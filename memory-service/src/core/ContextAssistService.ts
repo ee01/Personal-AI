@@ -26,6 +26,8 @@ const MIN_COMPOSER_CONTEXT_OVERLAP = 2;
 const MIN_COMPOSER_SOURCE_OVERLAP = 1;
 const COMPOSER_GENERATION_TIMEOUT_MS = 4500;
 const MAX_CONTEXT_ITEMS_FOR_PROMPT = 14;
+const MAX_PROFILE_ITEMS_FOR_PROMPT = 8;
+const MAX_USER_CORE_CHARS_FOR_PROMPT = 900;
 const WEB_AGENT_SOURCES: RecallSourceType[] = [
   'ai_chat',
   'doubao',
@@ -137,7 +139,12 @@ export class ContextAssistService {
 
     const suggestionType = getComposerSuggestionType(request);
     const riskLevel = getComposerRiskLevel(request, evidence);
-    const insertText = await buildComposerInsertText(request, evidence);
+    const personalization = loadComposerPersonalization(this.db, request);
+    const insertText = await buildComposerInsertText(
+      request,
+      evidence,
+      personalization,
+    );
 
     if (!insertText) {
       return {
@@ -465,12 +472,17 @@ function getConfidence(evidence: ComposerAssistEvidence[]): number {
 async function buildComposerInsertText(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
+  personalization: ComposerPersonalization,
 ): Promise<string | null> {
   if (request.contextType === 'web_agent_prompt') {
     return clipInsertText(renderWebAgentContextPack(request, evidence));
   }
 
-  const generated = await generateSendableComposerText(request, evidence);
+  const generated = await generateSendableComposerText(
+    request,
+    evidence,
+    personalization,
+  );
   if (!generated) return null;
   const sanitized = sanitizeGeneratedComposerText(generated);
   if (!isSendableComposerText(sanitized, getComposerScenario(request))) {
@@ -513,9 +525,15 @@ function renderWebAgentContextPack(
 async function generateSendableComposerText(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
+  personalization: ComposerPersonalization,
 ): Promise<string | null> {
   const scenario = getComposerScenario(request);
-  const prompt = buildComposerGenerationPrompt(request, evidence, scenario);
+  const prompt = buildComposerGenerationPrompt(
+    request,
+    evidence,
+    scenario,
+    personalization,
+  );
   if (!prompt) return null;
 
   try {
@@ -539,6 +557,7 @@ function buildComposerGenerationPrompt(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
   scenario: ComposerScenario,
+  personalization: ComposerPersonalization,
 ): string | null {
   const currentContext = buildComposerContextText(request, {
     includeAudience: false,
@@ -552,6 +571,7 @@ function buildComposerGenerationPrompt(
     .slice(0, 3)
     .map((item, index) => `[M${index + 1}] ${formatChatSnippet(item.snippet)}`)
     .join('\n');
+  const ownerConstraints = formatOwnerExpressionConstraints(personalization);
 
   return [
     '请根据当前场景，替用户写一段可以直接插入输入框并发送的内容。',
@@ -565,8 +585,15 @@ function buildComposerGenerationPrompt(
     '可用记忆：',
     memories,
     '',
+    '主人表达约束：',
+    '* 匹配主人当前使用的语言；长度、语气和结构跟当前场景保持一致。',
+    '* 不要编造未经确认的事实；未确认内容最多只能作为表达风格参考。',
+    '* 不要说 Personal AI，也不要透露这是由系统或记忆生成。',
+    '* 只输出可直接发送的正文，不要解释、不加标题、不加元信息。',
+    ownerConstraints,
+    '',
     '要求：',
-    '* 只输出要发送的正文，不要解释、不加标题、不说“我理解当前”。',
+    '* 不要说“我理解当前”。',
     '* 不要把记忆逐条摘抄成清单；先消化成自然回复。',
     '* 只使用和当前上下文明显相关的记忆，不确定就少说。',
     scenario === 'jira_comment'
@@ -576,6 +603,204 @@ function buildComposerGenerationPrompt(
   ]
     .filter(Boolean)
     .join('\n');
+}
+
+interface ComposerProfileRow {
+  item_type: string;
+  item_key: string;
+  item_value: string;
+  user_confirmed: number;
+  status: string;
+  salience_score: number | null;
+  updated_at: number | null;
+}
+
+interface ComposerPersonalization {
+  userCore?: string;
+  confirmedFacts: ComposerProfileRow[];
+  confirmedPreferences: ComposerProfileRow[];
+  confirmedConstraints: ComposerProfileRow[];
+  confirmedStyleHints: ComposerProfileRow[];
+  softStyleHints: ComposerProfileRow[];
+}
+
+function loadComposerPersonalization(
+  db: Database.Database,
+  request: ComposerAssistRequest,
+): ComposerPersonalization {
+  return {
+    userCore: loadUserCoreSnapshot(db),
+    confirmedFacts: loadConfirmedProfileItems(db, ['fact']),
+    confirmedPreferences: loadConfirmedProfileItems(db, ['preference']),
+    confirmedConstraints: loadConfirmedProfileItems(db, ['constraint']),
+    confirmedStyleHints: loadComposerStyleHints(db, request, true),
+    softStyleHints: loadComposerStyleHints(db, request, false),
+  };
+}
+
+function loadUserCoreSnapshot(db: Database.Database): string | undefined {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT content
+           FROM chunks
+          WHERE source_type = 'user_core'
+             OR file_path = 'USER_CORE.md'
+          ORDER BY created_at DESC, chunk_id DESC
+          LIMIT 3`,
+      )
+      .all() as Array<{ content: string }>;
+    const content = rows
+      .map((row) => formatProfileValue(row.content))
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, MAX_USER_CORE_CHARS_FOR_PROMPT)
+      .trim();
+    return content || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function loadConfirmedProfileItems(
+  db: Database.Database,
+  itemTypes: string[],
+): ComposerProfileRow[] {
+  try {
+    const placeholders = itemTypes.map(() => '?').join(', ');
+    return db
+      .prepare(
+        `SELECT item_type, item_key, item_value, user_confirmed, status,
+                salience_score, updated_at
+           FROM user_profile_items
+          WHERE item_type IN (${placeholders})
+            AND user_confirmed = 1
+            AND status = 'active'
+            AND item_key NOT LIKE 'writing_style.%'
+            AND item_key NOT IN ('writing_style', 'response_style', 'communication_style')
+          ORDER BY salience_score DESC, updated_at DESC
+          LIMIT ?`,
+      )
+      .all(...itemTypes, MAX_PROFILE_ITEMS_FOR_PROMPT) as ComposerProfileRow[];
+  } catch {
+    return [];
+  }
+}
+
+function loadComposerStyleHints(
+  db: Database.Database,
+  request: ComposerAssistRequest,
+  confirmedOnly: boolean,
+): ComposerProfileRow[] {
+  const styleKeys = getComposerStyleKeys(request);
+  const keyPlaceholders = styleKeys.map(() => '?').join(', ');
+  const confirmedClause = confirmedOnly
+    ? 'AND user_confirmed = 1 AND status = \'active\''
+    : 'AND user_confirmed = 0 AND status = \'pending_confirm\'';
+  try {
+    return db
+      .prepare(
+        `SELECT item_type, item_key, item_value, user_confirmed, status,
+                salience_score, updated_at
+           FROM user_profile_items
+          WHERE item_key IN (${keyPlaceholders})
+            ${confirmedClause}
+          ORDER BY
+            CASE ${styleKeys
+              .map((key, index) => `WHEN item_key = ? THEN ${index}`)
+              .join(' ')}
+              ELSE ${styleKeys.length}
+            END,
+            salience_score DESC,
+            updated_at DESC
+          LIMIT ?`,
+      )
+      .all(
+        ...styleKeys,
+        ...styleKeys,
+        MAX_PROFILE_ITEMS_FOR_PROMPT,
+      ) as ComposerProfileRow[];
+  } catch {
+    return [];
+  }
+}
+
+function getComposerStyleKeys(request: ComposerAssistRequest): string[] {
+  const scenario = getComposerScenario(request);
+  const scenarioKeys =
+    scenario === 'jira_comment'
+      ? ['writing_style.jira_comment', 'writing_style.jira.comment']
+      : scenario === 'thread_reply'
+        ? [
+            'writing_style.ringcentral_thread_reply',
+            'writing_style.ringcentral.thread_reply',
+            'writing_style.thread_reply',
+          ]
+        : [
+            'writing_style.ringcentral_reply',
+            'writing_style.ringcentral.reply',
+            'writing_style.instant_message_reply',
+          ];
+  return [
+    ...scenarioKeys,
+    'writing_style',
+    'response_style',
+    'communication_style',
+  ];
+}
+
+function formatOwnerExpressionConstraints(
+  personalization: ComposerPersonalization,
+): string {
+  const sections = [
+    formatProfileSection('USER_CORE（已确认画像快照）', personalization.userCore),
+    formatProfileSection(
+      '已确认偏好',
+      formatProfileRows(personalization.confirmedPreferences),
+    ),
+    formatProfileSection(
+      '已确认约束',
+      formatProfileRows(personalization.confirmedConstraints),
+    ),
+    formatProfileSection(
+      '已确认事实',
+      formatProfileRows(personalization.confirmedFacts),
+    ),
+    formatProfileSection(
+      'owner writing style hints（confirmed，优先遵守）',
+      formatProfileRows(personalization.confirmedStyleHints),
+    ),
+    formatProfileSection(
+      'owner writing style hints（pending inferred，只能作为 soft style hint，不能当事实）',
+      formatProfileRows(personalization.softStyleHints),
+    ),
+  ].filter(Boolean);
+
+  return sections.length ? sections.join('\n') : '';
+}
+
+function formatProfileSection(label: string, body?: string): string {
+  if (!body?.trim()) return '';
+  return `${label}：\n${body.trim()}`;
+}
+
+function formatProfileRows(rows: ComposerProfileRow[]): string {
+  return rows
+    .map((row) => `- ${row.item_key}: ${formatProfileValue(row.item_value)}`)
+    .filter((line) => line.trim().length > 3)
+    .join('\n');
+}
+
+function formatProfileValue(value: string): string {
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === 'string') return parsed;
+    return JSON.stringify(parsed);
+  } catch {
+    return trimmed;
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

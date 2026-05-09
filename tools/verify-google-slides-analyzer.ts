@@ -320,6 +320,76 @@ const numberedProjectKeyText = await textAnalyzer.analyzeTextElements([
 assert.equal(numberedProjectKeyText.projects[0].id, 'AIT2-11063');
 assert.equal(numberedProjectKeyText.projects[0].owner, 'Ada');
 
+const nestedTextProject = await textAnalyzer.analyzeTextElements([
+  {
+    objectId: 'shape-nested-project',
+    shape: {
+      text: {
+        textElements: [
+          {
+            paragraphMarker: {
+              style: {
+                bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+                indent: { magnitude: 0 },
+              },
+            },
+          },
+          {
+            textRun: {
+              content: 'MTR-123500: Nested project',
+            },
+          },
+          {
+            paragraphMarker: {
+              style: {
+                bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+                indent: { magnitude: 20 },
+              },
+            },
+          },
+          {
+            textRun: {
+              content: 'Status: In progress',
+            },
+          },
+          {
+            paragraphMarker: {
+              style: {
+                bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+                indent: { magnitude: 20 },
+              },
+            },
+          },
+          {
+            textRun: {
+              content: 'Owner: Ada',
+            },
+          },
+          {
+            paragraphMarker: {
+              style: {
+                bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+                indent: { magnitude: 20 },
+              },
+            },
+          },
+          {
+            textRun: {
+              content: 'Need rollout plan',
+            },
+          },
+        ],
+      },
+    },
+  },
+] as any);
+
+assert.equal(nestedTextProject.projects.length, 1);
+assert.equal(nestedTextProject.projects[0].id, 'MTR-123500');
+assert.equal(nestedTextProject.projects[0].status, 'In progress');
+assert.equal(nestedTextProject.projects[0].owner, 'Ada');
+assert.equal(nestedTextProject.projects[0].comments, 'Need rollout plan');
+
 const requestsSeen: any[] = [];
 
 (globalThis as any).fetch = async (url: string, init: RequestInit) => {

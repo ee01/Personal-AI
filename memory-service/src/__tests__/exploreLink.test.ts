@@ -5,10 +5,10 @@ import { buildExploreLink } from '../utils/exploreLink.js';
 describe('buildExploreLink', () => {
   it('maps messages and chunks to existing timeline routes', () => {
     expect(buildExploreLink({ type: 'message', id: 'msg-1' })).toBe(
-      '#/timeline?focus=msg-1',
+      '#/timeline?type=message&focus=msg-1',
     );
     expect(buildExploreLink({ type: 'chunk', id: '42' })).toBe(
-      '#/timeline?focus=42',
+      '#/timeline?type=chunk&focus=42',
     );
   });
 
@@ -19,7 +19,7 @@ describe('buildExploreLink', () => {
         id: 'msg-1',
         conversationId: 'thread-7',
       }),
-    ).toBe('#/timeline?thread=thread-7&focus=msg-1');
+    ).toBe('#/timeline?thread=thread-7&type=message&focus=msg-1');
   });
 
   it('maps known entity types to registered detail routes', () => {

@@ -1,4 +1,5 @@
 import type { CalendarEventSyncItem } from '../services/MemoryServiceClient';
+import { extractRingCentralVideoJoinUrl } from '../ringcentralNativeJoin';
 
 interface RingCentralCalendarRawEvent {
   id?: string;
@@ -59,7 +60,12 @@ function normalizeRingCentralCalendarEvent(
       ? event.location
       : event.location?.displayName || event.location?.name;
   const joinUrl =
-    event.joinUrl || event.meetingUrl || event.meetingUri || event.webLink;
+    event.joinUrl ||
+    event.meetingUrl ||
+    event.meetingUri ||
+    extractRingCentralVideoJoinUrl(location) ||
+    extractRingCentralVideoJoinUrl(event.description) ||
+    event.webLink;
   const descriptionPreview = clipText(stripHtml(event.description), 700);
   return {
     externalId,

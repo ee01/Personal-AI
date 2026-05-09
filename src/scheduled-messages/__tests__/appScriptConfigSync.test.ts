@@ -260,6 +260,64 @@ test('ConfigSyncService preserves unmanaged Config keys and remote sender keys w
   assert.equal(configMap.get('ringcentral_sender_client_secret'), 'old-secret');
 });
 
+test('ConfigSyncService deduplicates stale managed Config keys when saving', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        values: [
+          ['web_app_url', 'https://old.example.com/exec'],
+          ['web_app_url', 'https://older.example.com/exec'],
+          ['custom_owner_note', 'keep me'],
+          ['bot_automation_executor_rule_id', 'stale-rule'],
+          ['bot_automation_executor_rule_id', 'older-stale-rule'],
+          ['bot_automation_executor_rule_name', 'Stale Executor'],
+          ['bot_automation_executor_rule_name', 'Older Stale Executor'],
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    webAppUrl: 'https://script.google.com/macros/s/deploy/exec',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-04-30 12:00:00',
+    botAutomation: {
+      executorRule: {
+        ruleId: 'executor-new',
+        ruleName: 'Executor New',
+        webhookUrl: 'https://script.google.com/macros/s/deploy/exec',
+        projectKey: 'MTR',
+        jiraUrl: 'https://jira.example.com',
+        createdAt: '2026-05-01T00:00:00.000Z',
+      },
+    },
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const rows = (body.values as [string, string][]).filter(([key]) => key);
+  const countKey = (targetKey: string) => rows.filter(([key]) => key === targetKey).length;
+  const configMap = new Map(rows);
+
+  assert.equal(countKey('web_app_url'), 1);
+  assert.equal(countKey('bot_automation_executor_rule_id'), 1);
+  assert.equal(countKey('bot_automation_executor_rule_name'), 1);
+  assert.equal(configMap.get('web_app_url'), 'https://script.google.com/macros/s/deploy/exec');
+  assert.equal(configMap.get('bot_automation_executor_rule_id'), 'executor-new');
+  assert.equal(configMap.get('bot_automation_executor_rule_name'), 'Executor New');
+  assert.equal(configMap.get('custom_owner_note'), 'keep me');
+});
+
 test('ConfigSyncService clears remote sender credentials when sender is explicitly disabled', async () => {
   const calls = installFetchMock((_url, init) => {
     if (init?.method === 'PUT') {

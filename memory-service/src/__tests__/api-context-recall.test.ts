@@ -154,6 +154,13 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(
       typeof top.exploreLink === 'string' || top.exploreLink === undefined,
     ).toBe(true);
+    expect(
+      body.matches.some((match: any) =>
+        match.links?.some(
+          (link: any) => link.url === 'https://internal.example.com/wiki/falcon',
+        ),
+      ),
+    ).toBe(true);
     expect(body.topMatch?.id).toBe(top.id);
   });
 

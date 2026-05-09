@@ -224,6 +224,97 @@ function buildSourcePostIndex(messageGroups: any[]): Map<string, any> {
   return index;
 }
 
+function parseMessageTimestamp(value: unknown): number {
+  const timestamp = new Date(String(value || '')).getTime();
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
+function normalizeIdentityValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function getThreadRootPostId(post: any): string {
+  return String(
+    post?.threadRootPostId || post?.rootPostId || post?.parentId || post?.id || '',
+  );
+}
+
+function getOwnerSpeechPosts(messageGroups: any[], username?: string) {
+  const normalizedUsername = normalizeIdentityValue(username);
+  return (messageGroups || []).flatMap((group) =>
+    (group?.posts || [])
+      .filter(
+        (post: any) =>
+          post?.authorRole === 'owner' ||
+          post?.isSelf === true ||
+          (normalizedUsername &&
+            normalizeIdentityValue(post?.creator || post?.sender) ===
+              normalizedUsername),
+      )
+      .map((post: any) => ({
+        group,
+        post,
+      })),
+  );
+}
+
+async function ingestOwnerSpeechForLearning(
+  messageGroups: any[],
+  envConfig: EnvConfigType,
+  username?: string,
+) {
+  if (envConfig.OWNER_SPEECH_LEARNING_ENABLED === false) {
+    return;
+  }
+
+  const ownerPosts = getOwnerSpeechPosts(messageGroups, username).filter(
+    ({ post }) => Boolean(String(post?.text || post?.content || '').trim()),
+  );
+  if (ownerPosts.length === 0) {
+    return;
+  }
+
+  try {
+    const client = getMemoryServiceClient();
+    await client.ingestBatch(
+      ownerPosts.map(({ group, post }) => {
+        const content = String(post.text || post.content || '').trim();
+        const postId = String(post.id || post.postId || post.post_id || '');
+        const groupId = String(post.groupId || group.groupId || '');
+        const threadRootPostId = getThreadRootPostId(post);
+
+        return {
+          content,
+          sourceType: 'glip' as const,
+          sender: post.creator || post.sender || 'owner',
+          groupId,
+          groupName: post.groupName || group.groupName || '',
+          timestamp: parseMessageTimestamp(post.time || post.datetime),
+          metadata: {
+            authorRole: 'owner',
+            isSelf: true,
+            learningPurposes: ['owner_speech_style', 'input_suggestion'],
+            postId,
+            groupId,
+            threadRootPostId,
+            parentId: post.parentId,
+            creatorId: post.creatorId,
+            creatorUsername: post.creatorUsername,
+            captureReason: 'owner_speech_learning',
+          },
+        };
+      }),
+    );
+    console.log(`✅ 已捕获 ${ownerPosts.length} 条 owner 发言用于输入建议学习`);
+  } catch (error) {
+    console.warn('⚠️ owner 发言学习链路 ingest 失败:', error);
+  }
+}
+
 async function queueMatchedRuleAutomations(params: {
   manualItems: TopicItemWithAutoReply[];
   matchedRule?: string;
@@ -391,6 +482,7 @@ export async function analyzeMessagesInBackground(
   }
 
   const messageItems = data.filter((item) => item.type === 'message');
+  await ingestOwnerSpeechForLearning(messageItems, envConfig, username);
   const excludedItems =
     excludedPushGroupIds.size === 0
       ? []

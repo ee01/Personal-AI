@@ -640,6 +640,17 @@ const shellStyle = `
     margin-top: 12px;
   }
 
+  .capture-start-feedback {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-dim);
+  }
+
+  .capture-start-feedback.warn {
+    color: var(--p1-color);
+  }
+
   .capture-start-primary {
     flex: 1;
     padding: 10px 12px;
@@ -1594,6 +1605,9 @@ function MeetingSidePanel() {
     deadline: '',
   });
   const [actionEditError, setActionEditError] = useState<string | null>(null);
+  const [captureGuideFeedback, setCaptureGuideFeedback] = useState<
+    'shown' | 'failed' | null
+  >(null);
   const [panelUiReady, setPanelUiReady] = useState(false);
   const [settings, setSettings] = useState({
     autoDetect: true,
@@ -1625,6 +1639,7 @@ function MeetingSidePanel() {
   const restoreTimerRefs = useRef<number[]>([]);
   const actionCopyResetTimerRef = useRef<number | null>(null);
   const timelineFocusResetTimerRef = useRef<number | null>(null);
+  const captureGuideFeedbackTimerRef = useRef<number | null>(null);
   const panelUiReadyRef = useRef(false);
   const panelUiStorageKeyRef = useRef('');
   const [focusedTimelineEventId, setFocusedTimelineEventId] = useState<
@@ -2004,6 +2019,9 @@ function MeetingSidePanel() {
       if (timelineFocusResetTimerRef.current) {
         window.clearTimeout(timelineFocusResetTimerRef.current);
       }
+      if (captureGuideFeedbackTimerRef.current) {
+        window.clearTimeout(captureGuideFeedbackTimerRef.current);
+      }
     },
     [],
   );
@@ -2275,12 +2293,28 @@ function MeetingSidePanel() {
   };
 
   const showCaptureAuthorizationGuide = async () => {
-    await chrome.runtime.sendMessage({
-      type: 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE',
-      tabId: session.tabId,
-      meetingId: session.meetingId,
-      source: 'sidepanel-upgrade',
-    });
+    if (captureGuideFeedbackTimerRef.current) {
+      window.clearTimeout(captureGuideFeedbackTimerRef.current);
+    }
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        source: 'sidepanel-upgrade',
+      });
+      setCaptureGuideFeedback(response?.success ? 'shown' : 'failed');
+    } catch (error) {
+      console.warn('[Meeting Pilot][sidepanel] show capture guide failed', {
+        tabId: session.tabId,
+        error: String((error as Error)?.message || error),
+      });
+      setCaptureGuideFeedback('failed');
+    }
+    captureGuideFeedbackTimerRef.current = window.setTimeout(() => {
+      setCaptureGuideFeedback(null);
+      captureGuideFeedbackTimerRef.current = null;
+    }, 2200);
   };
 
   const sidePanelPinned = Boolean(session.sidePanelPinned);
@@ -2377,6 +2411,16 @@ function MeetingSidePanel() {
     : session.capture.kind === 'stopped'
     ? '录制已经停止。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”，恢复会中总结、时间线和会后分析。'
     : 'Chrome 的标签页录制授权在当前实现里以 popup 按钮最稳定。请点击浏览器右上角的 Personal AI 图标，然后在 popup 第一项点击“开启会议全貌”。';
+  const captureGuideButtonLabel =
+    captureGuideFeedback === 'shown'
+      ? '已显示开启步骤'
+      : captureGuideFeedback === 'failed'
+      ? '未能显示步骤'
+      : session.capture.kind === 'stopped'
+      ? '查看重新开启步骤'
+      : session.capture.kind === 'error'
+      ? '查看重试步骤'
+      : '查看开启步骤';
   const providerConfigured = Boolean(
     String(settings.providerBaseUrl || '').trim(),
   );
@@ -2524,6 +2568,20 @@ function MeetingSidePanel() {
                     >
                       启用画面理解与纪要
                     </button>
+                  </div>
+                ) : (
+                  <div className="capture-start-actions">
+                    <button
+                      className="capture-start-primary"
+                      onClick={() => void showCaptureAuthorizationGuide()}
+                    >
+                      {captureGuideButtonLabel}
+                    </button>
+                  </div>
+                )}
+                {captureGuideFeedback === 'failed' ? (
+                  <div className="capture-start-feedback warn">
+                    没能打开会议页引导。请确认原会议标签页仍在打开，然后从浏览器右上角扩展 icon 进入 popup。
                   </div>
                 ) : null}
               </div>
@@ -3211,18 +3269,19 @@ function MeetingSidePanel() {
             session.capture.kind === 'recording'
               ? toggleCaptureFromFooter
               : session.readiness.canStartCapture
-              ? undefined
+              ? showCaptureAuthorizationGuide
               : openMeetingOptionsPage
           }
           disabled={
             session.capture.kind !== 'recording' &&
-            session.readiness.canStartCapture
+            session.readiness.canStartCapture &&
+            session.tabId <= 0
           }
         >
           {session.capture.kind === 'recording'
             ? '🔘 停止 Capture'
             : session.readiness.canStartCapture
-            ? '请从 popup 开启'
+            ? captureGuideButtonLabel
             : '⚙️ 去配置 Meeting Pilot'}
         </button>
       </div>

@@ -3,9 +3,26 @@ import { getEnvConfig } from './utils';
 
 // JIRA 基础配置
 const JIRA_BASE_URL = 'https://jira.ringcentral.com';
+const JIRA_ISSUE_URL_PATTERNS = [
+  '*://*.jira.com/browse/*',
+  '*://*.atlassian.net/browse/*',
+  '*://jira.ringcentral.com/browse/*',
+];
+export const JIRA_COOKIE_AUTH_GUARD_MESSAGE = 'PERSONAL_AI_JIRA_COOKIE_AUTH_GUARD';
+export const JIRA_ISSUE_EDIT_STATE_MESSAGE = 'PERSONAL_AI_JIRA_ISSUE_EDIT_STATE';
+export const JIRA_SYNC_XSRF_TOKEN_MESSAGE = 'PERSONAL_AI_JIRA_SYNC_XSRF_TOKEN';
+export const JIRA_SYNC_XSRF_TOKEN_ALL_MESSAGE = 'PERSONAL_AI_JIRA_SYNC_XSRF_TOKEN_ALL';
+
+export type JiraAuthMode = 'token-only' | 'cookie-when-safe' | 'cookie-always';
+
+export interface JiraFetchAuthOptions {
+  authMode?: JiraAuthMode;
+  requestLabel?: string;
+  syncIssueTokens?: boolean;
+}
 
 // =====================================================
-// JIRA 认证工具函数（统一管理 Token 和 Cookie 认证）
+// JIRA 认证工具函数（统一管理 Token 和受控 Cookie 认证）
 // =====================================================
 
 // 缓存 Jira token
@@ -24,7 +41,7 @@ export async function getJiraToken(): Promise<string | null> {
     cachedJiraToken = envConfig.JIRA_API_TOKEN || '';
     return cachedJiraToken || null;
   } catch (error) {
-    console.log('未配置 Jira Token，将使用 cookie 模式访问');
+    console.log('未配置 Jira Token，将在安全场景下使用 Jira cookie fallback');
     cachedJiraToken = '';
     return null;
   }
@@ -38,7 +55,7 @@ export function clearJiraTokenCache(): void {
 }
 
 /**
- * 创建 JIRA 请求头，自动支持 token 和 cookie fallback
+ * 创建 JIRA 请求头。只有显式 token 时才添加 Authorization。
  * @param additionalHeaders 额外的请求头
  * @param overrideToken 可选的覆盖 token（用于调用方明确指定 token 的情况）
  * @returns 请求头对象
@@ -64,8 +81,134 @@ export async function createJiraHeaders(
   return headers;
 }
 
+function getChromeApi(): typeof chrome | null {
+  return typeof chrome !== 'undefined' ? chrome : null;
+}
+
+async function queryJiraIssueTabs(): Promise<chrome.tabs.Tab[]> {
+  const chromeApi = getChromeApi();
+  if (!chromeApi?.tabs?.query) return [];
+
+  const tabs = new Map<number, chrome.tabs.Tab>();
+  for (const url of JIRA_ISSUE_URL_PATTERNS) {
+    try {
+      const matchedTabs = await chromeApi.tabs.query({ url });
+      matchedTabs.forEach((tab) => {
+        if (typeof tab.id === 'number') {
+          tabs.set(tab.id, tab);
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to query Jira issue tabs:', error);
+    }
+  }
+  return Array.from(tabs.values());
+}
+
+async function sendMessageToTab<T>(tabId: number, message: any, timeoutMs = 700): Promise<T | null> {
+  const chromeApi = getChromeApi();
+  if (!chromeApi?.tabs?.sendMessage) return null;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, timeoutMs);
+
+    try {
+      chromeApi.tabs.sendMessage(tabId, message, (response: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (chromeApi.runtime?.lastError) {
+          resolve(null);
+          return;
+        }
+        resolve(response || null);
+      });
+    } catch {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      }
+    }
+  });
+}
+
+export async function notifyJiraIssuePagesToSyncXsrf(): Promise<void> {
+  const chromeApi = getChromeApi();
+
+  if (chromeApi?.tabs?.query && chromeApi?.tabs?.sendMessage) {
+    const tabs = await queryJiraIssueTabs();
+    await Promise.all(
+      tabs
+        .filter((tab) => typeof tab.id === 'number')
+        .map((tab) => sendMessageToTab(tab.id as number, { type: JIRA_SYNC_XSRF_TOKEN_MESSAGE })),
+    );
+    return;
+  }
+
+  if (chromeApi?.runtime?.sendMessage) {
+    try {
+      await chromeApi.runtime.sendMessage({ type: JIRA_SYNC_XSRF_TOKEN_ALL_MESSAGE });
+    } catch {
+      // Best effort only. The issue content script also syncs on user actions.
+    }
+  }
+}
+
+export async function assertJiraCookieAuthAllowed(requestLabel = 'Jira API request'): Promise<void> {
+  const chromeApi = getChromeApi();
+
+  if (chromeApi?.tabs?.query && chromeApi?.tabs?.sendMessage) {
+    const tabs = await queryJiraIssueTabs();
+    const editStates = await Promise.all(
+      tabs.map(async (tab) => {
+        if (typeof tab.id !== 'number') return null;
+        const response = await sendMessageToTab<{
+          isEditing?: boolean;
+          reason?: string;
+          url?: string;
+          title?: string;
+        }>(tab.id, { type: JIRA_ISSUE_EDIT_STATE_MESSAGE });
+        if (!response) {
+          return {
+            isEditing: true,
+            reason: 'open Jira issue page could not be inspected',
+            url: tab.url || '',
+            title: tab.title || '',
+          };
+        }
+        return response;
+      }),
+    );
+
+    const blockingState = editStates.find((state) => state?.isEditing);
+    if (blockingState) {
+      throw new Error(
+        `${requestLabel} was paused because a Jira issue page is being edited or cannot be inspected. Save or cancel the Jira edit first, then retry.`,
+      );
+    }
+    return;
+  }
+
+  if (chromeApi?.runtime?.sendMessage) {
+    const response = await chromeApi.runtime.sendMessage({
+      type: JIRA_COOKIE_AUTH_GUARD_MESSAGE,
+      requestLabel,
+    });
+    if (!response?.allowed) {
+      throw new Error(response?.reason || `${requestLabel} was paused because Jira cookie auth is not safe right now.`);
+    }
+  }
+}
+
 /**
- * 创建 JIRA 请求配置，自动支持 token 和 cookie fallback
+ * 创建 JIRA 请求配置。默认 token 优先；无 token 时只在安全场景下使用 cookie fallback。
  * @param method HTTP 方法
  * @param additionalHeaders 额外的请求头
  * @param body 请求体（会被 JSON.stringify）
@@ -76,14 +219,27 @@ export async function createJiraFetchInit(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
   additionalHeaders: Record<string, string> = {},
   body?: any,
-  overrideToken?: string
+  overrideToken?: string,
+  authOptions: JiraFetchAuthOptions = {}
 ): Promise<RequestInit> {
-  const headers = await createJiraHeaders(additionalHeaders, overrideToken);
+  const authMode = authOptions.authMode || 'cookie-when-safe';
+  const token = overrideToken ?? await getJiraToken();
+
+  if (!token) {
+    if (authMode === 'token-only') {
+      throw new Error('Jira API token is not configured and cookie fallback is disabled for this request.');
+    }
+    if (authMode === 'cookie-when-safe') {
+      await assertJiraCookieAuthAllowed(authOptions.requestLabel);
+    }
+  }
+
+  const headers = await createJiraHeaders(additionalHeaders, token || '');
   
   const init: RequestInit = {
     method,
     headers,
-    credentials: 'include' // 始终包含 cookie 作为 fallback
+    credentials: token ? 'omit' : 'include'
   };
   
   if (body && method !== 'GET') {
@@ -95,7 +251,7 @@ export async function createJiraFetchInit(
 
 /**
  * 统一的 JIRA API 请求方法
- * 自动处理 token 和 cookie 双重认证
+ * token 优先；无 token 时按 authMode 控制 cookie fallback。
  * 
  * @param url 完整的 API URL 或相对路径
  * @param options 请求配置
@@ -108,16 +264,28 @@ export async function jiraFetch(
     headers?: Record<string, string>;
     body?: any;
     token?: string;  // 可选的覆盖 token
+    authMode?: JiraAuthMode;
+    requestLabel?: string;
+    syncIssueTokens?: boolean;
   } = {}
 ): Promise<Response> {
   const init = await createJiraFetchInit(
     options.method || 'GET',
     options.headers || {},
     options.body,
-    options.token
+    options.token,
+    {
+      authMode: options.authMode,
+      requestLabel: options.requestLabel,
+      syncIssueTokens: options.syncIssueTokens,
+    },
   );
-  
-  return fetch(url, init);
+
+  const response = await fetch(url, init);
+  if (init.credentials === 'include' && options.syncIssueTokens !== false) {
+    void notifyJiraIssuePagesToSyncXsrf();
+  }
+  return response;
 }
 
 /**
@@ -143,7 +311,10 @@ export async function getJiraBaseUrl(): Promise<string> {
 export async function getCurrentUser(): Promise<{ success: boolean; ownerId?: string; accountId?: string; name?: string; error?: string }> {
   try {
     const baseUrl = await getJiraBaseUrl();
-    const response = await jiraFetch(`${baseUrl}/rest/api/2/myself`);
+    const response = await jiraFetch(`${baseUrl}/rest/api/2/myself`, {
+      authMode: 'cookie-always',
+      requestLabel: 'fetch Jira current user',
+    });
     
     if (!response.ok) {
       return { success: false, error: `获取用户信息失败 (${response.status})` };
@@ -179,7 +350,9 @@ export async function getProjectByKey(projectKey: string): Promise<{
 }> {
   try {
     const baseUrl = await getJiraBaseUrl();
-    const response = await jiraFetch(`${baseUrl}/rest/api/2/project/${projectKey}`);
+    const response = await jiraFetch(`${baseUrl}/rest/api/2/project/${projectKey}`, {
+      requestLabel: `fetch Jira project ${projectKey}`,
+    });
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -243,7 +416,9 @@ export async function getTicketDetail(ticketKey: string): Promise<{
       'description'
     ].join(',');
     
-    const response = await jiraFetch(`${baseUrl}/rest/api/2/issue/${ticketKey}?fields=${fields}`);
+    const response = await jiraFetch(`${baseUrl}/rest/api/2/issue/${ticketKey}?fields=${fields}`, {
+      requestLabel: `fetch Jira ticket ${ticketKey}`,
+    });
     
     if (!response.ok) {
       if (response.status === 404) {

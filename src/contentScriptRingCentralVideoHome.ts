@@ -4,8 +4,38 @@ import type {
 } from './services/MemoryServiceClient';
 import { readRingCentralCalendarEvents } from './context-assist/ringCentralCalendar';
 import { normalizeEnvConfigShape, type EnvConfigType } from './utils';
+import {
+  extractRingCentralVideoJoinUrl,
+  isRingCentralNativeJoinEnabledFromConfig,
+  loadRingCentralNativeJoinEnabled,
+  openRingCentralVideoNativeJoin,
+  parseRingCentralVideoJoinTarget,
+  shouldPreserveDefaultNativeJoinClick,
+  watchRingCentralNativeJoinEnabled,
+} from './ringcentralNativeJoin';
+import {
+  sanitizeContextExternalUrl,
+  sanitizeExploreRoute,
+} from './web-intelligence/contextRecallGuards';
 
 const HOST_ID = 'pai-meeting-prep-host';
+const DESCRIPTION_BOX_SELECTOR = [
+  '#upcoming-meeting-detail-description-box',
+  '[data-test-automation-id="upcoming-meeting-detail-description-box"]',
+].join(', ');
+const DETAIL_ROOT_SELECTORS = [
+  '[data-test-automation-id="upcoming-meeting-detail-container"]',
+  '[data-test-automation-id="video-detail-upcoming-meeting"]',
+  '[data-test-automation-id="video__rightPanel"]',
+  '[data-test-automation-id*="upcoming-meeting-detail"]',
+];
+const SELECTED_EVENT_ITEM_SELECTORS = [
+  '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][aria-selected="true"]',
+  '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][aria-current="true"]',
+  '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][data-selected="true"]',
+  '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][class*="selected"]',
+  '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][class*="active"]',
+].join(', ');
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const REFRESH_INTERVAL_MS = 2500;
 
@@ -29,6 +59,10 @@ class RingCentralVideoHomePrep {
   private assistRequestSeq = 0;
   private lastAssistKey: string | null = null;
   private readonly goalByEventKey = new Map<string, string>();
+  private hostListenersAttached = false;
+  private nativeJoinEnabled = true;
+  private nativeJoinConfigWatcherAttached = false;
+  private nativeJoinInterceptorAttached = false;
   private config: EnvConfigType | null = null;
   private state: MeetingPrepState = {
     enabled: true,
@@ -43,17 +77,26 @@ class RingCentralVideoHomePrep {
 
   async start(): Promise<void> {
     this.config = await this.loadConfig();
+    this.initNativeJoinConfig();
+    this.initNativeJoinInterceptor();
+
     this.state.enabled =
       this.config.CONTEXT_ASSIST_ENABLED !== false &&
       this.config.MEETING_PREP_ENABLED !== false;
-    if (!this.state.enabled) {
-      this.removeHost();
-      return;
+
+    if (this.state.enabled || this.nativeJoinEnabled) {
+      await this.syncRingCentralCalendar({
+        forceRingCentral: this.nativeJoinEnabled,
+      });
     }
 
-    await this.syncRingCentralCalendar();
+    if (!this.state.enabled) {
+      this.removeHost();
+    }
     this.refreshSelectedMeeting();
-    this.render();
+    if (this.state.enabled) {
+      this.render();
+    }
 
     this.observer = new MutationObserver(() => this.scheduleRefresh());
     this.observer.observe(document.documentElement, {
@@ -63,7 +106,10 @@ class RingCentralVideoHomePrep {
     });
     window.addEventListener('resize', this.scheduleRefresh);
     this.syncTimer = window.setInterval(
-      () => void this.syncRingCentralCalendar(),
+      () =>
+        void this.syncRingCentralCalendar({
+          forceRingCentral: this.nativeJoinEnabled,
+        }),
       SYNC_INTERVAL_MS,
     );
   }
@@ -73,6 +119,101 @@ class RingCentralVideoHomePrep {
       type: 'PERSONAL_AI_GET_ENV_CONFIG',
     }).catch(() => null);
     return normalizeEnvConfigShape(response?.envConfig || {});
+  }
+
+  private initNativeJoinConfig(): void {
+    if (this.config) {
+      this.nativeJoinEnabled = isRingCentralNativeJoinEnabledFromConfig(
+        this.config,
+      );
+    }
+
+    void loadRingCentralNativeJoinEnabled().then((enabled) => {
+      this.nativeJoinEnabled = enabled;
+      if (enabled) {
+        void this.syncRingCentralCalendar({ forceRingCentral: true });
+      }
+    });
+
+    if (this.nativeJoinConfigWatcherAttached) {
+      return;
+    }
+
+    watchRingCentralNativeJoinEnabled((enabled) => {
+      this.nativeJoinEnabled = enabled;
+      if (enabled) {
+        void this.syncRingCentralCalendar({ forceRingCentral: true });
+      }
+    });
+    this.nativeJoinConfigWatcherAttached = true;
+  }
+
+  private initNativeJoinInterceptor(): void {
+    if (this.nativeJoinInterceptorAttached) {
+      return;
+    }
+
+    document.addEventListener('click', this.handleNativeJoinClick, true);
+    this.nativeJoinInterceptorAttached = true;
+  }
+
+  private handleNativeJoinClick = (event: MouseEvent): void => {
+    if (
+      !this.nativeJoinEnabled ||
+      shouldPreserveDefaultNativeJoinClick(event)
+    ) {
+      return;
+    }
+
+    const trigger = findVideoHomeJoinButton(event);
+    if (!trigger) {
+      return;
+    }
+
+    const target = this.findNativeJoinTarget(trigger);
+    if (!target) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    openRingCentralVideoNativeJoin(target);
+  };
+
+  private findNativeJoinTarget(trigger: HTMLElement) {
+    const wrapper = trigger.closest<HTMLElement>(
+      '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id]',
+    );
+    const externalId = wrapper?.getAttribute('data-calendar-event-item-id');
+    const eventTarget = this.findEventNativeJoinTarget(externalId);
+    if (eventTarget) {
+      return eventTarget;
+    }
+
+    const detailContainer = trigger.closest<HTMLElement>(
+      '[data-test-automation-id="upcoming-meeting-detail-container"], [data-test-automation-id="video-detail-upcoming-meeting"], [data-test-automation-id="video__rightPanel"]',
+    );
+    const nearbyUrl = findRingCentralVideoJoinUrlNearElement(
+      wrapper || detailContainer || trigger,
+    );
+    const nearbyTarget = nearbyUrl
+      ? parseRingCentralVideoJoinTarget(nearbyUrl)
+      : null;
+    if (nearbyTarget) {
+      return nearbyTarget;
+    }
+
+    return this.findEventNativeJoinTarget(getVideoHomeRouteEventId());
+  }
+
+  private findEventNativeJoinTarget(externalId: string | null | undefined) {
+    if (!externalId) {
+      return null;
+    }
+
+    const event = findEventByExternalId(this.state.events, externalId);
+    return event?.joinUrl ? parseRingCentralVideoJoinTarget(event.joinUrl) : null;
   }
 
   private scheduleRefresh = (): void => {
@@ -90,8 +231,15 @@ class RingCentralVideoHomePrep {
     }, REFRESH_INTERVAL_MS);
   };
 
-  private async syncRingCentralCalendar(): Promise<void> {
-    if (this.config?.MEETING_PREP_CALENDAR_SOURCE === 'outlook') return;
+  private async syncRingCentralCalendar(
+    options: { forceRingCentral?: boolean } = {},
+  ): Promise<void> {
+    if (
+      !options.forceRingCentral &&
+      this.config?.MEETING_PREP_CALENDAR_SOURCE === 'outlook'
+    ) {
+      return;
+    }
     try {
       const events = await readRingCentralCalendarEvents();
       this.state.events = events;
@@ -112,6 +260,9 @@ class RingCentralVideoHomePrep {
       }
       this.state.error = '';
       this.refreshSelectedMeeting();
+      if (this.state.enabled) {
+        void this.generateAssist(false);
+      }
     } catch (error) {
       console.warn('[ContextAssist] RingCentral calendar sync failed:', error);
       this.state.syncLabel = '本地日历读取失败';
@@ -144,16 +295,32 @@ class RingCentralVideoHomePrep {
   }
 
   private findSelectedEvent(): CalendarEventSyncItem | null {
-    const pageText = getVisibleText(document.body).toLowerCase();
-    const now = Date.now();
-    const futureEvents = this.state.events
-      .filter((event) => !event.cancelled && event.startTime >= now - 2 * 60 * 60 * 1000)
+    const activeEvents = this.state.events
+      .filter((event) => !event.cancelled)
       .sort((a, b) => a.startTime - b.startTime);
-    const visibleMatch = futureEvents.find((event) =>
-      pageText.includes(event.title.toLowerCase().slice(0, 80)),
+
+    const routeMatch = findEventByExternalId(
+      activeEvents,
+      getVideoHomeRouteEventId(),
     );
-    if (visibleMatch) return visibleMatch;
-    return futureEvents[0] || null;
+    if (routeMatch) return routeMatch;
+
+    const selectedItemMatch = findEventByExternalId(
+      activeEvents,
+      getSelectedCalendarEventIdFromDom(),
+    );
+    if (selectedItemMatch) return selectedItemMatch;
+
+    const detailRoot = findMeetingDetailRoot();
+    const detailTitle = getSelectedMeetingTitleFromDetail(detailRoot);
+    const detailTitleMatch = findEventByDetailTitle(
+      activeEvents,
+      detailTitle,
+      detailRoot,
+    );
+    if (detailTitleMatch) return detailTitleMatch;
+
+    return null;
   }
 
   private async generateAssist(force: boolean): Promise<void> {
@@ -178,7 +345,17 @@ class RingCentralVideoHomePrep {
           url: window.location.href,
           userGoal,
           event,
-          sourceTypes: ['calendar', 'meeting', 'glip', 'jira', 'web', 'manual', 'system'],
+          sourceTypes: [
+            'meeting',
+            'glip',
+            'jira',
+            'web',
+            'manual',
+            'system',
+            'user_core',
+            'markdown',
+            'reflection',
+          ],
           limit: 5,
         },
       });
@@ -234,29 +411,33 @@ class RingCentralVideoHomePrep {
     );
   }
 
-  private ensureHost(): HTMLElement {
-    if (this.host && document.documentElement.contains(this.host)) {
-      return this.host;
+  private ensureHost(): HTMLElement | null {
+    const target = findInjectionTarget();
+    if (!target) {
+      this.removeHost();
+      return null;
     }
 
-    const host = document.createElement('section');
-    host.id = HOST_ID;
-    host.setAttribute('aria-label', 'Personal AI meeting prep');
-    const target = findInjectionTarget();
-    if (target) {
-      target.appendChild(host);
-    } else {
-      document.body.appendChild(host);
-      host.style.position = 'fixed';
-      host.style.right = '24px';
-      host.style.bottom = '24px';
-      host.style.width = '360px';
-      host.style.zIndex = '2147483645';
+    const previousHost = this.host;
+    const host =
+      this.host ||
+      (document.getElementById(HOST_ID) as HTMLElement | null) ||
+      document.createElement('section');
+    if (host !== previousHost) {
+      this.hostListenersAttached = false;
     }
+    host.id = HOST_ID;
+    applyHostLayoutStyle(host);
+    host.setAttribute('aria-label', 'Personal AI meeting prep');
+    mountHostAfterTarget(host, target);
+
     this.host = host;
-    this.shadow = host.attachShadow({ mode: 'open' });
-    this.shadow.addEventListener('click', (event) => this.handleClick(event));
-    this.shadow.addEventListener('input', (event) => this.handleInput(event));
+    this.shadow = host.shadowRoot || host.attachShadow({ mode: 'open' });
+    if (!this.hostListenersAttached) {
+      this.shadow.addEventListener('click', (event) => this.handleClick(event));
+      this.shadow.addEventListener('input', (event) => this.handleInput(event));
+      this.hostListenersAttached = true;
+    }
     return host;
   }
 
@@ -264,53 +445,41 @@ class RingCentralVideoHomePrep {
     this.host?.remove();
     this.host = null;
     this.shadow = null;
+    this.hostListenersAttached = false;
   }
 
   private render(): void {
     if (!this.state.enabled) return;
-    this.ensureHost();
-    if (!this.shadow) return;
 
     const event = this.state.selectedEvent;
     const assist = this.state.assist;
     const assistCurrent = this.isAssistCurrent();
-    const assistStale = Boolean(assist && !assistCurrent);
-    const cueCards = assist?.cueCards || [];
-    const evidence = assist?.evidence || [];
+    if (
+      !event ||
+      !assist ||
+      !assistCurrent ||
+      !shouldShowMeetingPrep(assist)
+    ) {
+      this.removeHost();
+      return;
+    }
+
+    if (!this.ensureHost() || !this.shadow) return;
+
+    const evidence = getDisplayEvidence(assist);
+    const cueCards = getDisplayCueCards(assist, event, evidence.length);
+    const iconUrl = chrome.runtime.getURL('icons/icon48.png');
     this.shadow.innerHTML = `
       <style>${styles()}</style>
       <div class="pai-card">
         <div class="pai-header">
           <div class="pai-title">
-            <span class="pai-dot"></span>
+            <img class="pai-logo" src="${escapeHtmlAttribute(iconUrl)}" alt="" />
             <span>Personal AI 会前准备</span>
           </div>
-          <button class="pai-icon" data-action="sync" title="同步日历">↻</button>
+          <button class="pai-icon" data-action="sync" title="刷新建议">↻</button>
         </div>
-        <div class="pai-sub">${escapeHtml(this.state.syncLabel)}</div>
-        ${
-          event
-            ? `
-              <div class="pai-meeting">
-                <div class="pai-meeting-title">${escapeHtml(event.title)}</div>
-                <div class="pai-time">${escapeHtml(formatEventTime(event))}</div>
-              </div>
-              <textarea class="pai-goal" data-role="goal" rows="2" placeholder="补充本次会议目标，例如：同步某个依赖进展">${escapeHtml(this.state.userGoal)}</textarea>
-              <div class="pai-actions">
-                <button class="pai-primary" data-action="generate" type="button">
-                  ${getGenerateButtonLabel(this.state.loading, Boolean(assist), assistStale)}
-                </button>
-                <button class="pai-secondary" data-action="handoff" type="button" ${assist?.insertText && assistCurrent ? '' : 'disabled'}>
-                  发送到 Meeting Pilot
-                </button>
-              </div>
-              <div class="pai-stale" data-role="stale" ${assistStale ? '' : 'hidden'}>目标已更新，请先更新建议后再发送。</div>
-            `
-            : `
-              <div class="pai-empty">请选择一个 upcoming meeting，或等待 RingCentral 日历加载完成。</div>
-            `
-        }
-        ${this.state.error ? `<div class="pai-error">${escapeHtml(this.state.error)}</div>` : ''}
+        <div class="pai-sub">已基于 ${evidence.length} 条相关记忆静默生成</div>
         ${
           cueCards.length
             ? `<div class="pai-cues">${cueCards
@@ -336,6 +505,7 @@ class RingCentralVideoHomePrep {
                     <div class="pai-source">
                       <div>${escapeHtml(item.sourceTitle || item.title || item.sourceLabel || 'Memory')}</div>
                       <small>${escapeHtml(item.whyMatched || item.sourceLabel || '')}</small>
+                      ${renderEvidenceLinks(item)}
                     </div>
                   `,
                   )
@@ -343,6 +513,10 @@ class RingCentralVideoHomePrep {
               </details>`
             : ''
         }
+        <div class="pai-footer">
+          <img class="pai-footer-icon" src="${escapeHtmlAttribute(iconUrl)}" alt="" />
+          <span>Provided by Personal AI</span>
+        </div>
       </div>
     `;
   }
@@ -351,7 +525,7 @@ class RingCentralVideoHomePrep {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const action = target?.closest<HTMLElement>('[data-action]')?.dataset.action;
     if (action === 'sync') {
-      void this.syncRingCentralCalendar();
+      void this.refreshMeetingPrep();
     } else if (action === 'generate') {
       void this.generateAssist(true);
     } else if (action === 'handoff') {
@@ -369,6 +543,13 @@ class RingCentralVideoHomePrep {
       }
       this.syncInteractiveState();
     }
+  }
+
+  private async refreshMeetingPrep(): Promise<void> {
+    await this.syncRingCentralCalendar({
+      forceRingCentral: this.nativeJoinEnabled,
+    });
+    await this.generateAssist(true);
   }
 
   private syncInteractiveState(): void {
@@ -399,6 +580,56 @@ class RingCentralVideoHomePrep {
 }
 
 function findInjectionTarget(): HTMLElement | null {
+  return findMeetingDetailRoot();
+}
+
+function mountHostAfterTarget(host: HTMLElement, target: HTMLElement): void {
+  if (host.parentElement !== target || host.nextElementSibling) {
+    target.appendChild(host);
+  }
+}
+
+function applyHostLayoutStyle(host: HTMLElement): void {
+  host.style.setProperty('display', 'block', 'important');
+  host.style.setProperty('width', '100%', 'important');
+  host.style.setProperty('max-width', '100%', 'important');
+  host.style.setProperty('box-sizing', 'border-box', 'important');
+  host.style.setProperty('flex', '0 0 100%', 'important');
+  host.style.setProperty('align-self', 'stretch', 'important');
+  host.style.setProperty('grid-column', '1 / -1', 'important');
+  host.style.setProperty('clear', 'both', 'important');
+  host.style.setProperty('position', 'relative', 'important');
+  host.style.setProperty('z-index', '1', 'important');
+}
+
+function findMeetingDetailRoot(): HTMLElement | null {
+  for (const selector of DETAIL_ROOT_SELECTORS) {
+    const explicitRoot = Array.from(
+      document.querySelectorAll<HTMLElement>(selector),
+    ).find(
+      (element) =>
+        isDisplayedElement(element) &&
+        !element.matches(DESCRIPTION_BOX_SELECTOR),
+    );
+    if (explicitRoot) {
+      return explicitRoot;
+    }
+  }
+
+  const descriptionBox = document.querySelector<HTMLElement>(
+    DESCRIPTION_BOX_SELECTOR,
+  );
+  if (descriptionBox) {
+    let current = descriptionBox.parentElement;
+    while (current && current !== document.body) {
+      const rect = current.getBoundingClientRect();
+      if (rect.width >= 320 && rect.left >= window.innerWidth * 0.35) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+  }
+
   const candidates = Array.from(document.querySelectorAll<HTMLElement>('main, section, div'))
     .map((element) => ({ element, rect: element.getBoundingClientRect() }))
     .filter(({ element, rect }) => {
@@ -409,6 +640,244 @@ function findInjectionTarget(): HTMLElement | null {
     })
     .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height);
   return candidates[0]?.element || null;
+}
+
+function getSelectedCalendarEventIdFromDom(): string | null {
+  const selectedItem = document.querySelector<HTMLElement>(
+    SELECTED_EVENT_ITEM_SELECTORS,
+  );
+  return selectedItem?.getAttribute('data-calendar-event-item-id') || null;
+}
+
+function getSelectedMeetingTitleFromDetail(
+  detailRoot: HTMLElement | null,
+): string | null {
+  if (!detailRoot) return null;
+
+  const headingSelectors = [
+    'h1',
+    'h2',
+    'h3',
+    '[role="heading"]',
+    '[data-test-automation-id*="title"]',
+    '[data-test-automation-id*="name"]',
+  ].join(', ');
+  const heading = Array.from(
+    detailRoot.querySelectorAll<HTMLElement>(headingSelectors),
+  )
+    .map((element) => ({
+      element,
+      text: normalizeText(element.textContent || ''),
+      rect: element.getBoundingClientRect(),
+    }))
+    .filter(({ element, text, rect }) => {
+      return (
+        isDisplayedElement(element) &&
+        rect.left >= window.innerWidth * 0.35 &&
+        isProbableMeetingTitle(text)
+      );
+    })
+    .sort((a, b) => a.rect.top - b.rect.top)[0];
+
+  if (heading?.text) {
+    return heading.text;
+  }
+
+  const lines = collectVisibleTextLines(detailRoot).filter(isProbableMeetingTitle);
+  return lines[0] || null;
+}
+
+function collectVisibleTextLines(root: HTMLElement): string[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>('h1, h2, h3, [role="heading"], div, span, p'),
+  )
+    .filter((element) => isDisplayedElement(element))
+    .map((element) => normalizeText(element.textContent || ''))
+    .filter(Boolean);
+}
+
+function findEventByExternalId(
+  events: CalendarEventSyncItem[],
+  externalId: string | null,
+): CalendarEventSyncItem | null {
+  if (!externalId) return null;
+  const normalizedExternalId = normalizeEventId(externalId);
+  return (
+    events.find((event) => {
+      return (
+        normalizeEventId(event.externalId) === normalizedExternalId ||
+        normalizeEventId(event.seriesKey || '') === normalizedExternalId
+      );
+    }) || null
+  );
+}
+
+function findEventByDetailTitle(
+  events: CalendarEventSyncItem[],
+  detailTitle: string | null,
+  detailRoot: HTMLElement | null,
+): CalendarEventSyncItem | null {
+  if (!detailTitle) return null;
+  const normalizedDetailTitle = normalizeMeetingTitle(detailTitle);
+  if (!normalizedDetailTitle) return null;
+
+  const candidates = events.filter((event) => {
+    const normalizedEventTitle = normalizeMeetingTitle(event.title);
+    if (!normalizedEventTitle) return false;
+    if (normalizedEventTitle === normalizedDetailTitle) return true;
+    if (
+      normalizedEventTitle.length >= 8 &&
+      normalizedDetailTitle.includes(normalizedEventTitle)
+    ) {
+      return true;
+    }
+    return (
+      normalizedDetailTitle.length >= 8 &&
+      normalizedEventTitle.includes(normalizedDetailTitle)
+    );
+  });
+
+  if (candidates.length <= 1) {
+    return candidates[0] || null;
+  }
+
+  const detailText = getVisibleText(detailRoot).toLowerCase();
+  const textMatch = candidates.find((event) => {
+    const matchingValues = [
+      formatShortTime(event.startTime),
+      event.location || '',
+      event.organizer?.name || '',
+      event.organizer?.email || '',
+    ]
+      .filter((value): value is string => Boolean(value));
+    return matchingValues.some((value) =>
+      detailText.includes(value.toLowerCase()),
+    );
+  });
+  return textMatch || candidates[0];
+}
+
+function normalizeEventId(value: string): string {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+}
+
+function normalizeMeetingTitle(value: string): string {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function isProbableMeetingTitle(text: string): boolean {
+  if (text.length < 3 || text.length > 180) return false;
+  if (/^(video meetings|upcoming|past|notes|recordings|participants|accepted|declined|join)$/i.test(text)) {
+    return false;
+  }
+  if (/^(starts in|conf rm|meeting id|passcode|please join using this link)/i.test(text)) {
+    return false;
+  }
+  if (/^[A-Z][a-z]{2},\s+[A-Z][a-z]{2}\s+\d{1,2}/.test(text)) {
+    return false;
+  }
+  if (/^\d{1,2}:\d{2}\s*(AM|PM)?\s*-/.test(text)) {
+    return false;
+  }
+  return true;
+}
+
+function formatShortTime(value: number): string {
+  return new Date(value).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function isDisplayedElement(
+  element: Element | null | undefined,
+): element is HTMLElement {
+  if (!(element instanceof HTMLElement)) return false;
+  const style = window.getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return (
+    style.display !== 'none' &&
+    style.visibility !== 'hidden' &&
+    rect.width > 0
+  );
+}
+
+function findVideoHomeJoinButton(event: MouseEvent): HTMLElement | null {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  return target.closest<HTMLElement>(
+    [
+      'button[data-test-automation-id="calendar-event-item-join-button"]',
+      'button[data-test-automation-id="join-meeting-button"]',
+      'button[data-test-automation-id="mini-join-button"]',
+    ].join(', '),
+  );
+}
+
+function getVideoHomeRouteEventId(): string | null {
+  const parts = location.pathname.split('/').filter(Boolean);
+  const homeIndex = parts.findIndex(
+    (part, index) => part === 'home' && parts[index - 1] === 'video',
+  );
+  const encodedEventId = homeIndex >= 0 ? parts[homeIndex + 1] : null;
+  if (!encodedEventId) {
+    return null;
+  }
+
+  return decodeVideoHomeRouteEventId(encodedEventId);
+}
+
+function decodeVideoHomeRouteEventId(encodedEventId: string): string | null {
+  try {
+    const normalized = decodeURIComponent(encodedEventId)
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+    const padded =
+      normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    return window.atob(padded);
+  } catch {
+    return null;
+  }
+}
+
+function findRingCentralVideoJoinUrlNearElement(
+  element: Element | null,
+): string | null {
+  if (!element) {
+    return null;
+  }
+
+  const anchor = element.querySelector<HTMLAnchorElement>(
+    'a[href*="v.ringcentral.com/join/"], a[href*="v.ringcentral.com/conf/on/"]',
+  );
+  if (anchor?.href) {
+    return anchor.href;
+  }
+
+  for (const attribute of Array.from(element.attributes || [])) {
+    const url = extractRingCentralVideoJoinUrl(attribute.value);
+    if (url) {
+      return url;
+    }
+  }
+
+  return extractRingCentralVideoJoinUrl(element.textContent || '');
 }
 
 function getVisibleText(root: Element | null): string {
@@ -430,24 +899,6 @@ function sendRuntimeMessage<T>(message: Record<string, unknown>): Promise<T> {
       resolve(response as T);
     });
   });
-}
-
-function formatEventTime(event: CalendarEventSyncItem): string {
-  const start = new Date(event.startTime);
-  const end = event.endTime ? new Date(event.endTime) : null;
-  const date = start.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-  const startTime = start.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-  const endTime = end
-    ? end.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-    : '';
-  return `${date} ${startTime}${endTime ? ` - ${endTime}` : ''}`;
 }
 
 function getEventKey(event: CalendarEventSyncItem | null): string | null {
@@ -480,19 +931,156 @@ function escapeHtml(value: string | undefined): string {
   return div.innerHTML;
 }
 
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case "'":
+        return '&#39;';
+      default:
+        return char;
+    }
+  });
+}
+
+function renderEvidenceLinks(
+  item: ContextAssistResponse['evidence'][number],
+): string {
+  const links: Array<{ label: string; url: string }> = [];
+  const seen = new Set<string>();
+  const addLink = (label: string, url: string | null): void => {
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    links.push({ label, url });
+  };
+
+  const safeExploreRoute = sanitizeExploreRoute(item.exploreLink);
+  if (safeExploreRoute) {
+    addLink(
+      '在记忆中查看',
+      chrome.runtime.getURL(`memory-exploring.html${safeExploreRoute}`),
+    );
+  }
+
+  for (const link of item.links ?? []) {
+    addLink(
+      link.label || '打开来源',
+      sanitizeContextExternalUrl(link.url, window.location.href),
+    );
+  }
+
+  addLink(
+    '打开来源',
+    sanitizeContextExternalUrl(item.sourceUrl, window.location.href),
+  );
+
+  if (links.length === 0) return '';
+  return `<div class="pai-source-actions">${links
+    .map(
+      (link) =>
+        `<a href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`,
+    )
+    .join('')}</div>`;
+}
+
+function shouldShowMeetingPrep(assist: ContextAssistResponse): boolean {
+  if (!assist.available || assist.suggestionType !== 'meeting_brief') {
+    return false;
+  }
+  const evidence = getDisplayEvidence(assist);
+  return evidence.length > 0 && getDisplayCueCards(assist).length > 0;
+}
+
+function getDisplayEvidence(
+  assist: ContextAssistResponse,
+): ContextAssistResponse['evidence'] {
+  return assist.evidence.filter(isUsefulMeetingPrepEvidence).slice(0, 5);
+}
+
+function getDisplayCueCards(
+  assist: ContextAssistResponse,
+  event?: CalendarEventSyncItem | null,
+  evidenceCount = getDisplayEvidence(assist).length,
+): ContextAssistResponse['cueCards'] {
+  const displayEvidenceIds = new Set(
+    getDisplayEvidence(assist).map((item) => item.id),
+  );
+  return assist.cueCards
+    .filter((card) => {
+      if (card.id === 'missing-goal' || card.kind === 'question') {
+        return false;
+      }
+      if (card.kind !== 'memory') {
+        return true;
+      }
+      const evidenceIds = card.evidenceIds || [];
+      return (
+        evidenceIds.length === 0 ||
+        evidenceIds.some((id) => displayEvidenceIds.has(id))
+      );
+    })
+    .map((card) => {
+      if (card.id !== 'brief') return card;
+      const title = event?.title || assist.title || '本次会议';
+      return {
+        ...card,
+        body: `${title} 已匹配到 ${evidenceCount} 条相关记忆。优先核对最近承诺、依赖进展和未关闭的问题。`,
+      };
+    });
+}
+
+function isUsefulMeetingPrepEvidence(
+  item: ContextAssistResponse['evidence'][number],
+): boolean {
+  const snippet = item.snippet?.trim() || '';
+  if (!snippet) return false;
+
+  const labelText = [
+    item.sourceLabel,
+    item.sourceTitle,
+    item.title,
+    item.whyMatched,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  const fullText = `${labelText} ${snippet}`.toLowerCase();
+  const looksLikeCalendarOnly =
+    /calendar event|ringcentral video|会议:\s*ringcentral video/.test(
+      fullText,
+    );
+  const hasWorkSignal =
+    /\b(mtr|jira|glip|thread|message|bug|issue|follow|dependency|blocked)\b/i.test(
+      fullText,
+    ) || /承诺|依赖|进展|问题|风险|决定|待办|阻塞/.test(fullText);
+
+  return !looksLikeCalendarOnly || hasWorkSignal;
+}
+
 function styles(): string {
   return `
     :host {
       display: block;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
       margin-top: 18px;
+      margin-bottom: 18px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #1f2937;
     }
     .pai-card {
-      border: 1px solid #d8dee8;
+      border: 2px solid #ff385c;
       border-radius: 8px;
       background: #fff;
-      box-shadow: 0 2px 8px rgba(31, 41, 55, 0.08);
+      box-shadow: 0 6px 18px rgba(244, 63, 94, 0.12);
       padding: 16px;
       font-size: 14px;
       line-height: 1.45;
@@ -510,12 +1098,11 @@ function styles(): string {
       font-size: 16px;
       font-weight: 700;
     }
-    .pai-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: #0b7fc3;
-      box-shadow: 0 0 0 3px rgba(11, 127, 195, 0.14);
+    .pai-logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      flex: 0 0 auto;
     }
     .pai-icon {
       width: 30px;
@@ -635,6 +1222,38 @@ function styles(): string {
     .pai-source {
       padding: 8px 0;
       border-bottom: 1px solid #f1f5f9;
+    }
+    .pai-source-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    .pai-source-actions a {
+      color: #0b66b2;
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .pai-source-actions a:hover {
+      text-decoration: underline;
+    }
+    .pai-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      border-top: 1px solid #f1f5f9;
+      margin-top: 12px;
+      padding-top: 8px;
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .pai-footer-icon {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
     }
   `;
 }

@@ -142,7 +142,11 @@ export class JiraAutomationService {
     const url = `${config.jiraUrl}/rest/api/2/myself`;
     const token = await this.getEffectiveToken(config);
     
-    const response = await jiraFetch(url, { token });
+    const response = await jiraFetch(url, {
+      token,
+      authMode: 'cookie-always',
+      requestLabel: 'fetch Jira current user for automation',
+    });
     
     if (!response.ok) {
       throw new Error(`无法获取用户信息 (${response.status}): ${await response.text()}`);

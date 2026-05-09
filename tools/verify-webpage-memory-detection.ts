@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  CONTEXT_SITE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_MUTE_TTL_MS,
   formatContextSiteMuteRemaining,
   getContextSiteMuteExpiresAt,
@@ -10,6 +11,7 @@ import {
   isContextSiteMuteActive,
   normalizeContextSiteMuteHost,
   normalizeContextPageUrl,
+  pruneContextSiteBlockRecord,
   pruneContextSiteMuteRecord,
   sanitizeContextExternalUrl,
   sanitizeExploreRoute,
@@ -87,6 +89,18 @@ assert.deepEqual(
     },
     now,
   ),
+  {
+    record: { 'example.com': now - 1_000 },
+    changed: true,
+  },
+);
+assert.equal(CONTEXT_SITE_BLOCK_STORAGE_KEY, 'pai-context-blocked-sites-v1');
+assert.deepEqual(
+  pruneContextSiteBlockRecord({
+    ' Example.COM. ': now - 1_000,
+    'bad.example': Number.NaN,
+    'expired.example': 0,
+  }),
   {
     record: { 'example.com': now - 1_000 },
     changed: true,

@@ -15,6 +15,7 @@ const RECALL_CHANNEL_LABELS: Record<string, string> = {
   fts: '关键词',
   graph: '图谱',
   time: '时间',
+  direct: '定位',
 };
 
 export interface SearchResultTypeOption {

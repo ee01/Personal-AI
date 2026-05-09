@@ -21,6 +21,7 @@ import { isValidFutureSnoozeTime } from './snoozeTime';
 export { formatRemindTime, isValidFutureSnoozeTime } from './snoozeTime';
 export {
   formatWorkdayQuickLabel,
+  getDefaultCustomSnoozeTime,
   getNextWorkdayTime,
   getQuickOptions,
 } from './snoozeQuickOptions';

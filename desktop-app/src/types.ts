@@ -23,6 +23,7 @@ export type AutoSyncKind =
   | 'reminder_sync';
 export type BridgeAssistantStatusKind =
   | 'setup_blocker'
+  | 'sync_issue'
   | 'confirm_request'
   | 'running_action'
   | 'waiting_reply'
@@ -102,6 +103,8 @@ export interface BridgeStatus extends BridgeServiceStatus {
     autoSyncEnabled: boolean;
     memoryServiceConfigured: boolean;
     pollIntervalMs: number;
+    lastErrorAt?: string;
+    lastErrorMessage?: string;
     tasks: Record<
       'stableMemory' | 'mobileBriefing' | 'reminderSync',
       {

@@ -61,6 +61,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
 
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
+    db.prepare('DELETE FROM user_profile_items').run();
     db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
 
     const now = Math.floor(Date.now() / 1000);

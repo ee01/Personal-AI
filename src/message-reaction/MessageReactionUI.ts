@@ -33,6 +33,7 @@ import {
   MessageInfo,
   extractMessageInfo,
   getQuickOptions,
+  getDefaultCustomSnoozeTime,
   formatRemindTime,
   createSnoozeReminder,
   showSuccessToast,
@@ -963,10 +964,6 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   picker.className = 'snooze-picker';
 
   const now = new Date();
-  const tomorrow9am = new Date();
-  tomorrow9am.setDate(tomorrow9am.getDate() + 1);
-  tomorrow9am.setHours(9, 0, 0, 0);
-
   // 格式化为 input datetime-local 需要的格式
   const formatForInput = (date: Date) => {
     const pad = (n: number) => n.toString().padStart(2, '0');
@@ -975,7 +972,7 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
   };
 
-  let selectedDate = tomorrow9am;
+  let selectedDate = getDefaultCustomSnoozeTime(now);
   const minDateValue = formatForInput(now);
 
   picker.innerHTML = `

@@ -12,6 +12,7 @@ const appRoot = path.resolve(scriptDir, '..');
 const repoRoot = path.resolve(appRoot, '..');
 const extensionPath = path.join(repoRoot, 'dist');
 const siteMuteStorageKey = 'pai-context-muted-sites-v1';
+const siteBlockStorageKey = 'pai-context-blocked-sites-v1';
 
 function log(message) {
   console.log(`[webpage-memory-detection] ${message}`);
@@ -278,14 +279,19 @@ async function launchExtensionContext(apiBaseUrl) {
   };
 
   await serviceWorker.evaluate(
-    async ({ envConfig, storageKey }) => {
+    async ({ envConfig, muteStorageKey, blockStorageKey }) => {
       await chrome.storage.local.set({
         envConfig,
         userinfo: { username: 'webpage-memory-e2e' },
-        [storageKey]: {},
+        [muteStorageKey]: {},
+        [blockStorageKey]: {},
       });
     },
-    { envConfig: config, storageKey: siteMuteStorageKey },
+    {
+      envConfig: config,
+      muteStorageKey: siteMuteStorageKey,
+      blockStorageKey: siteBlockStorageKey,
+    },
   );
 
   const configPage = await context.newPage();
@@ -503,7 +509,85 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     unmutedStartCount + 1,
     '从设置页恢复站点后应重新触发被动召回',
   );
+  await unmutedPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await unmutedPage.locator('.pai-context-bubble').click();
+  await unmutedPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await unmutedPage.locator('.pai-context-card').innerText(),
+    /永久不提示此站点/,
+  );
+  await unmutedPage.locator('.pai-context-site-block').click();
+  await unmutedPage.waitForSelector('.pai-context-toast', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await unmutedPage.locator('.pai-context-toast').innerText(),
+    /已永久关闭此网站记忆提示/,
+  );
+  await unmutedPage.waitForFunction(
+    () => !document.querySelector('.pai-context-bubble'),
+    { timeout: 5000 },
+  );
+  const storedBlocks = await serviceWorker.evaluate(
+    async (storageKey) => chrome.storage.local.get(storageKey),
+    siteBlockStorageKey,
+  );
+  assert.equal(
+    typeof storedBlocks[siteBlockStorageKey]?.['127.0.0.1'],
+    'number',
+    '永久屏蔽状态未写入 extension storage',
+  );
   await unmutedPage.close();
+
+  const blockedPage = await context.newPage();
+  const blockedStartCount = server.contextRecallRequests.length;
+  await blockedPage.goto(`${server.origin}/normal?blocked=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await blockedPage.waitForTimeout(3500);
+  assert.equal(
+    server.contextRecallRequests.length,
+    blockedStartCount,
+    '永久屏蔽站点不应触发被动召回',
+  );
+  assert.equal(
+    await blockedPage.locator('.pai-context-bubble').count(),
+    0,
+    '永久屏蔽站点不应显示记忆提示',
+  );
+  await blockedPage.close();
+
+  const blockedOptionsPage = await context.newPage();
+  await blockedOptionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await blockedOptionsPage.waitForSelector('text=永久屏蔽', { timeout: 5000 });
+  await blockedOptionsPage.waitForSelector('text=127.0.0.1', { timeout: 5000 });
+  await blockedOptionsPage.getByRole('button', { name: '恢复', exact: true }).click();
+  await blockedOptionsPage.waitForSelector('text=当前没有被永久屏蔽的网站', {
+    timeout: 5000,
+  });
+  await blockedOptionsPage.close();
+
+  const restoredPage = await context.newPage();
+  const restoredStartCount = server.contextRecallRequests.length;
+  await restoredPage.goto(`${server.origin}/normal?restored=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await waitForRequestCount(server, restoredStartCount + 1, 12000);
+  assert.equal(
+    server.contextRecallRequests.length,
+    restoredStartCount + 1,
+    '从设置页恢复永久屏蔽后应重新触发被动召回',
+  );
+  await restoredPage.close();
   await page.close();
 }
 

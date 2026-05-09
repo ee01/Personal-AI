@@ -584,3 +584,59 @@ test('tick still runs explorer scheduling when Doubao output sync is not ready',
   assert.equal(explorerTicks, 1);
   assert.deepEqual(calls, []);
 });
+
+test('tick records and clears auto-sync errors in the status snapshot', async () => {
+  let failRender = true;
+  const memoryClient = {
+    isEnabled: () => true,
+    getProviderCapabilities: async () => ({
+      provider: 'doubao',
+      supportedScenarios: ['stable_memory', 'mobile_briefing', 'reminder_sync'],
+    }),
+    renderContextPackage: async ({ scenario }: { scenario: string }) => {
+      if (failRender) {
+        throw new Error('Memory Service connection reset');
+      }
+      return {
+        provider: 'doubao',
+        scenario,
+        packages: [],
+      };
+    },
+    reportSyncJob: async () => undefined,
+  };
+  const bridgeService = {
+    getStatus: async () => ({
+      authStatus: 'connected',
+      bindings: {
+        memory_sync: { threadId: 'memory-thread' },
+        mobile_context: { threadId: 'mobile-thread' },
+      },
+    }),
+    syncStableMemoryAsMemo: async () => ({ accepted: true }),
+    syncMobileBriefing: async () => ({ accepted: true }),
+    syncTodosAsMemo: async () => ({ accepted: true }),
+    syncNotices: async () => ({ accepted: true }),
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  await manager.tick();
+  assert.match(
+    manager.getSnapshot().lastErrorMessage || '',
+    /Memory Service connection reset/,
+  );
+  assert.ok(manager.getSnapshot().lastErrorAt);
+
+  failRender = false;
+  await manager.tick();
+  assert.equal(manager.getSnapshot().lastErrorMessage, undefined);
+  assert.equal(manager.getSnapshot().lastErrorAt, undefined);
+});

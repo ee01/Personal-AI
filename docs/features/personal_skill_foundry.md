@@ -49,10 +49,15 @@ suggestion -> dismissed
 
 - `使用`：promote 为 `active`
 - `丢弃`：标记为 `dismissed`
-- `稍后审`：保留在 suggestion，但更新 snooze 时间
+- `稍后审`：保留在 suggestion，但设置 `snoozed_until`，未到期前不再出现在 Inbox Bar
 - 点击卡片：展开右侧详情
 
 OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 active，而是先作为 suggestion 让用户确认，避免外部平台内容无感覆盖个人真源库。
+
+2026-05-08 状态：
+
+- `GET /api/v1/skills/suggestions` 只返回未暂缓或已到期的 suggestion，避免用户点击“稍后审”后同一张卡片仍停留在 Inbox 里。
+- 前端刷新列表时只保留仍然可见的选中项；当前 suggestion 被稍后审或丢弃后，详情区会自动回到可见的 active skill 或下一条可见建议。
 
 ### 2. 管理在用技能
 
@@ -211,6 +216,27 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - ChatGPT / GPTs、Claude.ai Skills 当前只支持手动安装指引。
 - 暂不做 eval 面板、run receipt、per-skill 自动同步矩阵。
 
+## 建设性改进方向
+
+结合 Claude Code Skills、LangChain long-term memory、OpenAI Agents SDK guardrails / tracing，以及 Skill-Pro、AgeMem、LightMem、Memp 等近期 agent memory / procedural memory 论文，后续优先级建议：
+
+- Skill package 继续保持 `SKILL.md` 主文件轻量，把大参考、模板、脚本放到 files 中按需加载，减少 agent 上下文常驻成本。
+- 对外部导入 skill 增加更明确的审核 gate：高风险、含工具执行、含动态脚本或权限敏感内容时，进入 suggestion 后默认要求用户查看证据和风险再使用。
+- 为 suggestion 去重和冷却补上产品级策略：同一 `suggestionClusterKey` 在 snooze / dismiss 窗口内不重复打扰。
+- 为长期演进增加 run receipt / 失败反馈的轻量入口，不做重 eval 面板，但让用户能把“这个 skill 不好用”的证据回流到版本记录。
+- 同步链路继续保留 per-platform 开关；如需例外，优先通过 skill risk / scope 做过滤，而不是在首屏引入 per-skill 多平台矩阵。
+
+外部参考：
+
+- [Claude Code Skills](https://code.claude.com/docs/en/skills)
+- [LangChain long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory)
+- [OpenAI Agents SDK Guardrails](https://openai.github.io/openai-agents-js/guides/guardrails/)
+- [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/)
+- [Skill-Pro: Learning Reusable Skills from Experience](https://arxiv.org/abs/2602.01869)
+- [Agentic Memory](https://arxiv.org/abs/2601.01885)
+- [LightMem](https://arxiv.org/abs/2604.07798)
+- [Memp: Exploring Agent Procedural Memory](https://arxiv.org/abs/2508.06433)
+
 ## 验证建议
 
 Memory Service：
@@ -224,9 +250,10 @@ Extension：
 
 ```bash
 npm start
+node tools/verify-personal-skill-foundry-e2e.mjs
 ```
 
-运行到首次 webpack compile success 后停止 watch。
+`npm start` 运行到首次 webpack compile success 后停止 watch，再运行扩展页面 E2E。
 
 真实服务验证：
 

@@ -26,6 +26,106 @@ describe('Memories API', () => {
     db.prepare('DELETE FROM messages_raw').run();
   });
 
+  it('returns exact message and chunk memories for timeline focus links', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, scope, source, source_type, source_url, source_title,
+         sender, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'message-1',
+      'Focused message content with a decision and source.',
+      'personal',
+      'timeline-source',
+      'manual',
+      'https://example.com/source',
+      'Source title',
+      'Ada',
+      'AI Team',
+      now,
+      0.8,
+      'neutral',
+      JSON.stringify({ conversationId: 'conversation-1' }),
+      now,
+    );
+
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash,
+         scope, source, source_type, related_entity_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      301,
+      'messages/message-1.md',
+      1,
+      1,
+      'Focused chunk content from the same source.',
+      'hash-focused-chunk',
+      'personal',
+      'timeline-source',
+      'manual',
+      'not-a-message-id',
+      now - 60,
+    );
+
+    const messageRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memories/message/message-1',
+    });
+
+    expect(messageRes.statusCode).toBe(200);
+    expect(messageRes.json()).toMatchObject({
+      id: 'message-1',
+      type: 'message',
+      scope: 'personal',
+      source: 'manual',
+      sourceUrl: 'https://example.com/source',
+      sourceTitle: 'Source title',
+      exploreLink: '#/timeline?type=message&focus=message-1',
+      timestamp: now,
+      metadata: {
+        scope: 'personal',
+        source: 'timeline-source',
+        sender: 'Ada',
+        groupName: 'AI Team',
+        channels: ['direct'],
+      },
+    });
+
+    const chunkRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memories/chunk/301',
+    });
+
+    expect(chunkRes.statusCode).toBe(200);
+    expect(chunkRes.json()).toMatchObject({
+      id: '301',
+      type: 'chunk',
+      scope: 'personal',
+      source: 'manual',
+      sourceUrl: 'https://example.com/source',
+      sourceTitle: 'Source title',
+      exploreLink: '#/timeline?type=chunk&focus=301',
+      timestamp: now - 60,
+      metadata: {
+        filePath: 'messages/message-1.md',
+        scope: 'personal',
+        source: 'timeline-source',
+        relatedMessageId: 'message-1',
+        channels: ['direct'],
+      },
+    });
+
+    const missingRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memories/message/missing',
+    });
+
+    expect(missingRes.statusCode).toBe(404);
+  });
+
   it('deletes only the matching source within the requested scope and defaults scope to work', async () => {
     const now = Math.floor(Date.now() / 1000);
 

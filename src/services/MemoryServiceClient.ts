@@ -2126,6 +2126,23 @@ export class MemoryServiceClient {
   }
 
   /**
+   * Fetch one stored message/chunk by stable explorer id.
+   * Used to make `#/timeline?focus=...` links work even when the item is
+   * outside the currently selected timeline range.
+   */
+  async getMemoryItem(
+    type: 'message' | 'chunk',
+    id: string,
+  ): Promise<RecallItem> {
+    const encodedType = encodeURIComponent(type);
+    const encodedId = encodeURIComponent(id);
+    return this.request<RecallItem>(
+      'GET',
+      `/memories/${encodedType}/${encodedId}`,
+    );
+  }
+
+  /**
    * Passive associative recall — fast, structured, with stable jump links into
    * memory-exploring (Vue UI). Designed for surface-attached "you've seen this
    * before" bubbles in web/meeting/popup surfaces.
@@ -3022,6 +3039,20 @@ export class MemoryServiceClient {
     confidence?: number;
   }): Promise<any> {
     return this.request('POST', '/profile/items', body);
+  }
+
+  /**
+   * Create or reinforce an automatically inferred profile candidate.
+   * Inferred items stay pending until the user confirms them.
+   */
+  async createInferredProfileItem(body: {
+    itemType: string;
+    itemKey: string;
+    itemValue: string;
+    evidenceRefs?: unknown[];
+    confidence?: number;
+  }): Promise<any> {
+    return this.request('POST', '/profile/items/inferred', body);
   }
 
   /**

@@ -21,6 +21,8 @@ export interface UserProfileInterestItem {
   sourceKind: string;
   userConfirmed: boolean;
   status: string;
+  canUseForPersonalization: boolean;
+  contextUseState: 'usable' | 'needs_confirmation';
   evidenceRefs: unknown[];
 }
 
@@ -81,6 +83,7 @@ export interface UserProfileAnalysisViewModel {
     status: string;
     evidenceCount: number;
     lastSeen: number;
+    canUseForPersonalization: boolean;
     reason: string;
   }>;
   opinions: unknown[];
@@ -263,6 +266,9 @@ function normalizeItem(rawItem: unknown): UserProfileInterestItem {
     normalizeTimestampMs(item.lastSeen ?? item.last_seen) ||
     normalizeTimestampMs(item.updatedAt ?? item.updated_at) ||
     normalizeTimestampMs(item.createdAt ?? item.created_at);
+  const status = String(item.status ?? 'active');
+  const userConfirmed = Boolean(item.userConfirmed ?? item.user_confirmed);
+  const canUseForPersonalization = userConfirmed && status === 'active';
 
   return {
     id: String(item.id ?? `${category}:${name}`),
@@ -277,8 +283,10 @@ function normalizeItem(rawItem: unknown): UserProfileInterestItem {
     mentionCount: positiveNumber(item.mentionCount ?? item.mention_count, 1),
     lastSeen,
     sourceKind: String(item.sourceKind ?? item.source_kind ?? 'unknown'),
-    userConfirmed: Boolean(item.userConfirmed ?? item.user_confirmed),
-    status: String(item.status ?? 'active'),
+    userConfirmed,
+    status,
+    canUseForPersonalization,
+    contextUseState: canUseForPersonalization ? 'usable' : 'needs_confirmation',
     evidenceRefs: Array.isArray(item.evidenceRefs ?? item.evidence_refs)
       ? (item.evidenceRefs ?? item.evidence_refs)
       : [],
@@ -461,9 +469,12 @@ function buildAnalysis(
       status: item.status,
       evidenceCount: item.evidenceRefs.length,
       lastSeen: item.lastSeen,
+      canUseForPersonalization: item.canUseForPersonalization,
       reason:
         item.status === 'pending_confirm'
           ? '待确认后再进入核心画像。'
+          : !item.canUseForPersonalization
+            ? '尚未确认，暂不会用于个性化上下文。'
           : item.sourceKind === 'explicit'
             ? '来自显式配置'
             : '来自历史记忆推断，建议人工确认。',

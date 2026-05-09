@@ -92,6 +92,7 @@ describe('Ingest API profile extraction', () => {
         sourceType: 'manual',
         sender: 'test-user',
         timestamp,
+        metadata: { authorRole: 'owner' },
       },
     });
 
@@ -154,5 +155,135 @@ describe('Ingest API profile extraction', () => {
     });
     expect(coreAfterConfirm.statusCode).toBe(200);
     expect(coreAfterConfirm.json().content).toContain('concise product status updates');
+  });
+
+  it('does not store profile candidates from external senders', async () => {
+    const timestamp = 1_778_000_100;
+    generateJSONMock.mockResolvedValue({
+      entities: {
+        people: ['External Sender'],
+        projects: ['Personal AI'],
+        topics: ['user profile'],
+        technologies: [],
+        organizations: [],
+      },
+      properties: [],
+      importance: 0.9,
+      sentiment: 'neutral',
+      summary: 'External sender describes a preference.',
+      is_decision: false,
+      is_action_item: false,
+      profile_candidates: [
+        {
+          item_type: 'preference',
+          item_key: 'communication_style',
+          item_value: 'likes long weekly summaries',
+        },
+      ],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      headers: { 'x-user-id': userId },
+      payload: {
+        content: 'Esone likes long weekly summaries.',
+        sourceType: 'glip',
+        sender: 'external-sender',
+        timestamp,
+        metadata: { authorRole: 'external', isSelf: false },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('created');
+
+    const context = userContextManager.getContext(userId);
+    const profileCount = context.db
+      .prepare('SELECT COUNT(*) AS count FROM user_profile_items')
+      .get() as { count: number };
+    expect(profileCount.count).toBe(0);
+
+    const message = context.db
+      .prepare(
+        `SELECT id, entities_json
+         FROM messages_raw
+         WHERE id = ?`,
+      )
+      .get(res.json().id) as { id: string; entities_json: string | null } | undefined;
+    expect(message).toBeTruthy();
+    expect(message?.entities_json).toContain('External Sender');
+
+    const chunkCount = context.db
+      .prepare('SELECT COUNT(*) AS count FROM chunks WHERE related_entity_id = ?')
+      .get(res.json().id) as { count: number };
+    expect(chunkCount.count).toBeGreaterThan(0);
+  });
+
+  it('stores owner writing style signals as pending profile items', async () => {
+    const timestamp = 1_778_000_200;
+    generateJSONMock.mockResolvedValue({
+      entities: {
+        people: [],
+        projects: [],
+        topics: ['release updates'],
+        technologies: [],
+        organizations: [],
+      },
+      properties: [],
+      importance: 0.7,
+      sentiment: 'neutral',
+      summary: 'Owner writes concise release updates.',
+      is_decision: false,
+      is_action_item: false,
+      profile_candidates: [
+        {
+          item_type: 'fact',
+          item_key: 'writing_style.conciseness',
+          item_value: 'prefers short direct release updates',
+        },
+      ],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      headers: { 'x-user-id': userId },
+      payload: {
+        content: 'Quick release note: keep the update short and direct.',
+        sourceType: 'manual',
+        sender: 'test-user',
+        timestamp,
+        metadata: { isSelf: true },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('created');
+
+    const context = userContextManager.getContext(userId);
+    const row = context.db
+      .prepare(
+        `SELECT item_type, item_key, item_value, source_kind, status, user_confirmed
+         FROM user_profile_items
+         WHERE item_key = 'writing_style.conciseness'`,
+      )
+      .get() as
+      | {
+          item_type: string;
+          item_key: string;
+          item_value: string;
+          source_kind: string;
+          status: string;
+          user_confirmed: number;
+        }
+      | undefined;
+
+    expect(row).toBeTruthy();
+    expect(row?.item_type).toBe('preference');
+    expect(row?.item_value).toBe('prefers short direct release updates');
+    expect(row?.source_kind).toBe('inferred');
+    expect(row?.status).toBe('pending_confirm');
+    expect(row?.user_confirmed).toBe(0);
   });
 });

@@ -98,6 +98,39 @@ interface ConfigData {
 }
 
 type TabType = 'prompts' | 'personal' | 'team' | 'work' | 'communication' | 'analysis';
+type PromptScope = keyof CustomPrompts;
+type CurrentUserInfo = { name: string; email: string };
+
+const PROMPT_EXAMPLES: Record<PromptScope, Array<{ label: string; content: string }>> = {
+    message: [
+        {
+            label: '风险升级',
+            content: '优先识别客户升级、阻塞项、明确责任人和需要当天跟进的行动。'
+        },
+        {
+            label: '低噪声',
+            content: '忽略寒暄、重复确认和无行动价值的 FYI，除非它们包含截止时间或负责人。'
+        },
+        {
+            label: '结论优先',
+            content: '输出时先给结论，再列行动项、风险和需要我确认的问题。'
+        }
+    ],
+    project: [
+        {
+            label: '依赖检查',
+            content: '项目分析时优先检查跨团队依赖、外部阻塞和 owner 不清晰的事项。'
+        },
+        {
+            label: '里程碑可信度',
+            content: '评估里程碑时关注时间线是否有证据、风险是否被量化、缓冲是否足够。'
+        },
+        {
+            label: '汇报格式',
+            content: '用状态、风险、下一步、需要决策四段来组织项目分析结果。'
+        }
+    ]
+};
 
 const createDefaultConfig = (): ConfigData => ({
     customPrompts: {
@@ -201,6 +234,27 @@ const hasStoredConfig = (config: any): boolean => (
     Boolean(config?.customPrompts || config?.userContextConfig)
 );
 
+const isUsableIdentityValue = (value: string): boolean => (
+    Boolean(value && !value.startsWith('未知'))
+);
+
+const mergeIdentityFallback = (
+    config: ConfigData,
+    userInfo: CurrentUserInfo
+): ConfigData => ({
+    ...config,
+    userContextConfig: {
+        ...config.userContextConfig,
+        personalInfo: {
+            ...config.userContextConfig.personalInfo,
+            name: config.userContextConfig.personalInfo.name ||
+                (isUsableIdentityValue(userInfo.name) ? userInfo.name : ''),
+            email: config.userContextConfig.personalInfo.email ||
+                (isUsableIdentityValue(userInfo.email) ? userInfo.email : '')
+        }
+    }
+});
+
 const createEmptyStakeholder = (): Stakeholder => ({
     name: '',
     position: '',
@@ -227,38 +281,35 @@ const PromptConfig: React.FC = () => {
     const [configData, setConfigData] = useState<ConfigData>(createDefaultConfig);
 
     useEffect(() => {
-        loadCurrentUserInfo();
-        loadFromStorage();
+        initializeConfigPage();
     }, []);
 
-    const loadCurrentUserInfo = async () => {
+    const initializeConfigPage = async () => {
+        const userInfo = await loadCurrentUserInfo();
+        await loadFromStorage(userInfo);
+    };
+
+    const loadCurrentUserInfo = async (): Promise<CurrentUserInfo> => {
+        let nextUserInfo: CurrentUserInfo = { name: '', email: '' };
         try {
             const { userinfo } = await chrome.storage.local.get('userinfo');
             if (userinfo) {
                 const displayName = userinfo.fullName || userinfo.username || '未知用户';
                 const displayEmail = userinfo.userEmail || '未知邮箱';
+                nextUserInfo = { name: displayName, email: displayEmail };
                 
-                setCurrentUserInfo({ name: displayName, email: displayEmail });
+                setCurrentUserInfo(nextUserInfo);
                 
                 // 更新配置数据中的基本信息
-	                setConfigData(prev => ({
-	                    ...prev,
-	                    userContextConfig: {
-	                        ...prev.userContextConfig,
-	                        personalInfo: {
-	                            ...prev.userContextConfig.personalInfo,
-	                            name: prev.userContextConfig.personalInfo.name || displayName,
-	                            email: prev.userContextConfig.personalInfo.email || displayEmail
-	                        }
-	                    }
-	                }));
+                setConfigData(prev => mergeIdentityFallback(prev, nextUserInfo));
             }
         } catch (error) {
             console.error('加载用户信息失败:', error);
         }
+        return nextUserInfo;
     };
 
-	const loadFromStorage = async () => {
+	const loadFromStorage = async (identityFallback: CurrentUserInfo = currentUserInfo) => {
 	    setIsLoading(true);
 	    try {
             const localResult = await chrome.storage.local.get([
@@ -294,7 +345,7 @@ const PromptConfig: React.FC = () => {
                 console.warn('记忆服务配置读取失败，继续使用本机配置:', cloudError);
             }
 
-            setConfigData(nextConfig);
+            setConfigData(mergeIdentityFallback(nextConfig, identityFallback));
             setHasUnsavedChanges(false);
             setSyncSource(sourceLabel);
             showStatusMessage(`已加载${sourceLabel}`, 'success');
@@ -313,7 +364,7 @@ const PromptConfig: React.FC = () => {
 	    ) {
 	        return;
 	    }
-	    loadFromStorage();
+	    loadFromStorage(currentUserInfo);
 	};
 
 	// 🆕 数据迁移：从本地存储迁移到云端
@@ -580,6 +631,34 @@ const PromptConfig: React.FC = () => {
 	    updateConfigAtPath(path, value);
 	};
 
+    const appendPromptExample = (scope: PromptScope, content: string) => {
+        const currentContent = configData.customPrompts[scope].content.trim();
+        const nextContent = currentContent
+            ? `${currentContent}\n\n${content}`
+            : content;
+
+        if (nextContent.length > USER_CONFIG_PROMPT_CHAR_LIMIT) {
+            showStatusMessage(
+                `插入后会超过 ${USER_CONFIG_PROMPT_CHAR_LIMIT} 字符，请先删减现有内容`,
+                'error'
+            );
+            return;
+        }
+
+        updateConfigAtPath(`customPrompts.${scope}`, (prompt: CustomPrompts[PromptScope]) => ({
+            ...prompt,
+            enabled: true,
+            content: nextContent,
+            position: prompt?.position || 'after_analysis_guide'
+        }));
+    };
+
+    const getPromptMetaClass = (content: string) => (
+        content.length > USER_CONFIG_PROMPT_CHAR_LIMIT * 0.9
+            ? 'field-meta warning'
+            : 'field-meta'
+    );
+
 	const updateStakeholder = (index: number, key: keyof Stakeholder, value: string) => {
 	    updateConfigAtPath(
 	        'userContextConfig.stakeholders.keyStakeholders',
@@ -634,62 +713,76 @@ const PromptConfig: React.FC = () => {
         </div>
     );
 
+    const renderPromptEditor = (
+        scope: PromptScope,
+        title: string,
+        placeholder: string
+    ) => {
+        const prompt = configData.customPrompts[scope];
+
+        return (
+            <div className="prompt-scope-section">
+                <div className="field-group">
+                    <label className="prompt-toggle">
+                        <input
+                            type="checkbox"
+                            checked={prompt.enabled}
+                            onChange={(e) => updateValue(`customPrompts.${scope}.enabled`, e.target.checked)}
+                        />
+                        <span>启用{title}自定义提示词</span>
+                    </label>
+                    {prompt.enabled && (
+                        <>
+                            <textarea
+                                value={prompt.content}
+                                onChange={(e) => updateValue(`customPrompts.${scope}.content`, e.target.value)}
+                                placeholder={placeholder}
+                                rows={4}
+                                maxLength={USER_CONFIG_PROMPT_CHAR_LIMIT}
+                            />
+                            <div className={getPromptMetaClass(prompt.content)}>
+                                {prompt.content.length}/{USER_CONFIG_PROMPT_CHAR_LIMIT}
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                <div className="prompt-example-row" aria-label={`${title}提示词示例`}>
+                    <span>快速插入</span>
+                    {PROMPT_EXAMPLES[scope].map((example) => (
+                        <button
+                            key={example.label}
+                            type="button"
+                            className="example-chip"
+                            onClick={() => appendPromptExample(scope, example.content)}
+                        >
+                            {example.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
     const renderTab = () => {
         switch (activeTab) {
             case 'prompts':
                 return (
                     <div className="tab-content">
                         <h3>自定义提示词</h3>
-                        
-                        <div className="field-group">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={configData.customPrompts.message.enabled}
-                                    onChange={(e) => updateValue('customPrompts.message.enabled', e.target.checked)}
-                                />
-                                启用消息分析自定义提示词
-                            </label>
-                            {configData.customPrompts.message.enabled && (
-                                <>
-                                    <textarea
-                                        value={configData.customPrompts.message.content}
-                                        onChange={(e) => updateValue('customPrompts.message.content', e.target.value)}
-                                        placeholder="输入消息分析的自定义提示词..."
-                                        rows={4}
-                                        maxLength={USER_CONFIG_PROMPT_CHAR_LIMIT}
-                                    />
-	                                    <div className="field-meta">
-	                                        {configData.customPrompts.message.content.length}/{USER_CONFIG_PROMPT_CHAR_LIMIT}
-	                                    </div>
-                                </>
-                            )}
-                        </div>
-
-                        <div className="field-group">
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={configData.customPrompts.project.enabled}
-                                    onChange={(e) => updateValue('customPrompts.project.enabled', e.target.checked)}
-                                />
-                                启用项目分析自定义提示词
-                            </label>
-                            {configData.customPrompts.project.enabled && (
-                                <>
-                                    <textarea
-                                        value={configData.customPrompts.project.content}
-                                        onChange={(e) => updateValue('customPrompts.project.content', e.target.value)}
-                                        placeholder="输入项目分析的自定义提示词..."
-                                        rows={4}
-                                        maxLength={USER_CONFIG_PROMPT_CHAR_LIMIT}
-                                    />
-                                    <div className="field-meta">
-                                        {configData.customPrompts.project.content.length}/{USER_CONFIG_PROMPT_CHAR_LIMIT}
-                                    </div>
-                                </>
-                            )}
-                        </div>
+                        <p className="section-note">
+                            内容会作为低优先级偏好注入分析流程，并与系统规则、工具边界和返回格式隔离。
+                        </p>
+                        {renderPromptEditor(
+                            'message',
+                            '消息分析',
+                            '输入消息分析的自定义提示词...'
+                        )}
+                        {renderPromptEditor(
+                            'project',
+                            '项目分析',
+                            '输入项目分析的自定义提示词...'
+                        )}
                     </div>
                 );
 
@@ -1274,6 +1367,13 @@ const PromptConfig: React.FC = () => {
                     color: #2c3e50;
                 }
 
+                .section-note {
+                    margin: -4px 0 18px;
+                    color: #64748b;
+                    font-size: 13px;
+                    line-height: 1.5;
+                }
+
 	                .field-group {
 	                    margin-bottom: 20px;
 	                }
@@ -1310,11 +1410,66 @@ const PromptConfig: React.FC = () => {
                     border-color: #3498db;
                 }
 
+                .field-group input[type="checkbox"] {
+                    width: auto;
+                    padding: 0;
+                    margin: 0;
+                }
+
+                .prompt-scope-section {
+                    padding-bottom: 18px;
+                    margin-bottom: 20px;
+                    border-bottom: 1px solid #e5e7eb;
+                }
+
+                .prompt-scope-section:last-child {
+                    padding-bottom: 0;
+                    margin-bottom: 0;
+                    border-bottom: none;
+                }
+
+                .prompt-toggle {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+
                 .field-meta {
                     margin-top: 6px;
                     text-align: right;
                     color: #6b7280;
                     font-size: 12px;
+                }
+
+                .field-meta.warning {
+                    color: #b7791f;
+                    font-weight: 600;
+                }
+
+                .prompt-example-row {
+                    display: flex;
+                    flex-wrap: wrap;
+                    align-items: center;
+                    gap: 8px;
+                    color: #64748b;
+                    font-size: 12px;
+                }
+
+                .example-chip {
+                    width: auto;
+                    margin: 0;
+                    padding: 6px 10px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #334155;
+                    cursor: pointer;
+                    font-size: 12px;
+                }
+
+                .example-chip:hover {
+                    background: #f1f5f9;
+                    border-color: #94a3b8;
                 }
 
                 .user-info {

@@ -9,7 +9,13 @@
 import {
   getMemoryServiceClient,
   type RecallItem,
+  type RecallScope,
 } from '../services/MemoryServiceClient';
+import {
+  getTimelineRangeSeconds,
+  mapRecallItemsToTimelineEvents,
+  normalizeTimelineScope,
+} from './timelinePresentation';
 
 // Get the singleton client instance
 const client = getMemoryServiceClient();
@@ -220,23 +226,59 @@ const messageHandlers: Record<string, MessageHandler> = {
 
   GET_RECENT_TIMELINE: async (request) => {
     try {
-      const { limit = 50 } = request;
-      // Use recall with time channel to approximate timeline
-      const recallResult = await client.recall('', {
+      const limit = Math.min(Math.max(Number(request.limit) || 50, 1), 100);
+      const scope: RecallScope = normalizeTimelineScope(request.scope, 'all');
+      const range = request.range === 'recent' ? 'recent' : 'today';
+      const rangeDays = Number(request.rangeDays);
+      const timeRange = getTimelineRangeSeconds(Date.now(), range, rangeDays);
+
+      const recallResult = await client.recall('近期记忆时间轴', {
         topK: limit,
         channels: ['time'],
+        timeRange,
+        scope,
+        includeMetadata: true,
+        presentationHint: 'compact',
+        previewMaxLength: 180,
       });
-      const timeline = (recallResult.items || []).map((item) => ({
-        id: item.id,
-        content: item.content,
-        timestamp: item.timestamp,
-        source: item.source,
-        ...(item.metadata || {}),
-      }));
+      const timeline = mapRecallItemsToTimelineEvents(recallResult.items || []);
       return { success: true, data: timeline };
     } catch (error: any) {
       console.error('获取时间轴失败:', error);
       return { success: false, error: error.message, data: [] };
+    }
+  },
+
+  GET_MEMORY_ITEM: async (request) => {
+    try {
+      const id = String(request.id || '').trim();
+      const requestedType =
+        request.memoryType === 'message' || request.memoryType === 'chunk'
+          ? request.memoryType
+          : undefined;
+
+      if (!id) {
+        return { success: false, error: 'missing_memory_id', data: null };
+      }
+
+      const types: Array<'message' | 'chunk'> = requestedType
+        ? [requestedType]
+        : ['message', 'chunk'];
+
+      for (const type of types) {
+        try {
+          const item = await client.getMemoryItem(type, id);
+          const [event] = mapRecallItemsToTimelineEvents([item]);
+          return { success: true, data: event || null };
+        } catch (error) {
+          if (type === types[types.length - 1]) throw error;
+        }
+      }
+
+      return { success: false, error: 'memory_not_found', data: null };
+    } catch (error: any) {
+      console.error('获取定位记忆失败:', error);
+      return { success: false, error: error.message, data: null };
     }
   },
 

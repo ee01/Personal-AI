@@ -74,6 +74,43 @@
         </div>
       </div>
 
+      <div class="profile-card">
+        <h3>✍️ 主人表达与偏好</h3>
+        <p class="profile-card-description">
+          显式添加会立即用于 Context Assist，比自动推断优先级更高。
+        </p>
+        <div class="owner-profile-form">
+          <select v-model="explicitProfileDraft.itemType">
+            <option value="preference">偏好</option>
+            <option value="habit">习惯</option>
+            <option value="constraint">约束</option>
+            <option value="fact">事实</option>
+            <option value="interest">兴趣</option>
+          </select>
+          <select v-model="explicitProfileDraft.itemKey">
+            <option value="writing_style.ringcentral.reply">RingCentral 回复风格</option>
+            <option value="writing_style.ringcentral.thread_reply">Thread 回复风格</option>
+            <option value="writing_style.jira.comment">Jira 评论风格</option>
+            <option value="communication_style">通用沟通风格</option>
+            <option value="response_style">默认回复风格</option>
+            <option value="owner_response_constraint">不要替我说的话</option>
+          </select>
+          <textarea
+            v-model="explicitProfileDraft.itemValue"
+            rows="3"
+            placeholder="例如：中文回复尽量简短，先给结论，再给一个明确 next step。"
+          />
+          <button
+            type="button"
+            class="primary-action-btn"
+            :disabled="isCreatingExplicitProfile || !explicitProfileDraft.itemValue.trim()"
+            @click="createExplicitProfileItem"
+          >
+            {{ isCreatingExplicitProfile ? '添加中...' : '添加到画像' }}
+          </button>
+        </div>
+      </div>
+
       <!-- 核心兴趣概览 -->
       <div class="profile-card">
         <h3>🎯 当前关注重点</h3>
@@ -262,6 +299,12 @@
               <span>{{ getProfileStatusDisplayName(prediction.status) }}</span>
               <span>{{ getSourceDisplayName(prediction.sourceKind) }}</span>
               <span>{{ prediction.evidenceCount > 0 ? `${prediction.evidenceCount} 条证据` : '暂无证据' }}</span>
+              <span
+                class="context-use-pill"
+                :class="{ usable: prediction.canUseForPersonalization }"
+              >
+                {{ getContextUseLabel(prediction.canUseForPersonalization) }}
+              </span>
               <span>{{ formatTime(prediction.lastSeen) }}</span>
             </div>
             <div class="prediction-reason">{{ prediction.reason }}</div>
@@ -342,6 +385,12 @@
                 <span>命中 {{ item.mentionCount }} 次</span>
                 <span>{{ getSourceDisplayName(item.sourceKind) }}</span>
                 <span>{{ getEvidenceLabel(item) }}</span>
+                <span
+                  class="context-use-pill"
+                  :class="{ usable: item.canUseForPersonalization }"
+                >
+                  {{ getContextUseLabel(item.canUseForPersonalization) }}
+                </span>
                 <span>{{ formatTime(item.lastSeen) }}</span>
               </div>
             </div>
@@ -642,11 +691,17 @@ const isLoading = ref(true);
 const isExporting = ref(false);
 const showAdvancedSettings = ref(false);
 const isApplyingSettings = ref(false);
+const isCreatingExplicitProfile = ref(false);
 const statusMessage = ref('');
 const statusTone = ref<'success' | 'error' | 'info'>('info');
 const userProfile = ref<UserProfileViewModel | null>(null);
 const userProfileAnalysis = ref<UserProfileAnalysisViewModel | null>(null);
 const pendingItemIds = ref<Set<string>>(new Set());
+const explicitProfileDraft = ref({
+  itemType: 'preference',
+  itemKey: 'writing_style.ringcentral.reply',
+  itemValue: '',
+});
 
 const weightDecaySettings = ref({
   baseDecayRate: 0.05,
@@ -785,6 +840,9 @@ const getEvidenceLabel = (item: UserProfileInterestItem): string => {
   return count > 0 ? `${count} 条证据` : '暂无证据';
 };
 
+const getContextUseLabel = (canUseForPersonalization: boolean): string =>
+  canUseForPersonalization ? '可用于个性化' : '确认前不使用';
+
 const replaceProfileItem = (itemId: string, updates: Partial<UserProfileInterestItem>) => {
   if (!userProfile.value) return;
   userProfile.value.allItems = userProfile.value.allItems.map((item) =>
@@ -877,6 +935,34 @@ const retractProfileItem = async (itemId: string) => {
     setStatus(error?.message || '画像条目排除失败', 'error');
   } finally {
     setItemPending(itemId, false);
+  }
+};
+
+const createExplicitProfileItem = async () => {
+  const itemValue = explicitProfileDraft.value.itemValue.trim();
+  if (!itemValue || isCreatingExplicitProfile.value) return;
+
+  isCreatingExplicitProfile.value = true;
+  try {
+    const response = await chromeAPI.sendMessage({
+      type: 'CREATE_PROFILE_ITEM',
+      itemType: explicitProfileDraft.value.itemType,
+      itemKey: explicitProfileDraft.value.itemKey,
+      itemValue,
+      confidence: 1,
+    });
+
+    if (response && (response as any).success) {
+      explicitProfileDraft.value.itemValue = '';
+      setStatus('主人表达画像已添加', 'success');
+      await loadUserProfile({ showLoading: false });
+    } else {
+      setStatus((response as any)?.error || '画像条目添加失败', 'error');
+    }
+  } catch (error: any) {
+    setStatus(error?.message || '画像条目添加失败', 'error');
+  } finally {
+    isCreatingExplicitProfile.value = false;
   }
 };
 
@@ -1237,6 +1323,74 @@ onMounted(() => {
   font-size: 18px;
 }
 
+.profile-card-description {
+  margin: -8px 0 16px;
+  color: #5f6f7f;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.owner-profile-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(220px, 1.3fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.owner-profile-form select,
+.owner-profile-form textarea {
+  width: 100%;
+  border: 1px solid #d7dee5;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #2c3e50;
+  font: inherit;
+  min-width: 0;
+}
+
+.owner-profile-form select {
+  height: 38px;
+  padding: 0 10px;
+}
+
+.owner-profile-form textarea {
+  grid-column: 1 / -1;
+  min-height: 88px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.owner-profile-form select:focus,
+.owner-profile-form textarea:focus {
+  border-color: #1976d2;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.12);
+}
+
+.primary-action-btn {
+  grid-column: 1 / -1;
+  justify-self: end;
+  border: 1px solid #1565c0;
+  border-radius: 6px;
+  padding: 8px 14px;
+  background: #1976d2;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-action-btn:hover {
+  background: #1565c0;
+}
+
+.primary-action-btn:disabled {
+  border-color: #d7dee5;
+  background: #e9ecef;
+  color: #8a97a3;
+  cursor: not-allowed;
+}
+
 /* 🌟 兴趣网格布局 */
 .interest-grid {
   display: grid;
@@ -1322,6 +1476,7 @@ onMounted(() => {
 
 .star:focus-visible,
 .review-link:focus-visible,
+.primary-action-btn:focus-visible,
 .secondary-action-btn:focus-visible,
 .danger-action-btn:focus-visible {
   outline: 2px solid #1976d2;
@@ -1457,6 +1612,19 @@ onMounted(() => {
   gap: 10px;
   color: #6c757d;
   font-size: 12px;
+}
+
+.context-use-pill {
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: #fff8e1;
+  color: #8a5a00;
+  font-weight: 600;
+}
+
+.context-use-pill.usable {
+  background: #e8f5e9;
+  color: #2e7d32;
 }
 
 .prediction-actions {

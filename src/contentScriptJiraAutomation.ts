@@ -24,7 +24,7 @@ import {
   formatDaysOfWeekDisplay,
   jiraDaysToJsDays
 } from './scheduled-messages/scheduleUtils';
-import { createJiraHeaders } from './jira';
+import { jiraFetch } from './jira';
 
 // 检测是否在Jira automation管理页面
 function isJiraAutomationPage(): boolean {
@@ -75,11 +75,9 @@ async function getCurrentOwnerId(): Promise<string> {
   // 如果页面元素中也获取不到，尝试通过API获取（使用统一的认证方法）
   try {
     console.log('Trying to get ownerId from JIRA API...');
-    const headers = await createJiraHeaders();
-    const response = await fetch(window.location.origin + '/rest/api/2/myself', {
-      method: 'GET',
-      headers,
-      credentials: 'include'
+    const response = await jiraFetch(window.location.origin + '/rest/api/2/myself', {
+      authMode: 'cookie-always',
+      requestLabel: 'fetch Jira current user for automation import',
     });
     
     if (response.ok) {
@@ -255,11 +253,9 @@ async function resolveCurrentProjectContext(): Promise<JiraAutomationProjectCont
 
   if (projectKey) {
     try {
-      const headers = await createJiraHeaders();
-      const response = await fetch(`${window.location.origin}/rest/api/2/project/${encodeURIComponent(projectKey)}`, {
-        method: 'GET',
-        headers,
-        credentials: 'include',
+      const response = await jiraFetch(`${window.location.origin}/rest/api/2/project/${encodeURIComponent(projectKey)}`, {
+        authMode: 'cookie-when-safe',
+        requestLabel: `resolve Jira project ${projectKey}`,
       });
 
       if (!response.ok) {
@@ -382,12 +378,11 @@ function waitForIframe(): Promise<Document> {
 // 创建automation rule的API调用（使用统一的认证方法）
 async function createAutomationRule(ruleData: ImportRule, projectId: string): Promise<any> {
   try {
-    const headers = await createJiraHeaders();
-    const response = await fetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
+    const response = await jiraFetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
       method: 'POST',
-      headers,
-      credentials: 'include',
-      body: JSON.stringify(ruleData)
+      body: ruleData,
+      authMode: 'cookie-when-safe',
+      requestLabel: 'create Jira automation rule',
     });
     
     if (!response.ok) {
@@ -1206,11 +1201,9 @@ interface RuleInfo {
 async function getAllProjectRules(projectId: string): Promise<any[]> {
   try {
     // 使用统一的认证方法
-    const headers = await createJiraHeaders();
-    const response = await fetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
-      method: 'GET',
-      headers,
-      credentials: 'include'
+    const response = await jiraFetch(`/rest/cb-automation/latest/project/${projectId}/rule`, {
+      authMode: 'cookie-when-safe',
+      requestLabel: 'fetch Jira automation rules',
     });
     
     if (!response.ok) {
@@ -1292,11 +1285,9 @@ async function getRuleAuditLog(ruleId: string, projectId: string): Promise<any[]
   try {
     // 使用正确的 API 路径：/rest/cb-automation/latest/audit/{projectId}?limit=50&ruleId={ruleId}&offset=0
     // 使用统一的认证方法
-    const headers = await createJiraHeaders();
-    const response = await fetch(`/rest/cb-automation/latest/audit/${projectId}?limit=50&ruleId=${ruleId}&offset=0`, {
-      method: 'GET',
-      headers,
-      credentials: 'include'
+    const response = await jiraFetch(`/rest/cb-automation/latest/audit/${projectId}?limit=50&ruleId=${ruleId}&offset=0`, {
+      authMode: 'cookie-when-safe',
+      requestLabel: `fetch Jira automation audit log for rule ${ruleId}`,
     });
     
     if (!response.ok) {

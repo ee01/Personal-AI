@@ -21,6 +21,8 @@ Agent Workflow 是消息入口的标准化多 Agent 编排模式。它在 `ANALY
 
 `processNewMessage` 会规范化消息内容、时间和实体结果，避免不同入口传入 `message_content`、`content`、`text` 时造成后续 Agent 丢上下文。命中存储条件时，它通过 `MemoryServiceClient.ingest` 写入 Memory Service，并保留匹配规则、稳定摘要、实体、关系、回复建议、轻量执行 trace 和 `storageReview` 存储审计等元数据。关注项引用只有在能解析到当前手动关注项或运行时系统规则时才会进入 `matchedRuleRefs`；LLM 返回的过期/未知引用不会污染存储归因。
 
+写入 Memory Service metadata 的 `agentWorkflowTrace` 会做降敏处理：保留 Agent / 工具状态、耗时、跳过或失败信息，但省略输入摘要里的消息原文和 `historySearch` 查询文本。Options 页面里的“关注项测试”仍使用本次运行返回的实时 trace，方便调试当前配置；长期存储侧只保留足够审计的结构化摘要。
+
 低置信度手动关注项命中不会直接触发通知和规则自动化。当前阈值是 70%：低于阈值时，系统会把原始命中、置信度、阈值和复核原因写入 `notificationReview`，并保留到 Memory Service 审计元数据；`shouldNotify` 会降级为 false，避免误触发外部副作用。为了兼容不同模型输出，Agent Workflow 会把 `0.42`、`42`、`"42%"` 这类置信度统一归一化到 0-1 区间后再做通知门控和 UI 展示。
 
 ## 关注项与自动化
@@ -48,7 +50,7 @@ Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数
 - [Microsoft Copilot Studio AI approvals](https://learn.microsoft.com/en-us/microsoft-copilot-studio/faqs-ai-approvals) 把低风险自动决策和人工审核阶段组合起来；Agent Workflow 已先对低置信度通知和自动化动作增加人工复核门槛。
 - [Zapier Agents triggers](https://help.zapier.com/hc/en-us/articles/45394909914381-Set-up-your-agent-s-trigger) 的体验重点是 trigger、tools、knowledge sources、test、publish；Agent Workflow 已补“关注项测试”和最近消息回放，后续可把测试结果发布前检查做成固定步骤。
 - [CrewAI Flows](https://docs.crewai.com/en/concepts/flows) 和 [Human Feedback in Flows](https://docs.crewai.com/en/learn/human-feedback-in-flows) 强调可控流程、人工反馈和反馈历史；Agent Workflow 的 Options 测试路径应继续优先服务“配置后立即验证”，并让复核原因能被审计。
-- [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/) 把 workflow、agent、tool、guardrail 等运行片段组织成 trace；Agent Workflow 当前适合继续保留轻量 trace 摘要，把敏感原文留在消息本体而不是审计字段。
+- [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/) 把 workflow、agent、tool、guardrail 等运行片段组织成 trace，并单独提醒敏感数据处理；Agent Workflow 当前适合继续保留轻量 trace 摘要，把敏感原文留在消息本体而不是审计字段。
 - [LangSmith observability](https://docs.langchain.com/oss/python/langchain/observability) 强调按工具调用、提示和决策点追踪执行；Agent Workflow 的测试面板应继续把用户最关心的决策摘要前置，而不是只暴露原始 trace。
 - Generative Agents 论文强调 observation、planning、reflection 对行为质量的作用；Reflexion 论文强调把反馈写入 episodic memory 改进后续决策。Agent Workflow 更适合先加入失败/误报反馈回流，而不是增加更多固定 Agent。
 - [AgentTrace](https://arxiv.org/abs/2602.10133) 等 Agent observability 论文强调结构化 trace 对排障、风险分析和信任校准的价值；当前已把每条存储消息的存储原因和 trace 健康状态压缩进 `storageReview`，后续应保持轻量，避免把完整隐私上下文写入审计字段。

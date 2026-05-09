@@ -214,6 +214,32 @@ function installFetchMock() {
       }
 
       if (prompt.includes('实体') || prompt.includes('提取')) {
+        if (prompt.includes('no named entity secret phrase should not persist')) {
+          return new Response(
+            JSON.stringify({
+              response: JSON.stringify({
+                entities: {
+                  people: [],
+                  projects: [],
+                  topics: [],
+                  resources: [],
+                  webpages: [],
+                  jiraTickets: [],
+                  conversations: [],
+                },
+                metadata: {
+                  sentiment: 'neutral',
+                  priority: 'medium',
+                  category: [],
+                  tags: [],
+                },
+                actions: [],
+              }),
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
         return new Response(
           JSON.stringify({
             response: JSON.stringify({
@@ -259,6 +285,21 @@ function installFetchMock() {
       }
 
       if (prompt.includes('分析以下消息的重要性')) {
+        if (prompt.includes('no named entity secret phrase should not persist')) {
+          return new Response(
+            JSON.stringify({
+              response: JSON.stringify({
+                isImportant: true,
+                shouldStore: true,
+                priority: 'high',
+                reason: 'secret-free audit trace check',
+                tags: ['audit'],
+              }),
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
         if (prompt.includes('architecture decision should be remembered')) {
           return new Response(
             JSON.stringify({
@@ -353,6 +394,18 @@ async function main() {
     'system-only outreach evidence matched',
   );
   assert.equal(ingests[0].metadata.agentWorkflowTrace.length, 6);
+  assert.match(
+    result.agentWorkflowTrace?.[0].inputSummary || '',
+    /migration guide draft is ready/,
+  );
+  assert.doesNotMatch(
+    ingests[0].metadata.agentWorkflowTrace[0].inputSummary,
+    /migration guide draft is ready/,
+  );
+  assert.match(
+    ingests[0].metadata.agentWorkflowTrace[0].inputSummary,
+    /message content omitted/,
+  );
   assert.equal(botMessages.length, 0);
 
   storage.concernedItems = [
@@ -418,6 +471,31 @@ async function main() {
     'relevanceJudgment',
   );
   assert.equal(ingests[0].metadata.storageReview.traceStatus, 'complete');
+
+  runtimeStatusItems = [];
+  storage.concernedItems = [];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const secretTraceContent =
+    'no named entity secret phrase should not persist in trace metadata';
+  const secretTraceResult = await processNewMessage({
+    sender: 'Riley Park',
+    team_id: 'team-secret',
+    team_name: 'Private Ops',
+    content: secretTraceContent,
+    datetime: '2026-04-15T00:12:00.000Z',
+  });
+
+  assert.equal(secretTraceResult.shouldStore, true);
+  assert.equal(ingests.length, 1);
+  assert.equal(ingests[0].content, secretTraceContent);
+  const persistedTraceText = JSON.stringify(
+    ingests[0].metadata.agentWorkflowTrace,
+  );
+  assert.doesNotMatch(persistedTraceText, /secret phrase/);
+  assert.match(persistedTraceText, /message content omitted/);
+  assert.match(persistedTraceText, /query text omitted/);
 
   runtimeStatusItems = [];
   storage.concernedItems = [

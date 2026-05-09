@@ -59,6 +59,17 @@ export function buildProjectHistoryUrl(scriptId: string): string {
   return `https://script.google.com/home/projects/${encodeURIComponent(scriptId)}/projecthistory`;
 }
 
+export function buildAppScriptWebAppActionUrl(webAppUrl: string, action: string): string {
+  try {
+    const url = new URL(webAppUrl);
+    url.searchParams.set('action', action);
+    return url.toString();
+  } catch {
+    const separator = webAppUrl.includes('?') ? '&' : '?';
+    return `${webAppUrl}${separator}action=${encodeURIComponent(action)}`;
+  }
+}
+
 function isProjectHistoryLimitError(errorText: string): boolean {
   return (
     errorText.includes('Cannot create more versions') ||
@@ -138,10 +149,8 @@ export class AppScriptUpdater {
       
     } catch (error) {
       console.error('解析模板文件版本信息失败:', error);
-      // 回退到默认版本
-      const fallbackVersion = { version: '1.0.0', lastUpdated: new Date().toISOString().split('T')[0] };
-      AppScriptUpdater.cachedVersionInfo = fallbackVersion;
-      return fallbackVersion;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`无法读取最新 App Script 模板版本，已停止升级以避免误判版本。原因：${reason}`);
     }
   }
   
@@ -161,10 +170,12 @@ export class AppScriptUpdater {
    * 检查是否需要更新
    */
   async checkForUpdates(): Promise<UpdateCheckResult> {
+    let latestVersion = 'unknown';
+
     try {
       // 获取最新版本号
       const latestVersionInfo = await AppScriptUpdater.getLatestVersionInfo();
-      const latestVersion = latestVersionInfo.version;
+      latestVersion = latestVersionInfo.version;
       
       if (!this.config?.webAppUrl) {
         return {
@@ -206,8 +217,6 @@ export class AppScriptUpdater {
       
     } catch (error) {
       console.error('检查更新失败:', error);
-      // 发生错误时也需要获取最新版本号
-      const latestVersion = await AppScriptUpdater.getLatestVersion().catch(() => '1.0.0');
       return {
         needsUpdate: false,
         currentVersion: 'unknown',
@@ -227,7 +236,7 @@ export class AppScriptUpdater {
 
     let response: Response;
     try {
-      response = await fetch(`${this.config.webAppUrl}?action=getVersion`, {
+      response = await fetch(buildAppScriptWebAppActionUrl(this.config.webAppUrl, 'getVersion'), {
         method: 'GET',
         headers: {
           'Cache-Control': 'no-cache'
@@ -693,12 +702,16 @@ export class AppScriptUpdater {
     
     this.config.appScriptVersion = versionInfo.version;
     this.config.appScriptLastUpdated = versionInfo.lastUpdated;
-    
-    // 保存到 Chrome Storage
-    await this.saveConfigToStorage();
-    
-    // 同步到 Google Sheet
-    await this.syncConfigToSheet();
+    await this.syncConfigSheetFirst();
+  }
+
+  private async syncConfigSheetFirst(): Promise<void> {
+    if (!this.config) {
+      return;
+    }
+
+    const syncService = new ConfigSyncService(this.token);
+    this.config = await syncService.syncConfig(this.config);
   }
 
   private async syncKnownDeployedVersionToConfigIfStale(
@@ -741,19 +754,6 @@ export class AppScriptUpdater {
     
     await chrome.storage.local.set({ scheduledMessagesConfig: normalizeSheetConfig(this.config) });
     console.log('✅ 配置已保存到 Chrome Storage');
-  }
-  
-  /**
-   * 同步配置到 Google Sheet
-   */
-  private async syncConfigToSheet(): Promise<void> {
-    try {
-      const syncService = new ConfigSyncService(this.token);
-      await syncService.saveConfigToSheet(this.config!);
-      console.log('✅ 配置已同步到 Google Sheet');
-    } catch (error) {
-      console.warn('同步配置到 Sheet 失败（不影响功能）:', error);
-    }
   }
   
   /**

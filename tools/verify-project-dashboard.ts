@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DashboardDataManager,
   DashboardMessageHandler,
+  buildProjectDashboardLaunchPath,
   buildMilestoneClassToken,
   buildMilestoneMarkerText,
   buildProjectFocusItems,
@@ -11,6 +12,8 @@ import {
   buildProjectStatusEvidenceItems,
   buildProjectStatusUpdateDraft,
   compareProjectsByDashboardPriority,
+  parseProjectDashboardLaunchContext,
+  projectMatchesDashboardLaunchContext,
   rankProjectSuggestionNames,
 } from '../src/utils/dashboardIntegration.ts';
 
@@ -364,6 +367,44 @@ function verifyProjectSuggestionsRespectPrompt() {
   );
 }
 
+function verifyProjectDashboardLaunchContext() {
+  const path = buildProjectDashboardLaunchPath({
+    projectId: 'memory-project-123',
+    projectName: 'Project Dashboard Focus Queue',
+  });
+  const query = path.slice(path.indexOf('?'));
+  const context = parseProjectDashboardLaunchContext(query);
+
+  assert.equal(path.startsWith('project-dashboard.html?'), true);
+  assert.deepEqual(context, {
+    hasContext: true,
+    projectId: 'memory-project-123',
+    projectName: 'Project Dashboard Focus Queue',
+  });
+  assert.deepEqual(parseProjectDashboardLaunchContext(''), { hasContext: false });
+  assert.equal(
+    projectMatchesDashboardLaunchContext(
+      { id: 'memory-project-123', name: 'Renamed Local Project' },
+      context,
+    ),
+    true,
+  );
+  assert.equal(
+    projectMatchesDashboardLaunchContext(
+      { id: 'local-only', name: 'Project Dashboard Focus Queue' },
+      context,
+    ),
+    true,
+  );
+  assert.equal(
+    projectMatchesDashboardLaunchContext(
+      { id: 'other', name: 'Other Project' },
+      context,
+    ),
+    false,
+  );
+}
+
 async function main() {
   await verifyCreateProjectKeepsMilestonesAndPersists();
   await verifyCreateProjectKeepsUndatedMilestones();
@@ -375,6 +416,7 @@ async function main() {
   await verifyBlankProjectNameIsRejected();
   await verifySyncReadinessIsExplicitAboutLocalData();
   verifyProjectSuggestionsRespectPrompt();
+  verifyProjectDashboardLaunchContext();
 
   console.log('verify-project-dashboard: ok');
 }

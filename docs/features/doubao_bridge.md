@@ -1,6 +1,6 @@
 # Personal AI Desktop App Memory Flow
 
-_最后更新: 2026-05-05_
+_最后更新: 2026-05-09_
 
 ## 概述
 
@@ -18,7 +18,7 @@ Personal AI Desktop App 是一套运行在本机的记忆协调系统，用来�
   - 只做安装引导、状态摘要、打开 app
   - 不再承载主要配置功能
 
-当前版本为 `v2`，以 macOS app 形态交付。
+当前架构版本为 `v2`，以 macOS app 形态交付。
 
 ---
 
@@ -214,6 +214,7 @@ Desktop App 当前正式发送链路不再使用实验性的 request-mode，而�
 - 日常浏览器 `webpage-mcp` 传输不会只因为按下 Enter 就判定成功；它必须先成功填入输入框、触发提交，并在页面正文里观察到本次消息片段，才会向上层返回 `sent=true`
 - `webpage-mcp` 传输会先检查当前页是否已经处在安全验证状态；发送后会等待消息出现在非输入区正文中，避免把仍留在输入框里的文本或慢加载页面误判为成功/失败；如果这些检查返回未送达，输出链路会切到内置 Chromium profile 再尝试
 - `webpage-mcp` 传输现在支持 `/chat/<id>` 和 `/thread/<id>` 两类路径，也不再假设 thread id 一定是纯数字
+- `webpage-mcp` 失败后会进入短暂回退冷却，后台抓取和同步会直接使用内置 Chromium，避免反复撞同一个不可用连接器；但用户点击登录、打开线程或绑定线程时，会绕过这层冷却并优先尝试日常 Chrome，方便用户修复连接后立即恢复到自己选择的传输方式
 
 这套策略的背景是：
 
@@ -292,7 +293,11 @@ Desktop App 当前正式发送链路不再使用实验性的 request-mode，而�
 - 窗口已聚焦时
   - 切换语音输入 start / stop
 
-当前版本不支持真正的“全局长按语音”，因为 Electron 的 `globalShortcut` 只有按下回调，不提供稳定的全局 key-up / hold 语义。
+当前版本通过 Electron `Alt+A` 注册与本机 key-state helper 区分短按/长按：
+
+- 短按用于打开、聚焦或隐藏 quick ask
+- 按住约 `320ms` 会进入语音输入
+- 如果系统权限或本机 helper 不可用，会退化为短按快捷键，并在窗口内显示原因
 
 ### Compact 与 Expanded
 
@@ -335,10 +340,11 @@ Quick Ask 的视觉目标是 `Spotlight 式胶囊壳`：
 compact 态只显示一条主状态胶囊，按优先级从高到低选择：
 
 1. `setup_blocker`
-2. `confirm_request`
-3. `running_action`
-4. `waiting_reply`
-5. `queued_action`
+2. `sync_issue`
+3. `confirm_request`
+4. `running_action`
+5. `waiting_reply`
+6. `queued_action`
 
 如果还有其他活跃状态，胶囊文案会显示成：
 
@@ -361,16 +367,20 @@ compact 态只显示一条主状态胶囊，按优先级从高到低选择：
 
 当前 v1 中，状态卡只做“显示与引导”，不直接在卡片里完成 approve / retry / openclaw / outreach 操作。
 
+如果后台自动同步遇到 Memory Service 连接失败、豆包发送失败或其他桥接异常，`sync_issue` 会在 Quick Ask 状态卡中直接显示最近一次错误。点击这类状态项会把错误摘要带入输入框，方便用户继续追问排查顺序；不用先去翻本机日志才知道同步曾经失败。
+
 ### 显式记忆
 
 Quick Ask 和原来的 exploring `/ask` 有一个关键差异：它更像聊天，因此会自然出现“请帮我记住”这种输入。
 
 当前实现约定是：
 
-- 只有显式“记住”意图，才会写长期记忆
+- 只有命令式的显式“记住 / 记下 / 保存 / remember”意图，才会写长期记忆
+- “你还记住了吗？”这类回忆/确认问题不会触发写入
 - 普通聊天不会自动沉淀 profile item
 - 记忆写入不走 `/ingest`
 - 而是直接写 `POST /profile/items`
+- 独立记忆请求会在消息流里保留用户原话，再显示“已记住 / 已存在”的确认，方便回看
 
 分类规则：
 
@@ -384,11 +394,11 @@ Quick Ask 和原来的 exploring `/ask` 有一个关键差异：它更像聊天�
 
 当前语音输入只在 quick ask 窗口内可用：
 
-- 通过 `SpeechRecognition / webkitSpeechRecognition` 做浏览器级转写
-- interim transcript 会直接写回输入框
-- final transcript 保留给用户确认发送
+- macOS 上通过本机 `Speech` + `AVFoundation` helper 做系统语音识别
+- helper 会按需编译/启动，并把 transcript、音量、权限错误回传给 quick ask
+- transcript 先进入语音草稿，用户仍可确认后再发送
 
-当前不引入原生 macOS STT helper，也不做离线识别；如果后续确实需要隐私或离线能力，再考虑接 `Speech.framework`。
+当前不做离线识别；如果后续需要完全离线能力，再考虑接入本地模型。
 
 ### Demo
 
@@ -423,7 +433,7 @@ GitHub Release 主入口：
 
 但对最终用户来说，推荐只下载 `.pkg`。
 
-版本号由 [desktop-app/package.json](/Users/Esone/git/personal-ai/desktop-app/package.json) 的 `version` 驱动，例如当前为 `2.0.2`。
+版本号由 [desktop-app/package.json](/Users/Esone/git/personal-ai/desktop-app/package.json) 的 `version` 驱动，例如当前为 `4.0.0`。
 
 ---
 

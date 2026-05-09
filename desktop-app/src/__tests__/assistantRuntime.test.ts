@@ -5,6 +5,7 @@ import {
   buildAskContextFromTurns,
   buildAssistantRuntimeSummary,
   classifyRememberText,
+  hasExplicitRememberIntent,
   isStandaloneRememberRequest,
 } from '../assistantRuntime.js';
 import type { BridgeStatus } from '../types.js';
@@ -82,6 +83,13 @@ test('isStandaloneRememberRequest distinguishes remember-only from mixed questio
   assert.equal(isStandaloneRememberRequest('请帮我记住我偏好中文回复，然后总结今天发生了什么？'), false);
 });
 
+test('hasExplicitRememberIntent avoids recall questions and accepts command forms', () => {
+  assert.equal(hasExplicitRememberIntent('你还记住我的回复偏好吗？'), false);
+  assert.equal(hasExplicitRememberIntent('Do you remember my timezone?'), false);
+  assert.equal(hasExplicitRememberIntent('请记下：我偏好中文回复'), true);
+  assert.equal(hasExplicitRememberIntent('Remember that my timezone is Asia/Shanghai'), true);
+});
+
 test('buildAssistantRuntimeSummary picks top status by defined priority', () => {
   const summary = buildAssistantRuntimeSummary({
     status: createStatus({
@@ -113,4 +121,32 @@ test('buildAssistantRuntimeSummary picks top status by defined priority', () => 
   assert.equal(summary.items[0]?.kind, 'setup_blocker');
   assert.equal(summary.items.length >= 3, true);
   assert.equal(summary.memoryGrowth?.belowThreshold, true);
+});
+
+test('buildAssistantRuntimeSummary surfaces Doubao sync issues before confirmations', () => {
+  const summary = buildAssistantRuntimeSummary({
+    status: createStatus({
+      syncState: {
+        timerActive: true,
+        running: false,
+        autoSyncEnabled: true,
+        memoryServiceConfigured: true,
+        pollIntervalMs: 300000,
+        lastErrorAt: '2026-05-08T01:19:27.852Z',
+        lastErrorMessage: 'fetch failed',
+        tasks: {
+          stableMemory: { intervalMs: 1, due: true },
+          mobileBriefing: { intervalMs: 1, due: false },
+          reminderSync: { intervalMs: 1, due: false },
+        },
+      },
+    }),
+    confirmRequests: {
+      items: [{ id: 'cr-1', question: '是否确认这条偏好？' }],
+    },
+  });
+
+  assert.equal(summary.topStatus?.kind, 'sync_issue');
+  assert.equal(summary.items[0]?.title, '豆包同步异常');
+  assert.match(summary.items[0]?.summary || '', /fetch failed/);
 });

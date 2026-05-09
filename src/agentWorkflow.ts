@@ -428,6 +428,113 @@ function applyNotificationReviewGate(result: MessageProcessResult) {
   }
 }
 
+function getPersistedTraceInputSummary(message: any): string {
+  const sender = message?.sender || message?.creator || 'unknown';
+  const group = message?.team_name || message?.groupName || 'unknown group';
+  return `${sender} @ ${group}: message content omitted`;
+}
+
+function redactTraceText(
+  text: string | undefined,
+  messageContent: string,
+): string {
+  if (!text) return '';
+
+  let redacted = text;
+  const normalizedContent = messageContent.replace(/\s+/g, ' ').trim();
+  const fragments = [
+    messageContent.trim(),
+    normalizedContent,
+    messageContent.slice(0, 120),
+    messageContent.slice(0, 80),
+    messageContent.slice(0, 48),
+    normalizedContent.slice(0, 120),
+    normalizedContent.slice(0, 80),
+    normalizedContent.slice(0, 48),
+  ]
+    .map((fragment) => fragment.replace(/\s+/g, ' ').trim())
+    .filter((fragment, index, all) => {
+      return fragment.length >= 16 && all.indexOf(fragment) === index;
+    });
+
+  for (const fragment of fragments) {
+    redacted = redacted.split(fragment).join('[message omitted]');
+  }
+
+  return redacted;
+}
+
+function summarizePersistedTraceTool(
+  tool: AgentWorkflowTraceTool,
+  messageContent: string,
+): string {
+  if (tool.status === 'error') {
+    return 'tool failed';
+  }
+
+  if (tool.name === 'historySearch') {
+    return tool.status === 'skipped'
+      ? tool.summary || 'history search skipped'
+      : 'history search completed; query text omitted';
+  }
+
+  if (tool.status === 'skipped') {
+    return tool.summary || 'tool skipped';
+  }
+
+  if (
+    [
+      'entityExtraction',
+      'concernedItemMatcher',
+      'relationshipAnalysis',
+      'relevanceJudgment',
+      'externalServiceQuery',
+      'replyAdviser',
+    ].includes(tool.name)
+  ) {
+    return redactTraceText(tool.summary, messageContent) || 'tool completed';
+  }
+
+  return 'tool completed';
+}
+
+function summarizePersistedTraceStep(step: AgentWorkflowTraceStep): string {
+  const toolCounts = step.tools.reduce(
+    (counts, tool) => {
+      counts[tool.status] += 1;
+      return counts;
+    },
+    { success: 0, skipped: 0, error: 0 },
+  );
+
+  return `tools success=${toolCounts.success}, skipped=${toolCounts.skipped}, error=${toolCounts.error}`;
+}
+
+function buildPersistedAgentWorkflowTrace(params: {
+  message: any;
+  trace?: AgentWorkflowTraceStep[];
+}): AgentWorkflowTraceStep[] {
+  const trace = params.trace || [];
+  const messageContent = getMessageContent(params.message);
+  const inputSummary = getPersistedTraceInputSummary(params.message);
+
+  return trace.map((step) => ({
+    ...step,
+    inputSummary,
+    outputSummary: summarizePersistedTraceStep(step),
+    error: step.error
+      ? redactTraceText(step.error, messageContent) || 'agent failed'
+      : undefined,
+    tools: step.tools.map((tool) => ({
+      ...tool,
+      summary: summarizePersistedTraceTool(tool, messageContent),
+      error: tool.error
+        ? redactTraceText(tool.error, messageContent) || 'tool failed'
+        : undefined,
+    })),
+  }));
+}
+
 // 定义可用工具列表
 const availableTools: Record<string, AgentTool> = {
   entityExtraction: {
@@ -1065,6 +1172,10 @@ export async function processNewMessage(
 
     try {
       const client = getMemoryServiceClient();
+      const persistedAgentWorkflowTrace = buildPersistedAgentWorkflowTrace({
+        message,
+        trace: processResult.agentWorkflowTrace || [],
+      });
       const ingestResult = await client.ingest({
         content: messageContent,
         sourceType: 'glip',
@@ -1084,7 +1195,7 @@ export async function processNewMessage(
             message.summary ||
             '',
           replyAdvice: processResult.replyAdvice || message.reply_advice || '',
-          agentWorkflowTrace: processResult.agentWorkflowTrace || [],
+          agentWorkflowTrace: persistedAgentWorkflowTrace,
           storageReview: processResult.storageReview,
           notificationReview: processResult.notificationReview,
           groupUrl: message.team_url,

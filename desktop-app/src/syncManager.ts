@@ -37,6 +37,8 @@ export interface BridgeSyncManagerSnapshot {
   autoSyncEnabled: boolean;
   memoryServiceConfigured: boolean;
   pollIntervalMs: number;
+  lastErrorAt?: string;
+  lastErrorMessage?: string;
   tasks: {
     stableMemory: SyncTaskSnapshot;
     mobileBriefing: SyncTaskSnapshot;
@@ -138,6 +140,7 @@ export class BridgeSyncManager {
   private running = false;
   private settingsUnsubscribe: (() => void) | null = null;
   private providerScenariosCache?: { value: Set<string>; fetchedAt: number };
+  private lastError?: { message: string; occurredAt: number };
 
   constructor(
     private readonly config: BridgeConfig,
@@ -180,6 +183,10 @@ export class BridgeSyncManager {
         settings.memoryServiceBaseUrl && settings.memoryServiceUserId,
       ),
       pollIntervalMs: settings.pollIntervalMs,
+      lastErrorAt: this.lastError
+        ? new Date(this.lastError.occurredAt).toISOString()
+        : undefined,
+      lastErrorMessage: this.lastError?.message,
       tasks: {
         stableMemory: this.taskSnapshot(
           this.syncState.stableMemory,
@@ -258,6 +265,24 @@ export class BridgeSyncManager {
     return supportedScenarios.has(scenario);
   }
 
+  private recordSyncError(error: unknown): void {
+    this.lastError = {
+      message: error instanceof Error ? error.message : String(error),
+      occurredAt: Date.now(),
+    };
+  }
+
+  private recordSyncAttemptFailure(result: SyncAttemptResult): void {
+    this.lastError = {
+      message: result.errorMessage || 'Auto sync failed',
+      occurredAt: Date.now(),
+    };
+  }
+
+  private clearSyncError(): void {
+    this.lastError = undefined;
+  }
+
   private collectSourceRefs(rendered: RenderContextPackageResponse): string[] {
     return Array.from(
       new Set(
@@ -308,6 +333,8 @@ export class BridgeSyncManager {
     this.running = true;
 
     try {
+      let attemptedSync = false;
+      let failedAttempt: SyncAttemptResult | undefined;
       const status = await this.bridgeService.getStatus();
       if (status.authStatus === 'connected') {
         // 长期记忆同步 - 使用随手记格式
@@ -316,6 +343,10 @@ export class BridgeSyncManager {
           this.due(this.syncState.stableMemory, settings.stableMemoryIntervalMs)
         ) {
           const result = await this.syncStableMemoryAsMemo();
+          attemptedSync = true;
+          if (result.status === 'failed' && !failedAttempt) {
+            failedAttempt = result;
+          }
           if (shouldAdvanceSyncState(result)) {
             this.syncState.stableMemory = Date.now();
           }
@@ -329,6 +360,10 @@ export class BridgeSyncManager {
           )
         ) {
           const result = await this.syncMobileBriefing();
+          attemptedSync = true;
+          if (result.status === 'failed' && !failedAttempt) {
+            failedAttempt = result;
+          }
           if (shouldAdvanceSyncState(result)) {
             this.syncState.mobileBriefing = Date.now();
           }
@@ -340,6 +375,10 @@ export class BridgeSyncManager {
           this.due(this.syncState.reminderSync, settings.reminderSyncIntervalMs)
         ) {
           const result = await this.syncReminderChannels();
+          attemptedSync = true;
+          if (result.status === 'failed' && !failedAttempt) {
+            failedAttempt = result;
+          }
           if (shouldAdvanceSyncState(result)) {
             this.syncState.reminderSync = Date.now();
           }
@@ -350,7 +389,13 @@ export class BridgeSyncManager {
         await this.explorerManager.tick();
       }
       await this.localSkillSyncManager?.tick();
+      if (failedAttempt) {
+        this.recordSyncAttemptFailure(failedAttempt);
+      } else if (attemptedSync) {
+        this.clearSyncError();
+      }
     } catch (error) {
+      this.recordSyncError(error);
       console.error('[doubao-bridge] auto-sync tick failed:', error);
     } finally {
       this.running = false;
@@ -358,24 +403,33 @@ export class BridgeSyncManager {
   }
 
   async runNow(kind: AutoSyncKind): Promise<SyncAttemptResult> {
-    if (kind === 'stable_memory') {
-      const result = await this.syncStableMemoryAsMemo();
-      this.assertSyncAttemptSucceeded(kind, result);
-      this.syncState.stableMemory = Date.now();
-      return result;
-    }
+    let result: SyncAttemptResult;
+    try {
+      if (kind === 'stable_memory') {
+        result = await this.syncStableMemoryAsMemo();
+        this.assertSyncAttemptSucceeded(kind, result);
+        this.syncState.stableMemory = Date.now();
+        this.clearSyncError();
+        return result;
+      }
 
-    if (kind === 'mobile_briefing') {
-      const result = await this.syncMobileBriefing();
-      this.assertSyncAttemptSucceeded(kind, result);
-      this.syncState.mobileBriefing = Date.now();
-      return result;
-    }
+      if (kind === 'mobile_briefing') {
+        result = await this.syncMobileBriefing();
+        this.assertSyncAttemptSucceeded(kind, result);
+        this.syncState.mobileBriefing = Date.now();
+        this.clearSyncError();
+        return result;
+      }
 
-    const result = await this.syncReminderChannels();
-    this.assertSyncAttemptSucceeded(kind, result);
-    this.syncState.reminderSync = Date.now();
-    return result;
+      result = await this.syncReminderChannels();
+      this.assertSyncAttemptSucceeded(kind, result);
+      this.syncState.reminderSync = Date.now();
+      this.clearSyncError();
+      return result;
+    } catch (error) {
+      this.recordSyncError(error);
+      throw error;
+    }
   }
 
   private assertSyncAttemptSucceeded(

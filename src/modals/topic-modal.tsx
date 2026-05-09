@@ -1642,6 +1642,25 @@ const TopicModal = () => {
     window.open(url, '_blank');
   };
 
+  const openPromptConfigWindow = () => {
+    const url = chrome?.runtime?.getURL
+      ? chrome.runtime.getURL('prompt-config.html')
+      : 'prompt-config.html';
+
+    if (chrome?.windows?.create) {
+      chrome.windows.create({
+        url,
+        type: 'popup',
+        width: 900,
+        height: 800,
+        focused: true,
+      });
+      return;
+    }
+
+    window.open(url, '_blank', 'noopener');
+  };
+
   const openActionQueueForRule = (topic: TopicItem) => {
     const baseUrl = chrome?.runtime?.getURL
       ? chrome.runtime.getURL('memory-exploring.html')
@@ -1924,6 +1943,14 @@ const TopicModal = () => {
           }}
         >
           ＋ 添加规则
+        </button>
+        <button
+          type="button"
+          className="toolbar-button"
+          onClick={openPromptConfigWindow}
+          title="配置自定义提示词和用户上下文"
+        >
+          ⚙️ 自定义提示词与上下文
         </button>
         <button onClick={exportToXML}>📤 导出规则</button>
         <label className="import-button toolbar-button">

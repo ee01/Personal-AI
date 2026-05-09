@@ -1,18 +1,30 @@
 import { analyzeMessagesInBackground } from './messageDealing';
 // embeddings.ts 已废弃 — 后端 memory-service 处理嵌入生成
 import { getEnvConfig, normalizeConcernedItemsDigestHour } from './utils';
-import { FETCH_JIRA_TICKETS } from './jira';
+import {
+  FETCH_JIRA_TICKETS,
+  JIRA_COOKIE_AUTH_GUARD_MESSAGE,
+  JIRA_SYNC_XSRF_TOKEN_ALL_MESSAGE,
+  assertJiraCookieAuthAllowed,
+  notifyJiraIssuePagesToSyncXsrf,
+} from './jira';
 import {
   getGoogleAuthToken,
   getGoogleAuthTokenSilently,
 } from './utils/googleAuth';
 import { IntelligentAgent } from './agentThinking';
 import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
-import { getMemoryServiceClient } from './services/MemoryServiceClient';
+import {
+  getMemoryServiceClient,
+  type IngestPayload,
+} from './services/MemoryServiceClient';
 import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
-import { DashboardMessageHandler } from './utils/dashboardIntegration';
+import {
+  DashboardMessageHandler,
+  buildProjectDashboardLaunchPath,
+} from './utils/dashboardIntegration';
 import { taskScheduler, TaskScheduler } from './services/TaskScheduler';
 import { UserProfileMessageHandler } from './services/UserProfileMessageHandler';
 import {
@@ -861,6 +873,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === JIRA_COOKIE_AUTH_GUARD_MESSAGE) {
+    (async () => {
+      try {
+        await assertJiraCookieAuthAllowed(request.requestLabel);
+        sendResponse({ allowed: true });
+      } catch (error: any) {
+        sendResponse({
+          allowed: false,
+          reason: error?.message || 'Jira cookie auth is not safe right now.',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === JIRA_SYNC_XSRF_TOKEN_ALL_MESSAGE) {
+    (async () => {
+      await notifyJiraIssuePagesToSyncXsrf();
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
   // 离屏嵌入已废弃 — 后端 memory-service 处理嵌入生成
 
   // 处理 Jira tickets 获取
@@ -1019,6 +1054,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } catch (err) {
         console.warn('[background] context-recall failed:', err);
         sendResponse({ success: true, topMatch: null, matches: [] });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'OWNER_AUTHORED_LEARNING_SIGNAL') {
+    (async () => {
+      try {
+        const envConfig = await getEnvConfig();
+        if (envConfig.OWNER_SPEECH_LEARNING_ENABLED === false) {
+          sendResponse({ success: true, stored: 0, disabled: true });
+          return;
+        }
+        const payloads = (Array.isArray(request.payloads)
+          ? request.payloads
+          : []) as IngestPayload[];
+        const safePayloads = payloads.filter(
+          (payload) =>
+            payload &&
+            payload.sourceType === 'jira' &&
+            payload.metadata?.authorRole === 'owner' &&
+            payload.metadata?.isSelf === true &&
+            payload.metadata?.issueKey &&
+            payload.metadata?.commentId &&
+            payload.metadata?.sourceUrl,
+        );
+        if (!safePayloads.length) {
+          sendResponse({ success: true, stored: 0 });
+          return;
+        }
+        const client = getMemoryServiceClient();
+        if (safePayloads.length === 1) {
+          await client.ingest(safePayloads[0]);
+        } else {
+          await client.ingestBatch(safePayloads);
+        }
+        sendResponse({ success: true, stored: safePayloads.length });
+      } catch (err) {
+        console.warn('[background] owner-authored learning ingest failed:', err);
+        sendResponse({ success: false, error: String((err as Error)?.message || err) });
       }
     })();
     return true;
@@ -1942,7 +2017,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           projectId: request.projectId,
           projectName: request.projectName,
         });
-        const url = chrome.runtime.getURL('project-dashboard.html');
+        const url = chrome.runtime.getURL(buildProjectDashboardLaunchPath({
+          projectId: request.projectId,
+          projectName: request.projectName,
+        }));
         await chrome.windows.create({
           url,
           type: 'popup',
@@ -2308,39 +2386,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               console.log('🔔 Background: 后台更新用户画像...');
 
               if (messageInfo.senderName) {
-                await memClient.createProfileItem({
-                  itemType: 'interaction',
-                  itemKey: `snooze_person_${messageInfo.senderName
-                    .replace(/\s+/g, '_')
-                    .toLowerCase()}`,
-                  itemValue: JSON.stringify({
-                    actionType: 'favorite',
-                    context: 'snooze_reminder',
-                    weight: 0.3,
-                    personName: messageInfo.senderName,
+                await memClient.createInferredProfileItem({
+                  itemType: 'interest',
+                  itemKey: 'snooze_person',
+                  itemValue: messageInfo.senderName,
+                  evidenceRefs: [{
+                    sourceType: 'glip',
+                    actionType: 'snooze_reminder',
                     messageId: messageInfo.id,
                     groupName: messageInfo.groupName,
-                    remindAt: remindAt,
-                  }),
+                    remindAt,
+                    sourceUrl: messageInfo.messageLink,
+                  }],
                   confidence: 0.3,
                 });
               }
 
               if (messageInfo.groupName) {
-                await memClient.createProfileItem({
-                  itemType: 'interaction',
-                  itemKey: `snooze_topic_${messageInfo.groupName
-                    .replace(/\s+/g, '_')
-                    .toLowerCase()}`,
-                  itemValue: JSON.stringify({
-                    actionType: 'favorite',
-                    context: 'snooze_reminder',
-                    weight: 0.2,
-                    topicName: messageInfo.groupName,
+                await memClient.createInferredProfileItem({
+                  itemType: 'interest',
+                  itemKey: 'snooze_topic',
+                  itemValue: messageInfo.groupName,
+                  evidenceRefs: [{
+                    sourceType: 'glip',
+                    actionType: 'snooze_reminder',
                     messageId: messageInfo.id,
                     senderName: messageInfo.senderName,
                     groupId: messageInfo.groupId,
-                  }),
+                    sourceUrl: messageInfo.messageLink,
+                  }],
                   confidence: 0.2,
                 });
               }

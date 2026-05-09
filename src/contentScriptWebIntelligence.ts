@@ -4,6 +4,7 @@
  */
 
 import {
+    CONTEXT_SITE_BLOCK_STORAGE_KEY,
     CONTEXT_SITE_MUTE_STORAGE_KEY,
     formatRecallTimestamp,
     isContextSiteMuteActive,
@@ -12,12 +13,17 @@ import {
     isSensitiveControlDescriptor,
     normalizeContextSiteMuteHost,
     normalizeContextPageUrl,
+    pruneContextSiteBlockRecord,
     pruneContextSiteMuteRecord,
     sanitizeContextExternalUrl,
     sanitizeExploreRoute,
 } from './web-intelligence/contextRecallGuards';
 import { startComposerGuardController } from './composer-guard/ComposerGuardController';
-import { buildPassiveContextSnapshot } from './composer-guard/siteContextAdapters';
+import {
+    buildJiraOwnerCommentLearningPayloads,
+    buildPassiveContextSnapshot,
+    type OwnerAuthoredLearningPayload,
+} from './composer-guard/siteContextAdapters';
 import type { SiteContextSnapshot } from './composer-guard/types';
 
 interface SimplePageContent {
@@ -54,6 +60,7 @@ interface ContextMatchPayload {
     snippet?: string;
     entityHints?: Array<{ kind: string; value: string }>;
     sourceTypes?: string[];
+    ownerAuthoredLearningPayloads?: OwnerAuthoredLearningPayload[];
 }
 
 interface ContextRecallMatch {
@@ -169,8 +176,12 @@ class WebIntelligenceContentScript {
     private outsideClickListener: ((event: MouseEvent) => void) | null = null;
     private dismissedContextKeys = new Map<string, number>();
     private mutedSiteHosts = new Map<string, number>();
+    private blockedSiteHosts = new Map<string, number>();
     private siteMutesLoaded = false;
     private siteMutesLoadPromise: Promise<void> | null = null;
+    private siteBlocksLoaded = false;
+    private siteBlocksLoadPromise: Promise<void> | null = null;
+    private sentOwnerLearningKeys = new Set<string>();
 
     constructor() {
         this.initialize();
@@ -196,7 +207,7 @@ class WebIntelligenceContentScript {
 
         startComposerGuardController();
         this.setupEventListeners();
-        void this.loadSiteMutes().then(() => this.scheduleContextMatch(200));
+        void this.loadSiteControls().then(() => this.scheduleContextMatch(200));
 
         this.scheduleAnalysis(2000);
         this.scheduleContextMatch(2000);
@@ -759,12 +770,12 @@ class WebIntelligenceContentScript {
             return;
         }
 
-        if (!this.siteMutesLoaded) {
-            void this.loadSiteMutes().then(() => {
+        if (!this.areSiteControlsLoaded()) {
+            void this.loadSiteControls().then(() => {
                 this.scheduleContextMatch(0);
             });
             return;
-        } else if (this.isCurrentSiteMuted()) {
+        } else if (this.isCurrentSiteMuted() || this.isCurrentSiteBlocked()) {
             this.clearContextBubble();
             return;
         }
@@ -790,6 +801,8 @@ class WebIntelligenceContentScript {
             this.scheduleContextMatch(requiredStableMs - stableForMs);
             return;
         }
+
+        this.sendOwnerAuthoredLearningSignals(payload);
 
         const cached = contextMatchCache.get(payload.contextKey);
         if (this.isContextDismissed(payload.contextKey)) {
@@ -850,6 +863,7 @@ class WebIntelligenceContentScript {
             if (
                 this.isSensitiveContextPage() ||
                 this.isCurrentSiteMuted() ||
+                this.isCurrentSiteBlocked() ||
                 this.isContextDismissed(payload.contextKey)
             ) {
                 this.clearContextBubble();
@@ -882,10 +896,45 @@ class WebIntelligenceContentScript {
                 snippet: snapshot.primaryText,
                 entityHints: this.toPassiveRecallEntityHints(snapshot),
                 sourceTypes: snapshot.sourceTypes,
+                ownerAuthoredLearningPayloads: buildJiraOwnerCommentLearningPayloads(snapshot),
             };
         }
 
         return null;
+    }
+
+    private sendOwnerAuthoredLearningSignals(payload: ContextMatchPayload): void {
+        const learningPayloads = payload.ownerAuthoredLearningPayloads || [];
+        if (!learningPayloads.length) return;
+
+        const unsentPayloads = learningPayloads.filter((item) => {
+            const metadata = item.metadata || {};
+            const key = [
+                item.sourceType,
+                metadata.issueKey,
+                metadata.commentId,
+                item.sourceUrl,
+            ].filter(Boolean).join(':');
+            if (!key || this.sentOwnerLearningKeys.has(key)) return false;
+            this.sentOwnerLearningKeys.add(key);
+            return true;
+        });
+        if (!unsentPayloads.length) return;
+
+        chrome.runtime.sendMessage(
+            {
+                type: 'OWNER_AUTHORED_LEARNING_SIGNAL',
+                payloads: unsentPayloads,
+            },
+            () => {
+                if (chrome.runtime.lastError) {
+                    console.warn(
+                        'Owner-authored learning signal failed:',
+                        chrome.runtime.lastError.message,
+                    );
+                }
+            },
+        );
     }
 
     private toPassiveRecallSurface(
@@ -1109,6 +1158,14 @@ class WebIntelligenceContentScript {
         return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
     }
 
+    private areSiteControlsLoaded(): boolean {
+        return this.siteMutesLoaded && this.siteBlocksLoaded;
+    }
+
+    private loadSiteControls(): Promise<void> {
+        return Promise.all([this.loadSiteMutes(), this.loadSiteBlocks()]).then(() => undefined);
+    }
+
     private loadSiteMutes(): Promise<void> {
         if (this.siteMutesLoaded) {
             return Promise.resolve();
@@ -1150,6 +1207,47 @@ class WebIntelligenceContentScript {
         return this.siteMutesLoadPromise;
     }
 
+    private loadSiteBlocks(): Promise<void> {
+        if (this.siteBlocksLoaded) {
+            return Promise.resolve();
+        }
+        if (this.siteBlocksLoadPromise) {
+            return this.siteBlocksLoadPromise;
+        }
+
+        this.siteBlocksLoadPromise = new Promise((resolve) => {
+            try {
+                let settled = false;
+                const finish = (result?: Record<string, any>): void => {
+                    if (settled) return;
+                    settled = true;
+                    const pruned = pruneContextSiteBlockRecord(
+                        result?.[CONTEXT_SITE_BLOCK_STORAGE_KEY],
+                    );
+                    this.blockedSiteHosts = new Map(Object.entries(pruned.record));
+                    if (pruned.changed) {
+                        this.saveSiteBlocks();
+                    }
+                    this.siteBlocksLoaded = true;
+                    resolve();
+                };
+
+                const maybePromise = chrome.storage.local.get(
+                    CONTEXT_SITE_BLOCK_STORAGE_KEY,
+                    finish,
+                ) as unknown as Promise<Record<string, any>> | undefined;
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                    maybePromise.then(finish).catch(() => finish());
+                }
+            } catch (_error) {
+                this.siteBlocksLoaded = true;
+                resolve();
+            }
+        });
+
+        return this.siteBlocksLoadPromise;
+    }
+
     private saveSiteMutes(): void {
         const payload: Record<string, number> = {};
         for (const [host, mutedAt] of this.mutedSiteHosts.entries()) {
@@ -1160,6 +1258,19 @@ class WebIntelligenceContentScript {
             chrome.storage.local.set({ [CONTEXT_SITE_MUTE_STORAGE_KEY]: payload });
         } catch (_error) {
             // Storage is best-effort; in-memory mute still applies until reload.
+        }
+    }
+
+    private saveSiteBlocks(): void {
+        const payload: Record<string, number> = {};
+        for (const [host, blockedAt] of this.blockedSiteHosts.entries()) {
+            payload[host] = blockedAt;
+        }
+
+        try {
+            chrome.storage.local.set({ [CONTEXT_SITE_BLOCK_STORAGE_KEY]: payload });
+        } catch (_error) {
+            // Storage is best-effort; in-memory block still applies until reload.
         }
     }
 
@@ -1174,12 +1285,27 @@ class WebIntelligenceContentScript {
         return mutedAt !== undefined && isContextSiteMuteActive(mutedAt);
     }
 
+    private isCurrentSiteBlocked(): boolean {
+        const host = this.getCurrentSiteMuteHost();
+        return this.blockedSiteHosts.has(host);
+    }
+
     private muteCurrentSite(): void {
         this.mutedSiteHosts.set(this.getCurrentSiteMuteHost(), Date.now());
         this.pruneMutedSiteHosts();
         this.saveSiteMutes();
         this.clearContextBubble();
         this.showContextToast('已暂停此网站记忆提示 24 小时');
+    }
+
+    private blockCurrentSite(): void {
+        const host = this.getCurrentSiteMuteHost();
+        this.blockedSiteHosts.set(host, Date.now());
+        this.mutedSiteHosts.delete(host);
+        this.saveSiteBlocks();
+        this.saveSiteMutes();
+        this.clearContextBubble();
+        this.showContextToast('已永久关闭此网站记忆提示');
     }
 
     private pruneMutedSiteHosts(): void {
@@ -1507,6 +1633,7 @@ class WebIntelligenceContentScript {
                 ${exploreUrl ? `<a href="${escapeHtmlAttribute(exploreUrl)}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;font-size:11px;font-weight:600;">在记忆中查看</a>` : ''}
                 ${linksHtml}
                 <button type="button" class="pai-context-action-button pai-context-site-mute" aria-label="此网站今天不再显示记忆提示">此网站今天不提示</button>
+                <button type="button" class="pai-context-action-button pai-context-site-block" aria-label="永久关闭此网站记忆提示">永久不提示此站点</button>
             </div>
         `;
 
@@ -1563,6 +1690,11 @@ class WebIntelligenceContentScript {
         card.querySelector<HTMLButtonElement>('.pai-context-site-mute')?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.muteCurrentSite();
+        });
+
+        card.querySelector<HTMLButtonElement>('.pai-context-site-block')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.blockCurrentSite();
         });
 
         this.outsideClickListener = (event: MouseEvent) => {

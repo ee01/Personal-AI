@@ -35,6 +35,7 @@ const elements = {
 
 const STATUS_HINTS = {
   setup_blocker: '帮我总结现在还缺哪些配置步骤。',
+  sync_issue: '帮我解释豆包同步异常，并告诉我下一步该查什么。',
   confirm_request: '帮我总结这些待确认项，告诉我应该先处理哪个。',
   running_action: '帮我解释这些执行中的动作，当前卡在什么地方。',
   waiting_reply: '帮我总结这些外部询问状态，接下来应该跟进什么。',
@@ -61,6 +62,12 @@ const STREAMING_TAIL_CHARS = 14;
 const DRAFT_STORAGE_KEY = 'desktop-app.quick-ask.draft';
 const CHROME_EXTENSION_URL =
   'https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel?authuser=0&hl=zh-CN';
+
+const REMEMBER_INTENT_PATTERNS = [
+  /^(?:请帮我|帮我|麻烦你|请你|请)?\s*(?:记住|记下|记录|保存)(?!了吗|吗|没|没有|哪些|什么)(?:一下|到(?:长期)?记忆|在(?:长期)?记忆里)?[：:\s]*/i,
+  /^以后(?:请|帮我|麻烦你)?\s*(?:记住|记下|记录)(?!了吗|吗|没|没有|哪些|什么)[：:\s]*/i,
+  /^(?:please\s+)?(?:remember|save|note)(?:\s+(?:that|this))?(?:[\s:：]|$)/i,
+];
 
 const state = {
   uiState: 'idle-compact',
@@ -127,21 +134,27 @@ function markdownToHtml(text) {
 }
 
 function normalizeRememberText(text) {
-  return text
-    .trim()
-    .replace(/^(?:请帮我|帮我|麻烦你|请你|请)\s*记住(?:一下)?[：:\s]*/i, '')
-    .replace(/^记住(?:一下)?[：:\s]*/i, '')
-    .replace(/^(?:please\s+)?remember(?:\s+that)?[：:\s]*/i, '')
-    .trim()
-    .replace(/^[,，。.!！\s]+|[,，。.!！\s]+$/g, '');
+  const trimmed = text.trim();
+  let normalized = trimmed;
+  for (const pattern of REMEMBER_INTENT_PATTERNS) {
+    if (pattern.test(normalized)) {
+      normalized = normalized.replace(pattern, '').trim();
+      break;
+    }
+  }
+  return (
+    normalized.replace(/^[,，。.!！\s]+|[,，。.!！\s]+$/g, '').trim() ||
+    trimmed
+  );
 }
 
-function isRememberRequest(text) {
-  return /(记住|remember)/i.test(text);
+function hasExplicitRememberIntent(text) {
+  const trimmed = text.trim();
+  return REMEMBER_INTENT_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
 function isStandaloneRememberRequest(text) {
-  if (!isRememberRequest(text)) return false;
+  if (!hasExplicitRememberIntent(text)) return false;
   if (/[?？]/.test(text)) return false;
   const segments = text
     .split(/[。.!！\n]/)
@@ -739,7 +752,13 @@ function renderStatusMessage(message) {
           ${runtime.items
             .map(
               (item) => `
-                <button class="status-item" type="button" data-status-kind="${escapeHtml(item.kind)}">
+                <button
+                  class="status-item"
+                  type="button"
+                  data-status-kind="${escapeHtml(item.kind)}"
+                  data-status-title="${escapeHtml(item.title)}"
+                  data-status-summary="${escapeHtml(item.summary)}"
+                >
                   <span class="status-item-main">
                     <span class="status-item-title">${escapeHtml(item.title)}</span>
                     <span class="status-item-summary">${escapeHtml(item.summary)}</span>
@@ -1217,7 +1236,7 @@ async function submitQuery(rawInput, options = {}) {
   expireCurrentSessionIfNeeded();
   const askContext = buildAskContext();
 
-  const rememberRequested = isRememberRequest(input);
+  const rememberRequested = hasExplicitRememberIntent(input);
   const standaloneRemember =
     rememberRequested && isStandaloneRememberRequest(input);
   let memorySaveResult = null;
@@ -1239,6 +1258,11 @@ async function submitQuery(rawInput, options = {}) {
     setDraft('');
     state.autoScrollPinned = true;
     setUiState('enriched');
+    pushMessage({
+      id: createId('user'),
+      role: 'user',
+      text: input,
+    });
     pushMessage({
       id: createId('assistant'),
       role: 'assistant',
@@ -1489,6 +1513,16 @@ elements.conversationPanel.addEventListener('click', async (event) => {
     const kind = statusItem.dataset.statusKind;
     if (kind === 'setup_blocker') {
       await quickAsk.openSettings();
+      return;
+    }
+    if (kind === 'sync_issue') {
+      const summary = statusItem.dataset.statusSummary || '';
+      setDraft(
+        summary
+          ? `豆包同步异常：${summary}。请帮我判断可能原因，并给出下一步排查顺序。`
+          : STATUS_HINTS[kind],
+      );
+      focusComposer();
       return;
     }
     setDraft(STATUS_HINTS[kind] || '');

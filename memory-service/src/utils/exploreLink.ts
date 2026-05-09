@@ -7,7 +7,7 @@
  *
  * Routes (kept in sync with src/modals/memory-exploring-entry.ts):
  *
- *   /timeline?focus=<id>            // jump to a single message/chunk
+ *   /timeline?type=<type>&focus=<id> // jump to a single message/chunk
  *   /topic/<id>                     // open topic detail
  *   /person/<id>                    // open person detail
  *   /project/<id>                   // open project placeholder/detail
@@ -36,9 +36,9 @@ export function buildExploreLink(input: ExploreLinkInput): string | undefined {
     return `#/entity/${encodeURIComponent(t)}?focus=${encodedId}`;
   }
   if (input.conversationId) {
-    return `#/timeline?thread=${encodeURIComponent(input.conversationId)}&focus=${encodeURIComponent(input.id)}`;
+    return `#/timeline?thread=${encodeURIComponent(input.conversationId)}&type=${input.type}&focus=${encodeURIComponent(input.id)}`;
   }
-  return `#/timeline?focus=${encodeURIComponent(input.id)}`;
+  return `#/timeline?type=${input.type}&focus=${encodeURIComponent(input.id)}`;
 }
 
 export function attachExploreLink(item: RecallItem): RecallItem {

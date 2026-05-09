@@ -39,6 +39,7 @@ const chromeStub = {
 import {
   buildFallbackMeetingArchiveTitle,
   buildMeetingIngestPayloads,
+  buildMeetingOwnerTranscriptLearningPayloads,
   mergeActionItemReviewStates,
   shouldGenerateMeetingArchiveTitle,
 } from '../background.ts';
@@ -136,6 +137,103 @@ test('ingest after rename: participantStances use the final user-given name', ()
   // The summary header text is built from session.participants names too.
   assert.match(summaryPayload.content, /Alice/);
   assert.doesNotMatch(summaryPayload.content, /说话人 1/);
+});
+
+test('meeting owner transcript learning: only explicit self non-low-confidence turns create payloads', () => {
+  const session = makeSession();
+  const payloads = buildMeetingOwnerTranscriptLearningPayloads(
+    {
+      ...session,
+      selfName: 'Esone Qiu',
+      participants: [
+        {
+          id: 'self',
+          name: 'Esone Qiu',
+          role: 'You',
+          speakingPct: 40,
+          isSelf: true,
+          resolutionState: 'roster',
+        },
+        {
+          id: 'alice',
+          name: 'Alice',
+          role: 'Participant',
+          speakingPct: 40,
+          resolutionState: 'roster',
+        },
+        {
+          id: 'provisional-1',
+          name: '说话人 1',
+          role: 'Participant',
+          speakingPct: 20,
+          isSelf: true,
+          resolutionState: 'provisional',
+        },
+      ],
+      transcriptTurns: [
+        {
+          id: 'turn-self',
+          participantId: 'self',
+          speakerNameSnapshot: 'Esone Qiu',
+          startTs: 1500,
+          endTs: 1600,
+          text: 'I prefer short owner updates.',
+          chunkIds: ['c-self'],
+          resolutionSources: ['roster'],
+        },
+        {
+          id: 'turn-low',
+          participantId: 'self',
+          speakerNameSnapshot: 'Esone Qiu',
+          startTs: 1700,
+          endTs: 1800,
+          text: 'uncertain interim text',
+          chunkIds: ['c-low'],
+          resolutionSources: ['roster'],
+          lowConfidence: true,
+        },
+        {
+          id: 'turn-other',
+          participantId: 'alice',
+          speakerNameSnapshot: 'Alice',
+          startTs: 1900,
+          endTs: 2000,
+          text: 'Alice should not be learned as owner.',
+          chunkIds: ['c-other'],
+          resolutionSources: ['roster'],
+        },
+        {
+          id: 'turn-provisional',
+          participantId: 'provisional-1',
+          speakerNameSnapshot: '说话人 1',
+          startTs: 2100,
+          endTs: 2200,
+          text: 'provisional self speaker should be skipped.',
+          chunkIds: ['c-prov'],
+          resolutionSources: ['transcript'],
+        },
+        {
+          id: 'turn-unknown',
+          participantId: 'unknown',
+          speakerNameSnapshot: 'Unknown',
+          startTs: 2300,
+          endTs: 2400,
+          text: 'unknown speaker should be skipped.',
+          chunkIds: ['c-unknown'],
+          resolutionSources: ['transcript'],
+        },
+      ],
+    },
+    'chrome-extension://test/meeting-panorama.html?meetingId=meeting-int-1&tabId=7',
+  );
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].sourceType, 'meeting');
+  assert.equal(payloads[0].content, 'I prefer short owner updates.');
+  assert.equal(payloads[0].metadata?.meetingId, 'meeting-int-1');
+  assert.equal(payloads[0].metadata?.turnId, 'turn-self');
+  assert.equal(payloads[0].metadata?.participantId, 'self');
+  assert.equal(payloads[0].metadata?.authorRole, 'owner');
 });
 
 test('ingest after merge: stances and participant lists collapse to the target', () => {

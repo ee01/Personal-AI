@@ -61,6 +61,7 @@ describe('Composer Assist evals', () => {
 
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
+    db.prepare('DELETE FROM user_profile_items').run();
     db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
   });
 
@@ -92,6 +93,38 @@ describe('Composer Assist evals', () => {
     db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
       args.id,
       args.content,
+    );
+  }
+
+  function insertProfileItem(args: {
+    id: string;
+    itemType: string;
+    itemKey: string;
+    itemValue: string;
+    confirmed: boolean;
+    status?: string;
+    salience?: number;
+  }): void {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, evidence_refs, source_kind,
+         confidence, user_confirmed, status, salience_score, mention_count,
+         last_seen, created_at, updated_at, fingerprint)
+       VALUES (?, ?, ?, ?, NULL, ?, 0.86, ?, ?, ?, 1, ?, ?, ?, ?)`,
+    ).run(
+      args.id,
+      args.itemType,
+      args.itemKey,
+      args.itemValue,
+      args.confirmed ? 'explicit' : 'inferred',
+      args.confirmed ? 1 : 0,
+      args.status || (args.confirmed ? 'active' : 'pending_confirm'),
+      args.salience ?? 0.8,
+      now,
+      now,
+      now,
+      `${args.itemKey}:${args.itemValue}`.toLowerCase(),
     );
   }
 
@@ -340,5 +373,132 @@ describe('Composer Assist evals', () => {
     expect(bossPrompt).toContain('manager');
     expect(peerPrompt).toContain('developer peer group');
     expect(bossPrompt).not.toEqual(peerPrompt);
+  });
+
+  it('injects scenario-specific owner style hints into the composer prompt', async () => {
+    insertChunk({
+      id: 501,
+      content:
+        'Codex rollout should focus on one-click install, reusable backend-supported skills, and the owner for rollout risk.',
+      sourceType: 'glip',
+    });
+    insertProfileItem({
+      id: 'style-rc-reply',
+      itemType: 'preference',
+      itemKey: 'writing_style.ringcentral.reply',
+      itemValue: 'Use concise Chinese, one short paragraph, no bullet list.',
+      confirmed: true,
+    });
+    insertProfileItem({
+      id: 'style-jira-comment',
+      itemType: 'preference',
+      itemKey: 'writing_style.jira.comment',
+      itemValue: 'Use formal English with explicit next step.',
+      confirmed: true,
+    });
+
+    llmGenerateMock.mockImplementationOnce(async (prompt: string) => ({
+      content: prompt.includes('Use concise Chinese, one short paragraph')
+        ? '可以，我会把 Codex rollout 收敛成 owner、风险和下一步。'
+        : 'STYLE_HINT_MISSING',
+    }));
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        scenario: 'instant_message_reply',
+        title: 'AI dev group',
+        contextItems: [
+          {
+            type: 'message',
+            sender: 'Ryan Chen',
+            text: 'Codex rollout needs one-click install and a clear owner.',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.insertText).toContain('Codex rollout');
+    const prompt = llmGenerateMock.mock.calls[0][0] as string;
+    expect(prompt).toContain('主人表达约束');
+    expect(prompt).toContain('writing_style.ringcentral.reply');
+    expect(prompt).toContain('Use concise Chinese, one short paragraph');
+    expect(prompt).not.toContain('writing_style.jira.comment');
+    expect(prompt).not.toContain('Use formal English with explicit next step');
+  });
+
+  it('does not inject unconfirmed facts as facts but allows pending style as a soft hint', async () => {
+    insertChunk({
+      id: 601,
+      content:
+        'Factory AI trial is approved for security review; production usage still needs RingCentral email login.',
+      sourceType: 'glip',
+    });
+    insertProfileItem({
+      id: 'fact-pending-title',
+      itemType: 'fact',
+      itemKey: 'job_title',
+      itemValue: 'Unconfirmed VP of Product',
+      confirmed: false,
+    });
+    insertProfileItem({
+      id: 'fact-confirmed-team',
+      itemType: 'fact',
+      itemKey: 'team',
+      itemValue: 'AI platform team',
+      confirmed: true,
+    });
+    insertProfileItem({
+      id: 'style-pending-thread',
+      itemType: 'preference',
+      itemKey: 'writing_style.ringcentral.thread_reply',
+      itemValue: 'Prefer very brief replies with one concrete next action.',
+      confirmed: false,
+    });
+
+    llmGenerateMock.mockResolvedValueOnce({
+      content:
+        'Factory AI security review 已过，但 production 还是先用 RingCentral email login。',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        scenario: 'thread_reply',
+        title: 'AI tools selection',
+        contextItems: [
+          {
+            type: 'thread_root',
+            sender: 'Alice',
+            text: 'Can we use Factory AI for production project?',
+          },
+          {
+            type: 'thread_reply',
+            sender: 'Bob',
+            text: 'Need security review status and login requirement.',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    const prompt = llmGenerateMock.mock.calls[0][0] as string;
+    expect(prompt).toContain('已确认事实');
+    expect(prompt).toContain('team: AI platform team');
+    expect(prompt).not.toContain('job_title: Unconfirmed VP of Product');
+    expect(prompt).toContain('pending inferred，只能作为 soft style hint，不能当事实');
+    expect(prompt).toContain('writing_style.ringcentral.thread_reply');
+    expect(prompt).toContain('Prefer very brief replies with one concrete next action.');
   });
 });

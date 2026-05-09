@@ -657,6 +657,7 @@ export class SkillLibraryService {
 
   listSuggestions(): { items: SkillListItem[]; total: number } {
     this.ensureDefaultSyncSettings();
+    const ts = now();
     const rows = this.db
       .prepare(
         `SELECT s.*,
@@ -665,11 +666,12 @@ export class SkillLibraryService {
            FROM personal_skills s
       LEFT JOIN skill_versions v ON v.skill_id = s.id AND v.is_active = 1
           WHERE s.status = 'suggestion'
+            AND (s.snoozed_until IS NULL OR s.snoozed_until <= ?)
           ORDER BY COALESCE(s.snoozed_until, 0) ASC,
                    s.updated_at DESC,
                    s.created_at DESC`,
       )
-      .all() as SkillRow[];
+      .all(ts) as SkillRow[];
     const items = rows.map((row) => toSkillListItem(row, this.listBindings(row.id)));
     return { items, total: items.length };
   }

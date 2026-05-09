@@ -84,6 +84,21 @@ Use `.env.development` first, then `.env`, then fall back to the literal id abov
   - Open or ask the user to open `chrome://extensions/?id=$HARNESS_EXTENSION_ID`
   - Reload the unpacked extension from the extension details page
   - Confirm the page shows the extension id and a reload result, or report exactly why automation could not operate on the Chrome internal page
+  - If webpage-mcp cannot operate `chrome://extensions` but Apple Events JavaScript is enabled in Chrome/Canary, fall back to AppleScript. Prefer the active browser the user is validating (`Google Chrome` or `Google Chrome Canary`) and keep the extension id exact:
+
+    ```bash
+    HARNESS_EXTENSION_ID="${HARNESS_EXTENSION_ID:-hkmimegiefnbeadjoonnlogikcdddcho}"
+    osascript <<APPLESCRIPT
+    tell application "Google Chrome Canary"
+      set extTab to make new tab at end of tabs of front window with properties {URL:"chrome://extensions/?id=$HARNESS_EXTENSION_ID"}
+      delay 2
+      set js to "(() => { const mgr = document.querySelector('extensions-manager'); const detail = mgr?.shadowRoot?.querySelector('extensions-detail-view'); const item = detail || mgr?.shadowRoot?.querySelector('extensions-item'); const reload = item?.shadowRoot?.querySelector('#dev-reload-button, cr-icon-button[iron-icon=\"cr:reload\"]'); if (!reload) return 'NO_RELOAD_BUTTON'; reload.click(); return 'RELOADED'; })()"
+      return execute extTab javascript js
+    end tell
+    APPLESCRIPT
+    ```
+
+    Use `"Google Chrome"` instead when validating stable Chrome. After reload, refresh or reopen the target tab so content scripts are reinjected from the rebuilt `dist/`.
 - For Google Sheets and other auth-bound flows, prefer the real Chrome profile/webpage-mcp route because Playwright's clean profile may not have the required session
 
 ### Commit / Push Gate

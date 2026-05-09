@@ -774,7 +774,7 @@ ${escapedContent}
       ],
       execute: async (params) => {
         try {
-          // 从环境配置或公共方法获取JIRA连接信息（自动支持 token 和 cookie fallback）
+          // 从环境配置或公共方法获取 JIRA 连接信息（token 优先，必要时使用受控 cookie fallback）
           const jiraBaseUrl = await getJiraBaseUrl();
           const apiToken = await getJiraToken();
           const excludeCommentKeyworkds = ["Esone's AI", 'SDET bot'];

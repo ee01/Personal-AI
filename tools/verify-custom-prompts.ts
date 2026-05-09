@@ -311,7 +311,13 @@ function verifyPromptConfigSurface() {
   assert.match(source, /id: 'communication', label: '沟通偏好'/);
   assert.match(source, /USER_CONFIG_PROMPT_CHAR_LIMIT/);
   assert.match(source, /sanitizeIndependentUserConfig/);
+  assert.match(source, /PROMPT_EXAMPLES/);
+  assert.match(source, /appendPromptExample/);
+  assert.match(source, /mergeIdentityFallback/);
+  assert.match(source, /快速插入/);
+  assert.match(source, /低优先级偏好注入/);
   assert.match(source, /自定义提示词与上下文/);
+  assert.match(popupSource, /openPromptConfigWindow/);
   assert.match(popupSource, /className="prompt-config-button"/);
   assert.match(popupSource, />\s*自定义提示词与上下文\s*</);
   assert.match(source, /当前有未保存修改，重新加载会丢弃这些修改/);

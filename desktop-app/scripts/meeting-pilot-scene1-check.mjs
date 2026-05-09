@@ -386,6 +386,38 @@ try {
     `side panel 未绑定真实会议状态: ${panelTitle}`,
   );
 
+  log('附加校验: side panel 可直接打开 Capture 授权步骤');
+  await panelPage
+    .locator('.capture-start-primary', { hasText: '查看开启步骤' })
+    .click();
+  await page.waitForFunction(() => {
+    const host = document.getElementById('meeting-pilot-overlay-root');
+    const shadow = host?.shadowRoot;
+    const coachmark = shadow?.getElementById('mpCoachmark');
+    const stepText =
+      shadow?.getElementById('mpCoachmarkStep2Text')?.textContent || '';
+    return (
+      coachmark?.classList.contains('visible') &&
+      /开启会议全貌/.test(stepText)
+    );
+  });
+  const coachmarkState = await page.evaluate(() => {
+    const host = document.getElementById('meeting-pilot-overlay-root');
+    const shadow = host?.shadowRoot;
+    return {
+      visible:
+        shadow?.getElementById('mpCoachmark')?.classList.contains('visible') ||
+        false,
+      title: shadow?.getElementById('mpCoachmarkTitle')?.textContent || '',
+      step2:
+        shadow?.getElementById('mpCoachmarkStep2Text')?.textContent || '',
+    };
+  });
+  assert.equal(coachmarkState.visible, true, 'side panel 未打开授权步骤');
+  assert.match(coachmarkState.title, /扩展图标|扩展 icon/);
+  assert.match(coachmarkState.step2, /开启会议全貌/);
+  await saveScreenshot(page, 'scene1-2b-capture-guide.png');
+
   log('附加校验: side panel 设置页展示核心服务状态与 options 入口');
   await panelPage.locator('.panel-tab', { hasText: '设置' }).click();
   await panelPage.waitForFunction(() => {

@@ -1,0 +1,1440 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Memory Rehearsal Studio</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f6f4ee;
+      --surface: #ffffff;
+      --surface-soft: #f9faf7;
+      --ink: #24262b;
+      --muted: #68707a;
+      --line: #d9ddd5;
+      --line-strong: #bfc7bd;
+      --teal: #1f7a76;
+      --teal-soft: #e1f2ef;
+      --indigo: #4a5ca8;
+      --indigo-soft: #e6e9f8;
+      --amber: #9a6a16;
+      --amber-soft: #fbefd2;
+      --red: #a33f33;
+      --red-soft: #f8e4df;
+      --green: #347348;
+      --green-soft: #e4f2e7;
+      --shadow: 0 14px 42px rgba(36, 38, 43, 0.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--page);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .topbar-inner {
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 12px 18px;
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) auto auto;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .title-block {
+      min-width: 0;
+    }
+
+    .eyebrow {
+      margin: 0 0 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 19px;
+      line-height: 1.2;
+      font-weight: 720;
+    }
+
+    .goal-line {
+      margin-top: 5px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .timer {
+      height: 38px;
+      min-width: 132px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: var(--surface-soft);
+      font-variant-numeric: tabular-nums;
+      font-weight: 690;
+    }
+
+    .timer-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 4px var(--green-soft);
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      min-height: 38px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 8px 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .button.primary {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+    }
+
+    .button.subtle {
+      border-color: var(--line);
+      color: var(--muted);
+      background: var(--surface-soft);
+    }
+
+    .button.warn {
+      color: var(--red);
+      border-color: #e4b4aa;
+      background: var(--red-soft);
+    }
+
+    .button:focus-visible,
+    .seg-button:focus-visible,
+    .scenario-card:focus-visible,
+    .quick-answer:focus-visible {
+      outline: 3px solid rgba(31, 122, 118, 0.25);
+      outline-offset: 2px;
+    }
+
+    .workspace {
+      max-width: 1680px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(420px, 1fr) minmax(310px, 390px);
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: calc(100vh - 110px);
+    }
+
+    .panel-header {
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 58px;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 740;
+    }
+
+    .panel-subtitle {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .panel-body {
+      padding: 14px;
+      overflow: auto;
+      flex: 1;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .section-title {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 740;
+      text-transform: uppercase;
+    }
+
+    .scenario-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .scenario-card {
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+      border-radius: 8px;
+      padding: 10px;
+      width: 100%;
+      min-height: 82px;
+      display: grid;
+      gap: 5px;
+      color: var(--ink);
+    }
+
+    .scenario-card.active {
+      background: var(--teal-soft);
+      border-color: #91c7be;
+      box-shadow: inset 3px 0 0 var(--teal);
+    }
+
+    .scenario-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .scenario-name {
+      font-weight: 760;
+      line-height: 1.25;
+    }
+
+    .scenario-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .badge.teal {
+      color: var(--teal);
+      border-color: #a8d8d1;
+      background: var(--teal-soft);
+    }
+
+    .badge.indigo {
+      color: var(--indigo);
+      border-color: #b8c0e8;
+      background: var(--indigo-soft);
+    }
+
+    .badge.amber {
+      color: var(--amber);
+      border-color: #e8c982;
+      background: var(--amber-soft);
+    }
+
+    .badge.red {
+      color: var(--red);
+      border-color: #e5b4aa;
+      background: var(--red-soft);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .seg-button {
+      min-height: 34px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      padding: 6px 8px;
+      font-weight: 680;
+      overflow-wrap: anywhere;
+    }
+
+    .seg-button.active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 1px 4px rgba(36, 38, 43, 0.1);
+    }
+
+    .coverage {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px;
+      background: var(--surface-soft);
+    }
+
+    .coverage-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .meter {
+      height: 8px;
+      border-radius: 999px;
+      background: #e6e9e1;
+      overflow: hidden;
+    }
+
+    .meter span {
+      display: block;
+      height: 100%;
+      width: var(--value);
+      background: linear-gradient(90deg, var(--teal), var(--green));
+    }
+
+    .role-card,
+    .evidence-card,
+    .coach-card,
+    .outcome-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      padding: 11px;
+    }
+
+    .role-head,
+    .coach-head,
+    .evidence-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .person {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--indigo);
+      font-weight: 760;
+      flex: 0 0 auto;
+    }
+
+    .avatar.teal {
+      background: var(--teal);
+    }
+
+    .avatar.amber {
+      background: var(--amber);
+    }
+
+    .avatar.red {
+      background: var(--red);
+    }
+
+    .person-name {
+      font-weight: 760;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .person-role {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mini-list {
+      margin: 8px 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 6px;
+    }
+
+    .mini-list li {
+      display: grid;
+      grid-template-columns: 9px 1fr;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .mini-list li::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      margin-top: 6px;
+      border-radius: 50%;
+      background: var(--line-strong);
+    }
+
+    .conversation-panel {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: calc(100vh - 110px);
+    }
+
+    .conversation-header {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+    }
+
+    .session-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stat {
+      min-height: 54px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--surface-soft);
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+
+    .stat-value {
+      font-weight: 760;
+      font-size: 15px;
+      overflow-wrap: anywhere;
+    }
+
+    .transcript {
+      padding: 16px;
+      overflow: auto;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      background:
+        linear-gradient(#fdfdfb, #fdfdfb) padding-box,
+        repeating-linear-gradient(0deg, transparent 0, transparent 31px, rgba(217, 221, 213, 0.45) 32px);
+    }
+
+    .turn {
+      display: grid;
+      gap: 6px;
+      max-width: 82%;
+    }
+
+    .turn.simulated {
+      justify-self: start;
+    }
+
+    .turn.user {
+      justify-self: end;
+    }
+
+    .turn.coach {
+      max-width: 94%;
+      justify-self: center;
+    }
+
+    .turn-meta {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .bubble {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 11px;
+      background: var(--surface);
+      box-shadow: 0 4px 12px rgba(36, 38, 43, 0.05);
+      overflow-wrap: anywhere;
+    }
+
+    .turn.user .bubble {
+      background: var(--teal);
+      color: #fff;
+      border-color: var(--teal);
+    }
+
+    .turn.coach .bubble {
+      background: var(--amber-soft);
+      border-color: #e8c982;
+    }
+
+    .compose {
+      border-top: 1px solid var(--line);
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+      background: var(--surface);
+    }
+
+    .quick-answers {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .quick-answer {
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+      border-radius: 999px;
+      color: var(--muted);
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 640;
+    }
+
+    .answer-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    textarea {
+      min-height: 72px;
+      resize: vertical;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--ink);
+      background: #fff;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(31, 122, 118, 0.13);
+    }
+
+    .right-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      margin: -4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+    }
+
+    .tab-button {
+      min-height: 31px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tab-button.active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 1px 4px rgba(36, 38, 43, 0.1);
+    }
+
+    .tab-pane {
+      display: none;
+    }
+
+    .tab-pane.active {
+      display: grid;
+      gap: 12px;
+    }
+
+    .coach-card.medium {
+      background: var(--amber-soft);
+      border-color: #e8c982;
+    }
+
+    .coach-card.high {
+      background: var(--red-soft);
+      border-color: #e5b4aa;
+    }
+
+    .coach-card.good {
+      background: var(--green-soft);
+      border-color: #b9d8bd;
+    }
+
+    .coach-title {
+      font-weight: 760;
+    }
+
+    .coach-copy,
+    .evidence-copy {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 0;
+    }
+
+    .source-line {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+
+    .outcome {
+      border-top: 1px solid var(--line);
+      background: #fff;
+      padding: 14px;
+      display: none;
+    }
+
+    .outcome.active {
+      display: grid;
+      gap: 10px;
+    }
+
+    .outcome-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .outcome-card h3 {
+      margin: 0 0 7px;
+      font-size: 13px;
+    }
+
+    .outcome-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .check-row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    .check-row input {
+      margin-top: 2px;
+      flex: 0 0 auto;
+    }
+
+    .privacy-box {
+      border: 1px solid #e8c982;
+      background: var(--amber-soft);
+      border-radius: 8px;
+      padding: 10px;
+      color: #5e4714;
+      font-size: 13px;
+    }
+
+    .empty-note {
+      color: var(--muted);
+      border: 1px dashed var(--line-strong);
+      border-radius: 8px;
+      padding: 14px;
+      background: var(--surface-soft);
+    }
+
+    @media (max-width: 1240px) {
+      .workspace {
+        grid-template-columns: 320px minmax(420px, 1fr);
+      }
+
+      .right-panel {
+        grid-column: 1 / -1;
+        min-height: auto;
+      }
+
+      .right-panel .panel-body {
+        max-height: none;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .topbar-inner {
+        grid-template-columns: 1fr;
+      }
+
+      .timer,
+      .top-actions {
+        justify-self: start;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+        padding: 12px;
+      }
+
+      .panel,
+      .conversation-panel {
+        min-height: auto;
+      }
+
+      .transcript {
+        max-height: 540px;
+      }
+
+      .session-summary,
+      .outcome-grid,
+      .answer-row {
+        grid-template-columns: 1fr;
+      }
+
+      .turn {
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="title-block">
+          <p class="eyebrow">Personal AI / Memory Rehearsal Studio</p>
+          <h1 id="pageTitle">会前推演室</h1>
+          <div class="goal-line" id="goalLine">目标：确认 Rooms 和 Coa 协作 owner，并把下一步落到 action item。</div>
+        </div>
+        <div class="timer" aria-label="演练计时">
+          <span class="timer-dot"></span>
+          <span id="timerText">03:00</span>
+        </div>
+        <div class="top-actions">
+          <button class="button subtle" id="resetButton" type="button">重置</button>
+          <button class="button warn" id="finishButton" type="button">结束并总结</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">场景</h2>
+            <p class="panel-subtitle">选择一个真实记忆形状的演练 seed</p>
+          </div>
+          <span class="badge teal">Demo</span>
+        </div>
+        <div class="panel-body">
+          <div class="stack">
+            <section>
+              <p class="section-title">来源场景</p>
+              <div class="scenario-list" id="scenarioList"></div>
+            </section>
+
+            <section>
+              <p class="section-title">演练模式</p>
+              <div class="segmented" role="tablist" aria-label="演练模式">
+                <button class="seg-button active" type="button" data-mode="risk">快速排雷</button>
+                <button class="seg-button" type="button" data-mode="objection">反方挑战</button>
+                <button class="seg-button" type="button" data-mode="draft">消息先试发</button>
+              </div>
+            </section>
+
+            <section class="coverage">
+              <div class="coverage-head">
+                <div>
+                  <div class="section-title" style="margin:0;">证据覆盖</div>
+                  <div id="coverageText" style="font-weight:760;">78% 可演练</div>
+                </div>
+                <span class="badge amber" id="riskBadge">中风险</span>
+              </div>
+              <div class="meter" aria-hidden="true">
+                <span id="coverageMeter" style="--value:78%;"></span>
+              </div>
+            </section>
+
+            <section>
+              <p class="section-title">角色</p>
+              <div class="stack" id="roleList"></div>
+            </section>
+
+            <section class="privacy-box">
+              演练角色只代表“基于证据的可能问题”。模拟发言不会作为真实人物记忆写入长期库。
+            </section>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel conversation-panel">
+        <div class="conversation-header">
+          <div class="session-summary">
+            <div class="stat">
+              <div class="stat-label">当前模式</div>
+              <div class="stat-value" id="modeLabel">快速排雷</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">重点风险</div>
+              <div class="stat-value" id="topRisk">owner 未确认</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">下一步目标</div>
+              <div class="stat-value" id="nextGoal">问出 owner + due</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="transcript" id="transcript" aria-live="polite"></div>
+
+        <form class="compose" id="answerForm">
+          <div class="quick-answers" id="quickAnswers"></div>
+          <div class="answer-row">
+            <textarea id="answerInput" aria-label="输入你的回答"></textarea>
+            <button class="button primary" type="submit">提交回答</button>
+            <button class="button subtle" id="harderButton" type="button">提高难度</button>
+          </div>
+        </form>
+
+        <section class="outcome" id="outcomePanel" aria-live="polite">
+          <div class="panel-header" style="padding:0 0 10px;border:0;min-height:auto;">
+            <div>
+              <h2 class="panel-title">演练结论</h2>
+              <p class="panel-subtitle">这些内容需要用户确认后才会写回 Personal AI</p>
+            </div>
+            <button class="button primary" type="button" id="saveOutcomeButton">保存已勾选</button>
+          </div>
+          <div class="outcome-grid" id="outcomeGrid"></div>
+        </section>
+      </section>
+
+      <aside class="panel right-panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">教练</h2>
+            <p class="panel-subtitle">只显示当前最该处理的信号</p>
+          </div>
+          <div class="right-tabs" role="tablist" aria-label="右侧面板">
+            <button class="tab-button active" type="button" data-tab="coach">反馈</button>
+            <button class="tab-button" type="button" data-tab="evidence">证据</button>
+            <button class="tab-button" type="button" data-tab="package">包</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="tab-pane active" id="tab-coach"></div>
+          <div class="tab-pane" id="tab-evidence"></div>
+          <div class="tab-pane" id="tab-package"></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const scenarios = [
+      {
+        id: "rooms-coa",
+        title: "Rooms / Coa owner 对齐",
+        meta: "来源：RingCentral + meeting memory",
+        goal: "确认 Rooms 和 Coa 协作 owner，并把下一步落到 action item。",
+        coverage: 78,
+        risk: "中风险",
+        topRisk: "owner 未确认",
+        nextGoal: "问出 owner + due",
+        roles: [
+          {
+            name: "Sophia Lin",
+            initials: "SL",
+            color: "teal",
+            role: "Jira 数据协作 / Rooms 讨论",
+            confidence: "高",
+            bullets: [
+              "近期一起处理 Jira 数据统计和可视化。",
+              "曾建议推进 Rooms 前先确认 Coa 协作。",
+              "不要假设 Sophia 已经 owner Rooms。"
+            ]
+          },
+          {
+            name: "Coa stakeholder",
+            initials: "CO",
+            color: "indigo",
+            role: "协作 owner 待确认",
+            confidence: "中",
+            bullets: [
+              "系统只有间接线索，缺少明确 owner。",
+              "最可能的问题是责任边界和时间点。",
+              "需要用户在会议中确认，而不是提前断言。"
+            ]
+          }
+        ],
+        firstQuestion: "如果 Sophia 先问：Coa 这块现在到底谁 owner？你会怎么把问题收敛到今天能定的下一步？",
+        followups: [
+          "你的回答给了方向，但没有明确谁来确认 owner。你要不要直接问 owner 和最晚确认时间？",
+          "如果对方说今天还定不了，你准备接受什么替代输出？blocking reason、候选 owner，还是下一次确认会？",
+          "你刚才提到了 Rooms，但没有说明 Coa 依赖为什么影响 Rooms。要不要用一句话补上依据？"
+        ],
+        quick: [
+          "我会先确认 owner，再确认最晚时间。",
+          "如果今天不能定，我需要 blocker 和下一次确认点。",
+          "我不确定证据，先问清楚。"
+        ],
+        coach: [
+          { level: "medium", title: "缺 owner", copy: "现在最该问的是谁负责确认 Coa collaboration，而不是先讨论完整方案。" },
+          { level: "good", title: "证据边界清楚", copy: "可以引用 Sophia 之前建议 clarify Coa collaboration，但不要说她已经负责 Rooms。" },
+          { level: "medium", title: "下一步需要可执行", copy: "建议把输出压成 owner、blocking reason、next check 三选一。" }
+        ],
+        evidence: [
+          { type: "Glip", title: "Sophia 建议推进 Rooms 前先确认 Coa 协作", time: "2026-04-30", trust: "高" },
+          { type: "Glip", title: "Sophia 与 Esone 协作 Jira 数据统计和趋势图", time: "2026-04-30", trust: "高" },
+          { type: "Meeting", title: "Rooms / Nova 相关会议片段存在 ASR 噪声", time: "2026-04-24", trust: "中" }
+        ],
+        package: [
+          "Purpose: prepare a concise facilitation plan for Rooms / Coa owner alignment.",
+          "Known: Sophia raised the need to clarify Coa collaboration before pushing Rooms.",
+          "Do not assume: Sophia owns Rooms; Coa owner is confirmed.",
+          "Ask: Who owns Coa collaboration? If not confirmed today, what blocker and next check time?"
+        ],
+        outcome: [
+          { title: "建议开场", copy: "今天我想先把 Coa collaboration 的 owner 和确认时间对齐，这会影响 Rooms 后续推进节奏。", checked: true },
+          { title: "必问问题", copy: "这块现在是否已有明确 owner？如果没有，今天谁能给出候选 owner 或 blocker？", checked: true },
+          { title: "避免说法", copy: "不要说 Sophia 已经负责 Rooms；目前证据只支持她建议先 clarify Coa collaboration。", checked: false },
+          { title: "写回候选", copy: "Action item: 会中确认 Coa collaboration owner、blocking reason 和下一次确认时间。", checked: true }
+        ]
+      },
+      {
+        id: "codex-vote",
+        title: "Codex / Claude Code 投票",
+        meta: "来源：AI tools 群消息",
+        goal: "准备给 Gary 一个清晰的团队反馈口径，避免只表达个人偏好。",
+        coverage: 72,
+        risk: "中风险",
+        topRisk: "团队口径不完整",
+        nextGoal: "区分事实和偏好",
+        roles: [
+          {
+            name: "Gary Chevsky",
+            initials: "GC",
+            color: "amber",
+            role: "OpenAI deal 前需要快速投票",
+            confidence: "高",
+            bullets: [
+              "请求团队尽快在 Claude Code 与 Codex 间投票。",
+              "关注签约前的团队真实反馈。",
+              "需要明确是团队结论还是个人体验。"
+            ]
+          },
+          {
+            name: "AI tools reviewer",
+            initials: "AI",
+            color: "indigo",
+            role: "反方挑战",
+            confidence: "中",
+            bullets: [
+              "会追问成本、稳定性、企业合规和迁移成本。",
+              "会要求避免只看单次体验。",
+              "需要明确评估标准。"
+            ]
+          }
+        ],
+        firstQuestion: "如果 Gary 问：你们到底更倾向 Codex 还是 Claude Code？你怎么回答才不会把个人偏好说成团队结论？",
+        followups: [
+          "你提到了 Codex，但没有说评估维度。要不要按 coding success、成本、团队学习曲线来回答？",
+          "如果 Gary 要今天给方向，你能给一个临时结论和需要补充的数据吗？",
+          "对方可能关心 OpenAI 大单前的风险。你准备怎么说不确定性？"
+        ],
+        quick: [
+          "先说这是初步反馈，不是最终团队结论。",
+          "按成功率、成本、迁移成本三项回答。",
+          "我会给临时建议和待补充数据。"
+        ],
+        coach: [
+          { level: "medium", title: "需要评估标准", copy: "不要只说喜欢 Codex。把反馈拆成成功率、速度、企业合规、迁移成本。" },
+          { level: "good", title: "口径边界", copy: "明确区分个人使用体验、团队投票和管理层签约决策。" },
+          { level: "medium", title: "建议保留不确定性", copy: "如果样本量不足，建议说临时倾向和需要补充的真实任务验证。" }
+        ],
+        evidence: [
+          { type: "Glip", title: "Gary 请求团队快速投票 Claude Code vs Codex", time: "2026-05-01", trust: "高" },
+          { type: "Glip", title: "Fred 提到 Cursor license reclaim 与 usage-based AI tools", time: "2026-05-01", trust: "高" },
+          { type: "Glip", title: "John 提到 Codex 可帮助构建 RingCentral API app", time: "2026-04-30", trust: "中" }
+        ],
+        package: [
+          "Purpose: draft a balanced team feedback answer for Codex vs Claude Code.",
+          "Known: Gary asked for quick team vote before a large OpenAI deal.",
+          "Known: Fred discussed AI tool cost reduction and Cursor reclaim.",
+          "Do not assume: final team consensus exists unless a vote result is available."
+        ],
+        outcome: [
+          { title: "建议开场", copy: "我可以先给一个初步反馈：目前更适合按任务成功率、成本和迁移成本来比较，而不是只投个人偏好。", checked: true },
+          { title: "必问问题", copy: "Gary 需要的是今天的临时方向，还是签约前的正式团队投票结果？", checked: true },
+          { title: "避免说法", copy: "不要把“我觉得 Codex 好用”说成“团队已经决定 Codex”。", checked: false },
+          { title: "写回候选", copy: "Action item: 收集团队 Codex / Claude Code 真实任务投票维度和结果。", checked: true }
+        ]
+      },
+      {
+        id: "cursor-policy",
+        title: "Cursor license policy 澄清",
+        meta: "来源：工具成本策略消息",
+        goal: "准备向 Fred 澄清 Cursor 回收和 usage-based 工具例外口径。",
+        coverage: 66,
+        risk: "高风险",
+        topRisk: "政策可能变化",
+        nextGoal: "确认例外机制",
+        roles: [
+          {
+            name: "Fred Yang",
+            initials: "FY",
+            color: "red",
+            role: "AI tool cost policy",
+            confidence: "中",
+            bullets: [
+              "提到低活跃 Cursor 用户转向 usage-based tools。",
+              "例外可能需要 Mercury 或管理流程确认。",
+              "政策性问题不适合用旧消息直接下结论。"
+            ]
+          },
+          {
+            name: "Cost reviewer",
+            initials: "CR",
+            color: "amber",
+            role: "成本与公平性挑战",
+            confidence: "中",
+            bullets: [
+              "会追问如何判断 active usage。",
+              "会关注提前通知和例外条件。",
+              "需要避免制造政策承诺。"
+            ]
+          }
+        ],
+        firstQuestion: "如果 Fred 问：为什么这个人还要保留 Cursor license？你准备拿什么标准来说明例外理由？",
+        followups: [
+          "你刚才说了需要保留，但没有说明 active usage 或业务必要性证据。",
+          "如果政策要求统一回收，你能提出一个临时替代方案吗？",
+          "这类政策可能已变更。你需要先确认哪一个最新口径？"
+        ],
+        quick: [
+          "我会先确认最新 policy，再给例外理由。",
+          "需要 active usage 和业务依赖证据。",
+          "如果不能保留，给 usage-based 替代方案。"
+        ],
+        coach: [
+          { level: "high", title: "政策时效风险", copy: "不要引用旧政策直接做承诺。先问当前例外流程和 active usage 标准。" },
+          { level: "medium", title: "需要证据", copy: "保留 license 的理由要落在使用频率、关键任务和替代成本。" },
+          { level: "good", title: "可给替代路径", copy: "如果不能保留，准备 usage-based 工具和迁移支持作为备选。" }
+        ],
+        evidence: [
+          { type: "Glip", title: "Fred 提到低活跃 Cursor 用户转向 usage-based AI tools", time: "2026-04-30", trust: "高" },
+          { type: "Glip", title: "有人请求成本调整前提前通知", time: "2026-04-30", trust: "中" },
+          { type: "Reflection", title: "AI tools usage limitation 事实跟进线程", time: "2026-05-08", trust: "中" }
+        ],
+        package: [
+          "Purpose: clarify current Cursor license reclaim policy and exception path.",
+          "Known: low-activity Cursor users may be moved to usage-based AI tools.",
+          "Ask: What is the current active usage threshold and exception owner?",
+          "Do not assume: older policy messages still apply."
+        ],
+        outcome: [
+          { title: "建议开场", copy: "我想先确认最新 Cursor license 例外口径，再判断这个 case 是否满足保留条件。", checked: true },
+          { title: "必问问题", copy: "现在 active usage 的判断标准是什么？例外审批 owner 是谁？", checked: true },
+          { title: "避免说法", copy: "不要承诺一定能保留 license；当前证据只支持需要确认例外流程。", checked: false },
+          { title: "写回候选", copy: "Action item: 记录 Cursor license 例外流程、判断标准和审批 owner。", checked: true }
+        ]
+      }
+    ];
+
+    const modeLabels = {
+      risk: "快速排雷",
+      objection: "反方挑战",
+      draft: "消息先试发"
+    };
+
+    const state = {
+      scenarioId: "rooms-coa",
+      mode: "risk",
+      followupIndex: 0,
+      elapsed: 0,
+      timer: null,
+      ended: false
+    };
+
+    const els = {
+      pageTitle: document.getElementById("pageTitle"),
+      goalLine: document.getElementById("goalLine"),
+      timerText: document.getElementById("timerText"),
+      scenarioList: document.getElementById("scenarioList"),
+      coverageText: document.getElementById("coverageText"),
+      coverageMeter: document.getElementById("coverageMeter"),
+      riskBadge: document.getElementById("riskBadge"),
+      roleList: document.getElementById("roleList"),
+      modeLabel: document.getElementById("modeLabel"),
+      topRisk: document.getElementById("topRisk"),
+      nextGoal: document.getElementById("nextGoal"),
+      transcript: document.getElementById("transcript"),
+      quickAnswers: document.getElementById("quickAnswers"),
+      answerForm: document.getElementById("answerForm"),
+      answerInput: document.getElementById("answerInput"),
+      harderButton: document.getElementById("harderButton"),
+      finishButton: document.getElementById("finishButton"),
+      resetButton: document.getElementById("resetButton"),
+      outcomePanel: document.getElementById("outcomePanel"),
+      outcomeGrid: document.getElementById("outcomeGrid"),
+      saveOutcomeButton: document.getElementById("saveOutcomeButton"),
+      coachTab: document.getElementById("tab-coach"),
+      evidenceTab: document.getElementById("tab-evidence"),
+      packageTab: document.getElementById("tab-package")
+    };
+
+    function scenario() {
+      return scenarios.find((item) => item.id === state.scenarioId);
+    }
+
+    function renderScenarios() {
+      els.scenarioList.innerHTML = "";
+      scenarios.forEach((item) => {
+        const button = document.createElement("button");
+        button.className = `scenario-card${item.id === state.scenarioId ? " active" : ""}`;
+        button.type = "button";
+        button.innerHTML = `
+          <div class="scenario-top">
+            <div>
+              <div class="scenario-name">${item.title}</div>
+              <div class="scenario-meta">${item.meta}</div>
+            </div>
+            <span class="badge ${item.risk === "高风险" ? "red" : "amber"}">${item.risk}</span>
+          </div>
+          <div class="scenario-meta">目标：${item.goal}</div>
+        `;
+        button.addEventListener("click", () => {
+          state.scenarioId = item.id;
+          resetSession(false);
+        });
+        els.scenarioList.appendChild(button);
+      });
+    }
+
+    function renderScenarioDetails() {
+      const item = scenario();
+      els.goalLine.textContent = `目标：${item.goal}`;
+      els.coverageText.textContent = `${item.coverage}% 可演练`;
+      els.coverageMeter.style.setProperty("--value", `${item.coverage}%`);
+      els.riskBadge.textContent = item.risk;
+      els.riskBadge.className = `badge ${item.risk === "高风险" ? "red" : "amber"}`;
+      els.topRisk.textContent = item.topRisk;
+      els.nextGoal.textContent = item.nextGoal;
+      els.modeLabel.textContent = modeLabels[state.mode];
+
+      els.roleList.innerHTML = "";
+      item.roles.forEach((role) => {
+        const card = document.createElement("article");
+        card.className = "role-card";
+        card.innerHTML = `
+          <div class="role-head">
+            <div class="person">
+              <div class="avatar ${role.color}">${role.initials}</div>
+              <div>
+                <div class="person-name">${role.name}</div>
+                <div class="person-role">${role.role}</div>
+              </div>
+            </div>
+            <span class="badge ${role.confidence === "高" ? "teal" : "amber"}">${role.confidence}</span>
+          </div>
+          <ul class="mini-list">
+            ${role.bullets.map((text) => `<li>${text}</li>`).join("")}
+          </ul>
+        `;
+        els.roleList.appendChild(card);
+      });
+    }
+
+    function renderTranscript(initial = false) {
+      const item = scenario();
+      els.transcript.innerHTML = "";
+      addTurn("simulated", item.roles[0].name, item.firstQuestion, "evidence-backed");
+      addTurn("coach", "Coach", "先回答目标，不要急着给方案。这个场景最需要确认 owner、blocking reason 和下一次检查时间。", "live");
+      if (initial) {
+        els.answerInput.value = "";
+      }
+    }
+
+    function addTurn(kind, speaker, content, label) {
+      const turn = document.createElement("div");
+      turn.className = `turn ${kind}`;
+      turn.innerHTML = `
+        <div class="turn-meta">
+          <span>${speaker}</span>
+          <span class="badge ${label === "evidence-backed" ? "teal" : label === "live" ? "amber" : "indigo"}">${label}</span>
+        </div>
+        <div class="bubble">${content}</div>
+      `;
+      els.transcript.appendChild(turn);
+      els.transcript.scrollTop = els.transcript.scrollHeight;
+    }
+
+    function renderQuickAnswers() {
+      const item = scenario();
+      els.quickAnswers.innerHTML = "";
+      item.quick.forEach((text) => {
+        const button = document.createElement("button");
+        button.className = "quick-answer";
+        button.type = "button";
+        button.textContent = text;
+        button.addEventListener("click", () => {
+          els.answerInput.value = text;
+          els.answerInput.focus();
+        });
+        els.quickAnswers.appendChild(button);
+      });
+    }
+
+    function renderRightPanels() {
+      const item = scenario();
+      els.coachTab.innerHTML = item.coach.map((card) => `
+        <article class="coach-card ${card.level}">
+          <div class="coach-head">
+            <div class="coach-title">${card.title}</div>
+            <span class="badge ${card.level === "high" ? "red" : card.level === "good" ? "teal" : "amber"}">${card.level}</span>
+          </div>
+          <p class="coach-copy">${card.copy}</p>
+        </article>
+      `).join("");
+
+      els.evidenceTab.innerHTML = item.evidence.map((card) => `
+        <article class="evidence-card">
+          <div class="evidence-head">
+            <div>
+              <div class="coach-title">${card.title}</div>
+              <p class="evidence-copy">${card.type} / ${card.time}</p>
+            </div>
+            <span class="badge ${card.trust === "高" ? "teal" : "amber"}">${card.trust}</span>
+          </div>
+          <div class="source-line">
+            <span class="badge">${card.type}</span>
+            <span class="badge indigo">source ref</span>
+          </div>
+        </article>
+      `).join("");
+
+      els.packageTab.innerHTML = `
+        <article class="evidence-card">
+          <div class="coach-title">External AI context package</div>
+          <p class="evidence-copy">默认只发送摘要和边界，不发送完整原文。</p>
+          <ul class="mini-list">
+            ${item.package.map((line) => `<li>${line}</li>`).join("")}
+          </ul>
+        </article>
+        <article class="privacy-box">敏感证据应先经过 Memory Trust Console；用户展开确认后才可带入外部 AI。</article>
+      `;
+    }
+
+    function renderOutcome() {
+      const item = scenario();
+      els.outcomePanel.classList.add("active");
+      els.outcomeGrid.innerHTML = item.outcome.map((card, index) => `
+        <article class="outcome-card">
+          <h3>${card.title}</h3>
+          <p>${card.copy}</p>
+          <label class="check-row">
+            <input type="checkbox" ${card.checked ? "checked" : ""} data-outcome="${index}">
+            <span>确认后写回或带入 Meeting Pilot handoff</span>
+          </label>
+        </article>
+      `).join("");
+      els.outcomePanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+
+    function submitAnswer(answer) {
+      if (!answer.trim() || state.ended) return;
+      const item = scenario();
+      addTurn("user", "You", answer.trim(), "draft");
+      const followup = item.followups[state.followupIndex % item.followups.length];
+      state.followupIndex += 1;
+      addTurn("simulated", item.roles[state.followupIndex % item.roles.length].name, followup, state.mode === "draft" ? "message reaction" : "inferred");
+      const coachLine = state.mode === "objection"
+        ? "反方模式会持续追问证据和边界。下一句建议先承认不确定性，再要求一个可确认输出。"
+        : state.mode === "draft"
+          ? "消息先试发模式关注误解风险。把要求改成 owner、due、blocker 这类可回答字段。"
+          : "快速排雷模式关注目标是否闭环。你的下一句最好包含一个具体问题。";
+      addTurn("coach", "Coach", coachLine, "live");
+      els.answerInput.value = "";
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      document.querySelectorAll(".seg-button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.mode === mode);
+      });
+      els.modeLabel.textContent = modeLabels[mode];
+      const prompts = {
+        risk: "快速排雷会优先暴露 open loop、证据缺口和下一步不清晰。",
+        objection: "反方挑战会提高难度，持续追问成本、owner、风险和证据。",
+        draft: "消息先试发会模拟对方对草稿的误解点和追问。"
+      };
+      addTurn("coach", "Coach", prompts[mode], "mode");
+    }
+
+    function resetSession(keepScenario = true) {
+      state.followupIndex = 0;
+      state.elapsed = 0;
+      state.ended = false;
+      if (!keepScenario) {
+        renderScenarios();
+      }
+      els.outcomePanel.classList.remove("active");
+      renderScenarios();
+      renderScenarioDetails();
+      renderTranscript(true);
+      renderQuickAnswers();
+      renderRightPanels();
+      updateTimer();
+    }
+
+    function updateTimer() {
+      const remaining = Math.max(0, 180 - state.elapsed);
+      const minutes = String(Math.floor(remaining / 60)).padStart(2, "0");
+      const seconds = String(remaining % 60).padStart(2, "0");
+      els.timerText.textContent = `${minutes}:${seconds}`;
+    }
+
+    function startTimer() {
+      clearInterval(state.timer);
+      state.timer = setInterval(() => {
+        if (state.ended) return;
+        state.elapsed += 1;
+        updateTimer();
+        if (state.elapsed === 120) {
+          addTurn("coach", "Coach", "还剩约 1 分钟。建议现在把问题收敛成一个 owner 或 next check。", "time");
+        }
+      }, 1000);
+    }
+
+    document.querySelectorAll(".seg-button").forEach((button) => {
+      button.addEventListener("click", () => setMode(button.dataset.mode));
+    });
+
+    document.querySelectorAll(".tab-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".tab-button").forEach((item) => item.classList.toggle("active", item === button));
+        document.querySelectorAll(".tab-pane").forEach((pane) => pane.classList.remove("active"));
+        document.getElementById(`tab-${button.dataset.tab}`).classList.add("active");
+      });
+    });
+
+    els.answerForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitAnswer(els.answerInput.value);
+    });
+
+    els.harderButton.addEventListener("click", () => {
+      setMode("objection");
+      addTurn("simulated", scenario().roles[1].name, "我现在不接受泛泛的下一步。请直接说明：谁负责、什么时候确认、如果不能确认你要什么替代输出？", "harder");
+    });
+
+    els.finishButton.addEventListener("click", () => {
+      state.ended = true;
+      addTurn("coach", "Coach", "演练已结束。下面是可带进会议或消息里的结论，勾选后才会写回 Personal AI。", "summary");
+      renderOutcome();
+    });
+
+    els.resetButton.addEventListener("click", () => resetSession(true));
+
+    els.saveOutcomeButton.addEventListener("click", () => {
+      const checked = Array.from(document.querySelectorAll("[data-outcome]:checked")).length;
+      addTurn("coach", "Coach", `已模拟保存 ${checked} 条候选。真实实现中会进入 review queue，不会直接写入长期记忆。`, "saved");
+    });
+
+    renderScenarios();
+    renderScenarioDetails();
+    renderTranscript(true);
+    renderQuickAnswers();
+    renderRightPanels();
+    startTimer();
+  </script>
+</body>
+</html>

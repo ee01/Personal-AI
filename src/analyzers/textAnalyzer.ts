@@ -13,6 +13,7 @@ import {
   extractJiraTicketKeys,
   hasJiraTicketKey,
 } from '../utils/slidesAnalyzerSuggestions';
+import type { ProjectData } from '../slide';
 
 /**
  * 文本结构类型
@@ -349,7 +350,109 @@ export class TextContentAnalyzerImpl extends BaseSlideAnalyzer implements TextCo
     // 模式3: 段落文本包含完整的项目信息
     this.extractProjectsFromParagraphPattern(blocks, projects);
     
-    return projects;
+    return this.dedupeProjects(projects);
+  }
+
+  private dedupeProjects(projects: ProjectData[]): ProjectData[] {
+    const dedupedProjects: ProjectData[] = [];
+    const projectIndexByKey = new Map<string, number>();
+
+    for (const project of projects) {
+      const dedupeKey = this.getProjectDedupeKey(project);
+      if (!dedupeKey || !projectIndexByKey.has(dedupeKey)) {
+        if (dedupeKey) {
+          projectIndexByKey.set(dedupeKey, dedupedProjects.length);
+        }
+        dedupedProjects.push({ ...project });
+        continue;
+      }
+
+      const existingProject = dedupedProjects[projectIndexByKey.get(dedupeKey)!];
+      dedupedProjects[projectIndexByKey.get(dedupeKey)!] = this.mergeDuplicateProject(existingProject, project);
+    }
+
+    return dedupedProjects;
+  }
+
+  private getProjectDedupeKey(project: ProjectData): string {
+    const jiraKey = extractJiraTicketKeys(project.id, project.name)[0];
+    if (jiraKey) {
+      return `jira:${jiraKey.toUpperCase()}`;
+    }
+
+    const normalizedName = this.normalizeProjectText(project.name);
+    return normalizedName ? `name:${normalizedName}` : '';
+  }
+
+  private mergeDuplicateProject(existingProject: ProjectData, duplicateProject: ProjectData): ProjectData {
+    return {
+      ...existingProject,
+      id: existingProject.id || duplicateProject.id,
+      name: this.pickRicherText(existingProject.name, duplicateProject.name),
+      status: existingProject.status || duplicateProject.status,
+      owner: existingProject.owner || duplicateProject.owner,
+      track: existingProject.track || duplicateProject.track,
+      comments: this.mergeProjectComments(existingProject.comments, duplicateProject.comments),
+      description: existingProject.description || duplicateProject.description,
+      slideElementId: existingProject.slideElementId || duplicateProject.slideElementId,
+      tableId: existingProject.tableId || duplicateProject.tableId,
+      row: existingProject.row ?? duplicateProject.row,
+      slideId: existingProject.slideId || duplicateProject.slideId,
+      columnIndices: existingProject.columnIndices || duplicateProject.columnIndices
+    };
+  }
+
+  private pickRicherText(currentValue: unknown, candidateValue: unknown): string {
+    const current = typeof currentValue === 'string' ? currentValue.trim() : '';
+    const candidate = typeof candidateValue === 'string' ? candidateValue.trim() : '';
+
+    if (!current) {
+      return candidate;
+    }
+
+    if (!candidate) {
+      return current;
+    }
+
+    return candidate.length > current.length ? candidate : current;
+  }
+
+  private mergeProjectComments(currentValue: unknown, candidateValue: unknown): string {
+    const lines: string[] = [];
+    const seen = new Set<string>();
+
+    for (const value of [currentValue, candidateValue]) {
+      if (typeof value !== 'string') {
+        continue;
+      }
+
+      for (const line of value.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (this.isStructuredDetailLine(trimmed)) {
+          continue;
+        }
+
+        const normalized = this.normalizeProjectText(trimmed);
+        if (!trimmed || !normalized || seen.has(normalized)) {
+          continue;
+        }
+
+        seen.add(normalized);
+        lines.push(trimmed);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  private isStructuredDetailLine(value: string): boolean {
+    return /^(状态|status|负责人|责任人|owner|assignee|赛道|团队|track|team)\s*[:：]/i.test(value);
+  }
+
+  private normalizeProjectText(value: unknown): string {
+    return typeof value === 'string'
+      ? value.replace(/\s+/g, ' ').trim().toLowerCase()
+      : '';
   }
   
   /**

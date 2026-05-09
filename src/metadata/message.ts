@@ -18,6 +18,10 @@ export interface MessagePost {
   groupType: string;
   text: string;
   creator: string;
+  creatorId?: number | string;
+  creatorUsername?: string;
+  isSelf: boolean;
+  authorRole?: 'owner' | 'external' | 'system';
   time: string;
   type: 'message';
   contentType?: 'message' | 'event';
@@ -56,8 +60,78 @@ export interface MessageGroupWithThreads {
 let cachedPersonsMap: Map<number | string, string> | null = null;
 let cachedGroupsMap: Map<number | string, { name: string; is_team: boolean }> | null = null;
 
+interface MessageUserInfo {
+  username?: string;
+  fullName?: string;
+  extensionId?: string | number;
+  ownerId?: string | number;
+  accountId?: string | number;
+  id?: string | number;
+  userEmail?: string;
+  email?: string;
+}
+
+interface PersonIdentity {
+  name: string;
+  username?: string;
+}
+
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+function normalizeComparable(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function normalizeUsername(value: unknown): string {
+  const raw = normalizeComparable(value);
+  return raw.includes('@') ? raw.split('@')[0] : raw;
+}
+
+function extractUsernameFromPerson(person: any): string {
+  return (
+    normalizeUsername(person?.username) ||
+    normalizeUsername(person?.email) ||
+    normalizeUsername(person?.email_address) ||
+    normalizeUsername(person?.emailAddress) ||
+    normalizeUsername(person?.user_name) ||
+    normalizeUsername(person?.userName) ||
+    normalizeUsername(person?.login)
+  );
+}
+
+function createPersonIdentity(person: any): PersonIdentity {
+  const firstName = normalizeText(person?.first_name || person?.firstName);
+  const lastName = normalizeText(person?.last_name || person?.lastName);
+  const name =
+    normalizeText(person?.name) ||
+    normalizeText(person?.displayName) ||
+    `${firstName} ${lastName}`.trim();
+
+  return {
+    name,
+    username: extractUsernameFromPerson(person),
+  };
+}
+
+function resolvePersonIdentity(
+  personsMap: Map<any, PersonIdentity>,
+  rawId: unknown,
+): PersonIdentity | undefined {
+  if (rawId === null || rawId === undefined || rawId === '') {
+    return undefined;
+  }
+
+  return (
+    personsMap.get(rawId) ||
+    personsMap.get(String(rawId)) ||
+    personsMap.get(Number(rawId))
+  );
 }
 
 function resolvePersonName(
@@ -74,6 +148,105 @@ function resolvePersonName(
     personsMap.get(Number(rawId)) ||
     ''
   );
+}
+
+function extractPostCreatorId(post: any): string | number | undefined {
+  const creatorId =
+    post.creator_id ??
+    post.creatorId ??
+    post.from_ ??
+    post.from_id ??
+    post.fromId ??
+    post.user_id ??
+    post.userId ??
+    post.creator?.id ??
+    post.author?.id;
+
+  return creatorId === null || creatorId === undefined || creatorId === ''
+    ? undefined
+    : creatorId;
+}
+
+function extractPostCreatorUsername(
+  post: any,
+  personIdentitiesMap?: Map<any, PersonIdentity>,
+): string {
+  const creatorId = extractPostCreatorId(post);
+  const fromPerson = personIdentitiesMap
+    ? resolvePersonIdentity(personIdentitiesMap, creatorId)?.username
+    : '';
+
+  return (
+    normalizeUsername(post.creatorUsername) ||
+    normalizeUsername(post.creator?.username) ||
+    normalizeUsername(post.author?.username) ||
+    normalizeUsername(post.user_name) ||
+    normalizeUsername(post.userName) ||
+    normalizeUsername(post.user_name_snapshot) ||
+    normalizeUsername(post.email) ||
+    normalizeUsername(post.email_address) ||
+    normalizeUsername(post.emailAddress) ||
+    fromPerson ||
+    ''
+  );
+}
+
+export function resolveMessageAuthorMetadata(
+  post: {
+    creator?: string;
+    creatorId?: string | number;
+    creatorUsername?: string;
+    contentType?: string;
+  },
+  userinfo?: MessageUserInfo | null,
+): Pick<MessagePost, 'isSelf' | 'authorRole'> {
+  const creatorUsername = normalizeUsername(post.creatorUsername);
+  const currentUsername =
+    normalizeUsername(userinfo?.username) ||
+    normalizeUsername(userinfo?.userEmail) ||
+    normalizeUsername(userinfo?.email);
+  const creatorName = normalizeComparable(post.creator);
+  const currentFullName = normalizeComparable(userinfo?.fullName);
+  const creatorId = normalizeComparable(post.creatorId);
+  const currentIds = [
+    userinfo?.extensionId,
+    userinfo?.ownerId,
+    userinfo?.accountId,
+    userinfo?.id,
+  ]
+    .map(normalizeComparable)
+    .filter(Boolean);
+
+  const isSystem =
+    post.contentType === 'event' ||
+    creatorName === 'system' ||
+    creatorUsername === 'system';
+  const isSelf =
+    Boolean(
+      creatorUsername && currentUsername && creatorUsername === currentUsername,
+    ) ||
+    Boolean(
+      creatorName && currentFullName && creatorName === currentFullName,
+    ) ||
+    Boolean(creatorId && currentIds.includes(creatorId));
+
+  return {
+    isSelf,
+    authorRole: isSystem ? 'system' : isSelf ? 'owner' : 'external',
+  };
+}
+
+async function getStoredMessageUserInfo(): Promise<MessageUserInfo | undefined> {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+      return undefined;
+    }
+
+    const { userinfo } = await chrome.storage.local.get('userinfo');
+    return userinfo;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolvePersonNames(
@@ -577,6 +750,18 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
         const groupId = extractPostGroupId(post);
         const groupInfo = resolveGroupInfo(groupsMap, groupId);
         const isEvent = isEventPost(post);
+        const contentType: MessagePost['contentType'] = isEvent
+          ? 'event'
+          : 'message';
+        const creatorId = extractPostCreatorId(post);
+        const creatorUsername = extractPostCreatorUsername(post);
+        const creator = extractPostCreator(post, personsMap) || 'Unknown';
+        const authorMetadata = resolveMessageAuthorMetadata({
+          creator,
+          creatorId,
+          creatorUsername,
+          contentType,
+        });
         missingPosts.set(post.id, {
           id: post.id,
           parentId: post.parent_post_id,
@@ -584,10 +769,13 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
           groupName: groupInfo?.name || 'Unknown Team',
           groupType: groupInfo?.is_team ? 'team' : 'direct message',
           text,
-          creator: extractPostCreator(post, personsMap) || 'Unknown',
+          creator,
+          creatorId,
+          creatorUsername,
+          ...authorMetadata,
           time: formatDate(extractPostCreatedAt(post).getTime()),
           type: 'message',
-          contentType: isEvent ? 'event' : 'message',
+          contentType,
           ...(isEvent ? { event: buildEventDetails(post) } : {})
         });
       }
@@ -787,7 +975,8 @@ export async function transformMessagePosts(
   enableMessage: boolean, 
   startTime: number, 
   selectGroupNames: string[], 
-  selectFolderGroupIds: number[]
+  selectFolderGroupIds: number[],
+  userinfo?: MessageUserInfo | null
 ): Promise<MessageGroupWithThreads[]> {
     if (!enableMessage) {
       return [];
@@ -799,8 +988,12 @@ export async function transformMessagePosts(
       groupsMap: Map<any, any>;
     } => {
       const personsMap = new Map<any, string>();
+      const personIdentitiesMap = new Map<any, PersonIdentity>();
       persons.forEach(person => {
-        personsMap.set(person.id, `${person.first_name} ${person.last_name}`.trim());
+        const identity = createPersonIdentity(person);
+        personsMap.set(person.id, identity.name);
+        personIdentitiesMap.set(person.id, identity);
+        personIdentitiesMap.set(String(person.id), identity);
       });
       
       const groupsMap = new Map<any, any>();
@@ -819,15 +1012,35 @@ export async function transformMessagePosts(
         .map(post => ({
           raw: post,
           text: extractPostText(post, personsMap),
-          creator: extractPostCreator(post, personsMap)
+          creator: extractPostCreator(post, personsMap),
+          creatorId: extractPostCreatorId(post),
+          creatorUsername: extractPostCreatorUsername(post, personIdentitiesMap)
         }))
         .filter(item => item.text !== '');
 
       // 转换数据结构
-      const transformedData: MessagePost[] = filteredPosts.map(({ raw: post, text, creator }) => {
+      const transformedData: MessagePost[] = filteredPosts.map(({
+        raw: post,
+        text,
+        creator,
+        creatorId,
+        creatorUsername,
+      }) => {
         const groupId = extractPostGroupId(post);
         const groupInfo = resolveGroupInfo(groupsMap, groupId);
         const isEvent = isEventPost(post);
+        const contentType: MessagePost['contentType'] = isEvent
+          ? 'event'
+          : 'message';
+        const authorMetadata = resolveMessageAuthorMetadata(
+          {
+            creator,
+            creatorId,
+            creatorUsername,
+            contentType,
+          },
+          userinfo,
+        );
         return {
           id: post.id,
           parentId: post.parent_post_id || undefined,
@@ -837,8 +1050,11 @@ export async function transformMessagePosts(
           type: 'message' as const,
           text,
           creator,
+          creatorId,
+          creatorUsername,
+          ...authorMetadata,
           time: formatDate(extractPostCreatedAt(post).getTime()),
-          contentType: isEvent ? 'event' : 'message',
+          contentType,
           ...(isEvent ? { event: buildEventDetails(post) } : {})
         };
       }).filter(item => item.text !== '' && item.creator !== '' && item.groupId !== 'unknown');
@@ -850,8 +1066,10 @@ export async function transformMessagePosts(
     };
   
     try {
+      const resolvedUserinfo = userinfo || (await getStoredMessageUserInfo());
       const glipData = await fetchAllMessageData();
       const post = glipData.post.concat(glipData.replyPost, glipData.event);
+      userinfo = resolvedUserinfo;
       const { posts, personsMap, groupsMap } = transformPosts(post, glipData.person, glipData.group);
       
       // 按时间和群组过滤

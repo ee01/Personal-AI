@@ -210,6 +210,12 @@ export interface ProjectSyncReadiness {
   error?: string;
 }
 
+export interface ProjectDashboardLaunchContext {
+  hasContext: boolean;
+  projectId?: string;
+  projectName?: string;
+}
+
 const PROJECT_DASHBOARD_STORAGE_KEY = 'projectDashboardFishboneProjects';
 
 const PROJECT_HEALTH_PRIORITY: Record<ProjectHealthState, number> = {
@@ -224,6 +230,58 @@ const PROJECT_ATTENTION_PRIORITY: Record<ProjectAttentionLevel, number> = {
   overdue: 1,
   'due-soon': 2,
 };
+
+function normalizeLaunchContextValue(value: unknown): string | undefined {
+  const normalized = String(value || '').trim();
+  return normalized || undefined;
+}
+
+export function parseProjectDashboardLaunchContext(search = ''): ProjectDashboardLaunchContext {
+  const rawSearch = String(search || '').trim();
+  const query = rawSearch.startsWith('?') ? rawSearch.slice(1) : rawSearch;
+  const params = new URLSearchParams(query);
+  const projectId = normalizeLaunchContextValue(params.get('projectId'));
+  const projectName = normalizeLaunchContextValue(params.get('projectName'));
+  const context: ProjectDashboardLaunchContext = {
+    hasContext: Boolean(projectId || projectName),
+  };
+
+  if (projectId) context.projectId = projectId;
+  if (projectName) context.projectName = projectName;
+
+  return context;
+}
+
+export function buildProjectDashboardLaunchPath(
+  context: Partial<Pick<ProjectDashboardLaunchContext, 'projectId' | 'projectName'>> = {},
+): string {
+  const params = new URLSearchParams();
+  const projectId = normalizeLaunchContextValue(context.projectId);
+  const projectName = normalizeLaunchContextValue(context.projectName);
+
+  if (projectId) params.set('projectId', projectId);
+  if (projectName) params.set('projectName', projectName);
+
+  const query = params.toString();
+  return query ? `project-dashboard.html?${query}` : 'project-dashboard.html';
+}
+
+export function projectMatchesDashboardLaunchContext(
+  project: Pick<FishboneProject, 'id' | 'name'>,
+  context: ProjectDashboardLaunchContext,
+): boolean {
+  if (!context.hasContext) return false;
+
+  const projectId = normalizeLaunchContextValue(project.id)?.toLowerCase();
+  const projectName = normalizeLaunchContextValue(project.name)?.toLowerCase();
+  const targetId = normalizeLaunchContextValue(context.projectId)?.toLowerCase();
+  const targetName = normalizeLaunchContextValue(context.projectName)?.toLowerCase();
+
+  return Boolean(
+    (targetId && projectId === targetId) ||
+    (targetName && projectName === targetName),
+  );
+}
 
 function normalizeProjectSuggestionName(input: unknown): string {
   if (typeof input === 'string') return input.trim();

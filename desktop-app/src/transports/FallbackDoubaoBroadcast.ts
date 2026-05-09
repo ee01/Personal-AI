@@ -37,11 +37,15 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
   }
 
   openLogin(): Promise<string> {
-    return this.invoke((client) => client.openLogin());
+    return this.invokePreferringConfiguredTransport((client) =>
+      client.openLogin(),
+    );
   }
 
   openThread(url: string): Promise<BrowserThreadSnapshot> {
-    return this.invoke((client) => client.openThread(url));
+    return this.invokePreferringConfiguredTransport((client) =>
+      client.openThread(url),
+    );
   }
 
   collectConversationSnapshots(): Promise<BrowserConversationSnapshot[]> {
@@ -69,7 +73,9 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
   }
 
   findThreadByTitle(title: string): Promise<BrowserThreadSnapshot | null> {
-    return this.invoke((client) => client.findThreadByTitle(title));
+    return this.invokePreferringConfiguredTransport((client) =>
+      client.findThreadByTitle(title),
+    );
   }
 
   status(): BrowserStatus {
@@ -109,24 +115,40 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
     operation: (client: BrowserSessionAdapter) => Promise<T>,
   ): Promise<T> {
     if (this.shouldUseWebpageMcp()) {
-      try {
-        const result = await operation(this.options.webpageMcpClient);
-        this.webpageMcpCooldownUntil = 0;
-        this.lastFallbackReason = undefined;
-        return result;
-      } catch (error) {
-        const reason = formatError(error);
-        this.rememberWebpageMcpFailure(reason, error);
-        try {
-          return await operation(this.options.playwrightClient);
-        } catch (fallbackError) {
-          this.lastFallbackReason = `${reason}; managed Chromium fallback also failed: ${formatError(fallbackError)}`;
-          throw fallbackError;
-        }
-      }
+      return this.tryWebpageMcpThenFallback(operation);
     }
 
     return operation(this.options.playwrightClient);
+  }
+
+  private async invokePreferringConfiguredTransport<T>(
+    operation: (client: BrowserSessionAdapter) => Promise<T>,
+  ): Promise<T> {
+    if (this.options.getTransport() === 'webpage_mcp') {
+      return this.tryWebpageMcpThenFallback(operation);
+    }
+
+    return operation(this.options.playwrightClient);
+  }
+
+  private async tryWebpageMcpThenFallback<T>(
+    operation: (client: BrowserSessionAdapter) => Promise<T>,
+  ): Promise<T> {
+    try {
+      const result = await operation(this.options.webpageMcpClient);
+      this.webpageMcpCooldownUntil = 0;
+      this.lastFallbackReason = undefined;
+      return result;
+    } catch (error) {
+      const reason = formatError(error);
+      this.rememberWebpageMcpFailure(reason, error);
+      try {
+        return await operation(this.options.playwrightClient);
+      } catch (fallbackError) {
+        this.lastFallbackReason = `${reason}; managed Chromium fallback also failed: ${formatError(fallbackError)}`;
+        throw fallbackError;
+      }
+    }
   }
 
   private async sendTranscriptWithFallback(

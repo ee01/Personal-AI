@@ -79,7 +79,6 @@ import {
   getTodayLocalScheduleDate,
   isValidLocalScheduleTime,
   normalizeLocalScheduleTime,
-  parseLocalScheduleDate,
   parseLocalScheduleTime,
 } from './scheduleDateTime';
 import {
@@ -88,6 +87,7 @@ import {
   getDefaultScheduleTime,
   isExecutorDrivenSchedule,
 } from './scheduleNextExecution';
+import { formatScheduledMessageFrequency } from './scheduleFrequencyDisplay';
 import {
   formatScheduleQueueBlockReason,
   formatScheduleQueuePressure,
@@ -670,6 +670,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [latestAppScriptVersion, setLatestAppScriptVersion] = useState<string>('');
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [updateCheckNeedsAuth, setUpdateCheckNeedsAuth] = useState(false);
+  const [updateCheckError, setUpdateCheckError] = useState('');
   const [appScriptVersionUsage, setAppScriptVersionUsage] = useState<AppScriptVersionUsage | null>(null);
   const [editingMessage, setEditingMessage] = useState<ScheduledMessage | null>(null);
   const [outreachRuntime, setOutreachRuntime] = useState<OutreachRuntimeState>({
@@ -1106,11 +1107,13 @@ const ScheduledMessagesManager: React.FC = () => {
     try {
       if (!config || !config.webAppUrl) {
         setAppScriptVersionUsage(null);
+        setUpdateCheckError('');
         return;
       }
 
       if (interactive) {
         setIsCheckingUpdates(true);
+        setUpdateCheckError('');
       }
       
       const token = interactive
@@ -1118,6 +1121,7 @@ const ScheduledMessagesManager: React.FC = () => {
         : await getGoogleAuthTokenSilently({ caller: 'ScheduledMessagesManager.checkForUpdates.auto' });
       if (!token) {
         setUpdateCheckNeedsAuth(true);
+        setUpdateCheckError('');
         if (showCurrentAlert) {
           alert('无法获取 Google 授权，暂时不能检查 App Script 升级状态。');
         }
@@ -1132,11 +1136,14 @@ const ScheduledMessagesManager: React.FC = () => {
       setAppScriptVersionUsage(result.versionUsage || null);
 
       if (result.error) {
+        setUpdateCheckError(result.error);
         if (showCurrentAlert) {
           alert(`检查 App Script 升级状态失败: ${result.error}`);
         }
         return;
       }
+
+      setUpdateCheckError('');
       
       if (result.needsUpdate) {
         setUpdateAvailable(true);
@@ -1154,6 +1161,7 @@ const ScheduledMessagesManager: React.FC = () => {
       }
     } catch (error) {
       console.error('检查更新失败:', error);
+      setUpdateCheckError(error instanceof Error ? error.message : String(error));
       if (showCurrentAlert) {
         alert(`检查 App Script 升级状态失败: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -2198,105 +2206,7 @@ const ScheduledMessagesManager: React.FC = () => {
       return formatTimelineFrequencyText(message);
     }
     
-    // 判断是否有重复规则
-    if (!message.Repeat_Every || !message.Repeat_Unit) {
-      // 一次性任务
-      return '推送一次';
-    }
-    
-    const every = message.Repeat_Every;
-    const unit = message.Repeat_Unit;
-    const scheduleDate = message.Schedule_Date;
-    const scheduleTime = message.Schedule_Time;
-    
-    // 根据单位构建频率描述
-    let freq = '';
-    
-    if (unit === 'Day') {
-      if (every === 1) {
-        freq = '每天';
-      } else {
-        freq = `每 ${every} 天`;
-      }
-    } else if (unit === 'Week') {
-      const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
-      
-      // 检查是否有多星期配置
-      if (message.Repeat_Days) {
-        const days = message.Repeat_Days.split(',')
-          .map(d => parseInt(d.trim(), 10))
-          .filter(d => !isNaN(d) && d >= 0 && d <= 6)
-          .sort((a, b) => a - b);
-        
-        if (days.length > 0) {
-          // 检查是否是工作日 (1,2,3,4,5)
-          if (days.length === 5 && 
-              days[0] === 1 && days[1] === 2 && days[2] === 3 && 
-              days[3] === 4 && days[4] === 5) {
-            freq = '工作日';
-          }
-          // 检查是否是周末 (0,6)
-          else if (days.length === 2 && days[0] === 0 && days[1] === 6) {
-            freq = '周末';
-          }
-          // 其他情况，显示具体星期
-          else {
-            const dayNames = days.map(d => weekdays[d]).join('、');
-            freq = `每周${dayNames}`;
-          }
-        } else {
-          freq = `每周`;
-        }
-      } else if (every === 1) {
-        // 无 Repeat_Days，从 Schedule_Date 获取星期几（兼容旧数据）
-        try {
-          const date = parseLocalScheduleDate(scheduleDate);
-          const weekday = weekdays[date.getDay()];
-          freq = `每周${weekday}`;
-        } catch {
-          freq = '每周';
-        }
-      } else {
-        freq = `每 ${every} 周`;
-      }
-    } else if (unit === 'Month') {
-      // 从 Schedule_Date 提取日期
-      try {
-        const day = parseLocalScheduleDate(scheduleDate).getDate();
-        if (every === 1) {
-          freq = `每月 ${day} 号`;
-        } else {
-          freq = `每 ${every} 月的 ${day} 号`;
-        }
-      } catch {
-        freq = every === 1 ? '每月' : `每 ${every} 月`;
-      }
-    } else if (unit === 'Year') {
-      if (every === 1) {
-        try {
-          const date = parseLocalScheduleDate(scheduleDate);
-          const month = date.getMonth() + 1;
-          const day = date.getDate();
-          freq = `每年 ${month}/${day}`;
-        } catch {
-          freq = '每年';
-        }
-      } else {
-        freq = `每 ${every} 年`;
-      }
-    }
-    
-    // 添加时间
-    if (scheduleTime) {
-      const normalizedScheduleTime = normalizeLocalScheduleTime(scheduleTime);
-      freq += normalizedScheduleTime
-        ? ` ${normalizedScheduleTime}`
-        : ' 时间格式异常';
-    } else {
-      freq += isExecutorDrivenMessage(message) ? ' 08:00 后' : ' 09:00';
-    }
-    
-    return freq;
+    return formatScheduledMessageFrequency(message);
   };
 
   const formatDispatchPolicy = (message: ScheduledMessage): string => {
@@ -2604,6 +2514,27 @@ const ScheduledMessagesManager: React.FC = () => {
             disabled={isCheckingUpdates || isUpdating}
           >
             {isCheckingUpdates ? '检查中...' : '检查脚本'}
+          </button>
+        </div>
+      )}
+
+      {updateCheckError && !updateCheckNeedsAuth && !updateAvailable && (
+        <div style={styles.updateErrorBanner}>
+          <div style={styles.warningContent}>
+            <span style={styles.warningIcon}>⚠️</span>
+            <div style={styles.warningText}>
+              <strong>无法确认 App Script 升级状态</strong>
+              <p style={styles.updateErrorDescription}>
+                {updateCheckError} 当前脚本不会被自动改动；请修复后重试检查。
+              </p>
+            </div>
+          </div>
+          <button
+            style={styles.updateErrorButton}
+            onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
+            disabled={isCheckingUpdates || isUpdating}
+          >
+            {isCheckingUpdates ? '检查中...' : '重试检查'}
           </button>
         </div>
       )}
@@ -7280,6 +7211,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderBottom: '1px solid #fed7aa',
     animation: 'slideDown 0.3s ease-out',
   },
+  updateErrorBanner: {
+    backgroundColor: '#fef2f2',
+    borderLeft: '4px solid #dc2626',
+    padding: '16px 20px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottom: '1px solid #fecaca',
+    animation: 'slideDown 0.3s ease-out',
+  },
   queueInfoBanner: {
     backgroundColor: '#eef6ff',
     borderLeft: '4px solid #0d6efd',
@@ -7321,6 +7262,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '13px',
     color: '#9a3412',
   },
+  updateErrorDescription: {
+    margin: '4px 0 0 0',
+    fontSize: '13px',
+    color: '#991b1b',
+  },
   queueInfoDescription: {
     margin: '4px 0 0 0',
     fontSize: '13px',
@@ -7361,6 +7307,18 @@ const styles: { [key: string]: React.CSSProperties } = {
   updateBannerButton: {
     padding: '8px 16px',
     backgroundColor: '#ea580c',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: 'bold',
+    whiteSpace: 'nowrap',
+    marginLeft: '16px',
+  },
+  updateErrorButton: {
+    padding: '8px 16px',
+    backgroundColor: '#dc2626',
     color: '#fff',
     border: 'none',
     borderRadius: '6px',

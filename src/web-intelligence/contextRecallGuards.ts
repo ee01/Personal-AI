@@ -1,6 +1,7 @@
 const SAFE_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:']);
 
 export const CONTEXT_SITE_MUTE_STORAGE_KEY = 'pai-context-muted-sites-v1';
+export const CONTEXT_SITE_BLOCK_STORAGE_KEY = 'pai-context-blocked-sites-v1';
 export const CONTEXT_SITE_MUTE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const LOW_VALUE_CONTEXT_HOSTS = new Set([
@@ -81,6 +82,7 @@ export interface SensitiveControlDescriptor {
 }
 
 export type ContextSiteMuteRecord = Record<string, number>;
+export type ContextSiteBlockRecord = Record<string, number>;
 
 export function normalizeContextSiteMuteHost(rawHostname: string): string {
   return rawHostname.trim().toLowerCase().replace(/\.$/, '');
@@ -147,6 +149,32 @@ export function pruneContextSiteMuteRecord(
       changed = true;
     }
     record[host] = rawMutedAt;
+  }
+
+  return { record, changed };
+}
+
+export function pruneContextSiteBlockRecord(
+  rawValue: unknown,
+): { record: ContextSiteBlockRecord; changed: boolean } {
+  const record: ContextSiteBlockRecord = {};
+  let changed = false;
+
+  if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+    return { record, changed: Boolean(rawValue) };
+  }
+
+  for (const [rawHost, rawBlockedAt] of Object.entries(rawValue)) {
+    const host = normalizeContextSiteMuteHost(rawHost);
+    if (!host || typeof rawBlockedAt !== 'number' || !Number.isFinite(rawBlockedAt) || rawBlockedAt <= 0) {
+      changed = true;
+      continue;
+    }
+
+    if (host !== rawHost) {
+      changed = true;
+    }
+    record[host] = rawBlockedAt;
   }
 
   return { record, changed };

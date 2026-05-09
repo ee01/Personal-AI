@@ -8,6 +8,9 @@ import {
   buildProjectStatusEvidenceItems,
   buildProjectStatusUpdateDraft,
   compareProjectsByDashboardPriority,
+  parseProjectDashboardLaunchContext,
+  projectMatchesDashboardLaunchContext,
+  type ProjectDashboardLaunchContext,
   type ProjectSyncReadiness,
   type ProjectStatusEvidenceItem,
 } from '../../utils/dashboardIntegration';
@@ -135,6 +138,10 @@ const buildProjectAttentionTasks = (project: FishboneProject, now = new Date()):
 };
 
 const ProjectDashboard: React.FC = () => {
+  const launchContext = useMemo<ProjectDashboardLaunchContext>(
+    () => parseProjectDashboardLaunchContext(typeof window !== 'undefined' ? window.location.search : ''),
+    [],
+  );
   const [projects, setProjects] = useState<FishboneProject[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -205,6 +212,11 @@ const ProjectDashboard: React.FC = () => {
     return null;
   }, [projects, detailTaskRef]);
 
+  const launchContextProject = useMemo(
+    () => projects.find(project => projectMatchesDashboardLaunchContext(project, launchContext)) || null,
+    [projects, launchContext],
+  );
+
   const dashboardNow = useMemo(() => lastRefresh, [lastRefresh]);
 
   const dashboardStats = useMemo(() => projects.reduce(
@@ -239,8 +251,17 @@ const ProjectDashboard: React.FC = () => {
   const focusItems = focusSummary.visibleItems;
 
   const prioritizedProjects = useMemo(
-    () => [...projects].sort((a, b) => compareProjectsByDashboardPriority(a, b, dashboardNow)),
-    [projects, dashboardNow],
+    () => [...projects].sort((a, b) => {
+      const aMatchesLaunchContext = projectMatchesDashboardLaunchContext(a, launchContext);
+      const bMatchesLaunchContext = projectMatchesDashboardLaunchContext(b, launchContext);
+
+      if (aMatchesLaunchContext !== bMatchesLaunchContext) {
+        return aMatchesLaunchContext ? -1 : 1;
+      }
+
+      return compareProjectsByDashboardPriority(a, b, dashboardNow);
+    }),
+    [projects, dashboardNow, launchContext],
   );
 
   useEffect(() => {
@@ -396,6 +417,17 @@ const ProjectDashboard: React.FC = () => {
         handleSuggest();
       }
     }, 300);
+  };
+
+  const handleOpenLaunchProjectCreateModal = () => {
+    if (!launchContext.hasContext) return;
+
+    const name = launchContext.projectName || launchContext.projectId || '';
+    setNewProjectName(name);
+    setNewProjectDesc('');
+    setNewProjectPrompt(name);
+    setSuggestions([]);
+    setCreateModalOpen(true);
   };
 
   const handleCreateProject = async () => {
@@ -1065,6 +1097,31 @@ const ProjectDashboard: React.FC = () => {
         </button>
       </div>
 
+      {launchContext.hasContext && (
+        <div className={`launch-context-panel ${launchContextProject ? 'found' : 'missing'}`} role="status" aria-live="polite">
+          <div className="launch-context-copy">
+            <span className="launch-context-pill">来自实体记忆</span>
+            <div>
+              <strong>
+                {launchContextProject
+                  ? `已定位到 ${launchContextProject.name}`
+                  : `未找到 ${launchContext.projectName || launchContext.projectId} 的本地工作台`}
+              </strong>
+              <span>
+                {launchContextProject
+                  ? '该项目已置顶显示，继续查看健康摘要、今日焦点和鱼骨时间线。'
+                  : '实体记忆项目和本地仪表盘仍需绑定；可以先用该项目名创建本地工作台。'}
+              </span>
+            </div>
+          </div>
+          {!launchContextProject && (
+            <button className="launch-context-action" type="button" onClick={handleOpenLaunchProjectCreateModal}>
+              用此项目创建工作台
+            </button>
+          )}
+        </div>
+      )}
+
       {syncPanelOpen && syncReadiness && (
         <div className="data-source-panel" role="region" aria-label="数据源检查结果">
           <div className="data-source-panel-header">
@@ -1164,7 +1221,10 @@ const ProjectDashboard: React.FC = () => {
             const health = buildProjectHealthSummary(project, dashboardNow);
             const attentionTasks = buildProjectAttentionTasks(project, dashboardNow);
             return (
-              <div className="project-card" key={project.id}>
+              <div
+                className={`project-card ${projectMatchesDashboardLaunchContext(project, launchContext) ? 'launch-highlight' : ''}`}
+                key={project.id}
+              >
                 <div className="project-header">
                   <div>
                     <h2 className="project-title">{project.name}</h2>
@@ -1730,6 +1790,15 @@ const ProjectDashboard: React.FC = () => {
         .data-source-card-top span { border-radius: 999px; padding: 2px 7px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
         .data-source-card p { margin: 0 0 8px; color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
         .data-source-next { color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .launch-context-panel { margin: 0 20px 16px; background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--primary); border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; box-shadow: var(--shadow); }
+        .launch-context-panel.missing { border-left-color: var(--warning); }
+        .launch-context-copy { min-width: 0; display: flex; align-items: center; gap: 12px; color: var(--text); }
+        .launch-context-copy strong { display: block; font-size: 13px; margin-bottom: 2px; }
+        .launch-context-copy span:last-child { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+        .launch-context-pill { flex: 0 0 auto; border-radius: 999px; padding: 4px 9px; background: var(--primary-light); border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 12px; font-weight: 700; white-space: nowrap; }
+        .launch-context-panel.missing .launch-context-pill { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+        .launch-context-action { flex: 0 0 auto; padding: 7px 12px; border: 1px solid #fde68a; border-radius: 6px; background: #fffbeb; color: #92400e; cursor: pointer; font-size: 12px; font-weight: 700; }
+        .launch-context-action:hover { background: #fef3c7; }
 
         .dashboard-overview { margin: 0 20px 20px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 18px; box-shadow: var(--shadow); }
         .overview-summary { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 14px; }
@@ -1753,6 +1822,7 @@ const ProjectDashboard: React.FC = () => {
 
         .project-list { display: flex; flex-direction: column; gap: 30px; }
         .project-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
+        .project-card.launch-highlight { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14), var(--shadow); }
         .project-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
         .project-title { font-size: 24px; font-weight: 700; margin: 0; color: var(--text); }
         .empty-projects { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 28px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
@@ -2017,6 +2087,8 @@ const ProjectDashboard: React.FC = () => {
           .data-source-copy { align-items: flex-start; }
           .data-source-panel { margin: 0 10px 10px; }
           .data-source-panel-header { flex-direction: column; }
+          .launch-context-panel { margin: 0 10px 10px; flex-direction: column; align-items: flex-start; }
+          .launch-context-copy { align-items: flex-start; }
           .dashboard-overview { margin: 0 10px 10px; }
           .overview-summary { flex-direction: column; }
           .overview-metrics { justify-content: flex-start; }

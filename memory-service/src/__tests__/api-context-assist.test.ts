@@ -70,13 +70,33 @@ describe('Context Assist API (POST /context-assist)', () => {
     source: string;
     createdAt: number;
   }): void {
+    const messageId = `context-assist-${args.id}`;
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source, source_url, source_title, sender, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      messageId,
+      args.content,
+      args.sourceType,
+      args.source,
+      `https://internal.example.com/context-assist/${args.id}`,
+      `Context assist source ${args.id}`,
+      'memory-service-test',
+      'Context Assist',
+      args.createdAt,
+      0.8,
+      'neutral',
+      JSON.stringify({}),
+      args.createdAt,
+    );
     db.prepare(
       `INSERT INTO chunks
-        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'work', ?, ?, ?, ?)`,
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, related_entity_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'work', ?, ?, ?, ?, ?)`,
     ).run(
       args.id,
-      `context-assist/${args.id}`,
+      `messages/${messageId}`,
       1,
       1,
       args.content,
@@ -84,6 +104,7 @@ describe('Context Assist API (POST /context-assist)', () => {
       args.source,
       args.sourceType,
       'Nova',
+      messageId,
       args.createdAt,
     );
     db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
@@ -124,6 +145,14 @@ describe('Context Assist API (POST /context-assist)', () => {
     expect(body.suggestionType).toBe('meeting_brief');
     expect(body.cueCards.length).toBeGreaterThan(0);
     expect(body.evidence.length).toBeGreaterThan(0);
+    expect(body.evidence[0].links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: '打开来源',
+          url: expect.stringMatching(/^https:\/\/internal\.example\.com\/context-assist\//),
+        }),
+      ]),
+    );
     expect(body.insertText).toContain('Personal AI meeting prep');
   });
 

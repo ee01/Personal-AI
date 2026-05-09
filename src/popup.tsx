@@ -637,6 +637,16 @@ const Popup = () => {
     });
   };
 
+  const openPromptConfigWindow = () => {
+    chrome.windows.create({
+      url: chrome.runtime.getURL('prompt-config.html'),
+      type: 'popup',
+      width: 900,
+      height: 800,
+      focused: true,
+    });
+  };
+
   const _openProjectDashboard = () => {
     chrome.windows.create({
       url: 'project-dashboard.html',
@@ -651,16 +661,6 @@ const Popup = () => {
     chrome.tabs.create({
       url: chrome.runtime.getURL('memory-exploring.html'),
       active: true,
-    });
-  };
-
-  const openPromptConfigWindow = () => {
-    chrome.windows.create({
-      url: 'prompt-config.html',
-      type: 'popup',
-      width: 900,
-      height: 800,
-      focused: true,
     });
   };
 
@@ -1114,32 +1114,20 @@ const Popup = () => {
       )}
 
       {isGoogleSlides && (
-        <div className="slides-button-group">
-          <button
-            onClick={analyzeSlidesProjects}
-            className="slides-button main-button"
-            disabled={isAnalyzingSlides}
-          >
-            {isAnalyzingSlides ? (
-              <span className="loading-text">正在分析 Slide 项目信息...</span>
-            ) : (
-              '分析 Slide 项目信息并更新'
-            )}
-          </button>
-          <button
-            onClick={openPromptConfigWindow}
-            className="slides-button config-button"
-            title="配置自定义提示词和用户上下文"
-          >
-            ⚙️
-          </button>
-        </div>
+        <button
+          onClick={analyzeSlidesProjects}
+          className="slides-button main-button"
+          disabled={isAnalyzingSlides}
+        >
+          {isAnalyzingSlides ? (
+            <span className="loading-text">正在分析 Slide 项目信息...</span>
+          ) : (
+            '分析 Slide 项目信息并更新'
+          )}
+        </button>
       )}
 
-      <button
-        onClick={openPromptConfigWindow}
-        className="prompt-config-button"
-      >
+      <button onClick={openPromptConfigWindow} className="prompt-config-button">
         自定义提示词与上下文
       </button>
 
@@ -1696,29 +1684,9 @@ const Popup = () => {
                     box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
                  }
                  
-                 .slides-button-group {
-                    display: flex;
-                    gap: 4px;
-                    margin: 8px 8px 0 8px;
-                 }
-                 
                  .slides-button.main-button {
-                    flex: 1;
                     background-color: #4285F4; /* Google blue */
                     color: white;
-                 }
-                 
-                 .slides-button.config-button {
-                    width: 36px;
-                    min-width: 36px;
-                    background-color: #6c757d;
-                    color: white;
-                    font-size: 16px;
-                    padding: 8px 4px;
-                 }
-                 
-                 .slides-button.config-button:hover {
-                    background-color: #5a6268;
                  }
                  
                  .slides-button.main-button:hover {

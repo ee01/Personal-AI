@@ -612,6 +612,25 @@ describe('Personal Skill Library API', () => {
       snoozeRes.json().skill.updatedAt,
     );
 
+    const inboxAfterSnooze = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inboxAfterSnooze.statusCode).toBe(200);
+    expect(inboxAfterSnooze.json().total).toBe(0);
+
+    const context = userContextManager.getContext(USER_ID);
+    context.db
+      .prepare('UPDATE personal_skills SET snoozed_until = ? WHERE id = ?')
+      .run(1, suggestion.id);
+    const inboxAfterDue = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inboxAfterDue.json().total).toBe(1);
+
     const dismissRes = await app.inject({
       method: 'POST',
       url: `/api/v1/skills/suggestions/${suggestion.id}/dismiss`,

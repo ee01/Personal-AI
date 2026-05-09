@@ -1,3 +1,12 @@
+import {
+  extractRingCentralVideoJoinUrl,
+  openRingCentralVideoNativeJoin,
+  parseRingCentralVideoJoinTarget,
+  RINGCENTRAL_NATIVE_JOIN_ENABLED_ATTR,
+  shouldPreserveDefaultNativeJoinClick,
+} from './ringcentralNativeJoin';
+import type { RingCentralVideoJoinTarget } from './ringcentralNativeJoin';
+
 const GLIP_NATIVE_POPOUT_BRIDGE_SOURCE = 'personal-ai-glip-native-popout-bridge';
 const GLIP_NATIVE_POPOUT_BRIDGE_ATTR = 'data-pai-glip-native-popout-bridge';
 const GLIP_NATIVE_POPOUT_REQUEST = 'PAI_GLIP_NATIVE_POPOUT_REQUEST';
@@ -480,8 +489,250 @@ async function handleMessageTargetRequest(message: GlipMessageTargetRequestMessa
   }
 }
 
+interface NativeJoinCandidate {
+  target: RingCentralVideoJoinTarget;
+  score: number;
+}
+
+function isNativeClientJoinEnabled(): boolean {
+  return (
+    document.documentElement.getAttribute(
+      RINGCENTRAL_NATIVE_JOIN_ENABLED_ATTR,
+    ) !== 'false'
+  );
+}
+
+function handleNativeClientJoinClick(event: MouseEvent): void {
+  if (
+    !isNativeClientJoinEnabled() ||
+    shouldPreserveDefaultNativeJoinClick(event)
+  ) {
+    return;
+  }
+
+  const trigger = findNativeClientJoinTrigger(event);
+  if (!trigger) {
+    return;
+  }
+
+  const target = findNativeClientJoinTarget(trigger);
+  if (!target) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  openRingCentralVideoNativeJoin(target);
+}
+
+function findNativeClientJoinTrigger(event: MouseEvent): HTMLElement | null {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  return target.closest<HTMLElement>(
+    'button[data-test-automation-id="meeting-card-join-btn"]',
+  );
+}
+
+function findNativeClientJoinTarget(
+  trigger: HTMLElement,
+): RingCentralVideoJoinTarget | null {
+  const candidates: NativeJoinCandidate[] = [];
+  collectDomNativeJoinCandidates(trigger, candidates);
+  collectReactNativeJoinCandidates(trigger, candidates);
+  return candidates.sort((a, b) => b.score - a.score)[0]?.target || null;
+}
+
+function collectDomNativeJoinCandidates(
+  trigger: HTMLElement,
+  candidates: NativeJoinCandidate[],
+): void {
+  const card =
+    trigger.closest<HTMLElement>('[data-test-automation-id="rich-invite-card"]') ||
+    trigger.closest<HTMLElement>('[data-test-automation-id="rich-invite-wrapper"]') ||
+    trigger;
+  const url = extractRingCentralVideoJoinUrl(card.textContent || '');
+  const target = url ? parseRingCentralVideoJoinTarget(url) : null;
+  if (target) {
+    candidates.push({ target, score: 70 });
+  }
+}
+
+function collectReactNativeJoinCandidates(
+  trigger: HTMLElement,
+  candidates: NativeJoinCandidate[],
+): void {
+  const roots = [
+    trigger,
+    trigger.parentElement,
+    trigger.closest<HTMLElement>('[data-test-automation-id="rich-invite-card"]'),
+    trigger.closest<HTMLElement>('[data-test-automation-id="rich-invite-wrapper"]'),
+    trigger.closest<HTMLElement>('[data-name="conversation-card"]'),
+  ].filter((element): element is HTMLElement => Boolean(element));
+
+  const seenRoots = new Set<HTMLElement>();
+  for (const root of roots) {
+    if (seenRoots.has(root)) continue;
+    seenRoots.add(root);
+
+    const reactFiberKey = Object.keys(root).find((key) =>
+      key.startsWith('__reactFiber$'),
+    );
+    if (!reactFiberKey) continue;
+
+    let fiberNode: any = (root as any)[reactFiberKey];
+    for (let depth = 0; fiberNode && depth < 28; depth += 1) {
+      collectNativeJoinCandidatesFromValue(
+        fiberNode.memoizedProps,
+        `fiber${depth}.memoizedProps`,
+        candidates,
+      );
+      collectNativeJoinCandidatesFromValue(
+        fiberNode.pendingProps,
+        `fiber${depth}.pendingProps`,
+        candidates,
+      );
+      collectNativeJoinCandidatesFromValue(
+        fiberNode.stateNode?.props,
+        `fiber${depth}.stateNode.props`,
+        candidates,
+      );
+      fiberNode = fiberNode.return;
+    }
+  }
+}
+
+function collectNativeJoinCandidatesFromValue(
+  value: unknown,
+  path: string,
+  candidates: NativeJoinCandidate[],
+  depth = 7,
+  seen = new WeakSet<object>(),
+): void {
+  if (value == null || depth < 0 || candidates.length > 80) {
+    return;
+  }
+
+  const valueType = typeof value;
+  if (
+    valueType === 'string' ||
+    valueType === 'number' ||
+    valueType === 'boolean'
+  ) {
+    collectPrimitiveNativeJoinCandidate(value, path, candidates);
+    return;
+  }
+
+  if (valueType !== 'object' && valueType !== 'function') {
+    return;
+  }
+
+  const objectValue = value as Record<string, unknown>;
+  if (seen.has(objectValue)) {
+    return;
+  }
+  seen.add(objectValue);
+
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(objectValue);
+  } catch {
+    return;
+  }
+
+  const prioritizedKeys = keys
+    .filter(isNativeJoinKeyInteresting)
+    .concat(keys.filter((key) => !isNativeJoinKeyInteresting(key)).slice(0, 35));
+
+  for (const key of prioritizedKeys.slice(0, 80)) {
+    if (isUnsafeDomTraversalKey(key)) {
+      continue;
+    }
+
+    let childValue: unknown;
+    try {
+      childValue = objectValue[key];
+    } catch {
+      continue;
+    }
+
+    collectNativeJoinCandidatesFromValue(
+      childValue,
+      `${path}.${key}`,
+      candidates,
+      depth - 1,
+      seen,
+    );
+  }
+}
+
+function collectPrimitiveNativeJoinCandidate(
+  value: unknown,
+  path: string,
+  candidates: NativeJoinCandidate[],
+): void {
+  const normalizedPath = path.toLowerCase();
+  const directTarget = parseRingCentralVideoJoinTarget(String(value));
+  if (directTarget) {
+    candidates.push({
+      target: directTarget,
+      score: getNativeJoinCandidateScore(normalizedPath, true),
+    });
+    return;
+  }
+
+  const embeddedUrl = extractRingCentralVideoJoinUrl(value);
+  const embeddedTarget = embeddedUrl
+    ? parseRingCentralVideoJoinTarget(embeddedUrl)
+    : null;
+  if (embeddedTarget) {
+    candidates.push({
+      target: embeddedTarget,
+      score: getNativeJoinCandidateScore(normalizedPath, true),
+    });
+    return;
+  }
+
+  if (/(^|\.)meetingid$/.test(normalizedPath)) {
+    const meetingId = String(value || '').trim();
+    if (/^\d{3,}$/.test(meetingId)) {
+      const meetingTarget = parseRingCentralVideoJoinTarget(
+        `https://v.ringcentral.com/join/${meetingId}`,
+      );
+      if (meetingTarget) {
+        candidates.push({ target: meetingTarget, score: 45 });
+      }
+    }
+  }
+}
+
+function getNativeJoinCandidateScore(path: string, isUrl: boolean): number {
+  if (path.includes('meetingdto.meeting.joinurl')) return 120;
+  if (/(^|\.)joinurl$/.test(path)) return 110;
+  if (path.includes('post._text')) return 95;
+  if (isUrl) return 80;
+  return 40;
+}
+
+function isNativeJoinKeyInteresting(key: string): boolean {
+  return /(join|meeting|conf|url|uri|link|video|call|invite|post|text)/i.test(
+    key,
+  );
+}
+
+function isUnsafeDomTraversalKey(key: string): boolean {
+  return /^(ownerDocument|parentNode|parentElement|children|childNodes|firstChild|lastChild|nextSibling|previousSibling|__reactFiber)/.test(
+    key,
+  );
+}
+
 if (!window.__PAI_GLIP_NATIVE_POPOUT_BRIDGE__) {
   window.__PAI_GLIP_NATIVE_POPOUT_BRIDGE__ = true;
+
+  document.addEventListener('click', handleNativeClientJoinClick, true);
 
   window.addEventListener('message', (event: MessageEvent) => {
     if (event.source !== window) {

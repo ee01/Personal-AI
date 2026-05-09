@@ -58,16 +58,24 @@ export interface AssistantRememberClassification {
   itemValue: string;
 }
 
+const REMEMBER_INTENT_PATTERNS = [
+  /^(?:请帮我|帮我|麻烦你|请你|请)?\s*(?:记住|记下|记录|保存)(?!了吗|吗|没|没有|哪些|什么)(?:一下|到(?:长期)?记忆|在(?:长期)?记忆里)?[：:\s]*/i,
+  /^以后(?:请|帮我|麻烦你)?\s*(?:记住|记下|记录)(?!了吗|吗|没|没有|哪些|什么)[：:\s]*/i,
+  /^(?:please\s+)?(?:remember|save|note)(?:\s+(?:that|this))?(?:[\s:：]|$)/i,
+];
+
 const STATUS_PRIORITIES: Record<BridgeAssistantStatusKind, number> = {
   setup_blocker: 1,
-  confirm_request: 2,
-  running_action: 3,
-  waiting_reply: 4,
-  queued_action: 5,
+  sync_issue: 2,
+  confirm_request: 3,
+  running_action: 4,
+  waiting_reply: 5,
+  queued_action: 6,
 };
 
 const STATUS_LABELS: Record<BridgeAssistantStatusKind, string> = {
   setup_blocker: '还没完成设置',
+  sync_issue: '豆包同步异常',
   confirm_request: '待你确认',
   running_action: '工具执行中',
   waiting_reply: '外部询问等待回复',
@@ -89,6 +97,24 @@ function summarizeSetupBlocker(status: BridgeStatus, runtimeErrorMessage?: strin
     badgeLabel: `${count} 项`,
     actionHint: '打开设置继续完成',
     priority: STATUS_PRIORITIES.setup_blocker,
+  };
+}
+
+function summarizeSyncIssue(status: BridgeStatus): BridgeAssistantStatusItem | undefined {
+  const summary =
+    status.syncState?.lastErrorMessage ||
+    status.lastError ||
+    '';
+  if (!summary) return undefined;
+
+  return {
+    kind: 'sync_issue',
+    title: STATUS_LABELS.sync_issue,
+    summary,
+    count: 1,
+    badgeLabel: '需检查',
+    actionHint: '查看同步诊断',
+    priority: STATUS_PRIORITIES.sync_issue,
   };
 }
 
@@ -165,6 +191,7 @@ function summarizeOutreach(
 export function buildAssistantRuntimeSummary(input: AssistantRuntimeBuildInput): BridgeAssistantRuntimeSummary {
   const items = [
     summarizeSetupBlocker(input.status, input.runtimeErrorMessage),
+    summarizeSyncIssue(input.status),
     summarizeConfirmRequest(input.confirmRequests),
     summarizeAction('running_action', input.runningActions),
     summarizeOutreach(input.outreachSummary, input.waitingReplySessions, input.pendingApprovalSessions),
@@ -221,14 +248,8 @@ export function buildAskContextFromTurns(
 
 export function normalizeRememberText(text: string): string {
   const trimmed = text.trim();
-  const patterns = [
-    /^(?:请帮我|帮我|麻烦你|请你|请)\s*记住(?:一下)?[：:\s]*/i,
-    /^记住(?:一下)?[：:\s]*/i,
-    /^(?:please\s+)?remember(?:\s+that)?[：:\s]*/i,
-  ];
-
   let normalized = trimmed;
-  for (const pattern of patterns) {
+  for (const pattern of REMEMBER_INTENT_PATTERNS) {
     if (pattern.test(normalized)) {
       normalized = normalized.replace(pattern, '').trim();
       break;
@@ -236,6 +257,11 @@ export function normalizeRememberText(text: string): string {
   }
 
   return normalized.replace(/^[,，。.!！\s]+|[,，。.!！\s]+$/g, '').trim() || trimmed;
+}
+
+export function hasExplicitRememberIntent(text: string): boolean {
+  const trimmed = text.trim();
+  return REMEMBER_INTENT_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
 export function classifyRememberText(text: string): AssistantRememberClassification {
@@ -307,7 +333,7 @@ export function classifyRememberText(text: string): AssistantRememberClassificat
 
 export function isStandaloneRememberRequest(text: string): boolean {
   const trimmed = text.trim();
-  if (!/(记住|remember)/i.test(trimmed)) return false;
+  if (!hasExplicitRememberIntent(trimmed)) return false;
   if (/[?？]/.test(trimmed)) return false;
   const segments = trimmed.split(/[。.!！\n]/).map((item) => item.trim()).filter(Boolean);
   return segments.length <= 1;

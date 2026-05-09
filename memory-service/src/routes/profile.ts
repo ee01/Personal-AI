@@ -119,6 +119,33 @@ function formatProfileItem(row: ProfileItemRow) {
   };
 }
 
+function buildProfileFingerprint(itemKey: string, itemValue: string): string {
+  return contentHash(itemKey + ':' + itemValue.toLowerCase().trim());
+}
+
+function calculateInferredSalience(
+  confidence: number,
+  mentionCount: number,
+  userConfirmed: boolean,
+): number {
+  const frequencyNorm = Math.min(mentionCount / 10, 1);
+  const recency = 1;
+  const confirmationBonus = userConfirmed ? 1 : 0;
+  return Math.min(
+    1,
+    0.4 * confidence +
+      0.3 * frequencyNorm +
+      0.2 * recency +
+      0.1 * confirmationBonus,
+  );
+}
+
+function mergeEvidenceRefs(rawExisting: string | null, incoming?: unknown[]): unknown[] {
+  const existing = safeJsonParse<unknown[]>(rawExisting, []);
+  if (!incoming || incoming.length === 0) return existing;
+  return [...existing, ...incoming].slice(-50);
+}
+
 function formatSocialEdge(row: SocialEdgeRow) {
   return {
     id: row.id,
@@ -368,20 +395,47 @@ export async function profileRoutes(
       const { itemType, itemKey, itemValue, evidenceRefs, confidence, validFrom, validTo } =
         request.body;
 
-      const fingerprint = contentHash(itemKey + ':' + itemValue.toLowerCase().trim());
+      const fingerprint = buildProfileFingerprint(itemKey, itemValue);
       const currentTime = now();
       const initialScore = confidence ?? 1.0;
 
-      // Check for duplicate fingerprint among active items
+      // Check for duplicate fingerprint among visible items.
       const existing = db
-        .prepare("SELECT id FROM user_profile_items WHERE fingerprint = ? AND status = 'active'")
-        .get(fingerprint) as { id: string } | undefined;
+        .prepare(
+          `SELECT * FROM user_profile_items
+           WHERE fingerprint = ?
+             AND status IN ('active', 'pending_confirm')
+           ORDER BY user_confirmed DESC, updated_at DESC
+           LIMIT 1`,
+        )
+        .get(fingerprint) as ProfileItemRow | undefined;
 
-      if (existing) {
+      if (existing?.status === 'active' && existing.user_confirmed === 1) {
         return reply.status(409).send({
           error: 'A profile item with the same key and value already exists',
           existingId: existing.id,
         });
+      }
+
+      if (existing) {
+        db.prepare(
+          `UPDATE user_profile_items
+           SET source_kind = 'explicit',
+               confidence = ?,
+               salience_score = ?,
+               user_confirmed = 1,
+               status = 'active',
+               last_seen = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        ).run(initialScore, initialScore, currentTime, currentTime, existing.id);
+
+        const row = db
+          .prepare('SELECT * FROM user_profile_items WHERE id = ?')
+          .get(existing.id) as ProfileItemRow;
+
+        await refreshUserCoreSnapshot(request.userContext);
+        return reply.status(200).send(formatProfileItem(row));
       }
 
       const id = v4();
@@ -400,6 +454,104 @@ export async function profileRoutes(
         evidenceRefs ? JSON.stringify(evidenceRefs) : null,
         initialScore,
         initialScore,
+        currentTime,
+        validFrom ?? null,
+        validTo ?? null,
+        currentTime,
+        currentTime,
+        fingerprint,
+      );
+
+      const row = db
+        .prepare('SELECT * FROM user_profile_items WHERE id = ?')
+        .get(id) as ProfileItemRow;
+
+      await refreshUserCoreSnapshot(request.userContext);
+      return reply.status(201).send(formatProfileItem(row));
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /profile/items/inferred -- Add or reinforce an inferred profile item
+  // -----------------------------------------------------------------------
+  app.post<{ Body: CreateProfileItemBody }>(
+    '/profile/items/inferred',
+    { schema: { body: createProfileItemBodySchema } },
+    async (request, reply) => {
+      const { db } = request.userContext;
+      const { itemType, itemKey, itemValue, evidenceRefs, confidence, validFrom, validTo } =
+        request.body;
+      const currentTime = now();
+      const normalizedConfidence = Math.max(0, Math.min(1, confidence ?? 0.6));
+      const fingerprint = buildProfileFingerprint(itemKey, itemValue);
+
+      const existing = db
+        .prepare(
+          `SELECT * FROM user_profile_items
+           WHERE fingerprint = ?
+             AND status IN ('active', 'pending_confirm')
+           ORDER BY user_confirmed DESC, updated_at DESC
+           LIMIT 1`,
+        )
+        .get(fingerprint) as ProfileItemRow | undefined;
+
+      if (existing) {
+        const nextMentionCount = existing.mention_count + 1;
+        const nextEvidenceRefs = mergeEvidenceRefs(existing.evidence_refs, evidenceRefs);
+        const nextConfidence = Math.max(existing.confidence, normalizedConfidence);
+        const nextSalience = Math.max(
+          existing.salience_score,
+          calculateInferredSalience(
+            nextConfidence,
+            nextMentionCount,
+            existing.user_confirmed === 1,
+          ),
+        );
+
+        db.prepare(
+          `UPDATE user_profile_items
+           SET confidence = ?,
+               salience_score = ?,
+               mention_count = ?,
+               last_seen = ?,
+               evidence_refs = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        ).run(
+          nextConfidence,
+          nextSalience,
+          nextMentionCount,
+          currentTime,
+          nextEvidenceRefs.length > 0 ? JSON.stringify(nextEvidenceRefs) : null,
+          currentTime,
+          existing.id,
+        );
+
+        const row = db
+          .prepare('SELECT * FROM user_profile_items WHERE id = ?')
+          .get(existing.id) as ProfileItemRow;
+
+        await refreshUserCoreSnapshot(request.userContext);
+        return reply.status(200).send(formatProfileItem(row));
+      }
+
+      const id = v4();
+      const salienceScore = calculateInferredSalience(normalizedConfidence, 1, false);
+
+      db.prepare(
+        `INSERT INTO user_profile_items
+          (id, item_type, item_key, item_value, evidence_refs, source_kind, confidence,
+           user_confirmed, status, salience_score, mention_count, last_seen,
+           valid_from, valid_to, created_at, updated_at, fingerprint)
+         VALUES (?, ?, ?, ?, ?, 'inferred', ?, 0, 'pending_confirm', ?, 1, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        itemType,
+        itemKey,
+        itemValue,
+        evidenceRefs ? JSON.stringify(evidenceRefs) : null,
+        normalizedConfidence,
+        salienceScore,
         currentTime,
         validFrom ?? null,
         validTo ?? null,
@@ -441,7 +593,7 @@ export async function profileRoutes(
       const params: unknown[] = [];
 
       if (body.itemValue !== undefined) {
-        const newFingerprint = contentHash(existing.item_key + ':' + body.itemValue.toLowerCase().trim());
+        const newFingerprint = buildProfileFingerprint(existing.item_key, body.itemValue);
         const duplicate = db
           .prepare(
             `SELECT id FROM user_profile_items

@@ -85,3 +85,30 @@ test('FallbackDoubaoSource uses webpage-mcp when selected and healthy', async ()
   assert.deepEqual(webpageMcp.calls, ['openLogin']);
   assert.deepEqual(playwright.calls, []);
 });
+
+test('FallbackDoubaoSource retries webpage-mcp login during fallback cooldown', async () => {
+  const webpageMcp = createClient('webpage_mcp', {
+    failMethods: ['collectConversationSnapshots'],
+  });
+  const playwright = createClient('playwright');
+  const source = new FallbackDoubaoSource({
+    getTransport: () => 'webpage_mcp',
+    webpageMcpClient: webpageMcp,
+    playwrightClient: playwright,
+  });
+
+  const collected = await source.collectConversationSnapshots();
+  const loginUrl = await source.openLogin();
+
+  assert.equal(collected[0]?.conversationId, 'playwright');
+  assert.equal(loginUrl, 'https://www.doubao.com/chat/webpage_mcp');
+  assert.deepEqual(webpageMcp.calls, [
+    'collectConversationSnapshots',
+    'openLogin',
+  ]);
+  assert.deepEqual(playwright.calls, ['collectConversationSnapshots']);
+  assert.deepEqual(source.getClientStatus(), {
+    mode: 'webpage_mcp',
+    fallbackReason: undefined,
+  });
+});

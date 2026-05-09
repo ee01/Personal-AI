@@ -4,12 +4,26 @@ function getCalendarDayDiff(from: Date, to: Date): number {
   return Math.round((toDay.getTime() - fromDay.getTime()) / (1000 * 60 * 60 * 24));
 }
 
+function formatSameDayDuration(diffMinutes: number): string {
+  if (diffMinutes < 60) {
+    return `${diffMinutes} 分钟后`;
+  }
+
+  const hours = Math.floor(diffMinutes / 60);
+  const minutes = diffMinutes % 60;
+  if (minutes === 0) {
+    return `${hours} 小时后`;
+  }
+
+  return `${hours} 小时 ${minutes} 分钟后`;
+}
+
 /**
  * 格式化提醒时间显示。
  */
 export function formatRemindTime(date: Date, now = new Date()): string {
   const diffMs = date.getTime() - now.getTime();
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMinutes = Math.max(1, Math.ceil(diffMs / (1000 * 60)));
   const calendarDayDiff = getCalendarDayDiff(now, date);
 
   const timeStr = date.toLocaleTimeString('zh-CN', {
@@ -26,11 +40,7 @@ export function formatRemindTime(date: Date, now = new Date()): string {
   }
 
   if (calendarDayDiff === 0) {
-    if (diffHours < 1) {
-      const diffMins = Math.max(1, Math.floor(diffMs / (1000 * 60)));
-      return `${diffMins} 分钟后 (${timeStr})`;
-    }
-    return `${diffHours} 小时后 (${timeStr})`;
+    return `${formatSameDayDuration(diffMinutes)} (${timeStr})`;
   }
 
   if (calendarDayDiff === 1) {

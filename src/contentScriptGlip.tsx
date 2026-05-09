@@ -9,6 +9,14 @@ import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
 import { getLocalStorageItem, getCurrentUserInfo } from './storage';
 import { initMessageReaction, MessageReactionConfig } from './message-reaction';
 import { isManualConcernedItem } from './watchRules';
+import {
+  loadRingCentralNativeJoinEnabled,
+  openRingCentralVideoNativeJoin,
+  parseRingCentralVideoJoinTarget,
+  setRingCentralNativeJoinEnabledAttribute,
+  shouldPreserveDefaultNativeJoinClick,
+  watchRingCentralNativeJoinEnabled,
+} from './ringcentralNativeJoin';
 
 // =====================================================
 // Jira Ticket 悬浮卡片功能
@@ -155,6 +163,9 @@ const pendingGlipMessageTargetRequests = new Map<
   }
 >();
 let glipNativePopoutBridgeListenerAttached = false;
+let ringCentralVideoNativeJoinInterceptorAttached = false;
+let ringCentralVideoNativeJoinEnabled = true;
+let ringCentralVideoNativeJoinConfigWatcherAttached = false;
 
 // 初始化时获取 JIRA Base URL
 async function initJiraBaseUrl() {
@@ -1220,7 +1231,75 @@ function buildPreferredGlipTargetUrl(
   groupId: string,
   postId?: string,
 ): string {
-  return postId ? buildGlipMessageUrl(groupId, postId) : buildGlipGroupUrl(groupId);
+  return postId
+    ? buildGlipMessageUrl(groupId, postId)
+    : buildGlipGroupUrl(groupId);
+}
+
+function findClickedAnchor(event: MouseEvent): HTMLAnchorElement | null {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  return target.closest<HTMLAnchorElement>('a[href]');
+}
+
+function handleRingCentralVideoNativeJoinClick(event: MouseEvent) {
+  if (
+    !ringCentralVideoNativeJoinEnabled ||
+    shouldPreserveDefaultNativeJoinClick(event)
+  ) {
+    return;
+  }
+
+  const anchor = findClickedAnchor(event);
+  if (!anchor) {
+    return;
+  }
+
+  const target = parseRingCentralVideoJoinTarget(anchor.href);
+  if (!target) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  openRingCentralVideoNativeJoin(target);
+}
+
+function setRingCentralVideoNativeJoinEnabled(enabled: boolean) {
+  ringCentralVideoNativeJoinEnabled = enabled;
+  setRingCentralNativeJoinEnabledAttribute(enabled);
+}
+
+function initRingCentralVideoNativeJoinConfig() {
+  if (ringCentralVideoNativeJoinConfigWatcherAttached) {
+    return;
+  }
+
+  setRingCentralVideoNativeJoinEnabled(true);
+  void loadRingCentralNativeJoinEnabled().then(
+    setRingCentralVideoNativeJoinEnabled,
+  );
+  watchRingCentralNativeJoinEnabled(setRingCentralVideoNativeJoinEnabled);
+  ringCentralVideoNativeJoinConfigWatcherAttached = true;
+}
+
+function initRingCentralVideoNativeJoinInterceptor() {
+  initRingCentralVideoNativeJoinConfig();
+
+  if (ringCentralVideoNativeJoinInterceptorAttached) {
+    return;
+  }
+
+  document.addEventListener(
+    'click',
+    handleRingCentralVideoNativeJoinClick,
+    true,
+  );
+  ringCentralVideoNativeJoinInterceptorAttached = true;
 }
 
 function getGlipPopoutIconSvg(): string {
@@ -1887,6 +1966,7 @@ function scanAndProcessGlipLinks(container?: Element) {
 }
 
 function initGlipLinkProcessor() {
+  initRingCentralVideoNativeJoinInterceptor();
   injectGlipLinkStyles();
   void ensureGlipNativePopoutBridge().catch((error) => {
     console.warn('预热 Glip Native Popout Bridge 失败:', error);

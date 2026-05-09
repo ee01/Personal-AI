@@ -426,7 +426,7 @@ export class ConfigSyncService {
   /**
    * 同步配置：同时保存到 Sheet 和 Chrome Storage
    */
-  async syncConfig(config: SheetConfig): Promise<void> {
+  async syncConfig(config: SheetConfig): Promise<SheetConfig> {
     const lastSyncTime = new Date().toISOString();
     const includeRingCentralSenderKeys = config.ringCentralSender !== undefined;
     const normalizedConfig = normalizeSheetConfig({
@@ -441,6 +441,7 @@ export class ConfigSyncService {
     await this.saveConfigToStorage(normalizedConfig);
 
     console.log('✅ 配置已同步到 Sheet 和 Chrome Storage');
+    return normalizedConfig;
   }
 
   async ensureConfigSheet(sheetId: string): Promise<void> {
@@ -776,6 +777,7 @@ export class ConfigSyncService {
   ): ConfigRow[] {
     const managedByKey = new Map(managedRows);
     const writtenKeys = new Set<string>();
+    const seenManagedKeys = new Set<string>();
     const mergedRows: ConfigRow[] = [];
 
     for (const row of existingRows) {
@@ -785,6 +787,11 @@ export class ConfigSyncService {
       }
 
       if (managedKeys.has(key)) {
+        if (seenManagedKeys.has(key)) {
+          continue;
+        }
+        seenManagedKeys.add(key);
+
         if (managedByKey.has(key)) {
           mergedRows.push([key, managedByKey.get(key)!]);
           writtenKeys.add(key);

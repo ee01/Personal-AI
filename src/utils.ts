@@ -71,6 +71,7 @@ export interface EnvConfigType {
   ENABLE_LINKED_ACTION: boolean; // 启用联动操作功能
   // 消息过滤配置
   FILTER_OWN_MESSAGES: boolean; // 是否过滤自己发送的消息
+  OWNER_SPEECH_LEARNING_ENABLED: boolean; // 是否自动学习自己的发言以优化输入建议
   // 记忆系统 (Memory Service)
   MEMORY_SERVICE_BASE_URL: string; // 记忆服务 API 地址，如 http://localhost:3210/api/v1
   MEMORY_SERVICE_API_KEY?: string; // 可选，用于认证扩展请求；后端配置 API_KEY 时需匹配
@@ -120,6 +121,7 @@ export interface EnvConfigType {
   CONTEXT_ASSIST_ENABLED: boolean;
   MEETING_PREP_ENABLED: boolean;
   MEETING_PREP_CALENDAR_SOURCE: MeetingPrepCalendarSource;
+  MEETING_NATIVE_CLIENT_JOIN_ENABLED: boolean;
   MS_OUTLOOK_CLIENT_ID: string;
   MS_OUTLOOK_TENANT_ID: string;
   MEETING_MINUTES_API_URL: string;
@@ -452,8 +454,12 @@ export function normalizeEnvConfigShape(
     MEETING_PILOT_FLOATING_ICON_VISIBLE:
       normalizedMeetingPilotFloatingIconVisible,
     CONTEXT_ASSIST_ENABLED: config.CONTEXT_ASSIST_ENABLED !== false,
+    OWNER_SPEECH_LEARNING_ENABLED:
+      config.OWNER_SPEECH_LEARNING_ENABLED !== false,
     MEETING_PREP_ENABLED: config.MEETING_PREP_ENABLED !== false,
     MEETING_PREP_CALENDAR_SOURCE: normalizedMeetingPrepCalendarSource,
+    MEETING_NATIVE_CLIENT_JOIN_ENABLED:
+      config.MEETING_NATIVE_CLIENT_JOIN_ENABLED !== false,
     MS_OUTLOOK_CLIENT_ID: String(config.MS_OUTLOOK_CLIENT_ID || '').trim(),
     MS_OUTLOOK_TENANT_ID:
       String(config.MS_OUTLOOK_TENANT_ID || '').trim() || 'common',
@@ -524,6 +530,8 @@ export const defaultEnvConfig: EnvConfigType = {
   ENABLE_LINKED_ACTION: process.env.ENABLE_LINKED_ACTION !== 'false',
   // 消息过滤配置（默认开启过滤）
   FILTER_OWN_MESSAGES: process.env.FILTER_OWN_MESSAGES !== 'false',
+  OWNER_SPEECH_LEARNING_ENABLED:
+    process.env.OWNER_SPEECH_LEARNING_ENABLED !== 'false',
   // 记忆系统 (Memory Service)
   MEMORY_SERVICE_BASE_URL:
     process.env.MEMORY_SERVICE_BASE_URL || 'http://localhost:3210/api/v1',
@@ -605,6 +613,8 @@ export const defaultEnvConfig: EnvConfigType = {
     process.env.MEETING_PREP_CALENDAR_SOURCE === 'ringcentral_indexeddb'
       ? process.env.MEETING_PREP_CALENDAR_SOURCE
       : 'auto',
+  MEETING_NATIVE_CLIENT_JOIN_ENABLED:
+    process.env.MEETING_NATIVE_CLIENT_JOIN_ENABLED !== 'false',
   MS_OUTLOOK_CLIENT_ID: process.env.MS_OUTLOOK_CLIENT_ID || '',
   MS_OUTLOOK_TENANT_ID: process.env.MS_OUTLOOK_TENANT_ID || 'common',
   MEETING_MINUTES_API_URL:

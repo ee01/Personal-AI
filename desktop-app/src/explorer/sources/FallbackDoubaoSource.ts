@@ -34,7 +34,9 @@ export class FallbackDoubaoSource implements DoubaoConversationCollectorClient {
   constructor(private readonly options: FallbackDoubaoSourceOptions) {}
 
   openLogin(): Promise<string> {
-    return this.invoke((client) => client.openLogin());
+    return this.invokePreferringConfiguredTransport((client) =>
+      client.openLogin(),
+    );
   }
 
   probeAuthStatus(): Promise<'connected' | 'needs_login'> {
@@ -69,38 +71,7 @@ export class FallbackDoubaoSource implements DoubaoConversationCollectorClient {
         return result;
       }
 
-      try {
-        const result = await operation(this.options.webpageMcpClient);
-        this.webpageMcpCooldownUntil = 0;
-        this.lastOutcome = {
-          mode: 'webpage_mcp',
-          fellBackFromWebpageMcp: false,
-        };
-        return result;
-      } catch (error) {
-        const reason = formatError(error);
-        this.webpageMcpCooldownUntil = Date.now() + FALLBACK_COOLDOWN_MS;
-        this.options.log?.(
-          `[doubao-source] webpage-mcp transport failed, falling back to managed Chromium: ${reason}`,
-          error,
-        );
-        try {
-          const result = await operation(this.options.playwrightClient);
-          this.lastOutcome = {
-            mode: 'playwright',
-            fellBackFromWebpageMcp: true,
-            fallbackReason: reason,
-          };
-          return result;
-        } catch (fallbackError) {
-          this.lastOutcome = {
-            mode: 'playwright',
-            fellBackFromWebpageMcp: true,
-            fallbackReason: `${reason}; managed Chromium fallback also failed: ${formatError(fallbackError)}`,
-          };
-          throw fallbackError;
-        }
-      }
+      return this.tryWebpageMcpThenFallback(operation);
     }
 
     const result = await operation(this.options.playwrightClient);
@@ -109,6 +80,59 @@ export class FallbackDoubaoSource implements DoubaoConversationCollectorClient {
       fellBackFromWebpageMcp: false,
     };
     return result;
+  }
+
+  private async invokePreferringConfiguredTransport<T>(
+    operation: (client: DoubaoConversationCollectorClient) => Promise<T>,
+  ): Promise<T> {
+    const preferredTransport = this.options.getTransport();
+    if (preferredTransport === 'webpage_mcp') {
+      return this.tryWebpageMcpThenFallback(operation);
+    }
+
+    const result = await operation(this.options.playwrightClient);
+    this.lastOutcome = {
+      mode: normalizeTransportMode(preferredTransport),
+      fellBackFromWebpageMcp: false,
+    };
+    return result;
+  }
+
+  private async tryWebpageMcpThenFallback<T>(
+    operation: (client: DoubaoConversationCollectorClient) => Promise<T>,
+  ): Promise<T> {
+    try {
+      const result = await operation(this.options.webpageMcpClient);
+      this.webpageMcpCooldownUntil = 0;
+      this.lastOutcome = {
+        mode: 'webpage_mcp',
+        fellBackFromWebpageMcp: false,
+      };
+      return result;
+    } catch (error) {
+      const reason = formatError(error);
+      this.webpageMcpCooldownUntil = Date.now() + FALLBACK_COOLDOWN_MS;
+      this.options.log?.(
+        `[doubao-source] webpage-mcp transport failed, falling back to managed Chromium: ${reason}`,
+        error,
+      );
+      try {
+        const result = await operation(this.options.playwrightClient);
+        this.lastOutcome = {
+          mode: 'playwright',
+          fellBackFromWebpageMcp: true,
+          fallbackReason: reason,
+        };
+        return result;
+      } catch (fallbackError) {
+        this.lastOutcome = {
+          mode: 'playwright',
+          fellBackFromWebpageMcp: true,
+          fallbackReason: `${reason}; managed Chromium fallback also failed: ${formatError(fallbackError)}`,
+        };
+        throw fallbackError;
+      }
+    }
   }
 
   private isInCooldown(): boolean {

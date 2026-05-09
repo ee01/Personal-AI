@@ -65,6 +65,7 @@ interface LLMExtraction {
     item_type: string;
     item_key: string;
     item_value: string;
+    confidence?: number;
   }>;
   profileCandidates?: ProfileCandidate[];
 }
@@ -80,6 +81,14 @@ const ENTITY_CATEGORY_MAP: Record<string, EntityType> = {
 
 /** Salience threshold — entities and chunks are only created above this value. */
 const STORAGE_THRESHOLD = 0.3;
+
+const ALLOWED_PROFILE_ITEM_TYPES = new Set([
+  'fact',
+  'preference',
+  'habit',
+  'interest',
+  'constraint',
+]);
 
 // ---------------------------------------------------------------------------
 // IngestionPipeline
@@ -301,7 +310,10 @@ export class IngestionPipeline {
     }
 
     // ---- 6b. Profile candidate extraction ----
-    if (extraction?.profileCandidates?.length) {
+    if (
+      extraction?.profileCandidates?.length &&
+      this.isOwnerAuthoredPayload(payload)
+    ) {
       try {
         this.processProfileCandidates(extraction.profileCandidates, id, ts);
       } catch (err) {
@@ -386,6 +398,7 @@ export class IngestionPipeline {
     ts: number,
   ): Promise<LLMExtraction> {
     const llm = getLLMClient();
+    const ownerAuthored = this.isOwnerAuthoredPayload(payload);
 
     const prompt = `Given the following message content and context, extract structured information.
 
@@ -393,6 +406,7 @@ Message: "${payload.content}"
 Sender: ${payload.sender ?? 'unknown'}
 Group: ${payload.groupName ?? 'unknown'}
 Time: ${new Date(ts * 1000).toISOString()}
+Owner-authored message: ${ownerAuthored ? 'yes' : 'no'}
 
 Return JSON:
 {
@@ -420,7 +434,7 @@ Return JSON:
   "is_decision": false,
   "is_action_item": false,
   "profile_candidates": [
-    {"item_type": "interest|preference|fact|habit", "item_key": "string", "item_value": "string"}
+    {"item_type": "interest|preference|fact|habit|constraint", "item_key": "string", "item_value": "string"}
   ]
 }
 
@@ -428,12 +442,21 @@ Rules:
 - importance is 0-1 (0 = trivial chat, 1 = critical decision)
 - sentiment is one of: positive, negative, neutral, mixed
 - Only include entities that are clearly referenced
-- profile_candidates: extract any personal traits, preferences, facts, habits, or interests about the sender
-  - item_type must be one of: interest, preference, fact, habit
+- profile_candidates: only extract profile information when Owner-authored message is yes
+  - Never extract profile_candidates from external senders or messages merely about the owner
+  - Extract personal traits, preferences, facts, habits, constraints, interests, writing style, and owner knowledge from owner-authored messages
+  - item_type must be one of: interest, preference, fact, habit, constraint
+  - Use item_key prefixes for profile signals:
+    - writing_style.* for how the owner writes; use item_type preference or habit
+    - owner_knowledge.* for what the owner knows or constraints they state; use item_type fact or constraint
+    - interest_signal.* for owner interests or recurring focus areas; use item_type interest
   - Examples:
     - Timezone mentioned → {"item_type": "fact", "item_key": "timezone", "item_value": "GMT+8"}
     - User focuses on a project → {"item_type": "interest", "item_key": "focus_project", "item_value": "Apollo"}
     - Communication preference → {"item_type": "preference", "item_key": "communication_style", "item_value": "async"}
+    - Writing style → {"item_type": "preference", "item_key": "writing_style.conciseness", "item_value": "prefers concise status updates"}
+    - Owner knowledge → {"item_type": "fact", "item_key": "owner_knowledge.release_process", "item_value": "knows the BE release checklist"}
+    - Interest signal → {"item_type": "interest", "item_key": "interest_signal.ai_memory", "item_value": "personal AI memory systems"}
   - Only include profile_candidates when there is clear evidence in the message
 - Return ONLY valid JSON, no extra text`;
 
@@ -446,14 +469,107 @@ Rules:
 
     // Map snake_case profile_candidates from LLM to camelCase profileCandidates
     if (raw.profile_candidates && raw.profile_candidates.length > 0) {
-      raw.profileCandidates = raw.profile_candidates.map((pc) => ({
-        itemType: pc.item_type as ProfileCandidate['itemType'],
-        itemKey: pc.item_key,
-        itemValue: pc.item_value,
-      }));
+      raw.profileCandidates = raw.profile_candidates
+        .map((pc) =>
+          this.normalizeProfileCandidate({
+            itemType: pc.item_type as ProfileCandidate['itemType'],
+            itemKey: pc.item_key,
+            itemValue: pc.item_value,
+            confidence: pc.confidence,
+          }),
+        )
+        .filter((pc): pc is ProfileCandidate => pc != null);
+    } else if (raw.profileCandidates && raw.profileCandidates.length > 0) {
+      raw.profileCandidates = raw.profileCandidates
+        .map((pc) => this.normalizeProfileCandidate(pc))
+        .filter((pc): pc is ProfileCandidate => pc != null);
     }
 
     return raw;
+  }
+
+  private isOwnerAuthoredPayload(payload: IngestPayload): boolean {
+    const metadata = payload.metadata ?? {};
+    return this.hasOwnerAuthoredSignal(metadata);
+  }
+
+  private hasOwnerAuthoredSignal(value: unknown): boolean {
+    if (!value || typeof value !== 'object') return false;
+
+    const record = value as Record<string, unknown>;
+    const booleanSignalKeys = [
+      'isSelf',
+      'authorIsSelf',
+      'senderIsSelf',
+      'fromSelf',
+      'isOwner',
+      'ownerAuthored',
+    ];
+    if (booleanSignalKeys.some((key) => record[key] === true)) return true;
+
+    const roleSignalKeys = [
+      'authorRole',
+      'senderRole',
+      'fromRole',
+      'role',
+      'messageAuthorRole',
+    ];
+    if (
+      roleSignalKeys.some((key) => {
+        const role = record[key];
+        return (
+          typeof role === 'string' &&
+          ['owner', 'self', 'user'].includes(role.trim().toLowerCase())
+        );
+      })
+    ) {
+      return true;
+    }
+
+    for (const key of ['author', 'sender', 'from', 'participant']) {
+      if (this.hasOwnerAuthoredSignal(record[key])) return true;
+    }
+
+    return false;
+  }
+
+  private normalizeProfileCandidate(
+    candidate: ProfileCandidate,
+  ): ProfileCandidate | null {
+    const itemKey = candidate.itemKey?.trim();
+    const itemValue = candidate.itemValue?.trim();
+    if (!itemKey || !itemValue) return null;
+
+    let itemType = String(candidate.itemType ?? '').trim().toLowerCase();
+
+    if (itemKey.startsWith('writing_style.')) {
+      itemType =
+        itemType === 'habit' || itemType === 'preference'
+          ? itemType
+          : 'preference';
+    } else if (itemKey.startsWith('owner_knowledge.')) {
+      itemType =
+        itemType === 'constraint' || itemType === 'fact'
+          ? itemType
+          : 'fact';
+    } else if (itemKey.startsWith('interest_signal.')) {
+      itemType = 'interest';
+    } else if (itemType === 'writing_style') {
+      itemType = 'preference';
+    } else if (itemType === 'owner_knowledge') {
+      itemType = 'fact';
+    } else if (itemType === 'interest_signal') {
+      itemType = 'interest';
+    }
+
+    if (!ALLOWED_PROFILE_ITEM_TYPES.has(itemType)) return null;
+
+    return {
+      ...candidate,
+      itemType: itemType as ProfileCandidate['itemType'],
+      itemKey,
+      itemValue,
+    };
   }
 
   /**

@@ -42,9 +42,12 @@ import {
   AgentResultSummary,
 } from './agent-visualizer';
 import {
+  CONTEXT_SITE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_MUTE_STORAGE_KEY,
   formatContextSiteMuteRemaining,
   getContextSiteMuteExpiresAt,
+  normalizeContextSiteMuteHost,
+  pruneContextSiteBlockRecord,
   pruneContextSiteMuteRecord,
 } from './web-intelligence/contextRecallGuards';
 
@@ -761,10 +764,19 @@ interface ContextMutedSiteView {
   expiresAtLabel: string;
 }
 
+interface ContextBlockedSiteView {
+  host: string;
+  blockedAtLabel: string;
+}
+
 function ContextSiteMuteSettings() {
   const [mutedSites, setMutedSites] = React.useState<ContextMutedSiteView[]>(
     [],
   );
+  const [blockedSites, setBlockedSites] = React.useState<ContextBlockedSiteView[]>(
+    [],
+  );
+  const [blockHostInput, setBlockHostInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState('');
 
@@ -791,6 +803,38 @@ function ContextSiteMuteSettings() {
       });
   };
 
+  const toBlockedSiteViews = (
+    record: Record<string, number>,
+  ): ContextBlockedSiteView[] => {
+    const formatter = new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return Object.entries(record)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([host, blockedAt]) => ({
+        host,
+        blockedAtLabel: formatter.format(new Date(blockedAt)),
+      }));
+  };
+
+  const normalizeSiteControlHost = (rawValue: string): string => {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return '';
+
+    try {
+      const parsed = new URL(
+        trimmed.includes('://') ? trimmed : `https://${trimmed}`,
+      );
+      return normalizeContextSiteMuteHost(parsed.hostname);
+    } catch (_error) {
+      return normalizeContextSiteMuteHost(trimmed.split(/[/:?#]/)[0] || '');
+    }
+  };
+
   const readMutedSiteRecord = async (): Promise<Record<string, number>> => {
     const result = await chrome.storage.local.get(CONTEXT_SITE_MUTE_STORAGE_KEY);
     const pruned = pruneContextSiteMuteRecord(
@@ -804,22 +848,39 @@ function ContextSiteMuteSettings() {
     return pruned.record;
   };
 
-  const refreshMutedSites = async (nextMessage = '') => {
+  const readBlockedSiteRecord = async (): Promise<Record<string, number>> => {
+    const result = await chrome.storage.local.get(CONTEXT_SITE_BLOCK_STORAGE_KEY);
+    const pruned = pruneContextSiteBlockRecord(
+      result?.[CONTEXT_SITE_BLOCK_STORAGE_KEY],
+    );
+    if (pruned.changed) {
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_BLOCK_STORAGE_KEY]: pruned.record,
+      });
+    }
+    return pruned.record;
+  };
+
+  const refreshSiteControls = async (nextMessage = '') => {
     setLoading(true);
     try {
-      const record = await readMutedSiteRecord();
-      setMutedSites(toMutedSiteViews(record));
+      const [muteRecord, blockRecord] = await Promise.all([
+        readMutedSiteRecord(),
+        readBlockedSiteRecord(),
+      ]);
+      setMutedSites(toMutedSiteViews(muteRecord));
+      setBlockedSites(toBlockedSiteViews(blockRecord));
       setMessage(nextMessage);
     } catch (error) {
-      console.warn('Failed to load context site mutes:', error);
-      setMessage('读取静默站点失败');
+      console.warn('Failed to load context site controls:', error);
+      setMessage('读取站点控制失败');
     } finally {
       setLoading(false);
     }
   };
 
   React.useEffect(() => {
-    void refreshMutedSites();
+    void refreshSiteControls();
   }, []);
 
   const unmuteSite = async (host: string) => {
@@ -854,6 +915,69 @@ function ContextSiteMuteSettings() {
     }
   };
 
+  const blockSite = async () => {
+    const host = normalizeSiteControlHost(blockHostInput);
+    if (!host) {
+      setMessage('请输入有效网站域名');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const [muteRecord, blockRecord] = await Promise.all([
+        readMutedSiteRecord(),
+        readBlockedSiteRecord(),
+      ]);
+      delete muteRecord[host];
+      blockRecord[host] = Date.now();
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_MUTE_STORAGE_KEY]: muteRecord,
+        [CONTEXT_SITE_BLOCK_STORAGE_KEY]: blockRecord,
+      });
+      setMutedSites(toMutedSiteViews(muteRecord));
+      setBlockedSites(toBlockedSiteViews(blockRecord));
+      setBlockHostInput('');
+      setMessage(`已永久关闭 ${host} 的网页记忆提示`);
+    } catch (error) {
+      console.warn('Failed to block context site:', error);
+      setMessage('永久关闭站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const unblockSite = async (host: string) => {
+    setLoading(true);
+    try {
+      const record = await readBlockedSiteRecord();
+      delete record[host];
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_BLOCK_STORAGE_KEY]: record,
+      });
+      setBlockedSites(toBlockedSiteViews(record));
+      setMessage(`已恢复 ${host} 的网页记忆提示`);
+    } catch (error) {
+      console.warn('Failed to unblock context site:', error);
+      setMessage('恢复永久屏蔽站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearBlockedSites = async () => {
+    setLoading(true);
+    try {
+      await chrome.storage.local.set({ [CONTEXT_SITE_BLOCK_STORAGE_KEY]: {} });
+      setBlockedSites([]);
+      setMessage('已恢复全部永久屏蔽站点');
+    } catch (error) {
+      console.warn('Failed to clear context site blocks:', error);
+      setMessage('恢复全部永久屏蔽站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="form-group">
       <label>网页记忆提示静默站点</label>
@@ -875,12 +999,12 @@ function ContextSiteMuteSettings() {
           }}
         >
           <small style={{ color: '#64748b' }}>
-            管理右下角记忆卡片里选择“此网站今天不提示”的站点。
+            管理右下角记忆卡片的站点级提示控制。
           </small>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               type="button"
-              onClick={() => refreshMutedSites('已刷新静默站点')}
+              onClick={() => refreshSiteControls('已刷新站点控制')}
               disabled={loading}
               style={{ fontSize: 12, padding: '4px 10px' }}
             >
@@ -895,6 +1019,12 @@ function ContextSiteMuteSettings() {
               全部恢复
             </button>
           </div>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <strong style={{ color: '#0f172a', fontSize: 13 }}>
+            临时静默（24 小时）
+          </strong>
         </div>
 
         {mutedSites.length > 0 ? (
@@ -944,6 +1074,114 @@ function ContextSiteMuteSettings() {
             当前没有被临时静默的网站。
           </small>
         )}
+
+        <div
+          style={{
+            borderTop: '1px solid #e2e8f0',
+            marginTop: 14,
+            paddingTop: 14,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <strong style={{ color: '#0f172a', fontSize: 13 }}>
+                永久屏蔽
+              </strong>
+              <small style={{ color: '#64748b', display: 'block', marginTop: 2 }}>
+                这些站点不会再触发网页记忆提示，直到你手动恢复。
+              </small>
+            </div>
+            <button
+              type="button"
+              onClick={clearBlockedSites}
+              disabled={loading || blockedSites.length === 0}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              清空永久屏蔽
+            </button>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) auto',
+              gap: 8,
+              marginTop: 10,
+            }}
+          >
+            <input
+              type="text"
+              value={blockHostInput}
+              onChange={(event) => setBlockHostInput(event.target.value)}
+              placeholder="example.com 或 https://example.com/path"
+              disabled={loading}
+              style={{ fontSize: 12, padding: '6px 8px' }}
+            />
+            <button
+              type="button"
+              onClick={blockSite}
+              disabled={loading || !blockHostInput.trim()}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              添加
+            </button>
+          </div>
+
+          {blockedSites.length > 0 ? (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+              {blockedSites.map((site) => (
+                <div
+                  key={site.host}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    gap: 10,
+                    alignItems: 'center',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 6,
+                    background: '#fff',
+                    padding: '9px 10px',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <strong
+                      style={{
+                        display: 'block',
+                        color: '#0f172a',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      {site.host}
+                    </strong>
+                    <small style={{ color: '#64748b' }}>
+                      永久屏蔽 · 添加于 {site.blockedAtLabel}
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => unblockSite(site.host)}
+                    disabled={loading}
+                    style={{ fontSize: 12, padding: '4px 10px' }}
+                  >
+                    恢复
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <small style={{ color: '#64748b', display: 'block', marginTop: 10 }}>
+              当前没有被永久屏蔽的网站。
+            </small>
+          )}
+        </div>
 
         {message ? (
           <small
@@ -2283,7 +2521,12 @@ const Options = () => {
       </div>
 
       <div className="form-section">
-        <h2>常规设置</h2>
+        <h2>消息分析推送</h2>
+        <small
+          style={{ color: '#666', display: 'block', marginBottom: '15px' }}
+        >
+          配置消息分析频度、过滤规则，以及命中关注项后的推送位置。
+        </small>
         <div className="form-group">
           <label htmlFor="MESSAGE_ANALYSIS_INTERVAL">
             消息分析频度（分钟）
@@ -2404,36 +2647,13 @@ const Options = () => {
               description="关闭后，会直接推送所有命中关注项的消息。"
             />
           )}
-      </div>
 
-      <div className="form-section">
-        <h2>Bot 推送设置</h2>
-        <small
-          style={{ color: '#666', display: 'block', marginBottom: '15px' }}
-        >
-          Bot Key 和 Base URL 从 env 读取，这里只配置各场景推送到
-          Me（user）还是自定义群组。
-        </small>
         {renderPushTargetFields(
           '消息分析推送',
           'MESSAGE_ANALYSIS_PUSH_TARGET',
           'MESSAGE_ANALYSIS_PUSH_GROUP_ID',
           false,
-          '命中关注项后的即时提醒。默认推送给 Me。',
-        )}
-        {renderPushTargetFields(
-          '关注后续推送',
-          'FOLLOW_UP_PUSH_TARGET',
-          'FOLLOW_UP_PUSH_GROUP_ID',
-          false,
-          '与消息分析拆开配置，关注后续汇总和相关提醒走这一套。',
-        )}
-        {renderPushTargetFields(
-          '决策中心推送',
-          'DECISION_CENTER_PUSH_TARGET',
-          'DECISION_CENTER_PUSH_GROUP_ID',
-          false,
-          '用于冲突/待确认类的决策中心提醒。默认推送给 Me。',
+          '命中关注项后的即时提醒。Bot Key 和 Base URL 从 env 读取。',
         )}
         <div className="form-group">
           <label htmlFor="CONCERNED_ITEMS_DIGEST_HOUR">
@@ -2466,10 +2686,7 @@ const Options = () => {
             8:00 左右汇总推送。
           </small>
         </div>
-      </div>
 
-      <div className="form-section">
-        <h2>消息过滤设置</h2>
         <ToggleField
           id="FILTER_OWN_MESSAGES"
           name="FILTER_OWN_MESSAGES"
@@ -2477,6 +2694,14 @@ const Options = () => {
           onChange={handleInputChange}
           label="过滤自己发送的消息"
           description="开启后，消息分析会自动忽略自己发出的消息。"
+        />
+        <ToggleField
+          id="OWNER_SPEECH_LEARNING_ENABLED"
+          name="OWNER_SPEECH_LEARNING_ENABLED"
+          checked={config.OWNER_SPEECH_LEARNING_ENABLED}
+          onChange={handleInputChange}
+          label="自动学习我的发言以优化输入建议"
+          description="只用于学习你的表达习惯和上下文偏好；不改变外部消息监控、过滤和通知规则。"
         />
       </div>
 
@@ -2502,6 +2727,13 @@ const Options = () => {
           label="启用「关注后续」功能"
           description="围绕当前消息快速创建关注后续规则，持续追踪后续讨论。"
         />
+        {renderPushTargetFields(
+          '关注后续推送',
+          'FOLLOW_UP_PUSH_TARGET',
+          'FOLLOW_UP_PUSH_GROUP_ID',
+          false,
+          '关注后续汇总和相关提醒的推送位置。默认推送给 Me。',
+        )}
         <ToggleField
           id="ENABLE_AUTO_REPLY"
           name="ENABLE_AUTO_REPLY"
@@ -2592,6 +2824,13 @@ const Options = () => {
             保存后会同步到 memory-service，按用户分别生效。
           </small>
         </div>
+        {renderPushTargetFields(
+          '决策中心推送',
+          'DECISION_CENTER_PUSH_TARGET',
+          'DECISION_CENTER_PUSH_GROUP_ID',
+          false,
+          '用于冲突/待确认类的决策中心提醒。默认推送给 Me。',
+        )}
         {renderPushTargetFields(
           '梦境重放报表推送',
           'DREAM_INSIGHT_PUSH_TARGET',
@@ -2749,6 +2988,14 @@ const Options = () => {
           label="显示会议页右下角悬浮入口"
           description="如果你在 meeting 页面通过悬浮 icon 上的小 x 选择了“永不展示”，可以在这里重新打开。关闭后仅隐藏会议页悬浮入口与浮层提醒，不会停用整个 Meeting Pilot 功能。"
           disabled={config.MEETING_PILOT_ENABLED !== true}
+        />
+        <ToggleField
+          id="MEETING_NATIVE_CLIENT_JOIN_ENABLED"
+          name="MEETING_NATIVE_CLIENT_JOIN_ENABLED"
+          checked={config.MEETING_NATIVE_CLIENT_JOIN_ENABLED !== false}
+          onChange={handleInputChange}
+          label="使用 Native Client 加会"
+          description="开启后会拦截 RingCentral Web 中的 Video Join 链接和部分 Join 按钮，改用本机 RingCentral app 打开会议。"
         />
         {config.MEETING_PILOT_ENABLED === true &&
         config.MEETING_PILOT_FLOATING_ICON_VISIBLE === false ? (

@@ -8,6 +8,18 @@ import type {
   VisibleMessageSnapshot,
 } from './types';
 
+export interface OwnerAuthoredLearningPayload {
+  content: string;
+  sourceType: 'jira';
+  sender?: string;
+  groupId?: string;
+  groupName?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  timestamp?: number;
+  metadata: Record<string, unknown>;
+}
+
 const MAX_VISIBLE_MESSAGES = 8;
 const MAX_MESSAGE_TEXT = 280;
 const MAX_PRIMARY_TEXT = 1800;
@@ -52,6 +64,38 @@ const WEB_AGENT_COMPOSER_SELECTORS: Record<string, string> = {
 
 function normalizeText(text?: string | null): string {
   return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeIdentity(value?: string | null): string {
+  return normalizeText(value)
+    .replace(/^your profile and settings,?\s*/i, '')
+    .replace(/^profile,?\s*/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9@._-]+/g, ' ')
+    .trim();
+}
+
+function identityCandidates(value?: string | null): string[] {
+  const normalized = normalizeIdentity(value);
+  if (!normalized) return [];
+  const candidates = new Set<string>([normalized]);
+  normalized
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2)
+    .forEach((part) => candidates.add(part));
+  if (normalized.includes('@')) {
+    candidates.add(normalized.split('@')[0]);
+  }
+  return Array.from(candidates);
+}
+
+function identitiesMatch(authorValues: Array<string | undefined>, selfValues: string[]): boolean {
+  const selfCandidates = new Set(selfValues.flatMap(identityCandidates));
+  if (!selfCandidates.size) return false;
+  return authorValues
+    .flatMap(identityCandidates)
+    .some((candidate) => selfCandidates.has(candidate));
 }
 
 function clip(text: string, maxLength: number): string {
@@ -544,7 +588,100 @@ function getJiraIssueKey(location: Location, doc: Document): string | null {
   );
 }
 
-function getJiraVisibleComments(doc: Document): ComposerContextItem[] {
+function getJiraCurrentUserIdentifiers(doc: Document): string[] {
+  const identifiers = new Set<string>();
+  const add = (value?: string | null) => {
+    const normalized = normalizeText(value);
+    if (normalized) identifiers.add(normalized);
+  };
+
+  [
+    'ajs-remote-user',
+    'ajs-remote-user-fullname',
+    'ajs-user-id',
+    'ajs-remote-user-key',
+    'ajs-remote-user-email',
+  ].forEach((name) => add(doc.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content));
+
+  Array.from(
+    doc.querySelectorAll<HTMLElement>(
+      [
+        '#header-details-user-fullname',
+        '[data-testid="atlassian-navigation--profile-button"]',
+        '[data-testid*="profile-button"]',
+        '[aria-label*="profile" i]',
+      ].join(', '),
+    ),
+  ).forEach((element) => {
+    add(element.textContent);
+    add(element.getAttribute('aria-label'));
+    add(element.getAttribute('title'));
+    add(element.getAttribute('data-username'));
+    add(element.getAttribute('data-account-id'));
+    add(element.getAttribute('data-user-key'));
+  });
+
+  return Array.from(identifiers);
+}
+
+function getJiraCommentId(root: HTMLElement, index: number): string {
+  const raw =
+    root.getAttribute('data-comment-id') ||
+    root.getAttribute('data-id') ||
+    root.id ||
+    '';
+  const match = raw.match(/comment[-_]?(\d+)/i) || raw.match(/(\d{3,})/);
+  return match?.[1] || raw || `visible-comment-${index}`;
+}
+
+function getJiraCommentAuthorValues(root: HTMLElement): string[] {
+  const author =
+    root.querySelector<HTMLElement>('.user-hover, [data-testid*="user"], .author') ||
+    root.querySelector<HTMLElement>('[rel][href*="ViewProfile"], [data-account-id]');
+  return [
+    normalizeText(author?.textContent),
+    author?.getAttribute('rel') || undefined,
+    author?.getAttribute('data-username') || undefined,
+    author?.getAttribute('data-account-id') || undefined,
+    author?.getAttribute('data-user-key') || undefined,
+    root.getAttribute('data-author') || undefined,
+    root.getAttribute('data-author-key') || undefined,
+    root.getAttribute('data-account-id') || undefined,
+  ].filter(Boolean) as string[];
+}
+
+export function markJiraSelfAuthoredComments(
+  comments: ComposerContextItem[],
+  currentUserIdentifiers: string[],
+): ComposerContextItem[] {
+  return comments.map((comment) => {
+    if (comment.type !== 'jira_comment') return comment;
+    const metadata = comment.metadata || {};
+    const authorValues = [
+      comment.sender,
+      metadata.authorUsername as string | undefined,
+      metadata.authorAccountId as string | undefined,
+      metadata.authorUserKey as string | undefined,
+    ];
+    const isSelf = identitiesMatch(authorValues, currentUserIdentifiers);
+    return {
+      ...comment,
+      metadata: {
+        ...metadata,
+        isSelf,
+        ...(isSelf ? { authorRole: 'owner' } : {}),
+      },
+    };
+  });
+}
+
+function getJiraVisibleComments(
+  doc: Document,
+  location: Location,
+  issueKey: string,
+): ComposerContextItem[] {
+  const currentUserIdentifiers = getJiraCurrentUserIdentifiers(doc);
+  const pageUrl = normalizeContextPageUrl(location.href) || location.href;
   const candidates = Array.from(
     doc.querySelectorAll<HTMLElement>(
       [
@@ -562,15 +699,25 @@ function getJiraVisibleComments(doc: Document): ComposerContextItem[] {
       const root =
         element.closest<HTMLElement>('.issue-data-block, .activity-comment, [id*="comment"]') ||
         element;
-      const sender = normalizeText(
-        root.querySelector<HTMLElement>('.user-hover, [data-testid*="user"], .author')
-          ?.textContent,
-      );
+      const authorValues = getJiraCommentAuthorValues(root);
+      const sender = authorValues[0] || '';
+      const commentId = getJiraCommentId(root, index);
+      const sourceUrl = `${pageUrl.split('#')[0]}#comment-${commentId}`;
       return {
         type: 'jira_comment' as const,
-        id: root.id || `visible-comment-${index}`,
+        id: commentId,
         sender: sender || undefined,
         text,
+        url: sourceUrl,
+        metadata: {
+          issueKey,
+          commentId,
+          sourceUrl,
+          authorUsername: authorValues[1] || sender || undefined,
+          authorAccountId: authorValues[2] || undefined,
+          authorUserKey: authorValues[3] || undefined,
+          currentUserIdentifiers,
+        },
       };
     })
     .filter((item): item is ComposerContextItem => item != null);
@@ -580,7 +727,7 @@ function getJiraVisibleComments(doc: Document): ComposerContextItem[] {
     const key = `${item.sender || ''}:${item.text || ''}`;
     if (!unique.has(key)) unique.set(key, item);
   }
-  return Array.from(unique.values()).slice(-8);
+  return markJiraSelfAuthoredComments(Array.from(unique.values()).slice(-8), currentUserIdentifiers);
 }
 
 function getJiraAttachmentContextItems(doc: Document): ComposerContextItem[] {
@@ -679,7 +826,7 @@ const jiraIssueAdapter: SiteContextAdapter = {
     );
 
     if (!url || !issueKey || !primaryText) return null;
-    const comments = getJiraVisibleComments(doc);
+    const comments = getJiraVisibleComments(doc, location, issueKey);
     const attachments = getJiraAttachmentContextItems(doc);
     const contextItems: ComposerContextItem[] = [
       { type: 'jira_summary', id: issueKey, text: summary },
@@ -717,6 +864,46 @@ const jiraIssueAdapter: SiteContextAdapter = {
     return null;
   },
 };
+
+export function buildJiraOwnerCommentLearningPayloads(
+  snapshot: SiteContextSnapshot,
+): OwnerAuthoredLearningPayload[] {
+  if (snapshot.contextType !== 'jira_issue') return [];
+  const issueKey = snapshot.identifiers?.issueKey || snapshot.audience?.issueKey;
+  if (!issueKey) return [];
+
+  return (snapshot.contextItems || [])
+    .filter(
+      (item) =>
+        item.type === 'jira_comment' &&
+        item.text &&
+        item.metadata?.authorRole === 'owner' &&
+        item.metadata?.isSelf === true,
+    )
+    .map((item) => {
+      const commentId = String(item.metadata?.commentId || item.id || '');
+      const sourceUrl = String(item.metadata?.sourceUrl || item.url || snapshot.url);
+      return {
+        content: item.text || '',
+        sourceType: 'jira' as const,
+        sender: item.sender,
+        groupId: issueKey,
+        groupName: snapshot.title,
+        sourceUrl,
+        sourceTitle: snapshot.title,
+        timestamp: Date.now(),
+        metadata: {
+          authorRole: 'owner',
+          isSelf: true,
+          issueKey,
+          commentId,
+          postId: `jira:${issueKey}:${commentId}`,
+          sourceUrl,
+          learningPurposes: ['owner-authored-comment', 'jira-comment-style'],
+        },
+      };
+    });
+}
 
 function closestJiraCommentComposerElement(element?: Element | null): HTMLElement | null {
   const candidate = closestComposerElement(element);

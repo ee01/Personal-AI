@@ -3,7 +3,12 @@
  * 在Jira ticket页面上显示设计链接
  */
 
-import { createJiraHeaders } from './jira';
+import {
+  JIRA_ISSUE_EDIT_STATE_MESSAGE,
+  JIRA_SYNC_XSRF_TOKEN_MESSAGE,
+  JiraAuthMode,
+  jiraFetch,
+} from './jira';
 import {
   DesignDisplayItem,
   DesignLinkCandidate,
@@ -56,6 +61,155 @@ const jiraIssueContextCache = new Map<string, Promise<JiraIssueContext | null>>(
 const uxDesignContextCache = new Map<string, Promise<UXDesignContext | null>>();
 const jiraRemoteDesignLinksCache = new Map<string, Promise<DesignLinkCandidate[]>>();
 let mainRunSequence = 0;
+let jiraCookieFallbackSkipLogged = false;
+let jiraXsrfSynchronizerStarted = false;
+let lastSyncedJiraXsrfToken = '';
+
+function getJiraXsrfCookieToken(): string {
+  const rawValue = document.cookie
+    .split('; ')
+    .find((value) => value.startsWith('atlassian.xsrf.token='))
+    ?.split('=')
+    .slice(1)
+    .join('=') || '';
+
+  try {
+    return decodeURIComponent(rawValue);
+  } catch {
+    return rawValue;
+  }
+}
+
+function injectJiraXsrfTokenIntoPageContext(token: string): void {
+  const script = document.createElement('script');
+  script.textContent = `
+    (() => {
+      const token = ${JSON.stringify(token)};
+      try {
+        if (window.AJS?.Meta?.set) {
+          window.AJS.Meta.set('atl-token', token);
+          window.AJS.Meta.set('ajs-atl-token', token);
+        }
+      } catch (_) {}
+      try {
+        window.atl_token = () => token;
+      } catch (_) {}
+    })();
+  `;
+  (document.head || document.documentElement).appendChild(script);
+  script.remove();
+}
+
+function syncJiraXsrfTokenFromCookie(): { token: string; changed: number } {
+  const token = getJiraXsrfCookieToken();
+  if (!token) return { token: '', changed: 0 };
+
+  let changed = 0;
+  document.querySelectorAll<HTMLInputElement>('input[name="atl_token"]').forEach((input) => {
+    if (input.value !== token) {
+      input.value = token;
+      input.setAttribute('value', token);
+      changed += 1;
+    }
+  });
+
+  document
+    .querySelectorAll<HTMLMetaElement>('meta[name="atl-token"], meta[name="ajs-atl-token"]')
+    .forEach((meta) => {
+      if (meta.content !== token) {
+        meta.content = token;
+        meta.setAttribute('content', token);
+        changed += 1;
+      }
+    });
+
+  if (changed > 0 || lastSyncedJiraXsrfToken !== token) {
+    injectJiraXsrfTokenIntoPageContext(token);
+    lastSyncedJiraXsrfToken = token;
+  }
+
+  return { token, changed };
+}
+
+function isVisibleElement(element: Element | null): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  const style = window.getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+}
+
+function getJiraIssueEditState(): { isEditing: boolean; reason: string | null; url: string; title: string } {
+  const activeElement = document.activeElement as HTMLElement | null;
+  const focusedEditable = activeElement?.matches(
+    'input:not([type="hidden"]):not([readonly]):not([disabled]), textarea:not([readonly]):not([disabled]), [contenteditable="true"], .select2-input',
+  );
+  if (focusedEditable) {
+    return { isEditing: true, reason: 'focused editable control', url: location.href, title: document.title };
+  }
+
+  const visibleDialog = Array.from(
+    document.querySelectorAll(
+      '.aui-dialog2[open], .aui-dialog2.aui-layer[aria-hidden="false"], .aui-dialog:not([aria-hidden="true"]), .jira-dialog',
+    ),
+  ).find(isVisibleElement);
+  if (visibleDialog) {
+    return { isEditing: true, reason: 'visible Jira dialog', url: location.href, title: document.title };
+  }
+
+  const activeInlineEditor = Array.from(
+    document.querySelectorAll('.editable-field.active, .editable-field.editing, .field-edit, .issue-field-edit'),
+  ).find(isVisibleElement);
+  if (activeInlineEditor) {
+    return { isEditing: true, reason: 'active inline editor', url: location.href, title: document.title };
+  }
+
+  return { isEditing: false, reason: null, url: location.href, title: document.title };
+}
+
+function startJiraXsrfTokenSynchronizer(): void {
+  if (jiraXsrfSynchronizerStarted) return;
+  jiraXsrfSynchronizerStarted = true;
+
+  const sync = () => {
+    if (isJiraTicketPage()) {
+      syncJiraXsrfTokenFromCookie();
+    }
+  };
+
+  sync();
+  window.setInterval(sync, 1000);
+  ['click', 'submit', 'focusin', 'keydown', 'input'].forEach((eventName) => {
+    document.addEventListener(eventName, sync, true);
+  });
+
+  const observer = new MutationObserver(sync);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+async function fetchJiraRead(
+  url: string,
+  requestLabel: string,
+  authMode: JiraAuthMode = 'cookie-when-safe',
+): Promise<Response | null> {
+  try {
+    const response = await jiraFetch(url, {
+      method: 'GET',
+      authMode,
+      requestLabel,
+    });
+    syncJiraXsrfTokenFromCookie();
+    return response;
+  } catch (error) {
+    if (!jiraCookieFallbackSkipLogged) {
+      console.warn(
+        'Personal AI Jira content script skipped Jira REST cookie fallback while Jira issue editing is not safe.',
+        error,
+      );
+      jiraCookieFallbackSkipLogged = true;
+    }
+    return null;
+  }
+}
 
 // 检测页面是否是Jira ticket详情页
 function isJiraTicketPage(): boolean {
@@ -201,16 +355,15 @@ function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url
 }
 
 // 调用Jira API获取票据信息
-// 支持 token 和 cookie fallback 模式
+// token 优先；无 token 时仅在 Jira issue 页没有编辑风险时使用 cookie fallback
 async function fetchTicketData(ticketKey: string): Promise<any> {
   try {
-    const headers = await createJiraHeaders();
     // 使用 expand=names 获取更多字段信息
-    const response = await fetch(`/rest/api/2/issue/${ticketKey}?fields=issuelinks,subtasks&expand=names`, {
-      method: 'GET',
-      headers,
-      credentials: 'include'  // 使用 cookie 认证（当没有 token 时作为 fallback）
-    });
+    const response = await fetchJiraRead(
+      `/rest/api/2/issue/${ticketKey}?fields=issuelinks,subtasks&expand=names`,
+      `fetch Jira ticket ${ticketKey}`,
+    );
+    if (!response) return null;
     if (!response.ok) throw new Error(`Failed to fetch ticket data: ${response.statusText}`);
     return await response.json();
   } catch (error) {
@@ -220,17 +373,13 @@ async function fetchTicketData(ticketKey: string): Promise<any> {
 }
 
 // 通过 JQL 查询 parent 字段获取所有 child issues
-// 支持 token 和 cookie fallback 模式
+// token 优先；无 token 时仅在 Jira issue 页没有编辑风险时使用 cookie fallback
 async function fetchChildIssues(parentKey: string): Promise<any[]> {
   try {
-    const headers = await createJiraHeaders();
     const jql = `issueFunction in portfolioChildrenOf("key=${parentKey}")`;
     const url = `/rest/api/2/search?jql=${encodeURIComponent(jql)}&fields=key,summary,issuetype,status`;
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-      credentials: 'include'  // 使用 cookie 认证
-    });
+    const response = await fetchJiraRead(url, `fetch Jira child issues for ${parentKey}`);
+    if (!response) return [];
     if (!response.ok) throw new Error('Failed to fetch child issues');
     const data = await response.json();
     return data.issues || [];
@@ -244,6 +393,7 @@ async function fetchChildIssues(parentKey: string): Promise<any[]> {
 async function findUXTickets(parentData: any, currentTicketKey: string, projectPrefix = 'UX*'): Promise<UXTicketReference[]> {
   try {
     const uxTickets: UXTicketReference[] = [];
+    if (!parentData?.fields) return uxTickets;
     
     // 获取所有关联的issues
     const issueLinks = parentData.fields.issuelinks || [];
@@ -290,15 +440,11 @@ async function fetchJiraIssueContext(issueKey: string): Promise<JiraIssueContext
 
   const request = (async (): Promise<JiraIssueContext | null> => {
     try {
-      const headers = await createJiraHeaders();
-      const response = await fetch(
+      const response = await fetchJiraRead(
         `/rest/api/2/issue/${issueKey}?fields=summary,status,issuetype,customfield_21233,customfield_11450,duedate,fixVersions&expand=names`,
-        {
-          method: 'GET',
-          headers,
-          credentials: 'include'
-        }
+        `fetch Jira issue context for ${issueKey}`,
       );
+      if (!response) return null;
       if (!response.ok) throw new Error(`Failed to fetch issue context: ${response.statusText}`);
       const data = await response.json();
       const fixVersions = data.fields.fixVersions || [];
@@ -334,12 +480,11 @@ async function fetchRemoteDesignLinks(
 
   const request = (async (): Promise<DesignLinkCandidate[]> => {
     try {
-      const headers = await createJiraHeaders();
-      const response = await fetch(`/rest/api/2/issue/${issueKey}/remotelink`, {
-        method: 'GET',
-        headers,
-        credentials: 'include'
-      });
+      const response = await fetchJiraRead(
+        `/rest/api/2/issue/${issueKey}/remotelink`,
+        `fetch Jira remote design links for ${issueKey}`,
+      );
+      if (!response) return [];
       if (!response.ok) return [];
 
       const remoteLinks = await response.json();
@@ -447,15 +592,14 @@ async function fetchUXDesignContext(
 }
 
 // 获取Epic ticket的Parent Link
-// 支持 token 和 cookie fallback 模式
+// token 优先；无 token 时仅在 Jira issue 页没有编辑风险时使用 cookie fallback
 async function getEpicParentLink(epicKey: string): Promise<{ key: string; url: string } | null> {
   try {
-    const headers = await createJiraHeaders();
-    const response = await fetch(`/rest/api/2/issue/${epicKey}?fields=customfield_15751&expand=names`, {
-      method: 'GET',
-      headers,
-      credentials: 'include'  // 使用 cookie 认证
-    });
+    const response = await fetchJiraRead(
+      `/rest/api/2/issue/${epicKey}?fields=customfield_15751&expand=names`,
+      `fetch Jira epic parent link for ${epicKey}`,
+    );
+    if (!response) return null;
     if (!response.ok) throw new Error(`Failed to fetch Epic ticket: ${response.statusText}`);
     const data = await response.json();
     
@@ -988,11 +1132,11 @@ async function fetchDependencyDetails(ticketKey: string): Promise<{
   fixVersion: string | null;
 }> {
   try {
-    const headers = await createJiraHeaders();
-    const response = await fetch(
+    const response = await fetchJiraRead(
       `/rest/api/2/issue/${ticketKey}?fields=customfield_18351,customfield_14354,fixVersions`,
-      { method: 'GET', headers, credentials: 'include' }
+      `fetch Jira dependency details for ${ticketKey}`,
     );
+    if (!response) return { targetEnd: null, fixVersion: null };
     if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
     const data = await response.json();
     
@@ -1012,11 +1156,11 @@ async function fetchDependencyDetails(ticketKey: string): Promise<{
 // 通过API获取ticket的Epic Link字段
 async function fetchTicketEpicLink(ticketKey: string): Promise<string | null> {
   try {
-    const headers = await createJiraHeaders();
-    const response = await fetch(
+    const response = await fetchJiraRead(
       `/rest/api/2/issue/${ticketKey}?fields=customfield_11450`,
-      { method: 'GET', headers, credentials: 'include' }
+      `fetch Jira epic link for ${ticketKey}`,
     );
+    if (!response) return null;
     if (!response.ok) return null;
     const data = await response.json();
     return data.fields.customfield_11450 || null;
@@ -1565,6 +1709,7 @@ function handlePageChanges(): void {
 }
 
 function scheduleInitialJiraScan(delayMs = 1000): void {
+  startJiraXsrfTokenSynchronizer();
   setTimeout(main, delayMs);
   handlePageChanges();
 }
@@ -1585,6 +1730,17 @@ window.addEventListener('load', () => {
 
 // 监听来自background的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === JIRA_ISSUE_EDIT_STATE_MESSAGE) {
+    syncJiraXsrfTokenFromCookie();
+    sendResponse(getJiraIssueEditState());
+    return true;
+  }
+
+  if (request.type === JIRA_SYNC_XSRF_TOKEN_MESSAGE) {
+    sendResponse({ success: true, ...syncJiraXsrfTokenFromCookie() });
+    return true;
+  }
+
   if (request.type === 'GET_USER_INFO') {
     getUserInfoFromJiraAPI()
       .then(userInfo => {
@@ -1599,16 +1755,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // 从 JIRA API 获取用户信息
-// 支持 token 和 cookie fallback 模式
+// username/ownerId 是记忆读写的关键初始化信息，允许 cookie fallback 不因编辑态暂停。
 async function getUserInfoFromJiraAPI(): Promise<any> {
   try {
     console.log('Getting user info from JIRA API...');
-    const headers = await createJiraHeaders();
-    const response = await fetch(window.location.origin + '/rest/api/2/myself', {
-      method: 'GET',
-      headers,
-      credentials: 'include'  // 使用 cookie 认证
-    });
+    const response = await fetchJiraRead(
+      window.location.origin + '/rest/api/2/myself',
+      'fetch Jira current user',
+      'cookie-always',
+    );
+    if (!response) return null;
     
     if (!response.ok) {
       throw new Error(`JIRA API request failed: ${response.status} ${response.statusText}`);

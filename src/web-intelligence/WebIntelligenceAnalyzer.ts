@@ -117,13 +117,18 @@ export class WebIntelligenceAnalyzer {
       const focusAreas: string[] = [];
 
       for (const item of profileItemsResult.items) {
-        const name = item.itemKey || item.itemValue || '';
+        const name = item.itemValue || item.itemKey || '';
         const weight = item.confidence ?? item.salienceScore ?? 0.5;
-        if (item.itemType === 'project') {
+        const itemKey = String(item.itemKey || '').toLowerCase();
+        if (itemKey.includes('project')) {
           projects.push({ name, weight });
-        } else if (item.itemType === 'topic') {
+        } else if (itemKey.includes('topic')) {
           topics.push({ name, weight });
-        } else if (item.itemType === 'technology' || item.itemType === 'focus_area') {
+        } else if (
+          itemKey.includes('technology') ||
+          itemKey.includes('tech') ||
+          itemKey.includes('focus_area')
+        ) {
           focusAreas.push(name);
         }
       }
@@ -757,23 +762,25 @@ export class WebIntelligenceAnalyzer {
       const extractedInfo = analysisResult.extractedInfo;
 
       // Helper to create a profile item for a discovered entity
-      const recordInterest = async (type: string, name: string, weight: number) => {
+      const recordInterest = async (category: string, name: string, weight: number) => {
         try {
-          await this.client.createProfileItem({
-            itemType: type,
-            itemKey: name,
-            itemValue: JSON.stringify({
+          await this.client.createInferredProfileItem({
+            itemType: 'interest',
+            itemKey: `web_${category}`,
+            itemValue: name,
+            evidenceRefs: [{
+              sourceType: 'web',
               source: pageContent.domain,
               url: pageContent.url,
               title: pageContent.title,
+              category,
               analysisConfidence: analysisResult.confidence,
               discoveredAt: Date.now(),
-            }),
+            }],
             confidence: weight,
           });
         } catch (err) {
-          // Non-critical — log and continue
-          console.warn(`Failed to record interest ${type}/${name}:`, err);
+          console.warn(`Failed to record inferred profile interest ${category}/${name}:`, err);
         }
       };
 

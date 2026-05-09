@@ -88,6 +88,7 @@ interface ChunkRow {
   source: string | null;
   source_type: RecallSourceType | null;
   related_project: string | null;
+  related_entity_id: string | null;
   created_at: number;
 }
 
@@ -275,6 +276,30 @@ function buildMessageMetadata(
     }
   }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function getChunkMessageRefCandidates(chunk: ChunkRow): string[] {
+  const candidates = new Set<string>();
+  const add = (value: string | null | undefined): void => {
+    const trimmed = value?.trim();
+    if (trimmed) candidates.add(trimmed);
+  };
+
+  add(chunk.related_entity_id);
+
+  const filePath = chunk.file_path.trim();
+  if (filePath.startsWith('messages/')) {
+    add(stripKnownChunkPathExtension(filePath.slice('messages/'.length)));
+  }
+  if (filePath.startsWith('calendar/')) {
+    add(stripKnownChunkPathExtension(filePath.slice('calendar/'.length)));
+  }
+
+  return Array.from(candidates);
+}
+
+function stripKnownChunkPathExtension(value: string): string {
+  return value.replace(/\.(md|txt|json)$/i, '');
 }
 
 function normalizeStoredScope(
@@ -584,7 +609,8 @@ export class RecallEngine {
         const ph = chunkIds.map(() => '?').join(', ');
         const chunks = this.db
           .prepare(
-            `SELECT chunk_id, content, file_path, scope, source, source_type, related_project, created_at
+            `SELECT chunk_id, content, file_path, scope, source, source_type,
+                    related_project, related_entity_id, created_at
              FROM chunks
              WHERE chunk_id IN (${ph})`,
           )
@@ -611,6 +637,7 @@ export class RecallEngine {
             continue;
 
           const score = 1 / (1 + row.distance);
+          const sourceRef = this.resolveChunkSourceRef(chunk);
           candidates.push({
             id: String(chunk.chunk_id),
             type: 'chunk',
@@ -618,6 +645,8 @@ export class RecallEngine {
             score,
             timestamp: chunk.created_at,
             source: chunk.source_type ?? undefined,
+            sourceUrl: sourceRef.sourceUrl,
+            sourceTitle: sourceRef.sourceTitle,
             channels: ['vector'],
             metadata: {
               filePath: chunk.file_path,
@@ -665,7 +694,8 @@ export class RecallEngine {
       const ph = chunkIds.map(() => '?').join(', ');
       const chunks = this.db
         .prepare(
-          `SELECT chunk_id, content, file_path, scope, source, source_type, related_project, created_at
+          `SELECT chunk_id, content, file_path, scope, source, source_type,
+                  related_project, related_entity_id, created_at
            FROM chunks
            WHERE chunk_id IN (${ph})`,
         )
@@ -696,6 +726,7 @@ export class RecallEngine {
 
         // Normalize: best rank -> score ~1, worst -> score ~0
         const score = Math.abs(row.rank) / maxAbsRank;
+        const sourceRef = this.resolveChunkSourceRef(chunk);
 
         candidates.push({
           id: String(chunk.chunk_id),
@@ -704,6 +735,8 @@ export class RecallEngine {
           score,
           timestamp: chunk.created_at,
           source: chunk.source_type ?? undefined,
+          sourceUrl: sourceRef.sourceUrl,
+          sourceTitle: sourceRef.sourceTitle,
           channels: ['fts'],
           metadata: {
             filePath: chunk.file_path,
@@ -718,6 +751,41 @@ export class RecallEngine {
     }
 
     return candidates;
+  }
+
+  private resolveChunkSourceRef(
+    chunk: ChunkRow,
+  ): { sourceUrl?: string; sourceTitle?: string } {
+    const messageIds = getChunkMessageRefCandidates(chunk);
+    if (messageIds.length === 0) return {};
+
+    try {
+      const placeholders = messageIds.map(() => '?').join(', ');
+      const rows = this.db
+        .prepare(
+          `SELECT id, source_url, source_title
+           FROM messages_raw
+           WHERE id IN (${placeholders})`,
+        )
+        .all(...messageIds) as Array<{
+        id: string;
+        source_url: string | null;
+        source_title: string | null;
+      }>;
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      for (const id of messageIds) {
+        const row = byId.get(id);
+        if (!row) continue;
+        return {
+          sourceUrl: row.source_url ?? undefined,
+          sourceTitle: row.source_title ?? undefined,
+        };
+      }
+    } catch {
+      return {};
+    }
+
+    return {};
   }
 
   // =========================================================================

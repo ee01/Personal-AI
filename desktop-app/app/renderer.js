@@ -563,13 +563,22 @@ function renderSummary(status) {
 
 function renderBlockingReasons(status) {
   const reasons = status?.blockingReasons || [];
-  if (reasons.length === 0) {
+  const syncError =
+    status?.syncState?.lastErrorMessage || status?.lastError || '';
+  const visibleReasons = [...reasons];
+  if (syncError) {
+    visibleReasons.push({
+      message: `最近一次自动同步失败：${syncError}`,
+    });
+  }
+
+  if (visibleReasons.length === 0) {
     elements.blockingReasons.innerHTML =
       '<div class="reason-pill status-ready">所有前置条件已满足，自动同步可以正常运行。</div>';
     return;
   }
 
-  elements.blockingReasons.innerHTML = reasons
+  elements.blockingReasons.innerHTML = visibleReasons
     .map(
       (reason) =>
         `<div class="reason-pill status-blocked">${reason.message}</div>`,

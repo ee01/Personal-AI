@@ -26,6 +26,7 @@ import {
 import { MeetingPilotRegistry } from './store';
 import {
   getMemoryServiceClient,
+  type IngestPayload,
   type MemoryServiceError,
 } from '../services/MemoryServiceClient';
 import {
@@ -82,6 +83,7 @@ const speechSuggestionLastRunAt = new Map<number, number>();
 const speechSuggestionLastSignatures = new Map<number, string>();
 const digestPollTimers = new Map<number, number>();
 const transcriptUpdateQueues = new Map<number, Promise<void>>();
+const ownerTranscriptLearningKeys = new Set<string>();
 let testForceSidePanelOpenFailure = false;
 let testUseMockCapture = false;
 const READINESS_CACHE_TTL_MS = 20_000;
@@ -3004,6 +3006,9 @@ async function handleTranscriptUpdate(
     await broadcastSessionSnapshot(latestSession);
     scheduleMeetingMemoryRefresh(tabId);
     scheduleSpeechSuggestionRefresh(tabId);
+    void ingestMeetingOwnerTranscriptLearning(latestSession).catch((error) => {
+      console.warn('Meeting Pilot owner transcript learning failed:', error);
+    });
   }
 }
 
@@ -3133,7 +3138,7 @@ async function handleDigestStatusUpdate(
 
 export function buildMeetingIngestPayloads(
   session: MeetingPilotSessionSnapshot,
-) {
+): IngestPayload[] {
   const activeActionItems = getActiveMeetingActionItems(session.actionItems);
   const panoramaUrl = chrome.runtime.getURL(
     `meeting-panorama.html?meetingId=${encodeURIComponent(
@@ -3224,7 +3229,91 @@ ${chapter.summary}`,
     },
   }));
 
-  return [summaryPayload, ...chapterPayloads];
+  return [
+    summaryPayload,
+    ...chapterPayloads,
+    ...buildMeetingOwnerTranscriptLearningPayloads(session, panoramaUrl),
+  ];
+}
+
+export function buildMeetingOwnerTranscriptLearningPayloads(
+  session: MeetingPilotSessionSnapshot,
+  sourceUrl = chrome.runtime.getURL(
+    `meeting-panorama.html?meetingId=${encodeURIComponent(
+      session.meetingId,
+    )}&tabId=${session.tabId}`,
+  ),
+): IngestPayload[] {
+  const participantsById = new Map(
+    session.participants.map((participant) => [participant.id, participant]),
+  );
+  return session.transcriptTurns
+    .filter((turn) => {
+      if (!turn.text || turn.lowConfidence) return false;
+      const participant = participantsById.get(turn.participantId);
+      if (!participant?.isSelf) return false;
+      if (participant.resolutionState === 'provisional') return false;
+      return true;
+    })
+    .map((turn) => {
+      const participant = participantsById.get(turn.participantId);
+      const speakerName = participant?.name || turn.speakerNameSnapshot || session.selfName || 'You';
+      return {
+        content: turn.text,
+        sourceType: 'meeting' as const,
+        sender: speakerName,
+        groupId: session.meetingId,
+        groupName: session.title,
+        sourceUrl,
+        sourceTitle: session.title,
+        timestamp: turn.endTs || session.updatedAt,
+        metadata: {
+          meetingId: session.meetingId,
+          turnId: turn.id,
+          postId: `meeting:${session.meetingId}:${turn.id}`,
+          participantId: turn.participantId,
+          authorRole: 'owner',
+          isSelf: true,
+          speakerNameSnapshot: turn.speakerNameSnapshot,
+          chunkIds: turn.chunkIds,
+          learningPurposes: ['owner-transcript-turn', 'meeting-self-expression'],
+        },
+      };
+    });
+}
+
+async function ingestMeetingOwnerTranscriptLearning(
+  session: MeetingPilotSessionSnapshot,
+): Promise<void> {
+  const envConfig = await getEnvConfig();
+  if (envConfig.OWNER_SPEECH_LEARNING_ENABLED === false) {
+    return;
+  }
+
+  const payloads = buildMeetingOwnerTranscriptLearningPayloads(session).filter(
+    (payload) => {
+      const metadata = payload.metadata || {};
+      const key = String(
+        metadata.postId ||
+          `meeting:${metadata.meetingId || session.meetingId}:${metadata.turnId || ''}`,
+      );
+      if (!key || ownerTranscriptLearningKeys.has(key)) {
+        return false;
+      }
+      ownerTranscriptLearningKeys.add(key);
+      return true;
+    },
+  );
+  if (!payloads.length) {
+    return;
+  }
+
+  const client = getMemoryServiceClient();
+  if (payloads.length === 1) {
+    await client.ingest(payloads[0]);
+    return;
+  }
+  await client.ingestBatch(payloads);
 }
 
 async function ingestMeetingSession(

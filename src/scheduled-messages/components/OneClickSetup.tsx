@@ -8,6 +8,10 @@ import { useState } from 'react';
 import { SheetInitializer } from '../SheetInitializer';
 import { InitializationResult, SheetConfig } from '../types';
 import { getGoogleAuthToken } from '../../utils/googleAuth';
+import {
+  buildSheetUrl,
+  getManualBindSheetInputFeedback,
+} from '../manualBindSheetInput';
 
 interface OneClickSetupProps {
   onComplete: (result: InitializationResult) => void;
@@ -24,6 +28,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const [tempResult, setTempResult] = useState<InitializationResult | null>(null);
   const [needsAppScriptAPI, setNeedsAppScriptAPI] = useState(false);
   const [appScriptAPIUrl, setAppScriptAPIUrl] = useState('');
+  const manualBindFeedback = getManualBindSheetInputFeedback(manualSheetUrl);
   
   const handleOneClickSetup = async () => {
     setIsInitializing(true);
@@ -126,9 +131,9 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     
     try {
       // 从 URL 提取 Sheet ID
-      const sheetId = extractSheetId(rawSheetInput);
+      const sheetId = manualBindFeedback.sheetId;
       if (!sheetId) {
-        throw new Error('无效的 Sheet URL 或 Sheet ID');
+        throw new Error(manualBindFeedback.error || '无效的 Sheet URL 或 Sheet ID');
       }
       const canonicalSheetUrl = buildSheetUrl(sheetId);
       
@@ -234,34 +239,6 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     });
   };
   
-  const buildSheetUrl = (sheetId: string): string => {
-    return `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
-  };
-
-  const extractSheetId = (input: string): string | null => {
-    const value = input.trim();
-    const pathMatch = value.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    if (pathMatch) {
-      return pathMatch[1];
-    }
-
-    const queryMatch = value.match(/[?&]id=([a-zA-Z0-9-_]+)/);
-    if (queryMatch) {
-      return queryMatch[1];
-    }
-
-    const driveFileMatch = value.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
-    if (driveFileMatch) {
-      return driveFileMatch[1];
-    }
-
-    if (/^[a-zA-Z0-9-_]{20,}$/.test(value)) {
-      return value;
-    }
-
-    return null;
-  };
-
   const getManualBindErrorMessage = (err: any): string => {
     const message = err?.message || '';
     if (message.includes('401') || message.includes('invalid_token') || message.includes('Unauthorized')) {
@@ -282,7 +259,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     return message || '绑定失败，请检查 Sheet URL、Config 工作表和 Google 授权状态';
   };
 
-  const manualBindDisabled = isInitializing || !manualSheetUrl.trim();
+  const manualBindInputHasValue = Boolean(manualSheetUrl.trim());
+  const manualBindDisabled = isInitializing || !manualBindFeedback.sheetId;
   
   return (
     <div style={styles.container}>
@@ -460,6 +438,14 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
               <div style={styles.syncNotice}>
                 绑定会以 Sheet Config 作为跨设备恢复源；当前设备未参与写回的新字段会保留在 Sheet 中，避免旧本地配置覆盖远端设置。
               </div>
+              {manualBindInputHasValue && (
+                <div
+                  style={manualBindFeedback.error ? styles.inputErrorHint : styles.inputPreview}
+                  role={manualBindFeedback.error ? 'alert' : 'status'}
+                >
+                  {manualBindFeedback.error || `将绑定到 Sheet ID：${manualBindFeedback.sheetId}`}
+                </div>
+              )}
               <div style={styles.inputGroup}>
                 <input
                   type="text"
@@ -488,7 +474,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                     e.currentTarget.style.backgroundColor = manualBindDisabled ? '#adb5bd' : '#6c757d';
                   }}
                 >
-                  绑定已有表
+                  {manualBindFeedback.sheetId ? '绑定已有表' : '等待有效链接'}
                 </button>
               </div>
             </div>
@@ -598,6 +584,26 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '6px',
     padding: '10px 12px',
     marginBottom: '12px',
+    lineHeight: 1.5,
+  },
+  inputPreview: {
+    fontSize: '12px',
+    color: '#155724',
+    backgroundColor: '#d4edda',
+    border: '1px solid #c3e6cb',
+    borderRadius: '6px',
+    padding: '8px 10px',
+    marginBottom: '10px',
+    overflowWrap: 'anywhere',
+  },
+  inputErrorHint: {
+    fontSize: '12px',
+    color: '#721c24',
+    backgroundColor: '#f8d7da',
+    border: '1px solid #f5c6cb',
+    borderRadius: '6px',
+    padding: '8px 10px',
+    marginBottom: '10px',
     lineHeight: 1.5,
   },
   inputGroup: {

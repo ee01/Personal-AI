@@ -130,20 +130,46 @@ async function main() {
     const quickLabels = await page.$$eval('.snooze-quick-option-label', (els) =>
       els.map((el) => el.textContent?.trim()),
     );
-    assert.equal(quickLabels.length, 5);
-    assert.deepEqual(quickLabels.slice(0, 2), ['1 小时后', '3 小时后']);
-    assert.match(quickLabels[2], /^(今天|明天|周[一二三四五])下班前$/);
-    assert.match(quickLabels[3], /^(明天|周[一二三四五]) 9 点$/);
-    assert.equal(quickLabels[4], '下周一 9 点');
+    assert.ok(
+      quickLabels.length >= 5 && quickLabels.length <= 7,
+      `Expected 5 to 7 quick options, got ${quickLabels.length}`,
+    );
+    assert.deepEqual(quickLabels.slice(0, 4), [
+      '30 分钟后',
+      '1 小时后',
+      '2 小时后',
+      '3 小时后',
+    ]);
+    const routineLabels = quickLabels.slice(4);
+    const workdayEndLabel = routineLabels.find((label) =>
+      label?.endsWith('下班前'),
+    );
+    if (workdayEndLabel) {
+      assert.match(workdayEndLabel, /^(今天|明天|周[一二三四五] )下班前$/);
+    }
+    assert.ok(
+      routineLabels.some((label) => /^(明天|周[一二三四五]) 9 点$/.test(label)),
+      `Expected next workday morning option in ${routineLabels.join(', ')}`,
+    );
+    if (routineLabels.includes('下周一 9 点')) {
+      assert.equal(routineLabels.at(-1), '下周一 9 点');
+    }
 
     const quickTimes = await page.$$eval('.snooze-quick-option-time', (els) =>
       els.map((el) => el.textContent?.trim()),
     );
-    assert.equal(quickTimes.length, 5);
+    assert.equal(quickTimes.length, quickLabels.length);
     assert.equal(quickTimes.every(Boolean), true);
+    assert.equal(new Set(quickTimes).size, quickTimes.length);
 
     await page.locator('.snooze-custom-option').click();
     await page.waitForSelector('.snooze-picker', { timeout: 3_000 });
+    const pickerDefaultValue = await page
+      .locator('.snooze-datetime-input')
+      .inputValue();
+    const pickerDefaultDay = new Date(pickerDefaultValue).getDay();
+    assert.notEqual(pickerDefaultDay, 0);
+    assert.notEqual(pickerDefaultDay, 6);
     await page.locator('.snooze-datetime-input').fill('2000-01-01T09:00');
     await page.waitForSelector('.snooze-preview-time.invalid', {
       timeout: 3_000,

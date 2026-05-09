@@ -111,6 +111,63 @@ describe('Profile API', () => {
     expect(confirmed.status).toBe('active');
   });
 
+  it('records inferred profile candidates as pending and reinforces repeats', async () => {
+    const firstRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/profile/items/inferred',
+      headers: { 'x-user-id': userId },
+      payload: {
+        itemType: 'interest',
+        itemKey: 'web_project',
+        itemValue: 'Personal AI',
+        evidenceRefs: [{ sourceType: 'web', url: 'https://example.test/a' }],
+        confidence: 0.42,
+      },
+    });
+
+    expect(firstRes.statusCode).toBe(201);
+    const first = firstRes.json();
+    expect(first.sourceKind).toBe('inferred');
+    expect(first.status).toBe('pending_confirm');
+    expect(first.userConfirmed).toBe(false);
+    expect(first.mentionCount).toBe(1);
+    expect(first.evidenceRefs).toEqual([
+      { sourceType: 'web', url: 'https://example.test/a' },
+    ]);
+
+    const secondRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/profile/items/inferred',
+      headers: { 'x-user-id': userId },
+      payload: {
+        itemType: 'interest',
+        itemKey: 'web_project',
+        itemValue: 'Personal AI',
+        evidenceRefs: [{ sourceType: 'web', url: 'https://example.test/b' }],
+        confidence: 0.7,
+      },
+    });
+
+    expect(secondRes.statusCode).toBe(200);
+    const second = secondRes.json();
+    expect(second.id).toBe(first.id);
+    expect(second.mentionCount).toBe(2);
+    expect(second.confidence).toBe(0.7);
+    expect(second.evidenceRefs).toEqual([
+      { sourceType: 'web', url: 'https://example.test/a' },
+      { sourceType: 'web', url: 'https://example.test/b' },
+    ]);
+
+    const coreRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/profile/core',
+      headers: { 'x-user-id': userId },
+    });
+
+    expect(coreRes.statusCode).toBe(200);
+    expect(coreRes.json().content).not.toContain('Personal AI');
+  });
+
   it('rejects updates that would duplicate another visible profile item', async () => {
     const create = async (itemValue: string) =>
       app.inject({

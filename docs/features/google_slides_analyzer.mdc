@@ -17,6 +17,7 @@ Keep this feature aligned with the current implementation:
 - `contentScriptGoogleSlide.tsx` extracts the current presentation/slide and opens `slides-analysis.html`.
 - `slide.ts` reads and updates Slides through the Google Slides API.
 - `tableAnalyzer.ts` handles table header detection, Jira Key columns, and project row extraction.
+- `textAnalyzer.ts` merges duplicate Jira projects found by overlapping text/list extraction passes before suggestions are shown.
 - `slides-analysis.tsx` is the review UI; users select specific fields before writing updates.
 
 When changing this feature, verify:

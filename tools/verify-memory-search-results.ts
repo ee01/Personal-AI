@@ -18,6 +18,7 @@ assert.equal(getScopeLabel('all'), '全部记忆');
 assert.equal(getScopeLabel('both'), '全部记忆');
 
 assert.equal(getRecallChannelLabel('vector'), '语义');
+assert.equal(getRecallChannelLabel('direct'), '定位');
 assert.equal(getRecallChannelLabel('unknown'), 'unknown');
 assert.equal(getSearchResultKey({ resultKey: 'message:101' }), 'message:101');
 assert.equal(
@@ -39,6 +40,10 @@ assert.deepEqual(
   ['Roadmap', formatMemoryTimestamp(1_704_067_200)],
 );
 
+assert.equal(
+  sanitizeMemoryExploreRoute('#/timeline?type=message&focus=msg-1'),
+  '#/timeline?type=message&focus=msg-1',
+);
 assert.equal(sanitizeMemoryExploreRoute('#/timeline?focus=msg-1'), '#/timeline?focus=msg-1');
 assert.equal(sanitizeMemoryExploreRoute('memory-exploring.html#/timeline'), null);
 assert.equal(sanitizeMemoryExploreRoute('javascript:alert(1)'), null);

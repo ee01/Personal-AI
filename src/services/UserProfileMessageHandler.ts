@@ -172,6 +172,53 @@ export class UserProfileMessageHandler {
             return true;
         }
 
+        if (request.type === 'CREATE_PROFILE_ITEM') {
+            console.log('处理显式画像条目创建请求:', request);
+            const { itemType, itemKey, itemValue, confidence } = request;
+            const normalizedType = String(itemType || '').trim();
+            const normalizedKey = String(itemKey || '').trim();
+            const normalizedValue = String(itemValue || '').trim();
+
+            if (!normalizedType || !normalizedKey || !normalizedValue) {
+                sendResponse({
+                    success: false,
+                    error: '画像类型、键和值不能为空',
+                });
+                return true;
+            }
+
+            const client = getMemoryServiceClient();
+            client.createProfileItem({
+                itemType: normalizedType,
+                itemKey: normalizedKey,
+                itemValue: normalizedValue,
+                confidence: Number.isFinite(Number(confidence))
+                    ? Math.max(0, Math.min(1, Number(confidence)))
+                    : 1,
+                evidenceRefs: [{
+                    sourceType: 'manual',
+                    source: 'user_profile_page',
+                    capturedAt: Date.now(),
+                }],
+            })
+            .then(result => {
+                sendResponse({
+                    success: true,
+                    data: result,
+                    message: '画像条目已添加'
+                });
+            })
+            .catch(error => {
+                console.error('画像条目创建失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '画像条目创建失败'
+                });
+            });
+            return true;
+        }
+
         // 处理用户画像导出请求
         if (request.type === 'EXPORT_USER_PROFILE') {
             console.log('处理用户画像导出请求');

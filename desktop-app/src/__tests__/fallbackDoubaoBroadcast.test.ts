@@ -11,7 +11,11 @@ import type {
 } from '../browserSession.js';
 import { FallbackDoubaoBroadcast } from '../transports/FallbackDoubaoBroadcast.js';
 
-type MethodName = 'openLogin' | 'sendTranscript' | 'probeAuthStatus';
+type MethodName =
+  | 'openLogin'
+  | 'sendTranscript'
+  | 'probeAuthStatus'
+  | 'findThreadByTitle';
 
 function createAdapter(
   name: string,
@@ -69,8 +73,18 @@ function createAdapter(
       }
       return 'connected';
     },
-    async findThreadByTitle(): Promise<BrowserThreadSnapshot | null> {
-      return null;
+    async findThreadByTitle(
+      title: string,
+    ): Promise<BrowserThreadSnapshot | null> {
+      calls.push('findThreadByTitle');
+      if (shouldFail('findThreadByTitle')) {
+        throw new Error(`${name} find failed`);
+      }
+      return {
+        title,
+        threadId: `${name}-thread`,
+        url: `https://www.doubao.com/chat/${name}-thread`,
+      };
     },
     status(): BrowserStatus {
       return { running: true };
@@ -115,6 +129,48 @@ test('FallbackDoubaoBroadcast falls back to managed Chromium and keeps cooldown'
   assert.equal(second.threadId, 'playwright');
   assert.deepEqual(webpageMcp.calls, ['sendTranscript']);
   assert.deepEqual(playwright.calls, ['sendTranscript', 'sendTranscript']);
+});
+
+test('FallbackDoubaoBroadcast retries webpage-mcp login during fallback cooldown', async () => {
+  const webpageMcp = createAdapter('webpage_mcp', {
+    failMethods: ['sendTranscript'],
+  });
+  const playwright = createAdapter('playwright');
+  const broadcast = new FallbackDoubaoBroadcast({
+    getTransport: () => 'webpage_mcp',
+    webpageMcpClient: webpageMcp,
+    playwrightClient: playwright,
+  });
+
+  const first = await broadcast.sendTranscript('first');
+  const loginUrl = await broadcast.openLogin();
+
+  assert.equal(first.threadId, 'playwright');
+  assert.equal(loginUrl, 'https://www.doubao.com/chat/webpage_mcp');
+  assert.deepEqual(webpageMcp.calls, ['sendTranscript', 'openLogin']);
+  assert.deepEqual(playwright.calls, ['sendTranscript']);
+  assert.equal(broadcast.status().lastError, undefined);
+});
+
+test('FallbackDoubaoBroadcast retries webpage-mcp thread lookup during fallback cooldown', async () => {
+  const webpageMcp = createAdapter('webpage_mcp', {
+    failMethods: ['sendTranscript'],
+  });
+  const playwright = createAdapter('playwright');
+  const broadcast = new FallbackDoubaoBroadcast({
+    getTransport: () => 'webpage_mcp',
+    webpageMcpClient: webpageMcp,
+    playwrightClient: playwright,
+  });
+
+  const first = await broadcast.sendTranscript('first');
+  const found = await broadcast.findThreadByTitle('手机版对话');
+
+  assert.equal(first.threadId, 'playwright');
+  assert.equal(found?.threadId, 'webpage_mcp-thread');
+  assert.deepEqual(webpageMcp.calls, ['sendTranscript', 'findThreadByTitle']);
+  assert.deepEqual(playwright.calls, ['sendTranscript']);
+  assert.equal(broadcast.status().lastError, undefined);
 });
 
 test('FallbackDoubaoBroadcast falls back when webpage-mcp reports an unsent transcript', async () => {

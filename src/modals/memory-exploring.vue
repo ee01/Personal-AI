@@ -610,8 +610,19 @@ body {
     Roboto, sans-serif;
   background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
   color: #ffffff;
+  height: max-content;
   overflow-x: hidden;
   min-height: 100vh;
+}
+
+html,
+#memory-app {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+}
+
+#memory-app {
+  height: max-content;
 }
 
 .memory-container {
@@ -2270,18 +2281,89 @@ body {
 
 /* 响应式设计 */
 @media (max-width: 768px) {
+  html {
+    height: auto;
+    min-height: 100%;
+    overflow-y: auto;
+  }
+
+  body {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+
+  #memory-app {
+    height: auto;
+    min-height: 100vh;
+  }
+
   .memory-container {
     flex-direction: column;
+    min-height: 100vh;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .sidebar {
     width: 100%;
     height: auto;
     position: static;
+    padding: 1rem 0 0.7rem;
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  }
+
+  .sidebar-header {
+    padding: 0 1rem 0.75rem;
+  }
+
+  .sidebar-note {
+    display: none;
+  }
+
+  .logo {
+    font-size: 1.25rem;
+  }
+
+  .entity-types {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    padding: 0.75rem 1rem 0.1rem;
+  }
+
+  .entity-type {
+    flex: 0 0 auto;
+    min-width: max-content;
+    margin: 0;
+    padding: 0.5rem 0.7rem;
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0.55rem;
+  }
+
+  .entity-type:hover,
+  .entity-type.router-link-active {
+    border-left-color: transparent;
+    border-bottom-color: #60a5fa;
+  }
+
+  .entity-icon {
+    margin-right: 0.45rem;
+  }
+
+  .entity-subnote,
+  .sidebar-divider {
+    display: none;
   }
 
   .main-content {
     padding: 1rem;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .content-grid,

@@ -1,6 +1,6 @@
 # Context Assist / 情境助理
 
-_最后更新: 2026-05-08_
+_最后更新: 2026-05-09_
 
 ## 是什么
 
@@ -43,7 +43,7 @@ _最后更新: 2026-05-08_
    - 会前 brief。
    - 相关历史记忆。
    - 建议补充的问题。
-   - 证据来源。
+   - 证据来源；每条 evidence 会优先提供“在记忆中查看”和可安全打开的原始来源链接，方便用户在发送到 Meeting Pilot 前复核。
 7. 点击 `发送到 Meeting Pilot` 后，brief 写入 `chrome.storage.local.meetingPrepHandoff`，供 Meeting Pilot 后续读取。
 
 ### 写作护航
@@ -150,9 +150,16 @@ Outlook 读取未来 14 天和过去 1 天的 `calendarView`，只同步 `bodyPr
 - 不替用户发消息、不自动发 prompt。
 - 日历 fallback 静默同步只保存轻量 metadata。
 - 每条建议必须能看到证据来源。
+- Evidence 需要保留 `/context-recall` 产出的 `exploreLink` 和 direct source links；会前准备 UI 只渲染通过安全过滤的记忆探索路由和 `http/https` 来源链接。
 - daily / recurring meeting 默认生成 compact cues；用户补充目标后再生成更具体的准备内容。
 - handoff 前必须确保 brief 与当前会议和当前目标一致。
 - “会前准备”是当前 UI 文案；`Context Assist` 是统一功能名。
+
+## 2026-05-09 更新：会前证据可点击复核
+
+- Chunk 召回结果会从关联的 `messages_raw` 补回 `source_url` / `source_title`，避免 Context Assist 只显示一段来源文字却无法打开原始证据。
+- `/context-assist` evidence 保留 direct source links。
+- RingCentral Video Home 的会前准备卡片在证据列表中显示 `在记忆中查看` / `打开来源`，并复用网页记忆提示的安全过滤，阻止不安全 fragment 或非 `http/https` URL。
 
 ## 与已有功能关系
 

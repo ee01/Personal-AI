@@ -116,6 +116,12 @@ function verifyViewModelNormalization() {
   assert.equal(viewModel.profile.statistics.totalInteractions, 8);
   assert.equal(viewModel.profile.statistics.confirmedItems, 1);
   assert.equal(viewModel.profile.statistics.inferredItems, 4);
+  assert.equal(viewModel.profile.allItems[0].canUseForPersonalization, true);
+  assert.equal(viewModel.profile.allItems[0].contextUseState, 'usable');
+  assert.equal(
+    viewModel.profile.allItems.find((item) => item.id === 'profile-6')?.canUseForPersonalization,
+    false,
+  );
   assert.equal(viewModel.profile.activityTrend.length, 7);
   assert.equal(viewModel.profile.heatmap.length, 168);
   assert.equal(viewModel.profile.allItems[0].lastSeen, (nowSeconds - 86_400) * 1000);
@@ -124,6 +130,7 @@ function verifyViewModelNormalization() {
   assert.equal(viewModel.analysis.predictedInterests.length, 4);
   assert.equal(viewModel.analysis.predictedInterests[0].id, 'profile-6');
   assert.equal(viewModel.analysis.predictedInterests[0].status, 'pending_confirm');
+  assert.equal(viewModel.analysis.predictedInterests[0].canUseForPersonalization, false);
   assert.equal(
     viewModel.analysis.predictedInterests.some(
       (item) =>
@@ -177,10 +184,49 @@ async function verifyProfileClientConfirmedOnlyQuery() {
   assert.doesNotMatch(requestedUrl, /confirmedOnly/);
 }
 
+async function verifyProfileClientInferredItemQuery() {
+  let requestedUrl = '';
+  let requestedMethod = '';
+  let requestedBody = '';
+  const originalFetch = globalThis.fetch;
+
+  (globalThis as any).fetch = async (url: string, init?: RequestInit) => {
+    requestedUrl = String(url);
+    requestedMethod = String(init?.method || '');
+    requestedBody = String(init?.body || '');
+    return new Response(JSON.stringify({ id: 'candidate-1' }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  try {
+    const client = new MemoryServiceClient({
+      baseUrl: 'http://unit.test/api/v1',
+      userId: 'tester',
+      timeout: 1000,
+    });
+    await client.createInferredProfileItem({
+      itemType: 'interest',
+      itemKey: 'web_project',
+      itemValue: 'Personal AI',
+      confidence: 0.42,
+      evidenceRefs: [{ sourceType: 'web', url: 'https://example.test' }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(requestedUrl, /\/profile\/items\/inferred$/);
+  assert.equal(requestedMethod, 'POST');
+  assert.match(requestedBody, /"itemKey":"web_project"/);
+}
+
 async function main() {
   verifyViewModelNormalization();
   verifyEmptyPayloadIsRenderable();
   await verifyProfileClientConfirmedOnlyQuery();
+  await verifyProfileClientInferredItemQuery();
   console.log('verify-user-profile-system: ok');
 }
 

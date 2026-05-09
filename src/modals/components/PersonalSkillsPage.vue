@@ -784,14 +784,25 @@ async function loadData(preferredId?: string) {
     skills.value = skillList.items;
     suggestions.value = suggestionList.items;
     syncSettings.value = settings.items;
+    const visibleIds = new Set([
+      ...skills.value.map((skill) => skill.id),
+      ...suggestions.value.map((skill) => skill.id),
+    ]);
+    const preferredVisibleId = preferredId && visibleIds.has(preferredId) ? preferredId : '';
+    const currentVisibleId = selectedId.value && visibleIds.has(selectedId.value)
+      ? selectedId.value
+      : '';
     const nextId =
-      preferredId ||
-      selectedId.value ||
+      preferredVisibleId ||
+      currentVisibleId ||
       skills.value.find((skill) => skill.status === 'active')?.id ||
       suggestions.value[0]?.id ||
       '';
     if (nextId) await selectSkill(nextId);
-    else selectedSkill.value = null;
+    else {
+      selectedId.value = '';
+      selectedSkill.value = null;
+    }
   } catch (error: any) {
     errorMessage.value = error?.message || '加载个人技能失败';
   } finally {
@@ -829,8 +840,8 @@ async function dismissSuggestion(id: string) {
 
 async function snoozeSuggestion(id: string) {
   try {
-    const response = await client.snoozeSkillSuggestion(id);
-    await loadData(response.skill.id);
+    await client.snoozeSkillSuggestion(id);
+    await loadData();
   } catch (error: any) {
     errorMessage.value = error?.message || '稍后审技能建议失败';
   }
