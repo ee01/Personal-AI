@@ -139,8 +139,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.suggestionType).toBe('context_pack');
     expect(body.previewRequired).toBe(true);
     expect(body.riskLevel).toBe('medium');
-    expect(body.insertText).toContain('Personal AI context pack');
-    expect(body.insertText).toContain('Do not expose private details');
+    expect(body.insertText).not.toContain('Personal AI context pack (review before sending)');
+    expect(body.insertText).not.toContain('Please review and edit before sending');
+    expect(body.insertText).toContain('请结合下面上下文回答');
+    expect(body.insertText).toContain('不要直接暴露不必要的私人细节');
     expect(body.evidence.length).toBeGreaterThan(0);
   });
 
@@ -171,7 +173,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     const body = res.json();
     expect(body.available).toBe(true);
     expect(body.suggestionType).toBe('reply_context');
-    expect(body.insertText).toContain('Thread root');
+    expect(body.insertText).not.toContain('Personal AI context to consider');
+    expect(body.insertText).not.toContain('Please review and edit before sending');
+    expect(body.insertText).toContain('> Can we use Factory AI for production project?');
+    expect(body.insertText).toContain('我这边先补充几个相关点');
     expect(body.insertText).toContain('Factory AI free trial');
   });
 

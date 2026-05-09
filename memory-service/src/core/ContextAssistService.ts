@@ -436,7 +436,7 @@ function renderWebAgentContextPack(
 ): string {
   const intent = summarizeIntent(request);
   const bullets = evidence.map(
-    (item, index) => `${index + 1}. ${item.snippet} [M${index + 1}]`,
+    (item, index) => `${index + 1}. ${formatChatSnippet(item.snippet)} [M${index + 1}]`,
   );
   const sources = evidence.map((item, index) => {
     const label = item.sourceTitle || item.title || item.sourceLabel || item.id;
@@ -444,19 +444,19 @@ function renderWebAgentContextPack(
   });
 
   return [
-    'Personal AI context pack (review before sending):',
+    '请结合下面上下文回答：',
     '',
-    `Goal: ${intent}`,
+    `目标：${intent}`,
     '',
-    'Relevant memory:',
+    '相关记忆：',
     ...bullets,
     '',
-    'Use instructions:',
-    '- Use this context only when it helps answer the current prompt.',
-    '- Do not expose private details verbatim unless I explicitly ask.',
-    '- Prefer citing the source idea, not copying the whole memory.',
+    '约束：',
+    '* 只在有帮助时使用这些上下文。',
+    '* 不要直接暴露不必要的私人细节。',
+    '* 优先吸收意思，不要整段照抄记忆。',
     '',
-    'Sources:',
+    '来源：',
     ...sources,
   ].join('\n');
 }
@@ -465,18 +465,16 @@ function renderReplyContext(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
 ): string {
-  const bullets = evidence.map((item) => `- ${item.snippet}`);
+  const bullets = evidence.map((item) => `* ${formatChatSnippet(item.snippet)}`);
   const threadLine = request.threadRoot?.text
-    ? [`Thread root: ${request.threadRoot.text}`, '']
+    ? [`> ${formatChatSnippet(request.threadRoot.text)}`, '']
     : [];
 
   return [
-    'Personal AI context to consider before replying:',
-    '',
     ...threadLine,
-    ...bullets,
+    '我这边先补充几个相关点：',
     '',
-    'Please review and edit before sending.',
+    ...bullets,
   ].join('\n');
 }
 
@@ -484,14 +482,23 @@ function renderJiraContext(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
 ): string {
-  const issue = request.identifiers?.issueKey || request.title || 'this issue';
   return [
-    `Personal AI context for ${issue}:`,
+    '我补充一下相关背景：',
     '',
-    ...evidence.map((item) => `- ${item.snippet}`),
-    '',
-    'Please verify against the current Jira state before posting.',
+    ...evidence.map((item) => `* ${formatChatSnippet(item.snippet)}`),
   ].join('\n');
+}
+
+function formatChatSnippet(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/^\s*[-*]\s+/, '')
+    .replace(/^\s*\d+[.)]\s+/, '')
+    .replace(/^Personal AI context(?: pack)?[^:]*:\s*/i, '')
+    .replace(/\s*Please review and edit before sending\.?\s*$/i, '')
+    .replace(/\s*Please verify against the current Jira state before posting\.?\s*$/i, '')
+    .trim()
+    .slice(0, 360);
 }
 
 function buildMeetingCueCards(

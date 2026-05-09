@@ -38,6 +38,16 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
+function sanitizeComposerInsertText(text: string): string {
+  return text
+    .replace(/^Personal AI context to consider before replying:\s*/i, '')
+    .replace(/^Personal AI context pack \(review before sending\):\s*/i, '')
+    .replace(/^Personal AI context for [^\n]+:\s*/i, '')
+    .replace(/\n?\s*Please review and edit before sending\.?\s*$/i, '')
+    .replace(/\n?\s*Please verify against the current Jira state before posting\.?\s*$/i, '')
+    .trim();
+}
+
 function isSensitiveEditableElement(element: HTMLElement): boolean {
   const input = element as HTMLInputElement;
   return isSensitiveControlDescriptor({
@@ -343,18 +353,15 @@ export class ComposerGuardController {
   }
 
   private buildSuggestionPreview(assist: ComposerAssistResponse): string {
-    const insertText = assist.insertText || '';
-    const preview = insertText
-      .replace(/^Personal AI context to consider before replying:\s*/i, '')
-      .replace(/^Personal AI context pack \(review before sending\):\s*/i, '')
-      .replace(/^Personal AI context for .*?:\s*/i, '')
-      .trim();
+    const preview = sanitizeComposerInsertText(assist.insertText || '');
     return preview.length > 520 ? `${preview.slice(0, 520).trimEnd()}...` : preview;
   }
 
   private insertLatestAssist(): void {
     if (!this.activeSession || !this.latestAssist?.insertText) return;
-    insertTextIntoComposer(this.activeSession.target, this.latestAssist.insertText);
+    const insertText = sanitizeComposerInsertText(this.latestAssist.insertText);
+    if (!insertText) return;
+    insertTextIntoComposer(this.activeSession.target, insertText);
     this.clear();
   }
 
