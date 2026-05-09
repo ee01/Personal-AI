@@ -97,6 +97,10 @@ function isElementVisible(element: HTMLElement): boolean {
   );
 }
 
+function intersectsRect(a: DOMRect, b: DOMRect): boolean {
+  return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+}
+
 function closestComposerElement(element?: Element | null): HTMLElement | null {
   if (!element) return null;
   const candidate = element.closest(COMPOSER_SELECTOR);
@@ -233,21 +237,31 @@ function toVisibleMessage(card: HTMLElement): VisibleMessageSnapshot | null {
 
 function getVisibleRingCentralCards(doc: Document): HTMLElement[] {
   const stream = doc.querySelector<HTMLElement>('#message-chat-stream-wrapper');
+  const root: ParentNode = stream || doc;
   const cards = Array.from(
-    doc.querySelectorAll<HTMLElement>(
-      [
-        '.conversation-card-wrapper[data-id]',
-        '[data-name="reply-tree-conversation-card"][data-id]',
-      ].join(', '),
-    ),
+    root.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'),
   );
+
+  const replyTree = doc.querySelector<HTMLElement>(
+    '[data-test-automation-id="conversation-reply-post-tree"]',
+  );
+  if (replyTree && (!stream || stream.contains(replyTree))) {
+    cards.push(
+      ...Array.from(
+        replyTree.querySelectorAll<HTMLElement>(
+          '[data-name="reply-tree-conversation-card"][data-id]',
+        ),
+      ),
+    );
+  }
 
   if (!stream) return cards.slice(-MAX_VISIBLE_MESSAGES);
 
   const streamRect = stream.getBoundingClientRect();
   const visibleCards = cards.filter((card) => {
+    if (!isElementVisible(card)) return false;
     const rect = card.getBoundingClientRect();
-    return rect.bottom > streamRect.top && rect.top < streamRect.bottom;
+    return intersectsRect(rect, streamRect);
   });
 
   return (visibleCards.length > 0 ? visibleCards : cards).slice(-MAX_VISIBLE_MESSAGES);

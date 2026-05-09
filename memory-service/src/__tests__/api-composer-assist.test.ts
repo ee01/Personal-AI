@@ -176,8 +176,67 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).not.toContain('Personal AI context to consider');
     expect(body.insertText).not.toContain('Please review and edit before sending');
     expect(body.insertText).toContain('> Can we use Factory AI for production project?');
+    expect(body.insertText).toContain('我理解当前是在讨论');
+    expect(body.insertText).toContain('Discussing Factory AI free trial security approval');
     expect(body.insertText).toContain('我这边先补充几个相关点');
     expect(body.insertText).toContain('Factory AI free trial');
+  });
+
+  it('filters weak composer memories that do not match the current scene', async () => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    const now = Math.floor(Date.now() / 1000);
+    insertChunk({
+      id: 9301,
+      content:
+        'Tue Mar 31 — Flight: SFO → HKG · Cathay Pacific CX873 · 12:20 AM–6:15 AM (+1)',
+      sourceType: 'calendar',
+      source: 'calendar',
+      scope: 'work',
+      createdAt: now - 60,
+    });
+    insertChunk({
+      id: 9302,
+      content:
+        'Everyone AI 主题分享 | RingClaw：在 RingCentral 内直接对话多智能体 AI',
+      sourceType: 'glip',
+      source: 'glip',
+      scope: 'work',
+      createdAt: now - 50,
+    });
+    insertChunk({
+      id: 9303,
+      content:
+        '五一假期即将来临，根据国家法定节假日规定并结合公司实际情况，现将2026年劳动节放假安排通知如下：',
+      sourceType: 'web',
+      source: 'web',
+      scope: 'work',
+      createdAt: now - 40,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        title: 'RingCentral AI reply',
+        primaryText: 'Can you reply with the owner and next action?',
+        visibleMessages: [
+          {
+            sender: 'Alice',
+            text: 'Can you reply with the owner and next action?',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    expect(body.suggestionType).toBe('none');
+    expect(body.insertText).toBeUndefined();
   });
 
   it('returns an empty result when no memory is relevant', async () => {

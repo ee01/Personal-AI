@@ -19,6 +19,8 @@ const DEFAULT_LIMIT = 3;
 const MEETING_LIMIT = 5;
 const MAX_INSERT_TEXT = 2400;
 const MIN_AVAILABLE_CONFIDENCE = 0.58;
+const MIN_COMPOSER_CONTEXT_OVERLAP = 2;
+const MIN_HIGH_SCORE_WITH_CONTEXT_OVERLAP = 0.7;
 const WEB_AGENT_SOURCES: RecallSourceType[] = [
   'ai_chat',
   'doubao',
@@ -80,7 +82,8 @@ export class ContextAssistService {
   ): Promise<ComposerAssistResponse> {
     const recallRequest = buildComposerRecallRequest(request);
     const recall = await this.recallService.recall(recallRequest);
-    const evidence = recall.matches.map(toEvidence);
+    const rawEvidence = recall.matches.map(toEvidence);
+    const evidence = filterComposerEvidence(request, rawEvidence);
 
     if (evidence.length === 0) {
       return {
@@ -88,7 +91,7 @@ export class ContextAssistService {
         suggestionType: 'none',
         title: '暂无相关记忆',
         summary: '没有找到足够相关的 Personal AI 记忆。',
-        evidence: [],
+        evidence: rawEvidence,
         riskLevel: 'low',
         previewRequired: false,
         confidence: 0,
@@ -97,6 +100,9 @@ export class ContextAssistService {
           ? {
               recall: recall.debug,
               recallRequest,
+              rejectedReason: rawEvidence.length
+                ? 'composer_evidence_not_relevant_to_current_scene'
+                : undefined,
             }
           : undefined,
       };
@@ -469,9 +475,12 @@ function renderReplyContext(
   const threadLine = request.threadRoot?.text
     ? [`> ${formatChatSnippet(request.threadRoot.text)}`, '']
     : [];
+  const scene = summarizeComposerScene(request);
+  const sceneLine = scene ? [`我理解当前是在讨论：${scene}`, ''] : [];
 
   return [
     ...threadLine,
+    ...sceneLine,
     '我这边先补充几个相关点：',
     '',
     ...bullets,
@@ -482,12 +491,147 @@ function renderJiraContext(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
 ): string {
+  const scene = summarizeComposerScene(request);
   return [
+    ...(scene ? [`我理解当前 issue/comment 主要是在讨论：${scene}`, ''] : []),
     '我补充一下相关背景：',
     '',
     ...evidence.map((item) => `* ${formatChatSnippet(item.snippet)}`),
   ].join('\n');
 }
+
+function filterComposerEvidence(
+  request: ComposerAssistRequest,
+  evidence: ComposerAssistEvidence[],
+): ComposerAssistEvidence[] {
+  if (request.contextType === 'web_agent_prompt') {
+    return evidence;
+  }
+
+  const contextTokens = tokenizeComposerRelevance(buildComposerSceneText(request));
+  if (contextTokens.size === 0) {
+    return [];
+  }
+
+  return evidence.filter((item) => {
+    const evidenceTokens = tokenizeComposerRelevance(
+      [item.snippet, item.title, item.sourceTitle].filter(Boolean).join(' '),
+    );
+    const overlap = countTokenOverlap(contextTokens, evidenceTokens);
+    if (overlap >= MIN_COMPOSER_CONTEXT_OVERLAP) return true;
+
+    const score = item.score ?? 0;
+    return score >= MIN_HIGH_SCORE_WITH_CONTEXT_OVERLAP && overlap >= 1;
+  });
+}
+
+function buildComposerSceneText(request: ComposerAssistRequest): string {
+  return [
+    request.title,
+    request.primaryText,
+    request.threadRoot?.text,
+    ...(request.secondaryTexts ?? []),
+    ...(request.visibleMessages ?? []).slice(-4).map((message) => message.text),
+    ...(request.keywords ?? []),
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function summarizeComposerScene(request: ComposerAssistRequest): string {
+  const messages = request.visibleMessages ?? [];
+  const recentMessages = messages
+    .slice(-3)
+    .map((message) =>
+      formatChatSnippet(
+        [message.sender, message.text].filter(Boolean).join(': '),
+      ),
+    )
+    .filter(Boolean);
+
+  const fallback = request.primaryText || request.title || '';
+  const scene = (
+    recentMessages.length
+      ? recentMessages.join('；')
+      : fallback || request.threadRoot?.text || ''
+  ).trim();
+  return scene.length > 220 ? `${scene.slice(0, 220).trimEnd()}...` : scene;
+}
+
+function tokenizeComposerRelevance(text: string): Set<string> {
+  const tokens = new Set<string>();
+  const normalized = text.toLowerCase();
+  const parts = normalized.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+
+  for (const part of parts) {
+    if (COMPOSER_RELEVANCE_STOPWORDS.has(part)) continue;
+
+    if (/^[\u3400-\u9fff\uf900-\ufaff]+$/u.test(part)) {
+      if (part.length === 1) continue;
+      tokens.add(part);
+      for (let index = 0; index < part.length - 1; index += 1) {
+        tokens.add(part.slice(index, index + 2));
+      }
+      continue;
+    }
+
+    if (part.length >= 2) {
+      tokens.add(part);
+    }
+  }
+
+  return tokens;
+}
+
+function countTokenOverlap(a: Set<string>, b: Set<string>): number {
+  let overlap = 0;
+  for (const token of a) {
+    if (b.has(token)) overlap += 1;
+  }
+  return overlap;
+}
+
+const COMPOSER_RELEVANCE_STOPWORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'this',
+  'that',
+  'from',
+  'about',
+  'please',
+  'reply',
+  'message',
+  'comment',
+  'current',
+  'context',
+  'ringcentral',
+  'glip',
+  'jira',
+  'ai',
+  '我',
+  '你',
+  '他',
+  '她',
+  '它',
+  '我们',
+  '你们',
+  '他们',
+  '这个',
+  '那个',
+  '当前',
+  '回复',
+  '消息',
+  '评论',
+  '相关',
+  '讨论',
+  '一下',
+  '可以',
+  '需要',
+  '进行',
+  '关于',
+]);
 
 function formatChatSnippet(text: string): string {
   return text
