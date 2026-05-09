@@ -353,6 +353,23 @@ export type ComposerContextType =
   | 'jira_issue'
   | 'web_agent_prompt';
 
+export type ComposerScenario =
+  | 'instant_message_reply'
+  | 'thread_reply'
+  | 'jira_comment'
+  | 'web_agent_prompt'
+  | 'document_note';
+
+export type ComposerContextItemType =
+  | 'message'
+  | 'thread_root'
+  | 'thread_reply'
+  | 'jira_summary'
+  | 'jira_description'
+  | 'jira_comment'
+  | 'attachment'
+  | 'image';
+
 export interface ComposerVisibleMessage {
   id?: string;
   sender?: string;
@@ -360,9 +377,32 @@ export interface ComposerVisibleMessage {
   timestampLabel?: string;
 }
 
+export interface ComposerAudience {
+  conversationTitle?: string;
+  conversationId?: string;
+  groupId?: string;
+  issueKey?: string;
+  issueSummary?: string;
+  people?: string[];
+  provider?: string;
+  relationshipHint?: string;
+}
+
+export interface ComposerContextItem {
+  type: ComposerContextItemType;
+  id?: string;
+  sender?: string;
+  title?: string;
+  text?: string;
+  timestampLabel?: string;
+  url?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface ComposerAssistRequest {
   surface: ComposerSurface;
   contextType: ComposerContextType;
+  scenario?: ComposerScenario;
   title?: string;
   url?: string;
   draftText?: string;
@@ -378,6 +418,8 @@ export interface ComposerAssistRequest {
   };
   visibleMessages?: ComposerVisibleMessage[];
   threadRoot?: ComposerVisibleMessage;
+  audience?: ComposerAudience;
+  contextItems?: ComposerContextItem[];
   sourceTypes?: string[];
   automationLevel?: 'L1' | 'L2';
   debug?: boolean;
@@ -392,6 +434,7 @@ export interface ComposerAssistEvidence {
   sourceUrl?: string;
   sourceTitle?: string;
   exploreLink?: string;
+  links?: Array<{ label: string; url: string }>;
   whyMatched?: string;
   timestamp?: number;
   score?: number;

@@ -13,6 +13,23 @@ export type ComposerContextType =
   | 'jira_issue'
   | 'web_agent_prompt';
 
+export type ComposerScenario =
+  | 'instant_message_reply'
+  | 'thread_reply'
+  | 'jira_comment'
+  | 'web_agent_prompt'
+  | 'document_note';
+
+export type ComposerContextItemType =
+  | 'message'
+  | 'thread_root'
+  | 'thread_reply'
+  | 'jira_summary'
+  | 'jira_description'
+  | 'jira_comment'
+  | 'attachment'
+  | 'image';
+
 export type ComposerTargetKind = 'textarea' | 'input' | 'contenteditable';
 
 export interface VisibleMessageSnapshot {
@@ -20,6 +37,28 @@ export interface VisibleMessageSnapshot {
   sender?: string;
   text: string;
   timestampLabel?: string;
+}
+
+export interface ComposerAudience {
+  conversationTitle?: string;
+  conversationId?: string;
+  groupId?: string;
+  issueKey?: string;
+  issueSummary?: string;
+  people?: string[];
+  provider?: string;
+  relationshipHint?: string;
+}
+
+export interface ComposerContextItem {
+  type: ComposerContextItemType;
+  id?: string;
+  sender?: string;
+  title?: string;
+  text?: string;
+  timestampLabel?: string;
+  url?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ComposerTarget {
@@ -33,6 +72,7 @@ export interface SiteContextSnapshot {
   adapterId: string;
   surface: ComposerSurface;
   contextType: ComposerContextType;
+  scenario?: ComposerScenario;
   contextKey: string;
   title: string;
   url: string;
@@ -49,6 +89,8 @@ export interface SiteContextSnapshot {
   };
   visibleMessages?: VisibleMessageSnapshot[];
   threadRoot?: VisibleMessageSnapshot;
+  audience?: ComposerAudience;
+  contextItems?: ComposerContextItem[];
   sourceTypes?: string[];
 }
 
@@ -79,6 +121,7 @@ export interface ComposerAssistEvidence {
 export interface ComposerAssistRequest {
   surface: ComposerSurface;
   contextType: ComposerContextType;
+  scenario?: ComposerScenario;
   title?: string;
   url?: string;
   draftText?: string;
@@ -88,6 +131,8 @@ export interface ComposerAssistRequest {
   identifiers?: SiteContextSnapshot['identifiers'];
   visibleMessages?: VisibleMessageSnapshot[];
   threadRoot?: VisibleMessageSnapshot;
+  audience?: ComposerAudience;
+  contextItems?: ComposerContextItem[];
   sourceTypes?: string[];
   automationLevel?: 'L1' | 'L2';
   debug?: boolean;

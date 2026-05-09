@@ -1,5 +1,6 @@
 import { normalizeContextPageUrl } from '../web-intelligence/contextRecallGuards';
 import type {
+  ComposerContextItem,
   ComposerSurface,
   ComposerTarget,
   SiteContextAdapter,
@@ -235,48 +236,169 @@ function toVisibleMessage(card: HTMLElement): VisibleMessageSnapshot | null {
   };
 }
 
-function getVisibleRingCentralCards(doc: Document): HTMLElement[] {
-  const stream = doc.querySelector<HTMLElement>('#message-chat-stream-wrapper');
-  const root: ParentNode = stream || doc;
-  const cards = Array.from(
-    root.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'),
-  );
-
-  const replyTree = doc.querySelector<HTMLElement>(
-    '[data-test-automation-id="conversation-reply-post-tree"]',
-  );
-  if (replyTree && (!stream || stream.contains(replyTree))) {
-    cards.push(
-      ...Array.from(
-        replyTree.querySelectorAll<HTMLElement>(
-          '[data-name="reply-tree-conversation-card"][data-id]',
-        ),
-      ),
-    );
+function uniqueByDataId(elements: HTMLElement[]): HTMLElement[] {
+  const seen = new Set<string>();
+  const unique: HTMLElement[] = [];
+  for (const element of elements) {
+    const key = element.getAttribute('data-id') || element.textContent || `${unique.length}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(element);
   }
+  return unique;
+}
 
-  if (!stream) return cards.slice(-MAX_VISIBLE_MESSAGES);
-
-  const streamRect = stream.getBoundingClientRect();
+function getVisibleCardsInContainer(cards: HTMLElement[], container?: HTMLElement | null): HTMLElement[] {
+  if (!container) return cards.slice(-MAX_VISIBLE_MESSAGES);
+  const containerRect = container.getBoundingClientRect();
   const visibleCards = cards.filter((card) => {
     if (!isElementVisible(card)) return false;
     const rect = card.getBoundingClientRect();
-    return intersectsRect(rect, streamRect);
+    return intersectsRect(rect, containerRect);
   });
+  return visibleCards.length > 0 ? visibleCards : cards;
+}
 
-  return (visibleCards.length > 0 ? visibleCards : cards).slice(-MAX_VISIBLE_MESSAGES);
+function getRingCentralReplyTree(doc: Document): HTMLElement | null {
+  return doc.querySelector<HTMLElement>(
+    '[data-test-automation-id="conversation-reply-post-tree"]',
+  );
+}
+
+function getVisibleRingCentralMainCards(doc: Document): HTMLElement[] {
+  const stream = doc.querySelector<HTMLElement>('#message-chat-stream-wrapper');
+  const root: ParentNode = stream || doc;
+  const replyTree = getRingCentralReplyTree(doc);
+  const cards = Array.from(
+    root.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'),
+  ).filter((card) => !replyTree?.contains(card));
+
+  return getVisibleCardsInContainer(uniqueByDataId(cards), stream).slice(-MAX_VISIBLE_MESSAGES);
+}
+
+function getVisibleRingCentralThreadCards(doc: Document): HTMLElement[] {
+  const replyTree = getRingCentralReplyTree(doc);
+  if (!replyTree) return [];
+  const cards = uniqueByDataId(
+    Array.from(
+      replyTree.querySelectorAll<HTMLElement>(
+        [
+          '.conversation-card-wrapper[data-id]',
+          '[data-name="reply-tree-conversation-card"][data-id]',
+        ].join(', '),
+      ),
+    ),
+  );
+  return getVisibleCardsInContainer(cards, replyTree).slice(-12);
 }
 
 function getRingCentralThreadRoot(doc: Document): VisibleMessageSnapshot | undefined {
-  const replyTree = doc.querySelector<HTMLElement>(
-    '[data-test-automation-id="conversation-reply-post-tree"]',
-  );
+  const replyTree = getRingCentralReplyTree(doc);
   if (!replyTree) return undefined;
 
   const rootCard =
     replyTree.querySelector<HTMLElement>('.conversation-card-wrapper[data-id]') ||
     replyTree.querySelector<HTMLElement>('[data-name="reply-tree-conversation-card"][data-id]');
   return rootCard ? toVisibleMessage(rootCard) || undefined : undefined;
+}
+
+function getElementUrl(element: Element): string | undefined {
+  if (element instanceof HTMLAnchorElement) return element.href || undefined;
+  if (element instanceof HTMLImageElement) return element.currentSrc || element.src || undefined;
+  return undefined;
+}
+
+function getRingCentralMediaContextItems(card: HTMLElement): ComposerContextItem[] {
+  const messageId = card.getAttribute('data-id') || undefined;
+  const items: ComposerContextItem[] = [];
+  const mediaElements = Array.from(
+    card.querySelectorAll<HTMLElement>(
+      [
+        'img[alt]',
+        'img[title]',
+        'a[href*="/attachment"]',
+        'a[href*="download"]',
+        '[aria-label*="attachment" i]',
+        '[title*="attachment" i]',
+      ].join(', '),
+    ),
+  ).slice(0, 4);
+
+  for (const element of mediaElements) {
+    const isImage = element instanceof HTMLImageElement;
+    const url = getElementUrl(element);
+    if (url?.startsWith('data:')) continue;
+    const label = clip(
+      element.getAttribute('alt') ||
+        element.getAttribute('title') ||
+        element.getAttribute('aria-label') ||
+        element.textContent ||
+        url ||
+        '',
+      160,
+    );
+    if (!label && !url) continue;
+    items.push({
+      type: isImage ? 'image' : 'attachment',
+      id: messageId ? `${messageId}:media:${items.length}` : undefined,
+      title: label || (isImage ? 'image' : 'attachment'),
+      text: label,
+      url,
+    });
+  }
+
+  return items;
+}
+
+function toMessageContextItem(
+  message: VisibleMessageSnapshot,
+  type: ComposerContextItem['type'],
+): ComposerContextItem {
+  return {
+    type,
+    id: message.id,
+    sender: message.sender,
+    text: message.text,
+    timestampLabel: message.timestampLabel,
+  };
+}
+
+function buildRingCentralContextItems(
+  cards: HTMLElement[],
+  mode: ComposerTarget['mode'],
+): ComposerContextItem[] {
+  const items: ComposerContextItem[] = [];
+  const threadMode = mode === 'thread';
+  cards.forEach((card, index) => {
+    const message = toVisibleMessage(card);
+    if (message) {
+      items.push(
+        toMessageContextItem(
+          message,
+          threadMode && index === 0 ? 'thread_root' : threadMode ? 'thread_reply' : 'message',
+        ),
+      );
+    }
+    items.push(...getRingCentralMediaContextItems(card));
+  });
+  if (threadMode && items.length > 18) {
+    return [items[0], ...items.slice(-17)];
+  }
+  return items.slice(-18);
+}
+
+function formatContextItemForPrimary(item: ComposerContextItem): string {
+  return clip(
+    [item.sender, item.timestampLabel, item.title, item.text].filter(Boolean).join(': '),
+    MAX_MESSAGE_TEXT,
+  );
+}
+
+function collectPeopleFromMessages(messages: VisibleMessageSnapshot[]): string[] | undefined {
+  const people = Array.from(
+    new Set(messages.map((message) => normalizeText(message.sender)).filter(Boolean)),
+  ).slice(0, 12);
+  return people.length ? people : undefined;
 }
 
 function findRingCentralComposer(
@@ -341,24 +463,29 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
     const url = normalizeContextPageUrl(location.href);
     const conversationId = getRingCentralConversationId(location);
     const title = getRingCentralConversationTitle(doc);
-    const cards = getVisibleRingCentralCards(doc);
+    const activeComposer = findRingCentralComposer(doc, doc.activeElement);
+    const threadMode = activeComposer?.mode === 'thread';
+    const cards = threadMode
+      ? getVisibleRingCentralThreadCards(doc)
+      : getVisibleRingCentralMainCards(doc);
     const visibleMessages = cards
       .map((card) => toVisibleMessage(card))
       .filter((message): message is VisibleMessageSnapshot => message != null);
+    const contextItems = buildRingCentralContextItems(cards, activeComposer?.mode || 'main');
     const primaryText = clip(
-      visibleMessages
-        .map((message) =>
-          [message.sender, message.timestampLabel, message.text].filter(Boolean).join(': '),
-        )
+      contextItems
+        .filter((item) => item.type !== 'attachment' && item.type !== 'image')
+        .map(formatContextItemForPrimary)
         .join('\n'),
       MAX_PRIMARY_TEXT,
     );
 
     if (!url || !conversationId || !title || !primaryText) return null;
 
-    const activeComposer = findRingCentralComposer(doc, doc.activeElement);
     const threadRoot =
-      activeComposer?.mode === 'thread' ? getRingCentralThreadRoot(doc) : undefined;
+      threadMode
+        ? visibleMessages[0] || getRingCentralThreadRoot(doc)
+        : undefined;
     const groupId =
       cards
         .map((card) => card.getAttribute('groupid'))
@@ -379,6 +506,7 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
       adapterId: this.id,
       surface,
       contextType: 'message_thread',
+      scenario: threadMode ? 'thread_reply' : 'instant_message_reply',
       contextKey,
       title,
       url,
@@ -392,6 +520,13 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
       },
       visibleMessages,
       threadRoot,
+      audience: {
+        conversationTitle: title,
+        conversationId,
+        groupId,
+        people: collectPeopleFromMessages(visibleMessages),
+      },
+      contextItems,
       sourceTypes: ['glip', 'meeting', 'jira', 'web', 'manual', 'system'],
     };
   },
@@ -407,6 +542,111 @@ function getJiraIssueKey(location: Location, doc: Document): string | null {
     normalizeText(issueKey?.textContent || '') ||
     null
   );
+}
+
+function getJiraVisibleComments(doc: Document): ComposerContextItem[] {
+  const candidates = Array.from(
+    doc.querySelectorAll<HTMLElement>(
+      [
+        '#issue_actions_container .action-body',
+        '#issue_actions_container .activity-comment',
+        '[data-testid*="comment"]',
+        '[id*="comment"] .wiki-content',
+      ].join(', '),
+    ),
+  )
+    .filter(isElementVisible)
+    .map((element, index) => {
+      const text = clip(getContextTextContent(element), 500);
+      if (!text) return null;
+      const root =
+        element.closest<HTMLElement>('.issue-data-block, .activity-comment, [id*="comment"]') ||
+        element;
+      const sender = normalizeText(
+        root.querySelector<HTMLElement>('.user-hover, [data-testid*="user"], .author')
+          ?.textContent,
+      );
+      return {
+        type: 'jira_comment' as const,
+        id: root.id || `visible-comment-${index}`,
+        sender: sender || undefined,
+        text,
+      };
+    })
+    .filter((item): item is ComposerContextItem => item != null);
+
+  const unique = new Map<string, ComposerContextItem>();
+  for (const item of candidates) {
+    const key = `${item.sender || ''}:${item.text || ''}`;
+    if (!unique.has(key)) unique.set(key, item);
+  }
+  return Array.from(unique.values()).slice(-8);
+}
+
+function getJiraAttachmentContextItems(doc: Document): ComposerContextItem[] {
+  const items: ComposerContextItem[] = [];
+  const elements = Array.from(
+    doc.querySelectorAll<HTMLElement>(
+      [
+        '#attachmentmodule img',
+        '#attachmentmodule a[href]',
+        'a[href*="/secure/attachment/"]',
+        'a[href*="/attachment/"]',
+        'img[src*="/secure/attachment/"]',
+      ].join(', '),
+    ),
+  ).filter(isElementVisible);
+
+  for (const element of elements.slice(0, 12)) {
+    const url = getElementUrl(element);
+    if (url?.startsWith('data:')) continue;
+    const isImage =
+      element instanceof HTMLImageElement ||
+      /\.(png|jpe?g|gif|webp|svg)(?:[?#].*)?$/i.test(url || '');
+    const text = clip(
+      element.getAttribute('alt') ||
+        element.getAttribute('title') ||
+        element.getAttribute('aria-label') ||
+        element.textContent ||
+        url ||
+        '',
+      180,
+    );
+    if (!text && !url) continue;
+    items.push({
+      type: isImage ? 'image' : 'attachment',
+      title: text || (isImage ? 'image' : 'attachment'),
+      text,
+      url,
+    });
+  }
+
+  const unique = new Map<string, ComposerContextItem>();
+  for (const item of items) {
+    const key = item.url || item.text || `${unique.size}`;
+    if (!unique.has(key)) unique.set(key, item);
+  }
+  return Array.from(unique.values()).slice(0, 8);
+}
+
+function getJiraPeople(doc: Document): string[] | undefined {
+  const people = Array.from(
+    new Set(
+      [
+        '#assignee-val',
+        '#reporter-val',
+        '[data-testid*="assignee"]',
+        '[data-testid*="reporter"]',
+      ].flatMap((selector) =>
+        Array.from(doc.querySelectorAll<HTMLElement>(selector)).map((element) =>
+          normalizeText(element.textContent),
+        ),
+      ),
+    ),
+  )
+    .filter(Boolean)
+    .slice(0, 12);
+  return people.length ? people : undefined;
 }
 
 const jiraIssueAdapter: SiteContextAdapter = {
@@ -439,11 +679,22 @@ const jiraIssueAdapter: SiteContextAdapter = {
     );
 
     if (!url || !issueKey || !primaryText) return null;
+    const comments = getJiraVisibleComments(doc);
+    const attachments = getJiraAttachmentContextItems(doc);
+    const contextItems: ComposerContextItem[] = [
+      { type: 'jira_summary', id: issueKey, text: summary },
+      ...(description
+        ? [{ type: 'jira_description' as const, id: `${issueKey}:description`, text: description }]
+        : []),
+      ...comments,
+      ...attachments,
+    ];
 
     return {
       adapterId: this.id,
       surface: 'jira_issue',
       contextType: 'jira_issue',
+      scenario: 'jira_comment',
       contextKey: `jira:${issueKey}|${signature(primaryText)}`,
       title: `${issueKey}: ${summary}`,
       url,
@@ -451,6 +702,12 @@ const jiraIssueAdapter: SiteContextAdapter = {
       secondaryTexts: status ? [status] : undefined,
       keywords: collectKeywords([issueKey, summary, description]),
       identifiers: { issueKey },
+      audience: {
+        issueKey,
+        issueSummary: summary,
+        people: getJiraPeople(doc),
+      },
+      contextItems,
       sourceTypes: ['jira', 'glip', 'meeting', 'web', 'manual', 'system'],
     };
   },
@@ -545,6 +802,7 @@ const webAgentAdapter: SiteContextAdapter = {
       adapterId: this.id,
       surface: provider,
       contextType: 'web_agent_prompt',
+      scenario: 'web_agent_prompt',
       contextKey: `web-agent:${provider}|${location.origin}${location.pathname}|${signature(primaryText)}`,
       title,
       url,
@@ -553,6 +811,15 @@ const webAgentAdapter: SiteContextAdapter = {
       keywords: collectKeywords([title, ...turns]),
       provider,
       identifiers: { provider },
+      audience: {
+        conversationTitle: title,
+        provider,
+      },
+      contextItems: turns.map((turn, index) => ({
+        type: 'message',
+        id: `turn-${index}`,
+        text: turn,
+      })),
       sourceTypes: [
         'ai_chat',
         'doubao',

@@ -8,6 +8,8 @@ import {
   vi,
 } from 'vitest';
 
+const llmGenerateMock = vi.hoisted(() => vi.fn());
+
 vi.mock('../llm/EmbeddingClient.js', () => ({
   EmbeddingClient: {
     getInstance: vi
@@ -16,6 +18,17 @@ vi.mock('../llm/EmbeddingClient.js', () => ({
     isLoaded: vi.fn().mockReturnValue(false),
     getModelName: vi.fn().mockReturnValue('mock-model'),
   },
+}));
+
+vi.mock('../llm/LLMClient.js', () => ({
+  LLMClient: vi.fn().mockImplementation(() => ({
+    generate: llmGenerateMock,
+    generateJSON: vi.fn(),
+    generateStream: vi.fn(),
+  })),
+  getLLMClient: () => ({
+    generate: llmGenerateMock,
+  }),
 }));
 
 import type { FastifyInstance } from 'fastify';
@@ -36,10 +49,16 @@ describe('Composer Assist API (POST /composer/assist)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    if (app) await app.close();
   });
 
   beforeEach(() => {
+    llmGenerateMock.mockReset();
+    llmGenerateMock.mockResolvedValue({
+      content:
+        'Factory AI 试用已经过了 security approval，但 production 场景还是要用 RingCentral email login。',
+    });
+
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
     db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
@@ -175,11 +194,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.suggestionType).toBe('reply_context');
     expect(body.insertText).not.toContain('Personal AI context to consider');
     expect(body.insertText).not.toContain('Please review and edit before sending');
-    expect(body.insertText).toContain('> Can we use Factory AI for production project?');
-    expect(body.insertText).toContain('我理解当前是在讨论');
-    expect(body.insertText).toContain('Discussing Factory AI free trial security approval');
-    expect(body.insertText).toContain('我这边先补充几个相关点');
-    expect(body.insertText).toContain('Factory AI free trial');
+    expect(body.insertText).not.toContain('我理解当前是在讨论');
+    expect(body.insertText).not.toContain('我这边先补充几个相关点');
+    expect(body.insertText).toContain('Factory AI');
+    expect(llmGenerateMock).toHaveBeenCalledTimes(1);
   });
 
   it('filters weak composer memories that do not match the current scene', async () => {

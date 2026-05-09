@@ -18,6 +18,56 @@ const visibleMessageSchema = {
   additionalProperties: false,
 };
 
+const audienceSchema = {
+  type: 'object' as const,
+  properties: {
+    conversationTitle: { type: 'string' as const },
+    conversationId: { type: 'string' as const },
+    groupId: { type: 'string' as const },
+    issueKey: { type: 'string' as const },
+    issueSummary: { type: 'string' as const },
+    people: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+      maxItems: 24,
+    },
+    provider: { type: 'string' as const },
+    relationshipHint: { type: 'string' as const },
+  },
+  additionalProperties: false,
+};
+
+const contextItemSchema = {
+  type: 'object' as const,
+  required: ['type'],
+  properties: {
+    type: {
+      type: 'string' as const,
+      enum: [
+        'message',
+        'thread_root',
+        'thread_reply',
+        'jira_summary',
+        'jira_description',
+        'jira_comment',
+        'attachment',
+        'image',
+      ],
+    },
+    id: { type: 'string' as const },
+    sender: { type: 'string' as const },
+    title: { type: 'string' as const },
+    text: { type: 'string' as const },
+    timestampLabel: { type: 'string' as const },
+    url: { type: 'string' as const },
+    metadata: {
+      type: 'object' as const,
+      additionalProperties: true,
+    },
+  },
+  additionalProperties: false,
+};
+
 const composerAssistBodySchema = {
   type: 'object' as const,
   required: ['surface', 'contextType'],
@@ -38,6 +88,16 @@ const composerAssistBodySchema = {
     contextType: {
       type: 'string' as const,
       enum: ['message_thread', 'jira_issue', 'web_agent_prompt'],
+    },
+    scenario: {
+      type: 'string' as const,
+      enum: [
+        'instant_message_reply',
+        'thread_reply',
+        'jira_comment',
+        'web_agent_prompt',
+        'document_note',
+      ],
     },
     title: { type: 'string' as const },
     url: { type: 'string' as const },
@@ -70,6 +130,12 @@ const composerAssistBodySchema = {
       maxItems: 12,
     },
     threadRoot: visibleMessageSchema,
+    audience: audienceSchema,
+    contextItems: {
+      type: 'array' as const,
+      items: contextItemSchema,
+      maxItems: 32,
+    },
     sourceTypes: {
       type: 'array' as const,
       items: { type: 'string' as const },

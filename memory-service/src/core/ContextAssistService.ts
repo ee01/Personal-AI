@@ -1,10 +1,13 @@
 import type Database from 'better-sqlite3';
 
 import { ContextRecallService } from './ContextRecallService.js';
+import { getLLMClient } from '../llm/LLMClient.js';
 import type {
   ComposerAssistEvidence,
   ComposerAssistRequest,
   ComposerAssistResponse,
+  ComposerContextItem,
+  ComposerScenario,
   ContextAssistCueCard,
   ContextAssistRequest,
   ContextAssistResponse,
@@ -20,7 +23,9 @@ const MEETING_LIMIT = 5;
 const MAX_INSERT_TEXT = 2400;
 const MIN_AVAILABLE_CONFIDENCE = 0.58;
 const MIN_COMPOSER_CONTEXT_OVERLAP = 2;
-const MIN_HIGH_SCORE_WITH_CONTEXT_OVERLAP = 0.7;
+const MIN_COMPOSER_SOURCE_OVERLAP = 1;
+const COMPOSER_GENERATION_TIMEOUT_MS = 4500;
+const MAX_CONTEXT_ITEMS_FOR_PROMPT = 14;
 const WEB_AGENT_SOURCES: RecallSourceType[] = [
   'ai_chat',
   'doubao',
@@ -132,7 +137,28 @@ export class ContextAssistService {
 
     const suggestionType = getComposerSuggestionType(request);
     const riskLevel = getComposerRiskLevel(request, evidence);
-    const insertText = clipInsertText(renderComposerInsertText(request, evidence));
+    const insertText = await buildComposerInsertText(request, evidence);
+
+    if (!insertText) {
+      return {
+        available: false,
+        suggestionType: 'none',
+        title: '暂无可直接发送的建议',
+        summary: '找到相关记忆，但未能生成适合当前场景的回复文本。',
+        evidence,
+        riskLevel,
+        previewRequired: false,
+        confidence,
+        queryTimeMs: recall.queryTimeMs,
+        debug: request.debug
+          ? {
+              recall: recall.debug,
+              recallRequest,
+              rejectedReason: 'composer_generation_unavailable',
+            }
+          : undefined,
+      };
+    }
 
     return {
       available: true,
@@ -212,11 +238,13 @@ export class ContextAssistService {
 function buildComposerRecallRequest(
   request: ComposerAssistRequest,
 ): ContextRecallRequest {
+  const contextText = buildComposerContextText(request, {
+    includeAudience: false,
+    includeSender: false,
+  });
   const secondaryTexts = [
-    ...(request.secondaryTexts ?? []),
+    ...buildComposerSecondaryContextTexts(request),
     ...(request.keywords?.length ? [request.keywords.join(' ')] : []),
-    request.threadRoot?.text,
-    ...(request.visibleMessages ?? []).slice(-4).map((message) => message.text),
   ]
     .filter((value): value is string => Boolean(value))
     .slice(0, 8);
@@ -226,7 +254,7 @@ function buildComposerRecallRequest(
     contextType: mapComposerContextType(request),
     title: request.title,
     url: request.url,
-    primaryText: request.primaryText?.slice(0, 1600),
+    primaryText: (contextText || request.primaryText)?.slice(0, 1600),
     secondaryTexts,
     entityHints: buildComposerEntityHints(request),
     scope: 'work',
@@ -310,6 +338,18 @@ function buildComposerEntityHints(
   if (ids?.threadRootPostId)
     hints.push({ kind: 'thread_root', value: ids.threadRootPostId });
   if (ids?.provider) hints.push({ kind: 'provider', value: ids.provider });
+  if (request.audience?.issueKey && request.audience.issueKey !== ids?.issueKey) {
+    hints.push({ kind: 'jira_key', value: request.audience.issueKey });
+  }
+  if (
+    request.audience?.conversationId &&
+    request.audience.conversationId !== ids?.conversationId
+  ) {
+    hints.push({ kind: 'conversation', value: request.audience.conversationId });
+  }
+  if (request.audience?.groupId && request.audience.groupId !== ids?.groupId) {
+    hints.push({ kind: 'group', value: request.audience.groupId });
+  }
   return hints.length ? hints : undefined;
 }
 
@@ -347,6 +387,7 @@ function toEvidence(match: ContextRecallMatch): ComposerAssistEvidence {
     sourceUrl: match.sourceUrl,
     sourceTitle: match.sourceTitle,
     exploreLink: match.exploreLink,
+    links: match.links,
     whyMatched: match.whyMatched,
     timestamp: match.timestamp,
     score: match.score,
@@ -421,19 +462,21 @@ function getConfidence(evidence: ComposerAssistEvidence[]): number {
   return Number(confidence.toFixed(2));
 }
 
-function renderComposerInsertText(
+async function buildComposerInsertText(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
-): string {
+): Promise<string | null> {
   if (request.contextType === 'web_agent_prompt') {
-    return renderWebAgentContextPack(request, evidence);
+    return clipInsertText(renderWebAgentContextPack(request, evidence));
   }
 
-  if (request.contextType === 'jira_issue') {
-    return renderJiraContext(request, evidence);
+  const generated = await generateSendableComposerText(request, evidence);
+  if (!generated) return null;
+  const sanitized = sanitizeGeneratedComposerText(generated);
+  if (!isSendableComposerText(sanitized, getComposerScenario(request))) {
+    return null;
   }
-
-  return renderReplyContext(request, evidence);
+  return clipInsertText(sanitized);
 }
 
 function renderWebAgentContextPack(
@@ -467,37 +510,150 @@ function renderWebAgentContextPack(
   ].join('\n');
 }
 
-function renderReplyContext(
+async function generateSendableComposerText(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
-): string {
-  const bullets = evidence.map((item) => `* ${formatChatSnippet(item.snippet)}`);
-  const threadLine = request.threadRoot?.text
-    ? [`> ${formatChatSnippet(request.threadRoot.text)}`, '']
-    : [];
-  const scene = summarizeComposerScene(request);
-  const sceneLine = scene ? [`我理解当前是在讨论：${scene}`, ''] : [];
+): Promise<string | null> {
+  const scenario = getComposerScenario(request);
+  const prompt = buildComposerGenerationPrompt(request, evidence, scenario);
+  if (!prompt) return null;
 
-  return [
-    ...threadLine,
-    ...sceneLine,
-    '我这边先补充几个相关点：',
-    '',
-    ...bullets,
-  ].join('\n');
+  try {
+    const llm = getLLMClient();
+    const response = await withTimeout(
+      llm.generate(prompt, {
+        temperature: 0.2,
+        maxTokens: scenario === 'jira_comment' ? 360 : 220,
+        systemPrompt:
+          'You write only the exact text the user can insert into the current composer. No explanation, no wrapper, no metadata.',
+      }),
+      COMPOSER_GENERATION_TIMEOUT_MS,
+    );
+    return response.content;
+  } catch {
+    return null;
+  }
 }
 
-function renderJiraContext(
+function buildComposerGenerationPrompt(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
-): string {
-  const scene = summarizeComposerScene(request);
+  scenario: ComposerScenario,
+): string | null {
+  const currentContext = buildComposerContextText(request, {
+    includeAudience: false,
+    includeSender: true,
+    maxItems: MAX_CONTEXT_ITEMS_FOR_PROMPT,
+  });
+  if (!currentContext) return null;
+
+  const audience = formatComposerAudience(request);
+  const memories = evidence
+    .slice(0, 3)
+    .map((item, index) => `[M${index + 1}] ${formatChatSnippet(item.snippet)}`)
+    .join('\n');
+
   return [
-    ...(scene ? [`我理解当前 issue/comment 主要是在讨论：${scene}`, ''] : []),
-    '我补充一下相关背景：',
+    '请根据当前场景，替用户写一段可以直接插入输入框并发送的内容。',
     '',
-    ...evidence.map((item) => `* ${formatChatSnippet(item.snippet)}`),
-  ].join('\n');
+    `场景：${describeComposerScenario(scenario)}`,
+    audience ? `对象：${audience}` : '',
+    '',
+    '当前上下文：',
+    currentContext,
+    '',
+    '可用记忆：',
+    memories,
+    '',
+    '要求：',
+    '* 只输出要发送的正文，不要解释、不加标题、不说“我理解当前”。',
+    '* 不要把记忆逐条摘抄成清单；先消化成自然回复。',
+    '* 只使用和当前上下文明显相关的记忆，不确定就少说。',
+    scenario === 'jira_comment'
+      ? '* 语气正式、清晰，给出判断/依据/next step。'
+      : '* 语气像即时通讯里的真实回复，简短自然，默认 3-5 行以内。',
+    '* 不要编造当前上下文或记忆里没有的事实。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('composer_generation_timeout')), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function sanitizeGeneratedComposerText(text: string): string {
+  return text
+    .replace(/^```(?:\w+)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .replace(/^["'“”]+|["'“”]+$/g, '')
+    .replace(/^Personal AI context(?: pack)?[^:：]*[:：]\s*/i, '')
+    .replace(/^我理解当前是在讨论[:：]\s*/i, '')
+    .replace(/^我这边先补充几个相关点[:：]\s*/i, '')
+    .replace(/^我补充一下相关背景[:：]\s*/i, '')
+    .replace(/\s*Please review and edit before sending\.?\s*$/i, '')
+    .trim();
+}
+
+function isSendableComposerText(text: string, scenario: ComposerScenario): boolean {
+  const cleaned = text.trim();
+  if (!cleaned) return false;
+  if (/Personal AI context|Please review/i.test(cleaned)) return false;
+  if (/^我理解当前是在讨论[:：]/.test(cleaned)) return false;
+  if (/^我这边先补充几个相关点[:：]/.test(cleaned)) return false;
+  if (/^我补充一下相关背景[:：]/.test(cleaned)) return false;
+  if (scenario !== 'web_agent_prompt' && cleaned.split('\n').length > 8) return false;
+  if (scenario === 'jira_comment' && /哈哈|嘿|lol|😂|🤣/i.test(cleaned)) return false;
+  return true;
+}
+
+function getComposerScenario(request: ComposerAssistRequest): ComposerScenario {
+  if (request.scenario) return request.scenario;
+  if (request.contextType === 'web_agent_prompt') return 'web_agent_prompt';
+  if (request.contextType === 'jira_issue') return 'jira_comment';
+  if (request.surface === 'ringcentral_thread' || request.threadRoot) return 'thread_reply';
+  return 'instant_message_reply';
+}
+
+function describeComposerScenario(scenario: ComposerScenario): string {
+  switch (scenario) {
+    case 'thread_reply':
+      return '在即时通讯工具的 thread 里回复';
+    case 'jira_comment':
+      return '在 Jira issue 里写 comment';
+    case 'web_agent_prompt':
+      return '给网页 AI/Agent 写 prompt';
+    case 'document_note':
+      return '整理文档或笔记';
+    case 'instant_message_reply':
+    default:
+      return '在即时通讯工具里回复消息';
+  }
+}
+
+function formatComposerAudience(request: ComposerAssistRequest): string {
+  const audience = request.audience;
+  return [
+    audience?.conversationTitle || request.title,
+    audience?.issueKey,
+    audience?.issueSummary,
+    audience?.people?.length ? `visible people: ${audience.people.slice(0, 8).join(', ')}` : '',
+    audience?.relationshipHint,
+  ]
+    .filter(Boolean)
+    .join('；');
 }
 
 function filterComposerEvidence(
@@ -509,53 +665,149 @@ function filterComposerEvidence(
   }
 
   const contextTokens = tokenizeComposerRelevance(buildComposerSceneText(request));
+  const sourceTokens = tokenizeComposerRelevance(buildComposerSourceAnchorText(request));
   if (contextTokens.size === 0) {
     return [];
   }
 
   return evidence.filter((item) => {
     const evidenceTokens = tokenizeComposerRelevance(
-      [item.snippet, item.title, item.sourceTitle].filter(Boolean).join(' '),
+        [item.snippet, item.title, item.sourceTitle].filter(Boolean).join(' '),
     );
     const overlap = countTokenOverlap(contextTokens, evidenceTokens);
     if (overlap >= MIN_COMPOSER_CONTEXT_OVERLAP) return true;
 
-    const score = item.score ?? 0;
-    return score >= MIN_HIGH_SCORE_WITH_CONTEXT_OVERLAP && overlap >= 1;
+    const sourceOverlap = countTokenOverlap(sourceTokens, evidenceTokens);
+    return overlap >= MIN_COMPOSER_SOURCE_OVERLAP && sourceOverlap >= 1;
   });
 }
 
 function buildComposerSceneText(request: ComposerAssistRequest): string {
+  return buildComposerContextText(request, {
+    includeAudience: false,
+    includeSender: false,
+  });
+}
+
+function buildComposerSourceAnchorText(request: ComposerAssistRequest): string {
+  const ids = request.identifiers;
   return [
-    request.title,
-    request.primaryText,
-    request.threadRoot?.text,
-    ...(request.secondaryTexts ?? []),
-    ...(request.visibleMessages ?? []).slice(-4).map((message) => message.text),
-    ...(request.keywords ?? []),
+    ids?.issueKey,
+    ids?.conversationId,
+    ids?.groupId,
+    ids?.threadRootPostId,
+    request.audience?.issueKey,
+    request.audience?.conversationId,
+    request.audience?.groupId,
   ]
     .filter(Boolean)
     .join(' ');
 }
 
-function summarizeComposerScene(request: ComposerAssistRequest): string {
-  const messages = request.visibleMessages ?? [];
-  const recentMessages = messages
-    .slice(-3)
-    .map((message) =>
-      formatChatSnippet(
-        [message.sender, message.text].filter(Boolean).join(': '),
-      ),
-    )
-    .filter(Boolean);
+interface ComposerContextTextOptions {
+  includeAudience?: boolean;
+  includeSender?: boolean;
+  maxItems?: number;
+}
 
-  const fallback = request.primaryText || request.title || '';
-  const scene = (
-    recentMessages.length
-      ? recentMessages.join('；')
-      : fallback || request.threadRoot?.text || ''
-  ).trim();
-  return scene.length > 220 ? `${scene.slice(0, 220).trimEnd()}...` : scene;
+function buildComposerContextText(
+  request: ComposerAssistRequest,
+  options: ComposerContextTextOptions = {},
+): string {
+  const items = normalizeComposerContextItems(request);
+  const maxItems = options.maxItems ?? 12;
+  const contextLines = takeComposerContextItems(items, maxItems)
+    .map((item) => formatComposerContextItem(item, options.includeSender ?? false))
+    .filter(Boolean);
+  const audience = options.includeAudience ? formatComposerAudience(request) : '';
+  return [audience, ...contextLines].filter(Boolean).join('\n');
+}
+
+function buildComposerSecondaryContextTexts(request: ComposerAssistRequest): string[] {
+  const itemTexts = takeComposerContextItems(normalizeComposerContextItems(request), 8)
+    .map((item) => item.text || item.title || '')
+    .filter(Boolean)
+    .slice(0, 8);
+  return [...itemTexts, ...(request.secondaryTexts ?? [])].slice(0, 10);
+}
+
+function takeComposerContextItems(
+  items: ComposerContextItem[],
+  maxItems: number,
+): ComposerContextItem[] {
+  if (items.length <= maxItems) return items;
+  const root = items.find((item) => item.type === 'thread_root');
+  if (!root) return items.slice(-maxItems);
+  const tail = items.filter((item) => item !== root).slice(-(maxItems - 1));
+  return [root, ...tail];
+}
+
+function normalizeComposerContextItems(
+  request: ComposerAssistRequest,
+): ComposerContextItem[] {
+  if (request.contextItems?.length) {
+    return request.contextItems.filter((item) => Boolean(item.text || item.title));
+  }
+
+  const items: ComposerContextItem[] = [];
+  if (request.threadRoot?.text) {
+    items.push({
+      type: 'thread_root',
+      id: request.threadRoot.id,
+      sender: request.threadRoot.sender,
+      text: request.threadRoot.text,
+      timestampLabel: request.threadRoot.timestampLabel,
+    });
+  }
+  for (const message of request.visibleMessages ?? []) {
+    items.push({
+      type: request.threadRoot ? 'thread_reply' : 'message',
+      id: message.id,
+      sender: message.sender,
+      text: message.text,
+      timestampLabel: message.timestampLabel,
+    });
+  }
+  if (items.length === 0 && request.primaryText) {
+    items.push({
+      type: request.contextType === 'jira_issue' ? 'jira_summary' : 'message',
+      text: request.primaryText,
+    });
+  }
+  return items;
+}
+
+function formatComposerContextItem(
+  item: ComposerContextItem,
+  includeSender: boolean,
+): string {
+  const label = getComposerContextItemLabel(item.type);
+  const speaker = includeSender && item.sender ? `${item.sender}: ` : '';
+  const body = formatChatSnippet(item.text || item.title || '');
+  if (!body) return '';
+  return `${label}${speaker}${body}`;
+}
+
+function getComposerContextItemLabel(type: ComposerContextItem['type']): string {
+  switch (type) {
+    case 'thread_root':
+      return 'Thread root: ';
+    case 'thread_reply':
+      return 'Thread reply: ';
+    case 'jira_summary':
+      return 'Jira summary: ';
+    case 'jira_description':
+      return 'Jira description: ';
+    case 'jira_comment':
+      return 'Jira comment: ';
+    case 'attachment':
+      return 'Attachment: ';
+    case 'image':
+      return 'Image: ';
+    case 'message':
+    default:
+      return 'Message: ';
+  }
 }
 
 function tokenizeComposerRelevance(text: string): Set<string> {
@@ -606,10 +858,15 @@ const COMPOSER_RELEVANCE_STOPWORDS = new Set([
   'comment',
   'current',
   'context',
+  'meeting',
+  'title',
+  'video',
   'ringcentral',
   'glip',
   'jira',
   'ai',
+  'esone',
+  'qiu',
   '我',
   '你',
   '他',

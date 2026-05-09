@@ -48,6 +48,16 @@ function sanitizeComposerInsertText(text: string): string {
     .trim();
 }
 
+function looksLikeSendableComposerText(text?: string): boolean {
+  const cleaned = sanitizeComposerInsertText(text || '');
+  if (!cleaned) return false;
+  if (/^我理解当前是在讨论[:：]/.test(cleaned)) return false;
+  if (/^我这边先补充几个相关点[:：]/.test(cleaned)) return false;
+  if (/^我补充一下相关背景[:：]/.test(cleaned)) return false;
+  if (/Personal AI context|Please review/i.test(cleaned)) return false;
+  return true;
+}
+
 function isSensitiveEditableElement(element: HTMLElement): boolean {
   const input = element as HTMLInputElement;
   return isSensitiveControlDescriptor({
@@ -273,6 +283,7 @@ export class ComposerGuardController {
     return {
       surface: snapshot.surface,
       contextType: snapshot.contextType,
+      scenario: snapshot.scenario,
       title: snapshot.title,
       url: snapshot.url,
       draftText: session.draftText,
@@ -282,6 +293,8 @@ export class ComposerGuardController {
       identifiers: snapshot.identifiers,
       visibleMessages: snapshot.visibleMessages,
       threadRoot: snapshot.threadRoot,
+      audience: snapshot.audience,
+      contextItems: snapshot.contextItems,
       sourceTypes: snapshot.sourceTypes,
       automationLevel: 'L1',
     };
@@ -305,6 +318,7 @@ export class ComposerGuardController {
     return Boolean(
       this.latestAssist?.available &&
         this.latestAssist.insertText &&
+        looksLikeSendableComposerText(this.latestAssist.insertText) &&
         this.latestAssist.confidence >= MIN_ASSIST_CONFIDENCE,
     );
   }
