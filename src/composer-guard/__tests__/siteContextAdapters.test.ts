@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildJiraOwnerCommentLearningPayloads,
+  markRingCentralSelfAuthoredMessages,
   markJiraSelfAuthoredComments,
 } from '../siteContextAdapters.ts';
 import type { ComposerContextItem, SiteContextSnapshot } from '../types.ts';
@@ -25,12 +26,61 @@ test('markJiraSelfAuthoredComments: only current Jira user comments are marked s
     },
   ];
 
-  const marked = markJiraSelfAuthoredComments(comments, ['esone.qiu', 'Esone Qiu']);
+  const marked = markJiraSelfAuthoredComments(comments, [
+    'esone.qiu',
+    'Esone Qiu',
+  ]);
 
   assert.equal(marked[0].metadata?.isSelf, true);
   assert.equal(marked[0].metadata?.authorRole, 'owner');
   assert.equal(marked[1].metadata?.isSelf, false);
   assert.equal(marked[1].metadata?.authorRole, undefined);
+});
+
+test('markRingCentralSelfAuthoredMessages: marks owner messages from display name and avatar id', () => {
+  const messages: ComposerContextItem[] = [
+    {
+      type: 'message',
+      sender: 'Esone Qiu 😏 凡事先让 AI 跑一遍~',
+      text: '我也上传了',
+      metadata: {
+        authorValues: [
+          'Esone Qiu 😏 凡事先让 AI 跑一遍~',
+          'GLIP_PERSON.20367368195',
+          '20367368195',
+        ],
+      },
+    },
+    {
+      type: 'message',
+      sender: 'Zong Zheng',
+      text: '收到',
+      metadata: {
+        authorValues: ['Zong Zheng', 'GLIP_PERSON.9999', '9999'],
+      },
+    },
+    {
+      type: 'message',
+      sender: 'Alice Qiu',
+      text: '这个我来处理',
+      metadata: {
+        authorValues: ['Alice Qiu'],
+      },
+    },
+  ];
+
+  const marked = markRingCentralSelfAuthoredMessages(messages, [
+    'Esone Qiu',
+    'esone.qiu@ringcentral.com',
+    '20367368195',
+  ]);
+
+  assert.equal(marked[0].metadata?.isSelf, true);
+  assert.equal(marked[0].metadata?.authorRole, 'owner');
+  assert.equal(marked[1].metadata?.isSelf, false);
+  assert.equal(marked[1].metadata?.authorRole, undefined);
+  assert.equal(marked[2].metadata?.isSelf, false);
+  assert.equal(marked[2].metadata?.authorRole, undefined);
 });
 
 test('buildJiraOwnerCommentLearningPayloads: creates jira owner learning payloads only', () => {

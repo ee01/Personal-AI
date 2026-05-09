@@ -62,7 +62,9 @@ describe('Composer Assist evals', () => {
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
     db.prepare('DELETE FROM user_profile_items').run();
-    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    db.prepare(
+      `INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`,
+    ).run();
   });
 
   function insertChunk(args: {
@@ -187,9 +189,143 @@ describe('Composer Assist evals', () => {
     expect(body.insertText).not.toContain('我理解当前是在讨论');
     expect(body.insertText).not.toContain('我这边先补充几个相关点');
     expect(body.insertText).toContain('Codex');
-    const evidenceText = body.evidence.map((item: any) => item.snippet).join('\n');
+    const evidenceText = body.evidence
+      .map((item: any) => item.snippet)
+      .join('\n');
     expect(evidenceText).not.toContain('Flight: SFO');
     expect(evidenceText).not.toContain('video meeting');
+  });
+
+  it('does not suggest when the latest RingCentral context is a completed owner reply', async () => {
+    insertChunk({
+      id: 151,
+      content:
+        'Capacity Management poster should be uploaded to the Google Drive poster folder and Zong Zheng can verify it.',
+      sourceType: 'glip',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        scenario: 'instant_message_reply',
+        title: 'AI 小群',
+        contextItems: [
+          {
+            type: 'message',
+            sender: 'Fred Gu',
+            text: '这期 poster 还没看到。',
+          },
+          {
+            type: 'message',
+            sender: 'Esone Qiu',
+            text: '容量管理(Capacity Management) 这期 poster 似乎还没传上来，Zong Zheng 看看？ https://drive.google.com/drive/folders/poster',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+          {
+            type: 'message',
+            sender: 'Esone Qiu',
+            text: '测试下 忽略，看看定时消息能不能 @ 到人',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+        ],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    expect(body.debug.rejectedReason).toBe('owner_already_replied');
+    expect(llmGenerateMock).not.toHaveBeenCalled();
+  });
+
+  it('allows only supplemental output after an incomplete owner reply', async () => {
+    insertChunk({
+      id: 152,
+      content:
+        'Capacity Management poster 这期怎么处理：如果上传后还是看不到，可以确认 Google Drive folder 权限。',
+      sourceType: 'glip',
+    });
+    llmGenerateMock.mockResolvedValueOnce({
+      content:
+        '我再补一句：如果上传后还是看不到，我可以直接帮忙确认 folder 权限。',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        scenario: 'instant_message_reply',
+        title: 'AI 小群',
+        contextItems: [
+          {
+            type: 'message',
+            sender: 'Fred Gu',
+            text: 'Capacity Management poster 这期怎么处理？',
+          },
+          {
+            type: 'message',
+            sender: 'Esone Qiu',
+            text: '我先看下，稍等',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.insertText).toContain('再补');
+    const prompt = llmGenerateMock.mock.calls[0][0] as string;
+    expect(prompt).toContain('用户已经发送但可能未完成的内容');
+    expect(prompt).toContain('只生成补充说明');
+  });
+
+  it('rejects generated text that repeats an incomplete owner reply', async () => {
+    insertChunk({
+      id: 153,
+      content:
+        'Factory AI security review passed and production should use RingCentral email login.',
+      sourceType: 'glip',
+    });
+    llmGenerateMock.mockResolvedValueOnce({
+      content: '我先看下 Factory AI security review，稍等',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        scenario: 'instant_message_reply',
+        title: 'AI tools',
+        contextItems: [
+          {
+            type: 'message',
+            sender: 'Alice',
+            text: 'Factory AI security review 过了吗？',
+          },
+          {
+            type: 'message',
+            sender: 'Esone Qiu',
+            text: '我先看下 Factory AI security review，稍等',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    expect(body.summary).toContain('未能生成');
   });
 
   it('uses only thread context for thread replies', async () => {
@@ -497,8 +633,12 @@ describe('Composer Assist evals', () => {
     expect(prompt).toContain('已确认事实');
     expect(prompt).toContain('team: AI platform team');
     expect(prompt).not.toContain('job_title: Unconfirmed VP of Product');
-    expect(prompt).toContain('pending inferred，只能作为 soft style hint，不能当事实');
+    expect(prompt).toContain(
+      'pending inferred，只能作为 soft style hint，不能当事实',
+    );
     expect(prompt).toContain('writing_style.ringcentral.thread_reply');
-    expect(prompt).toContain('Prefer very brief replies with one concrete next action.');
+    expect(prompt).toContain(
+      'Prefer very brief replies with one concrete next action.',
+    );
   });
 });

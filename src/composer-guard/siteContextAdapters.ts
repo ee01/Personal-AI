@@ -90,12 +90,42 @@ function identityCandidates(value?: string | null): string[] {
   return Array.from(candidates);
 }
 
-function identitiesMatch(authorValues: Array<string | undefined>, selfValues: string[]): boolean {
+function identitiesMatch(
+  authorValues: Array<string | undefined>,
+  selfValues: string[],
+): boolean {
   const selfCandidates = new Set(selfValues.flatMap(identityCandidates));
   if (!selfCandidates.size) return false;
   return authorValues
     .flatMap(identityCandidates)
     .some((candidate) => selfCandidates.has(candidate));
+}
+
+function ringCentralIdentitiesMatch(
+  authorValues: Array<string | undefined>,
+  selfValues: string[],
+): boolean {
+  const authorCandidates = authorValues.map(normalizeIdentity).filter(Boolean);
+  const selfCandidates = selfValues.map(normalizeIdentity).filter(Boolean);
+  return authorCandidates.some((author) =>
+    selfCandidates.some((self) => {
+      if (author === self) return true;
+      if (/^\d+$/.test(author) && author === self) return true;
+      const selfEmailLocal = self.includes('@') ? self.split('@')[0] : '';
+      if (selfEmailLocal && author === selfEmailLocal) return true;
+      return self.length >= 5 && author.length >= 5 && author.includes(self);
+    }),
+  );
+}
+
+function readJsonLocalStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 function clip(text: string, maxLength: number): string {
@@ -143,7 +173,9 @@ function isElementVisible(element: HTMLElement): boolean {
 }
 
 function intersectsRect(a: DOMRect, b: DOMRect): boolean {
-  return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+  return (
+    a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom
+  );
 }
 
 function closestComposerElement(element?: Element | null): HTMLElement | null {
@@ -174,7 +206,8 @@ function includesAny(text: string, terms: string[]): boolean {
 
 function isSearchLikeControl(element: HTMLElement): boolean {
   const tag = element.tagName.toLowerCase();
-  const type = (element as HTMLInputElement).type || element.getAttribute('type') || '';
+  const type =
+    (element as HTMLInputElement).type || element.getAttribute('type') || '';
   const hint = getControlHint(element);
   const hasSearchHint =
     /\b(search|filter|query|find|quick search|jump to)\b/.test(hint) ||
@@ -252,8 +285,74 @@ function getRingCentralConversationId(location: Location): string | null {
 }
 
 function getRingCentralConversationTitle(doc: Document): string {
-  const heading = doc.querySelector<HTMLElement>('main h1, main [role="heading"]');
+  const heading = doc.querySelector<HTMLElement>(
+    'main h1, main [role="heading"]',
+  );
   return normalizeText(heading?.textContent || doc.title);
+}
+
+function getRingCentralCurrentUserIdentifiers(doc: Document): string[] {
+  const identifiers = new Set<string>();
+  const add = (value?: unknown) => {
+    const normalized = normalizeText(
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value)
+        : '',
+    );
+    if (normalized) identifiers.add(normalized);
+  };
+
+  const accountUD = window.localStorage.getItem('global.account.UD') || '';
+  const sessionData = readJsonLocalStorage<unknown>(
+    'global.account.ACCOUNT_SESSION_DATA_LIST',
+    [],
+  );
+  const sessionList = Array.isArray(sessionData)
+    ? sessionData
+    : Object.values((sessionData || {}) as Record<string, unknown>);
+  const sessionMap =
+    !Array.isArray(sessionData) && sessionData
+      ? (sessionData as Record<string, unknown>)
+      : {};
+  const accountInfo =
+    (accountUD &&
+      (sessionMap[accountUD] as Record<string, unknown> | undefined)) ||
+    sessionList.find((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as Record<string, unknown>;
+      const ids = [record.accountId, record.id, record.extensionId].map(
+        (value) => String(value || ''),
+      );
+      return accountUD
+        ? ids.includes(String(accountUD))
+        : Boolean(record.displayName);
+    });
+
+  if (accountInfo && typeof accountInfo === 'object') {
+    const record = accountInfo as Record<string, unknown>;
+    add(record.displayName);
+    add(record.email);
+    add(record.extensionId);
+    add(record.id);
+    add(record.accountId);
+  }
+
+  Array.from(
+    doc.querySelectorAll<HTMLElement>(
+      [
+        '[data-test-automation-id*="profile" i]',
+        '[data-testid*="profile" i]',
+        '[aria-label*="profile" i]',
+        '[title*="profile" i]',
+      ].join(', '),
+    ),
+  ).forEach((element) => {
+    add(element.textContent);
+    add(element.getAttribute('aria-label'));
+    add(element.getAttribute('title'));
+  });
+
+  return Array.from(identifiers);
 }
 
 function getMessageText(card: HTMLElement): string {
@@ -271,20 +370,42 @@ function toVisibleMessage(card: HTMLElement): VisibleMessageSnapshot | null {
   return {
     id: card.getAttribute('data-id') || undefined,
     sender:
-      normalizeText(card.querySelector<HTMLElement>('[data-name="name"]')?.textContent) ||
-      undefined,
+      normalizeText(
+        card.querySelector<HTMLElement>('[data-name="name"]')?.textContent,
+      ) || undefined,
     text,
     timestampLabel:
-      normalizeText(card.querySelector<HTMLElement>('[data-name="time"]')?.textContent) ||
-      undefined,
+      normalizeText(
+        card.querySelector<HTMLElement>('[data-name="time"]')?.textContent,
+      ) || undefined,
   };
+}
+
+function getRingCentralMessageAuthorValues(card: HTMLElement): string[] {
+  const avatar = card.querySelector<HTMLElement>('[data-name="avatar"]');
+  const avatarUid = avatar?.getAttribute('data-uid') || '';
+  const avatarId = avatarUid.replace(/^GLIP_PERSON\./i, '');
+  return [
+    card.querySelector<HTMLElement>('[data-name="name"]')?.textContent ||
+      undefined,
+    card.getAttribute('data-sender-name') || undefined,
+    card.getAttribute('data-sender-id') || undefined,
+    card.getAttribute('data-creator-id') || undefined,
+    avatarUid || undefined,
+    avatarId || undefined,
+  ]
+    .filter(Boolean)
+    .map((value) => normalizeText(value));
 }
 
 function uniqueByDataId(elements: HTMLElement[]): HTMLElement[] {
   const seen = new Set<string>();
   const unique: HTMLElement[] = [];
   for (const element of elements) {
-    const key = element.getAttribute('data-id') || element.textContent || `${unique.length}`;
+    const key =
+      element.getAttribute('data-id') ||
+      element.textContent ||
+      `${unique.length}`;
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(element);
@@ -292,7 +413,10 @@ function uniqueByDataId(elements: HTMLElement[]): HTMLElement[] {
   return unique;
 }
 
-function getVisibleCardsInContainer(cards: HTMLElement[], container?: HTMLElement | null): HTMLElement[] {
+function getVisibleCardsInContainer(
+  cards: HTMLElement[],
+  container?: HTMLElement | null,
+): HTMLElement[] {
   if (!container) return cards.slice(-MAX_VISIBLE_MESSAGES);
   const containerRect = container.getBoundingClientRect();
   const visibleCards = cards.filter((card) => {
@@ -317,7 +441,9 @@ function getVisibleRingCentralMainCards(doc: Document): HTMLElement[] {
     root.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'),
   ).filter((card) => !replyTree?.contains(card));
 
-  return getVisibleCardsInContainer(uniqueByDataId(cards), stream).slice(-MAX_VISIBLE_MESSAGES);
+  return getVisibleCardsInContainer(uniqueByDataId(cards), stream).slice(
+    -MAX_VISIBLE_MESSAGES,
+  );
 }
 
 function getVisibleRingCentralThreadCards(doc: Document): HTMLElement[] {
@@ -336,23 +462,32 @@ function getVisibleRingCentralThreadCards(doc: Document): HTMLElement[] {
   return getVisibleCardsInContainer(cards, replyTree).slice(-12);
 }
 
-function getRingCentralThreadRoot(doc: Document): VisibleMessageSnapshot | undefined {
+function getRingCentralThreadRoot(
+  doc: Document,
+): VisibleMessageSnapshot | undefined {
   const replyTree = getRingCentralReplyTree(doc);
   if (!replyTree) return undefined;
 
   const rootCard =
-    replyTree.querySelector<HTMLElement>('.conversation-card-wrapper[data-id]') ||
-    replyTree.querySelector<HTMLElement>('[data-name="reply-tree-conversation-card"][data-id]');
+    replyTree.querySelector<HTMLElement>(
+      '.conversation-card-wrapper[data-id]',
+    ) ||
+    replyTree.querySelector<HTMLElement>(
+      '[data-name="reply-tree-conversation-card"][data-id]',
+    );
   return rootCard ? toVisibleMessage(rootCard) || undefined : undefined;
 }
 
 function getElementUrl(element: Element): string | undefined {
   if (element instanceof HTMLAnchorElement) return element.href || undefined;
-  if (element instanceof HTMLImageElement) return element.currentSrc || element.src || undefined;
+  if (element instanceof HTMLImageElement)
+    return element.currentSrc || element.src || undefined;
   return undefined;
 }
 
-function getRingCentralMediaContextItems(card: HTMLElement): ComposerContextItem[] {
+function getRingCentralMediaContextItems(
+  card: HTMLElement,
+): ComposerContextItem[] {
   const messageId = card.getAttribute('data-id') || undefined;
   const items: ComposerContextItem[] = [];
   const mediaElements = Array.from(
@@ -410,18 +545,35 @@ function toMessageContextItem(
 function buildRingCentralContextItems(
   cards: HTMLElement[],
   mode: ComposerTarget['mode'],
+  currentUserIdentifiers: string[],
 ): ComposerContextItem[] {
   const items: ComposerContextItem[] = [];
   const threadMode = mode === 'thread';
   cards.forEach((card, index) => {
     const message = toVisibleMessage(card);
     if (message) {
-      items.push(
-        toMessageContextItem(
-          message,
-          threadMode && index === 0 ? 'thread_root' : threadMode ? 'thread_reply' : 'message',
-        ),
+      const authorValues = getRingCentralMessageAuthorValues(card);
+      const isSelf = ringCentralIdentitiesMatch(
+        authorValues,
+        currentUserIdentifiers,
       );
+      const item = toMessageContextItem(
+        message,
+        threadMode && index === 0
+          ? 'thread_root'
+          : threadMode
+          ? 'thread_reply'
+          : 'message',
+      );
+      items.push({
+        ...item,
+        metadata: {
+          ...(item.metadata || {}),
+          authorValues,
+          isSelf,
+          ...(isSelf ? { authorRole: 'owner' } : {}),
+        },
+      });
     }
     items.push(...getRingCentralMediaContextItems(card));
   });
@@ -433,14 +585,72 @@ function buildRingCentralContextItems(
 
 function formatContextItemForPrimary(item: ComposerContextItem): string {
   return clip(
-    [item.sender, item.timestampLabel, item.title, item.text].filter(Boolean).join(': '),
+    [item.sender, item.timestampLabel, item.title, item.text]
+      .filter(Boolean)
+      .join(': '),
     MAX_MESSAGE_TEXT,
   );
 }
 
-function collectPeopleFromMessages(messages: VisibleMessageSnapshot[]): string[] | undefined {
+function collectPeopleFromMessages(
+  messages: VisibleMessageSnapshot[],
+): string[] | undefined {
   const people = Array.from(
-    new Set(messages.map((message) => normalizeText(message.sender)).filter(Boolean)),
+    new Set(
+      messages.map((message) => normalizeText(message.sender)).filter(Boolean),
+    ),
+  ).slice(0, 12);
+  return people.length ? people : undefined;
+}
+
+export function markRingCentralSelfAuthoredMessages(
+  items: ComposerContextItem[],
+  currentUserIdentifiers: string[],
+): ComposerContextItem[] {
+  return items.map((item) => {
+    if (
+      item.type !== 'message' &&
+      item.type !== 'thread_root' &&
+      item.type !== 'thread_reply'
+    ) {
+      return item;
+    }
+    const metadata = item.metadata || {};
+    const authorValues = [
+      item.sender,
+      ...((metadata.authorValues as string[] | undefined) || []),
+    ];
+    const isSelf = ringCentralIdentitiesMatch(
+      authorValues,
+      currentUserIdentifiers,
+    );
+    return {
+      ...item,
+      metadata: {
+        ...metadata,
+        isSelf,
+        ...(isSelf ? { authorRole: 'owner' } : {}),
+      },
+    };
+  });
+}
+
+function collectPeopleFromRingCentralContextItems(
+  items: ComposerContextItem[],
+): string[] | undefined {
+  const people = Array.from(
+    new Set(
+      items
+        .filter(
+          (item) =>
+            item.type === 'message' ||
+            item.type === 'thread_reply' ||
+            item.type === 'thread_root',
+        )
+        .filter((item) => item.metadata?.isSelf !== true)
+        .map((item) => normalizeText(item.sender))
+        .filter(Boolean),
+    ),
   ).slice(0, 12);
   return people.length ? people : undefined;
 }
@@ -466,7 +676,9 @@ function findRingCentralComposer(
   return targetFromElement(element, mode);
 }
 
-function closestRingCentralComposerElement(element?: Element | null): HTMLElement | null {
+function closestRingCentralComposerElement(
+  element?: Element | null,
+): HTMLElement | null {
   if (!element) return null;
   const candidate = element.closest(RINGCENTRAL_COMPOSER_SELECTOR);
   if (!(candidate instanceof HTMLElement)) return null;
@@ -488,7 +700,9 @@ function isLikelyRingCentralComposer(element: HTMLElement): boolean {
   }
 
   return Boolean(
-    element.closest('[data-test-automation-id="conversation-reply-post-tree"]') ||
+    element.closest(
+      '[data-test-automation-id="conversation-reply-post-tree"]',
+    ) ||
       element.closest('[data-test-automation-id*="compose"]') ||
       element.closest('[data-testid*="composer"]') ||
       element.closest('[data-test-id*="composer"]'),
@@ -512,10 +726,15 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
     const cards = threadMode
       ? getVisibleRingCentralThreadCards(doc)
       : getVisibleRingCentralMainCards(doc);
+    const currentUserIdentifiers = getRingCentralCurrentUserIdentifiers(doc);
     const visibleMessages = cards
       .map((card) => toVisibleMessage(card))
       .filter((message): message is VisibleMessageSnapshot => message != null);
-    const contextItems = buildRingCentralContextItems(cards, activeComposer?.mode || 'main');
+    const contextItems = buildRingCentralContextItems(
+      cards,
+      activeComposer?.mode || 'main',
+      currentUserIdentifiers,
+    );
     const primaryText = clip(
       contextItems
         .filter((item) => item.type !== 'attachment' && item.type !== 'image')
@@ -526,15 +745,16 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
 
     if (!url || !conversationId || !title || !primaryText) return null;
 
-    const threadRoot =
-      threadMode
-        ? visibleMessages[0] || getRingCentralThreadRoot(doc)
-        : undefined;
+    const threadRoot = threadMode
+      ? visibleMessages[0] || getRingCentralThreadRoot(doc)
+      : undefined;
     const groupId =
       cards
         .map((card) => card.getAttribute('groupid'))
         .find((value): value is string => Boolean(value)) || conversationId;
-    const messageIds = visibleMessages.map((message) => message.id).filter(Boolean);
+    const messageIds = visibleMessages
+      .map((message) => message.id)
+      .filter(Boolean);
     const surface = threadRoot ? 'ringcentral_thread' : 'ringcentral_message';
     const contextKey = [
       'ringcentral',
@@ -568,7 +788,11 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
         conversationTitle: title,
         conversationId,
         groupId,
-        people: collectPeopleFromMessages(visibleMessages),
+        people:
+          collectPeopleFromRingCentralContextItems(contextItems) ||
+          (currentUserIdentifiers.length
+            ? undefined
+            : collectPeopleFromMessages(visibleMessages)),
       },
       contextItems,
       sourceTypes: ['glip', 'meeting', 'jira', 'web', 'manual', 'system'],
@@ -578,7 +802,9 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
 };
 
 function getJiraIssueKey(location: Location, doc: Document): string | null {
-  const fromPath = location.pathname.match(/\/browse\/([A-Z][A-Z0-9]{1,9}-\d+)/);
+  const fromPath = location.pathname.match(
+    /\/browse\/([A-Z][A-Z0-9]{1,9}-\d+)/,
+  );
   if (fromPath?.[1]) return fromPath[1];
   const issueKey = doc.querySelector<HTMLElement>('[data-issue-key], #key-val');
   return (
@@ -601,7 +827,9 @@ function getJiraCurrentUserIdentifiers(doc: Document): string[] {
     'ajs-user-id',
     'ajs-remote-user-key',
     'ajs-remote-user-email',
-  ].forEach((name) => add(doc.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content));
+  ].forEach((name) =>
+    add(doc.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content),
+  );
 
   Array.from(
     doc.querySelectorAll<HTMLElement>(
@@ -636,8 +864,12 @@ function getJiraCommentId(root: HTMLElement, index: number): string {
 
 function getJiraCommentAuthorValues(root: HTMLElement): string[] {
   const author =
-    root.querySelector<HTMLElement>('.user-hover, [data-testid*="user"], .author') ||
-    root.querySelector<HTMLElement>('[rel][href*="ViewProfile"], [data-account-id]');
+    root.querySelector<HTMLElement>(
+      '.user-hover, [data-testid*="user"], .author',
+    ) ||
+    root.querySelector<HTMLElement>(
+      '[rel][href*="ViewProfile"], [data-account-id]',
+    );
   return [
     normalizeText(author?.textContent),
     author?.getAttribute('rel') || undefined,
@@ -697,8 +929,9 @@ function getJiraVisibleComments(
       const text = clip(getContextTextContent(element), 500);
       if (!text) return null;
       const root =
-        element.closest<HTMLElement>('.issue-data-block, .activity-comment, [id*="comment"]') ||
-        element;
+        element.closest<HTMLElement>(
+          '.issue-data-block, .activity-comment, [id*="comment"]',
+        ) || element;
       const authorValues = getJiraCommentAuthorValues(root);
       const sender = authorValues[0] || '';
       const commentId = getJiraCommentId(root, index);
@@ -727,7 +960,10 @@ function getJiraVisibleComments(
     const key = `${item.sender || ''}:${item.text || ''}`;
     if (!unique.has(key)) unique.set(key, item);
   }
-  return markJiraSelfAuthoredComments(Array.from(unique.values()).slice(-8), currentUserIdentifiers);
+  return markJiraSelfAuthoredComments(
+    Array.from(unique.values()).slice(-8),
+    currentUserIdentifiers,
+  );
 }
 
 function getJiraAttachmentContextItems(doc: Document): ComposerContextItem[] {
@@ -806,7 +1042,8 @@ const jiraIssueAdapter: SiteContextAdapter = {
     const issueKey = getJiraIssueKey(location, doc);
     const summary =
       normalizeText(
-        doc.querySelector<HTMLElement>('#summary-val, .issue-header-content h1')?.textContent,
+        doc.querySelector<HTMLElement>('#summary-val, .issue-header-content h1')
+          ?.textContent,
       ) || doc.title;
     const description = clip(
       getContextTextContent(
@@ -817,8 +1054,9 @@ const jiraIssueAdapter: SiteContextAdapter = {
       MAX_GENERIC_TEXT,
     );
     const status = normalizeText(
-      doc.querySelector<HTMLElement>('#status-val, [data-testid="issue.fields.status"]')
-        ?.textContent,
+      doc.querySelector<HTMLElement>(
+        '#status-val, [data-testid="issue.fields.status"]',
+      )?.textContent,
     );
     const primaryText = clip(
       [issueKey, summary, status, description].filter(Boolean).join('\n'),
@@ -831,7 +1069,13 @@ const jiraIssueAdapter: SiteContextAdapter = {
     const contextItems: ComposerContextItem[] = [
       { type: 'jira_summary', id: issueKey, text: summary },
       ...(description
-        ? [{ type: 'jira_description' as const, id: `${issueKey}:description`, text: description }]
+        ? [
+            {
+              type: 'jira_description' as const,
+              id: `${issueKey}:description`,
+              text: description,
+            },
+          ]
         : []),
       ...comments,
       ...attachments,
@@ -869,7 +1113,8 @@ export function buildJiraOwnerCommentLearningPayloads(
   snapshot: SiteContextSnapshot,
 ): OwnerAuthoredLearningPayload[] {
   if (snapshot.contextType !== 'jira_issue') return [];
-  const issueKey = snapshot.identifiers?.issueKey || snapshot.audience?.issueKey;
+  const issueKey =
+    snapshot.identifiers?.issueKey || snapshot.audience?.issueKey;
   if (!issueKey) return [];
 
   return (snapshot.contextItems || [])
@@ -882,7 +1127,9 @@ export function buildJiraOwnerCommentLearningPayloads(
     )
     .map((item) => {
       const commentId = String(item.metadata?.commentId || item.id || '');
-      const sourceUrl = String(item.metadata?.sourceUrl || item.url || snapshot.url);
+      const sourceUrl = String(
+        item.metadata?.sourceUrl || item.url || snapshot.url,
+      );
       return {
         content: item.text || '',
         sourceType: 'jira' as const,
@@ -905,7 +1152,9 @@ export function buildJiraOwnerCommentLearningPayloads(
     });
 }
 
-function closestJiraCommentComposerElement(element?: Element | null): HTMLElement | null {
+function closestJiraCommentComposerElement(
+  element?: Element | null,
+): HTMLElement | null {
   const candidate = closestComposerElement(element);
   if (!candidate || !isLikelyJiraCommentComposer(candidate)) return null;
   return candidate;
@@ -934,7 +1183,11 @@ function isLikelyJiraCommentComposer(element: HTMLElement): boolean {
 
 function detectWebAgentProvider(location: Location): ComposerSurface | null {
   const host = location.hostname.toLowerCase();
-  if (host === 'chat.openai.com' || host === 'chatgpt.com' || host.endsWith('.chatgpt.com')) {
+  if (
+    host === 'chat.openai.com' ||
+    host === 'chatgpt.com' ||
+    host.endsWith('.chatgpt.com')
+  ) {
     return 'chatgpt';
   }
   if (host === 'claude.ai' || host.endsWith('.claude.ai')) {
@@ -943,7 +1196,11 @@ function detectWebAgentProvider(location: Location): ComposerSurface | null {
   if (host === 'gemini.google.com' || host === 'bard.google.com') {
     return 'gemini';
   }
-  if (host === 'www.doubao.com' || host === 'doubao.com' || host.endsWith('.doubao.com')) {
+  if (
+    host === 'www.doubao.com' ||
+    host === 'doubao.com' ||
+    host.endsWith('.doubao.com')
+  ) {
     return 'doubao';
   }
   return null;
@@ -990,7 +1247,9 @@ const webAgentAdapter: SiteContextAdapter = {
       surface: provider,
       contextType: 'web_agent_prompt',
       scenario: 'web_agent_prompt',
-      contextKey: `web-agent:${provider}|${location.origin}${location.pathname}|${signature(primaryText)}`,
+      contextKey: `web-agent:${provider}|${location.origin}${
+        location.pathname
+      }|${signature(primaryText)}`,
       title,
       url,
       primaryText,
@@ -1030,7 +1289,8 @@ const webAgentAdapter: SiteContextAdapter = {
       fromElement instanceof Element
         ? fromElement.closest(providerSpecificSelector)
         : null;
-    if (focused instanceof HTMLElement) return targetFromElement(focused, 'prompt');
+    if (focused instanceof HTMLElement)
+      return targetFromElement(focused, 'prompt');
     return null;
   },
 };
@@ -1076,7 +1336,11 @@ export function findActiveComposerContext(
   doc: Document,
   location: Location,
   fromElement?: Element | null,
-): { adapter: SiteContextAdapter; target: ComposerTarget; snapshot: SiteContextSnapshot } | null {
+): {
+  adapter: SiteContextAdapter;
+  target: ComposerTarget;
+  snapshot: SiteContextSnapshot;
+} | null {
   for (const adapter of siteContextAdapters) {
     if (!adapter.match(location, doc)) continue;
     const target = adapter.findComposer(doc, fromElement);
@@ -1105,10 +1369,15 @@ export function readComposerText(target: ComposerTarget): string {
   if (target.kind === 'textarea' || target.kind === 'input') {
     return normalizeText(element.value);
   }
-  return normalizeText(target.element.innerText || target.element.textContent || '');
+  return normalizeText(
+    target.element.innerText || target.element.textContent || '',
+  );
 }
 
-export function insertTextIntoComposer(target: ComposerTarget, text: string): void {
+export function insertTextIntoComposer(
+  target: ComposerTarget,
+  text: string,
+): void {
   const element = target.element as HTMLTextAreaElement | HTMLInputElement;
   const insertion = text.trim();
   if (!insertion) return;
@@ -1126,7 +1395,13 @@ export function insertTextIntoComposer(target: ComposerTarget, text: string): vo
     element.value = `${prefix}${separatorBefore}${insertion}${separatorAfter}${suffix}`;
     const nextCursor = `${prefix}${separatorBefore}${insertion}`.length;
     element.setSelectionRange(nextCursor, nextCursor);
-    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: insertion }));
+    element.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: insertion,
+      }),
+    );
     element.dispatchEvent(new Event('change', { bubbles: true }));
     return;
   }
@@ -1159,6 +1434,8 @@ export function insertTextIntoComposer(target: ComposerTarget, text: string): vo
   target.element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-export function isComposerElement(element: Element | null | undefined): boolean {
+export function isComposerElement(
+  element: Element | null | undefined,
+): boolean {
   return Boolean(closestComposerElement(element || null));
 }

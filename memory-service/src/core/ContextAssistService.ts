@@ -76,7 +76,8 @@ export class ContextAssistService {
 
   async assist(request: ContextAssistRequest): Promise<ContextAssistResponse> {
     if (request.surface === 'composer_guard') {
-      const composerRequest = request.composer ?? contextAssistToComposer(request);
+      const composerRequest =
+        request.composer ?? contextAssistToComposer(request);
       const composer = await this.assistComposer(composerRequest);
       return composerToContextAssist(composer, request);
     }
@@ -87,6 +88,27 @@ export class ContextAssistService {
   async assistComposer(
     request: ComposerAssistRequest,
   ): Promise<ComposerAssistResponse> {
+    const ownerReplyState = getOwnerReplyState(request);
+    if (ownerReplyState.state === 'complete') {
+      return {
+        available: false,
+        suggestionType: 'none',
+        title: '已回复',
+        summary: '最近上下文显示用户已经完成回复，不展示重复提词。',
+        evidence: [],
+        riskLevel: 'low',
+        previewRequired: false,
+        confidence: 0,
+        queryTimeMs: 0,
+        debug: request.debug
+          ? {
+              rejectedReason: 'owner_already_replied',
+              ownerReplyText: ownerReplyState.text,
+            }
+          : undefined,
+      };
+    }
+
     const recallRequest = buildComposerRecallRequest(request);
     const recall = await this.recallService.recall(recallRequest);
     const rawEvidence = recall.matches.map(toEvidence);
@@ -300,7 +322,9 @@ function buildMeetingPrepRecallRequest(
     ...(event?.organizer?.name
       ? [{ kind: 'person', value: event.organizer.name }]
       : []),
-    ...attendeeNames.slice(0, 8).map((name) => ({ kind: 'person', value: name })),
+    ...attendeeNames
+      .slice(0, 8)
+      .map((name) => ({ kind: 'person', value: name })),
   ];
 
   return {
@@ -345,14 +369,20 @@ function buildComposerEntityHints(
   if (ids?.threadRootPostId)
     hints.push({ kind: 'thread_root', value: ids.threadRootPostId });
   if (ids?.provider) hints.push({ kind: 'provider', value: ids.provider });
-  if (request.audience?.issueKey && request.audience.issueKey !== ids?.issueKey) {
+  if (
+    request.audience?.issueKey &&
+    request.audience.issueKey !== ids?.issueKey
+  ) {
     hints.push({ kind: 'jira_key', value: request.audience.issueKey });
   }
   if (
     request.audience?.conversationId &&
     request.audience.conversationId !== ids?.conversationId
   ) {
-    hints.push({ kind: 'conversation', value: request.audience.conversationId });
+    hints.push({
+      kind: 'conversation',
+      value: request.audience.conversationId,
+    });
   }
   if (request.audience?.groupId && request.audience.groupId !== ids?.groupId) {
     hints.push({ kind: 'group', value: request.audience.groupId });
@@ -364,7 +394,9 @@ function normalizeComposerSourceTypes(
   request: ComposerAssistRequest,
 ): RecallSourceType[] {
   const defaults =
-    request.contextType === 'web_agent_prompt' ? WEB_AGENT_SOURCES : WORK_SOURCES;
+    request.contextType === 'web_agent_prompt'
+      ? WEB_AGENT_SOURCES
+      : WORK_SOURCES;
   const requested = request.sourceTypes?.length
     ? request.sourceTypes.filter((value): value is RecallSourceType =>
         defaults.includes(value as RecallSourceType),
@@ -425,8 +457,8 @@ function getComposerSummary(
     request.contextType === 'web_agent_prompt'
       ? '当前 AI prompt'
       : request.contextType === 'jira_issue'
-        ? '当前 Jira issue'
-        : '当前消息会话';
+      ? '当前 Jira issue'
+      : '当前消息会话';
   const preview = riskLevel === 'high' ? '，插入前需要预览' : '';
   return `找到 ${evidenceCount} 条与${target}相关的记忆${preview}。`;
 }
@@ -437,7 +469,9 @@ function getComposerRiskLevel(
 ): ComposerAssistResponse['riskLevel'] {
   const sensitiveSource = evidence.some((item) =>
     /manual|user_core|profile|private|personal/i.test(
-      [item.sourceLabel, item.sourceTitle, item.title].filter(Boolean).join(' '),
+      [item.sourceLabel, item.sourceTitle, item.title]
+        .filter(Boolean)
+        .join(' '),
     ),
   );
   if (sensitiveSource) return 'high';
@@ -450,7 +484,9 @@ function getMeetingRiskLevel(
 ): ContextAssistResponse['riskLevel'] {
   const sensitiveSource = evidence.some((item) =>
     /manual|user_core|profile|private|personal/i.test(
-      [item.sourceLabel, item.sourceTitle, item.title].filter(Boolean).join(' '),
+      [item.sourceLabel, item.sourceTitle, item.title]
+        .filter(Boolean)
+        .join(' '),
     ),
   );
   return sensitiveSource ? 'medium' : 'low';
@@ -488,6 +524,9 @@ async function buildComposerInsertText(
   if (!isSendableComposerText(sanitized, getComposerScenario(request))) {
     return null;
   }
+  if (isRedundantWithOwnerReply(sanitized, request)) {
+    return null;
+  }
   return clipInsertText(sanitized);
 }
 
@@ -497,7 +536,8 @@ function renderWebAgentContextPack(
 ): string {
   const intent = summarizeIntent(request);
   const bullets = evidence.map(
-    (item, index) => `${index + 1}. ${formatChatSnippet(item.snippet)} [M${index + 1}]`,
+    (item, index) =>
+      `${index + 1}. ${formatChatSnippet(item.snippet)} [M${index + 1}]`,
   );
   const sources = evidence.map((item, index) => {
     const label = item.sourceTitle || item.title || item.sourceLabel || item.id;
@@ -572,6 +612,7 @@ function buildComposerGenerationPrompt(
     .map((item, index) => `[M${index + 1}] ${formatChatSnippet(item.snippet)}`)
     .join('\n');
   const ownerConstraints = formatOwnerExpressionConstraints(personalization);
+  const ownerReplyState = getOwnerReplyState(request);
 
   return [
     '请根据当前场景，替用户写一段可以直接插入输入框并发送的内容。',
@@ -581,6 +622,9 @@ function buildComposerGenerationPrompt(
     '',
     '当前上下文：',
     currentContext,
+    ...(ownerReplyState.state === 'partial'
+      ? ['', '用户已经发送但可能未完成的内容：', ownerReplyState.text]
+      : []),
     '',
     '可用记忆：',
     memories,
@@ -596,6 +640,9 @@ function buildComposerGenerationPrompt(
     '* 不要说“我理解当前”。',
     '* 不要把记忆逐条摘抄成清单；先消化成自然回复。',
     '* 只使用和当前上下文明显相关的记忆，不确定就少说。',
+    ownerReplyState.state === 'partial'
+      ? '* 用户已经发过的内容不要重复；只生成补充说明，且必须能接在已发送内容后面。'
+      : '',
     scenario === 'jira_comment'
       ? '* 语气正式、清晰，给出判断/依据/next step。'
       : '* 语气像即时通讯里的真实回复，简短自然，默认 3-5 行以内。',
@@ -695,8 +742,8 @@ function loadComposerStyleHints(
   const styleKeys = getComposerStyleKeys(request);
   const keyPlaceholders = styleKeys.map(() => '?').join(', ');
   const confirmedClause = confirmedOnly
-    ? 'AND user_confirmed = 1 AND status = \'active\''
-    : 'AND user_confirmed = 0 AND status = \'pending_confirm\'';
+    ? "AND user_confirmed = 1 AND status = 'active'"
+    : "AND user_confirmed = 0 AND status = 'pending_confirm'";
   try {
     return db
       .prepare(
@@ -731,16 +778,16 @@ function getComposerStyleKeys(request: ComposerAssistRequest): string[] {
     scenario === 'jira_comment'
       ? ['writing_style.jira_comment', 'writing_style.jira.comment']
       : scenario === 'thread_reply'
-        ? [
-            'writing_style.ringcentral_thread_reply',
-            'writing_style.ringcentral.thread_reply',
-            'writing_style.thread_reply',
-          ]
-        : [
-            'writing_style.ringcentral_reply',
-            'writing_style.ringcentral.reply',
-            'writing_style.instant_message_reply',
-          ];
+      ? [
+          'writing_style.ringcentral_thread_reply',
+          'writing_style.ringcentral.thread_reply',
+          'writing_style.thread_reply',
+        ]
+      : [
+          'writing_style.ringcentral_reply',
+          'writing_style.ringcentral.reply',
+          'writing_style.instant_message_reply',
+        ];
   return [
     ...scenarioKeys,
     'writing_style',
@@ -753,7 +800,10 @@ function formatOwnerExpressionConstraints(
   personalization: ComposerPersonalization,
 ): string {
   const sections = [
-    formatProfileSection('USER_CORE（已确认画像快照）', personalization.userCore),
+    formatProfileSection(
+      'USER_CORE（已确认画像快照）',
+      personalization.userCore,
+    ),
     formatProfileSection(
       '已确认偏好',
       formatProfileRows(personalization.confirmedPreferences),
@@ -805,7 +855,10 @@ function formatProfileValue(value: string): string {
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('composer_generation_timeout')), timeoutMs);
+    const timer = setTimeout(
+      () => reject(new Error('composer_generation_timeout')),
+      timeoutMs,
+    );
     promise.then(
       (value) => {
         clearTimeout(timer);
@@ -832,15 +885,20 @@ function sanitizeGeneratedComposerText(text: string): string {
     .trim();
 }
 
-function isSendableComposerText(text: string, scenario: ComposerScenario): boolean {
+function isSendableComposerText(
+  text: string,
+  scenario: ComposerScenario,
+): boolean {
   const cleaned = text.trim();
   if (!cleaned) return false;
   if (/Personal AI context|Please review/i.test(cleaned)) return false;
   if (/^我理解当前是在讨论[:：]/.test(cleaned)) return false;
   if (/^我这边先补充几个相关点[:：]/.test(cleaned)) return false;
   if (/^我补充一下相关背景[:：]/.test(cleaned)) return false;
-  if (scenario !== 'web_agent_prompt' && cleaned.split('\n').length > 8) return false;
-  if (scenario === 'jira_comment' && /哈哈|嘿|lol|😂|🤣/i.test(cleaned)) return false;
+  if (scenario !== 'web_agent_prompt' && cleaned.split('\n').length > 8)
+    return false;
+  if (scenario === 'jira_comment' && /哈哈|嘿|lol|😂|🤣/i.test(cleaned))
+    return false;
   return true;
 }
 
@@ -848,8 +906,94 @@ function getComposerScenario(request: ComposerAssistRequest): ComposerScenario {
   if (request.scenario) return request.scenario;
   if (request.contextType === 'web_agent_prompt') return 'web_agent_prompt';
   if (request.contextType === 'jira_issue') return 'jira_comment';
-  if (request.surface === 'ringcentral_thread' || request.threadRoot) return 'thread_reply';
+  if (request.surface === 'ringcentral_thread' || request.threadRoot)
+    return 'thread_reply';
   return 'instant_message_reply';
+}
+
+type OwnerReplyState = {
+  state: 'none' | 'partial' | 'complete';
+  text: string;
+};
+
+function getOwnerReplyState(request: ComposerAssistRequest): OwnerReplyState {
+  if (request.contextType === 'web_agent_prompt') {
+    return { state: 'none', text: '' };
+  }
+
+  const messageItems =
+    normalizeComposerContextItems(request).filter(isComposerReplyItem);
+  const trailingOwnerItems: ComposerContextItem[] = [];
+  for (let index = messageItems.length - 1; index >= 0; index -= 1) {
+    const item = messageItems[index];
+    if (!isOwnerAuthoredContextItem(item)) break;
+    trailingOwnerItems.unshift(item);
+  }
+
+  if (trailingOwnerItems.length === 0) {
+    return { state: 'none', text: '' };
+  }
+
+  const text = trailingOwnerItems
+    .map((item) => formatChatSnippet(item.text || item.title || ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  if (!text) return { state: 'none', text: '' };
+
+  return {
+    state: isCompleteOwnerReply(text) ? 'complete' : 'partial',
+    text,
+  };
+}
+
+function isComposerReplyItem(item: ComposerContextItem): boolean {
+  return (
+    item.type === 'message' ||
+    item.type === 'thread_reply' ||
+    item.type === 'thread_root' ||
+    item.type === 'jira_comment'
+  );
+}
+
+function isOwnerAuthoredContextItem(item: ComposerContextItem): boolean {
+  return (
+    item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner'
+  );
+}
+
+function isCompleteOwnerReply(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+
+  const hasFinalRequestOrAnswerCue =
+    /https?:\/\/|@[a-z0-9._-]+|[?？]|麻烦|帮忙|看看|能不能|是否|已经|已|可以|我也|上传|补齐|补充/i.test(
+      normalized,
+    );
+  const hasIncompleteCue =
+    /等下|稍等|待补|还没|没想好|先不|先别|草稿|draft|\btodo\b|ignore|忽略|测试下|test/i.test(
+      normalized,
+    );
+
+  if (hasIncompleteCue && !hasFinalRequestOrAnswerCue) return false;
+  if (hasFinalRequestOrAnswerCue) return true;
+  return normalized.length >= 4;
+}
+
+function isRedundantWithOwnerReply(
+  text: string,
+  request: ComposerAssistRequest,
+): boolean {
+  const ownerReplyState = getOwnerReplyState(request);
+  if (ownerReplyState.state === 'none' || !ownerReplyState.text) return false;
+
+  const generatedTokens = tokenizeComposerRelevance(text);
+  const ownerTokens = tokenizeComposerRelevance(ownerReplyState.text);
+  if (generatedTokens.size === 0 || ownerTokens.size === 0) return false;
+
+  const overlap = countTokenOverlap(generatedTokens, ownerTokens);
+  const smaller = Math.min(generatedTokens.size, ownerTokens.size);
+  return overlap >= 3 && overlap / Math.max(smaller, 1) >= 0.55;
 }
 
 function describeComposerScenario(scenario: ComposerScenario): string {
@@ -874,7 +1018,9 @@ function formatComposerAudience(request: ComposerAssistRequest): string {
     audience?.conversationTitle || request.title,
     audience?.issueKey,
     audience?.issueSummary,
-    audience?.people?.length ? `visible people: ${audience.people.slice(0, 8).join(', ')}` : '',
+    audience?.people?.length
+      ? `visible people: ${audience.people.slice(0, 8).join(', ')}`
+      : '',
     audience?.relationshipHint,
   ]
     .filter(Boolean)
@@ -889,15 +1035,19 @@ function filterComposerEvidence(
     return evidence;
   }
 
-  const contextTokens = tokenizeComposerRelevance(buildComposerSceneText(request));
-  const sourceTokens = tokenizeComposerRelevance(buildComposerSourceAnchorText(request));
+  const contextTokens = tokenizeComposerRelevance(
+    buildComposerSceneText(request),
+  );
+  const sourceTokens = tokenizeComposerRelevance(
+    buildComposerSourceAnchorText(request),
+  );
   if (contextTokens.size === 0) {
     return [];
   }
 
   return evidence.filter((item) => {
     const evidenceTokens = tokenizeComposerRelevance(
-        [item.snippet, item.title, item.sourceTitle].filter(Boolean).join(' '),
+      [item.snippet, item.title, item.sourceTitle].filter(Boolean).join(' '),
     );
     const overlap = countTokenOverlap(contextTokens, evidenceTokens);
     if (overlap >= MIN_COMPOSER_CONTEXT_OVERLAP) return true;
@@ -942,14 +1092,23 @@ function buildComposerContextText(
   const items = normalizeComposerContextItems(request);
   const maxItems = options.maxItems ?? 12;
   const contextLines = takeComposerContextItems(items, maxItems)
-    .map((item) => formatComposerContextItem(item, options.includeSender ?? false))
+    .map((item) =>
+      formatComposerContextItem(item, options.includeSender ?? false),
+    )
     .filter(Boolean);
-  const audience = options.includeAudience ? formatComposerAudience(request) : '';
+  const audience = options.includeAudience
+    ? formatComposerAudience(request)
+    : '';
   return [audience, ...contextLines].filter(Boolean).join('\n');
 }
 
-function buildComposerSecondaryContextTexts(request: ComposerAssistRequest): string[] {
-  const itemTexts = takeComposerContextItems(normalizeComposerContextItems(request), 8)
+function buildComposerSecondaryContextTexts(
+  request: ComposerAssistRequest,
+): string[] {
+  const itemTexts = takeComposerContextItems(
+    normalizeComposerContextItems(request),
+    8,
+  )
     .map((item) => item.text || item.title || '')
     .filter(Boolean)
     .slice(0, 8);
@@ -971,7 +1130,9 @@ function normalizeComposerContextItems(
   request: ComposerAssistRequest,
 ): ComposerContextItem[] {
   if (request.contextItems?.length) {
-    return request.contextItems.filter((item) => Boolean(item.text || item.title));
+    return request.contextItems.filter((item) =>
+      Boolean(item.text || item.title),
+    );
   }
 
   const items: ComposerContextItem[] = [];
@@ -1013,7 +1174,9 @@ function formatComposerContextItem(
   return `${label}${speaker}${body}`;
 }
 
-function getComposerContextItemLabel(type: ComposerContextItem['type']): string {
+function getComposerContextItemLabel(
+  type: ComposerContextItem['type'],
+): string {
   switch (type) {
     case 'thread_root':
       return 'Thread root: ';
@@ -1122,7 +1285,10 @@ function formatChatSnippet(text: string): string {
     .replace(/^\s*\d+[.)]\s+/, '')
     .replace(/^Personal AI context(?: pack)?[^:]*:\s*/i, '')
     .replace(/\s*Please review and edit before sending\.?\s*$/i, '')
-    .replace(/\s*Please verify against the current Jira state before posting\.?\s*$/i, '')
+    .replace(
+      /\s*Please verify against the current Jira state before posting\.?\s*$/i,
+      '',
+    )
     .trim()
     .slice(0, 360);
 }
@@ -1203,10 +1369,11 @@ function renderMeetingPilotHandoffText(
 function summarizeIntent(request: ComposerAssistRequest): string {
   const draft = request.draftText?.replace(/\s+/g, ' ').trim();
   if (draft) return draft.slice(0, 220);
-  return (request.title || request.primaryText || 'continue this conversation').slice(
-    0,
-    220,
-  );
+  return (
+    request.title ||
+    request.primaryText ||
+    'continue this conversation'
+  ).slice(0, 220);
 }
 
 function clipInsertText(text: string): string {
@@ -1223,8 +1390,8 @@ function contextAssistToComposer(
       request.contextType === 'jira_issue'
         ? 'jira_issue'
         : request.contextType === 'web_agent_prompt'
-          ? 'web_agent_prompt'
-          : 'message_thread',
+        ? 'web_agent_prompt'
+        : 'message_thread',
     title: request.title,
     url: request.url,
     draftText: request.userGoal,
