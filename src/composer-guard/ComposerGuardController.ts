@@ -19,17 +19,39 @@ const ROOT_ID = 'pai-composer-guard-root';
 const STYLE_ID = 'pai-composer-guard-styles';
 const REQUEST_DEBOUNCE_MS = 700;
 const DISMISS_TTL_MS = 30 * 60 * 1000;
-const MIN_ASSIST_CONFIDENCE = 0.58;
+const ENV_CONFIG_KEY = 'envConfig';
+const FEEDBACK_EVENTS_KEY = 'composerGuardFeedbackEvents';
+const CONFIDENCE_THRESHOLD_CONFIG_KEY = 'COMPOSER_GUARD_CONFIDENCE_THRESHOLD';
+export const DEFAULT_ASSIST_CONFIDENCE_THRESHOLD = 0.78;
+const MIN_ADAPTIVE_ASSIST_CONFIDENCE = 0.62;
+const MAX_ADAPTIVE_ASSIST_CONFIDENCE = 0.92;
+const ACCEPT_THRESHOLD_ADJUSTMENT_RATE = 0.12;
+const REJECT_THRESHOLD_ADJUSTMENT_RATE = 0.16;
+const MAX_FEEDBACK_EVENTS = 100;
 const ICON_SIZE = 32;
 const VIEWPORT_MARGIN = 8;
 
 type GuardState = 'ready';
+type AssistFeedbackKind = 'accepted' | 'rejected';
 
 interface ActiveComposerSession {
   target: ComposerTarget;
   snapshot: SiteContextSnapshot;
   contextKey: string;
   draftText: string;
+}
+
+interface ComposerGuardFeedbackEvent {
+  kind: AssistFeedbackKind;
+  timestamp: number;
+  thresholdBefore: number;
+  thresholdAfter: number;
+  confidence?: number;
+  suggestionType?: ComposerAssistResponse['suggestionType'];
+  surface?: SiteContextSnapshot['surface'];
+  scenario?: SiteContextSnapshot['scenario'];
+  contextType?: SiteContextSnapshot['contextType'];
+  contextKey?: string;
 }
 
 function escapeHtml(text: string): string {
@@ -44,7 +66,10 @@ function sanitizeComposerInsertText(text: string): string {
     .replace(/^Personal AI context pack \(review before sending\):\s*/i, '')
     .replace(/^Personal AI context for [^\n]+:\s*/i, '')
     .replace(/\n?\s*Please review and edit before sending\.?\s*$/i, '')
-    .replace(/\n?\s*Please verify against the current Jira state before posting\.?\s*$/i, '')
+    .replace(
+      /\n?\s*Please verify against the current Jira state before posting\.?\s*$/i,
+      '',
+    )
     .trim();
 }
 
@@ -75,6 +100,75 @@ function isSensitiveEditableElement(element: HTMLElement): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function roundThreshold(value: number): number {
+  return Number(value.toFixed(3));
+}
+
+export function normalizeComposerAssistThreshold(
+  value: unknown,
+  fallback = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
+): number {
+  const candidate = Number(value);
+  if (!Number.isFinite(candidate)) {
+    return roundThreshold(
+      clamp(
+        Number.isFinite(fallback)
+          ? fallback
+          : DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
+        MIN_ADAPTIVE_ASSIST_CONFIDENCE,
+        MAX_ADAPTIVE_ASSIST_CONFIDENCE,
+      ),
+    );
+  }
+  return roundThreshold(
+    clamp(
+      candidate,
+      MIN_ADAPTIVE_ASSIST_CONFIDENCE,
+      MAX_ADAPTIVE_ASSIST_CONFIDENCE,
+    ),
+  );
+}
+
+export function getNextComposerAssistThreshold(
+  currentValue: number,
+  feedbackKind: AssistFeedbackKind,
+): number {
+  const current = normalizeComposerAssistThreshold(currentValue);
+  if (feedbackKind === 'accepted') {
+    const delta =
+      (current - MIN_ADAPTIVE_ASSIST_CONFIDENCE) *
+      ACCEPT_THRESHOLD_ADJUSTMENT_RATE;
+    return normalizeComposerAssistThreshold(current - delta);
+  }
+
+  const delta =
+    (MAX_ADAPTIVE_ASSIST_CONFIDENCE - current) *
+    REJECT_THRESHOLD_ADJUSTMENT_RATE;
+  return normalizeComposerAssistThreshold(current + delta);
+}
+
+function getChromeLocal<T extends Record<string, unknown>>(
+  keys: string | string[],
+): Promise<T> {
+  return new Promise((resolve) => {
+    if (typeof chrome === 'undefined' || !chrome?.storage?.local) {
+      resolve({} as T);
+      return;
+    }
+    chrome.storage.local.get(keys, (result) => resolve(result as T));
+  });
+}
+
+function setChromeLocal(items: Record<string, unknown>): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof chrome === 'undefined' || !chrome?.storage?.local) {
+      resolve();
+      return;
+    }
+    chrome.storage.local.set(items, () => resolve());
+  });
 }
 
 function isUsableViewportRect(rect: DOMRect): boolean {
@@ -121,6 +215,7 @@ export class ComposerGuardController {
   private positionTimer: number | null = null;
   private requestSeq = 0;
   private dismissedContexts = new Map<string, number>();
+  private assistConfidenceThreshold = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD;
 
   start(): void {
     if (hasSensitiveUrlSignal(window.location.href)) {
@@ -128,13 +223,32 @@ export class ComposerGuardController {
     }
 
     this.injectStyles();
+    void this.loadAssistConfidenceThreshold();
     document.addEventListener('focusin', this.handleFocusIn, true);
     document.addEventListener('input', this.handleInput, true);
     document.addEventListener('keydown', this.handleKeyDown, true);
     window.addEventListener('scroll', this.schedulePositionRefresh, true);
     window.addEventListener('resize', this.schedulePositionRefresh);
+    if (typeof chrome !== 'undefined' && chrome?.storage?.onChanged) {
+      chrome.storage.onChanged.addListener(this.handleStorageChanged);
+    }
     this.activateFromElement(document.activeElement, true);
   }
+
+  private handleStorageChanged = (
+    changes: Record<string, chrome.storage.StorageChange>,
+    areaName: string,
+  ): void => {
+    if (areaName !== 'local' || !changes[ENV_CONFIG_KEY]) return;
+    const nextConfig = changes[ENV_CONFIG_KEY].newValue as
+      | Record<string, unknown>
+      | undefined;
+    this.assistConfidenceThreshold = normalizeComposerAssistThreshold(
+      nextConfig?.[CONFIDENCE_THRESHOLD_CONFIG_KEY],
+      this.assistConfidenceThreshold,
+    );
+    this.renderIfUseful();
+  };
 
   private handleFocusIn = (event: FocusEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
@@ -166,7 +280,11 @@ export class ComposerGuardController {
       return;
     }
 
-    const context = findActiveComposerContext(document, window.location, fromElement);
+    const context = findActiveComposerContext(
+      document,
+      window.location,
+      fromElement,
+    );
     if (!context) {
       if (fromElement && isComposerElement(fromElement)) {
         this.clear();
@@ -180,7 +298,9 @@ export class ComposerGuardController {
     }
 
     const draftText = readComposerText(context.target);
-    const contextKey = `${context.snapshot.contextKey}|${context.target.mode || 'composer'}`;
+    const contextKey = `${context.snapshot.contextKey}|${
+      context.target.mode || 'composer'
+    }`;
     if (this.isDismissed(contextKey)) {
       this.clear();
       return;
@@ -243,27 +363,34 @@ export class ComposerGuardController {
     const payload = this.buildAssistRequest(session);
 
     try {
-      const response = await new Promise<ComposerAssistResponse>((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          {
-            type: 'COMPOSER_ASSIST_REQUEST',
-            request: payload,
-          },
-          (rawResponse) => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-              return;
-            }
-            if (rawResponse?.success === false) {
-              reject(new Error(rawResponse.error || 'composer_assist_failed'));
-              return;
-            }
-            resolve(rawResponse?.result || rawResponse);
-          },
-        );
-      });
+      const response = await new Promise<ComposerAssistResponse>(
+        (resolve, reject) => {
+          chrome.runtime.sendMessage(
+            {
+              type: 'COMPOSER_ASSIST_REQUEST',
+              request: payload,
+            },
+            (rawResponse) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+              }
+              if (rawResponse?.success === false) {
+                reject(
+                  new Error(rawResponse.error || 'composer_assist_failed'),
+                );
+                return;
+              }
+              resolve(rawResponse?.result || rawResponse);
+            },
+          );
+        },
+      );
 
-      if (requestSeq !== this.requestSeq || this.activeSession?.contextKey !== session.contextKey) {
+      if (
+        requestSeq !== this.requestSeq ||
+        this.activeSession?.contextKey !== session.contextKey
+      ) {
         return;
       }
 
@@ -278,7 +405,9 @@ export class ComposerGuardController {
     }
   }
 
-  private buildAssistRequest(session: ActiveComposerSession): ComposerAssistRequest {
+  private buildAssistRequest(
+    session: ActiveComposerSession,
+  ): ComposerAssistRequest {
     const snapshot = session.snapshot;
     return {
       surface: snapshot.surface,
@@ -319,7 +448,7 @@ export class ComposerGuardController {
       this.latestAssist?.available &&
         this.latestAssist.insertText &&
         looksLikeSendableComposerText(this.latestAssist.insertText) &&
-        this.latestAssist.confidence >= MIN_ASSIST_CONFIDENCE,
+        this.latestAssist.confidence >= this.assistConfidenceThreshold,
     );
   }
 
@@ -347,7 +476,15 @@ export class ComposerGuardController {
         <img src="${iconUrl}" alt="Personal AI" />
       </button>
       <div class="pai-composer-guard-popover" aria-hidden="true">
-        <div class="pai-composer-guard-label">建议内容</div>
+        <div class="pai-composer-guard-header">
+          <div class="pai-composer-guard-label">建议内容</div>
+          <button class="pai-composer-guard-feedback-button" data-action="reject" type="button" title="减少这类建议" aria-label="减少这类建议">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10 15.5v3.1c0 .8.7 1.4 1.5 1.4.5 0 .9-.2 1.2-.6l4.2-5.4c.4-.5.6-1.1.6-1.8V5.6c0-1-.8-1.8-1.8-1.8H7.1c-.7 0-1.4.4-1.7 1L2.7 11c-.5 1.2.4 2.5 1.7 2.5H10Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              <path d="M19 4v10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
       </div>
     `;
@@ -362,21 +499,88 @@ export class ComposerGuardController {
       event.preventDefault();
       event.stopPropagation();
     });
+    const rejectButton = root.querySelector('[data-action="reject"]');
+    rejectButton?.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.recordAssistFeedback('rejected');
+      this.dismissCurrentContext();
+    });
+    rejectButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
 
     this.positionRoot();
   }
 
   private buildSuggestionPreview(assist: ComposerAssistResponse): string {
     const preview = sanitizeComposerInsertText(assist.insertText || '');
-    return preview.length > 520 ? `${preview.slice(0, 520).trimEnd()}...` : preview;
+    return preview.length > 520
+      ? `${preview.slice(0, 520).trimEnd()}...`
+      : preview;
   }
 
   private insertLatestAssist(): void {
     if (!this.activeSession || !this.latestAssist?.insertText) return;
     const insertText = sanitizeComposerInsertText(this.latestAssist.insertText);
     if (!insertText) return;
+    void this.recordAssistFeedback('accepted');
     insertTextIntoComposer(this.activeSession.target, insertText);
     this.clear();
+  }
+
+  private async loadAssistConfidenceThreshold(): Promise<void> {
+    const result = await getChromeLocal<{
+      envConfig?: Record<string, unknown>;
+    }>(ENV_CONFIG_KEY);
+    this.assistConfidenceThreshold = normalizeComposerAssistThreshold(
+      result.envConfig?.[CONFIDENCE_THRESHOLD_CONFIG_KEY],
+    );
+    this.renderIfUseful();
+  }
+
+  private async recordAssistFeedback(kind: AssistFeedbackKind): Promise<void> {
+    const session = this.activeSession;
+    const assist = this.latestAssist;
+    const result = await getChromeLocal<{
+      envConfig?: Record<string, unknown>;
+      composerGuardFeedbackEvents?: ComposerGuardFeedbackEvent[];
+    }>([ENV_CONFIG_KEY, FEEDBACK_EVENTS_KEY]);
+    const envConfig = result.envConfig || {};
+    const currentThreshold = normalizeComposerAssistThreshold(
+      envConfig[CONFIDENCE_THRESHOLD_CONFIG_KEY],
+      this.assistConfidenceThreshold,
+    );
+    const nextThreshold = getNextComposerAssistThreshold(
+      currentThreshold,
+      kind,
+    );
+    this.assistConfidenceThreshold = nextThreshold;
+
+    const event: ComposerGuardFeedbackEvent = {
+      kind,
+      timestamp: Date.now(),
+      thresholdBefore: currentThreshold,
+      thresholdAfter: nextThreshold,
+      confidence: assist?.confidence,
+      suggestionType: assist?.suggestionType,
+      surface: session?.snapshot.surface,
+      scenario: session?.snapshot.scenario,
+      contextType: session?.snapshot.contextType,
+      contextKey: session?.contextKey,
+    };
+    const events = Array.isArray(result.composerGuardFeedbackEvents)
+      ? result.composerGuardFeedbackEvents
+      : [];
+
+    await setChromeLocal({
+      [ENV_CONFIG_KEY]: {
+        ...envConfig,
+        [CONFIDENCE_THRESHOLD_CONFIG_KEY]: nextThreshold,
+      },
+      [FEEDBACK_EVENTS_KEY]: [...events, event].slice(-MAX_FEEDBACK_EVENTS),
+    });
   }
 
   private dismissCurrentContext(): void {
@@ -437,8 +641,14 @@ export class ComposerGuardController {
       return;
     }
 
-    const maxTop = Math.max(VIEWPORT_MARGIN, window.innerHeight - ICON_SIZE - VIEWPORT_MARGIN);
-    const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - ICON_SIZE - VIEWPORT_MARGIN);
+    const maxTop = Math.max(
+      VIEWPORT_MARGIN,
+      window.innerHeight - ICON_SIZE - VIEWPORT_MARGIN,
+    );
+    const maxLeft = Math.max(
+      VIEWPORT_MARGIN,
+      window.innerWidth - ICON_SIZE - VIEWPORT_MARGIN,
+    );
     const top = clamp(rect.top - 12, VIEWPORT_MARGIN, maxTop);
     const left = clamp(rect.right - 28, VIEWPORT_MARGIN, maxLeft);
     this.root.classList.toggle('pai-composer-guard--near-left', left < 360);
@@ -564,10 +774,40 @@ export class ComposerGuardController {
       .pai-composer-guard--near-left:hover .pai-composer-guard-popover {
         transform: translateX(0) scale(1);
       }
+      .pai-composer-guard-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
       .pai-composer-guard-label {
         color: #c62828;
         font-weight: 700;
-        margin-bottom: 6px;
+      }
+      .pai-composer-guard-feedback-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        width: 18px;
+        height: 18px;
+        margin: 0;
+        border: 0;
+        border-radius: 4px;
+        padding: 0;
+        color: #9ca3af;
+        background: transparent;
+        cursor: pointer;
+      }
+      .pai-composer-guard-feedback-button:hover {
+        color: #c62828;
+        background: rgba(198, 40, 40, 0.08);
+      }
+      .pai-composer-guard-feedback-button svg {
+        width: 14px;
+        height: 14px;
+        display: block;
       }
       .pai-composer-guard-text {
         color: #374151;
