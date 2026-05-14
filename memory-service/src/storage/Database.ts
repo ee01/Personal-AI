@@ -174,11 +174,65 @@ export class Database {
       console.log(`[Database] Migration applied: ${file}`);
     }
 
+    this.ensureSchemaCompatibility();
+
     if (newlyApplied.length === 0) {
       console.log('[Database] All migrations already applied');
     }
 
     return newlyApplied;
+  }
+
+  /**
+   * Repair schema drift caused by older CREATE TABLE IF NOT EXISTS migrations.
+   *
+   * Some early migrations were expanded after they had already run on the
+   * long-lived personal database. SQLite does not add those new columns when
+   * the original CREATE TABLE IF NOT EXISTS statement is skipped, so keep this
+   * small compatibility pass for known legacy gaps.
+   */
+  private ensureSchemaCompatibility(): void {
+    this.ensureColumn(
+      'relationship_radar_people',
+      'summary',
+      'TEXT',
+    );
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    if (!this.tableExists(table) || this.columnExists(table, column)) {
+      return;
+    }
+
+    console.warn(
+      `[Database] Adding missing legacy column ${table}.${column}`,
+    );
+    this.db.exec(
+      `ALTER TABLE ${this.quoteIdentifier(table)} ADD COLUMN ${this.quoteIdentifier(column)} ${definition}`,
+    );
+  }
+
+  private tableExists(table: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+      )
+      .get(table) as { name: string } | undefined;
+    return Boolean(row);
+  }
+
+  private columnExists(table: string, column: string): boolean {
+    const rows = this.db.pragma(
+      `table_info(${this.quoteIdentifier(table)})`,
+    ) as Array<{ name: string }>;
+    return rows.some((row) => row.name === column);
+  }
+
+  private quoteIdentifier(identifier: string): string {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+      throw new Error(`Unsafe SQL identifier: ${identifier}`);
+    }
+    return `"${identifier}"`;
   }
 
   /**

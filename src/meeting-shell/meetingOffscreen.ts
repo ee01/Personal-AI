@@ -408,9 +408,12 @@ function buildTabAsrProviders(
   language: MeetingTranscribeLanguage,
 ) {
   if (transcriptionMode === 'local-only') {
-    return [new DesktopLocalAsrProvider(language), new WebSpeechProvider(language)];
+    return [
+      new DesktopLocalAsrProvider(language, 'tab'),
+      new WebSpeechProvider(language),
+    ];
   }
-  return [new DesktopLocalAsrProvider(language), new CloudASRProvider()];
+  return [new DesktopLocalAsrProvider(language, 'tab'), new CloudASRProvider()];
 }
 
 function buildMicAsrProviders(
@@ -420,7 +423,7 @@ function buildMicAsrProviders(
   if (transcriptionMode === 'cloud-only') {
     return [new CloudASRProvider()];
   }
-  return [new DesktopLocalAsrProvider(language)];
+  return [new DesktopLocalAsrProvider(language, 'mic')];
 }
 
 function getAsrLanguageLogLabel(language: MeetingTranscribeLanguage): string {
@@ -929,14 +932,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'MEETING_PILOT_OFFSCREEN_START_CAPTURE') {
-    void startCapture(message).catch((error) => {
-      const messageText = String(
-        (error as Error)?.message || error || 'capture_start_failed',
-      );
-      appendCaptureLog('error', `capture start failed: ${messageText}`);
-      emitCaptureStatus('error', messageText);
-    });
-    sendResponse({ success: true });
+    void startCapture(message)
+      .then(() => {
+        sendResponse({ success: true });
+      })
+      .catch((error) => {
+        const messageText = String(
+          (error as Error)?.message || error || 'capture_start_failed',
+        );
+        appendCaptureLog('error', `capture start failed: ${messageText}`);
+        emitCaptureStatus('error', messageText);
+        sendResponse({ success: false, error: messageText });
+      });
     return true;
   }
   if (message.type === 'MEETING_PILOT_OFFSCREEN_INJECT_CHUNK') {

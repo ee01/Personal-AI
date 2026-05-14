@@ -10,6 +10,7 @@ import EntityListPage from './components/EntityListPage.vue';
 import TopicDetailPage from './components/TopicDetailPage.vue';
 import UserProfilePage from './components/UserProfilePage.vue';
 import PersonDetailPage from './components/PersonDetailPage.vue';
+import RelationshipRadarPage from './components/RelationshipRadarPage.vue';
 import SearchResultPage from './components/SearchResultPage.vue';
 import PlaceholderPage from './components/PlaceholderPage.vue';
 import FollowThreads from './components/FollowThreads.vue';
@@ -50,6 +51,11 @@ const routes = [
     name: 'OutreachSessionDetail',
     component: OutreachSessionDetail,
     props: true,
+  },
+  {
+    path: '/entity/Person',
+    name: 'RelationshipRadar',
+    component: RelationshipRadarPage,
   },
   {
     path: '/entity/:type',

@@ -1,15 +1,26 @@
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  PROJECT_DASHBOARD_VIEW_FILTER_LABELS,
   buildMilestoneClassToken,
   buildMilestoneMarkerText,
+  buildProjectDashboardViewFilterCounts,
+  buildProjectDashboardViewReason,
+  buildProjectDataQualitySummary,
+  buildProjectDecisionSummary,
   buildProjectFocusSummary,
+  buildProjectFreshnessSummary,
   buildProjectHealthSummary,
+  buildProjectReviewQueueSummary,
+  buildProjectReviewSummary,
   buildProjectStatusEvidenceItems,
   buildProjectStatusUpdateDraft,
+  buildProjectTaskRiskSummary,
   compareProjectsByDashboardPriority,
+  filterProjectsByDashboardView,
   parseProjectDashboardLaunchContext,
   projectMatchesDashboardLaunchContext,
+  type ProjectDashboardViewFilter,
   type ProjectDashboardLaunchContext,
   type ProjectSyncReadiness,
   type ProjectStatusEvidenceItem,
@@ -40,6 +51,7 @@ interface FishboneProject {
   milestones: MilestonePoint[]; // 动态多点
   tasks: FishboneTask[];
   platformConfig?: PlatformKey[]; // 默认 sdk/ios/android/qa，可选 dev
+  lastStatusReviewAt?: string;
 }
 
 type AddTaskState = {
@@ -54,6 +66,11 @@ type TaskAttention = {
   level: 'blocked' | 'overdue' | 'due-soon';
   label: string;
   detail: string;
+  risk: {
+    score: number;
+    label: string;
+    drivers: string[];
+  };
 };
 
 const clampPercent = (value: number, min = 10, max = 90) => {
@@ -93,12 +110,15 @@ const buildProjectAttentionTasks = (project: FishboneProject, now = new Date()):
 
   return tasks
     .map((task): TaskAttention | null => {
+      const risk = buildProjectTaskRiskSummary(project, task, { now });
+
       if (normalizeStatusToken(task.status).includes('blocked')) {
         return {
           task,
           level: 'blocked',
           label: '阻塞',
           detail: task.eta ? `ETA ${task.eta}` : '需要明确处理人',
+          risk,
         };
       }
 
@@ -113,6 +133,7 @@ const buildProjectAttentionTasks = (project: FishboneProject, now = new Date()):
           level: 'overdue',
           label: '过期',
           detail: `已超 ${Math.abs(days)} 天`,
+          risk,
         };
       }
 
@@ -122,6 +143,7 @@ const buildProjectAttentionTasks = (project: FishboneProject, now = new Date()):
           level: 'due-soon',
           label: '近 7 天',
           detail: days === 0 ? '今天到期' : `${days} 天后到期`,
+          risk,
         };
       }
 
@@ -132,6 +154,8 @@ const buildProjectAttentionTasks = (project: FishboneProject, now = new Date()):
       const levelWeight = { blocked: 0, overdue: 1, 'due-soon': 2 };
       const levelDelta = levelWeight[a.level] - levelWeight[b.level];
       if (levelDelta !== 0) return levelDelta;
+      const riskDelta = b.risk.score - a.risk.score;
+      if (riskDelta !== 0) return riskDelta;
       return (a.task.eta || '').localeCompare(b.task.eta || '');
     })
     .slice(0, 4);
@@ -159,6 +183,8 @@ const ProjectDashboard: React.FC = () => {
   } | null>(null);
   const [syncReadiness, setSyncReadiness] = useState<ProjectSyncReadiness | null>(null);
   const [syncPanelOpen, setSyncPanelOpen] = useState(false);
+  const [projectFilter, setProjectFilter] = useState<ProjectDashboardViewFilter>('all');
+  const [focusExpanded, setFocusExpanded] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // 新增项目入口
@@ -230,6 +256,17 @@ const ProjectDashboard: React.FC = () => {
       acc.dueSoonTasks += health.dueSoonTasks;
       if (health.state === 'off-track') acc.offTrackProjects += 1;
       if (health.state === 'at-risk') acc.atRiskProjects += 1;
+      const freshness = buildProjectFreshnessSummary(project, dashboardNow);
+      if (freshness.state === 'stale') acc.staleProjects += 1;
+      if (freshness.state === 'unscheduled') acc.unscheduledProjects += 1;
+      const review = buildProjectReviewSummary(project, dashboardNow);
+      if (review.state === 'due' || review.state === 'overdue' || review.state === 'unreviewed') {
+        acc.reviewDueProjects += 1;
+      }
+      const dataQuality = buildProjectDataQualitySummary(project);
+      if (dataQuality.state === 'partial' || dataQuality.state === 'poor') {
+        acc.evidenceGapProjects += 1;
+      }
       return acc;
     },
     {
@@ -241,14 +278,31 @@ const ProjectDashboard: React.FC = () => {
       dueSoonTasks: 0,
       offTrackProjects: 0,
       atRiskProjects: 0,
+      staleProjects: 0,
+      unscheduledProjects: 0,
+      reviewDueProjects: 0,
+      evidenceGapProjects: 0,
     },
   ), [projects, dashboardNow]);
 
   const focusSummary = useMemo(
-    () => buildProjectFocusSummary(projects, { now: dashboardNow, maxItems: 8 }),
-    [projects, dashboardNow],
+    () => buildProjectFocusSummary(projects, {
+      now: dashboardNow,
+      maxItems: focusExpanded ? Number.POSITIVE_INFINITY : 8,
+    }),
+    [projects, dashboardNow, focusExpanded],
   );
   const focusItems = focusSummary.visibleItems;
+
+  const projectFilterCounts = useMemo(
+    () => buildProjectDashboardViewFilterCounts(projects, dashboardNow),
+    [projects, dashboardNow],
+  );
+
+  const reviewQueue = useMemo(
+    () => buildProjectReviewQueueSummary(projects, { now: dashboardNow, maxItems: 3 }),
+    [projects, dashboardNow],
+  );
 
   const prioritizedProjects = useMemo(
     () => [...projects].sort((a, b) => {
@@ -262,6 +316,11 @@ const ProjectDashboard: React.FC = () => {
       return compareProjectsByDashboardPriority(a, b, dashboardNow);
     }),
     [projects, dashboardNow, launchContext],
+  );
+
+  const visibleProjects = useMemo(
+    () => filterProjectsByDashboardView(prioritizedProjects, projectFilter, dashboardNow),
+    [prioritizedProjects, projectFilter, dashboardNow],
   );
 
   useEffect(() => {
@@ -533,29 +592,26 @@ const ProjectDashboard: React.FC = () => {
     }
   };
 
-  const handleOpenStatusDraftPreview = (project: FishboneProject) => {
+  const buildStatusDraftPreviewState = (project: FishboneProject, draftOverride?: string) => {
     const generatedDraft = buildProjectStatusUpdateDraft(project, { now: dashboardNow });
-    setStatusDraftPreview({
+    return {
       project,
-      draft: generatedDraft,
+      draft: draftOverride ?? generatedDraft,
       generatedDraft,
       evidence: buildProjectStatusEvidenceItems(project, { now: dashboardNow, maxAttentionTasks: 8 }),
       lastGeneratedAt: new Date(),
-    });
+    };
+  };
+
+  const handleOpenStatusDraftPreview = (project: FishboneProject) => {
+    setStatusDraftPreview(buildStatusDraftPreviewState(project));
   };
 
   const handleResetStatusDraft = () => {
     setStatusDraftPreview(prev => {
       if (!prev) return prev;
 
-      const generatedDraft = buildProjectStatusUpdateDraft(prev.project, { now: dashboardNow });
-      return {
-        ...prev,
-        draft: generatedDraft,
-        generatedDraft,
-        evidence: buildProjectStatusEvidenceItems(prev.project, { now: dashboardNow, maxAttentionTasks: 8 }),
-        lastGeneratedAt: new Date(),
-      };
+      return buildStatusDraftPreviewState(prev.project);
     });
   };
 
@@ -566,6 +622,61 @@ const ProjectDashboard: React.FC = () => {
     } catch (error) {
       console.error('复制状态草稿失败:', error);
       showActionStatus('error', error instanceof Error ? error.message : '复制状态草稿失败');
+    }
+  };
+
+  const markProjectReviewed = async (project: FishboneProject, options?: { silent?: boolean }) => {
+    const reviewedAt = new Date().toISOString();
+    const reviewedProject = { ...project, lastStatusReviewAt: reviewedAt };
+    setProjects(prev => prev.map(item => item.id === project.id ? { ...item, lastStatusReviewAt: reviewedAt } : item));
+    setStatusDraftPreview(prev => {
+      if (!prev || prev.project.id !== project.id) return prev;
+      const nextProject = { ...prev.project, lastStatusReviewAt: reviewedAt };
+      const draftOverride = prev.draft === prev.generatedDraft ? undefined : prev.draft;
+      return buildStatusDraftPreviewState(nextProject, draftOverride);
+    });
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'UPDATE_PROJECT_ITEM',
+        projectId: project.id,
+        itemType: 'project',
+        itemId: project.id,
+        changes: { lastStatusReviewAt: reviewedAt },
+      });
+      if (!response?.success) {
+        throw new Error(response?.error || '标记复核失败');
+      }
+      if (!options?.silent) {
+        showActionStatus('success', `项目 ${project.name} 已标记为已复核`);
+      }
+      setStatusDraftPreview(prev => {
+        if (!prev || prev.project.id !== project.id) return prev;
+        const draftOverride = prev.draft === prev.generatedDraft ? undefined : prev.draft;
+        return buildStatusDraftPreviewState(reviewedProject, draftOverride);
+      });
+      await loadProjects({ silent: true });
+      return true;
+    } catch (error) {
+      if (!options?.silent) {
+        showActionStatus('error', error instanceof Error ? error.message : '标记复核失败');
+      }
+      await loadProjects({ silent: true });
+      return false;
+    }
+  };
+
+  const handleCopyAndMarkStatusDraft = async (project: FishboneProject, draft?: string) => {
+    try {
+      await copyTextToClipboard(draft || buildProjectStatusUpdateDraft(project, { now: dashboardNow }));
+      const marked = await markProjectReviewed(project, { silent: true });
+      if (!marked) {
+        throw new Error('状态草稿已复制，但标记复核失败');
+      }
+      showActionStatus('success', `项目 ${project.name} 状态更新已复制并标记复核`);
+    } catch (error) {
+      console.error('复制并标记复核失败:', error);
+      showActionStatus('error', error instanceof Error ? error.message : '复制并标记复核失败');
     }
   };
 
@@ -988,6 +1099,9 @@ const ProjectDashboard: React.FC = () => {
               if (Object.prototype.hasOwnProperty.call(prev, positionKey)) {
                 // 如果已有自定义锚点位置，保持不变
                 newPositions[positionKey] = prev[positionKey];
+              } else if (typeof task.anchorPosition === 'number' && Number.isFinite(task.anchorPosition)) {
+                // 刷新/缩放后优先保留已持久化的拖拽锚点
+                newPositions[positionKey] = clampPercent(task.anchorPosition, 2, 98);
               } else {
                 // 使用默认的均匀分布锚点位置
                 const tasks = [...project.tasks].sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
@@ -1162,13 +1276,27 @@ const ProjectDashboard: React.FC = () => {
                   : '暂无阻塞、过期或 7 天内到期任务'}
               </h2>
             </div>
-            <div className="overview-metrics">
-              <span>{dashboardStats.totalProjects} 项目</span>
-              <span>{dashboardStats.completedTasks}/{dashboardStats.totalTasks} 完成</span>
-              <span>{dashboardStats.blockedTasks} 阻塞</span>
-              <span>{dashboardStats.overdueTasks} 过期</span>
-              <span>{dashboardStats.dueSoonTasks} 近 7 天</span>
-              <span>{dashboardStats.offTrackProjects + dashboardStats.atRiskProjects} 需关注项目</span>
+            <div className="overview-side">
+              <div className="overview-metrics">
+                <span>{dashboardStats.totalProjects} 项目</span>
+                <span>{dashboardStats.completedTasks}/{dashboardStats.totalTasks} 完成</span>
+                <span>{dashboardStats.blockedTasks} 阻塞</span>
+                <span>{dashboardStats.overdueTasks} 过期</span>
+                <span>{dashboardStats.dueSoonTasks} 近 7 天</span>
+                <span>{dashboardStats.offTrackProjects + dashboardStats.atRiskProjects} 需关注项目</span>
+                <span>{dashboardStats.staleProjects} 计划陈旧</span>
+                <span>{dashboardStats.reviewDueProjects} 待复核</span>
+                <span>{dashboardStats.evidenceGapProjects} 证据待补</span>
+              </div>
+              {focusSummary.totalItems > 8 && (
+                <button
+                  type="button"
+                  className="focus-toggle"
+                  onClick={() => setFocusExpanded(prev => !prev)}
+                >
+                  {focusExpanded ? '收起焦点' : `展开全部 ${focusSummary.totalItems} 项`}
+                </button>
+              )}
             </div>
           </div>
           <div className="focus-list" aria-label="跨项目优先处理任务">
@@ -1190,16 +1318,102 @@ const ProjectDashboard: React.FC = () => {
                       <span>{item.projectName}</span>
                     </span>
                     <span className="focus-detail">{item.detail}</span>
+                    <span className={`focus-risk risk-${item.risk.label === '高风险' ? 'high' : item.risk.label === '中风险' ? 'medium' : 'low'}`}>
+                      {item.risk.label} {item.risk.score}
+                    </span>
                   </button>
                 ))}
                 {focusSummary.hiddenItems > 0 && (
-                  <div className="focus-overflow" aria-label={`还有 ${focusSummary.hiddenItems} 个优先处理项未在首屏展示`}>
-                    还有 {focusSummary.hiddenItems} 个未展示，按刷新后的项目排序继续查看。
-                  </div>
+                  <button
+                    type="button"
+                    className="focus-overflow"
+                    aria-label={`还有 ${focusSummary.hiddenItems} 个优先处理项未在首屏展示，点击展开全部`}
+                    onClick={() => setFocusExpanded(true)}
+                  >
+                    还有 {focusSummary.hiddenItems} 个未展示，点击展开全部焦点项。
+                  </button>
+                )}
+                {focusExpanded && focusSummary.totalItems > 8 && (
+                  <button
+                    type="button"
+                    className="focus-overflow collapse"
+                    onClick={() => setFocusExpanded(false)}
+                  >
+                    已显示全部焦点项，点击收起。
+                  </button>
                 )}
               </>
             )}
           </div>
+          {reviewQueue.totalItems > 0 && (
+            <div className="review-queue" aria-label="项目状态复核队列">
+              <div className="review-queue-header">
+                <div>
+                  <span>状态复核</span>
+                  <strong>{reviewQueue.totalItems} 个项目待复核</strong>
+                </div>
+                {reviewQueue.hiddenItems > 0 && (
+                  <em>先显示最需要处理的 {reviewQueue.visibleItems.length} 个</em>
+                )}
+              </div>
+              <div className="review-queue-list">
+                {reviewQueue.visibleItems.map(item => {
+                  const queueProject = projects.find(project => project.id === item.projectId);
+                  return (
+                    <div className={`review-queue-item ${item.reviewState} ${item.severity}`} key={item.projectId}>
+                      <div className="review-queue-main">
+                        <span>{item.label}</span>
+                        <strong>{item.projectName}</strong>
+                        <em>{item.headline}</em>
+                      </div>
+                      <div className="review-queue-meta">
+                        <span>{item.healthLabel}</span>
+                        <span>{item.viewLabel}</span>
+                        {item.nextDueDate && <span>下次 {item.nextDueDate}</span>}
+                      </div>
+                      <div className="review-queue-next">{item.nextStep}</div>
+                      <div className="review-queue-actions">
+                        <button
+                          type="button"
+                          className="review-queue-action"
+                          disabled={!queueProject}
+                          onClick={() => queueProject && handleOpenStatusDraftPreview(queueProject)}
+                        >
+                          预览草稿
+                        </button>
+                        <button
+                          type="button"
+                          className="review-queue-action primary"
+                          disabled={!queueProject}
+                          onClick={() => queueProject && markProjectReviewed(queueProject)}
+                        >
+                          标记已复核
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {projects.length > 0 && (
+        <div className="project-filter-bar" role="toolbar" aria-label="项目列表筛选">
+          <span className="project-filter-label">项目视图</span>
+          {(Object.keys(PROJECT_DASHBOARD_VIEW_FILTER_LABELS) as ProjectDashboardViewFilter[]).map(filter => (
+            <button
+              key={filter}
+              type="button"
+              className={`project-filter-button ${projectFilter === filter ? 'active' : ''}`}
+              aria-pressed={projectFilter === filter}
+              onClick={() => setProjectFilter(filter)}
+            >
+              <span>{PROJECT_DASHBOARD_VIEW_FILTER_LABELS[filter]}</span>
+              <strong>{projectFilterCounts[filter]}</strong>
+            </button>
+          ))}
         </div>
       )}
 
@@ -1214,11 +1428,25 @@ const ProjectDashboard: React.FC = () => {
               </button>
             </div>
           )}
-          {prioritizedProjects.map(project => {
+          {projects.length > 0 && visibleProjects.length === 0 && (
+            <div className="empty-projects filter-empty">
+              <h2>当前视图没有项目</h2>
+              <p>切换到全部项目，或在项目里补充任务 ETA 和阻塞状态后再筛选。</p>
+              <button className="control-button primary" onClick={() => setProjectFilter('all')}>
+                查看全部项目
+              </button>
+            </div>
+          )}
+          {visibleProjects.map(project => {
             const milestones = project.milestones || [];
             const tasks = [...(project.tasks || [])]
               .sort((a, b) => (a.eta || a.id).localeCompare(b.eta || b.id));
             const health = buildProjectHealthSummary(project, dashboardNow);
+            const freshness = buildProjectFreshnessSummary(project, dashboardNow);
+            const review = buildProjectReviewSummary(project, dashboardNow);
+            const dataQuality = buildProjectDataQualitySummary(project);
+            const decisionSummary = buildProjectDecisionSummary(project, { now: dashboardNow });
+            const viewReason = buildProjectDashboardViewReason(project, dashboardNow);
             const attentionTasks = buildProjectAttentionTasks(project, dashboardNow);
             return (
               <div
@@ -1237,6 +1465,13 @@ const ProjectDashboard: React.FC = () => {
                       onClick={() => handleOpenStatusDraftPreview(project)}
                     >
                       预览状态草稿
+                    </button>
+                    <button
+                      className="badge review-badge"
+                      type="button"
+                      onClick={() => markProjectReviewed(project)}
+                    >
+                      标记已复核
                     </button>
                     <button
                       className="badge"
@@ -1258,9 +1493,54 @@ const ProjectDashboard: React.FC = () => {
                     <span>{health.blockedTasks} 阻塞</span>
                     <span>{health.overdueTasks} 过期</span>
                     <span>{health.dueSoonTasks} 近 7 天</span>
+                    <span className={`freshness-chip ${freshness.state}`}>{freshness.label}</span>
+                    <span className={`review-chip ${review.state}`}>{review.label}</span>
+                    <span className={`data-quality-chip ${dataQuality.state}`}>{dataQuality.label}</span>
                     {health.upcomingMilestone && (
                       <span>下个里程碑: {health.upcomingMilestone.label} · {health.upcomingMilestone.date}</span>
                     )}
+                  </div>
+                </div>
+                <div className={`view-reason-strip ${viewReason.severity}`} aria-label={`${project.name} 当前视图归类原因`}>
+                  <span className="view-reason-kicker">{projectFilter === 'all' ? '当前归类' : '筛选命中'}</span>
+                  <strong>{viewReason.label}</strong>
+                  <span>{viewReason.headline}</span>
+                  <em>{viewReason.detail}</em>
+                </div>
+                {freshness.state !== 'fresh' && (
+                  <div className={`freshness-strip ${freshness.state}`} role="status" aria-label={`${project.name} 数据新鲜度`}>
+                    <strong>{freshness.label}</strong>
+                    <span>{freshness.headline}</span>
+                    <em>{freshness.nextStep}</em>
+                  </div>
+                )}
+                {review.state !== 'current' && (
+                  <div className={`review-strip ${review.state}`} role="status" aria-label={`${project.name} 状态复核`}>
+                    <strong>{review.label}</strong>
+                    <span>{review.headline}</span>
+                    <em>{review.nextStep}{review.nextDueDate ? `；下次复核 ${review.nextDueDate}` : ''}</em>
+                  </div>
+                )}
+                {(dataQuality.state === 'partial' || dataQuality.state === 'poor') && (
+                  <div className={`data-quality-strip ${dataQuality.state}`} role="status" aria-label={`${project.name} 证据覆盖度`}>
+                    <strong>{dataQuality.label}</strong>
+                    <span>{dataQuality.headline}</span>
+                    <em>{dataQuality.nextStep}</em>
+                  </div>
+                )}
+                <div className="decision-strip" aria-label={`${project.name} 决策依据`}>
+                  <div className="decision-next">
+                    <span>建议下一步</span>
+                    <strong>{decisionSummary.nextAction}</strong>
+                  </div>
+                  <div className="decision-signals">
+                    {decisionSummary.signals.map(signal => (
+                      <div className={`decision-signal ${signal.severity}`} key={signal.id}>
+                        <span>{signal.label}</span>
+                        <strong>{signal.title}</strong>
+                        <em>{signal.detail}</em>
+                      </div>
+                    ))}
                   </div>
                 </div>
                 {attentionTasks.length > 0 && (
@@ -1278,6 +1558,9 @@ const ProjectDashboard: React.FC = () => {
                           <span className="project-alert-label">{item.label}</span>
                           <span className="project-alert-title">{item.task.title}</span>
                           <span className="project-alert-detail">{item.detail}</span>
+                          <span className={`project-alert-risk risk-${item.risk.label === '高风险' ? 'high' : item.risk.label === '中风险' ? 'medium' : 'low'}`}>
+                            {item.risk.score}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -1516,9 +1799,15 @@ const ProjectDashboard: React.FC = () => {
                 </button>
                 <button
                   className="save-btn"
+                  onClick={() => handleCopyAndMarkStatusDraft(statusDraftPreview.project, statusDraftPreview.draft)}
+                >
+                  复制并标记复核
+                </button>
+                <button
+                  className="cancel-btn"
                   onClick={() => handleCopyStatusDraft(statusDraftPreview.project, statusDraftPreview.draft)}
                 >
-                  复制审阅稿
+                  仅复制
                 </button>
                 <button className="cancel-btn" onClick={() => setStatusDraftPreview(null)}>
                   关闭
@@ -1765,6 +2054,7 @@ const ProjectDashboard: React.FC = () => {
         .notification-area { position: fixed; top: 16px; right: 16px; z-index: 1000; max-width: 400px; pointer-events: none; }
         .refresh-btn { padding: 8px 16px; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
         .badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; background: var(--primary-light); color: var(--primary); border: none; cursor: pointer; }
+        .badge.review-badge { background: #ecfdf5; color: #047857; }
         .badge:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .data-source-banner { margin: 0 20px 16px; background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--info); border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; box-shadow: var(--shadow); }
@@ -1804,11 +2094,14 @@ const ProjectDashboard: React.FC = () => {
         .overview-summary { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 14px; }
         .overview-eyebrow { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
         .overview-title { margin: 4px 0 0; color: var(--text); font-size: 20px; line-height: 1.25; }
+        .overview-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-width: 280px; }
         .overview-metrics { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; color: var(--text-muted); font-size: 12px; }
         .overview-metrics span { padding: 5px 9px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
+        .focus-toggle { border: 1px solid #bfdbfe; border-radius: 6px; background: var(--primary-light); color: #1d4ed8; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .focus-toggle:hover { background: #bfdbfe; }
         .focus-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
         .focus-empty { padding: 12px; color: var(--text-muted); background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
-        .focus-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 10px; cursor: pointer; color: var(--text); transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+        .focus-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 10px; cursor: pointer; color: var(--text); transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
         .focus-item:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: var(--shadow); }
         .focus-label { border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 700; color: white; white-space: nowrap; }
         .focus-item.blocked .focus-label { background: var(--danger); }
@@ -1818,7 +2111,43 @@ const ProjectDashboard: React.FC = () => {
         .focus-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
         .focus-main span { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .focus-detail { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
-        .focus-overflow { display: flex; align-items: center; min-height: 44px; padding: 10px 12px; color: var(--text-muted); background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; font-size: 12px; line-height: 1.35; }
+        .focus-risk, .project-alert-risk { border-radius: 999px; padding: 3px 7px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+        .risk-high { color: #b91c1c; background: #fee2e2; border: 1px solid #fecaca; }
+        .risk-medium { color: #92400e; background: #fef3c7; border: 1px solid #fde68a; }
+        .risk-low { color: #0f766e; background: #ccfbf1; border: 1px solid #99f6e4; }
+        .focus-overflow { display: flex; align-items: center; min-height: 44px; padding: 10px 12px; color: var(--primary); background: var(--bg); border: 1px dashed #bfdbfe; border-radius: 8px; font-size: 12px; line-height: 1.35; text-align: left; cursor: pointer; }
+        .focus-overflow:hover { background: var(--primary-light); border-style: solid; }
+        .focus-overflow.collapse { color: var(--text-muted); border-color: var(--border); }
+        .review-queue { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+        .review-queue-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
+        .review-queue-header span { display: block; color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; }
+        .review-queue-header strong { color: var(--text); font-size: 14px; }
+        .review-queue-header em { color: var(--text-muted); font-size: 12px; font-style: normal; }
+        .review-queue-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+        .review-queue-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--bg); padding: 10px; }
+        .review-queue-item.warning { border-left-color: var(--warning); background: #fffbeb; }
+        .review-queue-item.critical { border-left-color: var(--danger); background: #fef2f2; }
+        .review-queue-main { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; align-items: center; }
+        .review-queue-main span { grid-row: span 2; align-self: start; border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .review-queue-main strong { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .review-queue-main em { color: var(--text-muted); font-size: 12px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .review-queue-meta { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+        .review-queue-meta span { border-radius: 999px; padding: 2px 7px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+        .review-queue-next { grid-column: 1 / -1; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+        .review-queue-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+        .review-queue-action { border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .review-queue-action:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+        .review-queue-action.primary { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }
+        .review-queue-action.primary:hover:not(:disabled) { background: #d1fae5; }
+        .review-queue-action:disabled { opacity: .6; cursor: not-allowed; }
+
+        .project-filter-bar { margin: 0 20px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .project-filter-label { color: var(--text-muted); font-size: 12px; font-weight: 700; margin-right: 4px; }
+        .project-filter-button { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); color: var(--text); padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 650; }
+        .project-filter-button strong { color: var(--text-muted); font-size: 11px; }
+        .project-filter-button:hover { border-color: var(--primary); color: var(--primary); }
+        .project-filter-button.active { border-color: var(--primary); background: var(--primary-light); color: #1d4ed8; }
+        .project-filter-button.active strong { color: #1d4ed8; }
 
         .project-list { display: flex; flex-direction: column; gap: 30px; }
         .project-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
@@ -1828,6 +2157,7 @@ const ProjectDashboard: React.FC = () => {
         .empty-projects { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 28px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
         .empty-projects h2 { margin: 0; color: var(--text); font-size: 20px; }
         .empty-projects p { margin: 0; color: var(--text-muted); }
+        .empty-projects.filter-empty { box-shadow: none; border-style: dashed; }
         .project-health { border: 1px solid var(--border); border-left-width: 5px; border-radius: 8px; padding: 12px 14px; margin-bottom: 18px; background: #f8fafc; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
         .project-health.empty { border-left-color: var(--text-muted); }
         .project-health.on-track { border-left-color: var(--success); }
@@ -1841,10 +2171,54 @@ const ProjectDashboard: React.FC = () => {
         .health-headline { font-weight: 650; color: var(--text); }
         .health-metrics { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; color: var(--text-muted); font-size: 12px; }
         .health-metrics span { padding: 3px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
+        .health-metrics .freshness-chip { font-weight: 700; }
+        .freshness-chip.fresh { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+        .freshness-chip.aging { color: #0e7490; border-color: #a5f3fc; background: #ecfeff; }
+        .freshness-chip.stale { color: #92400e; border-color: #fde68a; background: #fffbeb; }
+        .freshness-chip.unscheduled { color: #475569; border-color: #cbd5e1; background: #f8fafc; }
+        .review-chip.current { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+        .review-chip.due { color: #0e7490; border-color: #a5f3fc; background: #ecfeff; }
+        .review-chip.overdue, .review-chip.unreviewed { color: #92400e; border-color: #fde68a; background: #fffbeb; }
+        .data-quality-chip.complete { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+        .data-quality-chip.partial { color: #0e7490; border-color: #a5f3fc; background: #ecfeff; }
+        .data-quality-chip.poor { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+        .data-quality-chip.empty { color: #475569; border-color: #cbd5e1; background: #f8fafc; }
+        .view-reason-strip { margin: -6px 0 18px; display: grid; grid-template-columns: auto auto minmax(0, 1fr); column-gap: 9px; row-gap: 3px; align-items: center; padding: 9px 12px; border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 8px; background: var(--card); }
+        .view-reason-strip.critical { border-left-color: var(--danger); background: #fef2f2; }
+        .view-reason-strip.warning { border-left-color: var(--warning); background: #fffbeb; }
+        .view-reason-strip.info { border-left-color: var(--info); background: #ecfeff; }
+        .view-reason-strip.neutral { border-left-color: var(--success); background: #ecfdf5; }
+        .view-reason-kicker { color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+        .view-reason-strip strong { padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,0.78); border: 1px solid var(--border); color: var(--text); font-size: 12px; white-space: nowrap; }
+        .view-reason-strip span:not(.view-reason-kicker) { color: var(--text); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+        .view-reason-strip em { grid-column: 3; color: var(--text-muted); font-size: 12px; font-style: normal; overflow-wrap: anywhere; }
+        .freshness-strip, .review-strip, .data-quality-strip { margin: -6px 0 18px; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 2px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--bg); }
+        .freshness-strip strong, .review-strip strong, .data-quality-strip strong { grid-row: span 2; padding: 3px 9px; border-radius: 999px; background: var(--card); color: var(--text); font-size: 12px; white-space: nowrap; }
+        .freshness-strip span, .review-strip span, .data-quality-strip span { color: var(--text); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+        .freshness-strip em, .review-strip em, .data-quality-strip em { color: var(--text-muted); font-size: 12px; font-style: normal; overflow-wrap: anywhere; }
+        .freshness-strip.stale { border-left-color: var(--warning); background: #fffbeb; }
+        .freshness-strip.unscheduled { border-left-color: var(--text-muted); }
+        .review-strip.overdue, .review-strip.unreviewed { border-left-color: var(--warning); background: #fffbeb; }
+        .data-quality-strip.poor { border-left-color: var(--danger); background: #fef2f2; }
+        .decision-strip { margin: -6px 0 18px; padding: 10px 0 0; border-top: 1px solid var(--border); display: grid; grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr); gap: 14px; align-items: start; }
+        .decision-next { min-width: 0; }
+        .decision-next span { display: block; color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+        .decision-next strong { display: block; color: var(--text); font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
+        .decision-signals { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+        .decision-signal { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 7px; row-gap: 2px; align-items: center; min-width: 180px; max-width: 280px; padding: 7px 9px; border-left: 3px solid var(--border); background: rgba(255,255,255,0.65); }
+        .decision-signal span { grid-row: span 2; align-self: start; padding: 2px 6px; border-radius: 999px; background: var(--bg); color: var(--text-muted); font-size: 10px; font-weight: 700; white-space: nowrap; }
+        .decision-signal strong { color: var(--text); font-size: 12px; line-height: 1.3; overflow-wrap: anywhere; }
+        .decision-signal em { color: var(--text-muted); font-size: 11px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .decision-signal.critical { border-left-color: var(--danger); }
+        .decision-signal.critical span { color: #b91c1c; background: #fee2e2; }
+        .decision-signal.warning { border-left-color: var(--warning); }
+        .decision-signal.warning span { color: #92400e; background: #fef3c7; }
+        .decision-signal.info { border-left-color: var(--info); }
+        .decision-signal.info span { color: #0e7490; background: #ecfeff; }
         .project-alerts { display: flex; gap: 12px; align-items: center; margin: -6px 0 18px; }
         .project-alerts-title { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; white-space: nowrap; }
         .project-alerts-list { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
-        .project-alert { display: inline-flex; align-items: center; gap: 7px; max-width: 320px; border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 7px 9px; color: var(--text); cursor: pointer; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+        .project-alert { display: inline-flex; align-items: center; gap: 7px; max-width: 360px; border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 7px 9px; color: var(--text); cursor: pointer; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
         .project-alert:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: var(--shadow); }
         .project-alert-label { border-radius: 999px; padding: 2px 7px; font-size: 11px; font-weight: 700; color: white; white-space: nowrap; }
         .project-alert.blocked .project-alert-label { background: var(--danger); }
@@ -2054,6 +2428,9 @@ const ProjectDashboard: React.FC = () => {
         .status-evidence-label.jira { background: var(--primary); }
         .status-evidence-label.platform { background: var(--warning); }
         .status-evidence-label.milestone { background: var(--success); }
+        .status-evidence-label.freshness { background: var(--info); }
+        .status-evidence-label.review { background: var(--purple); }
+        .status-evidence-label.data-quality { background: var(--danger); }
         .status-evidence-item strong { display: block; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
         .status-evidence-item span:not(.status-evidence-label) { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
         .status-evidence-item em { display: block; margin-top: 3px; color: var(--text-muted); font-size: 11px; font-style: normal; }
@@ -2077,6 +2454,11 @@ const ProjectDashboard: React.FC = () => {
           .project-health { align-items: flex-start; flex-direction: column; }
           .health-main { min-width: 0; }
           .health-metrics { justify-content: flex-start; }
+          .view-reason-strip { grid-template-columns: auto minmax(0, 1fr); }
+          .view-reason-strip strong { justify-self: start; }
+          .view-reason-strip span:not(.view-reason-kicker), .view-reason-strip em { grid-column: 1 / -1; }
+          .decision-strip { grid-template-columns: 1fr; }
+          .decision-signal { max-width: none; width: 100%; }
           .fishbone-container { height: 160px; padding: 15px; }
           .task-bone { min-width: 140px; padding: 8px 12px; }
           .zoom-content { margin: 20px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); }
@@ -2091,9 +2473,16 @@ const ProjectDashboard: React.FC = () => {
           .launch-context-copy { align-items: flex-start; }
           .dashboard-overview { margin: 0 10px 10px; }
           .overview-summary { flex-direction: column; }
+          .overview-side { align-items: flex-start; min-width: 0; width: 100%; }
           .overview-metrics { justify-content: flex-start; }
+          .project-filter-bar { margin: 0 10px 10px; }
           .focus-item { grid-template-columns: auto minmax(0, 1fr); }
           .focus-detail { grid-column: 2; }
+          .focus-risk { grid-column: 2; justify-self: start; }
+          .review-queue-header { flex-direction: column; align-items: flex-start; }
+          .review-queue-item { grid-template-columns: 1fr; }
+          .review-queue-meta { justify-content: flex-start; }
+          .review-queue-actions { justify-content: flex-start; }
           .status-draft-layout { grid-template-columns: 1fr; }
           .status-draft-textarea { min-height: 280px; }
           .status-draft-actions { justify-content: flex-start; }

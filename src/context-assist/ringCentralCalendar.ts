@@ -2,6 +2,7 @@ import type { CalendarEventSyncItem } from '../services/MemoryServiceClient';
 import { extractRingCentralVideoJoinUrl } from '../ringcentralNativeJoin';
 
 interface RingCentralCalendarRawEvent {
+  [key: string]: unknown;
   id?: string;
   uid?: string;
   eventId?: string;
@@ -65,6 +66,7 @@ function normalizeRingCentralCalendarEvent(
     event.meetingUri ||
     extractRingCentralVideoJoinUrl(location) ||
     extractRingCentralVideoJoinUrl(event.description) ||
+    findRingCentralJoinUrlInRawEvent(event) ||
     event.webLink;
   const descriptionPreview = clipText(stripHtml(event.description), 700);
   return {
@@ -96,6 +98,116 @@ function normalizeRingCentralCalendarEvent(
       responseStatus: event.responseStatus,
     },
   };
+}
+
+function findRingCentralJoinUrlInRawEvent(
+  event: RingCentralCalendarRawEvent,
+): string | undefined {
+  return findRingCentralJoinUrlInValue(event, '$') || undefined;
+}
+
+function findRingCentralJoinUrlInValue(
+  value: unknown,
+  path: string,
+  depth = 8,
+  seen = new WeakSet<object>(),
+): string | null {
+  if (value == null || depth < 0) {
+    return null;
+  }
+
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    const text = String(value);
+    const embeddedUrl = extractRingCentralVideoJoinUrl(text);
+    if (embeddedUrl) {
+      return embeddedUrl;
+    }
+
+    if (isProbableRingCentralMeetingIdPath(path)) {
+      const meetingId = text.trim();
+      if (/^\d{3,}$/.test(meetingId)) {
+        return `https://v.ringcentral.com/join/${meetingId}`;
+      }
+    }
+
+    return null;
+  }
+
+  if (typeof value !== 'object') {
+    return null;
+  }
+
+  if (seen.has(value)) {
+    return null;
+  }
+  seen.add(value);
+
+  const objectValue = value as Record<string, unknown>;
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(objectValue);
+  } catch {
+    return null;
+  }
+
+  const prioritizedKeys = keys
+    .filter(isRingCentralJoinSearchKeyInteresting)
+    .concat(keys.filter((key) => !isRingCentralJoinSearchKeyInteresting(key)));
+  for (const key of prioritizedKeys.slice(0, 120)) {
+    if (isUnsafeRawEventTraversalKey(key)) {
+      continue;
+    }
+
+    let childValue: unknown;
+    try {
+      childValue = objectValue[key];
+    } catch {
+      continue;
+    }
+
+    const match = findRingCentralJoinUrlInValue(
+      childValue,
+      `${path}.${key}`,
+      depth - 1,
+      seen,
+    );
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+function isRingCentralJoinSearchKeyInteresting(key: string): boolean {
+  return /(ringcentral|video|meeting|conference|conf|join|url|uri|link|online|location|description|body|text|sip|dial|access)/i.test(
+    key,
+  );
+}
+
+function isProbableRingCentralMeetingIdPath(path: string): boolean {
+  const normalizedPath = path.toLowerCase();
+  if (
+    !/(ringcentral|video|meeting|conference|conf|join|online|dial)/.test(
+      normalizedPath,
+    )
+  ) {
+    return false;
+  }
+
+  return /(^|\.)(meetingid|meeting_id|conferenceid|conference_id|confid|conf_id|shortid|short_id|accesscode|access_code)$/.test(
+    normalizedPath,
+  );
+}
+
+function isUnsafeRawEventTraversalKey(key: string): boolean {
+  return /^(ownerDocument|parentNode|parentElement|children|childNodes|firstChild|lastChild|nextSibling|previousSibling|__reactFiber)/.test(
+    key,
+  );
 }
 
 function normalizeParticipant(

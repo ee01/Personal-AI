@@ -6,9 +6,15 @@ import {
   IntelligentAgent,
 } from '../src/agentThinking.ts';
 import {
+  buildAgentRunReviewItems,
   buildAgentFlowSteps,
+  getAgentRunReviewSeverity,
+  getStepDiagnosticSummary,
+  getStepIntentSummary,
   getStepKind,
   getStepSummary,
+  getStepVisibleSummary,
+  stepHasEmptyToolEvidence,
   getToolStepResultPresentation,
 } from '../src/agentVisualizerPresentation.ts';
 import { buildRuntimeWatchRules } from '../src/watchRules.ts';
@@ -202,6 +208,33 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('standalone-only regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify([
+              {
+                post_id: 'post-thinking-standalone',
+                summary: 'standalone-only regression 命中记忆入口规则',
+                importanceLevel: 'low',
+                needsProcessing: true,
+                isNoiseMessage: false,
+                matchedRuleRefs: ['outreach:session-before-followup'],
+                matchedRuleIds: [0],
+                matchedRules: ['[RULE_REF:outreach:session-before-followup]'],
+                nextAction: 'finish',
+                tools: [],
+                shouldStore: true,
+                shouldNotify: false,
+                confidence: 0.9,
+                user_relation_type: 'general_interest',
+                entities: {},
+              },
+            ]),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       if (prompt.includes('关注规则')) {
         return new Response(
           JSON.stringify({
@@ -326,19 +359,36 @@ async function main() {
   const agentThinkingSource = readFileSync('src/agentThinking.ts', 'utf8');
   assert.ok(!agentThinkingSource.includes('考虑使用orgStructure'));
   assert.ok(agentThinkingSource.includes('已阻断调用'));
+  assert.ok(agentThinkingSource.includes('publicSummary'));
+  assert.ok(!agentThinkingSource.includes('详细解释你的思考过程'));
+  assert.ok(!agentThinkingSource.includes('分析当前情况和下一步行动的详细思考过程'));
   const agentVisualizerSource = readFileSync('src/agent-visualizer.tsx', 'utf8');
   assert.ok(agentVisualizerSource.includes('agentVisualizerPresentation'));
   assert.ok(agentVisualizerSource.includes('role="button"'));
   assert.ok(agentVisualizerSource.includes('aria-expanded'));
+  assert.ok(agentVisualizerSource.includes('决策摘要:'));
+  assert.ok(agentVisualizerSource.includes('调用意图:'));
+  assert.ok(agentVisualizerSource.includes('状态说明:'));
+  assert.ok(agentVisualizerSource.includes('运行检查'));
+  assert.ok(!agentVisualizerSource.includes('思考过程:'));
   const agentVisualizerPresentationSource = readFileSync(
     'src/agentVisualizerPresentation.ts',
     'utf8',
   );
   assert.ok(agentVisualizerPresentationSource.includes('stepHasToolBlocked'));
   assert.ok(agentVisualizerPresentationSource.includes('已阻断'));
+  assert.ok(agentVisualizerPresentationSource.includes('getStepVisibleSummary'));
+  assert.ok(agentVisualizerPresentationSource.includes('getStepDiagnosticSummary'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentRunReviewItems'));
+  assert.ok(agentVisualizerPresentationSource.includes('stepHasEmptyToolEvidence'));
+  assert.ok(agentVisualizerPresentationSource.includes('证据不足'));
   const agentVisualizerCss = readFileSync('static/agent-visualizer.css', 'utf8');
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
   assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
+  assert.ok(agentVisualizerCss.includes('.flow-node.tool.empty'));
+  assert.ok(agentVisualizerCss.includes('.node-result.empty'));
+  assert.ok(agentVisualizerCss.includes('.diagnostic-content'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-review'));
 
   const timestamp = Date.parse('2026-05-08T00:00:00.000Z');
   const blockedStep = {
@@ -358,10 +408,36 @@ async function main() {
     getStepSummary(blockedStep),
     'orgStructure 未通过工具校验，已阻断执行。',
   );
+  assert.equal(
+    getStepVisibleSummary({
+      ...blockedStep,
+      thought: '内部候选推理不应该成为 UI 主路径',
+      publicSummary: '未注册工具未通过执行前校验，系统已阻断调用。',
+    }),
+    'orgStructure 未通过工具校验，已阻断执行。',
+  );
+  assert.equal(
+    getStepIntentSummary({
+      ...blockedStep,
+      thought: '内部候选推理不应该成为 UI 主路径',
+      publicSummary: '未注册工具未通过执行前校验，系统已阻断调用。',
+    }),
+    '未注册工具未通过执行前校验，系统已阻断调用。',
+  );
+  assert.match(
+    getStepDiagnosticSummary(blockedStep),
+    /执行前校验拦截/,
+  );
   assert.deepEqual(getToolStepResultPresentation(blockedStep), {
     label: '已阻断',
     className: 'blocked',
   });
+  const blockedReviewItems = buildAgentRunReviewItems([blockedStep]);
+  assert.equal(getAgentRunReviewSeverity(blockedReviewItems), 'warning');
+  assert.deepEqual(blockedReviewItems.map((item) => item.title), [
+    '工具被阻断',
+    '缺少完成状态',
+  ]);
 
   const mixedSkippedStep = {
     timestamp: timestamp + 1000,
@@ -386,6 +462,19 @@ async function main() {
     label: '部分跳过',
     className: 'partial',
   });
+  const skippedReviewItems = buildAgentRunReviewItems([
+    mixedSkippedStep,
+    {
+      timestamp: timestamp + 1500,
+      thought: '完成',
+      publicSummary: '已有足够信息，结束分析。',
+      action: 'finish',
+    },
+  ]);
+  assert.equal(getAgentRunReviewSeverity(skippedReviewItems), 'info');
+  assert.deepEqual(skippedReviewItems.map((item) => item.title), [
+    '重复调用已跳过',
+  ]);
 
   const errorStep = {
     timestamp: timestamp + 2000,
@@ -400,9 +489,111 @@ async function main() {
   };
   assert.equal(getStepKind(errorStep), '失败');
   assert.equal(getToolStepResultPresentation(errorStep).className, 'error');
+  const errorReviewItems = buildAgentRunReviewItems([
+    errorStep,
+    {
+      timestamp: timestamp + 2500,
+      thought: '完成',
+      publicSummary: '工具失败后使用已有信息结束。',
+      action: 'finish',
+    },
+  ]);
+  assert.equal(getAgentRunReviewSeverity(errorReviewItems), 'critical');
+  assert.equal(errorReviewItems[0].title, '工具调用失败');
+
+  const jiraSoftFailureStep = {
+    timestamp: timestamp + 2600,
+    thought: 'JIRA 返回失败对象',
+    action: 'use_tool',
+    toolUsed: 'jiraQuery',
+    toolResult: JSON.stringify({
+      jiraQuery: {
+        success: false,
+        source: 'jira-api',
+        message: 'JIRA认证失败',
+      },
+    }),
+  };
+  assert.equal(getStepKind(jiraSoftFailureStep), '失败');
+  assert.equal(
+    getStepSummary(jiraSoftFailureStep),
+    'jiraQuery 调用失败，需要查看调试详情。',
+  );
+  assert.equal(getToolStepResultPresentation(jiraSoftFailureStep).className, 'error');
+
+  const emptyEvidenceStep = {
+    timestamp: timestamp + 2700,
+    thought: '历史工具没有返回证据',
+    action: 'use_tool',
+    toolUsed: 'historySearch',
+    toolResult: JSON.stringify({
+      historySearch: {
+        message: '没有找到匹配的历史消息',
+        result: [],
+      },
+    }),
+  };
+  assert.equal(stepHasEmptyToolEvidence(emptyEvidenceStep), true);
+  assert.equal(getStepKind(emptyEvidenceStep), '证据不足');
+  assert.equal(
+    getStepSummary(emptyEvidenceStep),
+    'historySearch 已执行，但没有返回可用证据。',
+  );
+  assert.match(getStepDiagnosticSummary(emptyEvidenceStep), /返回结果为空/);
+  assert.deepEqual(getToolStepResultPresentation(emptyEvidenceStep), {
+    label: '证据不足',
+    className: 'empty',
+  });
+  assert.equal(
+    stepHasEmptyToolEvidence({
+      ...emptyEvidenceStep,
+      toolResult: JSON.stringify({
+        historySearch: {
+          message: '没有找到匹配的历史消息',
+          result: { memories: [] },
+        },
+      }),
+    }),
+    true,
+  );
+  const emptyEvidenceReviewItems = buildAgentRunReviewItems([
+    emptyEvidenceStep,
+    {
+      timestamp: timestamp + 2800,
+      thought: '完成',
+      publicSummary: '用已有信息结束。',
+      action: 'finish',
+    },
+  ]);
+  assert.equal(getAgentRunReviewSeverity(emptyEvidenceReviewItems), 'warning');
+  assert.deepEqual(emptyEvidenceReviewItems.map((item) => item.title), [
+    '工具证据不足',
+  ]);
+
+  const budgetReviewItems = buildAgentRunReviewItems([
+    {
+      timestamp: timestamp + 3000,
+      thought: '已达到最大行动次数 1，使用当前已收集的信息结束本轮分析。',
+      publicSummary: '已达到最大行动次数 1，使用当前已收集的信息结束本轮分析。',
+      action: 'max_actions_reached',
+    },
+  ]);
+  assert.equal(getAgentRunReviewSeverity(budgetReviewItems), 'warning');
+  assert.equal(budgetReviewItems[0].title, '行动次数用完');
+
+  const okReviewItems = buildAgentRunReviewItems([
+    {
+      timestamp: timestamp + 4000,
+      thought: '完成',
+      publicSummary: '已有足够信息，结束分析。',
+      action: 'finish',
+    },
+  ]);
+  assert.deepEqual(okReviewItems.map((item) => item.title), ['运行正常']);
+  assert.equal(getAgentRunReviewSeverity(okReviewItems), 'ok');
 
   const flowSteps = buildAgentFlowSteps(
-    [blockedStep, mixedSkippedStep, errorStep],
+    [blockedStep, mixedSkippedStep, emptyEvidenceStep, errorStep],
     (time) => String(time),
   );
   assert.deepEqual(
@@ -412,6 +603,7 @@ async function main() {
     [
       'orgStructure:已阻断:blocked',
       'historySearch, historySearch:部分跳过:partial',
+      'historySearch:证据不足:empty',
       'jiraQuery:失败:error',
     ],
   );
@@ -510,6 +702,10 @@ async function main() {
     (step) => step.toolUsed === 'historySearch, historySearch, historySearch',
   );
   assert.ok(toolStep?.toolResult);
+  assert.match(
+    toolStep.publicSummary || '',
+    /准备调用 historySearch/,
+  );
   const toolResult = JSON.parse(toolStep.toolResult);
   assert.ok(Array.isArray(toolResult.historySearch));
   assert.equal(toolResult.historySearch.length, 3);
@@ -535,11 +731,53 @@ async function main() {
     (step) => step.toolUsed === 'orgStructure, historySearch',
   );
   assert.ok(guardToolStep?.toolResult);
+  assert.match(guardToolStep.publicSummary || '', /准备调用 orgStructure、historySearch/);
   const guardToolResult = JSON.parse(guardToolStep.toolResult);
   assert.equal(guardToolResult.orgStructure.blocked, true);
   assert.match(guardToolResult.orgStructure.message, /未注册/);
   assert.equal(guardToolResult.historySearch.blocked, true);
   assert.match(guardToolResult.historySearch.message, /缺少必填参数 content/);
+
+  const standaloneCompletedGroups: any[][] = [];
+  const standaloneResult = await agent.analyze(
+    [
+      {
+        groupName: 'SDK Updates',
+        groupId: 'team-1',
+        standalone: [
+          {
+            content: 'standalone-only regression migration guide draft is ready',
+            sender: 'James Lee',
+            datetime: '2026-04-15T00:02:00.000Z',
+            post_id: 'post-thinking-standalone',
+          },
+        ],
+      },
+    ],
+    {
+      type: 'message',
+      analysisDepth: 'normal',
+      maxActions: 1,
+    },
+    {
+      currentUser: 'Current User',
+      concernedRules,
+      groupInfo: {
+        id: 'team-1',
+        name: 'SDK Updates',
+        members: [],
+      },
+    },
+    (groupResults) => {
+      standaloneCompletedGroups.push(groupResults);
+    },
+  );
+
+  assert.ok(Array.isArray(standaloneResult));
+  assert.equal(standaloneResult.length, 1);
+  assert.equal(standaloneResult[0].postId, 'post-thinking-standalone');
+  assert.equal(standaloneResult[0].shouldStore, true);
+  assert.equal(standaloneCompletedGroups.length, 1);
 
   console.log('verify-memory-entry-agent-thinking: ok');
 }

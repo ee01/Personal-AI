@@ -70,6 +70,39 @@ export function buildAppScriptWebAppActionUrl(webAppUrl: string, action: string)
   }
 }
 
+function normalizeWebAppUrlForDeploymentMatch(webAppUrl: string): string {
+  const trimmedUrl = webAppUrl.trim();
+  if (!trimmedUrl) {
+    return '';
+  }
+
+  try {
+    const url = new URL(trimmedUrl);
+    url.search = '';
+    url.hash = '';
+    url.pathname = url.pathname.replace(/\/+$/, '');
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmedUrl.replace(/[?#].*$/, '').replace(/\/+$/, '');
+  }
+}
+
+function getDeploymentWebAppEntryPoint(deployment: any): any | undefined {
+  return deployment?.entryPoints?.find((entryPoint: any) => entryPoint?.entryPointType === 'WEB_APP');
+}
+
+function getDeploymentWebAppUrl(deployment: any): string {
+  const webAppUrl = getDeploymentWebAppEntryPoint(deployment)?.webApp?.url;
+  return typeof webAppUrl === 'string' ? webAppUrl.trim() : '';
+}
+
+function isVersionedWebAppDeployment(deployment: any): boolean {
+  return Boolean(
+    deployment?.deploymentConfig?.versionNumber &&
+    getDeploymentWebAppEntryPoint(deployment)
+  );
+}
+
 function isProjectHistoryLimitError(errorText: string): boolean {
   return (
     errorText.includes('Cannot create more versions') ||
@@ -277,6 +310,28 @@ export class AppScriptUpdater {
   private buildVersionProbeFailureMessage(error: unknown): string {
     const reason = error instanceof Error ? error.message : String(error);
     return `升级前无法确认线上 App Script 版本，已停止本次升级以避免重复创建脚本版本。请检查网络或 Web App URL 后重试。原因：${reason}`;
+  }
+
+  private deploymentMatchesConfiguredWebAppUrl(deployment: any): boolean {
+    if (!this.config?.webAppUrl) {
+      return true;
+    }
+
+    const configuredWebAppUrl = normalizeWebAppUrlForDeploymentMatch(this.config.webAppUrl);
+    const deploymentWebAppUrl = normalizeWebAppUrlForDeploymentMatch(getDeploymentWebAppUrl(deployment));
+    return Boolean(configuredWebAppUrl && deploymentWebAppUrl && configuredWebAppUrl === deploymentWebAppUrl);
+  }
+
+  private buildDeploymentMismatchMessage(deployments: any[]): string {
+    const configuredWebAppUrl = this.config?.webAppUrl || '未知';
+    const knownWebAppUrls = deployments
+      .map(getDeploymentWebAppUrl)
+      .filter(Boolean);
+    const knownUrlSummary = knownWebAppUrls.length > 0
+      ? knownWebAppUrls.join(', ')
+      : '没有返回可比对的 Web App URL';
+
+    return `未找到与当前 Web App URL 匹配的正式 deployment，已停止升级以避免更新错误的 Web App。当前配置 URL: ${configuredWebAppUrl}；Apps Script API 返回的正式 Web App URL: ${knownUrlSummary}。请重新绑定当前 Web App URL，或在 Apps Script Manage deployments 中确认对应的正式部署后重试。`;
   }
   
   /**
@@ -564,7 +619,7 @@ export class AppScriptUpdater {
         if (isValid) {
           return this.config.deploymentId;
         } else {
-          console.warn('⚠️ 配置中的 deployment 是 @HEAD deployment（只读），需要查找正式版本');
+          console.warn('⚠️ 配置中的 deployment 不可更新或与当前 Web App URL 不匹配，需要查找匹配的正式版本');
         }
       } catch (error) {
         console.warn('⚠️ 验证 deployment ID 失败，重新查找:', error);
@@ -593,10 +648,10 @@ export class AppScriptUpdater {
     const deployments = data.deployments || [];
     
     // 查找正式版本的 Web App deployment（必须有 versionNumber）
-    const versionedDeployment = deployments.find((d: any) => 
-      d.deploymentConfig?.versionNumber &&  // 必须有 versionNumber
-      d.entryPoints?.some((ep: any) => ep.entryPointType === 'WEB_APP')
-    );
+    const versionedDeployments = deployments.filter(isVersionedWebAppDeployment);
+    const versionedDeployment = this.config.webAppUrl
+      ? versionedDeployments.find((deployment: any) => this.deploymentMatchesConfiguredWebAppUrl(deployment))
+      : versionedDeployments[0];
     
     if (versionedDeployment) {
       const deploymentId = versionedDeployment.deploymentId;
@@ -610,6 +665,17 @@ export class AppScriptUpdater {
       }
       
       return deploymentId;
+    }
+
+    if (this.config.webAppUrl && versionedDeployments.length > 0) {
+      console.error('❌ 存在正式 Web App deployment，但没有一个匹配当前配置的 Web App URL');
+      console.error('当前配置 Web App URL:', this.config.webAppUrl);
+      console.error('正式 Web App deployments:', versionedDeployments.map((d: any) => ({
+        id: d.deploymentId,
+        version: d.deploymentConfig?.versionNumber,
+        webAppUrl: getDeploymentWebAppUrl(d)
+      })));
+      throw new Error(this.buildDeploymentMismatchMessage(versionedDeployments));
     }
     
     // 如果没有找到正式版本 deployment，列出所有 deployment 供调试
@@ -648,8 +714,21 @@ export class AppScriptUpdater {
       
       const deployment = await response.json();
       
-      // 检查是否有 versionNumber（正式版本）
-      return !!deployment.deploymentConfig?.versionNumber;
+      // 检查是否有 versionNumber（正式版本），且 Web App URL 与当前配置一致
+      if (!isVersionedWebAppDeployment(deployment)) {
+        return false;
+      }
+
+      if (!this.deploymentMatchesConfiguredWebAppUrl(deployment)) {
+        console.warn('⚠️ 配置中的 deployment 与当前 Web App URL 不匹配，需要重新查找匹配部署', {
+          deploymentId,
+          configuredWebAppUrl: this.config?.webAppUrl,
+          deploymentWebAppUrl: getDeploymentWebAppUrl(deployment)
+        });
+        return false;
+      }
+
+      return true;
       
     } catch (error) {
       console.warn('验证 deployment 失败:', error);

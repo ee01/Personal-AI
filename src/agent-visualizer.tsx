@@ -2,11 +2,16 @@ import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { ThoughtStep } from './agentThinking';
 import {
+  buildAgentRunReviewItems,
   buildAgentFlowSteps,
   formatToolResult,
+  getAgentRunReviewSeverity,
+  getStepDiagnosticSummary,
+  getStepIntentSummary,
   getStepKind,
   getStepKindClass,
-  getStepSummary,
+  getStepVisibleSummary,
+  stepHasEmptyToolEvidence,
   stepHasToolBlocked,
   stepHasToolError,
   stepWasSkipped,
@@ -19,6 +24,16 @@ interface AgentVisualizerProps {
 
 const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isProcessing = false }) => {
   const [expandedSteps, setExpandedSteps] = useState<number[]>([]);
+  const runReviewItems = buildAgentRunReviewItems(thoughtProcess, {
+    isProcessing,
+  });
+  const runReviewSeverity = getAgentRunReviewSeverity(runReviewItems);
+  const runReviewLabel: Record<typeof runReviewSeverity, string> = {
+    ok: '正常',
+    info: '提示',
+    warning: '需复核',
+    critical: '需处理',
+  };
 
   useEffect(() => {
     setExpandedSteps(prevExpanded =>
@@ -67,6 +82,9 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       if (stepHasToolBlocked(step)) {
         return { color: '#D97706', icon: '!' };
       }
+      if (stepHasEmptyToolEvidence(step)) {
+        return { color: '#BF8700', icon: '?' };
+      }
       if (stepWasSkipped(step)) {
         return { color: '#757575', icon: '↷' };
       }
@@ -85,73 +103,118 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
           {isProcessing ? '等待Agent开始处理...' : '没有处理记录'}
         </div>
       ) : (
-        <div className="thought-timeline">
-          {thoughtProcess.map((step, index) => {
-            const isExpanded = expandedSteps.includes(index);
-            const { color, icon } = getStepStyle(step);
-            
-            return (
-              <div 
-                key={index} 
-                className={`thought-step ${isExpanded ? 'expanded' : ''}`}
-                style={{ borderLeftColor: color }}
-              >
-                <div
-                  className="step-header"
-                  onClick={() => toggleExpand(index)}
-                  onKeyDown={(event) => handleHeaderKeyDown(event, index)}
-                  role="button"
-                  tabIndex={0}
-                  aria-expanded={isExpanded}
-                  aria-controls={`agent-step-details-${index}`}
-                >
-                  <span className="step-icon" style={{ backgroundColor: color }}>{icon}</span>
-                  <div className="step-header-main">
-                    <div className="step-title-row">
-                      <span className="step-time">{formatTime(step.timestamp)}</span>
-                      <span className="step-title">
-                        {step.toolUsed
-                          ? `使用工具: ${step.toolUsed}`
-                          : (step.action === 'finish'
-                            ? '完成处理'
-                            : '分析判断')}
-                      </span>
-                      <span className={`step-status ${getStepKindClass(step)}`}>
-                        {getStepKind(step)}
-                      </span>
-                    </div>
-                    <div className="step-summary">{getStepSummary(step)}</div>
-                  </div>
-                  <span className="expand-icon">{isExpanded ? '▼' : '▶'}</span>
-                </div>
-                
-                {isExpanded && (
-                  <div
-                    className="step-details"
-                    id={`agent-step-details-${index}`}
-                  >
-                    <div className="thought-content">
-                      <h4>思考过程:</h4>
-                      <p>{step.thought}</p>
-                    </div>
-                    
-                    <div className="action-content">
-                      <h4>动作:</h4>
-                      <p>{step.action}</p>
-                    </div>
-                    
-                    {step.toolUsed && (
-                      <div className="tool-result">
-                        <h4>工具结果:</h4>
-                        <pre>{formatToolResult(step.toolResult ?? (step as any).result)}</pre>
-                      </div>
-                    )}
-                  </div>
-                )}
+        <>
+          <section
+            className={`agent-run-review ${runReviewSeverity}`}
+            aria-live="polite"
+          >
+            <div className="agent-run-review-header">
+              <div>
+                <h4>运行检查</h4>
+                <p>先处理失败、阻断和预算耗尽，再阅读完整时间线。</p>
               </div>
-            );
-          })}
-        </div>
+              <span className={`agent-run-review-status ${runReviewSeverity}`}>
+                {runReviewLabel[runReviewSeverity]}
+              </span>
+            </div>
+            <div className="agent-run-review-list">
+              {runReviewItems.map((item, index) => (
+                <div
+                  key={`${item.title}-${index}`}
+                  className={`agent-run-review-item ${item.severity}`}
+                >
+                  <div className="agent-run-review-title">{item.title}</div>
+                  <div className="agent-run-review-detail">{item.detail}</div>
+                  <div className="agent-run-review-action">{item.action}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <div className="thought-timeline">
+            {thoughtProcess.map((step, index) => {
+              const isExpanded = expandedSteps.includes(index);
+              const { color, icon } = getStepStyle(step);
+              const intentSummary = getStepIntentSummary(step);
+              const diagnosticSummary = getStepDiagnosticSummary(step);
+
+              return (
+                <div
+                  key={index}
+                  className={`thought-step ${isExpanded ? 'expanded' : ''}`}
+                  style={{ borderLeftColor: color }}
+                >
+                  <div
+                    className="step-header"
+                    onClick={() => toggleExpand(index)}
+                    onKeyDown={(event) => handleHeaderKeyDown(event, index)}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    aria-controls={`agent-step-details-${index}`}
+                  >
+                    <span className="step-icon" style={{ backgroundColor: color }}>{icon}</span>
+                    <div className="step-header-main">
+                      <div className="step-title-row">
+                        <span className="step-time">{formatTime(step.timestamp)}</span>
+                        <span className="step-title">
+                          {step.toolUsed
+                            ? `使用工具: ${step.toolUsed}`
+                            : (step.action === 'finish'
+                              ? '完成处理'
+                              : '分析判断')}
+                        </span>
+                        <span className={`step-status ${getStepKindClass(step)}`}>
+                          {getStepKind(step)}
+                        </span>
+                      </div>
+                      <div className="step-summary">{getStepVisibleSummary(step)}</div>
+                    </div>
+                    <span className="expand-icon">{isExpanded ? '▼' : '▶'}</span>
+                  </div>
+
+                  {isExpanded && (
+                    <div
+                      className="step-details"
+                      id={`agent-step-details-${index}`}
+                    >
+                      <div className="thought-content">
+                        <h4>决策摘要:</h4>
+                        <p>{getStepVisibleSummary(step)}</p>
+                      </div>
+
+                      {intentSummary && (
+                        <div className="intent-content">
+                          <h4>调用意图:</h4>
+                          <p>{intentSummary}</p>
+                        </div>
+                      )}
+
+                      {diagnosticSummary && (
+                        <div className="diagnostic-content">
+                          <h4>状态说明:</h4>
+                          <p>{diagnosticSummary}</p>
+                        </div>
+                      )}
+
+                      <div className="action-content">
+                        <h4>动作:</h4>
+                        <p>{step.action}</p>
+                      </div>
+
+                      {step.toolUsed && (
+                        <div className="tool-result">
+                          <h4>工具结果:</h4>
+                          <pre>{formatToolResult(step.toolResult ?? (step as any).result)}</pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );

@@ -39,7 +39,10 @@ describe('Personal Skill Library API', () => {
     db.prepare('DELETE FROM personal_skills').run();
     db.prepare('DELETE FROM skill_platform_sync_settings').run();
     db.prepare("DELETE FROM notification_records WHERE type = 'skill_suggestion'").run();
-    context.userDataManager.writeFile('config.json', '{}');
+    context.userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({ openClawEnabled: false }),
+    );
   });
 
   afterEach(() => {
@@ -100,6 +103,17 @@ describe('Personal Skill Library API', () => {
       status: 200,
       text: async () => JSON.stringify({ output_text: text }),
     };
+  }
+
+  function escapedOpenClawJsonText(payload: unknown, rounds = 1) {
+    let text = JSON.stringify(payload, null, 2);
+    for (let index = 0; index < rounds; index += 1) {
+      text = text
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n');
+    }
+    return text;
   }
 
   it('keeps suggestions out of the main list until promoted', async () => {
@@ -349,6 +363,85 @@ describe('Personal Skill Library API', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('imports OpenClaw packages returned as escaped JSON text', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+    const context = userContextManager.getContext(USER_ID);
+    context.userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+      }),
+    );
+
+    fetchMock
+      .mockResolvedValueOnce(
+        openClawJsonResponse({
+          ok: true,
+          total: 1,
+          skills: [
+            {
+              slug: 'webinar-release-tracker',
+              title: 'Webinar Release Tracker',
+              description: 'Manage webinar Jira tickets.',
+              version: 'v1',
+              sha256: 'webinar-sha',
+              mtime: 1_000,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        openClawTextResponse(
+          escapedOpenClawJsonText(
+            {
+              ok: true,
+              skill: {
+                slug: 'webinar-release-tracker',
+                title: 'Webinar Release Tracker',
+                description: 'Manage webinar Jira tickets.',
+                version: 'v1',
+                sha256: 'webinar-sha',
+                mtime: 1_000,
+                skillMdBase64: Buffer.from(
+                  '# Webinar Release Tracker\n\nCreate "Webinar Ticket" Jira tasks.',
+                  'utf8',
+                ).toString('base64'),
+                files: [],
+              },
+            },
+            2,
+          ),
+        ),
+      );
+
+    const syncRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/sync/run',
+      headers: { 'x-user-id': USER_ID },
+      payload: { platform: 'openclaw', limit: 10, q: 'webinar' },
+    });
+
+    expect(syncRes.statusCode).toBe(200);
+    expect(syncRes.json().status).toBe('succeeded');
+    expect(syncRes.json().platforms[0]).toMatchObject({
+      processed: 1,
+      imported: 1,
+    });
+
+    const inbox = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inbox.json().items[0]).toMatchObject({
+      slug: 'webinar-release-tracker',
+      status: 'suggestion',
+      suggestedFrom: 'openclaw',
+    });
+  });
+
   it('pushes active Personal AI skills to OpenClaw when remote is missing', async () => {
     const suggestion = await createSuggestion({
       slug: 'meeting-prep',
@@ -416,7 +509,7 @@ describe('Personal Skill Library API', () => {
     });
   });
 
-  it('pulls a newer OpenClaw version over an active Personal AI skill', async () => {
+  it('stages newer OpenClaw versions as reviewable external changes before applying them', async () => {
     const suggestion = await createSuggestion({
       slug: 'weather',
       title: 'Weather',
@@ -481,18 +574,65 @@ describe('Personal Skill Library API', () => {
     });
     expect(syncRes.statusCode).toBe(200);
     expect(syncRes.json().platforms[0]).toMatchObject({
-      pulled: 1,
+      externalChanges: 1,
       pushed: 0,
     });
 
-    const detail = await app.inject({
+    const unchangedDetail = await app.inject({
       method: 'GET',
       url: '/api/v1/skills/weather',
       headers: { 'x-user-id': USER_ID },
     });
-    expect(detail.json().skill.currentVersion).toBe('v2');
-    expect(detail.json().skill.currentSha256).toBe('remote-weather-v2-sha');
-    expect(detail.json().skill.activeVersion.skillMd).toContain('New weather workflow');
+    expect(unchangedDetail.json().skill.currentVersion).toBe('v1');
+    expect(unchangedDetail.json().skill.activeVersion.skillMd).toContain('Old weather workflow');
+
+    const inbox = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inbox.statusCode).toBe(200);
+    expect(inbox.json().total).toBe(1);
+    const externalChange = inbox.json().items[0];
+    expect(externalChange).toMatchObject({
+      slug: 'weather-openclaw-change',
+      status: 'suggestion',
+      reviewRequired: true,
+    });
+
+    const blockedUse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${externalChange.id}/use`,
+      headers: { 'x-user-id': USER_ID },
+      payload: {},
+    });
+    expect(blockedUse.statusCode).toBe(400);
+    expect(blockedUse.json().error).toMatch(/Review required/);
+
+    const confirmedUse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${externalChange.id}/use`,
+      headers: { 'x-user-id': USER_ID },
+      payload: { reviewConfirmed: true },
+    });
+    expect(confirmedUse.statusCode).toBe(200);
+    expect(confirmedUse.json().skill).toMatchObject({
+      slug: 'weather',
+      status: 'active',
+      currentVersion: 'v2',
+      currentSha256: 'remote-weather-v2-sha',
+    });
+    expect(confirmedUse.json().skill.activeVersion.skillMd).toContain('New weather workflow');
+
+    const dismissedList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills?filter=dismissed',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(dismissedList.json().items[0]).toMatchObject({
+      slug: 'weather-openclaw-change',
+      dismissReason: 'applied_external_change',
+    });
   });
 
   it('syncs local Desktop App platforms bidirectionally through Memory Service', async () => {
@@ -549,15 +689,37 @@ describe('Personal Skill Library API', () => {
       },
     });
     expect(pullRes.statusCode).toBe(200);
-    expect(pullRes.json()).toMatchObject({ pulled: 1, pushed: 0 });
+    expect(pullRes.json()).toMatchObject({ externalChanges: 1, pushed: 0 });
 
-    const detail = await app.inject({
+    const detailBeforeReview = await app.inject({
       method: 'GET',
       url: '/api/v1/skills/meeting-prep',
       headers: { 'x-user-id': USER_ID },
     });
-    expect(detail.json().skill.currentVersion).toBe('v2');
-    expect(detail.json().skill.currentSha256).toBe('local-v2-sha');
+    expect(detailBeforeReview.json().skill.currentVersion).toBe('v1');
+
+    const inbox = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    const externalChange = inbox
+      .json()
+      .items.find((item: any) => item.slug === 'meeting-prep-codex-change');
+    expect(externalChange).toMatchObject({
+      status: 'suggestion',
+      reviewRequired: true,
+    });
+
+    const applyRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${externalChange.id}/use`,
+      headers: { 'x-user-id': USER_ID },
+      payload: { reviewConfirmed: true },
+    });
+    expect(applyRes.statusCode).toBe(200);
+    expect(applyRes.json().skill.currentVersion).toBe('v2');
+    expect(applyRes.json().skill.currentSha256).toBe('local-v2-sha');
   });
 
   it('reports malformed OpenClaw JSON as a sync failure', async () => {
@@ -592,6 +754,88 @@ describe('Personal Skill Library API', () => {
       .json()
       .items.find((item: any) => item.platform === 'openclaw');
     expect(openclaw.lastError).toMatch(/strict JSON/);
+  });
+
+  it('requires explicit review confirmation before promoting risky suggestions', async () => {
+    const suggestion = await createSuggestion({
+      slug: 'external-script-skill',
+      title: 'External Script Skill',
+      risk: 'high',
+      sources: ['openclaw'],
+      suggestedFrom: 'openclaw',
+      workflow: [
+        {
+          title: 'Run helper',
+          desc: 'Execute the imported helper script.',
+          tools: ['bash'],
+        },
+      ],
+      evidence: [
+        {
+          title: 'OpenClaw export',
+          desc: 'Imported package metadata.',
+          kind: 'openclaw',
+          evidenceState: 'partial',
+        },
+      ],
+      files: [
+        {
+          relativePath: 'scripts/helper.sh',
+          content: 'echo helper\n',
+        },
+      ],
+    });
+
+    const detailRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/skills/${suggestion.id}`,
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(detailRes.statusCode).toBe(200);
+    expect(detailRes.json().skill.reviewRequired).toBe(true);
+    expect(detailRes.json().skill.reviewReasons).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/高风险/),
+        expect.stringMatching(/外部 agent/),
+        expect.stringMatching(/脚本或资源文件/),
+        expect.stringMatching(/证据链/),
+        expect.stringMatching(/工具调用/),
+      ]),
+    );
+
+    const inboxRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inboxRes.statusCode).toBe(200);
+    expect(inboxRes.json().items[0].reviewRequired).toBe(true);
+    expect(inboxRes.json().items[0].reviewReasons).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/脚本或资源文件/),
+        expect.stringMatching(/证据链/),
+        expect.stringMatching(/工具调用/),
+      ]),
+    );
+
+    const blockedUse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${suggestion.id}/use`,
+      headers: { 'x-user-id': USER_ID },
+      payload: {},
+    });
+    expect(blockedUse.statusCode).toBe(400);
+    expect(blockedUse.json().error).toMatch(/Review required/);
+
+    const confirmedUse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${suggestion.id}/use`,
+      headers: { 'x-user-id': USER_ID },
+      payload: { reviewConfirmed: true },
+    });
+    expect(confirmedUse.statusCode).toBe(200);
+    expect(confirmedUse.json().skill.status).toBe('active');
+    expect(confirmedUse.json().skill.reviewRequired).toBe(false);
   });
 
   it('snoozes and dismisses only pending suggestions', async () => {
@@ -673,6 +917,95 @@ describe('Personal Skill Library API', () => {
     });
     expect(dismissActive.statusCode).toBe(400);
     expect(dismissActive.json().error).toMatch(/Only suggestions/);
+  });
+
+  it('deduplicates repeated suggestions by cluster and dismissal cooldown', async () => {
+    const first = await createSuggestion({
+      slug: 'clustered-skill',
+      title: 'Clustered Skill',
+      suggestionClusterKey: 'flight:clustered-skill',
+      notify: true,
+    });
+
+    const duplicateRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+      payload: {
+        slug: 'renamed-clustered-skill',
+        title: 'Renamed Clustered Skill',
+        summary: 'Same source cluster should not create another inbox card.',
+        suggestionClusterKey: 'flight:clustered-skill',
+        notify: true,
+      },
+    });
+    expect(duplicateRes.statusCode).toBe(201);
+    expect(duplicateRes.json().skill.id).toBe(first.id);
+
+    const context = userContextManager.getContext(USER_ID);
+    const notificationCount = context.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM notification_records WHERE type = 'skill_suggestion'",
+      )
+      .get() as { count: number };
+    expect(notificationCount.count).toBe(1);
+
+    const inboxAfterDuplicate = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inboxAfterDuplicate.json().total).toBe(1);
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${first.id}/dismiss`,
+      headers: { 'x-user-id': USER_ID },
+      payload: { reason: 'not_useful' },
+    });
+
+    const cooledDuplicate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+      payload: {
+        slug: 'clustered-skill-again',
+        title: 'Clustered Skill Again',
+        suggestionClusterKey: 'flight:clustered-skill',
+      },
+    });
+    expect(cooledDuplicate.statusCode).toBe(201);
+    expect(cooledDuplicate.json().skill).toMatchObject({
+      id: first.id,
+      status: 'dismissed',
+    });
+
+    const inboxAfterCooldownSuppression = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inboxAfterCooldownSuppression.json().total).toBe(0);
+
+    const oldDismissedAt = Math.floor(Date.now() / 1000) - 31 * 86400;
+    context.db
+      .prepare('UPDATE personal_skills SET dismissed_at = ?, updated_at = ? WHERE id = ?')
+      .run(oldDismissedAt, oldDismissedAt, first.id);
+
+    const revivedRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+      payload: {
+        slug: 'clustered-skill',
+        title: 'Clustered Skill',
+        suggestionClusterKey: 'flight:clustered-skill',
+      },
+    });
+    expect(revivedRes.statusCode).toBe(201);
+    expect(revivedRes.json().skill.id).not.toBe(first.id);
+    expect(revivedRes.json().skill.slug).toBe('clustered-skill-2');
+    expect(revivedRes.json().skill.status).toBe('suggestion');
   });
 
   it('blocks share generation when skill content looks secret-bearing', async () => {

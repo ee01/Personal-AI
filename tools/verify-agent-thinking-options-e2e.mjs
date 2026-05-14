@@ -94,12 +94,33 @@ try {
   await page.locator('.flow-node.tool.blocked .node-result.blocked', {
     hasText: '已阻断',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-run-review.warning', {
+    hasText: '工具被阻断',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-run-review-item.info', {
+    hasText: '重复调用已跳过',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-run-review-item.warning', {
+    hasText: '工具证据不足',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-run-review-action', {
+    hasText: '补齐必填参数',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.tool.empty .node-result.empty', {
+    hasText: '证据不足',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.thought-step .step-summary', {
+    hasText: 'historySearch 已执行，但没有返回可用证据。',
+  }).waitFor({ timeout: 12000 });
 
   const blockedHeader = page
     .locator('.thought-step', { hasText: 'orgStructure' })
     .locator('.step-header')
     .first();
   await blockedHeader.waitFor({ timeout: 12000 });
+  await page.locator('.thought-step .step-summary', {
+    hasText: 'orgStructure 未通过工具校验，已阻断执行。',
+  }).waitFor({ timeout: 3000 });
   await blockedHeader.focus();
   await page.keyboard.press('Enter');
   await assert
@@ -112,6 +133,21 @@ try {
   await page.locator('.thought-step.expanded .tool-result', {
     hasText: '工具结果',
   }).waitFor({ timeout: 3000 });
+  await page.locator('.thought-step.expanded .thought-content', {
+    hasText: '决策摘要',
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.thought-step.expanded .intent-content', {
+    hasText: '调用意图',
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.thought-step.expanded .diagnostic-content', {
+    hasText: '执行前校验',
+  }).waitFor({ timeout: 3000 });
+  assert.equal(
+    await page.locator('.thought-step.expanded .thought-content', {
+      hasText: '思考过程',
+    }).count(),
+    0,
+  );
 
   await page.locator('.agent-result-summary', { hasText: '处理结果' }).waitFor({
     timeout: 12000,

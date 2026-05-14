@@ -41,6 +41,7 @@ final class SpeechHelper {
       guard let self else { return }
       let data = handle.availableData
       if data.isEmpty {
+        self.shutdown()
         return
       }
       self.stdinBuffer += String(decoding: data, as: UTF8.self)

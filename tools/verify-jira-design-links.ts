@@ -9,7 +9,10 @@ import {
   formatDesignStatusLabel,
   getDesignDisplayLabel,
   getDesignDisplayPriority,
+  getDesignDisplayStatusTone,
+  getDesignReadinessDecision,
   getDesignStatusTone,
+  getDesignStatusSummary,
   getDesignSourceLabel,
   getFigmaDisplayLabel,
   getUXEpicStatusTone,
@@ -23,8 +26,10 @@ import {
 
 function verifyProjectPatternMatching() {
   assert.equal(matchesProjectPattern('UX-123', 'UX'), true);
+  assert.equal(matchesProjectPattern('ux-123', ' UX '), true);
   assert.equal(matchesProjectPattern('UXDES-123', 'UX'), false);
   assert.equal(matchesProjectPattern('UXDES-123', 'UX*'), true);
+  assert.equal(matchesProjectPattern('UXDES-123', ' ux* '), true);
   assert.equal(matchesProjectPattern('RCV-123', 'UX*'), false);
 }
 
@@ -45,10 +50,18 @@ function verifyUrlNormalization() {
     parseDesignDomainPatterns('https://prototype.internal/path, *.design.local; .handoff.example.com'),
     ['prototype.internal', '*.design.local', 'handoff.example.com'],
   );
+  assert.equal(matchesDesignDomain('prototype.internal', ['prototype.internal']), true);
+  assert.equal(matchesDesignDomain('preview.prototype.internal', ['prototype.internal']), false);
   assert.equal(matchesDesignDomain('flow.design.local', ['*.design.local']), true);
+  assert.equal(matchesDesignDomain('design.local', ['*.design.local']), false);
   assert.equal(matchesDesignDomain('evilprototype.internal.bad', ['prototype.internal']), false);
   assert.equal(
     classifyDesignUrl('https://prototype.internal/spec/123', false, ['prototype.internal'])?.label,
+    'Design link',
+  );
+  assert.equal(classifyDesignUrl('https://preview.prototype.internal/spec/123', false, ['prototype.internal']), null);
+  assert.equal(
+    classifyDesignUrl('https://flow.design.local/a', false, ['*.design.local'])?.label,
     'Design link',
   );
   assert.deepEqual(
@@ -72,6 +85,7 @@ function verifySourceLabels() {
   assert.equal(getDesignSourceLabel('description'), 'Description');
   assert.equal(getDesignSourceLabel('epic_issue_link, parent_child_issue'), 'Epic link, Parent child');
   assert.equal(getDesignSourceLabel('linked_issues, remote_link'), 'Linked issue, Remote link');
+  assert.equal(getDesignSourceLabel('jira_designs'), 'Jira Designs');
 }
 
 function verifyFigmaLabels() {
@@ -239,10 +253,34 @@ function verifyDisplayOrdering() {
 
   const sorted = sortDesignDisplayItems(items);
   assert.equal(getDesignDisplayPriority(sorted[0]), 0);
+  assert.equal(getDesignDisplayStatusTone(sorted[0]), 'ready');
   assert.equal((sorted[0] as any).uxTicketKey, 'UX-123');
   assert.equal((sorted[1] as any).status, 'Design updated');
+  assert.equal(getDesignDisplayStatusTone(sorted[1]), 'updated');
   assert.equal((sorted[2] as any).linkProvided, false);
+  assert.equal(getDesignDisplayStatusTone(sorted[2]), 'missing');
   assert.equal(sorted[3].type, 'figma');
+  assert.equal(getDesignDisplayStatusTone(sorted[3]), 'neutral');
+
+  assert.deepEqual(getDesignStatusSummary(sorted), [
+    { tone: 'ready', label: 'ready', count: 1 },
+    { tone: 'updated', label: 'updated', count: 1 },
+    { tone: 'missing', label: 'missing', count: 1 },
+  ]);
+
+  assert.deepEqual(getDesignReadinessDecision(sorted), {
+    tone: 'missing',
+    label: 'Missing design links',
+    detail: '1 UX ticket needs design links before implementation',
+    targetTone: 'missing',
+  });
+
+  assert.deepEqual(getDesignReadinessDecision([sorted[0]]), {
+    tone: 'ready',
+    label: 'Ready for dev',
+    detail: '1 ready item available; confirm scope before starting',
+    targetTone: 'ready',
+  });
 }
 
 verifyProjectPatternMatching();

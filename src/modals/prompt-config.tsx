@@ -5,11 +5,22 @@
 
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
     sanitizeIndependentUserConfig,
     USER_CONFIG_PROMPT_CHAR_LIMIT
 } from '../services/userConfigSanitizer';
+import {
+    buildIndependentUserConfigSummary,
+    buildIndependentUserConfigPreview,
+    createConfigHistoryEntry,
+    detectPromptImprovementHints,
+    detectPromptRiskHints,
+    mergeConfigHistory,
+    normalizeConfigHistoryEntries,
+    USER_CONFIG_HISTORY_KEY,
+    type ConfigHistoryEntry
+} from '../services/userConfigPreview';
 
 // 数据类型定义
 interface CustomPrompts {
@@ -238,6 +249,15 @@ const isUsableIdentityValue = (value: string): boolean => (
     Boolean(value && !value.startsWith('未知'))
 );
 
+const formatHistoryTimestamp = (timestamp: number): string => (
+    new Intl.DateTimeFormat('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    }).format(new Date(timestamp))
+);
+
 const mergeIdentityFallback = (
     config: ConfigData,
     userInfo: CurrentUserInfo
@@ -279,6 +299,39 @@ const PromptConfig: React.FC = () => {
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [syncSource, setSyncSource] = useState('');
     const [configData, setConfigData] = useState<ConfigData>(createDefaultConfig);
+    const [configHistory, setConfigHistory] = useState<ConfigHistoryEntry[]>([]);
+    const [promptRiskAcknowledgedKey, setPromptRiskAcknowledgedKey] = useState('');
+    const injectedPreview = useMemo(
+        () => buildIndependentUserConfigPreview(configData),
+        [configData]
+    );
+    const configSummary = useMemo(
+        () => buildIndependentUserConfigSummary(configData),
+        [configData]
+    );
+    const promptRiskHints = useMemo(
+        () => detectPromptRiskHints(configData),
+        [configData]
+    );
+    const promptImprovementHints = useMemo(
+        () => detectPromptImprovementHints(configData),
+        [configData]
+    );
+    const promptRiskAcknowledgementKey = useMemo(() => {
+        if (promptRiskHints.length === 0) return '';
+        const riskyPromptContents = promptRiskHints.map((hint) => ({
+            scope: hint.scope,
+            content: configData.customPrompts[hint.scope]?.content || ''
+        }));
+        return JSON.stringify({
+            hints: promptRiskHints,
+            promptContents: riskyPromptContents
+        });
+    }, [configData.customPrompts, promptRiskHints]);
+    const hasUnacknowledgedPromptRisk = (
+        promptRiskHints.length > 0 &&
+        promptRiskAcknowledgedKey !== promptRiskAcknowledgementKey
+    );
 
     useEffect(() => {
         initializeConfigPage();
@@ -286,7 +339,10 @@ const PromptConfig: React.FC = () => {
 
     const initializeConfigPage = async () => {
         const userInfo = await loadCurrentUserInfo();
-        await loadFromStorage(userInfo);
+        await Promise.all([
+            loadFromStorage(userInfo),
+            loadConfigHistoryFromStorage()
+        ]);
     };
 
     const loadCurrentUserInfo = async (): Promise<CurrentUserInfo> => {
@@ -307,6 +363,18 @@ const PromptConfig: React.FC = () => {
             console.error('加载用户信息失败:', error);
         }
         return nextUserInfo;
+    };
+
+    const loadConfigHistoryFromStorage = async () => {
+        try {
+            const result = await chrome.storage.local.get(USER_CONFIG_HISTORY_KEY);
+            setConfigHistory(
+                normalizeConfigHistoryEntries(result?.[USER_CONFIG_HISTORY_KEY])
+            );
+        } catch (error) {
+            console.warn('加载配置版本历史失败:', error);
+            setConfigHistory([]);
+        }
     };
 
 	const loadFromStorage = async (identityFallback: CurrentUserInfo = currentUserInfo) => {
@@ -451,28 +519,42 @@ const PromptConfig: React.FC = () => {
             return false;
         }
 
+        if (hasUnacknowledgedPromptRisk) {
+            showStatusMessage('检测到安全提示，请先确认这些语句只作为低优先级偏好保存', 'error');
+            setActiveTab('prompts');
+            return false;
+        }
+
 	    return true;
 	};
 
 	const persistConfiguration = async (): Promise<ConfigData | null> => {
 	    if (!validateConfiguration()) return null;
 
+        const savedAt = Date.now();
 	    const updatedConfig = sanitizeIndependentUserConfig({
 	        customPrompts: configData.customPrompts,
 	        userContextConfig: {
 	            ...configData.userContextConfig,
-	            lastUpdated: Date.now(),
+	            lastUpdated: savedAt,
 	            version: '1.0'
 	        }
 	    }) as ConfigData;
+        const historyResult = await chrome.storage.local.get(USER_CONFIG_HISTORY_KEY);
+        const nextHistory = mergeConfigHistory(
+            historyResult?.[USER_CONFIG_HISTORY_KEY],
+            createConfigHistoryEntry(updatedConfig, savedAt)
+        );
 
 	    await chrome.storage.local.set({
 	        customPrompts: updatedConfig.customPrompts,
 	        userContextConfig: updatedConfig.userContextConfig,
-	        cloudSyncTime: Date.now()
+	        cloudSyncTime: savedAt,
+            [USER_CONFIG_HISTORY_KEY]: nextHistory
 	    });
 
 	    setConfigData(updatedConfig);
+        setConfigHistory(nextHistory);
 	    setHasUnsavedChanges(false);
 
 	    try {
@@ -512,6 +594,8 @@ const PromptConfig: React.FC = () => {
 	const triggerDataFusion = async () => {
 	    setIsSaving(true);
 	    try {
+            if (!validateConfiguration()) return;
+
 	        let configForFusion = configData;
 	        if (hasUnsavedChanges) {
 	            const savedConfig = await persistConfiguration();
@@ -575,6 +659,20 @@ const PromptConfig: React.FC = () => {
             setHasUnsavedChanges(true);
             showStatusMessage('配置已重置，保存后生效', 'success');
         }
+    };
+
+    const restoreHistoryEntry = (entry: ConfigHistoryEntry) => {
+        if (
+            hasUnsavedChanges &&
+            !confirm('当前有未保存修改，恢复历史版本会覆盖页面上的修改。继续恢复？')
+        ) {
+            return;
+        }
+
+        setConfigData(normalizeConfig(entry.config));
+        setHasUnsavedChanges(true);
+        setSyncSource(`已恢复 ${formatHistoryTimestamp(entry.savedAt)} 的历史版本`);
+        showStatusMessage('已恢复历史版本，保存后生效', 'success');
     };
 
     const showStatusMessage = (message: string, type: 'success' | 'error') => {
@@ -659,6 +757,46 @@ const PromptConfig: React.FC = () => {
             : 'field-meta'
     );
 
+    const renderConfigSummary = () => (
+        <div
+            className={`config-summary-strip ${configSummary.riskHintCount > 0 ? 'has-warning' : ''}`}
+            aria-live="polite"
+        >
+            <button
+                type="button"
+                className="summary-item"
+                onClick={() => setActiveTab('prompts')}
+            >
+                <span>提示词</span>
+                <strong>
+                    {configSummary.enabledPromptLabels.length > 0
+                        ? configSummary.enabledPromptLabels.join('、')
+                        : '未启用'}
+                </strong>
+            </button>
+            <button
+                type="button"
+                className="summary-item"
+                onClick={() => setActiveTab('analysis')}
+            >
+                <span>上下文信号</span>
+                <strong>{configSummary.contextSignalCount} 项</strong>
+            </button>
+            <button
+                type="button"
+                className="summary-item"
+                onClick={() => setActiveTab('prompts')}
+            >
+                <span>安全提示</span>
+                <strong>{configSummary.riskHintCount} 条</strong>
+            </button>
+            <div className="summary-item passive">
+                <span>本机历史</span>
+                <strong>{configHistory.length} 版</strong>
+            </div>
+        </div>
+    );
+
 	const updateStakeholder = (index: number, key: keyof Stakeholder, value: string) => {
 	    updateConfigAtPath(
 	        'userContextConfig.stakeholders.keyStakeholders',
@@ -719,6 +857,8 @@ const PromptConfig: React.FC = () => {
         placeholder: string
     ) => {
         const prompt = configData.customPrompts[scope];
+        const scopedRiskHints = promptRiskHints.filter((hint) => hint.scope === scope);
+        const scopedImprovementHints = promptImprovementHints.filter((hint) => hint.scope === scope);
 
         return (
             <div className="prompt-scope-section">
@@ -747,6 +887,29 @@ const PromptConfig: React.FC = () => {
                     )}
                 </div>
 
+                {(scopedRiskHints.length > 0 || scopedImprovementHints.length > 0) && (
+                    <div className="prompt-inline-hints" role="status">
+                        {scopedRiskHints.map((hint, index) => (
+                            <div
+                                key={`risk-${scope}-${index}`}
+                                className="prompt-inline-hint warning"
+                            >
+                                <strong>安全提示</strong>
+                                <span>{hint.message}</span>
+                            </div>
+                        ))}
+                        {scopedImprovementHints.map((hint, index) => (
+                            <div
+                                key={`improve-${scope}-${index}`}
+                                className="prompt-inline-hint suggestion"
+                            >
+                                <strong>优化建议</strong>
+                                <span>{hint.message}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 <div className="prompt-example-row" aria-label={`${title}提示词示例`}>
                     <span>快速插入</span>
                     {PROMPT_EXAMPLES[scope].map((example) => (
@@ -760,9 +923,77 @@ const PromptConfig: React.FC = () => {
                         </button>
                     ))}
                 </div>
+                <div className="prompt-scope-note">
+                    <strong>作用范围</strong>
+                    <span>
+                        {scope === 'message'
+                            ? '消息重要性判断、规则匹配、行动建议'
+                            : '项目、会议、文档和通用内容分析'}
+                    </span>
+                </div>
             </div>
         );
     };
+
+    const renderEffectPreview = () => (
+        <div className="effect-preview-section">
+            <div className="section-title-row">
+                <h4>生效预览</h4>
+                <span>{configSummary.hasInjectablePreferences ? '清洗后' : '未注入'}</span>
+            </div>
+            {promptRiskHints.length > 0 && (
+                <div className="preference-warnings" role="status">
+                    {promptRiskHints.map((hint, index) => (
+                        <div key={`${hint.scope}-${index}`}>
+                            <strong>{hint.scopeLabel}</strong>
+                            <span>{hint.message}</span>
+                        </div>
+                    ))}
+                    <label className="risk-acknowledgement">
+                        <input
+                            type="checkbox"
+                            checked={!hasUnacknowledgedPromptRisk}
+                            onChange={(event) => setPromptRiskAcknowledgedKey(
+                                event.target.checked ? promptRiskAcknowledgementKey : ''
+                            )}
+                        />
+                        <span>我确认上述语句只作为低优先级偏好保存，不用于覆盖系统规则、工具边界或返回格式。</span>
+                    </label>
+                </div>
+            )}
+            <pre className="prompt-preview">{injectedPreview}</pre>
+        </div>
+    );
+
+    const renderConfigHistory = () => (
+        <div className="config-history-section">
+            <div className="section-title-row">
+                <h4>版本历史</h4>
+                <span>{configHistory.length > 0 ? `最近 ${configHistory.length} 次` : '暂无'}</span>
+            </div>
+            {configHistory.length === 0 ? (
+                <p className="empty-note">保存后会保留最近 10 个本机版本。</p>
+            ) : (
+                <div className="history-list">
+                    {configHistory.map((entry) => (
+                        <div key={entry.id} className="history-item">
+                            <div>
+                                <strong>{formatHistoryTimestamp(entry.savedAt)}</strong>
+                                <span>{entry.summary}</span>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => restoreHistoryEntry(entry)}
+                                disabled={isLoading || isSaving}
+                            >
+                                恢复
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
 
     const renderTab = () => {
         switch (activeTab) {
@@ -1158,10 +1389,15 @@ const PromptConfig: React.FC = () => {
                     </button>
                     <button
                         onClick={triggerDataFusion}
-	                        className="fusion-btn"
+	                        className={`fusion-btn ${hasUnacknowledgedPromptRisk ? 'needs-review' : ''}`}
+                        title={
+                            hasUnacknowledgedPromptRisk
+                                ? '先确认安全提示只作为低优先级偏好，再融合到用户画像'
+                                : '将当前用户上下文融合到用户画像'
+                        }
 	                        disabled={isLoading || isSaving}
 	                    >
-	                        融合到用户画像
+	                        {hasUnacknowledgedPromptRisk ? '确认安全提示后融合' : '融合到用户画像'}
 	                    </button>
                     <button
                         onClick={resetToDefaults}
@@ -1206,7 +1442,10 @@ const PromptConfig: React.FC = () => {
             </div>
 
             <div className="config-content">
+                {renderConfigSummary()}
                 {renderTab()}
+                {renderEffectPreview()}
+                {renderConfigHistory()}
             </div>
 
             <style>{`
@@ -1272,6 +1511,16 @@ const PromptConfig: React.FC = () => {
                     background: linear-gradient(135deg, #F57C00 0%, #FF9800 100%);
                     transform: translateY(-1px);
                     box-shadow: 0 4px 8px rgba(255, 152, 0, 0.4);
+                }
+
+                .fusion-btn.needs-review {
+                    background: #b45309;
+                    box-shadow: 0 2px 4px rgba(180, 83, 9, 0.28);
+                }
+
+                .fusion-btn.needs-review:hover {
+                    background: #92400e;
+                    box-shadow: 0 4px 8px rgba(146, 64, 14, 0.32);
                 }
 
                 .reload-btn {
@@ -1362,6 +1611,66 @@ const PromptConfig: React.FC = () => {
                     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
                 }
 
+                .config-summary-strip {
+                    display: grid;
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                    gap: 0;
+                    margin: -4px 0 24px;
+                    border: 1px solid #e5e7eb;
+                    border-radius: 6px;
+                    overflow: hidden;
+                    background: #f8fafc;
+                }
+
+                .summary-item {
+                    display: grid;
+                    gap: 4px;
+                    min-width: 0;
+                    padding: 12px;
+                    border: 0;
+                    border-right: 1px solid #e5e7eb;
+                    background: transparent;
+                    color: #334155;
+                    cursor: pointer;
+                    text-align: left;
+                }
+
+                .summary-item:last-child {
+                    border-right: 0;
+                }
+
+                .summary-item.passive {
+                    cursor: default;
+                }
+
+                .summary-item:hover,
+                .summary-item:focus-visible {
+                    background: #eef6ff;
+                    outline: none;
+                }
+
+                .summary-item.passive:hover {
+                    background: transparent;
+                }
+
+                .summary-item span {
+                    color: #64748b;
+                    font-size: 12px;
+                }
+
+                .summary-item strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 14px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+
+                .config-summary-strip.has-warning .summary-item:nth-child(3) strong {
+                    color: #b45309;
+                }
+
                 .tab-content h3 {
                     margin-top: 0;
                     color: #2c3e50;
@@ -1372,6 +1681,140 @@ const PromptConfig: React.FC = () => {
                     color: #64748b;
                     font-size: 13px;
                     line-height: 1.5;
+                }
+
+                .effect-preview-section,
+                .config-history-section {
+                    margin-top: 24px;
+                    padding-top: 18px;
+                    border-top: 1px solid #e5e7eb;
+                }
+
+                .section-title-row {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 12px;
+                    margin-bottom: 12px;
+                }
+
+                .section-title-row h4 {
+                    margin: 0;
+                }
+
+                .section-title-row span {
+                    color: #64748b;
+                    font-size: 12px;
+                }
+
+                .preference-warnings {
+                    display: grid;
+                    gap: 8px;
+                    margin-bottom: 12px;
+                }
+
+                .preference-warnings div {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    padding: 8px 10px;
+                    border: 1px solid #fed7aa;
+                    border-radius: 6px;
+                    background: #fff7ed;
+                    color: #9a3412;
+                    font-size: 13px;
+                }
+
+                .preference-warnings strong {
+                    color: #7c2d12;
+                }
+
+                .risk-acknowledgement {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 8px;
+                    padding: 10px 12px;
+                    border: 1px solid #fdba74;
+                    border-radius: 6px;
+                    background: #fffbeb;
+                    color: #92400e;
+                    font-size: 13px;
+                    line-height: 1.45;
+                }
+
+                .risk-acknowledgement input {
+                    flex: 0 0 auto;
+                    margin-top: 2px;
+                }
+
+                .prompt-preview {
+                    max-height: 280px;
+                    margin: 0;
+                    padding: 12px;
+                    overflow: auto;
+                    border: 1px solid #dbe3ee;
+                    border-radius: 6px;
+                    background: #f8fafc;
+                    color: #1f2937;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                    font-size: 12px;
+                    line-height: 1.55;
+                }
+
+                .history-list {
+                    display: grid;
+                    gap: 10px;
+                }
+
+                .history-item {
+                    display: grid;
+                    grid-template-columns: 1fr auto;
+                    gap: 12px;
+                    align-items: center;
+                    padding: 10px 0;
+                    border-bottom: 1px solid #eef2f7;
+                }
+
+                .history-item:last-child {
+                    border-bottom: none;
+                }
+
+                .history-item div {
+                    display: grid;
+                    gap: 4px;
+                    min-width: 0;
+                }
+
+                .history-item strong {
+                    color: #1f2937;
+                    font-size: 13px;
+                }
+
+                .history-item span {
+                    color: #64748b;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .history-item button {
+                    padding: 6px 10px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #334155;
+                    cursor: pointer;
+                }
+
+                .history-item button:hover {
+                    background: #f1f5f9;
+                }
+
+                .empty-note {
+                    margin: 0;
+                    color: #64748b;
+                    font-size: 13px;
                 }
 
 	                .field-group {
@@ -1446,6 +1889,47 @@ const PromptConfig: React.FC = () => {
                     font-weight: 600;
                 }
 
+                .prompt-inline-hints {
+                    display: grid;
+                    gap: 8px;
+                    margin: -8px 0 14px;
+                }
+
+                .prompt-inline-hint {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    padding: 8px 10px;
+                    border-radius: 6px;
+                    font-size: 13px;
+                    line-height: 1.45;
+                }
+
+                .prompt-inline-hint strong {
+                    flex: 0 0 auto;
+                    font-weight: 600;
+                }
+
+                .prompt-inline-hint.warning {
+                    border: 1px solid #fed7aa;
+                    background: #fff7ed;
+                    color: #9a3412;
+                }
+
+                .prompt-inline-hint.warning strong {
+                    color: #7c2d12;
+                }
+
+                .prompt-inline-hint.suggestion {
+                    border: 1px solid #bfdbfe;
+                    background: #eff6ff;
+                    color: #1e3a8a;
+                }
+
+                .prompt-inline-hint.suggestion strong {
+                    color: #1d4ed8;
+                }
+
                 .prompt-example-row {
                     display: flex;
                     flex-wrap: wrap;
@@ -1470,6 +1954,20 @@ const PromptConfig: React.FC = () => {
                 .example-chip:hover {
                     background: #f1f5f9;
                     border-color: #94a3b8;
+                }
+
+                .prompt-scope-note {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-top: 10px;
+                    color: #64748b;
+                    font-size: 12px;
+                }
+
+                .prompt-scope-note strong {
+                    color: #334155;
+                    font-weight: 600;
                 }
 
                 .user-info {
@@ -1575,6 +2073,22 @@ const PromptConfig: React.FC = () => {
 	                    .array-item {
 	                        display: grid;
 	                    }
+
+                        .history-item {
+                            grid-template-columns: 1fr;
+                        }
+
+                        .config-summary-strip {
+                            grid-template-columns: repeat(2, minmax(0, 1fr));
+                        }
+
+                        .summary-item:nth-child(2) {
+                            border-right: 0;
+                        }
+
+                        .summary-item:nth-child(-n + 2) {
+                            border-bottom: 1px solid #e5e7eb;
+                        }
 	                }
 
 	                h4 {

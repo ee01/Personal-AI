@@ -1,496 +1,440 @@
 <template>
-  <div class="overview-section">
-    <div class="greeting-card">
-      <div class="greeting-title">
-        <span>🌅</span>
-        <span>早上好！今天的重点信息</span>
-      </div>
-      <div class="greeting-content">
-        <p>你今天的主要项目进展如下：</p>
-        <ul class="quick-summary">
-          <li>🚀 Personal-AI 项目已进入测试阶段</li>
-          <li>💬 有 {{ unreadTopicsCount }} 个主题包含未读讨论</li>
-          <li>
-            📊 {{ overviewStats?.totalEntities || 0 }} 个实体，{{
-              overviewStats?.totalRelationships || 0
-            }}
-            个关系
-          </li>
-          <li>
-            📈 本周新增 {{ overviewStats?.entitiesCreatedThisWeek || 0 }} 个实体
-          </li>
-        </ul>
-        <p>我帮你整理了今天你可能想先看的内容 👇</p>
-      </div>
-    </div>
-
-    <div v-if="topicReadUndo" class="topic-undo-toast" role="status">
-      <span>已将「{{ topicReadUndo.topicName }}」标记为已读</span>
-      <button type="button" @click="handleUndoTopicRead">撤销</button>
-    </div>
-
-    <div class="content-grid" id="today-cards-grid">
-      <!-- 今日重点项目 -->
-      <div
-        v-if="!isCardClosed('today-projects')"
-        class="content-card"
-        style="position: relative"
-        @click="navigateToEntityType('Project')"
-      >
-        <button
-          type="button"
-          class="dismiss-card-btn"
-          title="今日不再显示"
-          aria-label="今日不再显示今日重点项目"
-          @click.stop="handleCloseTodayCard('today-projects')"
-        >
-          ×
-        </button>
-        <div class="card-header">
-          <div class="card-title">
-            <span>🚀</span>
-            <span>今日重点项目</span>
+  <div class="day-pilot-home">
+    <section class="brief-header">
+      <div class="brief-top">
+        <div>
+          <div class="brief-greeting">
+            今天有 {{ visibleMissionCards.length }} 件事值得关注
           </div>
-          <div class="card-badge">{{ getEntityCount('Project') }} 个活跃</div>
-        </div>
-        <div class="card-content">最近活跃的项目和相关信息</div>
-        <ul class="info-list">
-          <li class="info-item">
-            <span>🔥</span>
-            <span>Personal-AI - Chrome 扩展开发</span>
-            <span class="info-time">2 小时前</span>
-          </li>
-          <li class="info-item">
-            <span>📊</span>
-            <span>Data Pipeline - 性能优化</span>
-            <span class="info-time">5 小时前</span>
-          </li>
-          <li class="info-item">
-            <span>🎨</span>
-            <span>Design System - 组件库更新</span>
-            <span class="info-time">1 天前</span>
-          </li>
-        </ul>
-        <div class="view-more-btn">
-          <span>查看所有项目</span>
-          <span>→</span>
-        </div>
-      </div>
-
-      <!-- 热门主题讨论 -->
-      <div
-        v-if="!isCardClosed('today-topics')"
-        class="content-card"
-        style="position: relative"
-        @click="navigateToEntityType('Topic')"
-      >
-        <button
-          type="button"
-          class="dismiss-card-btn"
-          title="今日不再显示"
-          aria-label="今日不再显示热门主题讨论"
-          @click.stop="handleCloseTodayCard('today-topics')"
-        >
-          ×
-        </button>
-        <div class="card-header">
-          <div class="card-title">
-            <span>💡</span>
-            <span>热门主题讨论</span>
+          <div class="brief-subtitle">
+            {{ todayLabel }} · {{ timezoneLabel }} · {{ refreshedAtLabel }} 生成
           </div>
-          <div class="card-badge">{{ unreadTopicsCount }} 个未读</div>
         </div>
-        <div class="card-content">最近讨论频繁的话题和观点</div>
-        <ul class="info-list">
-          <li class="info-item">
-            <span>🤖</span>
-            <span>AI 工作流自动化实践</span>
-            <span class="info-time">30 分钟前</span>
-          </li>
-          <li class="info-item">
-            <span>⚡</span>
-            <span>前端性能优化策略</span>
-            <span class="info-time">2 小时前</span>
-          </li>
-        </ul>
-        <div class="view-more-btn">
-          <span>查看所有主题</span>
-          <span>→</span>
-        </div>
-      </div>
 
-      <!-- 重要联系人动态 -->
-      <div
-        v-if="!isCardClosed('today-people')"
-        class="content-card"
-        style="position: relative"
-        @click="navigateToEntityType('Person')"
-      >
-        <button
-          type="button"
-          class="dismiss-card-btn"
-          title="今日不再显示"
-          aria-label="今日不再显示重要联系人动态"
-          @click.stop="handleCloseTodayCard('today-people')"
-        >
-          ×
-        </button>
-        <div class="card-header">
-          <div class="card-title">
-            <span>👥</span>
-            <span>重要联系人动态</span>
-          </div>
-          <div class="card-badge">新消息</div>
-        </div>
-        <div class="card-content">来自同事和合作伙伴的重要更新</div>
-        <ul class="info-list">
-          <li class="info-item">
-            <span>👤</span>
-            <span>张三 - 代码审查反馈</span>
-            <span class="info-time">1 小时前</span>
-          </li>
-          <li class="info-item">
-            <span>👤</span>
-            <span>李四 - 设计稿更新通知</span>
-            <span class="info-time">3 小时前</span>
-          </li>
-        </ul>
-        <div class="view-more-btn">
-          <span>查看所有联系人</span>
-          <span>→</span>
-        </div>
-      </div>
-
-      <!-- AI 推荐内容 -->
-      <div
-        v-if="!isCardClosed('today-ai-recommend')"
-        class="content-card"
-        style="position: relative"
-      >
-        <button
-          type="button"
-          class="dismiss-card-btn"
-          title="今日不再显示"
-          aria-label="今日不再显示 AI 推荐内容"
-          @click.stop="handleCloseTodayCard('today-ai-recommend')"
-        >
-          ×
-        </button>
-        <div class="card-header">
-          <div class="card-title">
-            <span>🎯</span>
-            <span>AI 推荐内容</span>
-          </div>
-          <div class="card-badge">智能推荐</div>
-        </div>
-        <div class="card-content">基于你的兴趣和工作习惯推荐的内容</div>
-        <ul class="info-list">
-          <li class="info-item">
-            <span>📖</span>
-            <span>《Clean Architecture》读书笔记复习</span>
-            <span class="info-time">推荐</span>
-          </li>
-          <li class="info-item">
-            <span>🔧</span>
-            <span>Webpack 5 迁移指南</span>
-            <span class="info-time">推荐</span>
-          </li>
-        </ul>
-        <div class="view-more-btn">
-          <span>查看更多推荐</span>
-          <span>→</span>
-        </div>
-      </div>
-
-      <!-- 主动询问概览 -->
-      <div
-        v-if="!isCardClosed('today-outreach')"
-        class="content-card"
-        style="position: relative"
-        @click="router.push('/outreach')"
-      >
-        <button
-          type="button"
-          class="dismiss-card-btn"
-          title="今日不再显示"
-          aria-label="今日不再显示主动询问进度"
-          @click.stop="handleCloseTodayCard('today-outreach')"
-        >
-          ×
-        </button>
-        <div class="card-header">
-          <div class="card-title">
-            <span>📡</span>
-            <span>主动询问进度</span>
-          </div>
-          <div class="card-badge">{{ outreachTotal }} 项待关注</div>
-        </div>
-        <div class="card-content">外部主动询问的执行和回复状态</div>
-        <ul class="info-list">
-          <li class="info-item">
-            <span>🕒</span>
-            <span
-              >待触发模板 {{ pendingTemplateCount }} · 已排程
-              {{ scheduledSessionCount
-              }}<template v-if="outreachSummary.pendingApprovalCount > 0">
-                · 待审批 {{ outreachSummary.pendingApprovalCount }}</template
-              ></span
-            >
-            <span class="info-time">计划中</span>
-          </li>
-          <li class="info-item">
-            <span>💬</span>
-            <span>等待回复 {{ outreachSummary.waitingReplyCount }}</span>
-            <span class="info-time">跟进中</span>
-          </li>
-          <li class="info-item">
-            <span>⚠️</span>
-            <span>已升级 {{ outreachSummary.escalatedCount }}</span>
-            <span class="info-time">需处理</span>
-          </li>
-        </ul>
-        <div class="view-more-btn">
-          <span>进入主动询问</span>
-          <span>→</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 未读主题瀑布流推送 -->
-    <div v-if="waterfallTopics.length > 0" id="unread-topics-waterfall">
-      <h2 style="margin: 2rem 0 1rem; font-size: 1.5rem; font-weight: 600">
-        📬 未读主题推送
-      </h2>
-      <div class="waterfall-container" id="waterfall-topics-container">
-        <div
-          v-for="topic in waterfallTopics.slice(0, waterfallDisplayCount)"
-          :key="topic.id"
-          class="waterfall-item"
-        >
-          <div
-            class="content-card unread"
-            :data-topic-id="topic.id"
-            style="position: relative"
-            @click="handleTopicClick(topic)"
+        <div class="brief-meta">
+          <span
+            v-for="source in sourceTags"
+            :key="source.key"
+            class="source-tag"
           >
-            <div class="card-header">
-              <div class="card-title">
-                <span>💡</span>
-                <span>{{ topic.name }}</span>
-              </div>
-              <span class="unread-badge">{{
-                topic.readStatus?.unreadCount || 0
-              }}</span>
+            <span :class="['source-dot', { warn: source.warn }]" />
+            {{ source.label }}
+          </span>
+          <button
+            type="button"
+            class="refresh-btn"
+            :disabled="loading"
+            @click="loadDayPilot()"
+          >
+            {{ loading ? '刷新中' : '刷新' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="budget-strip">
+        <span class="budget-label">今日提醒预算</span>
+        <div class="budget-track">
+          <div class="budget-fill" :style="{ width: budgetPercent }" />
+        </div>
+        <span class="budget-count">
+          {{ attentionBudget.used }} / {{ attentionBudget.max }}
+        </span>
+      </div>
+    </section>
+
+    <div v-if="loadError" class="load-error" role="status">
+      {{ loadError }}
+    </div>
+
+    <section>
+      <div class="section-title">
+        今日 Mission
+        <span class="section-count">{{ visibleMissionCards.length }}</span>
+      </div>
+
+      <div
+        v-if="loading && visibleMissionCards.length === 0"
+        class="empty-panel"
+      >
+        正在整理今天的记忆信号...
+      </div>
+
+      <div v-else-if="visibleMissionCards.length === 0" class="empty-panel">
+        当前没有需要放到首页的高优先级事项。可以从左侧进入决策中心、动作队列或主题页查看完整列表。
+      </div>
+
+      <div v-else class="mission-cards">
+        <article
+          v-for="card in visibleMissionCards"
+          :key="card.id"
+          :class="['mission-card', { expanded: expandedCardId === card.id }]"
+          :data-priority="card.priority"
+        >
+          <button
+            type="button"
+            class="mission-head"
+            :aria-expanded="expandedCardId === card.id"
+            @click="toggleCard(card.id)"
+          >
+            <div class="mission-row-1">
+              <span :class="['priority-badge', card.priority]">
+                {{ card.priority }}
+              </span>
+              <span :class="['state-badge', card.stateClass]">
+                {{ card.state }}
+              </span>
+              <span class="mission-time">{{ card.timeLabel }}</span>
+              <span class="chevron">▶</span>
             </div>
-            <div class="card-content" style="margin-bottom: 0.75rem">
-              {{ topic.description }}
+            <div class="mission-title">{{ card.title }}</div>
+            <div class="mission-next">
+              <span>你要做</span>
+              <strong>{{ card.next || card.actions[0]?.title }}</strong>
             </div>
-            <div
-              class="card-content"
-              style="font-size: 0.875rem; line-height: 1.5"
-            >
-              {{ topic.importance >= 0.8 ? '🔥 热门' : '' }}
-              {{ topic.statistic?.conversations || 0 }}条讨论 •
-              {{ formatTime(topic.updated || Date.now()) }}
+            <div class="mission-why">
+              <span>为什么出现</span>
+              <strong>{{ card.why }}</strong>
             </div>
-            <!-- 未读讨论 -->
-            <div
-              v-if="
-                topic.unreadDiscussions && topic.unreadDiscussions.length > 0
-              "
-              class="unread-discussions"
-            >
-              <div class="unread-discussions-title">
-                💬 未读讨论 ({{ topic.unreadDiscussions.length }}条)
-              </div>
-              <div
-                v-for="(discussion, idx) in topic.unreadDiscussions.slice(0, 2)"
-                :key="idx"
-                class="discussion-item"
+            <div class="mission-tags">
+              <span
+                v-for="tag in card.tags"
+                :key="`${card.id}:${tag.text}`"
+                :class="['tag', tag.type]"
               >
-                <span class="discussion-icon">▪</span>
-                <div class="discussion-text">{{ discussion.text }}</div>
-              </div>
-              <div
-                v-if="topic.unreadDiscussions.length > 2"
-                style="
-                  text-align: center;
-                  color: #60a5fa;
-                  font-size: 0.75rem;
-                  margin-top: 0.5rem;
-                "
-              >
-                还有 {{ topic.unreadDiscussions.length - 2 }} 条...
-              </div>
+                {{ tag.text }}
+              </span>
             </div>
-            <div class="topic-triage-actions">
-              <div class="topic-defer-menu" @click.stop>
-                <button
-                  type="button"
-                  class="topic-action-btn later"
-                  :aria-label="`选择 ${topic.name} 的稍后处理时间`"
-                  :aria-expanded="activeDeferTopicId === topic.id"
-                  @click.stop="toggleTopicDeferMenu(topic.id)"
-                >
-                  ⏰ 稍后
-                </button>
-                <div
-                  v-if="activeDeferTopicId === topic.id"
-                  class="topic-defer-options"
-                  role="menu"
-                >
-                  <button
-                    v-for="option in topicDeferOptions"
-                    :key="option.key"
-                    type="button"
-                    class="topic-defer-option"
-                    role="menuitem"
-                    @click.stop="
-                      handleDeferTopicForLater(topic.id, option.until)
-                    "
+          </button>
+
+          <div class="mission-body">
+            <div class="mission-body-inner">
+              <div class="sub-section">
+                <div class="sub-title">证据 ({{ card.evidence.length }})</div>
+                <div class="evidence-list">
+                  <div
+                    v-for="item in card.evidence"
+                    :key="`${card.id}:${item.source}:${item.text}`"
+                    class="evidence-item"
                   >
-                    <span>{{ option.label }}</span>
-                    <small>{{ formatDeferredUntil(option.until) }}</small>
-                  </button>
-                  <div class="topic-custom-defer" role="none">
-                    <label :for="`overview-topic-custom-defer-${topic.id}`">
-                      自定义时间
-                    </label>
-                    <div class="topic-custom-defer-row">
-                      <input
-                        :id="`overview-topic-custom-defer-${topic.id}`"
-                        v-model="customDeferValue"
-                        type="datetime-local"
-                        :min="customDeferMin"
-                        @click.stop
-                        @keydown.enter.prevent="handleCustomDefer(topic.id)"
-                      />
-                      <button
-                        type="button"
-                        :disabled="!customDeferTimestamp"
-                        @click.stop="handleCustomDefer(topic.id)"
-                      >
-                        确定
-                      </button>
+                    <div class="evidence-source">{{ item.source }}</div>
+                    <div class="evidence-text">{{ item.text }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sub-section">
+                <div class="sub-title">建议动作</div>
+                <div class="action-steps">
+                  <div
+                    v-for="(action, index) in card.actions"
+                    :key="`${card.id}:action:${index}`"
+                    class="action-step"
+                  >
+                    <div class="step-num">{{ index + 1 }}</div>
+                    <div class="step-content">
+                      <strong>{{ action.title }}</strong>
+                      <span>{{ action.desc }}</span>
                     </div>
                   </div>
                 </div>
               </div>
-              <div class="topic-defer-menu topic-mute-menu" @click.stop>
-                <button
-                  type="button"
-                  class="topic-action-btn mute"
-                  :aria-label="`静音 ${topic.name} 以减少未读噪声`"
-                  :aria-expanded="activeMuteTopicId === topic.id"
-                  @click.stop="toggleTopicMuteMenu(topic.id)"
-                >
-                  🔕 静音
-                </button>
-                <div
-                  v-if="activeMuteTopicId === topic.id"
-                  class="topic-defer-options topic-mute-options"
-                  role="menu"
-                >
-                  <button
-                    v-for="option in topicMuteOptions"
-                    :key="option.key"
-                    type="button"
-                    class="topic-defer-option topic-mute-option"
-                    role="menuitem"
-                    @click.stop="handleMuteTopic(topic.id, option.until)"
+
+              <div v-if="card.questions.length > 0" class="sub-section">
+                <div class="sub-title">待确认</div>
+                <div class="question-list">
+                  <div
+                    v-for="question in card.questions"
+                    :key="`${card.id}:question:${question}`"
+                    class="question-item"
                   >
-                    <span>{{ option.label }}</span>
-                    <small>{{ formatMutedUntil(option.until) }}</small>
-                  </button>
+                    {{ question }}
+                  </div>
                 </div>
               </div>
-              <button
-                type="button"
-                class="topic-action-btn read"
-                :aria-label="`标记 ${topic.name} 为已读`"
-                @click.stop="handleMarkTopicAsRead(topic.id)"
-              >
-                ✓ 已阅
-              </button>
+
+              <div class="sub-section">
+                <div class="context-toolbar">
+                  <div
+                    class="provider-segment"
+                    role="group"
+                    aria-label="目标 AI"
+                  >
+                    <button
+                      v-for="provider in providerOptions"
+                      :key="provider.id"
+                      type="button"
+                      :class="[
+                        'provider-btn',
+                        { active: contextProvider === provider.id },
+                      ]"
+                      @click.stop="setContextProvider(provider.id, card)"
+                    >
+                      {{ provider.shortLabel }}
+                    </button>
+                  </div>
+                  <label class="sensitive-toggle" @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="includeSensitiveContext"
+                      @change="setIncludeSensitiveContext($event, card)"
+                    />
+                    包含敏感原文
+                  </label>
+                  <button
+                    type="button"
+                    class="context-toggle"
+                    @click.stop="toggleContextPack(card)"
+                  >
+                    {{
+                      openContextPackIds.has(card.id) ? '收起' : '生成上下文包'
+                    }}
+                  </button>
+                </div>
+                <div
+                  :class="[
+                    'context-pack',
+                    { open: openContextPackIds.has(card.id) },
+                  ]"
+                >
+                  <div
+                    v-if="isContextPackLoading(card.id)"
+                    class="context-status"
+                  >
+                    正在生成 {{ currentProviderLabel }}...
+                  </div>
+                  <div
+                    v-if="currentContextPack(card)?.redactionApplied"
+                    class="redaction-note"
+                  >
+                    已默认脱敏；复制前可展开预览确认。
+                  </div>
+                  <div
+                    v-if="currentRedactionPreview(card).length > 0"
+                    class="redaction-list"
+                  >
+                    <div
+                      v-for="item in currentRedactionPreview(card)"
+                      :key="`${card.id}:redaction:${item}`"
+                    >
+                      {{ item }}
+                    </div>
+                  </div>
+                  <pre>{{ currentPackText(card) }}</pre>
+                </div>
+              </div>
+
+              <div class="card-actions">
+                <button
+                  type="button"
+                  class="card-action primary"
+                  @click.stop="hideCardForToday(card, 'done')"
+                >
+                  完成
+                </button>
+                <button
+                  type="button"
+                  class="card-action secondary"
+                  @click.stop="hideCardForToday(card, 'later')"
+                >
+                  稍后
+                </button>
+                <button
+                  type="button"
+                  class="card-action secondary"
+                  @click.stop="sendCardSignal(card, 'useful')"
+                >
+                  有用
+                </button>
+                <button
+                  type="button"
+                  class="card-action ghost"
+                  @click.stop="sendCardSignal(card, 'wrong')"
+                >
+                  不准确
+                </button>
+                <button
+                  type="button"
+                  class="card-action secondary"
+                  @click.stop="copyContextPack(card)"
+                >
+                  复制上下文包
+                </button>
+                <button
+                  type="button"
+                  class="card-action ghost"
+                  @click.stop="navigateTo(card.route)"
+                >
+                  打开详情
+                </button>
+                <button
+                  type="button"
+                  class="card-action ghost"
+                  @click.stop="hideCardForToday(card, 'mute')"
+                >
+                  不再提醒同类
+                </button>
+              </div>
             </div>
-            <!-- 关联项目标签 -->
-            <div
-              v-if="topic.relatedProjects && topic.relatedProjects.length > 0"
-              style="
-                margin-top: 0.75rem;
-                display: flex;
-                gap: 0.5rem;
-                flex-wrap: wrap;
-              "
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">需要你处理</div>
+      <div class="attention-bar">
+        <button
+          v-for="item in attentionItems"
+          :key="item.id"
+          type="button"
+          class="attention-item"
+          @click="navigateTo(item.route)"
+        >
+          <span class="attention-icon">{{ item.icon }}</span>
+          <span class="attention-info">
+            <span class="attention-count">{{ item.count }}</span>
+            <span class="attention-label">{{ item.label }}</span>
+          </span>
+          <span class="attention-arrow">→</span>
+        </button>
+      </div>
+    </section>
+
+    <section v-if="topicPreviewItems.length > 0" class="topic-entry">
+      <div>
+        <div class="section-title compact">未读主题入口</div>
+        <p>
+          首页只展示少量未读主题信号；完整阅读、稍后、静音和已阅操作请进入主题页处理。
+        </p>
+      </div>
+      <div class="topic-preview-list">
+        <button
+          v-for="topic in topicPreviewItems"
+          :key="topic.id"
+          type="button"
+          class="topic-preview"
+          @click="navigateTo(`/topic/${topic.id}`)"
+        >
+          <strong>{{ topic.name }}</strong>
+          <span>{{ topic.readStatus?.unreadCount || 0 }} 条未读</span>
+        </button>
+      </div>
+      <button
+        type="button"
+        class="topic-all-btn"
+        @click="navigateTo('/entity/Topic')"
+      >
+        进入主题收件箱 →
+      </button>
+    </section>
+
+    <section v-if="timelineItems.length > 0" class="timeline">
+      <div class="section-title">今日时间线</div>
+      <div class="timeline-list">
+        <div
+          v-for="item in timelineItems"
+          :key="`${item.time}:${item.title}`"
+          class="tl-item"
+        >
+          <div
+            :class="['tl-dot', { active: item.active, muted: item.muted }]"
+          />
+          <div class="tl-time">{{ item.time }}</div>
+          <div class="tl-content">
+            <div class="tl-title">{{ item.title }}</div>
+            <div class="tl-desc">{{ item.desc }}</div>
+            <button
+              v-if="item.route"
+              type="button"
+              class="tl-link"
+              @click="navigateTo(item.route)"
             >
-              <span
-                v-for="project in topic.relatedProjects"
-                :key="project.id"
-                style="
-                  padding: 0.25rem 0.5rem;
-                  background: rgba(59, 130, 246, 0.1);
-                  color: #60a5fa;
-                  border-radius: 0.25rem;
-                  font-size: 0.75rem;
-                "
-              >
-                {{ project.name }}
-              </span>
-            </div>
+              查看关联内容 →
+            </button>
           </div>
         </div>
       </div>
-      <button
-        v-if="waterfallTopics.length > waterfallDisplayCount"
-        class="load-more-btn"
-        @click="loadMoreTopics"
-      >
-        加载更多主题
-      </button>
+    </section>
+
+    <div class="footer-note">
+      今日领航由现有记忆数据聚合生成；决策、动作、主题阅读仍在各自子页面完成。
+    </div>
+
+    <div :class="['day-toast', { show: toastMessage }]">
+      {{ toastMessage }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import {
-  useMemoryStore,
-  getTopicDeferPresetOptions,
-  getTopicMutePresetOptions,
-} from '../memory-store';
+import { useMemoryStore } from '../memory-store';
 import {
   getMemoryServiceClient,
+  type ConfirmRequest,
+  type DayPilotBrief,
+  type DayPilotCard,
+  type DayPilotContextPackResponse,
+  type DayPilotProviderTarget,
+  type NotificationRecord,
+  type OutreachSession,
   type OutreachSummary,
   type OutreachTemplateRuntimeStatusItem,
+  type PersonalSkillListItem,
+  type ReflectionThread,
+  type RuntimeAction,
+  type StatsResponse,
 } from '../../services/MemoryServiceClient';
+
+type MissionPriority = 'critical' | 'high' | 'medium' | 'low';
+type MissionStateClass = 'now' | 'prepare' | 'waiting';
+type MissionTagType = 'person' | 'source' | 'project';
+
+interface MissionCard {
+  id: string;
+  missionId?: string;
+  sourceHash?: string;
+  cardType?: string;
+  priority: MissionPriority;
+  state: string;
+  stateClass: MissionStateClass;
+  timeLabel: string;
+  title: string;
+  next?: string;
+  why: string;
+  tags: Array<{ text: string; type: MissionTagType }>;
+  evidence: Array<{ source: string; text: string }>;
+  actions: Array<{ title: string; desc: string }>;
+  questions: string[];
+  pack: string;
+  route: string;
+}
+
+interface AttentionItem {
+  id: string;
+  icon: string;
+  label: string;
+  count: number;
+  route: string;
+}
 
 const store = useMemoryStore();
 const router = useRouter();
+const client = getMemoryServiceClient();
 
-const overviewStats = computed(() => store.overviewStats);
-const closedTodayCards = computed(() => store.closedTodayCards);
-const waterfallDisplayCount = ref(6);
-const activeDeferTopicId = ref<string | null>(null);
-const activeMuteTopicId = ref<string | null>(null);
-const topicDeferOptions = ref(getTopicDeferPresetOptions());
-const topicMuteOptions = ref(getTopicMutePresetOptions());
-const topicReadUndo = computed(() => store.topicReadUndo);
-const formatDateTimeLocal = (timestamp = Date.now() + 60 * 60 * 1000) => {
-  const date = new Date(timestamp);
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-    date.getDate(),
-  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
-const customDeferValue = ref(formatDateTimeLocal());
-const customDeferMin = computed(() => formatDateTimeLocal(Date.now() + 60_000));
-const customDeferTimestamp = computed(() => {
-  const timestamp = new Date(customDeferValue.value).getTime();
-  return Number.isFinite(timestamp) && timestamp > Date.now()
-    ? timestamp
-    : null;
-});
+const loading = ref(false);
+const loadError = ref('');
+const dayBrief = ref<DayPilotBrief | null>(null);
+const stats = ref<StatsResponse | null>(null);
+const _decisionRequests = ref<ConfirmRequest[]>([]);
+const decisionTotal = ref(0);
+const _watchRequests = ref<ConfirmRequest[]>([]);
+const watchTotal = ref(0);
+const _queuedActions = ref<RuntimeAction[]>([]);
+const queuedActionTotal = ref(0);
+const _outreachSessions = ref<OutreachSession[]>([]);
+const _outreachTemplates = ref<OutreachTemplateRuntimeStatusItem[]>([]);
 const outreachSummary = ref<OutreachSummary>({
   upcomingCount: 0,
   waitingReplyCount: 0,
@@ -498,21 +442,23 @@ const outreachSummary = ref<OutreachSummary>({
   pendingApprovalCount: 0,
 });
 const pendingTemplateCount = ref(0);
-const scheduledSessionCount = computed(() =>
-  Math.max(
-    Number(outreachSummary.value.upcomingCount || 0) -
-      Number(outreachSummary.value.pendingApprovalCount || 0),
-    0,
-  ),
-);
-const outreachTotal = computed(
-  () =>
-    pendingTemplateCount.value +
-    outreachSummary.value.upcomingCount +
-    outreachSummary.value.waitingReplyCount +
-    outreachSummary.value.escalatedCount,
-);
-let outreachSummaryTimer: ReturnType<typeof setInterval> | null = null;
+const _activeSkillTotal = ref(0);
+const _skillSuggestions = ref<PersonalSkillListItem[]>([]);
+const skillSuggestionTotal = ref(0);
+const _pendingNotifications = ref<NotificationRecord[]>([]);
+const _activeReflections = ref<ReflectionThread[]>([]);
+const _activeReflectionTotal = ref(0);
+const refreshedAt = ref(Date.now());
+const expandedCardId = ref<string | null>(null);
+const openContextPackIds = ref(new Set<string>());
+const hiddenDayPilotCardIds = ref(new Set<string>());
+const contextProvider = ref<DayPilotProviderTarget>('codex');
+const includeSensitiveContext = ref(false);
+const contextPackCache = ref<Record<string, DayPilotContextPackResponse>>({});
+const contextPackLoadingIds = ref(new Set<string>());
+const toastMessage = ref('');
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
 const TERMINAL_OUTREACH_STATUSES = new Set([
   'resolved',
   'no_reply',
@@ -521,183 +467,333 @@ const TERMINAL_OUTREACH_STATUSES = new Set([
   'failed',
 ]);
 
-// 获取未读主题数量
-const unreadTopicsCount = computed(() => store.getUnreadTopics().length);
-
-// 获取未读主题瀑布流(按热度排序)
-const waterfallTopics = computed(() => store.getUnreadTopicsByImportance());
-
-const navigateToEntityType = (entityType: string) => {
-  router.push(`/entity/${entityType}`);
-};
-
-const _navigateToTopic = (topicId: string) => {
-  router.push(`/topic/${topicId}`);
-};
-
-const getEntityCount = (entityType: string) => {
-  const entity = store.entityTypes.find((e) => e.type === entityType);
-  return entity ? entity.count : 0;
-};
-
-const isCardClosed = (cardId: string) => {
-  return closedTodayCards.value.has(cardId);
-};
-
-const handleCloseTodayCard = (cardId: string) => {
-  store.closeTodayCard(cardId);
-};
-
-const handleTopicClick = (topic: any) => {
-  // 点击主题只进入详情页，避免误清空未读。
-  router.push(`/topic/${topic.id}`);
-};
-
-const handleMarkTopicAsRead = async (topicId: string) => {
-  // 找到对应的DOM元素
-  const cardElement = document.querySelector(
-    `[data-topic-id="${topicId}"]`,
-  ) as HTMLElement;
-
-  if (cardElement) {
-    // 添加淡出动画class
-    cardElement.classList.add('fade-out');
-
-    // 等待动画完成(300ms)后再标记已读
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    // 标记已读(这会触发Vue的响应式更新)
-    await store.markTopicAsRead(topicId);
-  } else {
-    // 如果找不到元素,直接标记已读
-    await store.markTopicAsRead(topicId);
-  }
-};
-
-const toggleTopicDeferMenu = (topicId: string) => {
-  if (activeDeferTopicId.value === topicId) {
-    activeDeferTopicId.value = null;
-    return;
-  }
-
-  activeMuteTopicId.value = null;
-  topicDeferOptions.value = getTopicDeferPresetOptions();
-  customDeferValue.value = formatDateTimeLocal();
-  activeDeferTopicId.value = topicId;
-};
-
-const toggleTopicMuteMenu = (topicId: string) => {
-  if (activeMuteTopicId.value === topicId) {
-    activeMuteTopicId.value = null;
-    return;
-  }
-
-  activeDeferTopicId.value = null;
-  topicMuteOptions.value = getTopicMutePresetOptions();
-  activeMuteTopicId.value = topicId;
-};
-
-const handleDeferTopicForLater = async (topicId: string, until?: number) => {
-  activeDeferTopicId.value = null;
-  const cardElement = document.querySelector(
-    `[data-topic-id="${topicId}"]`,
-  ) as HTMLElement;
-
-  if (cardElement) {
-    cardElement.classList.add('fade-out');
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-
-  await store.deferTopicForLater(topicId, until);
-};
-
-const handleMuteTopic = async (topicId: string, until?: number | null) => {
-  activeMuteTopicId.value = null;
-  const cardElement = document.querySelector(
-    `[data-topic-id="${topicId}"]`,
-  ) as HTMLElement;
-
-  if (cardElement) {
-    cardElement.classList.add('fade-out');
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-
-  await store.muteTopic(topicId, until);
-};
-
-const handleCustomDefer = async (topicId: string) => {
-  if (!customDeferTimestamp.value) return;
-  await handleDeferTopicForLater(topicId, customDeferTimestamp.value);
-};
-
-const handleUndoTopicRead = async () => {
-  await store.undoLastTopicRead();
-};
-
-const loadMoreTopics = () => {
-  waterfallDisplayCount.value += 6;
-};
-
-const formatTime = (timestamp: number) => {
-  const now = Date.now();
-  const diff = now - timestamp;
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (hours < 24) return `${hours}小时前`;
-  if (days < 30) return `${days}天前`;
-  return new Date(timestamp).toLocaleDateString();
-};
-
-const formatDeferredUntil = (timestamp?: number) => {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  const now = new Date();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  const time = date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-  if (date.toDateString() === now.toDateString()) {
-    return `今天 ${time}`;
-  }
-  if (date.toDateString() === tomorrow.toDateString()) {
-    return `明天 ${time}`;
-  }
-  return date.toLocaleString(undefined, {
-    month: 'numeric',
+const todayLabel = computed(() =>
+  new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
     day: 'numeric',
+    weekday: 'long',
+  }).format(new Date()),
+);
+
+const timezoneLabel = computed(
+  () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'local',
+);
+
+const refreshedAtLabel = computed(() =>
+  new Date(refreshedAt.value).toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
-  });
-};
+  }),
+);
 
-const formatMutedUntil = (timestamp?: number | null) => {
-  if (timestamp === null) return '直到手动恢复';
-  if (!timestamp) return '';
-  return formatDeferredUntil(timestamp);
-};
+const sourceTags = computed(() => {
+  const sourceStats = dayBrief.value?.sourceStats;
+  if (sourceStats) {
+    return [
+      {
+        key: 'messages',
+        label: `${sourceStats.messages.totalRecent} 消息`,
+        warn: false,
+      },
+      {
+        key: 'calendar',
+        label: `${sourceStats.calendar.upcoming} 日历`,
+        warn: false,
+      },
+      {
+        key: 'notifications',
+        label: `${sourceStats.notifications.pending} 待提醒`,
+        warn: sourceStats.notifications.pending > 0,
+      },
+      {
+        key: 'missions',
+        label: `${dayBrief.value?.cards.length || 0} mission`,
+        warn: false,
+      },
+    ];
+  }
+  const current = stats.value;
+  if (!current)
+    return [{ key: 'loading', label: '记忆统计加载中', warn: true }];
+  return [
+    { key: 'messages', label: `${current.messages.total} 消息`, warn: false },
+    { key: 'chunks', label: `${current.chunks.total} 片段`, warn: false },
+    {
+      key: 'relationships',
+      label: `${current.relationships.total} 关系`,
+      warn: false,
+    },
+    {
+      key: 'notifications',
+      label: `${current.notifications.pending} 待提醒`,
+      warn: current.notifications.pending > 0,
+    },
+  ];
+});
 
-async function loadOutreachSummary() {
+const outreachTotal = computed(
+  () =>
+    pendingTemplateCount.value +
+    outreachSummary.value.upcomingCount +
+    outreachSummary.value.waitingReplyCount +
+    outreachSummary.value.escalatedCount +
+    outreachSummary.value.pendingApprovalCount,
+);
+
+const unreadTopics = computed(() => store.getUnreadTopicsByImportance());
+const unreadTopicCount = computed(() => unreadTopics.value.length);
+const topicPreviewItems = computed(() => unreadTopics.value.slice(0, 2));
+
+const providerOptions: Array<{
+  id: DayPilotProviderTarget;
+  shortLabel: string;
+}> = [
+  { id: 'codex', shortLabel: 'Codex' },
+  { id: 'chatgpt', shortLabel: 'ChatGPT' },
+  { id: 'claude', shortLabel: 'Claude' },
+  { id: 'doubao', shortLabel: '豆包' },
+  { id: 'generic', shortLabel: '通用' },
+];
+
+const currentProviderLabel = computed(
+  () =>
+    providerOptions.find((provider) => provider.id === contextProvider.value)
+      ?.shortLabel || '上下文包',
+);
+
+const attentionBudget = computed(() => ({
+  max: dayBrief.value?.attentionBudget.maxInterruptions ?? 3,
+  used:
+    dayBrief.value?.attentionBudget.usedInterruptions ??
+    Math.min(
+      3,
+      Number(decisionTotal.value > 0) +
+        Number(watchTotal.value > 0) +
+        Number(queuedActionTotal.value > 0) +
+        Number(outreachTotal.value > 0),
+    ),
+}));
+
+const budgetPercent = computed(() => {
+  const percent =
+    (attentionBudget.value.used / Math.max(attentionBudget.value.max, 1)) * 100;
+  return `${Math.min(100, Math.max(0, percent))}%`;
+});
+
+const MISSION_LIMIT = 7;
+
+const missionCards = computed<MissionCard[]>(() => {
+  return (dayBrief.value?.cards ?? [])
+    .map(mapDayPilotCard)
+    .slice(0, MISSION_LIMIT);
+});
+
+const visibleMissionCards = computed(() =>
+  missionCards.value.filter((card) => !isDayPilotCardClosed(card.id)),
+);
+
+const attentionItems = computed<AttentionItem[]>(() => [
+  {
+    id: 'decisions',
+    icon: '⚖',
+    label: '待拍板决策',
+    count: decisionTotal.value,
+    route: '/decisions',
+  },
+  {
+    id: 'actions',
+    icon: '⚙',
+    label: '排队中动作',
+    count: queuedActionTotal.value,
+    route: '/actions',
+  },
+  {
+    id: 'outreach',
+    icon: '📡',
+    label: '跟进中询问',
+    count: outreachTotal.value,
+    route: '/outreach',
+  },
+  {
+    id: 'skills',
+    icon: '🧪',
+    label: '技能建议',
+    count: skillSuggestionTotal.value,
+    route: '/skills',
+  },
+  {
+    id: 'topics',
+    icon: '💡',
+    label: '未读主题',
+    count: unreadTopicCount.value,
+    route: '/entity/Topic',
+  },
+]);
+
+const timelineItems = computed(() =>
+  visibleMissionCards.value.slice(0, 5).map((card, index) => ({
+    time: card.timeLabel,
+    title: card.title,
+    desc: card.tags.map((tag) => tag.text).join(' · '),
+    active: index < 2,
+    muted: card.priority === 'low',
+    route: card.route,
+  })),
+);
+
+async function loadDayPilot() {
+  loading.value = true;
+  loadError.value = '';
   try {
-    const client = getMemoryServiceClient();
-    const [summary, templates] = await Promise.all([
-      client.getOutreachSummary(),
-      client.getOutreachTemplateRuntimeStatus(undefined, 100),
-    ]);
-    outreachSummary.value = summary;
-    pendingTemplateCount.value = templates.items.filter((item) =>
-      isPendingTemplate(item),
-    ).length;
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const result = await client.getTodayPilotToday({
+      timezone: timezone || 'Asia/Shanghai',
+      autoGenerate: true,
+    });
+    dayBrief.value = result.brief;
+    decisionTotal.value = countCards('decision_check');
+    queuedActionTotal.value = dayBrief.value.sourceStats.actions.queued;
+    pendingTemplateCount.value = 0;
+    outreachSummary.value = {
+      upcomingCount: 0,
+      waitingReplyCount: 0,
+      escalatedCount: 0,
+      pendingApprovalCount: 0,
+    };
+    skillSuggestionTotal.value = dayBrief.value.sourceStats.skills.suggestions;
+    refreshedAt.value = Date.now();
   } catch (error) {
-    console.error('加载主动询问概览失败:', error);
+    console.error('加载今日领航失败:', error);
+    dayBrief.value = null;
+    loadError.value =
+      '今日领航后端暂时不可用，无法从原始记忆生成今日 mission。请稍后刷新。';
+  } finally {
+    loading.value = false;
   }
 }
 
-function isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
+function countCards(cardType: string) {
+  return (dayBrief.value?.cards ?? []).filter(
+    (card) => card.cardType === cardType,
+  ).length;
+}
+
+function mapDayPilotCard(card: DayPilotCard): MissionCard {
+  const route = routeForDayPilotCard(card);
+  const evidence = card.evidenceRefs.slice(0, 5).map((item) => ({
+    source: limitText(item.title || `${item.sourceKind}:${item.sourceId}`, 40),
+    text: limitText(item.snippet, 220),
+  }));
+  return {
+    id: card.id,
+    missionId: card.missionId,
+    sourceHash: card.sourceHash,
+    cardType: card.cardType,
+    priority: card.priority,
+    state: stateLabel(card.state),
+    stateClass:
+      card.state === 'now'
+        ? 'now'
+        : card.state === 'prepare'
+        ? 'prepare'
+        : 'waiting',
+    timeLabel: card.dueAt
+      ? relativeTime(card.dueAt)
+      : relativeTime(card.evidenceRefs[0]?.timestamp || card.updatedAt),
+    title: limitText(card.title, 88),
+    next: limitText(card.nextBestAction, 130),
+    why: limitText(card.whyNow, 220),
+    tags: compactTags([
+      ...card.people
+        .slice(0, 2)
+        .map((person) => missionTag(person.name, 'person')),
+      ...card.projects
+        .slice(0, 2)
+        .map((project) => missionTag(project.name, 'project')),
+      missionTag(cardTypeLabel(card.cardType), 'source'),
+      missionTag(`trust ${Math.round(card.trust.confidence * 100)}%`, 'source'),
+    ]),
+    evidence,
+    actions: [
+      {
+        title: card.nextBestAction,
+        desc: nextActionDesc(card),
+      },
+    ],
+    questions: card.openQuestions.slice(0, 4),
+    pack:
+      typeof card.contextPack?.preview === 'string'
+        ? card.contextPack.preview
+        : buildPack([
+            `Mission: ${card.title}`,
+            `Why now: ${card.whyNow}`,
+            `Next: ${card.nextBestAction}`,
+            ...card.evidenceRefs.map(
+              (item) =>
+                `Evidence: ${item.title || item.sourceKind} - ${item.snippet}`,
+            ),
+          ]),
+    route,
+  };
+}
+
+function stateLabel(state: DayPilotCard['state']) {
+  const labels: Record<DayPilotCard['state'], string> = {
+    now: 'Now',
+    prepare: 'Prepare',
+    waiting: 'Waiting',
+    done: 'Done',
+    muted: 'Muted',
+  };
+  return labels[state] || state;
+}
+
+function cardTypeLabel(cardType: DayPilotCard['cardType']) {
+  const labels: Record<DayPilotCard['cardType'], string> = {
+    meeting_prepare: '会前准备',
+    thread_followup: 'Thread follow-up',
+    decision_check: '决策检查',
+    ai_tool_shift: 'AI 工具',
+    project_risk: '项目风险',
+    relationship_ping: '关系上下文',
+    skill_opportunity: '技能机会',
+    memory_quality: '记忆质量',
+  };
+  return labels[cardType] || cardType;
+}
+
+function routeForDayPilotCard(card: DayPilotCard) {
+  const primaryEvidence = card.evidenceRefs[0];
+  if (card.cardType === 'skill_opportunity') return '/skills';
+  if (card.cardType === 'meeting_prepare') return '/timeline';
+  if (card.cardType === 'memory_quality') {
+    return primaryEvidence?.sourceId
+      ? `/search?q=${encodeURIComponent(card.title)}`
+      : '/search';
+  }
+  if (primaryEvidence?.sourceKind === 'action') {
+    return `/actions?actionId=${encodeURIComponent(primaryEvidence.sourceId)}`;
+  }
+  if (primaryEvidence?.sourceKind === 'reflection') {
+    return `/reflection-threads/${encodeURIComponent(
+      primaryEvidence.sourceId,
+    )}`;
+  }
+  if (primaryEvidence?.sourceKind === 'calendar') return '/timeline';
+  return `/search?q=${encodeURIComponent(card.title)}`;
+}
+
+function nextActionDesc(card: DayPilotCard) {
+  if (card.cardType === 'decision_check') {
+    return '强状态处理仍在对应子页面完成，首页只负责提示和上下文整理。';
+  }
+  if (card.cardType === 'meeting_prepare') {
+    return '打开详情后可以查看相关时间线，并复制 mission context pack 给其他 AI。';
+  }
+  return '展开卡片查看证据和上下文包，再决定完成、稍后或静默。';
+}
+
+function _isPendingTemplate(item: OutreachTemplateRuntimeStatusItem): boolean {
   const template = item.template;
   const nextDispatchAt = resolveTemplateNextDispatchAt(item);
   if (template.enabled === false) return false;
@@ -732,414 +828,1665 @@ function resolveTemplateNextDispatchAt(
   return Math.floor(date.getTime() / 1000);
 }
 
-onMounted(async () => {
-  await loadOutreachSummary();
-  outreachSummaryTimer = setInterval(() => {
-    void loadOutreachSummary();
-  }, 60_000);
-});
+function toggleCard(id: string) {
+  expandedCardId.value = expandedCardId.value === id ? null : id;
+}
 
-onUnmounted(() => {
-  if (outreachSummaryTimer) {
-    clearInterval(outreachSummaryTimer);
-    outreachSummaryTimer = null;
+async function toggleContextPack(card: MissionCard) {
+  const next = new Set(openContextPackIds.value);
+  if (next.has(card.id)) {
+    next.delete(card.id);
+  } else {
+    next.add(card.id);
+    void loadContextPack(card);
   }
+  openContextPackIds.value = next;
+}
+
+function isDayPilotCardClosed(cardId: string) {
+  return hiddenDayPilotCardIds.value.has(cardId);
+}
+
+function contextPackKey(card: MissionCard) {
+  return `${card.id}:${contextProvider.value}:${
+    includeSensitiveContext.value ? 'sensitive' : 'redacted'
+  }`;
+}
+
+function currentContextPack(card: MissionCard) {
+  return contextPackCache.value[contextPackKey(card)];
+}
+
+function currentPackText(card: MissionCard) {
+  return currentContextPack(card)?.bodyMd || card.pack;
+}
+
+function currentRedactionPreview(card: MissionCard) {
+  return currentContextPack(card)?.redactionPreview || [];
+}
+
+function isContextPackLoading(cardId: string) {
+  return contextPackLoadingIds.value.has(cardId);
+}
+
+function setContextProvider(
+  provider: DayPilotProviderTarget,
+  card: MissionCard,
+) {
+  contextProvider.value = provider;
+  if (openContextPackIds.value.has(card.id)) {
+    void loadContextPack(card);
+  }
+}
+
+function setIncludeSensitiveContext(event: Event, card: MissionCard) {
+  includeSensitiveContext.value = Boolean(
+    (event.target as HTMLInputElement | null)?.checked,
+  );
+  if (openContextPackIds.value.has(card.id)) {
+    void loadContextPack(card, true);
+  }
+}
+
+async function loadContextPack(card: MissionCard, force = false) {
+  if (!card.missionId) return;
+  const key = contextPackKey(card);
+  if (!force && contextPackCache.value[key]) return;
+
+  const loading = new Set(contextPackLoadingIds.value);
+  loading.add(card.id);
+  contextPackLoadingIds.value = loading;
+  try {
+    const pack = await client.renderDayPilotContextPack(card.missionId, {
+      tokenBudget: 1600,
+      targetProvider: contextProvider.value,
+      includeSensitive: includeSensitiveContext.value,
+    });
+    contextPackCache.value = {
+      ...contextPackCache.value,
+      [key]: pack,
+    };
+  } catch (error) {
+    console.error('生成 Day Pilot context pack 失败:', error);
+    showToast('上下文包生成失败，请稍后重试。');
+  } finally {
+    const next = new Set(contextPackLoadingIds.value);
+    next.delete(card.id);
+    contextPackLoadingIds.value = next;
+  }
+}
+
+async function sendCardSignal(card: MissionCard, action: 'useful' | 'wrong') {
+  try {
+    const feedback = await client.sendDayPilotCardFeedback(card.id, {
+      action,
+      muteKey: card.sourceHash,
+    });
+    dayBrief.value = feedback.brief;
+    showToast(
+      action === 'useful' ? '已记录：这张卡有用。' : '已记录：这张卡不准确。',
+    );
+  } catch (error) {
+    console.error('写入 Day Pilot 信号失败:', error);
+    showToast('反馈写入失败。');
+  }
+}
+
+async function hideCardForToday(
+  card: MissionCard,
+  reason: 'done' | 'later' | 'mute',
+) {
+  hiddenDayPilotCardIds.value = new Set([
+    ...Array.from(hiddenDayPilotCardIds.value),
+    card.id,
+  ]);
+  try {
+    const feedback = await client.sendDayPilotCardFeedback(card.id, {
+      action: reason,
+      snoozeUntil:
+        reason === 'later'
+          ? Math.floor(Date.now() / 1000) + 6 * 3600
+          : undefined,
+      muteKey: reason === 'mute' ? card.sourceHash : undefined,
+    });
+    dayBrief.value = feedback.brief;
+  } catch (error) {
+    console.error('写入 Day Pilot feedback 失败:', error);
+  }
+  const messages = {
+    done: '已从今日首页移除。',
+    later: '已放到稍后，今天首页不再显示。',
+    mute: '已静默同类提醒。',
+  };
+  showToast(messages[reason]);
+}
+
+async function copyContextPack(card: MissionCard) {
+  try {
+    if (!navigator.clipboard?.writeText) {
+      showToast('当前环境不支持直接复制，请展开上下文包手动复制。');
+      return;
+    }
+    await loadContextPack(card);
+    const pack = currentContextPack(card);
+    await navigator.clipboard.writeText(pack ? pack.bodyMd : card.pack);
+    showToast('已复制上下文包。');
+  } catch (error) {
+    console.error('复制上下文包失败:', error);
+    showToast('复制失败，请展开上下文包手动复制。');
+  }
+}
+
+function navigateTo(path: string) {
+  router.push(path);
+}
+
+function showToast(message: string) {
+  toastMessage.value = message;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastMessage.value = '';
+    toastTimer = null;
+  }, 1800);
+}
+
+function relativeTime(timestamp?: number) {
+  if (!timestamp) return '刚刚';
+  const value = timestamp > 20_000_000_000 ? timestamp : timestamp * 1000;
+  const diff = Date.now() - value;
+  if (diff < -24 * 60 * 60 * 1000) {
+    return `${Math.ceil(Math.abs(diff) / (24 * 60 * 60 * 1000))}天后`;
+  }
+  if (diff < -60 * 60 * 1000) {
+    return `${Math.ceil(Math.abs(diff) / (60 * 60 * 1000))}小时后`;
+  }
+  if (diff < -60_000) return `${Math.ceil(Math.abs(diff) / 60_000)}分钟后`;
+  if (diff < 0) return '即将';
+  if (diff < 60_000) return '刚刚';
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  return `${Math.floor(hours / 24)}天前`;
+}
+
+function _buildDecisionMission(request: ConfirmRequest): MissionCard {
+  const context = confirmContextText(request);
+  return {
+    id: `decision:${request.id}`,
+    priority: priorityFromString(request.priority, 'high'),
+    state: 'Now',
+    stateClass: 'now',
+    timeLabel: relativeTime(request.createdAt),
+    title: limitText(request.question, 80),
+    why:
+      context ||
+      `${confirmReasonLabel(
+        request,
+      )}，需要你在决策中心完成选择后系统才能继续推进。`,
+    tags: compactTags([
+      missionTag('决策中心', 'source'),
+      missionTag(confirmReasonLabel(request), 'project'),
+      missionTag(request.category, 'source'),
+    ]),
+    evidence: compactEvidence([
+      {
+        source: request.category || request.reasonCode || 'Confirm Request',
+        text: context || request.question,
+      },
+      {
+        source: '状态',
+        text: `priority=${request.priority}，state=${request.state}，queue=${
+          request.routing || 'decision'
+        }`,
+      },
+    ]),
+    actions: [
+      {
+        title: '进入决策中心处理',
+        desc: '首页只展示这件具体事项；批准、拒绝、选项回答仍在决策中心完成。',
+      },
+    ],
+    questions: request.options?.map((option) => option.label).slice(0, 4) || [],
+    pack: buildPack([
+      'Mission: Review one pending Personal AI decision',
+      `Question: ${request.question}`,
+      context ? `Context: ${context}` : '',
+      request.options?.length
+        ? `Options: ${request.options
+            .map((option) => option.label)
+            .join(' / ')}`
+        : '',
+      'Boundary: answer inside Decision Center; homepage only previews.',
+    ]),
+    route: '/decisions',
+  };
+}
+
+function _buildWatchMission(request: ConfirmRequest): MissionCard {
+  const context = confirmContextText(request);
+  return {
+    id: `watch:${request.id}`,
+    priority: priorityFromString(request.priority, 'medium'),
+    state: 'Waiting',
+    stateClass: 'waiting',
+    timeLabel: relativeTime(request.updatedAt || request.createdAt),
+    title: limitText(request.question, 80),
+    why:
+      context ||
+      '这是一个仍在观察中的具体事项。首页提示今天值得扫一眼，状态变更仍回到决策中心完成。',
+    tags: compactTags([
+      missionTag('观察队列', 'source'),
+      missionTag(confirmReasonLabel(request), 'project'),
+      missionTag(request.category, 'source'),
+    ]),
+    evidence: compactEvidence([
+      {
+        source: request.category || request.reasonCode || 'Watch Request',
+        text: context || request.question,
+      },
+      request.snoozeCount > 0
+        ? {
+            source: '观察次数',
+            text: `已观察 ${request.snoozeCount} 次。`,
+          }
+        : null,
+    ]),
+    actions: [
+      {
+        title: '进入观察队列复查',
+        desc: '决定立即查证、继续观察或结束追踪。',
+      },
+    ],
+    questions: request.gapType ? [request.gapType] : [],
+    pack: buildPack([
+      'Mission: Review one Personal AI watch item',
+      `Question: ${request.question}`,
+      context ? `Context: ${context}` : '',
+      request.snoozeUntil ? `Snoozed until: ${request.snoozeUntil}` : '',
+      'Boundary: state transitions stay inside Decision Center.',
+    ]),
+    route: '/decisions',
+  };
+}
+
+function _buildActionMission(action: RuntimeAction): MissionCard {
+  const needsApproval = action.requiresApproval || action.riskLevel === 'high';
+  return {
+    id: `action:${action.id}`,
+    priority: priorityFromString(
+      action.riskLevel,
+      needsApproval ? 'high' : 'medium',
+    ),
+    state: needsApproval ? 'Now' : 'Prepare',
+    stateClass: needsApproval ? 'now' : 'prepare',
+    timeLabel: action.scheduledAt
+      ? relativeTime(action.scheduledAt)
+      : relativeTime(action.createdAt),
+    title: limitText(action.title || action.actionType, 80),
+    why:
+      limitText(action.description || action.lastError || '', 180) ||
+      `动作队列里有一条 ${action.actionType} 动作等待执行或确认。`,
+    tags: compactTags([
+      missionTag('动作队列', 'source'),
+      missionTag(action.actionType, 'project'),
+      missionTag(action.executionMode, 'source'),
+    ]),
+    evidence: compactEvidence([
+      {
+        source: action.sourceKind || action.source || 'Runtime Action',
+        text: action.description || action.title,
+      },
+      action.lastError
+        ? { source: '最近错误', text: action.lastError }
+        : {
+            source: '执行状态',
+            text: `queue=${action.queueStatus}，risk=${action.riskLevel}，retry=${action.retryCount}`,
+          },
+    ]),
+    actions: [
+      {
+        title: needsApproval ? '确认是否执行' : '查看排队动作',
+        desc: '进入动作队列查看参数、依赖、风险和执行结果。',
+      },
+    ],
+    questions: needsApproval ? ['是否允许这条动作继续执行？'] : [],
+    pack: buildPack([
+      'Mission: Review one queued Personal AI action',
+      `Action: ${action.title}`,
+      `Type: ${action.actionType}`,
+      action.description ? `Description: ${action.description}` : '',
+      action.requiresApproval ? 'Needs approval before execution.' : '',
+    ]),
+    route: `/actions?actionId=${encodeURIComponent(action.id)}`,
+  };
+}
+
+function _buildOutreachSessionMission(session: OutreachSession): MissionCard {
+  const statusLabel = outreachSessionStatusLabel(session.status);
+  const isUrgent =
+    session.status === 'pending_approval' || session.status === 'escalated';
+  return {
+    id: `outreach-session:${session.id}`,
+    priority: isUrgent ? 'high' : 'medium',
+    state: isUrgent
+      ? 'Now'
+      : session.status === 'scheduled'
+      ? 'Prepare'
+      : 'Waiting',
+    stateClass: isUrgent
+      ? 'now'
+      : session.status === 'scheduled'
+      ? 'prepare'
+      : 'waiting',
+    timeLabel: session.waitUntil
+      ? relativeTime(session.waitUntil)
+      : relativeTime(session.updatedAt || session.createdAt),
+    title: limitText(`主动询问：${session.renderedQuestion}`, 82),
+    why:
+      limitText(session.renderedContext || session.errorMessage || '', 180) ||
+      `这条主动询问当前处于「${statusLabel}」状态，需要按会话推进。`,
+    tags: compactTags([
+      missionTag('主动询问', 'source'),
+      missionTag(statusLabel, 'project'),
+      missionTag(session.targetResolvedLabel || session.targetRef, 'person'),
+    ]),
+    evidence: compactEvidence([
+      { source: '问题', text: session.renderedQuestion },
+      session.renderedContext
+        ? { source: '上下文', text: session.renderedContext }
+        : null,
+      session.replyRawText
+        ? { source: '最近回复', text: session.replyRawText }
+        : null,
+    ]),
+    actions: [
+      {
+        title: isUrgent ? '处理这条询问' : '查看询问进展',
+        desc: '进入具体会话查看审批、排程、等待回复或升级信息。',
+      },
+    ],
+    questions: session.requiresApproval ? ['今天是否允许这条询问发出？'] : [],
+    pack: buildPack([
+      'Mission: Review one outreach session',
+      `Question: ${session.renderedQuestion}`,
+      session.renderedContext ? `Context: ${session.renderedContext}` : '',
+      `Status: ${statusLabel}`,
+      session.targetResolvedLabel
+        ? `Target: ${session.targetResolvedLabel}`
+        : '',
+    ]),
+    route: `/outreach/${encodeURIComponent(session.id)}`,
+  };
+}
+
+function _buildOutreachTemplateMission(
+  item: OutreachTemplateRuntimeStatusItem,
+): MissionCard {
+  const nextDispatchAt = resolveTemplateNextDispatchAt(item);
+  return {
+    id: `outreach-template:${item.template.id}`,
+    priority: item.template.approvalPolicy === 'manual' ? 'high' : 'medium',
+    state: 'Prepare',
+    stateClass: 'prepare',
+    timeLabel: nextDispatchAt ? relativeTime(nextDispatchAt) : '待排程',
+    title: limitText(
+      item.template.title || item.template.questionTemplate || '待触发主动询问',
+      82,
+    ),
+    why:
+      limitText(
+        item.template.contextTemplate || item.template.questionTemplate || '',
+        180,
+      ) || '这是一条即将触发的主动询问模板，需要确认是否仍适合今天发出。',
+    tags: compactTags([
+      missionTag('主动询问模板', 'source'),
+      missionTag(item.template.approvalPolicy || 'auto', 'project'),
+      missionTag(item.template.targetRef, 'person'),
+    ]),
+    evidence: compactEvidence([
+      {
+        source: '模板问题',
+        text: item.template.questionTemplate || item.template.title,
+      },
+      nextDispatchAt
+        ? { source: '下一次触发', text: relativeTime(nextDispatchAt) }
+        : null,
+      item.template.lastSyncError
+        ? { source: '同步错误', text: item.template.lastSyncError }
+        : null,
+    ]),
+    actions: [
+      {
+        title: '检查模板是否发出',
+        desc: '进入主动询问页确认目标、上下文和审批策略。',
+      },
+    ],
+    questions:
+      item.template.approvalPolicy === 'manual'
+        ? ['这条询问今天是否允许发出？']
+        : [],
+    pack: buildPack([
+      'Mission: Review one pending outreach template',
+      `Template: ${item.template.title}`,
+      item.template.questionTemplate
+        ? `Question: ${item.template.questionTemplate}`
+        : '',
+      item.template.contextTemplate
+        ? `Context: ${item.template.contextTemplate}`
+        : '',
+    ]),
+    route: `/outreach?templateId=${encodeURIComponent(item.template.id)}`,
+  };
+}
+
+function _buildSkillSuggestionMission(
+  skill: PersonalSkillListItem,
+): MissionCard {
+  return {
+    id: `skill:${skill.id}`,
+    priority: skill.risk === 'high' ? 'high' : 'medium',
+    state: 'Prepare',
+    stateClass: 'prepare',
+    timeLabel: skill.suggestedAt ? relativeTime(skill.suggestedAt) : '可萃取',
+    title: limitText(`沉淀技能：${skill.title}`, 82),
+    why:
+      limitText(
+        skill.summary || skill.repetition || skill.trigger || '',
+        180,
+      ) || 'Personal AI 发现了一条可能值得沉淀的具体做事方法。',
+    tags: compactTags([
+      missionTag('个人技能', 'source'),
+      missionTag(skill.scope, 'project'),
+      missionTag(skill.risk, 'source'),
+    ]),
+    evidence: compactEvidence([
+      { source: '摘要', text: skill.summary },
+      skill.suggestedFrom
+        ? { source: '来源', text: skill.suggestedFrom }
+        : null,
+      skill.riskBrief ? { source: '风险', text: skill.riskBrief } : null,
+    ]),
+    actions: [
+      {
+        title: '审阅这条技能建议',
+        desc: '进入技能库决定使用、丢弃或稍后审。',
+      },
+    ],
+    questions: ['这条方法是否会重复使用？'],
+    pack: buildPack([
+      'Mission: Review one personal skill suggestion',
+      `Skill: ${skill.title}`,
+      skill.summary ? `Summary: ${skill.summary}` : '',
+      skill.trigger ? `Trigger: ${skill.trigger}` : '',
+      skill.notUse ? `Do not use when: ${skill.notUse}` : '',
+    ]),
+    route: '/skills',
+  };
+}
+
+function _buildNotificationMission(
+  notification: NotificationRecord,
+): MissionCard {
+  return {
+    id: `notification:${notification.id}`,
+    priority:
+      Number(notification.utilityScore || 0) >= 0.8 ||
+      notification.type === 'truth_conflict'
+        ? 'high'
+        : 'medium',
+    state: 'Now',
+    stateClass: 'now',
+    timeLabel: relativeTime(notification.createdAt),
+    title: limitText(notification.title, 82),
+    why:
+      limitText(notification.body || '', 180) ||
+      '这是一条尚未处理的具体记忆提醒，不应该只藏在统计数字里。',
+    tags: compactTags([
+      missionTag('记忆提醒', 'source'),
+      missionTag(notification.type, 'project'),
+      missionTag(notification.channel, 'source'),
+    ]),
+    evidence: compactEvidence([
+      {
+        source: notification.type || 'Notification',
+        text: notification.body || notification.title,
+      },
+      notification.payload
+        ? { source: 'payload', text: JSON.stringify(notification.payload) }
+        : null,
+    ]),
+    actions: [
+      {
+        title: '查看相关记忆',
+        desc: '进入对应主题或搜索页确认这条提醒是否需要处理。',
+      },
+    ],
+    questions: [],
+    pack: buildPack([
+      'Mission: Review one pending memory notification',
+      `Title: ${notification.title}`,
+      notification.body ? `Body: ${notification.body}` : '',
+      notification.type ? `Type: ${notification.type}` : '',
+    ]),
+    route: notification.topicId
+      ? `/topic/${encodeURIComponent(notification.topicId)}`
+      : `/search?q=${encodeURIComponent(notification.title)}`,
+  };
+}
+
+function _buildTopicMission(topic: any): MissionCard {
+  const unreadCount = Number(topic.readStatus?.unreadCount || 0);
+  return {
+    id: `topic:${topic.id}`,
+    priority: Number(topic.importance || 0) >= 0.8 ? 'medium' : 'low',
+    state: 'Waiting',
+    stateClass: 'waiting',
+    timeLabel: topic.updated ? relativeTime(topic.updated) : '阅读入口',
+    title: limitText(topic.name || '未读主题', 82),
+    why:
+      limitText(topic.description || '', 180) ||
+      `${unreadCount} 条未读讨论适合进入主题页集中处理。`,
+    tags: compactTags([
+      missionTag('主题', 'source'),
+      missionTag(`${unreadCount} 未读`, 'project'),
+    ]),
+    evidence: compactEvidence(
+      Array.isArray(topic.unreadDiscussions)
+        ? topic.unreadDiscussions.slice(0, 3).map((discussion: any) => ({
+            source: '未读讨论',
+            text: discussion.text || discussion.summary || '',
+          }))
+        : [
+            {
+              source: '主题状态',
+              text: `${unreadCount} 条未读讨论。`,
+            },
+          ],
+    ),
+    actions: [
+      {
+        title: '进入主题页阅读',
+        desc: '在主题页完成阅读、稍后、静音和已阅操作，首页不承载完整阅读流。',
+      },
+    ],
+    questions: [],
+    pack: buildPack([
+      'Mission: Review one unread topic',
+      `Topic: ${topic.name}`,
+      `Unread messages: ${unreadCount}`,
+      topic.description ? `Description: ${topic.description}` : '',
+    ]),
+    route: `/topic/${encodeURIComponent(topic.id)}`,
+  };
+}
+
+function _buildReflectionMission(thread: ReflectionThread): MissionCard {
+  return {
+    id: `reflection:${thread.id}`,
+    priority: thread.priority >= 8 ? 'medium' : 'low',
+    state: 'Waiting',
+    stateClass: 'waiting',
+    timeLabel: thread.nextReflectionAt
+      ? relativeTime(thread.nextReflectionAt)
+      : relativeTime(thread.updatedAt),
+    title: limitText(thread.title, 82),
+    why:
+      limitText(
+        thread.currentHypothesis ||
+          thread.latestSummary ||
+          thread.continueReason ||
+          '',
+        180,
+      ) || '这条自我反思线程仍在跟踪，今天没有更高优先级事项时可以复查。',
+    tags: compactTags([
+      missionTag('自我反思', 'source'),
+      missionTag(thread.sourceType, 'project'),
+    ]),
+    evidence: compactEvidence([
+      {
+        source: '当前假设',
+        text: thread.currentHypothesis || thread.latestSummary,
+      },
+      thread.openQuestions?.length
+        ? { source: '开放问题', text: thread.openQuestions.join(' / ') }
+        : null,
+    ]),
+    actions: [
+      {
+        title: '查看反思线程',
+        desc: '决定继续推进、暂停或关闭这个观察。',
+      },
+    ],
+    questions: thread.openQuestions?.slice(0, 3) || [],
+    pack: buildPack([
+      'Mission: Review one active reflection thread',
+      `Thread: ${thread.title}`,
+      thread.currentHypothesis ? `Hypothesis: ${thread.currentHypothesis}` : '',
+      thread.latestSummary ? `Summary: ${thread.latestSummary}` : '',
+    ]),
+    route: `/reflection-threads/${encodeURIComponent(thread.id)}`,
+  };
+}
+
+function _sortMissionCards(a: MissionCard, b: MissionCard) {
+  const priorityOrder: Record<MissionPriority, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+  };
+  return priorityOrder[b.priority] - priorityOrder[a.priority];
+}
+
+function missionTag(
+  text: string | number | undefined | null,
+  type: MissionTagType,
+) {
+  if (text === undefined || text === null || String(text).trim().length === 0) {
+    return null;
+  }
+  return { text: limitText(String(text), 24), type };
+}
+
+function compactTags(
+  tags: Array<{ text: string; type: MissionTagType } | null>,
+) {
+  return tags.filter((tag): tag is { text: string; type: MissionTagType } =>
+    Boolean(tag),
+  );
+}
+
+function compactEvidence(
+  items: Array<{ source: string; text?: string | null } | null>,
+) {
+  return items
+    .filter((item): item is { source: string; text?: string | null } =>
+      Boolean(item && item.text && item.text.trim().length > 0),
+    )
+    .slice(0, 4)
+    .map((item) => ({
+      source: limitText(item.source, 40),
+      text: limitText(item.text || '', 220),
+    }));
+}
+
+function priorityFromString(
+  value: string | undefined,
+  fallback: MissionPriority,
+): MissionPriority {
+  if (value === 'critical') return 'critical';
+  if (value === 'high') return 'high';
+  if (value === 'low') return 'low';
+  if (value === 'medium' || value === 'normal') return 'medium';
+  return fallback;
+}
+
+function confirmReasonLabel(request: ConfirmRequest) {
+  const labels: Record<string, string> = {
+    authority_required: '需要你定夺',
+    approval_required: '需要审批',
+    action_result_improvement: '规则改进',
+    future_monitoring: '持续观察',
+    owner_eta_gap: '负责人 / ETA 缺口',
+    artifact_gap: '等待更多证据',
+    time_sensitive_blocker: '时效阻塞',
+  };
+  if (request.reasonCode && labels[request.reasonCode]) {
+    return labels[request.reasonCode];
+  }
+  if (request.category) return request.category;
+  return request.routing === 'watch' ? '观察项' : '待确认';
+}
+
+function confirmContextText(request: ConfirmRequest) {
+  if (!request.context) return '';
+  try {
+    const parsed = JSON.parse(request.context) as Record<string, unknown>;
+    const candidates = [
+      parsed.summary,
+      parsed.reason,
+      parsed.sourceActionTitle,
+      parsed.sourceMessage,
+      parsed.outcomeSummary,
+    ];
+    const found = candidates.find(
+      (item) => typeof item === 'string' && item.trim().length > 0,
+    );
+    if (typeof found === 'string') return limitText(found, 220);
+  } catch {
+    // Plain text context is expected for most confirm requests.
+  }
+  return limitText(request.context, 220);
+}
+
+function outreachSessionStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending_approval: '待审批',
+    scheduled: '已排程',
+    waiting_reply: '等待回复',
+    deferred: '延期等待',
+    resolved: '已拿到结果',
+    no_reply: '无回复',
+    escalated: '已升级',
+    cancelled: '已取消',
+    failed: '失败',
+  };
+  return labels[status] || status || '未知状态';
+}
+
+function limitText(text: string, maxLength: number) {
+  const normalized = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function buildPack(lines: Array<string | false | null | undefined>) {
+  return lines.filter(Boolean).join('\n');
+}
+
+onMounted(() => {
+  void loadDayPilot();
 });
 </script>
 
 <style scoped>
-/* "阅"字按钮 - 标记已读 */
-.mark-read-btn {
-  position: absolute;
-  bottom: 1rem;
-  right: 1rem;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 50%;
+.day-pilot-home {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  animation: fadeInUp 0.45s ease-out;
+}
+
+.brief-header,
+.mission-card,
+.attention-item,
+.topic-entry,
+.empty-panel,
+.load-error {
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 0.85rem;
+}
+
+.brief-header {
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
   background: linear-gradient(
-    135deg,
-    rgba(34, 197, 94, 0.2),
-    rgba(16, 185, 129, 0.2)
-  );
-  border: 2px solid rgba(34, 197, 94, 0.4);
-  color: #22c55e;
-  font-weight: 700;
-  font-size: 0.875rem;
-  cursor: pointer;
+      135deg,
+      rgba(59, 130, 246, 0.1),
+      rgba(147, 51, 234, 0.1)
+    ),
+    rgba(15, 23, 42, 0.55);
+}
+
+.brief-top {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s ease;
-  opacity: 0;
-  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
-  z-index: 10;
-}
-
-.dismiss-card-btn {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  background: rgba(15, 23, 42, 0.72);
-  color: #cbd5e1;
-  font-size: 1.25rem;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: all 0.2s ease;
-  z-index: 10;
-}
-
-.content-card:hover .mark-read-btn,
-.content-card:hover .dismiss-card-btn,
-.mark-read-btn:focus-visible,
-.dismiss-card-btn:focus-visible {
-  opacity: 1;
-}
-
-.mark-read-btn:hover {
-  background: linear-gradient(
-    135deg,
-    rgba(34, 197, 94, 0.3),
-    rgba(16, 185, 129, 0.3)
-  );
-  border-color: #22c55e;
-  transform: scale(1.1);
-  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.2);
-}
-
-.mark-read-btn:active {
-  transform: scale(0.95);
-}
-
-.dismiss-card-btn:hover,
-.dismiss-card-btn:focus-visible {
-  border-color: rgba(148, 163, 184, 0.55);
-  background: rgba(30, 41, 59, 0.95);
-  color: #ffffff;
-}
-
-.mark-read-btn:focus-visible,
-.dismiss-card-btn:focus-visible {
-  outline: 2px solid rgba(96, 165, 250, 0.75);
-  outline-offset: 2px;
-}
-
-.topic-triage-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
   flex-wrap: wrap;
 }
 
-.topic-defer-menu {
-  position: relative;
-}
-
-.topic-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  min-height: 2rem;
-  padding: 0.4rem 0.75rem;
-  border-radius: 0.5rem;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  background: rgba(15, 23, 42, 0.72);
-  color: #cbd5e1;
-  cursor: pointer;
-  font-size: 0.8rem;
-  font-weight: 600;
-  transition: all 0.2s ease;
-}
-
-.topic-action-btn:hover,
-.topic-action-btn:focus-visible {
-  border-color: rgba(96, 165, 250, 0.55);
-  background: rgba(30, 41, 59, 0.95);
+.brief-greeting {
   color: #ffffff;
+  font-size: 1.35rem;
+  font-weight: 650;
+  line-height: 1.3;
 }
 
-.topic-action-btn.later {
-  border-color: rgba(245, 158, 11, 0.32);
-  color: #fbbf24;
-}
-
-.topic-action-btn.mute {
-  border-color: rgba(148, 163, 184, 0.34);
+.brief-subtitle {
+  margin-top: 0.35rem;
   color: #cbd5e1;
-}
-
-.topic-action-btn.read {
-  border-color: rgba(34, 197, 94, 0.36);
-  color: #22c55e;
-}
-
-.topic-undo-toast {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin: 0 0 1rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid rgba(96, 165, 250, 0.28);
-  border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.88);
-  color: #dbeafe;
   font-size: 0.875rem;
 }
 
-.topic-undo-toast button {
-  flex: 0 0 auto;
-  padding: 0.35rem 0.7rem;
-  border: 1px solid rgba(96, 165, 250, 0.42);
-  border-radius: 0.375rem;
-  background: rgba(37, 99, 235, 0.18);
-  color: #93c5fd;
-  cursor: pointer;
-  font-size: 0.8rem;
-  font-weight: 700;
+.brief-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
-.topic-undo-toast button:hover,
-.topic-undo-toast button:focus-visible {
-  outline: none;
-  background: rgba(37, 99, 235, 0.32);
-  color: #ffffff;
-}
-
-.topic-defer-options {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  right: 0;
-  z-index: 30;
-  display: grid;
-  min-width: 11rem;
-  padding: 0.35rem;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.98);
-  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
-}
-
-.topic-defer-option {
-  display: grid;
-  gap: 0.15rem;
-  width: 100%;
-  padding: 0.55rem 0.65rem;
-  border: 0;
-  border-radius: 0.375rem;
-  background: transparent;
-  color: #e2e8f0;
-  cursor: pointer;
-  font-size: 0.8rem;
-  line-height: 1.25;
-  text-align: left;
-}
-
-.topic-defer-option small {
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
   color: #94a3b8;
-  font-size: 0.72rem;
-}
-
-.topic-defer-option:hover,
-.topic-defer-option:focus-visible {
-  outline: none;
-  background: rgba(245, 158, 11, 0.12);
-  color: #ffffff;
-}
-
-.topic-custom-defer {
-  display: grid;
-  gap: 0.4rem;
-  margin-top: 0.35rem;
-  padding: 0.55rem 0.65rem 0.65rem;
-  border-top: 1px solid rgba(148, 163, 184, 0.14);
-}
-
-.topic-custom-defer label {
-  color: #cbd5e1;
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
-.topic-custom-defer-row {
-  display: grid;
-  grid-template-columns: minmax(9rem, 1fr) auto;
-  gap: 0.4rem;
+.source-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
 }
 
-.topic-custom-defer input {
-  min-width: 0;
-  padding: 0.4rem 0.5rem;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 0.375rem;
-  background: rgba(2, 6, 23, 0.42);
-  color: #e2e8f0;
-  font-size: 0.75rem;
+.source-dot.warn {
+  background: #f59e0b;
 }
 
-.topic-custom-defer button {
-  padding: 0.4rem 0.55rem;
-  border: 1px solid rgba(245, 158, 11, 0.34);
-  border-radius: 0.375rem;
-  background: rgba(245, 158, 11, 0.12);
-  color: #fbbf24;
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 0.5rem;
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
   cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 700;
+  font-size: 0.8rem;
+  font-weight: 750;
 }
 
-.topic-custom-defer button:disabled {
-  opacity: 0.45;
+.refresh-btn:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
-@media (max-width: 640px) {
-  .topic-defer-options {
-    right: auto;
-    left: 0;
-  }
-
-  .topic-custom-defer-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* 未读徽章 */
-.unread-badge {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
-  color: #ffffff;
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
-  animation: pulse 2s infinite;
-  margin-left: 0.5rem;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
-  }
-  50% {
-    box-shadow: 0 0 20px rgba(239, 68, 68, 0.6);
-  }
-}
-
-/* 主题卡片未读状态 */
-.content-card.unread {
-  border-left: 3px solid #ef4444;
-  background: rgba(239, 68, 68, 0.05);
-}
-
-/* 瀑布流布局 */
-.waterfall-container {
-  column-count: 2;
-  column-gap: 1.5rem;
-}
-
-@media (max-width: 1400px) {
-  .waterfall-container {
-    column-count: 1;
-  }
-}
-
-.waterfall-item {
-  break-inside: avoid;
-  margin-bottom: 1.5rem;
-}
-
-/* 未读讨论列表样式 */
-.unread-discussions {
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
+.budget-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
   border-top: 1px solid rgba(148, 163, 184, 0.1);
 }
 
-.unread-discussions-title {
-  font-size: 0.75rem;
+.budget-label,
+.budget-count {
   color: #94a3b8;
-  margin-bottom: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.budget-count {
+  color: #22c55e;
+}
+
+.budget-track {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.budget-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #22c55e, #60a5fa);
+  transition: width 0.3s ease;
+}
+
+.load-error {
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.section-title {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-}
-
-.discussion-item {
-  display: flex;
-  align-items: flex-start;
   gap: 0.5rem;
-  padding: 0.5rem;
-  margin: 0.25rem 0;
-  background: rgba(59, 130, 246, 0.05);
-  border-left: 2px solid rgba(59, 130, 246, 0.3);
-  border-radius: 0.25rem;
-  font-size: 0.8rem;
-  line-height: 1.4;
-  color: #cbd5e1;
-  transition: all 0.2s ease;
+  margin: 0 0 1rem;
+  color: #ffffff;
+  font-size: 1.1rem;
+  font-weight: 650;
 }
 
-.discussion-item:hover {
-  background: rgba(59, 130, 246, 0.1);
-  border-left-color: #60a5fa;
+.section-title.compact {
+  margin-bottom: 0.35rem;
 }
 
-.discussion-icon {
+.section-count {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.2);
   color: #60a5fa;
-  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 800;
 }
 
-.discussion-text {
-  flex: 1;
+.empty-panel {
+  padding: 1.25rem;
+  color: #94a3b8;
+  line-height: 1.6;
+}
+
+.mission-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.mission-card {
   overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  transition: border-color 0.25s ease, background 0.25s ease;
 }
 
-/* 加载更多按钮 */
-.load-more-btn {
-  display: block;
+.mission-card:hover {
+  border-color: rgba(59, 130, 246, 0.3);
+  background: rgba(15, 23, 42, 0.78);
+}
+
+.mission-card[data-priority='critical'] {
+  border-left: 3px solid #f43f5e;
+}
+
+.mission-card[data-priority='high'] {
+  border-left: 3px solid #f59e0b;
+}
+
+.mission-card[data-priority='medium'] {
+  border-left: 3px solid #60a5fa;
+}
+
+.mission-card[data-priority='low'] {
+  border-left: 3px solid #64748b;
+}
+
+.mission-head {
   width: 100%;
-  padding: 1rem;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  border-radius: 0.75rem;
-  color: #60a5fa;
+  padding: 1rem 1.25rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
-  transition: all 0.3s ease;
-  margin-top: 2rem;
+  text-align: left;
 }
 
-.load-more-btn:hover {
+.mission-head:hover {
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.mission-row-1 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+}
+
+.priority-badge,
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.priority-badge {
+  text-transform: uppercase;
+}
+
+.priority-badge.critical {
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.15);
+}
+
+.priority-badge.high {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.priority-badge.medium,
+.state-badge.prepare {
+  color: #60a5fa;
   background: rgba(59, 130, 246, 0.2);
 }
 
-/* 淡出动画 */
-.fade-out {
-  animation: fadeOutCard 0.3s ease forwards;
+.priority-badge.low {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.12);
 }
 
-@keyframes fadeOutCard {
+.state-badge.now {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.2);
+}
+
+.state-badge.waiting {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.mission-time {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.chevron {
+  color: #64748b;
+  font-size: 0.7rem;
+  transition: transform 0.25s ease;
+}
+
+.mission-card.expanded .chevron {
+  transform: rotate(90deg);
+}
+
+.mission-title {
+  margin-bottom: 0.35rem;
+  color: #ffffff;
+  font-size: 1.05rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.mission-next,
+.mission-why {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: baseline;
+  margin-top: 0.35rem;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.mission-next span,
+.mission-why span {
+  color: #60a5fa;
+  font-size: 0.72rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.mission-next strong,
+.mission-why strong {
+  min-width: 0;
+  color: inherit;
+  font-weight: 650;
+}
+
+.mission-next strong {
+  color: #ffffff;
+}
+
+.mission-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.tag {
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tag.person {
+  background: rgba(147, 51, 234, 0.2);
+  color: #a78bfa;
+}
+
+.tag.source {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+}
+
+.tag.project {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.mission-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease;
+}
+
+.mission-card.expanded .mission-body {
+  max-height: 1200px;
+}
+
+.mission-body-inner {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.sub-section {
+  margin-top: 1rem;
+}
+
+.sub-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+  color: #60a5fa;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.evidence-list,
+.action-steps,
+.question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.evidence-item {
+  padding: 0.65rem 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 0.5rem;
+  background: rgba(30, 41, 59, 0.4);
+}
+
+.evidence-source {
+  margin-bottom: 0.2rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.evidence-text {
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.action-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
+.step-num {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.step-content strong {
+  display: block;
+  color: #ffffff;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.step-content span {
+  display: block;
+  margin-top: 0.15rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.question-item {
+  position: relative;
+  padding-left: 1rem;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
+.question-item::before {
+  content: '?';
+  position: absolute;
+  left: 0;
+  color: #f59e0b;
+  font-weight: 900;
+}
+
+.context-toggle,
+.card-action,
+.tl-link,
+.topic-all-btn {
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+.context-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.provider-segment {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.provider-btn {
+  min-height: 2rem;
+  padding: 0.35rem 0.55rem;
+  border: 0;
+  border-right: 1px solid rgba(148, 163, 184, 0.1);
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.provider-btn:last-child {
+  border-right: 0;
+}
+
+.provider-btn.active {
+  background: rgba(59, 130, 246, 0.22);
+  color: #60a5fa;
+}
+
+.sensitive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  padding: 0 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.5rem;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.sensitive-toggle input {
+  width: 13px;
+  height: 13px;
+  accent-color: #60a5fa;
+}
+
+.context-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(30, 41, 59, 0.6);
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.context-toggle:hover {
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+.context-pack {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.context-pack.open {
+  max-height: 460px;
+}
+
+.context-pack pre {
+  max-height: 300px;
+  margin-top: 0.5rem;
+  overflow: auto;
+  padding: 0.85rem;
+  border-radius: 0.5rem;
+  background: #111827;
+  color: #e5e7eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.context-status,
+.redaction-note,
+.redaction-list {
+  margin-top: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.5rem;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.context-status {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.redaction-note {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.redaction-list {
+  display: grid;
+  gap: 0.25rem;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.55);
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.card-action {
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  font-size: 0.78rem;
+  transition: all 0.2s ease;
+}
+
+.card-action.primary {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
+.card-action.secondary {
+  border-color: rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.card-action.ghost {
+  border-color: rgba(148, 163, 184, 0.12);
+  background: transparent;
+  color: #94a3b8;
+}
+
+.card-action:hover {
+  filter: brightness(1.15);
+}
+
+.attention-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.attention-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.25s ease, transform 0.25s ease;
+}
+
+.attention-item:hover {
+  border-color: rgba(59, 130, 246, 0.3);
+  transform: translateY(-1px);
+}
+
+.attention-icon {
+  flex: 0 0 auto;
+  font-size: 1.35rem;
+}
+
+.attention-info {
+  display: grid;
+  min-width: 0;
+}
+
+.attention-count {
+  color: #60a5fa;
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.attention-label {
+  overflow: hidden;
+  margin-top: 0.2rem;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-arrow {
+  margin-left: auto;
+  color: #64748b;
+}
+
+.topic-entry {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1.2fr) auto;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding: 1rem;
+}
+
+.topic-entry p {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.topic-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.topic-preview {
+  display: grid;
+  min-width: 150px;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.5rem;
+  background: rgba(30, 41, 59, 0.45);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.topic-preview strong {
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topic-preview span {
+  margin-top: 0.2rem;
+  color: #f59e0b;
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.topic-all-btn {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+}
+
+.timeline {
+  margin-bottom: 2rem;
+}
+
+.timeline-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding-left: 1.5rem;
+}
+
+.timeline-list::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 5px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(to bottom, #60a5fa, rgba(96, 165, 250, 0.15));
+}
+
+.tl-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 0.6rem 0;
+}
+
+.tl-dot {
+  position: absolute;
+  top: 0.75rem;
+  left: -1.5rem;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #60a5fa;
+  border-radius: 50%;
+  background: #0f172a;
+}
+
+.tl-dot.active {
+  background: #60a5fa;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+}
+
+.tl-dot.muted {
+  border-color: #64748b;
+}
+
+.tl-time {
+  flex: 0 0 64px;
+  min-width: 64px;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.tl-content {
+  min-width: 0;
+}
+
+.tl-title {
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.tl-desc {
+  margin-top: 0.1rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.tl-link {
+  display: inline-block;
+  margin-top: 0.15rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #60a5fa;
+  font-size: 0.72rem;
+}
+
+.footer-note {
+  padding: 1.5rem 0 0.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  color: #64748b;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.day-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 100;
+  transform: translateX(-50%) translateY(16px);
+  padding: 0.6rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.5rem;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+
+.day-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+@keyframes fadeInUp {
   from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+    opacity: 0;
+    transform: translateY(12px);
   }
   to {
-    opacity: 0;
-    transform: translateY(-10px) scale(0.95);
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .day-pilot-home {
+    padding: 1rem;
+  }
+
+  .brief-top {
+    flex-direction: column;
+  }
+
+  .brief-meta {
+    justify-content: flex-start;
+  }
+
+  .topic-entry {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -1,6 +1,8 @@
 import type {
   CalendarEventSyncItem,
   ContextAssistResponse,
+  TodayPilotMeetingPrepRecord,
+  TodayPilotMeetingPrepResolveResponse,
 } from './services/MemoryServiceClient';
 import { readRingCentralCalendarEvents } from './context-assist/ringCentralCalendar';
 import { normalizeEnvConfigShape, type EnvConfigType } from './utils';
@@ -10,7 +12,6 @@ import {
   loadRingCentralNativeJoinEnabled,
   openRingCentralVideoNativeJoin,
   parseRingCentralVideoJoinTarget,
-  shouldPreserveDefaultNativeJoinClick,
   watchRingCentralNativeJoinEnabled,
 } from './ringcentralNativeJoin';
 import {
@@ -44,10 +45,10 @@ interface MeetingPrepState {
   events: CalendarEventSyncItem[];
   selectedEvent: CalendarEventSyncItem | null;
   assist: ContextAssistResponse | null;
+  prep: TodayPilotMeetingPrepRecord | null;
   loading: boolean;
   syncLabel: string;
   error: string;
-  userGoal: string;
 }
 
 class RingCentralVideoHomePrep {
@@ -57,8 +58,7 @@ class RingCentralVideoHomePrep {
   private refreshTimer: number | null = null;
   private syncTimer: number | null = null;
   private assistRequestSeq = 0;
-  private lastAssistKey: string | null = null;
-  private readonly goalByEventKey = new Map<string, string>();
+  private lastPrepEventKey: string | null = null;
   private hostListenersAttached = false;
   private nativeJoinEnabled = true;
   private nativeJoinConfigWatcherAttached = false;
@@ -69,10 +69,10 @@ class RingCentralVideoHomePrep {
     events: [],
     selectedEvent: null,
     assist: null,
+    prep: null,
     loading: false,
     syncLabel: '未同步',
     error: '',
-    userGoal: '',
   };
 
   async start(): Promise<void> {
@@ -82,7 +82,8 @@ class RingCentralVideoHomePrep {
 
     this.state.enabled =
       this.config.CONTEXT_ASSIST_ENABLED !== false &&
-      this.config.MEETING_PREP_ENABLED !== false;
+      this.config.MEETING_PREP_ENABLED !== false &&
+      this.config.TODAY_PILOT_MEETING_PREP_ENABLED !== false;
 
     if (this.state.enabled || this.nativeJoinEnabled) {
       await this.syncRingCentralCalendar({
@@ -160,7 +161,7 @@ class RingCentralVideoHomePrep {
   private handleNativeJoinClick = (event: MouseEvent): void => {
     if (
       !this.nativeJoinEnabled ||
-      shouldPreserveDefaultNativeJoinClick(event)
+      shouldPreserveVideoHomeNativeJoinClick(event)
     ) {
       return;
     }
@@ -213,7 +214,9 @@ class RingCentralVideoHomePrep {
     }
 
     const event = findEventByExternalId(this.state.events, externalId);
-    return event?.joinUrl ? parseRingCentralVideoJoinTarget(event.joinUrl) : null;
+    return event?.joinUrl
+      ? parseRingCentralVideoJoinTarget(event.joinUrl)
+      : null;
   }
 
   private scheduleRefresh = (): void => {
@@ -223,8 +226,9 @@ class RingCentralVideoHomePrep {
       const changed = this.refreshSelectedMeeting();
       if (changed) {
         this.state.assist = null;
+        this.state.prep = null;
         this.render();
-        void this.generateAssist(false);
+        void this.loadMeetingPrep();
       } else {
         this.render();
       }
@@ -245,7 +249,12 @@ class RingCentralVideoHomePrep {
       this.state.events = events;
       if (events.length > 0) {
         const response = await sendRuntimeMessage<{
-          result?: { created: number; updated: number; unchanged: number; total: number };
+          result?: {
+            created: number;
+            updated: number;
+            unchanged: number;
+            total: number;
+          };
         }>({
           type: 'CALENDAR_EVENTS_SYNC_REQUEST',
           sourceSystem: 'ringcentral_indexeddb',
@@ -253,7 +262,9 @@ class RingCentralVideoHomePrep {
         });
         const result = response?.result;
         this.state.syncLabel = result
-          ? `已同步 ${result.total} 个会议，变化 ${result.created + result.updated}`
+          ? `已同步 ${result.total} 个会议，变化 ${
+              result.created + result.updated
+            }`
           : `已读取 ${events.length} 个会议`;
       } else {
         this.state.syncLabel = '未读取到本地会议';
@@ -261,12 +272,13 @@ class RingCentralVideoHomePrep {
       this.state.error = '';
       this.refreshSelectedMeeting();
       if (this.state.enabled) {
-        void this.generateAssist(false);
+        void this.loadMeetingPrep();
       }
     } catch (error) {
-      console.warn('[ContextAssist] RingCentral calendar sync failed:', error);
+      console.warn('[TodayPilot] RingCentral calendar sync failed:', error);
       this.state.syncLabel = '本地日历读取失败';
-      this.state.error = error instanceof Error ? error.message : 'calendar_sync_failed';
+      this.state.error =
+        error instanceof Error ? error.message : 'calendar_sync_failed';
     } finally {
       this.render();
     }
@@ -275,9 +287,6 @@ class RingCentralVideoHomePrep {
   private refreshSelectedMeeting(): boolean {
     const previous = this.state.selectedEvent;
     const previousKey = getEventKey(previous);
-    if (previousKey) {
-      this.goalByEventKey.set(previousKey, this.state.userGoal);
-    }
 
     const current = this.findSelectedEvent();
     const currentKey = getEventKey(current);
@@ -285,11 +294,9 @@ class RingCentralVideoHomePrep {
     const changed = previousKey !== currentKey;
     if (changed) {
       this.assistRequestSeq += 1;
-      this.lastAssistKey = null;
+      this.lastPrepEventKey = null;
       this.state.assist = null;
-      this.state.userGoal = currentKey
-        ? this.goalByEventKey.get(currentKey) || ''
-        : '';
+      this.state.prep = null;
     }
     return changed;
   }
@@ -323,40 +330,26 @@ class RingCentralVideoHomePrep {
     return null;
   }
 
-  private async generateAssist(force: boolean): Promise<void> {
-    if (!this.state.selectedEvent || (!force && this.state.assist)) return;
+  private async loadMeetingPrep(): Promise<void> {
+    if (!this.state.selectedEvent || this.state.assist) return;
 
     const requestSeq = ++this.assistRequestSeq;
     const event = this.state.selectedEvent;
     const eventKey = getEventKey(event);
-    const userGoal = this.state.userGoal;
-    const assistKey = getAssistKey(event, userGoal);
     this.state.loading = true;
     this.state.error = '';
     this.render();
 
     try {
-      const response = await sendRuntimeMessage<{ result?: ContextAssistResponse }>({
-        type: 'CONTEXT_ASSIST_REQUEST',
+      const response = await sendRuntimeMessage<{
+        result?: TodayPilotMeetingPrepResolveResponse;
+      }>({
+        type: 'TODAY_PILOT_MEETING_PREP_REQUEST',
         request: {
-          surface: 'meeting_prep',
-          contextType: 'meeting',
-          title: event.title,
-          url: window.location.href,
-          userGoal,
           event,
-          sourceTypes: [
-            'meeting',
-            'glip',
-            'jira',
-            'web',
-            'manual',
-            'system',
-            'user_core',
-            'markdown',
-            'reflection',
-          ],
-          limit: 5,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          autoGenerate: false,
+          forceGenerate: false,
         },
       });
       if (
@@ -365,13 +358,17 @@ class RingCentralVideoHomePrep {
       ) {
         return;
       }
-      this.state.assist = response?.result || null;
-      this.lastAssistKey = assistKey;
+      this.state.assist = response?.result?.assist || null;
+      this.state.prep = response?.result?.prep || null;
+      this.lastPrepEventKey = eventKey;
+      await this.persistMeetingPilotHandoff();
     } catch (error) {
       if (requestSeq !== this.assistRequestSeq) return;
-      console.warn('[ContextAssist] meeting prep failed:', error);
+      console.warn('[TodayPilot] meeting prep failed:', error);
       this.state.error =
-        error instanceof Error ? error.message : 'context_assist_failed';
+        error instanceof Error
+          ? error.message
+          : 'today_pilot_meeting_prep_failed';
     } finally {
       if (requestSeq === this.assistRequestSeq) {
         this.state.loading = false;
@@ -380,34 +377,31 @@ class RingCentralVideoHomePrep {
     }
   }
 
-  private async sendToMeetingPilot(): Promise<void> {
+  private async persistMeetingPilotHandoff(): Promise<void> {
     if (!this.state.selectedEvent || !this.state.assist?.insertText) return;
-    if (!this.isAssistCurrent()) {
-      this.state.error = '会议目标已更新，请先重新生成建议。';
-      this.render();
-      return;
-    }
+    if (!this.isPrepCurrent()) return;
     await chrome.storage.local.set({
       meetingPrepHandoff: {
         createdAt: Date.now(),
         expiresAt: Date.now() + 12 * 60 * 60 * 1000,
         event: this.state.selectedEvent,
-        goal: this.state.userGoal.trim(),
+        goal: '',
         text: this.state.assist.insertText,
         cueCards: this.state.assist.cueCards,
         evidence: this.state.assist.evidence,
+        source: 'today_pilot',
+        prepId: this.state.prep?.id,
+        missionId: this.state.prep?.missionId,
+        generatedMode: this.state.prep?.generatedMode,
       },
     });
-    this.state.syncLabel = '已发送到 Meeting Pilot';
-    this.render();
   }
 
-  private isAssistCurrent(): boolean {
+  private isPrepCurrent(): boolean {
     return Boolean(
       this.state.assist &&
         this.state.selectedEvent &&
-        this.lastAssistKey ===
-          getAssistKey(this.state.selectedEvent, this.state.userGoal),
+        this.lastPrepEventKey === getEventKey(this.state.selectedEvent),
     );
   }
 
@@ -428,14 +422,13 @@ class RingCentralVideoHomePrep {
     }
     host.id = HOST_ID;
     applyHostLayoutStyle(host);
-    host.setAttribute('aria-label', 'Personal AI meeting prep');
+    host.setAttribute('aria-label', 'Today Pilot meeting prep');
     mountHostAfterTarget(host, target);
 
     this.host = host;
     this.shadow = host.shadowRoot || host.attachShadow({ mode: 'open' });
     if (!this.hostListenersAttached) {
       this.shadow.addEventListener('click', (event) => this.handleClick(event));
-      this.shadow.addEventListener('input', (event) => this.handleInput(event));
       this.hostListenersAttached = true;
     }
     return host;
@@ -452,69 +445,114 @@ class RingCentralVideoHomePrep {
     if (!this.state.enabled) return;
 
     const event = this.state.selectedEvent;
-    const assist = this.state.assist;
-    const assistCurrent = this.isAssistCurrent();
-    if (
-      !event ||
-      !assist ||
-      !assistCurrent ||
-      !shouldShowMeetingPrep(assist)
-    ) {
+    if (!event) {
       this.removeHost();
       return;
     }
 
     if (!this.ensureHost() || !this.shadow) return;
 
-    const evidence = getDisplayEvidence(assist);
-    const cueCards = getDisplayCueCards(assist, event, evidence.length);
+    const assist = this.state.assist;
+    const prep = this.state.prep;
+    const prepCurrent = this.isPrepCurrent();
+    const displayAssist = assist && prepCurrent ? assist : null;
+    const evidence = displayAssist ? getDisplayEvidence(displayAssist) : [];
+    const cueCards = displayAssist
+      ? getDisplayCueCards(displayAssist, event, evidence.length)
+      : [];
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
     this.shadow.innerHTML = `
       <style>${styles()}</style>
       <div class="pai-card">
         <div class="pai-header">
           <div class="pai-title">
-            <img class="pai-logo" src="${escapeHtmlAttribute(iconUrl)}" alt="" />
-            <span>Personal AI 会前准备</span>
+            <img class="pai-logo" src="${escapeHtmlAttribute(
+              iconUrl,
+            )}" alt="" />
+            <span>Today Pilot 会前准备</span>
           </div>
-          <button class="pai-icon" data-action="sync" title="刷新建议">↻</button>
+          <button class="pai-icon" data-action="sync" title="刷新会前准备">↻</button>
         </div>
-        <div class="pai-sub">已基于 ${evidence.length} 条相关记忆静默生成</div>
+        <div class="pai-sub">${escapeHtml(
+          getMeetingPrepSubtitle(
+            this.state.loading,
+            displayAssist,
+            displayAssist ? prep : null,
+            evidence.length,
+            this.state.syncLabel,
+          ),
+        )}</div>
+        <div class="pai-meeting">
+          <div class="pai-meeting-title">${escapeHtml(
+            event.title || '当前会议',
+          )}</div>
+          <div class="pai-time">${escapeHtml(
+            formatMeetingTimeRange(event),
+          )}</div>
+          ${renderMeetingMeta(event)}
+        </div>
         ${
-          cueCards.length
-            ? `<div class="pai-cues">${cueCards
-                .map(
-                  (card) => `
-                    <article class="pai-cue" data-kind="${escapeHtml(card.kind)}">
-                      <div class="pai-cue-title">${escapeHtml(card.title)}</div>
-                      <div class="pai-cue-body">${escapeHtml(card.body)}</div>
-                    </article>
-                  `,
-                )
-                .join('')}</div>`
+          this.state.error
+            ? `<div class="pai-error">${escapeHtml(this.state.error)}</div>`
             : ''
         }
-        ${
-          evidence.length
-            ? `<details class="pai-evidence">
-                <summary>证据来源 (${evidence.length})</summary>
-                ${evidence
-                  .slice(0, 5)
+        <div class="pai-assist-output" data-role="assist-output">
+          ${
+            !this.state.error && displayAssist?.summary
+              ? `<div class="pai-empty">${escapeHtml(
+                  displayAssist.summary,
+                )}</div>`
+              : ''
+          }
+          ${
+            cueCards.length
+              ? `<div class="pai-cues">${cueCards
                   .map(
-                    (item) => `
-                    <div class="pai-source">
-                      <div>${escapeHtml(item.sourceTitle || item.title || item.sourceLabel || 'Memory')}</div>
-                      <small>${escapeHtml(item.whyMatched || item.sourceLabel || '')}</small>
-                      ${renderEvidenceLinks(item)}
-                    </div>
-                  `,
+                    (card) => `
+                      <article class="pai-cue" data-kind="${escapeHtml(
+                        card.kind,
+                      )}">
+                        <div class="pai-cue-title">${escapeHtml(
+                          card.title,
+                        )}</div>
+                        <div class="pai-cue-body">${escapeHtml(card.body)}</div>
+                      </article>
+                    `,
                   )
-                  .join('')}
-              </details>`
-            : ''
-        }
+                  .join('')}</div>`
+              : ''
+          }
+          ${
+            evidence.length
+              ? `<details class="pai-evidence">
+                  <summary>证据来源 (${evidence.length})</summary>
+                  ${evidence
+                    .slice(0, 5)
+                    .map(
+                      (item) => `
+                      <div class="pai-source">
+                        <div>${escapeHtml(
+                          item.sourceTitle ||
+                            item.title ||
+                            item.sourceLabel ||
+                            'Memory',
+                        )}</div>
+                        <small>${escapeHtml(
+                          item.whyMatched || item.sourceLabel || '',
+                        )}</small>
+                        ${renderEvidenceLinks(item)}
+                      </div>
+                    `,
+                    )
+                    .join('')}
+                </details>`
+              : ''
+          }
+        </div>
         <div class="pai-footer">
-          <img class="pai-footer-icon" src="${escapeHtmlAttribute(iconUrl)}" alt="" />
+          <img class="pai-footer-icon" src="${escapeHtmlAttribute(
+            iconUrl,
+          )}" alt="" />
           <span>Provided by Personal AI</span>
         </div>
       </div>
@@ -523,59 +561,21 @@ class RingCentralVideoHomePrep {
 
   private handleClick(event: Event): void {
     const target = event.target instanceof HTMLElement ? event.target : null;
-    const action = target?.closest<HTMLElement>('[data-action]')?.dataset.action;
+    const action =
+      target?.closest<HTMLElement>('[data-action]')?.dataset.action;
     if (action === 'sync') {
       void this.refreshMeetingPrep();
-    } else if (action === 'generate') {
-      void this.generateAssist(true);
-    } else if (action === 'handoff') {
-      void this.sendToMeetingPilot();
-    }
-  }
-
-  private handleInput(event: Event): void {
-    const target = event.target instanceof HTMLTextAreaElement ? event.target : null;
-    if (target?.dataset.role === 'goal') {
-      this.state.userGoal = target.value;
-      const key = getEventKey(this.state.selectedEvent);
-      if (key) {
-        this.goalByEventKey.set(key, this.state.userGoal);
-      }
-      this.syncInteractiveState();
     }
   }
 
   private async refreshMeetingPrep(): Promise<void> {
+    this.state.assist = null;
+    this.state.prep = null;
+    this.lastPrepEventKey = null;
     await this.syncRingCentralCalendar({
       forceRingCentral: this.nativeJoinEnabled,
     });
-    await this.generateAssist(true);
-  }
-
-  private syncInteractiveState(): void {
-    if (!this.shadow) return;
-    const assistCurrent = this.isAssistCurrent();
-    const assistStale = Boolean(this.state.assist && !assistCurrent);
-    const handoff = this.shadow.querySelector<HTMLButtonElement>(
-      '[data-action="handoff"]',
-    );
-    if (handoff) {
-      handoff.disabled = !this.state.assist?.insertText || !assistCurrent;
-    }
-    const generate = this.shadow.querySelector<HTMLButtonElement>(
-      '[data-action="generate"]',
-    );
-    if (generate) {
-      generate.textContent = getGenerateButtonLabel(
-        this.state.loading,
-        Boolean(this.state.assist),
-        assistStale,
-      );
-    }
-    const stale = this.shadow.querySelector<HTMLElement>('[data-role="stale"]');
-    if (stale) {
-      stale.hidden = !assistStale;
-    }
+    await this.loadMeetingPrep();
   }
 }
 
@@ -630,15 +630,21 @@ function findMeetingDetailRoot(): HTMLElement | null {
     }
   }
 
-  const candidates = Array.from(document.querySelectorAll<HTMLElement>('main, section, div'))
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>('main, section, div'),
+  )
     .map((element) => ({ element, rect: element.getBoundingClientRect() }))
     .filter(({ element, rect }) => {
       if (rect.width < 320 || rect.height < 260) return false;
       if (rect.left < window.innerWidth * 0.42) return false;
       const text = getVisibleText(element);
-      return /participants|accepted|declined|join|conf|starts in|hi all/i.test(text);
+      return /participants|accepted|declined|join|conf|starts in|hi all/i.test(
+        text,
+      );
     })
-    .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height);
+    .sort(
+      (a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height,
+    );
   return candidates[0]?.element || null;
 }
 
@@ -683,13 +689,17 @@ function getSelectedMeetingTitleFromDetail(
     return heading.text;
   }
 
-  const lines = collectVisibleTextLines(detailRoot).filter(isProbableMeetingTitle);
+  const lines = collectVisibleTextLines(detailRoot).filter(
+    isProbableMeetingTitle,
+  );
   return lines[0] || null;
 }
 
 function collectVisibleTextLines(root: HTMLElement): string[] {
   return Array.from(
-    root.querySelectorAll<HTMLElement>('h1, h2, h3, [role="heading"], div, span, p'),
+    root.querySelectorAll<HTMLElement>(
+      'h1, h2, h3, [role="heading"], div, span, p',
+    ),
   )
     .filter((element) => isDisplayedElement(element))
     .map((element) => normalizeText(element.textContent || ''))
@@ -748,8 +758,7 @@ function findEventByDetailTitle(
       event.location || '',
       event.organizer?.name || '',
       event.organizer?.email || '',
-    ]
-      .filter((value): value is string => Boolean(value));
+    ].filter((value): value is string => Boolean(value));
     return matchingValues.some((value) =>
       detailText.includes(value.toLowerCase()),
     );
@@ -780,10 +789,18 @@ function normalizeText(value: string): string {
 
 function isProbableMeetingTitle(text: string): boolean {
   if (text.length < 3 || text.length > 180) return false;
-  if (/^(video meetings|upcoming|past|notes|recordings|participants|accepted|declined|join)$/i.test(text)) {
+  if (
+    /^(video meetings|upcoming|past|notes|recordings|participants|accepted|declined|join)$/i.test(
+      text,
+    )
+  ) {
     return false;
   }
-  if (/^(starts in|conf rm|meeting id|passcode|please join using this link)/i.test(text)) {
+  if (
+    /^(starts in|conf rm|meeting id|passcode|please join using this link)/i.test(
+      text,
+    )
+  ) {
     return false;
   }
   if (/^[A-Z][a-z]{2},\s+[A-Z][a-z]{2}\s+\d{1,2}/.test(text)) {
@@ -809,9 +826,7 @@ function isDisplayedElement(
   const style = window.getComputedStyle(element);
   const rect = element.getBoundingClientRect();
   return (
-    style.display !== 'none' &&
-    style.visibility !== 'hidden' &&
-    rect.width > 0
+    style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0
   );
 }
 
@@ -821,12 +836,55 @@ function findVideoHomeJoinButton(event: MouseEvent): HTMLElement | null {
     return null;
   }
 
-  return target.closest<HTMLElement>(
+  return (
+    target.closest<HTMLElement>(
+      [
+        'button[data-test-automation-id="calendar-event-item-join-button"]',
+        'button[data-test-automation-id="join-meeting-button"]',
+        'button[data-test-automation-id="mini-join-button"]',
+      ].join(', '),
+    ) || findJoinButtonLikeTarget(target)
+  );
+}
+
+function findJoinButtonLikeTarget(target: Element): HTMLElement | null {
+  const button = target.closest<HTMLElement>('button, [role="button"]');
+  if (!button || !isDisplayedElement(button)) {
+    return null;
+  }
+
+  const label = [
+    button.getAttribute('aria-label'),
+    button.getAttribute('title'),
+    button.textContent,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!/\bjoin\b/i.test(label)) {
+    return null;
+  }
+
+  const surface = button.closest<HTMLElement>(
     [
-      'button[data-test-automation-id="calendar-event-item-join-button"]',
-      'button[data-test-automation-id="join-meeting-button"]',
-      'button[data-test-automation-id="mini-join-button"]',
+      '[data-at*="calendar-event" i]',
+      '[data-test-automation-id*="calendar-event" i]',
+      '[data-test-automation-id*="meeting-detail" i]',
+      '[data-test-automation-id="video__leftPanel"]',
+      '[data-test-automation-id="video__rightPanel"]',
     ].join(', '),
+  );
+  return surface ? button : null;
+}
+
+function shouldPreserveVideoHomeNativeJoinClick(event: MouseEvent): boolean {
+  return (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
   );
 }
 
@@ -848,8 +906,7 @@ function decodeVideoHomeRouteEventId(encodedEventId: string): string | null {
     const normalized = decodeURIComponent(encodedEventId)
       .replace(/-/g, '+')
       .replace(/_/g, '/');
-    const padded =
-      normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
     return window.atob(padded);
   } catch {
     return null;
@@ -909,20 +966,6 @@ function getEventKey(event: CalendarEventSyncItem | null): string | null {
     [event.title, event.startTime].filter(Boolean).join('@') ||
     null
   );
-}
-
-function getAssistKey(event: CalendarEventSyncItem, userGoal: string): string {
-  return `${getEventKey(event) || 'event'}::${userGoal.replace(/\s+/g, ' ').trim()}`;
-}
-
-function getGenerateButtonLabel(
-  loading: boolean,
-  hasAssist: boolean,
-  assistStale: boolean,
-): string {
-  if (loading) return '生成中...';
-  if (assistStale) return '更新建议';
-  return hasAssist ? '刷新建议' : '生成建议';
 }
 
 function escapeHtml(value: string | undefined): string {
@@ -985,17 +1028,13 @@ function renderEvidenceLinks(
   return `<div class="pai-source-actions">${links
     .map(
       (link) =>
-        `<a href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`,
+        `<a href="${escapeHtmlAttribute(
+          link.url,
+        )}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+          link.label,
+        )}</a>`,
     )
     .join('')}</div>`;
-}
-
-function shouldShowMeetingPrep(assist: ContextAssistResponse): boolean {
-  if (!assist.available || assist.suggestionType !== 'meeting_brief') {
-    return false;
-  }
-  const evidence = getDisplayEvidence(assist);
-  return evidence.length > 0 && getDisplayCueCards(assist).length > 0;
 }
 
 function getDisplayEvidence(
@@ -1014,7 +1053,7 @@ function getDisplayCueCards(
   );
   return assist.cueCards
     .filter((card) => {
-      if (card.id === 'missing-goal' || card.kind === 'question') {
+      if (card.id === 'missing-goal') {
         return false;
       }
       if (card.kind !== 'memory') {
@@ -1053,15 +1092,64 @@ function isUsefulMeetingPrepEvidence(
     .toLowerCase();
   const fullText = `${labelText} ${snippet}`.toLowerCase();
   const looksLikeCalendarOnly =
-    /calendar event|ringcentral video|会议:\s*ringcentral video/.test(
-      fullText,
-    );
+    /calendar event|ringcentral video|会议:\s*ringcentral video/.test(fullText);
   const hasWorkSignal =
     /\b(mtr|jira|glip|thread|message|bug|issue|follow|dependency|blocked)\b/i.test(
       fullText,
     ) || /承诺|依赖|进展|问题|风险|决定|待办|阻塞/.test(fullText);
 
   return !looksLikeCalendarOnly || hasWorkSignal;
+}
+
+function getMeetingPrepSubtitle(
+  loading: boolean,
+  assist: ContextAssistResponse | null,
+  prep: TodayPilotMeetingPrepRecord | null,
+  evidenceCount: number,
+  syncLabel: string,
+): string {
+  const syncSuffix =
+    syncLabel && syncLabel !== '未同步' ? ` · ${syncLabel}` : '';
+  if (loading) return `正在读取 Today Pilot 会前准备${syncSuffix}`;
+  if (!assist) return `Today Pilot 暂未为这场会议生成提前准备${syncSuffix}`;
+  if (!assist.available || evidenceCount === 0) {
+    return `暂无高置信记忆，仍可查看会议基础信息${syncSuffix}`;
+  }
+  if (prep?.generatedMode === 'nightly_llm') {
+    return `已提前准备 · ${evidenceCount} 条证据${syncSuffix}`;
+  }
+  if (prep?.generatedMode === 'on_demand_llm') {
+    return `已准备目标版本 · ${evidenceCount} 条证据${syncSuffix}`;
+  }
+  return `已准备 fallback · ${evidenceCount} 条证据${syncSuffix}`;
+}
+
+function formatMeetingTimeRange(event: CalendarEventSyncItem): string {
+  const start = formatMeetingDateTime(event.startTime);
+  const end = formatMeetingDateTime(event.endTime);
+  if (start && end) return `${start} - ${end}`;
+  return start || end || '时间待确认';
+}
+
+function formatMeetingDateTime(value?: number): string {
+  if (!value) return '';
+  return new Date(value).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function renderMeetingMeta(event: CalendarEventSyncItem): string {
+  const organizer = event.organizer?.name || event.organizer?.email;
+  const attendeeCount = event.attendees?.length || 0;
+  const parts = [
+    organizer ? `Organizer: ${organizer}` : '',
+    attendeeCount ? `${attendeeCount} attendees` : '',
+  ].filter(Boolean);
+  if (parts.length === 0) return '';
+  return `<div class="pai-time">${escapeHtml(parts.join(' · '))}</div>`;
 }
 
 function styles(): string {
@@ -1133,6 +1221,13 @@ function styles(): string {
       font-weight: 700;
       color: #111827;
     }
+    .pai-goal-label {
+      display: block;
+      margin-top: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #475569;
+    }
     .pai-goal {
       box-sizing: border-box;
       width: 100%;
@@ -1185,6 +1280,9 @@ function styles(): string {
     .pai-stale {
       color: #92400e;
       font-size: 12px;
+    }
+    .pai-assist-output[hidden] {
+      display: none !important;
     }
     .pai-cues {
       display: grid;
@@ -1258,6 +1356,66 @@ function styles(): string {
   `;
 }
 
-if (location.hostname === 'app.ringcentral.com' && location.pathname.startsWith('/video/home')) {
+let ringCentralVideoHomePrepStarted = false;
+let ringCentralVideoHomeRouteWatcherAttached = false;
+let ringCentralVideoHomeLastHref = location.href;
+
+function isRingCentralVideoHomeRoute(): boolean {
+  return (
+    location.hostname === 'app.ringcentral.com' &&
+    location.pathname.startsWith('/video/home')
+  );
+}
+
+function startRingCentralVideoHomePrepIfNeeded(): void {
+  if (ringCentralVideoHomePrepStarted || !isRingCentralVideoHomeRoute()) {
+    return;
+  }
+
+  ringCentralVideoHomePrepStarted = true;
   void new RingCentralVideoHomePrep().start();
+}
+
+function scheduleRingCentralVideoHomePrepCheck(): void {
+  window.setTimeout(startRingCentralVideoHomePrepIfNeeded, 0);
+}
+
+function checkRingCentralVideoHomeRoute(): void {
+  if (location.href === ringCentralVideoHomeLastHref) {
+    startRingCentralVideoHomePrepIfNeeded();
+    return;
+  }
+
+  ringCentralVideoHomeLastHref = location.href;
+  startRingCentralVideoHomePrepIfNeeded();
+}
+
+function watchRingCentralVideoHomeRoute(): void {
+  if (ringCentralVideoHomeRouteWatcherAttached) {
+    return;
+  }
+
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = ((...args: Parameters<History['pushState']>) => {
+    const result = originalPushState(...args);
+    scheduleRingCentralVideoHomePrepCheck();
+    return result;
+  }) as History['pushState'];
+
+  const originalReplaceState = history.replaceState.bind(history);
+  history.replaceState = ((...args: Parameters<History['replaceState']>) => {
+    const result = originalReplaceState(...args);
+    scheduleRingCentralVideoHomePrepCheck();
+    return result;
+  }) as History['replaceState'];
+
+  window.addEventListener('popstate', scheduleRingCentralVideoHomePrepCheck);
+  window.addEventListener('hashchange', scheduleRingCentralVideoHomePrepCheck);
+  window.setInterval(checkRingCentralVideoHomeRoute, 500);
+  ringCentralVideoHomeRouteWatcherAttached = true;
+}
+
+if (location.hostname === 'app.ringcentral.com') {
+  watchRingCentralVideoHomeRoute();
+  startRingCentralVideoHomePrepIfNeeded();
 }

@@ -70,6 +70,55 @@ const SENSITIVE_QUERY_PARAM_NAMES = new Set([
 const TRACKING_QUERY_PARAM_PATTERN =
   /^(?:utm_.+|fbclid|gclid|gbraid|wbraid|msclkid|mc_cid|mc_eid|igshid|yclid|_hsenc|_hsmi|vero_id|mkt_tok|ref|ref_src|spm)$/i;
 const UNSAFE_EXPLORE_ROUTE_VISIBLE_CHARS_PATTERN = /[\s<>"'`]/;
+const CONTEXT_RECALL_GENERIC_TERMS = new Set([
+  'about',
+  'accepted',
+  'am',
+  'apr',
+  'aug',
+  'calendar',
+  'context',
+  'current',
+  'declined',
+  'dec',
+  'didn',
+  'event',
+  'feb',
+  'fri',
+  'jan',
+  'jul',
+  'jun',
+  'mar',
+  'may',
+  'meeting',
+  'memory',
+  'mon',
+  'nov',
+  'oct',
+  'page',
+  'participants',
+  'pm',
+  'recall',
+  'related',
+  'respond',
+  'ringcentral',
+  'sat',
+  'sep',
+  'source',
+  'sun',
+  'thu',
+  'tue',
+  'video',
+  'web',
+  'webpage',
+  'wed',
+]);
+
+const CONTEXT_RECALL_SPECIFIC_SIGNAL_PATTERN =
+  /\b(action|android|api|approval|blocked|bug|commit|customer|decision|decided|dependency|design|estimate|follow[-\s]?up|handoff|incident|ios|issue|jira|launch|layout|migration|owner|plan|planning|project|release|review|risk|ship|task|thread|todo|ux)\b/i;
+const CONTEXT_RECALL_CJK_SPECIFIC_SIGNAL_PATTERN =
+  /承诺|依赖|进展|问题|风险|决定|结论|待办|阻塞|负责人|排期|评审|方案|上线|需求|修复|讨论|计划|跟进|设计|布局|客户|事故|审批|迁移/;
+const CONTEXT_RECALL_ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/;
 
 export interface SensitiveControlDescriptor {
   type?: string | null;
@@ -83,6 +132,13 @@ export interface SensitiveControlDescriptor {
 
 export type ContextSiteMuteRecord = Record<string, number>;
 export type ContextSiteBlockRecord = Record<string, number>;
+
+export interface DisplayableContextRecallCandidate {
+  title?: string;
+  snippet?: string;
+  sourceLabel?: string;
+  sourceTitle?: string;
+}
 
 export function normalizeContextSiteMuteHost(rawHostname: string): string {
   return rawHostname.trim().toLowerCase().replace(/\.$/, '');
@@ -206,6 +262,54 @@ export function sanitizeExploreRoute(rawRoute?: string | null): string | null {
   return value;
 }
 
+export function isDisplayableContextRecallMatch(
+  match: DisplayableContextRecallCandidate | null | undefined,
+): boolean {
+  if (!match) return false;
+
+  const title = normalizeContextRecallInfo(match.title);
+  const snippet = normalizeContextRecallInfo(match.snippet);
+  const sourceTitle = normalizeContextRecallInfo(match.sourceTitle);
+  const sourceLabel = normalizeContextRecallInfo(match.sourceLabel);
+
+  if (!title && !snippet) return false;
+
+  const combined = [title, snippet, sourceTitle].filter(Boolean).join(' ');
+  const stripped = stripContextRecallShellLabels(combined);
+  const hasSpecificSignal = hasSpecificContextRecallSignal(stripped);
+  const meaningfulTokenCount = countContextRecallMeaningfulTokens(stripped);
+  const cjkSignalChars = countContextRecallCjkSignalChars(stripped);
+
+  const duplicatesLabel =
+    snippet.length > 0 &&
+    [title, sourceTitle, sourceLabel].some((label) =>
+      label ? areEquivalentContextRecallTexts(snippet, label) : false,
+    );
+  if (
+    duplicatesLabel &&
+    !hasSpecificSignal &&
+    meaningfulTokenCount < 4 &&
+    cjkSignalChars < 8
+  ) {
+    return false;
+  }
+
+  if (
+    looksLikeContextRecallShell(combined) &&
+    !hasSpecificSignal &&
+    meaningfulTokenCount < 3 &&
+    cjkSignalChars < 8
+  ) {
+    return false;
+  }
+
+  const signalChars =
+    (stripped.match(/[A-Za-z0-9\u3400-\u9fff]/g) || []).length;
+  if (!hasSpecificSignal && signalChars < 10) return false;
+
+  return hasSpecificSignal || meaningfulTokenCount >= 3 || cjkSignalChars >= 8;
+}
+
 export function isLowValueContextHost(rawHostname: string): boolean {
   const hostname = rawHostname.trim().toLowerCase();
   if (!hostname) return true;
@@ -213,6 +317,80 @@ export function isLowValueContextHost(rawHostname: string): boolean {
   return LOW_VALUE_CONTEXT_HOST_SUFFIXES.some((suffix) =>
     hostname.endsWith(suffix),
   );
+}
+
+function normalizeContextRecallInfo(value?: string | null): string {
+  return (value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeContextRecallComparable(value: string): string {
+  return stripContextRecallShellLabels(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripContextRecallShellLabels(value: string): string {
+  return value
+    .replace(
+      /\b(calendar event|current context|meeting|memory|related memory|source|webpage|web page|page)\b\s*[:：-]*/gi,
+      ' ',
+    )
+    .replace(/(?:^|\s)(会议|网页|页面|来源|记忆|相关记忆)\s*[:：-]*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function areEquivalentContextRecallTexts(left: string, right: string): boolean {
+  const normalizedLeft = normalizeContextRecallComparable(left);
+  const normalizedRight = normalizeContextRecallComparable(right);
+  return (
+    normalizedLeft.length > 0 &&
+    normalizedRight.length > 0 &&
+    normalizedLeft === normalizedRight
+  );
+}
+
+function looksLikeContextRecallShell(value: string): boolean {
+  const comparable = normalizeContextRecallComparable(value);
+  if (!comparable) return true;
+  return (
+    comparable === 'ringcentral video' ||
+    comparable === 'video meetings' ||
+    comparable === 'meeting' ||
+    comparable === 'calendar event' ||
+    comparable === 'webpage' ||
+    comparable === 'page' ||
+    /\bringcentral video\b/.test(comparable)
+  );
+}
+
+function hasSpecificContextRecallSignal(value: string): boolean {
+  return (
+    CONTEXT_RECALL_ISSUE_KEY_PATTERN.test(value) ||
+    CONTEXT_RECALL_SPECIFIC_SIGNAL_PATTERN.test(value) ||
+    CONTEXT_RECALL_CJK_SPECIFIC_SIGNAL_PATTERN.test(value)
+  );
+}
+
+function countContextRecallCjkSignalChars(value: string): number {
+  const withoutShellTerms = stripContextRecallShellLabels(value).replace(
+    /会议|网页|页面|来源|记忆|相关|当前/g,
+    '',
+  );
+  return (withoutShellTerms.match(/[\u3400-\u9fff]/g) || []).length;
+}
+
+function countContextRecallMeaningfulTokens(value: string): number {
+  const tokens = value.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) || [];
+  return new Set(
+    tokens.filter((token) => {
+      if (token.length < 2) return false;
+      if (/^\d+$/.test(token)) return false;
+      return !CONTEXT_RECALL_GENERIC_TERMS.has(token);
+    }),
+  ).size;
 }
 
 export function formatRecallTimestamp(timestamp?: number): string | null {

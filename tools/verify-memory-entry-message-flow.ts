@@ -145,6 +145,34 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('Daily Standup')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              data: [
+                {
+                  team_name: 'Daily Standup',
+                  team_id: 'daily-standup',
+                  sender: 'Priya',
+                  message_content: 'blocker update is ready',
+                  summary: 'LLM hallucinated a release-only rule match',
+                  datetime: '2026-04-15T01:00:00.000Z',
+                  post_id: 'post-out-of-scope-1',
+                  matched_rule:
+                    '[RULE_REF:manual:release-only] Release blockers',
+                  matched_rule_refs: ['manual:release-only'],
+                  matched_rule_ids: [],
+                  reply_advice: '',
+                  user_relation_type: 'general_interest',
+                  contextMessages: [],
+                },
+              ],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       return new Response(
         JSON.stringify({
           response: JSON.stringify({
@@ -296,6 +324,49 @@ async function main() {
   assert.deepEqual(ingests[0]?.metadata?.matchedRules, [
     '[RULE_REF:outreach:session-before-followup]',
   ]);
+
+  storage.concernedItems = [
+    {
+      id: 'release-only',
+      text: 'Release blockers',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+      filterGroup: 'Release Chat',
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Daily Standup',
+        groupId: 'daily-standup',
+        standalone: [
+          {
+            creator: 'Priya',
+            time: '2026-04-15T01:00:00.000Z',
+            id: 'post-out-of-scope-1',
+            text: 'blocker update is ready',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  assert.equal(
+    ingests.length,
+    0,
+    'out-of-scope hallucinated rule refs must not ingest memory',
+  );
+  assert.equal(
+    botMessages.length,
+    0,
+    'out-of-scope hallucinated rule refs must not notify',
+  );
 
   console.log('verify-memory-entry-message-flow: ok');
 }

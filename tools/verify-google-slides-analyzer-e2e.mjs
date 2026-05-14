@@ -54,7 +54,19 @@ const analysisResult = {
       currentTrack: 'Growth',
       currentComments: '',
       reason: ['Owner inferred from recent Jira activity'],
-      sourceInfo: {},
+      sourceInfo: {
+        jiraIssues: [
+          {
+            key: 'AIT2-11063',
+            status: 'Incomplete',
+            priority: 'Medium',
+            duedate: '2020-01-01',
+            summary: 'Leadership summary owner follow-up',
+            assignee: 'Cara',
+            url: 'https://jira.ringcentral.com/browse/AIT2-11063',
+          },
+        ],
+      },
       confidence: 0.55,
       slideId: 'slide-1',
       tableId: 'table-1',
@@ -95,13 +107,14 @@ const analysisResult = {
       currentTrack: 'Core Platform',
       suggestedTrack: 'Core   Platform',
       currentComments: '',
-      reason: ['Only whitespace and case differ from the slide'],
+      reason: ['No risk: only whitespace and case differ from the slide'],
       sourceInfo: {
         jiraIssues: [
           {
             key: 'NOOP-1',
-            status: 'In progress',
-            priority: 'Low',
+            status: 'Done',
+            priority: 'High',
+            duedate: '2020-01-01',
             summary: 'Formatting-only result should not be actionable',
             assignee: 'Ada Lovelace',
             url: 'https://jira.ringcentral.com/browse/NOOP-1',
@@ -192,6 +205,7 @@ try {
 <html>
   <head><title>Slides Analyzer Fixture</title></head>
   <body>
+    <div class="goog-toolbar-horizontal" id="slides-toolbar"></div>
     <button id="open-analysis">Open analysis</button>
     <script>
       window.appliedUpdates = null;
@@ -242,6 +256,24 @@ try {
 
   const opener = await context.newPage();
   await opener.goto('https://docs.google.com/presentation/d/test/edit#slide=id.slide-1');
+  await opener.waitForSelector('#analyze-projects-button', { timeout: 15000 });
+  assert.match(
+    await opener.locator('#analyze-projects-button').innerText(),
+    /分析项目/,
+  );
+
+  await opener.evaluate(() => {
+    document.querySelector('.goog-toolbar-horizontal')?.remove();
+    const replacementToolbar = document.createElement('div');
+    replacementToolbar.className = 'goog-toolbar-horizontal';
+    replacementToolbar.id = 'slides-toolbar-rebuilt';
+    document.body.prepend(replacementToolbar);
+  });
+  await opener.waitForFunction(() => {
+    const buttons = document.querySelectorAll('#analyze-projects-button');
+    const rebuiltToolbar = document.querySelector('#slides-toolbar-rebuilt');
+    return buttons.length === 1 && rebuiltToolbar?.contains(buttons[0]);
+  });
 
   const popupPromise = context.waitForEvent('page');
   await opener.locator('#open-analysis').click();
@@ -253,8 +285,13 @@ try {
   assert.match(pageText, /可更新字段 3/);
   assert.match(pageText, /高可信默认 2/);
   assert.match(pageText, /需复核项目 2/);
+  assert.match(pageText, /风险项目 3/);
   assert.match(pageText, /缺少来源 1/);
   assert.match(pageText, /无法写回字段 1/);
+  assert.match(pageText, /风险焦点/);
+  assert.match(pageText, /状态提示风险: At risk -> On track/);
+  assert.match(pageText, /已逾期 Jira: AIT2-11063/);
+  assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 3);
   assert.match(pageText, /来源证据/);
   assert.match(pageText, /Jira: MTR-123407/);
   assert.match(pageText, /Release notes are ready/);
@@ -282,6 +319,15 @@ try {
   const reviewText = await analysisPage.locator('.slides-analysis').innerText();
   assert.match(reviewText, /Leadership summary/);
   assert.match(reviewText, /Missing status column/);
+
+  await analysisPage.locator('#review-filter-risk').click();
+  assert.equal(await analysisPage.locator('.project-item').count(), 3);
+  const riskText = await analysisPage.locator('.slides-analysis').innerText();
+  assert.match(riskText, /Quarterly status deck/);
+  assert.match(riskText, /Leadership summary/);
+  assert.match(riskText, /Missing status column/);
+  assert.doesNotMatch(riskText, /Formatting only noise/);
+  assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 3);
 
   await analysisPage.locator('#review-filter-selected').click();
   assert.equal(await analysisPage.locator('.project-item').count(), 1);

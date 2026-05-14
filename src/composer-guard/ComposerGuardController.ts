@@ -8,6 +8,15 @@ import {
   isComposerElement,
   readComposerText,
 } from './siteContextAdapters';
+import {
+  DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
+  getComposerAssistPreviewText,
+  getComposerGuardPrimaryAction,
+  getNextComposerAssistThreshold,
+  normalizeComposerAssistThreshold,
+  sanitizeComposerAssistInsertText,
+  shouldPreviewComposerAssistBeforeInsert,
+} from './assistPreviewPolicy';
 import type {
   ComposerAssistRequest,
   ComposerAssistResponse,
@@ -22,13 +31,11 @@ const DISMISS_TTL_MS = 30 * 60 * 1000;
 const ENV_CONFIG_KEY = 'envConfig';
 const FEEDBACK_EVENTS_KEY = 'composerGuardFeedbackEvents';
 const CONFIDENCE_THRESHOLD_CONFIG_KEY = 'COMPOSER_GUARD_CONFIDENCE_THRESHOLD';
-export const DEFAULT_ASSIST_CONFIDENCE_THRESHOLD = 0.78;
-const MIN_ADAPTIVE_ASSIST_CONFIDENCE = 0.62;
-const MAX_ADAPTIVE_ASSIST_CONFIDENCE = 0.92;
-const ACCEPT_THRESHOLD_ADJUSTMENT_RATE = 0.12;
-const REJECT_THRESHOLD_ADJUSTMENT_RATE = 0.16;
 const MAX_FEEDBACK_EVENTS = 100;
-const ICON_SIZE = 32;
+const ICON_SIZE = 24;
+const ICON_IMAGE_SIZE = 22;
+const ICON_INSET = 6;
+const POPOVER_GAP = 6;
 const VIEWPORT_MARGIN = 8;
 
 type GuardState = 'ready';
@@ -60,21 +67,8 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
-function sanitizeComposerInsertText(text: string): string {
-  return text
-    .replace(/^Personal AI context to consider before replying:\s*/i, '')
-    .replace(/^Personal AI context pack \(review before sending\):\s*/i, '')
-    .replace(/^Personal AI context for [^\n]+:\s*/i, '')
-    .replace(/\n?\s*Please review and edit before sending\.?\s*$/i, '')
-    .replace(
-      /\n?\s*Please verify against the current Jira state before posting\.?\s*$/i,
-      '',
-    )
-    .trim();
-}
-
 function looksLikeSendableComposerText(text?: string): boolean {
-  const cleaned = sanitizeComposerInsertText(text || '');
+  const cleaned = sanitizeComposerAssistInsertText(text);
   if (!cleaned) return false;
   if (/^我理解当前是在讨论[:：]/.test(cleaned)) return false;
   if (/^我这边先补充几个相关点[:：]/.test(cleaned)) return false;
@@ -100,53 +94,6 @@ function isSensitiveEditableElement(element: HTMLElement): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
-}
-
-function roundThreshold(value: number): number {
-  return Number(value.toFixed(3));
-}
-
-export function normalizeComposerAssistThreshold(
-  value: unknown,
-  fallback = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
-): number {
-  const candidate = Number(value);
-  if (!Number.isFinite(candidate)) {
-    return roundThreshold(
-      clamp(
-        Number.isFinite(fallback)
-          ? fallback
-          : DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
-        MIN_ADAPTIVE_ASSIST_CONFIDENCE,
-        MAX_ADAPTIVE_ASSIST_CONFIDENCE,
-      ),
-    );
-  }
-  return roundThreshold(
-    clamp(
-      candidate,
-      MIN_ADAPTIVE_ASSIST_CONFIDENCE,
-      MAX_ADAPTIVE_ASSIST_CONFIDENCE,
-    ),
-  );
-}
-
-export function getNextComposerAssistThreshold(
-  currentValue: number,
-  feedbackKind: AssistFeedbackKind,
-): number {
-  const current = normalizeComposerAssistThreshold(currentValue);
-  if (feedbackKind === 'accepted') {
-    const delta =
-      (current - MIN_ADAPTIVE_ASSIST_CONFIDENCE) *
-      ACCEPT_THRESHOLD_ADJUSTMENT_RATE;
-    return normalizeComposerAssistThreshold(current - delta);
-  }
-
-  const delta =
-    (MAX_ADAPTIVE_ASSIST_CONFIDENCE - current) *
-    REJECT_THRESHOLD_ADJUSTMENT_RATE;
-  return normalizeComposerAssistThreshold(current + delta);
 }
 
 function getChromeLocal<T extends Record<string, unknown>>(
@@ -216,6 +163,7 @@ export class ComposerGuardController {
   private requestSeq = 0;
   private dismissedContexts = new Map<string, number>();
   private assistConfidenceThreshold = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD;
+  private previewLockedOpen = false;
 
   start(): void {
     if (hasSensitiveUrlSignal(window.location.href)) {
@@ -286,7 +234,12 @@ export class ComposerGuardController {
       fromElement,
     );
     if (!context) {
+      if (fromElement && this.root?.contains(fromElement)) {
+        return;
+      }
       if (fromElement && isComposerElement(fromElement)) {
+        this.clear();
+      } else if (fromElement) {
         this.clear();
       }
       return;
@@ -306,7 +259,15 @@ export class ComposerGuardController {
       return;
     }
 
+    const previousTargetElement = this.activeSession?.target.element ?? null;
     const contextChanged = this.activeSession?.contextKey !== contextKey;
+    if (
+      previousTargetElement &&
+      previousTargetElement !== context.target.element
+    ) {
+      previousTargetElement.classList.remove('pai-composer-guard-target-glow');
+    }
+
     this.activeSession = {
       target: context.target,
       snapshot: context.snapshot,
@@ -316,6 +277,7 @@ export class ComposerGuardController {
 
     if (contextChanged) {
       this.latestAssist = null;
+      this.previewLockedOpen = false;
       this.removeAffordance();
     } else {
       this.renderIfUseful();
@@ -395,6 +357,7 @@ export class ComposerGuardController {
       }
 
       this.latestAssist = response;
+      this.previewLockedOpen = false;
       this.renderIfUseful();
     } catch (error) {
       console.warn('[ComposerGuard] assist request failed:', error);
@@ -468,16 +431,33 @@ export class ComposerGuardController {
     const root = this.ensureRoot();
     root.dataset.state = state;
     const assist = this.latestAssist;
-    const preview = this.buildSuggestionPreview(assist);
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
+    const primaryAction = getComposerGuardPrimaryAction(assist);
+    const previewRequired = primaryAction === 'preview';
+    const showFullPreview = previewRequired && this.previewLockedOpen;
+    const preview = this.buildSuggestionPreview(assist, showFullPreview);
 
+    root.classList.toggle(
+      'pai-composer-guard--preview-open',
+      this.previewLockedOpen,
+    );
+    root.classList.toggle(
+      'pai-composer-guard--full-preview',
+      showFullPreview,
+    );
     root.innerHTML = `
-      <button class="pai-composer-guard-icon-button" data-action="insert" type="button" title="插入建议内容">
+      <button class="pai-composer-guard-icon-button" data-action="primary" type="button" title="${
+        previewRequired ? '预览建议内容' : '插入建议内容'
+      }">
         <img src="${iconUrl}" alt="Personal AI" />
       </button>
-      <div class="pai-composer-guard-popover" aria-hidden="true">
+      <div class="pai-composer-guard-popover" aria-hidden="${
+        this.previewLockedOpen ? 'false' : 'true'
+      }">
         <div class="pai-composer-guard-header">
-          <div class="pai-composer-guard-label">建议内容</div>
+          <div class="pai-composer-guard-label">${
+            showFullPreview ? '完整预览' : previewRequired ? '先预览' : '建议内容'
+          }</div>
           <button class="pai-composer-guard-feedback-button" data-action="reject" type="button" title="减少这类建议" aria-label="减少这类建议">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M10 15.5v3.1c0 .8.7 1.4 1.5 1.4.5 0 .9-.2 1.2-.6l4.2-5.4c.4-.5.6-1.1.6-1.8V5.6c0-1-.8-1.8-1.8-1.8H7.1c-.7 0-1.4.4-1.7 1L2.7 11c-.5 1.2.4 2.5 1.7 2.5H10Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
@@ -486,18 +466,29 @@ export class ComposerGuardController {
           </button>
         </div>
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
+        ${
+          previewRequired
+            ? `<div class="pai-composer-guard-actions">
+                <button class="pai-composer-guard-secondary-button" data-action="dismiss" type="button">取消</button>
+                <button class="pai-composer-guard-insert-button" data-action="confirm-insert" type="button">插入</button>
+              </div>`
+            : ''
+        }
       </div>
     `;
 
-    const insertButton = root.querySelector('[data-action="insert"]');
-    insertButton?.addEventListener('pointerdown', (event) => {
+    const primaryButton = root.querySelector('[data-action="primary"]');
+    primaryButton?.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.insertLatestAssist();
+      this.handlePrimaryAction();
     });
-    insertButton?.addEventListener('click', (event) => {
+    primaryButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if ((event as MouseEvent).detail === 0) {
+        this.handlePrimaryAction();
+      }
     });
     const rejectButton = root.querySelector('[data-action="reject"]');
     rejectButton?.addEventListener('pointerdown', (event) => {
@@ -509,21 +500,67 @@ export class ComposerGuardController {
     rejectButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if ((event as MouseEvent).detail === 0) {
+        void this.recordAssistFeedback('rejected');
+        this.dismissCurrentContext();
+      }
+    });
+    const confirmInsertButton = root.querySelector(
+      '[data-action="confirm-insert"]',
+    );
+    confirmInsertButton?.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.insertLatestAssist();
+    });
+    confirmInsertButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if ((event as MouseEvent).detail === 0) {
+        this.insertLatestAssist();
+      }
+    });
+    const dismissButton = root.querySelector('[data-action="dismiss"]');
+    dismissButton?.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.dismissCurrentContext();
+    });
+    dismissButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if ((event as MouseEvent).detail === 0) {
+        this.dismissCurrentContext();
+      }
     });
 
     this.positionRoot();
   }
 
-  private buildSuggestionPreview(assist: ComposerAssistResponse): string {
-    const preview = sanitizeComposerInsertText(assist.insertText || '');
-    return preview.length > 520
-      ? `${preview.slice(0, 520).trimEnd()}...`
-      : preview;
+  private handlePrimaryAction(): void {
+    if (shouldPreviewComposerAssistBeforeInsert(this.latestAssist)) {
+      this.previewLockedOpen = true;
+      this.renderIfUseful();
+      return;
+    }
+
+    this.insertLatestAssist();
+  }
+
+  private buildSuggestionPreview(
+    assist: ComposerAssistResponse,
+    forceFull = false,
+  ): string {
+    return getComposerAssistPreviewText(assist.insertText, {
+      forceFull,
+    });
   }
 
   private insertLatestAssist(): void {
     if (!this.activeSession || !this.latestAssist?.insertText) return;
-    const insertText = sanitizeComposerInsertText(this.latestAssist.insertText);
+    const insertText = sanitizeComposerAssistInsertText(
+      this.latestAssist.insertText,
+    );
     if (!insertText) return;
     void this.recordAssistFeedback('accepted');
     insertTextIntoComposer(this.activeSession.target, insertText);
@@ -587,6 +624,7 @@ export class ComposerGuardController {
     if (this.activeSession) {
       this.dismissedContexts.set(this.activeSession.contextKey, Date.now());
     }
+    this.previewLockedOpen = false;
     this.clear();
   }
 
@@ -608,12 +646,14 @@ export class ComposerGuardController {
     this.setTargetGlow(false);
     this.activeSession = null;
     this.latestAssist = null;
+    this.previewLockedOpen = false;
     this.root?.remove();
     this.root = null;
   }
 
   private removeAffordance(): void {
     this.setTargetGlow(false);
+    this.previewLockedOpen = false;
     this.root?.remove();
     this.root = null;
   }
@@ -649,8 +689,16 @@ export class ComposerGuardController {
       VIEWPORT_MARGIN,
       window.innerWidth - ICON_SIZE - VIEWPORT_MARGIN,
     );
-    const top = clamp(rect.top - 12, VIEWPORT_MARGIN, maxTop);
-    const left = clamp(rect.right - 28, VIEWPORT_MARGIN, maxLeft);
+    const topInsideTarget =
+      rect.height >= ICON_SIZE + ICON_INSET * 2
+        ? rect.top + ICON_INSET
+        : rect.top + Math.max(0, (rect.height - ICON_SIZE) / 2);
+    const leftInsideTarget =
+      rect.width >= ICON_SIZE + ICON_INSET * 2
+        ? rect.right - ICON_SIZE - ICON_INSET
+        : rect.right - ICON_SIZE;
+    const top = clamp(topInsideTarget, VIEWPORT_MARGIN, maxTop);
+    const left = clamp(leftInsideTarget, VIEWPORT_MARGIN, maxLeft);
     this.root.classList.toggle('pai-composer-guard--near-left', left < 360);
     this.root.style.top = `${top}px`;
     this.root.style.left = `${left}px`;
@@ -708,8 +756,8 @@ export class ComposerGuardController {
       #${ROOT_ID}.pai-composer-guard {
         position: fixed;
         z-index: 2147483646;
-        width: 32px;
-        height: 32px;
+        width: ${ICON_SIZE}px;
+        height: ${ICON_SIZE}px;
         color: #172033;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         font-size: 12px;
@@ -720,30 +768,30 @@ export class ComposerGuardController {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 32px;
-        height: 32px;
+        width: ${ICON_SIZE}px;
+        height: ${ICON_SIZE}px;
         margin: 0;
         border: 0;
         border-radius: 999px;
         padding: 0;
         background: transparent;
-        box-shadow: 0 4px 14px rgba(209, 42, 42, 0.26);
+        box-shadow: 0 3px 10px rgba(209, 42, 42, 0.24);
         cursor: pointer;
         transition: transform 140ms ease, box-shadow 140ms ease;
       }
       .pai-composer-guard-icon-button:hover {
         transform: scale(1.04);
-        box-shadow: 0 5px 18px rgba(209, 42, 42, 0.42);
+        box-shadow: 0 4px 14px rgba(209, 42, 42, 0.36);
       }
       .pai-composer-guard-icon-button img {
-        width: 28px;
-        height: 28px;
+        width: ${ICON_IMAGE_SIZE}px;
+        height: ${ICON_IMAGE_SIZE}px;
         display: block;
         border-radius: 999px;
       }
       .pai-composer-guard-popover {
         position: absolute;
-        right: 38px;
+        right: ${ICON_SIZE + POPOVER_GAP}px;
         top: -2px;
         width: min(320px, calc(100vw - 70px));
         max-height: 260px;
@@ -760,19 +808,25 @@ export class ComposerGuardController {
         pointer-events: none;
         transition: opacity 130ms ease, transform 130ms ease;
       }
-      .pai-composer-guard:hover .pai-composer-guard-popover {
+      .pai-composer-guard:hover .pai-composer-guard-popover,
+      .pai-composer-guard--preview-open .pai-composer-guard-popover {
         opacity: 1;
         transform: translateX(0) scale(1);
         pointer-events: auto;
       }
       .pai-composer-guard--near-left .pai-composer-guard-popover {
         right: auto;
-        left: 38px;
+        left: ${ICON_SIZE + POPOVER_GAP}px;
         transform: translateX(-8px) scale(0.98);
         transform-origin: left top;
       }
-      .pai-composer-guard--near-left:hover .pai-composer-guard-popover {
+      .pai-composer-guard--near-left:hover .pai-composer-guard-popover,
+      .pai-composer-guard--near-left.pai-composer-guard--preview-open .pai-composer-guard-popover {
         transform: translateX(0) scale(1);
+      }
+      #${ROOT_ID}.pai-composer-guard--full-preview .pai-composer-guard-popover {
+        width: min(420px, calc(100vw - 70px));
+        max-height: min(460px, calc(100vh - 32px));
       }
       .pai-composer-guard-header {
         display: flex;
@@ -814,6 +868,41 @@ export class ComposerGuardController {
         white-space: pre-wrap;
         word-break: break-word;
         font-size: 12px;
+      }
+      .pai-composer-guard-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(17, 24, 39, 0.08);
+      }
+      .pai-composer-guard-secondary-button,
+      .pai-composer-guard-insert-button {
+        min-width: 48px;
+        height: 26px;
+        margin: 0;
+        border-radius: 6px;
+        padding: 0 10px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .pai-composer-guard-secondary-button {
+        border: 1px solid rgba(17, 24, 39, 0.14);
+        color: #4b5563;
+        background: #ffffff;
+      }
+      .pai-composer-guard-secondary-button:hover {
+        background: #f9fafb;
+      }
+      .pai-composer-guard-insert-button {
+        border: 1px solid rgba(198, 40, 40, 0.82);
+        color: #ffffff;
+        background: #c62828;
+      }
+      .pai-composer-guard-insert-button:hover {
+        background: #b71c1c;
       }
       .pai-composer-guard-target-glow {
         outline: 1px solid rgba(218, 48, 48, 0.54) !important;

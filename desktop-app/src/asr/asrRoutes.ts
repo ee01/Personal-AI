@@ -24,6 +24,7 @@ import {
 } from './sherpaEngine.js';
 import {
   AppleSpeechPcmSession,
+  cleanupOrphanedAppleSpeechHelpers,
   getAppleSpeechAvailability,
 } from './appleSpeechEngine.js';
 import {
@@ -45,6 +46,7 @@ import {
 
 interface AsrSession {
   id: string;
+  sourceChannel?: string;
   locale: string;
   language: string;
   liveEngine: LiveEngineName;
@@ -59,6 +61,7 @@ interface AsrSession {
   apple?: AppleSpeechPcmSession;
   lastPartial?: string;
   startedAt: number;
+  lastTouchedAt: number;
   finalizing: Promise<AsrFinalResult> | undefined;
 }
 
@@ -84,6 +87,9 @@ const sessions = new Map<string, AsrSession>();
 const PCM16_MONO_16KHZ_BYTES_PER_SECOND = 16000 * 2;
 const TRAILING_SILENCE_MS = 800;
 const MAX_TRAILING_SILENCE_MS = 900;
+const MAX_SEGMENT_MS = 12_000;
+const SESSION_IDLE_TTL_MS = 2 * 60_000;
+const SESSION_SWEEP_INTERVAL_MS = 30_000;
 const MIN_FINAL_SPEECH_SECONDS = 0.25;
 const DEFAULT_LOCALE = 'auto';
 
@@ -121,16 +127,28 @@ export function selectLiveEngine(options: {
 export function shouldFinalizeAsrSegment(options: {
   hasSpeech: boolean;
   trailingSilenceMs: number;
+  bufferedAudioMs?: number;
   flush?: boolean;
   liveEndpoint?: boolean;
 }): boolean {
   if (!options.hasSpeech) return false;
   if (options.flush) return true;
   if (options.liveEndpoint) return true;
+  if ((options.bufferedAudioMs || 0) >= MAX_SEGMENT_MS) return true;
   return options.trailingSilenceMs >= TRAILING_SILENCE_MS;
 }
 
 export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
+  void cleanupOrphanedAppleSpeechHelpers().catch(() => undefined);
+  const sessionSweepTimer = setInterval(() => {
+    void closeIdleSessions();
+  }, SESSION_SWEEP_INTERVAL_MS);
+  sessionSweepTimer.unref?.();
+  app.addHook('onClose', async () => {
+    clearInterval(sessionSweepTimer);
+    await closeAllAsrSessions();
+  });
+
   app.get('/asr/status', async (_req: FastifyRequest, reply: FastifyReply) => {
     const sherpaStatus = await isSherpaStreamingModelReady();
     const funAsrStatus = await isFunAsrNanoModelReady();
@@ -172,6 +190,21 @@ export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
       },
       sherpaEngine: getSherpaEngineState(),
       activeSessionId: sessions.size > 0 ? [...sessions.keys()][0] : null,
+      activeSessions: [...sessions.values()].map((session) => ({
+        id: session.id,
+        sourceChannel: session.sourceChannel,
+        locale: session.locale,
+        language: session.language,
+        liveEngine: session.liveEngine,
+        finalEngine: session.finalEngine,
+        fallbackFinalEngine: session.fallbackFinalEngine,
+        hasSpeech: session.hasSpeech,
+        bufferedAudioMs: getBufferedSegmentMs(session),
+        trailingSilenceMs: session.trailingSilenceMs,
+        currentUtteranceId: session.currentUtteranceId,
+        startedAt: session.startedAt,
+        lastTouchedAt: session.lastTouchedAt,
+      })),
       downloadInProgress: downloadStatus.downloadInProgress,
       downloadProgress: downloadStatus.downloadProgress,
       downloadTarget: downloadStatus.downloadTarget,
@@ -214,6 +247,7 @@ export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
       const body = req.body as
         | {
             sessionId?: string;
+            sourceChannel?: string;
             locale?: string;
             language?: string;
             liveEngine?: string;
@@ -266,6 +300,7 @@ export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
 
       const session: AsrSession = {
         id: sessionId,
+        sourceChannel: normalizeSourceChannel(body?.sourceChannel),
         locale,
         language,
         liveEngine,
@@ -276,6 +311,7 @@ export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
         trailingSilenceMs: 0,
         segmentSeq: 0,
         startedAt: Date.now(),
+        lastTouchedAt: Date.now(),
         finalizing: undefined,
       };
 
@@ -311,6 +347,7 @@ export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
         | { pcmBase64?: string; flush?: boolean }
         | undefined;
       try {
+        session.lastTouchedAt = Date.now();
         const response = await handleSessionChunk(session, body);
         return reply.send(response);
       } catch (error) {
@@ -352,6 +389,23 @@ export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
   );
 }
 
+export async function closeAllAsrSessions(): Promise<void> {
+  const activeSessions = [...sessions.values()];
+  sessions.clear();
+  await Promise.all(activeSessions.map((session) => closeSession(session)));
+}
+
+async function closeIdleSessions(now = Date.now()): Promise<void> {
+  const expiredSessions = [...sessions.values()].filter(
+    (session) =>
+      !session.finalizing && now - session.lastTouchedAt > SESSION_IDLE_TTL_MS,
+  );
+  for (const session of expiredSessions) {
+    sessions.delete(session.id);
+    await closeSession(session);
+  }
+}
+
 async function handleSessionChunk(
   session: AsrSession,
   body: { pcmBase64?: string; flush?: boolean } | undefined,
@@ -360,17 +414,17 @@ async function handleSessionChunk(
   let liveEndpoint = false;
 
   if (body?.pcmBase64) {
-      const pcmBuf = Buffer.from(body.pcmBase64, 'base64');
-      if (pcmBuf.length > 0) {
-        const analysis = analyzePcm16SpeechPresence(pcmBuf);
-        const hasSpeechInChunk = isLikelySpeechChunk(analysis);
-        const chunkMs = Math.round(
-          (pcmBuf.length / PCM16_MONO_16KHZ_BYTES_PER_SECOND) * 1000,
-        );
-        const shouldFeedLive = hasSpeechInChunk || session.hasSpeech;
-        if (hasSpeechInChunk) {
-          startSegmentIfNeeded(session);
-          session.chunks.push(pcmBuf);
+    const pcmBuf = Buffer.from(body.pcmBase64, 'base64');
+    if (pcmBuf.length > 0) {
+      const analysis = analyzePcm16SpeechPresence(pcmBuf);
+      const hasSpeechInChunk = isLikelySpeechChunk(analysis);
+      const chunkMs = Math.round(
+        (pcmBuf.length / PCM16_MONO_16KHZ_BYTES_PER_SECOND) * 1000,
+      );
+      const shouldFeedLive = hasSpeechInChunk || session.hasSpeech;
+      if (hasSpeechInChunk) {
+        startSegmentIfNeeded(session);
+        session.chunks.push(pcmBuf);
         session.trailingSilenceMs = 0;
       } else if (session.hasSpeech) {
         if (session.trailingSilenceMs < MAX_TRAILING_SILENCE_MS) {
@@ -392,6 +446,7 @@ async function handleSessionChunk(
     shouldFinalizeAsrSegment({
       hasSpeech: session.hasSpeech,
       trailingSilenceMs: session.trailingSilenceMs,
+      bufferedAudioMs: getBufferedSegmentMs(session),
       flush: body?.flush,
       liveEndpoint,
     })
@@ -430,6 +485,11 @@ function startSegmentIfNeeded(session: AsrSession): void {
   session.trailingSilenceMs = 0;
   session.segmentSeq += 1;
   session.currentUtteranceId = `${session.id}-utt-${session.segmentSeq}`;
+}
+
+function getBufferedSegmentMs(session: AsrSession): number {
+  const bytes = session.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  return Math.round((bytes / PCM16_MONO_16KHZ_BYTES_PER_SECOND) * 1000);
 }
 
 async function processLiveChunk(
@@ -553,6 +613,12 @@ function normalizeFinalEngine(
   if (raw === 'whisper_cpp') return 'whisper_cpp';
   if (raw === 'none') return 'none';
   return raw ? 'none' : defaultEngine;
+}
+
+function normalizeSourceChannel(value: unknown): string | undefined {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'tab' || raw === 'mic') return raw;
+  return undefined;
 }
 
 function isEnglishLocale(locale: string | undefined): boolean {

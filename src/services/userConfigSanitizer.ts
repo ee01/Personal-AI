@@ -6,6 +6,20 @@ const cleanString = (value: any): string => (
   typeof value === 'string' ? value.trim() : ''
 );
 
+const DEFAULT_USER_CONTEXT_SCALARS = new Set([
+  'GMT+8',
+  'medium',
+  'weekly',
+  '每周',
+  '中英文混合',
+  '简洁直接',
+  '项目状态报告',
+]);
+
+export const isDefaultUserContextScalar = (value: any): boolean => (
+  DEFAULT_USER_CONTEXT_SCALARS.has(cleanString(value))
+);
+
 export const normalizePromptContent = (value: any): string => {
   const content = cleanString(value);
   return content.length > USER_CONFIG_PROMPT_CHAR_LIMIT

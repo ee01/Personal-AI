@@ -10,11 +10,15 @@
 - 任务开关、上次执行时间和下次执行时间存储在 `chrome.storage.local.taskSchedulerStates`
 - 每次 Service Worker 启动都会按 Storage 状态补齐或清理 `scheduled_task_*` alarm
 - 每次查询任务状态也会刷新 alarm 实况，避免 popup 显示过期的 `nextRun`
+- 如果旧版本留下已不存在任务定义的 `scheduled_task_*` alarm，会在启动、状态刷新或触发时自动清理，避免无意义唤醒和占用 Chrome alarm 配额
+- 如果某个启用任务的 alarm 仍存在但触发时间已经明显滞后，状态会标记为 `overdue`，popup 会把它排到前面并提示用户手动执行或重新启用排程
+- 对已启用但排程异常的任务，popup 可调用修复动作重新创建该任务的 Chrome alarm，不需要用户手动关开开关
 - 重复启动会复用同一个启动流程，避免首次运行和 alarm 创建并发
 - 已禁用任务即使收到残留 alarm 也会被跳过并清理
 - 读取旧版/部分写入的 `taskSchedulerStates` 时，如果某个任务缺少 `enabled` 字段，会回退到任务定义默认值，而不是把默认启用任务误判为关闭
 - 启用任务只会创建排程，不会暗中立即执行；需要一次性执行时应调用手动执行动作
 - 创建 Chrome alarm 失败时会回滚本次启用状态并把真实错误返回给调用方，避免 popup 卡在“已启用但无排程”的状态
+- 状态刷新时如果某个任务的 alarm 自动修复失败，不会让整组任务状态不可用；该任务会显示 `repair_failed` 和真实错误，用户仍可重试修复或停用任务
 - 每个任务会保存最近 5 次完成记录，用于 popup 快速判断失败是否偶发、是否连续发生
 
 `background.ts` 仍有少量非 `TaskScheduler` 的专用 alarm，例如 `cleanupFollowThreads` 和 `pollBackendNotifications`。这些不是 `scheduled_task_*` 任务，但创建时也会先检查现有 alarm，避免 Service Worker 每次唤醒都重置下一次触发时间。
@@ -90,6 +94,8 @@ chrome.runtime.sendMessage(
 - `scheduled`：任务已启用且 Chrome alarm 存在
 - `missing_alarm`：任务已启用但未找到 alarm，通常会被状态刷新自动修复
 - `period_mismatch`：任务定义和现有 alarm 间隔不一致，通常会被状态刷新自动修复
+- `overdue`：任务已启用且 alarm 存在，但计划触发时间已经超过容忍窗口
+- `repair_failed`：状态刷新尝试补齐或重建 alarm 失败，返回值会包含可见错误
 - `disabled`：任务已停用，无需排程
 
 ### 控制任务
@@ -112,6 +118,16 @@ chrome.runtime.sendMessage({
   type: 'CONTROL_TASK',
   taskId: 'digest_queue_process',
   action: 'run',
+});
+```
+
+修复或重排已启用任务的 Chrome alarm：
+
+```ts
+chrome.runtime.sendMessage({
+  type: 'CONTROL_TASK',
+  taskId: 'system_monitoring',
+  action: 'repair',
 });
 ```
 
@@ -162,13 +178,17 @@ Popup 还提供可展开的后台任务概览：
 - 查看所有任务是否启用、是否正在执行、执行间隔、下次执行时间和排程健康
 - 摘要会优先提示执行中、排程异常或失败任务数量
 - 展开后会把执行中、排程异常和失败的任务排在前面，减少排查时滚动查找
+- 下次执行时间同时显示相对倒计时和本地时间，并给任务打上消息、同步、维护、画像等轻量类别标签
 - 查看最近一次执行成功/失败结果，失败时显示简短错误
-- 查看最近 5 次运行的成功/失败概览，悬停可看到每次运行的触发来源和耗时
+- 只要有运行记录，就显示最近最多 5 次运行的成功/失败概览，悬停可看到每次运行的触发来源和耗时
 - 查看最近 5 次运行里的跳过记录，用于判断是否存在长任务挤压后续排程
 - 刷新任务状态
+- 排程异常任务会显示重排按钮，可一键重新创建该任务的 Chrome alarm
+- 如果自动修复排程失败，任务行会保留在列表里并显示“修复失败”，避免用户失去停用或重试入口
 - 单独启用/停用任务，列表会先给出本地反馈，失败时回滚
 - 已停用任务会显示“停用 · 可手动执行”，手动执行只运行一次，不会隐式启用排程
 - 手动执行某个任务，按钮会立即进入执行中状态并在完成后刷新；失败或跳过原因会保留在任务结果和历史里，不会被刷新动作清掉
+- 如果用户在任务已运行时再次点击手动执行，popup 会刷新跳过记录，但不会把“已有执行中任务”当成新的全局错误
 
 ## 维护规则
 
@@ -190,4 +210,5 @@ Popup 还提供可展开的后台任务概览：
 4. 启用一个已停用任务，确认只创建 alarm，不会更新 `lastRun`
 5. 手动执行 `digest_queue_process` 或轻量 no-op 任务，确认执行中状态短暂出现，`lastRun` / `lastCompletedAt` / `lastSuccess` / `runHistory` 更新并持久化
 6. 在 Service Worker 控制台检查 `chrome.alarms.getAll()`，确认 `scheduled_task_*` 数量与启用任务一致
-7. 运行 `npm run verify:task-scheduler-api`，覆盖启用不立即执行、alarm 创建失败回滚、手动执行、失败记录、跳过记录、最近运行历史、重复执行跳过和状态刷新补齐丢失 alarm
+7. 对一个 `overdue` 任务点击重排，确认 `nextRun` 回到未来时间，且不会更新 `lastRun`
+8. 运行 `npm run verify:task-scheduler-api`，覆盖启用不立即执行、alarm 创建失败回滚、手动执行、失败记录、跳过记录、最近运行历史、重复执行跳过、状态刷新补齐丢失 alarm、自动修复失败时仍返回任务列表、识别并修复明显滞后的 alarm，以及清理旧版本遗留的未知 `scheduled_task_*` alarm

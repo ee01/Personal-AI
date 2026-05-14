@@ -75,6 +75,16 @@ function rawStringValue(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function base64StringValue(...values: unknown[]): string | undefined {
+  const encoded = stringValue(...values);
+  if (!encoded) return undefined;
+  try {
+    return Buffer.from(encoded, 'base64').toString('utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 function numberValue(...values: unknown[]): number | undefined {
   for (const value of values) {
     const candidate = Number(value);
@@ -106,14 +116,95 @@ function cleanJsonCandidate(raw: string): string {
   return trimmed;
 }
 
-function parseJsonCandidate(raw: string): Record<string, unknown> {
-  try {
-    return JSON.parse(cleanJsonCandidate(raw)) as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(
-      `OpenClaw did not return strict JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
+function escapeUnescapedJsonStringQuotes(value: string): string {
+  let result = '';
+  let backslashCount = 0;
+  for (const char of value) {
+    if (char === '"' && backslashCount % 2 === 0) {
+      result += '\\"';
+    } else {
+      result += char;
+    }
+    backslashCount = char === '\\' ? backslashCount + 1 : 0;
   }
+  return result;
+}
+
+function escapeInvalidJsonStringBackslashes(value: string): string {
+  let result = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char !== '\\') {
+      result += char;
+      continue;
+    }
+
+    const next = value[index + 1];
+    if (!next) {
+      result += '\\\\';
+      continue;
+    }
+    if ('"\\/bfnrt'.includes(next)) {
+      result += char;
+      continue;
+    }
+    if (
+      next === 'u' &&
+      /^[0-9a-fA-F]{4}$/.test(value.slice(index + 2, index + 6))
+    ) {
+      result += char;
+      continue;
+    }
+    result += '\\\\';
+  }
+  return result;
+}
+
+function decodeJsonEncodedString(value: string): string {
+  const stringLiteral = escapeInvalidJsonStringBackslashes(
+    escapeUnescapedJsonStringQuotes(value),
+  )
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t');
+  return JSON.parse(`"${stringLiteral}"`) as string;
+}
+
+function parseJsonCandidate(raw: string): Record<string, unknown> {
+  let candidate = cleanJsonCandidate(raw);
+  let firstError: unknown;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      return JSON.parse(candidate) as Record<string, unknown>;
+    } catch (error) {
+      firstError ??= error;
+      lastError = error;
+    }
+
+    let decoded: string | undefined;
+    try {
+      decoded = decodeJsonEncodedString(candidate);
+    } catch {
+      try {
+        const decoded = decodeJsonEncodedString(raw.trim());
+        if (typeof decoded === 'string' && decoded.trim()) {
+          candidate = cleanJsonCandidate(decoded);
+          continue;
+        }
+      } catch (error) {
+        lastError = error;
+        break;
+      }
+    }
+    if (!decoded?.trim()) break;
+    const nextCandidate = cleanJsonCandidate(decoded);
+    if (nextCandidate === candidate) break;
+    candidate = nextCandidate;
+  }
+  throw new Error(
+    `OpenClaw did not return strict JSON: ${lastError instanceof Error ? lastError.message : firstError instanceof Error ? firstError.message : String(firstError)}`,
+  );
 }
 
 function extractOutputText(raw: unknown): string {
@@ -135,6 +226,25 @@ function extractOutputText(raw: unknown): string {
       const contentRecord = asRecord(content);
       if (!contentRecord) continue;
       const text = stringValue(contentRecord.text, contentRecord.content);
+      if (text) parts.push(text);
+    }
+  }
+
+  const choices = Array.isArray(record.choices) ? record.choices : [];
+  for (const choice of choices) {
+    const choiceRecord = asRecord(choice);
+    const message = asRecord(choiceRecord?.message);
+    if (!message) continue;
+    const content = message.content;
+    if (typeof content === 'string' && content.trim()) {
+      parts.push(content.trim());
+      continue;
+    }
+    const contentItems = Array.isArray(content) ? content : [];
+    for (const item of contentItems) {
+      const itemRecord = asRecord(item);
+      if (!itemRecord) continue;
+      const text = stringValue(itemRecord.text, itemRecord.content);
       if (text) parts.push(text);
     }
   }
@@ -176,7 +286,10 @@ function normalizePackageFile(raw: unknown): OpenClawSkillPackageFile | null {
   if (!file) return null;
   const relativePath = stringValue(file.path, file.relativePath, file.name);
   if (!relativePath) return null;
-  const content = rawStringValue(file.content, file.text, file.body) ?? '';
+  const content =
+    base64StringValue(file.contentBase64, file.content_base64, file.bodyBase64) ??
+    rawStringValue(file.content, file.text, file.body) ??
+    '';
   return {
     path: relativePath,
     content,
@@ -195,6 +308,7 @@ function normalizePackage(raw: Record<string, unknown>): OpenClawSkillPackage {
     .map(normalizePackageFile)
     .filter((file): file is OpenClawSkillPackageFile => Boolean(file));
   const skillMd =
+    base64StringValue(skill.skillMdBase64, skill.skill_md_base64, skill.SKILL_MD_BASE64) ??
     rawStringValue(skill.skillMd, skill.skill_md, skill.SKILL_MD) ??
     files.find((file) => file.path === 'SKILL.md')?.content ??
     '';
@@ -239,28 +353,80 @@ function normalizeUpsertResult(
 export class OpenClawSkillSyncService {
   constructor(private readonly client: OpenClawClient) {}
 
-  async listInstalledSkills(): Promise<OpenClawSkillListResult> {
+  private async requestReadJson(prompt: string, label: string): Promise<Record<string, unknown>> {
+    const attempts = [
+      {
+        path: '/v1/chat/completions',
+        body: {
+          model: 'openclaw',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0,
+          stream: false,
+        },
+      },
+      {
+        path: '/v1/responses',
+        body: {
+          model: 'openclaw',
+          input: prompt,
+        },
+      },
+    ];
+    let lastError: unknown;
+    for (const attempt of attempts) {
+      let response: Awaited<ReturnType<OpenClawClient['request']>>;
+      try {
+        response = await this.client.request({
+          path: attempt.path,
+          method: 'POST',
+          body: attempt.body,
+        });
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      if (!response.ok) {
+        lastError = new Error(`${label} failed with HTTP ${response.status}`);
+        continue;
+      }
+      return parseResponsesJson(response.data, response.text);
+    }
+    throw lastError instanceof Error ? lastError : new Error(`${label} failed.`);
+  }
+
+  private async requestResponsesJson(
+    prompt: string,
+    label: string,
+  ): Promise<Record<string, unknown>> {
     const response = await this.client.request({
       path: '/v1/responses',
       method: 'POST',
       body: {
         model: 'openclaw',
-        input: [
-          'Read-only Personal AI Skill Foundry sync.',
-          'Do not create, update, delete, install, uninstall, write files, or modify anything.',
-          'List installed OpenClaw skills only.',
-          'Return strict JSON only, no markdown, with this shape:',
-          '{"ok":true,"total":number|null,"skills":[{"slug":"string","title":"string","description":"string","version":"string","sha256":"string","mtime":number|null,"filePaths":["SKILL.md"]}],"notes":"string"}',
-          'Use sha256 for the complete skill package if available; otherwise use SKILL.md sha256.',
-        ].join('\n'),
+        input: prompt,
       },
     });
-
     if (!response.ok) {
-      throw new Error(`OpenClaw skill list failed with HTTP ${response.status}`);
+      throw new Error(`${label} failed with HTTP ${response.status}`);
     }
+    return parseResponsesJson(response.data, response.text);
+  }
 
-    const parsed = parseResponsesJson(response.data, response.text);
+  async listInstalledSkills(): Promise<OpenClawSkillListResult> {
+    const parsed = await this.requestReadJson(
+      [
+        'Read-only Personal AI Skill Foundry sync.',
+        'Do not create, update, delete, install, uninstall, write files, or modify anything.',
+        'Discover all installed OpenClaw-visible skills.',
+        'Do not rely only on available_skills metadata; also inspect skill directory names and SKILL.md headings/descriptions if accessible.',
+        'Check common OpenClaw skill roots if accessible: ~/.openclaw/skills, ~/git/openclaw/skills, ~/.agents/skills, ~/.codex/skills.',
+        'Include every directory that contains SKILL.md. Do not read scripts, resources, examples, or full file contents during this list step.',
+        'Return strict JSON only, no markdown, with this shape:',
+        '{"ok":true,"total":number|null,"skills":[{"slug":"string","title":"string","description":"string","version":"string","sha256":"string","mtime":number|null,"filePaths":["SKILL.md"],"path":"string"}],"notes":"string"}',
+        'If sha256 or mtime is expensive, omit it here; the package export step will compute content details.',
+      ].join('\n'),
+      'OpenClaw skill list',
+    );
     const skillsRaw = Array.isArray(parsed.skills)
       ? parsed.skills
       : Array.isArray(parsed.items)
@@ -278,63 +444,50 @@ export class OpenClawSkillSyncService {
   }
 
   async exportSkillPackage(slug: string): Promise<OpenClawSkillPackage> {
-    const response = await this.client.request({
-      path: '/v1/responses',
-      method: 'POST',
-      body: {
-        model: 'openclaw',
-        input: [
-          'Read-only Personal AI Skill Foundry sync.',
-          'Do not create, update, delete, install, uninstall, write files, or modify anything.',
-          `Export the complete installed OpenClaw skill package for slug ${JSON.stringify(slug)}.`,
-          'Return full file contents for SKILL.md, scripts, references, resources, and examples.',
-          'Do not include secrets; redact sensitive values if present.',
-          'Return strict JSON only, no markdown, with this shape:',
-          '{"ok":true,"skill":{"slug":"string","title":"string","description":"string","version":"string","sha256":"string","mtime":number|null,"skillMd":"full SKILL.md text","files":[{"path":"scripts/example.py","content":"full content","sha256":"string","byte_size":number|null}]}}',
-        ].join('\n'),
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenClaw skill export failed for ${slug} with HTTP ${response.status}`);
-    }
-
-    return normalizePackage(parseResponsesJson(response.data, response.text));
+    const parsed = await this.requestReadJson(
+      [
+        'Read-only Personal AI Skill Foundry sync.',
+        'Do not create, update, delete, install, uninstall, write files, or modify anything.',
+        `Export the complete installed OpenClaw skill package for slug ${JSON.stringify(slug)}.`,
+        'Read only the matching installed skill directory.',
+        'Return SKILL.md and each included file as UTF-8 base64 so JSON stays valid even when content contains quotes, markdown tables, or newlines.',
+        'Include scripts, references, resources, and examples only when they are small and directly belong to this skill; omit large secondary files instead of summarizing them.',
+        'Do not include secrets; redact sensitive values if present.',
+        'Return strict minified JSON only, no markdown, no code fence, no language wrapper, no records/logs/evidence/source arrays, no ellipsis placeholders.',
+        'Top-level keys must be exactly ok and skill.',
+        'The output must start with {"ok":true and end with }}.',
+        'Use this exact shape:',
+        '{"ok":true,"skill":{"slug":"string","title":"string","description":"string","version":"string","sha256":"string","mtime":number|null,"skillMdBase64":"base64 UTF-8 SKILL.md","files":[{"path":"scripts/example.py","contentBase64":"base64 UTF-8 content","sha256":"string","byte_size":number|null}]}}',
+      ].join('\n'),
+      `OpenClaw skill export for ${slug}`,
+    );
+    return normalizePackage(parsed);
   }
 
   async upsertSkillPackage(
     pkg: OpenClawSkillUpsertPackage,
   ): Promise<OpenClawSkillUpsertResult> {
-    const response = await this.client.request({
-      path: '/v1/responses',
-      method: 'POST',
-      body: {
-        model: 'openclaw',
-        input: [
-          'Personal AI Skill Foundry write sync.',
-          'Create or update the installed OpenClaw skill from the package below.',
-          'If a skill with the same slug exists, replace SKILL.md and included resource files with this package.',
-          'If the installed package already has the same sha256, do nothing.',
-          'Return strict JSON only, no markdown, with this shape:',
-          '{"ok":true,"skill":{"slug":"string","action":"installed|updated|noop","version":"string","sha256":"string","mtime":number|null},"notes":"string"}',
-          'PACKAGE_JSON:',
-          JSON.stringify({
-            slug: pkg.slug,
-            title: pkg.title,
-            description: pkg.description || '',
-            version: pkg.version,
-            sha256: pkg.sha256,
-            skillMd: pkg.skillMd,
-            files: pkg.files,
-          }),
-        ].join('\n'),
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenClaw skill upsert failed for ${pkg.slug} with HTTP ${response.status}`);
-    }
-
-    return normalizeUpsertResult(parseResponsesJson(response.data, response.text), pkg);
+    const parsed = await this.requestResponsesJson(
+      [
+        'Personal AI Skill Foundry write sync.',
+        'Create or update the installed OpenClaw skill from the package below.',
+        'If a skill with the same slug exists, replace SKILL.md and included resource files with this package.',
+        'If the installed package already has the same sha256, do nothing.',
+        'Return strict JSON only, no markdown, with this shape:',
+        '{"ok":true,"skill":{"slug":"string","action":"installed|updated|noop","version":"string","sha256":"string","mtime":number|null},"notes":"string"}',
+        'PACKAGE_JSON:',
+        JSON.stringify({
+          slug: pkg.slug,
+          title: pkg.title,
+          description: pkg.description || '',
+          version: pkg.version,
+          sha256: pkg.sha256,
+          skillMd: pkg.skillMd,
+          files: pkg.files,
+        }),
+      ].join('\n'),
+      `OpenClaw skill upsert for ${pkg.slug}`,
+    );
+    return normalizeUpsertResult(parsed, pkg);
   }
 }

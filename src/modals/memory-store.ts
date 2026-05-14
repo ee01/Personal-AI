@@ -794,11 +794,20 @@ export const useMemoryStore = defineStore('memory', () => {
           },
           unreadDiscussions: [
             {
+              messageId: 'msg-1',
               text: '张三分享了GPT-4 API的Token优化策略,可以减少30%成本',
               time: '30分钟前',
             },
-            { text: '李四提出了自动化测试框架的新方案', time: '1小时前' },
-            { text: 'AI工作流中异常处理的最佳实践讨论', time: '2小时前' },
+            {
+              messageId: 'msg-2',
+              text: '李四提出了自动化测试框架的新方案',
+              time: '1小时前',
+            },
+            {
+              messageId: 'msg-3',
+              text: 'AI工作流中异常处理的最佳实践讨论',
+              time: '2小时前',
+            },
           ],
           recentDataDetails: {
             conversations: [
@@ -895,9 +904,21 @@ export const useMemoryStore = defineStore('memory', () => {
             lastUpdateTime: Date.now() - 7200000,
           },
           unreadDiscussions: [
-            { text: 'React 18并发模式实战经验分享', time: '2小时前' },
-            { text: 'Webpack Bundle分析工具对比', time: '3小时前' },
-            { text: '图片懒加载优化方案讨论', time: '4小时前' },
+            {
+              messageId: 'msg-3',
+              text: 'React 18并发模式实战经验分享',
+              time: '2小时前',
+            },
+            {
+              messageId: 'msg-4',
+              text: 'Webpack Bundle分析工具对比',
+              time: '3小时前',
+            },
+            {
+              messageId: 'msg-frontend-lazyload',
+              text: '图片懒加载优化方案讨论',
+              time: '4小时前',
+            },
           ],
           recentDataDetails: {
             conversations: [
@@ -1716,7 +1737,7 @@ export const useMemoryStore = defineStore('memory', () => {
       ],
       conversations: [
         {
-          id: 'conv-1',
+          id: 'msg-1',
           sender: '张三',
           group: '技术讨论组',
           time: '30分钟前',
@@ -1741,7 +1762,7 @@ export const useMemoryStore = defineStore('memory', () => {
           ],
         },
         {
-          id: 'conv-2',
+          id: 'msg-2',
           sender: '李四',
           group: '产品团队',
           time: '2小时前',
@@ -1766,7 +1787,7 @@ export const useMemoryStore = defineStore('memory', () => {
           ],
         },
         {
-          id: 'conv-3',
+          id: 'msg-3',
           sender: '王五',
           group: 'AI研发团队',
           time: '4小时前',

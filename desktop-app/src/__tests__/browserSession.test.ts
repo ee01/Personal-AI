@@ -149,3 +149,46 @@ test('probeAuthStatus returns needs_login after the browser was manually closed'
   assert.equal(session.page, null);
   assert.ok(session.context);
 });
+
+test('post-send inspection requires a new visible message occurrence', async () => {
+  const session = createSession() as any;
+  const transcript = '请把以下长期稳定信息存入随手记：测试偏好';
+  const probe = transcript.replace(/\s+/g, ' ').trim().slice(0, 24);
+  const bodyText = `历史消息：${probe}：旧内容`;
+
+  session.page = {
+    evaluate: async () => bodyText,
+  };
+
+  const result = await session.inspectPostSend(transcript, 1);
+
+  assert.equal(result.visibleMatchCount, 1);
+  assert.equal(result.messageVisible, false);
+});
+
+test('post-send verification waits until a new visible message appears', async () => {
+  const session = createSession() as any;
+  const transcript = '请把以下长期稳定信息存入随手记：新的同步内容';
+  const probe = transcript.replace(/\s+/g, ' ').trim().slice(0, 24);
+  const bodySequence = [
+    `历史消息：${probe}：旧内容`,
+    `历史消息：${probe}：旧内容`,
+    `历史消息：${probe}：旧内容\n本次消息：${probe}：新的同步内容`,
+  ];
+  let waits = 0;
+
+  session.page = {
+    evaluate: async () =>
+      bodySequence.shift() ??
+      `历史消息：${probe}：旧内容\n本次消息：${probe}：新的同步内容`,
+    waitForTimeout: async () => {
+      waits += 1;
+    },
+  };
+
+  const result = await session.waitForPostSend(transcript, 1);
+
+  assert.equal(result.visibleMatchCount, 2);
+  assert.equal(result.messageVisible, true);
+  assert.equal(waits, 2);
+});

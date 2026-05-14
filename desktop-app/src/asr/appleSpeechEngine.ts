@@ -1,4 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import {
+  execFile,
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,20 +67,24 @@ export class AppleSpeechPcmSession {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const session = new AppleSpeechPcmSession(child);
-    await session.waitFor((event) => event.type === 'ready', 1500);
-    session.send({
-      command: 'pcm_start',
-      locale: locale || 'en-US',
-      localOnly: true,
-      sampleRate: 16000,
-    });
-    const event = await session.waitFor(
-      (item) => item.type === 'started' || item.type === 'error',
-      2500,
-    );
-    if (event.type === 'error') {
+    try {
+      await session.waitFor((event) => event.type === 'ready', 1500);
+      session.send({
+        command: 'pcm_start',
+        locale: locale || 'en-US',
+        localOnly: true,
+        sampleRate: 16000,
+      });
+      const event = await session.waitFor(
+        (item) => item.type === 'started' || item.type === 'error',
+        2500,
+      );
+      if (event.type === 'error') {
+        throw new Error(event.code || event.message || 'apple_speech_start_failed');
+      }
+    } catch (error) {
       session.close();
-      throw new Error(event.code || event.message || 'apple_speech_start_failed');
+      throw error;
     }
     return session;
   }
@@ -111,9 +119,20 @@ export class AppleSpeechPcmSession {
     if (this.closed) return;
     this.send({ command: 'shutdown' });
     this.closed = true;
+    this.rejectWaiters(new Error('apple_speech_session_closed'));
+    if (this.child.stdin.writable) {
+      try {
+        this.child.stdin.end();
+      } catch {
+        // The helper may already have exited.
+      }
+    }
     setTimeout(() => {
       if (!this.child.killed) this.child.kill('SIGTERM');
-    }, 200).unref?.();
+    }, 300).unref?.();
+    setTimeout(() => {
+      if (!this.child.killed) this.child.kill('SIGKILL');
+    }, 1500).unref?.();
   }
 
   private send(payload: Record<string, unknown>): void {
@@ -189,6 +208,33 @@ export function getAppleSpeechAvailability(): AppleSpeechAvailability {
   return { supported: true, ready: true, helperPath };
 }
 
+export async function cleanupOrphanedAppleSpeechHelpers(): Promise<number> {
+  if (process.platform !== 'darwin') return 0;
+  const helperPath = getSpeechHelperPath();
+  if (!helperPath) return 0;
+  const processList = await execFileText('ps', [
+    '-axo',
+    'pid=,ppid=,command=',
+  ]).catch(() => '');
+  let killed = 0;
+  for (const line of processList.split('\n')) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const command = match[3] || '';
+    if (!Number.isFinite(pid) || pid <= 0 || ppid !== 1) continue;
+    if (!command.startsWith(helperPath)) continue;
+    try {
+      process.kill(pid, 'SIGTERM');
+      killed += 1;
+    } catch {
+      // The process may already have exited.
+    }
+  }
+  return killed;
+}
+
 function getSpeechHelperPath(): string | undefined {
   const currentFile = fileURLToPath(import.meta.url);
   const desktopAppRoot = resolve(dirname(currentFile), '..', '..');
@@ -210,5 +256,17 @@ function getSpeechHelperPath(): string | undefined {
 function wait(ms: number): Promise<void> {
   return new Promise((resolveWait) => {
     setTimeout(resolveWait, ms);
+  });
+}
+
+function execFileText(command: string, args: string[]): Promise<string> {
+  return new Promise((resolveExec, rejectExec) => {
+    execFile(command, args, { maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
+      if (error) {
+        rejectExec(error);
+        return;
+      }
+      resolveExec(String(stdout));
+    });
   });
 }

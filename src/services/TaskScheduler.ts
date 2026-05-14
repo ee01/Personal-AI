@@ -54,6 +54,8 @@ export interface ScheduledTaskStatus extends ScheduledTask {
     | 'scheduled'
     | 'missing_alarm'
     | 'period_mismatch'
+    | 'overdue'
+    | 'repair_failed'
     | 'disabled';
   scheduleWarning?: string;
 }
@@ -82,6 +84,8 @@ interface TaskStatusOptions {
 }
 
 const TASK_RUN_HISTORY_LIMIT = 5;
+const MIN_ALARM_OVERDUE_GRACE_MS = 5 * 60 * 1000;
+const MAX_ALARM_OVERDUE_GRACE_MS = 30 * 60 * 1000;
 
 function getTaskErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
@@ -93,11 +97,33 @@ function getTaskErrorMessage(error: unknown): string {
   return '未知错误';
 }
 
+function getAlarmOverdueGraceMs(task: ScheduledTask): number {
+  return Math.min(
+    Math.max(task.intervalMinutes * 60 * 1000, MIN_ALARM_OVERDUE_GRACE_MS),
+    MAX_ALARM_OVERDUE_GRACE_MS,
+  );
+}
+
+function getAlarmOverdueMs(
+  task: ScheduledTask,
+  alarm: chrome.alarms.Alarm,
+): number {
+  return Date.now() - alarm.scheduledTime - getAlarmOverdueGraceMs(task);
+}
+
+function isAlarmOverdue(
+  task: ScheduledTask,
+  alarm: chrome.alarms.Alarm,
+): boolean {
+  return getAlarmOverdueMs(task, alarm) > 0;
+}
+
 export class TaskScheduler {
   private static instance: TaskScheduler | null = null;
   private tasks: Map<string, ScheduledTask> = new Map();
   private alarmListeners: Set<string> = new Set();
   private runningTasks: Set<string> = new Set();
+  private scheduleRepairErrors: Map<string, string> = new Map();
   private startPromise: Promise<void> | null = null;
   public isInitialized = false; // 改为 public，方便 background.ts 检查状态
   private storageChangeListener:
@@ -374,6 +400,7 @@ export class TaskScheduler {
     }
 
     task.nextRun = createdAlarm.scheduledTime;
+    this.scheduleRepairErrors.delete(task.id);
 
     console.log(
       `⏰ 创建定时任务: ${task.name} (${task.intervalMinutes}分钟间隔)`,
@@ -394,13 +421,29 @@ export class TaskScheduler {
    * 确保所有启用的任务都有对应的 alarm
    * 采用 Chrome 官方推荐的方式：基于 Storage 状态检查并创建 alarms
    */
-  private async ensureAlarmsCreated(): Promise<void> {
+  private async ensureAlarmsCreated({
+    throwOnError = false,
+  }: { throwOnError?: boolean } = {}): Promise<void> {
     console.log('🔍 检查并确保所有任务的定时器已创建...');
+
+    await this.clearOrphanedTaskAlarms();
 
     for (const [taskId, task] of Array.from(this.tasks.entries())) {
       const alarmName = `scheduled_task_${taskId}`;
 
-      if (task.enabled) {
+      if (!task.enabled) {
+        // 任务已禁用，确保 alarm 被清除
+        const existingAlarm = await this.getAlarm(alarmName);
+        if (existingAlarm) {
+          console.log(`🗑️ 清除已禁用任务的定时器: ${task.name}`);
+          await this.clearAlarm(alarmName);
+        }
+        task.nextRun = undefined;
+        this.scheduleRepairErrors.delete(taskId);
+        continue;
+      }
+
+      try {
         // 检查 alarm 是否存在
         const existingAlarm = await this.getAlarm(alarmName);
 
@@ -417,20 +460,36 @@ export class TaskScheduler {
         } else {
           // alarm 存在且配置正确
           task.nextRun = existingAlarm.scheduledTime;
+          this.scheduleRepairErrors.delete(taskId);
           console.log(`✅ 定时器已存在: ${task.name}`);
         }
-      } else {
-        // 任务已禁用，确保 alarm 被清除
-        const existingAlarm = await this.getAlarm(alarmName);
-        if (existingAlarm) {
-          console.log(`🗑️ 清除已禁用任务的定时器: ${task.name}`);
-          await this.clearAlarm(alarmName);
+      } catch (error) {
+        const errorMessage = getTaskErrorMessage(error);
+        this.scheduleRepairErrors.set(taskId, errorMessage);
+        await this.refreshTaskNextRun(task);
+        console.error(`❌ 修复任务 ${task.name} 的定时器失败:`, error);
+        if (throwOnError) {
+          throw error;
         }
-        task.nextRun = undefined;
       }
     }
 
     console.log('✅ 定时器检查完成');
+  }
+
+  private async clearOrphanedTaskAlarms(): Promise<void> {
+    const knownTaskIds = new Set(this.tasks.keys());
+    const existingAlarms = await this.getExistingAlarms();
+
+    for (const alarm of existingAlarms) {
+      const taskId = alarm.name.replace('scheduled_task_', '');
+      if (knownTaskIds.has(taskId)) {
+        continue;
+      }
+
+      console.warn(`🧹 清理未知任务的残留定时器: ${alarm.name}`);
+      await this.clearAlarm(alarm.name);
+    }
   }
 
   /**
@@ -522,7 +581,8 @@ export class TaskScheduler {
       console.log(`⚡ 执行定时任务: ${task.name}`);
       await this.executeTask(task, 'scheduled');
     } else {
-      console.warn(`⚠️ 未找到任务: ${taskId}`);
+      console.warn(`⚠️ 未找到任务: ${taskId}，清理残留定时器`);
+      await this.clearAlarm(alarm.name);
     }
   }
 
@@ -1113,11 +1173,15 @@ export class TaskScheduler {
     return Array.from(this.tasks.values()).map((task) => {
       const alarmName = `scheduled_task_${task.id}`;
       const alarm = alarmByName?.get(alarmName);
+      const repairError = this.scheduleRepairErrors.get(task.id);
       let scheduleHealth: ScheduledTaskStatus['scheduleHealth'] = 'disabled';
       let scheduleWarning: string | undefined;
 
       if (task.enabled) {
-        if (alarmByName && !alarm) {
+        if (repairError) {
+          scheduleHealth = 'repair_failed';
+          scheduleWarning = `Chrome alarm 修复失败：${repairError}`;
+        } else if (alarmByName && !alarm) {
           scheduleHealth = 'missing_alarm';
           scheduleWarning = '任务已启用，但未找到对应的 Chrome alarm';
         } else if (alarm && alarm.periodInMinutes !== task.intervalMinutes) {
@@ -1125,6 +1189,13 @@ export class TaskScheduler {
           scheduleWarning = `任务间隔为 ${
             task.intervalMinutes
           } 分钟，Chrome alarm 仍为 ${alarm.periodInMinutes ?? '一次性'} 排程`;
+        } else if (alarm && isAlarmOverdue(task, alarm)) {
+          const overdueMinutes = Math.max(
+            1,
+            Math.round(getAlarmOverdueMs(task, alarm) / 60_000),
+          );
+          scheduleHealth = 'overdue';
+          scheduleWarning = `Chrome alarm 已超过预期触发时间 ${overdueMinutes} 分钟，建议手动执行或重新启用排程`;
         } else {
           scheduleHealth = 'scheduled';
         }
@@ -1188,6 +1259,46 @@ export class TaskScheduler {
       }`,
     );
     return true;
+  }
+
+  /**
+   * 修复/重排单个任务的 Chrome alarm。
+   * 用于 popup 对过期、丢失或间隔不一致的排程提供一键恢复入口。
+   */
+  public async repairTaskSchedule(taskId: string): Promise<boolean> {
+    if (!this.isInitialized) {
+      console.log(`⚠️ 任务调度器未初始化，先启动后再修复排程: ${taskId}`);
+      await this.startAllTasks();
+    }
+
+    const task = this.tasks.get(taskId);
+    if (!task) {
+      console.error(`❌ 任务不存在: ${taskId}`);
+      return false;
+    }
+
+    const alarmName = `scheduled_task_${taskId}`;
+    if (!task.enabled) {
+      await this.clearAlarm(alarmName);
+      task.nextRun = undefined;
+      await this.saveTaskStates();
+      console.log(`ℹ️ 任务 ${task.name} 已停用，无需修复排程`);
+      return true;
+    }
+
+    try {
+      await this.createTaskAlarm(task);
+      await this.saveTaskStates();
+      console.log(`✅ 任务 ${task.name} 排程已修复`);
+      Logger.task(task.id, true, `${task.name} 排程已修复`, {
+        category: task.category,
+      });
+      return true;
+    } catch (error) {
+      await this.refreshTaskNextRun(task);
+      await this.saveTaskStates();
+      throw error;
+    }
   }
 
   /**

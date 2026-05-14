@@ -5,22 +5,22 @@ alwaysApply: false
 ---
 # Jira 设计链接显示功能
 
-*最后更新: 2026-05-07*
+*最后更新: 2026-05-14*
 
 ## 功能概述
 
-Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设计入口，让开发、测试、PM 不需要在 description、Jira Designs/remote links、linked issues、Epic、Parent ticket 之间来回查找。当前实现覆盖 Figma、FigJam、Miro、Loom、Google Slides 和 UX 项目 ticket 上维护的设计链接，同时展示 UX Epic 状态和 ETA 信息。
+Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设计入口，让开发、测试、PM 不需要在 description、Jira 原生 Designs 区块、remote links、linked issues、Epic、Parent ticket 之间来回查找。当前实现覆盖 Figma、FigJam、Miro、Loom、Google Slides 和 UX 项目 ticket 上维护的设计链接，并在 Jira summary 下方用紧凑面板先给出开工判定，再展示可行动设计状态、UX Epic 状态和 ETA。
 
 ## 主要功能
 
-1. **多渠道检测**：从 description、Jira remote links、当前 ticket linked issues、Epic、Parent ticket 中收集设计相关入口。
-2. **可配置 UX 项目识别**：默认使用 `UX*` 前缀模式，也支持通过 `DESIGN_JIRA_PROJECT` 改为 `UX` 这类精确匹配。
-3. **自定义设计域名识别**：通过 `DESIGN_LINK_DOMAINS` 补充内部原型、设计系统或交付站点域名。
+1. **多渠道检测**：从 description、Jira 原生 Designs 区块、Jira remote links、当前 ticket linked issues、Epic、Parent ticket 中收集设计相关入口。
+2. **可配置 UX 项目识别**：默认使用 `UX*` 前缀模式，也支持通过 `DESIGN_JIRA_PROJECT` 改为 `UX` 这类精确匹配；配置会自动处理首尾空格和大小写差异。
+3. **自定义设计域名识别**：通过 `DESIGN_LINK_DOMAINS` 补充内部原型、设计系统或交付站点域名；精确域名只匹配该 host，`*.example.com` 只匹配子域名。
 4. **层级关联分析**：Epic 和非 Epic ticket 都会尝试向上查找相关 UX ticket。
-5. **稳定展示**：在 Jira summary 下方展示带总数和状态摘要的紧凑面板，长标题会截断，标签会换行，hover 不会改变面板位置或挤压页面内容；Jira SPA 切换到无设计链接的 ticket 或非 ticket 页面时会清理旧面板。
+5. **稳定展示**：在 Jira summary 下方展示紧凑面板，长标题会截断，标签会换行，面板会按实际内容高度自适应，hover 效果与 Backend ETA 卡片保持一致且不挤压页面内容；Jira SPA 切换到无设计链接的 ticket、带尾斜杠的 ticket URL 或非 ticket 页面时会正确识别并清理旧面板。
 6. **状态补充**：对 UX ticket 额外显示 UX Epic、Epic 状态和 ETA（due date 或 fixVersion），对 Jira remote link/UX ticket 设计链接显示可用的设计状态；`ready_for_development`、`not_ready_for_dev` 这类机器状态会显示成人可读标签并映射到正确状态色。
-7. **可行动优先级**：优先展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的设计入口，并用状态色减少扫描成本；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
-8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态并把该项排在普通链接之前，避免开发者误以为没有设计依赖。
+7. **可行动优先级**：优先展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的设计入口，并用开工判定和可点击状态摘要减少扫描成本；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
+8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态和 UX ticket key，但不展示设计 ticket 标题，并把该项排在普通链接之前，避免开发者误以为没有设计依赖。
 9. **安全和去重**：只接受 http/https 设计链接，过滤重复设计链接/UX 链接，并保留合并后的来源标签。
 
 ## 使用方法
@@ -38,11 +38,11 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 
 例如：
 - `[icon] Design Figma design ↗ [Description]`
-- `[header] Design context [6 links] [1 ready · 2 missing · 1 not ready]`
+- `[decision] Missing design links 2 UX tickets need design links before implementation`
 - `[icon] Design Ready checkout prototype ↗ [Ready for development] [Remote link]`
 - `[icon] Design Draft onboarding walkthrough ↗ [Not ready for dev] [Remote link]`
 - `[icon] Design UX-12345 页面设计稿 ↗ UX-12345 UXE-88 In Progress ETA: 2026-05-10 [Epic link]`
-- `[icon] Design link missing Missing UX spec (UX-12345) [Missing link] UXE-88 In Progress [Parent child]`
+- `[icon] Design UX-12345 [Missing link] UXE-88 In Progress [Parent child]`
 
 ## 检测逻辑
 
@@ -51,7 +51,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 - 识别 Figma/FigJam、Miro、Loom、Google Slides 等设计或交付相关链接
 - 支持 `DESIGN_LINK_DOMAINS` 中配置的内部设计/原型域名
 - 支持链接元素和文本中的URL提取
-- 链接元素会优先使用有意义的锚文本作为展示标题，例如 “Checkout mobile handoff”；`the design`、`click here` 这类弱标题会回退为工具名称
+- 链接元素会优先使用有意义的锚文本、`title` 或 `aria-label` 作为展示标题，例如 “Checkout mobile handoff”；`the design`、`click here` 这类弱标题会回退为工具名称
 - 自动去掉文本 URL 末尾常见标点，避免把 `),` 等字符带入链接
 
 ### 2. Jira Remote Links 扫描
@@ -60,12 +60,16 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 - 如果 remote link 提供状态标题，会作为短标签展示
 - 远程状态会兼容 `icon.title`、`status/name/value` 和 `ready_for_development` 这类机器值，避免 Jira Designs 状态落到 Neutral
 
-### 3. Linked Issues 分析
+### 3. Jira 原生 Designs 区块扫描
+- 当 Jira 页面本身已经渲染 Designs/Figma 设计卡片时，会直接从该区块读取设计链接、卡片标题和常见状态标签。
+- 这个入口不依赖 remote link API，能在 API 被权限、编辑态安全策略或 Jira 集成差异阻塞时继续保留页面上已经可见的设计上下文。
+
+### 4. Linked Issues 分析
 - 从DOM中直接提取Issue Links部分
 - 筛选UX开头的相关tickets
 - 获取对应的summary信息
 
-### 4. Epic 层级分析
+### 5. Epic 层级分析
 - **当前票为Epic时**：
   - 直接从Epic中查找UX related issues
   - 检查Epic的Parent Link下的UX tickets
@@ -73,7 +77,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
   - 查找上级Epic的UX linked issues
   - 通过Epic的Parent Link查找相关UX tickets
 
-### 5. API 数据获取
+### 6. API 数据获取
 - 调用Jira REST API获取ticket详细信息
 - 提取UX tickets的customfield_21233字段（设计链接）
 - 读取 Jira remote links，作为比 description 更结构化的设计来源
@@ -135,6 +139,7 @@ interface FigmaLink {
 |------|------|
 | `description` | 从 ticket 描述中提取的设计链接 |
 | `remote_link` | 从 Jira remote links / Designs / Web Links 中提取的设计链接 |
+| `jira_designs` | 从 Jira 页面已渲染的原生 Designs 区块中提取的设计链接 |
 | `design_field` | 从 UX ticket 设计链接字段中提取的链接 |
 | `linked_issues` | 从当前页面 Issue Links 中提取的 UX tickets |
 | `epic_subtask` | 从Epic的subtask中提取的UX tickets |
@@ -148,9 +153,9 @@ interface FigmaLink {
 
 ### 基本样式
 - 使用浅灰背景和 Atlassian 风格蓝色链接，尽量贴近 Jira 页面本身。
-- 面板不再依赖 hover 展开，也不会通过动画位移挤压页面。
-- 面板顶部展示 `Design context`、链接总数和非中性状态摘要，帮助多链接 ticket 快速扫读。
-- 每个链接项包含 Personal AI 图标、设计入口、UX ticket、设计状态、UX Epic 状态、ETA 和来源标签；缺失设计链接时展示 UX ticket summary，方便判断是否需要补链。
+- 面板 hover 使用与 Backend ETA 卡片一致的轻微浮动和 footer 展开效果，不挤压页面内容。
+- 面板在链接列表上方展示一行开工判定和状态摘要芯片；用户可以先看到 `Missing design links` / `Review design updates` / `Ready for dev` 等判定，再点击判定或芯片定位到第一条对应设计入口。
+- 每个链接项包含 Personal AI 图标、设计入口、UX ticket、设计状态、UX Epic 状态、ETA 和来源标签；缺失设计链接时只展示 UX ticket key 和 `Missing link` 状态，避免设计 ticket 标题占据扫描空间。
 - Jira/Figma 的设计状态会按 tone 展示：Ready for dev、Design updated、Missing link、Not ready、Blocked、Review、Done、Neutral；Ready/Updated/Missing/Not ready 等更需要处理的入口会排在普通 description 链接前面。
 - 重复链接合并时会优先保留 Jira remote link / Designs 提供的结构化标题和状态，UX ticket 行也会优先展示具体设计名，避免 description 或工具默认名覆盖真正可行动的设计状态。
 
@@ -176,16 +181,16 @@ interface FigmaLink {
 - API调用失败的降级处理
 - DOM元素不存在时的兜底逻辑
 - DOM 等待超时后继续扫描已存在内容，避免 optional 字段缺失阻塞 description 链接展示
-- 扩展配置读取会对 background 响应做超时降级，避免 service worker 未响应时阻塞 Jira 面板渲染
+- 扩展配置读取会做总超时降级，避免 storage 或 service worker 未响应时阻塞 Jira 面板渲染
+- 设计链接相关 Jira API 只做只读 GET；配置 token 已读取后会显式传入请求，没有 token 时直接走 cookie GET，避免重复配置读取拖慢面板
 - 异步扫描会在 Jira SPA 页面切换后中止后续 DOM 读取；离开 ticket 页面会立即清理设计链接和 Backend Progress 面板，避免旧信息残留
 
 ## 浏览器兼容性
 
 ### 支持的浏览器
-- Chrome 88+
-- Edge 88+
-- Firefox 78+
-- Safari 14+
+- 当前主要作为 Chrome / Chromium 扩展验证。
+- Edge Chromium 理论上兼容同一 content script 路径。
+- Firefox / Safari 未作为当前验证目标，不在本功能交付范围内承诺。
 
 ### 依赖的Web API
 - Fetch API (Jira REST API调用)
@@ -212,7 +217,11 @@ const PARENT_LINK_FIELD = 'customfield_15751';
 prototype.example.com, *.design.example.com
 ```
 
-这些域名只用于 description 和 Jira remote links 的补充识别。UX ticket 设计链接字段仍允许任意 http/https 链接，以兼容团队内部维护的交付入口。
+这些域名只用于 description、Jira 原生 Designs 区块和 Jira remote links 的补充识别。UX ticket 设计链接字段仍允许任意 http/https 链接，以兼容团队内部维护的交付入口。
+
+匹配语义：
+- `prototype.example.com` 只匹配这个精确 host。
+- `*.design.example.com` 匹配 `flow.design.example.com` 等子域名，不匹配裸域 `design.example.com`。
 
 ### 等待超时设置
 ```typescript
@@ -283,9 +292,17 @@ const PAGE_CHANGE_DELAY = 1000;
 14. 配置读取增加 background 超时降级，防止扩展 service worker 异常时阻塞设计链接展示
 15. Jira SPA 切到没有设计链接的 ticket 时会移除旧面板，避免误导用户
 16. 支持 `DESIGN_LINK_DOMAINS` 自定义内部设计/原型域名
-17. 默认 UX 项目识别使用 `UX*`，空配置也会覆盖 `UXDES-123` 这类 UX 前缀项目
-18. 面板 hover 后保持原位，缺失链接行直接显示 UX ticket summary，减少扫描和误点成本
+17. 默认 UX 项目识别使用 `UX*`，空配置也会覆盖 `UXDES-123` 这类 UX 前缀项目；配置输入支持大小写和首尾空格容错
+18. 面板整体样式和 hover 效果与 Backend ETA 卡片保持一致；缺失链接行不展示设计 ticket 标题，减少扫描噪音
 19. 设计状态解析避免把 `Not ready for dev`、`Draft`、`Ready for review` 误标成绿色 Ready，降低错误开工风险
+20. 额外设计域名区分精确 host 与通配子域，避免把 `prototype.example.com` 意外放宽成所有子域
+21. 状态摘要芯片会把 Ready / Updated / Missing / Not ready 等有行动意义的入口先聚合展示，适合开发者快速判断是否能开工
+22. Description 中弱锚文本会回退检查 `title` 和 `aria-label`，避免 Jira Smart Link 或 “the design” 这类文本掩盖真实设计名
+23. Jira `/browse/KEY/` 这类带尾斜杠 URL 会按正确 issue key 处理，避免 API 请求空 key 或 SPA 陈旧面板
+24. 状态摘要芯片可点击定位并短暂高亮第一条对应设计入口，让开发者从 `missing` / `updated` 直接跳到需要处理的项
+25. 面板顶部增加开工判定行，并按实际内容高度更新 `max-height`，避免状态摘要或判定文案换行后与 footer 重叠
+26. Jira 设计链接配置读取增加总超时兜底；配置异常时仍用默认 `UX*` 继续渲染可见设计上下文
+27. Jira 设计链接的只读 API 请求复用已读取 token；无 token 时直接走 cookie GET，避免二次配置读取或编辑态检查阻塞设计面板
 
 ### 未来增强计划 🔄
 1. 在权限允许时展示轻量预览或缩略图，减少打开外部工具的次数。
@@ -297,8 +314,12 @@ const PAGE_CHANGE_DELAY = 1000;
 - [Jira REST API v2文档](https://developer.atlassian.com/cloud/jira/platform/rest/v2/)
 - [Jira Remote Issue Links REST API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-remote-links/)
 - [Atlassian + Figma integration](https://www.atlassian.com/partnerships/figma)
+- [Atlassian Jira automation design triggers](https://support.atlassian.com/cloud-automation/docs/jira-automation-triggers/)
 - [Figma Jira integration help](https://help.figma.com/hc/en-us/articles/360039827834-Jira-and-Figma)
+- [Figma Dev Mode statuses and notifications](https://help.figma.com/hc/en-us/articles/26781702258583-Dev-Mode-statuses-and-notifications)
 - [Figma Dev Mode plugin docs](https://developers.figma.com/docs/plugins/working-in-dev-mode/)
+- [Relay: A collaborative UI model for design handoff](https://research.google/pubs/relay-a-collaborative-ui-model-for-design-handoff/)
+- [Facilitation of Regular Communication between UI Designers and Developers through a Continuous Pipeline Tool](https://odr.chalmers.se/items/a2377031-375a-4470-ae47-bfecf4f588ca)
 - [Issue Tracking Ecosystems: Context and Best Practices](https://arxiv.org/abs/2507.06704)
 - [SoK: Systematizing Software Artifacts Traceability](https://arxiv.org/abs/2603.16208)
 - [Chrome扩展开发指南](https://developer.chrome.com/docs/extensions/mv3/)

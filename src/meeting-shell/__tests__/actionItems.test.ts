@@ -61,12 +61,56 @@ test('inferActionItemFromText ignores deadline-only scheduling statements', () =
   assert.equal(item, undefined);
 });
 
+test('inferActionItemFromText ignores collective English commitment without owner', () => {
+  const item = inferActionItemFromText({
+    text: 'We should confirm the launch budget by Friday.',
+    speaker: 'Chris',
+    chapterId: 'chapter-budget',
+    index: 4,
+  });
+
+  assert.equal(item, undefined);
+});
+
+test('inferActionItemFromText ignores collective Chinese commitment without owner', () => {
+  const item = inferActionItemFromText({
+    text: '我们需要下周三确认预算风险。',
+    speaker: 'Sarah Wang',
+    chapterId: 'chapter-budget',
+    index: 5,
+  });
+
+  assert.equal(item, undefined);
+});
+
+test('inferActionItemFromText ignores team-level English assignment without owner', () => {
+  const item = inferActionItemFromText({
+    text: 'The team should follow up the launch checklist by Friday.',
+    speaker: 'Chris',
+    chapterId: 'chapter-launch',
+    index: 6,
+  });
+
+  assert.equal(item, undefined);
+});
+
+test('inferActionItemFromText ignores Chinese group assignment without owner', () => {
+  const item = inferActionItemFromText({
+    text: '请大家下周三确认预算风险。',
+    speaker: 'Sarah Wang',
+    chapterId: 'chapter-budget',
+    index: 7,
+  });
+
+  assert.equal(item, undefined);
+});
+
 test('inferActionItemFromText ignores confirmation-only meeting decisions', () => {
   const item = inferActionItemFromText({
     text: '确认保持当前 Meeting Pilot 技术评审计划。',
     speaker: 'Sarah Wang',
     chapterId: 'chapter-review',
-    index: 4,
+    index: 8,
   });
 
   assert.equal(item, undefined);
@@ -77,7 +121,7 @@ test('inferActionItemFromText keeps explicit confirmation assignments', () => {
     text: '请 Esone 确认 Meeting Pilot 技术评审材料，DDL 下周三。',
     speaker: 'Alex Chen',
     chapterId: 'chapter-review',
-    index: 5,
+    index: 9,
   });
 
   assert.ok(item);
@@ -91,11 +135,26 @@ test('inferActionItemFromText extracts English owner and deadline', () => {
     text: 'Bella will follow up the launch checklist by Friday.',
     speaker: 'Chris',
     chapterId: 'chapter-launch',
-    index: 6,
+    index: 10,
   });
 
   assert.ok(item);
   assert.equal(item.owner, 'Bella');
   assert.equal(item.title, 'the launch checklist');
   assert.equal(item.deadline, 'Friday');
+});
+
+test('inferActionItemFromText keeps labeled action without owner as unassigned', () => {
+  const item = inferActionItemFromText({
+    text: 'Action item: send the launch recap by Friday.',
+    speaker: 'Chris',
+    chapterId: 'chapter-launch',
+    index: 11,
+  });
+
+  assert.ok(item);
+  assert.equal(item.owner, 'Unknown');
+  assert.equal(item.title, 'send the launch recap by Friday');
+  assert.equal(item.deadline, 'Friday');
+  assert.equal(item.reviewState, 'suggested');
 });

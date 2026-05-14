@@ -6,9 +6,11 @@
 import { getLocalStorageItem, setLocalStorageItem } from "./storage";
 import {
   JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
+  buildJiraAutomationImportedRuleName,
   buildJiraAutomationImportRule,
   buildJiraAutomationImportReviewChecklist,
   buildJiraAutomationImportWarnings,
+  buildJiraAutomationUniqueImportedRuleName,
   collectJiraAutomationImportReviewSignals,
   isJiraAutomationImportFileSizeAllowed,
   parseJiraAutomationExport,
@@ -523,6 +525,13 @@ function appendInfoRow(doc: Document, container: HTMLElement, label: string, val
   container.appendChild(row);
 }
 
+async function getExistingAutomationRuleNames(projectId: string): Promise<string[]> {
+  const rules = await getAllProjectRules(projectId);
+  return rules
+    .map((rule) => (typeof rule?.name === 'string' ? rule.name.trim() : ''))
+    .filter(Boolean);
+}
+
 function formatReviewSignalValue(count: number, samples: string[]): string {
   if (count === 0) {
     return 'None detected';
@@ -608,11 +617,28 @@ function renderReviewChecklist(
   });
 }
 
+function formatChecklistSeverityCounts(items: JiraAutomationImportReviewChecklistItem[]): string {
+  const counts = items.reduce(
+    (acc, item) => {
+      acc[item.severity] += 1;
+      return acc;
+    },
+    { high: 0, medium: 0, low: 0 },
+  );
+
+  return [
+    counts.high > 0 ? `${counts.high} high` : '',
+    counts.medium > 0 ? `${counts.medium} medium` : '',
+    counts.low > 0 ? `${counts.low} low` : '',
+  ].filter(Boolean).join(', ') || 'No blocking checks detected';
+}
+
 function showImportPreviewDialog(
   exportedData: ExportedData,
   file: File,
   projectContext: JiraAutomationProjectContext,
   doc: Document,
+  existingRuleNames: string[],
 ): Promise<{ confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean }> {
   return new Promise((resolve) => {
     const overlay = doc.createElement('div');
@@ -751,6 +777,15 @@ function showImportPreviewDialog(
       const rule = exportedData.rules[selectedRuleIndex];
       const summary = summarizeJiraAutomationImportRule(rule);
       const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+      const reviewChecklist = buildJiraAutomationImportReviewChecklist(rule);
+      const defaultImportedRuleName = buildJiraAutomationImportedRuleName(rule.name);
+      const importedRuleName = buildJiraAutomationUniqueImportedRuleName(rule.name, existingRuleNames);
+      const importNameWasNumbered = importedRuleName !== defaultImportedRuleName;
+      const accountReferenceSamples = [
+        ...reviewSignals.emailReferences,
+        ...reviewSignals.accountReferences,
+      ];
+      const accountReferenceCount = summary.emailReferenceCount + summary.accountReferenceCount;
       const sourceAllowsChainedTrigger = Boolean(rule.canOtherRuleTrigger);
       chainedTriggerCheckbox.disabled = !sourceAllowsChainedTrigger;
       chainedTriggerCheckbox.checked = sourceAllowsChainedTrigger && preventChainedTrigger;
@@ -760,9 +795,18 @@ function showImportPreviewDialog(
 
       details.textContent = '';
       appendInfoRow(doc, details, 'Rule name', rule.name);
+      appendInfoRow(doc, details, 'Imported name', importedRuleName);
+      appendInfoRow(
+        doc,
+        details,
+        'Name collision',
+        importNameWasNumbered ? 'Existing import name found; Personal AI will create a numbered copy.' : 'None detected',
+      );
       appendInfoRow(doc, details, 'Source state', rule.state || 'UNKNOWN');
       appendInfoRow(doc, details, 'Trigger', rule.trigger?.type || 'UNKNOWN');
       appendInfoRow(doc, details, 'Components', `${summary.componentCount} total`);
+      appendInfoRow(doc, details, 'Enablement checks', formatChecklistSeverityCounts(reviewChecklist));
+      appendInfoRow(doc, details, 'Review note', 'Added to imported rule description');
       appendInfoRow(doc, details, 'Actions', String(summary.actionCount));
       appendInfoRow(doc, details, 'Conditions', String(summary.conditionCount));
       appendInfoRow(doc, details, 'Web requests', summary.webRequestCount > 0 ? `${summary.webRequestCount} to review` : 'None detected');
@@ -770,7 +814,10 @@ function showImportPreviewDialog(
       appendInfoRow(doc, details, 'Secrets', summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} reference(s)` : 'None detected');
       appendInfoRow(doc, details, 'JQL / filters', formatReviewSignalValue(summary.jqlReferenceCount, reviewSignals.jqlReferences));
       appendInfoRow(doc, details, 'Hard-coded URLs', formatReviewSignalValue(summary.hardcodedUrlCount, reviewSignals.hardcodedUrls));
-      appendInfoRow(doc, details, 'Accounts', formatReviewSignalValue(summary.emailReferenceCount, reviewSignals.emailReferences));
+      appendInfoRow(doc, details, 'Custom fields', formatReviewSignalValue(summary.customFieldReferenceCount, reviewSignals.customFieldReferences));
+      appendInfoRow(doc, details, 'Saved filters', formatReviewSignalValue(summary.savedFilterReferenceCount, reviewSignals.savedFilterReferences));
+      appendInfoRow(doc, details, 'Connections', formatReviewSignalValue(summary.connectionReferenceCount, reviewSignals.connectionReferences));
+      appendInfoRow(doc, details, 'Accounts', formatReviewSignalValue(accountReferenceCount, accountReferenceSamples));
       appendInfoRow(doc, details, 'Source project refs', formatReviewSignalValue(summary.sourceProjectReferenceCount, reviewSignals.sourceProjectReferences));
       appendInfoRow(doc, details, 'Schedule', summary.scheduledTrigger ? 'Scheduled trigger' : 'No scheduled trigger');
       appendInfoRow(
@@ -783,10 +830,13 @@ function showImportPreviewDialog(
       );
       appendInfoRow(doc, details, 'Target project', `${projectContext.projectKey} (${projectContext.projectId})`);
       appendInfoRow(doc, details, 'Imported state', 'DISABLED');
-      renderReviewChecklist(doc, checklistBox, buildJiraAutomationImportReviewChecklist(rule));
+      renderReviewChecklist(doc, checklistBox, reviewChecklist);
 
       warningBox.textContent = '';
       const warnings = buildJiraAutomationImportWarnings(rule);
+      if (importNameWasNumbered) {
+        warnings.unshift('An existing rule already uses the default imported name. The new copy will be numbered so it stays easy to find.');
+      }
       warnings.forEach((warning) => {
         const item = doc.createElement('p');
         item.textContent = warning;
@@ -808,7 +858,18 @@ function showImportPreviewDialog(
     renderRuleDetails();
 
     const footer = doc.createElement('div');
-    footer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;';
+    footer.style.cssText = `
+      position: sticky;
+      bottom: 0;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      margin: 12px -24px -24px;
+      padding: 12px 24px 24px;
+      background: white;
+      border-top: 1px solid #EBECF0;
+    `;
 
     const cancelButton = createDialogButton(doc, 'Cancel', 'secondary');
     const confirmButton = createDialogButton(doc, 'Import disabled copy', 'primary');
@@ -864,7 +925,8 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
     try {
       const content = e.target?.result as string;
       const exportedData = parseJiraAutomationExport(JSON.parse(content));
-      const previewResult = await showImportPreviewDialog(exportedData, file, projectContext, doc);
+      const existingRuleNames = await getExistingAutomationRuleNames(projectContext.projectId);
+      const previewResult = await showImportPreviewDialog(exportedData, file, projectContext, doc, existingRuleNames);
 
       if (!previewResult.confirmed) {
         return;
@@ -874,9 +936,11 @@ function handleFileImport(file: File, projectContext: JiraAutomationProjectConte
       const ruleToImport = exportedData.rules[previewResult.selectedRuleIndex];
       const convertedRule = buildJiraAutomationImportRule(ruleToImport, {
         projectId: projectContext.projectId,
+        projectKey: projectContext.projectKey,
         projectTypeKey: projectContext.projectTypeKey,
         ownerId,
         allowOtherRuleTrigger: previewResult.allowOtherRuleTrigger,
+        existingRuleNames,
       });
 
       console.log('Importing rule:', convertedRule);

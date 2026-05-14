@@ -77,6 +77,45 @@
               </span>
             </div>
             <div class="event-actions">
+              <span
+                v-if="getFeedbackLabel(event)"
+                class="feedback-status"
+              >
+                {{ getFeedbackLabel(event) }}
+              </span>
+              <button
+                type="button"
+                :class="[
+                  'feedback-btn',
+                  { active: isFeedbackActive(event, 'positive') },
+                ]"
+                :aria-pressed="isFeedbackActive(event, 'positive')"
+                :disabled="isFeedbackPending(event)"
+                @click.stop="submitEventFeedback(event, 'positive')"
+              >
+                有用
+              </button>
+              <button
+                type="button"
+                :class="[
+                  'feedback-btn',
+                  { active: isFeedbackActive(event, 'negative') },
+                ]"
+                :aria-pressed="isFeedbackActive(event, 'negative')"
+                :disabled="isFeedbackPending(event)"
+                @click.stop="submitEventFeedback(event, 'negative')"
+              >
+                不相关
+              </button>
+              <button
+                v-if="canClearFeedback(event)"
+                type="button"
+                class="feedback-btn clear-feedback-btn"
+                :disabled="isFeedbackPending(event)"
+                @click.stop="submitEventFeedback(event, 'clear')"
+              >
+                撤销反馈
+              </button>
               <button
                 v-if="event.exploreLink"
                 type="button"
@@ -109,7 +148,10 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { chromeAPI, useMemoryStore } from '../memory-store';
-import type { RecallScope } from '../../services/MemoryServiceClient';
+import type {
+  MemoryFeedbackAction,
+  RecallScope,
+} from '../../services/MemoryServiceClient';
 import type { MemoryTimelineEvent } from '../timelinePresentation';
 import {
   formatTimelineTime,
@@ -128,6 +170,11 @@ const route = useRoute();
 
 type TimelineRangeKey = 'today' | '7d' | '30d';
 type TimelineFocusType = 'message' | 'chunk';
+type TimelineFeedbackChoice = Extract<
+  MemoryFeedbackAction,
+  'positive' | 'negative'
+>;
+type TimelineFeedbackState = TimelineFeedbackChoice | 'pending' | 'cleared';
 
 interface TimelineRangeOption {
   key: TimelineRangeKey;
@@ -141,6 +188,7 @@ interface TimelineRangeOption {
 }
 
 const timelineEvents = ref<MemoryTimelineEvent[]>([]);
+const feedbackByResultKey = ref<Record<string, TimelineFeedbackState>>({});
 const selectedScope = ref<RecallScope>(getInitialTimelineScope());
 const selectedRangeKey = ref<TimelineRangeKey>(getInitialRangeKey());
 const errorMessage = ref('');
@@ -260,12 +308,14 @@ async function applyFocusedTimelineEvent() {
   }
 
   const focusedEvent = response.data as MemoryTimelineEvent;
-  timelineEvents.value = [
+  const nextEvents = [
     focusedEvent,
     ...timelineEvents.value.filter(
       (event) => event.resultKey !== focusedEvent.resultKey,
     ),
   ];
+  timelineEvents.value = nextEvents;
+  hydrateFeedbackStateFromEvents(nextEvents);
   focusNotice.value = '已置顶定位记忆；它可能不属于当前时间范围。';
   await scrollFocusedEventIntoView();
 }
@@ -289,6 +339,7 @@ const loadTimeline = async () => {
     }
 
     timelineEvents.value = Array.isArray(response.data) ? response.data : [];
+    hydrateFeedbackStateFromEvents(timelineEvents.value);
     await applyFocusedTimelineEvent();
   } catch (error: any) {
     timelineEvents.value = [];
@@ -346,6 +397,112 @@ const handleEventClick = (event: MemoryTimelineEvent) => {
   if (openExploreLink(event.exploreLink)) return;
   openSourceUrl(event.sourceUrl);
 };
+
+function setFeedbackState(
+  resultKey: string,
+  state: TimelineFeedbackState | undefined,
+) {
+  const next = { ...feedbackByResultKey.value };
+  if (state) {
+    next[resultKey] = state;
+  } else {
+    delete next[resultKey];
+  }
+  feedbackByResultKey.value = next;
+}
+
+function hydrateFeedbackStateFromEvents(events: MemoryTimelineEvent[]) {
+  const next = { ...feedbackByResultKey.value };
+  const visibleKeys = new Set(events.map((event) => event.resultKey));
+
+  for (const key of Object.keys(next)) {
+    if (!visibleKeys.has(key) || next[key] === 'cleared') {
+      delete next[key];
+    }
+  }
+
+  for (const event of events) {
+    if (
+      event.feedbackAction === 'positive' ||
+      event.feedbackAction === 'negative'
+    ) {
+      next[event.resultKey] = event.feedbackAction;
+    } else if (next[event.resultKey] !== 'pending') {
+      delete next[event.resultKey];
+    }
+  }
+
+  feedbackByResultKey.value = next;
+}
+
+function getFeedbackLabel(event: MemoryTimelineEvent): string {
+  const state = feedbackByResultKey.value[event.resultKey];
+  if (state === 'pending') return '提交中...';
+  if (state === 'positive') return '已记录为有用';
+  if (state === 'negative') return '已记录为不相关';
+  if (state === 'cleared') return '已撤销反馈';
+  return '';
+}
+
+function isFeedbackPending(event: MemoryTimelineEvent): boolean {
+  return feedbackByResultKey.value[event.resultKey] === 'pending';
+}
+
+function isFeedbackActive(
+  event: MemoryTimelineEvent,
+  action: TimelineFeedbackChoice,
+): boolean {
+  return feedbackByResultKey.value[event.resultKey] === action;
+}
+
+function canClearFeedback(event: MemoryTimelineEvent): boolean {
+  const state = feedbackByResultKey.value[event.resultKey];
+  return state === 'positive' || state === 'negative';
+}
+
+async function submitEventFeedback(
+  event: MemoryTimelineEvent,
+  action: MemoryFeedbackAction,
+) {
+  const previousState = feedbackByResultKey.value[event.resultKey];
+  if (
+    action === 'clear' &&
+    previousState !== 'positive' &&
+    previousState !== 'negative'
+  ) {
+    return;
+  }
+  if (previousState === 'pending' || previousState === action) return;
+
+  setFeedbackState(event.resultKey, 'pending');
+  try {
+    const response = (await chromeAPI.sendMessage({
+      type: 'SUBMIT_MEMORY_FEEDBACK',
+      feedbackType: 'recall_quality',
+      targetId: event.id,
+      targetType: event.type,
+      action,
+    })) as any;
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'feedback_request_failed');
+    }
+
+    errorMessage.value = '';
+    setFeedbackState(event.resultKey, action === 'clear' ? 'cleared' : action);
+  } catch (error: any) {
+    setFeedbackState(
+      event.resultKey,
+      previousState === 'positive' ||
+        previousState === 'negative' ||
+        previousState === 'cleared'
+        ? previousState
+        : undefined,
+    );
+    errorMessage.value =
+      error?.message || '反馈暂时无法提交，请稍后再试。';
+  }
+}
 
 watch(
   () => [route.query.focus, route.query.type],
@@ -556,6 +713,30 @@ onMounted(() => {
 
 .event-actions button {
   padding: 0.42rem 0.7rem;
+}
+
+.event-actions button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.feedback-btn.active {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(14, 165, 233, 0.22);
+  color: #e0f2fe;
+}
+
+.clear-feedback-btn {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.34);
+  color: #cbd5e1;
+}
+
+.feedback-status {
+  align-self: center;
+  color: #bae6fd;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .empty-state {

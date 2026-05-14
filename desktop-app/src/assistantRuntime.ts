@@ -82,17 +82,75 @@ const STATUS_LABELS: Record<BridgeAssistantStatusKind, string> = {
   queued_action: '动作排队中',
 };
 
-function summarizeSetupBlocker(status: BridgeStatus, runtimeErrorMessage?: string): BridgeAssistantStatusItem | undefined {
+function formatSyncKind(kind?: string): string {
+  if (kind === 'stable_memory') return '长期记忆';
+  if (kind === 'mobile_briefing') return '近期重点';
+  if (kind === 'reminder_sync') return '待办 / 通知';
+  return kind || '同步';
+}
+
+function formatSyncTrigger(trigger?: string): string {
+  return trigger === 'manual' ? '手动' : '自动';
+}
+
+function compactErrorMessage(message: string, maxLength = 150): string {
+  const compact = message.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, maxLength - 1)}…`;
+}
+
+function latestFailedAttempt(status: BridgeStatus) {
+  return status.syncState?.recentAttempts?.find(
+    (attempt) => attempt.status === 'failed',
+  );
+}
+
+function syncIssueActionHint(message: string): string {
+  if (/challenge|安全验证|真人验证|风险验证/i.test(message)) {
+    return '完成验证后重试';
+  }
+  if (/different thread|不同线程/i.test(message)) {
+    return '重新绑定对话';
+  }
+  if (/No editable element|no composer|没有找到可输入区域/i.test(message)) {
+    return '打开可输入对话页';
+  }
+  if (/did not show the message|消息不可见|not show/i.test(message)) {
+    return '刷新豆包后重试';
+  }
+  return '查看同步诊断';
+}
+
+function uniqueNonEmpty(values: Array<string | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function summarizeSetupBlocker(
+  status: BridgeStatus,
+  runtimeErrorMessage?: string,
+): BridgeAssistantStatusItem | undefined {
   const blockers = status.blockingReasons || [];
   if (blockers.length === 0 && !runtimeErrorMessage) return undefined;
 
-  const summary = runtimeErrorMessage || blockers[0]?.message || '还有配置未完成。';
-  const count = Math.max(blockers.length, runtimeErrorMessage ? 1 : 0);
+  const summary =
+    runtimeErrorMessage || blockers[0]?.message || '还有配置未完成。';
+  const detailLines = uniqueNonEmpty([
+    runtimeErrorMessage ? `运行态读取失败：${runtimeErrorMessage}` : undefined,
+    ...blockers.map((blocker) => blocker.message),
+  ]).slice(0, 4);
+  const count = detailLines.length || 1;
 
   return {
     kind: 'setup_blocker',
     title: STATUS_LABELS.setup_blocker,
     summary,
+    detailLines,
     count,
     badgeLabel: `${count} 项`,
     actionHint: '打开设置继续完成',
@@ -100,20 +158,45 @@ function summarizeSetupBlocker(status: BridgeStatus, runtimeErrorMessage?: strin
   };
 }
 
-function summarizeSyncIssue(status: BridgeStatus): BridgeAssistantStatusItem | undefined {
-  const summary =
+function summarizeSyncIssue(
+  status: BridgeStatus,
+): BridgeAssistantStatusItem | undefined {
+  const failedAttempt = latestFailedAttempt(status);
+  const rawMessage =
     status.syncState?.lastErrorMessage ||
+    failedAttempt?.errorMessage ||
     status.lastError ||
     '';
-  if (!summary) return undefined;
+  if (!rawMessage) return undefined;
+
+  const message = compactErrorMessage(rawMessage);
+  const summary = failedAttempt
+    ? `${formatSyncKind(failedAttempt.kind)}${formatSyncTrigger(
+        failedAttempt.trigger,
+      )}失败：${message}`
+    : message;
+  const detailLines = uniqueNonEmpty([
+    failedAttempt
+      ? `链路：${formatSyncKind(failedAttempt.kind)} · ${formatSyncTrigger(
+          failedAttempt.trigger,
+        )}`
+      : undefined,
+    failedAttempt?.completedAt
+      ? `失败时间：${failedAttempt.completedAt}`
+      : status.syncState?.lastErrorAt
+        ? `失败时间：${status.syncState.lastErrorAt}`
+        : undefined,
+    '失败不会被当作已送达；修复后需要重新推送或等待下一轮同步。',
+  ]);
 
   return {
     kind: 'sync_issue',
     title: STATUS_LABELS.sync_issue,
     summary,
+    detailLines,
     count: 1,
     badgeLabel: '需检查',
-    actionHint: '查看同步诊断',
+    actionHint: syncIssueActionHint(rawMessage),
     priority: STATUS_PRIORITIES.sync_issue,
   };
 }

@@ -199,7 +199,7 @@ try {
   const { context, extensionId, serviceWorker } = launched;
 
   await serviceWorker.evaluate(
-    (configuredBaseUrl) =>
+    ({ configuredBaseUrl, meetingUrl, meetingTitle }) =>
       chrome.storage.local.set({
         envConfig: {
           MEETING_PILOT_ENABLED: true,
@@ -215,8 +215,54 @@ try {
           MEETING_MEMORY_CONTEXT_ENABLED: true,
           MEMORY_SERVICE_BASE_URL: configuredBaseUrl,
         },
+        meetingPrepHandoff: {
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+          event: {
+            externalId: 'scene1-context-assist-event',
+            title: meetingTitle,
+            startTime: Date.now() + 20 * 60 * 1000,
+            endTime: Date.now() + 50 * 60 * 1000,
+            joinUrl: meetingUrl,
+            sourceUrl: meetingUrl,
+            organizer: { name: 'Alex Chen' },
+            attendees: [{ name: 'Esone Qiu' }, { name: 'Sarah Wang' }],
+          },
+          goal: '确认预算风险、技术评审 owner 和下一步',
+          text:
+            'Personal AI meeting prep for Fixture RingCentral Meeting:\n- Confirm budget risk owner.\n- Confirm technical review next step.',
+          cueCards: [
+            {
+              id: 'brief',
+              kind: 'brief',
+              title: '进入会议前先看',
+              body:
+                'Fixture RingCentral Meeting 已匹配到会前上下文。优先确认预算风险和技术评审 owner。',
+            },
+            {
+              id: 'suggested-questions',
+              kind: 'question',
+              title: '建议带进会议的问题',
+              body: '预算风险现在卡在哪里，技术评审 owner 是谁来确认？',
+            },
+          ],
+          evidence: [
+            {
+              id: 'scene1-memory-1',
+              type: 'chunk',
+              title: 'Budget risk note',
+              snippet:
+                'Budget risk should be confirmed before the technical review handoff.',
+              sourceLabel: 'glip',
+              sourceUrl: 'https://internal.example.com/scene1-budget-risk',
+              sourceTitle: 'Budget risk thread',
+              whyMatched: '关键词命中会前准备',
+              score: 0.84,
+            },
+          ],
+        },
       }),
-    minutesBaseUrl,
+    { configuredBaseUrl: minutesBaseUrl, meetingUrl, meetingTitle },
   );
 
   await context.route('**/*', async (route) => {
@@ -342,6 +388,7 @@ try {
 
   log('附加校验: background 已收到会议上下文，side panel 不再回落到 demo 数据');
   const panelPage = await context.newPage();
+  await panelPage.setViewportSize({ width: 440, height: 900 });
   const assertNoPanelPageErrors = buildPageErrorCollector(panelPage);
   await panelPage.goto(
     `chrome-extension://${extensionId}/meeting-sidepanel.html?scene1StateProbe=1`,
@@ -384,6 +431,58 @@ try {
     panelTitle,
     meetingTitle,
     `side panel 未绑定真实会议状态: ${panelTitle}`,
+  );
+  const panelLayout = await panelPage.evaluate(() => {
+    const shell = document.querySelector('.meeting-shell');
+    const shellElement = shell instanceof HTMLElement ? shell : null;
+    return {
+      viewportWidth: window.innerWidth,
+      shellWidth: shellElement?.offsetWidth || 0,
+      shellLeft: shellElement?.offsetLeft || 0,
+      shellRightGap: shellElement
+        ? window.innerWidth - shellElement.offsetLeft - shellElement.offsetWidth
+        : -1,
+      isWindowSurface: Boolean(shell?.classList.contains('surface-window')),
+    };
+  });
+  assert.equal(
+    panelLayout.isWindowSurface,
+    true,
+    '独立 side panel 页面缺少 window surface 标记',
+  );
+  assert.ok(
+    panelLayout.shellWidth >= panelLayout.viewportWidth - 1,
+    `独立窗口未占满紧凑视口: ${JSON.stringify(panelLayout)}`,
+  );
+  assert.ok(
+    panelLayout.shellLeft <= 1 && panelLayout.shellRightGap <= 1,
+    `独立窗口仍存在大面积边缘空白: ${JSON.stringify(panelLayout)}`,
+  );
+
+  log('附加校验: Context Assist handoff 在 side panel 实时页可见');
+  await panelPage
+    .locator('[data-meeting-prep-handoff="true"]')
+    .waitFor({ state: 'attached', timeout: 15000 });
+  const meetingPrepState = await panelPage.evaluate(() => {
+    const card = document.querySelector('[data-meeting-prep-handoff="true"]');
+    return {
+      text: card?.textContent || '',
+      links: Array.from(card?.querySelectorAll('a') || []).map((link) => ({
+        label: link.textContent || '',
+        href: link.href,
+      })),
+    };
+  });
+  assert.match(meetingPrepState.text, /会前准备已带入/);
+  assert.match(meetingPrepState.text, /确认预算风险、技术评审 owner 和下一步/);
+  assert.match(meetingPrepState.text, /预算风险现在卡在哪里/);
+  assert.ok(
+    meetingPrepState.links.some((link) =>
+      link.href.startsWith('https://internal.example.com/scene1-budget-risk'),
+    ),
+    `Context Assist handoff 缺少安全来源链接: ${JSON.stringify(
+      meetingPrepState.links,
+    )}`,
   );
 
   log('附加校验: side panel 可直接打开 Capture 授权步骤');
@@ -455,6 +554,115 @@ try {
     '设置页缺少前往 options 的服务配置入口',
   );
   await saveScreenshot(panelPage, 'scene1-3-sidepanel.png');
+
+  log('附加校验: side panel 可手动补充漏掉的行动项并回跳时间线');
+  await panelPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await panelPage.locator('.action-add', { hasText: '添加行动项' }).click();
+  await panelPage
+    .locator('.manual-action-card input[name="manual-action-title"]')
+    .fill('Send manual recap to Alex');
+  await panelPage
+    .locator('.manual-action-card input[name="manual-action-owner"]')
+    .fill('');
+  await panelPage
+    .locator('.manual-action-card input[name="manual-action-deadline"]')
+    .fill('Friday');
+  await panelPage
+    .locator('.manual-action-card textarea[name="manual-action-evidence"]')
+    .fill('Alex asked for a written recap before Friday.');
+  await panelPage
+    .locator('.manual-action-card button', { hasText: '保存行动项' })
+    .click();
+  await panelPage.waitForFunction(() => {
+    const cardText =
+      Array.from(document.querySelectorAll('.action-card'))
+        .map((card) => card.textContent || '')
+        .find((text) => text.includes('Send manual recap to Alex')) || '';
+    return (
+      /已确认/.test(cardText) &&
+      /Alex asked for a written recap before Friday/.test(cardText)
+    );
+  });
+  const manualActionState = await panelPage.evaluate(() => {
+    const card =
+      Array.from(document.querySelectorAll('.action-card')).find((item) =>
+        (item.textContent || '').includes('Send manual recap to Alex'),
+      ) || null;
+    return {
+      text: card?.textContent || '',
+      warnings: Array.from(
+        card?.querySelectorAll('.ac-review-warning') || [],
+      ).map((item) => item.textContent || ''),
+      hasTimelineButton: Boolean(
+        Array.from(card?.querySelectorAll('button') || []).some((button) =>
+          /时间线/.test(button.textContent || ''),
+        ),
+      ),
+    };
+  });
+  assert.match(manualActionState.text, /待分配/);
+  assert.match(manualActionState.text, /Friday/);
+  assert.ok(
+    manualActionState.warnings.includes('补负责人'),
+    `手动未分配行动项缺少补负责人提示: ${JSON.stringify(
+      manualActionState,
+    )}`,
+  );
+  assert.equal(
+    manualActionState.hasTimelineButton,
+    true,
+    '手动行动项缺少时间线回跳入口',
+  );
+  await panelPage
+    .locator('.action-card', { hasText: 'Send manual recap to Alex' })
+    .locator('button', { hasText: '时间线' })
+    .click();
+  await panelPage.waitForFunction(() => {
+    const activeTab = document.querySelector('.panel-tab.active');
+    const focused = document.querySelector('.mini-tl-item.timeline-focused');
+    return (
+      /时间线/.test(activeTab?.textContent || '') &&
+      /Send manual recap to Alex/.test(focused?.textContent || '')
+    );
+  });
+
+  log('附加校验: 手动行动项在实时分析刷新后仍保留时间线锚点');
+  await panelPage.evaluate(
+    async ({ tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+        tabId,
+        transcriptChunk: {
+          id: 'scene1-manual-refresh',
+          speaker: 'Alex Chen',
+          text: 'Alex confirmed no new action is needed beyond the manual recap.',
+          ts: Date.now(),
+        },
+      });
+    },
+    { tabId: meetingTabId },
+  );
+  await panelPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await panelPage
+    .locator('.action-card', { hasText: 'Send manual recap to Alex' })
+    .locator('button', { hasText: '时间线' })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await panelPage
+    .locator('.action-card', { hasText: 'Send manual recap to Alex' })
+    .locator('button', { hasText: '时间线' })
+    .click();
+  await panelPage.waitForFunction(() => {
+    const activeTab = document.querySelector('.panel-tab.active');
+    const focused = document.querySelector('.mini-tl-item.timeline-focused');
+    return (
+      /时间线/.test(activeTab?.textContent || '') &&
+      /Send manual recap to Alex/.test(focused?.textContent || '') &&
+      /Alex asked for a written recap before Friday/.test(
+        focused.textContent || '',
+      )
+    );
+  });
+  await saveScreenshot(panelPage, 'scene1-3c-manual-action.png');
   assertNoPanelPageErrors();
 
   log('附加校验: demo side panel 行动项可定位到时间线证据');
@@ -471,7 +679,21 @@ try {
     },
     { timeout: 15000 },
   );
-  await actionJumpPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await actionJumpPage
+    .locator('.action-review-card', { hasText: '3 个待复核行动项' })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await saveScreenshot(actionJumpPage, 'scene1-3a-action-review-card.png');
+  await actionJumpPage
+    .locator('.action-review-card button', { hasText: '复核行动项' })
+    .click();
+  await actionJumpPage.waitForFunction(() => {
+    const activeTab = document.querySelector('.panel-tab.active');
+    const activeFilter = document.querySelector('.action-review-filter.active');
+    return (
+      /行动项/.test(activeTab?.textContent || '') &&
+      /待复核/.test(activeFilter?.textContent || '')
+    );
+  });
   await actionJumpPage
     .locator('.action-card[data-action-id="action-1"] .ac-evidence')
     .waitFor({ state: 'attached', timeout: 15000 });

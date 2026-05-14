@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Memory Reality Check Demo</title>
+  <style>
+    :root {
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --ink: #182027;
+      --muted: #65717d;
+      --line: #dfe4e8;
+      --green: #18815b;
+      --green-bg: #e9f7f1;
+      --red: #ba3b38;
+      --red-bg: #fdeceb;
+      --amber: #9a6500;
+      --amber-bg: #fff4d8;
+      --blue: #2861b8;
+      --blue-bg: #eaf1ff;
+      --teal: #0f766e;
+      --teal-bg: #e6f7f5;
+      --dark: #232a31;
+      --radius: 8px;
+      --shadow: 0 14px 40px rgba(27, 38, 49, 0.12);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: 56px 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 22px;
+      background: #111820;
+      color: #fff;
+      border-bottom: 1px solid #2d3844;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #53d39c, #5b8def);
+    }
+
+    .brand strong {
+      font-size: 15px;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .brand span {
+      color: #aeb9c4;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .target-tabs {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .tab {
+      border: 1px solid #3a4652;
+      background: #18222d;
+      color: #d7dee6;
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    .tab.active {
+      background: #fff;
+      color: #111820;
+      border-color: #fff;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(420px, 1fr) 420px;
+      gap: 18px;
+      padding: 18px;
+      min-height: 0;
+    }
+
+    .surface,
+    .inspector {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .surface {
+      display: grid;
+      grid-template-rows: 50px 1fr;
+    }
+
+    .surface-head,
+    .inspector-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    .surface-title,
+    .inspector-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    .surface-title strong,
+    .inspector-title strong {
+      font-size: 14px;
+    }
+
+    .surface-title span,
+    .inspector-title span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .chip.risk {
+      border-color: #f2c7c4;
+      color: var(--red);
+      background: var(--red-bg);
+    }
+
+    .answer-wrap {
+      padding: 26px;
+      overflow: auto;
+    }
+
+    .prompt {
+      max-width: 760px;
+      border: 1px solid var(--line);
+      background: #f7f9fb;
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      color: #303941;
+      font-size: 14px;
+      line-height: 1.55;
+      margin-bottom: 18px;
+    }
+
+    .answer {
+      max-width: 760px;
+      padding: 2px 0 18px;
+      font-size: 15px;
+      line-height: 1.72;
+    }
+
+    .answer h1 {
+      font-size: 22px;
+      margin: 0 0 14px;
+      letter-spacing: 0;
+    }
+
+    .answer p {
+      margin: 0 0 14px;
+    }
+
+    .claim-mark {
+      position: relative;
+      border-bottom: 2px solid;
+      padding-bottom: 1px;
+      cursor: pointer;
+    }
+
+    .claim-mark.red {
+      border-color: #d65b55;
+      background: linear-gradient(transparent 58%, rgba(214, 91, 85, 0.14) 58%);
+    }
+
+    .claim-mark.amber {
+      border-color: #d19614;
+      background: linear-gradient(transparent 58%, rgba(209, 150, 20, 0.16) 58%);
+    }
+
+    .claim-mark.green {
+      border-color: #32a071;
+      background: linear-gradient(transparent 58%, rgba(50, 160, 113, 0.14) 58%);
+    }
+
+    .floating-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #cfd8e2;
+      background: #fff;
+      border-radius: 999px;
+      padding: 8px 12px;
+      box-shadow: 0 8px 24px rgba(24, 32, 39, 0.16);
+      font-size: 13px;
+      margin: 6px 0 20px;
+    }
+
+    .score-dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: inline-grid;
+      place-items: center;
+      background: var(--amber-bg);
+      color: var(--amber);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .inspector {
+      display: grid;
+      grid-template-rows: 50px auto 1fr auto;
+    }
+
+    .scoreboard {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .score {
+      height: 92px;
+      border-radius: var(--radius);
+      border: 1px solid #ecd8a1;
+      background: var(--amber-bg);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: var(--amber);
+    }
+
+    .score strong {
+      display: block;
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .score span {
+      font-size: 11px;
+      margin-top: 6px;
+      display: block;
+    }
+
+    .meters {
+      display: grid;
+      gap: 8px;
+      align-content: center;
+    }
+
+    .meter-row {
+      display: grid;
+      grid-template-columns: 92px 1fr 26px;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 7px;
+      border-radius: 999px;
+      background: #eef2f5;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      border-radius: 999px;
+    }
+
+    .bar .green {
+      background: var(--green);
+    }
+
+    .bar .red {
+      background: var(--red);
+    }
+
+    .bar .amber {
+      background: #d08b00;
+    }
+
+    .claim-list {
+      overflow: auto;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .claim {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .claim.active {
+      border-color: #86a8dd;
+      box-shadow: 0 0 0 3px rgba(40, 97, 184, 0.12);
+    }
+
+    .claim-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .status.red {
+      color: var(--red);
+      background: var(--red-bg);
+    }
+
+    .status.green {
+      color: var(--green);
+      background: var(--green-bg);
+    }
+
+    .status.amber {
+      color: var(--amber);
+      background: var(--amber-bg);
+    }
+
+    .status.blue {
+      color: var(--blue);
+      background: var(--blue-bg);
+    }
+
+    .claim p {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .claim small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .evidence {
+      border-top: 1px solid var(--line);
+      padding: 14px 16px;
+      background: #fbfcfd;
+    }
+
+    .evidence h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .diff {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .diff-row {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      padding: 10px;
+    }
+
+    .diff-row strong {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+
+    .diff-row span {
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      min-height: 36px;
+      padding: 0 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      background: var(--dark);
+      border-color: var(--dark);
+      color: #fff;
+    }
+
+    .patch {
+      display: none;
+      margin-top: 10px;
+      border: 1px solid #c8d5e8;
+      background: #f4f8ff;
+      border-radius: 6px;
+      padding: 10px;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      color: #21344d;
+    }
+
+    .patch.show {
+      display: block;
+    }
+
+    @media (max-width: 980px) {
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .inspector {
+        min-height: 720px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .topbar {
+        height: auto;
+        min-height: 56px;
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 12px;
+      }
+
+      .target-tabs {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .workspace {
+        padding: 10px;
+        gap: 10px;
+      }
+
+      .scoreboard {
+        grid-template-columns: 1fr;
+      }
+
+      .score {
+        height: 72px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark"></div>
+        <strong>Personal AI</strong>
+        <span>Memory Reality Check</span>
+      </div>
+      <nav class="target-tabs" aria-label="Demo surfaces">
+        <button class="tab active" type="button">AI Answer</button>
+        <button class="tab" type="button">Meeting Notes</button>
+        <button class="tab" type="button">Jira Draft</button>
+      </nav>
+    </header>
+
+    <main class="workspace">
+      <section class="surface" aria-label="AI answer surface">
+        <div class="surface-head">
+          <div class="surface-title">
+            <span class="dot"></span>
+            <div>
+              <strong>ChatGPT answer draft</strong>
+              <span>Selected output from an external AI</span>
+            </div>
+          </div>
+          <span class="chip risk">Reality check: 3 risks</span>
+        </div>
+
+        <div class="answer-wrap">
+          <div class="prompt">
+            Summarize Gary's direction for Nova WhatsApp integration and turn it into next actions for the team.
+          </div>
+
+          <div class="floating-check">
+            <span class="score-dot">72</span>
+            <span>Personal AI found 1 contradiction, 2 missing-context claims, and 7 supported claims.</span>
+          </div>
+
+          <article class="answer">
+            <h1>Nova WhatsApp integration summary</h1>
+            <p>
+              Gary's direction is that Nova should
+              <span class="claim-mark red" data-claim="c1">build an independent WhatsApp-only backend</span>
+              so the team can move fast without waiting for other platform teams.
+            </p>
+            <p>
+              The team should coordinate with Chintamani's SMS backend team later, but the initial scope can stay separate.
+              A practical next step is to assign one DRI for API design and one DRI for rollout.
+            </p>
+            <p>
+              For reporting, use the Jira Story Points field
+              <span class="claim-mark red" data-claim="c2">customfield_10016</span>
+              when estimating Nova epics, then write the monthly totals into the current Google Sheet.
+            </p>
+            <p>
+              The meeting also confirms that
+              <span class="claim-mark amber" data-claim="c3">the production connection test is complete</span>,
+              so the team can move on to final WhatsApp configuration.
+            </p>
+            <p>
+              The answer should be concise, action-oriented, and suitable to send to the Chinese team.
+              <span class="claim-mark green" data-claim="c4">Mention that uncertain items still need source confirmation.</span>
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <aside class="inspector" aria-label="Reality Check inspector">
+        <div class="inspector-head">
+          <div class="inspector-title">
+            <span class="dot"></span>
+            <div>
+              <strong>Reality Check</strong>
+              <span>Last 90 days + confirmed profile + active skills</span>
+            </div>
+          </div>
+          <span class="chip">Local first</span>
+        </div>
+
+        <div class="scoreboard">
+          <div class="score">
+            <div>
+              <strong>72</strong>
+              <span>evidence fit</span>
+            </div>
+          </div>
+          <div class="meters">
+            <div class="meter-row">
+              <span>Supported</span>
+              <div class="bar"><span class="green" style="width: 72%"></span></div>
+              <strong>7</strong>
+            </div>
+            <div class="meter-row">
+              <span>Contradicted</span>
+              <div class="bar"><span class="red" style="width: 18%"></span></div>
+              <strong>2</strong>
+            </div>
+            <div class="meter-row">
+              <span>Missing context</span>
+              <div class="bar"><span class="amber" style="width: 26%"></span></div>
+              <strong>2</strong>
+            </div>
+            <div class="meter-row">
+              <span>Sensitive</span>
+              <div class="bar"><span class="green" style="width: 0%"></span></div>
+              <strong>0</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="claim-list" id="claimList">
+          <div class="claim active" data-claim="c1">
+            <div class="claim-top">
+              <span class="status red">Contradicted</span>
+              <span class="chip">0.86</span>
+            </div>
+            <p>Nova should build an independent WhatsApp-only backend.</p>
+            <small>Recent memory says Gary's direction was to reuse and evolve SMS backend into multi-channel infrastructure.</small>
+          </div>
+
+          <div class="claim" data-claim="c2">
+            <div class="claim-top">
+              <span class="status red">Contradicted</span>
+              <span class="chip">0.91</span>
+            </div>
+            <p>Use Jira Story Points field customfield_10016.</p>
+            <small>Personal AI found a recent Jira readback confirming customfield_10422.</small>
+          </div>
+
+          <div class="claim" data-claim="c3">
+            <div class="claim-top">
+              <span class="status amber">Missing context</span>
+              <span class="chip">0.74</span>
+            </div>
+            <p>The production connection test is complete.</p>
+            <small>Meeting memory says the test still needs to be run and recorded.</small>
+          </div>
+
+          <div class="claim" data-claim="c4">
+            <div class="claim-top">
+              <span class="status green">Supported</span>
+              <span class="chip">0.82</span>
+            </div>
+            <p>Mention that uncertain items still need source confirmation.</p>
+            <small>Matches user's repeated preference for evidence, readback, and not overstating AI results.</small>
+          </div>
+        </div>
+
+        <div class="evidence">
+          <h2 id="evidenceTitle">Evidence diff</h2>
+          <div class="diff">
+            <div class="diff-row">
+              <strong>AI said</strong>
+              <span id="aiSaid">Nova should build an independent WhatsApp-only backend.</span>
+            </div>
+            <div class="diff-row">
+              <strong>Personal AI remembers</strong>
+              <span id="memorySaid">Gary pushed the team to evolve SMS backend into a WhatsApp / SMS / RCS multi-channel infrastructure.</span>
+            </div>
+            <div class="diff-row">
+              <strong>Suggested patch</strong>
+              <span id="patchSaid">Revise to: align with Chintamani's SMS backend team first; avoid a WhatsApp-only backend unless shared infra constraints block the path.</span>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="patchBtn" type="button">Generate patch</button>
+            <button class="btn" type="button">Open evidence</button>
+          </div>
+          <div class="patch" id="patchBox">Please revise the answer using these Personal AI memory corrections:
+
+1. Do not say Nova should build an independent WhatsApp-only backend.
+2. Recent private memory indicates Gary's direction was to reuse/evolve SMS backend into multi-channel infrastructure.
+3. Keep uncertainty explicit and mark unresolved items as "needs confirmation".</div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const claimData = {
+      c1: {
+        ai: "Nova should build an independent WhatsApp-only backend.",
+        memory: "Gary pushed the team to evolve SMS backend into a WhatsApp / SMS / RCS multi-channel infrastructure.",
+        patch: "Revise to: align with Chintamani's SMS backend team first; avoid a WhatsApp-only backend unless shared infra constraints block the path.",
+        prompt: "Please revise the answer using these Personal AI memory corrections:\n\n1. Do not say Nova should build an independent WhatsApp-only backend.\n2. Recent private memory indicates Gary's direction was to reuse/evolve SMS backend into multi-channel infrastructure.\n3. Keep uncertainty explicit and mark unresolved items as \"needs confirmation\"."
+      },
+      c2: {
+        ai: "Use Jira Story Points field customfield_10016.",
+        memory: "Recent Jira readback in Personal AI memory confirmed NOVA-10893 Story Points uses customfield_10422 = 34.0.",
+        patch: "Replace customfield_10016 with customfield_10422, and say this field should be verified again before bulk updates.",
+        prompt: "Please correct the Jira field reference:\n\n- Replace customfield_10016 with customfield_10422.\n- Personal AI memory has a recent readback confirming customfield_10422 for Story Points.\n- Add a verification step before bulk updates."
+      },
+      c3: {
+        ai: "The production connection test is complete.",
+        memory: "Meeting memory only says the team needs to run the production connection test and record the result.",
+        patch: "Downgrade this to an action item: run the production connection test and record the result.",
+        prompt: "Please avoid overstating the meeting result:\n\n- Do not say the production connection test is complete.\n- Personal AI evidence says it still needs to be run and recorded.\n- Convert it into an action item."
+      },
+      c4: {
+        ai: "Mention that uncertain items still need source confirmation.",
+        memory: "This matches the user's preference for evidence-backed output, readback, and clear uncertainty labels.",
+        patch: "Keep this line. It is supported by user preference memory.",
+        prompt: "This claim is supported. Keep the uncertainty note and preserve source-confirmation language."
+      }
+    };
+
+    const claimEls = document.querySelectorAll("[data-claim]");
+    const claimCards = document.querySelectorAll(".claim");
+    const aiSaid = document.getElementById("aiSaid");
+    const memorySaid = document.getElementById("memorySaid");
+    const patchSaid = document.getElementById("patchSaid");
+    const patchBox = document.getElementById("patchBox");
+    const patchBtn = document.getElementById("patchBtn");
+    let activeClaim = "c1";
+
+    function setClaim(id) {
+      activeClaim = id;
+      const data = claimData[id];
+      aiSaid.textContent = data.ai;
+      memorySaid.textContent = data.memory;
+      patchSaid.textContent = data.patch;
+      patchBox.textContent = data.prompt;
+      patchBox.classList.remove("show");
+      claimCards.forEach(card => {
+        card.classList.toggle("active", card.dataset.claim === id);
+      });
+    }
+
+    claimEls.forEach(el => {
+      el.addEventListener("click", () => setClaim(el.dataset.claim));
+    });
+
+    patchBtn.addEventListener("click", () => {
+      patchBox.classList.toggle("show");
+    });
+  </script>
+</body>
+</html>

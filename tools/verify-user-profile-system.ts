@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { MemoryServiceClient } from '../src/services/MemoryServiceClient.ts';
+import { getProfileItemsForView } from '../src/services/UserProfileMessageHandler.ts';
 import {
   buildUserProfileViewModel,
   normalizeUserProfilePayload,
@@ -131,6 +132,12 @@ function verifyViewModelNormalization() {
   assert.equal(viewModel.analysis.predictedInterests[0].id, 'profile-6');
   assert.equal(viewModel.analysis.predictedInterests[0].status, 'pending_confirm');
   assert.equal(viewModel.analysis.predictedInterests[0].canUseForPersonalization, false);
+  assert.equal(viewModel.analysis.reviewQueue.length, 4);
+  assert.equal(viewModel.analysis.reviewQueue[0].id, 'profile-6');
+  assert.equal(
+    viewModel.analysis.reviewQueue.every((item) => item.canUseForPersonalization === false),
+    true,
+  );
   assert.equal(
     viewModel.analysis.predictedInterests.some(
       (item) =>
@@ -222,11 +229,55 @@ async function verifyProfileClientInferredItemQuery() {
   assert.match(requestedBody, /"itemKey":"web_project"/);
 }
 
+async function verifyProfileItemsPaginationBoundaries() {
+  const allItems = Array.from({ length: 450 }, (_, index) => ({
+    id: `profile-${index + 1}`,
+  }));
+  const requests: Array<{ limit: number; offset: number }> = [];
+  const client = {
+    async getProfileItems(filters: { limit?: number; offset?: number }) {
+      const limit = filters.limit ?? 50;
+      const offset = filters.offset ?? 0;
+      requests.push({ limit, offset });
+      return {
+        items: allItems.slice(offset, offset + limit),
+        total: allItems.length,
+      };
+    },
+  } as any;
+
+  const cappedPage = await getProfileItemsForView(client, 250);
+
+  assert.equal(cappedPage.items.length, 250);
+  assert.equal(cappedPage.total, 450);
+  assert.equal(cappedPage.truncated, true);
+  assert.deepEqual(requests, [
+    { limit: 200, offset: 0 },
+    { limit: 50, offset: 200 },
+  ]);
+
+  requests.length = 0;
+  const fullExportPage = await getProfileItemsForView(
+    client,
+    Number.POSITIVE_INFINITY,
+  );
+
+  assert.equal(fullExportPage.items.length, 450);
+  assert.equal(fullExportPage.total, 450);
+  assert.equal(fullExportPage.truncated, false);
+  assert.deepEqual(requests, [
+    { limit: 200, offset: 0 },
+    { limit: 200, offset: 200 },
+    { limit: 200, offset: 400 },
+  ]);
+}
+
 async function main() {
   verifyViewModelNormalization();
   verifyEmptyPayloadIsRenderable();
   await verifyProfileClientConfirmedOnlyQuery();
   await verifyProfileClientInferredItemQuery();
+  await verifyProfileItemsPaginationBoundaries();
   console.log('verify-user-profile-system: ok');
 }
 

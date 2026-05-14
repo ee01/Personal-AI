@@ -1,0 +1,109 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]: 🧠 记忆查询系统
+      - paragraph [ref=e8]: 记忆入口规则只展示你手动创建的规则；帮我问 / 自我反思等系统内部观察会在主动询问里展示证据，不计入这里的 FollowThreads。
+    - generic [ref=e9]:
+      - link "🏠 今日领航" [ref=e10] [cursor=pointer]:
+        - /url: "#/"
+        - generic [ref=e11]: 🏠
+        - generic [ref=e12]: 今日领航
+      - link "⏰ 时间轴" [ref=e13] [cursor=pointer]:
+        - /url: "#/timeline"
+        - generic [ref=e14]: ⏰
+        - generic [ref=e15]: 时间轴
+      - link "📡 会议记录" [ref=e16] [cursor=pointer]:
+        - /url: "#/meetings"
+        - generic [ref=e17]: 📡
+        - generic [ref=e18]: 会议记录
+      - link "👤 用户画像" [ref=e19] [cursor=pointer]:
+        - /url: "#/user-profile"
+        - generic [ref=e20]: 👤
+        - generic [ref=e21]: 用户画像
+      - link "👁 关注后续 仅统计手动规则 0" [ref=e22] [cursor=pointer]:
+        - /url: "#/follow-threads"
+        - generic [ref=e23]: 👁
+        - generic [ref=e24]:
+          - generic [ref=e25]: 关注后续
+          - generic [ref=e26]: 仅统计手动规则
+        - generic [ref=e27]: "0"
+      - link "🌙 梦境重放" [ref=e28] [cursor=pointer]:
+        - /url: "#/dreams"
+        - generic [ref=e29]: 🌙
+        - generic [ref=e30]: 梦境重放
+      - link "🧠 自我反思" [ref=e31] [cursor=pointer]:
+        - /url: "#/reflection-threads"
+        - generic [ref=e32]: 🧠
+        - generic [ref=e33]: 自我反思
+      - link "⚖️ 决策中心" [ref=e34] [cursor=pointer]:
+        - /url: "#/decisions"
+        - generic [ref=e35]: ⚖️
+        - generic [ref=e36]: 决策中心
+      - link "⚙️ 动作队列" [ref=e37] [cursor=pointer]:
+        - /url: "#/actions"
+        - generic [ref=e38]: ⚙️
+        - generic [ref=e39]: 动作队列
+      - link "📡 主动询问 系统证据在这里看" [ref=e40] [cursor=pointer]:
+        - /url: "#/outreach"
+        - generic [ref=e41]: 📡
+        - generic [ref=e42]:
+          - generic [ref=e43]: 主动询问
+          - generic [ref=e44]: 系统证据在这里看
+      - separator [ref=e45]
+      - link "🧪 个人技能 在用技能与萃取建议" [ref=e46] [cursor=pointer]:
+        - /url: "#/skills"
+        - generic [ref=e47]: 🧪
+        - generic [ref=e48]:
+          - generic [ref=e49]: 个人技能
+          - generic [ref=e50]: 在用技能与萃取建议
+      - separator [ref=e51]
+      - link "🚀 项目 12" [ref=e52] [cursor=pointer]:
+        - /url: "#/entity/Project"
+        - generic [ref=e53]: 🚀
+        - generic [ref=e54]: 项目
+        - generic [ref=e55]: "12"
+      - link "💡 主题 0" [ref=e56] [cursor=pointer]:
+        - /url: "#/entity/Topic"
+        - generic [ref=e57]: 💡
+        - generic [ref=e58]: 主题
+        - generic [ref=e59]: "0"
+      - link "👥 人物 45" [ref=e60] [cursor=pointer]:
+        - /url: "#/entity/Person"
+        - generic [ref=e61]: 👥
+        - generic [ref=e62]: 人物
+        - generic [ref=e63]: "45"
+      - link "🏢 组织 8" [ref=e64] [cursor=pointer]:
+        - /url: "#/entity/Organization"
+        - generic [ref=e65]: 🏢
+        - generic [ref=e66]: 组织
+        - generic [ref=e67]: "8"
+      - link "📄 文档 156" [ref=e68] [cursor=pointer]:
+        - /url: "#/entity/Document"
+        - generic [ref=e69]: 📄
+        - generic [ref=e70]: 文档
+        - generic [ref=e71]: "156"
+      - link "🔧 技术 23" [ref=e72] [cursor=pointer]:
+        - /url: "#/entity/Technology"
+        - generic [ref=e73]: 🔧
+        - generic [ref=e74]: 技术
+        - generic [ref=e75]: "23"
+  - generic [ref=e76]:
+    - generic [ref=e77]:
+      - generic [ref=e78]:
+        - generic [ref=e79]: 🔍
+        - textbox "搜索任何内容、实体或关键词（按 Enter 搜索）..." [ref=e80]
+      - group "记忆范围" [ref=e81]:
+        - button "工作" [ref=e82] [cursor=pointer]
+        - button "个人" [ref=e83] [cursor=pointer]
+        - button "全部" [ref=e84] [cursor=pointer]
+      - button "📊 搜索" [ref=e85] [cursor=pointer]
+      - button "🔄 重置" [ref=e86] [cursor=pointer]
+    - generic [ref=e87]:
+      - generic [ref=e88]:
+        - generic [ref=e89]: 💡
+        - generic [ref=e90]:
+          - heading "主题" [level=2] [ref=e91]
+          - generic [ref=e92]: 共 0 个主题
+      - generic [ref=e94]:
+        - generic [ref=e95]: 💡
+        - paragraph [ref=e96]: 暂无主题数据

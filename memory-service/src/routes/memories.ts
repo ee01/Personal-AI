@@ -4,6 +4,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import type { MemoryScope, RecallItem, RecallScope } from '../types/index.js';
 import { buildExploreLink } from '../utils/exploreLink.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
+import { getRecallFeedbackAction } from '../utils/recallFeedback.js';
 
 interface DeleteMemoriesQuerystring {
   source: string;
@@ -127,9 +128,13 @@ function getChunkMessageRefCandidates(chunk: ChunkMemoryRow): string[] {
   return Array.from(candidates);
 }
 
-function buildMessageItem(row: MessageMemoryRow): RecallItem {
+function buildMessageItem(
+  db: BetterSqlite3.Database,
+  row: MessageMemoryRow,
+): RecallItem {
   const metadata = parseMetadata(row.metadata_json) || {};
   const scope = normalizeStoredScope(row.scope);
+  const recallFeedback = getRecallFeedbackAction(db, 'message', row.id);
   const presentation = buildRecallPresentation({
     content: row.content,
     source: row.source_type,
@@ -159,15 +164,22 @@ function buildMessageItem(row: MessageMemoryRow): RecallItem {
       sender: row.sender ?? metadata.sender,
       groupName: row.group_name ?? metadata.groupName,
       channels: ['direct'],
+      ...(recallFeedback ? { recallFeedback } : {}),
     },
   };
 }
 
 function buildChunkItem(
+  db: BetterSqlite3.Database,
   chunk: ChunkMemoryRow,
   sourceMessage?: MessageMemoryRow,
 ): RecallItem {
   const scope = normalizeStoredScope(chunk.scope);
+  const recallFeedback = getRecallFeedbackAction(
+    db,
+    'chunk',
+    String(chunk.chunk_id),
+  );
   const source = chunk.source_type ?? sourceMessage?.source_type;
   const sourceTitle = sourceMessage?.source_title ?? undefined;
   const sourceUrl = sourceMessage?.source_url ?? undefined;
@@ -200,6 +212,7 @@ function buildChunkItem(
       relatedProject: chunk.related_project,
       relatedMessageId: sourceMessage?.id,
       channels: ['direct'],
+      ...(recallFeedback ? { recallFeedback } : {}),
     },
   };
 }
@@ -250,7 +263,7 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
           return reply.status(404).send({ error: 'Memory not found' });
         }
 
-        return reply.status(200).send(buildMessageItem(row));
+        return reply.status(200).send(buildMessageItem(db, row));
       }
 
       const chunkId = Number(id);
@@ -273,7 +286,7 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
 
       const sourceMessage = findChunkSourceMessage(db, chunk);
 
-      return reply.status(200).send(buildChunkItem(chunk, sourceMessage));
+      return reply.status(200).send(buildChunkItem(db, chunk, sourceMessage));
     },
   );
 

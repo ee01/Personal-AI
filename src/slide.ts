@@ -88,6 +88,10 @@ function isValidColumnIndex(columnIndex: unknown): columnIndex is number {
   return Number.isInteger(columnIndex) && (columnIndex as number) >= 0;
 }
 
+function isValidRowIndex(rowIndex: unknown): rowIndex is number {
+  return Number.isInteger(rowIndex) && (rowIndex as number) >= 0;
+}
+
 function hasMeaningfulTextChange(currentValue: unknown, suggestedValue: unknown): boolean {
   if (typeof suggestedValue !== 'string' || !suggestedValue.trim()) {
     return false;
@@ -336,8 +340,8 @@ export async function applyProjectUpdates(
     
     for (const update of updates) {
       // 确保有必要的定位信息
-      if (!update.slideId || !update.tableId || update.rowIndex === undefined) {
-        errors.push(`缺少更新位置信息: ${update.projectId} - ${update.projectName}`);
+      if (!update.slideId || !update.tableId || !isValidRowIndex(update.rowIndex)) {
+        errors.push(`缺少或无效更新位置信息: ${update.projectId} - ${update.projectName}`);
         continue;
       }
 

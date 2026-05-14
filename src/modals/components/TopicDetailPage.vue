@@ -26,13 +26,7 @@
               >● {{ topicUnreadCount }} 条未读</span
             >
             <span class="meta-item"
-              >⏰ 最后更新：{{
-                formatTimeAgo(
-                  topicData.readStatus?.lastUpdateTime ||
-                    topicData.updated ||
-                    Date.now(),
-                )
-              }}</span
+              >⏰ 最后更新：{{ getTopicLastUpdatedLabel(topicData) }}</span
             >
           </div>
         </div>
@@ -232,15 +226,16 @@
         </div>
         <div v-else class="conversations-list">
           <div
-            v-for="conv in filteredConversations"
-            :key="conv.id"
+            v-for="(conv, index) in filteredConversations"
+            :key="getConversationRenderId(conv, index)"
             class="conversation-item"
             :class="{
-              expanded: expandedConversations.has(conv.id),
+              expanded: isConversationExpanded(conv, index),
               unread: isConversationUnread(conv),
-              targeted: highlightedConversationId === conv.id,
+              targeted:
+                highlightedConversationId === getConversationRenderId(conv, index),
             }"
-            :data-conversation-id="conv.id"
+            :data-conversation-id="getConversationRenderId(conv, index)"
           >
             <div class="conversation-header">
               <div class="conversation-meta">
@@ -292,12 +287,12 @@
             <button
               type="button"
               class="context-indicator"
-              :class="{ expanded: expandedConversations.has(conv.id) }"
-              @click="toggleConversationExpand(conv.id)"
+              :class="{ expanded: isConversationExpanded(conv, index) }"
+              @click="toggleConversationExpand(conv, index)"
             >
               <span class="indicator-text">
                 {{
-                  expandedConversations.has(conv.id)
+                  isConversationExpanded(conv, index)
                     ? '🔼 收起上下文'
                     : getConversationContextLabel(conv)
                 }}
@@ -306,7 +301,7 @@
             <div
               v-if="conv.contextMessages"
               class="context-content"
-              :class="{ expanded: expandedConversations.has(conv.id) }"
+              :class="{ expanded: isConversationExpanded(conv, index) }"
             >
               <div class="context-divider"></div>
               <div
@@ -427,7 +422,9 @@ import {
   filterTopicConversationsByReadState,
   getTopicConversationUnreadMessageCount,
   getTopicConversationUnreadCount,
+  getTopicConversationPrimaryId,
   getTopicDetailRecentData,
+  getTopicDetailUnreadCount,
   isTopicConversationUnread,
   sortTopicConversationsForTriage,
   topicConversationHasContextMatch,
@@ -435,6 +432,8 @@ import {
   type TopicConversationReadFilter,
 } from '../topic-detail-data';
 import { renderHighlightedText } from '../topic-detail-rendering';
+import { getSafeExternalUrl } from '../topic-link-safety';
+import { formatTopicRelativeTime } from '../topic-time';
 
 const route = useRoute();
 const router = useRouter();
@@ -446,8 +445,8 @@ const isLoading = computed(() => store.isLoading);
 const topicReadUndo = computed(() => store.topicReadUndo);
 const conversationReadUndo = computed(() => store.conversationReadUndo);
 const activeTab = ref('conversations');
-const topicUnreadCount = computed(
-  () => topicData.value?.readStatus?.unreadCount || 0,
+const topicUnreadCount = computed(() =>
+  getTopicDetailUnreadCount(topicData.value),
 );
 const topicRecentData = computed(() =>
   getTopicDetailRecentData(topicData.value),
@@ -463,7 +462,7 @@ const convReadFilter = ref<TopicConversationReadFilter>('all');
 const convFilter = ref('all');
 const webSearchQuery = ref('');
 const webTypeFilter = ref('all');
-const expandedConversations = ref(new Set());
+const expandedConversations = ref<Set<string>>(new Set());
 const highlightedConversationId = ref<string | null>(null);
 const messageFocusNotice = ref<{
   type: 'info' | 'warning';
@@ -471,10 +470,10 @@ const messageFocusNotice = ref<{
 } | null>(null);
 
 const tabs = [
+  { key: 'conversations', label: '💬 聊天记录' },
   { key: 'projects', label: '🚀 相关项目' },
   { key: 'resources', label: '📚 相关资源' },
   { key: 'tickets', label: '🎯 相关Tickets' },
-  { key: 'conversations', label: '💬 聊天记录' },
   { key: 'webpages', label: '🌐 网页记录' },
 ];
 
@@ -556,15 +555,26 @@ const goBack = () => {
   router.push('/entity/Topic');
 };
 
-const toggleConversationExpand = (conversationId: string) => {
+const getConversationRenderId = (conversation: any, index = 0): string => {
+  return getTopicConversationPrimaryId(conversation) || `conversation-${index}`;
+};
+
+const isConversationExpanded = (conversation: any, index = 0): boolean => {
+  return expandedConversations.value.has(getConversationRenderId(conversation, index));
+};
+
+const toggleConversationExpand = (conversation: any, index = 0) => {
+  const conversationId = getConversationRenderId(conversation, index);
   const newExpanded = new Set(expandedConversations.value);
   if (newExpanded.has(conversationId)) {
     newExpanded.delete(conversationId);
   } else {
     newExpanded.clear();
     newExpanded.add(conversationId);
-    // 展开时标记为已读
-    void store.markConversationAsRead(topicId.value, conversationId);
+    const messageId = getTopicConversationPrimaryId(conversation);
+    if (messageId) {
+      void store.markConversationAsRead(topicId.value, messageId);
+    }
   }
   expandedConversations.value = newExpanded;
 };
@@ -631,7 +641,8 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     topicData.value,
     messageId,
   );
-  if (!targetConversation?.id) {
+  const targetConversationId = getTopicConversationPrimaryId(targetConversation);
+  if (!targetConversationId) {
     activeTab.value = 'conversations';
     convFilter.value = 'all';
     convSearchQuery.value = '';
@@ -652,24 +663,25 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
   if (
     convSearchQuery.value &&
     !filteredConversations.value.some(
-      (conversation: any) => conversation.id === targetConversation.id,
+      (conversation: any) =>
+        getTopicConversationPrimaryId(conversation) === targetConversationId,
     )
   ) {
     convSearchQuery.value = '';
   }
 
-  expandedConversations.value = new Set([targetConversation.id]);
-  highlightedConversationId.value = targetConversation.id;
-  await store.markConversationAsRead(topicId.value, targetConversation.id);
+  expandedConversations.value = new Set([targetConversationId]);
+  highlightedConversationId.value = targetConversationId;
+  await store.markConversationAsRead(topicId.value, messageId);
   await nextTick();
 
   const targetElement = Array.from(
     document.querySelectorAll<HTMLElement>('[data-conversation-id]'),
-  ).find((element) => element.dataset.conversationId === targetConversation.id);
+  ).find((element) => element.dataset.conversationId === targetConversationId);
   targetElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
   window.setTimeout(() => {
-    if (highlightedConversationId.value === targetConversation.id) {
+    if (highlightedConversationId.value === targetConversationId) {
       highlightedConversationId.value = null;
     }
     if (messageFocusNotice.value?.type === 'info') {
@@ -680,13 +692,6 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
 
 const highlightText = (text: string, searchQuery: string) => {
   return renderHighlightedText(text, searchQuery);
-};
-
-const getSafeExternalUrl = (url: unknown): string => {
-  if (!url || url === '#') return '';
-  const normalizedUrl = String(url).trim();
-  if (/^https?:\/\//i.test(normalizedUrl)) return normalizedUrl;
-  return '';
 };
 
 const getConversationSourceUrl = (conversation: any): string => {
@@ -721,19 +726,16 @@ const getPriorityStyle = (priority: string) => {
 /**
  * 格式化时间为相对时间
  */
-const formatTimeAgo = (timestamp: number): string => {
-  const now = Date.now();
-  const diff = now - timestamp;
+const formatTimeAgo = (timestamp: unknown): string => {
+  return formatTopicRelativeTime(timestamp);
+};
 
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-  const weeks = Math.floor(diff / 604800000);
-
-  if (hours < 1) return '刚刚';
-  if (hours < 24) return `${hours}小时前`;
-  if (days < 7) return `${days}天前`;
-  if (weeks < 4) return `${weeks}周前`;
-  return new Date(timestamp).toLocaleDateString();
+const getTopicLastUpdatedLabel = (topic: any): string => {
+  return (
+    formatTimeAgo(
+      topic?.readStatus?.lastUpdateTime ?? topic?.updated ?? topic?.cachedAt,
+    ) || '未知时间'
+  );
 };
 
 watch(

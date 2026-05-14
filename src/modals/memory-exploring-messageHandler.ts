@@ -8,6 +8,9 @@
 
 import {
   getMemoryServiceClient,
+  type MemoryFeedbackAction,
+  type MemoryFeedbackTargetType,
+  type MemoryFeedbackType,
   type RecallItem,
   type RecallScope,
 } from '../services/MemoryServiceClient';
@@ -279,6 +282,47 @@ const messageHandlers: Record<string, MessageHandler> = {
     } catch (error: any) {
       console.error('获取定位记忆失败:', error);
       return { success: false, error: error.message, data: null };
+    }
+  },
+
+  SUBMIT_MEMORY_FEEDBACK: async (request) => {
+    try {
+      const targetId = String(request.targetId || '').trim();
+      const targetType =
+        request.targetType === 'message' ||
+        request.targetType === 'chunk' ||
+        request.targetType === 'entity'
+          ? (request.targetType as MemoryFeedbackTargetType)
+          : undefined;
+      const action: MemoryFeedbackAction =
+        request.action === 'clear'
+          ? 'clear'
+          : request.action === 'negative'
+            ? 'negative'
+            : 'positive';
+      const feedbackType: MemoryFeedbackType =
+        request.feedbackType === 'notification_useful' ||
+        request.feedbackType === 'entity_correction'
+          ? request.feedbackType
+          : 'recall_quality';
+
+      if (!targetId) {
+        return { success: false, error: 'missing_feedback_target' };
+      }
+
+      const result = await client.submitFeedback({
+        type: feedbackType,
+        targetId,
+        targetType,
+        action,
+        detail:
+          typeof request.detail === 'string' ? request.detail : undefined,
+      });
+
+      return { success: true, data: result };
+    } catch (error: any) {
+      console.error('提交记忆反馈失败:', error);
+      return { success: false, error: error.message };
     }
   },
 

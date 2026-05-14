@@ -10,9 +10,11 @@ import {
 const MAX_CHUNK_BYTES = 900 * 1024;
 const DESKTOP_ASR_BASE_URL = 'http://127.0.0.1:46321';
 const IDLE_FLUSH_DELAY_MS = 900;
+const MAX_CLIENT_TRAILING_SILENCE_MS = 900;
 
 type LocalLiveEngine = 'apple_speech' | 'sherpa_streaming' | 'none';
 type LocalFinalEngine = 'funasr_nano' | 'whisper_cpp' | 'none';
+type LocalAsrChannel = 'tab' | 'mic';
 
 interface AsrStatusResponse {
   ok: boolean;
@@ -100,6 +102,41 @@ function formatEngineLabel(
   return `Local ASR · ${live} → ${final}`;
 }
 
+function hasLikelySpeechPcm16(buffer: ArrayBuffer): boolean {
+  const samples = new Int16Array(buffer);
+  if (!samples.length) return false;
+  let sumSquares = 0;
+  let peak = 0;
+  let activeFrames = 0;
+  let totalFrames = 0;
+  const frameSize = Math.max(1, Math.round(16000 * 0.02));
+  for (let i = 0; i < samples.length; i += 1) {
+    const normalized = Math.abs(samples[i] || 0) / 32768;
+    sumSquares += normalized * normalized;
+    if (normalized > peak) peak = normalized;
+  }
+  for (let start = 0; start < samples.length; start += frameSize) {
+    const end = Math.min(samples.length, start + frameSize);
+    let frameSumSquares = 0;
+    let framePeak = 0;
+    for (let i = start; i < end; i += 1) {
+      const normalized = Math.abs(samples[i] || 0) / 32768;
+      frameSumSquares += normalized * normalized;
+      if (normalized > framePeak) framePeak = normalized;
+    }
+    const frameRms = Math.sqrt(frameSumSquares / Math.max(1, end - start));
+    if (frameRms >= 0.006 || framePeak >= 0.025) activeFrames += 1;
+    totalFrames += 1;
+  }
+  const rms = Math.sqrt(sumSquares / samples.length);
+  const activeFrameRatio = totalFrames > 0 ? activeFrames / totalFrames : 0;
+  return (
+    rms >= 0.008 ||
+    (rms >= 0.003 && peak >= 0.025 && activeFrameRatio >= 0.08) ||
+    (rms >= 0.005 && peak >= 0.018 && activeFrameRatio >= 0.18)
+  );
+}
+
 export class DesktopLocalAsrProvider implements ASRProvider {
   readonly tier: MeetingPilotASRTier = 'desktop_whisper';
 
@@ -117,9 +154,17 @@ export class DesktopLocalAsrProvider implements ASRProvider {
   private fallbackFinalEngine: LocalFinalEngine | undefined;
   private lastChainLabel: string | undefined;
   private lastPartialByUtterance = new Map<string, string>();
+  private chunkSendQueue: Promise<void> = Promise.resolve();
+  private channel: LocalAsrChannel;
+  private clientHasSpeech = false;
+  private clientTrailingSilenceMs = 0;
 
-  constructor(language: MeetingTranscribeLanguage | string = 'auto') {
+  constructor(
+    language: MeetingTranscribeLanguage | string = 'auto',
+    channel: LocalAsrChannel = 'tab',
+  ) {
     this.language = normalizeMeetingTranscribeLanguage(language);
+    this.channel = channel;
   }
 
   async isAvailable(): Promise<{ ok: boolean; reason?: string }> {
@@ -174,6 +219,9 @@ export class DesktopLocalAsrProvider implements ASRProvider {
     this.stopped = false;
     this._clearIdleFlushTimer();
     this.lastPartialByUtterance.clear();
+    this.chunkSendQueue = Promise.resolve();
+    this.clientHasSpeech = false;
+    this.clientTrailingSilenceMs = 0;
     const track =
       audio instanceof MediaStreamTrack ? audio : audio.getAudioTracks()[0];
     if (!track) {
@@ -187,7 +235,7 @@ export class DesktopLocalAsrProvider implements ASRProvider {
       return;
     }
 
-    this.sessionId = `session-${Date.now()}-${Math.random()
+    this.sessionId = `session-${this.channel}-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 8)}`;
     this.sessionStartedAt = Date.now();
@@ -205,6 +253,7 @@ export class DesktopLocalAsrProvider implements ASRProvider {
           sessionId: this.sessionId,
           locale: getPreferredLocale(this.language),
           language: this.language,
+          sourceChannel: this.channel,
           liveEngine: 'auto',
           finalEngine: 'funasr_nano',
           fallbackFinalEngine: 'whisper_cpp',
@@ -229,7 +278,7 @@ export class DesktopLocalAsrProvider implements ASRProvider {
 
     this.pcmStreamer = createPcmStreamer(track);
     this.unsubPcm = this.pcmStreamer.onChunk((buffer, timing) => {
-      void this._sendChunk(buffer, timing);
+      this._handlePcmChunk(buffer, timing);
     });
 
     await this.pcmStreamer.start();
@@ -262,6 +311,7 @@ export class DesktopLocalAsrProvider implements ASRProvider {
 
     if (this.sessionId) {
       try {
+        await this.chunkSendQueue.catch(() => undefined);
         const result = await this._sendToBackground<AsrChunkResponse>({
           method: 'POST',
           path: `/asr/session/${this.sessionId}/stop`,
@@ -287,6 +337,36 @@ export class DesktopLocalAsrProvider implements ASRProvider {
     handler: (e: ASREventMap[K]) => void,
   ): () => void {
     return this.emitter.on(event, handler);
+  }
+
+  private _handlePcmChunk(
+    buffer: ArrayBuffer,
+    timing: { startedAt: number; endedAt: number },
+  ): void {
+    const hasSpeech = hasLikelySpeechPcm16(buffer);
+    const durationMs = Math.max(0, timing.endedAt - timing.startedAt);
+    if (hasSpeech) {
+      this.clientHasSpeech = true;
+      this.clientTrailingSilenceMs = 0;
+    } else if (!this.clientHasSpeech) {
+      return;
+    } else {
+      this.clientTrailingSilenceMs += durationMs;
+      if (this.clientTrailingSilenceMs > MAX_CLIENT_TRAILING_SILENCE_MS) {
+        this._scheduleIdleFlush();
+        return;
+      }
+    }
+    this._enqueueChunk(buffer, timing);
+  }
+
+  private _enqueueChunk(
+    buffer: ArrayBuffer,
+    timing: { startedAt: number; endedAt: number },
+  ): void {
+    this.chunkSendQueue = this.chunkSendQueue
+      .catch(() => undefined)
+      .then(() => this._sendChunk(buffer, timing));
   }
 
   private async _sendChunk(
@@ -358,6 +438,8 @@ export class DesktopLocalAsrProvider implements ASRProvider {
   ): boolean {
     const finalText = sanitizeASRTranscriptText(result?.final);
     if (!finalText || !result?.utteranceId) return false;
+    this.clientHasSpeech = false;
+    this.clientTrailingSilenceMs = 0;
     this.lastPartialByUtterance.delete(result.utteranceId);
     this.emitter.emit('transcript', {
       kind: 'final',
@@ -376,7 +458,9 @@ export class DesktopLocalAsrProvider implements ASRProvider {
     this.idleFlushTimer = setTimeout(() => {
       this.idleFlushTimer = undefined;
       if (this.sessionId !== sessionId || this.stopped) return;
-      void this._flushBufferedSpeech(sessionId);
+      this.chunkSendQueue = this.chunkSendQueue
+        .catch(() => undefined)
+        .then(() => this._flushBufferedSpeech(sessionId));
     }, IDLE_FLUSH_DELAY_MS);
   }
 

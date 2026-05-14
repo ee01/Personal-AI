@@ -120,6 +120,25 @@ function installFetchMock() {
       );
     }
 
+    if (url.startsWith('http://mock-memory/api/v1/entities')) {
+      return new Response(
+        JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    if (url.startsWith('http://mock-memory/api/v1/recall')) {
+      return new Response(
+        JSON.stringify({
+          items: [],
+          totalFound: 0,
+          queryTimeMs: 1,
+          channels: [],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
     if (url.startsWith('http://mock-memory/api/v1/message-rules/plan')) {
       plannedAutomations.push(body);
       return new Response(
@@ -176,34 +195,98 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('分析以下人物之间可能的关系')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({ relationships: [] }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (prompt.includes('分析以下消息的重要性')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              isImportant: false,
+              shouldStore: false,
+              priority: 'medium',
+              reason: 'storage comes from memory entry rule',
+              tags: [],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (prompt.includes('分析以下消息并提供回复建议')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              needsReply: false,
+              replyText: '',
+              priority: 'low',
+              reason: 'no reply needed',
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      const lowConfidenceAgentWorkflow = prompt.includes(
+        'Current User might be on leave',
+      );
       return new Response(
         JSON.stringify({
           response: JSON.stringify({
             data: [
-              {
-                team_name: 'Leave Chat',
-                team_id: 'leave-chat',
-                sender: 'Alice',
-                message_content: 'Current User will be on leave 2099-04-18~2099-04-20.',
-                summary: 'manual leave rule matched',
-                datetime: '2099-04-16T09:00:00.000Z',
-                post_id: 'post-leave-1',
-                matched_rule:
-                  '[RULE_REF:manual:leave-rule] [RULE_ID:0] Leave Chat 群有人发起请假消息，并且包含我的名字',
-                matched_rule_refs: ['manual:leave-rule'],
-                matched_rule_ids: [0],
-                reply_advice: '',
-                user_relation_type: 'general_interest',
-                contextMessages: [
-                  {
-                    id: 'post-leave-1',
+              lowConfidenceAgentWorkflow
+                ? {
+                    team_name: 'Leave Chat',
+                    team_id: 'leave-chat',
                     sender: 'Alice',
-                    content: 'Current User will be on leave 2099-04-18~2099-04-20.',
+                    message_content:
+                      'Current User might be on leave 2099-04-18~2099-04-20.',
+                    summary: 'low confidence manual leave rule matched',
+                    datetime: '2099-04-16T11:00:00.000Z',
+                    post_id: 'post-agent-workflow-low-confidence-1',
+                    matched_rule:
+                      '[RULE_REF:manual:agent-workflow-low-confidence] Leave Chat 群有人发起请假消息，并且包含我的名字',
+                    matched_rule_refs: [
+                      'manual:agent-workflow-low-confidence',
+                    ],
+                    matched_rule_ids: [],
+                    confidence: '42%',
+                    reply_advice: '',
+                    user_relation_type: 'general_interest',
+                    contextMessages: [],
+                  }
+                : {
+                    team_name: 'Leave Chat',
+                    team_id: 'leave-chat',
+                    sender: 'Alice',
+                    message_content:
+                      'Current User will be on leave 2099-04-18~2099-04-20.',
+                    summary: 'manual leave rule matched',
                     datetime: '2099-04-16T09:00:00.000Z',
-                    isMainMessage: true,
+                    post_id: 'post-leave-1',
+                    matched_rule:
+                      '[RULE_REF:manual:leave-rule] [RULE_ID:0] Leave Chat 群有人发起请假消息，并且包含我的名字',
+                    matched_rule_refs: ['manual:leave-rule'],
+                    matched_rule_ids: [0],
+                    reply_advice: '',
+                    user_relation_type: 'general_interest',
+                    contextMessages: [
+                      {
+                        id: 'post-leave-1',
+                        sender: 'Alice',
+                        content:
+                          'Current User will be on leave 2099-04-18~2099-04-20.',
+                        datetime: '2099-04-16T09:00:00.000Z',
+                        isMainMessage: true,
+                      },
+                    ],
                   },
-                ],
-              },
             ],
           }),
         }),
@@ -279,6 +362,124 @@ async function main() {
     startAtMs: Date.parse('2099-04-18T00:00:00.000Z'),
     endAtMs: Date.parse('2099-04-20T23:59:00.000Z'),
   });
+
+  storage.envConfig.ANALYSIS_TYPE = 'agentWorkflow';
+  storage.concernedItems = [
+    {
+      id: 'agent-workflow-action-only',
+      text: 'Leave Chat 群有人发起请假消息，并且包含我的名字',
+      expiredAt: 0,
+      notifyMethod: '',
+      filterGroup: 'Leave Chat',
+      automationPrompt:
+        '从消息提取请假日期，请假前 3 小时修改 Glip 状态为 PTO，结束后改回 Available。',
+    },
+  ];
+  ingests.length = 0;
+  plannedAutomations.length = 0;
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Leave Chat',
+        groupId: 'leave-chat',
+        standalone: [
+          {
+            creator: 'Alice',
+            time: '2099-04-16T10:00:00.000Z',
+            id: 'post-agent-workflow-leave-1',
+            text: 'Current User will be on leave 2099-04-18~2099-04-20.',
+            event: {
+              title: 'Current User PTO',
+              start: '2099-04-18',
+              end: '2099-04-20',
+              timeRange: '2099-04-18~2099-04-20',
+              location: 'OOO',
+              startAtMs: Date.parse('2099-04-18T00:00:00.000Z'),
+              endAtMs: Date.parse('2099-04-20T23:59:00.000Z'),
+            },
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  assert.equal(
+    plannedAutomations.length,
+    1,
+    'agentWorkflow should plan automation for matched action-only rules',
+  );
+  assert.equal(
+    plannedAutomations[0].ruleRef,
+    'manual:agent-workflow-action-only',
+  );
+  assert.equal(
+    plannedAutomations[0].message.postId,
+    'post-agent-workflow-leave-1',
+    'agentWorkflow should analyze standalone message entries',
+  );
+  assert.deepEqual(plannedAutomations[0].message.event, {
+    title: 'Current User PTO',
+    start: '2099-04-18',
+    end: '2099-04-20',
+    timeRange: '2099-04-18~2099-04-20',
+    location: 'OOO',
+    startAtMs: Date.parse('2099-04-18T00:00:00.000Z'),
+    endAtMs: Date.parse('2099-04-20T23:59:00.000Z'),
+  });
+
+  storage.concernedItems = [
+    {
+      id: 'agent-workflow-low-confidence',
+      text: 'Leave Chat 群有人发起请假消息，并且包含我的名字',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+      filterGroup: 'Leave Chat',
+      automationPrompt:
+        '从消息提取请假日期，请假前 3 小时修改 Glip 状态为 PTO，结束后改回 Available。',
+    },
+  ];
+  ingests.length = 0;
+  plannedAutomations.length = 0;
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Leave Chat',
+        groupId: 'leave-chat',
+        standalone: [
+          {
+            creator: 'Alice',
+            time: '2099-04-16T11:00:00.000Z',
+            id: 'post-agent-workflow-low-confidence-1',
+            text: 'Current User might be on leave 2099-04-18~2099-04-20.',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  assert.equal(
+    ingests.length,
+    1,
+    'low-confidence agentWorkflow matches should still be audited in memory',
+  );
+  assert.equal(
+    ingests[0].metadata.notificationReview.required,
+    true,
+    'low-confidence agentWorkflow match should require notification review',
+  );
+  assert.equal(
+    plannedAutomations.length,
+    0,
+    'low-confidence agentWorkflow matches should pause rule automation planning',
+  );
   console.log('verify-memory-entry-automation-flow: ok');
 }
 

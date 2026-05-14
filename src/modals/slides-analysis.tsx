@@ -7,6 +7,13 @@ import {
     getNewSuggestionText,
     normalizeComparableText,
 } from '../utils/slidesAnalyzerSuggestions';
+import {
+    formatDisplayDate,
+    getRiskEvidenceItems,
+    isOpenJiraIssue,
+    isPastDueDate,
+    isRiskSpotlightSuggestion,
+} from '../utils/slidesAnalyzerRisk';
 
 interface AnalysisData {
     result: DisplaySlideAnalysisResult;
@@ -14,7 +21,7 @@ interface AnalysisData {
 }
 
 type UpdateField = 'status' | 'owner' | 'track' | 'comments';
-type ReviewFilter = 'all' | 'selected' | 'review' | 'blocked';
+type ReviewFilter = 'all' | 'selected' | 'review' | 'risk' | 'blocked';
 
 const GOOGLE_SLIDES_ORIGIN = 'https://docs.google.com';
 const HIGH_CONFIDENCE_THRESHOLD = 0.75;
@@ -30,9 +37,9 @@ const REVIEW_FILTER_LABELS: Record<ReviewFilter, string> = {
     all: '全部',
     selected: '已选',
     review: '需复核',
+    risk: '风险',
     blocked: '无法写回'
 };
-
 const fieldKey = (projectIndex: number, field: UpdateField) => `${projectIndex}:${field}`;
 
 const hasWritableColumnIndex = (columnIndex: unknown): columnIndex is number => (
@@ -449,6 +456,10 @@ const SlidesAnalysis: React.FC = () => {
             return isSuggestionReviewRequired(suggestion);
         }
 
+        if (reviewFilter === 'risk') {
+            return isRiskSpotlightSuggestion(suggestion);
+        }
+
         if (reviewFilter === 'blocked') {
             return getUnavailableUpdateFields(suggestion).length > 0;
         }
@@ -494,6 +505,14 @@ const SlidesAnalysis: React.FC = () => {
             count + getUnavailableUpdateFields(suggestion).length
         ), 0)
         : 0;
+
+    const riskSpotlightEntries = analysisResult
+        ? analysisResult.updateSuggestions
+            .map((suggestion, index) => ({ suggestion, index, riskItems: getRiskEvidenceItems(suggestion) }))
+            .filter(({ riskItems }) => riskItems.length > 0)
+        : [];
+
+    const riskSpotlightCount = riskSpotlightEntries.length;
 
     const filteredSuggestionEntries = analysisResult
         ? analysisResult.updateSuggestions
@@ -642,14 +661,7 @@ const SlidesAnalysis: React.FC = () => {
     };
 
     const formatDate = (dateString: string): string => {
-        if (!dateString) return '';
-        
-        try {
-            const date = new Date(dateString);
-            return date.toLocaleDateString('zh-CN');
-        } catch (e) {
-            return dateString;
-        }
+        return formatDisplayDate(dateString);
     };
 
     if (!analysisResult) {
@@ -709,6 +721,9 @@ const SlidesAnalysis: React.FC = () => {
                             <span className="review-chip">可更新字段 {availableUpdateFieldCount}</span>
                             <span className="review-chip review-chip-safe">高可信默认 {defaultSelectedFieldCount}</span>
                             <span className="review-chip review-chip-attention">需复核项目 {reviewRequiredCount}</span>
+                            {riskSpotlightCount > 0 && (
+                                <span className="review-chip review-chip-risk">风险项目 {riskSpotlightCount}</span>
+                            )}
                             {missingEvidenceCount > 0 && (
                                 <span className="review-chip review-chip-attention">缺少来源 {missingEvidenceCount}</span>
                             )}
@@ -779,6 +794,41 @@ const SlidesAnalysis: React.FC = () => {
                 </ul>
             </div>
 
+            {riskSpotlightEntries.length > 0 && (
+                <div className="risk-spotlight-section">
+                    <div className="section-header-row">
+                        <h3>风险焦点</h3>
+                        <button
+                            id="review-filter-risk-inline"
+                            type="button"
+                            className="btn-quiet"
+                            onClick={() => setReviewFilter('risk')}
+                        >
+                            只看风险
+                        </button>
+                    </div>
+                    <div className="risk-spotlight-list">
+                        {riskSpotlightEntries.slice(0, 4).map(({ suggestion, riskItems }) => (
+                            <div key={`${suggestion.projectId}-${suggestion.projectName}`} className="risk-spotlight-item">
+                                <div className="risk-spotlight-title">
+                                    {suggestion.projectId}: {suggestion.projectName}
+                                </div>
+                                <ul className="risk-spotlight-reasons">
+                                    {riskItems.map((item, riskIndex) => (
+                                        <li key={riskIndex}>{item}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        ))}
+                    </div>
+                    {riskSpotlightEntries.length > 4 && (
+                        <div className="risk-spotlight-more">
+                            还有 {riskSpotlightEntries.length - 4} 个风险项目可在风险视图中查看。
+                        </div>
+                    )}
+                </div>
+            )}
+
             <div className="suggestions-section">
                 <h3>💡 更新建议</h3>
                 {analysisResult.updateSuggestions && analysisResult.updateSuggestions.length > 0 && (
@@ -796,6 +846,7 @@ const SlidesAnalysis: React.FC = () => {
                             const availableFields = getAvailableUpdateFields(suggestion);
                             const unavailableFields = getUnavailableUpdateFields(suggestion);
                             const evidenceItems = getSuggestionEvidenceItems(suggestion);
+                            const riskItems = getRiskEvidenceItems(suggestion);
                             const needsReview = isSuggestionReviewRequired(suggestion);
                             const isDefaultSelectable = shouldDefaultSelectSuggestion(suggestion);
                             const newSuggestedComments = getNewSuggestedComments(suggestion);
@@ -816,6 +867,16 @@ const SlidesAnalysis: React.FC = () => {
                                                 {(suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD
                                                     ? '低可信建议未自动选中，来源或理由不足时保持不写回。'
                                                     : '缺少可见来源或理由，需人工确认后手动勾选。'}
+                                            </div>
+                                        )}
+                                        {riskItems.length > 0 && (
+                                            <div className="project-risk-evidence-panel">
+                                                <div className="project-risk-evidence-title">风险依据</div>
+                                                <ul className="project-risk-evidence-list">
+                                                    {riskItems.map((item, riskIndex) => (
+                                                        <li key={riskIndex}>{item}</li>
+                                                    ))}
+                                                </ul>
                                             </div>
                                         )}
                                         <div className={`source-evidence-panel ${evidenceItems.length === 0 ? 'source-evidence-panel-empty' : ''}`}>
@@ -852,11 +913,14 @@ const SlidesAnalysis: React.FC = () => {
                                                 fontSize: '13px' 
                                             }}>
                                                 <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>相关Jira问题:</div>
-                                                {suggestion.sourceInfo.jiraIssues.map((issue, issueIndex) => (
-                                                    <div key={issueIndex} className="jira-issue-item" style={{ 
-                                                        marginBottom: '8px', 
-                                                        padding: '5px', 
-                                                        borderLeft: '3px solid #0052CC' 
+                                                {suggestion.sourceInfo.jiraIssues.map((issue, issueIndex) => {
+                                                    const isOpenPastDue = isOpenJiraIssue(issue) && isPastDueDate(issue.duedate);
+
+                                                    return (
+                                                    <div key={issueIndex} className="jira-issue-item" style={{
+                                                        marginBottom: '8px',
+                                                        padding: '5px',
+                                                        borderLeft: '3px solid #0052CC'
                                                     }}>
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                             <a href={issue.url || '#'} target="_blank" rel="noreferrer" style={{
@@ -938,8 +1002,8 @@ const SlidesAnalysis: React.FC = () => {
                                                                 }}>
                                                                     <span style={{ color: '#777', marginRight: '3px' }}>截止日期:</span>
                                                                     <span style={{ 
-                                                                        color: new Date(issue.duedate) < new Date() ? '#FF5630' : '#333',
-                                                                        fontWeight: new Date(issue.duedate) < new Date() ? 'bold' : 'normal'
+                                                                        color: isOpenPastDue ? '#FF5630' : '#333',
+                                                                        fontWeight: isOpenPastDue ? 'bold' : 'normal'
                                                                     }}>
                                                                         {formatDate(issue.duedate)}
                                                                     </span>
@@ -947,7 +1011,8 @@ const SlidesAnalysis: React.FC = () => {
                                                             )}
                                                         </div>
                                                     </div>
-                                                ))}
+                                                );
+                                                })}
                                             </div>
                                         )}
                                         
@@ -1250,6 +1315,12 @@ const styles = `
         color: #bf2600;
     }
 
+    .review-chip-risk {
+        background: #fff4e5;
+        border-color: #ffbd7a;
+        color: #8a4b00;
+    }
+
     .review-controls {
         align-items: center;
         display: flex;
@@ -1313,6 +1384,83 @@ const styles = `
         color: #42526e;
         padding: 18px;
         text-align: center;
+    }
+
+    .risk-spotlight-section {
+        margin-bottom: 30px;
+        padding: 18px 20px;
+        border: 1px solid #ffbd7a;
+        border-radius: 8px;
+        background: #fffaf2;
+    }
+
+    .section-header-row {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+    }
+
+    .section-header-row h3 {
+        margin: 0;
+    }
+
+    .risk-spotlight-list {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+
+    .risk-spotlight-item {
+        background: #fff;
+        border: 1px solid #ffe0b2;
+        border-left: 4px solid #ff8b00;
+        border-radius: 6px;
+        padding: 10px 12px;
+    }
+
+    .risk-spotlight-title {
+        color: #172b4d;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+    }
+
+    .risk-spotlight-reasons {
+        color: #5f4b00;
+        font-size: 12px;
+        line-height: 1.5;
+        margin: 6px 0 0;
+        padding-left: 18px;
+    }
+
+    .risk-spotlight-more {
+        color: #6b4f00;
+        font-size: 12px;
+        margin-top: 10px;
+    }
+
+    .project-risk-evidence-panel {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        border-left: 4px solid #f97316;
+        border-radius: 6px;
+        color: #7c2d12;
+        margin-top: 10px;
+        padding: 10px 12px;
+    }
+
+    .project-risk-evidence-title {
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 4px;
+    }
+
+    .project-risk-evidence-list {
+        font-size: 12px;
+        line-height: 1.5;
+        margin: 0;
+        padding-left: 18px;
     }
 
     .confidence-badge {

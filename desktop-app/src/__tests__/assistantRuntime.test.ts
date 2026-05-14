@@ -38,6 +38,7 @@ function createStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatus {
       autoSyncEnabled: true,
       memoryServiceConfigured: true,
       pollIntervalMs: 300000,
+      recentAttempts: [],
       tasks: {
         stableMemory: { intervalMs: 1, due: false },
         mobileBriefing: { intervalMs: 1, due: false },
@@ -63,7 +64,9 @@ test('buildAskContextFromTurns keeps last 4 turns and truncates oldest context',
 });
 
 test('classifyRememberText maps response preferences to preference items', () => {
-  const result = classifyRememberText('请帮我记住：以后优先用中文、简洁一点回答');
+  const result = classifyRememberText(
+    '请帮我记住：以后优先用中文、简洁一点回答',
+  );
   assert.equal(result.itemType, 'preference');
   assert.equal(result.itemKey, 'language_preference');
 });
@@ -80,14 +83,25 @@ test('classifyRememberText maps timezone and role to fact items', () => {
 
 test('isStandaloneRememberRequest distinguishes remember-only from mixed question', () => {
   assert.equal(isStandaloneRememberRequest('请帮我记住我偏好中文回复'), true);
-  assert.equal(isStandaloneRememberRequest('请帮我记住我偏好中文回复，然后总结今天发生了什么？'), false);
+  assert.equal(
+    isStandaloneRememberRequest(
+      '请帮我记住我偏好中文回复，然后总结今天发生了什么？',
+    ),
+    false,
+  );
 });
 
 test('hasExplicitRememberIntent avoids recall questions and accepts command forms', () => {
   assert.equal(hasExplicitRememberIntent('你还记住我的回复偏好吗？'), false);
-  assert.equal(hasExplicitRememberIntent('Do you remember my timezone?'), false);
+  assert.equal(
+    hasExplicitRememberIntent('Do you remember my timezone?'),
+    false,
+  );
   assert.equal(hasExplicitRememberIntent('请记下：我偏好中文回复'), true);
-  assert.equal(hasExplicitRememberIntent('Remember that my timezone is Asia/Shanghai'), true);
+  assert.equal(
+    hasExplicitRememberIntent('Remember that my timezone is Asia/Shanghai'),
+    true,
+  );
 });
 
 test('buildAssistantRuntimeSummary picks top status by defined priority', () => {
@@ -105,7 +119,9 @@ test('buildAssistantRuntimeSummary picks top status by defined priority', () => 
       items: [{ id: 'cr-1', question: '是否确认这条偏好？' }],
     },
     runningActions: {
-      items: [{ id: 'act-1', title: 'OpenClaw 正在打开页面', queueStatus: 'running' }],
+      items: [
+        { id: 'act-1', title: 'OpenClaw 正在打开页面', queueStatus: 'running' },
+      ],
     },
     outreachSummary: {
       waitingReplyCount: 1,
@@ -113,7 +129,13 @@ test('buildAssistantRuntimeSummary picks top status by defined priority', () => 
       escalatedCount: 0,
     },
     waitingReplySessions: {
-      items: [{ id: 'os-1', status: 'waiting_reply', renderedQuestion: '等王峰回复部署窗口时间' }],
+      items: [
+        {
+          id: 'os-1',
+          status: 'waiting_reply',
+          renderedQuestion: '等王峰回复部署窗口时间',
+        },
+      ],
     },
   });
 
@@ -134,6 +156,7 @@ test('buildAssistantRuntimeSummary surfaces Doubao sync issues before confirmati
         pollIntervalMs: 300000,
         lastErrorAt: '2026-05-08T01:19:27.852Z',
         lastErrorMessage: 'fetch failed',
+        recentAttempts: [],
         tasks: {
           stableMemory: { intervalMs: 1, due: true },
           mobileBriefing: { intervalMs: 1, due: false },
@@ -149,4 +172,48 @@ test('buildAssistantRuntimeSummary surfaces Doubao sync issues before confirmati
   assert.equal(summary.topStatus?.kind, 'sync_issue');
   assert.equal(summary.items[0]?.title, '豆包同步异常');
   assert.match(summary.items[0]?.summary || '', /fetch failed/);
+});
+
+test('buildAssistantRuntimeSummary explains failed Doubao sync lane in status card details', () => {
+  const summary = buildAssistantRuntimeSummary({
+    status: createStatus({
+      syncState: {
+        timerActive: true,
+        running: false,
+        autoSyncEnabled: true,
+        memoryServiceConfigured: true,
+        pollIntervalMs: 300000,
+        lastErrorAt: '2026-05-08T01:19:27.852Z',
+        lastErrorMessage:
+          'Doubao challenge detected before send (verify you are human)',
+        recentAttempts: [
+          {
+            id: 'attempt-1',
+            kind: 'reminder_sync',
+            trigger: 'manual',
+            status: 'failed',
+            startedAt: '2026-05-08T01:19:20.000Z',
+            completedAt: '2026-05-08T01:19:27.852Z',
+            durationMs: 7852,
+            errorMessage:
+              'Doubao challenge detected before send (verify you are human)',
+          },
+        ],
+        tasks: {
+          stableMemory: { intervalMs: 1, due: false },
+          mobileBriefing: { intervalMs: 1, due: false },
+          reminderSync: { intervalMs: 1, due: true },
+        },
+      },
+    }),
+  });
+
+  const issue = summary.items[0];
+  assert.equal(issue?.kind, 'sync_issue');
+  assert.match(issue?.summary || '', /待办 \/ 通知手动失败/);
+  assert.deepEqual(issue?.detailLines?.slice(0, 2), [
+    '链路：待办 / 通知 · 手动',
+    '失败时间：2026-05-08T01:19:27.852Z',
+  ]);
+  assert.equal(issue?.actionHint, '完成验证后重试');
 });

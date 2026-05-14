@@ -89,7 +89,7 @@ try {
 
   const page = await context.newPage();
 
-  log('验证总开关关闭时不会自动注入');
+  log('验证默认开启关闭时不会自动注入');
   await page.goto(`chrome-extension://${extensionId}/options.html`, {
     waitUntil: 'load',
   });
@@ -110,7 +110,95 @@ try {
   const noOverlay = await page.evaluate(
     () => !document.getElementById('meeting-pilot-overlay-root'),
   );
-  assert.equal(noOverlay, true, '禁用 Meeting Pilot 后仍自动注入 overlay');
+  assert.equal(noOverlay, true, '关闭默认开启后仍自动注入 overlay');
+
+  log('验证默认关闭时 popup 单次启动仍可用');
+  const controlPage = await context.newPage();
+  await controlPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: 'load',
+  });
+  const defaultToggleCopy = await controlPage
+    .locator('label', { hasText: '每次会议默认开启会议全貌' })
+    .textContent();
+  assert.match(defaultToggleCopy || '', /每次会议默认开启会议全貌/);
+  const disabledMeetingTabId = await controlPage.evaluate(async (targetUrl) => {
+    const tabs = await chrome.tabs.query({ url: targetUrl });
+    return tabs[0]?.id ?? null;
+  }, meetingUrl);
+  assert.ok(
+    Number.isFinite(disabledMeetingTabId),
+    '未找到默认关闭状态下的 meeting tab',
+  );
+  await controlPage.evaluate(async () => {
+    await chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_TEST_SET_API_MOCK',
+      enabled: true,
+    });
+    await chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_TEST_SET_SIDE_PANEL_FAILURE',
+      enabled: true,
+    });
+  });
+  const manualStartResult = await controlPage.evaluate(
+    async ({ meetingId, tabId, title, url }) => {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
+          meetingId,
+          tabId,
+          title,
+          url,
+          source: 'popup-start',
+        });
+        return response ?? { success: false, error: 'empty_response' };
+      } catch (error) {
+        return {
+          success: false,
+          error: String(error?.message || error),
+          lastError: chrome.runtime.lastError?.message,
+        };
+      }
+    },
+    {
+      meetingId,
+      tabId: disabledMeetingTabId,
+      title: meetingTitle,
+      url: meetingUrl,
+    },
+  );
+  assert.equal(
+    manualStartResult.success,
+    true,
+    `默认关闭时 popup 单次启动失败: ${JSON.stringify(manualStartResult)}`,
+  );
+  assert.match(
+    manualStartResult.session?.capture?.kind || '',
+    /armed|recording|uploading|completed/,
+  );
+  assert.equal(
+    manualStartResult.session?.readiness?.canStartCapture,
+    true,
+    '默认关闭不应阻塞 popup 单次启动 readiness',
+  );
+  await controlPage.evaluate(
+    async ({ meetingId, tabId }) => {
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_STOP_CAPTURE',
+        meetingId,
+        tabId,
+      });
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TEST_SET_SIDE_PANEL_FAILURE',
+        enabled: false,
+      });
+      await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_TEST_SET_API_MOCK',
+        enabled: false,
+      });
+    },
+    { meetingId, tabId: disabledMeetingTabId },
+  );
+  await controlPage.close();
 
   log('验证开启后，privacy notice / hotwords / aliases 会影响真实运行时');
   const settingsPage = await context.newPage();
@@ -143,6 +231,49 @@ try {
     return host?.shadowRoot?.getElementById('mpTopicMeta')?.textContent || '';
   });
   assert.match(overlayMeta, /请注意：会议内容将用于 Meeting Pilot 分析/);
+
+  log('验证悬浮 icon hover 3 秒后出现关闭按钮');
+  const closeBeforeHover = await page.evaluate(() => {
+    const host = document.getElementById('meeting-pilot-overlay-root');
+    return Boolean(
+      host?.shadowRoot
+        ?.getElementById('mpEntryCloseBtn')
+        ?.classList.contains('visible'),
+    );
+  });
+  assert.equal(closeBeforeHover, false, '关闭按钮不应在 hover 前显示');
+  await page.evaluate(() => {
+    const host = document.getElementById('meeting-pilot-overlay-root');
+    const entryWrap = host?.shadowRoot?.getElementById('mpEntryWrap');
+    entryWrap?.dispatchEvent(
+      new MouseEvent('mouseenter', { bubbles: false, composed: true }),
+    );
+  });
+  await page.waitForFunction(() => {
+    const host = document.getElementById('meeting-pilot-overlay-root');
+    return Boolean(
+      host?.shadowRoot
+        ?.getElementById('mpEntryCloseBtn')
+        ?.classList.contains('visible'),
+    );
+  }, null, { timeout: 4500 });
+  await page.evaluate(() => {
+    const host = document.getElementById('meeting-pilot-overlay-root');
+    const entryWrap = host?.shadowRoot?.getElementById('mpEntryWrap');
+    entryWrap?.dispatchEvent(
+      new MouseEvent('mouseleave', {
+        bubbles: false,
+        composed: true,
+        relatedTarget: document.body,
+      }),
+    );
+  });
+  await page.waitForFunction(() => {
+    const host = document.getElementById('meeting-pilot-overlay-root');
+    return !host?.shadowRoot
+      ?.getElementById('mpEntryCloseBtn')
+      ?.classList.contains('visible');
+  });
   await saveScreenshot(page, 'scene3-overlay-settings.png');
 
   const panelPage = await context.newPage();

@@ -1,6 +1,7 @@
 export const JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH = 255;
 const JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX = '(Imported by Personal AI) ';
+const JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING = 'Personal AI import review';
 
 export interface ExportedRule {
   id?: number;
@@ -54,9 +55,11 @@ export interface ImportRule {
 
 export interface ImportRuleContext {
   projectId: string;
+  projectKey?: string;
   projectTypeKey?: string;
   ownerId?: string;
   allowOtherRuleTrigger?: boolean;
+  existingRuleNames?: string[];
   now?: number;
 }
 
@@ -71,6 +74,10 @@ export interface JiraAutomationRuleSummary {
   jqlReferenceCount: number;
   hardcodedUrlCount: number;
   emailReferenceCount: number;
+  accountReferenceCount: number;
+  customFieldReferenceCount: number;
+  savedFilterReferenceCount: number;
+  connectionReferenceCount: number;
   sourceProjectReferenceCount: number;
   scheduledTrigger: boolean;
 }
@@ -79,6 +86,10 @@ export interface JiraAutomationRuleReviewSignals {
   jqlReferences: string[];
   hardcodedUrls: string[];
   emailReferences: string[];
+  accountReferences: string[];
+  customFieldReferences: string[];
+  savedFilterReferences: string[];
+  connectionReferences: string[];
   sourceProjectReferences: string[];
 }
 
@@ -107,11 +118,119 @@ function normalizeReviewSignal(value: string): string {
   return `${normalized.slice(0, 177)}...`;
 }
 
+function normalizeRuleNameForComparison(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+function buildImportedRuleNameWithSuffix(sourceName: string, suffix: string): string {
+  const normalizedName = sourceName.trim();
+  const maxSourceNameLength = Math.max(
+    0,
+    JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH
+      - JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX.length
+      - suffix.length,
+  );
+  const truncatedSourceName = normalizedName.length <= maxSourceNameLength
+    ? normalizedName
+    : `${normalizedName.slice(0, Math.max(0, maxSourceNameLength - 3))}...`;
+
+  return `${JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX}${truncatedSourceName}${suffix}`;
+}
+
+function formatChecklistSeveritySummary(items: JiraAutomationImportReviewChecklistItem[]): string {
+  const parts: string[] = [];
+  (['high', 'medium', 'low'] as const).forEach((severity) => {
+    const labels = items
+      .filter((item) => item.severity === severity)
+      .map((item) => item.label);
+    if (labels.length > 0) {
+      parts.push(`${severity}: ${labels.join(', ')}`);
+    }
+  });
+
+  return parts.join('; ') || 'standard Jira Automation compatibility and permission checks';
+}
+
+function formatDetectedReferenceSummary(summary: JiraAutomationRuleSummary): string {
+  const parts = [
+    summary.jqlReferenceCount > 0 ? `${summary.jqlReferenceCount} JQL/filter` : '',
+    summary.customFieldReferenceCount > 0 ? `${summary.customFieldReferenceCount} custom field` : '',
+    summary.savedFilterReferenceCount > 0 ? `${summary.savedFilterReferenceCount} saved filter` : '',
+    summary.hardcodedUrlCount > 0 ? `${summary.hardcodedUrlCount} URL` : '',
+    summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} secret` : '',
+    summary.connectionReferenceCount > 0 ? `${summary.connectionReferenceCount} connection/credential` : '',
+    summary.accountReferenceCount + summary.emailReferenceCount > 0
+      ? `${summary.accountReferenceCount + summary.emailReferenceCount} account/recipient`
+      : '',
+    summary.sourceProjectReferenceCount > 0 ? `${summary.sourceProjectReferenceCount} source project reference` : '',
+  ].filter(Boolean);
+
+  return parts.join(', ') || 'no environment-bound references detected';
+}
+
+function stripExistingImportReviewNote(description: string): string {
+  const marker = `\n\n${JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING}`;
+  const markerIndex = description.indexOf(marker);
+  if (markerIndex >= 0) {
+    return description.slice(0, markerIndex).trim();
+  }
+
+  if (description.trimStart().startsWith(JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING)) {
+    return '';
+  }
+
+  return description.trim();
+}
+
+export function buildJiraAutomationImportReviewNote(
+  exportedRule: ExportedRule,
+  context: ImportRuleContext,
+): string {
+  const summary = summarizeJiraAutomationImportRule(exportedRule);
+  const checklist = buildJiraAutomationImportReviewChecklist(exportedRule);
+  const targetProject = context.projectKey
+    ? `${context.projectKey} (${context.projectId})`
+    : context.projectId;
+  const sourceAllowsChainedTrigger = Boolean(exportedRule.canOtherRuleTrigger);
+  const ruleChaining = sourceAllowsChainedTrigger
+    ? (context.allowOtherRuleTrigger === true ? 'preserved from source by user choice' : 'blocked in imported copy')
+    : 'disabled in source';
+
+  return [
+    JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING,
+    `- Imported as a disabled copy into ${targetProject}.`,
+    `- Enablement checklist: ${formatChecklistSeveritySummary(checklist)}.`,
+    `- Detected bindings: ${formatDetectedReferenceSummary(summary)}.`,
+    `- Rule chaining: ${ruleChaining}.`,
+  ].join('\n');
+}
+
+function buildJiraAutomationImportDescription(
+  exportedRule: ExportedRule,
+  context: ImportRuleContext,
+): string {
+  const sourceDescription = typeof exportedRule.description === 'string'
+    ? stripExistingImportReviewNote(exportedRule.description)
+    : '';
+  const reviewNote = buildJiraAutomationImportReviewNote(exportedRule, context);
+
+  return sourceDescription ? `${sourceDescription}\n\n${reviewNote}` : reviewNote;
+}
+
 function addReviewSignal(values: Set<string>, value: string): void {
   const normalized = normalizeReviewSignal(value);
   if (normalized) {
     values.add(normalized);
   }
+}
+
+function addKeyedReviewSignal(values: Set<string>, key: string, value: string | number): void {
+  const normalizedKey = key.replace(/\s+/g, ' ').trim();
+  const normalizedValue = String(value).replace(/\s+/g, ' ').trim();
+  if (!normalizedValue) {
+    return;
+  }
+  addReviewSignal(values, normalizedKey ? `${normalizedKey}: ${normalizedValue}` : normalizedValue);
 }
 
 function getSourceProjectTokens(exportedRule: ExportedRule): string[] {
@@ -144,6 +263,29 @@ function isLikelyJqlReference(key: string, text: string): boolean {
   return /\b(project|issuetype|status|assignee|reporter|labels?|fixversion|component)\s*(=|!=|~|!~|in\b|not\s+in\b|is\b)/i.test(text);
 }
 
+function collectCustomFieldReferencesFromText(text: string, values: Set<string>): void {
+  const matches = text.match(/\bcustomfield_\d+\b/gi) || [];
+  matches.forEach((match) => addReviewSignal(values, match));
+}
+
+function collectSavedFilterReferencesFromText(key: string, text: string, values: Set<string>): void {
+  const lowerKey = key.toLowerCase();
+  const filterMatches = text.match(/\bfilter\s*(?:=|!=|in\b|not\s+in\b)\s*\(?\s*\d+/gi) || [];
+  filterMatches.forEach((match) => addReviewSignal(values, match));
+
+  if (lowerKey.includes('filter') && /\b\d{2,}\b/.test(text)) {
+    addKeyedReviewSignal(values, key, text);
+  }
+}
+
+function isLikelyConnectionKey(key: string): boolean {
+  return /(connection|credential|connector|integration|webhook|secret|token|api[-_ ]?key)/i.test(key);
+}
+
+function isLikelyAccountKey(key: string): boolean {
+  return /(accountid|account[-_ ]?id|userkey|user[-_ ]?key|username|user[-_ ]?name|actor|assignee|reporter|approver|recipient)/i.test(key);
+}
+
 function collectReviewSignals(
   value: unknown,
   key: string,
@@ -151,6 +293,10 @@ function collectReviewSignals(
   jqlReferences: Set<string>,
   hardcodedUrls: Set<string>,
   emailReferences: Set<string>,
+  accountReferences: Set<string>,
+  customFieldReferences: Set<string>,
+  savedFilterReferences: Set<string>,
+  connectionReferences: Set<string>,
   sourceProjectReferences: Set<string>,
 ): void {
   if (Array.isArray(value)) {
@@ -161,15 +307,23 @@ function collectReviewSignals(
       jqlReferences,
       hardcodedUrls,
       emailReferences,
+      accountReferences,
+      customFieldReferences,
+      savedFilterReferences,
+      connectionReferences,
       sourceProjectReferences,
     ));
     return;
   }
 
   if (typeof value === 'string') {
+    const trimmedValue = value.trim();
     if (isLikelyJqlReference(key, value)) {
       addReviewSignal(jqlReferences, value);
     }
+
+    collectCustomFieldReferencesFromText(value, customFieldReferences);
+    collectSavedFilterReferencesFromText(key, value, savedFilterReferences);
 
     const urls = value.match(/https?:\/\/[^\s"'<>]+/gi) || [];
     urls.forEach((url) => addReviewSignal(hardcodedUrls, url));
@@ -177,8 +331,30 @@ function collectReviewSignals(
     const emails = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
     emails.forEach((email) => addReviewSignal(emailReferences, email));
 
+    if (trimmedValue && isLikelyAccountKey(key) && emails.length === 0) {
+      addKeyedReviewSignal(accountReferences, key, trimmedValue);
+    }
+
+    if (trimmedValue && isLikelyConnectionKey(key) && urls.length === 0) {
+      addKeyedReviewSignal(connectionReferences, key, trimmedValue);
+    }
+
     if (sourceProjectTokens.length > 0 && textContainsSourceProjectToken(value, sourceProjectTokens)) {
       addReviewSignal(sourceProjectReferences, value);
+    }
+    return;
+  }
+
+  if (typeof value === 'number') {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.includes('customfield')) {
+      addKeyedReviewSignal(customFieldReferences, key, value);
+    }
+    if (lowerKey.includes('filter')) {
+      addKeyedReviewSignal(savedFilterReferences, key, value);
+    }
+    if (isLikelyConnectionKey(key)) {
+      addKeyedReviewSignal(connectionReferences, key, value);
     }
     return;
   }
@@ -195,6 +371,10 @@ function collectReviewSignals(
       jqlReferences,
       hardcodedUrls,
       emailReferences,
+      accountReferences,
+      customFieldReferences,
+      savedFilterReferences,
+      connectionReferences,
       sourceProjectReferences,
     );
   });
@@ -333,20 +513,33 @@ export function isJiraAutomationImportFileSizeAllowed(size: number): boolean {
 }
 
 export function buildJiraAutomationImportedRuleName(sourceName: string): string {
-  const normalizedName = sourceName.trim();
-  const importedName = `${JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX}${normalizedName}`;
+  return buildImportedRuleNameWithSuffix(sourceName, '');
+}
 
-  if (importedName.length <= JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH) {
-    return importedName;
+export function buildJiraAutomationUniqueImportedRuleName(
+  sourceName: string,
+  existingRuleNames: string[] = [],
+): string {
+  const existingNames = new Set(
+    existingRuleNames
+      .filter((name): name is string => typeof name === 'string')
+      .map(normalizeRuleNameForComparison),
+  );
+  const baseName = buildJiraAutomationImportedRuleName(sourceName);
+
+  if (!existingNames.has(normalizeRuleNameForComparison(baseName))) {
+    return baseName;
   }
 
-  const maxSourceNameLength = Math.max(
-    0,
-    JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH
-      - JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX.length
-      - 3,
-  );
-  return `${JIRA_AUTOMATION_IMPORT_RULE_NAME_PREFIX}${normalizedName.slice(0, maxSourceNameLength)}...`;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = buildImportedRuleNameWithSuffix(sourceName, ` (${index})`);
+    if (!existingNames.has(normalizeRuleNameForComparison(candidate))) {
+      return candidate;
+    }
+  }
+
+  const fallbackSuffix = ` (${Date.now()})`;
+  return buildImportedRuleNameWithSuffix(sourceName, fallbackSuffix);
 }
 
 export function summarizeJiraAutomationImportRule(
@@ -363,6 +556,10 @@ export function summarizeJiraAutomationImportRule(
     jqlReferenceCount: 0,
     hardcodedUrlCount: 0,
     emailReferenceCount: 0,
+    accountReferenceCount: 0,
+    customFieldReferenceCount: 0,
+    savedFilterReferenceCount: 0,
+    connectionReferenceCount: 0,
     sourceProjectReferenceCount: 0,
     scheduledTrigger: false,
   };
@@ -378,6 +575,10 @@ export function summarizeJiraAutomationImportRule(
   summary.jqlReferenceCount = reviewSignals.jqlReferences.length;
   summary.hardcodedUrlCount = reviewSignals.hardcodedUrls.length;
   summary.emailReferenceCount = reviewSignals.emailReferences.length;
+  summary.accountReferenceCount = reviewSignals.accountReferences.length;
+  summary.customFieldReferenceCount = reviewSignals.customFieldReferences.length;
+  summary.savedFilterReferenceCount = reviewSignals.savedFilterReferences.length;
+  summary.connectionReferenceCount = reviewSignals.connectionReferences.length;
   summary.sourceProjectReferenceCount = reviewSignals.sourceProjectReferences.length;
   return summary;
 }
@@ -389,6 +590,10 @@ export function collectJiraAutomationImportReviewSignals(
   const jqlReferences = new Set<string>();
   const hardcodedUrls = new Set<string>();
   const emailReferences = new Set<string>();
+  const accountReferences = new Set<string>();
+  const customFieldReferences = new Set<string>();
+  const savedFilterReferences = new Set<string>();
+  const connectionReferences = new Set<string>();
   const sourceProjectReferences = new Set<string>();
 
   collectReviewSignals(
@@ -398,6 +603,10 @@ export function collectJiraAutomationImportReviewSignals(
     jqlReferences,
     hardcodedUrls,
     emailReferences,
+    accountReferences,
+    customFieldReferences,
+    savedFilterReferences,
+    connectionReferences,
     sourceProjectReferences,
   );
   collectReviewSignals(
@@ -407,6 +616,10 @@ export function collectJiraAutomationImportReviewSignals(
     jqlReferences,
     hardcodedUrls,
     emailReferences,
+    accountReferences,
+    customFieldReferences,
+    savedFilterReferences,
+    connectionReferences,
     sourceProjectReferences,
   );
   collectReviewSignals(
@@ -416,6 +629,10 @@ export function collectJiraAutomationImportReviewSignals(
     jqlReferences,
     hardcodedUrls,
     emailReferences,
+    accountReferences,
+    customFieldReferences,
+    savedFilterReferences,
+    connectionReferences,
     sourceProjectReferences,
   );
   collectReviewSignals(
@@ -425,6 +642,10 @@ export function collectJiraAutomationImportReviewSignals(
     jqlReferences,
     hardcodedUrls,
     emailReferences,
+    accountReferences,
+    customFieldReferences,
+    savedFilterReferences,
+    connectionReferences,
     sourceProjectReferences,
   );
   collectReviewSignals(
@@ -434,6 +655,10 @@ export function collectJiraAutomationImportReviewSignals(
     jqlReferences,
     hardcodedUrls,
     emailReferences,
+    accountReferences,
+    customFieldReferences,
+    savedFilterReferences,
+    connectionReferences,
     sourceProjectReferences,
   );
 
@@ -441,6 +666,10 @@ export function collectJiraAutomationImportReviewSignals(
     jqlReferences: Array.from(jqlReferences),
     hardcodedUrls: Array.from(hardcodedUrls),
     emailReferences: Array.from(emailReferences),
+    accountReferences: Array.from(accountReferences),
+    customFieldReferences: Array.from(customFieldReferences),
+    savedFilterReferences: Array.from(savedFilterReferences),
+    connectionReferences: Array.from(connectionReferences),
     sourceProjectReferences: Array.from(sourceProjectReferences),
   };
 }
@@ -501,10 +730,10 @@ export function buildJiraAutomationImportRule(
   }];
 
   return {
-    name: buildJiraAutomationImportedRuleName(exportedRule.name),
+    name: buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames),
     isNewRule: true,
     state: 'DISABLED',
-    canOtherRuleTrigger: context.allowOtherRuleTrigger ?? exportedRule.canOtherRuleTrigger ?? false,
+    canOtherRuleTrigger: Boolean(exportedRule.canOtherRuleTrigger) && context.allowOtherRuleTrigger === true,
     notifyOnError: exportedRule.notifyOnError || 'FIRSTERROR',
     authorAccountId: actorAccountId,
     actorAccountId,
@@ -513,7 +742,7 @@ export function buildJiraAutomationImportRule(
     components: convertedComponents,
     trigger: convertedTrigger,
     labels: exportedRule.labels || [],
-    description: exportedRule.description,
+    description: buildJiraAutomationImportDescription(exportedRule, context),
     projects,
   };
 }
@@ -573,6 +802,21 @@ export function buildJiraAutomationImportWarnings(
     warnings.push(`Includes ${summary.emailReferenceCount} email or account reference(s). Confirm target recipients and service accounts.`);
   }
 
+  if (
+    summary.accountReferenceCount > 0 ||
+    summary.customFieldReferenceCount > 0 ||
+    summary.savedFilterReferenceCount > 0 ||
+    summary.connectionReferenceCount > 0
+  ) {
+    const parts = [
+      summary.accountReferenceCount > 0 ? `${summary.accountReferenceCount} account id/reference(s)` : '',
+      summary.customFieldReferenceCount > 0 ? `${summary.customFieldReferenceCount} custom field reference(s)` : '',
+      summary.savedFilterReferenceCount > 0 ? `${summary.savedFilterReferenceCount} saved filter id/reference(s)` : '',
+      summary.connectionReferenceCount > 0 ? `${summary.connectionReferenceCount} connection or credential reference(s)` : '',
+    ].filter(Boolean);
+    warnings.push(`Environment-bound references detected: ${parts.join(', ')}. Confirm they exist in the target project before enabling.`);
+  }
+
   if (exportedRule.canOtherRuleTrigger) {
     warnings.push('This rule can be triggered by other rules. Keep the chained-trigger safeguard enabled unless you intentionally need that behavior.');
   }
@@ -616,7 +860,9 @@ export function buildJiraAutomationImportReviewChecklist(
     summary.externalIntegrationCount > 0 ||
     summary.hardcodedUrlCount > 0 ||
     summary.secretReferenceCount > 0 ||
-    summary.emailReferenceCount > 0
+    summary.emailReferenceCount > 0 ||
+    summary.accountReferenceCount > 0 ||
+    summary.connectionReferenceCount > 0
   ) {
     const parts = [
       summary.webRequestCount > 0 ? `${summary.webRequestCount} web request(s)` : '',
@@ -624,15 +870,31 @@ export function buildJiraAutomationImportReviewChecklist(
       summary.hardcodedUrlCount > 0 ? `${summary.hardcodedUrlCount} URL(s)` : '',
       summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} secret reference(s)` : '',
       summary.emailReferenceCount > 0 ? `${summary.emailReferenceCount} account/email reference(s)` : '',
+      summary.accountReferenceCount > 0 ? `${summary.accountReferenceCount} account id/reference(s)` : '',
+      summary.connectionReferenceCount > 0 ? `${summary.connectionReferenceCount} connection/credential reference(s)` : '',
     ].filter(Boolean);
 
     items.push({
       id: 'external-effects',
       label: 'External effects and credentials',
       detail: `${parts.join(', ')} need endpoint, credential, and recipient review.`,
-      severity: summary.webRequestCount > 0 || summary.externalIntegrationCount > 0 || summary.secretReferenceCount > 0
+      severity: summary.webRequestCount > 0 || summary.externalIntegrationCount > 0 || summary.secretReferenceCount > 0 || summary.connectionReferenceCount > 0
         ? 'high'
         : 'medium',
+    });
+  }
+
+  if (summary.customFieldReferenceCount > 0 || summary.savedFilterReferenceCount > 0) {
+    const parts = [
+      summary.customFieldReferenceCount > 0 ? `${summary.customFieldReferenceCount} custom field reference(s)` : '',
+      summary.savedFilterReferenceCount > 0 ? `${summary.savedFilterReferenceCount} saved filter id/reference(s)` : '',
+    ].filter(Boolean);
+
+    items.push({
+      id: 'environment-bindings',
+      label: 'Target environment bindings',
+      detail: `${parts.join(', ')} should be mapped or verified in the target Jira project before enabling.`,
+      severity: 'high',
     });
   }
 

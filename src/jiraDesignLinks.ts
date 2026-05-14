@@ -53,6 +53,17 @@ export type DesignDisplayItem = FigmaDesignItem | ExternalDesignItem | UXDesignI
 
 export type UXEpicStatusTone = 'todo' | 'in-progress' | 'done' | 'blocked' | 'cancelled';
 export type DesignStatusTone = 'ready' | 'updated' | 'missing' | 'not-ready' | 'blocked' | 'review' | 'done' | 'neutral';
+export type DesignStatusSummaryItem = {
+  tone: Exclude<DesignStatusTone, 'neutral'>;
+  label: string;
+  count: number;
+};
+export type DesignReadinessDecision = {
+  tone: DesignStatusTone;
+  label: string;
+  detail: string;
+  targetTone?: Exclude<DesignStatusTone, 'neutral'>;
+};
 
 const genericDesignTitles = new Set([
   'design',
@@ -203,6 +214,7 @@ function getDesignStatusPriority(status?: string): number {
 
 function getSourcePriority(source: string): number {
   if (source.includes('remote_link')) return 0;
+  if (source.includes('jira_designs')) return 0;
   if (source.includes('design_field')) return 1;
   if (source.includes('linked_issues') || source.includes('issue_link') || source.includes('child_issue')) return 2;
   if (source.includes('description')) return 3;
@@ -219,6 +231,139 @@ export function getDesignDisplayPriority(item: DesignDisplayItem): number {
 
   const status = item.type === 'ux_ticket' ? item.designStatus : item.status;
   return getDesignStatusPriority(status);
+}
+
+const designStatusSummaryOrder: Exclude<DesignStatusTone, 'neutral'>[] = [
+  'ready',
+  'updated',
+  'missing',
+  'not-ready',
+  'blocked',
+  'review',
+  'done',
+];
+
+const designStatusSummaryLabels: Record<Exclude<DesignStatusTone, 'neutral'>, string> = {
+  ready: 'ready',
+  updated: 'updated',
+  missing: 'missing',
+  'not-ready': 'not ready',
+  blocked: 'blocked',
+  review: 'review',
+  done: 'done',
+};
+
+export function getDesignDisplayStatusTone(item: DesignDisplayItem): DesignStatusTone {
+  if (item.type === 'ux_ticket' && !item.linkProvided) return 'missing';
+
+  const status = item.type === 'ux_ticket' ? item.designStatus : item.status;
+  return getDesignStatusTone(status);
+}
+
+export function getDesignStatusSummary(items: DesignDisplayItem[]): DesignStatusSummaryItem[] {
+  const counts = new Map<Exclude<DesignStatusTone, 'neutral'>, number>();
+
+  for (const item of items) {
+    const tone = getDesignDisplayStatusTone(item);
+    if (tone === 'neutral') continue;
+    counts.set(tone, (counts.get(tone) || 0) + 1);
+  }
+
+  return designStatusSummaryOrder
+    .filter(tone => counts.has(tone))
+    .map(tone => ({
+      tone,
+      label: designStatusSummaryLabels[tone],
+      count: counts.get(tone) || 0,
+    }));
+}
+
+function pluralizeDesignItems(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+export function getDesignReadinessDecision(items: DesignDisplayItem[]): DesignReadinessDecision {
+  const summary = getDesignStatusSummary(items);
+  const counts = new Map<Exclude<DesignStatusTone, 'neutral'>, number>(
+    summary.map(item => [item.tone, item.count]),
+  );
+  const count = (tone: Exclude<DesignStatusTone, 'neutral'>): number => counts.get(tone) || 0;
+
+  const blockedCount = count('blocked');
+  if (blockedCount > 0) {
+    return {
+      tone: 'blocked',
+      label: 'Blocked',
+      detail: `${pluralizeDesignItems(blockedCount, 'blocked item')} ${blockedCount === 1 ? 'needs' : 'need'} action before implementation`,
+      targetTone: 'blocked',
+    };
+  }
+
+  const missingCount = count('missing');
+  if (missingCount > 0) {
+    return {
+      tone: 'missing',
+      label: 'Missing design links',
+      detail: `${pluralizeDesignItems(missingCount, 'UX ticket')} ${missingCount === 1 ? 'needs' : 'need'} design links before implementation`,
+      targetTone: 'missing',
+    };
+  }
+
+  const updatedCount = count('updated');
+  if (updatedCount > 0) {
+    return {
+      tone: 'updated',
+      label: 'Review design updates',
+      detail: `${pluralizeDesignItems(updatedCount, 'changed design')} should be checked before coding`,
+      targetTone: 'updated',
+    };
+  }
+
+  const notReadyCount = count('not-ready');
+  if (notReadyCount > 0) {
+    return {
+      tone: 'not-ready',
+      label: 'Not ready for dev',
+      detail: `${pluralizeDesignItems(notReadyCount, 'draft item')} ${notReadyCount === 1 ? 'is' : 'are'} still not ready`,
+      targetTone: 'not-ready',
+    };
+  }
+
+  const readyCount = count('ready');
+  if (readyCount > 0) {
+    return {
+      tone: 'ready',
+      label: 'Ready for dev',
+      detail: `${pluralizeDesignItems(readyCount, 'ready item')} available; confirm scope before starting`,
+      targetTone: 'ready',
+    };
+  }
+
+  const reviewCount = count('review');
+  if (reviewCount > 0) {
+    return {
+      tone: 'review',
+      label: 'Needs design review',
+      detail: `${pluralizeDesignItems(reviewCount, 'review item')} should be resolved before handoff`,
+      targetTone: 'review',
+    };
+  }
+
+  const doneCount = count('done');
+  if (doneCount > 0) {
+    return {
+      tone: 'done',
+      label: 'Design complete',
+      detail: `${pluralizeDesignItems(doneCount, 'completed item')} found`,
+      targetTone: 'done',
+    };
+  }
+
+  return {
+    tone: 'neutral',
+    label: 'Design references',
+    detail: `${pluralizeDesignItems(items.length, 'design link')} found`,
+  };
 }
 
 export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDisplayItem[] {
@@ -240,15 +385,20 @@ export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDispla
 export function matchesProjectPattern(ticketKey: string, pattern: string): boolean {
   if (!ticketKey || !pattern) return false;
 
-  const projectPart = ticketKey.split('-')[0];
+  const normalizedTicketKey = ticketKey.trim().toUpperCase();
+  const normalizedPattern = pattern.trim().toUpperCase();
+  if (!normalizedTicketKey || !normalizedPattern) return false;
+
+  const projectPart = normalizedTicketKey.split('-')[0];
   if (!projectPart) return false;
 
-  if (pattern.endsWith('*')) {
-    const prefix = pattern.slice(0, -1);
+  if (normalizedPattern.endsWith('*')) {
+    const prefix = normalizedPattern.slice(0, -1).trim();
+    if (!prefix) return false;
     return projectPart.startsWith(prefix);
   }
 
-  return projectPart === pattern;
+  return projectPart === normalizedPattern;
 }
 
 export function escapeHtml(value: unknown): string {
@@ -362,11 +512,15 @@ export function matchesDesignDomain(hostname: string, domainPatterns: string[]):
     const normalizedPattern = normalizeDesignDomainPattern(pattern);
     if (!normalizedPattern) return false;
 
-    const baseDomain = normalizedPattern.startsWith('*.')
+    const isWildcardPattern = normalizedPattern.startsWith('*.');
+    const baseDomain = isWildcardPattern
       ? normalizedPattern.slice(2)
       : normalizedPattern;
 
-    return normalizedHost === baseDomain || normalizedHost.endsWith(`.${baseDomain}`);
+    if (!baseDomain) return false;
+    return isWildcardPattern
+      ? normalizedHost.endsWith(`.${baseDomain}`)
+      : normalizedHost === baseDomain;
   });
 }
 
@@ -492,6 +646,7 @@ const sourceLabels: Record<string, string> = {
   parent_issue_link: 'Parent link',
   parent_child_issue: 'Parent child',
   remote_link: 'Remote link',
+  jira_designs: 'Jira Designs',
   design_field: 'Design field',
   subtask: 'Subtask',
   issue_link: 'Issue link',

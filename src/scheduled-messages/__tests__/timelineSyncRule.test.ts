@@ -17,7 +17,7 @@ import { redactJiraRulePayloadForLog, redactJiraRuleTextForLog } from '../jiraRu
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const scheduledMessagesDir = resolve(__dirname, '..');
 
-test('Timeline Sync components use POST JSON cache webhooks with visible responses for every project', () => {
+test('Timeline Sync components use POST JSON cache webhooks for every Apps Script callback', () => {
   const components = buildTimelineSyncComponents();
   assert.equal(components.length, TIMELINE_PROJECTS.length * 3);
 
@@ -33,18 +33,25 @@ test('Timeline Sync components use POST JSON cache webhooks with visible respons
     assert.equal(cacheWebhook.value.method, 'POST');
     assert.equal(cacheWebhook.value.contentType, 'custom');
     assert.equal(cacheWebhook.value.responseEnabled, true);
-    assert.equal(cacheWebhook.value.url, '{{WEB_APP_URL}}?action=cacheReleaseInfo');
-    const contentTypeHeader = cacheWebhook.value.headers.find((header: any) => header.name === 'Content-Type');
-    assert.equal(contentTypeHeader?.value?.keyOrValue, 'application/json');
-    assert.ok(
-      cacheWebhook.value.customBody.includes(`"project": "${project.paramKey}"`),
-      `cache webhook should include project in JSON body for ${project.variableName}`,
+    assert.deepEqual(cacheWebhook.value.headers, [
+      {
+        id: `_header_${project.paramKey}_content_type`,
+        name: 'Content-Type',
+        value: {
+          keyOrValue: 'application/json',
+          secret: false,
+        },
+      },
+    ]);
+    assert.equal(
+      cacheWebhook.value.url,
+      '{{WEB_APP_URL}}?action=cacheReleaseInfo',
     );
-    assert.ok(
-      cacheWebhook.value.customBody.includes(`"releaseInfo": ${buildJiraJsonStringSmartValue(project.variableName)}`),
-      `cache webhook should send releaseInfo in JSON body for ${project.variableName}`,
+    assert.doesNotMatch(cacheWebhook.value.url, /project=|releaseInfo=/);
+    assert.equal(
+      cacheWebhook.value.customBody,
+      `{\n  "project": "${project.paramKey}",\n  "releaseInfo": ${buildJiraJsonStringSmartValue(project.variableName)}\n}`,
     );
-    assert.doesNotMatch(cacheWebhook.value.url, /releaseInfo=|project=/);
 
     assert.notEqual(
       components[cacheWebhookIndex + 1]?.type,
@@ -73,6 +80,13 @@ test('Jira URL encoding helper keeps explicit %20 space encoding', () => {
   assert.equal(
     buildJiraUrlEncodedSmartValue('messageId'),
     '{{messageId.urlEncode.replaceAll("\\+","%20")}}',
+  );
+});
+
+test('Jira JSON string helper emits safe smart value JSON fragments', () => {
+  assert.equal(
+    buildJiraJsonStringSmartValue('mThorReleaseInfo'),
+    '{{mThorReleaseInfo.asJsonString}}',
   );
 });
 
@@ -142,6 +156,37 @@ test('Apps Script reports Timeline cache status without exposing release dates o
   assert.deepEqual(Array.from(mThorStatus.milestoneKeys), ['FF', 'Release']);
   assert.doesNotMatch(JSON.stringify(context.result), /05\/10\/2026|05\/20\/2026/);
   assert.doesNotMatch(JSON.stringify(context.result), /TIMELINE_CACHE_/);
+});
+
+test('Apps Script preserves Timeline project metadata while reading wrapped milestone maps', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    Logger: { log: () => undefined },
+    releaseInfo: {
+      mThor: {
+        currentRelease: '26.2',
+        currentPhase: 'FF',
+        releaseInfo: {
+          FF: '05/06/2026',
+        },
+      },
+    },
+    result: null as any,
+    targetDate: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+const projectInfo = getTimelineProjectInfo(releaseInfo, 'mThor');
+result = replaceProjectVariablesInText('Release {currentRelease} is in {currentPhase}', projectInfo);
+targetDate = getTimelineTargetDate({ Timeline_Project: 'mThor', Timeline_Milestone: 'FF', Timeline_Offset: '0' }, releaseInfo);`,
+    context,
+  );
+
+  assert.equal(context.result, 'Release 26.2 is in FF');
+  assert.equal(context.targetDate.getFullYear(), 2026);
+  assert.equal(context.targetDate.getMonth(), 4);
+  assert.equal(context.targetDate.getDate(), 6);
 });
 
 test('Apps Script parses form-decoded Jira urlEncode releaseInfo with spaces and literal plus', () => {
@@ -366,7 +411,78 @@ result = findMatchingMessage(data, headers, now, {}, 'CURRENT_MINUTE', '2026-05-
   assert.equal(context.result.chatId, '123456789');
 });
 
-test('Apps Script pre-marks RingCentral AsMe sender messages when Jira claims them', () => {
+test('Apps Script keeps no-time executor messages out of current-minute matching', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    Logger: { log: () => undefined },
+    Session: { getScriptTimeZone: () => 'Asia/Shanghai' },
+    Utilities: {
+      formatDate: (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      },
+    },
+    current: null as any,
+    noTime: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+var headers = ['ID', 'Status', 'Push_Method', 'Schedule_Date', 'Schedule_Time', 'Topic', 'Content', 'Last_Exec', 'Exec_Log'];
+var data = [
+  headers,
+  ['MSG_NO_TIME', 'Active', 'Bot', '2026-05-03', '', 'No-time bot', 'queued', '', ''],
+  ['MSG_EXPLICIT', 'Active', 'Bot', '2026-05-03', '09:00', 'Explicit bot', 'scheduled', '', '']
+];
+var now = new Date(2026, 4, 3, 9, 0);
+current = findMatchingMessage(data, headers, now, {}, 'CURRENT_MINUTE', '2026-05-03', 9, false);
+noTime = findMatchingMessage(data, headers, now, {}, 'NO_TIME_SPECIFIED', '2026-05-03', 9, false);`,
+    context,
+  );
+
+  assert.equal(context.current.ID, 'MSG_EXPLICIT');
+  assert.equal(context.current.matchMode, 'CURRENT_MINUTE');
+  assert.equal(context.noTime.ID, 'MSG_NO_TIME');
+  assert.equal(context.noTime.matchMode, 'NO_TIME_SPECIFIED');
+});
+
+test('Apps Script keeps no-time RingCentral AsMe sender messages at the 09:00 default', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    Logger: { log: () => undefined },
+    Session: { getScriptTimeZone: () => 'Asia/Shanghai' },
+    Utilities: {
+      formatDate: (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      },
+    },
+    earlyQueue: null as any,
+    atDefault: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+var headers = ['ID', 'Status', 'Push_Method', 'Schedule_Date', 'Schedule_Time', 'Topic', 'Content', 'Glip_User_Name', 'Glip_Team_ID', 'Last_Exec', 'Exec_Log'];
+var data = [
+  headers,
+  ['MSG_ASME_NO_TIME', 'Active', 'AsMe', '2026-05-03', '', 'AsMe no time', 'hello', 'esone.qiu', '', '', '']
+];
+earlyQueue = findMatchingMessage(data, headers, new Date(2026, 4, 3, 8, 30), {}, 'NO_TIME_SPECIFIED', '2026-05-03', 8, true);
+atDefault = findMatchingMessage(data, headers, new Date(2026, 4, 3, 9, 0), {}, 'CURRENT_MINUTE', '2026-05-03', 9, true);`,
+    context,
+  );
+
+  assert.equal(context.earlyQueue, null);
+  assert.equal(context.atDefault.ID, 'MSG_ASME_NO_TIME');
+  assert.equal(context.atDefault.targetType, 'ringcentral_sender');
+});
+
+test('Apps Script leaves RingCentral AsMe sender messages unmarked until Jira confirms Dify success', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const headers = [
     'ID',
@@ -410,8 +526,8 @@ result = getMessageCurrentTimeWithReleaseInfo({ currentTime: '2026-05-03 12:00',
   assert.equal(context.result.targetType, 'ringcentral_sender');
   assert.equal(context.result.messageId, 'MSG_ASME');
   assert.equal(context.result.chatId, 'esone.qiu');
-  assert.equal(updates.some(update => update.row === 2 && update.value === 'Done'), true);
-  assert.equal(logs.length, 1);
+  assert.equal(updates.length, 0);
+  assert.equal(logs.length, 0);
 });
 
 test('Apps Script does not fire explicit executor messages before the scheduled minute', () => {
@@ -590,18 +706,25 @@ test('Apps Script cacheReleaseInfo response includes safe milestone diagnostics'
     },
     releaseInfo,
     result: null as any,
+    status: null as any,
   };
 
   vm.runInNewContext(
-    `${appScript}\nresult = doGet({ parameter: { action: 'cacheReleaseInfo', project: 'mThor', releaseInfo: releaseInfo } });`,
+    `${appScript}
+result = doGet({ parameter: { action: 'cacheReleaseInfo', project: 'mThor', releaseInfo: releaseInfo } });
+status = getTimelineCacheStatus();`,
     context,
   );
 
   const body = JSON.parse(context.result.text);
+  const mThorStatus = context.status.projects.find((project: any) => project.project === 'mThor');
   assert.equal(body.success, true);
   assert.equal(body.project, 'mThor');
+  assert.match(body.requestId, /^tl_mThor_/);
   assert.equal(body.milestoneCount, 2);
   assert.deepEqual(Array.from(body.milestoneKeys), ['FF', 'Release']);
+  assert.equal(mThorStatus.lastAttempt.requestId, body.requestId);
+  assert.equal(mThorStatus.lastAttempt.success, true);
   assert.doesNotMatch(context.result.text, /11\/13\/2025|11\/20\/2025/);
   assert.ok(properties.TIMELINE_CACHE_mThor, 'cache payload should be written');
 });
@@ -766,6 +889,68 @@ test('Apps Script cacheReleaseInfo accepts standard JSON object releaseInfo body
   assert.doesNotMatch(context.result.text, /\[object Object\]/);
 });
 
+test('Apps Script cacheReleaseInfo dry-run validates payload without writing cache status', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const releaseInfo = {
+    currentRelease: 'diagnostic',
+    currentPhase: 'diagnostic',
+    releaseInfo: {
+      FF: '12/31/2026',
+    },
+  };
+  const properties: Record<string, string> = {};
+  const context = {
+    Logger: { log: () => undefined },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text: string) => {
+        const output = {
+          text,
+          mimeType: '',
+          setMimeType(mimeType: string) {
+            output.mimeType = mimeType;
+            return output;
+          },
+        };
+        return output;
+      },
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key: string) => properties[key] || null,
+        setProperty: (key: string, value: string) => {
+          properties[key] = value;
+        },
+      }),
+    },
+    postBody: JSON.stringify({ project: 'mThor', dryRun: true, releaseInfo }),
+    result: null as any,
+    status: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+result = doPost({ parameter: { action: 'cacheReleaseInfo' }, postData: { contents: postBody, type: 'application/json' } });
+status = getTimelineCacheStatus();`,
+    context,
+  );
+
+  const body = JSON.parse(context.result.text);
+  const mThorStatus = context.status.projects.find((project: any) => project.project === 'mThor');
+
+  assert.equal(body.success, true);
+  assert.equal(body.dryRun, true);
+  assert.equal(body.wouldCache, true);
+  assert.equal(body.project, 'mThor');
+  assert.equal(body.paramKey, 'mThor');
+  assert.equal(body.milestoneCount, 1);
+  assert.deepEqual(Array.from(body.milestoneKeys), ['FF']);
+  assert.equal(properties.TIMELINE_CACHE_mThor, undefined);
+  assert.equal(properties.TIMELINE_SYNC_ATTEMPT_mThor, undefined);
+  assert.equal(mThorStatus.status, 'missing');
+  assert.equal(mThorStatus.lastAttempt, undefined);
+});
+
 test('Apps Script cacheReleaseInfo exposes only milestones with valid dates', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const releaseInfo =
@@ -924,6 +1109,7 @@ test('Apps Script cacheReleaseInfo reports actionable diagnostics for malformed 
   assert.equal(body.status, 'ERROR');
   assert.equal(body.errorCode, 'INVALID_POST_JSON');
   assert.equal(body.action, 'cacheReleaseInfo');
+  assert.match(body.requestId, /^tl_mThor_/);
   assert.equal(body.receivedContentType, 'application/json');
   assert.equal(body.bodyLength, context.postBody.length);
   assert.equal(body.requestContentType, 'application/json');
@@ -984,9 +1170,11 @@ status = getTimelineCacheStatus();`,
   assert.equal(body.errorCode, 'INVALID_POST_JSON');
   assert.equal(body.project, 'mThor');
   assert.equal(body.paramKey, 'mThor');
+  assert.match(body.requestId, /^tl_mThor_/);
   assert.equal(mThorStatus.status, 'error');
   assert.equal(mThorStatus.cached, false);
   assert.equal(mThorStatus.lastAttempt.success, false);
+  assert.equal(mThorStatus.lastAttempt.requestId, body.requestId);
   assert.equal(mThorStatus.lastAttempt.errorCode, 'INVALID_POST_JSON');
   assert.equal(mThorStatus.lastAttempt.requestContentType, 'application/json');
   assert.ok(mThorStatus.lastAttempt.requestBodyBytes >= context.postBody.length);
@@ -1156,7 +1344,7 @@ status = getTimelineCacheStatus();`,
   assert.equal(mThorStatus.lastAttempt.success, false);
   assert.equal(mThorStatus.lastAttempt.errorCode, 'INVALID_RELEASE_INFO_SCHEMA');
   assert.match(mThorStatus.lastAttempt.parseError, /releaseInfo 必须是非空对象/);
-  assert.match(mThorStatus.lastAttempt.nextAction, /POST JSON/);
+  assert.match(mThorStatus.lastAttempt.nextAction, /MM\/DD\/YYYY/);
   assert.doesNotMatch(JSON.stringify(mThorStatus), /25\.4\.20/);
 });
 
@@ -1295,18 +1483,23 @@ test('Apps Script cacheReleaseInfo reports schema mismatch separately from parse
   assert.equal(body.errorCode, 'INVALID_RELEASE_INFO_SCHEMA');
   assert.match(body.parseError, /releaseInfo 必须是非空对象/);
   assert.match(body.parseError, /currentRelease, releaseInfo/);
+  assert.match(body.nextAction, /MM\/DD\/YYYY/);
   assert.equal(properties.TIMELINE_CACHE_mThor, undefined);
 });
 
-test('Executor rule mark-executed webhooks carry rowIndex from the message lookup response', () => {
+test('Executor rule marks sent messages through GET Apps Script callbacks with saved lookup variables', () => {
   const template = JSON.parse(
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
   const webhooks: any[] = [];
+  const variables: Record<string, string> = {};
 
-  const collectUrls = (node: any) => {
+  const collectRuleNodes = (node: any) => {
     if (!node || typeof node !== 'object') {
       return;
+    }
+    if (node.type === 'jira.create.variable') {
+      variables[node.value?.name?.value] = node.value?.query?.value;
     }
     if (
       node.type === 'jira.issue.outgoing.webhook' &&
@@ -1316,34 +1509,35 @@ test('Executor rule mark-executed webhooks carry rowIndex from the message looku
     }
     for (const value of Object.values(node)) {
       if (Array.isArray(value)) {
-        value.forEach(collectUrls);
+        value.forEach(collectRuleNodes);
       } else if (value && typeof value === 'object') {
-        collectUrls(value);
+        collectRuleNodes(value);
       }
     }
   };
 
-  collectUrls(template);
+  collectRuleNodes(template);
 
-  assert.equal(webhooks.length, 3);
+  assert.equal(variables.messageId, '{{webhookResponse.body.messageId}}');
+  assert.equal(variables.rowIndex, '{{webhookResponse.body.rowIndex}}');
+  assert.equal(variables.executionKey, '{{webhookResponse.body.executionKey}}');
+  assert.equal(webhooks.length, 5);
   for (const webhook of webhooks) {
     const url = webhook.value.url;
-    const body = webhook.value.customBody || '';
-    const contentTypeHeader = webhook.value.headers.find((header: any) => header.name === 'Content-Type');
 
-    assert.equal(webhook.value.method, 'POST');
-    assert.equal(webhook.value.contentType, 'custom');
-    assert.equal(webhook.value.responseEnabled, true);
-    assert.equal(url, '{{WEB_APP_URL}}?action=markBotMessageExecuted');
-    assert.equal(contentTypeHeader?.value?.keyOrValue, 'application/json');
-    assert.ok(body.includes('"messageId": {{messageId.asJsonString}}'));
-    assert.ok(body.includes('"rowIndex": {{webhookResponse.body.rowIndex}}'));
-    assert.ok(body.includes('"success": true'));
-    assert.ok(body.includes('"executionKey": {{webhookResponse.body.executionKey.asJsonString}}'));
-    assert.ok(body.includes('"topic": {{replacedTopic.asJsonString}}'));
-    assert.ok(body.includes('"content": {{replacedContent.asJsonString}}'));
-    assert.doesNotMatch(url, /messageId=|rowIndex=|topic=|content=/);
+    assert.equal(webhook.value.method, 'GET');
+    assert.equal(webhook.value.contentType, 'empty');
+    assert.equal(webhook.value.responseEnabled, false);
+    assert.equal(webhook.value.headers.length, 0);
+    assert.match(url, /^\{\{WEB_APP_URL\}\}\?action=markBotMessageExecuted&/);
+    assert.match(url, /messageId=\{\{messageId\.urlEncode\}\}/);
+    assert.match(url, /rowIndex=\{\{rowIndex\}\}/);
+    assert.match(url, /executionKey=\{\{executionKey\.urlEncode\}\}/);
+    assert.doesNotMatch(url, /webhookResponse\.body\.rowIndex|webhookResponse\.body\.executionKey|topic=|content=/);
+    assert.equal(webhook.value.customBody, undefined);
   }
+  assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=true')).length, 4);
+  assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=false')).length, 1);
 });
 
 test('Executor rule keeps Bot API token hidden and redacted from diagnostic logs', () => {
@@ -1449,6 +1643,12 @@ test('Executor rule sends RingCentral AsMe messages through the Dify workflow br
   assert.match(webhook.value.customBody, /"jwt": "{{RINGCENTRAL_SENDER_JWT}}"/);
   assert.match(webhook.value.customBody, /"chatId": {{webhookResponse.body.chatId.asJsonString}}/);
   assert.match(webhook.value.customBody, /"message_text": {{webhookResponse.body.content.asJsonString}}/);
+
+  const serializedRule = JSON.stringify(template);
+  assert.match(serializedRule, /"first":"\{\{webhookResponse\.body\.data\.status\}\}","second":"succeeded"/);
+  assert.match(serializedRule, /"first":"\{\{webhookResponse\.body\.data\.status\}\}","second":"failed"/);
+  assert.match(serializedRule, /success=true&executionKey=\{\{executionKey\.urlEncode\}\}/);
+  assert.match(serializedRule, /success=false&executionKey=\{\{executionKey\.urlEncode\}\}&error=\{\{webhookResponse\.body\.data\.error\.urlEncode\}\}/);
 });
 
 test('Jira rule payload redaction hides RingCentral sender credentials', () => {
@@ -1485,7 +1685,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.7\.4';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.7\.9';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -1724,6 +1924,130 @@ test('Apps Script mark-executed returns duplicate before resolving changed sheet
   assert.equal(firstLogs.length, 1);
   assert.equal(secondLogs.length, 0);
   assert.equal(secondUpdates.length, 0);
+});
+
+test('Apps Script clears stale Next_Exec when a one-time message is marked done', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_User_Name',
+    'Glip_Team_ID',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    ['MSG-ONE', 'One-time topic', 'content', 'Bot', 'esone.qiu', '', '2026-05-03', '12:00', '', '0', '2026-05-03 12:00', '', 'Active'],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+
+  vm.runInNewContext(
+    `${appScript}\nresult = markBotMessageExecuted('MSG-ONE', 2, true, '', 'Sent topic', 'Sent content', 'exec-clear-one-time');`,
+    context,
+  );
+
+  assert.equal(context.result.success, true);
+  assert.deepEqual(
+    updates.filter(update => update.row === 2 && update.col === 11).map(update => update.value),
+    [''],
+  );
+  assert.equal(updates.some(update => update.row === 2 && update.col === 13 && update.value === 'Done'), true);
+});
+
+test('Apps Script clears Next_Exec when a periodic message reaches End_Date', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_User_Name',
+    'Glip_Team_ID',
+    'Schedule_Date',
+    'Schedule_Time',
+    'End_Date',
+    'Repeat_Every',
+    'Repeat_Unit',
+    'Repeat_Count',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    ['MSG-END', 'End-date topic', 'content', 'Bot', 'esone.qiu', '', '2026-05-01', '12:00', '2026-05-01', '1', 'Day', '', '', '0', '2026-05-02', '', 'Active'],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+
+  vm.runInNewContext(
+    `${appScript}\nresult = markBotMessageExecuted('MSG-END', 2, true, '', 'Sent topic', 'Sent content', 'exec-clear-end-date');`,
+    context,
+  );
+
+  assert.equal(context.result.success, true);
+  assert.deepEqual(
+    updates.filter(update => update.row === 2 && update.col === 15).map(update => update.value),
+    [''],
+  );
+  assert.equal(updates.some(update => update.row === 2 && update.col === 17 && update.value === 'Done'), true);
+});
+
+test('Apps Script clears Next_Exec when a periodic message reaches Repeat_Count', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_User_Name',
+    'Glip_Team_ID',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Repeat_Every',
+    'Repeat_Unit',
+    'Repeat_Count',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    ['MSG-COUNT', 'Repeat-count topic', 'content', 'Bot', 'esone.qiu', '', '2026-05-01', '12:00', '1', 'Day', '1', '', '0', '2026-05-02', '', 'Active'],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+
+  vm.runInNewContext(
+    `${appScript}\nresult = markBotMessageExecuted('MSG-COUNT', 2, true, '', 'Sent topic', 'Sent content', 'exec-clear-repeat-count');`,
+    context,
+  );
+
+  assert.equal(context.result.success, true);
+  assert.deepEqual(
+    updates.filter(update => update.row === 2 && update.col === 14).map(update => update.value),
+    [''],
+  );
+  assert.equal(updates.some(update => update.row === 2 && update.col === 16 && update.value === 'Done'), true);
 });
 
 function createMarkExecutedVmContext(

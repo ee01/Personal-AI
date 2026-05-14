@@ -82,6 +82,7 @@ interface AgentStorageReview {
   agentCount: number;
   failedAgents: string[];
   toolErrorCount: number;
+  toolSkippedCount: number;
   notificationReviewRequired?: boolean;
   notificationReviewReason?: string;
   notificationConfidenceThreshold?: number;
@@ -317,6 +318,11 @@ function buildStorageReview(params: {
       count + step.tools.filter((tool) => tool.status === 'error').length,
     0,
   );
+  const toolSkippedCount = trace.reduce(
+    (count, step) =>
+      count + step.tools.filter((tool) => tool.status === 'skipped').length,
+    0,
+  );
 
   let reasonSource: AgentStorageReview['reasonSource'] = 'workflow';
   let primaryReason = 'Agent Workflow requested storage';
@@ -370,12 +376,15 @@ function buildStorageReview(params: {
     traceStatus:
       trace.length === 0
         ? 'missing'
-        : failedAgents.length > 0 || toolErrorCount > 0
+        : failedAgents.length > 0 ||
+            toolErrorCount > 0 ||
+            toolSkippedCount > 0
           ? 'partial'
           : 'complete',
     agentCount: trace.length,
     failedAgents,
     toolErrorCount,
+    toolSkippedCount,
     notificationReviewRequired: Boolean(result.notificationReview?.required),
     notificationReviewReason: result.notificationReview?.reason,
     notificationConfidenceThreshold: result.notificationReview?.threshold,
@@ -954,7 +963,7 @@ class AgentCoordinator {
     const agents = await this.getAgents();
     // 按优先级排序
     const sortedAgents = agents
-      .filter((agent) => agent.enabled)
+      .filter((agent) => agent.enabled !== false)
       .sort((a, b) => b.priority - a.priority);
 
     console.log(`开始处理消息，启用了 ${sortedAgents.length} 个Agent`);

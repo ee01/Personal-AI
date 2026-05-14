@@ -150,7 +150,9 @@ const composerAssistBodySchema = {
   additionalProperties: false,
 };
 
-export async function composerAssistRoutes(app: FastifyInstance): Promise<void> {
+export async function composerAssistRoutes(
+  app: FastifyInstance,
+): Promise<void> {
   app.post<{ Body: ComposerAssistRequest }>(
     '/composer/assist',
     {
@@ -160,9 +162,11 @@ export async function composerAssistRoutes(app: FastifyInstance): Promise<void> 
     },
     async (request, reply) => {
       const { db } = request.userContext;
-      const service = new ComposerAssistService(db);
+      const service = new ComposerAssistService(db, request.userId);
       try {
-        const result: ComposerAssistResponse = await service.assist(request.body);
+        const result: ComposerAssistResponse = await service.assist(
+          request.body,
+        );
         return reply.send(result);
       } catch (err) {
         request.log.warn({ err }, 'composer-assist failed');

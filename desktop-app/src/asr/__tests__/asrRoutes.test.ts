@@ -108,6 +108,22 @@ test('shouldFinalizeAsrSegment finalizes on endpoint or idle flush once speech e
     }),
     true,
   );
+  assert.equal(
+    shouldFinalizeAsrSegment({
+      hasSpeech: true,
+      trailingSilenceMs: 0,
+      bufferedAudioMs: 12_000,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldFinalizeAsrSegment({
+      hasSpeech: false,
+      trailingSilenceMs: 0,
+      bufferedAudioMs: 12_000,
+    }),
+    false,
+  );
 });
 
 test('GET /asr/status returns local ASR engine statuses', async () => {

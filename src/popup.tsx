@@ -4,6 +4,10 @@ import { useState, useEffect } from 'react';
 import { sendMessageToActiveTab } from './popup';
 import { getEnvConfig } from './utils';
 import { getGoogleAuthToken } from './utils/googleAuth';
+import {
+  getMemoryServiceClient,
+  type DayPilotCard,
+} from './services/MemoryServiceClient';
 import { getTaskEnabled } from './services/taskSchedulerDefinitions';
 import {
   extractMeetingIdFromUrl,
@@ -62,6 +66,8 @@ interface TaskSchedulerTask {
     | 'scheduled'
     | 'missing_alarm'
     | 'period_mismatch'
+    | 'overdue'
+    | 'repair_failed'
     | 'disabled';
   scheduleWarning?: string;
   runHistory?: TaskSchedulerRunRecord[];
@@ -77,6 +83,13 @@ interface TaskSchedulerRunRecord {
   error?: string;
 }
 
+const TASK_CATEGORY_LABELS: Record<string, string> = {
+  message_analysis: '消息',
+  data_sync: '同步',
+  system_maintenance: '维护',
+  user_profile: '画像',
+};
+
 function formatTaskInterval(minutes: number): string {
   if (minutes >= 1440 && minutes % 1440 === 0) {
     return `${minutes / 1440} 天`;
@@ -85,6 +98,30 @@ function formatTaskInterval(minutes: number): string {
     return `${minutes / 60} 小时`;
   }
   return `${minutes} 分钟`;
+}
+
+function formatTaskRelativeTime(value?: number): string {
+  if (!value) return '未排程';
+
+  const diffMs = value - Date.now();
+  if (diffMs <= 0) {
+    return '等待触发';
+  }
+
+  const totalMinutes = Math.max(1, Math.ceil(diffMs / 60_000));
+  if (totalMinutes < 60) {
+    return `${totalMinutes} 分钟后`;
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) {
+    return minutes > 0 ? `${hours} 小时 ${minutes} 分钟后` : `${hours} 小时后`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days} 天 ${remainingHours} 小时后` : `${days} 天后`;
 }
 
 function formatTaskTime(value?: number): string {
@@ -126,7 +163,7 @@ function formatTaskRunTrigger(
 
 function formatTaskRunHistorySummary(task: TaskSchedulerTask): string {
   const history = Array.isArray(task.runHistory) ? task.runHistory : [];
-  if (history.length < 2) {
+  if (history.length === 0) {
     return '';
   }
 
@@ -167,7 +204,9 @@ function hasTaskScheduleWarning(task: TaskSchedulerTask): boolean {
   return Boolean(
     task.enabled &&
       (task.scheduleHealth === 'missing_alarm' ||
-        task.scheduleHealth === 'period_mismatch'),
+        task.scheduleHealth === 'period_mismatch' ||
+        task.scheduleHealth === 'overdue' ||
+        task.scheduleHealth === 'repair_failed'),
   );
 }
 
@@ -185,7 +224,12 @@ function formatTaskSchedule(task: TaskSchedulerTask): string {
   if (hasTaskScheduleWarning(task)) {
     return task.scheduleWarning || '排程需要刷新';
   }
-  return `下次 ${formatTaskTime(task.nextRun)}`;
+  if (!task.nextRun) {
+    return '等待 Chrome 排程';
+  }
+  return `下次 ${formatTaskRelativeTime(task.nextRun)} · ${formatTaskTime(
+    task.nextRun,
+  )}`;
 }
 
 function getTaskAttentionRank(task: TaskSchedulerTask): number {
@@ -229,6 +273,27 @@ function isMeetingPilotTranscriptPilotActive(
   );
 }
 
+function formatTodayPilotDue(card: DayPilotCard): string {
+  if (!card.dueAt) return card.priority;
+  return new Date(card.dueAt * 1000).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getTodayPilotPriorityLabel(card: DayPilotCard): string {
+  if (card.priority === 'critical') return '关键';
+  if (card.priority === 'high') return '高';
+  if (card.priority === 'medium') return '中';
+  return '低';
+}
+
+function isTodayPilotMeetingCard(card: DayPilotCard): boolean {
+  return card.cardType === 'meeting_prepare';
+}
+
 async function focusMeetingPilotRecordingTab(
   session: MeetingPilotSessionSnapshot,
 ): Promise<void> {
@@ -262,6 +327,11 @@ const Popup = () => {
   >([]);
   const [taskSchedulerError, setTaskSchedulerError] = useState('');
   const [busyTaskIds, setBusyTaskIds] = useState<Record<string, boolean>>({});
+  const [todayPilotCards, setTodayPilotCards] = useState<DayPilotCard[]>([]);
+  const [todayPilotLoading, setTodayPilotLoading] = useState(false);
+  const [todayPilotError, setTodayPilotError] = useState('');
+  const [todayPilotCopyingMissionId, setTodayPilotCopyingMissionId] =
+    useState('');
 
   const loadTaskSchedulerStatus = async (showLoading = false) => {
     if (showLoading) {
@@ -296,12 +366,35 @@ const Popup = () => {
     }
   };
 
+  const loadTodayPilotCards = async () => {
+    setTodayPilotLoading(true);
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const response = await getMemoryServiceClient().getTodayPilotToday({
+        timezone: timezone || 'Asia/Shanghai',
+        autoGenerate: true,
+      });
+      setTodayPilotCards(
+        (response.brief?.cards || [])
+          .filter((card) => card.state !== 'done' && card.state !== 'muted')
+          .slice(0, 3),
+      );
+      setTodayPilotError('');
+    } catch (error: any) {
+      setTodayPilotCards([]);
+      setTodayPilotError(error?.message || 'today_pilot_unavailable');
+    } finally {
+      setTodayPilotLoading(false);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       // 获取定时任务状态 - 使用辅助函数
       const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
       setIsScheduleActive(messageAnalysisEnabled);
       void loadTaskSchedulerStatus(false);
+      void loadTodayPilotCards();
 
       // 检查当前标签页是否是 Google Sheets 或 Google Slides
       const [tab] = await chrome.tabs.query({
@@ -491,10 +584,15 @@ const Popup = () => {
         taskId: task.id,
         action: 'run',
       })) as
-        | { success?: boolean; error?: string; message?: string }
+        | {
+            success?: boolean;
+            skipped?: boolean;
+            error?: string;
+            message?: string;
+          }
         | undefined;
 
-      if (!response?.success) {
+      if (!response?.success && !response?.skipped) {
         throw new Error(response?.error || response?.message || '任务执行失败');
       }
 
@@ -502,6 +600,36 @@ const Popup = () => {
     } catch (error: any) {
       await loadTaskSchedulerStatus(false);
       setTaskSchedulerError(error?.message || '任务执行失败');
+    } finally {
+      setTaskBusy(task.id, false);
+    }
+  };
+
+  const repairTaskSchedule = async (task: TaskSchedulerTask) => {
+    setTaskBusy(task.id, true);
+    patchTaskSchedulerTask(task.id, {
+      nextRun: Date.now() + task.intervalMinutes * 60_000,
+      scheduleHealth: 'scheduled',
+      scheduleWarning: undefined,
+    });
+
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'CONTROL_TASK',
+        taskId: task.id,
+        action: 'repair',
+      })) as
+        | { success?: boolean; error?: string; message?: string }
+        | undefined;
+
+      if (!response?.success) {
+        throw new Error(response?.error || response?.message || '排程修复失败');
+      }
+
+      await loadTaskSchedulerStatus(false);
+    } catch (error: any) {
+      await loadTaskSchedulerStatus(false);
+      setTaskSchedulerError(error?.message || '排程修复失败');
     } finally {
       setTaskBusy(task.id, false);
     }
@@ -637,16 +765,6 @@ const Popup = () => {
     });
   };
 
-  const openPromptConfigWindow = () => {
-    chrome.windows.create({
-      url: chrome.runtime.getURL('prompt-config.html'),
-      type: 'popup',
-      width: 900,
-      height: 800,
-      focused: true,
-    });
-  };
-
   const _openProjectDashboard = () => {
     chrome.windows.create({
       url: 'project-dashboard.html',
@@ -662,6 +780,43 @@ const Popup = () => {
       url: chrome.runtime.getURL('memory-exploring.html'),
       active: true,
     });
+  };
+
+  const openTodayPilotHome = () => {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('memory-exploring.html#/'),
+      active: true,
+    });
+  };
+
+  const openRingCentralVideoHome = () => {
+    chrome.tabs.create({
+      url: 'https://app.ringcentral.com/video/home',
+      active: true,
+    });
+  };
+
+  const copyTodayPilotContextPack = async (card: DayPilotCard) => {
+    if (!card.missionId) {
+      openTodayPilotHome();
+      return;
+    }
+    setTodayPilotCopyingMissionId(card.missionId);
+    try {
+      const response = await getMemoryServiceClient().renderDayPilotContextPack(
+        card.missionId,
+        {
+          targetProvider: 'generic',
+          includeSensitive: false,
+        },
+      );
+      await navigator.clipboard.writeText(response.bodyMd);
+      setTodayPilotError('');
+    } catch (error: any) {
+      setTodayPilotError(error?.message || 'context_pack_copy_failed');
+    } finally {
+      setTodayPilotCopyingMissionId('');
+    }
   };
 
   const openScheduledMessagesManager = () => {
@@ -956,6 +1111,78 @@ const Popup = () => {
         </div>
       </div>
 
+      <section className="today-pilot-panel">
+        <div className="today-pilot-head">
+          <button
+            className="today-pilot-title"
+            onClick={openTodayPilotHome}
+            title="打开 Today Pilot 首页"
+          >
+            今日领航
+          </button>
+          <button
+            className="today-pilot-refresh"
+            onClick={() => void loadTodayPilotCards()}
+            disabled={todayPilotLoading}
+            title="刷新今日领航"
+            aria-label="刷新今日领航"
+          >
+            ↻
+          </button>
+        </div>
+        <div className="today-pilot-list">
+          {todayPilotLoading && todayPilotCards.length === 0 ? (
+            <div className="today-pilot-empty">正在读取今日 mission</div>
+          ) : todayPilotError && todayPilotCards.length === 0 ? (
+            <div className="today-pilot-empty">Today Pilot 暂不可用</div>
+          ) : todayPilotCards.length === 0 ? (
+            <div className="today-pilot-empty">暂时没有需要处理的事项</div>
+          ) : (
+            todayPilotCards.map((card) => {
+              const isMeeting = isTodayPilotMeetingCard(card);
+              const copying = todayPilotCopyingMissionId === card.missionId;
+              return (
+                <article className="today-pilot-card" key={card.id}>
+                  <button
+                    className="today-pilot-card-main"
+                    onClick={openTodayPilotHome}
+                    title={card.whyNow}
+                  >
+                    <span className={`today-pilot-priority ${card.priority}`}>
+                      {getTodayPilotPriorityLabel(card)}
+                    </span>
+                    <span className="today-pilot-card-text">
+                      <span className="today-pilot-card-title">
+                        {card.title}
+                      </span>
+                      <span className="today-pilot-card-sub">
+                        {card.nextBestAction}
+                      </span>
+                    </span>
+                    <span className="today-pilot-due">
+                      {formatTodayPilotDue(card)}
+                    </span>
+                  </button>
+                  {isMeeting ? (
+                    <div className="today-pilot-card-actions">
+                      <button onClick={openRingCentralVideoHome}>
+                        打开 Video Home
+                      </button>
+                      <button
+                        onClick={() => void copyTodayPilotContextPack(card)}
+                        disabled={copying}
+                      >
+                        {copying ? '复制中' : '复制 context pack'}
+                      </button>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })
+          )}
+        </div>
+      </section>
+
       <details className="task-status-panel">
         <summary>
           <span>后台任务</span>
@@ -999,7 +1226,9 @@ const Popup = () => {
             const stateLabel = task.isExecuting
               ? '执行中'
               : hasScheduleWarning
-              ? '排程异常'
+              ? task.scheduleHealth === 'repair_failed'
+                ? '修复失败'
+                : '排程异常'
               : hasRecentSkip
               ? '跳过'
               : task.lastSuccess === false
@@ -1016,6 +1245,9 @@ const Popup = () => {
                     <span className="task-name">{task.name}</span>
                     <span className={`task-state-badge ${statusClass}`}>
                       {stateLabel}
+                    </span>
+                    <span className="task-category-badge">
+                      {TASK_CATEGORY_LABELS[task.category] || '任务'}
                     </span>
                   </div>
                   <div
@@ -1072,6 +1304,17 @@ const Popup = () => {
                     />
                     <span></span>
                   </label>
+                  {hasScheduleWarning && task.enabled && (
+                    <button
+                      className="task-repair-btn"
+                      onClick={() => void repairTaskSchedule(task)}
+                      disabled={isBusy}
+                      title="重试创建此任务的 Chrome 排程"
+                      aria-label={`修复${task.name}排程`}
+                    >
+                      ↻
+                    </button>
+                  )}
                   <button
                     className="task-run-btn"
                     onClick={() => void runTaskNow(task)}
@@ -1126,10 +1369,6 @@ const Popup = () => {
           )}
         </button>
       )}
-
-      <button onClick={openPromptConfigWindow} className="prompt-config-button">
-        自定义提示词与上下文
-      </button>
 
       <button onClick={openMemoryInterface} className="memory-button">
         🧠 实体记忆查询
@@ -1192,6 +1431,144 @@ const Popup = () => {
                     padding: 4px 0;
                 }
 
+                .today-pilot-panel {
+                    padding: 8px;
+                    border-bottom: 1px solid #eeeeee;
+                    margin-bottom: 4px;
+                }
+
+                .today-pilot-head {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 6px;
+                }
+
+                .today-pilot-title {
+                    border: 0;
+                    background: transparent;
+                    padding: 0;
+                    margin: 0;
+                    color: #111827;
+                    font-size: 13px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    text-align: left;
+                }
+
+                .today-pilot-refresh {
+                    width: 24px !important;
+                    min-width: 24px !important;
+                    height: 24px;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    border: 1px solid #d4d4d8;
+                    border-radius: 4px;
+                    background: #ffffff;
+                    color: #334155;
+                }
+
+                .today-pilot-list {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+
+                .today-pilot-empty {
+                    color: #64748b;
+                    font-size: 12px;
+                    line-height: 1.45;
+                    padding: 6px 0;
+                }
+
+                .today-pilot-card {
+                    border: 1px solid #e5e7eb;
+                    border-radius: 6px;
+                    background: #ffffff;
+                    overflow: hidden;
+                }
+
+                .today-pilot-card-main {
+                    width: 100%;
+                    min-height: 56px;
+                    border: 0;
+                    background: transparent;
+                    display: grid;
+                    grid-template-columns: auto minmax(0, 1fr) auto;
+                    gap: 8px;
+                    align-items: center;
+                    padding: 8px;
+                    margin: 0;
+                    text-align: left;
+                    cursor: pointer;
+                }
+
+                .today-pilot-priority {
+                    min-width: 24px;
+                    text-align: center;
+                    border-radius: 4px;
+                    padding: 2px 4px;
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: #334155;
+                    background: #f1f5f9;
+                }
+
+                .today-pilot-priority.critical,
+                .today-pilot-priority.high {
+                    color: #991b1b;
+                    background: #fee2e2;
+                }
+
+                .today-pilot-priority.medium {
+                    color: #92400e;
+                    background: #fef3c7;
+                }
+
+                .today-pilot-card-text {
+                    min-width: 0;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                }
+
+                .today-pilot-card-title,
+                .today-pilot-card-sub {
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+
+                .today-pilot-card-title {
+                    color: #111827;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+
+                .today-pilot-card-sub,
+                .today-pilot-due {
+                    color: #64748b;
+                    font-size: 11px;
+                }
+
+                .today-pilot-card-actions {
+                    border-top: 1px solid #f1f5f9;
+                    display: flex;
+                    gap: 6px;
+                    padding: 6px 8px;
+                }
+
+                .today-pilot-card-actions button {
+                    flex: 1;
+                    min-height: 26px;
+                    border: 1px solid #d4d4d8;
+                    border-radius: 4px;
+                    background: #f8fafc;
+                    color: #334155;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+
                 .task-status-panel {
                     padding: 0 8px 4px;
                     border-bottom: 1px solid #eeeeee;
@@ -1228,6 +1605,7 @@ const Popup = () => {
                 }
 
                 .task-refresh-btn,
+                .task-repair-btn,
                 .task-run-btn {
                     width: 26px !important;
                     min-width: 26px !important;
@@ -1245,11 +1623,13 @@ const Popup = () => {
                 }
 
                 .task-refresh-btn:hover,
+                .task-repair-btn:hover,
                 .task-run-btn:hover {
                     background: #f4f4f5;
                 }
 
                 .task-refresh-btn:disabled,
+                .task-repair-btn:disabled,
                 .task-run-btn:disabled {
                     cursor: wait;
                     opacity: 0.55;
@@ -1334,6 +1714,18 @@ const Popup = () => {
                 .task-state-badge.skipped {
                     background: #f1f5f9;
                     color: #475569;
+                }
+
+                .task-category-badge {
+                    flex: 0 0 auto;
+                    padding: 1px 5px;
+                    border-radius: 4px;
+                    background: #f8fafc;
+                    color: #64748b;
+                    border: 1px solid #e2e8f0;
+                    font-size: 10px;
+                    font-weight: 600;
+                    line-height: 1.4;
                 }
 
                 .task-meta {
@@ -1640,27 +2032,13 @@ const Popup = () => {
                     transition: all 0.3s ease;
                  }
                  
-	                 .memory-button:hover {
-	                    transform: translateY(-1px);
-	                    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
-	                 }
+		                 .memory-button:hover {
+		                    transform: translateY(-1px);
+		                    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+		                 }
 
-                 .prompt-config-button {
-                    background: #334155;
-                    color: white;
-                    font-weight: 600;
-                    box-shadow: 0 2px 8px rgba(51, 65, 85, 0.22);
-                    transition: all 0.3s ease;
-                 }
-
-                 .prompt-config-button:hover {
-                    background: #1f2937;
-                    transform: translateY(-1px);
-                    box-shadow: 0 4px 12px rgba(51, 65, 85, 0.32);
-                 }
-
-	                 .message-button {
-                    background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+		                 .message-button {
+	                    background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
                      color: white;
                      font-weight: 600;
                      box-shadow: 0 2px 8px rgba(20, 184, 166, 0.28);

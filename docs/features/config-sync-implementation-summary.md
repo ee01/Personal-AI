@@ -14,14 +14,20 @@
 - 写回 Sheet 时只替换系统管理的配置键，保留用户或后续功能添加的自定义 Config 键。
 - 写回 Sheet 时会顺手清理重复的系统管理键，避免旧表多次迁移后留下多个 `web_app_url`、Bot rule id 等行；自定义键仍原样保留。
 - 手动绑定支持粘贴完整 Sheet URL、`/spreadsheets/u/0/d/...` 链接、Drive `open?id` 链接或 Sheet ID，并会在授权前即时提示识别到的 Sheet ID；读取到完整 Config 时恢复本地配置，旧表缺 Config 工作表或 Config 为空时会补齐兼容的最小绑定。
+- 手动绑定同一张维护表时会比较本机和 Sheet 的 `last_sync_time`；如果本机更新，界面会先让用户选择“保留本机并同步到 Sheet”或“仍用 Sheet 恢复本机”，避免静默覆盖本机新配置。
+- 手动绑定另一张维护表时会先进入“切换维护表”确认，展示当前本机表、新表和将恢复的配置范围；用户继续后才用新 Sheet 恢复本机，取消则保留当前本机配置。
 - App Script 版本元数据回写也复用 Sheet-first 完整同步，避免升级后本机显示新版本但 Sheet 恢复源仍停留在旧版本。
+- 局部配置更新会返回真正完成 Sheet + 本地写入后的规范化配置，调用方拿到的 `last_sync_time` 与持久化结果一致。
 
 ## 用户路径
 
 1. 首次使用时，用户通过一键初始化创建维护表、Apps Script、触发器和基础配置。
 2. 配置 Bot 推送时，系统创建或修复 Jira Automation 规则，并把规则信息同步到 Sheet + 本地。
 3. 更换设备或重装扩展后，用户只需要手动绑定同一个维护表，即可恢复 Web App、触发器、Bot Automation、Messages/Logs 工作表等配置。
-4. 如果旧维护表缺少 `Config` 工作表，系统会在用户有编辑权限时自动创建并写入基础配置；如果 Sheet 无访问权限、链接错误或自动补齐失败，手动绑定会给出可执行的错误提示。
+4. 手动绑定输入框会先展示识别到的维护表和将恢复的配置范围，降低粘错链接或不确定恢复内容的风险。
+5. 如果本机已有同一张维护表的更新配置，绑定流程会先停在冲突决策提示，用户明确选择后才写入本机或 Sheet。
+6. 如果本机已有另一张维护表，绑定流程会先停在切换确认提示，避免误粘 Sheet ID 后静默替换本机配置。
+7. 如果旧维护表缺少 `Config` 工作表，系统会在用户有编辑权限时自动创建并写入基础配置；如果 Sheet 无访问权限、链接错误或自动补齐失败，手动绑定会给出可执行的错误提示。
 
 ## 设计依据
 
@@ -30,8 +36,16 @@
 - Chrome `storage.local` 适合保存扩展运行态配置，但不是跨设备恢复来源；敏感 webhook 或 token 不应只依赖浏览器本地状态。
 - Jira Automation 规则和 Apps Script Web App URL 都是跨设备可恢复的连接配置，需要和普通 UI 偏好区分管理。
 - 这类“本地可用、云端可恢复”的设计接近 local-first 思路：本机状态保持快速可用，跨设备状态必须有可审计、可恢复的同步来源。
-- 业内配置同步产品通常会把“覆盖本机 / 覆盖云端 / 查看冲突”做成显式用户决策，例如 VS Code Settings Sync；当前实现先采用 Sheet 时间戳作为部分更新基线，后续可以增加可视化 diff 和字段级恢复。
+- 业内配置同步产品通常会把“覆盖本机 / 覆盖云端 / 查看冲突”做成显式用户决策，例如 VS Code Settings Sync；当前实现先采用 Sheet 时间戳和维护表 ID 作为保护基线，后续可以增加可视化 diff 和字段级恢复。
+- 文件同步产品处理并发写入时通常避免静默覆盖，例如 Dropbox API 建议用带 revision 的 update 模式来暴露冲突；本功能不做多端实时合并，但至少在跨表切换和同表本机较新时要求用户显式确认。
 - CRDT / local-first 讨论强调多副本最终收敛；当前 Config 是单用户轻量键值表，暂不引入 CRDT，但写回时会去重系统键，减少表格作为同步源时的歧义。
+
+## 外部参考
+
+- [VS Code Settings Sync](https://code.visualstudio.com/docs/configure/settings-sync) 在冲突时提供接受本地、接受远端和查看差异，说明跨设备配置恢复不能只做静默覆盖。
+- [Google Sheets values.update](https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/update) 要求调用方明确 `valueInputOption`；当前使用 `RAW` 保留 ID、URL 和时间戳的原始字符串。
+- [Dropbox API conflicted copy 讨论](https://community.dropbox.com/en/discussion/324605/dropbox-api-conflicted-copy) 建议用 revision-aware update 避免直接 overwrite，说明同步入口要保留冲突信号。
+- Local-first software 与 CRDT 相关论文强调本地可用和最终收敛，但也提醒配置语义冲突仍需要用户可理解的决策点；当前先对单用户 Config 做时间戳级保护。
 
 ## 验证重点
 
@@ -40,5 +54,8 @@
 - 写回 Config 时应把重复的系统管理键收敛成单行，避免后续读取或人工排查看到过期重复行。
 - 写回 Config 时不能让 Sheets 自动解析值；长数字 ID 和 ISO 时间戳需要原样保存。
 - `syncConfig` 必须保持 Sheet-first 顺序，并让本地 `last_sync_time` 与 Sheet 一致。
+- `updatePartialConfig` 必须返回与 Sheet / Chrome Storage 相同的同步时间戳，避免调用方 UI 状态与持久化状态短暂分叉。
 - App Script 版本回写必须走 `syncConfig`，Sheet 写入成功后才更新本地 storage。
 - 手动绑定需要覆盖：完整 Config 恢复、旧表最小绑定、无权限、Sheet 不存在、缺少 Config 工作表，以及常见 Sheet / Drive 链接格式的即时识别。
+- 手动绑定同表冲突需要覆盖：本机更新时暂停并显示决策；选择保留本机时写回 Sheet；选择 Sheet 时只恢复本机。
+- 手动绑定跨表切换需要覆盖：本机已有另一张维护表时暂停；继续前不改写本机 storage；确认继续后才恢复新表；取消时保持当前本机配置。

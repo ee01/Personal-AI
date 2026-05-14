@@ -1,0 +1,1069 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory Day Pilot — 今日记忆领航台</title>
+  <style>
+    :root {
+      --bg-base: #0c0c0c;
+      --bg-gradient: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+      --panel: rgba(15, 23, 42, 0.6);
+      --panel-hover: rgba(15, 23, 42, 0.8);
+      --panel-border: rgba(148, 163, 184, 0.1);
+      --panel-border-hover: rgba(59, 130, 246, 0.3);
+      --ink: #ffffff;
+      --ink-secondary: #cbd5e1;
+      --ink-muted: #94a3b8;
+      --ink-dim: #64748b;
+      --blue: #60a5fa;
+      --blue-bg: rgba(59, 130, 246, 0.2);
+      --blue-border: rgba(59, 130, 246, 0.3);
+      --purple: #a78bfa;
+      --purple-bg: rgba(147, 51, 234, 0.2);
+      --green: #22c55e;
+      --green-bg: rgba(34, 197, 94, 0.2);
+      --green-border: rgba(52, 211, 153, 0.35);
+      --amber: #f59e0b;
+      --amber-bg: rgba(245, 158, 11, 0.15);
+      --rose: #f43f5e;
+      --rose-bg: rgba(244, 63, 94, 0.15);
+      --radius: 0.75rem;
+      --radius-sm: 0.5rem;
+      --font: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg-gradient);
+      color: var(--ink);
+      min-height: 100vh;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Simulate memory-exploring main content area */
+    .day-pilot {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    /* === BRIEF HEADER === */
+    .brief-header {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1));
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.5rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .brief-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .brief-greeting {
+      font-size: 1.35rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .brief-subtitle {
+      color: var(--ink-secondary);
+      font-size: 0.875rem;
+      margin-top: 0.35rem;
+    }
+
+    .brief-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .source-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.3rem 0.6rem;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 999px;
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+      white-space: nowrap;
+    }
+
+    .source-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      flex-shrink: 0;
+    }
+
+    .source-dot.warn { background: var(--amber); }
+
+    .refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.85rem;
+      background: var(--blue-bg);
+      border: 1px solid var(--blue-border);
+      border-radius: var(--radius-sm);
+      color: var(--blue);
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: var(--font);
+    }
+    .refresh-btn:hover { background: rgba(59, 130, 246, 0.3); }
+
+    /* Attention budget bar */
+    .budget-strip {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 1rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--panel-border);
+    }
+
+    .budget-label {
+      font-size: 0.78rem;
+      color: var(--ink-muted);
+      white-space: nowrap;
+    }
+
+    .budget-track {
+      flex: 1;
+      height: 6px;
+      background: rgba(148, 163, 184, 0.15);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .budget-fill {
+      height: 100%;
+      width: 33%;
+      background: linear-gradient(90deg, var(--green), var(--blue));
+      border-radius: 999px;
+      transition: width 0.4s ease;
+    }
+
+    .budget-count {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--green);
+      white-space: nowrap;
+    }
+
+    /* === SECTION TITLES === */
+    .section-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--ink);
+    }
+
+    .section-count {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--blue);
+      background: var(--blue-bg);
+      padding: 0.15rem 0.55rem;
+      border-radius: 999px;
+    }
+
+    /* === MISSION CARDS === */
+    .mission-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-bottom: 2rem;
+    }
+
+    .mission-card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: all 0.25s ease;
+      backdrop-filter: blur(10px);
+    }
+    .mission-card:hover {
+      border-color: var(--panel-border-hover);
+    }
+
+    /* Priority left accent */
+    .mission-card[data-priority="critical"] { border-left: 3px solid var(--rose); }
+    .mission-card[data-priority="high"] { border-left: 3px solid var(--amber); }
+    .mission-card[data-priority="medium"] { border-left: 3px solid var(--blue); }
+    .mission-card[data-priority="low"] { border-left: 3px solid var(--ink-dim); }
+
+    /* Card collapsed (always visible) */
+    .mission-head {
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .mission-head:hover { background: rgba(59, 130, 246, 0.04); }
+
+    .mission-row-1 {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-bottom: 0.45rem;
+    }
+
+    .priority-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 0 0.55rem;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      text-transform: uppercase;
+    }
+    .priority-badge.critical { color: var(--rose); background: var(--rose-bg); }
+    .priority-badge.high { color: var(--amber); background: var(--amber-bg); }
+    .priority-badge.medium { color: var(--blue); background: var(--blue-bg); }
+    .priority-badge.low { color: var(--ink-muted); background: rgba(148, 163, 184, 0.12); }
+
+    .state-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 0 0.55rem;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .state-badge.now { color: var(--green); background: var(--green-bg); }
+    .state-badge.prepare { color: var(--blue); background: var(--blue-bg); }
+    .state-badge.waiting { color: var(--amber); background: var(--amber-bg); }
+
+    .mission-time {
+      margin-left: auto;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--ink-dim);
+      white-space: nowrap;
+    }
+
+    .chevron {
+      color: var(--ink-dim);
+      font-size: 0.7rem;
+      transition: transform 0.25s;
+      margin-left: 0.25rem;
+    }
+    .mission-card.expanded .chevron { transform: rotate(90deg); }
+
+    .mission-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      line-height: 1.35;
+      margin-bottom: 0.35rem;
+    }
+
+    .mission-why {
+      font-size: 0.85rem;
+      color: var(--ink-secondary);
+      line-height: 1.5;
+    }
+
+    .mission-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-top: 0.6rem;
+    }
+
+    .tag {
+      padding: 0.2rem 0.5rem;
+      border-radius: 0.3rem;
+      font-size: 0.7rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tag.person { background: var(--purple-bg); color: var(--purple); }
+    .tag.source { background: rgba(148, 163, 184, 0.12); color: var(--ink-muted); }
+    .tag.project { background: var(--blue-bg); color: var(--blue); }
+
+    /* Card expanded (hidden by default) */
+    .mission-body {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.35s ease;
+    }
+    .mission-card.expanded .mission-body {
+      max-height: 1200px;
+    }
+
+    .mission-body-inner {
+      padding: 0 1.25rem 1.25rem;
+      border-top: 1px solid var(--panel-border);
+    }
+
+    /* Sub-sections inside expanded card */
+    .sub-section {
+      margin-top: 1rem;
+    }
+
+    .sub-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--blue);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    /* Evidence items */
+    .evidence-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .evidence-item {
+      background: rgba(30, 41, 59, 0.4);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-sm);
+      padding: 0.65rem 0.85rem;
+    }
+
+    .evidence-source {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--ink-muted);
+      margin-bottom: 0.2rem;
+    }
+
+    .evidence-text {
+      font-size: 0.82rem;
+      color: var(--ink-secondary);
+      line-height: 1.45;
+    }
+
+    /* Action steps */
+    .action-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .action-step {
+      display: flex;
+      gap: 0.65rem;
+      align-items: flex-start;
+    }
+
+    .step-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      background: var(--blue-bg);
+      color: var(--blue);
+      font-size: 0.7rem;
+      font-weight: 900;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .step-content strong {
+      display: block;
+      font-size: 0.85rem;
+      line-height: 1.35;
+    }
+
+    .step-content span {
+      display: block;
+      margin-top: 0.15rem;
+      font-size: 0.78rem;
+      color: var(--ink-muted);
+      line-height: 1.45;
+    }
+
+    /* Open questions */
+    .question-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .question-item {
+      font-size: 0.82rem;
+      color: var(--ink-secondary);
+      padding-left: 1rem;
+      position: relative;
+    }
+    .question-item::before {
+      content: '?';
+      position: absolute;
+      left: 0;
+      font-weight: 800;
+      color: var(--amber);
+    }
+
+    /* Context pack preview (collapsible inside expanded card) */
+    .context-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.4rem 0.75rem;
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-sm);
+      color: var(--ink-muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: var(--font);
+    }
+    .context-toggle:hover { border-color: var(--blue-border); color: var(--blue); }
+
+    .context-pack {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+    .context-pack.open { max-height: 300px; }
+
+    .context-pack pre {
+      margin-top: 0.5rem;
+      padding: 0.85rem;
+      background: #111827;
+      border-radius: var(--radius-sm);
+      color: #e5e7eb;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow: auto;
+      max-height: 250px;
+    }
+
+    /* Card action bar */
+    .card-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .card-action {
+      padding: 0.45rem 0.85rem;
+      border-radius: var(--radius-sm);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 1px solid transparent;
+      font-family: var(--font);
+    }
+
+    .card-action.primary {
+      background: var(--green-bg);
+      border-color: var(--green-border);
+      color: var(--green);
+    }
+    .card-action.primary:hover { background: rgba(34, 197, 94, 0.3); }
+
+    .card-action.secondary {
+      background: var(--blue-bg);
+      border-color: var(--blue-border);
+      color: var(--blue);
+    }
+    .card-action.secondary:hover { background: rgba(59, 130, 246, 0.3); }
+
+    .card-action.ghost {
+      background: transparent;
+      border-color: var(--panel-border);
+      color: var(--ink-muted);
+    }
+    .card-action.ghost:hover { border-color: var(--ink-dim); color: var(--ink-secondary); }
+
+    /* === NEEDS ATTENTION BAR === */
+    .attention-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 2rem;
+    }
+
+    .attention-item {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      cursor: pointer;
+      transition: all 0.25s;
+      backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .attention-item:hover {
+      border-color: var(--panel-border-hover);
+      transform: translateY(-1px);
+    }
+
+    .attention-icon {
+      font-size: 1.35rem;
+      flex-shrink: 0;
+    }
+
+    .attention-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .attention-count {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--blue);
+      line-height: 1;
+    }
+
+    .attention-label {
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+      margin-top: 0.2rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .attention-arrow {
+      color: var(--ink-dim);
+      font-size: 0.85rem;
+      flex-shrink: 0;
+    }
+
+    /* === TODAY TIMELINE === */
+    .timeline {
+      margin-bottom: 2rem;
+    }
+
+    .timeline-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      position: relative;
+      padding-left: 1.5rem;
+    }
+
+    .timeline-list::before {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      background: linear-gradient(to bottom, var(--blue), rgba(96, 165, 250, 0.15));
+      border-radius: 999px;
+    }
+
+    .tl-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+      padding: 0.6rem 0;
+      position: relative;
+    }
+
+    .tl-dot {
+      position: absolute;
+      left: -1.5rem;
+      top: 0.75rem;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--bg-base);
+      border: 2px solid var(--blue);
+      z-index: 1;
+    }
+    .tl-dot.active {
+      background: var(--blue);
+      box-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+    }
+    .tl-dot.muted { border-color: var(--ink-dim); }
+
+    .tl-time {
+      font-size: 0.75rem;
+      font-weight: 800;
+      color: var(--ink-dim);
+      min-width: 52px;
+      flex-shrink: 0;
+      padding-top: 1px;
+    }
+
+    .tl-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .tl-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+
+    .tl-desc {
+      font-size: 0.78rem;
+      color: var(--ink-muted);
+      margin-top: 0.1rem;
+    }
+
+    .tl-link {
+      font-size: 0.72rem;
+      color: var(--blue);
+      cursor: pointer;
+      margin-top: 0.15rem;
+      display: inline-block;
+    }
+    .tl-link:hover { text-decoration: underline; }
+
+    /* === FOOTER NOTE === */
+    .footer-note {
+      text-align: center;
+      color: var(--ink-dim);
+      font-size: 0.75rem;
+      padding: 1.5rem 0 0.5rem;
+      border-top: 1px solid var(--panel-border);
+    }
+
+    /* === TOAST === */
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%) translateY(16px);
+      background: #1e293b;
+      color: #e2e8f0;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: var(--radius-sm);
+      padding: 0.6rem 1rem;
+      font-size: 0.82rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.2s ease;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 640px) {
+      .day-pilot { padding: 1rem; }
+      .brief-top { flex-direction: column; align-items: flex-start; }
+      .brief-meta { width: 100%; }
+      .attention-bar { grid-template-columns: 1fr 1fr; }
+      .mission-head { padding: 0.85rem 1rem; }
+      .mission-body-inner { padding: 0 1rem 1rem; }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.3); }
+    ::-webkit-scrollbar-thumb { background: rgba(59, 130, 246, 0.3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(59, 130, 246, 0.5); }
+
+    /* Animations */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .day-pilot > * { animation: fadeInUp 0.5s ease-out both; }
+    .day-pilot > *:nth-child(2) { animation-delay: 0.06s; }
+    .day-pilot > *:nth-child(3) { animation-delay: 0.12s; }
+    .day-pilot > *:nth-child(4) { animation-delay: 0.18s; }
+    .day-pilot > *:nth-child(5) { animation-delay: 0.24s; }
+  </style>
+</head>
+<body>
+  <div class="day-pilot">
+
+    <!-- ==================== BRIEF HEADER ==================== -->
+    <div class="brief-header">
+      <div class="brief-top">
+        <div>
+          <div class="brief-greeting">今天有 4 件事值得关注</div>
+          <div class="brief-subtitle">2026-05-11 周日 · Asia/Shanghai · 08:32 生成</div>
+        </div>
+        <div class="brief-meta">
+          <span class="source-tag"><span class="source-dot"></span>8638 消息</span>
+          <span class="source-tag"><span class="source-dot"></span>239 会议</span>
+          <span class="source-tag"><span class="source-dot"></span>87 日历</span>
+          <span class="source-tag"><span class="source-dot warn"></span>115 AI 对话</span>
+          <button class="refresh-btn" data-toast="已刷新今日 brief">刷新</button>
+        </div>
+      </div>
+      <div class="budget-strip">
+        <span class="budget-label">今日提醒预算</span>
+        <div class="budget-track"><div class="budget-fill"></div></div>
+        <span class="budget-count">1 / 3</span>
+      </div>
+    </div>
+
+    <!-- ==================== MISSION CARDS ==================== -->
+    <div class="section-title">
+      今日 Mission
+      <span class="section-count">4</span>
+    </div>
+
+    <div class="mission-cards" id="missionCards"></div>
+
+    <!-- ==================== NEEDS ATTENTION BAR ==================== -->
+    <div class="section-title">需要你处理</div>
+
+    <div class="attention-bar">
+      <div class="attention-item" data-toast="跳转到决策中心（Demo）">
+        <span class="attention-icon">⚖️</span>
+        <div class="attention-info">
+          <div class="attention-count">3</div>
+          <div class="attention-label">待拍板决策</div>
+        </div>
+        <span class="attention-arrow">→</span>
+      </div>
+      <div class="attention-item" data-toast="跳转到动作队列（Demo）">
+        <span class="attention-icon">⚙️</span>
+        <div class="attention-info">
+          <div class="attention-count">2</div>
+          <div class="attention-label">排队中动作</div>
+        </div>
+        <span class="attention-arrow">→</span>
+      </div>
+      <div class="attention-item" data-toast="跳转到主动询问（Demo）">
+        <span class="attention-icon">📡</span>
+        <div class="attention-info">
+          <div class="attention-count">5</div>
+          <div class="attention-label">跟进中询问</div>
+        </div>
+        <span class="attention-arrow">→</span>
+      </div>
+      <div class="attention-item" data-toast="跳转到个人技能（Demo）">
+        <span class="attention-icon">🧪</span>
+        <div class="attention-info">
+          <div class="attention-count">1</div>
+          <div class="attention-label">新萃取建议</div>
+        </div>
+        <span class="attention-arrow">→</span>
+      </div>
+    </div>
+
+    <!-- ==================== TODAY TIMELINE ==================== -->
+    <div class="timeline">
+      <div class="section-title">今日时间线</div>
+      <div class="timeline-list">
+        <div class="tl-item">
+          <div class="tl-dot active"></div>
+          <div class="tl-time">09:24</div>
+          <div class="tl-content">
+            <div class="tl-title">Fred 问 webpage-mcp 怎么配</div>
+            <div class="tl-desc">RingCentral · 待回复</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot active"></div>
+          <div class="tl-time">10:28</div>
+          <div class="tl-content">
+            <div class="tl-title">AI Notes 重复消费报告</div>
+            <div class="tl-desc">Elina · rcv.notes_lab01 · 需排查</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-time">14:00</div>
+          <div class="tl-content">
+            <div class="tl-title">RCVSDK Daily Sync</div>
+            <div class="tl-desc">Recurring · 无新变化，已降噪</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-time">15:30</div>
+          <div class="tl-content">
+            <div class="tl-title">Nova Brandy daily</div>
+            <div class="tl-desc">Recurring · 无新变化，已降噪</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-time">5/21</div>
+          <div class="tl-content">
+            <div class="tl-title">CoP — 基于 AI 的个人发展和工具</div>
+            <div class="tl-desc">需提前准备分享材料</div>
+            <div class="tl-link" data-toast="已定位到 AI 工具分享 mission">查看关联 mission →</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== FOOTER ==================== -->
+    <div class="footer-note">
+      Day Pilot Demo · 数据来自真实记忆信号 · 最终产品将替代首页概览
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ======================== DATA ========================
+    const missions = [
+      {
+        id: 'ai-notes',
+        priority: 'high',
+        state: 'Now',
+        stateClass: 'now',
+        time: '待排查',
+        title: 'AI Notes 重复 GeneratedNotes 消费',
+        why: 'Elina 报告 rcv.notes_lab01 上同一 GeneratedNotes 被收到数百次。若不跟进，AI Notes 测试会继续失败，影响会议记录相关能力。',
+        tags: [
+          { text: 'Elina', type: 'person' },
+          { text: 'RIO', type: 'source' },
+          { text: 'AI Notes', type: 'project' },
+          { text: 'Kibana', type: 'source' },
+        ],
+        evidence: [
+          { source: '2026-05-09 · RCV AI Notes Engineering', text: 'Elina 报告 AI Notes tests failing，同一 GeneratedNotes message 被收到 hundreds of times。' },
+          { source: 'Kibana', text: '消息包含可追踪的 Kibana 查询链接。' },
+          { source: '记忆信号', text: 'AI Notes 是当前 active initiative，和 Meeting Pilot / 会议记忆强相关。' },
+        ],
+        actions: [
+          { title: '确认 RIO owner', desc: '先确认 GeneratedNotes 消息由哪个服务消费，以及是否近期改过 ack / retry。' },
+          { title: '整理排查包', desc: '把 Kibana link、message id、时间窗和现象打包给 RIO 侧。' },
+        ],
+        questions: [
+          '是否已有 incident 或 flaky test 记录？',
+          '重复消费是 producer 重发还是 consumer 未 ack？',
+        ],
+        pack: 'Mission: Investigate AI Notes repeated GeneratedNotes\nKnown symptom: startGeneratedNotes and generatingNotesSuccess fire once,\nbut same GeneratedNotes on rcv.notes_lab01 is received hundreds of times.\nNeed: RIO-side diagnosis for retry/reconsumption.\nEvidence: Elina\'s 2026-05-09 message and Kibana link.\nNext ask: identify owner, confirm ack/retry path, summarize likely root cause.',
+      },
+      {
+        id: 'mcp',
+        priority: 'medium',
+        state: 'Prepare',
+        stateClass: 'prepare',
+        time: '上午',
+        title: 'Webpage-MCP / Codex 插件配置整理',
+        why: 'Fred 昨天问你 webpage-mcp 怎么配，并提到 Codex Chrome 插件与 webapp MCP 功能交叉。今天整理清楚可以转成团队可复用说明。',
+        tags: [
+          { text: 'Fred Gu', type: 'person' },
+          { text: 'Codex', type: 'project' },
+          { text: 'MCP', type: 'source' },
+          { text: '团队复用', type: 'source' },
+        ],
+        evidence: [
+          { source: '2026-05-09 · RingCentral', text: 'Fred 问 webpage-mcp 怎么配。' },
+          { source: '2026-05-09 · RingCentral', text: 'Fred 反馈 Codex 安装了 Chrome 插件，感觉和 webapp MCP 功能有交叉。' },
+          { source: 'AGENT.md', text: '仓库要求用户发送链接时优先用 webpage-mcp 检查已打开页面。' },
+        ],
+        actions: [
+          { title: '先给出适用边界', desc: '说明 webpage-mcp 更通用，Codex Chrome 插件更偏 Codex 自身体验。' },
+          { title: '再补安装和验证路径', desc: '给 Fred 一份最短可执行步骤，避免在插件和 MCP 之间来回试错。' },
+        ],
+        questions: [
+          '是否要形成一份团队 wiki 或 skill？',
+          'Codex Chrome 插件和 MCP 的能力重叠需要怎么表述？',
+        ],
+        pack: 'Mission: Clarify webpage-mcp vs Codex Chrome plugin\nGoal: Reply with a reusable setup and boundary explanation.\nKnown facts:\n- Fred asked how to configure webpage-mcp on 2026-05-09.\n- Fred installed the Codex Chrome plugin and noticed functional overlap.\n- This repo prefers webpage-mcp for link inspection when a relevant page is already open.\nOutput needed: concise Chinese guidance, with when-to-use and validation steps.',
+      },
+      {
+        id: 'ai-sharing',
+        priority: 'medium',
+        state: 'Prepare',
+        stateClass: 'prepare',
+        time: '5/21 前',
+        title: 'AI 工具分享材料预热',
+        why: '5/21 有 CoP AI 分享会议，最近团队高频讨论 Codex、Factory.ai、MCP 和 AI 工具成本。提前几天聚合素材，避免临时拼装。',
+        tags: [
+          { text: 'Ryan', type: 'person' },
+          { text: 'Sophia', type: 'person' },
+          { text: 'CoP', type: 'project' },
+          { text: '经验分享', type: 'source' },
+        ],
+        evidence: [
+          { source: '2026-05-21 · Calendar', text: 'CoP — 基于 AI 的个人发展和工具。' },
+          { source: '2026-05-09 · Daily Summary', text: 'AI Service Skills Sharing 记录了近期经验分享。' },
+          { source: '2026-04-30 · RingCentral', text: '团队讨论 Codex、Cursor license、OpenAI deal 和 Factory.ai。' },
+          { source: '2026-04-30 · Sophia', text: 'Jira 数据统计节省大量手工时间的真实反馈。' },
+        ],
+        actions: [
+          { title: '选 3 个真实案例', desc: 'Jira 数据统计、webpage-mcp 配置、AI 先修 bug。' },
+          { title: '沉淀为分享结构', desc: '每个案例按场景、工具、收益、限制、可复用步骤组织。' },
+        ],
+        questions: [
+          '分享是偏工具教程还是个人发展方法？',
+          '哪些内部链接不适合外发到外部 AI？',
+        ],
+        pack: 'Mission: Prepare AI personal development/tool sharing\nGoal: Turn recent AI work into 3 practical cases.\nCases to include:\n1. Jira headcount trend with AI assistance.\n2. webpage-mcp vs Codex Chrome plugin setup.\n3. Bug — AI fixes first, human reviews later.\nAudience: internal agile/community group.',
+      },
+      {
+        id: 'capacity',
+        priority: 'low',
+        state: 'Waiting',
+        stateClass: 'waiting',
+        time: '稍后',
+        title: 'Capacity poster 未闭环',
+        why: '你提醒本期 Capacity Management poster 似乎还没上传。轻量 open loop，不适合打扰，但应留在 board 避免被冲掉。',
+        tags: [
+          { text: 'Poster owner', type: 'person' },
+          { text: 'Follow-up', type: 'source' },
+        ],
+        evidence: [
+          { source: '2026-05-09 · RingCentral', text: '你提醒本期 poster 似乎还没传上来。' },
+          { source: 'Google Drive', text: '消息中包含目标 folder 链接。' },
+        ],
+        actions: [
+          { title: '等待 owner 回复', desc: '今天先不打扰，若 24 小时无回应再提醒。' },
+          { title: '保留来源链接', desc: '把 Google Drive folder 链接保留在 follow-up card。' },
+        ],
+        questions: [
+          'poster 是否已经上传但未同步？',
+        ],
+        pack: 'Mission: Capacity Management poster follow-up\nState: Waiting for owner response.\nEvidence: Esone asked owner to check upload status and shared Google Drive folder.\nRecommended next step: no interruption today; follow up tomorrow if no response.',
+      },
+    ];
+
+    // ======================== RENDER ========================
+    const cardsContainer = document.getElementById('missionCards');
+    const toastEl = document.getElementById('toast');
+    let expandedId = null;
+
+    function renderCards() {
+      cardsContainer.innerHTML = missions.map(m => `
+        <div class="mission-card ${expandedId === m.id ? 'expanded' : ''}"
+             data-priority="${m.priority}" data-id="${m.id}">
+          <div class="mission-head" onclick="toggleCard('${m.id}')">
+            <div class="mission-row-1">
+              <span class="priority-badge ${m.priority}">${m.priority}</span>
+              <span class="state-badge ${m.stateClass}">${m.state}</span>
+              <span class="mission-time">${m.time}</span>
+              <span class="chevron">▶</span>
+            </div>
+            <div class="mission-title">${m.title}</div>
+            <div class="mission-why">${m.why}</div>
+            <div class="mission-tags">
+              ${m.tags.map(t => `<span class="tag ${t.type}">${t.text}</span>`).join('')}
+            </div>
+          </div>
+          <div class="mission-body">
+            <div class="mission-body-inner">
+              <!-- Evidence -->
+              <div class="sub-section">
+                <div class="sub-title">📎 证据 (${m.evidence.length})</div>
+                <div class="evidence-list">
+                  ${m.evidence.map(e => `
+                    <div class="evidence-item">
+                      <div class="evidence-source">${e.source}</div>
+                      <div class="evidence-text">${e.text}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              <!-- Actions -->
+              <div class="sub-section">
+                <div class="sub-title">🎯 建议动作</div>
+                <div class="action-steps">
+                  ${m.actions.map((a, i) => `
+                    <div class="action-step">
+                      <div class="step-num">${i + 1}</div>
+                      <div class="step-content">
+                        <strong>${a.title}</strong>
+                        <span>${a.desc}</span>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              <!-- Questions -->
+              ${m.questions.length > 0 ? `
+              <div class="sub-section">
+                <div class="sub-title">❓ 待确认</div>
+                <div class="question-list">
+                  ${m.questions.map(q => `<div class="question-item">${q}</div>`).join('')}
+                </div>
+              </div>
+              ` : ''}
+              <!-- Context pack -->
+              <div class="sub-section">
+                <button class="context-toggle" onclick="event.stopPropagation(); togglePack('${m.id}')">
+                  📦 查看上下文包
+                </button>
+                <div class="context-pack" id="pack-${m.id}">
+                  <pre>${m.pack}</pre>
+                </div>
+              </div>
+              <!-- Action buttons -->
+              <div class="card-actions">
+                <button class="card-action primary" data-toast="已标记完成 ✓">完成</button>
+                <button class="card-action secondary" data-toast="已标记稍后提醒">稍后</button>
+                <button class="card-action secondary" data-toast="已复制上下文包">复制上下文包</button>
+                <button class="card-action ghost" data-toast="已静默同类提醒">不再提醒同类</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function toggleCard(id) {
+      expandedId = expandedId === id ? null : id;
+      renderCards();
+    }
+
+    function togglePack(id) {
+      const el = document.getElementById('pack-' + id);
+      if (el) el.classList.toggle('open');
+    }
+
+    // ======================== TOAST ========================
+    let toastTimer;
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+    }
+
+    document.addEventListener('click', e => {
+      const t = e.target.closest('[data-toast]');
+      if (t) showToast(t.dataset.toast);
+    });
+
+    // ======================== INIT ========================
+    renderCards();
+  </script>
+</body>
+</html>

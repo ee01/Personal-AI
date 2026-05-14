@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import {
   formatLocalScheduleDate,
   formatLocalScheduleDateTime,
+  formatLocalScheduleTimezoneHint,
+  formatLocalScheduleTimezoneLabel,
+  formatTimezoneOffsetFromMinutes,
   getLocalScheduleDayOfWeek,
+  hasLocalScheduleTime,
   isValidLocalScheduleTime,
   normalizeLocalScheduleTime,
   parseLocalScheduleDate,
@@ -79,6 +83,10 @@ test('getLocalScheduleDayOfWeek is not shifted by UTC parsing', () => {
 test('normalizeLocalScheduleTime accepts compact local times and pads them', () => {
   assert.equal(normalizeLocalScheduleTime('7:5'), '07:05');
   assert.equal(normalizeLocalScheduleTime('23:59'), '23:59');
+  assert.equal(normalizeLocalScheduleTime('9:05:30'), '09:05');
+  assert.equal(normalizeLocalScheduleTime('9:05 PM'), '21:05');
+  assert.equal(normalizeLocalScheduleTime('上午 9:05:00'), '09:05');
+  assert.equal(normalizeLocalScheduleTime('下午 9:05:00'), '21:05');
   assert.deepEqual(parseLocalScheduleTime('0:03'), {
     hours: 0,
     minutes: 3,
@@ -86,12 +94,35 @@ test('normalizeLocalScheduleTime accepts compact local times and pads them', () 
   });
 });
 
+test('local schedule time treats invisible-only values as blank', () => {
+  assert.equal(hasLocalScheduleTime('\u200B'), false);
+  assert.equal(isValidLocalScheduleTime('\u200B'), true);
+  assert.equal(normalizeLocalScheduleTime('\u200B'), undefined);
+});
+
 test('local schedule time validation rejects rollover times', () => {
   assert.equal(isValidLocalScheduleTime(''), true);
   assert.equal(isValidLocalScheduleTime('24:00'), false);
   assert.equal(isValidLocalScheduleTime('09:60'), false);
+  assert.equal(isValidLocalScheduleTime('09:00:60'), false);
   assert.equal(isValidLocalScheduleTime('not-a-time'), false);
   assert.throws(() => parseLocalScheduleTime('25:00'), {
     message: 'Invalid schedule time',
   });
+});
+
+test('timezone offset formatter uses ISO-style UTC offsets', () => {
+  assert.equal(formatTimezoneOffsetFromMinutes(-480), 'UTC+08:00');
+  assert.equal(formatTimezoneOffsetFromMinutes(330), 'UTC-05:30');
+  assert.equal(formatTimezoneOffsetFromMinutes(0), 'UTC+00:00');
+});
+
+test('local schedule timezone label accepts sheet-style date time strings', () => {
+  const label = formatLocalScheduleTimezoneLabel('2026-05-04 09:30');
+
+  assert.match(label, /^.+ \(UTC[+-]\d{2}:\d{2}\)$/);
+  assert.match(
+    formatLocalScheduleTimezoneHint('2026-05-04 09:30'),
+    /^本机时区：.+ \(UTC[+-]\d{2}:\d{2}\)；跨时区接收人请按此时间换算。$/,
+  );
 });

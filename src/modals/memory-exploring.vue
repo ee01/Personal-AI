@@ -22,7 +22,7 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">🏠</div>
-            <div class="entity-name">首页概览</div>
+            <div class="entity-name">今日领航</div>
           </router-link>
 
           <router-link
@@ -507,7 +507,7 @@ onMounted(async () => {
 });
 
 const handleSearchInput = () => {
-  // 首页概览搜索：不在输入时触发搜索，避免频繁调用 ask()
+  // 今日领航搜索：不在输入时触发搜索，避免频繁调用 ask()
   // 用户需要按 Enter 或点击搜索按钮才触发
 };
 
@@ -544,12 +544,13 @@ const performSearch = () => {
       );
     }
   } else if (path === '/' || path === '/user-profile' || path === '/timeline') {
-    // 首页概览、用户画像、时间轴 - 使用 ask() 智能搜索
+    // 今日领航、用户画像、时间轴 - 使用 ask() 智能搜索
     console.log('[搜索] 执行智能 AI 搜索:', searchQuery.value);
     store.performAskSearch(searchQuery.value, selectedRecallScope.value);
   } else if (path.startsWith('/entity/')) {
     // 分栏搜索 - 使用向量匹配
-    const entityType = route.params.type as string;
+    const entityType =
+      path === '/entity/Person' ? 'Person' : (route.params.type as string);
     console.log('[搜索] 执行实体向量搜索:', searchQuery.value, entityType);
     store.performEntityVectorSearch(
       searchQuery.value,
@@ -646,6 +647,13 @@ html,
 /* 侧边栏样式 */
 .sidebar {
   width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   background: rgba(15, 23, 42, 0.8);
   backdrop-filter: blur(20px);
   border-right: 1px solid rgba(148, 163, 184, 0.1);
@@ -675,6 +683,10 @@ html,
 }
 
 .entity-types {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 1.5rem 0;
 }
 
@@ -2308,6 +2320,9 @@ html,
   .sidebar {
     width: 100%;
     height: auto;
+    max-height: none;
+    display: block;
+    overflow: visible;
     position: static;
     padding: 1rem 0 0.7rem;
     border-right: none;
@@ -2328,8 +2343,11 @@ html,
 
   .entity-types {
     display: flex;
+    flex: none;
+    min-height: auto;
     gap: 0.4rem;
     overflow-x: auto;
+    overflow-y: hidden;
     padding: 0.75rem 1rem 0.1rem;
   }
 

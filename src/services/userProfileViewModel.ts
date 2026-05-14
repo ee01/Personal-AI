@@ -61,6 +61,20 @@ export interface UserProfileViewModel {
   lastUpdated: number;
 }
 
+export interface UserProfileReviewQueueItem {
+  id: string;
+  type: string;
+  name: string;
+  category: UserProfileCategory;
+  confidence: number;
+  sourceKind: string;
+  status: string;
+  evidenceCount: number;
+  lastSeen: number;
+  canUseForPersonalization: boolean;
+  reason: string;
+}
+
 export interface UserProfileAnalysisViewModel {
   topInterests: {
     projects: string[];
@@ -73,19 +87,8 @@ export interface UserProfileAnalysisViewModel {
     focusAreas: string[];
     suggestedContent: string[];
   };
-  predictedInterests: Array<{
-    id: string;
-    type: string;
-    name: string;
-    category: UserProfileCategory;
-    confidence: number;
-    sourceKind: string;
-    status: string;
-    evidenceCount: number;
-    lastSeen: number;
-    canUseForPersonalization: boolean;
-    reason: string;
-  }>;
+  predictedInterests: UserProfileReviewQueueItem[];
+  reviewQueue: UserProfileReviewQueueItem[];
   opinions: unknown[];
   totalOpinions: number;
   lastUpdated: number;
@@ -426,6 +429,29 @@ function pendingReviewScore(item: UserProfileInterestItem): number {
   return statusBoost + evidenceBoost + itemSortScore(item);
 }
 
+function buildReviewQueueItem(item: UserProfileInterestItem): UserProfileReviewQueueItem {
+  return {
+    id: item.id,
+    type: item.itemType,
+    name: item.name,
+    category: item.category,
+    confidence: item.confidence,
+    sourceKind: item.sourceKind,
+    status: item.status,
+    evidenceCount: item.evidenceRefs.length,
+    lastSeen: item.lastSeen,
+    canUseForPersonalization: item.canUseForPersonalization,
+    reason:
+      item.status === 'pending_confirm'
+        ? '待确认后再进入核心画像。'
+        : !item.canUseForPersonalization
+          ? '尚未确认，暂不会用于个性化上下文。'
+        : item.sourceKind === 'explicit'
+          ? '来自显式配置'
+          : '来自历史记忆推断，建议人工确认。',
+  };
+}
+
 function buildAnalysis(
   profile: UserProfileViewModel,
   opinions: unknown[],
@@ -441,6 +467,7 @@ function buildAnalysis(
   const inferredItems = profile.allItems
     .filter((item) => !item.userConfirmed)
     .sort((a, b) => pendingReviewScore(b) - pendingReviewScore(a));
+  const reviewQueue = inferredItems.map(buildReviewQueueItem);
 
   return {
     topInterests: {
@@ -459,26 +486,8 @@ function buildAnalysis(
       focusAreas: focusAreas.length > 0 ? focusAreas : ['待补充'],
       suggestedContent: buildSuggestions(profile),
     },
-    predictedInterests: inferredItems.slice(0, 4).map((item) => ({
-      id: item.id,
-      type: item.itemType,
-      name: item.name,
-      category: item.category,
-      confidence: item.confidence,
-      sourceKind: item.sourceKind,
-      status: item.status,
-      evidenceCount: item.evidenceRefs.length,
-      lastSeen: item.lastSeen,
-      canUseForPersonalization: item.canUseForPersonalization,
-      reason:
-        item.status === 'pending_confirm'
-          ? '待确认后再进入核心画像。'
-          : !item.canUseForPersonalization
-            ? '尚未确认，暂不会用于个性化上下文。'
-          : item.sourceKind === 'explicit'
-            ? '来自显式配置'
-            : '来自历史记忆推断，建议人工确认。',
-    })),
+    predictedInterests: reviewQueue.slice(0, 4),
+    reviewQueue,
     opinions,
     totalOpinions,
     lastUpdated: now,

@@ -119,7 +119,9 @@ export interface EnvConfigType {
   MEETING_PILOT_ENABLED: boolean;
   MEETING_PILOT_FLOATING_ICON_VISIBLE: boolean;
   CONTEXT_ASSIST_ENABLED: boolean;
+  COMPOSE_ASSIST_ENABLED: boolean;
   MEETING_PREP_ENABLED: boolean;
+  TODAY_PILOT_MEETING_PREP_ENABLED: boolean;
   MEETING_PREP_CALENDAR_SOURCE: MeetingPrepCalendarSource;
   MEETING_NATIVE_CLIENT_JOIN_ENABLED: boolean;
   MS_OUTLOOK_CLIENT_ID: string;
@@ -421,8 +423,8 @@ export function normalizeEnvConfigShape(
     typeof config.MEETING_PILOT_ENABLED === 'boolean'
       ? config.MEETING_PILOT_ENABLED
       : typeof config.MEETING_FEATURE_ENABLED === 'boolean'
-        ? config.MEETING_FEATURE_ENABLED
-        : defaultEnvConfig.MEETING_PILOT_ENABLED;
+      ? config.MEETING_FEATURE_ENABLED
+      : defaultEnvConfig.MEETING_PILOT_ENABLED;
   const normalizedMeetingPilotFloatingIconVisible =
     typeof config.MEETING_PILOT_FLOATING_ICON_VISIBLE === 'boolean'
       ? config.MEETING_PILOT_FLOATING_ICON_VISIBLE
@@ -454,9 +456,15 @@ export function normalizeEnvConfigShape(
     MEETING_PILOT_FLOATING_ICON_VISIBLE:
       normalizedMeetingPilotFloatingIconVisible,
     CONTEXT_ASSIST_ENABLED: config.CONTEXT_ASSIST_ENABLED !== false,
+    COMPOSE_ASSIST_ENABLED:
+      config.COMPOSE_ASSIST_ENABLED !== false &&
+      config.CONTEXT_ASSIST_ENABLED !== false,
     OWNER_SPEECH_LEARNING_ENABLED:
       config.OWNER_SPEECH_LEARNING_ENABLED !== false,
     MEETING_PREP_ENABLED: config.MEETING_PREP_ENABLED !== false,
+    TODAY_PILOT_MEETING_PREP_ENABLED:
+      config.TODAY_PILOT_MEETING_PREP_ENABLED !== false &&
+      config.MEETING_PREP_ENABLED !== false,
     MEETING_PREP_CALENDAR_SOURCE: normalizedMeetingPrepCalendarSource,
     MEETING_NATIVE_CLIENT_JOIN_ENABLED:
       config.MEETING_NATIVE_CLIENT_JOIN_ENABLED !== false,
@@ -607,7 +615,13 @@ export const defaultEnvConfig: EnvConfigType = {
   MEETING_PILOT_FLOATING_ICON_VISIBLE:
     process.env.MEETING_PILOT_FLOATING_ICON_VISIBLE !== 'false',
   CONTEXT_ASSIST_ENABLED: process.env.CONTEXT_ASSIST_ENABLED !== 'false',
+  COMPOSE_ASSIST_ENABLED:
+    process.env.COMPOSE_ASSIST_ENABLED !== 'false' &&
+    process.env.CONTEXT_ASSIST_ENABLED !== 'false',
   MEETING_PREP_ENABLED: process.env.MEETING_PREP_ENABLED !== 'false',
+  TODAY_PILOT_MEETING_PREP_ENABLED:
+    process.env.TODAY_PILOT_MEETING_PREP_ENABLED !== 'false' &&
+    process.env.MEETING_PREP_ENABLED !== 'false',
   MEETING_PREP_CALENDAR_SOURCE:
     process.env.MEETING_PREP_CALENDAR_SOURCE === 'outlook' ||
     process.env.MEETING_PREP_CALENDAR_SOURCE === 'ringcentral_indexeddb'
@@ -784,8 +798,8 @@ export function parseChromaConfig(config: EnvConfigType) {
         port: url.port
           ? parseInt(url.port)
           : url.protocol === 'https:'
-            ? 443
-            : 8000,
+          ? 443
+          : 8000,
         ssl: url.protocol === 'https:',
       };
     } catch (error) {

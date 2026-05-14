@@ -33,6 +33,7 @@ import {
   buildAgentWorkflowDecisionPath,
   buildAgentWorkflowConfigDiagnostics,
   buildAgentWorkflowResultDiagnostics,
+  buildAgentWorkflowRecommendedActions,
   type AgentWorkflowDiagnostic,
 } from './agentWorkflowDiagnostics';
 import { IntelligentAgent, type AgentToolDescription } from './agentThinking';
@@ -1199,6 +1200,7 @@ function ContextSiteMuteSettings() {
 const Options = () => {
   const outreachConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const meetingPilotConfigSectionRef = useRef<HTMLDivElement | null>(null);
+  const openClawConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const [config, setConfig] = useState<EnvConfigType>({ ...defaultEnvConfig });
   const [status, setStatus] = useState<{
     message: string;
@@ -1381,6 +1383,8 @@ const Options = () => {
       const sectionMap: Record<string, HTMLDivElement | null> = {
         'outreach-config': outreachConfigSectionRef.current,
         'meeting-pilot-config': meetingPilotConfigSectionRef.current,
+        'openclaw-config': openClawConfigSectionRef.current,
+        OPENCLAW_ENABLED: openClawConfigSectionRef.current,
       };
       const target = sectionMap[hash];
 
@@ -2977,8 +2981,8 @@ const Options = () => {
           name="MEETING_PILOT_ENABLED"
           checked={config.MEETING_PILOT_ENABLED === true}
           onChange={handleInputChange}
-          label="启用 Meeting Pilot"
-          description="关闭后不再注入会议浮层入口，也不会显示 Meeting Pilot 主流程。"
+          label="每次会议默认开启会议全貌"
+          description="关闭后不会在会议页默认注入悬浮入口；仍可从扩展 popup 点击“开启会议全貌”，对当前会议单次启用。"
         />
         <ToggleField
           id="MEETING_PILOT_FLOATING_ICON_VISIBLE"
@@ -2986,7 +2990,7 @@ const Options = () => {
           checked={config.MEETING_PILOT_FLOATING_ICON_VISIBLE !== false}
           onChange={handleInputChange}
           label="显示会议页右下角悬浮入口"
-          description="如果你在 meeting 页面通过悬浮 icon 上的小 x 选择了“永不展示”，可以在这里重新打开。关闭后仅隐藏会议页悬浮入口与浮层提醒，不会停用整个 Meeting Pilot 功能。"
+          description="悬浮 icon hover 3 秒后会出现小 x，可隐藏当前页面入口或选择永不展示；如果选过“永不展示”，可以在这里重新打开。关闭后仅隐藏会议页悬浮入口与浮层提醒，不会停用 popup 单次会议全貌。"
           disabled={config.MEETING_PILOT_ENABLED !== true}
         />
         <ToggleField
@@ -3298,13 +3302,31 @@ const Options = () => {
         </div>
       </div>
 
-      <div className="form-section">
+      <div
+        id="openclaw-config"
+        ref={openClawConfigSectionRef}
+        className="form-section"
+        style={
+          highlightedSection === 'openclaw-config' ||
+          highlightedSection === 'OPENCLAW_ENABLED'
+            ? {
+                scrollMarginTop: '16px',
+                boxShadow: '0 0 0 3px rgba(14, 165, 233, 0.22)',
+                borderRadius: '12px',
+                transition: 'box-shadow 0.25s ease',
+              }
+            : {
+                scrollMarginTop: '16px',
+                transition: 'box-shadow 0.25s ease',
+              }
+        }
+      >
         <h2>OpenClaw 对接</h2>
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
-          自我反思与关联操作里的外部执行入口都会走这里的 OpenClaw
-          配置。启用后才会真正调用外部系统。
+          自我反思与关联操作里的外部执行入口都会走这里的 OpenClaw 配置。
+          可填写服务根地址，也可填写完整的 OpenAI 兼容 endpoint。
         </small>
         <ToggleField
           id="OPENCLAW_ENABLED"
@@ -3312,22 +3334,24 @@ const Options = () => {
           checked={config.OPENCLAW_ENABLED === true}
           onChange={handleInputChange}
           label="启用 OpenClaw 外部委派"
-          description="开启后，自我反思与关联操作都可把外部系统查询/执行委派给 OpenClaw（OpenAI 兼容 Responses）。"
+          description="开启后，自我反思与关联操作都可把外部系统查询/执行委派给 OpenClaw。"
         />
         <div className="form-group">
-          <label htmlFor="OPENCLAW_BASE_URL">OpenClaw Base URL</label>
+          <label htmlFor="OPENCLAW_BASE_URL">
+            OpenClaw Base URL / Chat Completions Endpoint
+          </label>
           <input
             type="url"
             id="OPENCLAW_BASE_URL"
             name="OPENCLAW_BASE_URL"
             value={config.OPENCLAW_BASE_URL || ''}
             onChange={handleInputChange}
-            placeholder="https://openclaw.example.com"
+            placeholder="http://10.32.56.212:18789/v1/chat/completions"
             disabled={config.OPENCLAW_ENABLED !== true}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            示例：`https://openclaw.example.com`，后端会自动拼接
-            `/v1/responses`。
+            示例：`http://10.32.56.212:18789/v1/chat/completions`。也支持
+            `https://openclaw.example.com` 或 `https://openclaw.example.com/v1`。
           </small>
         </div>
         <div className="form-group">
@@ -4445,7 +4469,10 @@ const AgentSettings = () => {
     workflowTestStorageReview?.traceStatus ||
     (workflowTestTrace.length === 0
       ? 'missing'
-      : workflowTestTrace.some((step: any) => step.status === 'error')
+      : workflowTestTrace.some((step: any) => step.status === 'error') ||
+          workflowTestTrace.some((step: any) =>
+            (step.tools || []).some((tool: any) => tool.status === 'skipped'),
+          )
         ? 'partial'
         : 'complete');
   const workflowConfigDiagnostics = buildAgentWorkflowConfigDiagnostics(
@@ -4457,6 +4484,10 @@ const AgentSettings = () => {
   );
   const workflowDecisionPath =
     buildAgentWorkflowDecisionPath(workflowTestResult);
+  const workflowRecommendedActions = buildAgentWorkflowRecommendedActions(
+    workflowTestResult,
+    workflowRunDiagnostics,
+  );
   const workflowDiagnosticSeverityLabels: Record<string, string> = {
     error: '阻塞',
     warning: '注意',
@@ -4469,6 +4500,13 @@ const AgentSettings = () => {
     error: '阻塞',
     info: '提示',
     muted: '跳过',
+  };
+  const workflowRecommendedActionStatusLabels: Record<string, string> = {
+    review: '复核',
+    fix: '修复',
+    optimize: '优化',
+    verify: '确认',
+    done: '完成',
   };
 
   const formatWorkflowTraceDuration = (durationMs?: number) => {
@@ -4525,10 +4563,17 @@ const AgentSettings = () => {
         {
           label: '异常',
           value:
-            (workflowTestStorageReview.failedAgents || []).join('、') ||
-            (workflowTestStorageReview.toolErrorCount
-              ? `工具错误 ${workflowTestStorageReview.toolErrorCount}`
-              : '-'),
+            [
+              (workflowTestStorageReview.failedAgents || []).join('、'),
+              workflowTestStorageReview.toolErrorCount
+                ? `工具错误 ${workflowTestStorageReview.toolErrorCount}`
+                : '',
+              workflowTestStorageReview.toolSkippedCount
+                ? `跳过工具 ${workflowTestStorageReview.toolSkippedCount}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('、') || '-',
         },
       ]
     : [];
@@ -4608,7 +4653,10 @@ const AgentSettings = () => {
         )}
       </div>
 
-      <div className="agent-workflow-test-panel">
+      <div
+        className="agent-workflow-test-panel"
+        aria-busy={workflowTestRunning}
+      >
         <div className="agent-workflow-test-header">
           <div>
             <h3>关注项测试</h3>
@@ -4627,6 +4675,7 @@ const AgentSettings = () => {
               id="workflowScenario"
               value={workflowScenarioSelectedId}
               onChange={handleWorkflowScenarioChange}
+              disabled={workflowTestRunning}
             >
               {AGENT_WORKFLOW_TEST_SCENARIOS.map((scenario) => (
                 <option key={scenario.id} value={scenario.id}>
@@ -4636,7 +4685,11 @@ const AgentSettings = () => {
             </select>
           </div>
           <div className="agent-workflow-scenario-actions">
-            <button type="button" onClick={handleLoadWorkflowScenario}>
+            <button
+              type="button"
+              onClick={handleLoadWorkflowScenario}
+              disabled={workflowTestRunning}
+            >
               填入样例
             </button>
             <button
@@ -4657,7 +4710,11 @@ const AgentSettings = () => {
               onChange={(event) =>
                 setWorkflowReplaySelectedId(event.target.value)
               }
-              disabled={workflowReplayLoading || workflowReplaySamples.length === 0}
+              disabled={
+                workflowTestRunning ||
+                workflowReplayLoading ||
+                workflowReplaySamples.length === 0
+              }
             >
               {workflowReplaySamples.length === 0 ? (
                 <option value="">
@@ -4676,7 +4733,11 @@ const AgentSettings = () => {
             <button
               type="button"
               onClick={handleLoadWorkflowReplaySample}
-              disabled={workflowReplayLoading || workflowReplaySamples.length === 0}
+              disabled={
+                workflowTestRunning ||
+                workflowReplayLoading ||
+                workflowReplaySamples.length === 0
+              }
             >
               填入
             </button>
@@ -4694,7 +4755,7 @@ const AgentSettings = () => {
             <button
               type="button"
               onClick={loadWorkflowReplaySamples}
-              disabled={workflowReplayLoading}
+              disabled={workflowTestRunning || workflowReplayLoading}
             >
               {workflowReplayLoading ? '刷新中...' : '刷新'}
             </button>
@@ -4712,6 +4773,7 @@ const AgentSettings = () => {
               name="sender"
               value={workflowTestInput.sender}
               onChange={handleWorkflowTestInputChange}
+              disabled={workflowTestRunning}
             />
           </div>
           <div className="form-group">
@@ -4722,6 +4784,7 @@ const AgentSettings = () => {
               name="teamName"
               value={workflowTestInput.teamName}
               onChange={handleWorkflowTestInputChange}
+              disabled={workflowTestRunning}
             />
           </div>
           <div className="form-group">
@@ -4733,6 +4796,7 @@ const AgentSettings = () => {
               value={workflowTestInput.teamId}
               onChange={handleWorkflowTestInputChange}
               placeholder="可选，用于范围匹配"
+              disabled={workflowTestRunning}
             />
           </div>
           <div className="form-group">
@@ -4744,6 +4808,7 @@ const AgentSettings = () => {
               step="1"
               value={workflowTestInput.datetime}
               onChange={handleWorkflowTestInputChange}
+              disabled={workflowTestRunning}
             />
           </div>
         </div>
@@ -4755,6 +4820,7 @@ const AgentSettings = () => {
             value={workflowTestInput.content}
             onChange={handleWorkflowTestInputChange}
             placeholder="消息内容"
+            disabled={workflowTestRunning}
           />
         </div>
         {workflowTestError && (
@@ -4793,6 +4859,30 @@ const AgentSettings = () => {
                     {item.detail && <em>{item.detail}</em>}
                   </div>
                 ))}
+              </div>
+            )}
+            {workflowRecommendedActions.length > 0 && (
+              <div
+                className="agent-workflow-next-actions"
+                aria-label="Agent Workflow 下一步动作"
+              >
+                <div className="agent-test-section-title">下一步</div>
+                <div className="agent-workflow-next-action-list">
+                  {workflowRecommendedActions.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`agent-workflow-next-action ${item.status}`}
+                    >
+                      <span>
+                        {workflowRecommendedActionStatusLabels[item.status] ||
+                          item.status}
+                      </span>
+                      <strong>{item.title}</strong>
+                      <small>{item.summary}</small>
+                      {item.detail && <em>{item.detail}</em>}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <div className="agent-workflow-diagnostic-block compact">
@@ -5072,6 +5162,7 @@ const IntelligentAgentSettings = () => {
           timestamp: Date.now(),
           thought:
             '收到一条项目状态消息，需要先确认是否和用户近期关注的上下文相关。',
+          publicSummary: `准备调用 ${historyToolName} 判断这条项目消息是否属于近期关注上下文。`,
           action: 'use_tool',
           toolUsed: historyToolId,
           result: {
@@ -5101,6 +5192,7 @@ const IntelligentAgentSettings = () => {
           timestamp: Date.now(),
           thought:
             '历史消息显示该项目是近期关注对象。消息里出现了明确的 JIRA key，需要查询任务状态后再决定是否通知。',
+          publicSummary: `准备调用 ${jiraToolName} 补充任务状态和截止时间证据。`,
           action: 'use_tool',
           toolUsed: jiraToolId,
           result: {
@@ -5119,6 +5211,27 @@ const IntelligentAgentSettings = () => {
         },
       ]);
 
+      // 模拟工具成功但没有返回证据
+      await wait(1200);
+      if (!isDemoRunActive()) return;
+      setDemoThoughtProcess((prev) => [
+        ...prev,
+        {
+          timestamp: Date.now(),
+          thought:
+            '模型尝试用更窄的关键词补充历史证据，但工具返回空结果。系统需要把这类空证据前置，避免误判为成功调用。',
+          publicSummary: `准备调用 ${historyToolName} 验证更窄关键词下是否还有补充证据。`,
+          action: 'use_tool',
+          toolUsed: historyToolId,
+          result: {
+            [historyToolId]: {
+              message: '没有找到匹配的历史消息。',
+              result: [],
+            },
+          },
+        },
+      ]);
+
       // 模拟重复工具调用被跳过
       await wait(2000);
       if (!isDemoRunActive()) return;
@@ -5128,6 +5241,7 @@ const IntelligentAgentSettings = () => {
           timestamp: Date.now(),
           thought:
             '模型再次提出用同样参数查询历史消息。系统已经有相同工具结果，因此跳过重复调用并保留已有证据。',
+          publicSummary: `检测到 ${historyToolName} 的重复参数，本轮跳过重复调用。`,
           action: 'use_tool',
           toolUsed: historyToolId,
           result: {
@@ -5148,6 +5262,7 @@ const IntelligentAgentSettings = () => {
           timestamp: Date.now(),
           thought:
             '模型提出了一个未注册工具调用。系统在执行前完成校验，阻断该调用并提示当前可用工具。',
+          publicSummary: '未注册工具未通过执行前校验，系统已阻断调用。',
           action: 'use_tool',
           toolUsed: 'orgStructure',
           result: {
@@ -5168,6 +5283,8 @@ const IntelligentAgentSettings = () => {
           timestamp: Date.now(),
           thought:
             '结合历史上下文和 JIRA 状态，这是一条需要存储的项目进展；当前没有阻塞或高风险变化，因此不需要即时通知。',
+          publicSummary:
+            '已有足够信息：这条项目进展需要存储，但没有高风险变化，不需要即时通知。',
           action: 'finish',
         },
       ]);
@@ -5185,6 +5302,7 @@ const IntelligentAgentSettings = () => {
         reasonsToStore: [
           `通过 ${historyToolName} 确认为近期关注项目`,
           `通过 ${jiraToolName} 获得任务状态和截止时间`,
+          '精确历史查询未返回补充证据，已在运行检查中标记',
           '本轮重复工具调用已被跳过，避免浪费和重复证据',
         ],
       });

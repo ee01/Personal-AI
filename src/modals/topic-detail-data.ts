@@ -26,6 +26,10 @@ const getMessageIds = (message: any): string[] => {
     .map((value) => String(value));
 };
 
+export const getTopicConversationPrimaryId = (conversation: any): string => {
+  return getMessageIds(conversation)[0] || '';
+};
+
 export type TopicConversationReadFilter = 'all' | 'unread' | 'read';
 
 const getConversationReadNodes = (conversation: any): any[] => {
@@ -201,6 +205,23 @@ export const getTopicDetailRecentData = (topic: any): TopicDetailRecentData => {
       topic?.relatedTickets,
     ),
   };
+};
+
+export const getTopicDetailUnreadCount = (topic: any): number => {
+  const readStatusCount = Number(topic?.readStatus?.unreadCount);
+  const previewCount = Array.isArray(topic?.unreadDiscussions)
+    ? topic.unreadDiscussions.length
+    : 0;
+  const conversationUnreadCount = getTopicConversationUnreadCount(
+    getTopicDetailRecentData(topic).conversations,
+  );
+
+  return Math.max(
+    0,
+    Number.isFinite(readStatusCount) ? readStatusCount : 0,
+    previewCount,
+    conversationUnreadCount,
+  );
 };
 
 export const findTopicConversationByMessageId = (

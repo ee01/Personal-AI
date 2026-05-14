@@ -75,6 +75,8 @@ Per source, the app supports:
 - preview cached conversations
 - reset local cache and cursor state
 - revoke already ingested memories from `Memory Service`
+- source cards expose a guarded revoke action for the current source and scope,
+  while keeping local audit cache and remote chat history untouched
 
 ChatGPT additionally supports:
 
@@ -117,15 +119,15 @@ Doubao additionally supports:
   DOM fallback
 - conservative skip logic for obviously active/in-progress threads
 
-For outbound Doubao broadcast, the `webpage-mcp` transport only reports success
-after it fills the composer, submits the message, and observes the sent text in
-the page. This prevents reminder and notice jobs from being marked delivered
-when a selector changed, a challenge page appeared, or the active tab was wrong.
-It also preflights the current page for Doubao challenge text and waits briefly
-after submit for the sent text to appear outside the editable composer, reducing
-false failures on slow pages and false successes from unsent input text. If
-these checks return an unsent result, outbound sync falls back to the managed
-Chromium profile instead of treating the daily-browser attempt as final.
+For outbound Doubao broadcast, both the managed Chromium transport and the
+`webpage-mcp` transport only report success after they submit the message and
+observe a new copy of the sent text in the non-editable page body. They exclude
+composer/input text and compare pre-send/post-send match counts, so old sync
+messages or unsent input text do not mark reminder and notice jobs delivered.
+Both transports also preflight challenge pages and wait briefly after submit for
+slow pages. If the daily-browser checks return an unsent result, outbound sync
+falls back to the managed Chromium profile instead of treating that attempt as
+final.
 
 ## Local Desktop App API
 
@@ -176,3 +178,11 @@ Legacy `DOUBAO_BRIDGE_*` environment variables still work as fallbacks, but `DES
 The Chrome extension still exposes a `Desktop App` entry point for onboarding and status, but full configuration now lives in the desktop app itself.
 
 Compatibility aliases remain in the extension-facing client surface so older code paths do not break immediately, while the primary naming has moved to `DesktopApp*`.
+
+## Quick Ask Runtime Status
+
+The tray Quick Ask status pill keeps runtime issues inside the chat surface. A
+pill click expands an in-chat status card first, including setup blockers, so the
+user can see what is missing before opening settings. Doubao sync issues include
+the failed lane, trigger, timestamp, and a short next-action hint before the user
+continues troubleshooting or retries from settings.

@@ -6,6 +6,7 @@ import {
   formatContextSiteMuteRemaining,
   getContextSiteMuteExpiresAt,
   hasSensitiveUrlSignal,
+  isDisplayableContextRecallMatch,
   isLowValueContextHost,
   isSensitiveControlDescriptor,
   isContextSiteMuteActive,
@@ -36,6 +37,25 @@ assert.equal(sanitizeExploreRoute('#/timeline?focus=abc%20def'), '#/timeline?foc
 assert.equal(sanitizeExploreRoute('#/timeline?focus=abc" onclick="alert(1)'), null);
 assert.equal(sanitizeExploreRoute('#/timeline?focus=<img>'), null);
 assert.equal(sanitizeExploreRoute('#/timeline?focus=`template`'), null);
+
+assert.equal(
+  isDisplayableContextRecallMatch({
+    title: 'RingCentral Video',
+    snippet: '会议: RingCentral Video',
+    sourceLabel: 'meeting',
+    sourceTitle: 'RingCentral Video',
+  }),
+  false,
+);
+assert.equal(
+  isDisplayableContextRecallMatch({
+    title: 'RingCentral Video',
+    snippet: 'MTR-144449 Refine In-Meeting Video Tile Layout and UX dependency review.',
+    sourceLabel: 'meeting',
+    sourceTitle: 'RingCentral Video',
+  }),
+  true,
+);
 
 assert.equal(isLowValueContextHost('www.google.com'), true);
 assert.equal(isLowValueContextHost('m.youtube.com'), true);

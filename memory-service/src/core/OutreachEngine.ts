@@ -561,6 +561,87 @@ function isResolvedTargetStatus(status: string | undefined): boolean {
   return status === 'resolved';
 }
 
+function parseScheduleSeed(
+  scheduleDate: string,
+  scheduleTime: string,
+): Date | null {
+  const seed = new Date(
+    `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
+  );
+  return Number.isNaN(seed.getTime()) ? null : seed;
+}
+
+function parseRepeatDays(value: unknown): number[] {
+  const rawDays = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+
+  return Array.from(
+    new Set(
+      rawDays
+        .map((item) => Number(String(item).trim()))
+        .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6),
+    ),
+  ).sort((left, right) => left - right);
+}
+
+function getDayStart(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function getWeekIndexSinceStart(candidate: Date, start: Date): number {
+  const daysSinceStart = Math.floor(
+    (getDayStart(candidate).getTime() - getDayStart(start).getTime()) /
+      86400000,
+  );
+  return Math.floor(daysSinceStart / 7);
+}
+
+function isAfterScheduleEndDate(candidate: Date, endDate?: string): boolean {
+  if (!endDate) return false;
+  const parsedEndDate = parseScheduleSeed(endDate, '00:00');
+  if (!parsedEndDate) return false;
+  return (
+    getDayStart(candidate).getTime() > getDayStart(parsedEndDate).getTime()
+  );
+}
+
+function findNextWeeklyRepeatDay(
+  seed: Date,
+  baselineDate: Date,
+  every: number,
+  allowedDays: number[],
+  endDate?: string,
+): Date | null {
+  const searchFrom = new Date(Math.max(seed.getTime(), baselineDate.getTime()));
+  const searchDay = getDayStart(searchFrom);
+
+  for (let offset = 0; offset <= 366; offset += 1) {
+    const candidate = new Date(
+      searchDay.getFullYear(),
+      searchDay.getMonth(),
+      searchDay.getDate() + offset,
+      seed.getHours(),
+      seed.getMinutes(),
+      0,
+      0,
+    );
+
+    if (isAfterScheduleEndDate(candidate, endDate)) return null;
+    if (candidate.getTime() <= baselineDate.getTime()) continue;
+    if (!allowedDays.includes(candidate.getDay())) continue;
+
+    const weekIndex = getWeekIndexSinceStart(candidate, seed);
+    if (weekIndex >= 0 && weekIndex % every === 0) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 function parseNextDispatch(
   scheduleSpec: Record<string, unknown> | undefined,
   baseline: number,
@@ -570,15 +651,42 @@ function parseNextDispatch(
   const scheduleTime = normalizeString(scheduleSpec.scheduleTime) ?? '09:00';
   const repeatEvery = Number(scheduleSpec.repeatEvery);
   const repeatUnit = normalizeString(scheduleSpec.repeatUnit);
+  const repeatDays = repeatUnit === 'Week'
+    ? parseRepeatDays(scheduleSpec.repeatDays)
+    : [];
+  const endDate = normalizeString(scheduleSpec.endDate);
+  const baselineDate = new Date(baseline * 1000);
 
   if (scheduleDate) {
-    const seed = new Date(
-      `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
-    );
-    if (!Number.isNaN(seed.getTime())) {
+    const seed = parseScheduleSeed(scheduleDate, scheduleTime);
+    if (seed) {
       const candidate = new Date(seed.getTime());
       if (Number.isFinite(repeatEvery) && repeatEvery > 0 && repeatUnit) {
-        while (Math.floor(candidate.getTime() / 1000) <= baseline) {
+        if (repeatUnit === 'Week' && repeatDays.length > 0) {
+          const nextWeeklyDay = findNextWeeklyRepeatDay(
+            candidate,
+            baselineDate,
+            repeatEvery,
+            repeatDays,
+            endDate,
+          );
+          return nextWeeklyDay
+            ? Math.floor(nextWeeklyDay.getTime() / 1000)
+            : null;
+        }
+
+        for (let attempts = 0; attempts < 1000; attempts += 1) {
+          if (isAfterScheduleEndDate(candidate, endDate)) return null;
+
+          if (candidate.getTime() > baselineDate.getTime()) {
+            if (
+              repeatUnit !== 'Day' ||
+              (candidate.getDay() >= 1 && candidate.getDay() <= 5)
+            ) {
+              return Math.floor(candidate.getTime() / 1000);
+            }
+          }
+
           if (repeatUnit === 'Day') {
             candidate.setDate(candidate.getDate() + repeatEvery);
           } else if (repeatUnit === 'Week') {
@@ -591,12 +699,13 @@ function parseNextDispatch(
             break;
           }
         }
-        const nextAt = Math.floor(candidate.getTime() / 1000);
-        return nextAt > baseline ? nextAt : null;
+        return null;
       }
 
       const oneShotAt = Math.floor(seed.getTime() / 1000);
-      return oneShotAt > baseline ? oneShotAt : null;
+      return oneShotAt > baseline && !isAfterScheduleEndDate(seed, endDate)
+        ? oneShotAt
+        : null;
     }
   }
 

@@ -1,6 +1,6 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-05-08*
+*最后更新: 2026-05-13*
 
 ## 功能概述
 
@@ -35,9 +35,13 @@
 - 日期和时间按本机本地时间保存，避免接近午夜时被 UTC 转换成前一天 / 后一天
 - 执行时间必须是有效的本地时间（00:00-23:59），异常值会在管理界面提示并被执行器跳过
 - 周期任务的 `End_Date` 包含结束日当天；达到 `Repeat_Count` 后会在本次成功发送后收尾
+- 所有周期单位（天 / 周 / 月 / 年）都可以设置重复次数上限；周重复不会再丢失 `Repeat_Count`
+- 一次性任务、到达 `End_Date` 或达到 `Repeat_Count` 的周期任务成功收尾后会清空 `Next_Exec`，列表中显示为已完成，避免误以为还有下一次发送
+- Outreach / 帮我问模板同步到 memory-service 后会保留 `Repeat_Days`、`End_Date` 和 `Repeat_Count`，运行态发问节奏与表单预览保持一致
 - 周期任务的预计执行和保存校验会同步检查 `End_Date`；如果结束日前已经没有下一次可执行日期，表单会阻止保存并提示用户调整结束日或重复规则
 - 周重复任务的预览和 `Next_Exec` 始终指向未来的有效执行日，今天时间已过时会自动跳到下一个匹配星期
 - 列表里的频率文案与实际调度保持一致：Day 重复会标明“仅工作日”，`Repeat_Every > 1` 且选择多个星期时会显示“每 N 周的周一/三/五”，避免把隔周任务误看成每周任务
+- 新建 / 编辑表单会在执行预览中显示本机时区和 UTC offset，并把“明确 08:00”和“08:00 后队列”区分展示，降低跨时区和队列语义误解
 
 ### 5. 灵活的表格结构 ✨
 - **动态列位置识别**：通过 header 行自动识别列的位置
@@ -50,11 +54,14 @@
 - 筛选结果为空时会显示明确空状态和“清除筛选”按钮，不再只留下空表格
 - 筛选逻辑由共享 helper 统一处理，便于入口链接和 UI 保持一致
 - 自动答复通知中的“点击审核或取消”链接会带上 `messageId`，管理页打开后直接定位目标消息，并提供返回完整列表的恢复路径
+- 管理页的表格入口按任务拆分：“推送记录”打开 Logs；空状态和页脚的 Google Sheet 入口打开 Messages 维护表，避免批量编辑时误进日志页
 
 ### 7. 队列健康提示
 - Bot / AI / JiraAutomation 消息由 Jira Automation 每分钟执行一条；管理页会汇总同一执行时间的排队情况
+- 只有带有效 `AI_Endpoint` 的 JiraAutomation 消息会进入统一执行器队列；空白 endpoint 的外部规则不会被误判为 Bot / AI 队列
 - 当同一时间槽可能超过 30 分钟补偿窗口时，顶部会显示风险提示，并列出受影响的时间槽和示例消息
 - 新增 / 编辑表单会实时提示当前消息在同槽队列中的位置；高风险时间会阻止保存，避免创建后才发现不会按预期发送
+- 已有 Active 消息如果因为手工改 Sheet 或长期未打开而错过可执行窗口，管理页会在顶部和行内提示需要改期；用户可以编辑为未来明确时间，或对执行器消息清空时间进入 08:00 后队列
 
 ## 使用方法
 
@@ -113,7 +120,7 @@
    - **帮我问**：选择问某个人还是某个群，填写问题、可选背景和追问策略
 5. AI Report 模式下默认选中 **AI report** 模板，切换到 **自定义** 时可以手动填写并保存专属配置
 6. 执行日期 / 时间支持快捷选择：1 分钟后、下个整点、下次默认时间（AsMe 09:00，Bot / AI / JiraAutomation 08:00）或清空时间
-7. 表单会显示预计下次执行时间；一次性任务若已经错过可执行窗口，会提示改成未来时间
+7. 表单会显示预计下次执行时间和本机时区；一次性任务若已经错过可执行窗口，会提示改成未来时间
 8. 周期任务若因为结束日期或重复星期设置导致没有下一次执行机会，会在预计执行区域显示“暂无可执行时间”，并阻止保存
 9. 未填写执行时间时，AsMe 默认按 09:00 执行；Bot / AI / JiraAutomation 默认从 08:00 后进入队列，每分钟执行一条
 10. 点击“✅ 创建消息”完成创建
@@ -125,12 +132,14 @@
 - “过滤掉仅发我的”用于隐藏只发给当前账号的个人提醒
 - 从自动答复通知打开时，页面会优先展示目标消息；如果该消息已处理，仍会显示当前状态，避免用户在待审核列表中找不到记录
 - 如果筛选后没有结果，页面会提示当前筛选条件并提供一键清除筛选
+- 需要批量调整维护数据时，页面底部和空状态的 Google Sheet 链接会直接打开 `Messages` 工作表；需要查看发送历史时使用顶部“推送记录”按钮打开 `Logs`
 
 ### 队列健康查看
 
 - 顶部队列提示只在存在同槽排队时出现；没有排队风险时不会占用界面
 - 普通排队提示用于说明最大同槽数量和预计延后时间
 - 风险提示表示至少一个时间槽可能超过 30 分钟补偿窗口，建议改成未来明确时间，或清空执行时间进入 08:00 后队列
+- 如果顶部提示“有定时消息需要改期”，表示有 Active 一次性消息已经错过实际执行窗口或时间格式异常；这些消息不会只靠等待自动恢复，需要从列表行进入编辑并改成未来时间
 - 表单打开时会自动刷新时间判断，长时间停留后仍能正确阻止已错过的执行时间
 
 ### 消息类型说明
@@ -148,6 +157,7 @@
 - 必填字段：Schedule_Date, Repeat_Every, Repeat_Unit
 - 可选字段：End_Date（结束日期）, Repeat_Count（重复次数）, Repeat_Days（多选日期）
 - End_Date 表示最后允许执行的日期，结束日当天仍会执行匹配的任务
+- Repeat_Count 表示最多成功发送次数，适用于天 / 周 / 月 / 年重复任务
 - Repeat_Unit 可选值：
   - Day: 每 N 天（排除周末）
   - Week: 每 N 周
@@ -168,6 +178,7 @@
   - 或直接使用群组 ID：`{teamId}@reply.ringcentral.glip.com`
 - 如果 Bot 初始化时配置了 RingCentral Client ID / Client Secret / JWT，AsMe 会改由 **Jira Automation** 调内网 Dify RingCentral sender workflow 发送
 - RingCentral sender 路径继续复用 `Glip_User_Name` / `Glip_Team_ID` 作为 Dify `chatId`；例如 `Glip_User_Name = esone.qiu` 会传给 Dify 的 `chatId`
+- RingCentral sender 不再在领取消息时预标记完成；Jira Rule 会在 Dify workflow 返回 `data.status = succeeded` 后通过 GET 调用 `markBotMessageExecuted` 写回 Done 和 Logs，返回 `failed` 时写入失败日志避免当天重复发送
 - 未配置或关闭 RingCentral sender 时，仍由 **AppScript 引擎**执行邮件 fallback
 - 老版本 Sheet 如果已有 Bot executor rule 但没有 `ringcentral_sender_*` 配置，新建消息弹窗选择 AsMe 时会提示配置 @ 人发送能力；提交完整 RingCentral credentials 后，会先删除低于 v1.4.0 的旧 executor rule，再创建支持 Dify sender 的新版 rule
 
@@ -194,6 +205,7 @@
 - 如果在等待回复期间仍未收到直接回复，每次追问前也会再次做同一套预检；若已命中答案，则 **不再追问**
 - 用户在定时消息列表中看到的是模板状态和最近结果；更完整的证据、命中阶段、来源与相关消息会在“主动询问 / Outreach Sessions”页面中查看
 - 系统会为 Outreach 动态挂载内部观察规则用于证据采集，但这些规则不会显示在“记忆入口规则”或 “Follow Threads” 列表中
+- 周期性 Outreach 模板复用定时消息的本地日历语义：Day 排除周末，Week 支持多星期，End_Date 包含当天，Repeat_Count 达到后不再生成下一次发问
 
 #### Outreach 典型状态
 - `pending_approval`：目标未解析完成，或需要人工批准后才能发出
@@ -331,9 +343,9 @@ memory-service runtime（Outreach）
   - Timeline Sync Rule 每天 05:00 按项目刷新 releaseInfo 缓存
 - Timeline 缓存状态在创建/编辑相关消息时展示；用户从 Jira 手动同步或修复规则后回到扩展，会自动刷新状态并在诊断中区分“缓存不可用”和“缓存仍可用但最近同步失败”。
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
-- 因此 Executor Rule 把高频取消息链路保持为短 GET；体积较大、容易被 URL 编码破坏的 Timeline release info 和执行状态写回改用 POST JSON body，并开启 `responseEnabled`，让失败能在 Jira Audit Log 和扩展缓存状态里被看到。
+- 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
 - `cacheReleaseInfo` 按项目缓存并记录最近同步尝试摘要；`markBotMessageExecuted` 携带 `messageId` / `rowIndex` / `executionKey` 做行定位和幂等写回，避免 Sheet 行移动、Jira 重试或特殊字符导致误标记、重复记账或静默失败。
-- Timeline Sync Rule 逐项目调用内网 release info API 并写入 Script Properties；单个项目缓存失败不会阻断后续项目，Apps Script 会拒绝格式异常、未知项目、空 release info 或超出单值大小限制的写入，并返回可读错误。
+- Timeline Sync Rule 逐项目调用内网 release info API 并通过 GET 写入 Script Properties；单个项目缓存失败不会阻断后续项目，Apps Script 会拒绝格式异常、未知项目、空 release info 或超出单值大小限制的写入，并返回可读错误。
 - 首次配置或修复 Timeline Sync Rule 后，用户可以手动运行一次 Sync Rule 让缓存立即生效；新增/编辑 Timeline 消息或使用 `{currentRelease}`、`{nextPhase}` 等项目变量时，必须成功读取所选项目的缓存状态，否则保存会被拦截。
 - 缓存状态接口只暴露项目状态、Milestone key 和最近同步尝试摘要，不暴露具体 release 日期；如果接口返回 HTML、空响应或 Apps Script 错误对象，管理页会显示升级/排查提示，不会把异常响应当成有效缓存。
 - 旧 inline `releaseInfo` GET 参数仍保留解析能力，主要用于兼容旧 Rule 或手工调试；维护 Timeline 项目时要保持 `app-script-template.gs` 的 `TIMELINE_PROJECT_PARAM_MAP` 与前端项目清单一致。
@@ -528,8 +540,11 @@ A:
 - [Apps Script API 文档](https://developers.google.com/apps-script/api)
 - [Jira Automation 文档](https://support.atlassian.com/cloud-automation/docs/jira-automation/)
 - [Slack scheduled messages API](https://docs.slack.dev/messaging/sending-and-scheduling-messages/)：已排程消息需要可列出、删除，更新时可用删除后重建策略
+- [Slack recurring messages workflow](https://slack.com/help/articles/23814859584659-Automations--Schedule-recurring-messages-in-a-channel)：周期消息应把开始时间、频率、发送目标和正文配置放在同一个可编辑 workflow 中
 - [Microsoft Teams schedule chat messages](https://support.microsoft.com/en-gb/office/schedule-chat-messages-in-microsoft-teams-2fc5ea77-7bb4-4511-8f59-e62bac1c0f6a)：已排程消息支持编辑、改期和删除
 - [Google Chat schedule messages](https://support.google.com/chat/answer/16059642?co=GENIE.Platform%3DDesktop&hl=en)：Drafts 入口集中管理待发送消息，并显示发送人与接收人时区
+- [Analyzing and Predicting Task Reminders](https://www.microsoft.com/en-us/research/publication/analyzing-predicting-task-reminder/)：提醒时间会受创建时间和文本内容影响，调度系统要让用户能明确控制实际触发日历
+- [Iqbal & Bailey CHI 2007 interruption timing](https://www.interruptions.net/literature/Iqbal-CHI07.pdf)：不合适的通知时机会增加恢复成本，调度工具应让发送时间和上下文更可预期
 - [Intelligent Notification Systems survey](https://arxiv.org/abs/1711.10171)：通知系统需要结合时间、上下文和用户偏好降低打扰
 - [Adaptive notification scheduling study](https://www.sciencedirect.com/science/article/abs/pii/S1574119217304388)：真实生产环境中延迟到更合适时机发送通知能改善响应体验
 

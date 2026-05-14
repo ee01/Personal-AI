@@ -1041,18 +1041,25 @@ async function shutdownSpeechHelper() {
   if (processToStop.stdin?.writable) {
     try {
       processToStop.stdin.write(`${JSON.stringify({ command: 'shutdown' })}\n`);
+      processToStop.stdin.end();
     } catch {
       // Ignore and force kill below.
     }
   }
 
   await new Promise((resolve) => {
+    let killTimer;
     const timer = setTimeout(() => {
       processToStop.kill('SIGTERM');
-      resolve();
-    }, 300);
+      killTimer = setTimeout(() => {
+        processToStop.kill('SIGKILL');
+        resolve();
+      }, 1200);
+      killTimer.unref?.();
+    }, 500);
     processToStop.once('exit', () => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       resolve();
     });
   });

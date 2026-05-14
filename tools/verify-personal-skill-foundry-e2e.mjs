@@ -52,6 +52,11 @@ const suggestionListItem = {
   suggestedFrom: 'flight_recorder',
   repetition: '近 7 天 3 次相似任务',
   currentVersion: 'v0.1',
+  reviewRequired: true,
+  reviewReasons: [
+    '外部 agent 平台导入的技能需要先确认来源内容',
+    '证据链还不是完整确认状态',
+  ],
   bindings: [
     {
       id: 'snooze-candidate:personal_ai',
@@ -67,6 +72,38 @@ const suggestionListItem = {
   ],
   createdAt: 1778230000,
   updatedAt: 1778230000,
+};
+
+const externalChangeListItem = {
+  ...suggestionListItem,
+  id: 'external-change',
+  slug: 'active-skill-openclaw-change',
+  title: 'Active Skill (openclaw change)',
+  summary: 'A remote OpenClaw version differs from the Personal AI source.',
+  sources: ['openclaw'],
+  suggestedFrom: 'openclaw',
+  repetition: 'External platform import',
+  reviewReasons: [
+    '外部 agent 平台导入的技能需要先确认来源内容',
+    '证据链还不是完整确认状态',
+  ],
+  bindings: [
+    {
+      id: 'external-change:openclaw',
+      skillId: 'external-change',
+      platform: 'openclaw',
+      state: 'installed',
+      installedVersion: 'v2',
+      installedSha256: 'external-change-sha',
+      remoteMtime: 1778234000,
+      metadata: {
+        externalChangeFor: 'active-skill',
+        originalSlug: 'active-skill',
+      },
+      createdAt: 1778234000,
+      updatedAt: 1778234000,
+    },
+  ],
 };
 
 const syncSettings = [
@@ -196,8 +233,10 @@ try {
 
     if (request.method() === 'GET' && endpoint === '/skills/suggestions') {
       return jsonResponse(route, {
-        items: suggestionVisible ? [suggestionListItem] : [],
-        total: suggestionVisible ? 1 : 0,
+        items: suggestionVisible
+          ? [externalChangeListItem, suggestionListItem]
+          : [externalChangeListItem],
+        total: suggestionVisible ? 2 : 1,
       });
     }
 
@@ -211,6 +250,10 @@ try {
 
     if (request.method() === 'GET' && endpoint === '/skills/snooze-candidate') {
       return jsonResponse(route, { skill: detailFor(suggestionListItem) });
+    }
+
+    if (request.method() === 'GET' && endpoint === '/skills/external-change') {
+      return jsonResponse(route, { skill: detailFor(externalChangeListItem) });
     }
 
     if (
@@ -270,10 +313,51 @@ try {
   await page.locator('.workspace-title h2', { hasText: 'Active Skill' }).waitFor({
     timeout: 15000,
   });
-  await page.locator('.suggestion-card', { hasText: 'Snooze Candidate' }).click();
+  const suggestionCard = page.locator('.suggestion-card', {
+    hasText: 'Snooze Candidate',
+  });
+  await suggestionCard.locator('.review-chip', { hasText: '需审核' }).waitFor({
+    timeout: 15000,
+  });
+  const externalChangeCard = page.locator('.suggestion-card', {
+    hasText: 'Active Skill (openclaw change)',
+  });
+  await externalChangeCard.locator('.change-chip', { hasText: '变更' }).waitFor({
+    timeout: 15000,
+  });
+  await externalChangeCard.click();
+  await page
+    .locator('.workspace-title h2', { hasText: 'Active Skill (openclaw change)' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.workspace-actions button', { hasText: '查看变更' })
+    .click();
+  await page.locator('.review-gate', { hasText: '外部变更需要审核' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.review-gate', { hasText: 'active-skill 的新版本' }).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.workspace-actions button', { hasText: '确认覆盖' })
+    .waitFor({ timeout: 15000 });
+
+  await suggestionCard.click();
   await page.locator('.workspace-title h2', { hasText: 'Snooze Candidate' }).waitFor({
     timeout: 15000,
   });
+  await page
+    .locator('.workspace-actions button', { hasText: '查看风险' })
+    .click();
+  await page.locator('.review-gate', { hasText: '使用前需要审核' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.tab-btn.active', { hasText: '证据' }).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.workspace-actions button', { hasText: '确认使用' })
+    .waitFor({ timeout: 15000 });
 
   await page
     .locator('.suggestion-card', { hasText: 'Snooze Candidate' })

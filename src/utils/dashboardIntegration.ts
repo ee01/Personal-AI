@@ -51,6 +51,7 @@ export interface FishboneProject {
   milestones: MilestonePoint[];
   tasks: FishboneTask[];
   platformConfig?: PlatformKey[]; // 默认: sdk/ios/android/qa，可选 dev
+  lastStatusReviewAt?: string;
 }
 
 export interface ProjectData {
@@ -157,12 +158,62 @@ export interface ProjectHealthSummary {
   };
 }
 
+export type ProjectFreshnessState = 'fresh' | 'aging' | 'stale' | 'unscheduled';
+
+export interface ProjectFreshnessSummary {
+  state: ProjectFreshnessState;
+  label: string;
+  headline: string;
+  datedItems: number;
+  latestDate?: string;
+  daysSinceLatest?: number;
+  nextStep: string;
+}
+
+export type ProjectReviewState = 'current' | 'due' | 'overdue' | 'unreviewed';
+
+export interface ProjectReviewSummary {
+  state: ProjectReviewState;
+  label: string;
+  headline: string;
+  lastReviewedAt?: string;
+  daysSinceReview: number | null;
+  nextDueDate?: string;
+  nextStep: string;
+}
+
+export interface ProjectReviewQueueItem {
+  projectId: string;
+  projectName: string;
+  reviewState: ProjectReviewState;
+  label: string;
+  headline: string;
+  nextStep: string;
+  daysSinceReview: number | null;
+  nextDueDate?: string;
+  healthLabel: string;
+  viewLabel: string;
+  severity: ProjectDecisionSignalSeverity;
+}
+
+export interface ProjectReviewQueueSummary {
+  totalItems: number;
+  visibleItems: ProjectReviewQueueItem[];
+  hiddenItems: number;
+}
+
 export interface ProjectStatusDraftOptions {
   now?: Date;
   maxAttentionTasks?: number;
 }
 
 export type ProjectAttentionLevel = 'blocked' | 'overdue' | 'due-soon';
+
+export interface ProjectTaskRiskSummary {
+  score: number;
+  label: string;
+  drivers: string[];
+}
 
 export interface ProjectFocusItem {
   projectId: string;
@@ -173,6 +224,7 @@ export interface ProjectFocusItem {
   detail: string;
   daysUntil: number | null;
   priority: number;
+  risk: ProjectTaskRiskSummary;
 }
 
 export interface ProjectFocusSummary {
@@ -181,7 +233,14 @@ export interface ProjectFocusSummary {
   hiddenItems: number;
 }
 
-export type ProjectStatusEvidenceType = 'task' | 'jira' | 'platform' | 'milestone';
+export type ProjectStatusEvidenceType =
+  | 'task'
+  | 'jira'
+  | 'platform'
+  | 'milestone'
+  | 'freshness'
+  | 'review'
+  | 'data-quality';
 
 export interface ProjectStatusEvidenceItem {
   type: ProjectStatusEvidenceType;
@@ -191,6 +250,50 @@ export interface ProjectStatusEvidenceItem {
   source: string;
   priority: number;
   taskId?: string;
+}
+
+export type ProjectDecisionSignalSeverity = 'critical' | 'warning' | 'info' | 'neutral';
+
+export interface ProjectDecisionSignal {
+  id: string;
+  label: string;
+  title: string;
+  detail: string;
+  severity: ProjectDecisionSignalSeverity;
+  priority: number;
+}
+
+export interface ProjectDecisionSummary {
+  nextAction: string;
+  signals: ProjectDecisionSignal[];
+  dataQuality: ProjectDataQualitySummary;
+  dataGaps: {
+    missingEtaTasks: number;
+    missingSourceTasks: number;
+  };
+}
+
+export interface ProjectDashboardViewReason {
+  filter: Exclude<ProjectDashboardViewFilter, 'all'>;
+  label: string;
+  headline: string;
+  detail: string;
+  severity: ProjectDecisionSignalSeverity;
+}
+
+export type ProjectDataQualityState = 'complete' | 'partial' | 'poor' | 'empty';
+
+export interface ProjectDataQualitySummary {
+  state: ProjectDataQualityState;
+  label: string;
+  headline: string;
+  activeTasks: number;
+  missingEtaTasks: number;
+  missingSourceTasks: number;
+  etaCoverage: number;
+  sourceCoverage: number;
+  overallCoverage: number;
+  nextStep: string;
 }
 
 export interface ProjectSyncSourceStatus {
@@ -216,6 +319,16 @@ export interface ProjectDashboardLaunchContext {
   projectName?: string;
 }
 
+export type ProjectDashboardViewFilter = 'all' | 'needs-action' | 'watch' | 'empty' | 'on-track';
+
+export const PROJECT_DASHBOARD_VIEW_FILTER_LABELS: Record<ProjectDashboardViewFilter, string> = {
+  all: '全部',
+  'needs-action': '需处理',
+  watch: '需关注',
+  empty: '待规划',
+  'on-track': '正常',
+};
+
 const PROJECT_DASHBOARD_STORAGE_KEY = 'projectDashboardFishboneProjects';
 
 const PROJECT_HEALTH_PRIORITY: Record<ProjectHealthState, number> = {
@@ -230,6 +343,31 @@ const PROJECT_ATTENTION_PRIORITY: Record<ProjectAttentionLevel, number> = {
   overdue: 1,
   'due-soon': 2,
 };
+
+const PROJECT_FRESHNESS_PRIORITY: Record<ProjectFreshnessState, number> = {
+  stale: 0,
+  aging: 1,
+  unscheduled: 2,
+  fresh: 3,
+};
+
+const PROJECT_REVIEW_PRIORITY: Record<ProjectReviewState, number> = {
+  overdue: 0,
+  unreviewed: 1,
+  due: 2,
+  current: 3,
+};
+
+const PROJECT_DATA_QUALITY_PRIORITY: Record<ProjectDataQualityState, number> = {
+  poor: 0,
+  partial: 1,
+  complete: 2,
+  empty: 2,
+};
+
+const PROJECT_STALE_PLAN_THRESHOLD_DAYS = 30;
+const PROJECT_STATUS_REVIEW_CADENCE_DAYS = 7;
+const PROJECT_STATUS_REVIEW_OVERDUE_DAYS = 14;
 
 function normalizeLaunchContextValue(value: unknown): string | undefined {
   const normalized = String(value || '').trim();
@@ -392,6 +530,25 @@ function parseDateOnly(date: string | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function parseDateTime(value: string | undefined): Date | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
 function daysUntil(date: string | undefined, now: Date): number | null {
   const parsed = parseDateOnly(date);
   if (!parsed) return null;
@@ -399,6 +556,15 @@ function daysUntil(date: string | undefined, now: Date): number | null {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
   return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+function daysSinceDate(value: string | undefined, now: Date): number | null {
+  const parsed = parseDateTime(value);
+  if (!parsed) return null;
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  return Math.max(0, Math.round((today.getTime() - target.getTime()) / 86_400_000));
 }
 
 function isCompletedStatus(status: string | undefined): boolean {
@@ -504,6 +670,305 @@ export function buildProjectHealthSummary(
   };
 }
 
+export function buildProjectFreshnessSummary(
+  project: FishboneProject,
+  now = new Date(),
+): ProjectFreshnessSummary {
+  const datedItems = [
+    ...(Array.isArray(project.tasks) ? project.tasks : [])
+      .map((task) => task.eta)
+      .filter((date): date is string => Boolean(parseDateOnly(date))),
+    ...(Array.isArray(project.milestones) ? project.milestones : [])
+      .map((milestone) => milestone.date)
+      .filter((date): date is string => Boolean(parseDateOnly(date))),
+  ];
+
+  if (!datedItems.length) {
+    return {
+      state: 'unscheduled',
+      label: '缺时间线',
+      headline: '没有 ETA 或里程碑日期',
+      datedItems: 0,
+      nextStep: '先补齐关键任务 ETA 和里程碑日期',
+    };
+  }
+
+  const latestDate = datedItems
+    .sort((left, right) => {
+      const leftTime = parseDateOnly(left)?.getTime() ?? 0;
+      const rightTime = parseDateOnly(right)?.getTime() ?? 0;
+      return rightTime - leftTime;
+    })[0];
+  const latestDelta = daysUntil(latestDate, now) ?? 0;
+
+  if (latestDelta >= 0) {
+    return {
+      state: 'fresh',
+      label: '计划可用',
+      headline: latestDelta === 0
+        ? `计划更新到今天 ${latestDate}`
+        : `计划延伸到 ${latestDate}，还有 ${latestDelta} 天`,
+      datedItems: datedItems.length,
+      latestDate,
+      daysSinceLatest: 0,
+      nextStep: '继续维护任务 ETA 和状态来源',
+    };
+  }
+
+  const daysSinceLatest = Math.abs(latestDelta);
+  if (daysSinceLatest > PROJECT_STALE_PLAN_THRESHOLD_DAYS) {
+    return {
+      state: 'stale',
+      label: '计划陈旧',
+      headline: `最近计划日期 ${latestDate} 已过 ${daysSinceLatest} 天`,
+      datedItems: datedItems.length,
+      latestDate,
+      daysSinceLatest,
+      nextStep: '先更新 ETA / 里程碑，或归档已结束项目',
+    };
+  }
+
+  return {
+    state: 'aging',
+    label: '需复核',
+    headline: `最近计划日期 ${latestDate} 已过 ${daysSinceLatest} 天`,
+    datedItems: datedItems.length,
+    latestDate,
+    daysSinceLatest,
+    nextStep: '确认项目是否仍在推进，并刷新下一次检查日期',
+  };
+}
+
+export function buildProjectReviewSummary(
+  project: FishboneProject,
+  now = new Date(),
+): ProjectReviewSummary {
+  const lastReviewedAt = typeof project.lastStatusReviewAt === 'string'
+    ? project.lastStatusReviewAt
+    : undefined;
+  const lastReviewDate = parseDateTime(lastReviewedAt);
+  const daysSinceReview = daysSinceDate(lastReviewedAt, now);
+
+  if (!lastReviewDate || daysSinceReview === null) {
+    return {
+      state: 'unreviewed',
+      label: '未复核',
+      headline: '还没有状态复核记录',
+      daysSinceReview: null,
+      nextStep: '先预览状态草稿，确认证据后标记已复核',
+    };
+  }
+
+  const nextDueDate = formatDateOnly(addDays(lastReviewDate, PROJECT_STATUS_REVIEW_CADENCE_DAYS));
+
+  if (daysSinceReview <= PROJECT_STATUS_REVIEW_CADENCE_DAYS) {
+    return {
+      state: 'current',
+      label: '已复核',
+      headline: daysSinceReview === 0 ? '今天已复核状态' : `${daysSinceReview} 天前复核状态`,
+      lastReviewedAt,
+      daysSinceReview,
+      nextDueDate,
+      nextStep: '继续按当前节奏维护状态证据',
+    };
+  }
+
+  if (daysSinceReview <= PROJECT_STATUS_REVIEW_OVERDUE_DAYS) {
+    return {
+      state: 'due',
+      label: '待复核',
+      headline: `${daysSinceReview} 天未复核状态`,
+      lastReviewedAt,
+      daysSinceReview,
+      nextDueDate,
+      nextStep: '复制状态草稿前快速检查证据和下一步',
+    };
+  }
+
+  return {
+    state: 'overdue',
+    label: '复核过期',
+    headline: `${daysSinceReview} 天未复核状态`,
+    lastReviewedAt,
+    daysSinceReview,
+    nextDueDate,
+    nextStep: '先确认项目健康、阻塞和下一步，再同步状态',
+  };
+}
+
+export function buildProjectReviewQueueSummary(
+  projects: FishboneProject[],
+  options: { now?: Date; maxItems?: number } = {},
+): ProjectReviewQueueSummary {
+  const now = options.now || new Date();
+  const maxItems = options.maxItems ?? 5;
+  const candidates = (Array.isArray(projects) ? projects : [])
+    .map((project) => ({
+      project,
+      review: buildProjectReviewSummary(project, now),
+      health: buildProjectHealthSummary(project, now),
+      viewReason: buildProjectDashboardViewReason(project, now),
+    }))
+    .filter((item) => item.review.state !== 'current')
+    .sort((a, b) => {
+      const reviewDelta = PROJECT_REVIEW_PRIORITY[a.review.state] - PROJECT_REVIEW_PRIORITY[b.review.state];
+      if (reviewDelta !== 0) return reviewDelta;
+
+      const dashboardDelta = compareProjectsByDashboardPriority(a.project, b.project, now);
+      if (dashboardDelta !== 0) return dashboardDelta;
+
+      return a.project.name.localeCompare(b.project.name);
+    });
+
+  const visibleItems = candidates.slice(0, maxItems).map(({ project, review, health, viewReason }) => ({
+    projectId: project.id,
+    projectName: project.name,
+    reviewState: review.state,
+    label: review.label,
+    headline: review.headline,
+    nextStep: review.nextStep,
+    daysSinceReview: review.daysSinceReview,
+    nextDueDate: review.nextDueDate,
+    healthLabel: health.label,
+    viewLabel: viewReason.label,
+    severity: health.state === 'off-track'
+      ? 'critical'
+      : review.state === 'overdue' || review.state === 'unreviewed'
+        ? 'warning'
+        : 'info',
+  }));
+
+  return {
+    totalItems: candidates.length,
+    visibleItems,
+    hiddenItems: Math.max(0, candidates.length - visibleItems.length),
+  };
+}
+
+export function getProjectDashboardViewFilter(
+  project: FishboneProject,
+  now = new Date(),
+): Exclude<ProjectDashboardViewFilter, 'all'> {
+  return buildProjectDashboardViewReason(project, now).filter;
+}
+
+export function buildProjectDashboardViewReason(
+  project: FishboneProject,
+  now = new Date(),
+): ProjectDashboardViewReason {
+  const health = buildProjectHealthSummary(project, now);
+  const freshness = buildProjectFreshnessSummary(project, now);
+  const review = buildProjectReviewSummary(project, now);
+  const dataQuality = buildProjectDataQualitySummary(project);
+
+  switch (health.state) {
+    case 'off-track':
+      return {
+        filter: 'needs-action',
+        label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS['needs-action'],
+        headline: health.headline,
+        detail: health.blockedTasks > 0
+          ? '先确认阻塞负责人和解除条件'
+          : '重估过期任务 ETA 并同步里程碑',
+        severity: 'critical',
+      };
+    case 'at-risk':
+      return {
+        filter: 'watch',
+        label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS.watch,
+        headline: health.headline,
+        detail: '检查近 7 天任务的资源和排期',
+        severity: 'warning',
+      };
+    case 'empty':
+      return {
+        filter: 'empty',
+        label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS.empty,
+        headline: health.headline,
+        detail: '先把里程碑拆成可跟踪任务',
+        severity: 'info',
+      };
+    case 'on-track':
+    default:
+      if (freshness.state === 'stale' || freshness.state === 'aging') {
+        return {
+          filter: 'watch',
+          label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS.watch,
+          headline: freshness.headline,
+          detail: freshness.nextStep,
+          severity: freshness.state === 'stale' ? 'warning' : 'info',
+        };
+      }
+      if (freshness.state === 'unscheduled') {
+        return {
+          filter: 'empty',
+          label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS.empty,
+          headline: freshness.headline,
+          detail: freshness.nextStep,
+          severity: 'info',
+        };
+      }
+      if (review.state !== 'current') {
+        return {
+          filter: 'watch',
+          label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS.watch,
+          headline: review.headline,
+          detail: review.nextStep,
+          severity: review.state === 'overdue' || review.state === 'unreviewed' ? 'warning' : 'info',
+        };
+      }
+      if (dataQuality.state === 'poor') {
+        return {
+          filter: 'watch',
+          label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS.watch,
+          headline: dataQuality.headline,
+          detail: dataQuality.nextStep,
+          severity: 'warning',
+        };
+      }
+      return {
+        filter: 'on-track',
+        label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS['on-track'],
+        headline: health.headline,
+        detail: dataQuality.state === 'partial'
+          ? dataQuality.nextStep
+          : '继续维护任务状态、ETA 和来源链接',
+        severity: 'neutral',
+      };
+  }
+}
+
+export function filterProjectsByDashboardView<T extends FishboneProject>(
+  projects: T[],
+  filter: ProjectDashboardViewFilter,
+  now = new Date(),
+): T[] {
+  const list = Array.isArray(projects) ? projects : [];
+  if (filter === 'all') return list;
+
+  return list.filter((project) => getProjectDashboardViewFilter(project, now) === filter);
+}
+
+export function buildProjectDashboardViewFilterCounts(
+  projects: FishboneProject[],
+  now = new Date(),
+): Record<ProjectDashboardViewFilter, number> {
+  const counts: Record<ProjectDashboardViewFilter, number> = {
+    all: 0,
+    'needs-action': 0,
+    watch: 0,
+    empty: 0,
+    'on-track': 0,
+  };
+
+  (Array.isArray(projects) ? projects : []).forEach((project) => {
+    counts.all += 1;
+    counts[getProjectDashboardViewFilter(project, now)] += 1;
+  });
+
+  return counts;
+}
+
 export function compareProjectsByDashboardPriority(
   left: FishboneProject,
   right: FishboneProject,
@@ -523,6 +988,32 @@ export function compareProjectsByDashboardPriority(
 
   const dueSoonDelta = rightHealth.dueSoonTasks - leftHealth.dueSoonTasks;
   if (dueSoonDelta !== 0) return dueSoonDelta;
+
+  const leftFreshness = buildProjectFreshnessSummary(left, now);
+  const rightFreshness = buildProjectFreshnessSummary(right, now);
+  const freshnessDelta =
+    PROJECT_FRESHNESS_PRIORITY[leftFreshness.state] - PROJECT_FRESHNESS_PRIORITY[rightFreshness.state];
+  if (freshnessDelta !== 0) return freshnessDelta;
+
+  const freshnessAgeDelta = (rightFreshness.daysSinceLatest || 0) - (leftFreshness.daysSinceLatest || 0);
+  if (freshnessAgeDelta !== 0) return freshnessAgeDelta;
+
+  const leftReview = buildProjectReviewSummary(left, now);
+  const rightReview = buildProjectReviewSummary(right, now);
+  const reviewStateDelta = PROJECT_REVIEW_PRIORITY[leftReview.state] - PROJECT_REVIEW_PRIORITY[rightReview.state];
+  if (reviewStateDelta !== 0) return reviewStateDelta;
+
+  const reviewDelta = (rightReview.daysSinceReview || 0) - (leftReview.daysSinceReview || 0);
+  if (reviewDelta !== 0) return reviewDelta;
+
+  const leftDataQuality = buildProjectDataQualitySummary(left);
+  const rightDataQuality = buildProjectDataQualitySummary(right);
+  const dataQualityDelta =
+    PROJECT_DATA_QUALITY_PRIORITY[leftDataQuality.state] - PROJECT_DATA_QUALITY_PRIORITY[rightDataQuality.state];
+  if (dataQualityDelta !== 0) return dataQualityDelta;
+
+  const coverageDelta = leftDataQuality.overallCoverage - rightDataQuality.overallCoverage;
+  if (coverageDelta !== 0) return coverageDelta;
 
   const leftMilestoneDays = leftHealth.upcomingMilestone?.daysUntil ?? Number.POSITIVE_INFINITY;
   const rightMilestoneDays = rightHealth.upcomingMilestone?.daysUntil ?? Number.POSITIVE_INFINITY;
@@ -565,6 +1056,8 @@ function collectProjectFocusItems(projects: FishboneProject[], now: Date): Proje
 
       return tasks
         .map((task): ProjectFocusItem | null => {
+          const risk = buildProjectTaskRiskSummary(project, task, { now });
+
           if (isBlockedStatus(task.status)) {
             return {
               projectId: project.id,
@@ -575,6 +1068,7 @@ function collectProjectFocusItems(projects: FishboneProject[], now: Date): Proje
               detail: task.eta ? `ETA ${task.eta}` : '需要明确负责人或解除条件',
               daysUntil: daysUntil(task.eta, now),
               priority: PROJECT_ATTENTION_PRIORITY.blocked,
+              risk,
             };
           }
 
@@ -593,6 +1087,7 @@ function collectProjectFocusItems(projects: FishboneProject[], now: Date): Proje
               detail: `已超 ${Math.abs(delta)} 天`,
               daysUntil: delta,
               priority: PROJECT_ATTENTION_PRIORITY.overdue,
+              risk,
             };
           }
 
@@ -606,6 +1101,7 @@ function collectProjectFocusItems(projects: FishboneProject[], now: Date): Proje
               detail: delta === 0 ? '今天到期' : `${delta} 天后到期`,
               daysUntil: delta,
               priority: PROJECT_ATTENTION_PRIORITY['due-soon'],
+              risk,
             };
           }
 
@@ -616,6 +1112,9 @@ function collectProjectFocusItems(projects: FishboneProject[], now: Date): Proje
     .sort((a, b) => {
       const priorityDelta = a.priority - b.priority;
       if (priorityDelta !== 0) return priorityDelta;
+
+      const riskDelta = b.risk.score - a.risk.score;
+      if (riskDelta !== 0) return riskDelta;
 
       const leftDays = a.daysUntil ?? Number.POSITIVE_INFINITY;
       const rightDays = b.daysUntil ?? Number.POSITIVE_INFINITY;
@@ -643,6 +1142,359 @@ function buildTaskJiraKeys(task: FishboneTask): string[] {
   return Array.from(keys);
 }
 
+function clampRiskScore(score: number): number {
+  if (!Number.isFinite(score)) return 0;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function getRiskLabel(score: number): string {
+  if (score >= 70) return '高风险';
+  if (score >= 40) return '中风险';
+  if (score > 0) return '低风险';
+  return '低风险';
+}
+
+export function buildProjectTaskRiskSummary(
+  project: FishboneProject,
+  task: FishboneTask,
+  options: { now?: Date } = {},
+): ProjectTaskRiskSummary {
+  const now = options.now || new Date();
+  const drivers: string[] = [];
+
+  if (isCompletedStatus(task.status)) {
+    return {
+      score: 0,
+      label: '已完成',
+      drivers: ['任务已完成'],
+    };
+  }
+
+  let score = 0;
+  const delta = daysUntil(task.eta, now);
+
+  if (isBlockedStatus(task.status)) {
+    score += 45;
+    drivers.push('任务阻塞');
+  }
+
+  if (delta === null) {
+    score += 12;
+    drivers.push('缺 ETA');
+  } else if (delta < 0) {
+    score += Math.min(30, 15 + Math.abs(delta) * 2);
+    drivers.push(`过期 ${Math.abs(delta)} 天`);
+  } else if (delta <= 7) {
+    score += Math.max(8, 20 - delta * 2);
+    drivers.push(delta === 0 ? '今天到期' : `${delta} 天后到期`);
+  } else if (delta <= 14) {
+    score += 4;
+    drivers.push(`${delta} 天后到期`);
+  }
+
+  if (buildTaskJiraKeys(task).length === 0) {
+    score += 8;
+    drivers.push('缺 Jira / 平台来源');
+  }
+
+  const platformStates = Object.values(task.platforms || {});
+  const blockedPlatforms = platformStates.filter((platform) => isBlockedStatus(platform?.status)).length;
+  const pendingPlatforms = platformStates.filter((platform) => {
+    const status = normalizeStatusToken(platform?.status);
+    return status === 'pending' || status === 'todo';
+  }).length;
+
+  if (blockedPlatforms > 0) {
+    score += Math.min(18, blockedPlatforms * 9);
+    drivers.push(`${blockedPlatforms} 个平台阻塞`);
+  }
+  if (pendingPlatforms > 0) {
+    score += Math.min(8, pendingPlatforms * 4);
+    drivers.push(`${pendingPlatforms} 个平台待启动`);
+  }
+
+  const upcomingMilestone = buildProjectHealthSummary(project, now).upcomingMilestone;
+  if (upcomingMilestone && upcomingMilestone.daysUntil <= 7) {
+    score += 5;
+    drivers.push(`${upcomingMilestone.label} 里程碑临近`);
+  }
+
+  const normalizedScore = clampRiskScore(score);
+  return {
+    score: normalizedScore,
+    label: getRiskLabel(normalizedScore),
+    drivers: drivers.length ? drivers : ['暂无显著风险信号'],
+  };
+}
+
+function calculateCoveragePercent(completeItems: number, totalItems: number): number {
+  if (totalItems <= 0) return 100;
+  return Math.round((completeItems / totalItems) * 100);
+}
+
+function buildDataQualityNextStep(missingEtaTasks: number, missingSourceTasks: number): string {
+  if (missingEtaTasks > 0 && missingSourceTasks > 0) {
+    return '先补齐 ETA 和 Jira / 平台来源，避免风险排序失真';
+  }
+  if (missingEtaTasks > 0) {
+    return '优先补齐缺 ETA 的活动任务';
+  }
+  if (missingSourceTasks > 0) {
+    return '补充 Jira 或平台来源，方便状态回溯';
+  }
+  return '继续维护任务状态、ETA 和来源链接';
+}
+
+export function buildProjectDataQualitySummary(project: FishboneProject): ProjectDataQualitySummary {
+  const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+  const activeTasks = tasks.filter((task) => !isCompletedStatus(task.status));
+  const activeTaskCount = activeTasks.length;
+
+  if (!activeTaskCount) {
+    return {
+      state: 'empty',
+      label: '无活动任务',
+      headline: '没有进行中的任务需要补充证据',
+      activeTasks: 0,
+      missingEtaTasks: 0,
+      missingSourceTasks: 0,
+      etaCoverage: 100,
+      sourceCoverage: 100,
+      overallCoverage: 100,
+      nextStep: '新增任务时同步补齐 ETA 和 Jira / 平台来源',
+    };
+  }
+
+  const missingEtaTasks = activeTasks.filter((task) => !parseDateOnly(task.eta)).length;
+  const missingSourceTasks = activeTasks.filter((task) => buildTaskJiraKeys(task).length === 0).length;
+  const etaCoverage = calculateCoveragePercent(activeTaskCount - missingEtaTasks, activeTaskCount);
+  const sourceCoverage = calculateCoveragePercent(activeTaskCount - missingSourceTasks, activeTaskCount);
+  const overallCoverage = calculateCoveragePercent(
+    activeTaskCount * 2 - missingEtaTasks - missingSourceTasks,
+    activeTaskCount * 2,
+  );
+
+  if (overallCoverage === 100) {
+    return {
+      state: 'complete',
+      label: '证据完整',
+      headline: `${activeTaskCount} 个活动任务已补齐 ETA 和来源`,
+      activeTasks: activeTaskCount,
+      missingEtaTasks,
+      missingSourceTasks,
+      etaCoverage,
+      sourceCoverage,
+      overallCoverage,
+      nextStep: '继续维护任务状态、ETA 和来源链接',
+    };
+  }
+
+  const headline = `证据覆盖 ${overallCoverage}%：${missingEtaTasks} 个缺 ETA，${missingSourceTasks} 个缺来源`;
+
+  if (overallCoverage < 60) {
+    return {
+      state: 'poor',
+      label: '证据不足',
+      headline,
+      activeTasks: activeTaskCount,
+      missingEtaTasks,
+      missingSourceTasks,
+      etaCoverage,
+      sourceCoverage,
+      overallCoverage,
+      nextStep: buildDataQualityNextStep(missingEtaTasks, missingSourceTasks),
+    };
+  }
+
+  return {
+    state: 'partial',
+    label: '证据待补',
+    headline,
+    activeTasks: activeTaskCount,
+    missingEtaTasks,
+    missingSourceTasks,
+    etaCoverage,
+    sourceCoverage,
+    overallCoverage,
+    nextStep: buildDataQualityNextStep(missingEtaTasks, missingSourceTasks),
+  };
+}
+
+function summarizeTaskTitles(tasks: FishboneTask[], maxItems = 2): string {
+  const titles = tasks
+    .map((task) => String(task.title || '').trim())
+    .filter(Boolean)
+    .slice(0, maxItems);
+
+  const remaining = tasks.length - titles.length;
+  return `${titles.join('、')}${remaining > 0 ? ` 等 ${tasks.length} 项` : ''}`;
+}
+
+export function buildProjectDecisionSummary(
+  project: FishboneProject,
+  options: { now?: Date; maxSignals?: number } = {},
+): ProjectDecisionSummary {
+  const now = options.now || new Date();
+  const maxSignals = options.maxSignals ?? 5;
+  const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+  const activeTasks = tasks.filter((task) => !isCompletedStatus(task.status));
+  const health = buildProjectHealthSummary(project, now);
+  const freshness = buildProjectFreshnessSummary(project, now);
+  const review = buildProjectReviewSummary(project, now);
+  const dataQuality = buildProjectDataQualitySummary(project);
+  const signals: ProjectDecisionSignal[] = [];
+
+  const blockedTasks = activeTasks.filter((task) => isBlockedStatus(task.status));
+  const nonBlockedActiveTasks = activeTasks.filter((task) => !isBlockedStatus(task.status));
+  if (blockedTasks.length) {
+    signals.push({
+      id: 'blocked',
+      label: '阻塞',
+      title: `${blockedTasks.length} 个任务被阻塞`,
+      detail: summarizeTaskTitles(blockedTasks),
+      severity: 'critical',
+      priority: 0,
+    });
+  }
+
+  const overdueTasks = nonBlockedActiveTasks.filter((task) => {
+    const delta = daysUntil(task.eta, now);
+    return delta !== null && delta < 0;
+  });
+  if (overdueTasks.length) {
+    signals.push({
+      id: 'overdue',
+      label: '过期',
+      title: `${overdueTasks.length} 个任务超过 ETA`,
+      detail: summarizeTaskTitles(overdueTasks),
+      severity: 'critical',
+      priority: 1,
+    });
+  }
+
+  const dueSoonTasks = nonBlockedActiveTasks.filter((task) => {
+    const delta = daysUntil(task.eta, now);
+    return delta !== null && delta >= 0 && delta <= 7;
+  });
+  if (dueSoonTasks.length) {
+    signals.push({
+      id: 'due-soon',
+      label: '近 7 天',
+      title: `${dueSoonTasks.length} 个任务即将到期`,
+      detail: summarizeTaskTitles(dueSoonTasks),
+      severity: 'warning',
+      priority: 2,
+    });
+  }
+
+  if (freshness.state === 'stale' || freshness.state === 'aging') {
+    signals.push({
+      id: 'stale-plan',
+      label: freshness.label,
+      title: freshness.headline,
+      detail: freshness.nextStep,
+      severity: freshness.state === 'stale' ? 'warning' : 'info',
+      priority: 3,
+    });
+  } else if (freshness.state === 'unscheduled' && activeTasks.length) {
+    signals.push({
+      id: 'missing-timeline',
+      label: freshness.label,
+      title: freshness.headline,
+      detail: freshness.nextStep,
+      severity: 'info',
+      priority: 3,
+    });
+  }
+
+  if (review.state !== 'current') {
+    signals.push({
+      id: 'status-review',
+      label: review.label,
+      title: review.headline,
+      detail: review.nextStep,
+      severity: review.state === 'overdue' || review.state === 'unreviewed' ? 'warning' : 'info',
+      priority: 4,
+    });
+  }
+
+  const missingEtaTasks = activeTasks.filter((task) => !parseDateOnly(task.eta));
+  if (missingEtaTasks.length) {
+    signals.push({
+      id: 'missing-eta',
+      label: '数据缺口',
+      title: `${missingEtaTasks.length} 个任务缺少 ETA`,
+      detail: summarizeTaskTitles(missingEtaTasks),
+      severity: 'info',
+      priority: 5,
+    });
+  }
+
+  const missingSourceTasks = activeTasks.filter((task) => buildTaskJiraKeys(task).length === 0);
+  if (missingSourceTasks.length) {
+    signals.push({
+      id: 'missing-source',
+      label: '证据不足',
+      title: `${missingSourceTasks.length} 个任务没有 Jira 或平台来源`,
+      detail: summarizeTaskTitles(missingSourceTasks),
+      severity: 'neutral',
+      priority: 6,
+    });
+  }
+
+  if (health.upcomingMilestone) {
+    signals.push({
+      id: 'upcoming-milestone',
+      label: '里程碑',
+      title: `${health.upcomingMilestone.label} ${health.upcomingMilestone.date}`,
+      detail: health.upcomingMilestone.daysUntil === 0
+        ? '今天到期'
+        : `${health.upcomingMilestone.daysUntil} 天后到期`,
+      severity: health.upcomingMilestone.daysUntil <= 7 ? 'warning' : 'info',
+      priority: 7,
+    });
+  } else if (health.state === 'empty') {
+    signals.push({
+      id: 'empty-plan',
+      label: '待规划',
+      title: '还没有可跟踪任务',
+      detail: project.milestones?.length ? '已有里程碑，等待拆解任务' : '先补充里程碑和任务',
+      severity: 'info',
+      priority: 7,
+    });
+  }
+
+  const nextAction = (() => {
+    if (blockedTasks.length) return '先确认阻塞负责人和解除条件';
+    if (overdueTasks.length) return '重估过期任务 ETA 并同步里程碑';
+    if (dueSoonTasks.length) return '检查近 7 天任务的资源和排期';
+    if (freshness.state === 'stale') return '先刷新项目 ETA / 里程碑，确认计划仍有效';
+    if (freshness.state === 'aging') return '复核项目计划日期，补上下一次检查点';
+    if (review.state === 'overdue' || review.state === 'unreviewed') return '复核状态草稿并记录本次项目检查';
+    if (review.state === 'due') return '快速复核项目状态，确认是否需要同步更新';
+    if (missingEtaTasks.length) return '补齐任务 ETA，避免风险被低估';
+    if (health.state === 'empty') return '先把里程碑拆成可跟踪任务';
+    if (missingSourceTasks.length) return '补充 Jira 或平台来源，方便回溯';
+    return '维持当前节奏，下一次更新前补充新证据';
+  })();
+
+  return {
+    nextAction,
+    signals: signals
+      .sort((a, b) => {
+        const priorityDelta = a.priority - b.priority;
+        if (priorityDelta !== 0) return priorityDelta;
+        return a.title.localeCompare(b.title);
+      })
+      .slice(0, maxSignals),
+    dataQuality,
+    dataGaps: {
+      missingEtaTasks: missingEtaTasks.length,
+      missingSourceTasks: missingSourceTasks.length,
+    },
+  };
+}
+
 function formatRelativeDays(days: number): string {
   if (days === 0) return '今天';
   if (days > 0) return `${days} 天后`;
@@ -658,17 +1510,21 @@ function buildStatusDraftAttentionTasks(
   label: string;
   detail: string;
   priority: number;
+  risk: ProjectTaskRiskSummary;
 }> {
   const tasks = Array.isArray(project.tasks) ? project.tasks : [];
 
   return tasks
     .map((task) => {
+      const risk = buildProjectTaskRiskSummary(project, task, { now });
+
       if (isBlockedStatus(task.status)) {
         return {
           task,
           label: '阻塞',
           detail: task.eta ? `ETA ${task.eta}` : '需要明确负责人或解除条件',
           priority: 0,
+          risk,
         };
       }
 
@@ -683,6 +1539,7 @@ function buildStatusDraftAttentionTasks(
           label: '过期',
           detail: `已超 ${Math.abs(delta)} 天`,
           priority: 1,
+          risk,
         };
       }
 
@@ -692,6 +1549,7 @@ function buildStatusDraftAttentionTasks(
           label: '近 7 天到期',
           detail: delta === 0 ? '今天到期' : `${delta} 天后到期`,
           priority: 2,
+          risk,
         };
       }
 
@@ -705,11 +1563,14 @@ function buildStatusDraftAttentionTasks(
         label: string;
         detail: string;
         priority: number;
+        risk: ProjectTaskRiskSummary;
       } => Boolean(item),
     )
     .sort((a, b) => {
       const priorityDelta = a.priority - b.priority;
       if (priorityDelta !== 0) return priorityDelta;
+      const riskDelta = b.risk.score - a.risk.score;
+      if (riskDelta !== 0) return riskDelta;
       return (a.task.eta || '').localeCompare(b.task.eta || '');
     })
     .slice(0, maxItems);
@@ -723,16 +1584,19 @@ export function buildProjectStatusEvidenceItems(
   const maxItems = options.maxAttentionTasks ?? 8;
   const evidence: ProjectStatusEvidenceItem[] = [];
   const health = buildProjectHealthSummary(project, now);
+  const freshness = buildProjectFreshnessSummary(project, now);
+  const review = buildProjectReviewSummary(project, now);
+  const dataQuality = buildProjectDataQualitySummary(project);
   const attentionTasks = buildStatusDraftAttentionTasks(project, now, maxItems);
 
-  attentionTasks.forEach(({ task, label, detail, priority }) => {
+  attentionTasks.forEach(({ task, label, detail, priority, risk }) => {
     const jiraKeys = buildTaskJiraKeys(task);
     const jiraDetail = jiraKeys.length ? `；Jira ${jiraKeys.join(', ')}` : '';
     evidence.push({
       type: 'task',
       label,
       title: task.title,
-      detail: `${detail}${jiraDetail}`,
+      detail: `${detail}；${risk.label} ${risk.score}/100${jiraDetail}`,
       source: '本地任务状态 / ETA',
       priority,
       taskId: task.id,
@@ -747,6 +1611,40 @@ export function buildProjectStatusEvidenceItems(
       detail: `${health.upcomingMilestone.date}，${formatRelativeDays(health.upcomingMilestone.daysUntil)}`,
       source: '本地里程碑计划',
       priority: 3,
+    });
+  }
+
+  if (freshness.state !== 'fresh') {
+    evidence.push({
+      type: 'freshness',
+      label: freshness.label,
+      title: freshness.latestDate ? `最近计划日期 ${freshness.latestDate}` : '项目时间线',
+      detail: `${freshness.headline}；${freshness.nextStep}`,
+      source: '本地任务 ETA / 里程碑日期',
+      priority: freshness.state === 'stale' ? 2 : 3,
+    });
+  }
+
+  if (review.state !== 'current') {
+    const nextDueDetail = review.nextDueDate ? `；下次复核 ${review.nextDueDate}` : '';
+    evidence.push({
+      type: 'review',
+      label: review.label,
+      title: review.lastReviewedAt ? `上次复核 ${formatDateOnly(parseDateTime(review.lastReviewedAt) || now)}` : '状态复核记录',
+      detail: `${review.headline}；${review.nextStep}${nextDueDetail}`,
+      source: '本地状态复核时间',
+      priority: review.state === 'overdue' || review.state === 'unreviewed' ? 2 : 3,
+    });
+  }
+
+  if (dataQuality.state === 'partial' || dataQuality.state === 'poor') {
+    evidence.push({
+      type: 'data-quality',
+      label: dataQuality.label,
+      title: `${dataQuality.overallCoverage}% 覆盖`,
+      detail: `${dataQuality.missingEtaTasks} 个缺 ETA，${dataQuality.missingSourceTasks} 个缺来源；${dataQuality.nextStep}`,
+      source: '本地任务 ETA / Jira / 平台来源',
+      priority: dataQuality.state === 'poor' ? 2 : 3,
     });
   }
 
@@ -802,6 +1700,9 @@ export function buildProjectStatusUpdateDraft(
   const now = options.now || new Date();
   const maxAttentionTasks = options.maxAttentionTasks ?? 5;
   const health = buildProjectHealthSummary(project, now);
+  const freshness = buildProjectFreshnessSummary(project, now);
+  const review = buildProjectReviewSummary(project, now);
+  const dataQuality = buildProjectDataQualitySummary(project);
   const milestones = Array.isArray(project.milestones) ? project.milestones : [];
   const attentionTasks = buildStatusDraftAttentionTasks(project, now, maxAttentionTasks);
   const evidenceItems = buildProjectStatusEvidenceItems(project, {
@@ -814,6 +1715,9 @@ export function buildProjectStatusUpdateDraft(
     '',
     `状态：${health.label} - ${health.headline}`,
     `关键指标：${health.completedTasks}/${health.totalTasks} 完成，${health.blockedTasks} 阻塞，${health.overdueTasks} 过期，${health.dueSoonTasks} 个 7 天内到期。`,
+    `数据新鲜度：${freshness.label} - ${freshness.headline}`,
+    `状态复核：${review.label} - ${review.headline}${review.nextDueDate ? `；下次复核 ${review.nextDueDate}` : ''}`,
+    `证据覆盖：${dataQuality.label} - ${dataQuality.headline}`,
   ];
 
   if (health.upcomingMilestone) {
@@ -844,10 +1748,10 @@ export function buildProjectStatusUpdateDraft(
   if (!attentionTasks.length) {
     lines.push('- 暂无阻塞、过期或 7 天内到期任务。');
   } else {
-    attentionTasks.forEach(({ task, label, detail }) => {
+    attentionTasks.forEach(({ task, label, detail, risk }) => {
       const jiraKeys = buildTaskJiraKeys(task);
       const evidence = jiraKeys.length ? `；Jira ${jiraKeys.join(', ')}` : '';
-      lines.push(`- [${label}] ${task.title} (${detail}${evidence})`);
+      lines.push(`- [${label}] ${task.title} (${detail}；${risk.label} ${risk.score}/100${evidence})`);
     });
   }
 
@@ -858,6 +1762,8 @@ export function buildProjectStatusUpdateDraft(
     lines.push('- 重新确认过期任务 ETA，并同步受影响的里程碑。');
   } else if (health.dueSoonTasks > 0) {
     lines.push('- 检查近 7 天到期任务是否需要资源或排期调整。');
+  } else if (review.state !== 'current') {
+    lines.push('- 完成本次状态复核后，记录复核时间，避免正常项目长期无人检查。');
   } else {
     lines.push('- 保持当前节奏，并在下次状态更新前补充新的证据来源。');
   }
@@ -882,6 +1788,9 @@ function sanitizeFishboneChanges(changes: any): any {
   if ('anchorPosition' in next) {
     const value = Number(next.anchorPosition);
     next.anchorPosition = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : undefined;
+  }
+  if ('lastStatusReviewAt' in next && typeof next.lastStatusReviewAt !== 'string') {
+    next.lastStatusReviewAt = undefined;
   }
   return next;
 }
@@ -1619,7 +2528,8 @@ export class DashboardDataManager {
               }))
           : [],
         tasks: [],
-        platformConfig: data.platformConfig?.length ? data.platformConfig : ['sdk', 'ios', 'android', 'qa']
+        platformConfig: data.platformConfig?.length ? data.platformConfig : ['sdk', 'ios', 'android', 'qa'],
+        lastStatusReviewAt: new Date().toISOString(),
       };
       this.fishboneProjects.push(project);
       await this.persistFishboneProjects();

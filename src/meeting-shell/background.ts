@@ -3,6 +3,7 @@ import {
   MEETING_PILOT_LIVE_MAP_PATH,
   MEETING_PILOT_OFFSCREEN_PATH,
   MEETING_PILOT_SIDE_PANEL_PATH,
+  MeetingPilotActionItem,
   MeetingPilotAlert,
   MeetingPilotCaptureState,
   MeetingPilotDetectionPayload,
@@ -55,8 +56,10 @@ import {
   renameParticipant,
 } from './participantOps';
 import {
+  buildManualActionTimelineEvent,
   getActiveMeetingActionItems,
   mergeActionItemReviewStates,
+  mergeManualActionTimelineEvents,
   normalizeActionItemReviewState,
 } from './actionItemReview';
 import {
@@ -73,6 +76,8 @@ import {
 } from './speechSuggestion';
 
 export { mergeActionItemReviewStates } from './actionItemReview';
+
+const UNASSIGNED_ACTION_OWNER = '待分配';
 
 const registry = new MeetingPilotRegistry();
 let initPromise: Promise<void> | null = null;
@@ -413,6 +418,11 @@ function sanitizeActionTextEdit(
     .slice(0, maxLength);
 }
 
+function normalizeActionOwner(value: unknown): string {
+  const owner = sanitizeActionTextEdit(value, 80);
+  return owner && !/^unknown$/i.test(owner) ? owner : UNASSIGNED_ACTION_OWNER;
+}
+
 function withTimeoutSignal(timeoutMs: number): AbortSignal {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), timeoutMs);
@@ -468,7 +478,6 @@ async function evaluateMeetingReadiness(
   const promise = (async () => {
     const checkedAt = Date.now();
     const envConfig = await getEnvConfig();
-    const blockedByFeatureFlag = envConfig.MEETING_PILOT_ENABLED === false;
     const minutesApiBaseUrl = trimTrailingSlash(
       String(
         envConfig.MEETING_MINUTES_API_URL ||
@@ -637,7 +646,7 @@ async function evaluateMeetingReadiness(
     })();
 
     return buildReadinessSummary({
-      blockedByFeatureFlag,
+      blockedByFeatureFlag: false,
       minutesApi,
       transcription,
       analysisModel: analysis,
@@ -673,9 +682,8 @@ async function syncSessionCaptureGateReadiness(
 ): Promise<MeetingPilotSessionSnapshot | undefined> {
   const session = registry.getSessionByTabId(tabId);
   if (!session) return undefined;
-  const envConfig = await getEnvConfig();
   const readiness = buildCaptureGateReadiness({
-    blockedByFeatureFlag: envConfig.MEETING_PILOT_ENABLED === false,
+    blockedByFeatureFlag: false,
     previous: session.readiness,
   });
   return registry.updateObservation(tabId, { readiness });
@@ -1011,7 +1019,7 @@ function buildMeetingArchiveTitlePrompt(
     .join('\n');
   const actionItems = session.actionItems
     .slice(0, 6)
-    .map((item) => `- ${item.owner}: ${item.title}`)
+    .map((item) => `- ${normalizeActionOwner(item.owner)}: ${item.title}`)
     .join('\n');
 
   return `Generate a concise archive title for this meeting. Return strict JSON only: {"title":"..."}.
@@ -1237,7 +1245,7 @@ Transcript:\n${transcriptWindow}`;
       .map((item, index) => ({
         id: `action-llm-${index}`,
         title: item.title!.trim(),
-        owner: item.owner?.trim() || 'Unknown',
+        owner: normalizeActionOwner(item.owner),
         deadline: item.deadline?.trim() || undefined,
         status: item.status === 'done' ? 'done' : 'pending',
         reviewState: 'suggested',
@@ -1448,6 +1456,7 @@ const handledMeetingPilotTypes = new Set([
   'MEETING_PILOT_START_CAPTURE',
   'MEETING_PILOT_STOP_CAPTURE',
   'MEETING_PILOT_UPDATE_ALERTS',
+  'MEETING_PILOT_ADD_ACTION_ITEM',
   'MEETING_PILOT_UPDATE_ACTION_ITEM',
   'MEETING_PILOT_OBSERVATION_UPDATE',
   'MEETING_PILOT_TRANSCRIPT_UPDATE',
@@ -2073,8 +2082,8 @@ async function openMeetingSidePanelWindow(
       }),
     ),
     type: 'popup',
-    width: 1280,
-    height: 920,
+    width: 440,
+    height: 880,
     focused: true,
   });
 }
@@ -2925,11 +2934,12 @@ async function handleTranscriptUpdate(
           type: 'action' as const,
           title: item.title.slice(0, 48),
           description: item.evidence
-            ? `${item.owner} · ${item.title}\n依据：${item.evidence}`
-            : `${item.owner} · ${item.title}`,
+            ? `${normalizeActionOwner(item.owner)} · ${item.title}\n依据：${item.evidence}`
+            : `${normalizeActionOwner(item.owner)} · ${item.title}`,
           timestamp: item.timestamp || formatTranscriptTimestamp(Date.now()),
-          speaker: item.owner,
+          speaker: normalizeActionOwner(item.owner),
           chapterId: item.chapterId,
+          actionItemId: item.id,
         })),
         ...structuredData.timelineEvents.filter(
           (event) => event.type === 'topic',
@@ -2971,6 +2981,11 @@ async function handleTranscriptUpdate(
     llmActionItems.length ? llmActionItems : structuredData.actionItems,
     session.actionItems,
   );
+  const nextTimelineEvents = mergeManualActionTimelineEvents(
+    mergedTimelineEvents,
+    nextActionItems,
+    session.timelineEvents,
+  );
   latestStructuredParse.actionItems = nextActionItems;
 
   const updated = await registry.updateObservation(tabId, {
@@ -2980,7 +2995,7 @@ async function handleTranscriptUpdate(
     summary: llmResult?.summary || nextSummary || session.summary,
     participants: nextParticipants,
     chapters: structuredData.chapters,
-    timelineEvents: mergedTimelineEvents,
+    timelineEvents: nextTimelineEvents,
     actionItems: nextActionItems,
     decisions: llmDecisions.length ? llmDecisions : structuredData.decisions,
     timelineProgress: structuredData.timelineProgress,
@@ -3166,7 +3181,7 @@ ${
   activeActionItems
     .map(
       (item) =>
-        `- [${item.owner}] ${item.title}${
+        `- [${normalizeActionOwner(item.owner)}] ${item.title}${
           item.deadline ? ` (DDL: ${item.deadline})` : ''
         }`,
     )
@@ -3692,6 +3707,75 @@ async function handleMeetingPilotMessage(
       }
       return;
     }
+    case 'MEETING_PILOT_ADD_ACTION_ITEM': {
+      await ensureInitialized();
+      const actionTabId = Number(request.tabId || tabId || 0);
+      const requestMeetingId = String(request.meetingId || '');
+      const current = registry.getSessionByTabId(actionTabId);
+      if (
+        !Number.isFinite(actionTabId) ||
+        !current ||
+        (requestMeetingId && requestMeetingId !== current.meetingId)
+      ) {
+        sendResponse({ success: false });
+        return;
+      }
+
+      const title = sanitizeActionTextEdit(request.title, 160);
+      const owner = normalizeActionOwner(request.owner);
+      const deadline = sanitizeActionTextEdit(request.deadline, 80);
+      const evidence = sanitizeActionTextEdit(request.evidence, 240);
+      const chapterId =
+        sanitizeActionTextEdit(request.chapterId, 120) || undefined;
+      if (!title) {
+        sendResponse({
+          success: false,
+          message: '行动项标题不能为空。',
+        });
+        return;
+      }
+
+      const now = Date.now();
+      const timestamp = formatTranscriptTimestamp(now);
+      const actionItem: MeetingPilotActionItem = {
+        id: `action-manual-${now}-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`,
+        title,
+        owner,
+        deadline: deadline || undefined,
+        status: 'pending',
+        reviewState: 'confirmed',
+        reviewedAt: now,
+        editedAt: now,
+        chapterId,
+        evidence: evidence || undefined,
+        timestamp,
+        source: 'manual',
+      };
+      const timelineEvent = buildManualActionTimelineEvent(actionItem);
+
+      const updated = await registry.updateSession(actionTabId, (session) => {
+        const actionItems = [...session.actionItems, actionItem];
+        return {
+          ...session,
+          actionItems,
+          timelineEvents: [...session.timelineEvents, timelineEvent],
+          latestStructuredParse: session.latestStructuredParse
+            ? {
+                ...session.latestStructuredParse,
+                actionItems,
+              }
+            : session.latestStructuredParse,
+        };
+      });
+      if (updated) {
+        await broadcastSessionSnapshot(updated);
+        await pushSessionSnapshotToMeetingTab(updated);
+      }
+      sendResponse({ success: Boolean(updated), session: updated, actionItem });
+      return;
+    }
     case 'MEETING_PILOT_UPDATE_ACTION_ITEM': {
       await ensureInitialized();
       const actionTabId = Number(request.tabId || tabId || 0);
@@ -3710,15 +3794,15 @@ async function handleMeetingPilotMessage(
         ? sanitizeActionTextEdit(request.title, 160)
         : undefined;
       const nextOwner = ownerProvided
-        ? sanitizeActionTextEdit(request.owner, 80)
+        ? normalizeActionOwner(request.owner)
         : undefined;
       const nextDeadline = deadlineProvided
         ? sanitizeActionTextEdit(request.deadline, 80)
         : undefined;
-      if ((titleProvided && !nextTitle) || (ownerProvided && !nextOwner)) {
+      if (titleProvided && !nextTitle) {
         sendResponse({
           success: false,
-          message: '行动项标题和负责人不能为空。',
+          message: '行动项标题不能为空。',
         });
         return;
       }
@@ -3739,7 +3823,7 @@ async function handleMeetingPilotMessage(
           return {
             ...item,
             title: nextTitle || item.title,
-            owner: nextOwner || item.owner,
+            owner: ownerProvided ? nextOwner! : item.owner,
             deadline: deadlineProvided
               ? nextDeadline || undefined
               : item.deadline,
@@ -3767,9 +3851,15 @@ async function handleMeetingPilotMessage(
         if (!changed) {
           return session;
         }
+        const timelineEvents = mergeManualActionTimelineEvents(
+          session.timelineEvents,
+          actionItems,
+          session.timelineEvents,
+        );
         return {
           ...session,
           actionItems,
+          timelineEvents,
           latestStructuredParse: session.latestStructuredParse
             ? {
                 ...session.latestStructuredParse,

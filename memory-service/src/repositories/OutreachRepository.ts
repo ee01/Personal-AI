@@ -563,16 +563,50 @@ export class OutreachRepository {
     return this.listTemplates(limit)
       .filter((template) => template.enabled && template.syncState === 'synced')
       .filter((template) => {
+        const repeatCount = Number(template.scheduleSpec.repeatCount);
+        const dispatchCount = Number(template.scheduleSpec.dispatchCount ?? 0);
+        return !(
+          Number.isFinite(repeatCount) &&
+          repeatCount > 0 &&
+          Number.isFinite(dispatchCount) &&
+          dispatchCount >= repeatCount
+        );
+      })
+      .filter((template) => {
         const nextDispatchAt = Number(template.scheduleSpec.nextDispatchAt ?? 0);
-        return Number.isFinite(nextDispatchAt) && nextDispatchAt > 0 && nextDispatchAt <= referenceTs;
+        return (
+          Number.isFinite(nextDispatchAt) &&
+          nextDispatchAt > 0 &&
+          nextDispatchAt <= referenceTs
+        );
       });
   }
 
-  markTemplateDispatch(id: string, nextDispatchAt: number | null, lastSessionId: string): OutreachTemplateRecord | null {
+  markTemplateDispatch(
+    id: string,
+    nextDispatchAt: number | null,
+    lastSessionId: string,
+  ): OutreachTemplateRecord | null {
     const template = this.getTemplateById(id);
     if (!template) return null;
     const scheduleSpec = { ...template.scheduleSpec };
-    if (nextDispatchAt && Number.isFinite(nextDispatchAt) && nextDispatchAt > 0) {
+    const currentDispatchCount = Number(scheduleSpec.dispatchCount ?? 0);
+    const dispatchCount = Number.isFinite(currentDispatchCount)
+      ? Math.max(0, Math.floor(currentDispatchCount)) + 1
+      : 1;
+    const repeatCount = Number(scheduleSpec.repeatCount);
+    const reachedRepeatCount =
+      Number.isFinite(repeatCount) &&
+      repeatCount > 0 &&
+      dispatchCount >= repeatCount;
+
+    scheduleSpec.dispatchCount = dispatchCount;
+    if (
+      !reachedRepeatCount &&
+      nextDispatchAt &&
+      Number.isFinite(nextDispatchAt) &&
+      nextDispatchAt > 0
+    ) {
       scheduleSpec.nextDispatchAt = Math.floor(nextDispatchAt);
     } else {
       delete scheduleSpec.nextDispatchAt;

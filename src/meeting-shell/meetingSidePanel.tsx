@@ -2,8 +2,24 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { formatMainLlmProfileForMeetingPilot } from '../llm';
+import {
+  extractRingCentralVideoJoinUrl,
+  parseRingCentralVideoJoinTarget,
+} from '../ringcentralNativeJoin';
+import type {
+  CalendarEventSyncItem,
+  ComposerAssistEvidence,
+  ContextAssistCueCard,
+} from '../services/MemoryServiceClient';
 import { defaultEnvConfig, EnvConfigType, getEnvConfig } from '../utils';
-import CaptureLogTab from './CaptureLogTab';
+import {
+  sanitizeContextExternalUrl,
+  sanitizeExploreRoute,
+} from '../web-intelligence/contextRecallGuards';
+import {
+  getActionReviewWarningLabel,
+  getActionReviewWarnings,
+} from './actionItemReview';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
   MeetingPilotActionItem,
@@ -21,6 +37,9 @@ import SpeechTab from './SpeechTab';
 import { TierBadge } from './components/TierBadge';
 
 declare const __DEV__: boolean;
+
+const LazyCaptureLogTab = React.lazy(() => import('./CaptureLogTab'));
+const CAPTURE_LOG_TAB_LABEL = ['Capture', 'Log'].join(' ');
 
 function shouldUseMeetingPilotDemo() {
   return new URLSearchParams(window.location.search).get('demo') === '1';
@@ -51,6 +70,7 @@ type TabId =
 type PanelSurfaceMode = 'embedded' | 'side-panel' | 'window';
 type ActionReviewFilter =
   | 'open'
+  | 'needs-info'
   | 'review'
   | 'confirmed'
   | 'done'
@@ -73,11 +93,46 @@ type ActionEditDraft = {
   deadline: string;
 };
 
+type ManualActionDraft = ActionEditDraft & {
+  evidence: string;
+};
+
+type ActionReviewUpdate = {
+  status?: 'pending' | 'done';
+  reviewState?: 'suggested' | 'confirmed' | 'dismissed';
+  title?: string;
+  owner?: string;
+  deadline?: string;
+};
+
+type BulkActionReviewFeedback = {
+  status: 'updating' | 'confirmed' | 'failed';
+  total: number;
+  completed: number;
+};
+
 const PANEL_UI_STORAGE_PREFIX = 'meetingPilot.panelUi.';
 const DEFAULT_TAB: TabId = 'live';
 const TOP_SCROLL_THRESHOLD = 12;
 const BULK_ACTION_COPY_ID = '__bulk_action_copy__';
+const FOLLOW_UP_ACTION_COPY_ID = '__follow_up_action_copy__';
+const MEETING_PREP_HANDOFF_STORAGE_KEY = 'meetingPrepHandoff';
 const TIMELINE_FOCUS_DURATION_MS = 2200;
+const UNASSIGNED_ACTION_OWNER = '待分配';
+
+type MeetingPrepHandoff = {
+  createdAt: number;
+  expiresAt: number;
+  event: CalendarEventSyncItem;
+  goal: string;
+  text: string;
+  cueCards: ContextAssistCueCard[];
+  evidence: ComposerAssistEvidence[];
+  source?: 'today_pilot' | 'context_assist';
+  prepId?: string;
+  missionId?: string;
+  generatedMode?: string;
+};
 
 function getRequestedSurfaceMode(): PanelSurfaceMode {
   const params = new URLSearchParams(window.location.search);
@@ -221,6 +276,13 @@ function isActionVisibleInFilter(
   if (filter === 'open') {
     return reviewState !== 'dismissed' && item.status !== 'done';
   }
+  if (filter === 'needs-info') {
+    return (
+      reviewState !== 'dismissed' &&
+      item.status !== 'done' &&
+      getActionReviewWarnings(item).length > 0
+    );
+  }
   if (filter === 'review') return reviewState === 'suggested';
   if (filter === 'confirmed') {
     return reviewState === 'confirmed' && item.status !== 'done';
@@ -238,6 +300,9 @@ function getActionFilterEmptyCopy(filter: ActionReviewFilter): string {
   if (filter === 'review') {
     return '当前没有待复核行动项。新的 transcript 触发明确 owner / deadline 后会进入这里。';
   }
+  if (filter === 'needs-info') {
+    return '当前没有缺少负责人、截止或依据的行动项。可以继续复核或复制已确认跟进。';
+  }
   if (filter === 'confirmed') {
     return '当前没有已确认行动项。复核通过后，项目会保留在这个筛选中。';
   }
@@ -252,6 +317,7 @@ function getActionFilterEmptyCopy(filter: ActionReviewFilter): string {
 
 function getActionFilterLabel(filter: ActionReviewFilter): string {
   if (filter === 'open') return '处理中';
+  if (filter === 'needs-info') return '需补信息';
   if (filter === 'review') return '待复核';
   if (filter === 'confirmed') return '已确认';
   if (filter === 'done') return '已完成';
@@ -267,8 +333,32 @@ function buildActionEditDraft(item: MeetingPilotActionItem): ActionEditDraft {
   };
 }
 
+function formatActionOwner(owner?: string): string {
+  const normalized = String(owner || '').trim();
+  if (!normalized || /^unknown$/i.test(normalized)) {
+    return UNASSIGNED_ACTION_OWNER;
+  }
+  return normalized;
+}
+
+function isActionOwnerUnassigned(owner?: string): boolean {
+  return formatActionOwner(owner) === UNASSIGNED_ACTION_OWNER;
+}
+
+function formatActionReviewWarningLine(
+  item: MeetingPilotActionItem,
+): string | undefined {
+  const warnings = getActionReviewWarnings(item).map(
+    getActionReviewWarningLabel,
+  );
+  return warnings.length ? warnings.join(' / ') : undefined;
+}
+
 function formatActionItemForClipboard(item: MeetingPilotActionItem): string {
-  const lines = [`行动项：${item.title}`, `负责人：${item.owner || 'Unknown'}`];
+  const lines = [
+    `行动项：${item.title}`,
+    `负责人：${formatActionOwner(item.owner)}`,
+  ];
   if (item.deadline) {
     lines.push(`截止：${item.deadline}`);
   }
@@ -276,6 +366,10 @@ function formatActionItemForClipboard(item: MeetingPilotActionItem): string {
     lines.push(`识别时间：${item.timestamp}`);
   }
   lines.push(`状态：${getActionStatusLabel(item)}`);
+  const warningLine = formatActionReviewWarningLine(item);
+  if (warningLine) {
+    lines.push(`复核提示：${warningLine}`);
+  }
   if (item.evidence) {
     lines.push(`依据：${item.evidence}`);
   }
@@ -292,15 +386,42 @@ function formatActionItemsForClipboard(
   return [
     header,
     '',
-    ...items.flatMap((item, index) => [
-      `${index + 1}. ${item.title}`,
-      `负责人：${item.owner || 'Unknown'}`,
-      ...(item.deadline ? [`截止：${item.deadline}`] : []),
-      ...(item.timestamp ? [`识别时间：${item.timestamp}`] : []),
-      `状态：${getActionStatusLabel(item)}`,
-      ...(item.evidence ? [`依据：${item.evidence}`] : []),
-      '',
-    ]),
+    ...items.flatMap((item, index) => {
+      const warningLine = formatActionReviewWarningLine(item);
+      return [
+        `${index + 1}. ${item.title}`,
+        `负责人：${formatActionOwner(item.owner)}`,
+        ...(item.deadline ? [`截止：${item.deadline}`] : []),
+        ...(item.timestamp ? [`识别时间：${item.timestamp}`] : []),
+        `状态：${getActionStatusLabel(item)}`,
+        ...(warningLine ? [`复核提示：${warningLine}`] : []),
+        ...(item.evidence ? [`依据：${item.evidence}`] : []),
+        '',
+      ];
+    }),
+  ]
+    .join('\n')
+    .trim();
+}
+
+function formatFollowUpActionItemsForClipboard(
+  items: MeetingPilotActionItem[],
+): string {
+  return [
+    `Meeting Pilot 跟进清单（已确认，${items.length} 项）`,
+    '',
+    ...items.flatMap((item) => {
+      const warningLine = formatActionReviewWarningLine(item);
+      return [
+        `- [ ] ${item.title}`,
+        `  负责人：${formatActionOwner(item.owner)}`,
+        ...(item.deadline ? [`  截止：${item.deadline}`] : []),
+        ...(item.timestamp ? [`  识别时间：${item.timestamp}`] : []),
+        ...(warningLine ? [`  复核提示：${warningLine}`] : []),
+        ...(item.evidence ? [`  依据：${item.evidence}`] : []),
+        '',
+      ];
+    }),
   ]
     .join('\n')
     .trim();
@@ -355,8 +476,17 @@ function findTimelineEventForAction(
   session: MeetingPilotSessionSnapshot,
   item: MeetingPilotActionItem,
 ): MeetingPilotTimelineEvent | undefined {
+  const eventByActionId = session.timelineEvents.find(
+    (event) => event.actionItemId === item.id,
+  );
+  if (eventByActionId) {
+    return eventByActionId;
+  }
+
   const sameChapterEvents = item.chapterId
-    ? session.timelineEvents.filter((event) => event.chapterId === item.chapterId)
+    ? session.timelineEvents.filter(
+        (event) => event.chapterId === item.chapterId,
+      )
     : [];
   const candidates = sameChapterEvents.length
     ? sameChapterEvents
@@ -364,7 +494,8 @@ function findTimelineEventForAction(
 
   return (
     candidates.find(
-      (event) => event.type === 'action' && timelineEventMatchesAction(event, item),
+      (event) =>
+        event.type === 'action' && timelineEventMatchesAction(event, item),
     ) ||
     candidates.find((event) => event.type === 'action') ||
     candidates.find((event) => timelineEventMatchesAction(event, item)) ||
@@ -386,6 +517,217 @@ async function persistPanelUiState(
   await chrome.storage.local.set({
     [storageKey]: uiState,
   });
+}
+
+async function loadMeetingPrepHandoffForSession(
+  session: MeetingPilotSessionSnapshot,
+): Promise<MeetingPrepHandoff | null> {
+  const payload = await chrome.storage.local.get([
+    MEETING_PREP_HANDOFF_STORAGE_KEY,
+  ]);
+  const handoff = normalizeMeetingPrepHandoff(
+    payload?.[MEETING_PREP_HANDOFF_STORAGE_KEY],
+  );
+  if (!handoff || !isMeetingPrepHandoffRelevant(handoff, session)) {
+    return null;
+  }
+  return handoff;
+}
+
+function normalizeMeetingPrepHandoff(
+  value: unknown,
+): MeetingPrepHandoff | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const raw = value as Partial<MeetingPrepHandoff>;
+  if (!raw.event || typeof raw.event !== 'object') {
+    return null;
+  }
+  const createdAt = Number(raw.createdAt);
+  const expiresAt = Number(raw.expiresAt);
+  const text = String(raw.text || '').trim();
+  const event = raw.event as CalendarEventSyncItem;
+  if (
+    !Number.isFinite(createdAt) ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= Date.now() ||
+    !String(event.title || '').trim() ||
+    !text
+  ) {
+    return null;
+  }
+  return {
+    createdAt,
+    expiresAt,
+    event,
+    goal: String(raw.goal || '').trim(),
+    text,
+    cueCards: Array.isArray(raw.cueCards)
+      ? raw.cueCards.filter(isMeetingPrepCueCard).slice(0, 8)
+      : [],
+    evidence: Array.isArray(raw.evidence)
+      ? raw.evidence.filter(isMeetingPrepEvidence).slice(0, 8)
+      : [],
+    source:
+      raw.source === 'today_pilot' || raw.source === 'context_assist'
+        ? raw.source
+        : undefined,
+    prepId: typeof raw.prepId === 'string' ? raw.prepId : undefined,
+    missionId: typeof raw.missionId === 'string' ? raw.missionId : undefined,
+    generatedMode:
+      typeof raw.generatedMode === 'string' ? raw.generatedMode : undefined,
+  };
+}
+
+function isMeetingPrepCueCard(value: unknown): value is ContextAssistCueCard {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const card = value as Partial<ContextAssistCueCard>;
+  return Boolean(
+    card.id &&
+      card.title &&
+      card.body &&
+      (card.kind === 'brief' ||
+        card.kind === 'memory' ||
+        card.kind === 'question' ||
+        card.kind === 'action'),
+  );
+}
+
+function isMeetingPrepEvidence(
+  value: unknown,
+): value is ComposerAssistEvidence {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const item = value as Partial<ComposerAssistEvidence>;
+  return Boolean(item.id && (item.snippet || item.title || item.sourceTitle));
+}
+
+function isMeetingPrepHandoffRelevant(
+  handoff: MeetingPrepHandoff,
+  session: MeetingPilotSessionSnapshot,
+): boolean {
+  const sessionMeetingId = getRingCentralMeetingId(session.url);
+  const eventMeetingIds = [
+    handoff.event.joinUrl,
+    handoff.event.sourceUrl,
+    handoff.event.location,
+    handoff.text,
+  ]
+    .map(getRingCentralMeetingId)
+    .filter(Boolean);
+  if (
+    sessionMeetingId &&
+    eventMeetingIds.some((meetingId) => meetingId === sessionMeetingId)
+  ) {
+    return true;
+  }
+
+  const sessionTitle = normalizeMeetingPrepTitle(session.title);
+  const eventTitle = normalizeMeetingPrepTitle(handoff.event.title);
+  if (!sessionTitle || !eventTitle) {
+    return false;
+  }
+  return (
+    sessionTitle === eventTitle ||
+    (sessionTitle.length >= 8 && eventTitle.includes(sessionTitle)) ||
+    (eventTitle.length >= 8 && sessionTitle.includes(eventTitle)) ||
+    countMeetingPrepTitleTokenOverlap(sessionTitle, eventTitle) >= 2
+  );
+}
+
+function getRingCentralMeetingId(value?: string): string | null {
+  const joinUrl = extractRingCentralVideoJoinUrl(value) || value;
+  const target = joinUrl ? parseRingCentralVideoJoinTarget(joinUrl) : null;
+  return target?.meetingId || null;
+}
+
+function normalizeMeetingPrepTitle(value?: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\b(ringcentral|video|meeting)\b/g, ' ')
+    .replace(/[^\p{L}\p{N}\s_-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function countMeetingPrepTitleTokenOverlap(
+  left: string,
+  right: string,
+): number {
+  const leftTokens = new Set(
+    left
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3),
+  );
+  const rightTokens = new Set(
+    right
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3),
+  );
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
+function getMeetingPrepDisplayCueCards(
+  handoff: MeetingPrepHandoff,
+): ContextAssistCueCard[] {
+  const primary = handoff.cueCards.filter((card) => card.kind !== 'memory');
+  const memoryCards = handoff.cueCards.filter((card) => card.kind === 'memory');
+  return [...primary, ...memoryCards].slice(0, 4);
+}
+
+function getMeetingPrepCardKindLabel(
+  kind: ContextAssistCueCard['kind'],
+): string {
+  if (kind === 'brief') return 'Brief';
+  if (kind === 'question') return '问题';
+  if (kind === 'action') return '目标';
+  return '记忆';
+}
+
+function getMeetingPrepEvidenceLinks(
+  item: ComposerAssistEvidence,
+): Array<{ label: string; url: string }> {
+  const links: Array<{ label: string; url: string }> = [];
+  const seen = new Set<string>();
+  const addLink = (label: string, url: string | null): void => {
+    if (!url || seen.has(url)) {
+      return;
+    }
+    seen.add(url);
+    links.push({ label, url });
+  };
+
+  const exploreRoute = sanitizeExploreRoute(item.exploreLink);
+  if (exploreRoute) {
+    addLink(
+      '在记忆中查看',
+      chrome.runtime.getURL(`memory-exploring.html${exploreRoute}`),
+    );
+  }
+
+  for (const link of item.links ?? []) {
+    addLink(
+      link.label || '打开来源',
+      sanitizeContextExternalUrl(link.url, window.location.href),
+    );
+  }
+  addLink(
+    '打开来源',
+    sanitizeContextExternalUrl(item.sourceUrl, window.location.href),
+  );
+  return links.slice(0, 2);
 }
 
 const shellStyle = `
@@ -440,6 +782,21 @@ const shellStyle = `
 
   .meeting-shell.fill-width {
     width: 100%;
+  }
+
+  .meeting-shell.surface-window {
+    width: min(420px, 100%);
+    margin-left: auto;
+    margin-right: auto;
+    border-right: 1px solid var(--border);
+  }
+
+  @media (max-width: 520px) {
+    .meeting-shell.surface-window {
+      width: 100%;
+      border-left: 0;
+      border-right: 0;
+    }
   }
 
   @keyframes panel-enter {
@@ -574,6 +931,128 @@ const shellStyle = `
     font-weight: 500;
   }
 
+  .meeting-prep-handoff-card {
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin: 0 0 12px;
+    background: rgba(46, 204, 113, 0.08);
+    border: 1px solid rgba(46, 204, 113, 0.22);
+    border-left: 3px solid #2ecc71;
+  }
+
+  .meeting-prep-handoff-card .label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  .meeting-prep-handoff-card .value {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .meeting-prep-handoff-card .subtext {
+    margin-top: 5px;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-prep-cues {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin-top: 10px;
+  }
+
+  .meeting-prep-cue {
+    border-radius: 8px;
+    padding: 8px 9px;
+    background: rgba(15,23,42,0.42);
+    border: 1px solid rgba(148,163,184,0.14);
+  }
+
+  .meeting-prep-cue-head {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .meeting-prep-cue-head span {
+    flex: 0 0 auto;
+    color: #7ee2a8;
+    font-weight: 700;
+  }
+
+  .meeting-prep-cue-head strong {
+    min-width: 0;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-prep-cue-body {
+    margin-top: 4px;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-prep-evidence {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(148,163,184,0.14);
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  .meeting-prep-evidence summary {
+    cursor: pointer;
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .meeting-prep-source {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(148,163,184,0.10);
+  }
+
+  .meeting-prep-source strong,
+  .meeting-prep-source span {
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-prep-source strong {
+    color: var(--text);
+    font-size: 11.5px;
+  }
+
+  .meeting-prep-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .meeting-prep-links a {
+    color: #7ee2a8;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .meeting-prep-links a:hover {
+    text-decoration: underline;
+  }
+
   .current-topic-card {
     padding: 12px 14px;
     background: var(--surface-2);
@@ -593,6 +1072,69 @@ const shellStyle = `
   }
 
   .current-topic-card .value { font-size: 14px; font-weight: 600; }
+
+  .action-review-card {
+    padding: 12px 14px;
+    background: rgba(255,165,2,0.08);
+    border-radius: 10px;
+    margin: 0 0 12px;
+    border: 1px solid rgba(255,165,2,0.22);
+    border-left: 3px solid #ffa502;
+    box-shadow: none;
+  }
+
+  .action-review-card .label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  .action-review-card .value {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .action-review-card .subtext {
+    margin-top: 5px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+
+  .action-review-next {
+    margin-top: 8px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    background: rgba(15,23,42,0.44);
+    color: var(--text-muted);
+    font-size: 10.5px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .action-review-next strong {
+    color: var(--text);
+  }
+
+  .action-review-next .review-hints {
+    display: block;
+    margin-top: 3px;
+    color: #fbbf24;
+    font-size: 10px;
+  }
+
+  .action-review-card-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .action-review-card-actions .settings-link-btn {
+    margin-top: 0;
+  }
 
   .capture-start-card {
     padding: 14px 15px;
@@ -682,6 +1224,7 @@ const shellStyle = `
     justify-content: space-between;
     gap: 8px;
     margin-bottom: 2px;
+    flex-wrap: wrap;
   }
 
   .action-toolbar-count {
@@ -691,7 +1234,32 @@ const shellStyle = `
     line-height: 1.35;
   }
 
-  .action-copy-all {
+  .action-toolbar-warning {
+    color: #fbbf24;
+    white-space: nowrap;
+  }
+
+  .action-review-gate-note {
+    padding: 7px 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(251,191,36,0.22);
+    background: rgba(251,191,36,0.08);
+    color: #f8d678;
+    font-size: 10.5px;
+    line-height: 1.45;
+  }
+
+  .action-toolbar-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .action-add,
+  .action-copy-followup,
+  .action-copy-all,
+  .action-bulk-confirm {
     flex-shrink: 0;
     min-height: 28px;
     padding: 5px 9px;
@@ -704,26 +1272,56 @@ const shellStyle = `
     cursor: pointer;
   }
 
-  .action-copy-all:hover:not(:disabled) {
+  .action-add {
+    border-color: rgba(162,155,254,0.30);
+    background: rgba(108,92,231,0.12);
+    color: var(--accent-light);
+  }
+
+  .action-bulk-confirm {
+    border-color: rgba(105,219,124,0.28);
+    background: rgba(105,219,124,0.1);
+    color: var(--p2-color);
+  }
+
+  .action-add:hover:not(:disabled),
+  .action-copy-followup:hover:not(:disabled),
+  .action-copy-all:hover:not(:disabled),
+  .action-bulk-confirm:hover:not(:disabled) {
     border-color: rgba(116,185,255,0.48);
     color: var(--text);
   }
 
-  .action-copy-all:disabled {
+  .action-add:disabled,
+  .action-copy-followup:disabled,
+  .action-copy-all:disabled,
+  .action-bulk-confirm:disabled {
     cursor: not-allowed;
     opacity: 0.5;
   }
 
-  .action-copy-all.success {
+  .action-copy-followup.success,
+  .action-copy-all.success,
+  .action-bulk-confirm.success,
+  .action-bulk-confirm.confirmed {
     background: rgba(105,219,124,0.12);
     border-color: rgba(105,219,124,0.34);
     color: var(--p2-color);
   }
 
-  .action-copy-all.danger {
+  .action-copy-followup.danger,
+  .action-copy-all.danger,
+  .action-bulk-confirm.danger,
+  .action-bulk-confirm.failed {
     background: rgba(255,107,107,0.1);
     border-color: rgba(255,107,107,0.28);
     color: var(--p0-color);
+  }
+
+  .action-bulk-confirm.updating {
+    background: rgba(162,155,254,0.12);
+    border-color: rgba(162,155,254,0.32);
+    color: var(--accent-light);
   }
 
   .action-review-summary {
@@ -781,6 +1379,11 @@ const shellStyle = `
   .action-card.editing {
     border-color: rgba(116,185,255,0.54);
     background: rgba(116,185,255,0.08);
+  }
+
+  .manual-action-card {
+    border-color: rgba(162,155,254,0.45);
+    background: rgba(108,92,231,0.09);
   }
 
   .alert-card:hover, .action-card:hover {
@@ -920,6 +1523,7 @@ const shellStyle = `
 
   .action-card .ac-title { font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
   .action-card .ac-meta { font-size: 10.5px; color: var(--text-muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .action-card .ac-unassigned { color: #fbbf24; }
   .action-card .ac-edited {
     color: #bfdbfe;
     border: 1px solid rgba(116,185,255,0.25);
@@ -945,7 +1549,8 @@ const shellStyle = `
     font-size: 10px;
     font-weight: 700;
   }
-  .action-card .ac-field input {
+  .action-card .ac-field input,
+  .action-card .ac-field textarea {
     min-width: 0;
     min-height: 30px;
     border-radius: 7px;
@@ -956,8 +1561,15 @@ const shellStyle = `
     font-size: 11px;
     line-height: 1.35;
     outline: none;
+    box-sizing: border-box;
+    font-family: inherit;
+    resize: vertical;
   }
-  .action-card .ac-field input:focus {
+  .action-card .ac-field textarea {
+    min-height: 56px;
+  }
+  .action-card .ac-field input:focus,
+  .action-card .ac-field textarea:focus {
     border-color: rgba(116,185,255,0.58);
     box-shadow: 0 0 0 2px rgba(116,185,255,0.1);
   }
@@ -1011,6 +1623,21 @@ const shellStyle = `
     color: var(--text-dim);
     font-size: 10.5px;
     line-height: 1.45;
+  }
+  .action-card .ac-review-warnings {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 6px;
+  }
+  .action-card .ac-review-warning {
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(251,191,36,0.28);
+    background: rgba(251,191,36,0.10);
+    color: #fbbf24;
+    font-size: 10px;
+    font-weight: 700;
   }
   .ac-status { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
   .ac-status.pending { background: rgba(255,165,2,0.15); color: #ffa502; }
@@ -1598,6 +2225,8 @@ function MeetingSidePanel() {
     id: string;
     status: 'copied' | 'failed';
   } | null>(null);
+  const [bulkActionReviewFeedback, setBulkActionReviewFeedback] =
+    useState<BulkActionReviewFeedback | null>(null);
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
   const [actionEditDraft, setActionEditDraft] = useState<ActionEditDraft>({
     title: '',
@@ -1605,9 +2234,23 @@ function MeetingSidePanel() {
     deadline: '',
   });
   const [actionEditError, setActionEditError] = useState<string | null>(null);
+  const [addingActionItem, setAddingActionItem] = useState(false);
+  const [manualActionDraft, setManualActionDraft] = useState<ManualActionDraft>(
+    {
+      title: '',
+      owner: '',
+      deadline: '',
+      evidence: '',
+    },
+  );
+  const [manualActionError, setManualActionError] = useState<string | null>(
+    null,
+  );
   const [captureGuideFeedback, setCaptureGuideFeedback] = useState<
     'shown' | 'failed' | null
   >(null);
+  const [meetingPrepHandoff, setMeetingPrepHandoff] =
+    useState<MeetingPrepHandoff | null>(null);
   const [panelUiReady, setPanelUiReady] = useState(false);
   const [settings, setSettings] = useState({
     autoDetect: true,
@@ -1638,6 +2281,7 @@ function MeetingSidePanel() {
   const persistTimerRef = useRef<number | null>(null);
   const restoreTimerRefs = useRef<number[]>([]);
   const actionCopyResetTimerRef = useRef<number | null>(null);
+  const bulkActionReviewResetTimerRef = useRef<number | null>(null);
   const timelineFocusResetTimerRef = useRef<number | null>(null);
   const captureGuideFeedbackTimerRef = useRef<number | null>(null);
   const panelUiReadyRef = useRef(false);
@@ -1645,7 +2289,7 @@ function MeetingSidePanel() {
   const [focusedTimelineEventId, setFocusedTimelineEventId] = useState<
     string | null
   >(null);
-  /** 开发联调：始终可开 Capture Log；?debug=1 仍保留给其它更啰嗦的调试用。 */
+  /** 开发联调：始终可开捕获日志；?debug=1 仍保留给其它更啰嗦的调试用。 */
   const showDebugTab =
     __DEV__ && new URLSearchParams(window.location.search).get('debug') !== '0';
   const useDemoSession = shouldUseMeetingPilotDemo();
@@ -1776,6 +2420,9 @@ function MeetingSidePanel() {
   const openActions = session.actionItems.filter((item) =>
     isActionVisibleInFilter(item, 'open'),
   );
+  const needsInfoActions = session.actionItems.filter((item) =>
+    isActionVisibleInFilter(item, 'needs-info'),
+  );
   const reviewQueueActions = session.actionItems.filter(
     (item) => getActionReviewState(item) === 'suggested',
   );
@@ -1792,12 +2439,54 @@ function MeetingSidePanel() {
   const visibleActionItems = session.actionItems.filter((item) =>
     isActionVisibleInFilter(item, actionFilter),
   );
+  const visibleActionReviewWarningCount = visibleActionItems.filter(
+    (item) => getActionReviewWarnings(item).length > 0,
+  ).length;
+  const visibleReviewActions = visibleActionItems.filter(
+    (item) => getActionReviewState(item) === 'suggested',
+  );
+  const visibleConfirmableReviewActions = visibleReviewActions.filter(
+    (item) => getActionReviewWarnings(item).length === 0,
+  );
+  const visibleBlockedReviewActions = visibleReviewActions.filter(
+    (item) => getActionReviewWarnings(item).length > 0,
+  );
+  const nextReviewAction =
+    needsInfoActions.find(
+      (item) => getActionReviewState(item) === 'suggested',
+    ) ||
+    reviewQueueActions[0] ||
+    needsInfoActions[0];
+  const nextReviewActionWarnings = nextReviewAction
+    ? getActionReviewWarnings(nextReviewAction)
+    : [];
+  const showActionReviewCard =
+    activeTab === 'live' &&
+    (needsInfoActions.length > 0 ||
+      reviewQueueActions.length > 0 ||
+      openActions.length > 0);
+  const bulkConfirmButtonLabel = (() => {
+    if (bulkActionReviewFeedback?.status === 'updating') {
+      return `确认中 ${bulkActionReviewFeedback.completed}/${bulkActionReviewFeedback.total}`;
+    }
+    if (bulkActionReviewFeedback?.status === 'confirmed') {
+      return `已确认 ${bulkActionReviewFeedback.completed} 项`;
+    }
+    if (bulkActionReviewFeedback?.status === 'failed') {
+      return `确认失败 ${bulkActionReviewFeedback.completed}/${bulkActionReviewFeedback.total}`;
+    }
+    if (visibleConfirmableReviewActions.length) {
+      return `确认可用项（${visibleConfirmableReviewActions.length}）`;
+    }
+    return visibleBlockedReviewActions.length ? '先补信息' : '无待复核';
+  })();
   const actionFilterOptions: Array<{
     key: ActionReviewFilter;
     label: string;
     count: number;
   }> = [
     { key: 'open', label: '处理中', count: openActions.length },
+    { key: 'needs-info', label: '需补信息', count: needsInfoActions.length },
     { key: 'review', label: '待复核', count: reviewQueueActions.length },
     { key: 'confirmed', label: '已确认', count: confirmedActions.length },
     { key: 'done', label: '已完成', count: doneActions.length },
@@ -1808,7 +2497,7 @@ function MeetingSidePanel() {
     if (activeTab === 'live') {
       return `live:${session.updatedAt}:${liveFeedItems.length}:${
         liveFeedItems[0]?.id || ''
-      }:${session.currentTopic}`;
+      }:${session.currentTopic}:${meetingPrepHandoff?.createdAt || ''}`;
     }
     if (activeTab === 'speech') {
       return `speech:${session.updatedAt}:${session.transcriptTurns.length}:${
@@ -1823,7 +2512,9 @@ function MeetingSidePanel() {
     if (activeTab === 'actions') {
       return `actions:${session.updatedAt}:${session.actionItems.length}:${
         session.actionItems[0]?.id || ''
-      }:${actionFilter}:${visibleActionItems.length}`;
+      }:${actionFilter}:${visibleActionItems.length}:${
+        addingActionItem ? 'adding' : 'idle'
+      }:${editingActionId || ''}`;
     }
     if (activeTab === 'settings') {
       return `settings:${settings.autoDetect}:${settings.danmakuSpeed}:${settings.entryMode}`;
@@ -1835,8 +2526,11 @@ function MeetingSidePanel() {
     activeTab,
     captureLogEntries,
     liveFeedItems,
+    meetingPrepHandoff?.createdAt,
     session.actionItems,
     actionFilter,
+    addingActionItem,
+    editingActionId,
     visibleActionItems.length,
     session.currentTopic,
     session.timelineEvents,
@@ -1853,15 +2547,9 @@ function MeetingSidePanel() {
         : [...current, eventId],
     );
   };
-  const updateActionItemReview = async (
+  const sendActionItemReviewUpdate = async (
     item: MeetingPilotActionItem,
-    updates: {
-      status?: 'pending' | 'done';
-      reviewState?: 'suggested' | 'confirmed' | 'dismissed';
-      title?: string;
-      owner?: string;
-      deadline?: string;
-    },
+    updates: ActionReviewUpdate,
   ): Promise<boolean> => {
     try {
       const response = await chrome.runtime.sendMessage({
@@ -1874,7 +2562,6 @@ function MeetingSidePanel() {
       if (!response?.success) {
         throw new Error(response?.message || '更新行动项失败');
       }
-      await refresh();
       return true;
     } catch (error) {
       console.warn('[Meeting Pilot][sidepanel] update action item failed', {
@@ -1883,6 +2570,56 @@ function MeetingSidePanel() {
       });
       return false;
     }
+  };
+  const updateActionItemReview = async (
+    item: MeetingPilotActionItem,
+    updates: ActionReviewUpdate,
+  ): Promise<boolean> => {
+    const success = await sendActionItemReviewUpdate(item, updates);
+    if (success) {
+      await refresh();
+    }
+    return success;
+  };
+  const confirmVisibleReviewActions = async () => {
+    if (!visibleConfirmableReviewActions.length) {
+      return;
+    }
+    if (bulkActionReviewFeedback?.status === 'updating') {
+      return;
+    }
+    if (bulkActionReviewResetTimerRef.current) {
+      window.clearTimeout(bulkActionReviewResetTimerRef.current);
+    }
+
+    const total = visibleConfirmableReviewActions.length;
+    let completed = 0;
+    setBulkActionReviewFeedback({ status: 'updating', total, completed });
+
+    for (const item of visibleConfirmableReviewActions) {
+      const success = await sendActionItemReviewUpdate(item, {
+        reviewState: 'confirmed',
+      });
+      if (success) {
+        completed += 1;
+      }
+      setBulkActionReviewFeedback({
+        status: 'updating',
+        total,
+        completed,
+      });
+    }
+
+    await refresh();
+    setBulkActionReviewFeedback({
+      status: completed === total ? 'confirmed' : 'failed',
+      total,
+      completed,
+    });
+    bulkActionReviewResetTimerRef.current = window.setTimeout(() => {
+      setBulkActionReviewFeedback(null);
+      bulkActionReviewResetTimerRef.current = null;
+    }, 2200);
   };
   const startActionItemEdit = (item: MeetingPilotActionItem) => {
     setEditingActionId(item.id);
@@ -1897,8 +2634,8 @@ function MeetingSidePanel() {
     const title = actionEditDraft.title.trim();
     const owner = actionEditDraft.owner.trim();
     const deadline = actionEditDraft.deadline.trim();
-    if (!title || !owner) {
-      setActionEditError('标题和负责人不能为空。');
+    if (!title) {
+      setActionEditError('标题不能为空；负责人可留空，系统会标记为待分配。');
       return;
     }
     setActionEditError(null);
@@ -1912,6 +2649,63 @@ function MeetingSidePanel() {
       setEditingActionId(null);
     } else {
       setActionEditError('保存失败，请稍后重试。');
+    }
+  };
+  const startManualActionItemAdd = () => {
+    setAddingActionItem(true);
+    setManualActionDraft({
+      title: '',
+      owner: session.selfName || '',
+      deadline: '',
+      evidence: '',
+    });
+    setManualActionError(null);
+    setActionFilter('open');
+  };
+  const cancelManualActionItemAdd = () => {
+    setAddingActionItem(false);
+    setManualActionError(null);
+  };
+  const saveManualActionItem = async () => {
+    const title = manualActionDraft.title.trim();
+    const owner = manualActionDraft.owner.trim();
+    const deadline = manualActionDraft.deadline.trim();
+    const evidence = manualActionDraft.evidence.trim();
+    if (!title) {
+      setManualActionError('标题不能为空；负责人可留空，系统会标记为待分配。');
+      return;
+    }
+    setManualActionError(null);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_ADD_ACTION_ITEM',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        title,
+        owner,
+        deadline,
+        evidence,
+        chapterId: currentChapter?.id,
+      });
+      if (!response?.success) {
+        throw new Error(response?.message || '添加行动项失败');
+      }
+      setAddingActionItem(false);
+      setManualActionDraft({
+        title: '',
+        owner: '',
+        deadline: '',
+        evidence: '',
+      });
+      setActionFilter('open');
+      await refresh();
+    } catch (error) {
+      console.warn('[Meeting Pilot][sidepanel] add action item failed', {
+        error: String((error as Error)?.message || error),
+      });
+      setManualActionError(
+        (error as Error)?.message || '添加失败，请稍后重试。',
+      );
     }
   };
   const copyActionItem = async (item: MeetingPilotActionItem) => {
@@ -1972,6 +2766,43 @@ function MeetingSidePanel() {
       actionCopyResetTimerRef.current = null;
     }, 1800);
   };
+  const copyFollowUpActionItems = async () => {
+    if (!confirmedActions.length) {
+      return;
+    }
+    if (actionCopyResetTimerRef.current) {
+      window.clearTimeout(actionCopyResetTimerRef.current);
+    }
+
+    try {
+      await writeTextToClipboard(
+        formatFollowUpActionItemsForClipboard(confirmedActions),
+      );
+      setActionCopyFeedback({
+        id: FOLLOW_UP_ACTION_COPY_ID,
+        status: 'copied',
+      });
+    } catch (error) {
+      console.warn(
+        '[Meeting Pilot][sidepanel] copy follow-up action items failed',
+        {
+          count: confirmedActions.length,
+          error: String((error as Error)?.message || error),
+        },
+      );
+      setActionCopyFeedback({
+        id: FOLLOW_UP_ACTION_COPY_ID,
+        status: 'failed',
+      });
+    }
+
+    actionCopyResetTimerRef.current = window.setTimeout(() => {
+      setActionCopyFeedback((current) =>
+        current?.id === FOLLOW_UP_ACTION_COPY_ID ? null : current,
+      );
+      actionCopyResetTimerRef.current = null;
+    }, 1800);
+  };
   const focusTimelineForAction = (item: MeetingPilotActionItem) => {
     const targetEvent = findTimelineEventForAction(session, item);
     if (!targetEvent) {
@@ -1985,6 +2816,19 @@ function MeetingSidePanel() {
     activeTabRef.current = 'timeline';
     pendingRestoreTabRef.current = null;
     setActiveTab('timeline');
+    schedulePersistPanelUiState();
+  };
+  const openActionReviewQueue = () => {
+    persistCurrentTabScroll();
+    const nextFilter: ActionReviewFilter = needsInfoActions.length
+      ? 'needs-info'
+      : reviewQueueActions.length
+      ? 'review'
+      : 'open';
+    setActionFilter(nextFilter);
+    activeTabRef.current = 'actions';
+    pendingRestoreTabRef.current = null;
+    setActiveTab('actions');
     schedulePersistPanelUiState();
   };
 
@@ -2011,10 +2855,46 @@ function MeetingSidePanel() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const syncMeetingPrepHandoff = async () => {
+      const handoff = await loadMeetingPrepHandoffForSession(session).catch(
+        (error) => {
+          console.warn('[Meeting Pilot][sidepanel] load meeting prep failed', {
+            error: String((error as Error)?.message || error),
+          });
+          return null;
+        },
+      );
+      if (!cancelled) {
+        setMeetingPrepHandoff(handoff);
+      }
+    };
+
+    void syncMeetingPrepHandoff();
+    const handleStorageChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (areaName === 'local' && changes[MEETING_PREP_HANDOFF_STORAGE_KEY]) {
+        void syncMeetingPrepHandoff();
+      }
+    };
+    chrome.storage.onChanged.addListener(handleStorageChanged);
+
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(handleStorageChanged);
+    };
+  }, [session.meetingId, session.tabId, session.title, session.url]);
+
   useEffect(
     () => () => {
       if (actionCopyResetTimerRef.current) {
         window.clearTimeout(actionCopyResetTimerRef.current);
+      }
+      if (bulkActionReviewResetTimerRef.current) {
+        window.clearTimeout(bulkActionReviewResetTimerRef.current);
       }
       if (timelineFocusResetTimerRef.current) {
         window.clearTimeout(timelineFocusResetTimerRef.current);
@@ -2207,7 +3087,9 @@ function MeetingSidePanel() {
       document.querySelectorAll<HTMLElement>(
         '.mini-tl-item[data-timeline-event-id]',
       ),
-    ).find((element) => element.dataset.timelineEventId === focusedTimelineEventId);
+    ).find(
+      (element) => element.dataset.timelineEventId === focusedTimelineEventId,
+    );
     if (!target) {
       return;
     }
@@ -2391,8 +3273,7 @@ function MeetingSidePanel() {
         (chunk) => chunk.source === 'ringcentral_transcript',
       ),
   );
-  const showCaptureStartCard =
-    !isEnhancedCaptureActive && activeTab === 'live';
+  const showCaptureStartCard = !isEnhancedCaptureActive && activeTab === 'live';
   const captureStartTitle = !session.readiness.canStartCapture
     ? '先修复配置，再从 popup 开始'
     : isTranscriptPilotActive
@@ -2433,24 +3314,34 @@ function MeetingSidePanel() {
         className={`panel-tab ${activeTab === 'capture-log' ? 'active' : ''}`}
         onClick={() => handlePanelTabChange('capture-log')}
       >
-        Capture Log
+        {CAPTURE_LOG_TAB_LABEL}
       </button>
     ) : null;
   const debugTabContent =
     __DEV__ && activeTab === 'capture-log' && showDebugTab ? (
-      <>
-        <CaptureLogTab
+      <React.Suspense
+        fallback={<div className="empty-state">Loading logs...</div>}
+      >
+        <LazyCaptureLogTab
           session={session}
           captureLogEntries={captureLogEntries}
           readinessStatusLabel={readinessStatusLabel}
           currentTopicLabel={currentChapter?.title || session.currentTopic}
         />
-      </>
+      </React.Suspense>
     ) : null;
+  const meetingPrepCards = meetingPrepHandoff
+    ? getMeetingPrepDisplayCueCards(meetingPrepHandoff)
+    : [];
+  const meetingPrepEvidence = meetingPrepHandoff
+    ? meetingPrepHandoff.evidence.slice(0, 5)
+    : [];
 
   return (
     <div
-      className={`meeting-shell${fillShellWidth ? ' fill-width' : ''}`}
+      className={`meeting-shell surface-${surfaceMode}${
+        fillShellWidth ? ' fill-width' : ''
+      }`}
       data-session-title={session.title}
     >
       <style>{shellStyle}</style>
@@ -2581,10 +3472,76 @@ function MeetingSidePanel() {
                 )}
                 {captureGuideFeedback === 'failed' ? (
                   <div className="capture-start-feedback warn">
-                    没能打开会议页引导。请确认原会议标签页仍在打开，然后从浏览器右上角扩展 icon 进入 popup。
+                    没能打开会议页引导。请确认原会议标签页仍在打开，然后从浏览器右上角扩展
+                    icon 进入 popup。
                   </div>
                 ) : null}
               </div>
+            ) : null}
+
+            {meetingPrepHandoff ? (
+              <section
+                className="meeting-prep-handoff-card"
+                data-meeting-prep-handoff="true"
+              >
+                <div className="label">Today Pilot</div>
+                <div className="value">会前准备已带入</div>
+                <div className="subtext">
+                  {meetingPrepHandoff.event.title}
+                  {meetingPrepHandoff.goal
+                    ? ` · 目标：${meetingPrepHandoff.goal}`
+                    : ''}
+                </div>
+                {meetingPrepCards.length ? (
+                  <div className="meeting-prep-cues">
+                    {meetingPrepCards.map((card) => (
+                      <article
+                        className={`meeting-prep-cue ${card.kind}`}
+                        key={card.id}
+                      >
+                        <div className="meeting-prep-cue-head">
+                          <span>{getMeetingPrepCardKindLabel(card.kind)}</span>
+                          <strong>{card.title}</strong>
+                        </div>
+                        <div className="meeting-prep-cue-body">{card.body}</div>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+                {meetingPrepEvidence.length ? (
+                  <details className="meeting-prep-evidence">
+                    <summary>证据来源（{meetingPrepEvidence.length}）</summary>
+                    {meetingPrepEvidence.map((item) => {
+                      const links = getMeetingPrepEvidenceLinks(item);
+                      return (
+                        <div className="meeting-prep-source" key={item.id}>
+                          <strong>
+                            {item.sourceTitle ||
+                              item.title ||
+                              item.sourceLabel ||
+                              'Memory'}
+                          </strong>
+                          <span>{item.snippet}</span>
+                          {links.length ? (
+                            <div className="meeting-prep-links">
+                              {links.map((link) => (
+                                <a
+                                  href={link.url}
+                                  key={link.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {link.label}
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </details>
+                ) : null}
+              </section>
             ) : null}
 
             <button className="catchup-btn" onClick={openCatchup}>
@@ -2613,6 +3570,59 @@ function MeetingSidePanel() {
                 </button>
               ) : null}
             </div>
+
+            {showActionReviewCard ? (
+              <div className="action-review-card">
+                <div className="label">Action Review</div>
+                <div className="value">
+                  {needsInfoActions.length
+                    ? `${needsInfoActions.length} 个需补信息行动项`
+                    : reviewQueueActions.length
+                    ? `${reviewQueueActions.length} 个待复核行动项`
+                    : `${openActions.length} 个处理中行动项`}
+                </div>
+                <div className="subtext">
+                  {needsInfoActions.length
+                    ? '先补齐负责人、截止时间或依据，再批量确认；单条确认仍可用于你明确接受的例外项。'
+                    : reviewQueueActions.length
+                    ? '先确认负责人、截止时间和依据，再复制或标记完成，避免 AI 误判直接进入会后跟进。'
+                    : '当前没有待复核项，已确认的跟进可以继续复制给外部系统或标记完成。'}
+                </div>
+                {nextReviewAction ? (
+                  <div className="action-review-next">
+                    下一项：
+                    <strong>
+                      {formatActionOwner(nextReviewAction.owner)}
+                    </strong>{' '}
+                    — {nextReviewAction.title}
+                    {nextReviewAction.deadline
+                      ? `（${nextReviewAction.deadline}）`
+                      : ''}
+                    {nextReviewActionWarnings.length ? (
+                      <span className="review-hints">
+                        复核提示：
+                        {nextReviewActionWarnings
+                          .map(getActionReviewWarningLabel)
+                          .join(' / ')}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="action-review-card-actions">
+                  <button
+                    className="settings-link-btn"
+                    type="button"
+                    onClick={openActionReviewQueue}
+                  >
+                    {needsInfoActions.length
+                      ? '补齐信息'
+                      : reviewQueueActions.length
+                      ? '复核行动项'
+                      : '查看行动项'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             <div className="alert-feed">
               {liveFeedItems.length ? (
@@ -2764,7 +3774,7 @@ function MeetingSidePanel() {
                           .slice(0, 2)
                           .map((item) => (
                             <div className="detail-action" key={item.id}>
-                              {item.owner} — {item.title}
+                              {formatActionOwner(item.owner)} — {item.title}
                               {item.deadline ? ` (${item.deadline})` : ''}
                               {item.evidence ? (
                                 <div>依据：{item.evidence}</div>
@@ -2791,32 +3801,87 @@ function MeetingSidePanel() {
 
         {activeTab === 'actions' ? (
           <div className="action-list">
+            <div className="action-toolbar">
+              <div className="action-toolbar-count">
+                当前筛选 {visibleActionItems.length} /{' '}
+                {session.actionItems.length} 项
+                {visibleActionReviewWarningCount ? (
+                  <span className="action-toolbar-warning">
+                    {' '}
+                    · {visibleActionReviewWarningCount} 项需补信息
+                  </span>
+                ) : null}
+              </div>
+              <div className="action-toolbar-actions">
+                <button
+                  className="action-add"
+                  type="button"
+                  disabled={addingActionItem}
+                  onClick={startManualActionItemAdd}
+                >
+                  {addingActionItem ? '正在添加' : '添加行动项'}
+                </button>
+                <button
+                  className={`action-bulk-confirm ${
+                    bulkActionReviewFeedback?.status || ''
+                  }`}
+                  type="button"
+                  disabled={
+                    !visibleConfirmableReviewActions.length ||
+                    bulkActionReviewFeedback?.status === 'updating'
+                  }
+                  onClick={() => void confirmVisibleReviewActions()}
+                >
+                  {bulkConfirmButtonLabel}
+                </button>
+                <button
+                  className={`action-copy-followup ${
+                    actionCopyFeedback?.id === FOLLOW_UP_ACTION_COPY_ID
+                      ? actionCopyFeedback.status === 'copied'
+                        ? 'success'
+                        : 'danger'
+                      : ''
+                  }`}
+                  type="button"
+                  disabled={!confirmedActions.length}
+                  title="只复制已确认且未完成的行动项，避免待复核 AI 建议直接流入外部任务系统"
+                  onClick={() => void copyFollowUpActionItems()}
+                >
+                  {actionCopyFeedback?.id === FOLLOW_UP_ACTION_COPY_ID
+                    ? actionCopyFeedback.status === 'copied'
+                      ? '已复制跟进清单'
+                      : '复制失败'
+                    : '复制跟进清单'}
+                </button>
+                <button
+                  className={`action-copy-all ${
+                    actionCopyFeedback?.id === BULK_ACTION_COPY_ID
+                      ? actionCopyFeedback.status === 'copied'
+                        ? 'success'
+                        : 'danger'
+                      : ''
+                  }`}
+                  type="button"
+                  disabled={!visibleActionItems.length}
+                  onClick={() => void copyVisibleActionItems()}
+                >
+                  {actionCopyFeedback?.id === BULK_ACTION_COPY_ID
+                    ? actionCopyFeedback.status === 'copied'
+                      ? '已复制当前筛选'
+                      : '复制失败'
+                    : '复制当前筛选'}
+                </button>
+              </div>
+            </div>
+            {visibleBlockedReviewActions.length ? (
+              <div className="action-review-gate-note">
+                {visibleBlockedReviewActions.length}{' '}
+                个待复核项缺少负责人、截止或依据；
+                批量确认会先跳过它们，补齐后再进入跟进清单。
+              </div>
+            ) : null}
             {session.actionItems.length ? (
               <>
-                <div className="action-toolbar">
-                  <div className="action-toolbar-count">
-                    当前筛选 {visibleActionItems.length} /{' '}
-                    {session.actionItems.length} 项
-                  </div>
-                  <button
-                    className={`action-copy-all ${
-                      actionCopyFeedback?.id === BULK_ACTION_COPY_ID
-                        ? actionCopyFeedback.status === 'copied'
-                          ? 'success'
-                          : 'danger'
-                        : ''
-                    }`}
-                    type="button"
-                    disabled={!visibleActionItems.length}
-                    onClick={() => void copyVisibleActionItems()}
-                  >
-                    {actionCopyFeedback?.id === BULK_ACTION_COPY_ID
-                      ? actionCopyFeedback.status === 'copied'
-                        ? '已复制当前筛选'
-                        : '复制失败'
-                      : '复制当前筛选'}
-                  </button>
-                </div>
                 <div className="action-review-summary" aria-label="行动项筛选">
                   {actionFilterOptions.map((option) => (
                     <button
@@ -2838,12 +3903,99 @@ function MeetingSidePanel() {
                 </div>
               </>
             ) : null}
+            {addingActionItem ? (
+              <div className="action-card editing manual-action-card">
+                <div className="ac-edit-form">
+                  <label className="ac-field">
+                    <span>行动项</span>
+                    <input
+                      name="manual-action-title"
+                      value={manualActionDraft.title}
+                      onChange={(event) =>
+                        setManualActionDraft((current) => ({
+                          ...current,
+                          title: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <div className="ac-edit-row">
+                    <label className="ac-field">
+                      <span>负责人</span>
+                      <input
+                        name="manual-action-owner"
+                        value={manualActionDraft.owner}
+                        placeholder="可留空，稍后分配"
+                        onChange={(event) =>
+                          setManualActionDraft((current) => ({
+                            ...current,
+                            owner: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="ac-field">
+                      <span>截止</span>
+                      <input
+                        name="manual-action-deadline"
+                        value={manualActionDraft.deadline}
+                        placeholder="可留空"
+                        onChange={(event) =>
+                          setManualActionDraft((current) => ({
+                            ...current,
+                            deadline: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label className="ac-field">
+                    <span>依据</span>
+                    <textarea
+                      name="manual-action-evidence"
+                      value={manualActionDraft.evidence}
+                      placeholder="可留空"
+                      onChange={(event) =>
+                        setManualActionDraft((current) => ({
+                          ...current,
+                          evidence: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  {manualActionError ? (
+                    <div className="ac-edit-error">{manualActionError}</div>
+                  ) : null}
+                  <div className="ac-actions">
+                    <button
+                      className="ac-button primary"
+                      type="button"
+                      onClick={() => void saveManualActionItem()}
+                    >
+                      保存行动项
+                    </button>
+                    <button
+                      className="ac-button"
+                      type="button"
+                      onClick={cancelManualActionItemAdd}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {visibleActionItems.length ? (
               visibleActionItems.map((item: MeetingPilotActionItem) => {
-                const timelineTarget = findTimelineEventForAction(session, item);
+                const timelineTarget = findTimelineEventForAction(
+                  session,
+                  item,
+                );
+                const itemReviewState = getActionReviewState(item);
+                const itemReviewWarnings = getActionReviewWarnings(item);
                 return (
                   <div
-                    className={`action-card ${getActionReviewState(item)} ${
+                    className={`action-card ${itemReviewState} ${
                       editingActionId === item.id ? 'editing' : ''
                     }`}
                     data-action-id={item.id}
@@ -2868,6 +4020,7 @@ function MeetingSidePanel() {
                             <span>负责人</span>
                             <input
                               value={actionEditDraft.owner}
+                              placeholder="可留空，稍后分配"
                               onChange={(event) =>
                                 setActionEditDraft((current) => ({
                                   ...current,
@@ -2898,7 +4051,15 @@ function MeetingSidePanel() {
                       <>
                         <div className="ac-title">📌 {item.title}</div>
                         <div className="ac-meta">
-                          <span>👤 {item.owner}</span>
+                          <span
+                            className={
+                              isActionOwnerUnassigned(item.owner)
+                                ? 'ac-unassigned'
+                                : undefined
+                            }
+                          >
+                            👤 {formatActionOwner(item.owner)}
+                          </span>
                           {item.deadline ? (
                             <span>📅 {item.deadline}</span>
                           ) : null}
@@ -2906,16 +4067,29 @@ function MeetingSidePanel() {
                             <span>🕒 {item.timestamp}</span>
                           ) : null}
                           <span
-                            className={`ac-status ${getActionStatusClass(item)}`}
+                            className={`ac-status ${getActionStatusClass(
+                              item,
+                            )}`}
                           >
                             {getActionStatusLabel(item)}
                           </span>
-                          {item.editedAt ? (
+                          {item.source === 'manual' ? (
+                            <span className="ac-edited">人工新增</span>
+                          ) : item.editedAt ? (
                             <span className="ac-edited">人工校正</span>
                           ) : null}
                         </div>
                       </>
                     )}
+                    {itemReviewWarnings.length ? (
+                      <div className="ac-review-warnings" aria-label="复核提示">
+                        {itemReviewWarnings.map((warning) => (
+                          <span className="ac-review-warning" key={warning}>
+                            {getActionReviewWarningLabel(warning)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                     {item.evidence ? (
                       <div className="ac-evidence">依据：{item.evidence}</div>
                     ) : null}
@@ -2976,7 +4150,7 @@ function MeetingSidePanel() {
                           >
                             编辑
                           </button>
-                          {getActionReviewState(item) === 'dismissed' ? (
+                          {itemReviewState === 'dismissed' ? (
                             <button
                               className="ac-button"
                               type="button"
@@ -2991,7 +4165,7 @@ function MeetingSidePanel() {
                             </button>
                           ) : (
                             <>
-                              {getActionReviewState(item) !== 'confirmed' ? (
+                              {itemReviewState !== 'confirmed' ? (
                                 <button
                                   className="ac-button primary"
                                   type="button"
@@ -3017,7 +4191,11 @@ function MeetingSidePanel() {
                                   })
                                 }
                               >
-                                {item.status === 'done' ? '撤回完成' : '完成'}
+                                {item.status === 'done'
+                                  ? '撤回完成'
+                                  : itemReviewState === 'suggested'
+                                  ? '确认并完成'
+                                  : '完成'}
                               </button>
                               <button
                                 className="ac-button danger"
@@ -3039,13 +4217,13 @@ function MeetingSidePanel() {
                   </div>
                 );
               })
-            ) : (
+            ) : !addingActionItem ? (
               <div className="empty-state">
                 {getActionFilterEmptyCopy(
                   session.actionItems.length ? actionFilter : 'all',
                 )}
               </div>
-            )}
+            ) : null}
           </div>
         ) : null}
 
@@ -3333,7 +4511,7 @@ function MeetingSidePanel() {
                         .slice(0, 3)
                         .map(
                           (item) =>
-                            `${item.owner} — ${item.title}${
+                            `${formatActionOwner(item.owner)} — ${item.title}${
                               item.deadline ? ` (${item.deadline})` : ''
                             }`,
                         )

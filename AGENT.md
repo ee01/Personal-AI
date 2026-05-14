@@ -236,6 +236,7 @@ When modifying `src/scheduled-messages/app-script-template.gs`:
 - **Breaking changes**: Increment major version (e.g., 2.1.0 → 3.0.0)
 
 ### Documentation
+- When making a large feature change, user-visible behavior change, or meaningful logic/ranking/data-contract change, check the relevant file under `docs/features/` and update it in the same task when the feature behavior or boundary changed
 - When discussing features in `docs/`, check if updates should be reflected in `.mdc` files
 - For `google_slides_analyzer` changes, update `docs/features/google_slides_analyzer.mdc`
 

@@ -19,6 +19,7 @@ import type Database from 'better-sqlite3';
 
 import type {
   ContextRecallMatch,
+  ContextRecallDebug,
   ContextRecallRequest,
   ContextRecallResponse,
   ContextRecallScope,
@@ -43,6 +44,57 @@ const MIN_QUERY_CHARS = 8;
 const MAX_QUERY_CHARS = 600;
 // Reject obviously low-signal payloads where text is mostly markup/whitespace.
 const MIN_SIGNAL_RATIO = 0.45;
+const LOW_INFORMATION_REJECT_REASON = 'low_information_match';
+
+const GENERIC_CONTEXT_TERMS = new Set([
+  'about',
+  'accepted',
+  'am',
+  'apr',
+  'aug',
+  'calendar',
+  'context',
+  'current',
+  'declined',
+  'dec',
+  'didn',
+  'event',
+  'feb',
+  'fri',
+  'jan',
+  'jul',
+  'jun',
+  'mar',
+  'may',
+  'meeting',
+  'memory',
+  'mon',
+  'nov',
+  'oct',
+  'page',
+  'participants',
+  'pm',
+  'recall',
+  'related',
+  'respond',
+  'ringcentral',
+  'sat',
+  'sep',
+  'source',
+  'sun',
+  'thu',
+  'tue',
+  'video',
+  'web',
+  'webpage',
+  'wed',
+]);
+
+const SPECIFIC_CONTEXT_SIGNAL_PATTERN =
+  /\b(action|android|api|approval|blocked|bug|commit|customer|decision|decided|dependency|design|estimate|follow[-\s]?up|handoff|incident|ios|issue|jira|launch|layout|migration|owner|plan|planning|project|release|review|risk|ship|task|thread|todo|ux)\b/i;
+const CJK_SPECIFIC_CONTEXT_SIGNAL_PATTERN =
+  /承诺|依赖|进展|问题|风险|决定|结论|待办|阻塞|负责人|排期|评审|方案|上线|需求|修复|讨论|计划|跟进|设计|布局|客户|事故|审批|迁移/;
+const ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/;
 
 export class ContextRecallService {
   private engine: RecallEngine;
@@ -59,7 +111,7 @@ export class ContextRecallService {
     );
 
     const normalized = normalizeContextQuery(request);
-    const debug = request.debug
+    const debug: ContextRecallDebug | undefined = request.debug
       ? {
           normalizedQuery: normalized.query,
           channelsHit: [] as string[],
@@ -94,11 +146,24 @@ export class ContextRecallService {
     const result = await this.engine.recall(recallQuery);
     if (debug) debug.channelsHit = result.channels;
 
+    let lowInformationMatches = 0;
     const matches = result.items
       .slice(0, limit * 2)
-      .map((item) => toContextMatch(item, request))
+      .map((item) => {
+        const match = toContextMatch(item, request);
+        if (!match) return null;
+        if (!isDisplayableContextMatch(match)) {
+          lowInformationMatches += 1;
+          return null;
+        }
+        return match;
+      })
       .filter((m): m is ContextRecallMatch => m != null)
       .slice(0, limit);
+
+    if (debug && matches.length === 0 && lowInformationMatches > 0) {
+      debug.rejectedReason = LOW_INFORMATION_REJECT_REASON;
+    }
 
     return {
       matches,
@@ -208,6 +273,134 @@ function toContextMatch(
     whyMatched: explainMatch(item, req),
     timestamp: item.timestamp,
   };
+}
+
+function isDisplayableContextMatch(match: ContextRecallMatch): boolean {
+  const title = normalizeInformationText(match.title);
+  const snippet = normalizeInformationText(match.snippet);
+  const sourceTitle = normalizeInformationText(match.sourceTitle);
+  const sourceLabel = normalizeInformationText(match.sourceLabel);
+
+  if (!title && !snippet) return false;
+
+  const combined = [title, snippet, sourceTitle]
+    .filter(Boolean)
+    .join(' ');
+  const comparable = normalizeComparableText(combined);
+  if (!comparable) return false;
+
+  const stripped = stripContextShellLabels(combined);
+  const hasSpecificSignal = hasSpecificContextSignal(stripped);
+  const meaningfulTokenCount = countMeaningfulTokens(stripped);
+  const cjkSignalChars = countCjkSignalChars(stripped);
+
+  const duplicatesLabel =
+    snippet.length > 0 &&
+    [title, sourceTitle, sourceLabel].some((label) =>
+      label ? areEquivalentInformationTexts(snippet, label) : false,
+    );
+  if (
+    duplicatesLabel &&
+    !hasSpecificSignal &&
+    meaningfulTokenCount < 4 &&
+    cjkSignalChars < 8
+  ) {
+    return false;
+  }
+
+  if (
+    looksLikeContextShell(combined) &&
+    !hasSpecificSignal &&
+    meaningfulTokenCount < 3 &&
+    cjkSignalChars < 8
+  ) {
+    return false;
+  }
+
+  const signalChars = countSignalChars(stripped);
+  if (!hasSpecificSignal && signalChars < 10) {
+    return false;
+  }
+
+  return hasSpecificSignal || meaningfulTokenCount >= 3 || cjkSignalChars >= 8;
+}
+
+function normalizeInformationText(value?: string | null): string {
+  return (value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeComparableText(value: string): string {
+  return stripContextShellLabels(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripContextShellLabels(value: string): string {
+  return value
+    .replace(
+      /\b(calendar event|current context|meeting|memory|related memory|source|webpage|web page|page)\b\s*[:：-]*/gi,
+      ' ',
+    )
+    .replace(/(?:^|\s)(会议|网页|页面|来源|记忆|相关记忆)\s*[:：-]*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function areEquivalentInformationTexts(left: string, right: string): boolean {
+  const normalizedLeft = normalizeComparableText(left);
+  const normalizedRight = normalizeComparableText(right);
+  return (
+    normalizedLeft.length > 0 &&
+    normalizedRight.length > 0 &&
+    normalizedLeft === normalizedRight
+  );
+}
+
+function looksLikeContextShell(value: string): boolean {
+  const comparable = normalizeComparableText(value);
+  if (!comparable) return true;
+  return (
+    comparable === 'ringcentral video' ||
+    comparable === 'video meetings' ||
+    comparable === 'meeting' ||
+    comparable === 'calendar event' ||
+    comparable === 'webpage' ||
+    comparable === 'page' ||
+    /\bringcentral video\b/.test(comparable)
+  );
+}
+
+function hasSpecificContextSignal(value: string): boolean {
+  return (
+    ISSUE_KEY_PATTERN.test(value) ||
+    SPECIFIC_CONTEXT_SIGNAL_PATTERN.test(value) ||
+    CJK_SPECIFIC_CONTEXT_SIGNAL_PATTERN.test(value)
+  );
+}
+
+function countSignalChars(value: string): number {
+  return (value.match(/[A-Za-z0-9\u3400-\u9fff]/g) || []).length;
+}
+
+function countCjkSignalChars(value: string): number {
+  const withoutShellTerms = stripContextShellLabels(value).replace(
+    /会议|网页|页面|来源|记忆|相关|当前/g,
+    '',
+  );
+  return (withoutShellTerms.match(/[\u3400-\u9fff]/g) || []).length;
+}
+
+function countMeaningfulTokens(value: string): number {
+  const tokens = value.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) || [];
+  return new Set(
+    tokens.filter((token) => {
+      if (token.length < 2) return false;
+      if (/^\d+$/.test(token)) return false;
+      return !GENERIC_CONTEXT_TERMS.has(token);
+    }),
+  ).size;
 }
 
 function explainMatch(item: RecallItem, req: ContextRecallRequest): string {

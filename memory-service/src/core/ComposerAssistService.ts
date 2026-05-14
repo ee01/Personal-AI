@@ -7,19 +7,23 @@ import type {
 } from '../types/index.js';
 
 /**
- * Compatibility wrapper for the original Composer Guard API.
+ * Compose Assist handles input-box assistance only. The old Composer Assist
+ * class name remains as a route compatibility wrapper.
  *
- * New surfaces should call ContextAssistService directly. Keeping this class
- * avoids changing existing route imports and content-script callers.
+ * Meeting prep now belongs to Today Pilot.
  */
-export class ComposerAssistService {
+export class ComposeAssistService {
   private readonly contextAssistService: ContextAssistService;
 
-  constructor(db: Database.Database) {
-    this.contextAssistService = new ContextAssistService(db);
+  constructor(db: Database.Database, userId = 'default') {
+    this.contextAssistService = new ContextAssistService(db, userId);
   }
 
-  async assist(request: ComposerAssistRequest): Promise<ComposerAssistResponse> {
+  async assist(
+    request: ComposerAssistRequest,
+  ): Promise<ComposerAssistResponse> {
     return this.contextAssistService.assistComposer(request);
   }
 }
+
+export class ComposerAssistService extends ComposeAssistService {}

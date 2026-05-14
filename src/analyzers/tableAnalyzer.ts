@@ -19,6 +19,8 @@ import {
  * 专门处理表格样式的项目数据
  */
 export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements TableContentAnalyzer {
+  private static readonly MULTI_TABLE_CONFIDENCE_THRESHOLD = 0.5;
+
   // 识别项目状态的常见列名
   private static readonly STATUS_COLUMNS = ['status', 'state', 'stage', '状态', '阶段'];
   
@@ -134,15 +136,29 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
       return { projects: [], confidence: 0 };
     }
     
-    // 选择置信度最高的表格结果
+    // 选择置信度最高的表格结果，并合并同一 slide 上其他可信项目表格。
     allTableResults.sort((a, b) => b.confidence - a.confidence);
     const bestResult = allTableResults[0];
+    const selectedResults = bestResult.confidence >= TableContentAnalyzerImpl.MULTI_TABLE_CONFIDENCE_THRESHOLD
+      ? allTableResults.filter(result => (
+          result.confidence >= TableContentAnalyzerImpl.MULTI_TABLE_CONFIDENCE_THRESHOLD &&
+          result.projects.length > 0
+        ))
+      : [bestResult];
+    const selectedProjects = selectedResults.flatMap(result => result.projects);
+    const selectedProjectFields = Array.from(new Set(
+      selectedResults.flatMap(result => result.projectFields)
+    ));
+    const selectedConfidence = selectedResults.length > 0
+      ? selectedResults.reduce((sum, result) => sum + result.confidence, 0) / selectedResults.length
+      : bestResult.confidence;
     
     const warnings: string[] = [];
     
-    // 如果有多个表格，但无法确定主表格，添加警告
-    if (allTableResults.length > 1 && 
-        bestResult.confidence > 0 && 
+    if (selectedResults.length > 1) {
+      warnings.push(`幻灯片包含 ${selectedResults.length} 个可信项目表格，已合并分析`);
+    } else if (allTableResults.length > 1 &&
+        bestResult.confidence > 0 &&
         allTableResults[1].confidence > bestResult.confidence * 0.8) {
       warnings.push('幻灯片包含多个可能的项目表格，已选择最可能的一个进行分析');
     }
@@ -153,9 +169,9 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
     }
     
     return {
-      projects: bestResult.projects,
-      confidence: bestResult.confidence,
-      projectFields: bestResult.projectFields,
+      projects: selectedProjects,
+      confidence: selectedConfidence,
+      projectFields: selectedProjectFields,
       warnings: warnings.length > 0 ? warnings : undefined
     };
   }

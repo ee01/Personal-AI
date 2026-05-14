@@ -1,8 +1,11 @@
 {
   "_metadata": {
-    "version": "1.4.2",
-    "lastUpdated": "2026-05-08",
-    "description": "Personal AI Scheduled Messages Bot Executor Rule Template"
+    "version": "1.4.3",
+    "lastUpdated": "2026-05-11",
+    "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
+    "notes": [
+      "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com."
+    ]
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
   "state": "ENABLED",
@@ -59,6 +62,50 @@
         "method": "GET",
         "responseEnabled": true,
         "usedSecretsKeys": []
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_rowIndex",
+        "name": {
+          "type": "FREE",
+          "value": "rowIndex"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body.rowIndex}}"
+        },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_executionKey",
+        "name": {
+          "type": "FREE",
+          "value": "executionKey"
+        },
+        "type": "SMART",
+        "query": {
+          "type": "SMART",
+          "value": "{{webhookResponse.body.executionKey}}"
+        },
+        "lazy": false
       },
       "children": [],
       "conditions": [],
@@ -199,22 +246,12 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
-                "headers": [
-                  {
-                    "id": "_header_mark_private_content_type",
-                    "name": "Content-Type",
-                    "value": {
-                      "keyOrValue": "application/json",
-                      "secret": false
-                    }
-                  }
-                ],
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}",
+                "headers": [],
                 "sendIssue": false,
-                "contentType": "custom",
-                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
-                "method": "POST",
-                "responseEnabled": true,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],
@@ -282,6 +319,108 @@
                 "usedSecretsKeys": []
               },
               "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.condition.container.block",
+              "children": [
+                {
+                  "component": "CONDITION_BLOCK",
+                  "schemaVersion": 1,
+                  "type": "jira.condition.if.block",
+                  "value": {
+                    "conditionMatchType": "ALL"
+                  },
+                  "children": [
+                    {
+                      "component": "ACTION",
+                      "schemaVersion": 2,
+                      "type": "jira.issue.outgoing.webhook",
+                      "value": {
+                        "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}",
+                        "headers": [],
+                        "sendIssue": false,
+                        "contentType": "empty",
+                        "method": "GET",
+                        "responseEnabled": false,
+                        "usedSecretsKeys": []
+                      },
+                      "children": [],
+                      "conditions": [],
+                      "optimisedIds": [],
+                      "newComponent": false
+                    }
+                  ],
+                  "conditions": [
+                    {
+                      "component": "CONDITION",
+                      "schemaVersion": 1,
+                      "type": "jira.comparator.condition",
+                      "value": {
+                        "first": "{{webhookResponse.body.data.status}}",
+                        "second": "succeeded",
+                        "operator": "EQUALS"
+                      },
+                      "children": [],
+                      "conditions": [],
+                      "optimisedIds": [],
+                      "newComponent": false
+                    }
+                  ],
+                  "optimisedIds": [],
+                  "newComponent": false
+                },
+                {
+                  "component": "CONDITION_BLOCK",
+                  "schemaVersion": 1,
+                  "type": "jira.condition.if.block",
+                  "value": {
+                    "conditionMatchType": "ALL"
+                  },
+                  "children": [
+                    {
+                      "component": "ACTION",
+                      "schemaVersion": 2,
+                      "type": "jira.issue.outgoing.webhook",
+                      "value": {
+                        "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=false&executionKey={{executionKey.urlEncode}}&error={{webhookResponse.body.data.error.urlEncode}}",
+                        "headers": [],
+                        "sendIssue": false,
+                        "contentType": "empty",
+                        "method": "GET",
+                        "responseEnabled": false,
+                        "usedSecretsKeys": []
+                      },
+                      "children": [],
+                      "conditions": [],
+                      "optimisedIds": [],
+                      "newComponent": false
+                    }
+                  ],
+                  "conditions": [
+                    {
+                      "component": "CONDITION",
+                      "schemaVersion": 1,
+                      "type": "jira.comparator.condition",
+                      "value": {
+                        "first": "{{webhookResponse.body.data.status}}",
+                        "second": "failed",
+                        "operator": "EQUALS"
+                      },
+                      "children": [],
+                      "conditions": [],
+                      "optimisedIds": [],
+                      "newComponent": false
+                    }
+                  ],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
               "conditions": [],
               "optimisedIds": [],
               "newComponent": false
@@ -355,22 +494,12 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
-                "headers": [
-                  {
-                    "id": "_header_mark_group_content_type",
-                    "name": "Content-Type",
-                    "value": {
-                      "keyOrValue": "application/json",
-                      "secret": false
-                    }
-                  }
-                ],
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}",
+                "headers": [],
                 "sendIssue": false,
-                "contentType": "custom",
-                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
-                "method": "POST",
-                "responseEnabled": true,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],
@@ -437,22 +566,12 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted",
-                "headers": [
-                  {
-                    "id": "_header_mark_email_content_type",
-                    "name": "Content-Type",
-                    "value": {
-                      "keyOrValue": "application/json",
-                      "secret": false
-                    }
-                  }
-                ],
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}",
+                "headers": [],
                 "sendIssue": false,
-                "contentType": "custom",
-                "customBody": "{\n  \"messageId\": {{messageId.asJsonString}},\n  \"rowIndex\": {{webhookResponse.body.rowIndex}},\n  \"success\": true,\n  \"executionKey\": {{webhookResponse.body.executionKey.asJsonString}},\n  \"topic\": {{replacedTopic.asJsonString}},\n  \"content\": {{replacedContent.asJsonString}}\n}",
-                "method": "POST",
-                "responseEnabled": true,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
                 "usedSecretsKeys": []
               },
               "children": [],

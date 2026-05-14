@@ -70,6 +70,37 @@ test('reports row-order position for messages sharing an explicit execution time
   );
 });
 
+test('includes managed JiraAutomation API messages in executor queue pressure', () => {
+  const bot = makeMessage('msg-1');
+  const jiraApi = makeMessage('msg-2', {
+    Push_Method: 'JiraAutomation',
+    AI_Endpoint: 'POST https://example.com/report',
+  });
+
+  const pressure = getPressure([bot, jiraApi], jiraApi);
+
+  assert.deepEqual(pressure, {
+    slotKey: '2026-05-04 09:30',
+    slotSize: 2,
+    position: 2,
+    delayMinutes: 1,
+    elapsedCompensationMinutes: 0,
+    remainingCompensationMinutes: 30,
+    hasExplicitTime: true,
+    exceedsCompensationWindow: false,
+  });
+});
+
+test('ignores JiraAutomation rows with blank AI endpoints in executor queue pressure', () => {
+  const bot = makeMessage('msg-1');
+  const jiraWithoutEndpoint = makeMessage('msg-2', {
+    Push_Method: 'JiraAutomation',
+    AI_Endpoint: '   ',
+  });
+
+  assert.equal(getPressure([bot, jiraWithoutEndpoint], jiraWithoutEndpoint), null);
+});
+
 test('flags explicit-time executor backlog that cannot fit the compensation window', () => {
   const messages = Array.from({ length: 32 }, (_, index) => makeMessage(`msg-${index + 1}`));
   const pressure = getPressure(messages, messages[31]);
@@ -106,6 +137,104 @@ test('reports no-time executor queue without compensation-window risk', () => {
     formatScheduleQueuePressure(pressure!),
     '08:00 后队列第 2/2 个，预计延后 1 分钟',
   );
+});
+
+test('uses the caller clock when grouping repeating executor queues', () => {
+  const first = makeMessage('repeat-1', {
+    Repeat_Every: 1,
+    Repeat_Unit: 'Day',
+  });
+  const second = makeMessage('repeat-2', {
+    Repeat_Every: 1,
+    Repeat_Unit: 'Day',
+  });
+  const now = new Date('2026-05-05T10:00:00');
+
+  const pressure = getPressure([first], second, now);
+
+  assert.equal(pressure?.slotKey, '2026-05-06 09:30');
+  assert.equal(pressure?.position, 2);
+
+  const summary = getScheduleQueueSummary([first, second], now);
+  assert.equal(summary?.topSlots[0].slotKey, '2026-05-06 09:30');
+});
+
+test('ignores no-time executor queues after their execution date has passed', () => {
+  const yesterdayFirst = makeMessage('yesterday-1', {
+    Schedule_Date: '2026-05-04',
+    Schedule_Time: '',
+  });
+  const yesterdaySecond = makeMessage('yesterday-2', {
+    Schedule_Date: '2026-05-04',
+    Schedule_Time: '',
+  });
+  const todayFirst = makeMessage('today-1', {
+    Schedule_Date: '2026-05-05',
+    Schedule_Time: '',
+  });
+  const todaySecond = makeMessage('today-2', {
+    Schedule_Date: '2026-05-05',
+    Schedule_Time: '',
+  });
+  const now = new Date('2026-05-05T09:15:00');
+
+  assert.equal(
+    getPressure([yesterdayFirst], yesterdaySecond, now),
+    null,
+  );
+
+  const summary = getScheduleQueueSummary(
+    [yesterdayFirst, yesterdaySecond, todayFirst, todaySecond],
+    now,
+    4,
+  );
+
+  assert.equal(summary?.congestedSlotCount, 1);
+  assert.equal(summary?.queuedMessageCount, 2);
+  assert.deepEqual(
+    summary?.topSlots.map(slot => slot.slotKey),
+    ['2026-05-05 08:00'],
+  );
+});
+
+test('keeps explicit 08:00 slots separate from the no-time 08:00 queue', () => {
+  const noTimeFirst = makeMessage('no-time-1', { Schedule_Time: '' });
+  const explicitBefore = makeMessage('explicit-1', { Schedule_Time: '08:00' });
+  const explicitTarget = makeMessage('explicit-2', { Schedule_Time: '08:00' });
+
+  const pressure = getPressure([noTimeFirst, explicitBefore, explicitTarget], explicitTarget);
+
+  assert.deepEqual(pressure, {
+    slotKey: '2026-05-04 08:00',
+    slotSize: 2,
+    position: 2,
+    delayMinutes: 1,
+    elapsedCompensationMinutes: 0,
+    remainingCompensationMinutes: 30,
+    hasExplicitTime: true,
+    exceedsCompensationWindow: false,
+  });
+});
+
+test('summarizes explicit 08:00 slots and no-time 08:00 queue as separate lanes', () => {
+  const summary = getScheduleQueueSummary([
+    makeMessage('no-time-1', { Schedule_Time: '' }),
+    makeMessage('no-time-2', { Schedule_Time: '' }),
+    makeMessage('explicit-1', { Schedule_Time: '08:00' }),
+    makeMessage('explicit-2', { Schedule_Time: '08:00' }),
+  ], beforeSlot, 4);
+
+  assert.equal(summary?.congestedSlotCount, 2);
+  assert.ok(summary?.topSlots.some(slot => (
+    slot.slotKey === '2026-05-04 08:00' &&
+    slot.hasExplicitTime === true &&
+    slot.slotSize === 2
+  )));
+  assert.ok(summary?.topSlots.some(slot => (
+    slot.slotKey === '2026-05-04 08:00' &&
+    slot.hasExplicitTime === false &&
+    slot.slotSize === 2
+  )));
 });
 
 test('ignores same-day success and failure rows that Apps Script will skip', () => {
@@ -211,13 +340,22 @@ test('summarizes congested executor queue slots and sorts risk first', () => {
   assert.equal(summary?.topSlots[0].exceedsCompensationWindow, true);
   assert.equal(summary?.topSlots[0].remainingCompensationMinutes, 10);
   assert.deepEqual(summary?.topSlots[0].sampleTopics, ['Risk 1', 'Risk 2', 'Risk 3']);
+  assert.equal(summary?.topSlots[0].actionMessageId, 'risk-12');
+  assert.equal(summary?.topSlots[0].actionTopic, 'Risk 12');
+  assert.equal(summary?.topSlots[0].actionPosition, 12);
+  assert.deepEqual(summary?.topSlots[0].suggestion, {
+    dateStr: '2026-05-04',
+    timeStr: '09:51',
+    label: '2026-05-04 09:51',
+    inspectedMinutes: 1,
+  });
   assert.equal(
     formatScheduleQueueSlotSummary(summary!.topSlots[0]),
-    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，示例：Risk 1、Risk 2、Risk 3',
+    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，建议改到 2026-05-04 09:51，示例：Risk 1、Risk 2、Risk 3',
   );
   assert.equal(
     formatScheduleQueueSummary(summary!),
-    '2 个时间槽同时排队；14 条 Bot/AI 消息受影响；最大同槽 12 条；最大预计延后 11 分钟；1 个时间槽可能超过 30 分钟补偿窗口',
+    '2 个时间槽同时排队；14 条执行器消息受影响；最大同槽 12 条；最大预计延后 11 分钟；1 个时间槽可能超过 30 分钟补偿窗口',
   );
 });
 

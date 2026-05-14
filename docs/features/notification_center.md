@@ -124,6 +124,10 @@ Notification Center 对外主要暴露两个接口：
 `feed` 的语义是：
 
 - 给指定 channel 拉取还没有在该 channel 成功投递的 `todo` / `notice`
+- `channel` 必须是 `chrome`、`doubao` 或 `glip`
+- `lanes` 只接受 `todo` / `notice`，非法值会直接返回 400
+- 已经成功送达、点击或忽略过的 source 不会因为后续失败回执又重新进入 feed
+- feed 会先排除该 channel 已成功投递的 source，再做 `limit` 截断，避免旧的未投递通知被新的已投递记录挡住
 
 `delivery` 的语义是：
 
@@ -175,6 +179,7 @@ Doubao 现在分两条同步路径：
 
 - `todo` 文案不能带 `✅`
 - `notice` 不应该写成待办
+- `dream_digest` / 周报这类 notice 会把 `payload` 里的摘要详情纳入同步内容，避免只同步“生成了 N 条内容”的空壳提示
 - Doubao 成功后只写 delivery 回执，不自动全局 `acknowledge`
 
 对应实现：
@@ -193,10 +198,16 @@ Chrome extension 优先从 `notification-center/feed` 拉取消息。
 - 用户点“查看” -> 记录 `clicked`，并对 `notification:*` 做全局 `acknowledge`
 - 用户点“忽略” -> 记录 `dismissed`，并对 `notification:*` 做全局 `dismiss`
 - `proposed_action:*` 只记录渠道事件，不直接改全局通知状态
+- 用户直接关闭系统通知时，只记录 Chrome 渠道的 `dismissed`，不自动改全局通知状态
+- 通知弹窗会用 `contextMessage` 标出“待处理/通知”、优先级和待办截止时间，降低用户判断成本
+- `dream_digest` 这类通知的系统弹窗预览会优先用 payload 摘要片段，而不是只展示计数型 body
+- `proposed_action:*` 的“查看待办”会打开动作队列并定位对应 action；`project_update` / `property_change` 这类 notice 会打开时间轴；周报和 dream digest 仍进入梦境重放
+- Chrome 通知的来源元数据会同时保存在 `chrome.storage.local`，避免 MV3 service worker 被回收后点击 / 忽略操作无法回写通知中心
 
 对应实现：
 
 - `src/background.ts`
+- `src/backendNotifications.ts`
 - `src/services/MemoryServiceClient.ts`
 
 ### 2.4 Glip
@@ -325,6 +336,7 @@ DigestQueueService 的处理流程是：
 - `doubao-bridge/src/bridgeService.ts`
 - `doubao-bridge/src/memoFormatter.ts`
 - `src/background.ts`
+- `src/backendNotifications.ts`
 - `src/services/MemoryServiceClient.ts`
 
 ### DigestQueueService
@@ -334,4 +346,3 @@ DigestQueueService 的处理流程是：
 - `src/message-reaction/FollowThreadHandler.ts`
 - `src/services/TaskScheduler.ts`
 - `src/services/taskSchedulerDefinitions.ts`
-

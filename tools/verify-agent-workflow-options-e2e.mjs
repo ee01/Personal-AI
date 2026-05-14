@@ -126,6 +126,7 @@ async function installNetworkMocks(context) {
 
     if (url.endsWith('/api/generate')) {
       const body = JSON.parse(request.postData() || '{}');
+      await new Promise((resolve) => setTimeout(resolve, 150));
       await route.fulfill(
         jsonResponse({
           response: JSON.stringify(buildOllamaResponse(String(body.prompt || ''))),
@@ -210,6 +211,15 @@ try {
           notifyMethod: 'bot',
         },
       ],
+      customAgents: [
+        {
+          id: 'legacyInvalidToolAgent',
+          name: 'Legacy Invalid Tool Agent',
+          description: 'Old custom agent with a removed tool',
+          priority: 55,
+          tools: ['removedWorkflowTool'],
+        },
+      ],
     });
   });
 
@@ -234,6 +244,47 @@ try {
     .locator('.agent-workflow-test-header button', { hasText: '运行测试' })
     .click();
   await page
+    .locator('.agent-workflow-test-header button', { hasText: '测试中...' })
+    .waitFor({ timeout: 5000 });
+  const runningLocks = await page.evaluate(() => {
+    const disabled = (selector) => {
+      const element = document.querySelector(selector);
+      return Boolean(element && element.disabled);
+    };
+    const allDisabled = (selector) =>
+      Array.from(document.querySelectorAll(selector)).every(
+        (element) => element.disabled,
+      );
+
+    return {
+      panelBusy:
+        document
+          .querySelector('.agent-workflow-test-panel')
+          ?.getAttribute('aria-busy') === 'true',
+      scenarioSelect: disabled('#workflowScenario'),
+      scenarioButtons: allDisabled('.agent-workflow-scenario-actions button'),
+      replaySelect: disabled('#workflowReplaySample'),
+      replayButtons: allDisabled('.agent-workflow-replay-actions button'),
+      sender: disabled('#workflowTestSender'),
+      teamName: disabled('#workflowTestTeamName'),
+      teamId: disabled('#workflowTestTeamId'),
+      datetime: disabled('#workflowTestDatetime'),
+      content: disabled('#workflowTestContent'),
+    };
+  });
+  assert.deepEqual(runningLocks, {
+    panelBusy: true,
+    scenarioSelect: true,
+    scenarioButtons: true,
+    replaySelect: true,
+    replayButtons: true,
+    sender: true,
+    teamName: true,
+    teamId: true,
+    datetime: true,
+    content: true,
+  });
+  await page
     .locator('.agent-workflow-path-item strong', { hasText: /^关注项匹配$/ })
     .waitFor({ timeout: 15000 });
   await page
@@ -249,7 +300,23 @@ try {
   const decisionPathText = await page.locator('.agent-workflow-path').innerText();
   assert.match(decisionPathText, /manual:manual-1/);
   assert.match(decisionPathText, /置信度 88%/);
-  assert.match(decisionPathText, /6 个 Agent \/ 8 个工具/);
+  assert.match(decisionPathText, /7 个 Agent \/ 9 个工具/);
+  assert.match(decisionPathText, /跳过工具 1/);
+  await page
+    .locator('.agent-workflow-next-actions', { hasText: '下一步' })
+    .waitFor({ timeout: 15000 });
+  const nextActionText = await page
+    .locator('.agent-workflow-next-actions')
+    .innerText();
+  assert.match(nextActionText, /补齐被跳过工具/);
+  assert.match(nextActionText, /确认记忆审计/);
+  assert.match(nextActionText, /确认通知发送/);
+  assert.match(nextActionText, /manual:manual-1/);
+  const storageReviewText = await page
+    .locator('.agent-test-review-grid')
+    .innerText();
+  assert.match(storageReviewText, /Trace 状态\s*部分异常/);
+  assert.match(storageReviewText, /异常\s*跳过工具 1/);
   assertNoPageErrors();
 
   console.log('verify-agent-workflow-options-e2e: ok');

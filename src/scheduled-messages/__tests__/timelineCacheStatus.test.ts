@@ -5,6 +5,7 @@ import {
   buildTimelineCacheDiagnosticText,
   formatTimelineCacheAge,
   formatTimelineCacheLastAttempt,
+  getTimelineCacheAttemptQuickFixText,
   getTimelineProjectCacheSaveBlockText,
   getTimelineCacheReadinessBlockText,
   getTimelineCacheSaveBlockText,
@@ -220,6 +221,7 @@ test('Timeline cache response validation preserves safe last sync attempt diagno
         error: 'releaseInfo 必须是非空对象',
         lastAttempt: {
           success: false,
+          requestId: 'tl_mThor_abc123',
           attemptedAt: '2026-05-04T00:01:00.000Z',
           ageMs: 15 * 60 * 1000,
           errorCode: 'INVALID_RELEASE_INFO_SCHEMA',
@@ -237,6 +239,7 @@ test('Timeline cache response validation preserves safe last sync attempt diagno
 
   assert.equal(normalized.projects[0].status, 'error');
   assert.equal(normalized.projects[0].lastAttempt?.success, false);
+  assert.equal(normalized.projects[0].lastAttempt?.requestId, 'tl_mThor_abc123');
   assert.equal(normalized.projects[0].lastAttempt?.requestContentType, 'application/json');
   assert.equal(normalized.projects[0].lastAttempt?.nextAction, '检查 Custom data 并重新运行 Timeline Sync Rule。');
   assert.equal(normalized.projects[0].lastAttempt?.requestBodyBytes, 512);
@@ -248,7 +251,7 @@ test('Timeline cache response validation preserves safe last sync attempt diagno
   );
   assert.match(
     formatTimelineCacheLastAttempt(normalized.projects[0].lastAttempt),
-    /Content-Type application\/json，请求体 512B，payload 4KB\/9KB，样例 FF、Release/,
+    /Content-Type application\/json，请求 ID tl_mThor_abc123，请求体 512B，payload 4KB\/9KB，样例 FF、Release/,
   );
   assert.match(
     formatTimelineCacheLastAttempt(normalized.projects[0].lastAttempt),
@@ -271,6 +274,61 @@ test('Timeline cache last attempt formatter includes oversized payload diagnosti
   );
 });
 
+test('Timeline cache last attempt formatter falls back to attemptedAt when age is absent', () => {
+  assert.equal(
+    formatTimelineCacheLastAttempt({
+      success: true,
+      attemptedAt: '2026-05-04T00:01:00.000Z',
+    }),
+    '最近同步成功：2026-05-04T00:01:00.000Z',
+  );
+
+  assert.match(
+    formatTimelineCacheLastAttempt({
+      success: false,
+      attemptedAt: '2026-05-04T00:02:00.000Z',
+      errorCode: 'MISSING_RELEASE_INFO',
+    }),
+    /最近同步失败（2026-05-04T00:02:00.000Z）：MISSING_RELEASE_INFO/,
+  );
+});
+
+test('Timeline cache quick fix text summarizes the next user action', () => {
+  assert.equal(
+    getTimelineCacheAttemptQuickFixText({
+      success: false,
+      errorCode: 'INVALID_POST_JSON',
+      nextAction: 'long fallback',
+    }),
+    '检查 Method=POST、Content-Type=application/json，并确认 releaseInfo 使用 .asJsonString。',
+  );
+
+  assert.equal(
+    getTimelineCacheAttemptQuickFixText({
+      success: false,
+      errorCode: 'MISSING_RELEASE_INFO',
+    }),
+    '确认 Custom data 包含 releaseInfo，且项目变量使用 .asJsonString。',
+  );
+
+  assert.equal(
+    getTimelineCacheAttemptQuickFixText({
+      success: false,
+      errorCode: 'RELEASE_INFO_TOO_DEEP',
+    }),
+    '压平 releaseInfo 结构；Timeline 缓存只需要项目字段和 Milestone 日期。',
+  );
+
+  assert.equal(
+    getTimelineCacheAttemptQuickFixText({
+      success: false,
+      errorCode: 'UNKNOWN',
+      nextAction: '打开 Timeline Sync Rule 后重试。',
+    }),
+    '打开 Timeline Sync Rule 后重试。',
+  );
+});
+
 test('Timeline cache diagnostic text summarizes selected project troubleshooting context', () => {
   const diagnostic = buildTimelineCacheDiagnosticText({
     status: {
@@ -290,6 +348,7 @@ test('Timeline cache diagnostic text summarizes selected project troubleshooting
         milestoneKeys: ['FF', 'Release'],
         lastAttempt: {
           success: false,
+          requestId: 'tl_mThor_failed',
           ageMs: 20 * 60 * 1000,
           errorCode: 'INVALID_RELEASE_INFO_SCHEMA',
           parseError: 'releaseInfo 必须是非空对象',
@@ -299,6 +358,7 @@ test('Timeline cache diagnostic text summarizes selected project troubleshooting
     error: '',
     selectedProject: 'mThor',
     selectedMilestone: 'Release',
+    webAppUrl: 'https://script.google.com/macros/s/example/exec',
     timelineSyncRuleUrl: 'https://jira.example/rule/123',
   });
 
@@ -306,7 +366,16 @@ test('Timeline cache diagnostic text summarizes selected project troubleshooting
   assert.match(diagnostic, /项目: mThor/);
   assert.match(diagnostic, /状态: 缓存已过期/);
   assert.match(diagnostic, /最近同步失败（20 分钟前）：INVALID_RELEASE_INFO_SCHEMA - releaseInfo 必须是非空对象/);
+  assert.match(diagnostic, /请求 ID tl_mThor_failed/);
   assert.match(diagnostic, /缓存 Milestone: FF、Release/);
+  assert.match(diagnostic, /Jira Send web request 修复模板/);
+  assert.match(diagnostic, /Method: POST/);
+  assert.match(diagnostic, /Header: Content-Type=application\/json/);
+  assert.match(diagnostic, /"project": "mThor"/);
+  assert.match(diagnostic, /"releaseInfo": \{\{mThorReleaseInfo\.asJsonString\}\}/);
+  assert.match(diagnostic, /Apps Script dry-run 测试 curl/);
+  assert.match(diagnostic, /dryRun/);
+  assert.match(diagnostic, /https:\/\/script\.google\.com\/macros\/s\/example\/exec\?action=cacheReleaseInfo/);
   assert.match(diagnostic, /选中 Milestone: Release/);
   assert.match(diagnostic, /Timeline Sync Rule: https:\/\/jira\.example\/rule\/123/);
 });

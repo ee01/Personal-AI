@@ -5,6 +5,7 @@ import type { ScheduledMessage } from '../../scheduled-messages/types.js';
 import {
   findOpenSnoozeReminderForMessage,
   getSnoozeReminderSourceKey,
+  isOpenSnoozeReminder,
   isOpenSnoozeReminderForMessage,
 } from '../snoozeDeduplication.js';
 
@@ -45,6 +46,15 @@ test('does not match completed Snooze reminders', () => {
     isOpenSnoozeReminderForMessage(makeMessage({ Status: 'Completed' }), {
       messageLink: sourceLink,
     }),
+    false,
+  );
+});
+
+test('identifies open Snooze reminders for safe post-create actions', () => {
+  assert.equal(isOpenSnoozeReminder(makeMessage()), true);
+  assert.equal(isOpenSnoozeReminder(makeMessage({ Status: 'Done' })), false);
+  assert.equal(
+    isOpenSnoozeReminder(makeMessage({ Category: 'AutoReply' })),
     false,
   );
 });

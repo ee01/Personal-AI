@@ -23,11 +23,19 @@ const fixtureHtml = `<!doctype html>
       <span id="type-val">Story</span>
       <div id="description-val">
         Please inspect
-        <a href="https://www.figma.com/design/abc123/Spec?node-id=1-2">Checkout mobile handoff</a>
+        <a href="https://www.figma.com/design/abc123/Spec?node-id=1-2" title="Checkout mobile handoff">the design</a>
         and the pasted URL https://www.figma.com/design/abc123/Spec?node-id=1-2).
         The workshop board is https://miro.com/app/board/uXjVdemo.
         Ignore https://notfigma.com/design/abc.
       </div>
+      <section data-testid="issue-designs-panel" aria-label="Designs">
+        <h2>Designs</h2>
+        <article data-testid="linked-design-card">
+          <strong>Native pricing handoff</strong>
+          <span>Design updated</span>
+          <a href="https://www.figma.com/design/native456/Pricing?node-id=0-1">Open in Figma</a>
+        </article>
+      </section>
       <div class="links-list">
         <div class="links-section">
           <div class="issue-link">
@@ -58,7 +66,7 @@ const context = await chromium.launchPersistentContext(userDataDir, {
 });
 
 try {
-  await context.route('https://jira.ringcentral.com/browse/ABC-123', route => {
+  await context.route(/https:\/\/jira\.ringcentral\.com\/browse\/ABC-123\/?$/, route => {
     route.fulfill({
       status: 200,
       contentType: 'text/html',
@@ -192,12 +200,12 @@ try {
   });
 
   const page = await context.newPage();
-  await page.goto('https://jira.ringcentral.com/browse/ABC-123');
-  await page.waitForSelector('.design-links-container', { timeout: 10000 });
+  await page.goto('https://jira.ringcentral.com/browse/ABC-123/');
+  await page.waitForSelector('.design-links-container', { state: 'attached', timeout: 20000 });
 
   const itemTexts = await page.locator('.design-link-item').allTextContents();
-  assert.equal(await page.locator('.design-links-header').count(), 0, 'design panel should not render a persistent header');
-  assert.equal(itemTexts.length, 6, 'description, remote, and missing UX design rows should render once each');
+  assert.equal(await page.locator('.design-links-header').count(), 0, 'design panel should not render a summary header');
+  assert.equal(itemTexts.length, 7, 'description, native Jira Designs, remote, and missing UX design rows should render once each');
   assert.match(itemTexts[0], /Ready checkout prototype/);
   assert.match(itemTexts[0], /UX-100/);
   assert.match(itemTexts[0], /Ready for development/);
@@ -205,18 +213,44 @@ try {
   assert.match(itemTexts[0], /Linked issue/);
   assert.match(itemTexts[0], /Remote link/);
   assert.equal((itemTexts[0].match(/UX-100/g) || []).length, 1, 'UX epic key should not render twice');
-  assert.match(itemTexts[1], /UX-200/);
-  assert.doesNotMatch(itemTexts[1], /Design link missing/);
-  assert.doesNotMatch(itemTexts[1], /Missing design spec/);
-  assert.match(itemTexts[1], /Missing link/);
-  assert.match(itemTexts[2], /UXDES-300/);
-  assert.doesNotMatch(itemTexts[2], /Shared UXDES spec/);
+  assert.match(itemTexts[1], /Native pricing handoff/);
+  assert.match(itemTexts[1], /Design updated/);
+  assert.match(itemTexts[1], /Jira Designs/);
+  assert.match(itemTexts[2], /UX-200/);
+  assert.doesNotMatch(itemTexts[2], /Missing design spec/);
   assert.match(itemTexts[2], /Missing link/);
-  assert.match(itemTexts[3], /Draft onboarding walkthrough/);
-  assert.match(itemTexts[3], /Not ready for dev/);
-  assert.match(itemTexts[4], /Checkout mobile handoff/);
-  assert.match(itemTexts[4], /Description/);
-  assert.match(itemTexts[5], /Miro board/);
+  assert.equal(
+    await page.locator('.design-link-item', { hasText: 'UX-200' }).locator('.ux-ticket-link').getAttribute('title'),
+    'UX-200',
+  );
+  assert.match(itemTexts[3], /UXDES-300/);
+  assert.doesNotMatch(itemTexts[3], /Shared UXDES spec/);
+  assert.match(itemTexts[3], /Missing link/);
+  assert.equal(
+    await page.locator('.design-link-item', { hasText: 'UXDES-300' }).locator('.ux-ticket-link').getAttribute('title'),
+    'UXDES-300',
+  );
+  assert.match(itemTexts[4], /Draft onboarding walkthrough/);
+  assert.match(itemTexts[4], /Not ready for dev/);
+  assert.match(itemTexts[5], /Checkout mobile handoff/);
+  assert.match(itemTexts[5], /Description/);
+  assert.match(itemTexts[6], /Miro board/);
+
+  const readinessText = await page.locator('.design-readiness').textContent();
+  assert.match(
+    (readinessText || '').replace(/\s+/g, ' ').trim(),
+    /Missing design links 2 UX tickets need design links before implementation/,
+    'design panel should show the highest-priority handoff decision before status chips',
+  );
+  const readinessClass = await page.locator('.design-readiness').getAttribute('class');
+  assert.match(readinessClass, /design-readiness--missing/);
+
+  const statusSummaryTexts = await page.locator('.design-status-summary-chip').allTextContents();
+  assert.deepEqual(
+    statusSummaryTexts.map(text => text.trim()),
+    ['ready', 'updated', 'missing 2', 'not ready'],
+    'design panel should summarize actionable states before the link list',
+  );
 
   const firstHref = await page.locator('.design-link').first().getAttribute('href');
   assert.equal(firstHref, 'https://www.figma.com/proto/remote123/Checkout');
@@ -231,14 +265,17 @@ try {
   assert.match(missingStatusClass, /design-status-tag--missing/);
   const notReadyStatusClass = await page.locator('.design-status-tag', { hasText: 'Not ready for dev' }).getAttribute('class');
   assert.match(notReadyStatusClass, /design-status-tag--not-ready/);
+  const updatedStatusClass = await page.locator('.design-status-tag', { hasText: 'Design updated' }).getAttribute('class');
+  assert.match(updatedStatusClass, /design-status-tag--updated/);
 
   const containerHtml = await page.locator('.design-links-container').innerHTML();
   assert.equal(containerHtml.includes('notfigma.com'), false);
 
-  const transform = await page.locator('.design-links-container').evaluate(element => {
-    return getComputedStyle(element).transform;
+  const transformBeforeHoverY = await page.locator('.design-links-container').evaluate(element => {
+    const styles = getComputedStyle(element);
+    return new DOMMatrixReadOnly(styles.transform).m42;
   });
-  assert.equal(transform, 'none', 'design links panel should not shift page content');
+  assert.ok(Math.abs(transformBeforeHoverY) < 0.1, 'design links panel should not shift page content');
 
   const footerBeforeHover = await page.locator('.design-links-footer').evaluate(element => {
     const styles = getComputedStyle(element);
@@ -261,13 +298,37 @@ try {
   }, null, { timeout: 2000 });
   const footerAfterHover = await page.locator('.design-links-footer').evaluate(element => {
     const styles = getComputedStyle(element);
+    const matrix = new DOMMatrixReadOnly(styles.transform);
     return {
       opacity: styles.opacity,
       transform: styles.transform,
+      translateY: matrix.m42,
     };
   });
   assert.equal(footerAfterHover.opacity, '1');
-  assert.match(footerAfterHover.transform, /^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
+  assert.ok(Math.abs(footerAfterHover.translateY) < 0.1, 'design footer should slide back to its resting position on hover');
+  const containerTransformAfterHover = await page.locator('.design-links-container').evaluate(element => {
+    const styles = getComputedStyle(element);
+    return new DOMMatrixReadOnly(styles.transform).m42;
+  });
+  assert.ok(
+    containerTransformAfterHover > 3.5 && containerTransformAfterHover < 4.5,
+    'design links panel should use the same hover translate as the backend progress card',
+  );
+  await page.locator('.design-readiness').click();
+  await page.waitForFunction(() => {
+    const highlighted = document.querySelector('.design-link-item--highlight');
+    return highlighted?.getAttribute('data-design-status-tone') === 'missing'
+      && highlighted.textContent.includes('UX-200')
+      && document.activeElement === highlighted;
+  }, null, { timeout: 2000 });
+  await page.locator('.design-status-summary-chip[data-design-summary-tone="missing"]').click();
+  await page.waitForFunction(() => {
+    const highlighted = document.querySelector('.design-link-item--highlight');
+    return highlighted?.getAttribute('data-design-status-tone') === 'missing'
+      && highlighted.textContent.includes('UX-200')
+      && document.activeElement === highlighted;
+  }, null, { timeout: 2000 });
 
   await page.evaluate(() => {
     history.pushState({}, '', '/issues/?jql=project%20%3D%20ABC');
@@ -286,6 +347,7 @@ try {
     if (title) title.textContent = 'DEF-456 Empty issue';
     const description = document.querySelector('#description-val');
     if (description) description.textContent = 'No design references on this issue.';
+    document.querySelector('[data-testid="issue-designs-panel"]')?.remove();
     const linksList = document.querySelector('.links-list');
     if (linksList) linksList.innerHTML = '';
   });

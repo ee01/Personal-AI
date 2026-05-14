@@ -746,12 +746,16 @@ function renderStatusMessage(message) {
       <div class="status-card">
         <div>
           <h4>当前状态</h4>
-          <p class="status-card-copy">这些状态不会跳出 chat。你可以点其中一项，把建议追问带回输入框。</p>
+          <p class="status-card-copy">这些状态会先留在 chat 里说明清楚。你可以点其中一项继续追问，或打开对应位置处理。</p>
         </div>
         <div class="status-item-list">
           ${runtime.items
             .map(
-              (item) => `
+              (item) => {
+                const detailLines = Array.isArray(item.detailLines)
+                  ? item.detailLines.filter(Boolean).slice(0, 4)
+                  : [];
+                return `
                 <button
                   class="status-item"
                   type="button"
@@ -762,13 +766,24 @@ function renderStatusMessage(message) {
                   <span class="status-item-main">
                     <span class="status-item-title">${escapeHtml(item.title)}</span>
                     <span class="status-item-summary">${escapeHtml(item.summary)}</span>
+                    ${
+                      detailLines.length
+                        ? `<span class="status-item-details">${detailLines
+                            .map(
+                              (line) =>
+                                `<span>${escapeHtml(String(line))}</span>`,
+                            )
+                            .join('')}</span>`
+                        : ''
+                    }
                   </span>
                   <span class="status-item-meta">
                     ${item.badgeLabel ? `<span class="status-item-badge">${escapeHtml(item.badgeLabel)}</span>` : ''}
                     <span class="status-item-hint">${escapeHtml(item.actionHint || '继续追问')}</span>
                   </span>
                 </button>
-              `,
+              `;
+              },
             )
             .join('')}
         </div>
@@ -1477,10 +1492,6 @@ for (const [scope, button] of scopeButtons) {
 }
 
 elements.statusPill.addEventListener('click', async () => {
-  if (state.runtime?.topStatus?.kind === 'setup_blocker') {
-    await quickAsk.openSettings();
-    return;
-  }
   expireCurrentSessionIfNeeded();
   state.autoScrollPinned = true;
   setUiState('enriched');

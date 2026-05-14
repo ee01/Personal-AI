@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -13,7 +13,8 @@
           <p class="eyebrow">Personal AI · 4.0</p>
           <h1>让 AI 记住你</h1>
           <p class="hero-copy">
-            左侧是「记忆广播」——把记忆系统里的长期记忆、近期记忆重点和待办，自动推到豆包等外部入口；右侧是「记忆探索」——从豆包、ChatGPT 等日常对话里，把值得沉淀的事实和偏好自动写回记忆。
+            左侧是「记忆广播」——把记忆系统里的长期记忆、近期记忆重点和待办，自动推到豆包等外部入口；右侧是「记忆探索」——从豆包、ChatGPT
+            等日常对话里，把值得沉淀的事实和偏好自动写回记忆。
           </p>
         </div>
         <div class="hero-actions">
@@ -191,10 +192,12 @@
                     id="step-login-status"
                     class="step-status step-status-pending"
                     >待登录</span
+                  >
                 </div>
                 <p>
-                  默认使用桥接器自己的浏览器 profile；开启日常浏览器模式时，只通过扩展操作明确的
-                  doubao.com 标签页，不导出主浏览器 Cookie。
+                  默认使用桥接器自己的浏览器
+                  profile；开启日常浏览器模式时，只通过扩展操作明确的 doubao.com
+                  标签页，不导出主浏览器 Cookie。
                 </p>
               </div>
             </div>
@@ -203,25 +206,49 @@
               <input id="broadcast-use-daily-browser" type="checkbox" />
               <span class="toggle-copy">
                 <strong>使用我日常浏览器的登录状态</strong>
-                <span>开启后借用你日常 Chrome 的豆包登录态进行广播，无需桥接器单独登录。需安装 Chrome 扩展。</span>
+                <span
+                  >开启后借用你日常 Chrome
+                  的豆包登录态进行广播，无需桥接器单独登录。需安装 Chrome
+                  扩展。</span
+                >
               </span>
             </label>
 
-            <div class="webpage-mcp-guide-card" id="broadcast-webpage-mcp-guide" hidden>
+            <div
+              class="webpage-mcp-guide-card"
+              id="broadcast-webpage-mcp-guide"
+              hidden
+            >
               <div class="webpage-mcp-guide-steps">
                 <a
                   href="https://chromewebstore.google.com/detail/webpage-mcp-connector/iehgbogeakiedihodennfcnigojnncag"
                   target="_blank"
                   class="secondary compact-button"
-                >1. 安装 Chrome 扩展</a>
-                <span class="webpage-mcp-guide-hint">2. 重启 Chrome 让扩展接通</span>
-                <span class="webpage-mcp-guide-hint">3. 在 Chrome 里打开 doubao.com 并登录</span>
+                  >1. 安装 Chrome 扩展</a
+                >
+                <span class="webpage-mcp-guide-hint"
+                  >2. 重启 Chrome 让扩展接通</span
+                >
+                <span class="webpage-mcp-guide-hint"
+                  >3. 在 Chrome 里打开 doubao.com 并登录</span
+                >
               </div>
               <div class="webpage-mcp-guide-actions">
-                <button id="broadcast-mcp-test-button" class="secondary compact-button" type="button">测试连接</button>
-                <small id="broadcast-mcp-test-message" class="field-hint"></small>
+                <button
+                  id="broadcast-mcp-test-button"
+                  class="secondary compact-button"
+                  type="button"
+                >
+                  测试连接
+                </button>
+                <small
+                  id="broadcast-mcp-test-message"
+                  class="field-hint"
+                ></small>
               </div>
-              <p class="field-hint webpage-mcp-fallback-hint">未检测到扩展时不会阻塞广播 — 会临时使用桌面端自带 Chromium。</p>
+              <p class="field-hint webpage-mcp-fallback-hint">
+                未检测到扩展时不会阻塞广播 — 会临时使用桌面端自带 Chromium。
+              </p>
             </div>
 
             <div class="action-row">
@@ -317,14 +344,29 @@
               </div>
             </div>
             <p class="step-note">
-              如果你想先验证链路，可以先分别手动推送 persona、近期记忆重点和待办 /
-              通知，确认都能写入正确线程。
+              如果你想先验证链路，可以先分别手动推送 persona、近期记忆重点和待办
+              / 通知，确认都能写入正确线程。
             </p>
             <div class="action-row">
               <button id="stop-button" class="danger" type="button">
                 停止后台并退出
               </button>
             </div>
+          </article>
+
+          <article class="flow-card sync-audit-card">
+            <div class="sync-audit-head">
+              <div>
+                <p class="column-label">Delivery Audit</p>
+                <h3>最近同步流水</h3>
+              </div>
+              <span
+                id="sync-audit-status"
+                class="step-status step-status-pending"
+                >待记录</span
+              >
+            </div>
+            <div id="sync-audit-list" class="sync-audit-list"></div>
           </article>
         </section>
 
@@ -333,7 +375,8 @@
             <p class="column-label">Explore</p>
             <h2>记忆探索</h2>
             <p>
-              开启下面的来源开关后，桥接器会按设定节奏自动抓取豆包 / ChatGPT 对话，提炼值得沉淀的事实、偏好与待办，写回记忆系统。无需手动操作。
+              开启下面的来源开关后，桥接器会按设定节奏自动抓取豆包 / ChatGPT
+              对话，提炼值得沉淀的事实、偏好与待办，写回记忆系统。无需手动操作。
             </p>
           </div>
 
@@ -357,7 +400,7 @@
                 浏览探索记忆
               </button>
               <p class="input-overview-hint">
-                日常不用打开这里。想看看记忆系统从对话里学到了什么、或撤回某条记忆时再进入。
+                日常不用打开这里。想看看记忆系统从对话里学到了什么时再进入；批量撤回按来源卡片里的当前范围执行。
               </p>
             </div>
           </article>
@@ -440,25 +483,46 @@
               <input id="doubao-source-use-daily-browser" type="checkbox" />
               <span class="toggle-copy">
                 <strong>使用我日常浏览器的登录状态</strong>
-                <span>开启后借用你日常 Chrome 中的豆包登录态进行抓取，避免反复登录。需安装 Chrome 扩展。未检测到扩展时会自动回退到内置 Chromium。</span>
+                <span
+                  >开启后借用你日常 Chrome
+                  中的豆包登录态进行抓取，避免反复登录。需安装 Chrome
+                  扩展。未检测到扩展时会自动回退到内置 Chromium。</span
+                >
               </span>
             </label>
 
-            <div class="webpage-mcp-guide-card" id="doubao-source-webpage-mcp-guide" hidden>
+            <div
+              class="webpage-mcp-guide-card"
+              id="doubao-source-webpage-mcp-guide"
+              hidden
+            >
               <div class="webpage-mcp-guide-steps">
                 <a
                   href="https://chromewebstore.google.com/detail/webpage-mcp-connector/iehgbogeakiedihodennfcnigojnncag"
                   target="_blank"
                   class="secondary compact-button"
-                >1. 安装 Chrome 扩展</a>
-                <span class="webpage-mcp-guide-hint">2. 重启 Chrome 让扩展接通</span>
-                <span class="webpage-mcp-guide-hint">3. 在 Chrome 里打开 doubao.com 并登录</span>
+                  >1. 安装 Chrome 扩展</a
+                >
+                <span class="webpage-mcp-guide-hint"
+                  >2. 重启 Chrome 让扩展接通</span
+                >
+                <span class="webpage-mcp-guide-hint"
+                  >3. 在 Chrome 里打开 doubao.com 并登录</span
+                >
               </div>
               <div class="webpage-mcp-guide-actions">
-                <button id="doubao-mcp-test-button" class="secondary compact-button" type="button">测试连接</button>
+                <button
+                  id="doubao-mcp-test-button"
+                  class="secondary compact-button"
+                  type="button"
+                >
+                  测试连接
+                </button>
                 <small id="doubao-mcp-test-message" class="field-hint"></small>
               </div>
-              <p class="field-hint webpage-mcp-fallback-hint">未检测到扩展时不会阻塞同步 — 会临时使用桌面端自带 Chromium。</p>
+              <p class="field-hint webpage-mcp-fallback-hint">
+                未检测到扩展时不会阻塞同步 — 会临时使用桌面端自带 Chromium。
+              </p>
             </div>
 
             <p
@@ -487,10 +551,29 @@
               </button>
             </div>
 
+            <div class="source-revoke-panel">
+              <div>
+                <label>已入库记忆控制</label>
+                <strong id="doubao-source-revoke-scope">-</strong>
+                <p>
+                  撤回这个来源在当前范围写入 Memory Service
+                  的记忆；不会删除豆包聊天，也不会清理本地审计缓存。
+                </p>
+              </div>
+              <button
+                id="doubao-source-revoke-button"
+                class="secondary"
+                type="button"
+              >
+                撤回已入库记忆
+              </button>
+            </div>
+
             <p class="privacy-note">
-              隐私提示：默认只使用桥接器自己的豆包浏览器 profile；开启日常浏览器模式时，只读取明确打开的
-              doubao.com 标签页，不导出主浏览器 Cookie，也不会直接改写真实聊天；如果要在 Explorer
-              里撤回已入库记忆，会按这里保存的默认范围执行。
+              隐私提示：默认只使用桥接器自己的豆包浏览器
+              profile；开启日常浏览器模式时，只读取明确打开的 doubao.com
+              标签页，不导出主浏览器 Cookie，也不会直接改写真实聊天；如果要在
+              Explorer 里撤回已入库记忆，会按这里保存的默认范围执行。
             </p>
             <p id="doubao-source-message" class="inline-message"></p>
           </article>
@@ -584,26 +667,47 @@
               <input id="chatgpt-source-use-daily-browser" type="checkbox" />
               <span class="toggle-copy">
                 <strong>使用我日常浏览器的登录状态</strong>
-                <span>开启后借用你日常 Chrome 中的 ChatGPT 登录态进行抓取，避免 Cloudflare 验证。需安装 Chrome 扩展。未检测到扩展时会自动回退到内置 Chromium。</span>
+                <span
+                  >开启后借用你日常 Chrome 中的 ChatGPT 登录态进行抓取，避免
+                  Cloudflare 验证。需安装 Chrome
+                  扩展。未检测到扩展时会自动回退到内置 Chromium。</span
+                >
               </span>
             </label>
 
-            <div class="webpage-mcp-guide-card" id="chatgpt-webpage-mcp-guide" hidden>
+            <div
+              class="webpage-mcp-guide-card"
+              id="chatgpt-webpage-mcp-guide"
+              hidden
+            >
               <div class="webpage-mcp-guide-steps">
                 <a
                   href="https://chromewebstore.google.com/detail/webpage-mcp-connector/iehgbogeakiedihodennfcnigojnncag"
                   target="_blank"
                   class="secondary compact-button"
                   id="chatgpt-mcp-install-link"
-                >1. 安装 Chrome 扩展</a>
-                <span class="webpage-mcp-guide-hint">2. 重启 Chrome 让扩展接通</span>
-                <span class="webpage-mcp-guide-hint">3. 在 Chrome 里打开 chatgpt.com 并登录</span>
+                  >1. 安装 Chrome 扩展</a
+                >
+                <span class="webpage-mcp-guide-hint"
+                  >2. 重启 Chrome 让扩展接通</span
+                >
+                <span class="webpage-mcp-guide-hint"
+                  >3. 在 Chrome 里打开 chatgpt.com 并登录</span
+                >
               </div>
               <div class="webpage-mcp-guide-actions">
-                <button id="chatgpt-mcp-test-button" class="secondary compact-button" type="button">测试连接</button>
+                <button
+                  id="chatgpt-mcp-test-button"
+                  class="secondary compact-button"
+                  type="button"
+                >
+                  测试连接
+                </button>
                 <small id="chatgpt-mcp-test-message" class="field-hint"></small>
               </div>
-              <p class="field-hint webpage-mcp-fallback-hint">未检测到扩展时不会阻塞同步 — 会临时使用桌面端自带 Chromium。</p>
+              <p class="field-hint webpage-mcp-fallback-hint">
+                未检测到扩展时不会阻塞同步 — 会临时使用桌面端自带 Chromium。
+              </p>
             </div>
 
             <p
@@ -632,6 +736,24 @@
               </button>
             </div>
 
+            <div class="source-revoke-panel">
+              <div>
+                <label>已入库记忆控制</label>
+                <strong id="chatgpt-source-revoke-scope">-</strong>
+                <p>
+                  撤回这个来源在当前范围写入 Memory Service 的记忆；不会删除
+                  ChatGPT 对话，也不会清理本地审计缓存。
+                </p>
+              </div>
+              <button
+                id="chatgpt-source-revoke-button"
+                class="secondary"
+                type="button"
+              >
+                撤回已入库记忆
+              </button>
+            </div>
+
             <p class="privacy-note">
               隐私提示：来源内容会先进入本地 Explorer
               缓存用于预览与重置；如果后续需要在 Explorer
@@ -652,7 +774,8 @@
                   >
                 </div>
                 <p>
-                  浏览器扩展会静默观察你日常的网页消息流，把可沉淀的内容补到记忆里——配合上面两个对话来源，让 Quick Ask 拿到更连续的上下文。
+                  浏览器扩展会静默观察你日常的网页消息流，把可沉淀的内容补到记忆里——配合上面两个对话来源，让
+                  Quick Ask 拿到更连续的上下文。
                 </p>
               </div>
             </div>

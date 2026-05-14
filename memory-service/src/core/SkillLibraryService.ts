@@ -112,6 +112,8 @@ export interface SkillListItem {
   suggestionClusterKey?: string;
   currentVersion?: string;
   currentSha256?: string;
+  reviewRequired: boolean;
+  reviewReasons: string[];
   bindings: SkillBindingRecord[];
   createdAt: number;
   updatedAt: number;
@@ -323,6 +325,7 @@ const SECRET_PATTERNS = [
   /secret\s*[:=]\s*['"]?[A-Za-z0-9_.-]{16,}/i,
   /-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----/,
 ];
+const SUGGESTION_DISMISS_COOLDOWN_SECONDS = 30 * 86400;
 
 function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -357,6 +360,11 @@ function normalizeSlug(value: string): string {
 
 export function normalizeSkillSlug(value: string): string {
   return normalizeSlug(value);
+}
+
+function normalizeClusterKey(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
 }
 
 function normalizeVersion(value?: string): string {
@@ -485,6 +493,59 @@ function toBindingRecord(row: BindingRow): SkillBindingRecord {
   };
 }
 
+function uniqueText(values: Array<string | undefined>): string[] {
+  return Array.from(
+    new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]),
+  );
+}
+
+function skillReviewReasons(input: {
+  status: SkillStatus;
+  risk: SkillRisk;
+  sources: string[];
+  suggestedFrom?: string;
+  activeVersion?: SkillVersionRecord;
+}): string[] {
+  if (input.status !== 'suggestion') return [];
+
+  const externalPlatformIds = ['openclaw', 'codex', 'claude_code', 'cursor'];
+  const suggestedFrom = input.suggestedFrom?.toLowerCase();
+  const reasons: string[] = [];
+  const isExternalAgentSource = Boolean(
+    (suggestedFrom && externalPlatformIds.includes(suggestedFrom)) ||
+      input.sources.some((source) => externalPlatformIds.includes(source)),
+  );
+
+  if (input.risk === 'high') {
+    reasons.push('高风险技能建议需要先审核触发条件和风险策略');
+  }
+  if (isExternalAgentSource) {
+    reasons.push('外部 agent 平台导入的技能需要先确认来源内容');
+  }
+
+  const version = input.activeVersion;
+  if (version) {
+    if ((version.files || []).length > 0) {
+      reasons.push('技能包包含额外脚本或资源文件');
+    }
+    if (
+      version.evidence.some((evidence) =>
+        ['partial', 'unverified'].includes(evidence.evidenceState || ''),
+      )
+    ) {
+      reasons.push('证据链还不是完整确认状态');
+    }
+    if (
+      (input.risk === 'high' || isExternalAgentSource) &&
+      version.workflow.some((step) => (step.tools || []).length > 0)
+    ) {
+      reasons.push('工作流声明了工具调用步骤');
+    }
+  }
+
+  return uniqueText(reasons);
+}
+
 function toSyncSettingRecord(row: SyncSettingRow): SkillSyncSettingRecord {
   return {
     platform: row.platform,
@@ -498,19 +559,33 @@ function toSyncSettingRecord(row: SyncSettingRow): SkillSyncSettingRecord {
   };
 }
 
-function toSkillListItem(row: SkillRow, bindings: SkillBindingRecord[]): SkillListItem {
+function toSkillListItem(
+  row: SkillRow,
+  bindings: SkillBindingRecord[],
+  activeVersion?: SkillVersionRecord,
+): SkillListItem {
+  const status = validateStatus(row.status);
+  const risk = validateRisk(row.risk);
+  const sources = safeJsonParse<string[]>(row.source_kinds_json, []);
+  const reviewReasons = skillReviewReasons({
+    status,
+    risk,
+    sources,
+    suggestedFrom: row.suggested_from ?? undefined,
+    activeVersion,
+  });
   return {
     id: row.id,
     slug: row.slug,
     title: row.title,
     summary: row.summary,
     scope: validateScope(row.scope),
-    risk: validateRisk(row.risk),
+    risk,
     trigger: row.trigger_text ?? undefined,
     notUse: row.not_use_text ?? undefined,
-    status: validateStatus(row.status),
+    status,
     owner: row.owner ?? undefined,
-    sources: safeJsonParse<string[]>(row.source_kinds_json, []),
+    sources,
     repetition: row.repetition ?? undefined,
     riskBrief: row.risk_brief ?? undefined,
     suggestedFrom: row.suggested_from ?? undefined,
@@ -522,6 +597,8 @@ function toSkillListItem(row: SkillRow, bindings: SkillBindingRecord[]): SkillLi
     suggestionClusterKey: row.suggestion_cluster_key ?? undefined,
     currentVersion: row.current_version ?? undefined,
     currentSha256: row.current_sha256 ?? undefined,
+    reviewRequired: reviewReasons.length > 0,
+    reviewReasons,
     bindings,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -672,7 +749,11 @@ export class SkillLibraryService {
                    s.created_at DESC`,
       )
       .all(ts) as SkillRow[];
-    const items = rows.map((row) => toSkillListItem(row, this.listBindings(row.id)));
+    const items = rows.map((row) => {
+      const versions = this.listVersions(row.id);
+      const activeVersion = versions.find((version) => version.isActive) || versions[0];
+      return toSkillListItem(row, this.listBindings(row.id), activeVersion);
+    });
     return { items, total: items.length };
   }
 
@@ -693,7 +774,7 @@ export class SkillLibraryService {
 
     const versions = this.listVersions(row.id);
     const activeVersion = versions.find((version) => version.isActive) || versions[0];
-    const base = toSkillListItem(row, this.listBindings(row.id));
+    const base = toSkillListItem(row, this.listBindings(row.id), activeVersion);
     let share: SkillShareInfo | undefined;
     let shareError: string | undefined;
     if (activeVersion && base.status === 'active') {
@@ -1010,7 +1091,11 @@ export class SkillLibraryService {
 
     const shouldCreateExternalChange =
       existingDetail.status === 'active' &&
-      (!remoteMtime || remoteMtime > existingDetail.updatedAt);
+      this.isExternalNewerThanSkill(existingDetail, {
+        version,
+        sha256: packageSha,
+        mtime: remoteMtime,
+      });
     if (!shouldCreateExternalChange) {
       return {
         status: 'updated_binding',
@@ -1051,7 +1136,22 @@ export class SkillLibraryService {
     this.ensureDefaultSyncSettings();
     const ts = now();
     const id = randomUUID();
-    const slug = normalizeSlug(input.slug || input.title);
+    const clusterKey = normalizeClusterKey(input.suggestionClusterKey);
+    const existingByCluster = clusterKey
+      ? this.findSkillRowByClusterKey(clusterKey)
+      : null;
+    if (existingByCluster && this.shouldReuseSuggestionCandidate(existingByCluster, ts)) {
+      return this.getSkill(existingByCluster.id)!;
+    }
+
+    let slug = normalizeSlug(input.slug || input.title);
+    const existingBySlug = this.findSkillRowBySlug(slug);
+    if (existingBySlug) {
+      if (!clusterKey || this.shouldReuseSuggestionCandidate(existingBySlug, ts)) {
+        return this.getSkill(existingBySlug.id)!;
+      }
+      slug = this.generateUniqueSlug(slug);
+    }
     const version = normalizeVersion(input.currentVersion);
     const skillMd = buildSkillMd(input, slug);
     const workflow = input.workflow || [];
@@ -1097,7 +1197,7 @@ export class SkillLibraryService {
           input.suggestedFrom ?? null,
           ts,
           input.notify ? ts : null,
-          input.suggestionClusterKey ?? null,
+          clusterKey ?? null,
           ts,
           ts,
         );
@@ -1140,10 +1240,19 @@ export class SkillLibraryService {
     return this.getSkill(id)!;
   }
 
-  useSuggestion(id: string): SkillDetail {
+  useSuggestion(id: string, options?: { reviewConfirmed?: boolean }): SkillDetail {
     const skill = this.getSkill(id);
     if (!skill) throw new Error('Skill suggestion not found');
     if (skill.status !== 'suggestion') throw new Error('Only suggestions can be promoted');
+    if (skill.reviewRequired && !options?.reviewConfirmed) {
+      throw new Error(
+        `Review required before promoting this skill: ${skill.reviewReasons.join('; ')}`,
+      );
+    }
+    const externalChangeBinding = this.getExternalChangeBinding(skill);
+    if (externalChangeBinding) {
+      return this.applyExternalChangeSuggestion(skill, externalChangeBinding);
+    }
     const ts = now();
     this.db
       .prepare(
@@ -1338,6 +1447,35 @@ export class SkillLibraryService {
     return row ?? null;
   }
 
+  private findSkillRowByClusterKey(clusterKey: string): SkillRow | null {
+    const row = this.db
+      .prepare(
+        `SELECT s.*,
+                v.version AS current_version,
+                v.sha256 AS current_sha256
+           FROM personal_skills s
+      LEFT JOIN skill_versions v ON v.skill_id = s.id AND v.is_active = 1
+          WHERE s.suggestion_cluster_key = ?
+          ORDER BY CASE s.status
+            WHEN 'active' THEN 0
+            WHEN 'suggestion' THEN 1
+            WHEN 'dismissed' THEN 2
+            ELSE 3
+          END,
+          s.updated_at DESC
+          LIMIT 1`,
+      )
+      .get(clusterKey) as SkillRow | undefined;
+    return row ?? null;
+  }
+
+  private shouldReuseSuggestionCandidate(row: SkillRow, timestamp: number): boolean {
+    const status = validateStatus(row.status);
+    if (status !== 'dismissed') return true;
+    if (!row.dismissed_at) return true;
+    return timestamp - row.dismissed_at <= SUGGESTION_DISMISS_COOLDOWN_SECONDS;
+  }
+
   private getBinding(skillId: string, platform: string): SkillBindingRecord | null {
     const row = this.db
       .prepare(
@@ -1349,6 +1487,76 @@ export class SkillLibraryService {
       )
       .get(skillId, platform) as BindingRow | undefined;
     return row ? toBindingRecord(row) : null;
+  }
+
+  private getExternalChangeBinding(skill: SkillDetail): SkillBindingRecord | null {
+    return (
+      skill.bindings.find((binding) => {
+        const targetId = binding.metadata?.externalChangeFor;
+        return typeof targetId === 'string' && targetId.trim().length > 0;
+      }) || null
+    );
+  }
+
+  private applyExternalChangeSuggestion(
+    skill: SkillDetail,
+    binding: SkillBindingRecord,
+  ): SkillDetail {
+    const targetId = binding.metadata.externalChangeFor;
+    if (typeof targetId !== 'string' || !targetId.trim()) {
+      throw new Error('External change suggestion is missing its target skill');
+    }
+
+    const target = this.getSkill(targetId);
+    if (!target || target.status !== 'active') {
+      throw new Error('External change target skill is no longer active');
+    }
+    if (!skill.activeVersion) {
+      throw new Error('External change suggestion does not have a version to apply');
+    }
+
+    const packageJson = skill.activeVersion.packageJson as {
+      title?: unknown;
+      summary?: unknown;
+    };
+    const title =
+      typeof packageJson.title === 'string' && packageJson.title.trim()
+        ? packageJson.title.trim()
+        : target.title;
+    const summary =
+      typeof packageJson.summary === 'string' && packageJson.summary.trim()
+        ? packageJson.summary.trim()
+        : target.summary;
+
+    const applied = this.updateActiveSkillFromExternal({
+      platform: binding.platform,
+      slug: target.slug,
+      title,
+      summary,
+      version: skill.activeVersion.version,
+      skillMd: skill.activeVersion.skillMd,
+      files: skill.activeVersion.files,
+      sha256: skill.activeVersion.sha256,
+      remoteMtime: binding.remoteMtime,
+      metadata: {
+        ...binding.metadata,
+        appliedFromSuggestion: skill.id,
+      },
+    });
+
+    const ts = now();
+    this.db
+      .prepare(
+        `UPDATE personal_skills
+            SET status = 'dismissed',
+                dismissed_at = ?,
+                dismiss_reason = 'applied_external_change',
+                updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(ts, ts, skill.id);
+
+    return this.getSkill(target.id) || applied.skill || target;
   }
 
   private generateUniqueSlug(baseSlug: string): string {

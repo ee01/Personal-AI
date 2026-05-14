@@ -32,6 +32,10 @@ export function getNmBridgePath(): string {
 }
 
 export function getNmTokenPath(): string {
+  if (process.env.DESKTOP_APP_NM_TOKEN_PATH) {
+    return resolve(process.env.DESKTOP_APP_NM_TOKEN_PATH);
+  }
+
   return join(
     homedir(),
     'Library',

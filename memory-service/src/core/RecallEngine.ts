@@ -30,6 +30,7 @@ import { toSlug } from '../utils/slug.js';
 import { parseQueryTimeRange } from '../utils/queryTime.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
 import { buildExploreLink } from '../utils/exploreLink.js';
+import { getRecallFeedbackAction } from '../utils/recallFeedback.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -502,13 +503,17 @@ export class RecallEngine {
         timestamp: c.timestamp,
         entity: c.entity,
       };
-      if (query.includeMetadata && c.metadata) {
+      if (query.includeMetadata) {
+        const recallFeedback = getRecallFeedbackAction(this.db, c.type, c.id);
         item.metadata = {
-          ...c.metadata,
+          ...(c.metadata ?? {}),
           channels: c.channels,
           recencyScore: c.recencyScore,
           salienceScore: c.salienceScore,
         };
+        if (recallFeedback) {
+          item.metadata.recallFeedback = recallFeedback;
+        }
       }
       return item;
     });

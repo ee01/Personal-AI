@@ -1,0 +1,2286 @@
+<template>
+  <div class="relationship-radar-page">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">RM</div>
+        <div class="brand-text">
+          <h2>Relationship Memory Radar</h2>
+          <span>高频人物上下文、偏好、open loop 与关系图谱</span>
+        </div>
+      </div>
+
+      <div class="top-actions">
+        <label class="search">
+          <span class="search-icon">Search</span>
+          <input
+            v-model="searchText"
+            type="search"
+            placeholder="搜索人物、别名或描述"
+            @keydown.enter.prevent="refreshAll"
+          />
+        </label>
+        <button class="ghost-btn" type="button" :disabled="isLoading" @click="refreshAll">
+          {{ isLoading ? '刷新中' : '刷新' }}
+        </button>
+        <button
+          class="pill-btn primary"
+          type="button"
+          :disabled="isConsolidating"
+          @click="runConsolidation(false)"
+        >
+          {{ isConsolidating ? '整理中' : '后台整理' }}
+        </button>
+      </div>
+    </header>
+
+    <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
+
+    <section class="hero">
+      <div class="greeting-strip">
+        <div class="greeting-line">
+          <i></i>
+          <strong>{{ people.length }} 位雷达人物</strong>
+          <span>{{ peopleResponse?.coverageNote || '正在读取 Memory Service 的人物关系投影。' }}</span>
+        </div>
+        <div class="legend">
+          <span><i class="hot"></i>需确认</span>
+          <span><i class="warn"></i>待跟进</span>
+          <span><i class="calm"></i>已沉淀</span>
+        </div>
+      </div>
+
+      <article class="spotlight">
+        <div class="spotlight-tag">{{ selectedPerson ? stateLabel(selectedPerson.radarState) : '等待数据' }}</div>
+        <h1>
+          {{ selectedPerson?.name || '还没有可展示的人物关系雷达' }}
+        </h1>
+        <p>
+          {{
+            selectedPerson?.description ||
+            selectedPerson?.reason ||
+            '当 Memory Service 发现高频人物后，会先用 lazy fallback 展示索引级信息，再由后台整理生成更稳定的上下文卡。'
+          }}
+        </p>
+        <div v-if="selectedPerson" class="spotlight-meta">
+          <span>{{ selectedPerson.interactionCount }} 次交互</span>
+          <span>{{ selectedPerson.activeDays }} 个活跃日</span>
+          <span>{{ formatDate(selectedPerson.lastInteractionAt) }}</span>
+          <span :class="['chip', qualityTone(selectedPerson.dataQuality)]">
+            {{ qualityLabel(selectedPerson.dataQuality) }}
+          </span>
+        </div>
+        <div class="spotlight-actions">
+          <button
+            type="button"
+            class="primary"
+            :disabled="!selectedPerson"
+            @click="activeTab = 'context'"
+          >
+            查看上下文
+          </button>
+          <button
+            type="button"
+            :disabled="!selectedPerson || isConsolidating"
+            @click="runConsolidation(true)"
+          >
+            强制刷新此人
+          </button>
+          <button
+            type="button"
+            :disabled="!contextCard"
+            @click="copyContextPackage"
+          >
+            复制上下文包
+          </button>
+        </div>
+      </article>
+
+      <div class="stat-strip">
+        <div class="stat-card">
+          <div>
+            <span class="label">高频阈值</span>
+            <strong>{{ peopleResponse?.threshold.minimumInteractionCount || '-' }}</strong>
+            <small>次交互 / {{ peopleResponse?.threshold.minimumActiveDays || '-' }} 活跃日</small>
+          </div>
+          <span class="stat-icon">T</span>
+        </div>
+        <div class="stat-card">
+          <div>
+            <span class="label">待确认事实</span>
+            <strong>{{ pendingReviewCount }}</strong>
+            <small>确认后写入人物画像</small>
+          </div>
+          <span class="stat-icon warn">Q</span>
+        </div>
+        <div class="stat-card">
+          <div>
+            <span class="label">后台整理</span>
+            <strong>{{ consolidationResult?.consolidated ?? generatedPeopleCount }}</strong>
+            <small>{{ lastConsolidationText }}</small>
+          </div>
+          <span class="stat-icon purple">M</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title">
+          <h3>人物雷达</h3>
+          <span>{{ people.length }} / {{ peopleResponse?.totalCandidates || 0 }} 位候选</span>
+        </div>
+        <div class="section-tools">
+          <button
+            v-for="option in stateFilterOptions"
+            :key="option.value"
+            type="button"
+            :class="{ active: stateFilter === option.value }"
+            @click="setStateFilter(option.value)"
+          >
+            {{ option.label }}
+          </button>
+          <button
+            type="button"
+            :class="{ active: includeBelowThreshold }"
+            @click="toggleIncludeBelowThreshold"
+          >
+            候选
+          </button>
+        </div>
+      </div>
+
+      <div v-if="isLoading && people.length === 0" class="loading-state">
+        正在加载人物关系雷达...
+      </div>
+      <div v-else-if="people.length === 0" class="empty-state">
+        暂无达到阈值的人物。打开“候选”可查看低频人物；后台整理会在每日 consolidation 后补充更高质量的投影。
+      </div>
+      <div v-else class="radar-grid">
+        <button
+          v-for="(person, index) in people"
+          :key="person.id"
+          type="button"
+          :class="['person-card', toneForPerson(person), { active: person.id === selectedPersonId }]"
+          @click="selectPerson(person)"
+        >
+          <div class="person-head">
+            <div :class="['avatar', `g-${(index % 5) + 1}`]">
+              {{ person.name.slice(0, 1) }}
+            </div>
+            <div class="person-name">
+              <strong>{{ person.name }}</strong>
+              <span>{{ stateLabel(person.radarState) }} · {{ qualityLabel(person.dataQuality) }}</span>
+            </div>
+            <span v-if="person.reviewPendingCount > 0" class="chip hot">
+              {{ person.reviewPendingCount }}
+            </span>
+          </div>
+          <p class="person-headline">{{ person.reason }}</p>
+          <div class="person-foot">
+            <span>{{ person.interactionCount }} 次</span>
+            <span>{{ person.activeDays }} 天</span>
+            <span>{{ formatPercent(person.score) }}</span>
+          </div>
+        </button>
+      </div>
+    </section>
+
+    <section class="detail" v-if="selectedPerson">
+      <main class="detail-main">
+        <div class="detail-hero">
+          <div class="detail-hero-row">
+            <div class="detail-identity">
+              <div class="avatar large">{{ selectedPerson.name.slice(0, 1) }}</div>
+              <div class="detail-name">
+                <h2>
+                  {{ selectedPerson.name }}
+                  <span :class="['chip', stateTone(selectedPerson.radarState)]">
+                    {{ stateLabel(selectedPerson.radarState) }}
+                  </span>
+                  <span :class="['chip', qualityTone(selectedPerson.dataQuality)]">
+                    {{ qualityLabel(selectedPerson.dataQuality) }}
+                  </span>
+                </h2>
+                <p>{{ selectedPerson.description || selectedPerson.reason }}</p>
+              </div>
+            </div>
+            <div class="detail-actions">
+              <button class="ghost-btn" type="button" @click="activeTab = 'meeting'">
+                会议简报
+              </button>
+              <button class="ghost-btn" type="button" @click="activeTab = 'assistant'">
+                回复助手
+              </button>
+            </div>
+          </div>
+
+          <div class="detail-metrics">
+            <div class="detail-metric">
+              <span>关系分</span>
+              <strong>{{ formatPercent(selectedPerson.score) }}</strong>
+              <i :style="{ '--pct': formatPercent(selectedPerson.score) }"></i>
+            </div>
+            <div class="detail-metric">
+              <span>近期信号</span>
+              <strong>{{ formatPercent(selectedPerson.signals.recent) }}</strong>
+              <i :style="{ '--pct': formatPercent(selectedPerson.signals.recent) }"></i>
+            </div>
+            <div class="detail-metric">
+              <span>交互频率</span>
+              <strong>{{ formatPercent(selectedPerson.signals.frequency) }}</strong>
+              <i :style="{ '--pct': formatPercent(selectedPerson.signals.frequency) }"></i>
+            </div>
+            <div class="detail-metric">
+              <span>来源广度</span>
+              <strong>{{ formatPercent(selectedPerson.signals.breadth) }}</strong>
+              <i :style="{ '--pct': formatPercent(selectedPerson.signals.breadth) }"></i>
+            </div>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="关系雷达详情">
+          <button
+            v-for="tab in tabs"
+            :key="tab.value"
+            type="button"
+            :class="{ active: activeTab === tab.value }"
+            @click="activeTab = tab.value"
+          >
+            {{ tab.label }}
+            <span v-if="tab.badge" class="badge">{{ tab.badge }}</span>
+          </button>
+        </nav>
+
+        <div class="tab-content">
+          <div v-if="isContextLoading && activeTab === 'context'" class="loading-state compact">
+            正在生成上下文卡...
+          </div>
+
+          <template v-else-if="activeTab === 'context' && contextCard">
+            <div class="quote">
+              <div class="quote-body">{{ contextCard.bullets[0] || selectedPerson.reason }}</div>
+            </div>
+
+            <div class="panel-grid">
+              <section class="panel">
+                <div class="panel-head">
+                  <h4><span class="panel-icon">F</span>已知事实</h4>
+                  <span>{{ contextCard.knownFacts.length }}</span>
+                </div>
+                <div class="panel-body">
+                  <div v-if="contextCard.knownFacts.length === 0" class="muted-line">
+                    还没有沉淀为人物事实。
+                  </div>
+                  <div
+                    v-for="fact in contextCard.knownFacts"
+                    :key="`${fact.key}:${fact.value}`"
+                    class="item"
+                  >
+                    <div class="item-row">
+                      <strong>{{ fact.key }}</strong>
+                      <span :class="['chip', fact.confirmed ? 'ok' : 'warn']">
+                        {{ fact.confirmed ? '已确认' : '待确认' }}
+                      </span>
+                    </div>
+                    <p>{{ fact.value }}</p>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <h4><span class="panel-icon purple">R</span>关联对象</h4>
+                  <span>{{ contextCard.relationshipHints.length }}</span>
+                </div>
+                <div class="panel-body">
+                  <div v-if="contextCard.relationshipHints.length === 0" class="muted-line">
+                    暂无稳定关系边。
+                  </div>
+                  <div
+                    v-for="hint in contextCard.relationshipHints"
+                    :key="`${hint.targetId}:${hint.relationType}`"
+                    class="item relation-item"
+                  >
+                    <div>
+                      <strong>{{ hint.targetName }}</strong>
+                      <p>{{ hint.relationType }} · {{ hint.context || hint.targetType }}</p>
+                    </div>
+                    <span>{{ formatPercent(hint.strength) }}</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel full">
+                <div class="panel-head">
+                  <h4><span class="panel-icon warn">O</span>可能需要跟进</h4>
+                  <span>{{ contextCard.openLoops.length }}</span>
+                </div>
+                <div class="panel-body">
+                  <div v-if="contextCard.openLoops.length === 0" class="muted-line">
+                    没有识别到明确 open loop。
+                  </div>
+                  <button
+                    v-for="loop in contextCard.openLoops"
+                    :key="loop.id"
+                    type="button"
+                    class="timeline-item"
+                    @click="openEvidence(loop.evidenceRef)"
+                  >
+                    <span>{{ formatDate(loop.timestamp) }}</span>
+                    <strong>{{ loop.title }}</strong>
+                    <p>{{ loop.snippet }}</p>
+                  </button>
+                </div>
+              </section>
+
+              <section class="panel full">
+                <div class="panel-head">
+                  <h4><span class="panel-icon ok">B</span>检索增强提示</h4>
+                  <span>{{ contextCard.retrievalHints.boostTerms.length }}</span>
+                </div>
+                <div class="panel-body boost-cloud">
+                  <span
+                    v-for="term in contextCard.retrievalHints.boostTerms"
+                    :key="term"
+                    class="chip blue"
+                  >
+                    {{ term }}
+                  </span>
+                </div>
+              </section>
+
+              <section v-if="contextCard.doNotAssume.length > 0" class="panel full">
+                <div class="panel-head">
+                  <h4><span class="panel-icon danger">!</span>不要假设</h4>
+                </div>
+                <div class="panel-body">
+                  <div
+                    v-for="note in contextCard.doNotAssume"
+                    :key="note"
+                    class="item"
+                  >
+                    <p>{{ note }}</p>
+                  </div>
+                </div>
+              </section>
+
+              <details class="panel full markdown-panel">
+                <summary>Memory Context Markdown</summary>
+                <pre>{{ contextCard.contextMd }}</pre>
+              </details>
+            </div>
+          </template>
+
+          <template v-else-if="activeTab === 'meeting'">
+            <div class="tool-form">
+              <label>
+                会议标题
+                <input v-model="meetingTitle" type="text" placeholder="例如：Relationship Radar 评审" />
+              </label>
+              <label>
+                参会人（每行一个）
+                <textarea v-model="meetingAttendeesText" rows="5"></textarea>
+              </label>
+              <button
+                class="pill-btn primary"
+                type="button"
+                :disabled="isMeetingLoading"
+                @click="generateMeetingBrief"
+              >
+                {{ isMeetingLoading ? '生成中' : '生成会议人物简报' }}
+              </button>
+            </div>
+
+            <div v-if="meetingBrief" class="panel full">
+              <div class="panel-head">
+                <h4><span class="panel-icon">M</span>{{ meetingBrief.title }}</h4>
+                <span>{{ meetingBrief.matrix.length }} 人</span>
+              </div>
+              <div class="matrix">
+                <div class="matrix-head">
+                  <span>人物</span>
+                  <span>上下文</span>
+                  <span>Open loop</span>
+                  <span>建议问法</span>
+                </div>
+                <div v-for="row in meetingBrief.matrix" :key="row.person" class="matrix-row">
+                  <strong>{{ row.person }}</strong>
+                  <p>{{ row.recentContext }}</p>
+                  <p>{{ row.openLoop }}</p>
+                  <p>{{ row.suggestedAsk }}</p>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="activeTab === 'assistant'">
+            <div class="tool-form">
+              <label>
+                你要达成什么
+                <textarea
+                  v-model="assistantGoal"
+                  rows="4"
+                  placeholder="例如：礼貌跟进上次评审中未确认的 owner 和 deadline"
+                ></textarea>
+              </label>
+              <button
+                class="pill-btn primary"
+                type="button"
+                :disabled="isAssistantLoading"
+                @click="generateAssistantDraft"
+              >
+                {{ isAssistantLoading ? '生成中' : '生成关系感知回复' }}
+              </button>
+            </div>
+
+            <div v-if="assistantDraft" class="panel full">
+              <div class="panel-head">
+                <h4><span class="panel-icon purple">A</span>{{ assistantDraft.personName }}</h4>
+                <button class="tiny-btn primary" type="button" @click="copyAssistantDraft">
+                  复制草稿
+                </button>
+              </div>
+              <div class="draft-box">{{ assistantDraft.draftText }}</div>
+              <div v-if="assistantDraft.warnings.length > 0" class="warning-list">
+                <strong>发送前注意</strong>
+                <p v-for="warning in assistantDraft.warnings" :key="warning">
+                  {{ warning }}
+                </p>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="activeTab === 'graph'">
+            <div class="graph-layout">
+              <div class="graph-canvas">
+                <div
+                  v-for="(node, index) in graphPeopleNodes"
+                  :key="node.id"
+                  :class="['graph-node', node.radarState ? stateTone(node.radarState) : 'muted']"
+                  :style="graphNodeStyle(index, graphPeopleNodes.length)"
+                >
+                  <strong>{{ node.label.slice(0, 2) }}</strong>
+                  <span>{{ node.label }}</span>
+                </div>
+                <div v-if="graphPeopleNodes.length === 0" class="empty-state compact">
+                  关系图谱暂无节点。
+                </div>
+              </div>
+              <div class="graph-side">
+                <h4>关系动态</h4>
+                <div v-if="!graph?.dynamics.length" class="muted-line">
+                  暂无显著动态。
+                </div>
+                <button
+                  v-for="dynamic in graph?.dynamics || []"
+                  :key="`${dynamic.kind}:${dynamic.title}`"
+                  type="button"
+                  class="item graph-dynamic"
+                  @click="dynamic.personId && selectPersonById(dynamic.personId)"
+                >
+                  <strong>{{ dynamic.title }}</strong>
+                  <p>{{ dynamic.body }}</p>
+                </button>
+
+                <h4>强关系边</h4>
+                <div v-for="edge in graph?.edges.slice(0, 8) || []" :key="edge.id" class="edge-row">
+                  <span>{{ edgeLabel(edge.from) }}</span>
+                  <em>{{ edge.label }}</em>
+                  <span>{{ edgeLabel(edge.to) }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="activeTab === 'review'">
+            <div class="review-filter">
+              <button
+                v-for="option in reviewStatusOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: reviewStatus === option.value }"
+                @click="setReviewStatus(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <div class="review-grid">
+              <article
+                v-for="item in reviewItems"
+                :key="item.id"
+                class="review-card"
+              >
+                <div class="item-row">
+                  <strong>{{ item.title }}</strong>
+                  <span :class="['chip', reviewTone(item.status)]">
+                    {{ reviewStatusLabel(item.status) }}
+                  </span>
+                </div>
+                <p>{{ item.reason }}</p>
+                <textarea
+                  v-model="reviewDrafts[item.id]"
+                  :disabled="item.status !== 'pending' && item.status !== 'snoozed'"
+                  rows="3"
+                ></textarea>
+                <div class="review-actions">
+                  <button
+                    class="tiny-btn primary"
+                    type="button"
+                    :disabled="isReviewActionLoading(item.id)"
+                    @click="applyReviewAction(item, 'confirm')"
+                  >
+                    确认
+                  </button>
+                  <button
+                    class="tiny-btn"
+                    type="button"
+                    :disabled="isReviewActionLoading(item.id)"
+                    @click="applyReviewAction(item, 'snooze')"
+                  >
+                    稍后
+                  </button>
+                  <button
+                    class="tiny-btn danger"
+                    type="button"
+                    :disabled="isReviewActionLoading(item.id)"
+                    @click="applyReviewAction(item, 'reject')"
+                  >
+                    驳回
+                  </button>
+                </div>
+              </article>
+            </div>
+          </template>
+        </div>
+      </main>
+
+      <aside class="detail-side">
+        <section class="side-panel">
+          <div class="side-head">
+            <h4>确认队列</h4>
+            <button type="button" @click="activeTab = 'review'">查看全部</button>
+          </div>
+          <div v-if="reviewItems.length === 0" class="muted-line">
+            当前没有需要确认的关系事实。
+          </div>
+          <article
+            v-for="item in reviewItems.slice(0, 3)"
+            :key="item.id"
+            class="side-review"
+          >
+            <strong>{{ item.personName }}</strong>
+            <p>{{ item.proposedValue }}</p>
+            <div class="review-actions">
+              <button class="tiny-btn primary" type="button" @click="applyReviewAction(item, 'confirm')">
+                确认
+              </button>
+              <button class="tiny-btn" type="button" @click="applyReviewAction(item, 'snooze')">
+                稍后
+              </button>
+            </div>
+          </article>
+        </section>
+
+        <section class="side-panel">
+          <div class="side-head">
+            <h4>存储形态</h4>
+          </div>
+          <dl class="storage-list">
+            <div>
+              <dt>雷达投影</dt>
+              <dd>relationship_radar_people</dd>
+            </div>
+            <div>
+              <dt>上下文卡</dt>
+              <dd>relationship_context_cards</dd>
+            </div>
+            <div>
+              <dt>事件索引</dt>
+              <dd>relationship_event_index</dd>
+            </div>
+            <div>
+              <dt>人工确认</dt>
+              <dd>relationship_review_items → entity_properties</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="side-panel">
+          <div class="side-head">
+            <h4>数据接力</h4>
+          </div>
+          <ol class="flow-list">
+            <li>打开页面时使用 lazy fallback，先从 Person、message、relationship 索引即时构建。</li>
+            <li>每日 memory service 后台整理高频人物，写入更稳定的 context card 与事件索引。</li>
+            <li>用户确认关键事实后，升级为 confirmed，并反哺聊天、会议、外部 AI 对话检索。</li>
+          </ol>
+        </section>
+      </aside>
+    </section>
+
+    <div v-if="copyMessage" class="copy-toast" role="status">{{ copyMessage }}</div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import {
+  getMemoryServiceClient,
+  type RelationshipAssistantDraft,
+  type RelationshipContextCard,
+  type RelationshipConsolidationResult,
+  type RelationshipDataQuality,
+  type RelationshipEvidenceRef,
+  type RelationshipGraph,
+  type RelationshipMeetingBrief,
+  type RelationshipPeopleResponse,
+  type RelationshipPersonSummary,
+  type RelationshipRadarState,
+  type RelationshipReviewAction,
+  type RelationshipReviewItem,
+  type RelationshipReviewStatus,
+} from '../../services/MemoryServiceClient';
+import { useMemoryStore } from '../memory-store';
+
+type RadarStateFilter = RelationshipRadarState | 'all';
+type ReviewStatusFilter = RelationshipReviewStatus | 'all';
+type DetailTab = 'context' | 'meeting' | 'assistant' | 'graph' | 'review';
+
+const client = getMemoryServiceClient();
+const router = useRouter();
+const store = useMemoryStore();
+
+const isLoading = ref(false);
+const isContextLoading = ref(false);
+const isConsolidating = ref(false);
+const isMeetingLoading = ref(false);
+const isAssistantLoading = ref(false);
+const errorMessage = ref('');
+const searchText = ref('');
+const includeBelowThreshold = ref(false);
+const stateFilter = ref<RadarStateFilter>('all');
+const peopleResponse = ref<RelationshipPeopleResponse | null>(null);
+const selectedPersonId = ref('');
+const activeTab = ref<DetailTab>('context');
+const contextCard = ref<RelationshipContextCard | null>(null);
+const graph = ref<RelationshipGraph | null>(null);
+const reviewStatus = ref<ReviewStatusFilter>('pending');
+const reviewItems = ref<RelationshipReviewItem[]>([]);
+const reviewDrafts = ref<Record<string, string>>({});
+const reviewActionLoadingId = ref('');
+const copyMessage = ref('');
+const consolidationResult = ref<RelationshipConsolidationResult | null>(null);
+const meetingTitle = ref('');
+const meetingAttendeesText = ref('');
+const meetingBrief = ref<RelationshipMeetingBrief | null>(null);
+const assistantGoal = ref('');
+const assistantDraft = ref<RelationshipAssistantDraft | null>(null);
+
+const stateFilterOptions: Array<{ value: RadarStateFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'core', label: '核心' },
+  { value: 'active', label: '活跃' },
+  { value: 'rising', label: '升温' },
+  { value: 'dormant', label: '沉默' },
+  { value: 'watch', label: '候选' },
+];
+
+const reviewStatusOptions: Array<{ value: ReviewStatusFilter; label: string }> = [
+  { value: 'pending', label: '待确认' },
+  { value: 'snoozed', label: '稍后' },
+  { value: 'confirmed', label: '已确认' },
+  { value: 'rejected', label: '已驳回' },
+  { value: 'all', label: '全部' },
+];
+
+const people = computed(() => peopleResponse.value?.items || []);
+const selectedPerson = computed(() =>
+  people.value.find((person) => person.id === selectedPersonId.value),
+);
+const pendingReviewCount = computed(
+  () => reviewItems.value.filter((item) => item.status === 'pending').length,
+);
+const generatedPeopleCount = computed(
+  () => people.value.filter((person) => person.projectionSource !== 'lazy').length,
+);
+const lastConsolidationText = computed(() => {
+  if (!consolidationResult.value) return `${generatedPeopleCount.value} 人已有整理投影`;
+  return `${consolidationResult.value.skipped} 跳过 · ${formatDate(consolidationResult.value.generatedAt)}`;
+});
+const tabs = computed<Array<{ value: DetailTab; label: string; badge?: number }>>(() => [
+  { value: 'context', label: '上下文卡' },
+  { value: 'meeting', label: '会议简报' },
+  { value: 'assistant', label: '回复助手' },
+  { value: 'graph', label: '关系图谱', badge: graph.value?.nodes.length },
+  { value: 'review', label: '人工确认', badge: pendingReviewCount.value },
+]);
+const graphPeopleNodes = computed(() =>
+  (graph.value?.nodes || [])
+    .filter((node) => node.type === 'Person')
+    .slice(0, 9),
+);
+
+onMounted(() => {
+  store.clearSearchContext();
+  void refreshAll();
+});
+
+async function refreshAll() {
+  await Promise.all([loadPeople(), loadReviewItems(), loadGraph()]);
+}
+
+async function loadPeople() {
+  isLoading.value = true;
+  errorMessage.value = '';
+  try {
+    const response = await client.getRelationshipPeople({
+      limit: 36,
+      state: stateFilter.value,
+      search: searchText.value.trim() || undefined,
+      includeBelowThreshold: includeBelowThreshold.value,
+    });
+    peopleResponse.value = response;
+    const stillSelected = response.items.some(
+      (person) => person.id === selectedPersonId.value,
+    );
+    selectedPersonId.value = stillSelected
+      ? selectedPersonId.value
+      : response.items[0]?.id || '';
+    if (selectedPersonId.value) {
+      const person = response.items.find((item) => item.id === selectedPersonId.value);
+      syncDefaultInputs(person);
+      await loadContextCard(selectedPersonId.value);
+    } else {
+      contextCard.value = null;
+    }
+  } catch (error: any) {
+    errorMessage.value = error?.message || '加载关系雷达失败';
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+async function loadContextCard(personId: string) {
+  isContextLoading.value = true;
+  try {
+    contextCard.value = await client.getRelationshipContextCard({
+      personId,
+      surface: 'memory_exploring_person_tab',
+      tokenBudget: 1200,
+    });
+  } catch (error: any) {
+    errorMessage.value = error?.message || '生成上下文卡失败';
+    contextCard.value = null;
+  } finally {
+    isContextLoading.value = false;
+  }
+}
+
+async function loadGraph() {
+  try {
+    graph.value = await client.getRelationshipGraph({ limit: 36 });
+  } catch (error: any) {
+    errorMessage.value = error?.message || '加载关系图谱失败';
+  }
+}
+
+async function loadReviewItems() {
+  try {
+    const response = await client.getRelationshipReviewItems({
+      status: reviewStatus.value,
+      limit: 24,
+    });
+    reviewItems.value = response.items;
+    for (const item of response.items) {
+      if (!reviewDrafts.value[item.id]) {
+        reviewDrafts.value[item.id] = item.proposedValue;
+      }
+    }
+  } catch (error: any) {
+    errorMessage.value = error?.message || '加载审核项失败';
+  }
+}
+
+async function runConsolidation(force: boolean) {
+  isConsolidating.value = true;
+  errorMessage.value = '';
+  try {
+    consolidationResult.value = await client.consolidateRelationships({
+      limit: 40,
+      personIds: force && selectedPersonId.value ? [selectedPersonId.value] : undefined,
+      force,
+    });
+    await refreshAll();
+  } catch (error: any) {
+    errorMessage.value = error?.message || '后台整理失败';
+  } finally {
+    isConsolidating.value = false;
+  }
+}
+
+function setStateFilter(next: RadarStateFilter) {
+  stateFilter.value = next;
+  void loadPeople();
+}
+
+function toggleIncludeBelowThreshold() {
+  includeBelowThreshold.value = !includeBelowThreshold.value;
+  void loadPeople();
+}
+
+function setReviewStatus(next: ReviewStatusFilter) {
+  reviewStatus.value = next;
+  void loadReviewItems();
+}
+
+function selectPerson(person: RelationshipPersonSummary) {
+  selectedPersonId.value = person.id;
+  syncDefaultInputs(person);
+  activeTab.value = 'context';
+  void loadContextCard(person.id);
+}
+
+function selectPersonById(personId: string) {
+  const person = people.value.find((item) => item.id === personId);
+  if (person) selectPerson(person);
+}
+
+function syncDefaultInputs(person?: RelationshipPersonSummary) {
+  if (!person) return;
+  if (!meetingAttendeesText.value.trim()) {
+    meetingAttendeesText.value = person.name;
+  }
+  if (!meetingTitle.value.trim()) {
+    meetingTitle.value = `与 ${person.name} 同步`;
+  }
+}
+
+async function generateMeetingBrief() {
+  isMeetingLoading.value = true;
+  errorMessage.value = '';
+  try {
+    meetingBrief.value = await client.getRelationshipMeetingBrief({
+      title: meetingTitle.value.trim() || undefined,
+      attendees: parseAttendees(meetingAttendeesText.value),
+    });
+  } catch (error: any) {
+    errorMessage.value = error?.message || '生成会议简报失败';
+  } finally {
+    isMeetingLoading.value = false;
+  }
+}
+
+async function generateAssistantDraft() {
+  if (!selectedPerson.value) return;
+  isAssistantLoading.value = true;
+  errorMessage.value = '';
+  try {
+    assistantDraft.value = await client.getRelationshipAssistantDraft({
+      personId: selectedPerson.value.id,
+      scenario: 'follow_up_message',
+      userGoal: assistantGoal.value.trim() || undefined,
+    });
+  } catch (error: any) {
+    errorMessage.value = error?.message || '生成回复草稿失败';
+  } finally {
+    isAssistantLoading.value = false;
+  }
+}
+
+async function applyReviewAction(
+  item: RelationshipReviewItem,
+  action: RelationshipReviewAction,
+) {
+  reviewActionLoadingId.value = item.id;
+  try {
+    const snoozeUntil =
+      action === 'snooze'
+        ? Math.floor(Date.now() / 1000) + 7 * 86400
+        : undefined;
+    await client.updateRelationshipReviewItem(item.id, action, {
+      editedValue: reviewDrafts.value[item.id] || item.proposedValue,
+      snoozeUntil,
+    });
+    await Promise.all([loadReviewItems(), loadPeople(), loadGraph()]);
+  } catch (error: any) {
+    errorMessage.value = error?.message || '更新审核项失败';
+  } finally {
+    reviewActionLoadingId.value = '';
+  }
+}
+
+function isReviewActionLoading(id: string) {
+  return reviewActionLoadingId.value === id;
+}
+
+async function copyContextPackage() {
+  if (!contextCard.value) return;
+  await copyText(contextCard.value.contextMd, '已复制上下文包');
+}
+
+async function copyAssistantDraft() {
+  if (!assistantDraft.value) return;
+  await copyText(assistantDraft.value.draftText, '已复制回复草稿');
+}
+
+async function copyText(text: string, successMessage: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    copyMessage.value = successMessage;
+  } catch {
+    copyMessage.value = '当前环境无法写入剪贴板';
+  } finally {
+    window.setTimeout(() => {
+      copyMessage.value = '';
+    }, 2200);
+  }
+}
+
+function openEvidence(evidence: RelationshipEvidenceRef) {
+  if (evidence.exploreLink?.startsWith('#')) {
+    void router.push(evidence.exploreLink.slice(1));
+    return;
+  }
+  if (evidence.sourceUrl) {
+    window.open(evidence.sourceUrl, '_blank', 'noopener,noreferrer');
+  }
+}
+
+function parseAttendees(text: string): Array<{ name: string; email?: string }> {
+  return text
+    .split(/\n|,/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(.*?)\s*<([^>]+)>$/);
+      if (match) {
+        return { name: match[1].trim(), email: match[2].trim() };
+      }
+      return { name: line };
+    });
+}
+
+function formatPercent(value: number | undefined) {
+  return `${Math.round((value ?? 0) * 100)}%`;
+}
+
+function formatDate(timestamp?: number) {
+  if (!timestamp) return '未知时间';
+  return new Date(timestamp * 1000).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function stateLabel(state: RelationshipRadarState) {
+  const labels: Record<RelationshipRadarState, string> = {
+    core: '核心',
+    active: '活跃',
+    rising: '升温',
+    dormant: '沉默',
+    watch: '候选',
+  };
+  return labels[state];
+}
+
+function qualityLabel(quality: RelationshipDataQuality | undefined) {
+  const labels: Record<RelationshipDataQuality, string> = {
+    indexed: '索引级',
+    generated: '后台整理',
+    confirmed: '已确认',
+    stale: '待刷新',
+  };
+  return quality ? labels[quality] : '未知';
+}
+
+function reviewStatusLabel(status: RelationshipReviewStatus) {
+  const labels: Record<RelationshipReviewStatus, string> = {
+    pending: '待确认',
+    confirmed: '已确认',
+    rejected: '已驳回',
+    snoozed: '稍后',
+  };
+  return labels[status];
+}
+
+function toneForPerson(person: RelationshipPersonSummary) {
+  if (person.reviewPendingCount > 0) return 'tone-hot';
+  if (person.dataQuality === 'confirmed' || person.dataQuality === 'generated') {
+    return 'tone-calm';
+  }
+  return person.radarState === 'dormant' ? 'tone-quiet' : 'tone-warn';
+}
+
+function stateTone(state: RelationshipRadarState) {
+  const tones: Record<RelationshipRadarState, string> = {
+    core: 'blue',
+    active: 'ok',
+    rising: 'warn',
+    dormant: 'muted',
+    watch: 'muted',
+  };
+  return tones[state];
+}
+
+function qualityTone(quality: RelationshipDataQuality | undefined) {
+  if (quality === 'confirmed') return 'ok';
+  if (quality === 'generated') return 'blue';
+  if (quality === 'stale') return 'warn';
+  return 'muted';
+}
+
+function reviewTone(status: RelationshipReviewStatus) {
+  const tones: Record<RelationshipReviewStatus, string> = {
+    pending: 'warn',
+    confirmed: 'ok',
+    rejected: 'muted',
+    snoozed: 'blue',
+  };
+  return tones[status];
+}
+
+function graphNodeStyle(index: number, total: number) {
+  const radius = 38;
+  const angle = (index / Math.max(total, 1)) * Math.PI * 2 - Math.PI / 2;
+  const x = 50 + Math.cos(angle) * radius;
+  const y = 50 + Math.sin(angle) * radius;
+  return {
+    left: `${x}%`,
+    top: `${y}%`,
+  };
+}
+
+function edgeLabel(nodeId: string) {
+  return graph.value?.nodes.find((node) => node.id === nodeId)?.label || nodeId;
+}
+</script>
+
+<style scoped>
+.relationship-radar-page {
+  min-height: 100%;
+  padding: 1.35rem;
+  color: #f1f5f9;
+  background:
+    radial-gradient(760px 380px at 12% 0%, rgba(96, 165, 250, 0.18), transparent 62%),
+    radial-gradient(640px 360px at 96% 8%, rgba(167, 139, 250, 0.14), transparent 64%),
+    linear-gradient(180deg, #07080f 0%, #0c1124 45%, #0f1733 100%);
+  overflow-x: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.3rem;
+  flex-wrap: wrap;
+}
+
+.brand,
+.top-actions,
+.spotlight-meta,
+.spotlight-actions,
+.detail-actions,
+.legend,
+.greeting-line,
+.section-title,
+.section-tools,
+.review-actions {
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.brand-mark,
+.avatar,
+.stat-icon,
+.panel-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.brand-mark {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.8rem;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6 62%, #ec4899);
+  box-shadow: 0 0.5rem 1.8rem rgba(99, 102, 241, 0.36);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.brand-text h2,
+.spotlight h1,
+.detail-name h2,
+.section-title h3,
+.panel-head h4,
+.side-head h4,
+p {
+  margin: 0;
+}
+
+.brand-text h2 {
+  font-size: 1.05rem;
+  letter-spacing: 0;
+}
+
+.brand-text span,
+.section-title span,
+.greeting-line span,
+.legend,
+.muted-line {
+  color: #94a3b8;
+}
+
+.brand-text span {
+  display: block;
+  margin-top: 0.18rem;
+  font-size: 0.78rem;
+}
+
+.top-actions {
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.search {
+  position: relative;
+  min-width: min(24rem, 100%);
+}
+
+.search input,
+.tool-form input,
+.tool-form textarea,
+.review-card textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.58);
+  color: #f8fafc;
+  outline: none;
+}
+
+.search input {
+  height: 2.5rem;
+  padding: 0 0.9rem 0 4.2rem;
+}
+
+.search input:focus,
+.tool-form input:focus,
+.tool-form textarea:focus,
+.review-card textarea:focus {
+  border-color: rgba(96, 165, 250, 0.55);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.12);
+}
+
+.search-icon {
+  position: absolute;
+  left: 0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+button {
+  font: inherit;
+}
+
+.ghost-btn,
+.pill-btn,
+.spotlight-actions button,
+.section-tools button,
+.side-head button {
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.56);
+  color: #e2e8f0;
+  cursor: pointer;
+  font-weight: 700;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.ghost-btn,
+.pill-btn {
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+}
+
+.ghost-btn:hover,
+.pill-btn:hover,
+.spotlight-actions button:hover,
+.section-tools button:hover,
+.side-head button:hover {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(20, 32, 60, 0.72);
+  transform: translateY(-1px);
+}
+
+.ghost-btn:disabled,
+.pill-btn:disabled,
+.spotlight-actions button:disabled,
+.tiny-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+  transform: none;
+}
+
+.pill-btn.primary,
+.spotlight-actions .primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  color: #fff;
+  box-shadow: 0 0.55rem 1.75rem rgba(99, 102, 241, 0.32);
+}
+
+.error-banner {
+  margin-bottom: 1rem;
+  border: 1px solid rgba(239, 68, 68, 0.38);
+  border-radius: 0.75rem;
+  background: rgba(127, 29, 29, 0.25);
+  color: #fecaca;
+  padding: 0.8rem 1rem;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(18rem, 0.65fr);
+  gap: 1rem;
+  margin-bottom: 1.35rem;
+}
+
+.greeting-strip {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.greeting-line {
+  gap: 0.55rem;
+  font-size: 0.82rem;
+}
+
+.greeting-line i,
+.legend i {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0.8rem rgba(34, 197, 94, 0.55);
+}
+
+.legend {
+  gap: 0.85rem;
+  font-size: 0.76rem;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.legend i.hot {
+  background: #ef4444;
+  box-shadow: 0 0 0.8rem rgba(239, 68, 68, 0.5);
+}
+
+.legend i.warn {
+  background: #f59e0b;
+  box-shadow: 0 0 0.8rem rgba(245, 158, 11, 0.5);
+}
+
+.legend i.calm {
+  background: #22c55e;
+}
+
+.spotlight,
+.stat-card,
+.person-card,
+.detail-main,
+.side-panel {
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  background: rgba(15, 23, 42, 0.56);
+  backdrop-filter: blur(18px);
+}
+
+.spotlight {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.15rem;
+  padding: 1.55rem;
+  background:
+    radial-gradient(520px 260px at 8% 0%, rgba(239, 68, 68, 0.16), transparent 64%),
+    radial-gradient(460px 240px at 100% 100%, rgba(167, 139, 250, 0.18), transparent 65%),
+    rgba(15, 23, 42, 0.62);
+  box-shadow: 0 1.5rem 5rem rgba(7, 12, 28, 0.45);
+}
+
+.spotlight::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #60a5fa, #a78bfa, transparent);
+  opacity: 0.7;
+}
+
+.spotlight-tag {
+  display: inline-flex;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 99px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.spotlight h1 {
+  margin-top: 0.85rem;
+  font-size: clamp(1.5rem, 3vw, 2.15rem);
+  letter-spacing: 0;
+}
+
+.spotlight p {
+  max-width: 64ch;
+  margin-top: 0.65rem;
+  color: #cbd5e1;
+  line-height: 1.65;
+}
+
+.spotlight-meta,
+.spotlight-actions {
+  gap: 0.55rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.spotlight-meta {
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.spotlight-actions button {
+  min-height: 2.25rem;
+  padding: 0 0.85rem;
+}
+
+.stat-strip {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.stat-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  border-radius: 0.9rem;
+  padding: 1rem;
+}
+
+.stat-card .label {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.stat-card strong {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 1.45rem;
+}
+
+.stat-card small {
+  display: block;
+  margin-top: 0.15rem;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+.stat-icon {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 0.75rem;
+  background: rgba(96, 165, 250, 0.13);
+  color: #93c5fd;
+  font-weight: 800;
+}
+
+.stat-icon.warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+
+.stat-icon.purple {
+  background: rgba(167, 139, 250, 0.14);
+  color: #c4b5fd;
+}
+
+.section {
+  margin-bottom: 1.35rem;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  margin-bottom: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.section-title {
+  gap: 0.55rem;
+}
+
+.section-title h3 {
+  font-size: 1.05rem;
+}
+
+.section-tools,
+.review-filter {
+  display: inline-flex;
+  gap: 0.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.section-tools button,
+.review-filter button {
+  min-height: 1.9rem;
+  padding: 0 0.7rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.section-tools button.active,
+.review-filter button.active {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(96, 165, 250, 0.16);
+  color: #bfdbfe;
+}
+
+.radar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  gap: 0.85rem;
+}
+
+.person-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  min-height: 10.5rem;
+  padding: 1rem;
+  border-radius: 0.95rem;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.person-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  border-radius: inherit 0 0 inherit;
+  background: #94a3b8;
+  opacity: 0.45;
+}
+
+.person-card.tone-hot::before {
+  background: #ef4444;
+  opacity: 1;
+}
+
+.person-card.tone-warn::before {
+  background: #f59e0b;
+  opacity: 1;
+}
+
+.person-card.tone-calm::before {
+  background: #22c55e;
+  opacity: 0.9;
+}
+
+.person-card:hover,
+.person-card.active {
+  border-color: rgba(96, 165, 250, 0.48);
+  background: rgba(20, 32, 60, 0.72);
+}
+
+.person-card.active {
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.35);
+}
+
+.person-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.avatar {
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 0.85rem;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  color: #fff;
+  font-weight: 800;
+}
+
+.avatar.large {
+  width: 3.4rem;
+  height: 3.4rem;
+  border-radius: 1rem;
+  font-size: 1.25rem;
+}
+
+.avatar.g-2 { background: linear-gradient(135deg, #f97316, #ec4899); }
+.avatar.g-3 { background: linear-gradient(135deg, #06b6d4, #6366f1); }
+.avatar.g-4 { background: linear-gradient(135deg, #14b8a6, #3b82f6); }
+.avatar.g-5 { background: linear-gradient(135deg, #a855f7, #ec4899); }
+
+.person-name {
+  min-width: 0;
+  flex: 1;
+}
+
+.person-name strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person-name span {
+  display: block;
+  margin-top: 0.18rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.person-headline {
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  display: -webkit-box;
+  min-height: 2.55rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.person-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: auto;
+  border-top: 1px dashed rgba(148, 163, 184, 0.16);
+  padding-top: 0.65rem;
+  color: #94a3b8;
+  font-size: 0.76rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 99px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #cbd5e1;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.chip.hot,
+.chip.danger {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+.chip.warn {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+
+.chip.ok {
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.12);
+  color: #86efac;
+}
+
+.chip.blue {
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(96, 165, 250, 0.13);
+  color: #bfdbfe;
+}
+
+.chip.muted {
+  color: #94a3b8;
+}
+
+.detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem);
+  gap: 1rem;
+}
+
+.detail-main,
+.side-panel {
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.detail-hero {
+  padding: 1.35rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  background:
+    radial-gradient(460px 240px at 0 0, rgba(96, 165, 250, 0.16), transparent 64%),
+    radial-gradient(360px 220px at 100% 100%, rgba(167, 139, 250, 0.14), transparent 64%);
+}
+
+.detail-hero-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.detail-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.detail-name h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 1.25rem;
+}
+
+.detail-name p {
+  margin-top: 0.4rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.detail-actions {
+  gap: 0.5rem;
+  align-self: flex-start;
+}
+
+.detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.detail-metric {
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.56);
+  padding: 0.75rem;
+}
+
+.detail-metric span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.detail-metric strong {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 1.15rem;
+}
+
+.detail-metric i {
+  display: block;
+  height: 0.28rem;
+  margin-top: 0.45rem;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.detail-metric i::before {
+  content: '';
+  display: block;
+  width: var(--pct, 0);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #60a5fa, #a78bfa);
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  background: rgba(15, 23, 42, 0.35);
+  padding: 0.45rem 0.8rem 0;
+}
+
+.tabs button {
+  position: relative;
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0.8rem 0.75rem;
+  font-weight: 800;
+}
+
+.tabs button.active {
+  color: #f8fafc;
+}
+
+.tabs button.active::after {
+  content: '';
+  position: absolute;
+  left: 0.7rem;
+  right: 0.7rem;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #60a5fa, #a78bfa);
+}
+
+.badge {
+  margin-left: 0.35rem;
+  border-radius: 99px;
+  background: rgba(96, 165, 250, 0.18);
+  color: #bfdbfe;
+  padding: 0.05rem 0.42rem;
+  font-size: 0.7rem;
+}
+
+.tab-content {
+  padding: 1.25rem;
+}
+
+.quote {
+  position: relative;
+  margin-bottom: 0.9rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 0.9rem;
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.1), rgba(167, 139, 250, 0.08));
+  padding: 1rem 1.1rem 1rem 2.4rem;
+  color: #e2e8f0;
+  line-height: 1.7;
+}
+
+.quote::before {
+  content: '"';
+  position: absolute;
+  left: 0.8rem;
+  top: 0.2rem;
+  color: rgba(167, 139, 250, 0.5);
+  font-size: 2.2rem;
+  font-family: Georgia, serif;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.panel {
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 0.9rem;
+  background: rgba(15, 23, 42, 0.48);
+  overflow: hidden;
+}
+
+.panel.full {
+  grid-column: 1 / -1;
+}
+
+.panel-head,
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 0.75rem 0.85rem;
+}
+
+.panel-head h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+}
+
+.panel-head > span {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.panel-icon {
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: 0.48rem;
+  background: rgba(96, 165, 250, 0.13);
+  color: #93c5fd;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.panel-icon.warn { background: rgba(245, 158, 11, 0.12); color: #fcd34d; }
+.panel-icon.danger { background: rgba(239, 68, 68, 0.12); color: #fca5a5; }
+.panel-icon.ok { background: rgba(34, 197, 94, 0.12); color: #86efac; }
+.panel-icon.purple { background: rgba(167, 139, 250, 0.14); color: #c4b5fd; }
+
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.85rem;
+}
+
+.item,
+.timeline-item,
+.review-card,
+.side-review,
+.edge-row {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.72rem;
+  background: rgba(8, 14, 32, 0.45);
+  padding: 0.75rem;
+}
+
+.item-row,
+.relation-item,
+.edge-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.item p,
+.timeline-item p,
+.review-card p,
+.side-review p,
+.graph-dynamic p {
+  margin-top: 0.35rem;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.relation-item > span {
+  color: #bfdbfe;
+  font-weight: 800;
+}
+
+.timeline-item {
+  width: 100%;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.timeline-item span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  margin-bottom: 0.25rem;
+}
+
+.boost-cloud {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.markdown-panel summary {
+  cursor: pointer;
+  padding: 0.9rem;
+  color: #bfdbfe;
+  font-weight: 800;
+}
+
+.markdown-panel pre {
+  margin: 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 0.9rem;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.tool-form {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.tool-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.tool-form input,
+.tool-form textarea,
+.review-card textarea {
+  resize: vertical;
+  padding: 0.75rem;
+  line-height: 1.55;
+}
+
+.matrix {
+  padding: 0.85rem;
+}
+
+.matrix-head,
+.matrix-row {
+  display: grid;
+  grid-template-columns: 0.75fr 1.2fr 1.2fr 1.2fr;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.matrix-head {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0 0 0.5rem;
+}
+
+.matrix-row {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 0.75rem 0;
+}
+
+.matrix-row p {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.45;
+  font-size: 0.8rem;
+}
+
+.draft-box {
+  margin: 0.85rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 0.75rem;
+  background: rgba(8, 14, 32, 0.5);
+  color: #e2e8f0;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  padding: 0.9rem;
+}
+
+.warning-list {
+  margin: 0 0.85rem 0.85rem;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 0.75rem;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 0.8rem;
+}
+
+.warning-list p {
+  margin: 0.35rem 0 0;
+  color: #fcd34d;
+  line-height: 1.5;
+}
+
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(17rem, 0.9fr);
+  gap: 1rem;
+}
+
+.graph-canvas {
+  position: relative;
+  min-height: 26rem;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 1rem;
+  background:
+    radial-gradient(circle at center, rgba(96, 165, 250, 0.16), transparent 34%),
+    rgba(8, 14, 32, 0.45);
+  overflow: hidden;
+}
+
+.graph-canvas::before,
+.graph-canvas::after {
+  content: '';
+  position: absolute;
+  inset: 18%;
+  border: 1px dashed rgba(148, 163, 184, 0.18);
+  border-radius: 50%;
+}
+
+.graph-canvas::after {
+  inset: 32%;
+}
+
+.graph-node {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  gap: 0.2rem;
+  min-width: 4.8rem;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 0.85rem;
+  background: rgba(15, 23, 42, 0.82);
+  padding: 0.55rem;
+  box-shadow: 0 0.75rem 2rem rgba(8, 14, 32, 0.45);
+}
+
+.graph-node strong {
+  color: #f8fafc;
+}
+
+.graph-node span {
+  max-width: 6rem;
+  overflow: hidden;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.graph-side h4 {
+  margin: 0.25rem 0 0;
+}
+
+.graph-dynamic {
+  width: 100%;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.edge-row {
+  align-items: center;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+}
+
+.edge-row em {
+  color: #93c5fd;
+  font-style: normal;
+}
+
+.review-filter {
+  margin-bottom: 0.85rem;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.85rem;
+}
+
+.review-card {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.review-actions {
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.tiny-btn {
+  min-height: 1.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.56);
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 0 0.6rem;
+}
+
+.tiny-btn.primary {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(96, 165, 250, 0.16);
+  color: #bfdbfe;
+}
+
+.tiny-btn.danger {
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.side-panel {
+  padding-bottom: 0.8rem;
+}
+
+.side-head h4 {
+  font-size: 0.92rem;
+}
+
+.side-head button {
+  min-height: 1.8rem;
+  padding: 0 0.65rem;
+  color: #bfdbfe;
+  font-size: 0.76rem;
+}
+
+.side-review {
+  margin: 0.75rem 0.8rem 0;
+}
+
+.storage-list {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0.8rem;
+}
+
+.storage-list div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.storage-list dt {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.storage-list dd {
+  margin: 0;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.flow-list {
+  margin: 0;
+  padding: 0.8rem 0.8rem 0.8rem 1.9rem;
+  color: #cbd5e1;
+  line-height: 1.6;
+  font-size: 0.82rem;
+}
+
+.loading-state,
+.empty-state {
+  border: 1px dashed rgba(148, 163, 184, 0.16);
+  border-radius: 0.9rem;
+  color: #94a3b8;
+  padding: 1.25rem;
+  text-align: center;
+}
+
+.loading-state.compact,
+.empty-state.compact {
+  padding: 0.85rem;
+}
+
+.copy-toast {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 20;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.92);
+  color: #bfdbfe;
+  padding: 0.75rem 0.9rem;
+  box-shadow: 0 1rem 3rem rgba(8, 14, 32, 0.42);
+}
+
+@media (max-width: 1100px) {
+  .hero,
+  .detail,
+  .graph-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .detail-side {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .relationship-radar-page {
+    padding: 0.9rem;
+  }
+
+  .topbar,
+  .top-actions,
+  .search {
+    width: 100%;
+  }
+
+  .hero,
+  .panel-grid,
+  .detail-metrics,
+  .stat-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .matrix-head {
+    display: none;
+  }
+
+  .matrix-row {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

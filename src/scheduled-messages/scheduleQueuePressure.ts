@@ -1,6 +1,14 @@
 import type { ScheduledMessage } from './types';
-import { formatLocalScheduleDateTime, isValidLocalScheduleTime } from './scheduleDateTime.js';
-import { calculateScheduledMessageNextExecution } from './scheduleNextExecution.js';
+import {
+  formatLocalScheduleDate,
+  formatLocalScheduleDateTime,
+  hasLocalScheduleTime,
+  isValidLocalScheduleTime,
+} from './scheduleDateTime.js';
+import {
+  calculateScheduledMessageNextExecution,
+  isExecutorDrivenSchedule,
+} from './scheduleNextExecution.js';
 
 const COMPENSATION_WINDOW_MINUTES = 30;
 
@@ -15,6 +23,13 @@ export interface ScheduleQueuePressure {
   exceedsCompensationWindow: boolean;
 }
 
+export interface ScheduleQueueSuggestion {
+  dateStr: string;
+  timeStr: string;
+  label: string;
+  inspectedMinutes: number;
+}
+
 export interface ScheduleQueueSlotSummary {
   slotKey: string;
   slotSize: number;
@@ -25,6 +40,10 @@ export interface ScheduleQueueSlotSummary {
   exceedsCompensationWindow: boolean;
   messageIds: string[];
   sampleTopics: string[];
+  actionMessageId: string;
+  actionTopic: string;
+  actionPosition: number;
+  suggestion: ScheduleQueueSuggestion | null;
 }
 
 export interface ScheduleQueueSummary {
@@ -36,24 +55,17 @@ export interface ScheduleQueueSummary {
   topSlots: ScheduleQueueSlotSummary[];
 }
 
-export interface ScheduleQueueSuggestion {
-  dateStr: string;
-  timeStr: string;
-  label: string;
-  inspectedMinutes: number;
-}
+type ScheduleQueueMode = 'explicit-time' | 'no-time';
 
 function isExecutorDrivenMessage(message: Pick<ScheduledMessage, 'Push_Method' | 'AI_Endpoint'>): boolean {
-  return message.Push_Method === 'Bot' ||
-    message.Push_Method === 'AI' ||
-    (message.Push_Method === 'JiraAutomation' && Boolean(message.AI_Endpoint));
+  return isExecutorDrivenSchedule(message);
 }
 
 function hasExplicitScheduleTime(message: Pick<ScheduledMessage, 'Schedule_Time'>): boolean {
-  return Boolean(message.Schedule_Time && message.Schedule_Time.trim());
+  return hasLocalScheduleTime(message.Schedule_Time);
 }
 
-function getScheduleSlotKey(message: ScheduledMessage): string {
+function getScheduleSlotKey(message: ScheduledMessage, now = new Date()): string {
   if (message.Status !== 'Active') {
     return '';
   }
@@ -70,7 +82,22 @@ function getScheduleSlotKey(message: ScheduledMessage): string {
     return '';
   }
 
-  return calculateScheduledMessageNextExecution(message);
+  return calculateScheduledMessageNextExecution(message, now);
+}
+
+function getScheduleQueueMode(message: ScheduledMessage, now = new Date()): ScheduleQueueMode | '' {
+  const slotKey = getScheduleSlotKey(message, now);
+  if (!slotKey) {
+    return '';
+  }
+
+  return hasExplicitScheduleTime(message) ? 'explicit-time' : 'no-time';
+}
+
+function getScheduleQueueGroupKey(message: ScheduledMessage, now = new Date()): string {
+  const slotKey = getScheduleSlotKey(message, now);
+  const mode = slotKey ? getScheduleQueueMode(message, now) : '';
+  return slotKey && mode ? `${mode}:${slotKey}` : '';
 }
 
 function getExecutionDateFromSlotKey(slotKey: string): string {
@@ -122,6 +149,23 @@ function isExpiredExplicitSlot(slotKey: string, slotMessages: ScheduledMessage[]
     getElapsedCompensationMinutes(slotKey, now) > COMPENSATION_WINDOW_MINUTES;
 }
 
+function isStaleNoTimeExecutorSlot(
+  slotKey: string,
+  message: Pick<ScheduledMessage, 'Schedule_Time'>,
+  now: Date,
+): boolean {
+  if (hasExplicitScheduleTime(message)) {
+    return false;
+  }
+
+  const executionDate = getExecutionDateFromSlotKey(slotKey);
+  if (!executionDate) {
+    return false;
+  }
+
+  return executionDate < formatLocalScheduleDate(now);
+}
+
 function isTerminalExecutionForDate(
   message: Pick<ScheduledMessage, 'Last_Exec' | 'Exec_Log'>,
   executionDate: string,
@@ -145,6 +189,7 @@ function isTerminalExecutionForDate(
 function buildSlotSummary(
   slotKey: string,
   slotMessages: ScheduledMessage[],
+  allMessages: ScheduledMessage[],
   now: Date,
 ): ScheduleQueueSlotSummary {
   const hasExplicitTime = slotMessages.some(hasExplicitScheduleTime);
@@ -155,6 +200,12 @@ function buildSlotSummary(
     ? Math.max(0, COMPENSATION_WINDOW_MINUTES - elapsedCompensationMinutes)
     : 0;
   const maxDelayMinutes = Math.max(0, slotMessages.length - 1);
+  const actionMessage = slotMessages[slotMessages.length - 1];
+  const exceedsCompensationWindow = hasExplicitTime &&
+    elapsedCompensationMinutes + maxDelayMinutes > COMPENSATION_WINDOW_MINUTES;
+  const suggestion = actionMessage && exceedsCompensationWindow
+    ? getScheduleQueueSuggestion(allMessages, actionMessage, now)
+    : null;
 
   return {
     slotKey,
@@ -163,13 +214,16 @@ function buildSlotSummary(
     elapsedCompensationMinutes,
     remainingCompensationMinutes,
     hasExplicitTime,
-    exceedsCompensationWindow: hasExplicitTime &&
-      elapsedCompensationMinutes + maxDelayMinutes > COMPENSATION_WINDOW_MINUTES,
+    exceedsCompensationWindow,
     messageIds: slotMessages.map(message => message.ID).filter(Boolean),
     sampleTopics: slotMessages
       .slice(0, 3)
       .map(message => message.Topic || message.ID)
       .filter(Boolean),
+    actionMessageId: actionMessage?.ID || '',
+    actionTopic: actionMessage?.Topic || actionMessage?.ID || '',
+    actionPosition: slotMessages.length,
+    suggestion,
   };
 }
 
@@ -199,7 +253,7 @@ function getReservedExplicitMinuteKeys(messages: ScheduledMessage[], now: Date):
       continue;
     }
 
-    const slotKey = getScheduleSlotKey(message);
+    const slotKey = getScheduleSlotKey(message, now);
     if (!slotKey) {
       continue;
     }
@@ -239,11 +293,15 @@ export function getScheduleQueueSummary(
   now = new Date(),
   limit = 3,
 ): ScheduleQueueSummary | null {
-  const slots = new Map<string, ScheduledMessage[]>();
+  const slots = new Map<string, { slotKey: string; messages: ScheduledMessage[] }>();
 
   for (const message of messages) {
-    const slotKey = getScheduleSlotKey(message);
+    const slotKey = getScheduleSlotKey(message, now);
     if (!slotKey) {
+      continue;
+    }
+
+    if (isStaleNoTimeExecutorSlot(slotKey, message, now)) {
       continue;
     }
 
@@ -252,17 +310,22 @@ export function getScheduleQueueSummary(
       continue;
     }
 
-    const slotMessages = slots.get(slotKey) || [];
-    slotMessages.push(message);
-    slots.set(slotKey, slotMessages);
+    const groupKey = getScheduleQueueGroupKey(message, now);
+    if (!groupKey) {
+      continue;
+    }
+
+    const slot = slots.get(groupKey) || { slotKey, messages: [] };
+    slot.messages.push(message);
+    slots.set(groupKey, slot);
   }
 
-  const congestedSlots = Array.from(slots.entries())
-    .filter(([slotKey, slotMessages]) => (
+  const congestedSlots = Array.from(slots.values())
+    .filter(({ slotKey, messages: slotMessages }) => (
       slotMessages.length > 1 &&
       !isExpiredExplicitSlot(slotKey, slotMessages, now)
     ))
-    .map(([slotKey, slotMessages]) => buildSlotSummary(slotKey, slotMessages, now))
+    .map(({ slotKey, messages: slotMessages }) => buildSlotSummary(slotKey, slotMessages, messages, now))
     .sort((left, right) => {
       if (left.exceedsCompensationWindow !== right.exceedsCompensationWindow) {
         return left.exceedsCompensationWindow ? -1 : 1;
@@ -297,8 +360,15 @@ export function getScheduleQueuePressure(
   targetMessage: ScheduledMessage,
   now = new Date(),
 ): ScheduleQueuePressure | null {
-  const targetSlotKey = getScheduleSlotKey(targetMessage);
+  const targetSlotKey = getScheduleSlotKey(targetMessage, now);
   if (!targetSlotKey) {
+    return null;
+  }
+  if (isStaleNoTimeExecutorSlot(targetSlotKey, targetMessage, now)) {
+    return null;
+  }
+  const targetGroupKey = getScheduleQueueGroupKey(targetMessage, now);
+  if (!targetGroupKey) {
     return null;
   }
 
@@ -318,7 +388,7 @@ export function getScheduleQueuePressure(
   const targetExecutionDate = getExecutionDateFromSlotKey(targetSlotKey);
   const sameSlotMessages = messagesWithTarget.filter(
     (message) => (
-      getScheduleSlotKey(message) === targetSlotKey &&
+      getScheduleQueueGroupKey(message, now) === targetGroupKey &&
       !isTerminalExecutionForDate(message, targetExecutionDate)
     ),
   );
@@ -373,7 +443,7 @@ export function getScheduleQueueSuggestion(
     return null;
   }
 
-  const targetSlotKey = getScheduleSlotKey(targetMessage);
+  const targetSlotKey = getScheduleSlotKey(targetMessage, now);
   const targetSlotTime = parseScheduleSlotKey(targetSlotKey);
   if (!targetSlotTime) {
     return null;
@@ -383,8 +453,9 @@ export function getScheduleQueueSuggestion(
   const reservedMinuteKeys = getReservedExplicitMinuteKeys(existingMessages, now);
   const searchStart = new Date(Math.max(targetSlotTime.getTime(), getNextCandidateMinute(now).getTime()));
   const targetExecutionDate = getExecutionDateFromSlotKey(targetSlotKey);
+  const targetGroupKey = getScheduleQueueGroupKey(targetMessage, now);
   const existingTargetSlotCount = existingMessages.filter(message => (
-    getScheduleSlotKey(message) === targetSlotKey &&
+    getScheduleQueueGroupKey(message, now) === targetGroupKey &&
     !isTerminalExecutionForDate(message, targetExecutionDate)
   )).length;
   const targetSlotReservationEndMs = targetSlotTime.getTime() + existingTargetSlotCount * 60000;
@@ -469,11 +540,15 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
   const sampleLabel = slot.sampleTopics.length > 0
     ? `示例：${slot.sampleTopics.join('、')}`
     : '';
+  const suggestionLabel = slot.suggestion
+    ? `建议改到 ${slot.suggestion.label}`
+    : '';
 
   return [
     `${slotLabel}: ${slot.slotSize} 条`,
     delayLabel,
     riskLabel,
+    suggestionLabel,
     sampleLabel,
   ].filter(Boolean).join('，');
 }
@@ -485,7 +560,7 @@ export function formatScheduleQueueSummary(summary: ScheduleQueueSummary): strin
 
   return [
     `${summary.congestedSlotCount} 个时间槽同时排队`,
-    `${summary.queuedMessageCount} 条 Bot/AI 消息受影响`,
+    `${summary.queuedMessageCount} 条执行器消息受影响`,
     `最大同槽 ${summary.largestSlotSize} 条`,
     `最大预计延后 ${summary.maxDelayMinutes} 分钟`,
     riskLabel,

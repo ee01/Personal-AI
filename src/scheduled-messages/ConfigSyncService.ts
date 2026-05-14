@@ -550,14 +550,11 @@ export class ConfigSyncService {
           timelineSyncRule: mergeRule(existingBotAutomation.timelineSyncRule, updateBotAutomation.timelineSyncRule),
         },
       } : {}),
-      last_sync_time: new Date().toISOString()
     };
 
     // 同步到两个位置
     const normalizedConfig = normalizeSheetConfig(updatedConfig) as SheetConfig;
-    await this.syncConfig(normalizedConfig);
-
-    return normalizedConfig;
+    return this.syncConfig(normalizedConfig);
   }
 
   private async readLatestConfigBase(existingConfig: SheetConfig): Promise<SheetConfig> {

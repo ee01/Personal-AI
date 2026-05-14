@@ -207,7 +207,9 @@ const { getTaskEnabled, onTaskEnabledChanged } = await import(
 const { concernedItemsSyncService } = await import(
   '../src/services/ConcernedItemsSyncService.ts'
 );
-const { taskScheduler } = await import('../src/services/TaskScheduler.ts');
+const { TaskScheduler, taskScheduler } = await import(
+  '../src/services/TaskScheduler.ts'
+);
 
 assert.equal(
   await getTaskEnabled('vectorized_data_maintenance'),
@@ -235,7 +237,15 @@ assert.equal(
   'onTaskEnabledChanged should fall back to task defaults when a saved state lacks enabled',
 );
 
+alarms.scheduled_task_removed_before_start = {
+  name: 'scheduled_task_removed_before_start',
+  scheduledTime: Date.now() + 10_000,
+  periodInMinutes: 5,
+};
+
 await taskScheduler.startAllTasks();
+
+let status = taskScheduler.getTaskStatus();
 
 const scheduledSystemMonitoringAlarm =
   alarms.scheduled_task_system_monitoring?.scheduledTime;
@@ -243,8 +253,44 @@ assert.ok(
   scheduledSystemMonitoringAlarm,
   'enabled tasks should create a Chrome alarm on scheduler startup',
 );
+assert.equal(
+  alarms.scheduled_task_removed_before_start,
+  undefined,
+  'scheduler startup should clear orphaned scheduled_task alarms from old task definitions',
+);
 
-let status = taskScheduler.getTaskStatus();
+alarms.scheduled_task_removed_later = {
+  name: 'scheduled_task_removed_later',
+  scheduledTime: Date.now() + 10_000,
+  periodInMinutes: 5,
+};
+status = await taskScheduler.getTaskStatusFresh();
+assert.equal(
+  alarms.scheduled_task_removed_later,
+  undefined,
+  'status refresh should clear orphaned scheduled_task alarms that no longer map to a task definition',
+);
+
+alarms.scheduled_task_removed_when_fired = {
+  name: 'scheduled_task_removed_when_fired',
+  scheduledTime: Date.now() + 10_000,
+  periodInMinutes: 5,
+};
+const handledOrphanAlarm = await TaskScheduler.tryHandleAlarm({
+  name: 'scheduled_task_removed_when_fired',
+  scheduledTime: Date.now(),
+  periodInMinutes: 5,
+});
+assert.equal(
+  handledOrphanAlarm,
+  true,
+  'TaskScheduler should claim scheduled_task alarms even when their task definition was removed',
+);
+assert.equal(
+  alarms.scheduled_task_removed_when_fired,
+  undefined,
+  'unknown scheduled_task alarms should be cleared when they fire',
+);
 
 const enabledProfileDecay = await taskScheduler.toggleTask(
   'user_profile_decay',
@@ -465,6 +511,25 @@ assert.equal(
   'missing alarms should not expose a stale nextRun value',
 );
 
+nextAlarmCreateError = 'maximum number of alarms reached';
+status = await taskScheduler.getTaskStatusFresh();
+systemMonitoring = status.find((task) => task.id === 'system_monitoring');
+assert.equal(
+  systemMonitoring?.scheduleHealth,
+  'repair_failed',
+  'status refresh should keep returning task status when automatic alarm repair fails',
+);
+assert.match(
+  systemMonitoring?.scheduleWarning || '',
+  /maximum number of alarms reached/,
+  'automatic alarm repair failures should surface the Chrome error reason',
+);
+assert.equal(
+  alarms.scheduled_task_system_monitoring,
+  undefined,
+  'failed automatic alarm repair should not leave a partial alarm behind',
+);
+
 status = await taskScheduler.getTaskStatusFresh();
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
@@ -475,6 +540,49 @@ assert.equal(
 assert.ok(
   alarms.scheduled_task_system_monitoring?.scheduledTime,
   'status refresh should recreate the missing Chrome alarm',
+);
+
+alarms.scheduled_task_system_monitoring.scheduledTime =
+  Date.now() - 31 * 60_000;
+status = await taskScheduler.getTaskStatusFresh({
+  persist: false,
+});
+systemMonitoring = status.find((task) => task.id === 'system_monitoring');
+assert.equal(
+  systemMonitoring?.scheduleHealth,
+  'overdue',
+  'fresh status should report existing alarms whose scheduled fire time is stale',
+);
+assert.match(
+  systemMonitoring?.scheduleWarning || '',
+  /超过预期触发时间/,
+  'overdue alarms should include a user-visible warning',
+);
+
+const lastRunBeforeRepair = systemMonitoring?.lastRun;
+const repairResult = await taskScheduler.repairTaskSchedule('system_monitoring');
+assert.equal(
+  repairResult,
+  true,
+  'repairing an enabled task should return success',
+);
+assert.ok(
+  alarms.scheduled_task_system_monitoring?.scheduledTime > Date.now(),
+  'repairing a task should reschedule its Chrome alarm into the future',
+);
+status = await taskScheduler.getTaskStatusFresh({
+  persist: false,
+});
+systemMonitoring = status.find((task) => task.id === 'system_monitoring');
+assert.equal(
+  systemMonitoring?.scheduleHealth,
+  'scheduled',
+  'repairing an overdue task should clear the schedule warning',
+);
+assert.equal(
+  systemMonitoring?.lastRun,
+  lastRunBeforeRepair,
+  'repairing a schedule should not execute the task',
 );
 
 const missingTask = await taskScheduler.runTaskManuallyWithResult(

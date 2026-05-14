@@ -12,6 +12,7 @@
     "app:dev": "npm run build && electron app/main.mjs",
     "app:start": "electron app/main.mjs",
     "test": "NODE_ENV=test tsx --test src/**/*.test.ts",
+    "test:source-toggle-gating": "node scripts/doubao-source-toggle-gating-check.mjs",
     "test:meeting-pilot": "node scripts/meeting-pilot-demo-check.mjs",
     "test:meeting-pilot-build-check": "node scripts/meeting-pilot-build-check.mjs",
     "test:meeting-pilot-scene1": "node scripts/meeting-pilot-scene1-check.mjs",

@@ -12,9 +12,9 @@ AsMe 消息由 Apps Script 的分钟触发器直接处理。Bot、AI Report，�
 
 Bot/AI/JiraAutomation 执行入口会按以下顺序查找消息：
 
-1. `CURRENT_MINUTE`：执行当前分钟命中的消息。指定 `Schedule_Time` 时允许准点或最多迟到 1 分钟的触发器抖动容差，但不会提前发送；未指定时间时，当前分钟规则默认 9:00。
+1. `CURRENT_MINUTE`：执行当前分钟命中的显式时间消息。指定 `Schedule_Time` 时允许准点或最多迟到 1 分钟的触发器抖动容差，但不会提前发送；未指定时间的 Bot/AI/JiraAutomation 不走该模式，避免在 9:00 抢占显式时间消息。
 2. `PAST_30_MINUTES`：补偿过去 30 分钟内错过、且尚未标记成功/失败的定时消息。
-3. `NO_TIME_SPECIFIED`：8:00 后执行未指定 `Schedule_Time` 的消息。
+3. `NO_TIME_SPECIFIED`：8:00 后执行未指定 `Schedule_Time` 的 Bot/AI/带 `AI_Endpoint` 的 JiraAutomation 消息。
 
 补偿窗口支持跨午夜场景：例如 23:50 的 Bot/AI 消息如果在 00:05 才恢复轮询，仍会按前一日的执行日期匹配，并继续使用 `Last_Exec` / `Exec_Log` 去重，避免已经成功的消息被重复补偿。
 
@@ -24,7 +24,7 @@ Bot/AI/JiraAutomation 执行入口会按以下顺序查找消息：
 - Periodic：按 `Repeat_Every`、`Repeat_Unit`、`Repeat_Days`、`End_Date` 等字段计算。
 - Timeline：通过 Timeline Sync Rule 写入 Script Properties 的里程碑缓存计算目标日期。
 
-AsMe 消息仍走本地 `executeScheduledMessages()`：先判断日期，再在指定时间或未指定时间的 9:00 执行。
+AsMe 消息仍走本地 `executeScheduledMessages()`：先判断日期，再在指定时间或未指定时间的 9:00 执行。启用 RingCentral sender 接管 AsMe 时，也保留未指定时间 9:00 的默认语义，不进入 Bot/AI 的 8:00 后兜底队列。
 
 ## 去重与执行记录
 
@@ -57,6 +57,11 @@ AsMe 消息仍走本地 `executeScheduledMessages()`：先判断日期，再在�
 - 队列位置会排除同一执行日期已经成功或失败的行，因为 Apps Script 实际执行时也会跳过这些行，避免失败或已完成项继续制造虚假的排队压力。
 - 列表级队列提示会忽略已经超过 30 分钟补偿窗口的显式时间槽，避免旧的未执行行长期显示成“正在排队”。
 - 当创建/编辑的显式时间已经排不进补偿窗口时，表单会给出第一个避开当前拥挤时间槽的建议时间，并提供一键采用入口，减少用户手动试错。
+- 显式 08:00 时间槽与未填写时间的“08:00 后队列”按不同执行通道展示，避免低打断的留空队列误算为显式时间补偿窗口里的阻塞项。
+- 未填写时间的 Bot/AI/JiraAutomation 只会在执行日期当天 8:00 后兜底排队；如果执行日期已经过去，创建/编辑表单会阻止保存，列表行级策略和队列总览也不会把历史日期的留空消息显示成仍可执行。
+- 重复消息的队列压力、列表提示和创建/编辑预检都使用同一个本地时间基准计算下一次执行，避免页面刷新、测试时钟和后台轮询看到不同的队列日期。
+- “需要改期”的顶部提示会列出异常消息，并提供直接定位和编辑入口，让用户可以从风险提示进入修正路径。
+- Bot/AI/JiraAutomation 队列横幅中的每个拥挤时间槽会显示受影响示例、最晚受影响消息和建议改期时间，并提供“定位最晚”和“编辑”入口，优先处理排在最后、最容易超过补偿窗口的消息，避免用户在长列表里手动查找。
 
 创建表单会按推送方式动态显示默认时间：Bot/AI/JiraAutomation 留空提示为 8:00 后排队，AsMe 留空提示为 9:00 左右推送；快捷时间按钮也使用对应默认时间。这样用户不用打开 Sheet 或阅读实现细节，也能判断消息大概何时会被派发，以及错过时间后是否会补偿。
 
@@ -64,6 +69,8 @@ AsMe 消息仍走本地 `executeScheduledMessages()`：先判断日期，再在�
 
 - Microsoft Teams 的定时发送强调用户选择发送时间，并可编辑、改期和删除待发送消息；当前 Personal AI 已有编辑/删除，但列表需要清晰暴露执行策略，且不能早于用户选择的时间发送。
 - Slack 的 scheduled message API 会返回可管理的 `scheduled_message_id`，并通过 list/delete API 管理待发消息；Personal AI 目前用 Sheet 行序作为轻量队列，因此需要在 UI 暴露“第几个执行”和“哪些行不再阻塞”来补足可观察性，并继续补上更顺手的改期操作。
+- Zulip 的 scheduled messages API 会把未发送的定时消息按时间列出，并要求客户端对发送失败的待发消息显示失败状态；这说明 Personal AI 的队列提示也需要避免把已经错过执行日期、实际不会再被执行的项呈现为“正在排队”。
+- 2026-05-13 复核 Slack、Teams、Zulip 文档后，行业共同点仍是把待发送消息当作可管理对象：能查看、编辑/改期、删除，且 Slack 对同一频道短窗口内的排队量有限制。因此 Personal AI 的队列总览不应停留在告警文本，风险槽位需要直接通向最值得调整的消息，并提前给出可采用的改期时间。
 - Google Apps Script 有运行时间、触发器、URL Fetch 等配额限制，补偿窗口和去重是必要的可靠性保护。
 - Google Pub/Sub 的 exactly-once 文档也强调用消息处理进度避免重复工作；本功能以 `ID`、`Last_Exec`、`Exec_Log` 做轻量幂等。
 - 通知体验研究和 Apple HIG 都强调不要用高打断级别承载低价值信息；本功能的后续优化应继续把“立即推送”和“摘要/低打断”分开设计。
@@ -75,6 +82,7 @@ AsMe 消息仍走本地 `executeScheduledMessages()`：先判断日期，再在�
 - [Microsoft Teams scheduled chat messages](https://support.microsoft.com/en-us/office/schedule-chat-messages-in-microsoft-teams-2fc5ea77-7bb4-4511-8f59-e62bac1c0f6a)
 - [Slack `chat.scheduleMessage`](https://docs.slack.dev/reference/methods/chat.scheduleMessage/)
 - [Slack `chat.deleteScheduledMessage`](https://api.slack.com/methods/chat.deleteScheduledMessage)
+- [Zulip scheduled messages API](https://zulip.com/api/get-scheduled-messages)
 - [Google Apps Script quotas](https://developers.google.com/apps-script/guides/services/quotas)
 - [Google Pub/Sub exactly-once delivery](https://docs.cloud.google.com/pubsub/docs/exactly-once-delivery)
 - [Interruptive notifications in support of task management](https://www.sciencedirect.com/science/article/pii/S1071581915000245)
@@ -92,3 +100,8 @@ AsMe 消息仍走本地 `executeScheduledMessages()`：先判断日期，再在�
 - 2026-05-05：队列风险提示会纳入当前已消耗的补偿窗口，避免用户在窗口剩余时间不足时仍保存一个实际赶不上的显式时间消息。
 - 2026-05-06：显式时间消息不再因 1 分钟容差提前发送；容差仅覆盖准点或最多迟到 1 分钟的触发器抖动，并在列表/表单提示中明确“不提前发送”。
 - 2026-05-08：创建/编辑表单在队列阻塞时会推荐第一个低冲突时间并支持一键采用；列表级队列提示不再把已超过补偿窗口的显式时间槽显示为正在排队。
+- 2026-05-11：修正未填写时间消息的执行通道：Bot/AI/JiraAutomation 只走 8:00 后兜底队列，AsMe 保持 9:00 默认；队列压力展示拆分显式时间槽和 8:00 后队列。
+- 2026-05-11：修复历史日期的未填写时间执行器消息仍显示为排队的问题；创建/编辑表单会要求改成今天或未来日期，列表行级策略会提示日期已过，队列总览会跳过这类实际不可执行的历史槽。
+- 2026-05-11：重复消息队列压力统一使用调用方传入的本地时间；顶部“需要改期”提示增加定位和编辑入口。
+- 2026-05-12：队列总览的拥挤时间槽增加最晚受影响消息的定位/编辑入口；队列摘要计算层输出对应消息 ID、标题和排队位置，便于 UI 直接引导用户改期。
+- 2026-05-13：队列总览对超过补偿窗口的显式时间槽直接显示建议改期时间，并把摘要文案统一为“执行器消息/执行器队列”，覆盖 Bot、AI 和带 `AI_Endpoint` 的 JiraAutomation。

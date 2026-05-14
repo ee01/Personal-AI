@@ -11,6 +11,11 @@ import {
 import { homedir } from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+
+async function createTempDir(prefix: string): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+}
 
 test('HOST_NAME is correct', () => {
   assert.equal(HOST_NAME, 'com.personal_ai.whisper_host');
@@ -69,8 +74,21 @@ test('getNmTokenPath points to Personal AI token file', () => {
 });
 
 test('writeNmToken writes a token file to the expected location', async () => {
-  const tokenPath = getNmTokenPath();
-  await writeNmToken('test-token');
-  const content = await fs.readFile(tokenPath, 'utf8');
-  assert.equal(content, 'test-token');
+  const tempDir = await createTempDir('personal-ai-nm-token-');
+  const previousTokenPath = process.env.DESKTOP_APP_NM_TOKEN_PATH;
+  const tokenPath = path.join(tempDir, '.nm-token');
+  process.env.DESKTOP_APP_NM_TOKEN_PATH = tokenPath;
+
+  try {
+    assert.equal(getNmTokenPath(), tokenPath);
+    await writeNmToken('test-token');
+    const content = await fs.readFile(tokenPath, 'utf8');
+    assert.equal(content, 'test-token');
+  } finally {
+    if (previousTokenPath === undefined) {
+      delete process.env.DESKTOP_APP_NM_TOKEN_PATH;
+    } else {
+      process.env.DESKTOP_APP_NM_TOKEN_PATH = previousTokenPath;
+    }
+  }
 });

@@ -203,7 +203,7 @@ export interface MeetingPilotActionItem {
   chapterId?: string;
   evidence?: string;
   timestamp?: string;
-  source?: 'llm' | 'heuristic';
+  source?: 'llm' | 'heuristic' | 'manual';
 }
 
 export interface MeetingPilotDecisionItem {
@@ -221,6 +221,7 @@ export interface MeetingPilotTimelineEvent {
   timestamp: string;
   speaker?: string;
   chapterId?: string;
+  actionItemId?: string;
 }
 
 export interface MeetingPilotMemoryRef {

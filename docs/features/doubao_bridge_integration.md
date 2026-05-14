@@ -1,6 +1,6 @@
 # Desktop App Integration
 
-_最后更新: 2026-05-05_
+_最后更新: 2026-05-11_
 
 ## Goal
 
@@ -23,11 +23,13 @@ _最后更新: 2026-05-05_
 ### Three components
 
 1. `Memory Service`
+
    - 维护消息、画像、待办、反思、结论。
    - 把内部数据渲染成 provider-facing `context package`。
    - 持久化 provider bindings 与 sync jobs。
 
 2. `Desktop App`
+
    - 运行在用户机器上。
    - 使用受控浏览器 profile 保存 Doubao 登录态，并为 ChatGPT explorer 使用独立会话上下文。
    - 负责 Doubao 输出线程、explorer 输入采集、本地缓存、预览、提炼回写、撤回与状态同步。
@@ -74,6 +76,7 @@ _最后更新: 2026-05-05_
 ### Stable memory
 
 - `persona_core`
+
   - 职业角色
   - 长期偏好
   - 稳定约束
@@ -88,11 +91,13 @@ _最后更新: 2026-05-05_
 ### Rolling / ephemeral context
 
 - `active_focus_digest`
+
   - 最近 7-14 天重点关注事项
   - 当前重点项目
   - 最近显著信号
 
 - `reminder_digest`
+
   - 待提醒事项
   - pending notifications
   - pending actions
@@ -234,6 +239,7 @@ Explorer 相关行为：
 - 预览会返回 raw messages、cleaned preview、artifacts、cursor
 - `reset-cache` 只清本地缓存与 cursor
 - `revoke-ingested-memory` 只删除 `Memory Service` 中按 source/scope 写入的记忆，不删除远端聊天记录
+- 用户在来源卡片上改完抓取范围、默认范围或浏览器传输方式后直接点击手动抓取时，Desktop App 会先保存该来源的待生效设置，再按最新设置执行抓取
 
 ## End-user Packaging
 
@@ -305,6 +311,7 @@ Explorer 相关行为：
   - mobile briefing sync
   - todo / notice sync
   - Doubao / ChatGPT explorer 定时抓取
+- app 内会展示最近同步流水，用户可以直接看到每次手动 / 自动推送的结果、耗时和跳过 / 失败原因
 
 当前可靠性边界：
 
@@ -312,6 +319,7 @@ Explorer 相关行为：
 - 豆包安全验证、发送失败或消息不可见时，手动推送会返回失败，后台同步不会把失败任务当成已完成冷却。
 - todo / notice 投递失败会回写 delivery failed，避免 Memory Service 误以为用户已经收到。
 - 日常浏览器模式下，登录按钮会显示“打开 Chrome 豆包”，避免用户误以为仍在使用内置登录窗口。
+- 如果 Memory Service、登录态等前置条件暂时未满足，Explorer 来源开关只会被临时置为不可点击并显示原因；不会把已经保存的“自动读取豆包 / ChatGPT”配置静默改成关闭。
 
 ## Industry References And Product Direction
 
@@ -331,8 +339,8 @@ Explorer 相关行为：
 
 ### Next step
 
-- 为外部记忆推送增加用户可读的审计时间线。
-- 对 sent / delivered / failed / skipped 做更一致的状态展示与筛选。
+- 把当前本机内存中的最近同步流水升级为可查询的长期审计历史。
+- 对 sent / delivered / failed / skipped 做跨输出渠道的一致筛选。
 - 如果 Doubao 暴露稳定 reminder API，再把待办通道从随手记文本升级为原生提醒。
 
 ## UI Entry

@@ -275,14 +275,37 @@
       
       <!-- 预测兴趣 -->
       <div
-        v-if="userProfileAnalysis.predictedInterests.length > 0"
+        v-if="reviewQueueTotal > 0"
         id="profile-predictions"
         class="profile-card"
       >
-        <h3>🔮 待确认推断</h3>
+        <div class="queue-header">
+          <div>
+            <h3>🔮 待确认推断</h3>
+            <p class="queue-hint">
+              按影响排序，确认前不会进入个性化上下文。
+            </p>
+          </div>
+          <div class="review-filter-group" aria-label="待确认推断筛选">
+            <button
+              v-for="option in reviewFilterOptions"
+              :key="option.value"
+              type="button"
+              class="review-filter-btn"
+              :class="{ active: reviewQueueFilter === option.value }"
+              :aria-pressed="reviewQueueFilter === option.value"
+              @click="reviewQueueFilter = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+        <div v-if="profileReviewQueue.length === 0" class="inline-empty compact">
+          当前筛选下没有待处理条目
+        </div>
         <div class="predictions-list">
           <div
-            v-for="prediction in userProfileAnalysis.predictedInterests"
+            v-for="prediction in profileReviewQueue"
             :key="prediction.id"
             class="prediction-item"
             :class="{ updating: isItemPending(prediction.id) }"
@@ -329,7 +352,7 @@
       </div>
       
       <!-- 统计数据 -->
-      <div id="profile-items" class="profile-card">
+      <div id="profile-stats" class="profile-card">
         <h3>📊 活动统计</h3>
         <div class="stats-grid">
           <div class="stat-card">
@@ -351,7 +374,7 @@
         </div>
       </div>
 
-      <div class="profile-card">
+      <div id="profile-items" class="profile-card">
         <div class="items-header">
           <h3>🧭 画像条目</h3>
           <span class="items-count">{{ userProfile.allItems.length }} 条</span>
@@ -676,7 +699,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, toRaw } from 'vue';
+import { computed, ref, onMounted, toRaw } from 'vue';
 import { chromeAPI } from '../memory-store';
 import {
   buildUserProfileViewModel,
@@ -684,6 +707,7 @@ import {
   type UserProfileAnalysisViewModel,
   type UserProfileCategory,
   type UserProfileInterestItem,
+  type UserProfileReviewQueueItem,
   type UserProfileViewModel,
 } from '../../services/userProfileViewModel';
 
@@ -701,6 +725,34 @@ const explicitProfileDraft = ref({
   itemType: 'preference',
   itemKey: 'writing_style.ringcentral.reply',
   itemValue: '',
+});
+type ReviewQueueFilter = 'all' | 'pending' | 'withEvidence' | 'withoutEvidence';
+const reviewQueueFilter = ref<ReviewQueueFilter>('all');
+const reviewFilterOptions: Array<{ value: ReviewQueueFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'pending', label: '待确认' },
+  { value: 'withEvidence', label: '有证据' },
+  { value: 'withoutEvidence', label: '缺证据' },
+];
+
+const getReviewQueue = (): UserProfileReviewQueueItem[] =>
+  userProfileAnalysis.value?.reviewQueue ??
+  userProfileAnalysis.value?.predictedInterests ??
+  [];
+
+const reviewQueueTotal = computed(() => getReviewQueue().length);
+const profileReviewQueue = computed(() => {
+  const queue = getReviewQueue();
+  switch (reviewQueueFilter.value) {
+    case 'pending':
+      return queue.filter((item) => item.status === 'pending_confirm');
+    case 'withEvidence':
+      return queue.filter((item) => item.evidenceCount > 0);
+    case 'withoutEvidence':
+      return queue.filter((item) => item.evidenceCount === 0);
+    default:
+      return queue;
+  }
 });
 
 const weightDecaySettings = ref({
@@ -869,6 +921,9 @@ const setImportance = async (itemId: string, type: string, importance: number) =
     confidence: importance,
     salienceScore: importance,
     userConfirmed: true,
+    status: 'active',
+    canUseForPersonalization: true,
+    contextUseState: 'usable',
   });
 
   try {
@@ -904,7 +959,12 @@ const confirmProfileItem = async (itemId: string) => {
       itemId
     });
     if (response && (response as any).success) {
-      replaceProfileItem(itemId, { userConfirmed: true });
+      replaceProfileItem(itemId, {
+        userConfirmed: true,
+        status: 'active',
+        canUseForPersonalization: true,
+        contextUseState: 'usable',
+      });
       setStatus('画像条目已确认', 'success');
       await loadUserProfile({ showLoading: false });
     } else {
@@ -1476,6 +1536,7 @@ onMounted(() => {
 
 .star:focus-visible,
 .review-link:focus-visible,
+.review-filter-btn:focus-visible,
 .primary-action-btn:focus-visible,
 .secondary-action-btn:focus-visible,
 .danger-action-btn:focus-visible {
@@ -1545,6 +1606,56 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.queue-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.queue-header h3 {
+  margin-bottom: 6px;
+}
+
+.queue-hint {
+  margin: 0;
+  color: #6c757d;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.review-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.review-filter-btn {
+  border: 1px solid #d7dee5;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #34495e;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.review-filter-btn:hover {
+  background: #e3f2fd;
+  border-color: #90caf9;
+  color: #1565c0;
+}
+
+.review-filter-btn.active {
+  background: #1976d2;
+  border-color: #1565c0;
+  color: #ffffff;
 }
 
 .suggestion-item,
@@ -2408,6 +2519,14 @@ onMounted(() => {
 
   .profile-item-actions {
     justify-content: flex-end;
+  }
+
+  .queue-header {
+    flex-direction: column;
+  }
+
+  .review-filter-group {
+    justify-content: flex-start;
   }
   
   .metric-icon {

@@ -317,7 +317,7 @@ export interface ToastAction {
 function showToast(
   message: string,
   variant: 'success' | 'error',
-  action?: ToastAction,
+  action?: ToastAction | ToastAction[],
 ) {
   const toast = document.createElement('div');
   toast.className = `snooze-toast snooze-toast-${variant}`;
@@ -332,22 +332,23 @@ function showToast(
   messageElement.textContent = message;
   toast.appendChild(messageElement);
 
-  if (action) {
+  const actions = Array.isArray(action) ? action : action ? [action] : [];
+  actions.forEach((toastAction) => {
     const actionButton = document.createElement('button');
     actionButton.type = 'button';
     actionButton.className = 'snooze-toast-action';
-    actionButton.textContent = action.label;
+    actionButton.textContent = toastAction.label;
     actionButton.addEventListener('click', async (event) => {
       event.stopPropagation();
       try {
-        await action.onClick();
+        await toastAction.onClick();
       } catch (error) {
         console.warn('Snooze toast action failed:', error);
       }
       toast.remove();
     });
     toast.appendChild(actionButton);
-  }
+  });
 
   document.body.appendChild(toast);
 
@@ -368,7 +369,18 @@ function showToast(
 /**
  * 显示成功提示
  */
-export function showSuccessToast(message: string, action?: ToastAction) {
+export function showSuccessToast(
+  message: string,
+  action?: ToastAction,
+): void;
+export function showSuccessToast(
+  message: string,
+  action?: ToastAction[],
+): void;
+export function showSuccessToast(
+  message: string,
+  action?: ToastAction | ToastAction[],
+): void {
   showToast(message, 'success', action);
 }
 

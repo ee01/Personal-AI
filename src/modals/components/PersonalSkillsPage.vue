@@ -72,10 +72,16 @@
                 <div class="top">
                   <div class="title">{{ suggestion.title }}</div>
                   <span class="when">{{ suggestionSourceLabel(suggestion) }}</span>
+                  <span v-if="suggestion.reviewRequired" class="review-chip">
+                    需审核
+                  </span>
+                  <span v-if="isExternalChangeSuggestion(suggestion)" class="change-chip">
+                    变更
+                  </span>
                 </div>
                 <div class="desc">{{ suggestion.summary || '暂无摘要' }}</div>
                 <div class="source">
-                  <span>来源</span>
+                  <span>{{ isExternalChangeSuggestion(suggestion) ? '变更' : '来源' }}</span>
                   <span class="source-link">
                     {{ suggestionOriginText(suggestion) }}
                   </span>
@@ -84,9 +90,9 @@
                   <button
                     class="btn primary"
                     type="button"
-                    @click.stop="useSuggestion(suggestion.id)"
+                    @click.stop="handleSuggestionPrimary(suggestion.id)"
                   >
-                    ✓ 使用
+                    {{ suggestionPrimaryLabel(suggestion) }}
                   </button>
                   <button
                     class="btn danger"
@@ -186,18 +192,29 @@
           <header class="workspace-head">
             <div class="workspace-title">
               <div class="eyebrow workspace-eyebrow">
-                {{ selectedSkill.status === 'suggestion' ? 'Skill Suggestion' : 'Active Skill' }}
+                {{ workspaceStatusLabel(selectedSkill) }}
               </div>
               <h2>{{ selectedSkill.title }}</h2>
               <p>{{ selectedSkill.summary }}</p>
             </div>
             <div class="workspace-actions">
               <button
+                v-if="
+                  selectedSkill.status === 'suggestion' &&
+                  requiresReview(selectedSkill) &&
+                  !canConfirmSuggestion(selectedSkill)
+                "
+                class="btn secondary secondary-btn"
+                @click="prepareSuggestionReview(selectedSkill.id)"
+              >
+                查看证据
+              </button>
+              <button
                 v-if="selectedSkill.status === 'suggestion'"
                 class="btn primary primary-btn"
-                @click="useSuggestion(selectedSkill.id)"
+                @click="handleSuggestionPrimary(selectedSkill.id)"
               >
-                ✓ 使用
+                {{ suggestionPrimaryLabel(selectedSkill) }}
               </button>
               <button
                 v-if="selectedSkill.status === 'suggestion'"
@@ -215,12 +232,46 @@
               :key="tab.key"
               class="tab-btn"
               :class="{ active: activeTab === tab.key }"
-              @click="activeTab = tab.key"
+              @click="setActiveTab(tab.key)"
             >
               {{ tab.label }}
               <span v-if="tabCount(tab.key)" class="tab-badge tab-count">{{ tabCount(tab.key) }}</span>
             </button>
           </nav>
+
+          <section
+            v-if="selectedSkill.status === 'suggestion' && requiresReview(selectedSkill)"
+            class="review-gate"
+          >
+            <div class="review-gate-icon">!</div>
+            <div class="review-gate-body">
+              <strong>{{ reviewGateTitle(selectedSkill) }}</strong>
+              <p>{{ reviewGateDescription(selectedSkill) }}</p>
+              <ul>
+                <li v-for="reason in reviewReasons(selectedSkill)" :key="reason">
+                  {{ reason }}
+                </li>
+              </ul>
+            </div>
+            <div class="review-gate-actions">
+              <button
+                v-if="!canConfirmSuggestion(selectedSkill)"
+                class="btn secondary mini"
+                type="button"
+                @click="prepareSuggestionReview(selectedSkill.id)"
+              >
+                查看证据
+              </button>
+              <button
+                v-else
+                class="btn primary mini"
+                type="button"
+                @click="useSuggestion(selectedSkill.id, { reviewConfirmed: true })"
+              >
+                {{ suggestionPrimaryLabel(selectedSkill) }}
+              </button>
+            </div>
+          </section>
 
           <div class="workspace-content">
             <section v-if="activeTab === 'workflow'" class="detail-section">
@@ -595,6 +646,11 @@ import { DesktopAppClient } from '../../services/DesktopAppClient';
 
 type SkillFilter = 'active' | 'all' | 'dismissed';
 type SkillTab = 'workflow' | 'evidence' | 'versions' | 'bindings';
+type UseSuggestionOptions = { reviewConfirmed?: boolean };
+type ReviewableSkill = Pick<
+  PersonalSkillListItem,
+  'id' | 'slug' | 'reviewRequired' | 'reviewReasons' | 'bindings'
+>;
 
 const client = getMemoryServiceClient();
 const desktopClient = new DesktopAppClient();
@@ -605,6 +661,7 @@ const suggestions = ref<PersonalSkillListItem[]>([]);
 const selectedSkill = ref<PersonalSkillDetail | null>(null);
 const selectedId = ref('');
 const activeTab = ref<SkillTab>('workflow');
+const reviewedSuggestionIds = ref<Set<string>>(new Set());
 const filter = ref<SkillFilter>('active');
 const searchQuery = ref('');
 const inboxExpanded = ref(true);
@@ -820,11 +877,127 @@ async function selectSkill(id: string) {
   }
 }
 
-async function useSuggestion(id: string) {
+function visibleSkillById(id: string) {
+  if (selectedSkill.value?.id === id) return selectedSkill.value;
+  return (
+    suggestions.value.find((skill) => skill.id === id) ||
+    skills.value.find((skill) => skill.id === id)
+  );
+}
+
+function externalChangeBinding(skill?: Pick<PersonalSkillListItem, 'bindings'> | null) {
+  return (skill?.bindings || []).find((binding) => {
+    const targetId = binding.metadata?.externalChangeFor;
+    return typeof targetId === 'string' && targetId.trim().length > 0;
+  });
+}
+
+function isExternalChangeSuggestion(
+  skill?: Pick<PersonalSkillListItem, 'bindings'> | null,
+) {
+  return Boolean(externalChangeBinding(skill));
+}
+
+function externalChangeOriginalSlug(skill?: ReviewableSkill | null) {
+  const originalSlug = externalChangeBinding(skill)?.metadata?.originalSlug;
+  return typeof originalSlug === 'string' && originalSlug.trim()
+    ? originalSlug.trim()
+    : skill?.slug || 'active skill';
+}
+
+function externalChangePlatformLabel(skill?: ReviewableSkill | null) {
+  const platform = externalChangeBinding(skill)?.platform;
+  return platform ? platformLabel(platform) : '外部平台';
+}
+
+function requiresReview(skill?: Pick<PersonalSkillListItem, 'reviewRequired' | 'reviewReasons'> | null) {
+  return Boolean(skill?.reviewRequired || skill?.reviewReasons?.length);
+}
+
+function markSuggestionReviewed(id: string) {
+  if (reviewedSuggestionIds.value.has(id)) return;
+  reviewedSuggestionIds.value = new Set([...reviewedSuggestionIds.value, id]);
+}
+
+function canConfirmSuggestion(
+  skill?: Pick<PersonalSkillListItem, 'id' | 'reviewRequired' | 'reviewReasons'> | null,
+) {
+  if (!skill) return false;
+  return !requiresReview(skill) || reviewedSuggestionIds.value.has(skill.id);
+}
+
+function suggestionPrimaryLabel(skill?: ReviewableSkill | null) {
+  if (!skill || !requiresReview(skill)) return '✓ 使用';
+  if (isExternalChangeSuggestion(skill)) {
+    return canConfirmSuggestion(skill) ? '确认覆盖' : '查看变更';
+  }
+  return canConfirmSuggestion(skill) ? '确认使用' : '查看风险';
+}
+
+function reviewGateTitle(skill?: ReviewableSkill | null) {
+  return isExternalChangeSuggestion(skill) ? '外部变更需要审核' : '使用前需要审核';
+}
+
+function reviewGateDescription(skill?: ReviewableSkill | null) {
+  if (isExternalChangeSuggestion(skill)) {
+    return `${externalChangePlatformLabel(skill)} 检测到 ${externalChangeOriginalSlug(
+      skill,
+    )} 的新版本；确认后才会覆盖 Personal AI 的 active 真源版本。`;
+  }
+  return '这条建议可能会影响外部 agent 行为；先确认来源、证据和风险后再入库。';
+}
+
+function reviewReasons(skill: Pick<PersonalSkillListItem, 'reviewReasons'>) {
+  return skill.reviewReasons?.length
+    ? skill.reviewReasons
+    : ['来源或风险信息需要人工确认'];
+}
+
+function setActiveTab(tab: SkillTab) {
+  activeTab.value = tab;
+  if (
+    tab === 'evidence' &&
+    selectedSkill.value?.status === 'suggestion' &&
+    requiresReview(selectedSkill.value)
+  ) {
+    markSuggestionReviewed(selectedSkill.value.id);
+  }
+}
+
+async function prepareSuggestionReview(id: string) {
+  await selectSkill(id);
+  setActiveTab('evidence');
+}
+
+async function handleSuggestionPrimary(id: string) {
+  const candidate = visibleSkillById(id);
+  if (requiresReview(candidate) && !canConfirmSuggestion(candidate)) {
+    await prepareSuggestionReview(id);
+    return;
+  }
+  await useSuggestion(id, {
+    reviewConfirmed: requiresReview(candidate),
+  });
+}
+
+async function useSuggestion(id: string, options: UseSuggestionOptions = {}) {
+  const candidate = visibleSkillById(id);
+  if (!options.reviewConfirmed && requiresReview(candidate)) {
+    await prepareSuggestionReview(id);
+    return;
+  }
+
   try {
-    const response = await client.useSkillSuggestion(id);
+    const response = await client.useSkillSuggestion(id, {
+      reviewConfirmed: Boolean(options.reviewConfirmed),
+    });
     await loadData(response.skill.id);
   } catch (error: any) {
+    if (/Review required/i.test(error?.message || '')) {
+      await prepareSuggestionReview(id);
+      errorMessage.value = '使用前需要先确认审核项。';
+      return;
+    }
     errorMessage.value = error?.message || '使用技能建议失败';
   }
 }
@@ -879,6 +1052,9 @@ function platformIcon(platform: string) {
 }
 
 function suggestionSourceLabel(suggestion: PersonalSkillListItem) {
+  if (isExternalChangeSuggestion(suggestion)) {
+    return `${externalChangePlatformLabel(suggestion)} 变更`;
+  }
   if (suggestion.suggestedFrom === 'openclaw' || suggestion.sources?.includes('openclaw')) {
     return 'OpenClaw';
   }
@@ -892,6 +1068,9 @@ function suggestionSourceLabel(suggestion: PersonalSkillListItem) {
 }
 
 function suggestionOriginText(suggestion: PersonalSkillListItem) {
+  if (isExternalChangeSuggestion(suggestion)) {
+    return `将覆盖 ${externalChangeOriginalSlug(suggestion)}，需先审核`;
+  }
   if (suggestion.suggestedFrom === 'openclaw' || suggestion.sources?.includes('openclaw')) {
     return 'OpenClaw installed skill';
   }
@@ -909,6 +1088,15 @@ function statusLabel(status: string) {
   if (status === 'suggestion') return '萃取建议';
   if (status === 'dismissed') return '已丢弃';
   return status;
+}
+
+function workspaceStatusLabel(skill: PersonalSkillListItem) {
+  if (skill.status === 'suggestion') {
+    if (isExternalChangeSuggestion(skill)) return 'External Change · 需审核';
+    return requiresReview(skill) ? 'Skill Suggestion · 需审核' : 'Skill Suggestion';
+  }
+  if (skill.status === 'dismissed') return 'Dismissed Skill';
+  return 'Active Skill';
 }
 
 function bindingStateLabel(state: string) {
@@ -1533,6 +1721,28 @@ button:disabled {
   border-radius: 999px;
 }
 
+.review-chip {
+  flex: none;
+  font-size: 0.66rem;
+  color: #fbbf24;
+  padding: 0.1rem 0.4rem;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.change-chip {
+  flex: none;
+  font-size: 0.66rem;
+  color: #93c5fd;
+  padding: 0.1rem 0.4rem;
+  background: rgba(96, 165, 250, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  border-radius: 999px;
+  font-weight: 700;
+}
+
 .suggestion-card .desc {
   font-size: 0.74rem;
   color: var(--muted);
@@ -2015,6 +2225,62 @@ button:disabled {
   background: rgba(148, 163, 184, 0.08);
 }
 
+.review-gate {
+  margin: 0.85rem 1.2rem 0;
+  display: grid;
+  grid-template-columns: 1.55rem minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: start;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 0.65rem;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--ink-2);
+}
+
+.review-gate-icon {
+  width: 1.55rem;
+  height: 1.55rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #fbbf24;
+  color: #0f172a;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.review-gate-body {
+  min-width: 0;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.review-gate-body strong {
+  display: block;
+  color: var(--ink);
+  font-size: 0.84rem;
+  margin-bottom: 0.12rem;
+}
+
+.review-gate-body p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.review-gate-body ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1rem;
+  color: #fcd34d;
+}
+
+.review-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
 .steps {
   display: grid;
   gap: 0.55rem;
@@ -2198,6 +2464,15 @@ button:disabled {
   }
 
   .install-url-actions {
+    justify-content: flex-start;
+  }
+
+  .review-gate {
+    grid-template-columns: 1.55rem minmax(0, 1fr);
+  }
+
+  .review-gate-actions {
+    grid-column: 1 / -1;
     justify-content: flex-start;
   }
 }

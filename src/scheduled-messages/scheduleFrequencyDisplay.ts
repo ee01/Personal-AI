@@ -1,5 +1,9 @@
 import type { ScheduledMessage } from './types';
-import { normalizeLocalScheduleTime, parseLocalScheduleDate } from './scheduleDateTime.js';
+import {
+  hasLocalScheduleTime,
+  normalizeLocalScheduleTime,
+  parseLocalScheduleDate,
+} from './scheduleDateTime.js';
 import { getDefaultScheduleTime, isExecutorDrivenSchedule } from './scheduleNextExecution.js';
 
 type FrequencyDisplayMessage = Pick<
@@ -139,7 +143,7 @@ function formatBaseFrequency(message: FrequencyDisplayMessage): string {
 export function formatScheduledMessageFrequency(message: FrequencyDisplayMessage): string {
   const baseFrequency = formatBaseFrequency(message);
 
-  if (message.Schedule_Time) {
+  if (hasLocalScheduleTime(message.Schedule_Time)) {
     const normalizedScheduleTime = normalizeLocalScheduleTime(message.Schedule_Time);
     return normalizedScheduleTime
       ? `${baseFrequency} ${normalizedScheduleTime}`

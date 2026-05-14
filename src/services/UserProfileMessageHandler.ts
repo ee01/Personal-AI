@@ -6,6 +6,39 @@ import {
 } from './UserConfigStore';
 import { buildUserProfileViewModel } from './userProfileViewModel';
 
+export type ProfileItemsPage = {
+    items: any[];
+    total: number;
+    truncated: boolean;
+};
+
+export async function getProfileItemsForView(
+    client: ReturnType<typeof getMemoryServiceClient>,
+    maxItems = 1000,
+): Promise<ProfileItemsPage> {
+    const pageSize = 200;
+    const itemLimit = Number.isFinite(maxItems)
+        ? Math.max(1, Math.floor(maxItems))
+        : Number.POSITIVE_INFINITY;
+    const firstPage = await client.getProfileItems({
+        limit: Math.min(pageSize, itemLimit),
+        offset: 0,
+    });
+    const items = [...firstPage.items];
+    const total = firstPage.total;
+
+    for (let offset = items.length; offset < total && items.length < itemLimit; offset = items.length) {
+        const nextPage = await client.getProfileItems({
+            limit: Math.min(pageSize, itemLimit - items.length),
+            offset,
+        });
+        if (nextPage.items.length === 0) break;
+        items.push(...nextPage.items);
+    }
+
+    return { items, total, truncated: items.length < total };
+}
+
 /**
  * 用户画像相关消息处理器
  * 处理所有与用户画像、权重配置、数据融合等相关的消息
@@ -29,7 +62,7 @@ export class UserProfileMessageHandler {
             const client = getMemoryServiceClient();
             Promise.all([
                 client.getUserCore(),
-                client.getProfileItems({ limit: 100 }),
+                getProfileItemsForView(client),
                 client.getOpinions({ limit: 50 })
             ])
             .then(([coreResult, profileItems, opinions]) => {
@@ -226,7 +259,7 @@ export class UserProfileMessageHandler {
             const client = getMemoryServiceClient();
             Promise.all([
                 client.getUserCore(),
-                client.getProfileItems({ limit: 1000 }),
+                getProfileItemsForView(client, Number.POSITIVE_INFINITY),
                 client.getHealth(),
                 client.getStats()
             ])
@@ -246,7 +279,12 @@ export class UserProfileMessageHandler {
                         exportTime: new Date().toISOString(),
                         exportTimestamp: Date.now(),
                         version: '2.0',
-                        exportType: 'complete_user_profile'
+                        exportType: 'complete_user_profile',
+                        pagination: {
+                            exportedProfileItems: profileItems.items.length,
+                            totalProfileItems: profileItems.total,
+                            truncated: profileItems.truncated,
+                        },
                     },
 
                     // 用户画像核心数据
@@ -280,10 +318,15 @@ export class UserProfileMessageHandler {
 
                     // 生成用户友好的总结
                     exportSummary: {
-                        profileCompleteness: profileItems.total > 0 ? '完整' : '部分',
+                        profileCompleteness: profileItems.truncated
+                            ? '已截断'
+                            : profileItems.total > 0
+                                ? '完整'
+                                : '部分',
                         totalInteractions: viewModel.profile.statistics.totalInteractions,
                         averageDailyActivity: viewModel.profile.statistics.averageDailyActivity,
                         totalProfileItems: profileItems.total,
+                        exportedProfileItems: profileItems.items.length,
                         totalEntities: stats.entities.total,
                         dataQuality: healthStatus.database.connected ? '良好' : '离线模式'
                     }
@@ -401,7 +444,7 @@ export class UserProfileMessageHandler {
 
                     // Retrieve the updated core profile
                     const coreResult = await client.getUserCore();
-                    const profileItems = await client.getProfileItems({ limit: 100 });
+                    const profileItems = await getProfileItemsForView(client);
 
                     sendResponse({
                         success: true,
@@ -437,7 +480,7 @@ export class UserProfileMessageHandler {
                     const client = getMemoryServiceClient();
                     const [coreResult, profileItems, opinions] = await Promise.all([
                         client.getUserCore(),
-                        client.getProfileItems({ limit: 100 }),
+                        getProfileItemsForView(client),
                         client.getOpinions({ limit: 50 })
                     ]);
                     const viewModel = buildUserProfileViewModel({
@@ -488,7 +531,7 @@ export class UserProfileMessageHandler {
                 try {
                     const client = getMemoryServiceClient();
                     // Fetch all profile items, then re-score and update them
-                    const { items } = await client.getProfileItems({ limit: 1000 });
+                    const { items } = await getProfileItemsForView(client);
 
                     for (const item of items) {
                         // Simple adaptive: boost confidence for frequently-accessed items
@@ -608,7 +651,7 @@ export class UserProfileMessageHandler {
                 try {
                     const client = getMemoryServiceClient();
                     // Fetch profile items to build recommendations from
-                    const { items } = await client.getProfileItems({ limit: 100 });
+                    const { items } = await getProfileItemsForView(client);
 
                     // Simple recommendation algorithm based on profile items
                     const recommendations: Array<{

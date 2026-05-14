@@ -583,7 +583,6 @@ async function main() {
       id: 'legacyInvalidToolAgent',
       name: 'Legacy Invalid Tool Agent',
       description: 'Old custom agent with a removed tool',
-      enabled: true,
       priority: 55,
       tools: ['removedWorkflowTool'],
     },
@@ -595,16 +594,25 @@ async function main() {
     sender: 'Taylor Kim',
     team_id: 'team-4',
     team_name: 'General',
-    content: 'routine sync note without a storage signal',
+    content:
+      'architecture decision should be remembered even when a legacy custom tool is skipped',
     datetime: '2026-04-15T00:30:00.000Z',
   });
   const invalidToolStep = invalidToolResult.agentWorkflowTrace?.find(
     (step) => step.agentId === 'legacyInvalidToolAgent',
   );
+  assert.ok(
+    invalidToolStep,
+    'legacy custom agents without an enabled flag should still run',
+  );
   assert.equal(invalidToolStep?.status, 'skipped');
   assert.equal(invalidToolStep?.tools?.[0]?.status, 'skipped');
   assert.match(invalidToolStep?.outputSummary || '', /tool is not registered/);
-  assert.equal(ingests.length, 0);
+  assert.equal(invalidToolResult.storageReview?.traceStatus, 'partial');
+  assert.equal(invalidToolResult.storageReview?.toolSkippedCount, 1);
+  assert.equal(ingests.length, 1);
+  assert.equal(ingests[0].metadata.storageReview.traceStatus, 'partial');
+  assert.equal(ingests[0].metadata.storageReview.toolSkippedCount, 1);
   delete storage.customAgents;
 
   console.log('verify-memory-entry-agent-workflow: ok');

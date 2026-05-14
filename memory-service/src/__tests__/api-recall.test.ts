@@ -40,6 +40,7 @@ describe('Recall API', () => {
   });
 
   beforeEach(() => {
+    db.prepare('DELETE FROM memory_feedback_events').run();
     db.prepare('DELETE FROM memory_metadata').run();
     db.prepare('DELETE FROM relationships').run();
     db.prepare('DELETE FROM entities').run();
@@ -107,6 +108,35 @@ describe('Recall API', () => {
     expect(body.items[0].displayTitle).toBe('Q2 Planning Review');
     expect(body.items[0].displayText).toContain('Esone should lead');
     expect(body.items[0].previewText.length).toBeGreaterThan(0);
+  });
+
+  it('includes persisted recall feedback when metadata is requested', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO memory_feedback_events
+        (feedback_type, target_type, target_id, action, created_at, updated_at)
+       VALUES ('recall_quality', 'message', ?, 'negative', ?, ?)`,
+    ).run('meeting-memory-1', now, now);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'recent meeting memories',
+        topK: 5,
+        channels: ['time'],
+        timeRange: {
+          start: now - 3600,
+          end: now + 60,
+        },
+        includeMetadata: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const item = body.items.find((entry: any) => entry.id === 'meeting-memory-1');
+    expect(item?.metadata?.recallFeedback).toBe('negative');
   });
 
   it('includes meeting records in generic recall when no sourceTypes filter is provided', async () => {

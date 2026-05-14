@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
+  DEFAULT_ASSIST_PREVIEW_LIMIT,
+  getComposerAssistPreviewText,
+  getComposerGuardPrimaryAction,
   getNextComposerAssistThreshold,
   normalizeComposerAssistThreshold,
-} from '../ComposerGuardController.ts';
+  sanitizeComposerAssistInsertText,
+  shouldPreviewComposerAssistBeforeInsert,
+} from '../assistPreviewPolicy.ts';
 
 test('normalizeComposerAssistThreshold: defaults to 0.78 and clamps bounds', () => {
   assert.equal(normalizeComposerAssistThreshold(undefined), 0.78);
@@ -35,4 +40,63 @@ test('getNextComposerAssistThreshold: rejected feedback raises non-linearly', ()
   assert.ok(first > 0.78);
   assert.ok(second > first);
   assert.ok(firstDelta > secondDelta);
+});
+
+test('getComposerGuardPrimaryAction: preview-required assists require explicit preview', () => {
+  assert.equal(
+    shouldPreviewComposerAssistBeforeInsert({
+      previewRequired: false,
+      riskLevel: 'low',
+    }),
+    false,
+  );
+  assert.equal(
+    getComposerGuardPrimaryAction({
+      previewRequired: false,
+      riskLevel: 'low',
+    }),
+    'insert',
+  );
+  assert.equal(
+    shouldPreviewComposerAssistBeforeInsert({
+      previewRequired: true,
+      riskLevel: 'medium',
+    }),
+    true,
+  );
+  assert.equal(
+    getComposerGuardPrimaryAction({
+      previewRequired: true,
+      riskLevel: 'medium',
+    }),
+    'preview',
+  );
+  assert.equal(
+    getComposerGuardPrimaryAction({
+      previewRequired: false,
+      riskLevel: 'high',
+    }),
+    'preview',
+  );
+});
+
+test('getComposerAssistPreviewText: truncates hover previews but preserves locked previews', () => {
+  const longSuggestion = 'A'.repeat(DEFAULT_ASSIST_PREVIEW_LIMIT + 24);
+
+  const hoverPreview = getComposerAssistPreviewText(longSuggestion);
+  assert.equal(hoverPreview.length, DEFAULT_ASSIST_PREVIEW_LIMIT + 3);
+  assert.ok(hoverPreview.endsWith('...'));
+
+  const lockedPreview = getComposerAssistPreviewText(longSuggestion, {
+    forceFull: true,
+  });
+  assert.equal(lockedPreview, longSuggestion);
+});
+
+test('sanitizeComposerAssistInsertText: strips wrapper copy before preview or insert', () => {
+  const insertText = sanitizeComposerAssistInsertText(
+    'Personal AI context pack (review before sending):\n请结合 Orbit blocker 回复。\nPlease review and edit before sending.',
+  );
+
+  assert.equal(insertText, '请结合 Orbit blocker 回复。');
 });

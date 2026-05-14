@@ -206,7 +206,7 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
   projectName: string;
 
   /** 项目风险等级 */
-  riskLevel: 'critical' | 'high' | 'normal' | 'low';
+  riskLevel: 'critical' | 'high' | 'medium' | 'normal' | 'low';
 
   /** Jira数据（单个工单，旧版兼容） */
   jiraData?: Record<string, any>;

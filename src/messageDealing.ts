@@ -224,6 +224,82 @@ function buildSourcePostIndex(messageGroups: any[]): Map<string, any> {
   return index;
 }
 
+function normalizeAgentWorkflowPost(post: any) {
+  if (!post) return null;
+  const sourcePost = post?.raw ?? post;
+  const id = String(
+    post?.id ??
+      post?.post_id ??
+      post?.postId ??
+      sourcePost?.id ??
+      sourcePost?.post_id ??
+      sourcePost?.postId ??
+      '',
+  ).trim();
+  const creator =
+    post?.creator ??
+    post?.sender ??
+    sourcePost?.creator ??
+    sourcePost?.sender ??
+    '';
+  const time =
+    post?.time ??
+    post?.datetime ??
+    sourcePost?.time ??
+    sourcePost?.datetime ??
+    '';
+  const text =
+    post?.text ??
+    post?.content ??
+    sourcePost?.text ??
+    sourcePost?.content ??
+    '';
+
+  return {
+    id,
+    creator,
+    time,
+    text,
+    raw: sourcePost,
+  };
+}
+
+function getAgentWorkflowPostsForGroup(group: any) {
+  const posts: Array<{
+    id: string;
+    creator: string;
+    time: string;
+    text: string;
+    raw: any;
+  }> = [];
+  const seen = new Set<string>();
+  const add = (post: any) => {
+    const normalized = normalizeAgentWorkflowPost(post);
+    if (!normalized) return;
+    const dedupeKey =
+      normalized.id ||
+      [normalized.creator, normalized.time, normalized.text].join('\n');
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    posts.push(normalized);
+  };
+
+  for (const post of group?.posts || []) {
+    add(post);
+  }
+  for (const post of group?.standalone || []) {
+    add(post);
+  }
+  for (const thread of group?.threads || []) {
+    add(thread?.rootPost);
+    for (const reply of thread?.replies || []) {
+      add(reply);
+    }
+  }
+
+  return posts;
+}
+
 function parseMessageTimestamp(value: unknown): number {
   const timestamp = new Date(String(value || '')).getTime();
   return Number.isFinite(timestamp) ? timestamp : Date.now();
@@ -246,13 +322,13 @@ function getThreadRootPostId(post: any): string {
 function getOwnerSpeechPosts(messageGroups: any[], username?: string) {
   const normalizedUsername = normalizeIdentityValue(username);
   return (messageGroups || []).flatMap((group) =>
-    (group?.posts || [])
+    getAgentWorkflowPostsForGroup(group)
       .filter(
         (post: any) =>
-          post?.authorRole === 'owner' ||
-          post?.isSelf === true ||
+          post?.raw?.authorRole === 'owner' ||
+          post?.raw?.isSelf === true ||
           (normalizedUsername &&
-            normalizeIdentityValue(post?.creator || post?.sender) ===
+            normalizeIdentityValue(post?.creator || post?.raw?.sender) ===
               normalizedUsername),
       )
       .map((post: any) => ({
@@ -283,16 +359,19 @@ async function ingestOwnerSpeechForLearning(
     await client.ingestBatch(
       ownerPosts.map(({ group, post }) => {
         const content = String(post.text || post.content || '').trim();
-        const postId = String(post.id || post.postId || post.post_id || '');
-        const groupId = String(post.groupId || group.groupId || '');
-        const threadRootPostId = getThreadRootPostId(post);
+        const sourcePost = post.raw ?? post;
+        const postId = String(
+          post.id || sourcePost.postId || sourcePost.post_id || '',
+        );
+        const groupId = String(sourcePost.groupId || group.groupId || '');
+        const threadRootPostId = getThreadRootPostId(sourcePost) || post.id;
 
         return {
           content,
           sourceType: 'glip' as const,
           sender: post.creator || post.sender || 'owner',
           groupId,
-          groupName: post.groupName || group.groupName || '',
+          groupName: sourcePost.groupName || group.groupName || '',
           timestamp: parseMessageTimestamp(post.time || post.datetime),
           metadata: {
             authorRole: 'owner',
@@ -301,9 +380,9 @@ async function ingestOwnerSpeechForLearning(
             postId,
             groupId,
             threadRootPostId,
-            parentId: post.parentId,
-            creatorId: post.creatorId,
-            creatorUsername: post.creatorUsername,
+            parentId: sourcePost.parentId,
+            creatorId: sourcePost.creatorId,
+            creatorUsername: sourcePost.creatorUsername,
             captureReason: 'owner_speech_learning',
           },
         };
@@ -320,12 +399,24 @@ async function queueMatchedRuleAutomations(params: {
   matchedRule?: string;
   summary?: string;
   confidence?: number;
+  pausedReason?: string;
   message: MessageRuleAutomationMessage;
 }) {
   const automationItems = params.manualItems.filter((item) =>
     Boolean(item.automationPrompt?.trim()),
   );
   if (automationItems.length === 0) return;
+
+  if (params.pausedReason) {
+    console.log(
+      `⏸️ 已暂停 ${automationItems.length} 条规则自动化: ${params.pausedReason}`,
+      {
+        postId: params.message.postId,
+        matchedRule: params.matchedRule,
+      },
+    );
+    return;
+  }
 
   try {
     const client = getMemoryServiceClient();
@@ -573,13 +664,13 @@ export async function analyzeMessagesInBackground(
       const messageGroups = data.map((item) => ({
         groupName: item.groupName,
         groupId: item.groupId,
-        posts: item.posts.map((post: any) => ({
+        posts: getAgentWorkflowPostsForGroup(item).map((post) => ({
           sender: post.creator,
           datetime: post.time,
           post_id: post.id || '',
-          parent_id: post.parentId || undefined, // 新增：父消息 ID
+          parent_id: (post.raw as any)?.parentId || (post.raw as any)?.parent_id || undefined,
           content: post.text,
-          raw: post,
+          raw: post.raw,
         })),
         // 新增：Thread 结构化数据
         threads: item.threads || [],
@@ -996,8 +1087,16 @@ export async function analyzeMessagesInBackground(
         break;
       }
 
+      const agentWorkflowPosts = getAgentWorkflowPostsForGroup(item);
+      if (agentWorkflowPosts.length === 0) {
+        console.log('agentWorkflow 未发现可分析消息，跳过群组:', {
+          groupId: item.groupId,
+          groupName: item.groupName,
+        });
+      }
+
       // 处理该群组的每条消息
-      for (const post of item.posts) {
+      for (const post of agentWorkflowPosts) {
         const messageData = {
           post_id: post.id,
           team_id: item.groupId,
@@ -1012,32 +1111,31 @@ export async function analyzeMessagesInBackground(
         const processResult = await processNewMessage(messageData);
         console.log(`Agent处理消息结果:`, processResult);
 
+        const matchedRuleIds = mergeMatchedRuleIds(
+          processResult.matchedRuleIds,
+          extractRuleIdsFromMatchedRule(processResult.matchedRule || ''),
+        );
+        const resolvedMatchedRules = resolveMatchedWatchRules({
+          watchRules: runtimeWatchRules,
+          matchedRule: processResult.matchedRule,
+          matchedRuleRefs: processResult.matchedRuleRefs,
+          matchedRuleIds,
+          messageContext: {
+            sender: processResult.messageContext?.sender || post.creator || '',
+            groupId: processResult.messageContext?.groupId || item.groupId || '',
+            groupName:
+              processResult.messageContext?.groupName || item.groupName || '',
+          },
+        });
+        const matchedManualItems = getManualItemsFromMatchedRules(
+          resolvedMatchedRules.watchRules,
+        );
+        const matchedConcernedItem = getFirstManualItemFromMatchedRules(
+          resolvedMatchedRules.watchRules,
+        );
+
         // 如果需要发送通知
         if (processResult.shouldNotify) {
-          // 使用新的匹配函数查找关注项
-          const matchedRuleIds = mergeMatchedRuleIds(
-            processResult.matchedRuleIds,
-            extractRuleIdsFromMatchedRule(processResult.matchedRule || ''),
-          );
-          const resolvedMatchedRules = resolveMatchedWatchRules({
-            watchRules: runtimeWatchRules,
-            matchedRule: processResult.matchedRule,
-            matchedRuleRefs: processResult.matchedRuleRefs,
-            matchedRuleIds,
-            messageContext: {
-              sender: processResult.messageContext?.sender || post.creator || '',
-              groupId: processResult.messageContext?.groupId || item.groupId || '',
-              groupName:
-                processResult.messageContext?.groupName || item.groupName || '',
-            },
-          });
-          const matchedManualItems = getManualItemsFromMatchedRules(
-            resolvedMatchedRules.watchRules,
-          );
-          const matchedConcernedItem = getFirstManualItemFromMatchedRules(
-            resolvedMatchedRules.watchRules,
-          );
-
           // 获取通知方式
           const notifyMethod = matchedConcernedItem?.notifyMethod || '';
           const shouldMention = matchedConcernedItem?.mentionMe || false;
@@ -1087,34 +1185,38 @@ export async function analyzeMessagesInBackground(
                     concernedItems: concernedItems,
                   },
               )
-              .catch(console.error);
+                .catch(console.error);
             }
           }
+        }
 
-          if (matchedManualItems.length > 0) {
-            const sourcePost = post.raw ?? post;
-            await queueMatchedRuleAutomations({
-              manualItems: matchedManualItems,
-              matchedRule: processResult.matchedRule,
-              summary: processResult.summary || '',
-              confidence:
-                typeof processResult.confidence === 'number'
-                  ? processResult.confidence
-                  : undefined,
-              message: {
-                postId: post.id || '',
-                sender: processResult.messageContext?.sender || '',
-                groupId: processResult.messageContext?.groupId || '',
-                groupName: processResult.messageContext?.groupName || '',
-                content: processResult.messageContext?.messageContent || '',
-                timestamp:
-                  new Date(processResult.messageContext?.datetime || '').getTime() ||
-                  Date.now(),
-                timezone: getLocalTimeZone(),
-                event: extractEventPayload(sourcePost),
-              },
-            });
-          }
+        if (matchedManualItems.length > 0) {
+          const sourcePost = post.raw ?? post;
+          await queueMatchedRuleAutomations({
+            manualItems: matchedManualItems,
+            matchedRule: processResult.matchedRule,
+            summary: processResult.summary || '',
+            confidence:
+              typeof processResult.confidence === 'number'
+                ? processResult.confidence
+                : undefined,
+            pausedReason: processResult.notificationReview?.required
+              ? processResult.notificationReview.message ||
+                'Agent Workflow notification review is required'
+              : undefined,
+            message: {
+              postId: post.id || '',
+              sender: processResult.messageContext?.sender || '',
+              groupId: processResult.messageContext?.groupId || '',
+              groupName: processResult.messageContext?.groupName || '',
+              content: processResult.messageContext?.messageContent || '',
+              timestamp:
+                new Date(processResult.messageContext?.datetime || '').getTime() ||
+                Date.now(),
+              timezone: getLocalTimeZone(),
+              event: extractEventPayload(sourcePost),
+            },
+          });
         }
       }
     }
@@ -1316,6 +1418,55 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
           continue;
 
         const matched_rule = json.matched_rule;
+        const messageRuleContext = {
+          sender: json.sender,
+          groupId: body.messageData ? body.messageData.groupId : json.team_id,
+          groupName: body.messageData
+            ? body.messageData.groupName
+            : json.team_name,
+        };
+        const resolvedMatchedRules = resolveMatchedWatchRules({
+          watchRules: runtimeWatchRules,
+          matchedRule: matched_rule,
+          matchedRuleRefs: json.matched_rule_refs,
+          matchedRuleIds: json.matched_rule_ids,
+          messageContext: messageRuleContext,
+        });
+        const matchedManualItems = getManualItemsFromMatchedRules(
+          resolvedMatchedRules.watchRules,
+        );
+
+        let followThreadItem: TopicItemWithAutoReply | undefined;
+        if (
+          json.follow_thread_info &&
+          json.follow_thread_info.original_post_id
+        ) {
+          followThreadItem = manualConcernedItems.find(
+            (item: TopicItemWithAutoReply) =>
+              item.followThread &&
+              item.followConfig?.originalMessage?.postId ===
+                json.follow_thread_info.original_post_id,
+          );
+        }
+
+        if (
+          resolvedMatchedRules.watchRules.length === 0 &&
+          !followThreadItem
+        ) {
+          console.warn(
+            '跳过未通过最终规则范围校验的消息分析结果:',
+            {
+              postId: json.post_id,
+              sender: json.sender,
+              groupId: messageRuleContext.groupId,
+              groupName: messageRuleContext.groupName,
+              matchedRuleRefs: json.matched_rule_refs,
+              matchedRuleIds: json.matched_rule_ids,
+              matchedRule: matched_rule,
+            },
+          );
+          continue;
+        }
 
         // 0️⃣ 先 ingest，由后端去重。若为重复消息则跳过后续推送/通知等操作
         const extractedEntities = await extractEntitiesFromMessage(
@@ -1323,7 +1474,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
           json,
         );
         const contextMessages = body.messageData
-          ? body.messageData.posts.map((post: any) => ({
+          ? getAgentWorkflowPostsForGroup(body.messageData).map((post) => ({
               id: post.id,
               sender: post.creator,
               content: post.text,
@@ -1426,19 +1577,11 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
         }
 
         // 1.5️⃣ 处理关注后续（只更新数据，不推送通知）
-        let followThreadItem: TopicItemWithAutoReply | undefined;
         if (
           json.follow_thread_info &&
           json.follow_thread_info.original_post_id
         ) {
           try {
-            followThreadItem = concernedItems.find(
-              (item: TopicItemWithAutoReply) =>
-                item.followThread &&
-                item.followConfig?.originalMessage?.postId ===
-                  json.follow_thread_info.original_post_id,
-            );
-
             if (followThreadItem && followThreadItem.followConfig) {
               console.log(
                 `📌 关注后续匹配成功 [LLM识别]: ${json.sender} 的消息与 "${followThreadItem.followConfig.originalMessage.content.substring(0, 30)}..." 相关`,
@@ -1478,22 +1621,6 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 
         // 2️⃣ 统一通知推送（合并关注后续和普通推送）
         // 查找匹配的关注项
-        const resolvedMatchedRules = resolveMatchedWatchRules({
-          watchRules: runtimeWatchRules,
-          matchedRule: matched_rule,
-          matchedRuleRefs: json.matched_rule_refs,
-          matchedRuleIds: json.matched_rule_ids,
-          messageContext: {
-            sender: json.sender,
-            groupId: body.messageData ? body.messageData.groupId : json.team_id,
-            groupName: body.messageData
-              ? body.messageData.groupName
-              : json.team_name,
-          },
-        });
-        const matchedManualItems = getManualItemsFromMatchedRules(
-          resolvedMatchedRules.watchRules,
-        );
         const matchedConcernedItem =
           followThreadItem ||
           getFirstManualItemFromMatchedRules(resolvedMatchedRules.watchRules);

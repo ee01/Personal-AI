@@ -1,0 +1,1244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Session Context Drift Radar</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f4ef;
+      --surface: #fffdf8;
+      --surface-2: #f0ece3;
+      --ink: #202725;
+      --muted: #66706a;
+      --line: #d9d2c5;
+      --green: #1f8a70;
+      --green-soft: #dff1eb;
+      --coral: #d8644d;
+      --coral-soft: #f8ded7;
+      --amber: #b88920;
+      --amber-soft: #f6e9c3;
+      --cyan: #2f7891;
+      --cyan-soft: #dceff4;
+      --violet: #7563a8;
+      --violet-soft: #e9e3f7;
+      --shadow: 0 18px 48px rgba(33, 31, 26, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    textarea {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) auto;
+      gap: 22px;
+      align-items: center;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.92);
+      backdrop-filter: blur(18px);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 44px;
+      height: 44px;
+      border: 1px solid #1d2b29;
+      background: #263331;
+      color: #f7efe0;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 8px;
+      box-shadow: 0 8px 18px rgba(32, 39, 37, 0.18);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 760;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(116px, 1fr));
+      gap: 10px;
+      min-width: 520px;
+    }
+
+    .metric {
+      border-left: 1px solid var(--line);
+      padding: 2px 12px;
+      min-width: 0;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+      text-transform: uppercase;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 780;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 315px minmax(430px, 1fr) 390px;
+      min-height: 0;
+    }
+
+    .sessions,
+    .patch {
+      background: var(--surface);
+    }
+
+    .sessions {
+      border-right: 1px solid var(--line);
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .context {
+      padding: 22px;
+      overflow: auto;
+    }
+
+    .patch {
+      border-left: 1px solid var(--line);
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .section-title h2 {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.2;
+      text-transform: uppercase;
+      color: #4d5852;
+      font-weight: 780;
+    }
+
+    .icon-button,
+    .primary,
+    .secondary,
+    .ghost {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      min-height: 36px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 12px;
+      cursor: pointer;
+      transition: transform .16s ease, border-color .16s ease, background .16s ease;
+      white-space: nowrap;
+    }
+
+    .icon-button {
+      width: 36px;
+      padding: 0;
+      flex: 0 0 auto;
+    }
+
+    .primary {
+      border-color: #1d2b29;
+      background: #263331;
+      color: #fff9ed;
+    }
+
+    .secondary {
+      background: #fff8eb;
+    }
+
+    .ghost {
+      background: transparent;
+    }
+
+    .icon-button:hover,
+    .primary:hover,
+    .secondary:hover,
+    .ghost:hover {
+      transform: translateY(-1px);
+      border-color: #8f846f;
+    }
+
+    .filter-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .filter-row button {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      background: #faf7ef;
+      border-radius: 8px;
+      color: #52605b;
+      cursor: pointer;
+    }
+
+    .filter-row button.active {
+      background: #263331;
+      color: #fff9ed;
+      border-color: #263331;
+    }
+
+    .session-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .session-item {
+      width: 100%;
+      min-height: 110px;
+      border: 1px solid var(--line);
+      background: #fffaf0;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: left;
+      cursor: pointer;
+      display: grid;
+      gap: 10px;
+      color: var(--ink);
+    }
+
+    .session-item.active {
+      border-color: #263331;
+      box-shadow: inset 4px 0 0 #263331;
+      background: #fffdf8;
+    }
+
+    .session-head {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      min-width: 0;
+    }
+
+    .surface-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      background: var(--cyan-soft);
+      color: var(--cyan);
+      flex: 0 0 auto;
+    }
+
+    .session-copy {
+      min-width: 0;
+    }
+
+    .session-copy strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-copy span {
+      display: block;
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      font-size: 11px;
+      line-height: 1;
+      color: #52605b;
+      background: #fbf8ef;
+    }
+
+    .pill.green {
+      color: #166c58;
+      background: var(--green-soft);
+      border-color: #b4ded2;
+    }
+
+    .pill.amber {
+      color: #7a5a0b;
+      background: var(--amber-soft);
+      border-color: #e7cd78;
+    }
+
+    .pill.coral {
+      color: #994434;
+      background: var(--coral-soft);
+      border-color: #efb2a5;
+    }
+
+    .pill.violet {
+      color: #59498b;
+      background: var(--violet-soft);
+      border-color: #d0c3ee;
+    }
+
+    .contract-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 220px;
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+
+    .mission {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 18px;
+      min-width: 0;
+    }
+
+    .mission h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.18;
+      font-weight: 790;
+    }
+
+    .mission p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .radar {
+      border: 1px solid var(--line);
+      background: #fffaf0;
+      border-radius: 8px;
+      padding: 14px;
+      position: relative;
+      min-height: 150px;
+      overflow: hidden;
+    }
+
+    .radar-grid {
+      width: 118px;
+      height: 118px;
+      margin: 0 auto;
+      border-radius: 50%;
+      border: 1px solid #cfc4b2;
+      position: relative;
+      background:
+        linear-gradient(90deg, transparent 49%, rgba(47, 120, 145, .22) 50%, transparent 51%),
+        linear-gradient(0deg, transparent 49%, rgba(47, 120, 145, .22) 50%, transparent 51%),
+        radial-gradient(circle, transparent 28%, rgba(31, 138, 112, .14) 29%, rgba(31, 138, 112, .14) 30%, transparent 31%, transparent 58%, rgba(216, 100, 77, .16) 59%, rgba(216, 100, 77, .16) 60%, transparent 61%);
+    }
+
+    .radar-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      position: absolute;
+      left: var(--x);
+      top: var(--y);
+      transform: translate(-50%, -50%);
+      background: var(--dot);
+      border: 2px solid #fffdf8;
+      box-shadow: 0 0 0 2px rgba(32, 39, 37, .15);
+    }
+
+    .radar-label {
+      margin-top: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .score {
+      color: var(--ink);
+      font-weight: 780;
+      font-size: 24px;
+    }
+
+    .diff-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .diff-column {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .diff-column h3 {
+      margin: 0 0 12px;
+      font-size: 13px;
+      line-height: 1.2;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .diff-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .diff-item {
+      border-left: 3px solid var(--line);
+      padding: 3px 0 3px 10px;
+      color: #33403b;
+      font-size: 13px;
+      line-height: 1.42;
+      min-height: 42px;
+    }
+
+    .diff-item.known {
+      border-color: var(--cyan);
+    }
+
+    .diff-item.new {
+      border-color: var(--amber);
+    }
+
+    .diff-item.blocked {
+      border-color: var(--coral);
+    }
+
+    .timeline {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .timeline-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .timeline-head h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .event-track {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      position: relative;
+    }
+
+    .event-track::before {
+      content: "";
+      position: absolute;
+      left: 8%;
+      right: 8%;
+      top: 17px;
+      border-top: 1px solid #cfc4b2;
+    }
+
+    .event {
+      position: relative;
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .event-dot {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #fffdf8;
+      border: 1px solid var(--line);
+      z-index: 1;
+      color: var(--cyan);
+    }
+
+    .event strong {
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .event span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .patch h2 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+
+    .patch-subtitle {
+      margin: 6px 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .mode-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .mode-row button {
+      min-height: 34px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #faf7ef;
+      cursor: pointer;
+      color: #52605b;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .mode-row button.active {
+      background: #263331;
+      color: #fff9ed;
+      border-color: #263331;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 260px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      background: #fffaf0;
+      color: #263331;
+      border-radius: 8px;
+      padding: 14px;
+      line-height: 1.46;
+      font-size: 13px;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: #8f846f;
+      box-shadow: 0 0 0 3px rgba(184, 137, 32, 0.12);
+    }
+
+    .evidence {
+      margin-top: 14px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .evidence-item {
+      display: grid;
+      grid-template-columns: 30px 1fr auto;
+      align-items: center;
+      gap: 9px;
+      min-height: 46px;
+      border: 1px solid var(--line);
+      background: #fffdf8;
+      border-radius: 8px;
+      padding: 8px;
+    }
+
+    .evidence-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: var(--green-soft);
+      color: var(--green);
+      display: grid;
+      place-items: center;
+    }
+
+    .evidence-copy {
+      min-width: 0;
+    }
+
+    .evidence-copy strong {
+      display: block;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .evidence-copy span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+      margin-top: 14px;
+    }
+
+    .actions .primary {
+      grid-column: 1 / -1;
+    }
+
+    .privacy {
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      background: #fff8eb;
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .privacy-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      font-size: 12px;
+      line-height: 1.4;
+      color: #4d5852;
+    }
+
+    .privacy-row i {
+      color: var(--coral);
+      flex: 0 0 auto;
+      margin-top: 1px;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(20px);
+      opacity: 0;
+      pointer-events: none;
+      background: #263331;
+      color: #fff9ed;
+      border-radius: 8px;
+      padding: 11px 14px;
+      box-shadow: var(--shadow);
+      transition: transform .18s ease, opacity .18s ease;
+      z-index: 20;
+      font-size: 13px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+
+      .metrics {
+        min-width: 0;
+      }
+
+      .workspace {
+        grid-template-columns: 280px minmax(420px, 1fr);
+      }
+
+      .patch {
+        grid-column: 1 / -1;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 820px) {
+      .topbar {
+        padding: 14px;
+      }
+
+      .brand h1,
+      .brand p {
+        white-space: normal;
+      }
+
+      .metrics {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .sessions,
+      .patch {
+        border: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .contract-hero,
+      .diff-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .event-track {
+        grid-template-columns: 1fr;
+      }
+
+      .event-track::before {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><i data-lucide="radar"></i></div>
+        <div>
+          <h1>AI Session Context Drift Radar</h1>
+          <p>Watched sessions · context contracts · minimal patches</p>
+        </div>
+      </div>
+      <div class="metrics" aria-label="Session metrics">
+        <div class="metric"><span>Watched</span><strong id="metricWatched">4</strong></div>
+        <div class="metric"><span>Patch Needed</span><strong id="metricPatch">2</strong></div>
+        <div class="metric"><span>Sensitive</span><strong id="metricSensitive">1</strong></div>
+        <div class="metric"><span>Last Scan</span><strong>12s</strong></div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sessions">
+        <div class="section-title">
+          <h2>Live AI Sessions</h2>
+          <button class="icon-button" title="Import session"><i data-lucide="plus" size="17"></i></button>
+        </div>
+
+        <div class="filter-row" role="tablist">
+          <button class="active" type="button">All</button>
+          <button type="button">Patch</button>
+          <button type="button">Safe</button>
+        </div>
+
+        <div class="session-list" id="sessionList"></div>
+      </aside>
+
+      <section class="context">
+        <div class="contract-hero">
+          <div class="mission">
+            <div class="session-meta" id="heroMeta"></div>
+            <h2 id="missionTitle">AI VBG BE 进展判断</h2>
+            <p id="missionCopy">ChatGPT 正在基于早上的上下文帮用户判断 BE 交付风险。下午出现新的外部查证失败记录，因此旧假设需要被修正。</p>
+          </div>
+
+          <div class="radar" aria-label="Drift score">
+            <div class="radar-grid">
+              <span class="radar-dot" style="--x: 68%; --y: 32%; --dot: var(--coral);"></span>
+              <span class="radar-dot" style="--x: 42%; --y: 61%; --dot: var(--amber);"></span>
+              <span class="radar-dot" style="--x: 28%; --y: 40%; --dot: var(--green);"></span>
+            </div>
+            <div class="radar-label">
+              <span>Drift score</span>
+              <strong class="score" id="driftScore">86</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="diff-grid">
+          <div class="diff-column">
+            <h3><i data-lucide="brain" size="16"></i>AI 已知道</h3>
+            <div class="diff-list" id="knownList"></div>
+          </div>
+          <div class="diff-column">
+            <h3><i data-lucide="sparkles" size="16"></i>Personal AI 新知道</h3>
+            <div class="diff-list" id="newList"></div>
+          </div>
+          <div class="diff-column">
+            <h3><i data-lucide="shield-alert" size="16"></i>不应直接外发</h3>
+            <div class="diff-list" id="blockedList"></div>
+          </div>
+        </div>
+
+        <div class="timeline">
+          <div class="timeline-head">
+            <h3>Patch Ledger</h3>
+            <span class="pill amber" id="ledgerState"><i data-lucide="clock-3" size="13"></i>Draft patch</span>
+          </div>
+          <div class="event-track" id="eventTrack"></div>
+        </div>
+      </section>
+
+      <aside class="patch">
+        <div class="section-title">
+          <div>
+            <h2 id="patchTitle">Context Patch</h2>
+            <p class="patch-subtitle" id="patchSubtitle">Correction · requires review before continuing</p>
+          </div>
+          <button class="icon-button" title="Open evidence"><i data-lucide="external-link" size="17"></i></button>
+        </div>
+
+        <div class="mode-row">
+          <button class="active" data-mode="brief" type="button">Brief</button>
+          <button data-mode="evidence" type="button">Evidence</button>
+          <button data-mode="guarded" type="button">Guarded</button>
+        </div>
+
+        <textarea id="patchBody" spellcheck="false"></textarea>
+
+        <div class="evidence" id="evidenceList"></div>
+
+        <div class="privacy">
+          <div class="privacy-row">
+            <i data-lucide="lock-keyhole" size="16"></i>
+            <span id="privacyCopy">Raw RingCentral messages stay local. The patch sends a summarized correction and source labels only.</span>
+          </div>
+          <div class="privacy-row">
+            <i data-lucide="mouse-pointer-click" size="16"></i>
+            <span>Injection fills the target input box in demo mode; it does not send the message.</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="injectBtn" type="button"><i data-lucide="send-to-back" size="17"></i>Inject patch to input</button>
+          <button class="secondary" id="copyBtn" type="button"><i data-lucide="copy" size="17"></i>Copy patch</button>
+          <button class="ghost" id="resolveBtn" type="button"><i data-lucide="check-check" size="17"></i>Mark resolved</button>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">Patch copied</div>
+
+  <script>
+    const sessions = [
+      {
+        id: "chatgpt-vbg",
+        surface: "ChatGPT",
+        icon: "message-square-text",
+        title: "AI VBG BE 进展判断",
+        subtitle: "External check · active for 2h",
+        severity: "stop",
+        severityLabel: "Patch before continue",
+        score: 86,
+        mission: "ChatGPT 正在基于早上的上下文帮用户判断 BE 交付风险。下午出现新的外部查证失败记录，因此旧假设需要被修正。",
+        known: [
+          "BE 部分原计划在 5 月底交付，是当前判断里的关键假设。",
+          "用户需要把确认结果转成项目跟进口径，而不是泛泛总结。",
+          "目标 AI 已收到一个低 token 的项目背景包。"
+        ],
+        fresh: [
+          "2026-05-12 出现新的外部查证请求，但 OpenClaw 委派失败。",
+          "系统只知道“需要查证”，尚不能确认 BE 已完成。",
+          "该事实会影响 timeline、risk 和 Jira/会议措辞。"
+        ],
+        blocked: [
+          "原始 RingCentral 消息不直接外发，只发送摘要。",
+          "内部项目成员讨论细节默认 local-only。",
+          "OpenClaw 配置失败日志不应被当成项目事实。"
+        ],
+        patchType: "Correction",
+        patchSubtitle: "Correction · requires review before continuing",
+        patch: {
+          brief: "Context patch:\n\nThe earlier context treated AI VBG BE delivery as expected by end of May. New Personal AI evidence says the BE completion status is still unverified because the external OpenClaw check failed on 2026-05-12.\n\nPlease do not assume BE is complete. Before producing timeline, risk, or Jira wording, mark BE status as an open question and separate confirmed facts from assumptions.",
+          evidence: "Context patch for AI VBG BE follow-up:\n\nWhat changed:\n1. A new external verification action was created on 2026-05-12.\n2. The OpenClaw delegation failed, so Personal AI does not have confirmed external evidence.\n\nImpacted assumption:\n- Previous assumption: BE completion can be discussed as planned for end of May.\n- New state: BE completion is unverified and should be treated as a dependency.\n\nPlease adjust output:\n- Mark BE as needs confirmation.\n- Avoid definitive timeline language.\n- Ask for owner/source-of-truth if preparing a follow-up message.",
+          guarded: "Safe context patch:\n\nA related follow-up check failed today, so the previous BE delivery assumption should be downgraded to \"needs confirmation\". Do not claim completion. Produce wording that clearly separates confirmed facts from open questions.\n\nNo raw private messages are included in this patch."
+        },
+        evidence: [
+          ["RingCentral memory", "2026-05-12 · AI VBG BE follow-up", "message-circle"],
+          ["Proposed action", "delegate_openclaw · failed", "route"],
+          ["Reflection", "Open question remains unresolved", "notebook-tabs"]
+        ],
+        events: [
+          ["Passport used", "ChatGPT received project brief", "passport"],
+          ["New action", "External check created", "radar"],
+          ["Delegate failed", "OpenClaw missing capability", "triangle-alert"],
+          ["Patch drafted", "Correction ready", "file-pen-line"]
+        ],
+        privacy: "Raw RingCentral messages stay local. The patch sends a summarized correction and source labels only."
+      },
+      {
+        id: "codex-bug",
+        surface: "Codex",
+        icon: "terminal-square",
+        title: "Bug first pass before human review",
+        subtitle: "Coding task · local session",
+        severity: "patch",
+        severityLabel: "Patch recommended",
+        score: 72,
+        mission: "Codex 正在准备先修 bug 再交给用户 review。新的记忆强调需要记录验证证据和避免过度改动。",
+        known: [
+          "用户希望 AI 先做 bug 初筛/最小修复，人再看。",
+          "任务需要 repo、branch、MR 或 Jira 上下文。",
+          "输出应包含验证命令和剩余风险。"
+        ],
+        fresh: [
+          "最新 reflection 强调 AI-generated code 需要主动监督可维护性。",
+          "Personal Skill Foundry 里已有 active skill 可指导 release / data 流程。",
+          "项目 AGENT.md 要求代码改动后按风险选择验证 tier。"
+        ],
+        blocked: [
+          "内部 MR URL 不自动发给外部平台。",
+          "真实 bug 原文和团队私聊只作为本地 evidence。",
+          "无法确认的 build 环境变量不应进入 patch。"
+        ],
+        patchType: "Scope update",
+        patchSubtitle: "Scope update · validation emphasis",
+        patch: {
+          brief: "Context patch:\n\nFor this bug-first-pass task, keep the implementation minimal and explicitly record validation evidence. The user's latest working preference is: AI can do the first repair, but human review depends on clear commands, diff scope, and residual risk.\n\nPlease avoid broad refactors unless a test failure proves they are required.",
+          evidence: "Context patch for Codex bug task:\n\nWhat changed:\n- Recent reflection flags maintainability risk in AI-generated code.\n- Repo instructions require validation tier selection after runtime source changes.\n\nPlease adjust:\n1. Keep file changes narrowly scoped.\n2. Run the smallest meaningful validation.\n3. Summarize what was changed, what passed, and what risk remains.\n4. Do not modify unrelated dirty files.",
+          guarded: "Safe context patch:\n\nKeep this as a minimal bug-first-pass. Prioritize clear validation evidence over broad rewrites. Do not touch unrelated files or expand scope without a failing test that justifies it."
+        },
+        evidence: [
+          ["AGENT.md", "Validation tier policy", "file-check-2"],
+          ["Daily reflection", "AI code maintainability risk", "notebook-tabs"],
+          ["User pattern", "AI first pass, human review", "user-check"]
+        ],
+        events: [
+          ["Session created", "Codex local task attached", "terminal-square"],
+          ["Repo policy read", "AGENT.md validation tier", "file-check-2"],
+          ["New reflection", "Maintainability risk", "sparkles"],
+          ["Patch drafted", "Validation emphasis", "file-pen-line"]
+        ],
+        privacy: "Repo-local rules can be sent. Private team messages remain evidence labels unless the user expands them."
+      },
+      {
+        id: "doubao-sync",
+        surface: "豆包",
+        icon: "bot-message-square",
+        title: "随手记同步规则",
+        subtitle: "Memory bridge · watched",
+        severity: "watch",
+        severityLabel: "Watch",
+        score: 48,
+        mission: "豆包线程用于承接 Personal AI 的长期记忆和提醒同步。新的系统文档提示空包过滤和 delivery failed 回写需要被保持。",
+        known: [
+          "豆包普通会话上下文不跨线程共享。",
+          "stable_memory 和 reminder_sync 需要使用随手记导向话术。",
+          "输出同步必须过滤空占位包。"
+        ],
+        fresh: [
+          "docs/features/doubao_bridge.md 已记录空包 skipped 语义。",
+          "delivery failed 需要回写 Memory Service，避免误标 delivered。",
+          "输入侧 explorer 可 revoke ingested memory。"
+        ],
+        blocked: [
+          "个人随手记内容不自动复制到工作 AI 会话。",
+          "登录态和 cookie 不进入 Memory Service。",
+          "原始聊天批量内容不作为 patch 默认外发。"
+        ],
+        patchType: "Reminder",
+        patchSubtitle: "Reminder · low urgency",
+        patch: {
+          brief: "Context patch:\n\nWhen discussing Doubao memory sync, preserve the existing rule: empty context packages should be marked skipped, not delivered. Delivery failure must be written back so Memory Service does not believe the user received a todo or notice.",
+          evidence: "Context patch for Doubao bridge:\n\nCurrent durable rules:\n- Empty stable_memory / reminder_sync / mobile_briefing packages are skipped.\n- Delivery failed should be recorded back to Memory Service.\n- Normal Doubao session context does not automatically cross threads.\n\nPlease keep these as implementation constraints.",
+          guarded: "Safe context patch:\n\nKeep Doubao sync semantics conservative: skip empty packages, record delivery failures, and do not assume normal session context crosses threads."
+        },
+        evidence: [
+          ["Feature doc", "doubao_bridge.md", "file-text"],
+          ["Provider binding", "mobile_context_thread", "plug"],
+          ["Memory rule", "empty package skipped", "filter"]
+        ],
+        events: [
+          ["Bridge context", "Thread model known", "plug"],
+          ["Doc update", "Skipped packages", "file-text"],
+          ["Watch only", "No blocker", "eye"],
+          ["Patch optional", "Low urgency", "circle-dot"]
+        ],
+        privacy: "Only durable sync rules are included. Personal Doubao content stays excluded."
+      },
+      {
+        id: "openclaw-engg",
+        surface: "OpenClaw",
+        icon: "network",
+        title: "engg-dashboard 外部查证",
+        subtitle: "Delegated action · failed",
+        severity: "sensitive",
+        severityLabel: "Sensitive review",
+        score: 79,
+        mission: "OpenClaw 被委派做外部查证，但能力配置缺失。继续之前需要把失败原因和下一步确认方式讲清楚。",
+        known: [
+          "目标是查证 engg-dashboard 需要核对什么。",
+          "Personal AI 已创建 confirm request 提醒用户是否重试。",
+          "OpenClaw 可作为外部查证执行者，但能力不是总可用。"
+        ],
+        fresh: [
+          "同类 delegate_openclaw 多次失败，原因集中在缺少能力配置。",
+          "系统已产生 delegation_recovery 和 confirm_request_alert。",
+          "继续之前应确认 capability，而不是重复发起同一任务。"
+        ],
+        blocked: [
+          "OpenClaw 配置细节和凭据绝不外发。",
+          "失败日志只发送归因摘要。",
+          "不把内部 dashboard 链接给未授权平台。"
+        ],
+        patchType: "Do not continue",
+        patchSubtitle: "Sensitive · confirm capability first",
+        patch: {
+          brief: "Context patch:\n\nDo not retry the engg-dashboard external check yet. Personal AI has evidence that OpenClaw delegation failed due to missing capability/configuration. First confirm the required OpenClaw capability and authorization path, then retry with a narrow query.",
+          evidence: "Context patch for OpenClaw delegation:\n\nWhat changed:\n- Prior delegated checks for engg-dashboard failed.\n- Recovery actions and confirm requests were created.\n- The likely blocker is capability/configuration, not task content.\n\nPlease do not repeat the same delegation loop. Ask the user to confirm capability setup or choose a manual evidence source.",
+          guarded: "Safe context patch:\n\nDo not retry this external check until OpenClaw capability is confirmed. Treat current state as tool unavailable, not as an answer to the dashboard question."
+        },
+        evidence: [
+          ["Proposed action", "delegate_openclaw · failed", "route"],
+          ["Confirm request", "retry after configuration", "clipboard-check"],
+          ["Notification", "capability missing", "bell-ring"]
+        ],
+        events: [
+          ["Task delegated", "OpenClaw external check", "network"],
+          ["Failure", "Capability missing", "triangle-alert"],
+          ["Confirm request", "Retry decision", "clipboard-check"],
+          ["Patch blocked", "Sensitive review", "shield-alert"]
+        ],
+        privacy: "Capability and credential details remain local. Patch only states that tool capability must be confirmed first."
+      }
+    ];
+
+    const severityClass = {
+      stop: "coral",
+      patch: "amber",
+      watch: "violet",
+      sensitive: "coral"
+    };
+
+    const severityIcon = {
+      stop: "octagon-alert",
+      patch: "file-pen-line",
+      watch: "eye",
+      sensitive: "shield-alert"
+    };
+
+    let activeId = sessions[0].id;
+    let activeMode = "brief";
+
+    const refs = {
+      sessionList: document.getElementById("sessionList"),
+      heroMeta: document.getElementById("heroMeta"),
+      missionTitle: document.getElementById("missionTitle"),
+      missionCopy: document.getElementById("missionCopy"),
+      driftScore: document.getElementById("driftScore"),
+      knownList: document.getElementById("knownList"),
+      newList: document.getElementById("newList"),
+      blockedList: document.getElementById("blockedList"),
+      patchTitle: document.getElementById("patchTitle"),
+      patchSubtitle: document.getElementById("patchSubtitle"),
+      patchBody: document.getElementById("patchBody"),
+      evidenceList: document.getElementById("evidenceList"),
+      eventTrack: document.getElementById("eventTrack"),
+      ledgerState: document.getElementById("ledgerState"),
+      privacyCopy: document.getElementById("privacyCopy"),
+      toast: document.getElementById("toast")
+    };
+
+    function icon(name, size = 15) {
+      return `<i data-lucide="${name}" size="${size}"></i>`;
+    }
+
+    function renderSessions() {
+      refs.sessionList.innerHTML = sessions.map((session) => `
+        <button class="session-item ${session.id === activeId ? "active" : ""}" data-session="${session.id}" type="button">
+          <div class="session-head">
+            <span class="surface-icon">${icon(session.icon, 17)}</span>
+            <span class="session-copy">
+              <strong>${session.title}</strong>
+              <span>${session.surface} · ${session.subtitle}</span>
+            </span>
+          </div>
+          <span class="session-meta">
+            <span class="pill ${severityClass[session.severity]}">${icon(severityIcon[session.severity], 13)}${session.severityLabel}</span>
+            <span class="pill">${icon("activity", 13)}${session.score}</span>
+          </span>
+        </button>
+      `).join("");
+
+      refs.sessionList.querySelectorAll("[data-session]").forEach((button) => {
+        button.addEventListener("click", () => {
+          activeId = button.dataset.session;
+          activeMode = "brief";
+          render();
+        });
+      });
+    }
+
+    function renderList(container, items, klass) {
+      container.innerHTML = items.map((item) => `<div class="diff-item ${klass}">${item}</div>`).join("");
+    }
+
+    function renderActive() {
+      const session = sessions.find((item) => item.id === activeId);
+      refs.heroMeta.innerHTML = `
+        <span class="pill ${severityClass[session.severity]}">${icon(severityIcon[session.severity], 13)}${session.severityLabel}</span>
+        <span class="pill">${icon(session.icon, 13)}${session.surface}</span>
+      `;
+      refs.missionTitle.textContent = session.title;
+      refs.missionCopy.textContent = session.mission;
+      refs.driftScore.textContent = session.score;
+      renderList(refs.knownList, session.known, "known");
+      renderList(refs.newList, session.fresh, "new");
+      renderList(refs.blockedList, session.blocked, "blocked");
+
+      refs.patchTitle.textContent = `${session.patchType} Patch`;
+      refs.patchSubtitle.textContent = session.patchSubtitle;
+      refs.patchBody.value = session.patch[activeMode];
+      refs.privacyCopy.textContent = session.privacy;
+      refs.ledgerState.className = `pill ${severityClass[session.severity]}`;
+      refs.ledgerState.innerHTML = `${icon(severityIcon[session.severity], 13)}${session.severityLabel}`;
+
+      refs.evidenceList.innerHTML = session.evidence.map((item) => `
+        <div class="evidence-item">
+          <span class="evidence-icon">${icon(item[2], 15)}</span>
+          <span class="evidence-copy"><strong>${item[0]}</strong><span>${item[1]}</span></span>
+          <span class="pill green">${icon("link-2", 12)}ref</span>
+        </div>
+      `).join("");
+
+      refs.eventTrack.innerHTML = session.events.map((event) => `
+        <div class="event">
+          <span class="event-dot">${icon(event[2], 15)}</span>
+          <strong>${event[0]}</strong>
+          <span>${event[1]}</span>
+        </div>
+      `).join("");
+    }
+
+    function showToast(text) {
+      refs.toast.textContent = text;
+      refs.toast.classList.add("show");
+      window.setTimeout(() => refs.toast.classList.remove("show"), 1800);
+    }
+
+    document.querySelectorAll(".mode-row button").forEach((button) => {
+      button.addEventListener("click", () => {
+        activeMode = button.dataset.mode;
+        document.querySelectorAll(".mode-row button").forEach((item) => item.classList.toggle("active", item === button));
+        renderActive();
+        lucide.createIcons();
+      });
+    });
+
+    document.getElementById("copyBtn").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(refs.patchBody.value);
+        showToast("Patch copied");
+      } catch {
+        showToast("Patch ready to copy");
+      }
+    });
+
+    document.getElementById("injectBtn").addEventListener("click", () => {
+      showToast("Demo: patch staged in target input");
+    });
+
+    document.getElementById("resolveBtn").addEventListener("click", () => {
+      showToast("Session marked resolved in demo");
+    });
+
+    document.querySelectorAll(".filter-row button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".filter-row button").forEach((item) => item.classList.toggle("active", item === button));
+        showToast(`${button.textContent} sessions filter`);
+      });
+    });
+
+    function render() {
+      renderSessions();
+      renderActive();
+      document.querySelectorAll(".mode-row button").forEach((item) => item.classList.toggle("active", item.dataset.mode === activeMode));
+      lucide.createIcons();
+    }
+
+    render();
+  </script>
+</body>
+</html>

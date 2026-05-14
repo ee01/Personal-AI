@@ -43,6 +43,11 @@ describe('LLMClient', () => {
       weeklyCron: '0 3 * * 0',
       quietHoursStart: 22,
       quietHoursEnd: 8,
+      todayPilotPrepCron: '30 6 * * *',
+      todayPilotTimezone: 'Asia/Shanghai',
+      todayPilotMeetingPrepMax: 5,
+      todayPilotMeetingPrepEnabled: true,
+      composeAssistEnabled: true,
     });
 
     await client.generate('What changed?', {

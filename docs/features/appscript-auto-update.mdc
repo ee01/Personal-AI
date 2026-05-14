@@ -4,7 +4,7 @@
 
 为了让用户能够在扩展更新时自动获取最新的 App Script 代码，我们实现了一套完整的自动更新机制。该机制使用 Google Apps Script API 的 `deployments.update` 接口，确保在更新代码的同时保持 Web App URL 不变。
 
-当前实现会在后台静默检查、在管理页面提供手动检查和升级入口，并在升级前展示当前/最新版本、Project History 版本额度、URL 不变和失败保留旧版本的说明。升级会先读取扩展内置模板版本；如果模板版本不可读，会直接停止检查/升级并在管理页显示可重试提示，不会用默认版本兜底。随后会重新读取线上 Web App 版本，已是最新或更高版本时直接跳过脚本写入和版本创建；确实需要升级时，才预检是否存在可更新的正式 Web App deployment，再检查 Apps Script Project History 是否还有新建版本额度，然后写入代码和创建新版本，避免重复点击、状态过期、deployment 配置异常或 200 个版本上限导致升级中途阻塞。版本探测临时失败不会被当成旧版脚本，旧版兼容只用于 Web App 正常响应但缺少 `version` 字段的情况。版本比较按 SemVer 优先级处理，兼容常见的 `v` 前缀和 build metadata，避免因为 `2.6.16+build.7` 这类等价版本造成重复升级。
+当前实现会在后台静默检查、在管理页面提供手动检查和升级入口，并在升级前展示当前/最新版本、Project History 版本额度、URL 不变和失败保留旧版本的说明。升级会先读取扩展内置模板版本；如果模板版本不可读，会直接停止检查/升级并在管理页显示可重试提示，不会用默认版本兜底。随后会重新读取线上 Web App 版本，已是最新或更高版本时直接跳过脚本写入和版本创建；确实需要升级时，才预检是否存在可更新的正式 Web App deployment，并要求该 deployment 的 Web App URL 匹配当前配置 URL，再检查 Apps Script Project History 是否还有新建版本额度，然后写入代码和创建新版本，避免重复点击、状态过期、deployment 配置异常、误更新其他 Web App 或 200 个版本上限导致升级中途阻塞。版本探测临时失败不会被当成旧版脚本，旧版兼容只用于 Web App 正常响应但缺少 `version` 字段的情况。版本比较按 SemVer 优先级处理，兼容常见的 `v` 前缀和 build metadata，避免因为 `2.6.16+build.7` 这类等价版本造成重复升级。
 
 ## 功能特性
 
@@ -14,8 +14,8 @@
 
 ```javascript
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.7.4';
-var APP_SCRIPT_LAST_UPDATED = '2026-05-08';
+var APP_SCRIPT_VERSION = '2.7.9';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-13';
 ```
 
 同时提供了一个 API 端点来获取当前部署的版本：
@@ -55,6 +55,7 @@ export interface SheetConfig {
 - **幂等跳过**: 如果线上 Web App 已经是最新或更高版本，直接返回成功，不写入项目代码，不创建新的 Project History 版本
 - **探测失败保护**: 如果升级前无法确认线上版本，会停止升级并提示重试，避免网络/API 临时失败时消耗脚本版本额度
 - **版本端点 URL 保护**: 读取 `getVersion` 时会保留 Web App URL 里已有的查询参数，再追加 `action=getVersion`，避免旧绑定或调试参数把版本探测拼成无效地址
+- **deployment URL 匹配保护**: 查找正式 deployment 时会比对 `entryPoints.webApp.url` 和当前配置的 Web App URL；如果存在多个 deployment 但没有 URL 匹配项，会停止升级并提示用户重新绑定或检查 Manage deployments
 - **版本额度预检**: 升级前通过 `projects.versions.list` 读取 Project History 使用量；达到 200 个版本上限时直接提示清理，不先覆盖脚本代码
 - **版本比较**: 使用 `compareAppScriptVersions()` 按 SemVer 优先级比较版本，build metadata 不参与排序，异常旧值会被视为需要恢复升级
 - **版本解析**: 从 `app-script-template.gs` 读取最新版本和更新时间，避免在多个文件重复维护版本号
@@ -79,7 +80,7 @@ if (details.reason === 'update') {
 
 用户打开定时消息管理页面时会静默检查更新：只复用 Chrome 已缓存的 Google 授权，不会在页面加载时弹出授权窗口。如果没有缓存授权，会显示一个非阻塞提示，用户可以手动点击“检查脚本”再授权检查。
 
-如果发现有新版本，header 和页面提示条会显示“升级调度系统”入口；用户手动点击升级时才会触发交互式授权，并依次检查 Sheet Schema、App Script 和 Jira Automation 规则。提示条会说明当前版本、最新版本、Project History 额度、升级前会预检部署、Web App URL 会保持不变，以及失败项会保留旧版本。如果 Project History 已满，会把主操作切换为打开清理页面。
+如果发现有新版本，header 和页面提示条会显示“升级调度系统”入口；用户手动点击升级时才会触发交互式授权，并依次检查 Sheet Schema、App Script 和 Jira Automation 规则。提示条会说明当前版本、最新版本、Project History 额度、上次检查时间、升级前会重新确认线上版本、预检 deployment 和 Web App URL 匹配、检查 Project History 额度、更新后同步 Sheet 配置，Web App URL 会保持不变，失败项会保留旧版本。如果 Project History 接近或达到上限，会提前提示清理旧版本；已满时会把主操作切换为打开清理页面。若检查失败或无法获取授权，管理页会清掉旧的可升级入口，避免用户按过期状态继续升级。
 
 ## 更新流程
 
@@ -100,7 +101,7 @@ if (details.reason === 'update') {
 3. **执行更新**（如果需要）
    - 重新读取 Web App 当前版本；如果已经是最新或更高版本，跳过 App Script 写入和版本创建
    - 如果重新读取失败，停止升级，不继续写代码或创建版本
-   - 先查找并验证有 `versionNumber` 的正式 Web App deployment；如果只有 @HEAD 或没有 Web App deployment，升级会在创建脚本版本前失败
+   - 先查找并验证有 `versionNumber` 的正式 Web App deployment，并比对其 Web App URL 匹配当前配置；如果只有 @HEAD、没有 Web App deployment，或多个正式 deployment 都不匹配当前 URL，升级会在创建脚本版本前失败
    - 读取 Project History 版本数量；如果已达到 200 个版本上限，直接提示用户清理，不写入 HEAD 代码
    - 加载最新的 App Script 模板代码
    - 使用 `projects/{scriptId}/content` API 更新项目代码
@@ -210,10 +211,11 @@ await fetch(
    - 跳过更新
    - 等待下次检查
 
-3. **Deployment ID 不存在**
+3. **Deployment ID 不存在或 URL 不匹配**
    - 自动从 API 获取现有 deployment 列表
-   - 找到有 `versionNumber` 的正式 Web App deployment
+   - 找到有 `versionNumber` 且 Web App URL 匹配当前配置的正式 Web App deployment
    - 保存到配置供后续使用
+   - 如果有正式 deployment 但 URL 都不匹配，会停止升级，避免更新错误入口
 
 4. **更新失败**
    - 显示错误通知
@@ -290,13 +292,12 @@ Google Apps Script 有两种 deployment 类型：
 
 **解决方案：**
 
-✅ **过滤掉 @HEAD deployment**，只使用有 `versionNumber` 的正式 deployment：
+✅ **过滤掉 @HEAD deployment**，只使用有 `versionNumber` 且 Web App URL 匹配当前配置的正式 deployment：
 
 ```typescript
-// 查找正式版本的 deployment（必须有 versionNumber）
-const versionedDeployment = deployments.find((d: any) => 
-  d.deploymentConfig?.versionNumber &&  // ✅ 必须有 versionNumber
-  d.entryPoints?.some((ep: any) => ep.entryPointType === 'WEB_APP')
+const versionedDeployments = deployments.filter(isVersionedWebAppDeployment);
+const versionedDeployment = versionedDeployments.find((deployment: any) =>
+  deploymentMatchesConfiguredWebAppUrl(deployment)
 );
 ```
 
@@ -308,11 +309,13 @@ const versionedDeployment = deployments.find((d: any) =>
 
 2. **验证 deployment 类型**
    - 检查是否有 `versionNumber` 字段
+   - 检查 `entryPoints.webApp.url` 是否匹配当前 Web App URL
    - 只有正式版本才能更新
 
 3. **兼容老版本**
    - 如果配置中的 deploymentId 是 @HEAD，自动查找正式版本
-   - 更新配置保存正确的 deploymentId
+   - 如果找到 URL 匹配的正式版本，更新配置保存正确的 deploymentId
+   - 如果找不到 URL 匹配项，停止升级并提示用户重新绑定当前 Web App URL
 
 **影响的文件：**
 - `src/scheduled-messages/AppScriptUpdater.ts` - 过滤和验证 deployment
@@ -464,6 +467,13 @@ import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
 
 ## 更新记录
 
+- 2026-05-14：管理页升级提示补充升级前检查路径；检查失败或无法获取授权时清理旧的可升级状态，避免按过期检查结果继续操作。文档同步到模板版本 2.7.9。
+- 2026-05-13：升级前正式 deployment 预检增加 Web App URL 匹配，避免多 deployment 项目中误更新其他 Web App；管理页提示同步说明 URL 匹配后才更新。App Script 版本更新到 2.7.9。
+- 2026-05-11：App Script 可升级提示增加版本/额度/检查时间摘要；Project History 接近 200 上限时提前提供清理入口。文档同步到模板版本 2.7.8。
+- 2026-05-11：App Script 版本更新到 2.7.8，未填写时间的 AsMe 消息不再进入执行器 8:00 兜底队列，保持 9:00 默认发送语义。
+- 2026-05-10：App Script 版本更新到 2.7.7，任务成功收尾时会清空 `Next_Exec`，避免已完成消息继续显示旧的下次执行时间。
+- 2026-05-10：App Script 版本更新到 2.7.6，空白 `AI_Endpoint` 不再把 JiraAutomation 规则误判为 AI 执行器消息。
+- 2026-05-09：App Script 版本更新到 2.7.5，修复 Timeline 缓存保留完整项目对象时项目变量替换为空的问题。
 - 2026-05-09：版本探测 URL 改为保留 Web App URL 既有查询参数后追加 `action=getVersion`，避免带参数的旧绑定检查失败。
 - 2026-05-09：模板版本读取失败时停止检查/升级，不再缓存 `1.0.0` 兜底；管理页展示可重试的失败提示，避免静默误判为无需升级。
 - 2026-05-08：App Script 版本更新到 2.7.4；升级前重新确认线上版本，已是最新时直接跳过脚本写入和版本创建；版本探测临时失败时停止升级，避免重复点击或网络/API 抖动消耗 Project History 版本额度。

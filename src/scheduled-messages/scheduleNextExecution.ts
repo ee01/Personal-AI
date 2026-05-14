@@ -1,6 +1,7 @@
 import type { ScheduledMessage } from './types';
 import {
   formatLocalScheduleDate,
+  hasLocalScheduleTime,
   normalizeLocalScheduleTime,
   parseLocalScheduleDate,
   parseLocalScheduleTime,
@@ -16,7 +17,9 @@ type ScheduleLike = Pick<
   | 'End_Date'
   | 'Repeat_Every'
   | 'Repeat_Unit'
+  | 'Repeat_Count'
   | 'Repeat_Days'
+  | 'Exec_Count'
   | 'Push_Method'
   | 'AI_Endpoint'
 >;
@@ -30,10 +33,14 @@ export function getDefaultScheduleTime(message: ExecutorScheduleLike): string {
     : AS_ME_DEFAULT_SCHEDULE_TIME;
 }
 
+export function hasConfiguredAiEndpoint(endpoint?: string | null): boolean {
+  return Boolean(endpoint?.trim());
+}
+
 export function isExecutorDrivenSchedule(message: ExecutorScheduleLike): boolean {
   return message.Push_Method === 'Bot' ||
     message.Push_Method === 'AI' ||
-    (message.Push_Method === 'JiraAutomation' && Boolean(message.AI_Endpoint));
+    (message.Push_Method === 'JiraAutomation' && hasConfiguredAiEndpoint(message.AI_Endpoint));
 }
 
 export function getDefaultScheduleTimeLabel(message: ExecutorScheduleLike): string {
@@ -63,7 +70,7 @@ function parseScheduleDateTime(
 ): Date {
   const date = parseLocalScheduleDate(dateStr);
   const normalizedTime = normalizeLocalScheduleTime(scheduleTime);
-  if (scheduleTime?.trim() && !normalizedTime) {
+  if (hasLocalScheduleTime(scheduleTime) && !normalizedTime) {
     throw new Error('Invalid schedule time');
   }
 
@@ -122,6 +129,16 @@ function formatNextDateIfWithinEndDate(
     message.Schedule_Time,
     message,
   );
+}
+
+function hasReachedRepeatCount(message: ScheduleLike): boolean {
+  const repeatCount = Number(message.Repeat_Count);
+  if (!Number.isFinite(repeatCount) || repeatCount <= 0) {
+    return false;
+  }
+
+  const execCount = Number(message.Exec_Count || 0);
+  return Number.isFinite(execCount) && execCount >= repeatCount;
 }
 
 function findNextWeeklyRepeatDay(
@@ -188,6 +205,10 @@ export function calculateScheduledMessageNextExecution(
       message.Schedule_Time,
       message,
     );
+  }
+
+  if (hasReachedRepeatCount(message)) {
+    return '';
   }
 
   const every = Number(message.Repeat_Every);

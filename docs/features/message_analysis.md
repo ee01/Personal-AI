@@ -1,8 +1,8 @@
 # 记忆入口消息观察规则
 
-_最后更新: 2026-05-06_
+_最后更新: 2026-05-13_
 
-> 说明：文件名沿用 `message_analysis_filter.md` 以兼容现有引用；本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
+> 说明：旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
 
 ## 概述
 
@@ -413,6 +413,72 @@ Popup 中的入口名称已改为：
 - [Slack：Build a workflow](https://slack.com/help/articles/17542172840595-Build-a-workflow--Create-a-workflow-in-Slack)
 - [Zapier：Create Zaps by describing your workflow](https://help.zapier.com/hc/en-us/articles/44244146813453-Create-Zaps-by-describing-your-workflow)
 - [Supporting mental model accuracy in trigger-action programming](https://hcrlab.cs.washington.edu/publications/huang2015ubicomp/)
+- [Attention-Sensitive Alerting](https://erichorvitz.com/attend.htm)
+
+## 2026-05-10 更新：Agent Workflow 联动操作一致性
+
+本轮代码复查发现，`agentWorkflow` 模式下的关联操作规划被放在“需要即时通知”的分支里。这样一条规则即使命中了、也配置了 `automationPrompt`，只要它不发即时通知（例如只写入记忆 + 创建关联操作），就不会生成 RuntimeAction。
+
+当前实现已收敛为：
+
+- 先统一解析命中的手动规则，再分别分发通知、摘要和关联操作。
+- 关联操作只依赖“命中了带 `automationPrompt` 的手动规则”，不再依赖 `shouldNotify`。
+- `agentWorkflow` 模式会统一处理 `posts`、`standalone` 和 thread root / replies，避免只看旧 `posts` 字段时漏掉当前消息结构里的命中消息。
+- 规则卡片里的动作队列提示会跟随该规则的“需批准 / 免批准”设置，不再显示与规则不一致的默认审批文案。
+
+产品上继续沿用“当 / 则”心智：先让用户看到触发范围，再看到命中后的写入记忆、推送、摘要、自动答复、关注后续和关联操作。Slack Workflow Builder 会把消息触发限定到指定 channel 与关键词条件，Zapier 也把 filter / paths 作为显式条件步骤；触发-动作编程研究也提示，用户需要更准确地理解触发条件、动作时机和上下文风险。因此记忆入口规则应继续优先暴露范围、审批状态和动作队列结果。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Filter & Paths](https://help.zapier.com/hc/en-us/sections/16074338520461)
+- [Supporting mental model accuracy in trigger-action programming](https://hcrlab.cs.washington.edu/publications/huang2015ubicomp/)
+- [If This Context Then That Concern: Exploring users' concerns with IFTTT applets](https://arxiv.org/abs/2012.12518)
+- [Data Privacy in Trigger-Action Systems](https://arxiv.org/abs/2012.05749)
+
+## 2026-05-11 更新：新版消息结构的智能分析入口
+
+本轮复查发现，普通 filter 与 `agentWorkflow` 已能处理 `posts`、`standalone`、thread root / replies，但 `agentThinking` 入口仍假设每个群组都有旧版 `posts` 数组。上游只传新版结构时，智能分析模式会在进入 LLM 前失败。
+
+当前实现已调整为：
+
+- 后台消息分析入口先把 `posts`、`standalone`、thread root / replies 归一化为统一消息列表。
+- `IntelligentAgent` 自身也能识别只包含 `standalone` 或 `threads` 的消息组。
+- group-by-group filter 模式构建上下文消息时同样复用归一化逻辑，避免新版结构下丢上下文或抛错。
+- 验证脚本补充了 standalone-only 的 Agent Thinking 回归用例。
+
+产品上继续建议保留“当 / 则”预览，并在规则页显性展示群组、发送人、审批状态和动作队列结果。Slack 的消息关键词 workflow 要先指定 channel 和关键词条件；Zapier filter/path 也把条件作为 workflow 中的明确步骤。结合 Trigger-Action Programming 研究和 attention-sensitive alerting 研究，记忆入口规则应优先降低误触发、解释触发范围，并把即时通知与摘要的打断成本放在同一路径里呈现。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Filter Actions](https://docs.zapier.com/powered-by-zapier/zap-creation/filter-actions)
+- [Trigger-Action Programming in the Wild](https://www.blaseur.com/papers/chi16-ifttt.pdf)
+- [Attention-Sensitive Alerting](https://erichorvitz.com/attend.htm)
+
+## 2026-05-13 更新：最终规则校验与安全摘要
+
+本轮代码复查发现，普通 filter 模式虽然会在 LLM 前按群组筛出候选规则，但合并批量分析时仍可能出现模型把某个群组外规则写进 `matched_rule_refs` 的情况。此前通知、摘要和联动操作会在分发前再次解析规则范围，但入库动作发生得更早，存在“无效命中也写入记忆”的污染风险。
+
+当前实现已调整为：
+
+- `reviewMessageByLLMAndSendToBot` 会先用 `matched_rule_refs` / `matched_rule_ids` / `matched_rule` 解析运行时规则，并按消息上下文做最终范围校验。
+- 如果没有解析到有效用户规则或系统观察规则，也没有合法的 follow-thread 原消息关联，则跳过入库、通知、摘要、自动答复和联动操作。
+- owner 发言学习也复用新版消息归一化入口，支持 `posts`、`standalone`、thread root / replies，避免只学习旧版扁平消息。
+- 规则页和新建规则预览增加安全摘要：全局范围、过短范围词、即时通知、免批准联动操作会被汇总成状态标记，帮助用户在保存前看到规则风险。
+
+产品依据：
+
+- Slack 关键词 workflow 要先选 channel，再设置 include / exclude keyword conditions。
+- Zapier 把 filter / paths 作为明确的条件步骤，只有满足条件才继续执行后续动作。
+- Trigger-Action Programming 研究显示，用户会大量创建和复制规则，重复与上下文误判会削弱可理解性；因此系统需要在执行前保留确定性范围校验。
+- Attention-sensitive alerting 研究强调通知应权衡信息价值与打断成本；规则页的安全摘要把即时通知、摘要和自动执行风险放到同一条路径里展示。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Filter & Paths](https://help.zapier.com/hc/en-us/sections/16074338520461)
+- [Trigger-Action Programming in the Wild](https://www.blaseur.com/papers/chi16-ifttt.pdf)
 - [Attention-Sensitive Alerting](https://erichorvitz.com/attend.htm)
 
 ## 适用场景

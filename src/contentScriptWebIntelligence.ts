@@ -9,6 +9,7 @@ import {
     formatRecallTimestamp,
     isContextSiteMuteActive,
     hasSensitiveUrlSignal,
+    isDisplayableContextRecallMatch,
     isLowValueContextHost,
     isSensitiveControlDescriptor,
     normalizeContextSiteMuteHost,
@@ -105,6 +106,25 @@ function escapeHtmlAttribute(text: string): string {
 
 function normalizeText(text?: string | null): string {
     return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function formatContextMatchType(type?: ContextRecallMatch['type']): string {
+    switch (type) {
+        case 'message':
+            return '消息记忆';
+        case 'chunk':
+            return '片段记忆';
+        case 'entity':
+            return '实体记忆';
+        default:
+            return '记忆';
+    }
+}
+
+function formatContextMatchScore(score: number): string {
+    const numericScore = Number.isFinite(score) ? score : 0;
+    const scorePercent = Math.max(0, Math.min(100, Math.round(numericScore * 100)));
+    return `${scorePercent}%`;
 }
 
 function isMeetingPilotPage(): boolean {
@@ -870,7 +890,8 @@ class WebIntelligenceContentScript {
                 return;
             }
 
-            const match = (response?.topMatch ?? null) as ContextRecallMatch | null;
+            const rawMatch = (response?.topMatch ?? null) as ContextRecallMatch | null;
+            const match = isDisplayableContextRecallMatch(rawMatch) ? rawMatch : null;
             contextMatchCache.set(payload.contextKey, { match, ts: Date.now() });
             pruneContextMatchCache();
 
@@ -1331,8 +1352,56 @@ class WebIntelligenceContentScript {
     private dismissContext(contextKey: string): void {
         this.dismissedContextKeys.set(contextKey, Date.now());
         this.pruneDismissedContextKeys();
+        contextMatchCache.set(contextKey, { match: null, ts: Date.now() });
+        pruneContextMatchCache();
         this.clearContextBubble();
         this.showContextToast('已隐藏此条记忆提示 30 分钟');
+    }
+
+    private markContextMatchIrrelevant(match: ContextRecallMatch, contextKey: string): void {
+        this.dismissedContextKeys.set(contextKey, Date.now());
+        this.pruneDismissedContextKeys();
+        contextMatchCache.set(contextKey, { match: null, ts: Date.now() });
+        pruneContextMatchCache();
+        this.clearContextBubble();
+        this.showContextToast('已记录为不相关，后续会减少类似提示');
+
+        this.submitContextRecallFeedback(match, 'negative');
+    }
+
+    private markContextMatchRelevant(match: ContextRecallMatch): void {
+        this.showContextToast('已记录为有用，后续会优先保留类似提示');
+        this.submitContextRecallFeedback(match, 'positive');
+    }
+
+    private submitContextRecallFeedback(
+        match: ContextRecallMatch,
+        action: 'positive' | 'negative',
+    ): void {
+        chrome.runtime.sendMessage(
+            {
+                type: 'CONTEXT_RECALL_FEEDBACK',
+                feedback: {
+                    type: 'recall_quality',
+                    targetId: String(match.id || ''),
+                    targetType: match.type,
+                    action,
+                    detail: `web_passive_bubble:${this.getCurrentSiteMuteHost()}`,
+                },
+            },
+            (response) => {
+                if (chrome.runtime.lastError) {
+                    console.warn(
+                        'Context recall feedback failed:',
+                        chrome.runtime.lastError.message,
+                    );
+                    return;
+                }
+                if (response?.success === false) {
+                    console.warn('Context recall feedback rejected:', response.error);
+                }
+            },
+        );
     }
 
     private pruneDismissedContextKeys(): void {
@@ -1441,6 +1510,13 @@ class WebIntelligenceContentScript {
             .pai-context-action-button:hover {
                 background: #f8fafc;
                 border-color: #94a3b8;
+            }
+
+            .pai-context-action-button:disabled {
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+                color: #64748b;
+                cursor: default;
             }
 
             .pai-context-toast {
@@ -1597,11 +1673,14 @@ class WebIntelligenceContentScript {
 
         const sourceLabel = match.sourceLabel || match.sourceTitle || '记忆来源';
         const titleText = match.title || sourceLabel;
+        const typeLabel = formatContextMatchType(match.type);
+        const scoreLabel = formatContextMatchScore(match.score);
         const safeExploreRoute = sanitizeExploreRoute(match.exploreLink);
         const exploreUrl = safeExploreRoute
             ? chrome.runtime.getURL(`memory-exploring.html${safeExploreRoute}`)
             : '';
         const sourceMeta = [
+            typeLabel,
             sourceLabel,
             formatRecallTimestamp(match.timestamp),
             match.whyMatched
@@ -1623,7 +1702,7 @@ class WebIntelligenceContentScript {
                     <div style="font-weight:600;color:#0f172a;overflow-wrap:anywhere;">${escapeHtml(titleText)}</div>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="font-size:11px;color:#64748b;white-space:nowrap;">${Math.round(match.score * 100)}%</span>
+                    <span style="font-size:11px;color:#64748b;white-space:nowrap;">${scoreLabel}</span>
                     <button type="button" class="pai-context-dismiss" aria-label="隐藏此记忆提示" title="隐藏此记忆提示" style="border:0;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0;width:20px;height:20px;">×</button>
                 </div>
             </div>
@@ -1632,6 +1711,8 @@ class WebIntelligenceContentScript {
             <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 ${exploreUrl ? `<a href="${escapeHtmlAttribute(exploreUrl)}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;font-size:11px;font-weight:600;">在记忆中查看</a>` : ''}
                 ${linksHtml}
+                <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="标记这条记忆提示有用">这条有用</button>
+                <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="标记这条记忆提示不相关">这条不相关</button>
                 <button type="button" class="pai-context-action-button pai-context-site-mute" aria-label="此网站今天不再显示记忆提示">此网站今天不提示</button>
                 <button type="button" class="pai-context-action-button pai-context-site-block" aria-label="永久关闭此网站记忆提示">永久不提示此站点</button>
             </div>
@@ -1685,6 +1766,19 @@ class WebIntelligenceContentScript {
         card.querySelector<HTMLButtonElement>('.pai-context-dismiss')?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.dismissContext(contextKey);
+        });
+
+        card.querySelector<HTMLButtonElement>('.pai-context-recall-positive')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const button = event.currentTarget as HTMLButtonElement;
+            button.disabled = true;
+            button.textContent = '已标记有用';
+            this.markContextMatchRelevant(match);
+        });
+
+        card.querySelector<HTMLButtonElement>('.pai-context-recall-negative')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.markContextMatchIrrelevant(match, contextKey);
         });
 
         card.querySelector<HTMLButtonElement>('.pai-context-site-mute')?.addEventListener('click', (event) => {

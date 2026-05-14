@@ -15,7 +15,9 @@
    - 点击 "Import rule" 按钮
    - 选择之前从 Jira Automation 导出的 JSON 文件
    - 如果文件中有多条规则，先在预览弹窗中选择要导入的一条
-   - 确认目标项目、触发器、组件数量、Web request / external action / secret / JQL / URL / account / schedule 摘要、迁移复核清单和导入警告后再执行导入
+   - 确认目标项目、触发器、组件数量、Web request / external action / secret / JQL / URL / custom field / filter / connection / account / schedule 摘要、迁移复核清单和导入警告后再执行导入
+   - 预览会显示最终导入规则名；如果目标项目里已经有同名导入副本，会自动生成编号名称，避免重复导入后难以区分
+   - 预览会汇总启用前检查数量，并把精简复核备注写入导入副本的描述，方便跳转到 Jira 规则详情后继续检查
    - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留
 
 3. **导入完成**
@@ -56,11 +58,14 @@
    - 更新项目信息为当前项目
    - 多项目来源会折叠为当前项目，避免重复项目 scope
    - 导入时强制新规则为 `DISABLED`
+   - 生成 `(Imported by Personal AI) ...` 导入名，并在目标项目已有同名规则时追加编号
+   - 保留原规则描述，并追加 Personal AI 导入复核备注，记录目标项目、环境绑定摘要和链式触发状态
    - 导入 UI 默认关闭链式触发开关，避免启用后被其它规则意外触发
+   - 转换层默认不保留链式触发能力，只有用户在预览中明确保留时才会写入
    - 对超长规则名做截断，降低 Jira API 因名称长度拒绝创建的概率
    - 通过当前 Jira 项目 key 解析 numeric projectId，避免把 projectKey 当作 API projectId
    - 尽量把 `authorAccountId` / `actorAccountId` 设置为当前 Jira 用户，减少跨项目导入后的权限歧义
-   - 扫描规则内部的 JQL/filter、硬编码 URL、邮箱/账号和源项目引用，提示用户启用前完成环境迁移检查
+   - 扫描规则内部的 JQL/filter、硬编码 URL、custom field、saved filter、connection/credential、邮箱/账号和源项目引用，提示用户启用前完成环境迁移检查
 
 2. **API 调用**
    - 使用 `/rest/cb-automation/latest/project/{projectId}/rule` 接口
@@ -70,7 +75,9 @@
    - 在 iframe 内动态添加导入按钮
    - 如果 Jira Automation 工具栏异步渲染，会继续等待 `Create rule` 按钮出现再插入；慢加载时会有限重试，避免按钮只尝试一次后消失
    - 提供文件选择、规则选择、导入预览和进度反馈
-   - 预览中突出显示 Web request、外部集成动作、secret 引用、JQL/filter、硬编码 URL、账号引用、源项目引用、scheduled trigger、链式触发和版本兼容风险，并按高 / 中 / 低风险生成启用前复核清单
+   - 预览中突出显示 Web request、外部集成动作、secret 引用、JQL/filter、custom field、saved filter、connection/credential、硬编码 URL、账号引用、源项目引用、scheduled trigger、链式触发和版本兼容风险，并按高 / 中 / 低风险生成启用前复核清单
+   - 预览中显示最终导入名称和同名冲突状态
+   - 预览中显示高 / 中 / 低风险检查数量，并说明复核备注会随规则一起导入
    - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要中
    - 显示成功/错误消息
 
@@ -87,7 +94,7 @@
 - 5MB 文件大小限制
 - 缺少项目 ID / projectKey 时阻止导入
 - 缺少目标 projectId 时阻止转换
-- 对环境绑定值做导入前预检，但不会自动改写 JQL、URL 或账号
+- 对环境绑定值做导入前预检，但不会自动改写 JQL、URL、custom field、saved filter、connection 或账号
 - API 调用错误处理
 - 用户友好的错误消息提示
 
@@ -99,11 +106,12 @@
 4. 原有的规则 ID 会被替换为新的临时 ID
 5. 导入后的规则默认暂停，避免导入后立即执行
 6. Jira 官方导入要求导出 JSON 与当前 Jira Automation 版本兼容；Personal AI 会提示该风险，但最终兼容性仍以 Jira API 返回为准
-7. Web request URL、外部集成账号、secret、JQL、链式触发和定时计划不会自动判断业务正确性，启用前仍需人工复核；预检只负责把疑似环境绑定值提前暴露出来
+7. Web request URL、外部集成账号、secret、JQL、custom field、saved filter、connection、链式触发和定时计划不会自动判断业务正确性，启用前仍需人工复核；预检只负责把疑似环境绑定值提前暴露出来
 8. 链式触发默认按安全导入处理；如果业务需要其它 automation rule 继续触发它，需要在预览里明确保留
 
 ## 验证建议
 
-- 转换逻辑：`TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/jira-automation-import/__tests__/transform.test.ts`
+- 转换逻辑：`npm run verify:jira-automation-import`
 - 扩展构建：运行 `npm start`，等第一次 webpack 编译成功后停止 watch
+- 端到端模拟：`npm run verify:jira-automation-import:e2e`
 - 端到端：用导出的 Jira Automation JSON 在项目自动化页触发预览，确认新规则是 disabled copy 后再手动启用

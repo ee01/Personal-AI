@@ -1,6 +1,6 @@
 # Agent Thinking 功能概览
 
-最后更新: 2026-05-08
+最后更新: 2026-05-12
 
 ## 功能定位
 
@@ -50,6 +50,31 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - 被阻断的工具节点改为明确的琥珀色样式，避免在流程图里看起来像成功工具调用。
 - 思考时间线的步骤头支持键盘 `Enter` / `Space` 展开，并补充 `role="button"`、`aria-expanded` 和详情区关联，减少只支持鼠标点击的操作阻塞。
 
+2026-05-09 状态:
+
+- `ThoughtStep` 新增 `publicSummary`，作为用户界面优先展示的步骤摘要；完整 `thought` 不再作为 Options 演示页的主展示字段。
+- Agent 提示词中的 `thought` 字段改为“可展示的一句话决策摘要”，不再要求模型输出完整逐步推理。
+- `AgentVisualizer` 展开区从“思考过程”改为“决策摘要”，工具执行结果仍可展开查看，避免把内部推理文本当作用户路径。
+- Options 演示步骤补充了 `publicSummary`，流程中会看到调用原因、重复跳过、阻断和最终判断的简短说明。
+
+2026-05-10 状态:
+
+- 工具步骤的时间线主摘要改为优先展示执行结果状态，例如阻断、跳过、失败或成功，不再在工具执行后继续显示“准备调用工具”的旧意图。
+- 展开区补充“调用意图”和“状态说明”，让用户无需读原始 JSON 也能知道被阻断、跳过或失败的原因和下一步方向。
+- Options E2E 覆盖了被阻断工具的状态摘要、调用意图、状态说明和键盘展开路径。
+
+2026-05-11 状态:
+
+- `AgentVisualizer` 在时间线前新增“运行检查”摘要，先聚合展示工具失败、执行前阻断、预算耗尽、用户停止、重复调用跳过和正常完成状态。
+- 运行检查会给出下一步建议，例如检查工具配置/权限、改用工具目录里的 ID、补齐必填参数、提高 `maxActions` 或缩小问题范围。
+- Options 演示页会在流程图和时间线之外展示这个摘要，减少用户逐步展开 trace 才能判断是否需要处理的操作成本。
+
+2026-05-12 状态:
+
+- 工具结果状态新增“证据不足”: 工具调用成功但 `result` 为空时，时间线、流程图和运行检查都会提示缺少可用证据，不再显示为普通成功。
+- 工具返回 `success: false` 或 `result.success: false` 时会归类为失败，覆盖 JIRA API 这类以失败对象返回而不是抛异常的工具。
+- Options 演示页补充“空证据”步骤，用户能在运行检查里先看到需要补证或调整查询参数。
+
 ## 处理流程
 
 1. 检测输入类型和消息格式。
@@ -64,7 +89,7 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - `meeting` 和 `document` 分支仍是占位实现，只返回基础示例结果。
 - 工具调用缺少持久 checkpoint，浏览器刷新或 service worker 中断后不能恢复同一次思考循环。
 - 高风险副作用动作目前没有统一的人审/确认中断层。
-- 思考过程已有摘要化主路径，但完整调试详情仍在本地 UI 可展开，后续需要按权限/环境进一步分层。
+- 思考过程已有摘要化主路径；工具返回仍在本地 UI 可展开，后续需要按权限/环境进一步分层。
 - 当前工具 guardrail 只覆盖注册表和必填参数校验；工具级权限、人审、敏感数据脱敏仍需后续分层。
 
 ## 建设性改进方向
@@ -77,6 +102,10 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - 为工具调用增加更细的安全分类，例如只读、外部写入、通知、权限变更，并在执行前走统一 guardrail。
 - 如果后续恢复长时间 agent run，需要持久化每步输入、工具结果、决策摘要和跳过原因，支持刷新后继续和事后审计。
 - 参考 LangSmith / Langfuse 的 trace 体验，后续可以把“工具成功但结果质量不足”作为独立状态，避免用户只看到成功调用却不知道证据是否足够支撑最终判断。
+- 继续把 trace 事件和用户可见摘要拆成不同字段；用户界面展示摘要和证据状态，调试/审计界面才展示更完整的工具与模型诊断。
+- 参考 AgentTrace 对 operational/cognitive/contextual 三类 telemetry 的划分，后续可以把工具状态、决策摘要和上下文快照拆成结构化 trace 字段，而不是只依赖 UI 文案。
+- 参考 AgentOps、Langfuse 和 AgentTrace 的 observability 思路，trace UI 应继续从“可查看日志”走向“可定位问题并给出处理路径”，尤其要把失败/阻断/预算耗尽这些信号前置到运行级摘要。
+- 参考 OpenTelemetry GenAI agent spans，后续如果输出结构化 trace，应把工具执行 span、证据数量、失败状态和用户可见诊断作为可计算字段，而不是只依赖中文展示文案。
 
 ## 外部参考
 
@@ -88,10 +117,15 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - [OpenAI Agents SDK Guardrails](https://openai.github.io/openai-agents-js/guides/guardrails/): 工具 guardrail 可在执行前后验证或阻断工具调用。
 - [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/): agent run 的 traces 可覆盖 LLM、工具、handoff、guardrail 和自定义事件。
 - [Claude Extended Thinking](https://docs.claude.com/en/docs/build-with-claude/extended-thinking): 支持 summarized/omitted thinking，说明生产 UI 不应默认依赖完整思考文本。
+- [OpenTelemetry GenAI Agent Spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/): 将 agent、workflow 和 tool execution 作为 span 建模，可作为后续结构化 trace 字段参考。
+- [AgentTrace](https://arxiv.org/abs/2602.10133): 讨论 agent observability 应覆盖运行、认知和上下文三类结构化 telemetry。
+- [AgentOps](https://arxiv.org/abs/2411.05285): 从 AgentOps 生命周期角度整理 observability 应追踪的工件和数据。
+- [AgentTrace Causal Graph](https://arxiv.org/abs/2603.14688): 用执行日志重建因果图来定位多 Agent 失败根因，提示 trace 应保留可计算的故障信号。
+- [Cloudflare Agents Human-in-the-Loop](https://developers.cloudflare.com/agents/concepts/human-in-the-loop/): 把高风险工具调用显式建模为审批或等待状态，适合作为后续人审层参考。
 
 ## Reminders 反馈
 
-本轮通过 Reminders 读取本机列表，未找到名为 `Personal AI` 的列表；已枚举现有列表名称但没有可归属到该列表的开放反馈。因此本轮没有可纳入或标记完成的提醒。
+本轮通过 Reminders EventKit 读取到 `Personal AI` 列表，共 3 条项目且均已完成；内容主要涉及豆包记忆同步和本地 app 日志，不属于 Agent Thinking 本轮改进范围。因此本轮没有新的开放提醒需要纳入，也没有项目需要标记完成。
 
 ## 验证
 
@@ -118,4 +152,26 @@ node tools/verify-agent-thinking-options-e2e.mjs
 
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过。
 - `npm start` 首次 webpack dev 编译成功后已停止 watch；清理本轮引入的 ESLint warning 后重新编译成功。
-- `node tools/verify-agent-thinking-options-e2e.mjs` 通过；加载 `dist/options.html` 后确认 `orgStructure` 显示“已阻断”、重复调用显示“跳过”、时间线可用键盘展开。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 通过；加载 `dist/options.html` 后确认 `orgStructure` 显示“已阻断”、重复调用显示“跳过”、时间线可用键盘展开，展开区显示“决策摘要”且不再出现旧的“思考过程”标题。
+
+2026-05-09 验证覆盖:
+
+- `ThoughtStep.publicSummary` 会优先用于 UI 展示，避免展开区直接展示完整 `thought`。
+- Agent Thinking prompt 不再要求“详细思考过程”。
+- Options E2E 会确认展开区显示“决策摘要”，且不再出现旧的“思考过程”标题。
+
+2026-05-10 验证覆盖:
+
+- 工具步骤即使带有 `publicSummary`，主摘要也会优先显示执行后的阻断、跳过或失败状态。
+- 展开区显示“调用意图”和“状态说明”，避免用户必须阅读原始工具 JSON 才能判断下一步。
+
+2026-05-11 验证覆盖:
+
+- `buildAgentRunReviewItems` 会把失败、阻断、预算耗尽、停止、重复跳过和正常完成归纳成运行检查项。
+- Options E2E 会确认演示页出现“运行检查”，且被阻断和重复跳过状态都有用户可见的处理建议。
+
+2026-05-12 验证覆盖:
+
+- 工具返回 `success: false` 会归类为失败，不再被流程图显示为成功。
+- 工具返回空 `result` 会显示为“证据不足”，并在运行检查里提示补证或调整查询参数。
+- Options E2E 会确认演示页出现“工具证据不足”、流程图空证据节点和时间线空证据摘要。

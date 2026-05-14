@@ -49,6 +49,7 @@
       <!-- 排序选择 -->
       <div v-if="entityType === 'Topic'" class="filter-select-wrapper">
         <select class="filter-select" v-model="topicSortMode">
+          <option value="triage">优先处理排序</option>
           <option value="time">最新消息排序</option>
           <option value="importance">热度排序</option>
           <option value="unread-count">未读数量排序</option>
@@ -226,13 +227,19 @@
           </div>
 
           <div class="card-content" style="font-size: 0.875rem; color: #94a3b8">
+            <span
+              class="topic-priority-pill"
+              :title="getTopicPriorityTooltip(entity)"
+            >
+              {{ getTopicPriorityLabel(entity) }}
+            </span>
             {{
               entity.importance >= 0.8
                 ? '🔥 热度' + Math.round(entity.importance * 5) + '/5'
                 : ''
             }}
             {{ entity.statistic?.conversations || 0 }}条讨论 •
-            {{ formatTime(entity.updated || Date.now()) }}
+            {{ getTopicDisplayTime(entity) }}
           </div>
 
           <div
@@ -251,24 +258,27 @@
 
           <!-- 未读讨论预览 -->
           <div
-            v-if="
-              entity.unreadDiscussions && entity.unreadDiscussions.length > 0
-            "
+            v-if="getTopicUnreadPreviewCount(entity) > 0"
             class="unread-discussions"
           >
             <div class="unread-discussions-title">
-              💬 未读讨论 ({{ entity.unreadDiscussions.length }}条)
+              💬 未读讨论 {{ getTopicUnreadPreviewMeta(entity) }}
             </div>
-            <div
+            <button
               v-for="(discussion, idx) in entity.unreadDiscussions.slice(0, 3)"
-              :key="idx"
-              class="discussion-item"
+              :key="getUnreadDiscussionKey(discussion, idx)"
+              type="button"
+              class="discussion-item discussion-jump"
+              :title="getUnreadDiscussionActionTitle(discussion)"
+              @click.stop="handleUnreadDiscussionClick(entity, discussion)"
             >
               <span class="discussion-icon">▪</span>
-              <div class="discussion-text">{{ discussion.text }}</div>
-            </div>
+              <span class="discussion-text">
+                {{ getUnreadDiscussionText(discussion) }}
+              </span>
+            </button>
             <div
-              v-if="entity.unreadDiscussions.length > 3"
+              v-if="getTopicUnreadRemainingCount(entity) > 0"
               style="
                 text-align: center;
                 color: #60a5fa;
@@ -276,7 +286,7 @@
                 margin-top: 0.5rem;
               "
             >
-              还有 {{ entity.unreadDiscussions.length - 3 }} 条讨论...
+              还有 {{ getTopicUnreadRemainingCount(entity) }} 条未显示...
             </div>
           </div>
 
@@ -297,10 +307,22 @@
                 )"
                 :key="resource.id"
                 class="preview-item resource-item"
-                @click.stop="openResource(resource)"
+                :class="{
+                  'resource-openable': getSafeExternalUrl(resource.url),
+                }"
+                :title="getResourcePreviewTitle(resource)"
+                @click.stop="handleResourcePreviewClick(entity, resource)"
               >
                 <span>📖</span>
                 <span class="preview-content">{{ resource.name }}</span>
+                <span
+                  :class="[
+                    'preview-action-hint',
+                    { muted: !getSafeExternalUrl(resource.url) },
+                  ]"
+                >
+                  {{ getSafeExternalUrl(resource.url) ? '打开' : '详情' }}
+                </span>
               </li>
             </ul>
           </div>
@@ -448,7 +470,7 @@
 
           <div class="entity-footer">
             <span class="last-accessed">
-              最后更新: {{ formatTime(entity.updated || Date.now()) }}
+              最后更新: {{ getTopicDisplayTime(entity) }}
             </span>
           </div>
         </div>
@@ -757,6 +779,20 @@ import {
   getTopicDeferPresetOptions,
   getTopicMutePresetOptions,
 } from '../memory-store';
+import { getSafeExternalUrl } from '../topic-link-safety';
+import {
+  getTopicTriagePriority,
+  sortTopicsForTriage,
+} from '../topic-triage';
+import {
+  getTopicUnreadPreviewCount,
+  getTopicUnreadPreviewMeta,
+  getTopicUnreadRemainingCount,
+  getUnreadDiscussionKey,
+  getUnreadDiscussionMessageId,
+  getUnreadDiscussionText,
+} from '../topic-unread-preview';
+import { formatTopicRelativeTime } from '../topic-time';
 import { markdownToHtml } from '../utils/markdown';
 
 const route = useRoute();
@@ -772,7 +808,7 @@ const searchContext = computed(() => store.searchContext);
 // 本地过滤状态
 const selectedFilter = ref('all');
 const topicViewMode = ref('unread'); // 'unread' | 'all' | 'later' | 'muted'
-const topicSortMode = ref('time'); // 'time' | 'importance' | 'unread-count'
+const topicSortMode = ref('triage'); // 'triage' | 'time' | 'importance' | 'unread-count'
 const topicLaterCount = computed(() => store.getDeferredTopics().length);
 const topicMutedCount = computed(() => store.getMutedTopics().length);
 const topicReadUndo = computed(() => store.topicReadUndo);
@@ -869,11 +905,14 @@ const filteredEntities = computed(() => {
   // 主题排序
   if (entityType.value === 'Topic') {
     switch (topicSortMode.value) {
+      case 'triage':
+        filtered = sortTopicsForTriage(filtered);
+        break;
       case 'time':
         // 按最新消息时间排序
         filtered.sort((a, b) => {
-          const timeA = a.readStatus?.lastUpdateTime || a.updated || 0;
-          const timeB = b.readStatus?.lastUpdateTime || b.updated || 0;
+          const timeA = getTopicTriagePriority(a).lastActivityTime || 0;
+          const timeB = getTopicTriagePriority(b).lastActivityTime || 0;
           return timeB - timeA;
         });
         break;
@@ -965,16 +1004,57 @@ const navigateToPersonMessage = (personId: string, messageId: string) => {
   router.push(`/person/${personId}?messageId=${messageId}`);
 };
 
-const _navigateToTopicDiscussion = (topicId: string, messageId: string) => {
-  router.push(`/topic/${topicId}?messageId=${messageId}`);
+const navigateToTopicDiscussion = (topicId: string, messageId: string) => {
+  router.push({
+    path: `/topic/${topicId}`,
+    query: { messageId },
+  });
 };
 
-const openResource = (resource: any) => {
-  if (resource.url && resource.url !== '#') {
-    window.open(resource.url, '_blank');
-  } else {
-    console.log('打开资源:', resource);
+const getUnreadDiscussionActionTitle = (discussion: any) => {
+  return getUnreadDiscussionMessageId(discussion)
+    ? '打开并定位这条未读讨论'
+    : '打开主题详情';
+};
+
+const handleUnreadDiscussionClick = (topic: any, discussion: any) => {
+  const messageId = getUnreadDiscussionMessageId(discussion);
+  if (messageId) {
+    navigateToTopicDiscussion(topic.id, messageId);
+    return;
   }
+
+  handleEntityClick(topic);
+};
+
+const getResourcePreviewTitle = (resource: any) => {
+  return getSafeExternalUrl(resource?.url)
+    ? '打开资源来源'
+    : '查看主题详情中的资源上下文';
+};
+
+const handleResourcePreviewClick = (topic: any, resource: any) => {
+  const safeUrl = getSafeExternalUrl(resource?.url);
+  if (safeUrl) {
+    window.open(safeUrl, '_blank', 'noopener,noreferrer');
+    return;
+  }
+
+  handleEntityClick(topic);
+};
+
+const getTopicPriorityLabel = (topic: any) => {
+  return getTopicTriagePriority(topic).label;
+};
+
+const getTopicPriorityTooltip = (topic: any) => {
+  const priority = getTopicTriagePriority(topic);
+  return priority.reasons.join('、');
+};
+
+const getTopicDisplayTime = (topic: any) => {
+  const priority = getTopicTriagePriority(topic);
+  return formatTopicRelativeTime(priority.lastActivityTime) || '未知时间';
 };
 
 const navigateToProject = (projectId: string) => {
@@ -1262,6 +1342,22 @@ watch(
   font-size: 1rem;
 }
 
+.topic-priority-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  margin-right: 0.45rem;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.14);
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 /* AI 分析结果面板 */
 .ai-analysis-panel {
   margin-bottom: 2rem;
@@ -1545,6 +1641,22 @@ watch(
   color: #cbd5e1;
 }
 
+.resource-openable {
+  cursor: pointer;
+}
+
+.preview-action-hint {
+  margin-left: auto;
+  color: #93c5fd;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.preview-action-hint.muted {
+  color: #94a3b8;
+}
+
 .topic-triage-actions {
   display: flex;
   justify-content: flex-end;
@@ -1749,18 +1861,27 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
+  width: 100%;
   padding: 0.5rem;
   margin: 0.25rem 0;
+  border: 0;
   background: rgba(59, 130, 246, 0.05);
   border-left: 2px solid rgba(59, 130, 246, 0.3);
   border-radius: 0.25rem;
   font-size: 0.8rem;
   line-height: 1.4;
   color: #cbd5e1;
+  text-align: left;
   transition: all 0.2s ease;
 }
 
-.discussion-item:hover {
+.discussion-jump {
+  cursor: pointer;
+}
+
+.discussion-item:hover,
+.discussion-item:focus-visible {
+  outline: none;
   background: rgba(59, 130, 246, 0.1);
   border-left-color: #60a5fa;
 }

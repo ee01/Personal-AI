@@ -48,6 +48,11 @@ export interface Config {
   weeklyCron: string;
   quietHoursStart: number;
   quietHoursEnd: number;
+  todayPilotPrepCron: string;
+  todayPilotTimezone: string;
+  todayPilotMeetingPrepMax: number;
+  todayPilotMeetingPrepEnabled: boolean;
+  composeAssistEnabled: boolean;
 
   // Weekly Report
   weeklyReportEnabled: boolean;
@@ -99,12 +104,17 @@ export function getConfig(): Readonly<Config> {
       ? rawDataDir
       : path.resolve(__dirname, '..', rawDataDir)
     : path.resolve(__dirname, '..', 'data');
-  const rawDreamDigestScheduleType = process.env.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly';
+  const rawDreamDigestScheduleType =
+    process.env.DREAM_DIGEST_SCHEDULE_TYPE || 'weekly';
   const dreamDigestScheduleType: 'weekly' | 'every_x_days' | 'monthly' =
-    rawDreamDigestScheduleType === 'every_x_days' || rawDreamDigestScheduleType === 'monthly'
+    rawDreamDigestScheduleType === 'every_x_days' ||
+    rawDreamDigestScheduleType === 'monthly'
       ? rawDreamDigestScheduleType
       : 'weekly';
-  const parsedDreamIntervalDays = parseInt(process.env.DREAM_DIGEST_INTERVAL_DAYS || '7', 10);
+  const parsedDreamIntervalDays = parseInt(
+    process.env.DREAM_DIGEST_INTERVAL_DAYS || '7',
+    10,
+  );
   const dreamDigestIntervalDays = Number.isFinite(parsedDreamIntervalDays)
     ? Math.max(1, parsedDreamIntervalDays)
     : 7;
@@ -123,7 +133,9 @@ export function getConfig(): Readonly<Config> {
     groqApiKey: process.env.GROQ_API_KEY || '',
     difyApiKey: process.env.DIFY_API_KEY || '',
     difyApiUrl: process.env.DIFY_API_URL || process.env.DIFY_API_BASE_URL || '',
-    difyAppMode: (process.env.DIFY_APP_MODE === 'completion' ? 'completion' : 'chat') as 'chat' | 'completion',
+    difyAppMode: (process.env.DIFY_APP_MODE === 'completion'
+      ? 'completion'
+      : 'chat') as 'chat' | 'completion',
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'llama3',
 
@@ -144,19 +156,42 @@ export function getConfig(): Readonly<Config> {
     botTargetEmail: process.env.BOT_TARGET_EMAIL || '',
 
     // Context Match (0.50: MiniLM 在混合语言下相似度偏低，0.78 过于严格)
-    contextMatchThreshold: parseFloat(process.env.CONTEXT_MATCH_THRESHOLD || '0.50'),
+    contextMatchThreshold: parseFloat(
+      process.env.CONTEXT_MATCH_THRESHOLD || '0.50',
+    ),
 
     // Scheduler
-    heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || '900000', 10),
+    heartbeatIntervalMs: parseInt(
+      process.env.HEARTBEAT_INTERVAL_MS || '900000',
+      10,
+    ),
     dailyCron: process.env.DAILY_CRON || '0 23 * * *',
     weeklyCron: process.env.WEEKLY_CRON || '0 3 * * 0',
     quietHoursStart: parseInt(process.env.QUIET_HOURS_START || '22', 10),
     quietHoursEnd: parseInt(process.env.QUIET_HOURS_END || '8', 10),
+    todayPilotPrepCron: process.env.TODAY_PILOT_PREP_CRON || '30 6 * * *',
+    todayPilotTimezone:
+      process.env.TODAY_PILOT_TIMEZONE ||
+      process.env.TIMEZONE ||
+      'Asia/Shanghai',
+    todayPilotMeetingPrepMax: Math.max(
+      1,
+      parseInt(process.env.TODAY_PILOT_MEETING_PREP_MAX || '5', 10),
+    ),
+    todayPilotMeetingPrepEnabled:
+      process.env.TODAY_PILOT_MEETING_PREP_ENABLED !== 'false' &&
+      process.env.MEETING_PREP_ENABLED !== 'false',
+    composeAssistEnabled:
+      process.env.COMPOSE_ASSIST_ENABLED !== 'false' &&
+      process.env.CONTEXT_ASSIST_ENABLED !== 'false',
 
     // Weekly Report
     weeklyReportEnabled: process.env.WEEKLY_REPORT_ENABLED !== 'false',
     weeklyReportCron: process.env.WEEKLY_REPORT_CRON || '0 18 * * 5',
-    weeklyReportMinMessages: parseInt(process.env.WEEKLY_REPORT_MIN_MESSAGES || '20', 10),
+    weeklyReportMinMessages: parseInt(
+      process.env.WEEKLY_REPORT_MIN_MESSAGES || '20',
+      10,
+    ),
 
     // Dream Digest
     dreamDigestEnabled: process.env.DREAM_DIGEST_ENABLED !== 'false',
@@ -165,21 +200,39 @@ export function getConfig(): Readonly<Config> {
 
     // Reflection runtime
     reflectionEnabled: process.env.REFLECTION_ENABLED === 'true',
-    reflectionActiveTopicLimit: parseInt(process.env.REFLECTION_ACTIVE_TOPIC_LIMIT || '6', 10),
-    reflectionHeartbeatMinutes: parseInt(process.env.REFLECTION_HEARTBEAT_MINUTES || '15', 10),
-    reflectionUrgentNotifyThreshold: parseFloat(process.env.REFLECTION_URGENT_NOTIFY_THRESHOLD || '0.88'),
-    reflectionAutoExecuteThreshold: parseFloat(process.env.REFLECTION_AUTO_EXECUTE_THRESHOLD || '0.8'),
-    reflectionUrgentConfidenceThreshold: parseFloat(process.env.REFLECTION_URGENT_CONFIDENCE_THRESHOLD || '0.9'),
+    reflectionActiveTopicLimit: parseInt(
+      process.env.REFLECTION_ACTIVE_TOPIC_LIMIT || '6',
+      10,
+    ),
+    reflectionHeartbeatMinutes: parseInt(
+      process.env.REFLECTION_HEARTBEAT_MINUTES || '15',
+      10,
+    ),
+    reflectionUrgentNotifyThreshold: parseFloat(
+      process.env.REFLECTION_URGENT_NOTIFY_THRESHOLD || '0.88',
+    ),
+    reflectionAutoExecuteThreshold: parseFloat(
+      process.env.REFLECTION_AUTO_EXECUTE_THRESHOLD || '0.8',
+    ),
+    reflectionUrgentConfidenceThreshold: parseFloat(
+      process.env.REFLECTION_URGENT_CONFIDENCE_THRESHOLD || '0.9',
+    ),
 
     // OpenClaw
     openClawEnabled: process.env.OPENCLAW_ENABLED === 'true',
     openClawBaseUrl: process.env.OPENCLAW_BASE_URL || '',
     openClawApiKey: process.env.OPENCLAW_API_KEY || '',
-    openClawTimeoutMs: Math.max(300000, parseInt(process.env.OPENCLAW_TIMEOUT_MS || '600000', 10)),
+    openClawTimeoutMs: Math.max(
+      300000,
+      parseInt(process.env.OPENCLAW_TIMEOUT_MS || '600000', 10),
+    ),
 
     // Outreach
     outreachEnabled: process.env.OUTREACH_ENABLED === 'true',
-    outreachIntervalMs: parseInt(process.env.OUTREACH_INTERVAL_MS || '60000', 10),
+    outreachIntervalMs: parseInt(
+      process.env.OUTREACH_INTERVAL_MS || '60000',
+      10,
+    ),
     outreachRequireApprovalForReflection:
       process.env.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION !== 'false',
     outreachRequireApprovalForManual:
@@ -187,16 +240,16 @@ export function getConfig(): Readonly<Config> {
     outreachBeforeDispatchTargetChannelLookbackSeconds: Math.max(
       60,
       parseInt(
-        process.env
-          .OUTREACH_BEFORE_DISPATCH_TARGET_CHANNEL_LOOKBACK_SECONDS || `${7 * 24 * 60 * 60}`,
+        process.env.OUTREACH_BEFORE_DISPATCH_TARGET_CHANNEL_LOOKBACK_SECONDS ||
+          `${7 * 24 * 60 * 60}`,
         10,
       ),
     ),
     outreachBeforeDispatchGlobalMemoryLookbackSeconds: Math.max(
       60,
       parseInt(
-        process.env
-          .OUTREACH_BEFORE_DISPATCH_GLOBAL_MEMORY_LOOKBACK_SECONDS || `${3 * 24 * 60 * 60}`,
+        process.env.OUTREACH_BEFORE_DISPATCH_GLOBAL_MEMORY_LOOKBACK_SECONDS ||
+          `${3 * 24 * 60 * 60}`,
         10,
       ),
     ),

@@ -18,6 +18,17 @@ import {
   getMemoryServiceClient,
   type IngestPayload,
 } from './services/MemoryServiceClient';
+import {
+  buildBackendNotificationButtons,
+  buildBackendNotificationContextMessage,
+  buildBackendNotificationId,
+  buildBackendNotificationMessage,
+  getBackendNotificationMetaStorageKey,
+  getBackendTargetHash,
+  inferLegacyLane,
+  normalizeBackendNotificationMeta,
+  type BackendNotificationMeta,
+} from './backendNotifications';
 import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 // 旧的存储健康监控器已删除，使用新的系统维护工具
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
@@ -61,6 +72,7 @@ import { buildPendingLinkedActionConfig } from './message-reaction/linkedActionE
 import {
   findOpenSnoozeReminderForMessage,
   getSnoozeReminderSourceKey,
+  isOpenSnoozeReminder,
 } from './message-reaction/snoozeDeduplication';
 import {
   registerConcernedItemsDigestTask,
@@ -84,14 +96,6 @@ void initMeetingPilotBackgroundRuntime().catch((error) => {
   console.error('Meeting Pilot runtime failed to initialize:', error);
 });
 void concernedItemsSyncService.initialize();
-
-interface BackendNotificationMeta {
-  sourceRef: string;
-  lane: 'todo' | 'notice';
-  type?: string;
-  targetHash: string;
-  notificationId?: string;
-}
 
 // Map to track backend notification metadata for click handling
 const backendNotificationMeta = new Map<string, BackendNotificationMeta>();
@@ -179,23 +183,6 @@ function isNotificationCenterCompatError(error: any): boolean {
   return error?.status === 404 || error?.status === 501;
 }
 
-function getBackendTargetHash(type?: string, sourceType?: string): string {
-  if (sourceType === 'proposed_action') {
-    return '/decisions';
-  }
-  if (type === 'dream_digest' || type === 'weekly_report') {
-    return '/dreams';
-  }
-  return '/decisions';
-}
-
-function inferLegacyLane(type?: string): 'todo' | 'notice' {
-  if (type === 'dream_digest' || type === 'weekly_report') {
-    return 'notice';
-  }
-  return 'todo';
-}
-
 async function safeReportChromeDelivery(
   events: Array<{
     sourceRef: string;
@@ -219,6 +206,54 @@ async function safeReportChromeDelivery(
       return;
     }
     console.debug('safeReportChromeDelivery error:', error);
+  }
+}
+
+async function storeBackendNotificationMeta(
+  notificationId: string,
+  meta: BackendNotificationMeta,
+): Promise<void> {
+  backendNotificationMeta.set(notificationId, meta);
+  try {
+    await chrome.storage.local.set({
+      [getBackendNotificationMetaStorageKey(notificationId)]: meta,
+    });
+  } catch (error) {
+    console.debug('storeBackendNotificationMeta error:', error);
+  }
+}
+
+async function getStoredBackendNotificationMeta(
+  notificationId: string,
+): Promise<BackendNotificationMeta | undefined> {
+  const cached = backendNotificationMeta.get(notificationId);
+  if (cached) return cached;
+
+  try {
+    const storageKey = getBackendNotificationMetaStorageKey(notificationId);
+    const stored = await chrome.storage.local.get(storageKey);
+    const meta = normalizeBackendNotificationMeta(stored[storageKey]);
+    if (meta) {
+      backendNotificationMeta.set(notificationId, meta);
+      return meta;
+    }
+  } catch (error) {
+    console.debug('getStoredBackendNotificationMeta error:', error);
+  }
+
+  return undefined;
+}
+
+async function clearBackendNotificationMeta(
+  notificationId: string,
+): Promise<void> {
+  backendNotificationMeta.delete(notificationId);
+  try {
+    await chrome.storage.local.remove(
+      getBackendNotificationMetaStorageKey(notificationId),
+    );
+  } catch (error) {
+    console.debug('clearBackendNotificationMeta error:', error);
   }
 }
 
@@ -261,6 +296,15 @@ function buildOutreachScheduleSpec(
   if (message.Repeat_Every && message.Repeat_Unit) {
     spec.repeatEvery = Number(message.Repeat_Every);
     spec.repeatUnit = message.Repeat_Unit;
+  }
+  if (message.Repeat_Days) {
+    spec.repeatDays = message.Repeat_Days;
+  }
+  if (message.End_Date) {
+    spec.endDate = message.End_Date;
+  }
+  if (message.Repeat_Count) {
+    spec.repeatCount = Number(message.Repeat_Count);
   }
   return spec;
 }
@@ -642,6 +686,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       if (
         envConfig.CONTEXT_ASSIST_ENABLED !== false &&
         envConfig.MEETING_PREP_ENABLED !== false &&
+        envConfig.TODAY_PILOT_MEETING_PREP_ENABLED !== false &&
         envConfig.MEETING_PREP_CALENDAR_SOURCE !== 'ringcentral_indexeddb'
       ) {
         const status = await getOutlookCalendarStatus();
@@ -785,6 +830,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               : result.error || '任务执行失败',
             error: result.success ? undefined : result.error || '任务执行失败',
             skipped: result.skipped,
+          });
+        } else if (action === 'repair') {
+          const success = await taskScheduler.repairTaskSchedule(taskId);
+          sendResponse({
+            success,
+            message: success ? '任务排程已修复' : '任务排程修复失败',
+            error: success ? undefined : `任务排程修复失败: ${taskId}`,
           });
         } else {
           sendResponse({
@@ -1059,6 +1111,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === 'CONTEXT_RECALL_FEEDBACK') {
+    (async () => {
+      try {
+        const feedback = request.feedback || {};
+        const targetId = String(feedback.targetId || '').trim();
+        const targetType = feedback.targetType;
+        const action = feedback.action === 'positive' ? 'positive' : 'negative';
+        const allowedTargetTypes = new Set(['message', 'chunk', 'entity']);
+        if (!targetId || !allowedTargetTypes.has(targetType)) {
+          sendResponse({ success: false, error: 'invalid_feedback_target' });
+          return;
+        }
+
+        const detail =
+          typeof feedback.detail === 'string'
+            ? feedback.detail.slice(0, 500)
+            : undefined;
+        const client = getMemoryServiceClient();
+        const result = await client.submitFeedback({
+          type: 'recall_quality',
+          targetId,
+          targetType,
+          action,
+          detail,
+        });
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] context-recall feedback failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
   if (request.type === 'OWNER_AUTHORED_LEARNING_SIGNAL') {
     (async () => {
       try {
@@ -1067,9 +1156,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: true, stored: 0, disabled: true });
           return;
         }
-        const payloads = (Array.isArray(request.payloads)
-          ? request.payloads
-          : []) as IngestPayload[];
+        const payloads = (
+          Array.isArray(request.payloads) ? request.payloads : []
+        ) as IngestPayload[];
         const safePayloads = payloads.filter(
           (payload) =>
             payload &&
@@ -1092,8 +1181,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         sendResponse({ success: true, stored: safePayloads.length });
       } catch (err) {
-        console.warn('[background] owner-authored learning ingest failed:', err);
-        sendResponse({ success: false, error: String((err as Error)?.message || err) });
+        console.warn(
+          '[background] owner-authored learning ingest failed:',
+          err,
+        );
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
       }
     })();
     return true;
@@ -1128,6 +1223,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({
           success: false,
           error: err?.message || 'context_assist_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'TODAY_PILOT_MEETING_PREP_REQUEST') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.resolveTodayPilotMeetingPrep(
+          request.request || {},
+        );
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        console.warn('[background] today-pilot meeting-prep failed:', err);
+        sendResponse({
+          success: false,
+          error: err?.message || 'today_pilot_meeting_prep_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'TODAY_PILOT_PREPARE_MEETINGS_REQUEST') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.prepareTodayPilotMeetingPreps(
+          request.request || {},
+        );
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        console.warn('[background] today-pilot prepare-meetings failed:', err);
+        sendResponse({
+          success: false,
+          error: err?.message || 'today_pilot_prepare_meetings_failed',
         });
       }
     })();
@@ -2017,10 +2150,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           projectId: request.projectId,
           projectName: request.projectName,
         });
-        const url = chrome.runtime.getURL(buildProjectDashboardLaunchPath({
-          projectId: request.projectId,
-          projectName: request.projectName,
-        }));
+        const url = chrome.runtime.getURL(
+          buildProjectDashboardLaunchPath({
+            projectId: request.projectId,
+            projectName: request.projectName,
+          }),
+        );
         await chrome.windows.create({
           url,
           type: 'popup',
@@ -2138,6 +2273,66 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // =====================================================
   // Snooze 稍后处理功能
   // =====================================================
+
+  // 撤销刚创建的 Snooze 提醒，只允许删除仍未完成的 Snooze 项，避免误删其他定时消息
+  if (request.type === 'CANCEL_SNOOZE_REMINDER') {
+    (async () => {
+      try {
+        const messageId =
+          typeof request.data?.messageId === 'string'
+            ? request.data.messageId.trim()
+            : '';
+        if (!messageId) {
+          sendResponse({ success: false, error: '缺少提醒 ID' });
+          return;
+        }
+
+        const result = await chrome.storage.local.get([
+          'scheduledMessagesConfig',
+        ]);
+        const config = result.scheduledMessagesConfig;
+        if (!config || !config.sheetId) {
+          sendResponse({
+            success: false,
+            error: '请先在设置中初始化定时消息系统',
+          });
+          return;
+        }
+
+        const token = await getGoogleAuthToken({
+          caller: 'background.cancelSnoozeReminder',
+        });
+        const service = new ScheduledMessageService(token);
+        const messages = await service.getAllMessages();
+        const message = messages.find((item) => item.ID === messageId);
+        if (!message) {
+          sendResponse({
+            success: false,
+            error: '未找到提醒，可能已被删除',
+          });
+          return;
+        }
+
+        if (!isOpenSnoozeReminder(message)) {
+          sendResponse({
+            success: false,
+            error: '只能撤销未完成的稍后处理提醒',
+          });
+          return;
+        }
+
+        await service.deleteMessage(messageId);
+        sendResponse({ success: true });
+      } catch (error: any) {
+        console.error('❌ Background: 撤销 Snooze 提醒失败:', error);
+        sendResponse({
+          success: false,
+          error: error.message || '撤销提醒失败，请稍后重试',
+        });
+      }
+    })();
+    return true;
+  }
 
   // 创建 Snooze 提醒（从 RingCentral 消息页面调用）
   // 注意：MV3 Service Worker 有严格的生命周期管理，需要快速返回响应
@@ -2390,14 +2585,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                   itemType: 'interest',
                   itemKey: 'snooze_person',
                   itemValue: messageInfo.senderName,
-                  evidenceRefs: [{
-                    sourceType: 'glip',
-                    actionType: 'snooze_reminder',
-                    messageId: messageInfo.id,
-                    groupName: messageInfo.groupName,
-                    remindAt,
-                    sourceUrl: messageInfo.messageLink,
-                  }],
+                  evidenceRefs: [
+                    {
+                      sourceType: 'glip',
+                      actionType: 'snooze_reminder',
+                      messageId: messageInfo.id,
+                      groupName: messageInfo.groupName,
+                      remindAt,
+                      sourceUrl: messageInfo.messageLink,
+                    },
+                  ],
                   confidence: 0.3,
                 });
               }
@@ -2407,14 +2604,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                   itemType: 'interest',
                   itemKey: 'snooze_topic',
                   itemValue: messageInfo.groupName,
-                  evidenceRefs: [{
-                    sourceType: 'glip',
-                    actionType: 'snooze_reminder',
-                    messageId: messageInfo.id,
-                    senderName: messageInfo.senderName,
-                    groupId: messageInfo.groupId,
-                    sourceUrl: messageInfo.messageLink,
-                  }],
+                  evidenceRefs: [
+                    {
+                      sourceType: 'glip',
+                      actionType: 'snooze_reminder',
+                      messageId: messageInfo.id,
+                      senderName: messageInfo.senderName,
+                      groupId: messageInfo.groupId,
+                      sourceUrl: messageInfo.messageLink,
+                    },
+                  ],
                   confidence: 0.2,
                 });
               }
@@ -2539,7 +2738,7 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
   // 处理后端推送通知 (backend-xxx)
   if (notificationId.startsWith('backend-')) {
     try {
-      const meta = backendNotificationMeta.get(notificationId);
+      const meta = await getStoredBackendNotificationMeta(notificationId);
       const targetHash = meta?.targetHash || '/decisions';
       const url = chrome.runtime.getURL(`memory-exploring.html#${targetHash}`);
       await chrome.tabs.create({ url });
@@ -2564,12 +2763,12 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
           );
         }
       }
-
-      backendNotificationMeta.delete(notificationId);
     } catch (error) {
       console.error('Failed to handle backend notification click:', error);
+    } finally {
+      await clearBackendNotificationMeta(notificationId);
+      chrome.notifications.clear(notificationId);
     }
-    chrome.notifications.clear(notificationId);
     return;
   }
 
@@ -2630,7 +2829,7 @@ chrome.notifications.onButtonClicked.addListener(
     }
 
     if (notificationId.startsWith('backend-')) {
-      const meta = backendNotificationMeta.get(notificationId);
+      const meta = await getStoredBackendNotificationMeta(notificationId);
       try {
         if (buttonIndex === 0) {
           const targetHash = meta?.targetHash || '/decisions';
@@ -2685,7 +2884,7 @@ chrome.notifications.onButtonClicked.addListener(
           error,
         );
       } finally {
-        backendNotificationMeta.delete(notificationId);
+        await clearBackendNotificationMeta(notificationId);
         chrome.notifications.clear(notificationId);
       }
       return;
@@ -2738,9 +2937,22 @@ chrome.notifications.onButtonClicked.addListener(
   },
 );
 
-chrome.notifications.onClosed.addListener((notificationId) => {
+chrome.notifications.onClosed.addListener((notificationId, byUser) => {
   if (notificationId.startsWith('backend-')) {
-    backendNotificationMeta.delete(notificationId);
+    void (async () => {
+      const meta = await getStoredBackendNotificationMeta(notificationId);
+      if (byUser && meta?.sourceRef) {
+        await safeReportChromeDelivery([
+          {
+            sourceRef: meta.sourceRef,
+            lane: meta.lane,
+            status: 'dismissed',
+            externalRef: notificationId,
+          },
+        ]);
+      }
+      await clearBackendNotificationMeta(notificationId);
+    })();
   }
 });
 
@@ -2785,15 +2997,16 @@ async function pollBackendNotifications(): Promise<void> {
         20,
       );
       for (const item of feed.items) {
-        const notifId = `backend-${item.sourceRef.replace(
-          /[^a-zA-Z0-9_-]/g,
-          '_',
-        )}`;
-        backendNotificationMeta.set(notifId, {
+        const notifId = buildBackendNotificationId(item.sourceRef);
+        await storeBackendNotificationMeta(notifId, {
           sourceRef: item.sourceRef,
           lane: item.lane,
           type: item.type,
-          targetHash: getBackendTargetHash(item.type, item.sourceType),
+          targetHash: getBackendTargetHash(
+            item.type,
+            item.sourceType,
+            item.sourceId,
+          ),
           notificationId:
             item.sourceType === 'notification' ? item.sourceId : undefined,
         });
@@ -2801,9 +3014,18 @@ async function pollBackendNotifications(): Promise<void> {
           type: 'basic',
           iconUrl: chrome.runtime.getURL('icons/icon128.png'),
           title: item.title || 'Personal AI',
-          message: (item.body || '').slice(0, 200),
+          message: buildBackendNotificationMessage({
+            body: item.body,
+            type: item.type,
+            payload: item.payload,
+          }),
+          contextMessage: buildBackendNotificationContextMessage(
+            item.lane,
+            item.priority,
+            item.dueAt,
+          ),
           priority: item.priority === 'high' ? 2 : 1,
-          buttons: [{ title: '查看' }, { title: '忽略' }],
+          buttons: buildBackendNotificationButtons(item.lane),
         });
         await safeReportChromeDelivery([
           {
@@ -2836,10 +3058,15 @@ async function pollBackendNotifications(): Promise<void> {
       if (n.createdAt <= _lastSeenNotifCreatedAt) continue;
       _lastSeenNotifCreatedAt = n.createdAt;
 
-      const notifId = `backend-${n.id}`;
-      backendNotificationMeta.set(notifId, {
+      const notifId = buildBackendNotificationId(`notification:${n.id}`);
+      const legacyLane = inferLegacyLane(n.type);
+      const legacyPriority =
+        n.type === 'dream_digest' || n.type === 'weekly_report'
+          ? 'high'
+          : 'normal';
+      await storeBackendNotificationMeta(notifId, {
         sourceRef: `notification:${n.id}`,
-        lane: inferLegacyLane(n.type),
+        lane: legacyLane,
         type: n.type,
         targetHash: getBackendTargetHash(n.type, 'notification'),
         notificationId: n.id,
@@ -2848,10 +3075,18 @@ async function pollBackendNotifications(): Promise<void> {
         type: 'basic',
         iconUrl: chrome.runtime.getURL('icons/icon128.png'),
         title: n.title || 'Personal AI',
-        message: (n.body || '').slice(0, 200),
-        priority:
-          n.type === 'dream_digest' || n.type === 'weekly_report' ? 2 : 1,
-        buttons: [{ title: '查看' }, { title: '忽略' }],
+        message: buildBackendNotificationMessage({
+          body: n.body,
+          type: n.type,
+          payload: n.payload,
+        }),
+        contextMessage: buildBackendNotificationContextMessage(
+          legacyLane,
+          legacyPriority,
+          n.sentAt,
+        ),
+        priority: legacyPriority === 'high' ? 2 : 1,
+        buttons: buildBackendNotificationButtons(legacyLane),
       });
     }
   } catch (err) {

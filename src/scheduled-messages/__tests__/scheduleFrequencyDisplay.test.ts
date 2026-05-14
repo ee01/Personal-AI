@@ -85,6 +85,28 @@ test('derives weekly weekday from schedule date when repeat days are absent', ()
   );
 });
 
+test('uses default morning time when schedule time is blank-like', () => {
+  assert.equal(
+    formatScheduledMessageFrequency(makeMessage({
+      Schedule_Time: '\u200B',
+      Repeat_Every: 1,
+      Repeat_Unit: 'Week',
+    })),
+    '每周一 09:00',
+  );
+});
+
+test('accepts sheet-formatted schedule times with seconds', () => {
+  assert.equal(
+    formatScheduledMessageFrequency(makeMessage({
+      Schedule_Time: '9:30:00 AM',
+      Repeat_Every: 1,
+      Repeat_Unit: 'Week',
+    })),
+    '每周一 09:30',
+  );
+});
+
 test('shows executor default as an after-08:00 queue when time is empty', () => {
   assert.equal(
     formatScheduledMessageFrequency(makeMessage({

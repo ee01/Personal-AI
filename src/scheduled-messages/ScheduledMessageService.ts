@@ -48,8 +48,12 @@ import { normalizeSheetConfig } from './botAutomationConfig';
 import { formatTimelineNextExecutionText } from './timelineFormatting';
 import {
   getTodayLocalScheduleDate,
+  hasLocalScheduleTime,
 } from './scheduleDateTime';
-import { calculateScheduledMessageNextExecution } from './scheduleNextExecution';
+import {
+  calculateScheduledMessageNextExecution,
+  hasConfiguredAiEndpoint,
+} from './scheduleNextExecution';
 
 const NON_PERSISTED_OUTREACH_FIELDS = new Set([
   'Outreach_Target_Type',
@@ -69,7 +73,7 @@ const NON_PERSISTED_OUTREACH_FIELDS = new Set([
 function normalizeExecutorTargetType(message: Partial<ScheduledMessage>): void {
   if (
     message.Push_Method === 'AI' ||
-    (message.Push_Method === 'JiraAutomation' && Boolean(message.AI_Endpoint))
+    (message.Push_Method === 'JiraAutomation' && hasConfiguredAiEndpoint(message.AI_Endpoint))
   ) {
     message.Target_Type = 'api';
   }
@@ -213,7 +217,7 @@ export class ScheduledMessageService {
     }
     
     // 如果填写了 Schedule_Time，判断为 Hourly
-    if (message.Schedule_Time && message.Schedule_Time.trim()) {
+    if (hasLocalScheduleTime(message.Schedule_Time)) {
       return 'Hourly';
     }
     
@@ -278,7 +282,9 @@ export class ScheduledMessageService {
       updates.Type !== undefined ||
       updates.Repeat_Every !== undefined ||
       updates.Repeat_Unit !== undefined ||
+      updates.Repeat_Count !== undefined ||
       updates.Repeat_Days !== undefined ||
+      updates.Exec_Count !== undefined ||
       updates.Push_Method !== undefined ||
       updates.AI_Endpoint !== undefined
     ) {

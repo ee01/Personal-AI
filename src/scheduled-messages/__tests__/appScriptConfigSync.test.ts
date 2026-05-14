@@ -10,6 +10,7 @@ type FetchCall = {
 
 const originalFetch = globalThis.fetch;
 const originalChrome = (globalThis as any).chrome;
+const originalDate = globalThis.Date;
 
 function installFetchMock(handler: (url: string, init?: RequestInit) => Promise<Response> | Response) {
   const calls: FetchCall[] = [];
@@ -25,8 +26,35 @@ function installFetchMock(handler: (url: string, init?: RequestInit) => Promise<
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
+  (globalThis as any).Date = originalDate;
   (globalThis as any).chrome = originalChrome;
 });
+
+function installDateMock(isoValues: string[]) {
+  let constructorCalls = 0;
+
+  function MockDate(this: unknown, value?: string | number | Date) {
+    if (!(this instanceof MockDate)) {
+      return originalDate();
+    }
+
+    if (arguments.length === 0) {
+      const isoValue = isoValues[Math.min(constructorCalls, isoValues.length - 1)];
+      constructorCalls += 1;
+      return new originalDate(isoValue);
+    }
+
+    return new originalDate(value as any);
+  }
+
+  MockDate.UTC = originalDate.UTC;
+  MockDate.parse = originalDate.parse;
+  MockDate.now = () =>
+    new originalDate(isoValues[Math.min(constructorCalls, isoValues.length - 1)]).getTime();
+  MockDate.prototype = originalDate.prototype;
+
+  (globalThis as any).Date = MockDate;
+}
 
 test('ConfigSyncService reads App Script deployment metadata from Config sheet', async () => {
   const calls = installFetchMock(() =>
@@ -717,4 +745,64 @@ test('ConfigSyncService uses newer Sheet Config as base for partial updates', as
   assert.equal(storedConfig.botAutomation.timelineSyncRule.ruleId, 'timeline-remote');
   assert.equal(configMap.get('bot_automation_executor_rule_name'), 'Executor Updated');
   assert.equal(configMap.get('bot_automation_timeline_sync_rule_id'), 'timeline-remote');
+});
+
+test('ConfigSyncService returns the persisted timestamp from partial updates', async () => {
+  installDateMock([
+    '2026-05-10T00:00:00.000Z',
+    '2026-05-10T00:00:01.000Z',
+  ]);
+
+  let storedConfig: any;
+  let sheetLastSyncTime = '';
+
+  installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body));
+      const rows = body.values as [string, string][];
+      sheetLastSyncTime = new Map(rows.filter(([key]) => key)).get('last_sync_time') || '';
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        values: [
+          ['sheet_version', '2.7'],
+          ['created_by', 'Personal AI Extension'],
+          ['created_at', '2026-05-01T00:00:00.000Z'],
+          ['last_sync_time', '2026-05-09T00:00:00.000Z'],
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  (globalThis as any).chrome = {
+    storage: {
+      local: {
+        get: async () => ({
+          scheduledMessagesConfig: {
+            sheetId: 'sheet-123',
+            sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+            sheet_version: '2.7',
+            created_by: 'Personal AI Extension',
+            created_at: '2026-05-01T00:00:00.000Z',
+            last_sync_time: '2026-05-09T00:00:00.000Z',
+          },
+        }),
+        set: async (value: any) => {
+          storedConfig = value.scheduledMessagesConfig;
+        },
+      },
+    },
+  };
+
+  const service = new ConfigSyncService('token');
+  const config = await service.updatePartialConfig({
+    webAppUrl: 'https://script.google.com/macros/s/new-deploy/exec',
+  });
+
+  assert.equal(sheetLastSyncTime, '2026-05-10T00:00:00.000Z');
+  assert.equal(config.last_sync_time, sheetLastSyncTime);
+  assert.equal(storedConfig.last_sync_time, sheetLastSyncTime);
 });

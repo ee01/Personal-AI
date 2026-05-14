@@ -42,7 +42,9 @@ describe('Context Assist API (POST /context-assist)', () => {
   beforeEach(() => {
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
-    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    db.prepare(
+      `INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`,
+    ).run();
 
     const now = Math.floor(Date.now() / 1000);
     insertChunk({
@@ -135,6 +137,7 @@ describe('Context Assist API (POST /context-assist)', () => {
             responseStatus: 'accepted',
           },
         },
+        debug: true,
       },
     });
 
@@ -144,16 +147,37 @@ describe('Context Assist API (POST /context-assist)', () => {
     expect(body.surface).toBe('meeting_prep');
     expect(body.suggestionType).toBe('meeting_brief');
     expect(body.cueCards.length).toBeGreaterThan(0);
-    expect(body.evidence.length).toBeGreaterThan(0);
-    expect(body.evidence[0].links).toEqual(
+    expect(body.cueCards).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          label: '打开来源',
-          url: expect.stringMatching(/^https:\/\/internal\.example\.com\/context-assist\//),
+          id: 'suggested-questions',
+          kind: 'question',
+          title: '建议带进会议的问题',
         }),
       ]),
     );
-    expect(body.insertText).toContain('Personal AI meeting prep');
+    expect(
+      body.cueCards.find((card: any) => card.id === 'suggested-questions')
+        ?.body,
+    ).toMatch(/owner|blocker|Rooms|dependency/i);
+    expect(body.evidence.length).toBeGreaterThan(0);
+    expect(body.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          links: expect.arrayContaining([
+            expect.objectContaining({
+              label: '打开来源',
+              url: expect.stringMatching(
+                /^https:\/\/internal\.example\.com\/context-assist\//,
+              ),
+            }),
+          ]),
+        }),
+      ]),
+    );
+    expect(body.insertText).toContain('Today Pilot meeting prep');
+    expect(body.debug?.deprecated).toBe(true);
+    expect(body.debug?.delegatedTo).toBe('today_pilot');
   });
 
   it('supports composer_guard through the unified route', async () => {

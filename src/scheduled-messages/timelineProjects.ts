@@ -50,6 +50,27 @@ export interface TimelineProjectOption {
   label: string;
 }
 
+export interface TimelineSyncPayloadHelp {
+  project: TimelineProject;
+  label: string;
+  paramKey: string;
+  variableName: string;
+  method: 'POST';
+  url: string;
+  contentType: 'application/json';
+  customBody: string;
+}
+
+export interface TimelineSyncDryRunHelp {
+  project: TimelineProject;
+  label: string;
+  method: 'POST';
+  url: string;
+  contentType: 'application/json';
+  customBody: string;
+  curlCommand: string;
+}
+
 export const DEFAULT_TIMELINE_PROJECT: TimelineProject = TIMELINE_PROJECTS[0].value;
 
 export const TIMELINE_PROJECT_OPTIONS: TimelineProjectOption[] = TIMELINE_PROJECTS.map(project => ({
@@ -65,19 +86,104 @@ export function buildJiraJsonStringSmartValue(expression: string): string {
   return `{{${expression}.asJsonString}}`;
 }
 
-function buildJsonContentTypeHeader(id: string) {
-  return {
-    id,
-    name: 'Content-Type',
-    value: {
-      keyOrValue: 'application/json',
-      secret: false,
+function findTimelineProject(project?: string) {
+  return TIMELINE_PROJECTS.find(item => item.value === project || item.paramKey === project);
+}
+
+function buildTimelineSyncCustomBody(project: typeof TIMELINE_PROJECTS[number]): string {
+  return `{\n  "project": "${project.paramKey}",\n  "releaseInfo": ${buildJiraJsonStringSmartValue(project.variableName)}\n}`;
+}
+
+function buildTimelineSyncDryRunCustomBody(project: typeof TIMELINE_PROJECTS[number]): string {
+  return JSON.stringify({
+    project: project.paramKey,
+    dryRun: true,
+    releaseInfo: {
+      currentRelease: 'diagnostic',
+      currentPhase: 'diagnostic',
+      releaseInfo: {
+        FF: '12/31/2026',
+      },
     },
+  }, null, 2);
+}
+
+function appendQueryParameter(url: string, key: string, value: string): string {
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) {
+    return '';
+  }
+
+  const separator = trimmedUrl.includes('?') ? '&' : '?';
+  return `${trimmedUrl}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
+function quoteShellSingle(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildDryRunCurlCommand(input: {
+  url: string;
+  contentType: string;
+  customBody: string;
+}): string {
+  return [
+    'curl -sS -X POST',
+    `  -H ${quoteShellSingle(`Content-Type: ${input.contentType}`)}`,
+    `  --data ${quoteShellSingle(input.customBody)}`,
+    `  ${quoteShellSingle(input.url)}`,
+  ].join(' \\\n');
+}
+
+export function getTimelineSyncPayloadHelp(project?: string): TimelineSyncPayloadHelp | null {
+  const matchedProject = findTimelineProject(project);
+  if (!matchedProject) {
+    return null;
+  }
+
+  return {
+    project: matchedProject.value,
+    label: matchedProject.label,
+    paramKey: matchedProject.paramKey,
+    variableName: matchedProject.variableName,
+    method: 'POST',
+    url: '{{WEB_APP_URL}}?action=cacheReleaseInfo',
+    contentType: 'application/json',
+    customBody: buildTimelineSyncCustomBody(matchedProject),
+  };
+}
+
+export function getTimelineSyncDryRunHelp(input: {
+  project?: string;
+  webAppUrl?: string;
+}): TimelineSyncDryRunHelp | null {
+  const matchedProject = findTimelineProject(input.project);
+  const webAppUrl = input.webAppUrl?.trim();
+  if (!matchedProject || !webAppUrl) {
+    return null;
+  }
+
+  const url = appendQueryParameter(webAppUrl, 'action', 'cacheReleaseInfo');
+  const customBody = buildTimelineSyncDryRunCustomBody(matchedProject);
+  const contentType = 'application/json';
+
+  return {
+    project: matchedProject.value,
+    label: matchedProject.label,
+    method: 'POST',
+    url,
+    contentType,
+    customBody,
+    curlCommand: buildDryRunCurlCommand({
+      url,
+      contentType,
+      customBody,
+    }),
   };
 }
 
 export function getTimelineProjectOption(project?: string): TimelineProjectOption {
-  const matchedProject = TIMELINE_PROJECTS.find(item => item.value === project) || TIMELINE_PROJECTS[0];
+  const matchedProject = findTimelineProject(project) || TIMELINE_PROJECTS[0];
   return {
     value: matchedProject.value,
     label: matchedProject.label,
@@ -166,11 +272,18 @@ function buildCacheReleaseInfoWebhookAction(project: typeof TIMELINE_PROJECTS[nu
     value: {
       url: '{{WEB_APP_URL}}?action=cacheReleaseInfo',
       headers: [
-        buildJsonContentTypeHeader(`_header_cache_content_type_${project.paramKey}`),
+        {
+          id: `_header_${project.paramKey}_content_type`,
+          name: 'Content-Type',
+          value: {
+            keyOrValue: 'application/json',
+            secret: false,
+          },
+        },
       ],
       sendIssue: false,
       contentType: 'custom',
-      customBody: `{\n  "project": "${project.paramKey}",\n  "releaseInfo": ${buildJiraJsonStringSmartValue(project.variableName)}\n}`,
+      customBody: buildTimelineSyncCustomBody(project),
       method: 'POST',
       responseEnabled: true,
       usedSecretsKeys: [],

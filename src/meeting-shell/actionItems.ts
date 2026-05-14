@@ -15,6 +15,8 @@ const ENGLISH_ACTION_VERBS =
   '(?:follow up|own|handle|drive|confirm|update|prepare|send)';
 const ENGLISH_DEADLINE_RE =
   /\b(?:by|before|deadline|tomorrow|next\s+(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?|friday|monday|tuesday|wednesday|thursday)\b/i;
+const VAGUE_OWNER_RE =
+  /^(?:we\b.*|us\b.*|our team\b.*|the team\b.*|team\b.*|everyone\b.*|everybody\b.*|someone\b.*|somebody\b.*|anyone\b.*|anybody\b.*|tbd|unassigned|unknown|我们.*|咱们.*|大家.*|团队.*|有人.*|待定.*|待分配.*|未知.*)$/i;
 
 const NAMED_OWNER_PATTERN =
   /([A-Za-z][A-Za-z .'-]{0,39}|[\u4e00-\u9fa5]{1,12})/;
@@ -83,6 +85,7 @@ function normalizeOwnerCandidate(
 ): string | undefined {
   let owner = String(value || '')
     .replace(/^[\s:：-]+/, '')
+    .replace(/^(?:请|由|让)\s*/, '')
     .split(/[,，。;；、\n]/)[0]
     .trim();
   owner = owner
@@ -94,11 +97,23 @@ function normalizeOwnerCandidate(
   if (/^(?:我|俺|me|myself|i)$/i.test(owner)) {
     return speaker || 'Unknown';
   }
-  if (!owner || owner.length > 40) return undefined;
+  if (
+    !owner ||
+    owner.length > 40 ||
+    VAGUE_OWNER_RE.test(owner) ||
+    /(?:下周|本周|周[一二三四五六日天]|今天|明天|tomorrow|next\s+(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?)/i.test(
+      owner,
+    )
+  ) {
+    return undefined;
+  }
   return owner;
 }
 
-function extractActionOwner(text: string, speaker: string): string {
+function extractActionOwner(
+  text: string,
+  speaker: string,
+): string | undefined {
   if (
     /(?:我|俺)\s*(?:来)?(?:负责|跟进|处理|推进|完成|确认|对齐)/.test(text) ||
     /\b(?:i(?:'ll| will)?|me)\s+(?:follow up|own|handle|drive|confirm|update|prepare|send)\b/i.test(
@@ -127,7 +142,7 @@ function extractActionOwner(text: string, speaker: string): string {
     if (owner) return owner;
   }
 
-  return speaker || 'Unknown';
+  return undefined;
 }
 
 function extractActionDeadline(text: string): string | undefined {
@@ -142,34 +157,40 @@ function extractActionDeadline(text: string): string | undefined {
   return relative?.[1]?.trim();
 }
 
+function cleanActionTitle(value: string): string {
+  return value.replace(/\s+/g, ' ').replace(/[。.!！?？]+$/g, '').trim();
+}
+
 function extractActionTitle(text: string): string {
   const labeled = text.match(
     /(?:action item|action|todo|待办|行动项)\s*[:：]\s*([^,，。;；]+)/i,
   );
-  if (labeled?.[1]) return labeled[1].trim();
+  if (labeled?.[1]) return cleanActionTitle(labeled[1]);
 
   const afterResponsibilityVerb = text.match(
     /(?:负责|跟进|处理|推进|完成|对齐|确认)\s*([^,，。;；]+?)(?:\s*(?:ddl|deadline|截止|到|by)\b|[,，。;；]|$)/i,
   );
   if (afterResponsibilityVerb?.[1]?.trim()) {
-    return afterResponsibilityVerb[1].trim();
+    return cleanActionTitle(afterResponsibilityVerb[1]);
   }
 
   const needsFollowUp = text.match(
     /([^,，。;；]{2,60})\s*需要(?:我|[A-Za-z][A-Za-z .'-]{0,39}|[\u4e00-\u9fa5]{1,12})\s*(?:来)?(?:负责|跟进|处理|推进|完成|确认)/i,
   );
-  if (needsFollowUp?.[1]?.trim()) return needsFollowUp[1].trim();
+  if (needsFollowUp?.[1]?.trim()) return cleanActionTitle(needsFollowUp[1]);
 
   const englishFollowUp = text.match(
     /(?:follow up|own|handle|drive|confirm|update|prepare|send)\s+(.+?)(?:\s+(?:by|before|deadline)\b|[,，。;；]|$)/i,
   );
-  if (englishFollowUp?.[1]?.trim()) return englishFollowUp[1].trim();
+  if (englishFollowUp?.[1]?.trim()) {
+    return cleanActionTitle(englishFollowUp[1]);
+  }
 
-  return text
-    .replace(/^(?:决定|确认)\s*/i, '')
-    .replace(/(?:[,，;；]\s*)?(?:ddl|deadline|截止|到|by)\s*[:：]?.*$/i, '')
-    .trim()
-    .slice(0, 96);
+  return cleanActionTitle(
+    text
+      .replace(/^(?:决定|确认)\s*/i, '')
+      .replace(/(?:[,，;；]\s*)?(?:ddl|deadline|截止|到|by)\s*[:：]?.*$/i, ''),
+  ).slice(0, 96);
 }
 
 export function inferActionItemFromText(
@@ -181,11 +202,14 @@ export function inferActionItemFromText(
   if (!text || !hasActionItemSignal(text)) return undefined;
 
   const owner = extractActionOwner(text, args.speaker);
+  if (!owner && !ACTION_LABEL_RE.test(text)) {
+    return undefined;
+  }
   const timestamp = formatActionTimestamp(args.ts);
   return {
     id: `action-${args.index}`,
     title: extractActionTitle(text) || text.slice(0, 96),
-    owner,
+    owner: owner || 'Unknown',
     deadline: extractActionDeadline(text),
     status: 'pending',
     reviewState: 'suggested',

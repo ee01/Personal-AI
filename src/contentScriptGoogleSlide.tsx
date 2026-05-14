@@ -4,6 +4,8 @@ declare global {
     analysisPopupWindow?: Window | null;
     analysisPopupOrigin?: string;
     analysisPopupMessageCleanup?: () => void;
+    slidesAnalyzerToolbarObserver?: MutationObserver;
+    slidesAnalyzerToolbarCheckTimer?: number;
   }
 }
 
@@ -28,6 +30,13 @@ import {
   extractJiraTicketKeys,
 } from './utils/slidesAnalyzerSuggestions';
 import { createProjectUpdateSuggestion } from './utils/slidesAnalyzerUpdateSuggestions';
+import {
+  hasAttentionRiskLevelSignal,
+  hasProjectRiskSignal,
+} from './utils/slidesAnalyzerRisk';
+
+const ANALYSIS_BUTTON_ID = 'analyze-projects-button';
+const GOOGLE_SLIDES_TOOLBAR_SELECTOR = '.goog-toolbar-horizontal';
 
 // 分析结果接口
 export interface DisplaySlideAnalysisResult {
@@ -81,31 +90,73 @@ function initializeSlidesAnalyzer() {
 
   console.log('Google Slides项目分析器初始化');
 
-  // 监听页面加载完成
-  window.addEventListener('load', () => {
-    // 添加分析按钮到Google Slides界面
-    setTimeout(addAnalysisButton, 2000);
-  });
+  installAnalysisButtonWhenReady();
+  window.addEventListener('load', installAnalysisButtonWhenReady, { once: true });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', installAnalysisButtonWhenReady, { once: true });
+  }
+
+  if (window.slidesAnalyzerToolbarObserver) {
+    return;
+  }
+
+  window.slidesAnalyzerToolbarObserver = new MutationObserver(scheduleAnalysisButtonCheck);
+
+  const startObservingToolbarHost = () => {
+    if (!document.body || !window.slidesAnalyzerToolbarObserver) {
+      return;
+    }
+
+    window.slidesAnalyzerToolbarObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  };
+
+  if (document.body) {
+    startObservingToolbarHost();
+  } else {
+    document.addEventListener('DOMContentLoaded', startObservingToolbarHost, { once: true });
+  }
 }
 
 // 添加分析按钮到Google Slides界面
-function addAnalysisButton() {
-  // 查找Google Slides工具栏
-  const toolbar = document.querySelector('.goog-toolbar-horizontal');
-  if (!toolbar) {
-    console.warn('未找到Google Slides工具栏，尝试延迟添加');
-    setTimeout(addAnalysisButton, 2000);
+function installAnalysisButtonWhenReady() {
+  addAnalysisButton();
+  window.setTimeout(addAnalysisButton, 1000);
+  window.setTimeout(addAnalysisButton, 2500);
+}
+
+function scheduleAnalysisButtonCheck() {
+  if (window.slidesAnalyzerToolbarCheckTimer !== undefined) {
     return;
+  }
+
+  window.slidesAnalyzerToolbarCheckTimer = window.setTimeout(() => {
+    window.slidesAnalyzerToolbarCheckTimer = undefined;
+    addAnalysisButton();
+  }, 100);
+}
+
+function addAnalysisButton(): boolean {
+  // 查找Google Slides工具栏
+  const toolbar = document.querySelector(GOOGLE_SLIDES_TOOLBAR_SELECTOR);
+  if (!toolbar) {
+    console.debug('未找到Google Slides工具栏，等待界面渲染');
+    return false;
   }
 
   // 检查按钮是否已存在
-  if (document.getElementById('analyze-projects-button')) {
-    return;
+  const existingButton = document.getElementById(ANALYSIS_BUTTON_ID);
+  if (existingButton && toolbar.contains(existingButton)) {
+    return true;
   }
+  existingButton?.remove();
 
   // 创建按钮
   const button = document.createElement('div');
-  button.id = 'analyze-projects-button';
+  button.id = ANALYSIS_BUTTON_ID;
   button.className = 'goog-toolbar-button';
   button.setAttribute('role', 'button');
   button.setAttribute('aria-disabled', 'false');
@@ -126,6 +177,7 @@ function addAnalysisButton() {
   // 添加到工具栏
   toolbar.appendChild(button);
   console.log('已添加项目分析按钮');
+  return true;
 }
 
 // 分析幻灯片中的项目信息
@@ -270,13 +322,20 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
           analysisResult.updateSuggestions.push(suggestion);
         }
         
-        // 更新统计数据
-        const statusHasRisk = project.status.toLowerCase().includes('risk');
-        const suggestedStatusHasRisk = suggestion?.suggestedStatus?.toLowerCase().includes('risk');
-        
-        if (statusHasRisk || (needsUpdate && suggestedStatusHasRisk) || result.riskLevel === 'critical' || result.riskLevel === 'high') {
+        const requestJiraIssues = projectAnalysisRequests[i]?.jiraIssues || {};
+        const resultJiraIssues = result.jiraIssues || requestJiraIssues;
+        const jiraIssueList = Object.values(resultJiraIssues);
+        const hasRiskSignal = hasProjectRiskSignal({
+          currentStatus: project.status,
+          suggestedStatus: suggestion?.suggestedStatus,
+          reasons: suggestion?.reason || result.suggestions.risks,
+          riskLevel: result.riskLevel,
+          jiraIssues: jiraIssueList
+        });
+
+        if (hasRiskSignal) {
           analysisResult.summary.riskProjects++;
-        } else if (needsUpdate || result.riskLevel === 'normal') {
+        } else if (needsUpdate || hasAttentionRiskLevelSignal(result.riskLevel)) {
           analysisResult.summary.attentionProjects++;
         } else {
           analysisResult.summary.normalProjects++;

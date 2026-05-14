@@ -118,6 +118,8 @@ const CHALLENGE_PATTERNS = [
   /风险验证/,
   /继续使用前请验证/,
 ];
+const POST_SEND_VERIFY_TIMEOUT_MS = 8_000;
+const POST_SEND_VERIFY_INTERVAL_MS = 500;
 
 const SINGLETON_ARTIFACTS = [
   'SingletonLock',
@@ -176,6 +178,19 @@ function randomDelay(minMs: number, maxMs: number): number {
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function countTextOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let offset = 0;
+  while (offset < haystack.length) {
+    const index = haystack.indexOf(needle, offset);
+    if (index < 0) break;
+    count += 1;
+    offset = index + needle.length;
+  }
+  return count;
 }
 
 function dedupeConversationSnapshots(
@@ -466,6 +481,22 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
       .waitForLoadState('networkidle', { timeout: 5_000 })
       .catch(() => undefined);
 
+    const preSend = await this.inspectPostSend(transcript);
+    if (preSend.challengeDetected) {
+      const snapshot = await this.captureSnapshot();
+      this.lastError = `Doubao challenge detected before send (${preSend.observedBodySnippet || 'unknown'})`;
+      return {
+        ...snapshot,
+        sent: false,
+        transportUsed: 'dom',
+        verified: false,
+        challengeDetected: true,
+        messageVisible: false,
+        observedBodySnippet: preSend.observedBodySnippet,
+        error: this.lastError,
+      };
+    }
+
     const composer = await this.findVisibleLocator(COMPOSER_SELECTORS, 12_000);
     if (composer) {
       try {
@@ -512,7 +543,10 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
         .catch(() => undefined);
 
       const snapshot = await this.captureSnapshot();
-      const postSend = await this.inspectPostSend(transcript);
+      const postSend = await this.waitForPostSend(
+        transcript,
+        preSend.visibleMatchCount,
+      );
       if (threadUrl && !sameThreadTarget(snapshot.url, threadUrl)) {
         this.lastError = `Transcript was sent to a different thread than requested (${snapshot.url || 'unknown'})`;
         return {
@@ -928,28 +962,108 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
     challengeDetected: boolean;
     messageVisible: boolean;
     observedBodySnippet?: string;
+    visibleMatchCount: number;
+  }>;
+  private async inspectPostSend(
+    transcript: string,
+    baselineMatchCount: number,
+  ): Promise<{
+    challengeDetected: boolean;
+    messageVisible: boolean;
+    observedBodySnippet?: string;
+    visibleMatchCount: number;
+  }>;
+  private async inspectPostSend(
+    transcript: string,
+    baselineMatchCount = 0,
+  ): Promise<{
+    challengeDetected: boolean;
+    messageVisible: boolean;
+    observedBodySnippet?: string;
+    visibleMatchCount: number;
   }> {
     if (!this.page) {
       return {
         challengeDetected: false,
         messageVisible: false,
+        visibleMatchCount: 0,
       };
     }
 
     const bodyText = compactText(
-      (await this.page.textContent('body').catch(() => '')) || '',
+      (await this.page
+        .evaluate(() => {
+          const body = document.body;
+          if (!body) return '';
+          const clone = body.cloneNode(true) as Element;
+          clone
+            .querySelectorAll(
+              [
+                'textarea',
+                'input',
+                '[contenteditable="true"]',
+                '[contenteditable="plaintext-only"]',
+                'div[data-lexical-editor="true"]',
+              ].join(', '),
+            )
+            .forEach((node) => node.remove());
+          return (
+            clone.textContent ||
+            (body as HTMLElement).innerText ||
+            body.textContent ||
+            ''
+          );
+        })
+        .catch(() => '')) || '',
     );
     const transcriptProbe = compactText(transcript).slice(0, 24);
     const observedBodySnippet = bodyText.slice(0, 160);
+    const visibleMatchCount = countTextOccurrences(bodyText, transcriptProbe);
 
     return {
       challengeDetected: CHALLENGE_PATTERNS.some((pattern) =>
         pattern.test(bodyText),
       ),
       messageVisible:
-        transcriptProbe.length > 0 ? bodyText.includes(transcriptProbe) : false,
+        transcriptProbe.length > 0
+          ? visibleMatchCount > baselineMatchCount
+          : false,
       observedBodySnippet,
+      visibleMatchCount,
     };
+  }
+
+  private async waitForPostSend(
+    transcript: string,
+    baselineMatchCount: number,
+  ): Promise<{
+    challengeDetected: boolean;
+    messageVisible: boolean;
+    observedBodySnippet?: string;
+    visibleMatchCount: number;
+  }> {
+    const maxAttempts = Math.max(
+      1,
+      Math.ceil(POST_SEND_VERIFY_TIMEOUT_MS / POST_SEND_VERIFY_INTERVAL_MS),
+    );
+    let lastInspection = await this.inspectPostSend(
+      transcript,
+      baselineMatchCount,
+    );
+    for (
+      let attempt = 0;
+      attempt < maxAttempts &&
+      !lastInspection.challengeDetected &&
+      !lastInspection.messageVisible;
+      attempt += 1
+    ) {
+      await this.page?.waitForTimeout(POST_SEND_VERIFY_INTERVAL_MS);
+      lastInspection = await this.inspectPostSend(
+        transcript,
+        baselineMatchCount,
+      );
+    }
+    return lastInspection;
   }
 
   private async tryOpenNewChat(): Promise<void> {

@@ -19,6 +19,8 @@ import { ConsolidationEngine } from './ConsolidationEngine.js';
 import { GenerativeReplay } from './GenerativeReplay.js';
 import { WeeklyReporter } from './WeeklyReporter.js';
 import { OutreachEngine } from './OutreachEngine.js';
+import { RelationshipRadarService } from './RelationshipRadarService.js';
+import { TodayPilotMeetingPrepService } from './TodayPilotMeetingPrepService.js';
 import { UserContextManager } from './UserContextManager.js';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +35,7 @@ export class ProactiveScheduler {
   private dailyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyReportTask: ReturnType<typeof cron.schedule> | null = null;
+  private todayPilotPrepTask: ReturnType<typeof cron.schedule> | null = null;
   private running = false;
 
   constructor(ucm: UserContextManager) {
@@ -77,13 +80,22 @@ export class ProactiveScheduler {
       this.safeRun('weeklyReport', () => this.runWeeklyReport());
     });
 
+    if (config.todayPilotMeetingPrepEnabled) {
+      this.todayPilotPrepTask = cron.schedule(config.todayPilotPrepCron, () => {
+        this.safeRun('todayPilotMeetingPrep', () =>
+          this.runTodayPilotMeetingPrep(),
+        );
+      });
+    }
+
     this.running = true;
 
     console.log(
       `[ProactiveScheduler] Started — heartbeat every ${config.heartbeatIntervalMs}ms, ` +
         `outreach every ${config.outreachIntervalMs}ms, ` +
         `daily cron "${config.dailyCron}", weekly cron "${config.weeklyCron}", ` +
-        `weekly report cron "${config.weeklyReportCron}"`,
+        `weekly report cron "${config.weeklyReportCron}", ` +
+        `today pilot prep cron "${config.todayPilotPrepCron}"`,
     );
   }
 
@@ -120,6 +132,11 @@ export class ProactiveScheduler {
       this.weeklyReportTask = null;
     }
 
+    if (this.todayPilotPrepTask) {
+      this.todayPilotPrepTask.stop();
+      this.todayPilotPrepTask = null;
+    }
+
     this.running = false;
     console.log('[ProactiveScheduler] Stopped');
   }
@@ -136,7 +153,11 @@ export class ProactiveScheduler {
     for (const userId of userIds) {
       try {
         const ctx = this.ucm.getContext(userId);
-        const heartbeat = new HeartbeatLoop(ctx.db, ctx.userDataManager, userId);
+        const heartbeat = new HeartbeatLoop(
+          ctx.db,
+          ctx.userDataManager,
+          userId,
+        );
         await heartbeat.run();
       } catch (err) {
         console.error(
@@ -178,6 +199,12 @@ export class ProactiveScheduler {
         console.log(
           `[ProactiveScheduler] Daily consolidation for user ${userId}:`,
           JSON.stringify(result),
+        );
+        const relationshipRadar = new RelationshipRadarService(ctx.db);
+        const radarResult = relationshipRadar.consolidatePeople({ limit: 40 });
+        console.log(
+          `[ProactiveScheduler] Relationship radar consolidation for user ${userId}:`,
+          JSON.stringify(radarResult),
         );
       } catch (err) {
         console.error(
@@ -233,7 +260,11 @@ export class ProactiveScheduler {
     for (const userId of userIds) {
       try {
         const ctx = this.ucm.getContext(userId);
-        const reporter = new WeeklyReporter(ctx.db, ctx.userDataManager, userId);
+        const reporter = new WeeklyReporter(
+          ctx.db,
+          ctx.userDataManager,
+          userId,
+        );
         const result = await reporter.generateWeeklyReport();
         console.log(
           `[ProactiveScheduler] Weekly report for user ${userId}:`,
@@ -253,13 +284,50 @@ export class ProactiveScheduler {
     );
   }
 
+  private async runTodayPilotMeetingPrep(): Promise<void> {
+    const config = getConfig();
+    console.log('[ProactiveScheduler] Starting Today Pilot meeting prep...');
+    const startMs = Date.now();
+
+    const userIds = this.ucm.getRegisteredUserIds();
+    for (const userId of userIds) {
+      try {
+        const ctx = this.ucm.getContext(userId);
+        const service = new TodayPilotMeetingPrepService(ctx.db, userId);
+        const result = await service.prepare({
+          timezone: config.todayPilotTimezone,
+          horizonHours: 36,
+          maxMeetings: config.todayPilotMeetingPrepMax,
+          mode: 'nightly_llm',
+        });
+        console.log(
+          `[ProactiveScheduler] Today Pilot meeting prep for user ${userId}:`,
+          JSON.stringify(result),
+        );
+      } catch (err) {
+        console.error(
+          `[ProactiveScheduler] Today Pilot meeting prep error for user ${userId}:`,
+          (err as Error).message,
+        );
+      }
+    }
+
+    const elapsedMs = Date.now() - startMs;
+    console.log(
+      `[ProactiveScheduler] Today Pilot meeting prep complete for ${userIds.length} user(s) in ${elapsedMs}ms`,
+    );
+  }
+
   // ---- Error wrapper ------------------------------------------------------
 
   /**
    * Execute an async task, catching and logging any errors so the
    * scheduler loop is never broken by an unhandled rejection.
    */
-  private async safeRun(label: string, fn: () => Promise<unknown>): Promise<void> {
+  private async safeRun(
+    label: string,
+    fn: () => Promise<unknown>,
+  ): Promise<void> {
     try {
       await fn();
     } catch (err) {

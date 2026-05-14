@@ -61,6 +61,8 @@ import { providerRoutes } from './routes/providers.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { extractorRoutes } from './routes/extractor.js';
 import { publicSkillRoutes, skillRoutes } from './routes/skills.js';
+import { relationshipRoutes } from './routes/relationships.js';
+import { dayPilotRoutes } from './routes/dayPilot.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -198,7 +200,9 @@ export async function buildApp(
       await instance.register(providerRoutes);
       await instance.register(meetingRoutes);
       await instance.register(extractorRoutes);
+      await instance.register(relationshipRoutes);
       await instance.register(skillRoutes);
+      await instance.register(dayPilotRoutes);
     },
     { prefix: '/api/v1' },
   );

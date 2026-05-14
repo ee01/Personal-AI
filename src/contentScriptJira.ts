@@ -19,6 +19,9 @@ import {
   extractDesignLinks,
   formatDesignStatusLabel,
   getDesignDisplayLabel,
+  getDesignDisplayStatusTone,
+  getDesignReadinessDecision,
+  getDesignStatusSummary,
   getDesignStatusTone,
   getDesignSourceLabel,
   getUXEpicStatusTone,
@@ -64,6 +67,8 @@ let mainRunSequence = 0;
 let jiraCookieFallbackSkipLogged = false;
 let jiraXsrfSynchronizerStarted = false;
 let lastSyncedJiraXsrfToken = '';
+let jiraDesignFetchToken = '';
+const JIRA_DESIGN_CONFIG_TIMEOUT_MS = 1200;
 
 function getJiraXsrfCookieToken(): string {
   const rawValue = document.cookie
@@ -189,12 +194,13 @@ function startJiraXsrfTokenSynchronizer(): void {
 async function fetchJiraRead(
   url: string,
   requestLabel: string,
-  authMode: JiraAuthMode = 'cookie-when-safe',
+  authMode: JiraAuthMode = 'cookie-always',
 ): Promise<Response | null> {
   try {
     const response = await jiraFetch(url, {
       method: 'GET',
       authMode,
+      token: jiraDesignFetchToken,
       requestLabel,
     });
     syncJiraXsrfTokenFromCookie();
@@ -211,15 +217,34 @@ async function fetchJiraRead(
   }
 }
 
+async function getJiraDesignFeatureConfig(): Promise<Awaited<ReturnType<typeof getEnvConfig>> | null> {
+  const configPromise = getEnvConfig().catch(error => {
+    console.warn('Jira design links falling back after config read failed:', error);
+    return null;
+  });
+  const timeoutPromise = new Promise<null>(resolve => {
+    window.setTimeout(() => resolve(null), JIRA_DESIGN_CONFIG_TIMEOUT_MS);
+  });
+  const config = await Promise.race([configPromise, timeoutPromise]);
+  if (!config) {
+    console.warn('Jira design links continuing with default config after config read timeout or failure');
+  }
+  return config;
+}
+
 // 检测页面是否是Jira ticket详情页
 function isJiraTicketPage(): boolean {
-  return window.location.pathname.includes('/browse/');
+  return parseJiraIssueKeyFromPath(window.location.pathname) !== null;
 }
 
 // 从DOM获取当前ticket ID
 function getTicketIdFromUrl(): string {
-  const pathParts = window.location.pathname.split('/');
-  return pathParts[pathParts.length - 1];
+  return parseJiraIssueKeyFromPath(window.location.pathname) || '';
+}
+
+function parseJiraIssueKeyFromPath(pathname: string): string | null {
+  const match = pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i);
+  return match?.[1]?.toUpperCase() || null;
 }
 
 // 从DOM中查找Parent Link
@@ -279,11 +304,15 @@ function createDirectDesignItem(candidate: DesignLinkCandidate, source: string):
 }
 
 function getDescriptionLinkTitle(link: HTMLAnchorElement): string | undefined {
-  return (
-    link.textContent?.replace(/\s+/g, ' ').trim() ||
-    link.getAttribute('title')?.replace(/\s+/g, ' ').trim() ||
-    undefined
-  );
+  const candidates = [
+    link.textContent,
+    link.getAttribute('title'),
+    link.getAttribute('aria-label'),
+  ]
+    .map(value => value?.replace(/\s+/g, ' ').trim())
+    .filter((value): value is string => Boolean(value));
+
+  return candidates.find(isMeaningfulDesignTitle) || candidates[0] || undefined;
 }
 
 function getCandidateDesignLabel(candidate: DesignLinkCandidate): string {
@@ -321,6 +350,133 @@ function getDesignLinksFromDescription(
   }
   
   return designLinks;
+}
+
+function getCompactElementText(element: Element | null): string {
+  if (!element) return '';
+  return (element.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function getNativeDesignCard(link: HTMLAnchorElement): HTMLElement {
+  const selectors = [
+    '[data-testid*="design" i]',
+    '[data-test-id*="design" i]',
+    '[aria-label*="design" i]',
+    '[class*="design" i]',
+    'li',
+    '[role="listitem"]',
+    'article',
+    'section',
+  ];
+
+  for (const selector of selectors) {
+    const closest = link.closest(selector);
+    if (!(closest instanceof HTMLElement)) continue;
+    if (closest.closest('#description-val, .design-links-container, .backend-progress-container')) continue;
+    const text = getCompactElementText(closest);
+    if (text.length <= 800) return closest;
+  }
+
+  return link;
+}
+
+function extractNativeDesignStatus(text: string): string | undefined {
+  const normalizedText = text
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const statusPatterns: Array<[RegExp, string]> = [
+    [/\bnot\s+ready\s+for\s+(?:dev|development|handoff|implementation)\b/i, 'Not ready for dev'],
+    [/\bready\s+for\s+(?:dev|development|handoff|implementation)\b/i, 'Ready for dev'],
+    [/\bdesign\s+updated\b/i, 'Design updated'],
+    [/\bready\s+for\s+review\b/i, 'Ready for review'],
+    [/\bneeds\s+review\b/i, 'Needs review'],
+    [/\bblocked\b/i, 'Blocked'],
+    [/\bdone\b|\bcompleted\b|\bshipped\b/i, 'Done'],
+  ];
+
+  for (const [pattern, label] of statusPatterns) {
+    if (pattern.test(normalizedText)) return label;
+  }
+
+  return undefined;
+}
+
+function stripNativeDesignStatusText(text: string): string {
+  return text
+    .replace(/\bnot\s+ready\s+for\s+(?:dev|development|handoff|implementation)\b/ig, ' ')
+    .replace(/\bready\s+for\s+(?:dev|development|handoff|implementation)\b/ig, ' ')
+    .replace(/\bdesign\s+updated\b/ig, ' ')
+    .replace(/\bready\s+for\s+review\b/ig, ' ')
+    .replace(/\bneeds\s+review\b/ig, ' ')
+    .replace(/\bblocked\b/ig, ' ')
+    .replace(/\bdone\b|\bcompleted\b|\bshipped\b/ig, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getNativeDesignTitle(link: HTMLAnchorElement, candidate: DesignLinkCandidate, card: HTMLElement): string | undefined {
+  const values = [
+    link.textContent,
+    link.getAttribute('title'),
+    link.getAttribute('aria-label'),
+    card.getAttribute('title'),
+    card.getAttribute('aria-label'),
+  ];
+
+  const textLines = (card.innerText || card.textContent || '')
+    .split(/\n+/)
+    .map(line => stripNativeDesignStatusText(line.replace(/https?:\/\/[^\s<>"']+/g, ' ')))
+    .map(line => line.replace(/\b(open|view|inspect)\s+(in\s+)?(figma|design)\b/ig, ' '))
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  for (const value of [...values, ...textLines]) {
+    const normalized = stripNativeDesignStatusText(value || '')
+      .replace(/\b(open|view|inspect)\s+(in\s+)?(figma|design)\b/ig, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (isMeaningfulDesignTitle(normalized)) return normalized;
+  }
+
+  return candidate.title;
+}
+
+function getNativeJiraDesignLinks(
+  extraDesignDomains: string[] = [],
+): Exclude<DesignDisplayItem, { type: 'ux_ticket' }>[] {
+  const nativeDesignLinks: Exclude<DesignDisplayItem, { type: 'ux_ticket' }>[] = [];
+  const seenUrls = new Set<string>();
+  const selector = [
+    '[data-testid*="design" i] a[href]',
+    '[data-test-id*="design" i] a[href]',
+    '[aria-label*="design" i] a[href]',
+    '[id*="design" i] a[href]',
+    '[class*="design" i] a[href]',
+  ].join(',');
+
+  document.querySelectorAll<HTMLAnchorElement>(selector).forEach(link => {
+    if (link.closest('#description-val, .design-links-container, .backend-progress-container')) return;
+
+    const candidate = extractDesignLinks(link.href, false, extraDesignDomains)[0];
+    if (!candidate || seenUrls.has(candidate.url)) return;
+
+    const card = getNativeDesignCard(link);
+    const cardText = getCompactElementText(card);
+    const status = extractNativeDesignStatus(cardText);
+    const title = getNativeDesignTitle(link, candidate, card);
+
+    seenUrls.add(candidate.url);
+    nativeDesignLinks.push(createDirectDesignItem({
+      ...candidate,
+      title,
+      status,
+      source: 'jira_designs',
+    }, 'jira_designs'));
+  });
+
+  return nativeDesignLinks;
 }
 
 // 从DOM中查找linked issues中的UX tickets
@@ -693,6 +849,49 @@ function removeBackendProgress(): void {
   document.querySelectorAll('.backend-progress-container').forEach(element => element.remove());
 }
 
+function refreshDesignLinksContainerHeight(container: HTMLElement): void {
+  const content = container.querySelector<HTMLElement>('.design-links-content');
+  const footer = container.querySelector<HTMLElement>('.design-links-footer');
+  if (!content) return;
+
+  const contentHeight = Math.ceil(content.scrollHeight) + 8;
+  const footerHeight = footer ? Math.ceil(footer.scrollHeight) : 0;
+  container.style.setProperty('--design-links-collapsed-max-height', `${Math.max(40, contentHeight)}px`);
+  container.style.setProperty('--design-links-hover-max-height', `${Math.max(contentHeight + footerHeight + 12, contentHeight)}px`);
+}
+
+function bindDesignLinksDynamicHeight(container: HTMLElement): void {
+  let frameId = 0;
+  const refresh = () => {
+    if (frameId) window.cancelAnimationFrame(frameId);
+    frameId = window.requestAnimationFrame(() => {
+      frameId = 0;
+      if (document.contains(container)) {
+        refreshDesignLinksContainerHeight(container);
+      }
+    });
+  };
+
+  refresh();
+  window.addEventListener('resize', refresh);
+
+  let resizeObserver: ResizeObserver | null = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(refresh);
+    const content = container.querySelector<HTMLElement>('.design-links-content');
+    if (content) resizeObserver.observe(content);
+  }
+
+  const cleanupObserver = new MutationObserver(() => {
+    if (document.contains(container)) return;
+    if (frameId) window.cancelAnimationFrame(frameId);
+    window.removeEventListener('resize', refresh);
+    resizeObserver?.disconnect();
+    cleanupObserver.disconnect();
+  });
+  cleanupObserver.observe(document.body, { childList: true, subtree: true });
+}
+
 // 显示设计链接
 function displayDesignLinks(designData: DesignDisplayItem[]): void {
   const summaryElement = document.querySelector('.issue-header-content');
@@ -711,9 +910,42 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   designLinksContainer.className = 'design-links-container';
   designLinksContainer.setAttribute('role', 'region');
   designLinksContainer.setAttribute('aria-label', 'Design context');
+
+  const readinessDecision = getDesignReadinessDecision(designData);
+  const readinessHtml = `
+    <button
+      type="button"
+      class="design-readiness design-readiness--${readinessDecision.tone}"
+      ${readinessDecision.targetTone ? `data-design-readiness-tone="${escapeAttribute(readinessDecision.targetTone)}"` : ''}
+      title="${escapeAttribute(readinessDecision.detail)}"
+      aria-label="${escapeAttribute(`${readinessDecision.label}. ${readinessDecision.detail}`)}"
+    >
+      <span class="design-readiness-label">${escapeHtml(readinessDecision.label)}</span>
+      <span class="design-readiness-detail">${escapeHtml(readinessDecision.detail)}</span>
+    </button>
+  `;
+  const statusSummary = getDesignStatusSummary(designData);
+  const statusSummaryHtml = statusSummary.length > 0
+    ? `
+      <div class="design-status-summary" aria-label="Design status summary">
+        ${statusSummary.map(item => `
+          <button
+            type="button"
+            class="design-status-summary-chip design-status-summary-chip--${item.tone}"
+            data-design-summary-tone="${escapeAttribute(item.tone)}"
+            title="${escapeAttribute(`Show ${item.count} ${item.label} design ${item.count === 1 ? 'item' : 'items'}`)}"
+            aria-label="${escapeAttribute(`Show ${item.count} ${item.label} design ${item.count === 1 ? 'item' : 'items'}`)}"
+          >
+            ${escapeHtml(item.label)}${item.count > 1 ? ` ${item.count}` : ''}
+          </button>
+        `).join('')}
+      </div>
+    `
+    : '';
   
   let linksHtml = '';
   designData.forEach((design, _index) => {
+    const designStatusTone = getDesignDisplayStatusTone(design);
     if (design.type === 'figma' || design.type === 'design_link') {
       const linkLabel = getDesignDisplayLabel(design);
       const safeUrl = escapeAttribute(design.url);
@@ -722,7 +954,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
         ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(design.status)}">${escapeHtml(designStatusLabel)}</span>`
         : '';
       linksHtml += `
-        <div class="design-link-item">
+        <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" tabindex="-1">
           <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
           <span class="design-link-label">Design</span>
           <a href="${safeUrl}" title="${safeUrl}" target="_blank" rel="noopener noreferrer" class="design-link">
@@ -748,7 +980,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
           <a href="${escapeAttribute(uxTicketUrl)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link">${escapeHtml(design.uxTicketKey)}</a>
         `
         : `
-          <a href="${escapeAttribute(uxTicketUrl)}" title="${escapeAttribute(design.summary || design.uxTicketKey)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link">
+          <a href="${escapeAttribute(uxTicketUrl)}" title="${escapeAttribute(design.uxTicketKey)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link">
             ${escapeHtml(design.uxTicketKey)} <span class="external-link-icon">↗</span>
           </a>
         `;
@@ -773,7 +1005,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
         : '';
 
       linksHtml += `
-        <div class="design-link-item">
+        <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" tabindex="-1">
           <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
           <span class="design-link-label">Design</span>
           ${designContent}
@@ -788,6 +1020,8 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   
   designLinksContainer.innerHTML = `
     <div class="design-links-content">
+      ${readinessHtml}
+      ${statusSummaryHtml}
       ${linksHtml}
     </div>
     <div class="design-links-footer">
@@ -798,8 +1032,42 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   
   // 插入到Summary下方
   summaryElement.insertAdjacentElement('afterend', designLinksContainer);
+  bindDesignLinksDynamicHeight(designLinksContainer);
+
+  const focusFirstItemByTone = (targetTone?: string): void => {
+    if (!targetTone) return;
+
+    const targetItem = Array.from(
+      designLinksContainer.querySelectorAll<HTMLElement>('.design-link-item')
+    ).find(item => item.dataset.designStatusTone === targetTone);
+    if (!targetItem) return;
+
+    designLinksContainer
+      .querySelectorAll('.design-link-item--highlight')
+      .forEach(item => item.classList.remove('design-link-item--highlight'));
+    targetItem.classList.add('design-link-item--highlight');
+    targetItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    targetItem.focus({ preventScroll: true });
+    window.setTimeout(() => {
+      targetItem.classList.remove('design-link-item--highlight');
+    }, 1800);
+  };
+
+  designLinksContainer.querySelector<HTMLButtonElement>('.design-readiness')?.addEventListener('click', event => {
+    focusFirstItemByTone((event.currentTarget as HTMLButtonElement).dataset.designReadinessTone);
+  });
+
+  designLinksContainer.querySelectorAll<HTMLButtonElement>('.design-status-summary-chip').forEach(button => {
+    button.addEventListener('click', () => {
+      focusFirstItemByTone(button.dataset.designSummaryTone);
+    });
+  });
   
   // 添加样式
+  const readinessHeight = 28;
+  const statusSummaryHeight = statusSummary.length > 0 ? 28 : 0;
+  const collapsedMaxHeight = 40 + readinessHeight + statusSummaryHeight + (designData.length - 1) * 30;
+  const hoverMaxHeight = 80 + readinessHeight + statusSummaryHeight + (designData.length - 1) * 30;
   let style = document.getElementById('personal-ai-design-links-style') as HTMLStyleElement | null;
   if (!style) {
     style = document.createElement('style');
@@ -807,6 +1075,8 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
     document.head.appendChild(style);
   }
   style.textContent = `
+    /* Keep this card shell and hover behavior aligned with .backend-progress-container.
+       Do not change the overall card style, max-height expansion, shadow, or hover translate effect independently. */
     .design-links-container {
       margin: 10px 0;
       padding: 8px 12px;
@@ -818,11 +1088,11 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       transition: all 0.3s ease;
       position: relative;
       overflow: visible;
-      max-height: ${40 + (designData.length - 1) * 30}px;
+      max-height: var(--design-links-collapsed-max-height, ${collapsedMaxHeight}px);
       z-index: 1;
     }
     .design-links-container:hover {
-      max-height: ${80 + (designData.length - 1) * 30}px;
+      max-height: var(--design-links-hover-max-height, ${hoverMaxHeight}px);
       box-shadow: 0 4px 8px rgba(0,0,0,0.15);
       transform: translateY(4px);
       z-index: 1000;
@@ -833,6 +1103,135 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       background-color: #f0f5ff;
       position: relative;
       z-index: 2;
+    }
+    .design-readiness {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      width: 100%;
+      border: 0;
+      padding: 0 0 4px;
+      margin: 0 0 4px;
+      background: transparent;
+      color: #172b4d;
+      text-align: left;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .design-readiness:hover .design-readiness-label,
+    .design-readiness:focus-visible .design-readiness-label {
+      box-shadow: 0 0 0 2px rgba(38, 132, 255, 0.22);
+    }
+    .design-readiness:focus-visible {
+      outline: none;
+    }
+    .design-readiness-label {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.5;
+      letter-spacing: 0;
+      white-space: nowrap;
+      color: #172b4d;
+      background-color: #e6fcff;
+    }
+    .design-readiness-detail {
+      min-width: 0;
+      color: #42526e;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.45;
+    }
+    .design-readiness--ready .design-readiness-label {
+      color: #006644;
+      background-color: #dcfff1;
+    }
+    .design-readiness--updated .design-readiness-label {
+      color: #0747a6;
+      background-color: #deebff;
+    }
+    .design-readiness--missing .design-readiness-label {
+      color: #7a3e00;
+      background-color: #fff0b3;
+    }
+    .design-readiness--not-ready .design-readiness-label {
+      color: #974f0c;
+      background-color: #fffae6;
+    }
+    .design-readiness--blocked .design-readiness-label {
+      color: #7a3e00;
+      background-color: #fff0b3;
+    }
+    .design-readiness--review .design-readiness-label {
+      color: #403294;
+      background-color: #eae6ff;
+    }
+    .design-readiness--done .design-readiness-label {
+      color: #44546f;
+      background-color: #f1f2f4;
+    }
+    .design-status-summary {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(9, 30, 66, 0.08);
+    }
+    .design-status-summary-chip {
+      display: inline-flex;
+      align-items: center;
+      border: 0;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.5;
+      letter-spacing: 0;
+      color: #172b4d;
+      background-color: #e6fcff;
+      white-space: nowrap;
+      text-transform: capitalize;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .design-status-summary-chip:hover,
+    .design-status-summary-chip:focus-visible {
+      box-shadow: 0 0 0 2px rgba(38, 132, 255, 0.22);
+      outline: none;
+    }
+    .design-status-summary-chip--ready {
+      color: #006644;
+      background-color: #dcfff1;
+    }
+    .design-status-summary-chip--updated {
+      color: #0747a6;
+      background-color: #deebff;
+    }
+    .design-status-summary-chip--missing {
+      color: #7a3e00;
+      background-color: #fff0b3;
+    }
+    .design-status-summary-chip--not-ready {
+      color: #974f0c;
+      background-color: #fffae6;
+    }
+    .design-status-summary-chip--blocked {
+      color: #7a3e00;
+      background-color: #fff0b3;
+    }
+    .design-status-summary-chip--review {
+      color: #403294;
+      background-color: #eae6ff;
+    }
+    .design-status-summary-chip--done {
+      color: #44546f;
+      background-color: #f1f2f4;
     }
     .design-link-item {
       display: flex;
@@ -846,6 +1245,14 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
     }
     .design-link-item:last-child {
       margin-bottom: 0;
+    }
+    .design-link-item:focus {
+      outline: none;
+    }
+    .design-link-item--highlight {
+      background: rgba(255, 171, 0, 0.18);
+      box-shadow: 0 0 0 2px rgba(255, 171, 0, 0.35);
+      border-radius: 4px;
     }
     .design-links-footer {
       font-size: 12px;
@@ -1269,6 +1676,8 @@ function displayBackendProgress(progressData: BackendProgressData[]): void {
     const style = document.createElement('style');
     style.id = 'backend-progress-styles';
     style.textContent = `
+      /* Keep this card shell and hover behavior aligned with .design-links-container.
+         Do not change the overall card style, max-height expansion, shadow, or hover translate effect independently. */
       .backend-progress-container {
         margin: 10px 0;
         padding: 8px 12px;
@@ -1567,15 +1976,17 @@ async function main(): Promise<void> {
     removeBackendProgress();
 
     // 加载配置
-    const config = await getEnvConfig();
+    const config = await getJiraDesignFeatureConfig();
     if (!isCurrentRun()) return;
-    const designProject = config.DESIGN_JIRA_PROJECT || 'UX*';
-    const extraDesignDomains = parseDesignDomainPatterns(config.DESIGN_LINK_DOMAINS);
+    jiraDesignFetchToken = config?.JIRA_API_TOKEN || '';
+    const designProject = config?.DESIGN_JIRA_PROJECT || 'UX*';
+    const extraDesignDomains = parseDesignDomainPatterns(config?.DESIGN_LINK_DOMAINS);
     
     const allDesignData: DesignDisplayItem[] = [];
     
-    // 1. 从 description 和 Jira remote links 中查找设计链接
+    // 1. 从 description、Jira 原生 Designs 区块和 Jira remote links 中查找设计链接
     allDesignData.push(...getDesignLinksFromDescription(extraDesignDomains));
+    allDesignData.push(...getNativeJiraDesignLinks(extraDesignDomains));
 
     const remoteDesignLinks = await fetchRemoteDesignLinks(ticketId, extraDesignDomains);
     if (!isCurrentRun()) return;
@@ -1645,7 +2056,7 @@ async function main(): Promise<void> {
     }
     
     // === Backend Progress (外部依赖进展) ===
-    const depProject = config.DEPENDENCIES_JIRA_PROJECT;
+    const depProject = config?.DEPENDENCIES_JIRA_PROJECT;
     if (depProject) {
       if (!isCurrentRun()) return;
       await collectAndDisplayBackendProgress(ticketId, depProject, isCurrentRun);
@@ -1660,24 +2071,40 @@ async function main(): Promise<void> {
 // 等待元素出现
 function waitForElement(selector: string, timeoutMs: number): Promise<Element> {
   return new Promise((resolve, reject) => {
-    if (document.querySelector(selector)) {
-      return resolve(document.querySelector(selector));
-    }
-    
-    const observer = new MutationObserver(() => {
-      if (document.querySelector(selector)) {
-        observer.disconnect();
-        resolve(document.querySelector(selector));
-      }
+    let observer: MutationObserver | null = null;
+    let timeoutId = 0;
+
+    const cleanup = () => {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      observer?.disconnect();
+    };
+
+    const resolveIfPresent = (): boolean => {
+      const element = document.querySelector(selector);
+      if (!element) return false;
+      cleanup();
+      resolve(element);
+      return true;
+    };
+
+    if (resolveIfPresent()) return;
+
+    observer = new MutationObserver(() => {
+      resolveIfPresent();
     });
-    
-    observer.observe(document.body, {
+
+    observer.observe(document.body || document.documentElement || document, {
       childList: true,
       subtree: true
     });
-    
-    setTimeout(() => {
-      observer.disconnect();
+
+    timeoutId = window.setTimeout(() => {
+      cleanup();
+      const element = document.querySelector(selector);
+      if (element) {
+        resolve(element);
+        return;
+      }
       reject(new Error(`Timeout waiting for element: ${selector}`));
     }, timeoutMs);
   });

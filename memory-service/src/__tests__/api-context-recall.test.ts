@@ -164,6 +164,132 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(body.topMatch?.id).toBe(top.id);
   });
 
+  it('suppresses generic RingCentral Video shell matches', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'generic-ringcentral-video',
+      '会议: RingCentral Video',
+      'meeting',
+      'https://app.ringcentral.com/video/home',
+      'RingCentral Video',
+      'calendar',
+      'generic-rc-video',
+      'RingCentral Video',
+      now - 10,
+      0.3,
+      'neutral',
+      JSON.stringify({}),
+      now - 10,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      9010,
+      'messages/generic-ringcentral-video',
+      1,
+      1,
+      '会议: RingCentral Video',
+      'hash-generic-rc-video',
+      'work',
+      'meeting',
+      'meeting',
+      null,
+      now - 10,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9010,
+      '会议: RingCentral Video',
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'webpage',
+        title: 'RingCentral Video',
+        primaryText: '会议: RingCentral Video',
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.matches).toEqual([]);
+    expect(body.topMatch).toBeNull();
+    expect(body.debug?.rejectedReason).toBe('low_information_match');
+  });
+
+  it('keeps RingCentral Video matches with concrete work signals', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const content =
+      'MTR-144449 Refine In-Meeting Video Tile Layout and UX dependency review.';
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'specific-ringcentral-video',
+      content,
+      'meeting',
+      'https://app.ringcentral.com/video/home',
+      'RingCentral Video',
+      'calendar',
+      'specific-rc-video',
+      'RingCentral Video',
+      now - 10,
+      0.8,
+      'neutral',
+      JSON.stringify({}),
+      now - 10,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      9011,
+      'messages/specific-ringcentral-video',
+      1,
+      1,
+      content,
+      'hash-specific-rc-video',
+      'work',
+      'meeting',
+      'meeting',
+      'MTR',
+      now - 10,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9011,
+      content,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'webpage',
+        title: 'RingCentral Video',
+        primaryText: 'In-Meeting Video Tile Layout MTR-144449',
+        limit: 3,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.matches.map((match: any) => match.id)).toContain('9011');
+    expect(body.topMatch).not.toBeNull();
+  });
+
   it('uses all scope by default for passive recall', async () => {
     const res = await app.inject({
       method: 'POST',

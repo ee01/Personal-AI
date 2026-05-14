@@ -15,13 +15,25 @@ interface SpeechTabProps {
 }
 
 const SOURCE_LABEL: Record<MeetingPilotSpeakerSource, string> = {
-  transcript: 'Transcript',
+  transcript: 'Speaker',
   caption: 'Caption',
   dom: 'DOM',
   roster: 'Roster',
   continuity: '沿用',
   ai: 'AI',
   user: '用户',
+};
+
+const TRANSCRIPT_SOURCE_LABEL: Record<
+  NonNullable<MeetingPilotTranscriptChunk['source']>,
+  string
+> = {
+  ringcentral_transcript: 'RC Transcript',
+  web_speech: 'On-Device',
+  desktop_whisper: 'Local ASR',
+  cloud: 'Cloud',
+  whisper: 'Whisper',
+  test: 'Test',
 };
 
 const ASR_SOURCE_LABEL: Record<MeetingPilotASRTier | 'whisper', string> = {
@@ -425,6 +437,18 @@ function TurnTranscriptText(props: {
   );
 }
 
+function getTurnTranscriptSources(
+  turn: MeetingPilotTranscriptTurn,
+  chunkById: Map<string, MeetingPilotTranscriptChunk>,
+): NonNullable<MeetingPilotTranscriptChunk['source']>[] {
+  const sources = new Set<NonNullable<MeetingPilotTranscriptChunk['source']>>();
+  turn.chunkIds.forEach((id) => {
+    const source = chunkById.get(id)?.source;
+    if (source) sources.add(source);
+  });
+  return Array.from(sources);
+}
+
 interface RenameInputProps {
   initial: string;
   onCancel: () => void;
@@ -597,6 +621,10 @@ export function SpeechTab(props: SpeechTabProps) {
               participant?.name || turn.speakerNameSnapshot || '说话人';
             const isRenaming = renamingId === turn.participantId;
             const isActive = activeParticipantId === turn.participantId;
+            const transcriptSources = getTurnTranscriptSources(
+              turn,
+              chunkById,
+            );
             return (
               <div
                 key={turn.id}
@@ -620,7 +648,10 @@ export function SpeechTab(props: SpeechTabProps) {
                       {displayName}
                     </button>
                   )}
-                  <SourceBadges sources={turn.resolutionSources} />
+                  <SourceBadges
+                    sources={turn.resolutionSources}
+                    transcriptSources={transcriptSources}
+                  />
                   <span className="speech-meta">
                     {formatRange(turn.startTs, turn.endTs)}
                   </span>
@@ -662,11 +693,20 @@ export function SpeechTab(props: SpeechTabProps) {
   );
 }
 
-function SourceBadges(props: { sources: MeetingPilotSpeakerSource[] }) {
-  if (!props.sources?.length) return null;
+function SourceBadges(props: {
+  sources: MeetingPilotSpeakerSource[];
+  transcriptSources: NonNullable<MeetingPilotTranscriptChunk['source']>[];
+}) {
+  const speakerSources = props.sources.filter((src) => src !== 'transcript');
+  if (!props.transcriptSources?.length && !speakerSources.length) return null;
   return (
     <span className="speech-source-badges">
-      {props.sources.map((src) => (
+      {props.transcriptSources.map((src) => (
+        <span key={src} className={`speech-source-badge src-${src}`}>
+          {TRANSCRIPT_SOURCE_LABEL[src] || src}
+        </span>
+      ))}
+      {speakerSources.map((src) => (
         <span key={src} className={`speech-source-badge src-${src}`}>
           {SOURCE_LABEL[src] || src}
         </span>

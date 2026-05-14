@@ -143,7 +143,12 @@ export class ChannelDeliveryRepository {
            FROM channel_delivery_records
           WHERE channel = ?
             AND lane IN (${lanePlaceholders})
-            AND status IN ('delivered', 'clicked', 'dismissed')
+            AND (
+              status IN ('delivered', 'clicked', 'dismissed')
+              OR first_delivered_at IS NOT NULL
+              OR seen_at IS NOT NULL
+              OR dismissed_at IS NOT NULL
+            )
             AND source_ref IN (${sourcePlaceholders})`,
       )
       .all(channel, ...lanes, ...sourceRefs) as Array<{ source_ref: string }>;

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 import { ContextRecallService } from './ContextRecallService.js';
+import { TodayPilotMeetingPrepService } from './TodayPilotMeetingPrepService.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type {
   ComposerAssistEvidence,
@@ -70,7 +71,10 @@ const MEETING_PREP_SOURCES: RecallSourceType[] = [
 export class ContextAssistService {
   private readonly recallService: ContextRecallService;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(
+    private readonly db: Database.Database,
+    private readonly userId = 'default',
+  ) {
     this.recallService = new ContextRecallService(db);
   }
 
@@ -213,54 +217,8 @@ export class ContextAssistService {
   private async assistMeetingPrep(
     request: ContextAssistRequest,
   ): Promise<ContextAssistResponse> {
-    const recallRequest = buildMeetingPrepRecallRequest(request);
-    const recall = await this.recallService.recall(recallRequest);
-    const evidence = recall.matches.map(toEvidence);
-    const confidence = getConfidence(evidence);
-
-    if (evidence.length === 0) {
-      return {
-        available: false,
-        surface: 'meeting_prep',
-        suggestionType: 'none',
-        title: '暂无会前上下文',
-        summary: '没有找到与本次会议足够相关的 Personal AI 记忆。',
-        cueCards: buildMeetingFallbackCards(request),
-        evidence: [],
-        riskLevel: 'low',
-        previewRequired: false,
-        confidence: 0,
-        queryTimeMs: recall.queryTimeMs,
-        debug: request.debug
-          ? {
-              recall: recall.debug,
-              recallRequest,
-            }
-          : undefined,
-      };
-    }
-
-    const cueCards = buildMeetingCueCards(request, evidence);
-    return {
-      available: true,
-      surface: 'meeting_prep',
-      suggestionType: 'meeting_brief',
-      title: '会前准备',
-      summary: `找到 ${evidence.length} 条与本次会议相关的记忆。`,
-      insertText: renderMeetingPilotHandoffText(request, evidence),
-      cueCards,
-      evidence,
-      riskLevel: getMeetingRiskLevel(evidence),
-      previewRequired: false,
-      confidence,
-      queryTimeMs: recall.queryTimeMs,
-      debug: request.debug
-        ? {
-            recall: recall.debug,
-            recallRequest,
-          }
-        : undefined,
-    };
+    const todayPilot = new TodayPilotMeetingPrepService(this.db, this.userId);
+    return todayPilot.resolveFromContextAssist(request);
   }
 }
 
@@ -1318,6 +1276,11 @@ function buildMeetingCueCards(
     });
   }
 
+  const questionCard = buildMeetingQuestionCard(evidence);
+  if (questionCard) {
+    cards.push(questionCard);
+  }
+
   if (request.userGoal?.trim()) {
     cards.push({
       id: 'goal',
@@ -1335,6 +1298,49 @@ function buildMeetingCueCards(
   }
 
   return cards;
+}
+
+function buildMeetingQuestionCard(
+  evidence: ComposerAssistEvidence[],
+): ContextAssistCueCard | null {
+  if (evidence.length === 0) return null;
+
+  const evidenceText = evidence
+    .map((item) =>
+      [item.title, item.sourceTitle, item.snippet].filter(Boolean).join(' '),
+    )
+    .join(' ')
+    .toLowerCase();
+  const questions: string[] = [];
+  const addQuestion = (question: string): void => {
+    if (!questions.includes(question)) questions.push(question);
+  };
+
+  if (/dependency|blocked|blocker|risk|依赖|阻塞|风险/.test(evidenceText)) {
+    addQuestion('依赖或风险现在卡在哪里，owner 和下一步时间点是谁来确认？');
+  }
+  if (
+    /handoff|rollout|launch|progress|交接|上线|发布|进展/.test(evidenceText)
+  ) {
+    addQuestion('交接或推进项的最新状态是否变化，哪些结论需要同步给参会人？');
+  }
+  if (/decision|decided|proposal|方案|决定|结论/.test(evidenceText)) {
+    addQuestion('之前的决定是否仍然成立，有没有新的约束需要调整方案？');
+  }
+  if (/todo|follow.?up|action|next step|承诺|待办|下一步/.test(evidenceText)) {
+    addQuestion('上次承诺的 follow-up 是否完成，今天要不要重新分配 owner？');
+  }
+  if (questions.length === 0) {
+    addQuestion('哪些历史承诺、未关闭问题或风险需要在会中确认？');
+  }
+
+  return {
+    id: 'suggested-questions',
+    kind: 'question',
+    title: '建议带进会议的问题',
+    body: questions.slice(0, 2).join(' '),
+    evidenceIds: evidence.slice(0, 3).map((item) => item.id),
+  };
 }
 
 function buildMeetingFallbackCards(

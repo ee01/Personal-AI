@@ -24,11 +24,14 @@ interface CreateSuggestionBody extends CreateSkillSuggestionInput {}
 interface SuggestionActionBody {
   reason?: string;
   days?: number;
+  reviewConfirmed?: boolean;
 }
 
 interface SyncRunBody {
   platform?: string;
   limit?: number;
+  q?: string;
+  slugs?: string[];
 }
 
 interface LocalPlatformSkillPackage {
@@ -176,6 +179,7 @@ async function runOpenClawSkillSync(
   request: FastifyRequest,
   service: SkillLibraryService,
   limit: number,
+  filter?: { q?: string; slugs?: string[] },
 ): Promise<SkillSyncPlatformResult> {
   const setting = service.getSyncSetting('openclaw');
   if (!setting?.enabled) {
@@ -217,10 +221,27 @@ async function runOpenClawSkillSync(
   const sync = new OpenClawSkillSyncService(openClaw);
   try {
     const list = await sync.listInstalledSkills();
+    const query = filter?.q?.trim().toLowerCase() || '';
+    const slugSet = new Set(
+      (filter?.slugs || []).map((slug) => normalizeSkillSlug(slug)),
+    );
+    const matchesFilter = (skill: {
+      slug: string;
+      title?: string;
+      description?: string;
+    }) => {
+      if (slugSet.size > 0 && !slugSet.has(normalizeSkillSlug(skill.slug))) return false;
+      if (!query) return true;
+      return [skill.slug, skill.title || '', skill.description || '']
+        .join(' ')
+        .toLowerCase()
+        .includes(query);
+    };
     const remoteBySlug = new Map(
       list.skills.map((skill) => [normalizeSkillSlug(skill.slug), skill]),
     );
-    const pullQueue = list.skills.filter((remote) => {
+    const remoteCandidates = list.skills.filter(matchesFilter);
+    const pullQueue = remoteCandidates.filter((remote) => {
       const local = service.getSkillBySlug(remote.slug);
       if (!local) {
         return service.needsPlatformPackageImport({
@@ -260,7 +281,7 @@ async function runOpenClawSkillSync(
       pulled: 0,
       pushed: 0,
       externalChanges: 0,
-      skipped: list.skills.length - pullQueue.length,
+      skipped: remoteCandidates.length - pullQueue.length,
       hasMore: pullQueue.length > selected.length,
       errors: [],
       note: list.notes,
@@ -269,39 +290,21 @@ async function runOpenClawSkillSync(
     for (const item of selected) {
       try {
         const pkg = await sync.exportSkillPackage(item.slug);
-        const local = service.getSkillBySlug(pkg.slug);
-        const imported =
-          local?.status === 'active'
-            ? service.updateActiveSkillFromExternal({
-                platform: 'openclaw',
-                slug: pkg.slug,
-                title: pkg.title || item.title,
-                summary: pkg.description || item.description,
-                version: pkg.version || item.version,
-                skillMd: pkg.skillMd,
-                files: toPackageFiles(pkg.files),
-                sha256: pkg.sha256 || item.sha256,
-                remoteMtime: pkg.mtime || item.mtime,
-                metadata: {
-                  source: 'openclaw_responses',
-                  filePaths: pkg.files.map((file) => file.path),
-                },
-              })
-            : service.importExternalSkillPackage({
-                platform: 'openclaw',
-                slug: pkg.slug,
-                title: pkg.title || item.title,
-                summary: pkg.description || item.description,
-                version: pkg.version || item.version,
-                skillMd: pkg.skillMd,
-                files: toPackageFiles(pkg.files),
-                sha256: pkg.sha256 || item.sha256,
-                remoteMtime: pkg.mtime || item.mtime,
-                metadata: {
-                  source: 'openclaw_responses',
-                  filePaths: pkg.files.map((file) => file.path),
-                },
-              });
+        const imported = service.importExternalSkillPackage({
+          platform: 'openclaw',
+          slug: pkg.slug,
+          title: pkg.title || item.title,
+          summary: pkg.description || item.description,
+          version: pkg.version || item.version,
+          skillMd: pkg.skillMd,
+          files: toPackageFiles(pkg.files),
+          sha256: pkg.sha256 || item.sha256,
+          remoteMtime: pkg.mtime || item.mtime,
+          metadata: {
+            source: 'openclaw_responses',
+            filePaths: pkg.files.map((file) => file.path),
+          },
+        });
         result.processed += 1;
         if (imported.status === 'created_suggestion') result.imported += 1;
         else if (imported.status === 'updated_active') result.pulled += 1;
@@ -321,6 +324,7 @@ async function runOpenClawSkillSync(
     }
 
     for (const active of service.listActiveSyncPackages()) {
+      if (!matchesFilter(active)) continue;
       const remote = remoteBySlug.get(normalizeSkillSlug(active.slug));
       if (remote?.sha256 === active.sha256) continue;
       if (remote && service.isExternalNewerThanSkill(
@@ -452,7 +456,7 @@ async function syncOneActiveSkillToOpenClaw(
       )
     ) {
       const pkg = await sync.exportSkillPackage(remote.slug);
-      service.updateActiveSkillFromExternal({
+      const imported = service.importExternalSkillPackage({
         platform: 'openclaw',
         slug: pkg.slug,
         title: pkg.title || remote.title,
@@ -467,7 +471,13 @@ async function syncOneActiveSkillToOpenClaw(
           filePaths: pkg.files.map((file) => file.path),
         },
       });
-      return { ...result, processed: 1, pulled: 1 };
+      return {
+        ...result,
+        processed: 1,
+        externalChanges: imported.status === 'created_external_change' ? 1 : 0,
+        updated: imported.status === 'updated_binding' ? 1 : 0,
+        skipped: imported.status === 'skipped' ? 1 : 0,
+      };
     }
 
     const pushed = await sync.upsertSkillPackage(skillPackageForPlatform(active));
@@ -590,7 +600,7 @@ function runLocalPlatformSkillSync(
       }
 
       if (service.isExternalNewerThanSkill(existing, local)) {
-        const updated = service.updateActiveSkillFromExternal({
+        const updated = service.importExternalSkillPackage({
           platform,
           slug: local.slug,
           title: local.title,
@@ -603,7 +613,9 @@ function runLocalPlatformSkillSync(
           metadata: { source: 'desktop_app_fs' },
         });
         result.processed += 1;
-        if (updated.status === 'updated_active') result.pulled += 1;
+        if (updated.status === 'created_external_change') result.externalChanges += 1;
+        else if (updated.status === 'created_suggestion') result.imported += 1;
+        else if (updated.status === 'skipped') result.skipped += 1;
         else result.updated += 1;
       }
     } catch (error) {
@@ -669,12 +681,14 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post<{ Params: { id: string } }>(
+  app.post<{ Params: { id: string }; Body: SuggestionActionBody }>(
     '/skills/suggestions/:id/use',
     async (request, reply) => {
       const service = serviceForRequest(request);
       try {
-        const skill = service.useSuggestion(request.params.id);
+        const skill = service.useSuggestion(request.params.id, {
+          reviewConfirmed: Boolean(request.body?.reviewConfirmed),
+        });
         let sync: SkillSyncPlatformResult | undefined;
         if (service.getSyncSetting('openclaw')?.enabled) {
           sync = await syncOneActiveSkillToOpenClaw(request, service, skill.id);
@@ -777,10 +791,14 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
     const active = service.listSkills({ filter: 'active' });
     const requestedPlatform = request.body?.platform || 'all';
     const limit = normalizeSyncLimit(request.body?.limit);
+    const syncFilter = {
+      q: request.body?.q,
+      slugs: Array.isArray(request.body?.slugs) ? request.body.slugs : undefined,
+    };
     const platformResults: SkillSyncPlatformResult[] = [];
 
     if (requestedPlatform === 'all' || requestedPlatform === 'openclaw') {
-      platformResults.push(await runOpenClawSkillSync(request, service, limit));
+      platformResults.push(await runOpenClawSkillSync(request, service, limit, syncFilter));
     }
 
     if (requestedPlatform !== 'all' && requestedPlatform !== 'openclaw') {
@@ -810,6 +828,10 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
         .filter((setting) => setting.enabled)
         .map((setting) => setting.platform),
       limit,
+      filter: {
+        q: syncFilter.q || undefined,
+        slugs: syncFilter.slugs,
+      },
       platforms: platformResults,
     });
   });

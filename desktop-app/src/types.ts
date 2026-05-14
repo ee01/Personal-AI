@@ -21,6 +21,7 @@ export type AutoSyncKind =
   | 'stable_memory'
   | 'mobile_briefing'
   | 'reminder_sync';
+export type BridgeSyncAttemptStatus = 'succeeded' | 'skipped' | 'failed';
 export type BridgeAssistantStatusKind =
   | 'setup_blocker'
   | 'sync_issue'
@@ -105,6 +106,7 @@ export interface BridgeStatus extends BridgeServiceStatus {
     pollIntervalMs: number;
     lastErrorAt?: string;
     lastErrorMessage?: string;
+    recentAttempts: BridgeSyncAttemptLogEntry[];
     tasks: Record<
       'stableMemory' | 'mobileBriefing' | 'reminderSync',
       {
@@ -131,6 +133,17 @@ export interface BridgeStatus extends BridgeServiceStatus {
     memorySyncBound: boolean;
     mobileContextBound: boolean;
   };
+}
+
+export interface BridgeSyncAttemptLogEntry {
+  id: string;
+  kind: AutoSyncKind;
+  trigger: 'auto' | 'manual';
+  status: BridgeSyncAttemptStatus;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  errorMessage?: string;
 }
 
 export interface BridgeBlockingReason {
@@ -193,6 +206,7 @@ export interface BridgeAssistantStatusItem {
   kind: BridgeAssistantStatusKind;
   title: string;
   summary: string;
+  detailLines?: string[];
   count?: number;
   badgeLabel?: string;
   actionHint?: string;

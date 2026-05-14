@@ -115,6 +115,56 @@ async function main() {
       actions.every((action) => action.title === action.label),
       true,
     );
+    const actionRadii = await page.$$eval(
+      '.message-reaction-toolbar .message-reaction-action-btn',
+      (buttons) =>
+        buttons.map((button) => {
+          const style = window.getComputedStyle(button);
+          return {
+            borderTopLeftRadius: style.borderTopLeftRadius,
+            borderBottomLeftRadius: style.borderBottomLeftRadius,
+          };
+        }),
+    );
+    assert.deepEqual(actionRadii[0], {
+      borderTopLeftRadius: '4px',
+      borderBottomLeftRadius: '4px',
+    });
+    assert.equal(
+      actionRadii
+        .slice(1)
+        .every(
+          (radii) =>
+            radii.borderTopLeftRadius === '0px' &&
+            radii.borderBottomLeftRadius === '0px',
+        ),
+      true,
+      'Only the first action should own the segmented toolbar left radius',
+    );
+    const toolbarItemBoxes = await page.$$eval(
+      '.message-reaction-toolbar .message-reaction-action-btn, .message-reaction-toolbar .snooze-icon',
+      (items) =>
+        items.map((item) => ({
+          className: item.className,
+          top: item.getBoundingClientRect().top,
+          bottom: item.getBoundingClientRect().bottom,
+          height: item.getBoundingClientRect().height,
+        })),
+    );
+    const firstBox = toolbarItemBoxes[0];
+    assert.ok(firstBox, 'Expected toolbar item boxes to be measurable');
+    assert.equal(
+      toolbarItemBoxes.every(
+        (box) =>
+          Math.abs(box.top - firstBox.top) <= 0.5 &&
+          Math.abs(box.bottom - firstBox.bottom) <= 0.5 &&
+          Math.abs(box.height - firstBox.height) <= 0.5,
+      ),
+      true,
+      `Toolbar items should share one vertical baseline: ${JSON.stringify(
+        toolbarItemBoxes,
+      )}`,
+    );
 
     await toolbar.hover();
     await page.waitForFunction(
@@ -125,7 +175,57 @@ async function main() {
       { timeout: 4_000 },
     );
 
-    await page.locator('.snooze-icon-btn').hover();
+    const snoozeButton = page.locator('.snooze-icon-btn');
+    assert.equal(await snoozeButton.getAttribute('aria-haspopup'), 'menu');
+    assert.equal(await snoozeButton.getAttribute('aria-expanded'), 'false');
+
+    await snoozeButton.click();
+    await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    assert.equal(
+      await page.locator('.snooze-menu').isVisible(),
+      true,
+      'Clicking Snooze should open the quick menu instead of creating a default reminder',
+    );
+    await page.mouse.click(5, 5);
+    await page.waitForSelector('.snooze-menu', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    assert.equal(await snoozeButton.getAttribute('aria-expanded'), 'false');
+
+    await snoozeButton.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    assert.equal(await snoozeButton.getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('.snooze-menu').getAttribute('role'), 'menu');
+    assert.equal(
+      await page.locator('.snooze-menu button[role="menuitem"]').count(),
+      await page.locator('.snooze-menu button').count(),
+    );
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.classList.contains('snooze-quick-option'),
+      ),
+      true,
+    );
+    await page.keyboard.press('End');
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.classList.contains('snooze-manage-option'),
+      ),
+      true,
+    );
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.snooze-menu', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    assert.equal(await snoozeButton.getAttribute('aria-expanded'), 'false');
+
+    await page.mouse.move(5, 5);
+    await message.hover();
+    await toolbar.waitFor({ state: 'visible', timeout: 5_000 });
+    await snoozeButton.hover();
     await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
     const quickLabels = await page.$$eval('.snooze-quick-option-label', (els) =>
       els.map((el) => el.textContent?.trim()),

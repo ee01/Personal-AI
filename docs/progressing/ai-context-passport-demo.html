@@ -1,0 +1,1081 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Context Passport Demo</title>
+  <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --panel-2: #f0f3f5;
+      --ink: #172026;
+      --muted: #5f6d78;
+      --line: #d9e0e5;
+      --blue: #2b64d8;
+      --green: #167a57;
+      --amber: #a15f05;
+      --red: #b13a2f;
+      --violet: #6c4fc2;
+      --shadow: 0 12px 34px rgba(23, 32, 38, .08);
+      --radius: 8px;
+      --sidebar: 286px;
+      --right: 332px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background: var(--bg);
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 7px;
+      min-height: 34px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      border-color: #b8c5ce;
+      background: #fbfcfd;
+    }
+
+    button.icon {
+      width: 34px;
+      padding: 0;
+    }
+
+    button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: white;
+    }
+
+    button.ghost {
+      background: transparent;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--right);
+      min-height: 58px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 4;
+    }
+
+    .brand, .searchbar, .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 18px;
+      min-height: 58px;
+    }
+
+    .brand {
+      border-right: 1px solid var(--line);
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: linear-gradient(135deg, #1b6f5d, #2b64d8);
+    }
+
+    .searchbox {
+      height: 36px;
+      max-width: 640px;
+      width: min(100%, 640px);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--muted);
+      background: #f9fbfc;
+    }
+
+    .searchbox input {
+      flex: 1;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      min-width: 0;
+    }
+
+    .top-actions {
+      justify-content: flex-end;
+      border-left: 1px solid var(--line);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(22, 122, 87, .12);
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--right);
+      min-height: 0;
+    }
+
+    .left, .right {
+      background: var(--panel);
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .left {
+      border-right: 1px solid var(--line);
+    }
+
+    .right {
+      border-left: 1px solid var(--line);
+    }
+
+    .main {
+      min-width: 0;
+      overflow: auto;
+      padding: 22px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px 10px;
+    }
+
+    .section-title {
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 720;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .thread-list {
+      padding: 0 10px 18px;
+      display: grid;
+      gap: 7px;
+    }
+
+    .thread {
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      cursor: pointer;
+      background: transparent;
+    }
+
+    .thread:hover {
+      background: #f7f9fa;
+    }
+
+    .thread.active {
+      background: #eef5ff;
+      border-color: #c9ddff;
+    }
+
+    .thread-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .thread-title {
+      font-size: 14px;
+      font-weight: 720;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+
+    .thread-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 680;
+      line-height: 1.1;
+      background: var(--panel-2);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      width: max-content;
+    }
+
+    .badge.green { color: var(--green); background: #e8f5ef; }
+    .badge.amber { color: var(--amber); background: #fff2d9; }
+    .badge.blue { color: var(--blue); background: #edf4ff; }
+    .badge.red { color: var(--red); background: #fff0ee; }
+    .badge.violet { color: var(--violet); background: #f2efff; }
+
+    .hero {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero-band {
+      min-height: 132px;
+      padding: 20px 22px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: start;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(90deg, rgba(43, 100, 216, .09), rgba(22, 122, 87, .08)),
+        #fff;
+    }
+
+    .hero-band > * {
+      min-width: 0;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(24px, 3vw, 36px);
+      line-height: 1.08;
+      letter-spacing: 0;
+      max-width: 900px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .hero-sub {
+      margin-top: 10px;
+      color: var(--muted);
+      line-height: 1.48;
+      max-width: 760px;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-bottom: 1px solid var(--line);
+    }
+
+    .metric {
+      padding: 14px 18px;
+      border-right: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .metric:last-child {
+      border-right: 0;
+    }
+
+    .metric-value {
+      font-size: 22px;
+      font-weight: 780;
+      line-height: 1.1;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .body-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
+      gap: 16px;
+      padding: 16px;
+    }
+
+    .body-grid > * {
+      min-width: 0;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 760;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    .passport-items {
+      display: grid;
+      gap: 10px;
+    }
+
+    .passport-item {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 11px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      background: white;
+    }
+
+    .passport-item.dimmed {
+      opacity: .62;
+      background: #fafafa;
+    }
+
+    .item-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: #edf4ff;
+      color: var(--blue);
+      flex: 0 0 auto;
+    }
+
+    .item-kicker {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 740;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: 4px;
+    }
+
+    .item-text {
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .item-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .switch {
+      width: 38px;
+      height: 22px;
+      border-radius: 999px;
+      background: #c9d3dc;
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .switch.on {
+      background: var(--green);
+    }
+
+    .switch::after {
+      content: "";
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: white;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.18);
+      transition: transform .16s ease;
+    }
+
+    .switch.on::after {
+      transform: translateX(16px);
+    }
+
+    .prompt-preview {
+      min-height: 430px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #101820;
+      color: #d8e5ec;
+      padding: 14px;
+      overflow: auto;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .right-block {
+      border-bottom: 1px solid var(--line);
+      padding: 16px;
+    }
+
+    .right-block:last-child {
+      border-bottom: 0;
+    }
+
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .provider {
+      min-height: 54px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 9px;
+      display: grid;
+      gap: 3px;
+      cursor: pointer;
+      background: white;
+    }
+
+    .provider.active {
+      border-color: #8fb2ff;
+      background: #edf4ff;
+    }
+
+    .provider strong {
+      font-size: 13px;
+    }
+
+    .provider span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .slider-line {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--blue);
+    }
+
+    .evidence-list {
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .evidence {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+      background: #fff;
+    }
+
+    .evidence-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .evidence-title {
+      font-size: 13px;
+      font-weight: 720;
+      line-height: 1.25;
+    }
+
+    .evidence-text {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .timeline {
+      margin-top: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+    }
+
+    .step {
+      padding: 14px;
+      border-right: 1px solid var(--line);
+      min-height: 94px;
+    }
+
+    .step:last-child {
+      border-right: 0;
+    }
+
+    .step strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .step span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      min-width: 260px;
+      max-width: min(360px, calc(100vw - 44px));
+      border-radius: 8px;
+      background: #172026;
+      color: white;
+      box-shadow: 0 16px 44px rgba(23,32,38,.24);
+      padding: 12px 14px;
+      display: none;
+      z-index: 8;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 1120px) {
+      :root {
+        --sidebar: 250px;
+        --right: 300px;
+      }
+
+      .body-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .prompt-preview {
+        min-height: 260px;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .topbar, .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .brand, .top-actions, .left, .right {
+        border: 0;
+      }
+
+      .topbar {
+        position: relative;
+      }
+
+      .brand, .searchbar, .top-actions {
+        min-height: 52px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+
+      .workspace {
+        display: block;
+      }
+
+      .left, .right {
+        max-height: none;
+      }
+
+      .thread-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .hero-band {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-actions {
+        justify-content: flex-start;
+      }
+
+      .metrics, .steps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 560px) {
+      .main {
+        padding: 14px;
+        max-width: 100vw;
+        overflow-x: hidden;
+      }
+
+      .hero {
+        max-width: calc(100vw - 28px);
+      }
+
+      .hero-band {
+        padding: 20px 18px;
+      }
+
+      .thread-list, .provider-grid, .metrics, .steps {
+        grid-template-columns: 1fr;
+      }
+
+      .passport-item {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+
+      .item-actions {
+        grid-column: 2;
+      }
+
+      h1 {
+        font-size: 22px;
+        line-height: 1.15;
+        max-width: min(100%, 250px);
+      }
+
+      .hero-sub {
+        max-width: min(100%, 280px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><i data-lucide="passport"></i></div>
+        <span>AI Context Passport</span>
+      </div>
+      <div class="searchbar">
+        <label class="searchbox" aria-label="Search passports">
+          <i data-lucide="search" size="17"></i>
+          <input id="search" value="Jira Epic monthly trend" />
+        </label>
+      </div>
+      <div class="top-actions">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="badge green">Memory online</span>
+        <button class="icon" title="Refresh"><i data-lucide="refresh-cw" size="17"></i></button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="left">
+        <div class="section-head">
+          <div class="section-title">Active Threads</div>
+          <button class="icon" title="Create passport"><i data-lucide="plus" size="17"></i></button>
+        </div>
+        <div class="thread-list" id="threadList">
+          <div class="thread active" data-thread="jira">
+            <div class="thread-top">
+              <div class="thread-title">Jira Epic trend handoff</div>
+              <span class="badge blue">ready</span>
+            </div>
+            <div class="thread-meta">Codex target · 9 evidence · refreshed 2 min ago</div>
+          </div>
+          <div class="thread" data-thread="meeting">
+            <div class="thread-top">
+              <div class="thread-title">AI Notes meeting prep</div>
+              <span class="badge amber">review</span>
+            </div>
+            <div class="thread-meta">Meeting Pilot target · 5 evidence · stale in 1h</div>
+          </div>
+          <div class="thread" data-thread="doubao">
+            <div class="thread-top">
+              <div class="thread-title">Doubao sync failure follow-up</div>
+              <span class="badge green">used</span>
+            </div>
+            <div class="thread-meta">ChatGPT target · 7 evidence · result ingested</div>
+          </div>
+          <div class="thread" data-thread="research">
+            <div class="thread-top">
+              <div class="thread-title">Memory layer research spike</div>
+              <span class="badge violet">draft</span>
+            </div>
+            <div class="thread-meta">OpenClaw target · 12 sources · needs summary</div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="hero">
+          <div class="hero-band">
+            <div>
+              <div class="eyebrow">Passport Preview</div>
+              <h1 id="passportTitle">Continue Jira Epic monthly trend work in Codex</h1>
+              <div class="hero-sub" id="passportSub">
+                Personal AI condensed related AI chats, Jira constraints, Google Sheet expectations, user role preferences, and verified decisions into a portable execution brief.
+              </div>
+            </div>
+            <div class="hero-actions">
+              <button class="ghost" id="staleBtn"><i data-lucide="clock-3" size="17"></i>Mark stale</button>
+              <button id="copyBtn"><i data-lucide="copy" size="17"></i>Copy prompt</button>
+              <button class="primary" id="injectBtn"><i data-lucide="send" size="17"></i>Inject to current AI</button>
+            </div>
+          </div>
+
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-value" id="tokenMetric">1.7k</div>
+              <div class="metric-label">Estimated tokens</div>
+            </div>
+            <div class="metric">
+              <div class="metric-value" id="evidenceMetric">9</div>
+              <div class="metric-label">Evidence selected</div>
+            </div>
+            <div class="metric">
+              <div class="metric-value">2</div>
+              <div class="metric-label">Needs review</div>
+            </div>
+            <div class="metric">
+              <div class="metric-value" id="freshMetric">43m</div>
+              <div class="metric-label">Freshness window</div>
+            </div>
+          </div>
+
+          <div class="body-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><i data-lucide="list-checks" size="17"></i>Passport Items</div>
+                <span class="badge green">export policy checked</span>
+              </div>
+              <div class="panel-body">
+                <div class="passport-items" id="passportItems"></div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><i data-lucide="terminal-square" size="17"></i>Rendered Prompt</div>
+                <span class="badge blue" id="modeLabel">Codex · low-token</span>
+              </div>
+              <div class="panel-body">
+                <div class="prompt-preview" id="promptPreview"></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="timeline">
+          <div class="panel-header">
+            <div class="panel-title"><i data-lucide="route" size="17"></i>Handoff Timeline</div>
+            <button class="icon" title="Open timeline"><i data-lucide="external-link" size="16"></i></button>
+          </div>
+          <div class="steps">
+            <div class="step">
+              <strong>Chat thread captured</strong>
+              <span>AI Service conversation recognized the Q3-Q1 Epic trend scope.</span>
+            </div>
+            <div class="step">
+              <strong>Decision confirmed</strong>
+              <span>User changed output to monthly only and kept `customfield_10422`.</span>
+            </div>
+            <div class="step">
+              <strong>Passport rendered</strong>
+              <span>Context condensed for Codex with Jira and Sheet constraints.</span>
+            </div>
+            <div class="step">
+              <strong>Waiting for result</strong>
+              <span>Codex result can be ingested back as an action outcome.</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside class="right">
+        <div class="right-block">
+          <div class="section-title">Target AI</div>
+          <div class="provider-grid" id="providerGrid">
+            <div class="provider active" data-provider="Codex"><strong>Codex</strong><span>Implementation brief</span></div>
+            <div class="provider" data-provider="ChatGPT"><strong>ChatGPT</strong><span>Exploration brief</span></div>
+            <div class="provider" data-provider="Doubao"><strong>豆包</strong><span>Short context note</span></div>
+            <div class="provider" data-provider="OpenClaw"><strong>OpenClaw</strong><span>Tool-ready plan</span></div>
+          </div>
+          <div class="slider-line">
+            <label for="budget">Token budget</label>
+            <strong id="budgetValue">1800</strong>
+          </div>
+          <input id="budget" type="range" min="800" max="4200" step="100" value="1800" />
+        </div>
+
+        <div class="right-block">
+          <div class="section-title">Sensitive Items</div>
+          <div class="evidence-list">
+            <div class="evidence">
+              <div class="evidence-top">
+                <div class="evidence-title">Work-sensitive links</div>
+                <span class="badge amber">ask</span>
+              </div>
+              <div class="evidence-text">Internal wiki, meeting URLs, and private RingCentral messages are masked unless selected.</div>
+            </div>
+            <div class="evidence">
+              <div class="evidence-top">
+                <div class="evidence-title">Personal profile</div>
+                <span class="badge green">safe</span>
+              </div>
+              <div class="evidence-text">Only task-relevant role and timezone are included by default.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="right-block">
+          <div class="section-title">Evidence</div>
+          <div class="evidence-list" id="evidenceList"></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = {
+      provider: "Codex",
+      thread: "jira",
+      items: [
+        { kind: "Mission", icon: "target", text: "Run a monthly-only Epic trend dry run for 2025 Q3 through 2026 Q1, then prepare a Google Sheet update plan.", selected: true },
+        { kind: "Confirmed decision", icon: "check-circle-2", text: "User rejected quarterly output. Keep only monthly metrics and show the actual JQL before writing back.", selected: true },
+        { kind: "Tool context", icon: "wrench", text: "Jira project is Nova. Story Points field is customfield_10422. Child ticket lookup uses \"Epic Link\" = {EPIC_KEY}.", selected: true },
+        { kind: "User preference", icon: "user-round-cog", text: "User is Scrum Master Esone Qiu, timezone Asia/Shanghai, prefers concise execution plans with evidence and commands.", selected: true },
+        { kind: "Do not repeat", icon: "ban", text: "Do not ask again whether quarterly output is needed unless data quality requires a scope decision.", selected: true },
+        { kind: "Sensitive source", icon: "shield-alert", text: "Internal RingCentral message links are available as evidence but should not be pasted to external AI by default.", selected: false }
+      ],
+      evidence: [
+        { title: "AI Service chat", tag: "glip", text: "User confirmed monthly-only scope and Q3 2025 to Q1 2026 range." },
+        { title: "Memory profile", tag: "profile", text: "Role: scrum master. Timezone: Asia/Shanghai." },
+        { title: "Context Assist docs", tag: "repo", text: "Composer Guard already supports AI input surfaces and can host passport preview." },
+        { title: "Desktop App bridge", tag: "repo", text: "Provider-neutral context package rendering and explorer ingestion already exist." }
+      ]
+    };
+
+    const promptTemplates = {
+      Codex: ({ budget }) => `You are continuing an existing Personal AI task.\n\nMISSION\nRun a monthly-only Jira Epic trend dry run for 2025 Q3 through 2026 Q1, then prepare a Google Sheet update plan.\n\nCONFIRMED DECISIONS\n- Monthly output only. Do not include quarterly tables.\n- Time range: 2025-07-01 through 2026-03-31.\n- Show the JQL used before writing back.\n\nJIRA CONTEXT\n- Project: Nova\n- Epic query template:\n  project = Nova AND issuetype = Epic AND status in (Closed) AND resolutiondate >= "YYYY-MM-01" AND resolutiondate <= "YYYY-MM-DD"\n- Child ticket query:\n  "Epic Link" = {EPIC_KEY}\n- Story Points field: customfield_10422\n\nUSER PREFERENCE\nBe concise. Explain assumptions. Avoid repeating questions already answered.\n\nOUTPUT CONTRACT\n1. Dry run result by month.\n2. JQL used for each month.\n3. Data quality issues.\n4. Proposed Google Sheet writeback shape.\n\nToken budget target: ${budget}.`,
+      ChatGPT: ({ budget }) => `Help explore the next best approach for this Personal AI task.\n\nThe user wants to continue a Jira Epic monthly trend analysis. They already decided monthly-only output, Q3 2025 to Q1 2026, and Story Points from customfield_10422.\n\nUse the provided evidence as constraints, identify missing decisions, and propose the simplest safe next step.\n\nBudget: ${budget} tokens.`,
+      Doubao: ({ budget }) => `请记住这次任务上下文：用户正在做 Jira Epic 月度趋势统计，只要月度，不要季度；范围是 2025 Q3 到 2026 Q1；Story Points 字段是 customfield_10422；需要先展示 JQL 和 dry run 结果，再决定是否写回 Google Sheet。请后续回答时不要重复询问这些已确认信息。\n\n预算：${budget} tokens。`,
+      OpenClaw: ({ budget }) => `# Personal AI Context Passport\n\n## Goal\nContinue Jira Epic monthly trend task and produce a tool-ready execution plan.\n\n## Known constraints\n- Monthly only\n- 2025 Q3 to 2026 Q1\n- Project Nova\n- Story Points: customfield_10422\n- Show JQL before writeback\n\n## Tools expected\n- Jira search\n- Google Sheet update only after dry run review\n- Memory writeback with action outcome\n\n## Return\nA concise plan, exact commands/JQL, and writeback notes.\n\nBudget: ${budget}`
+    };
+
+    const threadCopy = {
+      jira: {
+        title: "Continue Jira Epic monthly trend work in Codex",
+        sub: "Personal AI condensed related AI chats, Jira constraints, Google Sheet expectations, user role preferences, and verified decisions into a portable execution brief.",
+        evidence: 9,
+        fresh: "43m"
+      },
+      meeting: {
+        title: "Bring AI Notes context into Meeting Pilot",
+        sub: "A meeting-ready passport with prior decisions, participants, open questions, and action items for the next AI Notes discussion.",
+        evidence: 5,
+        fresh: "1h"
+      },
+      doubao: {
+        title: "Follow up Doubao memory sync failure",
+        sub: "A troubleshooting passport built from local app logs, reminder notes, and the completed sync issue investigation.",
+        evidence: 7,
+        fresh: "2d"
+      },
+      research: {
+        title: "Continue memory layer research in OpenClaw",
+        sub: "A research passport linking memory papers, product references, project goals, and implementation hypotheses.",
+        evidence: 12,
+        fresh: "6h"
+      }
+    };
+
+    function renderItems() {
+      const box = document.getElementById("passportItems");
+      box.innerHTML = state.items.map((item, index) => `
+        <div class="passport-item ${item.selected ? "" : "dimmed"}">
+          <div class="item-icon"><i data-lucide="${item.icon}" size="16"></i></div>
+          <div>
+            <div class="item-kicker">${item.kind}</div>
+            <div class="item-text">${item.text}</div>
+          </div>
+          <div class="item-actions">
+            <button class="icon" title="Open source"><i data-lucide="external-link" size="15"></i></button>
+            <div class="switch ${item.selected ? "on" : ""}" role="switch" aria-checked="${item.selected}" data-index="${index}"></div>
+          </div>
+        </div>
+      `).join("");
+      document.querySelectorAll(".switch").forEach((sw) => {
+        sw.addEventListener("click", () => {
+          const idx = Number(sw.dataset.index);
+          state.items[idx].selected = !state.items[idx].selected;
+          renderAll();
+        });
+      });
+    }
+
+    function renderEvidence() {
+      const box = document.getElementById("evidenceList");
+      box.innerHTML = state.evidence.map((item) => `
+        <div class="evidence">
+          <div class="evidence-top">
+            <div class="evidence-title">${item.title}</div>
+            <span class="badge blue">${item.tag}</span>
+          </div>
+          <div class="evidence-text">${item.text}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderPrompt() {
+      const budget = document.getElementById("budget").value;
+      document.getElementById("budgetValue").textContent = budget;
+      document.getElementById("tokenMetric").textContent = `${(budget / 1000).toFixed(1)}k`;
+      document.getElementById("modeLabel").textContent = `${state.provider} · low-token`;
+      document.getElementById("promptPreview").textContent = promptTemplates[state.provider]({ budget });
+    }
+
+    function renderThread() {
+      const copy = threadCopy[state.thread];
+      document.getElementById("passportTitle").textContent = copy.title;
+      document.getElementById("passportSub").textContent = copy.sub;
+      document.getElementById("evidenceMetric").textContent = copy.evidence;
+      document.getElementById("freshMetric").textContent = copy.fresh;
+    }
+
+    function renderAll() {
+      renderThread();
+      renderItems();
+      renderEvidence();
+      renderPrompt();
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2400);
+    }
+
+    document.getElementById("budget").addEventListener("input", renderPrompt);
+
+    document.getElementById("providerGrid").addEventListener("click", (event) => {
+      const provider = event.target.closest(".provider");
+      if (!provider) return;
+      document.querySelectorAll(".provider").forEach((p) => p.classList.remove("active"));
+      provider.classList.add("active");
+      state.provider = provider.dataset.provider;
+      renderPrompt();
+      showToast(`Rendered passport for ${state.provider}.`);
+    });
+
+    document.getElementById("threadList").addEventListener("click", (event) => {
+      const thread = event.target.closest(".thread");
+      if (!thread) return;
+      document.querySelectorAll(".thread").forEach((t) => t.classList.remove("active"));
+      thread.classList.add("active");
+      state.thread = thread.dataset.thread;
+      renderThread();
+      showToast("Passport switched.");
+    });
+
+    document.getElementById("copyBtn").addEventListener("click", () => showToast("Prompt copied in demo mode."));
+    document.getElementById("injectBtn").addEventListener("click", () => showToast("Passport would be injected after user confirmation."));
+    document.getElementById("staleBtn").addEventListener("click", () => showToast("Passport marked stale in demo mode."));
+
+    renderAll();
+    window.addEventListener("load", () => {
+      if (window.lucide) lucide.createIcons();
+    });
+  </script>
+</body>
+</html>

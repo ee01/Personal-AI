@@ -12,9 +12,28 @@ import {
   buildSheetUrl,
   getManualBindSheetInputFeedback,
 } from '../manualBindSheetInput';
+import {
+  formatConfigSyncTimestamp,
+} from '../configSyncFreshness';
+import {
+  getManualBindDecision,
+  getManualBindRestoreScope,
+} from '../manualBindConfigDecision';
+import type {
+  ManualBindDecision,
+  ManualBindWriteMode,
+} from '../manualBindConfigDecision';
 
 interface OneClickSetupProps {
   onComplete: (result: InitializationResult) => void;
+}
+
+function formatSheetIdForDisplay(sheetId: string): string {
+  if (sheetId.length <= 20) {
+    return sheetId;
+  }
+
+  return `${sheetId.slice(0, 10)}...${sheetId.slice(-6)}`;
 }
 
 export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
@@ -28,6 +47,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const [tempResult, setTempResult] = useState<InitializationResult | null>(null);
   const [needsAppScriptAPI, setNeedsAppScriptAPI] = useState(false);
   const [appScriptAPIUrl, setAppScriptAPIUrl] = useState('');
+  const [manualBindDecision, setManualBindDecision] = useState<ManualBindDecision | null>(null);
   const manualBindFeedback = getManualBindSheetInputFeedback(manualSheetUrl);
   
   const handleOneClickSetup = async () => {
@@ -127,6 +147,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
     
     setIsInitializing(true);
     setError('');
+    setManualBindDecision(null);
     setCurrentStep('正在验证 Sheet 地址...');
     
     try {
@@ -143,10 +164,35 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       if (!token) {
         throw new Error('无法获取 Google 授权');
       }
+      setAuthToken(token);
       
       // 使用 ConfigSyncService 从 Sheet 读取完整配置
       const { ConfigSyncService } = await import('../ConfigSyncService');
-      const syncService = new ConfigSyncService(token);
+      const syncService = new ConfigSyncService(token || '');
+      const localConfig = await syncService.readConfigFromStorage().catch((storageError) => {
+        console.warn('读取本地配置失败，将继续按 Sheet 恢复:', storageError);
+        return null;
+      });
+      const pauseForManualBindDecision = (
+        nextSheetConfig: SheetConfig,
+        writeMode: ManualBindWriteMode
+      ): boolean => {
+        const decision = getManualBindDecision({
+          localConfig,
+          sheetConfig: nextSheetConfig,
+          canonicalSheetUrl,
+          writeMode,
+        });
+
+        if (!decision) {
+          return false;
+        }
+
+        setManualBindDecision(decision);
+        setCurrentStep('');
+        setIsInitializing(false);
+        return true;
+      };
       
       setCurrentStep('正在读取 Sheet Config 工作表...');
       let sheetConfig: Partial<SheetConfig>;
@@ -175,7 +221,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
           console.warn('读取 Messages/Logs 工作表 ID 失败，将仅保存基础绑定信息:', idError);
           return {};
         });
-        await syncService.syncConfig({
+        const minimalConfig: SheetConfig = {
           sheetId,
           sheetUrl: canonicalSheetUrl,
           messagesSheetId: worksheetIds.messagesSheetId,
@@ -183,12 +229,16 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
           sheet_version: '2.0',
           created_by: 'Manual',
           created_at: new Date().toISOString()
-        });
+        };
+        if (pauseForManualBindDecision(minimalConfig, 'sync')) {
+          return;
+        }
+        await syncService.syncConfig(minimalConfig);
       } else {
         const needsMessagesSheetId = sheetConfig.messagesSheetId === undefined || sheetConfig.messagesSheetId === null;
         const needsLogsSheetId = sheetConfig.logsSheetId === undefined || sheetConfig.logsSheetId === null;
         let recoveredConfig = sheetConfig;
-        let wroteRecoveredConfig = false;
+        let shouldWriteRecoveredConfig = false;
 
         if (needsMessagesSheetId || needsLogsSheetId) {
           try {
@@ -199,16 +249,22 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
               (needsLogsSheetId && recoveredConfig.logsSheetId !== undefined && recoveredConfig.logsSheetId !== null);
 
             if (recoveredWorksheetIds) {
-              setCurrentStep('正在把子表定位写回 Config...');
-              await syncService.syncConfig(recoveredConfig as SheetConfig);
-              wroteRecoveredConfig = true;
+              shouldWriteRecoveredConfig = true;
             }
           } catch (idError) {
             console.warn('读取 Messages/Logs 工作表 ID 失败，将仅恢复已有 Config:', idError);
           }
         }
 
-        if (!wroteRecoveredConfig) {
+        const writeMode: ManualBindWriteMode = shouldWriteRecoveredConfig ? 'sync' : 'storage';
+        if (pauseForManualBindDecision(recoveredConfig as SheetConfig, writeMode)) {
+          return;
+        }
+
+        if (writeMode === 'sync') {
+          setCurrentStep('正在把子表定位写回 Config...');
+          await syncService.syncConfig(recoveredConfig as SheetConfig);
+        } else {
           // 保存从 Sheet 读取的完整配置到 Chrome Storage
           setCurrentStep('正在恢复本地配置...');
           await syncService.saveConfigToStorage(recoveredConfig as any);
@@ -218,16 +274,95 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       }
       
       // 刷新页面
-      setCurrentStep('配置绑定成功，正在刷新...');
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
+      completeManualBind();
       
     } catch (err: any) {
       console.error('绑定 Sheet 失败:', err);
       setError(getManualBindErrorMessage(err));
       setIsInitializing(false);
     }
+  };
+
+  const completeManualBind = () => {
+    setManualBindDecision(null);
+    setCurrentStep('配置绑定成功，正在刷新...');
+    setTimeout(() => {
+      window.location.reload();
+    }, 1000);
+  };
+
+  const handleKeepLocalConfig = async () => {
+    if (!manualBindDecision || manualBindDecision.kind !== 'local-newer') {
+      return;
+    }
+
+    setIsInitializing(true);
+    setError('');
+    setCurrentStep('正在保留本机配置并同步到 Sheet...');
+
+    try {
+      const token = authToken || await getAuthTokenWithForceRefresh();
+      if (!token) {
+        throw new Error('无法获取 Google 授权');
+      }
+
+      const { ConfigSyncService } = await import('../ConfigSyncService');
+      const syncService = new ConfigSyncService(token || '');
+      await syncService.syncConfig({
+        ...manualBindDecision.localConfig,
+        sheetId: manualBindDecision.sheetConfig.sheetId,
+        sheetUrl: manualBindDecision.canonicalSheetUrl,
+      });
+      completeManualBind();
+    } catch (err: any) {
+      console.error('同步本机配置到 Sheet 失败:', err);
+      setError(getManualBindErrorMessage(err));
+      setIsInitializing(false);
+    }
+  };
+
+  const handleUsePendingSheetConfig = async () => {
+    if (!manualBindDecision) {
+      return;
+    }
+
+    setIsInitializing(true);
+    setError('');
+    setCurrentStep(
+      manualBindDecision.writeMode === 'sync'
+        ? '正在写回 Config 并恢复本机...'
+        : '正在用 Sheet 配置恢复本机...'
+    );
+
+    try {
+      const { ConfigSyncService } = await import('../ConfigSyncService');
+      const token = manualBindDecision.writeMode === 'sync'
+        ? authToken || await getAuthTokenWithForceRefresh()
+        : authToken || '';
+
+      if (manualBindDecision.writeMode === 'sync' && !token) {
+        throw new Error('无法获取 Google 授权');
+      }
+
+      const syncService = new ConfigSyncService(token || '');
+      if (manualBindDecision.writeMode === 'sync') {
+        await syncService.syncConfig(manualBindDecision.sheetConfig);
+      } else {
+        await syncService.saveConfigToStorage(manualBindDecision.sheetConfig);
+      }
+      completeManualBind();
+    } catch (err: any) {
+      console.error('用 Sheet 恢复本机配置失败:', err);
+      setError(getManualBindErrorMessage(err));
+      setIsInitializing(false);
+    }
+  };
+
+  const handleCancelManualBindDecision = () => {
+    setManualBindDecision(null);
+    setCurrentStep('');
+    setIsInitializing(false);
+    setError('');
   };
   
   // Google Auth Token 已迁移到 utils/googleAuth.ts
@@ -261,6 +396,12 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
 
   const manualBindInputHasValue = Boolean(manualSheetUrl.trim());
   const manualBindDisabled = isInitializing || !manualBindFeedback.sheetId;
+  const manualBindDisplayId = manualBindFeedback.sheetId
+    ? formatSheetIdForDisplay(manualBindFeedback.sheetId)
+    : '';
+  const manualBindRestoreScope = manualBindDecision
+    ? getManualBindRestoreScope(manualBindDecision.sheetConfig)
+    : [];
   
   return (
     <div style={styles.container}>
@@ -442,8 +583,19 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                 <div
                   style={manualBindFeedback.error ? styles.inputErrorHint : styles.inputPreview}
                   role={manualBindFeedback.error ? 'alert' : 'status'}
+                  aria-live="polite"
                 >
-                  {manualBindFeedback.error || `将绑定到 Sheet ID：${manualBindFeedback.sheetId}`}
+                  {manualBindFeedback.error ? (
+                    manualBindFeedback.error
+                  ) : (
+                    <>
+                      <div style={styles.inputPreviewTitle}>识别到维护表：{manualBindDisplayId}</div>
+                      <div style={styles.inputPreviewMeta}>{manualBindFeedback.canonicalSheetUrl}</div>
+                      <div style={styles.inputPreviewBody}>
+                        绑定后会从 Config 恢复 Web App、触发器、Bot Automation 和 Messages/Logs 定位。
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               <div style={styles.inputGroup}>
@@ -451,13 +603,17 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                   type="text"
                   placeholder="粘贴 Sheet URL 或 Sheet ID..."
                   value={manualSheetUrl}
-                  onChange={(e) => setManualSheetUrl(e.target.value)}
+                  onChange={(e) => {
+                    setManualSheetUrl(e.target.value);
+                    setManualBindDecision(null);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !manualBindDisabled) {
                       void handleManualBind();
                     }
                   }}
                   disabled={isInitializing}
+                  aria-invalid={Boolean(manualBindFeedback.error)}
                   style={styles.input}
                 />
                 <button 
@@ -477,6 +633,78 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                   {manualBindFeedback.sheetId ? '绑定已有表' : '等待有效链接'}
                 </button>
               </div>
+              {manualBindDecision && (
+                <div
+                  style={manualBindDecision.kind === 'different-sheet' ? styles.switchNotice : styles.conflictNotice}
+                  role="alert"
+                >
+                  {manualBindDecision.kind === 'different-sheet' ? (
+                    <>
+                      <div style={styles.conflictTitle}>将切换维护表</div>
+                      <div style={styles.conflictBody}>
+                        当前本机：{formatSheetIdForDisplay(manualBindDecision.localConfig.sheetId)}
+                      </div>
+                      <div style={styles.conflictBody}>
+                        新维护表：{formatSheetIdForDisplay(manualBindDecision.sheetConfig.sheetId)}
+                      </div>
+                      <div style={styles.conflictBody}>
+                        继续后会用新维护表恢复本机配置；当前本机配置不会写入新表。
+                      </div>
+                      <div style={styles.scopeList}>
+                        {manualBindRestoreScope.map((item) => (
+                          <span key={item} style={styles.scopeItem}>{item}</span>
+                        ))}
+                      </div>
+                      <div style={styles.conflictActions}>
+                        <button
+                          style={styles.warningButton}
+                          onClick={handleUsePendingSheetConfig}
+                        >
+                          继续绑定新表
+                        </button>
+                        <button
+                          style={styles.plainButton}
+                          onClick={handleCancelManualBindDecision}
+                        >
+                          取消，保留本机
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={styles.conflictTitle}>本机配置比 Sheet 更新</div>
+                      <div style={styles.conflictBody}>
+                        本机同步时间：{formatConfigSyncTimestamp(manualBindDecision.localConfig.last_sync_time)}
+                      </div>
+                      <div style={styles.conflictBody}>
+                        Sheet 同步时间：{formatConfigSyncTimestamp(manualBindDecision.sheetConfig.last_sync_time)}
+                      </div>
+                      <div style={styles.conflictBody}>
+                        请选择保留本机最新配置并写回 Sheet，或继续用 Sheet 恢复本机。
+                      </div>
+                      <div style={styles.scopeList}>
+                        {manualBindRestoreScope.map((item) => (
+                          <span key={item} style={styles.scopeItem}>{item}</span>
+                        ))}
+                      </div>
+                      <div style={styles.conflictActions}>
+                        <button
+                          style={styles.warningButton}
+                          onClick={handleKeepLocalConfig}
+                        >
+                          保留本机并同步到 Sheet
+                        </button>
+                        <button
+                          style={styles.plainButton}
+                          onClick={handleUsePendingSheetConfig}
+                        >
+                          仍用 Sheet 恢复本机
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
             
             {error && (
@@ -596,6 +824,19 @@ const styles: { [key: string]: React.CSSProperties } = {
     marginBottom: '10px',
     overflowWrap: 'anywhere',
   },
+  inputPreviewTitle: {
+    fontWeight: 600,
+    marginBottom: '4px',
+  },
+  inputPreviewMeta: {
+    color: '#2f6f3e',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    marginBottom: '6px',
+  },
+  inputPreviewBody: {
+    lineHeight: 1.5,
+  },
   inputErrorHint: {
     fontSize: '12px',
     color: '#721c24',
@@ -630,6 +871,71 @@ const styles: { [key: string]: React.CSSProperties } = {
   disabledButton: {
     backgroundColor: '#adb5bd',
     cursor: 'not-allowed',
+  },
+  conflictNotice: {
+    marginTop: '12px',
+    padding: '12px',
+    backgroundColor: '#fff3cd',
+    border: '1px solid #ffe08a',
+    borderRadius: '6px',
+    color: '#664d03',
+    fontSize: '13px',
+    lineHeight: 1.5,
+  },
+  switchNotice: {
+    marginTop: '12px',
+    padding: '12px',
+    backgroundColor: '#e7f3ff',
+    border: '1px solid #b3d7ff',
+    borderRadius: '6px',
+    color: '#17415f',
+    fontSize: '13px',
+    lineHeight: 1.5,
+  },
+  conflictTitle: {
+    fontWeight: 700,
+    marginBottom: '6px',
+  },
+  conflictBody: {
+    marginBottom: '4px',
+  },
+  conflictActions: {
+    display: 'flex',
+    gap: '8px',
+    flexWrap: 'wrap',
+    marginTop: '10px',
+  },
+  scopeList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginTop: '8px',
+  },
+  scopeItem: {
+    padding: '3px 7px',
+    borderRadius: '999px',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    border: '1px solid rgba(0,0,0,0.08)',
+    fontSize: '12px',
+    color: 'inherit',
+  },
+  warningButton: {
+    padding: '9px 12px',
+    fontSize: '13px',
+    color: '#212529',
+    backgroundColor: '#ffc107',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+  plainButton: {
+    padding: '9px 12px',
+    fontSize: '13px',
+    color: '#495057',
+    backgroundColor: '#fff',
+    border: '1px solid #ced4da',
+    borderRadius: '6px',
+    cursor: 'pointer',
   },
   completeButton: {
     padding: '15px',

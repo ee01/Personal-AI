@@ -158,6 +158,7 @@ try {
   });
 
   const panelPage = await context.newPage();
+  await panelPage.setViewportSize({ width: 440, height: 760 });
   await panelPage.goto(
     `chrome-extension://${extensionId}/meeting-sidepanel.html?scene2Probe=1`,
     { waitUntil: 'load' },
@@ -181,6 +182,32 @@ try {
     },
     undefined,
     { timeout: 15000 },
+  );
+  const panelLayout = await panelPage.evaluate(() => {
+    const shell = document.querySelector('.meeting-shell');
+    const shellElement = shell instanceof HTMLElement ? shell : null;
+    return {
+      viewportWidth: window.innerWidth,
+      shellWidth: shellElement?.offsetWidth || 0,
+      shellLeft: shellElement?.offsetLeft || 0,
+      shellRightGap: shellElement
+        ? window.innerWidth - shellElement.offsetLeft - shellElement.offsetWidth
+        : -1,
+      isWindowSurface: Boolean(shell?.classList.contains('surface-window')),
+    };
+  });
+  assert.equal(
+    panelLayout.isWindowSurface,
+    true,
+    '独立 side panel 页面缺少 window surface 标记',
+  );
+  assert.ok(
+    panelLayout.shellWidth >= panelLayout.viewportWidth - 1,
+    `独立窗口未占满紧凑视口: ${JSON.stringify(panelLayout)}`,
+  );
+  assert.ok(
+    panelLayout.shellLeft <= 1 && panelLayout.shellRightGap <= 1,
+    `独立窗口仍存在大面积边缘空白: ${JSON.stringify(panelLayout)}`,
   );
 
   await panelPage.evaluate(async () => {
@@ -314,11 +341,93 @@ try {
     `行动项未展示 transcript 依据: ${actionText}`,
   );
   assert.match(actionText, /待复核/, `行动项未进入用户复核状态: ${actionText}`);
-  const firstActionId = await panelPage
-    .locator('.action-card')
-    .first()
-    .getAttribute('data-action-id');
+  assert.match(
+    actionText,
+    /确认并完成/,
+    `未复核行动项的完成按钮没有显式确认语义: ${actionText}`,
+  );
+  const actionReviewStates = await panelPage.evaluate(() =>
+    Array.from(document.querySelectorAll('.action-card')).map((card) => ({
+      id: card.getAttribute('data-action-id') || '',
+      text: card.textContent || '',
+      warnings: Array.from(card.querySelectorAll('.ac-review-warning')).map(
+        (warning) => warning.textContent || '',
+      ),
+    })),
+  );
+  const confirmableAction = actionReviewStates.find(
+    (item) => item.id && item.warnings.length === 0,
+  );
+  const blockedAction = actionReviewStates.find(
+    (item) => item.id && item.warnings.length > 0,
+  );
+  assert.ok(
+    confirmableAction,
+    `没有可批量确认的完整行动项: ${JSON.stringify(actionReviewStates)}`,
+  );
+  assert.ok(
+    blockedAction,
+    `没有覆盖缺信息行动项: ${JSON.stringify(actionReviewStates)}`,
+  );
+  assert.ok(
+    blockedAction.warnings.some((warning) => /补截止|补负责人|缺依据/.test(warning)),
+    `缺信息行动项未展示复核提示: ${JSON.stringify(blockedAction)}`,
+  );
+  await panelPage.locator('[data-action-filter="needs-info"]').click();
+  await panelPage.waitForFunction(
+    (actionId) => {
+      const card = document.querySelector(`[data-action-id="${actionId}"]`);
+      return card?.textContent?.includes('待复核');
+    },
+    blockedAction.id,
+    { timeout: 10000 },
+  );
+  await panelPage.locator('[data-action-filter="open"]').click();
+  const firstActionId = confirmableAction.id;
   assert.ok(firstActionId, '行动项卡片缺少稳定 data-action-id');
+  log('批量确认当前筛选里信息完整的待复核行动项');
+  await panelPage
+    .locator('.action-bulk-confirm', { hasText: '确认可用项' })
+    .click();
+  await panelPage.waitForFunction(
+    () => {
+      return Array.from(document.querySelectorAll('.action-bulk-confirm')).some(
+        (button) => /^已确认 \d+ 项$/.test(button.textContent?.trim() || ''),
+      );
+    },
+    undefined,
+    { timeout: 10000 },
+  );
+  await panelPage.waitForFunction(
+    (actionId) => {
+      const card = document.querySelector(`[data-action-id="${actionId}"]`);
+      const text = card?.textContent || '';
+      return text.includes('已确认') && !text.includes('待复核');
+    },
+    firstActionId,
+    { timeout: 10000 },
+  );
+  await panelPage.waitForFunction(
+    (actionId) => {
+      const card = document.querySelector(`[data-action-id="${actionId}"]`);
+      const text = card?.textContent || '';
+      return text.includes('待复核') && !text.includes('已确认');
+    },
+    blockedAction.id,
+    { timeout: 10000 },
+  );
+  await panelPage
+    .locator('.action-copy-followup', { hasText: '复制跟进清单' })
+    .click();
+  await panelPage.waitForFunction(
+    () => {
+      return Array.from(document.querySelectorAll('.action-copy-followup')).some(
+        (button) => button.textContent?.trim() === '已复制跟进清单',
+      );
+    },
+    undefined,
+    { timeout: 10000 },
+  );
   await panelPage
     .locator('.action-copy-all', { hasText: '复制当前筛选' })
     .click();

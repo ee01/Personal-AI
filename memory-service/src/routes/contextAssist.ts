@@ -108,9 +108,11 @@ export async function contextAssistRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { db } = request.userContext;
-      const service = new ContextAssistService(db);
+      const service = new ContextAssistService(db, request.userId);
       try {
-        const result: ContextAssistResponse = await service.assist(request.body);
+        const result: ContextAssistResponse = await service.assist(
+          request.body,
+        );
         return reply.send(result);
       } catch (err) {
         request.log.warn({ err }, 'context-assist failed');

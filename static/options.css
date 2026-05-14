@@ -333,6 +333,108 @@
   color: #57606a;
 }
 
+.agent-workflow-next-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-workflow-next-action-list {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-workflow-next-action {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(112px, 0.32fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border: 1px solid #d8dee4;
+  border-left: 4px solid #57606a;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px 9px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-workflow-next-action > span {
+  border-radius: 999px;
+  background: #f6f8fa;
+  color: #57606a;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.agent-workflow-next-action strong {
+  color: #24292f;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-next-action small,
+.agent-workflow-next-action em {
+  min-width: 0;
+  color: #57606a;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-next-action em {
+  grid-column: 3;
+  color: #6e7781;
+}
+
+.agent-workflow-next-action.review {
+  border-left-color: #bf8700;
+}
+
+.agent-workflow-next-action.review > span {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
+.agent-workflow-next-action.fix {
+  border-left-color: #cf222e;
+}
+
+.agent-workflow-next-action.fix > span {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.agent-workflow-next-action.optimize {
+  border-left-color: #8250df;
+}
+
+.agent-workflow-next-action.optimize > span {
+  background: #fbefff;
+  color: #6639ba;
+}
+
+.agent-workflow-next-action.verify {
+  border-left-color: #0969da;
+}
+
+.agent-workflow-next-action.verify > span {
+  background: #ddf4ff;
+  color: #0969da;
+}
+
+.agent-workflow-next-action.done {
+  border-left-color: #1a7f37;
+}
+
+.agent-workflow-next-action.done > span {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
 .agent-test-review-banner {
   border: 1px solid #f0d98c;
   border-radius: 8px;
@@ -715,7 +817,8 @@
 
   .agent-test-trace-step summary,
   .agent-test-tool,
-  .agent-workflow-diagnostic {
+  .agent-workflow-diagnostic,
+  .agent-workflow-next-action {
     grid-template-columns: 1fr;
   }
 
@@ -728,6 +831,10 @@
   }
 
   .agent-workflow-diagnostic em {
+    grid-column: auto;
+  }
+
+  .agent-workflow-next-action em {
     grid-column: auto;
   }
 }

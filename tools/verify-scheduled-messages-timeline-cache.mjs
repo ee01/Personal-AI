@@ -37,24 +37,24 @@ const row = {
 
 const cachedShape = {
   mThor: {
+    currentRelease: '26.2',
+    currentPhase: 'FF',
+    releaseInfo: {
+      FF: '05/06/2026',
+    },
+  },
+};
+
+const legacyFlatShape = {
+  mThor: {
     FF: '05/06/2026',
     currentRelease: '26.2',
     currentPhase: 'FF',
   },
 };
 
-const legacyInlineShape = {
-  mThor: {
-    releaseInfo: {
-      FF: '05/06/2026',
-      currentRelease: '26.2',
-      currentPhase: 'FF',
-    },
-  },
-};
-
 assert.equal(isoDate(context.getTimelineTargetDate(row, cachedShape)), '2026-05-06');
-assert.equal(isoDate(context.getTimelineTargetDate(row, legacyInlineShape)), '2026-05-06');
+assert.equal(isoDate(context.getTimelineTargetDate(row, legacyFlatShape)), '2026-05-06');
 
 const previousWorkingDayRow = {
   Timeline_Project: 'mThor',
@@ -70,7 +70,7 @@ const mondayMilestone = {
 assert.equal(isoDate(context.getTimelineTargetDate(previousWorkingDayRow, mondayMilestone)), '2026-05-01');
 
 const cachedProjectInfo = context.getTimelineProjectInfo(cachedShape, 'mThor');
-const legacyProjectInfo = context.getTimelineProjectInfo(legacyInlineShape, 'mThor');
+const legacyProjectInfo = context.getTimelineProjectInfo(legacyFlatShape, 'mThor');
 
 assert.equal(
   context.replaceProjectVariablesInText('Release {currentRelease} is in {currentPhase}', cachedProjectInfo),

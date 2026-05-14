@@ -33,6 +33,7 @@ import {
   isPendingLinkedActionConfigFresh,
   shouldAutoRequestLinkedActionSuggestion,
 } from './linkedActionHelpers';
+import { getRuleSafetySummary } from './topic-rule-safety';
 
 // 自动答复配置接口
 interface AutoReplyConfig {
@@ -1549,6 +1550,16 @@ const TopicModal = () => {
       filterGroup: topic.filterGroup,
     });
 
+  const getTopicSafetySummary = (topic: TopicItem) =>
+    getRuleSafetySummary({
+      filterSender: topic.filterSender,
+      filterGroup: topic.filterGroup,
+      notifyMethod: topic.notifyMethod,
+      digestEnabled: Boolean(topic.digestConfig?.enabled),
+      automationPrompt: topic.automationPrompt,
+      automationRequiresApproval: topic.automationRequiresApproval,
+    });
+
   const formatDigestScheduleChip = (digestConfig: DigestConfigType) => {
     const hour = normalizeConcernedItemsDigestHour(
       digestConfig.preferredHour,
@@ -1630,9 +1641,14 @@ const TopicModal = () => {
     if (isAutomationActionSummaryLoading) {
       return '正在查询该规则关联的 RuntimeAction 状态…';
     }
+    const requiresApproval = topic.automationRequiresApproval === true;
     return openClawConfigured
-      ? '尚未看到这条规则创建的 RuntimeAction。首次命中后会出现在动作队列；外部写动作默认仍需审批。'
-      : 'OpenClaw 未配置。首次命中后可以先生成动作计划，但连接前无法执行外部写动作。';
+      ? requiresApproval
+        ? '尚未看到这条规则创建的 RuntimeAction。首次命中后会进入动作队列，外部写操作会等待你批准。'
+        : '尚未看到这条规则创建的 RuntimeAction。首次命中后会进入动作队列，并按这条规则自动执行可执行动作。'
+      : requiresApproval
+        ? 'OpenClaw 未配置。首次命中后可以先生成需批准的动作计划，但连接前无法执行外部写动作。'
+        : 'OpenClaw 未配置。首次命中后可以先生成免批准的动作计划，但连接前无法执行外部写动作。';
   };
 
   const openOptionsPage = () => {
@@ -1856,6 +1872,14 @@ const TopicModal = () => {
     automationPrompt: newAutomationPrompt,
     automationRequiresApproval: newAutomationRequiresApproval,
   });
+  const newRuleSafetySummary = getRuleSafetySummary({
+    filterSender: newFilterSender,
+    filterGroup: newFilterGroup,
+    notifyMethod: newNotifyMethod,
+    digestEnabled: newDigestEnabled && !newFollowThread,
+    automationPrompt: newAutomationPrompt,
+    automationRequiresApproval: newAutomationRequiresApproval,
+  });
 
   return (
     <div className="topic-modal">
@@ -1866,6 +1890,16 @@ const TopicModal = () => {
           <p>
             配置你希望系统持续观察并写入记忆的消息模式。这里只展示你手动创建的规则；系统内部观察规则会继续运行，但不会出现在这里。
           </p>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="header-secondary-btn"
+            onClick={openPromptConfigWindow}
+            title="配置自定义提示词和用户上下文"
+          >
+            ⚙️ 自定义提示词与上下文
+          </button>
         </div>
       </div>
 
@@ -1943,14 +1977,6 @@ const TopicModal = () => {
           }}
         >
           ＋ 添加规则
-        </button>
-        <button
-          type="button"
-          className="toolbar-button"
-          onClick={openPromptConfigWindow}
-          title="配置自定义提示词和用户上下文"
-        >
-          ⚙️ 自定义提示词与上下文
         </button>
         <button onClick={exportToXML}>📤 导出规则</button>
         <label className="import-button toolbar-button">
@@ -2854,6 +2880,12 @@ const TopicModal = () => {
                         : '免批准'}
                     </span>
                   )}
+                  <span
+                    className={`rule-badge safety-${getTopicSafetySummary(topic).tone}`}
+                    title={getTopicSafetySummary(topic).reasons.join(' / ')}
+                  >
+                    {getTopicSafetySummary(topic).label}
+                  </span>
                   <span className="rule-ref">{getRuleRef(topic)}</span>
                 </div>
 
@@ -3132,6 +3164,12 @@ const TopicModal = () => {
                   </span>
                 ))}
               </div>
+            </div>
+            <div className={`rule-safety-strip ${newRuleSafetySummary.tone}`}>
+              <span className={`rule-badge safety-${newRuleSafetySummary.tone}`}>
+                {newRuleSafetySummary.label}
+              </span>
+              <span>{newRuleSafetySummary.reasons.join(' / ')}</span>
             </div>
           </div>
 
@@ -4241,7 +4279,15 @@ const TopicModal = () => {
                 }
 
                 .page-header {
+                    display: flex;
+                    align-items: flex-start;
+                    justify-content: space-between;
+                    gap: 16px;
                     margin-bottom: 14px;
+                }
+
+                .page-copy {
+                    min-width: 0;
                 }
 
                 .page-eyebrow {
@@ -4267,6 +4313,37 @@ const TopicModal = () => {
                     margin: 0;
                     color: #b6c2d8;
                     line-height: 1.65;
+                }
+
+                .page-actions {
+                    flex-shrink: 0;
+                    display: flex;
+                    align-items: center;
+                    padding-top: 2px;
+                }
+
+                .header-secondary-btn {
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    min-height: 38px;
+                    padding: 9px 14px;
+                    border: 1px solid rgba(148, 163, 184, 0.26);
+                    border-radius: 12px;
+                    background: rgba(15, 23, 42, 0.72);
+                    color: #dbeafe;
+                    font-size: 13px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    box-shadow: 0 10px 28px rgba(2, 6, 23, 0.18);
+                    white-space: nowrap;
+                    transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+                }
+
+                .header-secondary-btn:hover {
+                    border-color: rgba(96, 165, 250, 0.48);
+                    background: rgba(30, 41, 59, 0.82);
+                    transform: translateY(-1px);
                 }
 
                 .status-strip {
@@ -4502,6 +4579,21 @@ const TopicModal = () => {
                     color: #cbd5e1;
                 }
 
+                .rule-badge.safety-ok {
+                    background: rgba(20, 184, 166, 0.18);
+                    color: #99f6e4;
+                }
+
+                .rule-badge.safety-warn {
+                    background: rgba(245, 158, 11, 0.18);
+                    color: #fde68a;
+                }
+
+                .rule-badge.safety-danger {
+                    background: rgba(244, 63, 94, 0.18);
+                    color: #fecdd3;
+                }
+
                 .rule-ref {
                     margin-left: auto;
                     color: #7dd3fc;
@@ -4649,6 +4741,28 @@ const TopicModal = () => {
                     flex-wrap: wrap;
                     gap: 8px;
                     margin-top: 8px;
+                }
+
+                .rule-safety-strip {
+                    grid-column: 1 / -1;
+                    display: flex;
+                    flex-wrap: wrap;
+                    align-items: center;
+                    gap: 8px;
+                    margin-top: 2px;
+                    padding-top: 10px;
+                    border-top: 1px solid rgba(148, 163, 184, 0.14);
+                    color: #cbd5e1;
+                    font-size: 12px;
+                    line-height: 1.45;
+                }
+
+                .rule-safety-strip.warn {
+                    color: #fde68a;
+                }
+
+                .rule-safety-strip.danger {
+                    color: #fecdd3;
                 }
 
                 .capability-chip {
@@ -4828,6 +4942,15 @@ const TopicModal = () => {
                 }
 
 	                @media (max-width: 880px) {
+	                    .page-header {
+	                        flex-direction: column;
+	                    }
+
+	                    .page-actions,
+	                    .header-secondary-btn {
+	                        width: 100%;
+	                    }
+
 	                    .warning-content,
 	                    .section-head,
 	                    .rule-card-top,

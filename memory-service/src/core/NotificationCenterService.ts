@@ -1,7 +1,11 @@
 import type Database from 'better-sqlite3';
 
-import { ChannelDeliveryRepository, type DeliveryChannel, type DeliveryLane, type DeliveryStatus } from '../repositories/ChannelDeliveryRepository.js';
-import { NotificationRepository } from '../repositories/NotificationRepository.js';
+import {
+  ChannelDeliveryRepository,
+  type DeliveryChannel,
+  type DeliveryLane,
+  type DeliveryStatus,
+} from '../repositories/ChannelDeliveryRepository.js';
 import { getBotSender, type BotSendResult } from '../utils/botSender.js';
 import { formatDateTime, now } from '../utils/time.js';
 
@@ -34,6 +38,16 @@ interface ProposedActionRow {
   params_json: string | null;
 }
 
+interface NotificationFeedRow {
+  id: string;
+  type: string | null;
+  title: string;
+  body: string | null;
+  payload_json: string | null;
+  sent_at: number | null;
+  created_at: number;
+}
+
 function safeJsonParse<T>(raw: string | null): T | undefined {
   if (!raw) return undefined;
   try {
@@ -41,6 +55,79 @@ function safeJsonParse<T>(raw: string | null): T | undefined {
   } catch {
     return undefined;
   }
+}
+
+function compactPayloadDetail(
+  raw: unknown,
+  maxLength = 900,
+): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const compacted = raw
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!compacted) return undefined;
+  if (compacted.length <= maxLength) return compacted;
+  return `${compacted.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function firstPayloadString(
+  payload: Record<string, unknown> | undefined,
+  keys: string[],
+  maxLength?: number,
+): string | undefined {
+  if (!payload) return undefined;
+  for (const key of keys) {
+    const detail = compactPayloadDetail(payload[key], maxLength);
+    if (detail) return detail;
+  }
+  return undefined;
+}
+
+function noticePayloadDetail(item: NotificationEnvelope): string | undefined {
+  if (item.type === 'dream_digest') {
+    return firstPayloadString(item.payload, [
+      'digestBody',
+      'summary',
+      'details',
+      'body',
+    ]);
+  }
+
+  if (item.type === 'weekly_report') {
+    const reportDetail = firstPayloadString(item.payload, [
+      'reportExcerpt',
+      'reportSummary',
+      'summary',
+      'details',
+    ]);
+    if (reportDetail) return reportDetail;
+
+    const reportPath = firstPayloadString(item.payload, ['reportPath'], 200);
+    return reportPath ? `Report file: ${reportPath}` : undefined;
+  }
+
+  return firstPayloadString(item.payload, [
+    'summary',
+    'details',
+    'digestBody',
+    'message',
+  ]);
+}
+
+function indentMarkdownBlock(raw: string): string {
+  return raw
+    .split('\n')
+    .map((line) => `  ${line}`)
+    .join('\n');
+}
+
+function formatNoticeDigestItem(item: NotificationEnvelope): string {
+  const when = item.sentAt ? ` @ ${formatDateTime(item.sentAt)}` : '';
+  const body = item.body ? ` - ${item.body}` : '';
+  const detail = noticePayloadDetail(item);
+  if (!detail) return `- ${item.title}${when}${body}`;
+  return `- ${item.title}${when}${body}\n${indentMarkdownBlock(detail)}`;
 }
 
 export function classifyNotificationRouting(params: {
@@ -68,16 +155,16 @@ export function classifyNotificationRouting(params: {
   }
 }
 
-export function shouldRouteToGlip(envelope: Pick<NotificationEnvelope, 'lane' | 'priority'>): boolean {
+export function shouldRouteToGlip(
+  envelope: Pick<NotificationEnvelope, 'lane' | 'priority'>,
+): boolean {
   return envelope.lane === 'notice' && envelope.priority === 'high';
 }
 
 export class NotificationCenterService {
-  private readonly notificationRepository: NotificationRepository;
   private readonly channelDeliveryRepository: ChannelDeliveryRepository;
 
   constructor(private readonly db: Database.Database) {
-    this.notificationRepository = new NotificationRepository(db);
     this.channelDeliveryRepository = new ChannelDeliveryRepository(db);
   }
 
@@ -92,58 +179,119 @@ export class NotificationCenterService {
     if (lanes.length === 0) return [];
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
-    const notifications = this.notificationRepository
-      .list({ state: 'pending', limit: Math.max(limit * 3, 20), includeFuture: false })
-      .map<NotificationEnvelope>((notification) => {
-        const routing = classifyNotificationRouting({
-          sourceType: 'notification',
-          type: notification.type,
-        });
-        return {
-          sourceRef: `notification:${notification.id}`,
-          sourceType: 'notification',
-          sourceId: notification.id,
-          lane: routing.lane,
-          priority: routing.priority,
-          title: notification.title,
-          body: notification.body,
-          createdAt: notification.createdAt,
-          sentAt: notification.sentAt,
-          type: notification.type,
-          payload: notification.payload,
-        };
-      });
+    const currentTime = now();
+    const successfulDeliverySql = `(
+      c.status IN ('delivered', 'clicked', 'dismissed')
+      OR c.first_delivered_at IS NOT NULL
+      OR c.seen_at IS NOT NULL
+      OR c.dismissed_at IS NOT NULL
+    )`;
+    const notificationLaneSql = `CASE n.type
+      WHEN 'truth_conflict' THEN 'todo'
+      WHEN 'new_conflict' THEN 'todo'
+      WHEN 'deadline' THEN 'todo'
+      WHEN 'notify_user' THEN 'todo'
+      ELSE 'notice'
+    END`;
+    const notificationPrioritySql = `CASE n.type
+      WHEN 'truth_conflict' THEN 0
+      WHEN 'new_conflict' THEN 0
+      WHEN 'deadline' THEN 0
+      WHEN 'notify_user' THEN 0
+      WHEN 'weekly_report' THEN 0
+      WHEN 'dream_digest' THEN 0
+      ELSE 1
+    END`;
+    const lanePlaceholders = lanes.map(() => '?').join(', ');
 
-    const actions = this.db
+    const notificationRows = this.db
       .prepare(
-        `SELECT id, type, action_type, title, description, state, expires_at, created_at, params_json
-           FROM proposed_actions
-          WHERE state = 'pending'
-            AND queue_status IN ('queued', 'running')
-          ORDER BY priority DESC, created_at DESC
+        `SELECT n.id, n.type, n.title, n.body, n.payload_json, n.sent_at, n.created_at
+           FROM notification_records n
+          WHERE n.clicked_at IS NULL
+            AND n.dismissed_at IS NULL
+            AND (n.sent_at IS NULL OR n.sent_at <= ?)
+            AND ${notificationLaneSql} IN (${lanePlaceholders})
+            AND NOT EXISTS (
+              SELECT 1
+                FROM channel_delivery_records c
+               WHERE c.source_ref = ('notification:' || n.id)
+                 AND c.channel = ?
+                 AND c.lane = ${notificationLaneSql}
+                 AND ${successfulDeliverySql}
+            )
+          ORDER BY ${notificationPrioritySql} ASC, COALESCE(n.sent_at, n.created_at) DESC
           LIMIT ?`,
       )
-      .all(Math.max(limit * 3, 20)) as ProposedActionRow[];
+      .all(
+        currentTime,
+        ...lanes,
+        input.channel,
+        limit,
+      ) as NotificationFeedRow[];
 
-    const actionEnvelopes = actions.map<NotificationEnvelope>((action) => {
-      const payload = safeJsonParse<Record<string, unknown>>(action.params_json);
+    const notifications = notificationRows.map<NotificationEnvelope>((row) => {
+      const routing = classifyNotificationRouting({
+        sourceType: 'notification',
+        type: row.type,
+      });
       return {
-        sourceRef: `proposed_action:${action.id}`,
-        sourceType: 'proposed_action',
-        sourceId: action.id,
-        lane: 'todo',
-        priority: 'high',
-        title: action.title,
-        body: action.description ?? undefined,
-        dueAt: action.expires_at ?? undefined,
-        createdAt: action.created_at,
-        type: action.action_type ?? action.type,
-        payload,
+        sourceRef: `notification:${row.id}`,
+        sourceType: 'notification',
+        sourceId: row.id,
+        lane: routing.lane,
+        priority: routing.priority,
+        title: row.title,
+        body: row.body ?? undefined,
+        createdAt: row.created_at,
+        sentAt: row.sent_at ?? undefined,
+        type: row.type ?? undefined,
+        payload: safeJsonParse<Record<string, unknown>>(row.payload_json),
       };
     });
 
-    const combined = [...notifications, ...actionEnvelopes]
-      .filter((item) => lanes.includes(item.lane))
+    const actionEnvelopes = lanes.includes('todo')
+      ? (
+          this.db
+            .prepare(
+              `SELECT id, type, action_type, title, description, state, expires_at, created_at, params_json
+               FROM proposed_actions a
+              WHERE state = 'pending'
+                AND queue_status IN ('queued', 'running')
+                AND (expires_at IS NULL OR expires_at > ?)
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM channel_delivery_records c
+                   WHERE c.source_ref = ('proposed_action:' || a.id)
+                     AND c.channel = ?
+                     AND c.lane = 'todo'
+                     AND ${successfulDeliverySql}
+                )
+              ORDER BY priority DESC, created_at DESC
+              LIMIT ?`,
+            )
+            .all(currentTime, input.channel, limit) as ProposedActionRow[]
+        ).map<NotificationEnvelope>((action) => {
+          const payload = safeJsonParse<Record<string, unknown>>(
+            action.params_json,
+          );
+          return {
+            sourceRef: `proposed_action:${action.id}`,
+            sourceType: 'proposed_action',
+            sourceId: action.id,
+            lane: 'todo',
+            priority: 'high',
+            title: action.title,
+            body: action.description ?? undefined,
+            dueAt: action.expires_at ?? undefined,
+            createdAt: action.created_at,
+            type: action.action_type ?? action.type,
+            payload,
+          };
+        })
+      : [];
+
+    return [...notifications, ...actionEnvelopes]
       .sort((left, right) => {
         if (left.priority !== right.priority) {
           return left.priority === 'high' ? -1 : 1;
@@ -151,25 +299,20 @@ export class NotificationCenterService {
         const leftTs = left.sentAt ?? left.createdAt;
         const rightTs = right.sentAt ?? right.createdAt;
         return rightTs - leftTs;
-      });
-
-    const delivered = this.channelDeliveryRepository.getSuccessfulSourceRefs(
-      combined.map((item) => item.sourceRef),
-      input.channel,
-      lanes,
-    );
-
-    return combined.filter((item) => !delivered.has(item.sourceRef)).slice(0, limit);
+      })
+      .slice(0, limit);
   }
 
-  recordDelivery(events: Array<{
-    sourceRef: string;
-    channel: DeliveryChannel;
-    lane: DeliveryLane;
-    status: DeliveryStatus;
-    externalRef?: string;
-    error?: string;
-  }>) {
+  recordDelivery(
+    events: Array<{
+      sourceRef: string;
+      channel: DeliveryChannel;
+      lane: DeliveryLane;
+      status: DeliveryStatus;
+      externalRef?: string;
+      error?: string;
+    }>,
+  ) {
     return this.channelDeliveryRepository.upsertEvents(
       events.map((event) => ({
         ...event,
@@ -224,7 +367,10 @@ export class NotificationCenterService {
     return result;
   }
 
-  formatTodoDigest(provider: string, tokenBudget: number): {
+  formatTodoDigest(
+    provider: string,
+    tokenBudget: number,
+  ): {
     bodyMd: string;
     sourceRefs: string[];
     dedupeSuffix: string;
@@ -250,18 +396,26 @@ export class NotificationCenterService {
       '> Rolling todo context for short-term action sync.',
       '',
       '## Pending Todos',
-      lines.length > 0 ? lines.map((line) => `- ${line}`).join('\n') : '- No pending todos.',
+      lines.length > 0
+        ? lines.map((line) => `- ${line}`).join('\n')
+        : '- No pending todos.',
     ].join('\n');
 
     return {
-      bodyMd: bodyMd.length <= Math.max(400, tokenBudget * 4) ? bodyMd : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
+      bodyMd:
+        bodyMd.length <= Math.max(400, tokenBudget * 4)
+          ? bodyMd
+          : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
       sourceRefs: items.map((item) => item.sourceRef),
       dedupeSuffix: items.map((item) => item.sourceRef).join('|'),
       itemCount: items.length,
     };
   }
 
-  formatNoticeDigest(provider: string, tokenBudget: number): {
+  formatNoticeDigest(
+    provider: string,
+    tokenBudget: number,
+  ): {
     bodyMd: string;
     sourceRefs: string[];
     dedupeSuffix: string;
@@ -273,22 +427,23 @@ export class NotificationCenterService {
       limit: 8,
     });
 
-    const lines = items.map((item) => {
-      const when = item.sentAt ? ` @ ${formatDateTime(item.sentAt)}` : '';
-      const body = item.body ? ` - ${item.body}` : '';
-      return `${item.title}${when}${body}`;
-    });
+    const lines = items.map(formatNoticeDigestItem);
 
     const bodyMd = [
       '# Notice Digest',
       '> Informational updates for the mobile context; do not turn these into todos.',
       '',
       '## Updates',
-      lines.length > 0 ? lines.map((line) => `- ${line}`).join('\n') : '- No new notices.',
+      lines.length > 0
+        ? lines.join('\n')
+        : '- No new notices.',
     ].join('\n');
 
     return {
-      bodyMd: bodyMd.length <= Math.max(400, tokenBudget * 4) ? bodyMd : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
+      bodyMd:
+        bodyMd.length <= Math.max(400, tokenBudget * 4)
+          ? bodyMd
+          : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
       sourceRefs: items.map((item) => item.sourceRef),
       dedupeSuffix: items.map((item) => item.sourceRef).join('|'),
       itemCount: items.length,

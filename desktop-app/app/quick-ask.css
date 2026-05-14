@@ -881,6 +881,19 @@ a,
   line-height: 1.45;
 }
 
+.status-item-details {
+  display: grid;
+  gap: 3px;
+  padding-top: 2px;
+  color: rgba(74, 95, 117, 0.82);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.status-item-details span {
+  overflow-wrap: anywhere;
+}
+
 .status-item-meta {
   display: grid;
   gap: 6px;

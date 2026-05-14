@@ -1,4 +1,5 @@
 import type { ScheduledMessage } from './types';
+import { normalizeLocalScheduleTime } from './scheduleDateTime.js';
 
 type TimelineOffsetInput = ScheduledMessage['Timeline_Offset'] | string | null | undefined;
 
@@ -69,7 +70,7 @@ export function formatTimelineFrequencyText(
   message: Pick<ScheduledMessage, 'Timeline_Milestone' | 'Timeline_Offset' | 'Schedule_Time'>
 ): string {
   const baseText = formatTimelineNextExecutionText(message);
-  const scheduleTime = message.Schedule_Time?.trim();
+  const scheduleTime = normalizeLocalScheduleTime(message.Schedule_Time);
 
   return scheduleTime ? `${baseText} ${scheduleTime}` : `${baseText}早上`;
 }

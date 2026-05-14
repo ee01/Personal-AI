@@ -45,6 +45,8 @@ const elements = {
   runBriefingButton: document.getElementById('run-briefing-button'),
   runReminderButton: document.getElementById('run-reminder-button'),
   mobileThreadMessage: document.getElementById('mobile-thread-message'),
+  syncAuditStatus: document.getElementById('sync-audit-status'),
+  syncAuditList: document.getElementById('sync-audit-list'),
   stopButton: document.getElementById('stop-button'),
   installExtensionButton: document.getElementById('install-extension-button'),
   stepMemoryStatus: document.getElementById('step-memory-status'),
@@ -84,6 +86,9 @@ const elements = {
   doubaoSourceRevokeScope: document.getElementById(
     'doubao-source-revoke-scope',
   ),
+  doubaoSourceRevokeButton: document.getElementById(
+    'doubao-source-revoke-button',
+  ),
   chatgptSourceAuthPill: document.getElementById('chatgpt-source-auth-pill'),
   chatgptSourceCacheCount: document.getElementById(
     'chatgpt-source-cache-count',
@@ -118,6 +123,9 @@ const elements = {
   chatgptSourceRevokeScope: document.getElementById(
     'chatgpt-source-revoke-scope',
   ),
+  chatgptSourceRevokeButton: document.getElementById(
+    'chatgpt-source-revoke-button',
+  ),
   doubaoSourceToggleStatus: document.getElementById(
     'doubao-source-toggle-status',
   ),
@@ -125,20 +133,34 @@ const elements = {
     'chatgpt-source-toggle-status',
   ),
   // webpage-mcp transport toggles
-  chatgptUseDailyBrowser: document.getElementById('chatgpt-source-use-daily-browser'),
+  chatgptUseDailyBrowser: document.getElementById(
+    'chatgpt-source-use-daily-browser',
+  ),
   chatgptMcpGuide: document.getElementById('chatgpt-webpage-mcp-guide'),
   chatgptMcpTestButton: document.getElementById('chatgpt-mcp-test-button'),
   chatgptMcpTestMessage: document.getElementById('chatgpt-mcp-test-message'),
-  doubaoSourceUseDailyBrowser: document.getElementById('doubao-source-use-daily-browser'),
-  doubaoSourceMcpGuide: document.getElementById('doubao-source-webpage-mcp-guide'),
+  doubaoSourceUseDailyBrowser: document.getElementById(
+    'doubao-source-use-daily-browser',
+  ),
+  doubaoSourceMcpGuide: document.getElementById(
+    'doubao-source-webpage-mcp-guide',
+  ),
   doubaoMcpTestButton: document.getElementById('doubao-mcp-test-button'),
   doubaoMcpTestMessage: document.getElementById('doubao-mcp-test-message'),
-  broadcastUseDailyBrowser: document.getElementById('broadcast-use-daily-browser'),
+  broadcastUseDailyBrowser: document.getElementById(
+    'broadcast-use-daily-browser',
+  ),
   broadcastMcpGuide: document.getElementById('broadcast-webpage-mcp-guide'),
   broadcastMcpTestButton: document.getElementById('broadcast-mcp-test-button'),
-  broadcastMcpTestMessage: document.getElementById('broadcast-mcp-test-message'),
-  broadcastTransportSaveButton: document.getElementById('broadcast-transport-save-button'),
-  broadcastTransportMessage: document.getElementById('broadcast-transport-message'),
+  broadcastMcpTestMessage: document.getElementById(
+    'broadcast-mcp-test-message',
+  ),
+  broadcastTransportSaveButton: document.getElementById(
+    'broadcast-transport-save-button',
+  ),
+  broadcastTransportMessage: document.getElementById(
+    'broadcast-transport-message',
+  ),
 };
 
 let refreshTimer;
@@ -176,16 +198,25 @@ async function runMcpConnectionTest(msgEl) {
   try {
     const result = await window.explorerApi?.testWebpageMcpConnection?.();
     if (result?.ok) {
-      setMcpTestMessage(msgEl, `扩展已连接 ✓（检测到 ${result.tabCount} 个标签页）`, true);
+      setMcpTestMessage(
+        msgEl,
+        `扩展已连接 ✓（检测到 ${result.tabCount} 个标签页）`,
+        true,
+      );
     } else {
       setMcpTestMessage(
         msgEl,
-        result?.error ?? '连接失败，请确认 Chrome 扩展已安装并显示为绿色连接状态。',
+        result?.error ??
+          '连接失败，请确认 Chrome 扩展已安装并显示为绿色连接状态。',
         false,
       );
     }
   } catch (err) {
-    setMcpTestMessage(msgEl, `连接测试失败：${err instanceof Error ? err.message : err}`, false);
+    setMcpTestMessage(
+      msgEl,
+      `连接测试失败：${err instanceof Error ? err.message : err}`,
+      false,
+    );
   }
 }
 
@@ -257,8 +288,7 @@ function sourceUsesDailyBrowser(source, sourceStatus) {
 function broadcastUsesDailyBrowser() {
   return (
     latestSettingsPayload?.effective?.explorer?.doubao?.broadcastTransport ===
-      'webpage_mcp' ||
-    elements.broadcastUseDailyBrowser?.checked
+      'webpage_mcp' || elements.broadcastUseDailyBrowser?.checked
   );
 }
 
@@ -272,10 +302,61 @@ function formatRunOutcome(sourceStatus) {
   return '未执行';
 }
 
+function formatSyncKind(kind) {
+  if (kind === 'stable_memory') return '长期记忆';
+  if (kind === 'mobile_briefing') return '近期记忆重点';
+  if (kind === 'reminder_sync') return '待办 / 通知';
+  return kind || '同步';
+}
+
+function formatSyncTrigger(trigger) {
+  return trigger === 'manual' ? '手动' : '自动';
+}
+
+function formatAttemptStatus(status) {
+  if (status === 'succeeded') return '已送达';
+  if (status === 'skipped') return '已跳过';
+  if (status === 'failed') return '失败';
+  return '待确认';
+}
+
+function attemptTone(status) {
+  if (status === 'succeeded') return 'ready';
+  if (status === 'failed') return 'error';
+  return 'pending';
+}
+
+function formatDuration(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value < 0) return '';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}s`;
+}
+
+function formatAttemptMessage(attempt) {
+  const text = String(attempt?.errorMessage || '').trim();
+  if (!text) return '';
+  if (attempt.status === 'skipped') {
+    return formatManualRunSkippedMessage(text, text);
+  }
+  if (attempt.status === 'failed') {
+    return formatBridgeIssueMessage(text);
+  }
+  return text;
+}
+
 function setMessage(element, text, tone = 'muted') {
   if (!element) return;
   element.textContent = text || '';
-  element.className = `inline-message ${tone === 'error' ? 'status-error' : tone === 'success' ? 'status-ready' : tone === 'warn' ? 'status-blocked' : ''}`;
+  element.className = `inline-message ${
+    tone === 'error'
+      ? 'status-error'
+      : tone === 'success'
+      ? 'status-ready'
+      : tone === 'warn'
+      ? 'status-blocked'
+      : ''
+  }`;
 }
 
 function setButtonBusy(button, busy, label) {
@@ -295,16 +376,67 @@ function setStatusPill(element, text, tone = 'pending') {
   element.className = `step-status step-status-${tone}`;
 }
 
-function setManualRunResultMessage(
-  element,
-  result,
-  { succeeded, skipped },
-) {
+function setManualRunResultMessage(element, result, { succeeded, skipped }) {
   if (result?.status === 'skipped') {
-    setMessage(element, result.errorMessage || skipped, 'warn');
+    setMessage(
+      element,
+      formatManualRunSkippedMessage(result.errorMessage, skipped),
+      'warn',
+    );
     return;
   }
   setMessage(element, succeeded, 'success');
+}
+
+function formatManualRunSkippedMessage(message, fallback) {
+  const text = String(message || '').trim();
+  if (!text) return fallback;
+
+  if (/No stable memory items/i.test(text)) {
+    return '本次没有可推送的 persona / 长期记忆。';
+  }
+  if (/No recent memory highlights/i.test(text)) {
+    return '本次没有可推送的近期记忆重点；不会把 concerned items 或空摘要写入豆包。';
+  }
+  if (/No mobile briefing bullets extracted/i.test(text)) {
+    return '近期重点渲染结果只有元信息或空占位，未推送到豆包。';
+  }
+  if (/No pending todos/i.test(text) || /No notices/i.test(text)) {
+    return '本次没有可推送的待办或通知。';
+  }
+  if (/No todo titles extracted/i.test(text)) {
+    return '本次待办内容为空，未推送到豆包。';
+  }
+  if (/No notice titles extracted/i.test(text)) {
+    return '本次通知内容为空，未推送到豆包。';
+  }
+  if (/Notice sync is not supported/i.test(text)) {
+    return '当前 Memory Service 暂不支持通知同步；本次只检查待办。';
+  }
+  return text;
+}
+
+function formatBridgeIssueMessage(message) {
+  const text = String(message || '').trim();
+  if (!text) return '';
+
+  if (/challenge|安全验证|真人验证|风险验证/i.test(text)) {
+    return `${text}。请在豆包页面完成安全验证，再回到 Personal AI 重新推送；系统不会在验证页继续尝试写入。`;
+  }
+
+  if (/No editable element|没有找到可输入区域|no composer/i.test(text)) {
+    return `${text}。请确认豆包标签页已经打开到可输入的对话页，或点击“打开登录窗口 / 打开 Chrome 豆包”重新建立会话。`;
+  }
+
+  if (/did not show the message|消息不可见|not show/i.test(text)) {
+    return `${text}。系统没有确认消息出现在对话正文中，因此不会把本次同步当成已送达；请刷新豆包页后重试。`;
+  }
+
+  if (/different thread|不同线程/i.test(text)) {
+    return `${text}。请重新绑定手机版对话，避免近期重点或待办进入错误线程。`;
+  }
+
+  return text;
 }
 
 function collectRuntimeSettings() {
@@ -380,7 +512,9 @@ function syncBroadcastTransportDirtyFromControl() {
   if (broadcastTransportDirty) {
     setMessage(
       elements.broadcastTransportMessage,
-      `广播方式尚未保存：将切换为${describeBroadcastTransport(selectedTransport)}。保存后生效；登录、绑定和手动推送会先自动保存。`,
+      `广播方式尚未保存：将切换为${describeBroadcastTransport(
+        selectedTransport,
+      )}。保存后生效；登录、绑定和手动推送会先自动保存。`,
       'warn',
     );
   } else {
@@ -568,22 +702,26 @@ function renderBlockingReasons(status) {
   const visibleReasons = [...reasons];
   if (syncError) {
     visibleReasons.push({
-      message: `最近一次自动同步失败：${syncError}`,
+      message: `最近一次自动同步失败：${formatBridgeIssueMessage(syncError)}`,
     });
   }
 
+  elements.blockingReasons.replaceChildren();
+
   if (visibleReasons.length === 0) {
-    elements.blockingReasons.innerHTML =
-      '<div class="reason-pill status-ready">所有前置条件已满足，自动同步可以正常运行。</div>';
+    const pill = document.createElement('div');
+    pill.className = 'reason-pill status-ready';
+    pill.textContent = '所有前置条件已满足，自动同步可以正常运行。';
+    elements.blockingReasons.appendChild(pill);
     return;
   }
 
-  elements.blockingReasons.innerHTML = visibleReasons
-    .map(
-      (reason) =>
-        `<div class="reason-pill status-blocked">${reason.message}</div>`,
-    )
-    .join('');
+  for (const reason of visibleReasons) {
+    const pill = document.createElement('div');
+    pill.className = 'reason-pill status-blocked';
+    pill.textContent = reason.message;
+    elements.blockingReasons.appendChild(pill);
+  }
 }
 
 function renderNextStep(status) {
@@ -665,7 +803,9 @@ function renderStepStatuses(status) {
   for (const [element, ok, readyText, pendingText] of stepStates) {
     if (!element) continue;
     element.textContent = ok ? readyText : pendingText;
-    element.className = `step-status ${ok ? 'step-status-ready' : 'step-status-pending'}`;
+    element.className = `step-status ${
+      ok ? 'step-status-ready' : 'step-status-pending'
+    }`;
   }
 
   const memoryGrowth = status?.memoryGrowth;
@@ -702,6 +842,76 @@ function renderStepStatuses(status) {
   elements.extensionMemoryCopy.textContent = `最近 ${memoryGrowth.windowDays} 天已经累计 ${memoryGrowth.recentMessageCount} 条消息。若还想继续补充日常上下文，仍可安装 extension 并开启“静默消息分析”。`;
 }
 
+function renderSyncAudit(status) {
+  const attempts = status?.syncState?.recentAttempts || [];
+  const latest = attempts[0];
+  setStatusPill(
+    elements.syncAuditStatus,
+    latest ? formatAttemptStatus(latest.status) : '待记录',
+    latest ? attemptTone(latest.status) : 'pending',
+  );
+
+  elements.syncAuditList?.replaceChildren();
+  if (!elements.syncAuditList) return;
+
+  if (attempts.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'sync-audit-empty';
+    empty.textContent =
+      '还没有同步记录。手动推送或后台自动同步后会显示最近结果。';
+    elements.syncAuditList.appendChild(empty);
+    return;
+  }
+
+  for (const attempt of attempts.slice(0, 6)) {
+    const item = document.createElement('div');
+    item.className = 'sync-audit-item';
+
+    const head = document.createElement('div');
+    head.className = 'sync-audit-item-head';
+
+    const title = document.createElement('strong');
+    title.textContent = formatSyncKind(attempt.kind);
+    head.appendChild(title);
+
+    const badge = document.createElement('span');
+    badge.className = `sync-audit-badge sync-audit-badge-${attemptTone(
+      attempt.status,
+    )}`;
+    badge.textContent = formatAttemptStatus(attempt.status);
+    head.appendChild(badge);
+
+    const meta = document.createElement('div');
+    meta.className = 'sync-audit-meta';
+
+    const left = document.createElement('span');
+    left.textContent = `${formatSyncTrigger(attempt.trigger)} · ${formatTime(
+      attempt.completedAt || attempt.startedAt,
+    )}`;
+    meta.appendChild(left);
+
+    const duration = formatDuration(attempt.durationMs);
+    if (duration) {
+      const right = document.createElement('span');
+      right.textContent = duration;
+      meta.appendChild(right);
+    }
+
+    item.appendChild(head);
+    item.appendChild(meta);
+
+    const message = formatAttemptMessage(attempt);
+    if (message) {
+      const reason = document.createElement('p');
+      reason.className = 'sync-audit-reason';
+      reason.textContent = message;
+      item.appendChild(reason);
+    }
+
+    elements.syncAuditList.appendChild(item);
+  }
+}
+
 function renderShortcutStatus(shortcutStatus) {
   if (!shortcutStatus?.message) {
     setMessage(elements.metaShortcut, '');
@@ -711,8 +921,8 @@ function renderShortcutStatus(shortcutStatus) {
   const tone = shortcutStatus.usingNativeHelper
     ? 'success'
     : shortcutStatus.fallbackEnabled
-      ? 'warn'
-      : 'muted';
+    ? 'warn'
+    : 'muted';
   setMessage(elements.metaShortcut, shortcutStatus.message, tone);
 }
 
@@ -779,10 +989,7 @@ function renderSourceTransportBanner(source, sourceStatus) {
     sourceStatus.settings?.transport === 'webpage_mcp';
   const sourceLabel = isDoubao ? '豆包' : 'ChatGPT';
 
-  if (
-    (!transport || transport.mode === 'unknown') &&
-    !preferredDailyBrowser
-  ) {
+  if ((!transport || transport.mode === 'unknown') && !preferredDailyBrowser) {
     banner.hidden = true;
     banner.textContent = '';
     return;
@@ -891,6 +1098,14 @@ function applyButtonAvailability(status, explorerStatus) {
     !chatgptSource ||
     chatgptSource.running ||
     chatgptSource.authStatus === 'unsupported';
+  if (elements.doubaoSourceRevokeButton) {
+    elements.doubaoSourceRevokeButton.disabled =
+      !memoryConnected || !doubaoSource || doubaoSource.running;
+  }
+  if (elements.chatgptSourceRevokeButton) {
+    elements.chatgptSourceRevokeButton.disabled =
+      !memoryConnected || !chatgptSource || chatgptSource.running;
+  }
 
   applyExplorerToggleGating('doubao', {
     memoryReady: memoryConnected,
@@ -934,13 +1149,14 @@ function applyExplorerToggleGating(source, { memoryReady, sourceStatus }) {
   }
 
   if (blockedReason) {
-    if (input.checked) {
-      input.checked = false;
-    }
     input.disabled = true;
     wrapper?.classList.add('is-disabled');
-    wrapper?.classList.remove('is-on');
-    if (statusLabel) statusLabel.textContent = blockedReason;
+    wrapper?.classList.toggle('is-on', Boolean(input.checked));
+    if (statusLabel) {
+      statusLabel.textContent = input.checked
+        ? `已开启，${blockedReason}`
+        : blockedReason;
+    }
   } else {
     input.disabled = false;
     wrapper?.classList.remove('is-disabled');
@@ -980,6 +1196,7 @@ async function refreshStatus() {
   renderNextStep(status);
   renderBlockingReasons(status);
   renderStepStatuses(status);
+  renderSyncAudit(status);
   applyRuntimeSettings(settings.effective);
   renderExplorerOverview(explorerStatus, settings.effective.explorer);
   applyButtonAvailability(status, explorerStatus);
@@ -1012,9 +1229,10 @@ async function saveRuntimeSettings({ silent = false } = {}) {
   return saved;
 }
 
-async function saveBroadcastTransportSettings(
-  { silent = false, refresh = true } = {},
-) {
+async function saveBroadcastTransportSettings({
+  silent = false,
+  refresh = true,
+} = {}) {
   const currentExplorer = latestSettingsPayload?.effective?.explorer;
   if (!currentExplorer) {
     throw new Error('广播方式设置尚未加载完成，请稍后重试。');
@@ -1124,13 +1342,81 @@ async function saveExplorerSourceSettings(
       source === 'doubao'
         ? elements.doubaoSourceMessage
         : elements.chatgptSourceMessage,
-      `${source === 'doubao' ? '豆包' : 'ChatGPT'} 来源设置已保存。启用状态、抓取范围、抓取节奏与默认范围会立即按新配置生效。`,
+      `${
+        source === 'doubao' ? '豆包' : 'ChatGPT'
+      } 来源设置已保存。启用状态、抓取范围、抓取节奏与默认范围会立即按新配置生效。`,
       'success',
     );
   }
   if (refresh) {
     await refreshStatus();
   }
+}
+
+async function savePendingExplorerSourceSettings(source) {
+  if (!explorerSourceDirty.has(source)) return;
+
+  await saveExplorerSourceSettings(source, {
+    silent: true,
+    refresh: false,
+  });
+  setMessage(
+    source === 'doubao'
+      ? elements.doubaoSourceMessage
+      : elements.chatgptSourceMessage,
+    `${
+      source === 'doubao' ? '豆包' : 'ChatGPT'
+    } 来源设置已先保存，正在按最新设置继续执行。`,
+    'success',
+  );
+}
+
+async function revokeIngestedMemoryForSource(source) {
+  const sourceStatus = latestExplorerStatus?.sources?.[source];
+  const scope = normalizeInputScope(
+    sourceStatus?.settings?.defaultScope,
+    source === 'doubao' ? 'personal' : 'work',
+  );
+  const sourceLabel = source === 'doubao' ? '豆包' : 'ChatGPT';
+  const messageElement =
+    source === 'doubao'
+      ? elements.doubaoSourceMessage
+      : elements.chatgptSourceMessage;
+  const button =
+    source === 'doubao'
+      ? elements.doubaoSourceRevokeButton
+      : elements.chatgptSourceRevokeButton;
+
+  const ok = window.confirm(
+    `确定撤回 ${sourceLabel} 来源写入「${formatAskScope(
+      scope,
+    )}」范围的已入库记忆吗？\n\n这只会删除 Memory Service 中对应来源/范围的记忆，不会删除原始聊天，也不会清理本地审计缓存。`,
+  );
+  if (!ok) return;
+
+  await withAction(button, '撤回中...', async () => {
+    try {
+      const result = await explorerApi.revokeIngestedMemory(source, scope);
+      const deletedMessages = Number(result?.deletedMessages ?? 0);
+      const deletedChunks = Number(result?.deletedChunks ?? 0);
+      setMessage(
+        messageElement,
+        `已撤回 ${sourceLabel} / ${formatAskScope(
+          scope,
+        )}：删除 ${deletedMessages} 条消息、${deletedChunks} 个记忆块。记忆列表仍保留本地审计记录。`,
+        'success',
+      );
+      await refreshStatus();
+    } catch (error) {
+      setMessage(
+        messageElement,
+        error instanceof Error
+          ? `撤回失败：${error.message}`
+          : '撤回已入库记忆失败',
+        'error',
+      );
+    }
+  });
 }
 
 async function handleRefresh() {
@@ -1149,6 +1435,7 @@ async function handleRefresh() {
       ],
     });
     renderStepStatuses(null);
+    renderSyncAudit(null);
     renderExplorerOverview(null, latestSettingsPayload?.effective?.explorer);
   }
 }
@@ -1291,7 +1578,10 @@ elements.settingsForm.addEventListener('submit', (event) => {
 
 if (elements.chatgptUseDailyBrowser) {
   elements.chatgptUseDailyBrowser.addEventListener('change', () => {
-    syncWebpageMcpGuide(elements.chatgptUseDailyBrowser, elements.chatgptMcpGuide);
+    syncWebpageMcpGuide(
+      elements.chatgptUseDailyBrowser,
+      elements.chatgptMcpGuide,
+    );
     markExplorerSourceDirty('chatgpt');
     applyButtonAvailability(latestStatus, latestExplorerStatus);
   });
@@ -1299,7 +1589,10 @@ if (elements.chatgptUseDailyBrowser) {
 
 if (elements.doubaoSourceUseDailyBrowser) {
   elements.doubaoSourceUseDailyBrowser.addEventListener('change', () => {
-    syncWebpageMcpGuide(elements.doubaoSourceUseDailyBrowser, elements.doubaoSourceMcpGuide);
+    syncWebpageMcpGuide(
+      elements.doubaoSourceUseDailyBrowser,
+      elements.doubaoSourceMcpGuide,
+    );
     markExplorerSourceDirty('doubao');
     applyButtonAvailability(latestStatus, latestExplorerStatus);
   });
@@ -1307,7 +1600,10 @@ if (elements.doubaoSourceUseDailyBrowser) {
 
 if (elements.broadcastUseDailyBrowser) {
   elements.broadcastUseDailyBrowser.addEventListener('change', () => {
-    syncWebpageMcpGuide(elements.broadcastUseDailyBrowser, elements.broadcastMcpGuide);
+    syncWebpageMcpGuide(
+      elements.broadcastUseDailyBrowser,
+      elements.broadcastMcpGuide,
+    );
     syncBroadcastTransportDirtyFromControl();
     syncBroadcastTransportPresentation();
     applyButtonAvailability(latestStatus, latestExplorerStatus);
@@ -1334,17 +1630,21 @@ if (elements.broadcastMcpTestButton) {
 
 if (elements.broadcastTransportSaveButton) {
   elements.broadcastTransportSaveButton.addEventListener('click', () => {
-    void withAction(elements.broadcastTransportSaveButton, '保存中...', async () => {
-      try {
-        await saveBroadcastTransportSettings();
-      } catch (error) {
-        setMessage(
-          elements.broadcastTransportMessage,
-          error instanceof Error ? error.message : '保存广播方式失败',
-          'error',
-        );
-      }
-    });
+    void withAction(
+      elements.broadcastTransportSaveButton,
+      '保存中...',
+      async () => {
+        try {
+          await saveBroadcastTransportSettings();
+        } catch (error) {
+          setMessage(
+            elements.broadcastTransportMessage,
+            error instanceof Error ? error.message : '保存广播方式失败',
+            'error',
+          );
+        }
+      },
+    );
   });
 }
 
@@ -1450,9 +1750,12 @@ elements.runStableButton.addEventListener('click', () => {
     } catch (error) {
       setMessage(
         elements.memoryThreadMessage,
-        error instanceof Error ? error.message : '手动推送失败',
+        error instanceof Error
+          ? formatBridgeIssueMessage(error.message)
+          : '手动推送失败',
         'error',
       );
+      await refreshStatus().catch(() => undefined);
     }
   });
 });
@@ -1471,9 +1774,12 @@ elements.runBriefingButton.addEventListener('click', () => {
     } catch (error) {
       setMessage(
         elements.mobileThreadMessage,
-        error instanceof Error ? error.message : '手动推送失败',
+        error instanceof Error
+          ? formatBridgeIssueMessage(error.message)
+          : '手动推送失败',
         'error',
       );
+      await refreshStatus().catch(() => undefined);
     }
   });
 });
@@ -1491,9 +1797,12 @@ elements.runReminderButton.addEventListener('click', () => {
     } catch (error) {
       setMessage(
         elements.mobileThreadMessage,
-        error instanceof Error ? error.message : '手动推送失败',
+        error instanceof Error
+          ? formatBridgeIssueMessage(error.message)
+          : '手动推送失败',
         'error',
       );
+      await refreshStatus().catch(() => undefined);
     }
   });
 });
@@ -1529,12 +1838,7 @@ elements.chatgptSourceSaveButton.addEventListener('click', () => {
 elements.doubaoSourceLoginButton.addEventListener('click', () => {
   void withAction(elements.doubaoSourceLoginButton, '打开中...', async () => {
     try {
-      if (explorerSourceDirty.has('doubao')) {
-        await saveExplorerSourceSettings('doubao', {
-          silent: true,
-          refresh: false,
-        });
-      }
+      await savePendingExplorerSourceSettings('doubao');
       const result = await explorerApi.openLogin('doubao');
       if (!result.implemented) {
         throw new Error('豆包 explorer 登录入口暂未实现。');
@@ -1560,12 +1864,7 @@ elements.doubaoSourceLoginButton.addEventListener('click', () => {
 elements.chatgptSourceLoginButton.addEventListener('click', () => {
   void withAction(elements.chatgptSourceLoginButton, '打开中...', async () => {
     try {
-      if (explorerSourceDirty.has('chatgpt')) {
-        await saveExplorerSourceSettings('chatgpt', {
-          silent: true,
-          refresh: false,
-        });
-      }
+      await savePendingExplorerSourceSettings('chatgpt');
       const result = await explorerApi.openLogin('chatgpt');
       if (!result.implemented) {
         throw new Error('ChatGPT explorer 登录暂未接通。');
@@ -1591,6 +1890,7 @@ elements.chatgptSourceLoginButton.addEventListener('click', () => {
 elements.doubaoSourceRunButton.addEventListener('click', () => {
   void withAction(elements.doubaoSourceRunButton, '抓取中...', async () => {
     try {
+      await savePendingExplorerSourceSettings('doubao');
       const result = await explorerApi.runNow('doubao');
       setMessage(
         elements.doubaoSourceMessage,
@@ -1611,6 +1911,7 @@ elements.doubaoSourceRunButton.addEventListener('click', () => {
 elements.chatgptSourceRunButton.addEventListener('click', () => {
   void withAction(elements.chatgptSourceRunButton, '抓取中...', async () => {
     try {
+      await savePendingExplorerSourceSettings('chatgpt');
       const result = await explorerApi.runNow('chatgpt');
       if (!result.implemented) {
         throw new Error('ChatGPT explorer 抓取流程暂未实现。');
@@ -1629,6 +1930,14 @@ elements.chatgptSourceRunButton.addEventListener('click', () => {
       );
     }
   });
+});
+
+elements.doubaoSourceRevokeButton?.addEventListener('click', () => {
+  void revokeIngestedMemoryForSource('doubao');
+});
+
+elements.chatgptSourceRevokeButton?.addEventListener('click', () => {
+  void revokeIngestedMemoryForSource('chatgpt');
 });
 
 elements.stopButton.addEventListener('click', () => {

@@ -5,6 +5,12 @@ export type AgentWorkflowDecisionPathStatus =
   | 'error'
   | 'info'
   | 'muted';
+export type AgentWorkflowRecommendedActionStatus =
+  | 'review'
+  | 'fix'
+  | 'optimize'
+  | 'verify'
+  | 'done';
 
 export interface AgentWorkflowDiagnostic {
   id: string;
@@ -17,6 +23,14 @@ export interface AgentWorkflowDiagnostic {
 export interface AgentWorkflowDecisionPathItem {
   id: string;
   status: AgentWorkflowDecisionPathStatus;
+  title: string;
+  summary: string;
+  detail?: string;
+}
+
+export interface AgentWorkflowRecommendedAction {
+  id: string;
+  status: AgentWorkflowRecommendedActionStatus;
   title: string;
   summary: string;
   detail?: string;
@@ -69,6 +83,7 @@ export interface AgentWorkflowResultLike {
     traceStatus?: string;
     failedAgents?: string[];
     toolErrorCount?: number;
+    toolSkippedCount?: number;
   };
   notificationReview?: {
     required?: boolean;
@@ -489,13 +504,20 @@ export function buildAgentWorkflowDecisionPath(
         (step.tools || []).filter((tool) => tool.status === 'error').length,
       0,
     );
+  const storageSkippedToolCount = result.storageReview?.toolSkippedCount;
+  const effectiveSkippedToolCount =
+    skippedToolCount > 0
+      ? skippedToolCount
+      : typeof storageSkippedToolCount === 'number'
+        ? storageSkippedToolCount
+        : 0;
 
   decisionPath.push({
     id: 'trace-health',
     status:
       failedSteps.length > 0 || toolErrorCount > 0
         ? 'error'
-        : skippedToolCount > 0 ||
+        : effectiveSkippedToolCount > 0 ||
             result.storageReview?.traceStatus === 'partial'
           ? 'warning'
           : 'success',
@@ -504,12 +526,143 @@ export function buildAgentWorkflowDecisionPath(
     detail:
       failedSteps.length > 0
         ? `失败：${failedSteps.map(getTraceStepLabel).join('、')}`
-        : skippedToolCount > 0
-          ? `跳过工具 ${skippedToolCount}`
+        : effectiveSkippedToolCount > 0
+          ? `跳过工具 ${effectiveSkippedToolCount}`
           : undefined,
   });
 
   return decisionPath;
+}
+
+export function buildAgentWorkflowRecommendedActions(
+  result?: AgentWorkflowResultLike | null,
+  diagnostics?: AgentWorkflowDiagnostic[],
+): AgentWorkflowRecommendedAction[] {
+  if (!result) return [];
+
+  const runDiagnostics =
+    diagnostics || buildAgentWorkflowResultDiagnostics(result);
+  const diagnosticIds = new Set(runDiagnostics.map((item) => item.id));
+  const actions: AgentWorkflowRecommendedAction[] = [];
+  const matchedRuleLabel = getMatchedRuleLabel(result);
+  const confidenceLabel =
+    getConfidenceLabel(result.confidence) ||
+    getConfidenceLabel(result.storageReview?.confidence);
+
+  if (result.notificationReview?.required) {
+    actions.push({
+      id: 'review-notification',
+      status: 'review',
+      title: '处理通知/自动化复核',
+      summary:
+        result.notificationReview.message ||
+        '低置信度关注项命中需要人工确认。',
+      detail: matchedRuleLabel
+        ? `规则：${matchedRuleLabel}${confidenceLabel ? ` / ${confidenceLabel}` : ''}`
+        : confidenceLabel
+          ? `置信度 ${confidenceLabel}`
+          : undefined,
+    });
+  }
+
+  if (diagnosticIds.has('agent-step-errors')) {
+    const failedAgents =
+      result.storageReview?.failedAgents?.filter(Boolean).join('、') ||
+      runDiagnostics.find((item) => item.id === 'agent-step-errors')?.message ||
+      '查看失败 Agent';
+    actions.push({
+      id: 'fix-agent-errors',
+      status: 'fix',
+      title: '修复失败阶段',
+      summary: failedAgents,
+      detail: '先处理失败 Agent，再重新运行同一条测试消息。',
+    });
+  }
+
+  if (diagnosticIds.has('skipped-tools')) {
+    actions.push({
+      id: 'fix-skipped-tools',
+      status: 'fix',
+      title: '补齐被跳过工具',
+      summary:
+        runDiagnostics.find((item) => item.id === 'skipped-tools')?.message ||
+        '存在未注册或不可用工具。',
+      detail: '检查自定义 Agent 配置，移除旧工具或替换为已注册工具。',
+    });
+  }
+
+  if (
+    diagnosticIds.has('slow-agents') ||
+    diagnosticIds.has('slow-tools')
+  ) {
+    const slowSummary = runDiagnostics
+      .filter((item) => item.id === 'slow-agents' || item.id === 'slow-tools')
+      .map((item) => item.message)
+      .join('、');
+    actions.push({
+      id: 'optimize-slow-steps',
+      status: 'optimize',
+      title: '压缩慢步骤',
+      summary: slowSummary || '有阶段耗时偏高。',
+      detail: '优先检查 historySearch、外部查询和 LLM 调用是否可缓存或缩小输入。',
+    });
+  }
+
+  if (diagnosticIds.has('missing-storage-review')) {
+    actions.push({
+      id: 'fix-storage-review',
+      status: 'fix',
+      title: '补齐存储审计',
+      summary: '本次决定写入记忆，但缺少 storageReview。',
+      detail: '没有审计字段会让后续回溯和误报处理变困难。',
+    });
+  }
+
+  if (diagnosticIds.has('missing-trace')) {
+    actions.push({
+      id: 'fix-missing-trace',
+      status: 'fix',
+      title: '恢复执行 Trace',
+      summary: '本次运行没有返回 Agent / 工具 trace。',
+      detail: '先确认测试是否真正走到 Agent Workflow 编排器。',
+    });
+  }
+
+  if (result.shouldStore && result.storageReview) {
+    actions.push({
+      id: 'verify-storage',
+      status: 'verify',
+      title: '确认记忆审计',
+      summary:
+        result.storageReview.primaryReason ||
+        result.storageReview.summary ||
+        '确认这条消息应写入 Memory Service。',
+      detail: result.storageReview.reasonSource
+        ? `来源：${getStorageReasonSourceLabel(result.storageReview.reasonSource)}`
+        : undefined,
+    });
+  }
+
+  if (result.shouldNotify) {
+    actions.push({
+      id: 'verify-notification',
+      status: 'verify',
+      title: '确认通知发送',
+      summary: matchedRuleLabel || '本次会发送用户通知。',
+      detail: confidenceLabel ? `置信度 ${confidenceLabel}` : undefined,
+    });
+  }
+
+  if (actions.length === 0) {
+    actions.push({
+      id: 'no-followup',
+      status: 'done',
+      title: '无需后续动作',
+      summary: '本次不会存储，也不会发送通知。',
+    });
+  }
+
+  return actions.slice(0, 5);
 }
 
 export function getAgentWorkflowHighestSeverity(

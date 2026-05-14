@@ -14,15 +14,19 @@ Source of truth: [google_slides_analyzer.md](./google_slides_analyzer.md).
 Keep this feature aligned with the current implementation:
 
 - The user starts analysis from a Google Slides page or the extension popup.
-- `contentScriptGoogleSlide.tsx` extracts the current presentation/slide and opens `slides-analysis.html`.
+- `contentScriptGoogleSlide.tsx` keeps the Google Slides toolbar entry available, extracts the current presentation/slide, and opens `slides-analysis.html`.
 - `slide.ts` reads and updates Slides through the Google Slides API.
-- `tableAnalyzer.ts` handles table header detection, Jira Key columns, and project row extraction.
+- `tableAnalyzer.ts` handles table header detection, Jira Key columns, project row extraction, and merges multiple credible project tables on the same slide.
 - `textAnalyzer.ts` merges duplicate Jira projects found by overlapping text/list extraction passes before suggestions are shown.
-- `slides-analysis.tsx` is the review UI; users select specific fields before writing updates.
+- `slides-analysis.tsx` is the review UI; users can inspect risk spotlight/filter views, verify per-project risk evidence, and select specific fields before writing updates.
+- `slidesAnalyzerRisk.ts` keeps summary and review-page risk detection aligned, including negated phrases such as `No risk`, open statuses such as `Not done`, and closed Jira issues that should not count as active priority/overdue risks.
+- Project risk levels are normalized before summary counts: `medium` and legacy `normal` are attention, `high` / `critical` are risk, and `low` is normal.
 
 When changing this feature, verify:
 
-- Invalid column indexes such as `-1` are not sent to Slides API update requests.
+- Invalid row/column indexes such as `-1` are not sent to Slides API update requests.
 - Cell replacement uses `deleteText.textRange.type = ALL` and `insertText.insertionIndex = 0`.
 - The review window and Slides page use constrained `postMessage` origins.
+- Risk detection does not treat negated phrases such as `No risk` or open statuses such as `Incomplete` / `Not done` as closed, and closed high-priority Jira issues do not become active risk by priority alone.
+- `medium` project risk from the project-analysis prompt must not be counted as normal.
 - `docs/features/google_slides_analyzer.md` stays concise and current.

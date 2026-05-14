@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-05-08_
+_最后更新: 2026-05-13_
 
 ## 是什么
 
@@ -58,6 +58,17 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 
 - `GET /api/v1/skills/suggestions` 只返回未暂缓或已到期的 suggestion，避免用户点击“稍后审”后同一张卡片仍停留在 Inbox 里。
 - 前端刷新列表时只保留仍然可见的选中项；当前 suggestion 被稍后审或丢弃后，详情区会自动回到可见的 active skill 或下一条可见建议。
+
+2026-05-12 状态：
+
+- 创建 suggestion 时会按 `suggestionClusterKey` 和 slug 做去重；同一来源簇的 pending / active / dismissed 记录不会重复生成 Inbox 卡片。
+- 被用户丢弃的同簇建议有 30 天冷却期；冷却期内重复萃取会复用已丢弃记录，不重新打扰。
+- 高风险、外部 agent 平台导入、带脚本/资源文件、证据不完整或声明工具调用的 suggestion 会标记为 `reviewRequired`；前端先引导用户看证据和风险，后端也要求 `reviewConfirmed` 后才允许 promote。
+
+2026-05-13 状态：
+
+- Inbox Bar 会返回完整审核原因，包括版本里的 evidence / files / workflow 工具信息；需要审核的卡片先进入证据页，再允许确认使用，避免用户先点“使用”才被后端拦住。
+- 外部平台或本机 agent skill 目录里的新版本不会再静默覆盖 Personal AI 的 active 真源技能；同步会生成“外部变更建议”，用户确认后才应用到原 active skill。
 
 ### 2. 管理在用技能
 
@@ -152,7 +163,7 @@ OpenClaw remote 不要求和 Personal AI app 在同一台机器上。
 
 1. `sha256` 相同：noop，并更新 binding。
 2. OpenClaw 有新 skill，而 Personal AI 不存在：导入为 `suggestion`。
-3. Personal AI 已有 active skill，OpenClaw 版本更新：从 OpenClaw export 完整 package，覆盖 Personal AI 当前 active version。
+3. Personal AI 已有 active skill，OpenClaw 版本更新：从 OpenClaw export 完整 package，生成需要审核的外部变更 suggestion；用户确认后才覆盖 Personal AI 当前 active version。
 4. Personal AI 版本更新或 OpenClaw 缺失：推送 Personal AI active package 到 OpenClaw。
 5. 冲突判断会综合 `sha256`、version 和 remote mtime。
 
@@ -167,7 +178,7 @@ Codex CLI / Claude Code / Cursor 的 skill 目录在本机文件系统里，Chro
 1. Desktop App 定期扫描本机 skill 目录。
 2. 调用 Memory Service `POST /api/v1/skills/sync/local-platform`。
 3. Memory Service 判断本机平台和 Personal AI 哪边更新。
-4. 如果本机 skill 是新内容，创建 suggestion 或更新 active。
+4. 如果本机 skill 是新内容，创建 suggestion；如果它会改变已有 active skill，生成需要审核的外部变更 suggestion。
 5. 如果 Personal AI active 更新，Memory Service 返回 `packagesToInstall`。
 6. Desktop App 把 package 写回对应平台目录。
 
@@ -188,7 +199,7 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 | `GET /api/v1/skills?filter=active|all|dismissed&q=` | 主列表；默认不返回 suggestion |
 | `GET /api/v1/skills/suggestions` | Inbox Bar 建议列表 |
 | `POST /api/v1/skills/suggestions` | 创建 suggestion，供同步器或 miner 写入 |
-| `POST /api/v1/skills/suggestions/:id/use` | promote 为 active，生成版本和 share link，并触发已开启平台同步 |
+| `POST /api/v1/skills/suggestions/:id/use` | promote 为 active；需要审核的建议必须传 `reviewConfirmed`，成功后生成 share link 并触发已开启平台同步 |
 | `POST /api/v1/skills/suggestions/:id/dismiss` | 标记 dismissed，并记录冷却 key |
 | `POST /api/v1/skills/suggestions/:id/snooze` | 暂缓建议 |
 | `GET /api/v1/skills/:id` | 技能详情，返回 workflow / evidence / versions / bindings / share |
@@ -205,6 +216,7 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - 短展示 URL 不能直接打开，避免误把无 token URL 当公开 URL。
 - share 生成前扫描疑似 secret，例如 api key、bearer token、private key、password 等。
 - 外部平台导入的 skill 默认先进入 suggestion，不直接进入 active。
+- 外部平台或本机 agent 目录对 active skill 的改动也默认先进入 suggestion，不直接覆盖真源。
 - 自动同步按平台开启，避免用户误以为单条 skill 有独立同步开关。
 
 ## 已知边界
@@ -218,24 +230,35 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 
 ## 建设性改进方向
 
-结合 Claude Code Skills、LangChain long-term memory、OpenAI Agents SDK guardrails / tracing，以及 Skill-Pro、AgeMem、LightMem、Memp 等近期 agent memory / procedural memory 论文，后续优先级建议：
+结合 Claude Skills、LangChain long-term memory、OpenAI Agents SDK guardrails / tracing，以及 Skill-Pro、SkillX、SSL skill representation 等近期 agent skill / procedural memory 论文，后续优先级建议：
 
 - Skill package 继续保持 `SKILL.md` 主文件轻量，把大参考、模板、脚本放到 files 中按需加载，减少 agent 上下文常驻成本。
-- 对外部导入 skill 增加更明确的审核 gate：高风险、含工具执行、含动态脚本或权限敏感内容时，进入 suggestion 后默认要求用户查看证据和风险再使用。
-- 为 suggestion 去重和冷却补上产品级策略：同一 `suggestionClusterKey` 在 snooze / dismiss 窗口内不重复打扰。
+- 审核 gate 后续可以加入更细的来源可信度、脚本权限分类和安装前 diff 预览，让用户更快判断外部导入技能是否可信。
+- 继续扩展 suggestion 去重策略：在已有 `suggestionClusterKey` 冷却基础上，后续可加入语义相似合并和来源可信度排序。
+- 将 trigger、执行结构、工具/文件副作用和证据状态提取成结构化摘要，用于搜索、风险评估和审核，而不是只依赖 `SKILL.md` 原文。
 - 为长期演进增加 run receipt / 失败反馈的轻量入口，不做重 eval 面板，但让用户能把“这个 skill 不好用”的证据回流到版本记录。
 - 同步链路继续保留 per-platform 开关；如需例外，优先通过 skill risk / scope 做过滤，而不是在首屏引入 per-skill 多平台矩阵。
 
+本轮调研后新增的短期产品判断：
+
+- Claude Skills 把 skill 明确定义为包含 instructions、metadata、scripts、templates 的能力包，并强调 progressive disclosure；因此 Foundry 应继续把短触发描述和完整资源分层，而不是把所有资料塞进主 `SKILL.md`。
+- Claude 官方文档也提醒第三方 skill 可能带来工具滥用和数据外泄风险；这支持了本轮把外部 active 更新改成审核建议，而不是自动覆盖。
+- OpenAI Agents SDK 的 guardrails / tracing 说明生产 agent 需要围绕工具调用和运行轨迹做可审计边界；Foundry 后续应把“确认覆盖”记录成版本证据，而不只做一次 UI 弹窗。
+- SkillX、AutoSkill 等 2026 年论文都把执行反馈、技能库自演进和跨 agent 共享作为核心方向；Foundry 目前不需要重 eval 面板，但需要保留轻量 run receipt / 失败反馈入口。
+
+## Reminders 反馈
+
+本轮尝试检查本机 Reminders 的 `Personal AI` 列表：Computer Use 能看到 Reminders 正在运行，但无法取得可读窗口；AppleScript 枚举列表在 5 秒超时内没有返回；本地 Reminders 数据目录也被 macOS 隐私权限拒绝。因此本轮没有可靠读取到新的 Reminder item，也没有可标记 done 的条目。
+
 外部参考：
 
-- [Claude Code Skills](https://code.claude.com/docs/en/skills)
+- [Claude Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
 - [LangChain long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory)
 - [OpenAI Agents SDK Guardrails](https://openai.github.io/openai-agents-js/guides/guardrails/)
 - [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/)
 - [Skill-Pro: Learning Reusable Skills from Experience](https://arxiv.org/abs/2602.01869)
-- [Agentic Memory](https://arxiv.org/abs/2601.01885)
-- [LightMem](https://arxiv.org/abs/2604.07798)
-- [Memp: Exploring Agent Procedural Memory](https://arxiv.org/abs/2508.06433)
+- [SkillX: Automatically Constructing Skill Knowledge Bases for Agents](https://arxiv.org/abs/2604.04804)
+- [From Skill Text to Skill Structure: SSL Representation for Agent Skills](https://arxiv.org/abs/2604.24026)
 
 ## 验证建议
 

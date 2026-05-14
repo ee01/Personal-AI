@@ -1,0 +1,293 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const overviewSource = readFileSync(
+  new URL('../src/modals/components/OverviewPage.vue', import.meta.url),
+  'utf8',
+);
+const shellSource = readFileSync(
+  new URL('../src/modals/memory-exploring.vue', import.meta.url),
+  'utf8',
+);
+const clientSource = readFileSync(
+  new URL('../src/services/MemoryServiceClient.ts', import.meta.url),
+  'utf8',
+);
+const serverSource = readFileSync(
+  new URL('../memory-service/src/server.ts', import.meta.url),
+  'utf8',
+);
+const dayPilotRouteSource = readFileSync(
+  new URL('../memory-service/src/routes/dayPilot.ts', import.meta.url),
+  'utf8',
+);
+const dayPilotServiceSource = readFileSync(
+  new URL('../memory-service/src/core/DayPilotService.ts', import.meta.url),
+  'utf8',
+);
+const dayPilotMigrationSource = readFileSync(
+  new URL(
+    '../memory-service/src/storage/migrations/022_day_pilot.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+
+function assertContains(source: string, pattern: RegExp, label: string) {
+  assert.match(source, pattern, `${label} should be present`);
+}
+
+function assertNotContains(source: string, pattern: RegExp, label: string) {
+  assert.doesNotMatch(source, pattern, `${label} should not be present`);
+}
+
+function verifyDayPilotStructure() {
+  assertContains(overviewSource, /class="day-pilot-home"/, 'Day Pilot shell');
+  assertContains(overviewSource, /今日 Mission/, 'mission section');
+  assertContains(overviewSource, /需要你处理/, 'attention section');
+  assertContains(overviewSource, /今日时间线/, 'timeline section');
+  assertContains(overviewSource, /未读主题入口/, 'compact topic entry');
+  assertContains(overviewSource, /生成上下文包/, 'context pack control');
+  assertContains(overviewSource, /provider-segment/, 'provider selector');
+  assertContains(overviewSource, /包含敏感原文/, 'sensitive handoff toggle');
+}
+
+function verifyRealDataSources() {
+  assertContains(
+    overviewSource,
+    /client\.getTodayPilotToday\(/,
+    'Today Pilot today source',
+  );
+  assertContains(
+    overviewSource,
+    /sendDayPilotCardFeedback/,
+    'Day Pilot feedback source',
+  );
+  assertContains(
+    overviewSource,
+    /renderDayPilotContextPack/,
+    'Day Pilot context pack source',
+  );
+  assertContains(
+    overviewSource,
+    /sendCardSignal\(card, 'useful'\)/,
+    'useful feedback signal',
+  );
+  assertContains(
+    overviewSource,
+    /sendCardSignal\(card, 'wrong'\)/,
+    'wrong feedback signal',
+  );
+  for (const directApi of [
+    /client\.getConfirmRequests/,
+    /client\.getActions\(/,
+    /client\.getOutreach/,
+    /client\.getSkillSuggestions/,
+    /client\.getNotifications\(/,
+    /client\.getReflectionThreads/,
+  ]) {
+    assertNotContains(
+      overviewSource,
+      directApi,
+      `legacy frontend aggregate source: ${directApi}`,
+    );
+  }
+  for (const oldBuilderUse of [
+    /\.map\(buildDecisionMission\)/,
+    /\.map\(buildActionMission\)/,
+    /\.map\(buildOutreachSessionMission\)/,
+    /\.map\(buildSkillSuggestionMission\)/,
+    /\.map\(buildNotificationMission\)/,
+    /\.map\(buildTopicMission\)/,
+  ]) {
+    assertNotContains(
+      overviewSource,
+      oldBuilderUse,
+      `legacy mission builder usage: ${oldBuilderUse}`,
+    );
+  }
+}
+
+function verifyBackendDayPilotApi() {
+  assertContains(
+    serverSource,
+    /dayPilotRoutes/,
+    'Day Pilot route registration',
+  );
+  assertContains(
+    dayPilotRouteSource,
+    /\['\/day-pilot', '\/today-pilot'\]/,
+    'Today Pilot canonical alias route loop',
+  );
+  assertContains(dayPilotRouteSource, /\$\{prefix\}\/today/, 'today API route');
+  assertContains(
+    dayPilotRouteSource,
+    /\$\{prefix\}\/refresh/,
+    'refresh API route',
+  );
+  assertContains(
+    dayPilotRouteSource,
+    /\$\{prefix\}\/cards\/:id\/feedback/,
+    'feedback API route',
+  );
+  assertContains(
+    dayPilotRouteSource,
+    /\$\{prefix\}\/missions\/:id\/context-pack/,
+    'context pack API route',
+  );
+  for (const table of [
+    'day_briefs',
+    'day_missions',
+    'day_brief_cards',
+    'day_brief_feedback',
+  ]) {
+    assertContains(
+      dayPilotMigrationSource,
+      new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`),
+      `${table} migration`,
+    );
+  }
+  for (const source of [
+    'messages_raw',
+    'calendar_events',
+    'notification_records',
+    'proposed_actions',
+    'reflection_threads',
+    'personal_skills',
+    'relationship_radar_people',
+  ]) {
+    assertContains(
+      dayPilotServiceSource,
+      new RegExp(source),
+      `${source} scanner`,
+    );
+  }
+  assertContains(
+    dayPilotServiceSource,
+    /PROVIDER_PROFILES/,
+    'provider-specific context pack profiles',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /prepareEvidenceForHandoff/,
+    'redaction-aware context pack rendering',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /applyFeedbackSignal/,
+    'feedback rank adjustment',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /ACTIONABLE_RELATIONSHIP_PATTERN/,
+    'relationship radar actionability gate',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /relationshipCandidate\(row, currentTime\)/,
+    'relationship radar current-time scoring',
+  );
+  assertContains(
+    clientSource,
+    /getTodayPilotToday/,
+    'client getTodayPilotToday method',
+  );
+  assertContains(
+    clientSource,
+    /refreshTodayPilot/,
+    'client refreshTodayPilot method',
+  );
+  assertContains(
+    clientSource,
+    /sendDayPilotCardFeedback/,
+    'client feedback method',
+  );
+  assertContains(
+    clientSource,
+    /renderDayPilotContextPack/,
+    'client context pack method',
+  );
+}
+
+function verifyHomepageIsReadOnlyOrDelegating() {
+  assertNotContains(
+    overviewSource,
+    /answerConfirmRequest/,
+    'decision write API on homepage',
+  );
+  assertNotContains(
+    overviewSource,
+    /transitionConfirmRequestState/,
+    'decision state transition API on homepage',
+  );
+  assertNotContains(
+    overviewSource,
+    /handleMuteTopic|handleMarkTopicAsRead|topic-action-btn|waterfallTopics/,
+    'full topic triage controls on homepage',
+  );
+  assertContains(
+    overviewSource,
+    /\/actions\?actionId=|\/skills|\/timeline|\/search/,
+    'delegating detail route',
+  );
+  assertNotContains(
+    overviewSource,
+    /Personal-AI 项目已进入测试阶段/,
+    'old fake overview content',
+  );
+}
+
+function verifyMissionCardsAreConcreteItems() {
+  for (const groupedTitle of [
+    '个事项需要你拍板',
+    '个动作正在等待处理',
+    '个主动询问需要关注',
+    '条个人技能萃取建议',
+    '个主题包含未读讨论',
+    '条自我反思仍在跟踪',
+  ]) {
+    assertNotContains(
+      overviewSource,
+      new RegExp(groupedTitle),
+      `grouped mission title: ${groupedTitle}`,
+    );
+  }
+
+  assertContains(overviewSource, /mapDayPilotCard/, 'Day Pilot card mapper');
+}
+
+function verifyDemoContentWasRemoved() {
+  for (const fakeText of [
+    'Personal-AI 项目已进入测试阶段',
+    'Data Pipeline',
+    '张三',
+    '李四',
+    'Clean Architecture',
+    'Webpack 5',
+  ]) {
+    assertNotContains(
+      overviewSource,
+      new RegExp(fakeText),
+      `old demo text: ${fakeText}`,
+    );
+  }
+}
+
+function verifyShellLabel() {
+  assertContains(
+    shellSource,
+    /<div class="entity-name">今日领航<\/div>/,
+    'sidebar label',
+  );
+  assertNotContains(shellSource, /首页概览/, 'old overview label/comment');
+}
+
+verifyDayPilotStructure();
+verifyRealDataSources();
+verifyBackendDayPilotApi();
+verifyHomepageIsReadOnlyOrDelegating();
+verifyMissionCardsAreConcreteItems();
+verifyDemoContentWasRemoved();
+verifyShellLabel();
+
+console.log('verify-day-pilot-home: ok');

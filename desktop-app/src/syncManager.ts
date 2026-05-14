@@ -7,7 +7,11 @@ import {
 } from './memoryServiceClient.js';
 import { BridgeSettingsStore } from './settings.js';
 import { DoubaoBridgeService } from './bridgeService.js';
-import type { AutoSyncKind } from './types.js';
+import type {
+  AutoSyncKind,
+  BridgeSyncAttemptLogEntry,
+  BridgeSyncAttemptStatus,
+} from './types.js';
 import type { ExplorerManager } from './explorer/index.js';
 import type { LocalSkillSyncManager } from './skillSync/localSkillSyncManager.js';
 
@@ -17,7 +21,7 @@ interface SyncState {
   reminderSync?: number;
 }
 
-export type SyncAttemptStatus = 'succeeded' | 'skipped' | 'failed';
+export type SyncAttemptStatus = BridgeSyncAttemptStatus;
 
 export interface SyncAttemptResult {
   status: SyncAttemptStatus;
@@ -39,6 +43,7 @@ export interface BridgeSyncManagerSnapshot {
   pollIntervalMs: number;
   lastErrorAt?: string;
   lastErrorMessage?: string;
+  recentAttempts: BridgeSyncAttemptLogEntry[];
   tasks: {
     stableMemory: SyncTaskSnapshot;
     mobileBriefing: SyncTaskSnapshot;
@@ -46,13 +51,37 @@ export interface BridgeSyncManagerSnapshot {
   };
 }
 
+const MAX_RECENT_ATTEMPTS = 8;
+
 function stripMarkdown(line: string): string {
   return line
     .replace(/^#+\s*/, '')
     .replace(/^>\s*/, '')
     .replace(/^[-*]\s*/, '')
     .replace(/^\d+\.\s*/, '')
+    .replace(/^_+|_+$/g, '')
     .trim();
+}
+
+function isPlaceholderOrMetadataLine(rawLine: string, value: string): boolean {
+  const raw = rawLine.trim();
+  const normalized = value.toLowerCase();
+  if (!value) return true;
+  if (raw.startsWith('#')) return true;
+  if (/^freshness window\b/i.test(value)) return true;
+  if (/watch rules\s*\/\s*concerned items/i.test(value)) return true;
+  if (
+    /^(no recent|no stable|no pending|no notices?|no data available)\b/i.test(
+      value,
+    )
+  ) {
+    return true;
+  }
+  if (/^暂无/.test(value)) return true;
+  if (raw.startsWith('>') && /no recent|no data|暂无/.test(normalized)) {
+    return true;
+  }
+  return false;
 }
 
 function extractBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
@@ -71,7 +100,7 @@ function extractBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
       /^\d+\.\s/.test(line)
     ) {
       const value = stripMarkdown(line);
-      if (value) {
+      if (!isPlaceholderOrMetadataLine(line, value)) {
         bullets.push(value);
       }
       if (bullets.length >= limit) break;
@@ -80,10 +109,15 @@ function extractBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
 
   if (bullets.length > 0) return bullets.slice(0, limit);
 
-  return lines
-    .map((line) => stripMarkdown(line))
-    .filter(Boolean)
-    .slice(0, limit);
+  const fallback: string[] = [];
+  for (const line of lines) {
+    const value = stripMarkdown(line);
+    if (!isPlaceholderOrMetadataLine(line, value)) {
+      fallback.push(value);
+    }
+    if (fallback.length >= limit) break;
+  }
+  return fallback;
 }
 
 function packageHasItems(pkg: ProviderMemoryProduct): boolean {
@@ -91,6 +125,12 @@ function packageHasItems(pkg: ProviderMemoryProduct): boolean {
     return pkg.itemCount > 0;
   }
   return Array.isArray(pkg.sourceRefs) && pkg.sourceRefs.length > 0;
+}
+
+function actionablePackages(
+  rendered: RenderContextPackageResponse,
+): ProviderMemoryProduct[] {
+  return rendered.packages.filter((pkg) => packageHasItems(pkg));
 }
 
 function extractReminders(pkg: ProviderMemoryProduct, limit = 8) {
@@ -141,6 +181,8 @@ export class BridgeSyncManager {
   private settingsUnsubscribe: (() => void) | null = null;
   private providerScenariosCache?: { value: Set<string>; fetchedAt: number };
   private lastError?: { message: string; occurredAt: number };
+  private recentAttempts: BridgeSyncAttemptLogEntry[] = [];
+  private attemptSequence = 0;
 
   constructor(
     private readonly config: BridgeConfig,
@@ -187,6 +229,7 @@ export class BridgeSyncManager {
         ? new Date(this.lastError.occurredAt).toISOString()
         : undefined,
       lastErrorMessage: this.lastError?.message,
+      recentAttempts: [...this.recentAttempts],
       tasks: {
         stableMemory: this.taskSnapshot(
           this.syncState.stableMemory,
@@ -283,6 +326,61 @@ export class BridgeSyncManager {
     this.lastError = undefined;
   }
 
+  private recordSyncAttempt(input: {
+    kind: AutoSyncKind;
+    trigger: BridgeSyncAttemptLogEntry['trigger'];
+    status: SyncAttemptStatus;
+    startedAtMs: number;
+    completedAtMs: number;
+    errorMessage?: string;
+  }): void {
+    this.attemptSequence += 1;
+    const entry: BridgeSyncAttemptLogEntry = {
+      id: `${input.startedAtMs}-${this.attemptSequence}-${input.kind}`,
+      kind: input.kind,
+      trigger: input.trigger,
+      status: input.status,
+      startedAt: new Date(input.startedAtMs).toISOString(),
+      completedAt: new Date(input.completedAtMs).toISOString(),
+      durationMs: Math.max(0, input.completedAtMs - input.startedAtMs),
+      errorMessage: input.errorMessage,
+    };
+    this.recentAttempts = [entry, ...this.recentAttempts].slice(
+      0,
+      MAX_RECENT_ATTEMPTS,
+    );
+  }
+
+  private async trackSyncAttempt(
+    kind: AutoSyncKind,
+    trigger: BridgeSyncAttemptLogEntry['trigger'],
+    run: () => Promise<SyncAttemptResult>,
+  ): Promise<SyncAttemptResult> {
+    const startedAtMs = Date.now();
+    try {
+      const result = await run();
+      this.recordSyncAttempt({
+        kind,
+        trigger,
+        status: result.status,
+        startedAtMs,
+        completedAtMs: Date.now(),
+        errorMessage: result.errorMessage,
+      });
+      return result;
+    } catch (error) {
+      this.recordSyncAttempt({
+        kind,
+        trigger,
+        status: 'failed',
+        startedAtMs,
+        completedAtMs: Date.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
   private collectSourceRefs(rendered: RenderContextPackageResponse): string[] {
     return Array.from(
       new Set(
@@ -342,7 +440,11 @@ export class BridgeSyncManager {
           status.bindings.memory_sync &&
           this.due(this.syncState.stableMemory, settings.stableMemoryIntervalMs)
         ) {
-          const result = await this.syncStableMemoryAsMemo();
+          const result = await this.trackSyncAttempt(
+            'stable_memory',
+            'auto',
+            () => this.syncStableMemoryAsMemo(),
+          );
           attemptedSync = true;
           if (result.status === 'failed' && !failedAttempt) {
             failedAttempt = result;
@@ -359,7 +461,11 @@ export class BridgeSyncManager {
             settings.mobileBriefingIntervalMs,
           )
         ) {
-          const result = await this.syncMobileBriefing();
+          const result = await this.trackSyncAttempt(
+            'mobile_briefing',
+            'auto',
+            () => this.syncMobileBriefing(),
+          );
           attemptedSync = true;
           if (result.status === 'failed' && !failedAttempt) {
             failedAttempt = result;
@@ -374,7 +480,11 @@ export class BridgeSyncManager {
           status.bindings.mobile_context &&
           this.due(this.syncState.reminderSync, settings.reminderSyncIntervalMs)
         ) {
-          const result = await this.syncReminderChannels();
+          const result = await this.trackSyncAttempt(
+            'reminder_sync',
+            'auto',
+            () => this.syncReminderChannels(),
+          );
           attemptedSync = true;
           if (result.status === 'failed' && !failedAttempt) {
             failedAttempt = result;
@@ -406,7 +516,9 @@ export class BridgeSyncManager {
     let result: SyncAttemptResult;
     try {
       if (kind === 'stable_memory') {
-        result = await this.syncStableMemoryAsMemo();
+        result = await this.trackSyncAttempt(kind, 'manual', () =>
+          this.syncStableMemoryAsMemo(),
+        );
         this.assertSyncAttemptSucceeded(kind, result);
         this.syncState.stableMemory = Date.now();
         this.clearSyncError();
@@ -414,14 +526,18 @@ export class BridgeSyncManager {
       }
 
       if (kind === 'mobile_briefing') {
-        result = await this.syncMobileBriefing();
+        result = await this.trackSyncAttempt(kind, 'manual', () =>
+          this.syncMobileBriefing(),
+        );
         this.assertSyncAttemptSucceeded(kind, result);
         this.syncState.mobileBriefing = Date.now();
         this.clearSyncError();
         return result;
       }
 
-      result = await this.syncReminderChannels();
+      result = await this.trackSyncAttempt(kind, 'manual', () =>
+        this.syncReminderChannels(),
+      );
       this.assertSyncAttemptSucceeded(kind, result);
       this.syncState.reminderSync = Date.now();
       this.clearSyncError();
@@ -447,12 +563,15 @@ export class BridgeSyncManager {
       scenario: 'stable_memory',
       deviceContext: 'doubao_bridge_daemon',
     });
-    if (rendered.packages.length === 0) {
-      return { status: 'skipped' };
+    const packages = actionablePackages(rendered);
+    if (packages.length === 0) {
+      const reason = 'No stable memory items to sync';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped', errorMessage: reason };
     }
 
     const result = await this.bridgeService.syncStableMemory({
-      items: rendered.packages.map((pkg) => ({
+      items: packages.map((pkg) => ({
         title: pkg.title,
         body: pkg.bodyMd,
       })),
@@ -476,25 +595,20 @@ export class BridgeSyncManager {
       scenario: 'mobile_briefing',
       deviceContext: 'doubao_bridge_daemon',
     });
-    const actionablePackages = rendered.packages.filter((pkg) =>
-      packageHasItems(pkg),
-    );
-    if (actionablePackages.length === 0) {
-      await this.reportSkipped(
-        rendered,
-        startedAt,
-        'No recent memory highlights to sync',
-      );
-      return { status: 'skipped' };
+    const packages = actionablePackages(rendered);
+    if (packages.length === 0) {
+      const reason = 'No recent memory highlights to sync';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped', errorMessage: reason };
     }
 
-    const bullets = actionablePackages
+    const bullets = packages
       .flatMap((pkg) => extractBullets(pkg, 5))
       .slice(0, 12);
     if (bullets.length === 0) {
       const reason = 'No mobile briefing bullets extracted';
       await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped' };
+      return { status: 'skipped', errorMessage: reason };
     }
 
     const result = await this.bridgeService.syncMobileBriefing({
@@ -553,12 +667,15 @@ export class BridgeSyncManager {
       scenario: 'stable_memory',
       deviceContext: 'doubao_bridge_daemon',
     });
-    if (rendered.packages.length === 0) {
-      return { status: 'skipped' };
+    const packages = actionablePackages(rendered);
+    if (packages.length === 0) {
+      const reason = 'No stable memory items to sync';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped', errorMessage: reason };
     }
 
     const result = await this.bridgeService.syncStableMemoryAsMemo({
-      items: rendered.packages.map((pkg) => ({
+      items: packages.map((pkg) => ({
         title: pkg.title,
         body: pkg.bodyMd,
       })),
@@ -584,27 +701,33 @@ export class BridgeSyncManager {
     if (results.some((result) => result.status === 'succeeded')) {
       return { status: 'succeeded' };
     }
-    return { status: 'skipped' };
+    const skippedReasons = results
+      .map((result) => result.errorMessage)
+      .filter((message): message is string => Boolean(message));
+    return {
+      status: 'skipped',
+      errorMessage:
+        skippedReasons.join(' / ') || 'No pending todos or notices to sync',
+    };
   }
 
   async syncTodosAsMemo(): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
     const rendered = await this.renderTodoPackage();
-    const actionablePackages = rendered.packages.filter((pkg) =>
-      packageHasItems(pkg),
-    );
-    if (actionablePackages.length === 0) {
-      await this.reportSkipped(rendered, startedAt, 'No pending todos to sync');
-      return { status: 'skipped' };
+    const packages = actionablePackages(rendered);
+    if (packages.length === 0) {
+      const reason = 'No pending todos to sync';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped', errorMessage: reason };
     }
 
-    const reminders = actionablePackages
+    const reminders = packages
       .flatMap((pkg) => extractReminders(pkg))
       .slice(0, 8);
     if (reminders.length === 0) {
       const reason = 'No todo titles extracted';
       await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped' };
+      return { status: 'skipped', errorMessage: reason };
     }
 
     const result = await this.bridgeService.syncTodosAsMemo({
@@ -641,7 +764,10 @@ export class BridgeSyncManager {
       console.warn(
         '[doubao-bridge] memory-service does not support notice_sync yet, skipping notice push',
       );
-      return { status: 'skipped' };
+      return {
+        status: 'skipped',
+        errorMessage: 'Notice sync is not supported by Memory Service',
+      };
     }
 
     const rendered = await this.memoryClient.renderContextPackage({
@@ -649,21 +775,18 @@ export class BridgeSyncManager {
       scenario: 'notice_sync',
       deviceContext: 'doubao_bridge_daemon',
     });
-    const actionablePackages = rendered.packages.filter((pkg) =>
-      packageHasItems(pkg),
-    );
-    if (actionablePackages.length === 0) {
-      await this.reportSkipped(rendered, startedAt, 'No notices to sync');
-      return { status: 'skipped' };
+    const packages = actionablePackages(rendered);
+    if (packages.length === 0) {
+      const reason = 'No notices to sync';
+      await this.reportSkipped(rendered, startedAt, reason);
+      return { status: 'skipped', errorMessage: reason };
     }
 
-    const notices = actionablePackages
-      .flatMap((pkg) => extractNotices(pkg))
-      .slice(0, 8);
+    const notices = packages.flatMap((pkg) => extractNotices(pkg)).slice(0, 8);
     if (notices.length === 0) {
       const reason = 'No notice titles extracted';
       await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped' };
+      return { status: 'skipped', errorMessage: reason };
     }
 
     const result = await this.bridgeService.syncNotices({

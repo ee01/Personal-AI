@@ -3,11 +3,24 @@ import type { MessageInfo } from './SnoozeManager';
 
 const CLOSED_SNOOZE_STATUSES = new Set(['Completed', 'Done']);
 
-function getScheduledMessageCategories(category?: string): string[] {
+export function getScheduledMessageCategories(category?: string): string[] {
   return (category || '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+export function isClosedSnoozeStatus(status?: string): boolean {
+  return CLOSED_SNOOZE_STATUSES.has(status || '');
+}
+
+export function isOpenSnoozeReminder(
+  message: Pick<ScheduledMessage, 'Category' | 'Status'>,
+): boolean {
+  return (
+    getScheduledMessageCategories(message.Category).includes('Snooze') &&
+    !isClosedSnoozeStatus(message.Status)
+  );
 }
 
 export function getSnoozeReminderSourceKey(
@@ -36,11 +49,7 @@ export function isOpenSnoozeReminderForMessage(
     return false;
   }
 
-  if (!getScheduledMessageCategories(message.Category).includes('Snooze')) {
-    return false;
-  }
-
-  if (CLOSED_SNOOZE_STATUSES.has(message.Status)) {
+  if (!isOpenSnoozeReminder(message)) {
     return false;
   }
 

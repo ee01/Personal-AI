@@ -59,6 +59,7 @@ async function waitForRequestCount(server, expectedCount, timeoutMs = 5000) {
 
 async function startHarnessServer() {
   const contextRecallRequests = [];
+  const feedbackRequests = [];
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -102,6 +103,21 @@ async function startHarnessServer() {
             matches: [match],
             topMatch: match,
             queryTimeMs: 4,
+          }),
+        );
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/api/v1/feedback') {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        feedbackRequests.push(body);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'ok',
+            targetType: body.targetType,
+            appliedDelta: body.action === 'negative' ? -0.15 : 0.1,
           }),
         );
         return;
@@ -246,6 +262,7 @@ async function startHarnessServer() {
     origin: `http://127.0.0.1:${port}`,
     apiBaseUrl: `http://127.0.0.1:${port}/api/v1`,
     contextRecallRequests,
+    feedbackRequests,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -320,6 +337,7 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   await page.setViewportSize({ width: 340, height: 720 });
   const diagnostics = attachPageDiagnostics(page, 'normal');
   const startCount = server.contextRecallRequests.length;
+  const startFeedbackCount = server.feedbackRequests.length;
   await page.goto(
     `${server.origin}/normal?utm_source=newsletter&b=2&a=1&fbclid=tracker#private-anchor`,
     {
@@ -407,7 +425,28 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
 
   const cardText = await page.locator('.pai-context-card').innerText();
   assert.match(cardText, /相关记忆/);
+  assert.match(cardText, /消息记忆/);
+  assert.match(cardText, /这条有用/);
   assert.match(cardText, /此网站今天不提示/);
+
+  await page.locator('.pai-context-recall-positive').click();
+  await waitForRequestCount(
+    { contextRecallRequests: server.feedbackRequests },
+    startFeedbackCount + 1,
+    5000,
+  );
+  assert.deepEqual(server.feedbackRequests[startFeedbackCount], {
+    type: 'recall_quality',
+    targetId: 'web-memory-1',
+    targetType: 'message',
+    action: 'positive',
+    detail: 'web_passive_bubble:127.0.0.1',
+  });
+  assert.equal(
+    await page.locator('.pai-context-recall-positive').innerText(),
+    '已标记有用',
+    '标记有用后应立即给出按钮状态反馈',
+  );
 
   const hrefs = await page.$$eval('.pai-context-card a', (anchors) =>
     anchors.map((anchor) => anchor.href),
@@ -588,6 +627,77 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     '从设置页恢复永久屏蔽后应重新触发被动召回',
   );
   await restoredPage.close();
+  await page.close();
+}
+
+async function verifyIrrelevantFeedback(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'irrelevant-feedback');
+  const startRecallCount = server.contextRecallRequests.length;
+  const startFeedbackCount = server.feedbackRequests.length;
+  await page.goto(`${server.origin}/normal?feedback=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `irrelevant feedback bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startRecallCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await page.locator('.pai-context-recall-negative').click();
+  await page.waitForSelector('.pai-context-toast', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /已记录为不相关/,
+  );
+  await page.waitForFunction(
+    () =>
+      !document.querySelector('.pai-context-bubble') &&
+      !document.querySelector('.pai-context-card'),
+    { timeout: 5000 },
+  );
+  await waitForRequestCount(
+    { contextRecallRequests: server.feedbackRequests },
+    startFeedbackCount + 1,
+    5000,
+  );
+  assert.deepEqual(server.feedbackRequests[startFeedbackCount], {
+    type: 'recall_quality',
+    targetId: 'web-memory-1',
+    targetType: 'message',
+    action: 'negative',
+    detail: 'web_passive_bubble:127.0.0.1',
+  });
+
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(1200);
+  assert.equal(
+    server.contextRecallRequests.length,
+    startRecallCount + 1,
+    '标记不相关后，同一上下文不应立刻重复触发召回',
+  );
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('不相关反馈页面出现脚本异常');
+  }
   await page.close();
 }
 
@@ -898,6 +1008,7 @@ try {
   await verifyJiraIssueContext(server, context);
   await verifyUnsafeExploreRoute(server, context);
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
+  await verifyIrrelevantFeedback(server, context);
   await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
   await verifySensitivePage(server, context);
   log('browser checks passed');

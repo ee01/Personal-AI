@@ -50,6 +50,20 @@ test('describes AsMe empty schedule time with the 09:00 default', () => {
   );
 });
 
+test('treats blank-like schedule times as the default morning time', () => {
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-05-03',
+        Schedule_Time: '\u200B',
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 2, 12, 0),
+    ),
+    '2026-05-03 09:00',
+  );
+});
+
 test('only managed JiraAutomation API messages use the 08:00 executor queue default', () => {
   assert.equal(getDefaultScheduleTime({ Push_Method: 'JiraAutomation' }), '09:00');
   assert.equal(getDefaultScheduleTimeLabel({ Push_Method: 'JiraAutomation' }), '09:00');
@@ -85,6 +99,34 @@ test('only managed JiraAutomation API messages use the 08:00 executor queue defa
       new Date(2026, 4, 2, 12, 0),
     ),
     '2026-05-03 08:00',
+  );
+});
+
+test('ignores blank JiraAutomation AI endpoints when choosing executor defaults', () => {
+  assert.equal(
+    getDefaultScheduleTime({
+      Push_Method: 'JiraAutomation',
+      AI_Endpoint: '   ',
+    }),
+    '09:00',
+  );
+  assert.equal(
+    getDefaultScheduleTimeLabel({
+      Push_Method: 'JiraAutomation',
+      AI_Endpoint: '   ',
+    }),
+    '09:00',
+  );
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-05-03',
+        Push_Method: 'JiraAutomation',
+        AI_Endpoint: '   ',
+      },
+      new Date(2026, 4, 2, 12, 0),
+    ),
+    '2026-05-03 09:00',
   );
 });
 
@@ -215,6 +257,37 @@ test('honors every-N-weeks after the selected time passes on a valid day', () =>
   );
 });
 
+test('uses fixed weekly intervals when Repeat_Days is absent', () => {
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-04-27',
+        Schedule_Time: '09:30',
+        Repeat_Every: 2,
+        Repeat_Unit: 'Week',
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 2, 12, 0),
+    ),
+    '2026-05-11 09:30',
+  );
+
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-04-27',
+        Schedule_Time: '09:30',
+        Repeat_Every: 2,
+        Repeat_Unit: 'Week',
+        Repeat_Days: '',
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 11, 10, 0),
+    ),
+    '2026-05-25 09:30',
+  );
+});
+
 test('keeps End_Date inclusive when calculating periodic next execution', () => {
   assert.equal(
     calculateScheduledMessageNextExecution(
@@ -264,5 +337,43 @@ test('returns empty when weekly Repeat_Days has no valid occurrence before End_D
       new Date(2026, 4, 4, 8, 0),
     ),
     '',
+  );
+});
+
+test('returns empty when a periodic message already reached Repeat_Count', () => {
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-04-27',
+        Schedule_Time: '09:30',
+        Repeat_Every: 1,
+        Repeat_Unit: 'Week',
+        Repeat_Days: '1,3,5',
+        Repeat_Count: 3,
+        Exec_Count: 3,
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 4, 8, 0),
+    ),
+    '',
+  );
+});
+
+test('keeps weekly Repeat_Count active until the final occurrence is sent', () => {
+  assert.equal(
+    calculateScheduledMessageNextExecution(
+      {
+        Schedule_Date: '2026-04-27',
+        Schedule_Time: '09:30',
+        Repeat_Every: 1,
+        Repeat_Unit: 'Week',
+        Repeat_Days: '1,3,5',
+        Repeat_Count: 3,
+        Exec_Count: 2,
+        Push_Method: 'AsMe',
+      },
+      new Date(2026, 4, 4, 8, 0),
+    ),
+    '2026-05-04 09:30',
   );
 });

@@ -142,10 +142,10 @@ async function assertSidePanelScenario(page, expectedTitle, screenshotName) {
     '';
   assert.equal(title, expectedTitle, `side panel 标题不匹配: ${title}`);
 
-  await page.locator('.panel-tab').nth(1).click();
+  await page.locator('.panel-tab', { hasText: '时间线' }).click();
   await page.waitForFunction(() => {
-    const tabs = Array.from(document.querySelectorAll('.panel-tab'));
-    return tabs[1]?.classList.contains('active') ?? false;
+    const activeTab = document.querySelector('.panel-tab.active');
+    return /时间线/.test(activeTab?.textContent || '');
   });
   await page.waitForSelector('.timeline-card,.timeline-item,.mini-tl-item', {
     timeout: 10000,

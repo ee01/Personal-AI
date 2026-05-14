@@ -1,0 +1,1086 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Memory Control Tower · Personal AI</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f2;
+      --panel: #ffffff;
+      --panel-soft: #fbfbf7;
+      --ink: #17201c;
+      --ink-mid: #4a5751;
+      --ink-low: #748078;
+      --line: #d9dfd5;
+      --line-strong: #bac6b8;
+      --green: #1f8a5b;
+      --green-soft: #e5f3ec;
+      --blue: #315f9e;
+      --blue-soft: #e7edf7;
+      --amber: #a45f12;
+      --amber-soft: #f7ead6;
+      --red: #b13d3d;
+      --red-soft: #f7dfdf;
+      --violet: #6750a4;
+      --violet-soft: #ece7f6;
+      --steel: #455a64;
+      --steel-soft: #e8edf0;
+      --shadow: 0 18px 44px rgba(49, 64, 54, 0.12);
+      --radius: 8px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(246, 247, 242, 0.96), rgba(239, 242, 235, 0.98)),
+        repeating-linear-gradient(90deg, rgba(23, 32, 28, 0.03) 0 1px, transparent 1px 96px);
+      color: var(--ink);
+      font-family: var(--font);
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 46px;
+      height: 46px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(135deg, #ffffff 0%, #eef4ed 100%);
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 4px;
+      padding: 9px;
+      box-shadow: var(--shadow);
+      flex: 0 0 auto;
+    }
+
+    .mark span {
+      border-radius: 3px;
+      background: var(--green);
+    }
+
+    .mark span:nth-child(2) {
+      background: var(--blue);
+    }
+
+    .mark span:nth-child(3) {
+      background: var(--amber);
+    }
+
+    .mark span:nth-child(4) {
+      background: var(--violet);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(21px, 2.8vw, 34px);
+      line-height: 1.08;
+      font-weight: 760;
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      color: var(--ink-mid);
+      font-size: 14px;
+      line-height: 1.45;
+      max-width: 760px;
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .btn {
+      min-height: 36px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 7px 11px;
+      font-weight: 650;
+      font-size: 13px;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+    }
+
+    .btn.primary {
+      border-color: #196c46;
+      background: #1f8a5b;
+      color: white;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.76);
+      padding: 12px;
+      min-height: 78px;
+    }
+
+    .metric small {
+      display: block;
+      color: var(--ink-low);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: clamp(20px, 2.4vw, 30px);
+      line-height: 1;
+    }
+
+    .metric em {
+      display: block;
+      margin-top: 8px;
+      color: var(--ink-mid);
+      font-size: 12px;
+      font-style: normal;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(250px, 0.78fr) minmax(520px, 1.8fr) minmax(290px, 0.92fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .column {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.9);
+      min-height: 620px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .column-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      min-height: 48px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .column-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 760;
+    }
+
+    .column-hint {
+      color: var(--ink-low);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .mission-list {
+      padding: 10px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .mission {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+      transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+    }
+
+    .mission:hover,
+    .mission.active {
+      border-color: var(--green);
+      background: #f7fcf9;
+      transform: translateY(-1px);
+    }
+
+    .mission-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+      font-weight: 730;
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .mission p {
+      margin: 0;
+      color: var(--ink-mid);
+      line-height: 1.45;
+      font-size: 12px;
+    }
+
+    .badge,
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      min-height: 24px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      background: var(--panel-soft);
+      color: var(--ink-mid);
+    }
+
+    .badge.green { background: var(--green-soft); color: var(--green); border-color: #b9ddca; }
+    .badge.blue { background: var(--blue-soft); color: var(--blue); border-color: #bfd0ea; }
+    .badge.amber { background: var(--amber-soft); color: var(--amber); border-color: #ebca9c; }
+    .badge.red { background: var(--red-soft); color: var(--red); border-color: #edb9b9; }
+    .badge.violet { background: var(--violet-soft); color: var(--violet); border-color: #d1c5ed; }
+    .badge.steel { background: var(--steel-soft); color: var(--steel); border-color: #c5d0d5; }
+
+    .mini-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .mission-foot {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      color: var(--ink-low);
+      font-size: 12px;
+    }
+
+    .board-body {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 620px;
+    }
+
+    .mission-summary {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(90deg, rgba(31, 138, 91, 0.08), transparent 42%),
+        var(--panel);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.75fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .summary-title {
+      margin: 0 0 8px;
+      font-size: 18px;
+      line-height: 1.24;
+      font-weight: 760;
+    }
+
+    .summary-copy {
+      margin: 0;
+      color: var(--ink-mid);
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .contract-strip {
+      display: grid;
+      gap: 7px;
+      font-size: 12px;
+    }
+
+    .contract-strip div {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 9px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .lanes {
+      padding: 12px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      align-content: start;
+    }
+
+    .lane {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      min-height: 245px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .lane-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .agent-name {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+
+    .agent-role {
+      display: block;
+      margin-top: 4px;
+      color: var(--ink-low);
+      font-size: 12px;
+    }
+
+    .lane-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .progress {
+      height: 9px;
+      border-radius: 999px;
+      background: #edf0ea;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+
+    .bar {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--green), #73b35a);
+    }
+
+    .bar.blue { background: linear-gradient(90deg, var(--blue), #5d85bd); }
+    .bar.amber { background: linear-gradient(90deg, var(--amber), #d59b42); }
+    .bar.violet { background: linear-gradient(90deg, var(--violet), #8f77c4); }
+
+    .lane-body p {
+      margin: 0;
+      color: var(--ink-mid);
+      font-size: 12px;
+      line-height: 1.48;
+    }
+
+    .facts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .fact {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcf8;
+      padding: 8px;
+      min-height: 54px;
+    }
+
+    .fact small {
+      display: block;
+      color: var(--ink-low);
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+
+    .fact strong {
+      display: block;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .lane-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      background: #fbfcf8;
+    }
+
+    .small-btn {
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: #ffffff;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .merge-strip {
+      border-top: 1px solid var(--line);
+      background: #fdfbf5;
+      padding: 12px;
+    }
+
+    .merge-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .merge-item {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: white;
+      padding: 10px;
+      min-height: 78px;
+    }
+
+    .merge-item small {
+      display: block;
+      color: var(--ink-low);
+      font-size: 11px;
+      margin-bottom: 5px;
+    }
+
+    .merge-item strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .side-body {
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .section h3 {
+      margin: 0;
+      padding: 10px 11px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      font-size: 13px;
+    }
+
+    .section-content {
+      padding: 10px 11px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .evidence {
+      display: grid;
+      gap: 7px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .evidence div {
+      padding-left: 12px;
+      border-left: 3px solid var(--line-strong);
+      color: var(--ink-mid);
+    }
+
+    .risk-line {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px;
+      align-items: start;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--ink-mid);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      margin-top: 4px;
+      background: var(--green);
+    }
+
+    .dot.amber { background: var(--amber); }
+    .dot.red { background: var(--red); }
+    .dot.blue { background: var(--blue); }
+
+    .budget {
+      display: grid;
+      gap: 8px;
+    }
+
+    .budget-row {
+      display: grid;
+      grid-template-columns: 88px 1fr 42px;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--ink-mid);
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 20px;
+      background: rgba(23, 32, 28, 0.24);
+      z-index: 10;
+    }
+
+    .modal-backdrop.show {
+      display: grid;
+    }
+
+    .modal {
+      width: min(720px, 100%);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: white;
+      box-shadow: 0 28px 80px rgba(23, 32, 28, 0.24);
+      overflow: hidden;
+    }
+
+    .modal header,
+    .modal footer {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .modal footer {
+      border-top: 1px solid var(--line);
+      border-bottom: none;
+      justify-content: flex-end;
+    }
+
+    .modal h2 {
+      margin: 0;
+      font-size: 17px;
+    }
+
+    .modal main {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .prompt-box {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcf8;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 1180px) {
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .column {
+        min-height: auto;
+      }
+
+      .board-body {
+        min-height: auto;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .shell {
+        padding: 14px;
+      }
+
+      .topbar,
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+
+      .metrics,
+      .lanes,
+      .merge-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .facts {
+        grid-template-columns: 1fr;
+      }
+
+      .budget-row {
+        grid-template-columns: 78px 1fr 38px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div>
+          <h1>Agent Memory Control Tower</h1>
+          <div class="subtitle">把 Codex、Claude Code、Cursor、Copilot 和 OpenClaw 的并行工作收束成一个可审阅的任务塔台。</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="btn" id="planBtn">生成 Tower Plan</button>
+        <button class="btn">导出 Context Contract</button>
+        <button class="btn primary">启动只读预演</button>
+      </div>
+    </div>
+
+    <section class="metrics" aria-label="塔台指标">
+      <div class="metric">
+        <small>Active missions</small>
+        <strong id="metricMissions">3</strong>
+        <em>1 个等待合并审查</em>
+      </div>
+      <div class="metric">
+        <small>Agent lanes</small>
+        <strong id="metricAgents">4</strong>
+        <em>2 个只读，2 个可写</em>
+      </div>
+      <div class="metric">
+        <small>File claim risk</small>
+        <strong id="metricRisk">Low</strong>
+        <em>1 个潜在测试文件冲突</em>
+      </div>
+      <div class="metric">
+        <small>Memory receipts</small>
+        <strong id="metricReceipts">9</strong>
+        <em>7 条 observed，2 条 claimed</em>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="column">
+        <div class="column-header">
+          <h2 class="column-title">Mission 队列</h2>
+          <span class="column-hint">按可并行性排序</span>
+        </div>
+        <div class="mission-list">
+          <button class="mission active" data-mission="bug">
+            <div class="mission-title">
+              <span>Bug - AI 先修一遍我再看</span>
+              <span class="badge green">running</span>
+            </div>
+            <p>来自日历和 MR 链接。先让 AI 做首轮定位、最小修复和测试补强。</p>
+            <div class="mini-row">
+              <span class="pill">repo</span>
+              <span class="pill">branch</span>
+              <span class="pill">meeting</span>
+            </div>
+            <div class="mission-foot">
+              <span>4 agents · 68% ready</span>
+              <span>12:30 CST</span>
+            </div>
+          </button>
+
+          <button class="mission" data-mission="nova">
+            <div class="mission-title">
+              <span>Nova weekly 数据口径复核</span>
+              <span class="badge amber">planned</span>
+            </div>
+            <p>把 RingCentral 讨论、Jira 口径和周会 action item 组合成数据报告流程。</p>
+            <div class="mini-row">
+              <span class="pill">Jira</span>
+              <span class="pill">Sheet</span>
+              <span class="pill">weekly</span>
+            </div>
+            <div class="mission-foot">
+              <span>3 agents · draft</span>
+              <span>14:00 CST</span>
+            </div>
+          </button>
+
+          <button class="mission" data-mission="adapter">
+            <div class="mission-title">
+              <span>Milo Video Adapter 方案拆解</span>
+              <span class="badge blue">review</span>
+            </div>
+            <p>聚焦 adapter 层，不重复造视频助手。需要调研、方案和会议回复。</p>
+            <div class="mini-row">
+              <span class="pill">meeting</span>
+              <span class="pill">design</span>
+              <span class="pill">reply</span>
+            </div>
+            <div class="mission-foot">
+              <span>2 agents · merge review</span>
+              <span>昨天</span>
+            </div>
+          </button>
+        </div>
+      </aside>
+
+      <section class="column">
+        <div class="column-header">
+          <h2 class="column-title">Agent Lanes</h2>
+          <span class="column-hint" id="boardHint">Bug first pass · worktree isolated</span>
+        </div>
+        <div class="board-body">
+          <div class="mission-summary">
+            <div class="summary-grid">
+              <div>
+                <h2 class="summary-title" id="summaryTitle">Bug - AI 先修一遍我再看</h2>
+                <p class="summary-copy" id="summaryCopy">塔台先把任务切成只读定位、最小修复、测试补强和合并审查。每个 agent 只拿到必要记忆和文件边界，最后由用户决定是否采纳。</p>
+              </div>
+              <div class="contract-strip">
+                <div><span>Context scope</span><strong id="scopeText">work only</strong></div>
+                <div><span>Workspace</span><strong id="workspaceText">git worktree x 2</strong></div>
+                <div><span>Merge policy</span><strong id="mergeText">human review</strong></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lanes" id="lanes"></div>
+
+          <div class="merge-strip">
+            <div class="merge-grid">
+              <div class="merge-item">
+                <small>Diff readiness</small>
+                <strong id="diffText">Codex patch ready, reviewer pending</strong>
+              </div>
+              <div class="merge-item">
+                <small>Test evidence</small>
+                <strong id="testText">2 commands observed, 1 browser check missing</strong>
+              </div>
+              <div class="merge-item">
+                <small>Conflict watch</small>
+                <strong id="conflictText">Possible overlap in actionItemReview.test.ts</strong>
+              </div>
+              <div class="merge-item">
+                <small>Memory writeback</small>
+                <strong id="writebackText">Skill suggestion candidate after finish</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="column">
+        <div class="column-header">
+          <h2 class="column-title">Memory Contract</h2>
+          <span class="column-hint">可审阅上下文</span>
+        </div>
+        <div class="side-body">
+          <section class="section">
+            <h3>发送给 agents 的记忆</h3>
+            <div class="section-content evidence" id="evidenceList"></div>
+          </section>
+
+          <section class="section">
+            <h3>风险和权限</h3>
+            <div class="section-content" id="riskList"></div>
+          </section>
+
+          <section class="section">
+            <h3>预算</h3>
+            <div class="section-content budget">
+              <div class="budget-row">
+                <span>Exploration</span>
+                <div class="progress"><div class="bar blue" style="width: 42%"></div></div>
+                <strong>42%</strong>
+              </div>
+              <div class="budget-row">
+                <span>Implementation</span>
+                <div class="progress"><div class="bar" style="width: 68%"></div></div>
+                <strong>68%</strong>
+              </div>
+              <div class="budget-row">
+                <span>Review</span>
+                <div class="progress"><div class="bar amber" style="width: 31%"></div></div>
+                <strong>31%</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <h3>下一步</h3>
+            <div class="section-content">
+              <button class="btn primary" id="copyBtn">复制 reviewer work order</button>
+              <button class="btn">打开 merge review</button>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header>
+        <h2 id="modalTitle">Tower Plan Preview</h2>
+        <button class="small-btn" id="closeModal">关闭</button>
+      </header>
+      <main>
+        <div class="mini-row">
+          <span class="badge green">read-only first</span>
+          <span class="badge blue">worktree isolated</span>
+          <span class="badge amber">human merge</span>
+        </div>
+        <div class="prompt-box" id="promptBox"></div>
+      </main>
+      <footer>
+        <button class="btn">只复制</button>
+        <button class="btn primary">创建 mission draft</button>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    const missions = {
+      bug: {
+        title: "Bug - AI 先修一遍我再看",
+        copy: "塔台先把任务切成只读定位、最小修复、测试补强和合并审查。每个 agent 只拿到必要记忆和文件边界，最后由用户决定是否采纳。",
+        hint: "Bug first pass · worktree isolated",
+        scope: "work only",
+        workspace: "git worktree x 2",
+        merge: "human review",
+        metrics: ["3", "4", "Low", "9"],
+        lanes: [
+          ["Claude Code Explore", "只读代码探索", "running", "blue", 82, "读取 AGENT.md、测试入口和相关模块，输出 bug path 和不要修改的文件。", "Read-only", "0 files", "Context v3", "12 refs"],
+          ["Codex Local", "最小修复实现", "running", "green", 68, "在隔离 worktree 中实现最小 patch，必须记录命令和失败重试。", "Edit scope", "3 files", "Tests", "2 observed"],
+          ["Cursor Background", "测试补强", "queued", "amber", 24, "等待 Codex patch 后补测试。不允许修改核心实现文件。", "Delayed write", "1 overlap", "Branch", "feature/ai-first-pass"],
+          ["Personal AI Reviewer", "合并审查", "ready", "violet", 45, "汇总 receipts、检查越界修改和测试证据，生成会议可读摘要。", "Local only", "0 secrets", "Receipts", "9"]
+        ],
+        evidence: [
+          "日历事件：Bug - AI 先修一遍我再看，包含 repo、开发分支和 MR 链接。",
+          "项目规则：AGENT.md 要求修改 src 后优先 npm start，并在首个成功 compile 后停止。",
+          "用户偏好：AI 先做首轮，人类保留 merge、发送和部署确认。"
+        ],
+        risks: [
+          ["amber", "测试文件存在潜在 overlap，Cursor task 需要等 Codex patch 后再写。"],
+          ["green", "当前 Context Contract 只包含 work scope，不发送 personal 记忆。"],
+          ["blue", "所有外部可见动作保留人工确认，不自动 push 或 comment。"]
+        ],
+        merge: [
+          "Codex patch ready, reviewer pending",
+          "2 commands observed, 1 browser check missing",
+          "Possible overlap in actionItemReview.test.ts",
+          "Skill suggestion candidate after finish"
+        ],
+        prompt: "Mission: Bug first pass before human review\n\nWork orders:\n1. Claude Code Explore: read-only investigation, return bug path and test entry.\n2. Codex Local: implement minimal patch in isolated worktree, record commands.\n3. Cursor Background: add tests after patch is stable, avoid core implementation files.\n4. Personal AI Reviewer: merge review, evidence audit, meeting summary.\n\nMerge policy: human approval required for push, PR comment, deploy, or deletion."
+      },
+      nova: {
+        title: "Nova weekly 数据口径复核",
+        copy: "把周会、聊天、Jira 和 Google Sheet 上下文拆成数据口径、拉取计划、图表草稿和审查四个步骤，避免报告里混入未确认字段。",
+        hint: "Nova weekly · data contract",
+        scope: "work + selected meetings",
+        workspace: "no code write",
+        merge: "report review",
+        metrics: ["3", "3", "Medium", "6"],
+        lanes: [
+          ["Memory Analyst", "口径提炼", "ready", "blue", 91, "读取 Sophia/Nova 周会和聊天证据，输出已确认口径和待确认问题。", "Read-only", "0 files", "Evidence", "18 refs"],
+          ["Jira Planner", "JQL 和字段计划", "draft", "green", 56, "生成 JQL、字段清单和数据缺口，不直接写 Jira 或 Sheet。", "No external write", "0 files", "JQL", "draft"],
+          ["Sheet Designer", "报告结构", "draft", "amber", 39, "设计 Sheet tabs、pivot 和图表草稿，等待用户确认字段。", "Draft only", "0 writes", "Output", "table plan"],
+          ["Reviewer", "异常值检查", "blocked", "violet", 12, "等真实数据拉取后做 outlier 和口径一致性检查。", "Waits", "data", "Status", "blocked"]
+        ],
+        evidence: [
+          "记忆中 Nova、Sophia、Jira、weekly sync 高频出现，用户经常要做项目进展和数据口径同步。",
+          "用户角色是 Scrum Master，输出需要可贴进周会和 RingCentral。",
+          "已有多个 report 类工作流，适合沉淀成可复用 skill。"
+        ],
+        risks: [
+          ["amber", "Jira 字段不能猜，需要用户或来源证据确认。"],
+          ["green", "首版只生成数据计划和报告草稿，不写外部系统。"],
+          ["red", "如果包含客户或人员绩效数据，需要单独 scope review。"]
+        ],
+        merge: [
+          "Report skeleton ready",
+          "No live query executed",
+          "Jira field confirmation needed",
+          "Potential Jira report skill"
+        ],
+        prompt: "Mission: Nova weekly data contract review\n\nSplit:\n1. Memory Analyst extracts confirmed scope from meetings and chats.\n2. Jira Planner drafts JQL and fields with unknowns marked.\n3. Sheet Designer proposes report structure.\n4. Reviewer checks data consistency after user-approved pull.\n\nRule: no external writes before field confirmation."
+      },
+      adapter: {
+        title: "Milo Video Adapter 方案拆解",
+        copy: "把“不要造独立视频助手，聚焦 adapter 层”的反馈转成方案结构、技术边界和可发送回复，避免重新发散。",
+        hint: "Adapter design · reply ready",
+        scope: "work memories",
+        workspace: "docs only",
+        merge: "copy review",
+        metrics: ["3", "2", "Low", "5"],
+        lanes: [
+          ["Research Agent", "竞品和架构补充", "done", "blue", 100, "整理 media adapter、meeting assistant 和 NCA gateway 相关参考。", "Read-only", "0 files", "Sources", "5"],
+          ["Codex Writer", "方案草稿", "done", "green", 100, "生成 adapter-first 的设计提纲和回复草稿。", "Docs only", "1 file", "Draft", "ready"],
+          ["Personal AI Reviewer", "口径检查", "review", "violet", 76, "确认没有把话题带回独立视频助手，输出会议回复。", "Local", "0 files", "Checks", "2"],
+          ["Meeting Follow-up", "待发送摘要", "waiting", "amber", 18, "等待用户确认后再复制到 RingCentral 或会议纪要。", "Manual", "0 writes", "Approval", "needed"]
+        ],
+        evidence: [
+          "Igor 的反馈重点是 adapter，而不是新视频助手。",
+          "相关场景包括 Call-Me 扩展、会议委派扩展和 RCV meeting assistant。",
+          "输出目标是可讨论的 adapter 阶段设计，而不是完整产品承诺。"
+        ],
+        risks: [
+          ["green", "只写方案和回复草稿，无代码风险。"],
+          ["amber", "对外回复前需要用户确认语气和承诺边界。"],
+          ["blue", "可沉淀为“技术反馈转设计方案”skill。"]
+        ],
+        merge: [
+          "Draft ready",
+          "Sources linked",
+          "No file conflict",
+          "Reply approval needed"
+        ],
+        prompt: "Mission: Milo Video Adapter design split\n\nKeep the scope adapter-first. Do not propose a separate video assistant. Produce:\n1. Technical boundary.\n2. Concrete adapter scenarios.\n3. Open questions.\n4. Short reply draft for Igor.\n\nExternal sending requires user approval."
+      }
+    };
+
+    const lanesEl = document.getElementById("lanes");
+    const evidenceEl = document.getElementById("evidenceList");
+    const riskEl = document.getElementById("riskList");
+    const modal = document.getElementById("modal");
+    const promptBox = document.getElementById("promptBox");
+    let activeMission = "bug";
+
+    function renderMission(key) {
+      activeMission = key;
+      const data = missions[key];
+      document.querySelectorAll(".mission").forEach((node) => {
+        node.classList.toggle("active", node.dataset.mission === key);
+      });
+      document.getElementById("summaryTitle").textContent = data.title;
+      document.getElementById("summaryCopy").textContent = data.copy;
+      document.getElementById("boardHint").textContent = data.hint;
+      document.getElementById("scopeText").textContent = data.scope;
+      document.getElementById("workspaceText").textContent = data.workspace;
+      document.getElementById("mergeText").textContent = data.merge;
+      document.getElementById("metricMissions").textContent = data.metrics[0];
+      document.getElementById("metricAgents").textContent = data.metrics[1];
+      document.getElementById("metricRisk").textContent = data.metrics[2];
+      document.getElementById("metricReceipts").textContent = data.metrics[3];
+      document.getElementById("diffText").textContent = data.merge[0];
+      document.getElementById("testText").textContent = data.merge[1];
+      document.getElementById("conflictText").textContent = data.merge[2];
+      document.getElementById("writebackText").textContent = data.merge[3];
+
+      lanesEl.innerHTML = data.lanes.map((lane) => `
+        <article class="lane">
+          <div class="lane-head">
+            <div>
+              <h3 class="agent-name">${lane[0]}</h3>
+              <span class="agent-role">${lane[1]}</span>
+            </div>
+            <span class="badge ${lane[3]}">${lane[2]}</span>
+          </div>
+          <div class="lane-body">
+            <div class="progress"><div class="bar ${lane[3]}" style="width:${lane[4]}%"></div></div>
+            <p>${lane[5]}</p>
+            <div class="facts">
+              <div class="fact"><small>Permission</small><strong>${lane[6]}</strong></div>
+              <div class="fact"><small>Claim</small><strong>${lane[7]}</strong></div>
+              <div class="fact"><small>Contract</small><strong>${lane[8]}</strong></div>
+              <div class="fact"><small>Evidence</small><strong>${lane[9]}</strong></div>
+            </div>
+          </div>
+          <div class="lane-foot">
+            <span class="badge steel">receipt required</span>
+            <button class="small-btn" data-open>Work order</button>
+          </div>
+        </article>
+      `).join("");
+
+      evidenceEl.innerHTML = data.evidence.map((item) => `<div>${item}</div>`).join("");
+      riskEl.innerHTML = data.risks.map((item) => `
+        <div class="risk-line"><span class="dot ${item[0]}"></span><span>${item[1]}</span></div>
+      `).join("");
+
+      document.querySelectorAll("[data-open]").forEach((btn) => {
+        btn.addEventListener("click", showModal);
+      });
+    }
+
+    function showModal() {
+      promptBox.textContent = missions[activeMission].prompt;
+      modal.classList.add("show");
+    }
+
+    document.querySelectorAll(".mission").forEach((node) => {
+      node.addEventListener("click", () => renderMission(node.dataset.mission));
+    });
+    document.getElementById("planBtn").addEventListener("click", showModal);
+    document.getElementById("copyBtn").addEventListener("click", showModal);
+    document.getElementById("closeModal").addEventListener("click", () => modal.classList.remove("show"));
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) modal.classList.remove("show");
+    });
+
+    renderMission("bug");
+  </script>
+</body>
+</html>

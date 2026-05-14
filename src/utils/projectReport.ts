@@ -29,6 +29,7 @@ export interface ProjectReportProject {
   milestones: ProjectReportMilestone[];
   tasks: ProjectReportTask[];
   platformConfig?: string[];
+  lastStatusReviewAt?: string;
 }
 
 export type ProjectReportScope = 'single_project' | 'all_projects';
@@ -181,6 +182,8 @@ export function sanitizeProject(project: any): ProjectReportProject {
     platformConfig: Array.isArray(project?.platformConfig)
       ? project.platformConfig.filter((item: any) => typeof item === 'string')
       : undefined,
+    lastStatusReviewAt:
+      typeof project?.lastStatusReviewAt === 'string' ? project.lastStatusReviewAt : undefined,
   };
 }
 

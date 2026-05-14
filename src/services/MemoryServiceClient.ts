@@ -136,6 +136,28 @@ export interface RecallItem {
   };
 }
 
+export type MemoryFeedbackTargetType = 'message' | 'chunk' | 'entity';
+export type MemoryFeedbackAction = 'positive' | 'negative' | 'clear';
+export type MemoryFeedbackType =
+  | 'recall_quality'
+  | 'notification_useful'
+  | 'entity_correction';
+
+export interface MemoryFeedbackPayload {
+  type: MemoryFeedbackType;
+  targetId: string;
+  targetType?: MemoryFeedbackTargetType;
+  action: MemoryFeedbackAction;
+  detail?: string;
+}
+
+export interface MemoryFeedbackResult {
+  status: 'ok';
+  targetType?: MemoryFeedbackTargetType;
+  previousAction?: MemoryFeedbackAction;
+  appliedDelta?: number;
+}
+
 // ---------- Active recall blocks ----------
 export interface RecallEvidenceCard {
   itemId: string;
@@ -740,6 +762,254 @@ export interface EntityRelationship {
 }
 
 // ============================================================================
+// Relationship radar types
+// ============================================================================
+
+export type RelationshipRadarState =
+  | 'core'
+  | 'active'
+  | 'rising'
+  | 'dormant'
+  | 'watch';
+
+export type RelationshipReviewStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'rejected'
+  | 'snoozed';
+
+export type RelationshipReviewAction = 'confirm' | 'reject' | 'snooze';
+export type RelationshipDataQuality =
+  | 'indexed'
+  | 'generated'
+  | 'confirmed'
+  | 'stale';
+export type RelationshipProjectionSource =
+  | 'lazy'
+  | 'background'
+  | 'user_confirmed';
+
+export interface RelationshipEvidenceRef {
+  sourceKind: 'message' | 'entity_property' | 'relationship';
+  sourceId: string;
+  title?: string;
+  snippet: string;
+  timestamp?: number;
+  sourceUrl?: string;
+  exploreLink?: string;
+}
+
+export interface RelationshipPersonSummary {
+  id: string;
+  name: string;
+  aliases: string[];
+  description?: string;
+  tags: string[];
+  score: number;
+  radarState: RelationshipRadarState;
+  interactionCount: number;
+  activeDays: number;
+  firstSeen?: number;
+  lastSeen?: number;
+  lastInteractionAt?: number;
+  mentionCount: number;
+  confidence: number;
+  dataQuality: RelationshipDataQuality;
+  projectionSource: RelationshipProjectionSource;
+  generatedAt: number;
+  dirtySince?: number;
+  lastConsolidatedAt?: number;
+  reason: string;
+  signals: {
+    recent: number;
+    frequency: number;
+    breadth: number;
+    confirmedFacts: number;
+  };
+  contextBullets: string[];
+  evidenceCount: number;
+  reviewPendingCount: number;
+}
+
+export interface RelationshipPeopleResponse {
+  items: RelationshipPersonSummary[];
+  totalCandidates: number;
+  threshold: {
+    minimumInteractionCount: number;
+    minimumActiveDays: number;
+    minimumScore: number;
+    minimumKeepCount: number;
+    strategy: 'hybrid_threshold_top_n';
+  };
+  generatedAt: number;
+  coverageNote: string;
+}
+
+export interface RelationshipReviewItem {
+  id: string;
+  personId: string;
+  personName: string;
+  itemType: string;
+  proposedKey: string;
+  title: string;
+  proposedValue: string;
+  reason?: string;
+  confidence: number;
+  priority: string;
+  evidenceRefs: RelationshipEvidenceRef[];
+  status: RelationshipReviewStatus;
+  userNote?: string;
+  snoozeUntil?: number;
+  confirmedAt?: number;
+  rejectedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RelationshipReviewItemListResponse {
+  items: RelationshipReviewItem[];
+  total: number;
+  generatedAt: number;
+}
+
+export interface RelationshipContextCard {
+  person: RelationshipPersonSummary;
+  surface: string;
+  tokenBudget: number;
+  dataQuality: RelationshipDataQuality;
+  projectionSource: RelationshipProjectionSource;
+  contextMd: string;
+  bullets: string[];
+  knownFacts: Array<{
+    key: string;
+    value: string;
+    confidence: number;
+    confirmed: boolean;
+  }>;
+  relationshipHints: Array<{
+    relationType: string;
+    targetId: string;
+    targetName: string;
+    targetType: string;
+    strength: number;
+    context?: string;
+  }>;
+  openLoops: Array<{
+    id: string;
+    title: string;
+    snippet: string;
+    timestamp: number;
+    evidenceRef: RelationshipEvidenceRef;
+  }>;
+  doNotAssume: string[];
+  evidenceRefs: RelationshipEvidenceRef[];
+  retrievalHints: {
+    entityIds: string[];
+    names: string[];
+    boostTerms: string[];
+    sourceTypes: string[];
+  };
+  generatedAt: number;
+}
+
+export interface RelationshipTimelineResponse {
+  personId: string;
+  items: Array<{
+    id: string;
+    kind: 'message' | 'property' | 'relationship';
+    title: string;
+    body: string;
+    timestamp: number;
+    evidenceRef?: RelationshipEvidenceRef;
+  }>;
+  total: number;
+}
+
+export interface RelationshipOpenLoopsResponse {
+  personId: string;
+  items: RelationshipContextCard['openLoops'];
+}
+
+export interface RelationshipContextPackage {
+  generatedAt: number;
+  packageType: 'relationship_context';
+  cards: RelationshipContextCard[];
+  retrievalBoosts: Array<{
+    entityId: string;
+    name: string;
+    score: number;
+    terms: string[];
+  }>;
+}
+
+export interface RelationshipConsolidationResult {
+  generatedAt: number;
+  scanned: number;
+  consolidated: number;
+  skipped: number;
+  personIds: string[];
+}
+
+export interface RelationshipMeetingBrief {
+  generatedAt: number;
+  title: string;
+  startAt?: number;
+  attendees: Array<{
+    displayName: string;
+    personId?: string;
+    personName?: string;
+    radarState?: RelationshipRadarState;
+    dataQuality?: RelationshipDataQuality;
+    summary: string;
+    openLoops: RelationshipContextCard['openLoops'];
+    suggestedQuestions: string[];
+    evidenceRefs: RelationshipEvidenceRef[];
+  }>;
+  matrix: Array<{
+    person: string;
+    recentContext: string;
+    openLoop: string;
+    suggestedAsk: string;
+    evidenceCount: number;
+  }>;
+}
+
+export interface RelationshipAssistantDraft {
+  generatedAt: number;
+  personId?: string;
+  personName: string;
+  scenario: string;
+  draftText: string;
+  contextPackage: RelationshipContextPackage;
+  warnings: string[];
+}
+
+export interface RelationshipGraph {
+  generatedAt: number;
+  nodes: Array<{
+    id: string;
+    label: string;
+    type: string;
+    dataQuality?: RelationshipDataQuality;
+    radarState?: RelationshipRadarState;
+    score?: number;
+  }>;
+  edges: Array<{
+    id: string;
+    from: string;
+    to: string;
+    label: string;
+    weight: number;
+  }>;
+  dynamics: Array<{
+    kind: 'rising' | 'dormant' | 'review_needed' | 'high_context';
+    title: string;
+    body: string;
+    personId?: string;
+  }>;
+}
+
+// ============================================================================
 // Project types
 // ============================================================================
 
@@ -1290,6 +1560,8 @@ export interface PersonalSkillListItem {
   suggestionClusterKey?: string;
   currentVersion?: string;
   currentSha256?: string;
+  reviewRequired?: boolean;
+  reviewReasons?: string[];
   bindings: SkillPlatformBinding[];
   createdAt: number;
   updatedAt: number;
@@ -1346,6 +1618,8 @@ export interface SkillSyncPlatformRunResult {
   processed: number;
   imported: number;
   updated: number;
+  pulled: number;
+  pushed: number;
   externalChanges: number;
   skipped: number;
   hasMore?: boolean;
@@ -1490,6 +1764,190 @@ export interface StatsResponse {
     forgotten: number;
     archived: number;
   };
+}
+
+export type DayPilotPriority = 'critical' | 'high' | 'medium' | 'low';
+export type DayPilotState = 'prepare' | 'now' | 'waiting' | 'done' | 'muted';
+export type DayPilotProviderTarget =
+  | 'codex'
+  | 'chatgpt'
+  | 'claude'
+  | 'doubao'
+  | 'generic';
+export type DayPilotCardType =
+  | 'meeting_prepare'
+  | 'thread_followup'
+  | 'decision_check'
+  | 'ai_tool_shift'
+  | 'project_risk'
+  | 'relationship_ping'
+  | 'skill_opportunity'
+  | 'memory_quality';
+
+export interface DayPilotEvidenceRef {
+  sourceKind: string;
+  sourceId: string;
+  title?: string;
+  snippet: string;
+  timestamp?: number;
+  sourceUrl?: string;
+  exploreLink?: string;
+}
+
+export interface DayPilotCard {
+  id: string;
+  briefId: string;
+  missionId?: string;
+  cardType: DayPilotCardType;
+  title: string;
+  priority: DayPilotPriority;
+  state: DayPilotState;
+  whyNow: string;
+  nextBestAction: string;
+  dueAt?: number;
+  people: Array<{ id?: string; name: string; type?: string }>;
+  projects: Array<{ id?: string; name: string; type?: string }>;
+  evidenceRefs: DayPilotEvidenceRef[];
+  openQuestions: string[];
+  trust: {
+    confidence: number;
+    riskLevel: 'low' | 'medium' | 'high';
+    staleEvidenceCount: number;
+    sensitiveEvidenceCount: number;
+  };
+  contextPack: Record<string, any>;
+  sourceHash: string;
+  score: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DayPilotMission {
+  id: string;
+  briefId: string;
+  missionKey: string;
+  title: string;
+  status: 'active' | 'waiting' | 'done' | 'muted';
+  sourceKinds: string[];
+  timeWindow: { from?: number; to?: number };
+  relatedRefs: Record<string, any>;
+  currentState?: string;
+  desiredOutcome?: string;
+  nextActions: Array<{ title: string; desc: string }>;
+  score: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DayPilotBrief {
+  id: string;
+  userId: string;
+  localDate: string;
+  timezone: string;
+  generatedAt: number;
+  horizon: { from: number; to: number };
+  status: 'draft' | 'ready' | 'stale' | 'archived';
+  summary: string;
+  attentionBudget: {
+    maxInterruptions: number;
+    usedInterruptions: number;
+    quietWindows: Array<{ from: number; to: number; reason?: string }>;
+    plannedInterruptions?: Array<{ cardId: string; reason: string }>;
+    boardOnlyCardIds?: string[];
+  };
+  sourceStats: {
+    messages: { scanned: number; totalRecent: number };
+    calendar: { scanned: number; upcoming: number };
+    notifications: { scanned: number; pending: number };
+    actions: { scanned: number; queued: number };
+    reflections: { scanned: number; active: number };
+    skills: { scanned: number; suggestions: number };
+    relationships: { scanned: number; highFrequencyPeople: number };
+  };
+  cards: DayPilotCard[];
+  missions: DayPilotMission[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DayPilotTodayResponse {
+  brief: DayPilotBrief;
+  generated: boolean;
+  stale: boolean;
+}
+
+export interface DayPilotContextPackResponse {
+  missionId: string;
+  generatedAt: number;
+  tokenBudget: number;
+  targetProvider: DayPilotProviderTarget;
+  providerProfile: {
+    id: DayPilotProviderTarget;
+    label: string;
+    defaultTokenBudget: number;
+    style: 'implementation' | 'conversation' | 'analysis' | 'chinese' | 'plain';
+  };
+  bodyMd: string;
+  evidenceRefs: DayPilotEvidenceRef[];
+  warnings: string[];
+  redactionPreview: string[];
+  redactionApplied: boolean;
+}
+
+export type TodayPilotMeetingPrepStatus =
+  | 'ready'
+  | 'fallback'
+  | 'failed'
+  | 'stale';
+
+export type TodayPilotMeetingPrepGeneratedMode =
+  | 'nightly_llm'
+  | 'on_demand_llm'
+  | 'deterministic_fallback';
+
+export interface TodayPilotMeetingPrepRecord {
+  id: string;
+  userId: string;
+  localDate: string;
+  timezone: string;
+  briefId?: string;
+  missionId?: string;
+  eventExternalId: string;
+  eventSeriesKey?: string;
+  eventTitle: string;
+  startAt: number;
+  goalHash: string;
+  status: TodayPilotMeetingPrepStatus;
+  generatedMode: TodayPilotMeetingPrepGeneratedMode;
+  summaryMd: string;
+  cueCards: ContextAssistCueCard[];
+  questions: string[];
+  evidenceRefs: ComposerAssistEvidence[];
+  contextPackMd: string;
+  redaction: Record<string, unknown>;
+  llmUsage: Record<string, unknown>;
+  sourceHash: string;
+  generatedAt: number;
+  expiresAt: number;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TodayPilotMeetingPrepPrepareResponse {
+  prepared: number;
+  skipped: number;
+  failed: number;
+  items: TodayPilotMeetingPrepRecord[];
+  warnings: string[];
+}
+
+export interface TodayPilotMeetingPrepResolveResponse {
+  prep: TodayPilotMeetingPrepRecord | null;
+  assist: ContextAssistResponse | null;
+  generated: boolean;
+  source: 'cached' | 'generated' | 'fallback' | 'none';
+  warnings: string[];
 }
 
 export interface MemoryBackupDownloadResponse {
@@ -1937,7 +2395,9 @@ export class MemoryServiceClient {
 
       throw new MemoryServiceError(
         0,
-        `Network error: ${err.message || 'Failed to connect to Memory Service'}`,
+        `Network error: ${
+          err.message || 'Failed to connect to Memory Service'
+        }`,
       );
     }
   }
@@ -2020,7 +2480,9 @@ export class MemoryServiceClient {
 
       throw new MemoryServiceError(
         0,
-        `Network error: ${err.message || 'Failed to connect to Memory Service'}`,
+        `Network error: ${
+          err.message || 'Failed to connect to Memory Service'
+        }`,
       );
     }
   }
@@ -2080,7 +2542,9 @@ export class MemoryServiceClient {
 
       throw new MemoryServiceError(
         0,
-        `Network error: ${err.message || 'Failed to connect to Memory Service'}`,
+        `Network error: ${
+          err.message || 'Failed to connect to Memory Service'
+        }`,
       );
     }
   }
@@ -2140,6 +2604,12 @@ export class MemoryServiceClient {
       'GET',
       `/memories/${encodedType}/${encodedId}`,
     );
+  }
+
+  async submitFeedback(
+    payload: MemoryFeedbackPayload,
+  ): Promise<MemoryFeedbackResult> {
+    return this.request<MemoryFeedbackResult>('POST', '/feedback', payload);
   }
 
   /**
@@ -2288,7 +2758,9 @@ export class MemoryServiceClient {
     if (includeSuperseded) params.set('includeSuperseded', 'true');
 
     const qs = params.toString();
-    const path = `/entities/${encodeURIComponent(id)}/properties${qs ? '?' + qs : ''}`;
+    const path = `/entities/${encodeURIComponent(id)}/properties${
+      qs ? '?' + qs : ''
+    }`;
     return this.request('GET', path);
   }
 
@@ -2319,8 +2791,182 @@ export class MemoryServiceClient {
     if (depth !== undefined) params.set('depth', String(depth));
 
     const qs = params.toString();
-    const path = `/entities/${encodeURIComponent(id)}/relationships${qs ? '?' + qs : ''}`;
+    const path = `/entities/${encodeURIComponent(id)}/relationships${
+      qs ? '?' + qs : ''
+    }`;
     return this.request('GET', path);
+  }
+
+  // --------------------------------------------------------------------------
+  // Relationship radar
+  // --------------------------------------------------------------------------
+
+  async getRelationshipPeople(options?: {
+    limit?: number;
+    state?: RelationshipRadarState | 'all';
+    search?: string;
+    includeBelowThreshold?: boolean;
+  }): Promise<RelationshipPeopleResponse> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined)
+      params.set('limit', String(options.limit));
+    if (options?.state) params.set('state', options.state);
+    if (options?.search) params.set('search', options.search);
+    if (options?.includeBelowThreshold)
+      params.set('includeBelowThreshold', 'true');
+    const query = params.toString();
+    return this.request<RelationshipPeopleResponse>(
+      'GET',
+      `/relationships/people${query ? `?${query}` : ''}`,
+    );
+  }
+
+  async getRelationshipPerson(id: string): Promise<RelationshipPersonSummary> {
+    return this.request<RelationshipPersonSummary>(
+      'GET',
+      `/relationships/people/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async getRelationshipTimeline(
+    personId: string,
+    limit?: number,
+  ): Promise<RelationshipTimelineResponse> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+    const query = params.toString();
+    return this.request<RelationshipTimelineResponse>(
+      'GET',
+      `/relationships/people/${encodeURIComponent(personId)}/timeline${
+        query ? `?${query}` : ''
+      }`,
+    );
+  }
+
+  async getRelationshipOpenLoops(
+    personId: string,
+    limit?: number,
+  ): Promise<RelationshipOpenLoopsResponse> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+    const query = params.toString();
+    return this.request<RelationshipOpenLoopsResponse>(
+      'GET',
+      `/relationships/people/${encodeURIComponent(personId)}/open-loops${
+        query ? `?${query}` : ''
+      }`,
+    );
+  }
+
+  async getRelationshipContextCard(body: {
+    personId?: string;
+    personName?: string;
+    surface?: string;
+    tokenBudget?: number;
+    includeSensitive?: boolean;
+  }): Promise<RelationshipContextCard> {
+    return this.request<RelationshipContextCard>(
+      'POST',
+      '/relationships/context-card',
+      body,
+    );
+  }
+
+  async getRelationshipContextPackage(body: {
+    personIds?: string[];
+    personName?: string;
+    surface?: string;
+    tokenBudget?: number;
+  }): Promise<RelationshipContextPackage> {
+    return this.request<RelationshipContextPackage>(
+      'POST',
+      '/relationships/context-package',
+      body,
+    );
+  }
+
+  async consolidateRelationships(body?: {
+    limit?: number;
+    personIds?: string[];
+    force?: boolean;
+  }): Promise<RelationshipConsolidationResult> {
+    return this.request<RelationshipConsolidationResult>(
+      'POST',
+      '/relationships/consolidate',
+      body ?? {},
+    );
+  }
+
+  async getRelationshipMeetingBrief(body: {
+    eventId?: string;
+    title?: string;
+    startAt?: number;
+    attendees?: Array<{ name?: string; email?: string } | string>;
+  }): Promise<RelationshipMeetingBrief> {
+    return this.request<RelationshipMeetingBrief>(
+      'POST',
+      '/relationships/meeting-brief',
+      body,
+    );
+  }
+
+  async getRelationshipAssistantDraft(body: {
+    personId?: string;
+    personName?: string;
+    scenario?: string;
+    userGoal?: string;
+  }): Promise<RelationshipAssistantDraft> {
+    return this.request<RelationshipAssistantDraft>(
+      'POST',
+      '/relationships/assistant/draft',
+      body,
+    );
+  }
+
+  async getRelationshipGraph(options?: {
+    limit?: number;
+  }): Promise<RelationshipGraph> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined)
+      params.set('limit', String(options.limit));
+    const query = params.toString();
+    return this.request<RelationshipGraph>(
+      'GET',
+      `/relationships/graph${query ? `?${query}` : ''}`,
+    );
+  }
+
+  async getRelationshipReviewItems(options?: {
+    status?: RelationshipReviewStatus | 'all';
+    limit?: number;
+    personId?: string;
+  }): Promise<RelationshipReviewItemListResponse> {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.limit !== undefined)
+      params.set('limit', String(options.limit));
+    if (options?.personId) params.set('personId', options.personId);
+    const query = params.toString();
+    return this.request<RelationshipReviewItemListResponse>(
+      'GET',
+      `/relationships/review-items${query ? `?${query}` : ''}`,
+    );
+  }
+
+  async updateRelationshipReviewItem(
+    id: string,
+    action: RelationshipReviewAction,
+    body?: {
+      editedValue?: string;
+      userNote?: string;
+      snoozeUntil?: number;
+    },
+  ): Promise<RelationshipReviewItem> {
+    return this.request<RelationshipReviewItem>(
+      'POST',
+      `/relationships/review-items/${encodeURIComponent(id)}/${action}`,
+      body ?? {},
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -2590,7 +3236,9 @@ export class MemoryServiceClient {
     const qs = params.toString();
     return this.request<{ items: ProviderBindingRecord[]; total: number }>(
       'GET',
-      `/providers/${encodeURIComponent(provider)}/bindings${qs ? `?${qs}` : ''}`,
+      `/providers/${encodeURIComponent(provider)}/bindings${
+        qs ? `?${qs}` : ''
+      }`,
     );
   }
 
@@ -2601,7 +3249,9 @@ export class MemoryServiceClient {
   ): Promise<{ binding: ProviderBindingRecord }> {
     return this.request<{ binding: ProviderBindingRecord }>(
       'PUT',
-      `/providers/${encodeURIComponent(provider)}/bindings/${encodeURIComponent(bindingType)}`,
+      `/providers/${encodeURIComponent(provider)}/bindings/${encodeURIComponent(
+        bindingType,
+      )}`,
       payload,
     );
   }
@@ -2631,7 +3281,9 @@ export class MemoryServiceClient {
     const qs = params.toString();
     return this.request<ProviderSyncJobListResponse>(
       'GET',
-      `/providers/${encodeURIComponent(provider)}/sync-jobs${qs ? `?${qs}` : ''}`,
+      `/providers/${encodeURIComponent(provider)}/sync-jobs${
+        qs ? `?${qs}` : ''
+      }`,
     );
   }
 
@@ -2641,7 +3293,9 @@ export class MemoryServiceClient {
   ): Promise<{ job: ProviderSyncJobRecord }> {
     return this.request<{ job: ProviderSyncJobRecord }>(
       'GET',
-      `/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}`,
+      `/providers/${encodeURIComponent(
+        provider,
+      )}/sync-jobs/${encodeURIComponent(id)}`,
     );
   }
 
@@ -2652,7 +3306,9 @@ export class MemoryServiceClient {
   ): Promise<{ job: ProviderSyncJobRecord }> {
     return this.request<{ job: ProviderSyncJobRecord }>(
       'POST',
-      `/providers/${encodeURIComponent(provider)}/sync-jobs/${encodeURIComponent(id)}/report`,
+      `/providers/${encodeURIComponent(
+        provider,
+      )}/sync-jobs/${encodeURIComponent(id)}/report`,
       payload,
     );
   }
@@ -2941,7 +3597,9 @@ export class MemoryServiceClient {
     }
     return this.request(
       'POST',
-      `/outreach/directory/sync${params.toString() ? `?${params.toString()}` : ''}`,
+      `/outreach/directory/sync${
+        params.toString() ? `?${params.toString()}` : ''
+      }`,
     );
   }
 
@@ -3211,7 +3869,9 @@ export class MemoryServiceClient {
     if (limit !== undefined) params.set('limit', String(limit));
 
     const qs = params.toString();
-    const path = `/agent/${encodeURIComponent(kind)}/history${qs ? '?' + qs : ''}`;
+    const path = `/agent/${encodeURIComponent(kind)}/history${
+      qs ? '?' + qs : ''
+    }`;
     return this.request<{ kind: string; versions: any[] }>('GET', path);
   }
 
@@ -3256,6 +3916,130 @@ export class MemoryServiceClient {
   }
 
   // --------------------------------------------------------------------------
+  // Memory Day Pilot
+  // --------------------------------------------------------------------------
+
+  async getDayPilotToday(params?: {
+    date?: string;
+    timezone?: string;
+    autoGenerate?: boolean;
+  }): Promise<DayPilotTodayResponse> {
+    const query = new URLSearchParams();
+    if (params?.date) query.set('date', params.date);
+    if (params?.timezone) query.set('timezone', params.timezone);
+    if (params?.autoGenerate !== undefined) {
+      query.set('autoGenerate', String(params.autoGenerate));
+    }
+    const qs = query.toString();
+    return this.request<DayPilotTodayResponse>(
+      'GET',
+      `/day-pilot/today${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async getTodayPilotToday(params?: {
+    date?: string;
+    timezone?: string;
+    autoGenerate?: boolean;
+  }): Promise<DayPilotTodayResponse> {
+    const query = new URLSearchParams();
+    if (params?.date) query.set('date', params.date);
+    if (params?.timezone) query.set('timezone', params.timezone);
+    if (params?.autoGenerate !== undefined) {
+      query.set('autoGenerate', String(params.autoGenerate));
+    }
+    const qs = query.toString();
+    return this.request<DayPilotTodayResponse>(
+      'GET',
+      `/today-pilot/today${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async refreshDayPilot(payload?: {
+    date?: string;
+    timezone?: string;
+    mode?: 'light' | 'full';
+  }): Promise<DayPilotTodayResponse> {
+    return this.request<DayPilotTodayResponse>(
+      'POST',
+      '/day-pilot/refresh',
+      payload ?? {},
+    );
+  }
+
+  async refreshTodayPilot(payload?: {
+    date?: string;
+    timezone?: string;
+    mode?: 'light' | 'full';
+  }): Promise<DayPilotTodayResponse> {
+    return this.request<DayPilotTodayResponse>(
+      'POST',
+      '/today-pilot/refresh',
+      payload ?? {},
+    );
+  }
+
+  async sendDayPilotCardFeedback(
+    cardId: string,
+    payload: {
+      action: 'done' | 'later' | 'mute' | 'wrong' | 'useful';
+      note?: string;
+      reason?: string;
+      snoozeUntil?: number;
+      muteKey?: string;
+    },
+  ): Promise<DayPilotTodayResponse> {
+    return this.request<DayPilotTodayResponse>(
+      'POST',
+      `/day-pilot/cards/${encodeURIComponent(cardId)}/feedback`,
+      payload,
+    );
+  }
+
+  async renderDayPilotContextPack(
+    missionId: string,
+    payload?: {
+      tokenBudget?: number;
+      targetProvider?: DayPilotProviderTarget;
+      includeSensitive?: boolean;
+    },
+  ): Promise<DayPilotContextPackResponse> {
+    return this.request<DayPilotContextPackResponse>(
+      'POST',
+      `/day-pilot/missions/${encodeURIComponent(missionId)}/context-pack`,
+      payload ?? {},
+    );
+  }
+
+  async prepareTodayPilotMeetingPreps(payload?: {
+    date?: string;
+    timezone?: string;
+    horizonHours?: number;
+    maxMeetings?: number;
+    mode?: 'nightly_llm' | 'on_demand_llm';
+  }): Promise<TodayPilotMeetingPrepPrepareResponse> {
+    return this.request<TodayPilotMeetingPrepPrepareResponse>(
+      'POST',
+      '/today-pilot/meeting-prep/prepare',
+      payload ?? {},
+    );
+  }
+
+  async resolveTodayPilotMeetingPrep(payload: {
+    event?: CalendarEventSyncItem;
+    timezone?: string;
+    userGoal?: string;
+    autoGenerate?: boolean;
+    forceGenerate?: boolean;
+  }): Promise<TodayPilotMeetingPrepResolveResponse> {
+    return this.request<TodayPilotMeetingPrepResolveResponse>(
+      'POST',
+      '/today-pilot/meeting-prep/resolve',
+      payload,
+    );
+  }
+
+  // --------------------------------------------------------------------------
   // Personal Skill Library
   // --------------------------------------------------------------------------
 
@@ -3287,11 +4071,14 @@ export class MemoryServiceClient {
     );
   }
 
-  async useSkillSuggestion(id: string): Promise<PersonalSkillDetailResponse> {
+  async useSkillSuggestion(
+    id: string,
+    options?: { reviewConfirmed?: boolean },
+  ): Promise<PersonalSkillDetailResponse> {
     return this.request<PersonalSkillDetailResponse>(
       'POST',
       `/skills/suggestions/${encodeURIComponent(id)}/use`,
-      {},
+      options || {},
     );
   }
 
@@ -3439,7 +4226,9 @@ export class MemoryServiceClient {
     onEvent: (event: string, data: any) => void,
     onError?: (error: Event) => void,
   ): () => void {
-    const url = `${this.baseUrl}/events?userId=${encodeURIComponent(this.userId)}`;
+    const url = `${this.baseUrl}/events?userId=${encodeURIComponent(
+      this.userId,
+    )}`;
     const eventSource = new EventSource(url);
 
     const eventTypes = [
@@ -3499,7 +4288,9 @@ export class MemoryServiceClient {
     try {
       const result = await this.request<{ filename: string; content: string }>(
         'GET',
-        `/user-files/${encodeURIComponent(subdir)}/${encodeURIComponent(filename)}`,
+        `/user-files/${encodeURIComponent(subdir)}/${encodeURIComponent(
+          filename,
+        )}`,
       );
       return result.content;
     } catch {

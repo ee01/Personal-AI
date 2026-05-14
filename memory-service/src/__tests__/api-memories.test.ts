@@ -21,6 +21,7 @@ describe('Memories API', () => {
   });
 
   beforeEach(() => {
+    db.prepare('DELETE FROM memory_feedback_events').run();
     db.prepare('DELETE FROM memory_metadata').run();
     db.prepare('DELETE FROM chunks').run();
     db.prepare('DELETE FROM messages_raw').run();
@@ -69,6 +70,13 @@ describe('Memories API', () => {
       'not-a-message-id',
       now - 60,
     );
+    db.prepare(
+      `INSERT INTO memory_feedback_events
+        (feedback_type, target_type, target_id, action, created_at, updated_at)
+       VALUES
+        ('recall_quality', 'message', 'message-1', 'positive', ?, ?),
+        ('recall_quality', 'chunk', '301', 'negative', ?, ?)`,
+    ).run(now, now, now, now);
 
     const messageRes = await app.inject({
       method: 'GET',
@@ -91,6 +99,7 @@ describe('Memories API', () => {
         sender: 'Ada',
         groupName: 'AI Team',
         channels: ['direct'],
+        recallFeedback: 'positive',
       },
     });
 
@@ -115,6 +124,7 @@ describe('Memories API', () => {
         source: 'timeline-source',
         relatedMessageId: 'message-1',
         channels: ['direct'],
+        recallFeedback: 'negative',
       },
     });
 

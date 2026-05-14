@@ -31,6 +31,7 @@ import { installManifest } from '../nativeMessaging/manifestInstaller.js';
 interface SessionBuffer {
   chunks: Buffer[];
   startedAt: number;
+  lastTouchedAt: number;
   language?: string;
 }
 
@@ -39,6 +40,8 @@ const MIN_TRANSCRIBE_SECONDS = 3;
 const MIN_IDLE_FLUSH_TRANSCRIBE_SECONDS = 0.7;
 const PCM16_MONO_16KHZ_BYTES_PER_SECOND = 16000 * 2;
 const DEFAULT_MEETING_WHISPER_LANGUAGE = 'auto';
+const SESSION_IDLE_TTL_MS = 2 * 60_000;
+const SESSION_SWEEP_INTERVAL_MS = 30_000;
 
 let downloadProgress = 0;
 let downloadInProgress = false;
@@ -68,6 +71,16 @@ function shouldAutoEnsureWhisperBinary(): boolean {
 }
 
 export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
+  const sessionSweepTimer = setInterval(() => {
+    closeIdleSessions();
+  }, SESSION_SWEEP_INTERVAL_MS);
+  sessionSweepTimer.unref?.();
+  app.addHook('onClose', async () => {
+    clearInterval(sessionSweepTimer);
+    closeAllSessions();
+    await unloadWhisperModel();
+  });
+
   app.get(
     '/whisper/status',
     async (_req: FastifyRequest, reply: FastifyReply) => {
@@ -212,6 +225,7 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
       sessions.set(sessionId, {
         chunks: [],
         startedAt: Date.now(),
+        lastTouchedAt: Date.now(),
         language: normalizeWhisperLanguage(body?.language),
       });
       if (!replacingExistingSession) {
@@ -236,6 +250,7 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
       const body = req.body as
         | { pcmBase64?: string; flush?: boolean }
         | undefined;
+      session.lastTouchedAt = Date.now();
       if (body?.pcmBase64) {
         const pcmBuf = Buffer.from(body.pcmBase64, 'base64');
         if (pcmBuf.length > 0) session.chunks.push(pcmBuf);
@@ -306,4 +321,24 @@ export async function registerWhisperRoutes(app: FastifyApp): Promise<void> {
       return reply.send({ ok: true });
     },
   );
+}
+
+function closeAllSessions(): void {
+  const releasedCount = sessions.size;
+  sessions.clear();
+  for (let index = 0; index < releasedCount; index += 1) {
+    releaseWhisperEngine();
+  }
+}
+
+function closeIdleSessions(now = Date.now()): void {
+  let releasedCount = 0;
+  for (const [sessionId, session] of sessions) {
+    if (now - session.lastTouchedAt <= SESSION_IDLE_TTL_MS) continue;
+    sessions.delete(sessionId);
+    releasedCount += 1;
+  }
+  for (let index = 0; index < releasedCount; index += 1) {
+    releaseWhisperEngine();
+  }
 }

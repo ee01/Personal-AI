@@ -24,7 +24,11 @@ import {
   DEFAULT_TIMELINE_PROJECT,
   TIMELINE_PROJECT_OPTIONS,
   getTimelineProjectOption,
+  getTimelineSyncDryRunHelp,
+  getTimelineSyncPayloadHelp,
+  type TimelineSyncDryRunHelp,
   resolveTimelineProjectForSave,
+  type TimelineSyncPayloadHelp,
 } from './timelineProjects';
 import {
   BotConfigDialogMode,
@@ -58,6 +62,7 @@ import {
   buildTimelineCacheDiagnosticText,
   formatTimelineCacheAge,
   formatTimelineCacheLastAttempt,
+  getTimelineCacheAttemptQuickFixText,
   getTimelineCacheProjectStatus,
   getTimelineCacheReadinessBlockText,
   getTimelineCacheSaveBlockText,
@@ -75,7 +80,8 @@ import {
 import {
   formatLocalScheduleDate,
   formatLocalScheduleDateTime,
-  getLocalScheduleDayOfWeek,
+  formatLocalScheduleTimezoneHint,
+  hasLocalScheduleTime,
   getTodayLocalScheduleDate,
   isValidLocalScheduleTime,
   normalizeLocalScheduleTime,
@@ -99,11 +105,23 @@ import {
   getScheduleQueueSummary,
 } from './scheduleQueuePressure';
 import {
+  formatScheduleHealthIssue,
+  formatScheduleHealthSummary,
+  getScheduleHealthIssue,
+  getScheduleHealthIssues,
+} from './scheduleHealth';
+import {
   filterScheduledMessagesForView,
   getScheduledMessageCategories,
   hasScheduledMessagesViewFilters,
   parseScheduledMessagesQueryFilters,
 } from './scheduledMessagesFilters';
+import {
+  buildScheduledMessagesSheetTabUrl,
+  getScheduledMessagesSheetTabId,
+  type ScheduledMessagesSheetTab,
+} from './scheduledSheetLinks';
+import { buildRepeatSubmissionFields } from './repeatSubmission';
 
 // react-select 选项类型
 interface SelectOption {
@@ -116,6 +134,19 @@ interface BotConfigWarningState {
   title: string;
   description: string;
   dialogMode: BotConfigDialogMode;
+}
+
+function formatAppScriptUpdateCheckedAt(isoValue: string): string {
+  if (!isoValue) {
+    return '';
+  }
+
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.toLocaleString();
 }
 
 interface OutreachRuntimeState {
@@ -672,6 +703,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [updateCheckNeedsAuth, setUpdateCheckNeedsAuth] = useState(false);
   const [updateCheckError, setUpdateCheckError] = useState('');
   const [appScriptVersionUsage, setAppScriptVersionUsage] = useState<AppScriptVersionUsage | null>(null);
+  const [appScriptUpdateCheckedAt, setAppScriptUpdateCheckedAt] = useState('');
   const [editingMessage, setEditingMessage] = useState<ScheduledMessage | null>(null);
   const [outreachRuntime, setOutreachRuntime] = useState<OutreachRuntimeState>({
     enabled: false,
@@ -1074,23 +1106,46 @@ const ScheduledMessagesManager: React.FC = () => {
     try {
       await loadMessages(service);
       
-      // 检查并补充 logsSheetId（如果缺失）
-      if (config.logsSheetId === undefined || config.logsSheetId === null) {
-        console.log('⏳ 同步时发现 logsSheetId 缺失，尝试获取...');
+      // 检查并补充 Messages / Logs 工作表 ID（如果缺失）
+      if (
+        config.messagesSheetId === undefined ||
+        config.messagesSheetId === null ||
+        config.logsSheetId === undefined ||
+        config.logsSheetId === null
+      ) {
+        console.log('⏳ 同步时发现 Messages/Logs 工作表 ID 缺失，尝试获取...');
         try {
-          const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.syncLogsSheetId' });
+          const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.syncWorksheetIds' });
           if (token) {
-            const logsSheetId = await fetchLogsSheetId(token, config.sheetId);
-            if (logsSheetId !== null) {
+            const worksheetIds = await fetchScheduledWorksheetIds(token, config.sheetId);
+            const updatedConfig = { ...config };
+            let hasWorksheetIdUpdates = false;
+
+            if (
+              (updatedConfig.messagesSheetId === undefined || updatedConfig.messagesSheetId === null) &&
+              worksheetIds.messagesSheetId !== null
+            ) {
+              updatedConfig.messagesSheetId = worksheetIds.messagesSheetId;
+              hasWorksheetIdUpdates = true;
+            }
+
+            if (
+              (updatedConfig.logsSheetId === undefined || updatedConfig.logsSheetId === null) &&
+              worksheetIds.logsSheetId !== null
+            ) {
+              updatedConfig.logsSheetId = worksheetIds.logsSheetId;
+              hasWorksheetIdUpdates = true;
+            }
+
+            if (hasWorksheetIdUpdates) {
               // 保存到配置
-              const updatedConfig = { ...config, logsSheetId };
               await chrome.storage.local.set({ scheduledMessagesConfig: updatedConfig });
               setConfig(updatedConfig);
-              console.log('✅ 已补充 logsSheetId:', logsSheetId);
+              console.log('✅ 已补充 Messages/Logs 工作表 ID:', worksheetIds);
             }
           }
         } catch (error) {
-          console.error('补充 logsSheetId 失败:', error);
+          console.error('补充 Messages/Logs 工作表 ID 失败:', error);
         }
       }
     } finally {
@@ -1108,6 +1163,7 @@ const ScheduledMessagesManager: React.FC = () => {
       if (!config || !config.webAppUrl) {
         setAppScriptVersionUsage(null);
         setUpdateCheckError('');
+        setUpdateAvailable(false);
         return;
       }
 
@@ -1122,6 +1178,8 @@ const ScheduledMessagesManager: React.FC = () => {
       if (!token) {
         setUpdateCheckNeedsAuth(true);
         setUpdateCheckError('');
+        setUpdateAvailable(false);
+        setAppScriptVersionUsage(null);
         if (showCurrentAlert) {
           alert('无法获取 Google 授权，暂时不能检查 App Script 升级状态。');
         }
@@ -1132,11 +1190,13 @@ const ScheduledMessagesManager: React.FC = () => {
       
       const updater = new AppScriptUpdater(token, config);
       const result = await updater.checkForUpdates();
+      setAppScriptUpdateCheckedAt(new Date().toISOString());
       setLatestAppScriptVersion(result.latestVersion);
       setAppScriptVersionUsage(result.versionUsage || null);
 
       if (result.error) {
         setUpdateCheckError(result.error);
+        setUpdateAvailable(false);
         if (showCurrentAlert) {
           alert(`检查 App Script 升级状态失败: ${result.error}`);
         }
@@ -1161,7 +1221,10 @@ const ScheduledMessagesManager: React.FC = () => {
       }
     } catch (error) {
       console.error('检查更新失败:', error);
+      setAppScriptUpdateCheckedAt(new Date().toISOString());
       setUpdateCheckError(error instanceof Error ? error.message : String(error));
+      setUpdateAvailable(false);
+      setAppScriptVersionUsage(null);
       if (showCurrentAlert) {
         alert(`检查 App Script 升级状态失败: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -1180,7 +1243,7 @@ const ScheduledMessagesManager: React.FC = () => {
       ? `\n\n当前 App Script: ${appScriptVersion}\n最新 App Script: ${latestAppScriptVersion}`
       : '';
 
-    if (!confirm(`确定要升级调度系统吗？${versionSummary}\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script Web App 代码升级（先重新确认线上版本，再预检部署，保持 Web App URL 不变）\n3. Jira Automation 规则升级\n\n失败项会保留现有版本；如果 App Script 已是最新，会跳过脚本写入和版本创建；如果 deployment 预检失败，不会创建新的脚本版本。整个过程可能需要几分钟时间。`)) {
+    if (!confirm(`确定要升级调度系统吗？${versionSummary}\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script Web App 代码升级（先重新确认线上版本，再预检部署和 Web App URL 匹配，保持 Web App URL 不变）\n3. Jira Automation 规则升级\n\n失败项会保留现有版本；如果 App Script 已是最新，会跳过脚本写入和版本创建；如果 deployment 预检或 URL 匹配失败，不会创建新的脚本版本。整个过程可能需要几分钟时间。`)) {
       return;
     }
     
@@ -1292,9 +1355,35 @@ const ScheduledMessagesManager: React.FC = () => {
   };
 
   const isAppScriptVersionLimitReached = appScriptVersionUsage?.remaining === 0;
+  const shouldSuggestAppScriptVersionCleanup = Boolean(
+    appScriptVersionUsage?.nearLimit && appScriptVersionUsage.remaining > 0,
+  );
   const appScriptVersionUsageText = appScriptVersionUsage
     ? `Project History 已用 ${appScriptVersionUsage.count}/${appScriptVersionUsage.limit}，剩余 ${appScriptVersionUsage.remaining} 个版本。`
     : '升级前会检查 Project History 版本额度。';
+  const appScriptUpdateCheckedAtText = formatAppScriptUpdateCheckedAt(appScriptUpdateCheckedAt);
+  const appScriptUpgradeSummary = [
+    `当前 ${appScriptVersion || '未知'}`,
+    `最新 ${latestAppScriptVersion || '未知'}`,
+    appScriptVersionUsage
+      ? `Project History ${appScriptVersionUsage.count}/${appScriptVersionUsage.limit}`
+      : '升级前预检版本额度',
+    appScriptUpdateCheckedAtText ? `检查于 ${appScriptUpdateCheckedAtText}` : '',
+    'URL 匹配后更新',
+    'Web App URL 不变',
+    '失败保留旧部署',
+  ].filter(Boolean);
+  const appScriptUpgradePreflightSteps = [
+    '重新确认线上版本',
+    '匹配当前 Web App deployment',
+    '检查 Project History 额度',
+    '更新后同步 Sheet 配置',
+  ];
+  const appScriptUpgradeGuidance = isAppScriptVersionLimitReached
+    ? '请先清理旧版本，避免升级流程被 200 个版本上限阻塞。'
+    : shouldSuggestAppScriptVersionCleanup
+      ? `Project History 只剩 ${appScriptVersionUsage?.remaining} 个版本，建议先打开 Project History 清理旧版本，再执行升级。`
+      : '升级前会重新确认线上版本、预检 deployment 是否匹配当前 Web App URL，并检查版本额度；如果已是最新，会跳过脚本写入和版本创建。';
 
   const handleOpenAppScriptProjectHistory = () => {
     const projectHistoryUrl = appScriptVersionUsage?.projectHistoryUrl
@@ -1313,47 +1402,71 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   }, [isInitialized, config]);
   
-  const handleOpenSheet = async () => {
-    if (config && config.sheetUrl) {
-      // 如果有 logsSheetId，直接打开 Logs 表
-      if (config.logsSheetId !== undefined && config.logsSheetId !== null) {
-        const url = `${config.sheetUrl.replace('/edit', '')}#gid=${config.logsSheetId}`;
-        window.open(url, '_blank');
-      } else {
-        // 没有 logsSheetId，尝试获取并保存
-        console.log('⏳ logsSheetId 未记录，尝试获取...');
-        try {
-          const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.openLogsSheet' });
-          if (token && service) {
-            const logsSheetId = await fetchLogsSheetId(token, config.sheetId);
-            if (logsSheetId !== null) {
-              // 保存到配置
-              const updatedConfig = { ...config, logsSheetId };
-              await chrome.storage.local.set({ scheduledMessagesConfig: updatedConfig });
-              setConfig(updatedConfig);
-              
-              // 打开 Logs 表
-              const url = `${config.sheetUrl.replace('/edit', '')}#gid=${logsSheetId}`;
-              window.open(url, '_blank');
-              console.log('✅ 已获取并保存 logsSheetId:', logsSheetId);
-            } else {
-              // 找不到 Logs 表，打开默认页
-              window.open(config.sheetUrl, '_blank');
-            }
-          } else {
-            window.open(config.sheetUrl, '_blank');
+  const handleOpenScheduledSheetTab = async (
+    tab: ScheduledMessagesSheetTab,
+    event?: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>,
+  ) => {
+    event?.preventDefault();
+
+    if (!config?.sheetUrl) {
+      return;
+    }
+
+    let nextConfig = config;
+    const currentTabId = getScheduledMessagesSheetTabId(config, tab);
+
+    if (currentTabId === undefined || currentTabId === null) {
+      console.log(`⏳ ${tab === 'messages' ? 'messagesSheetId' : 'logsSheetId'} 未记录，尝试获取...`);
+      try {
+        const token = await getGoogleAuthToken({
+          caller: tab === 'messages'
+            ? 'ScheduledMessagesManager.openMessagesSheet'
+            : 'ScheduledMessagesManager.openLogsSheet',
+        });
+
+        if (token) {
+          const worksheetIds = await fetchScheduledWorksheetIds(token, config.sheetId);
+          const updatedConfig = { ...config };
+          let hasWorksheetIdUpdates = false;
+
+          if (worksheetIds.messagesSheetId !== null && updatedConfig.messagesSheetId !== worksheetIds.messagesSheetId) {
+            updatedConfig.messagesSheetId = worksheetIds.messagesSheetId;
+            hasWorksheetIdUpdates = true;
           }
-        } catch (error) {
-          console.error('获取 logsSheetId 失败:', error);
-          // 出错时打开默认页
-          window.open(config.sheetUrl, '_blank');
+
+          if (worksheetIds.logsSheetId !== null && updatedConfig.logsSheetId !== worksheetIds.logsSheetId) {
+            updatedConfig.logsSheetId = worksheetIds.logsSheetId;
+            hasWorksheetIdUpdates = true;
+          }
+
+          if (hasWorksheetIdUpdates) {
+            await chrome.storage.local.set({ scheduledMessagesConfig: updatedConfig });
+            setConfig(updatedConfig);
+            nextConfig = updatedConfig;
+            console.log('✅ 已获取并保存 Messages/Logs 工作表 ID:', worksheetIds);
+          }
         }
+      } catch (error) {
+        console.error(`获取 ${tab === 'messages' ? 'messagesSheetId' : 'logsSheetId'} 失败:`, error);
       }
     }
+
+    window.open(buildScheduledMessagesSheetTabUrl(nextConfig, tab), '_blank');
   };
-  
-  // 获取 Logs Sheet ID
-  const fetchLogsSheetId = async (token: string, sheetId: string): Promise<number | null> => {
+
+  const handleOpenMessagesSheet = (
+    event?: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>,
+  ) => handleOpenScheduledSheetTab('messages', event);
+
+  const handleOpenLogsSheet = (
+    event?: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>,
+  ) => handleOpenScheduledSheetTab('logs', event);
+
+  // 获取 Messages / Logs Sheet ID
+  const fetchScheduledWorksheetIds = async (
+    token: string,
+    sheetId: string,
+  ): Promise<{ messagesSheetId: number | null; logsSheetId: number | null }> => {
     try {
       const response = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties`,
@@ -1369,17 +1482,24 @@ const ScheduledMessagesManager: React.FC = () => {
       }
       
       const data = await response.json();
+      const messagesSheet = data.sheets.find((s: any) => s.properties.title === 'Messages');
       const logsSheet = data.sheets.find((s: any) => s.properties.title === 'Logs');
       
+      if (!messagesSheet) {
+        console.warn('未找到 Messages 工作表');
+      }
+
       if (!logsSheet) {
         console.warn('未找到 Logs 工作表');
-        return null;
       }
-      
-      return logsSheet.properties.sheetId;
+
+      return {
+        messagesSheetId: messagesSheet?.properties.sheetId ?? null,
+        logsSheetId: logsSheet?.properties.sheetId ?? null,
+      };
     } catch (error) {
-      console.error('fetchLogsSheetId 失败:', error);
-      return null;
+      console.error('fetchScheduledWorksheetIds 失败:', error);
+      return { messagesSheetId: null, logsSheetId: null };
     }
   };
 
@@ -2180,6 +2300,10 @@ const ScheduledMessagesManager: React.FC = () => {
   
   // 格式化下次执行时间
   const formatNextExec = (message: ScheduledMessage): string => {
+    if (message.Status === 'Done' || message.Status === 'Completed') {
+      return '已完成';
+    }
+
     // 检查是否为 Timeline 触发
     if (!message.Schedule_Date && message.Timeline_Milestone) {
       return `下次 ${formatTimelineNextExecutionText(message)}`;
@@ -2190,8 +2314,7 @@ const ScheduledMessagesManager: React.FC = () => {
   };
 
   const isExecutorDrivenMessage = (message: ScheduledMessage): boolean => {
-    return requiresBotAutomation(message) ||
-      (message.Push_Method === 'JiraAutomation' && Boolean(message.AI_Endpoint));
+    return isExecutorDrivenSchedule(message);
   };
   
   // 频率格式化函数
@@ -2218,7 +2341,12 @@ const ScheduledMessagesManager: React.FC = () => {
       return '';
     }
 
-    const hasScheduleTime = Boolean(message.Schedule_Time && message.Schedule_Time.trim());
+    const scheduleHealthIssue = getScheduleHealthIssue(message, queueSummaryNow);
+    if (scheduleHealthIssue) {
+      return formatScheduleHealthIssue(scheduleHealthIssue);
+    }
+
+    const hasScheduleTime = hasLocalScheduleTime(message.Schedule_Time);
     if (hasScheduleTime && !isValidLocalScheduleTime(message.Schedule_Time)) {
       return '请编辑为 00:00-23:59';
     }
@@ -2228,18 +2356,21 @@ const ScheduledMessagesManager: React.FC = () => {
         return '';
       }
 
-      const queuePressure = getScheduleQueuePressure(messages, message);
-      return [
-        '每分钟轮询；不提前发送；30 分钟补偿',
-        queuePressure ? formatScheduleQueuePressure(queuePressure) : '',
-      ].filter(Boolean).join('；');
+      const queuePressure = getScheduleQueuePressure(messages, message, queueSummaryNow);
+      return queuePressure ? formatScheduleQueuePressure(queuePressure) : '';
     }
 
     if (!isExecutorDrivenMessage(message)) {
       return '未设时间：09:00 执行';
     }
 
-    const queuePressure = getScheduleQueuePressure(messages, message);
+    const nextExecution = calculateScheduledMessageNextExecution(message, queueSummaryNow);
+    const nextExecutionDate = nextExecution.slice(0, 10);
+    if (nextExecutionDate && nextExecutionDate < formatLocalScheduleDate(queueSummaryNow)) {
+      return '未设时间：执行日期已过，请改成今天或未来日期';
+    }
+
+    const queuePressure = getScheduleQueuePressure(messages, message, queueSummaryNow);
     return [
       '未设时间：08:00 后排队',
       queuePressure ? formatScheduleQueuePressure(queuePressure) : '',
@@ -2346,6 +2477,17 @@ const ScheduledMessagesManager: React.FC = () => {
     () => getScheduleQueueSummary(messages, queueSummaryNow),
     [messages, queueSummaryNow],
   );
+  const scheduleHealthIssues = useMemo(
+    () => getScheduleHealthIssues(messages, queueSummaryNow),
+    [messages, queueSummaryNow],
+  );
+  const focusMessageById = (messageId: string) => {
+    setTargetMessageId(messageId);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set('messageId', messageId);
+    window.history.replaceState(null, document.title, `${url.pathname}${url.search}${url.hash}`);
+  };
   const clearMessageFilters = () => {
     setTargetMessageId('');
     setFilterPendingReview(false);
@@ -2484,14 +2626,14 @@ const ScheduledMessagesManager: React.FC = () => {
               disabled={isUpdating}
               title={isAppScriptVersionLimitReached
                 ? `${appScriptVersionUsageText}请先清理旧版本后再升级。`
-                : `当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule；升级前会重新确认线上版本，已是最新时不会重复创建脚本版本。${appScriptVersionUsage ? ` ${appScriptVersionUsageText}` : ''}`}
+                : `当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule；升级前会重新确认线上版本并校验 deployment 的 Web App URL 匹配，已是最新时不会重复创建脚本版本。${appScriptVersionUsage ? ` ${appScriptVersionUsageText}` : ''}${shouldSuggestAppScriptVersionCleanup ? ' 版本额度接近上限，建议先清理旧版本。' : ''}`}
             >
               {isUpdating
                 ? '⏳ 升级中...'
                 : isAppScriptVersionLimitReached ? '🧹 清理脚本版本' : '🚀 升级调度系统'}
             </button>
           )}
-          <button style={styles.configButton} onClick={handleOpenSheet} title="查看推送记录">
+          <button style={styles.configButton} onClick={handleOpenLogsSheet} title="查看推送记录">
             📊 推送记录
           </button>
         </div>
@@ -2544,22 +2686,49 @@ const ScheduledMessagesManager: React.FC = () => {
           <div style={styles.warningContent}>
             <span style={styles.warningIcon}>🚀</span>
             <div style={styles.warningText}>
-              <strong>{isAppScriptVersionLimitReached ? 'App Script 可升级，但版本历史已满' : 'App Script 可升级'}</strong>
-              <p style={styles.updateDescription}>
-                当前 {appScriptVersion || '未知'}，最新 {latestAppScriptVersion || '未知'}。{appScriptVersionUsageText}
+              <strong>
                 {isAppScriptVersionLimitReached
-                  ? '请先清理旧版本，避免升级流程被 200 个版本上限阻塞。'
-                  : '升级前会重新确认线上版本、预检部署和版本额度，保持 Web App URL 不变；如果已是最新，会跳过脚本写入和版本创建。'}
+                  ? 'App Script 可升级，但版本历史已满'
+                  : shouldSuggestAppScriptVersionCleanup
+                    ? 'App Script 可升级，版本历史接近上限'
+                    : 'App Script 可升级'}
+              </strong>
+              <p style={styles.updateDescription}>
+                {appScriptUpgradeGuidance}
               </p>
+              <div style={styles.updateMetaRow}>
+                {appScriptUpgradeSummary.map((item) => (
+                  <span key={item} style={styles.updateMetaItem}>{item}</span>
+                ))}
+              </div>
+              <div style={styles.updatePreflightRow} aria-label="App Script 升级前检查">
+                {appScriptUpgradePreflightSteps.map((step, index) => (
+                  <span key={step} style={styles.updatePreflightItem}>
+                    <strong style={styles.updatePreflightItemNumber}>{index + 1}</strong>
+                    {step}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
-          <button
-            style={styles.updateBannerButton}
-            onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
-            disabled={isUpdating}
-          >
-            {isUpdating ? '升级中...' : isAppScriptVersionLimitReached ? '打开 Project History' : '升级调度系统'}
-          </button>
+          <div style={styles.updateBannerActions}>
+            {shouldSuggestAppScriptVersionCleanup && (
+              <button
+                style={styles.secondaryUpdateBannerButton}
+                onClick={handleOpenAppScriptProjectHistory}
+                disabled={isUpdating}
+              >
+                打开 Project History
+              </button>
+            )}
+            <button
+              style={styles.updateBannerButton}
+              onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
+              disabled={isUpdating}
+            >
+              {isUpdating ? '升级中...' : isAppScriptVersionLimitReached ? '打开 Project History' : '升级调度系统'}
+            </button>
+          </div>
         </div>
       )}
       
@@ -2604,21 +2773,98 @@ const ScheduledMessagesManager: React.FC = () => {
         </div>
       )}
 
+      {scheduleHealthIssues.length > 0 && (
+        <div style={styles.queueRiskBanner}>
+          <div style={styles.warningContent}>
+            <span style={styles.warningIcon}>⏰</span>
+            <div style={styles.warningText}>
+              <strong>有定时消息需要改期</strong>
+              <p style={styles.queueRiskDescription}>
+                {formatScheduleHealthSummary(scheduleHealthIssues)}
+              </p>
+              <div style={styles.queueSlotList}>
+                {scheduleHealthIssues.slice(0, 4).map(issue => (
+                  <div
+                    key={issue.messageId}
+                    style={styles.queueIssueItem}
+                    title={formatScheduleHealthIssue(issue)}
+                  >
+                    <span style={styles.queueIssueText}>
+                      {issue.topic}: {formatScheduleHealthIssue(issue)}
+                    </span>
+                    <div style={styles.queueIssueActions}>
+                      <button
+                        type="button"
+                        style={styles.queueIssueButton}
+                        onClick={() => focusMessageById(issue.messageId)}
+                      >
+                        定位
+                      </button>
+                      <button
+                        type="button"
+                        style={styles.queueIssueButton}
+                        onClick={() => {
+                          const message = messages.find(candidate => candidate.ID === issue.messageId);
+                          if (message) {
+                            void handleEditMessage(message);
+                          }
+                        }}
+                      >
+                        编辑
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {scheduleQueueSummary && (
         <div style={scheduleQueueSummary.riskSlotCount > 0 ? styles.queueRiskBanner : styles.queueInfoBanner}>
           <div style={styles.warningContent}>
             <span style={styles.warningIcon}>{scheduleQueueSummary.riskSlotCount > 0 ? '⏱️' : '📬'}</span>
             <div style={styles.warningText}>
               <strong>
-                {scheduleQueueSummary.riskSlotCount > 0 ? 'Bot/AI 队列可能延迟' : 'Bot/AI 队列正在排队'}
+                {scheduleQueueSummary.riskSlotCount > 0 ? '执行器队列可能延迟' : '执行器队列正在排队'}
               </strong>
               <p style={scheduleQueueSummary.riskSlotCount > 0 ? styles.queueRiskDescription : styles.queueInfoDescription}>
                 {formatScheduleQueueSummary(scheduleQueueSummary)}
               </p>
               <div style={styles.queueSlotList}>
                 {scheduleQueueSummary.topSlots.map(slot => (
-                  <div key={slot.slotKey} style={styles.queueSlotItem}>
-                    {formatScheduleQueueSlotSummary(slot)}
+                  <div
+                    key={`${slot.hasExplicitTime ? 'explicit' : 'no-time'}:${slot.slotKey}`}
+                    style={styles.queueSlotItem}
+                    title={slot.actionTopic ? `最晚受影响：${slot.actionTopic}` : undefined}
+                  >
+                    <span style={styles.queueSlotText}>
+                      {formatScheduleQueueSlotSummary(slot)}
+                    </span>
+                    {slot.actionMessageId && (
+                      <div style={styles.queueIssueActions}>
+                        <button
+                          type="button"
+                          style={styles.queueIssueButton}
+                          onClick={() => focusMessageById(slot.actionMessageId)}
+                        >
+                          定位最晚
+                        </button>
+                        <button
+                          type="button"
+                          style={styles.queueIssueButton}
+                          onClick={() => {
+                            const message = messages.find(candidate => candidate.ID === slot.actionMessageId);
+                            if (message) {
+                              void handleEditMessage(message);
+                            }
+                          }}
+                        >
+                          编辑
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2723,7 +2969,7 @@ const ScheduledMessagesManager: React.FC = () => {
       {targetMessageId && (
         <div style={styles.targetReviewBanner}>
           <div style={styles.targetReviewText}>
-            <strong>已定位自动答复审核项</strong>
+            <strong>已定位消息</strong>
             <span>
               {targetMessage
                 ? `消息 ${targetMessageId}，当前状态：${targetMessage.Status}`
@@ -2745,7 +2991,7 @@ const ScheduledMessagesManager: React.FC = () => {
           <div style={styles.emptyState}>
             <p style={styles.emptyText}>暂无定时消息</p>
             <p style={styles.emptyHint}>
-              请在 <a href="#" onClick={handleOpenSheet}>Google Sheet</a> 中添加消息
+              请在 <a href="#" onClick={handleOpenMessagesSheet}>Google Sheet</a> 中添加消息
             </p>
           </div>
         ) : filteredMessages.length === 0 ? (
@@ -2767,6 +3013,17 @@ const ScheduledMessagesManager: React.FC = () => {
         ) : (
           <div style={styles.messageList}>
             <table style={styles.table}>
+              <colgroup>
+                <col style={styles.typeColumn} />
+                <col style={styles.topicColumn} />
+                <col style={styles.categoryColumn} />
+                <col style={styles.recipientColumn} />
+                <col style={styles.frequencyColumn} />
+                <col style={styles.nextExecColumn} />
+                <col style={styles.sentCountColumn} />
+                <col style={styles.statusColumn} />
+                <col style={styles.actionsColumn} />
+              </colgroup>
               <thead>
                 <tr>
                   <th style={styles.th}>类型</th>
@@ -2786,7 +3043,10 @@ const ScheduledMessagesManager: React.FC = () => {
                     const displayTitle = message.Topic || (
                       questionPreview.length > 30 ? `${questionPreview.substring(0, 30)}...` : questionPreview
                     );
+                    const frequencyText = formatFrequency(message);
+                    const scheduleHealthIssue = getScheduleHealthIssue(message, queueSummaryNow);
                     const dispatchPolicy = formatDispatchPolicy(message);
+                    const nextExecText = formatNextExec(message);
                     return (
                       <tr 
                         key={message.ID} 
@@ -2812,7 +3072,7 @@ const ScheduledMessagesManager: React.FC = () => {
                           </span>
                         </td>
                         <td style={styles.td}>
-                          <span style={styles.topicText}>
+                          <span style={styles.topicText} title={displayTitle}>
                             {message.Category?.includes('自动答复') && (
                               <span title="自动答复消息" style={{ marginRight: '4px' }}>🤖</span>
                             )}
@@ -2840,17 +3100,22 @@ const ScheduledMessagesManager: React.FC = () => {
                             )}
                           </div>
                         </td>
-                        <td style={styles.td}>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <span>{formatFrequency(message)}</span>
+                        <td style={{ ...styles.td, ...styles.frequencyCell }}>
+                          <div style={styles.frequencyStack}>
+                            <span style={styles.frequencyPrimaryText} title={frequencyText}>{frequencyText}</span>
                             {dispatchPolicy && (
-                              <small style={styles.schedulePolicyText}>{dispatchPolicy}</small>
+                              <small
+                                style={scheduleHealthIssue ? styles.schedulePolicyWarningText : styles.schedulePolicyText}
+                                title={dispatchPolicy}
+                              >
+                                {dispatchPolicy}
+                              </small>
                             )}
                           </div>
                         </td>
-                        <td style={styles.td}>{formatNextExec(message)}</td>
-                        <td style={styles.td}>{message.Exec_Count || 0} 次</td>
-                        <td style={styles.td}>
+                        <td style={{ ...styles.td, ...styles.nextExecCell }} title={nextExecText}>{nextExecText}</td>
+                        <td style={{ ...styles.td, ...styles.sentCountCell }}>{message.Exec_Count || 0} 次</td>
+                        <td style={{ ...styles.td, ...styles.statusCell }}>
                           <span 
                             style={{...getStatusStyle(message.Status), cursor: 'pointer'}} 
                             onClick={() => handleToggleStatus(message)}
@@ -2859,8 +3124,8 @@ const ScheduledMessagesManager: React.FC = () => {
                             {message.Status}
                           </span>
                         </td>
-                        <td style={styles.td}>
-                          <div style={{ display: 'flex', gap: '6px' }}>
+                        <td style={{ ...styles.td, ...styles.actionCell }}>
+                          <div style={styles.rowActions}>
                             {/* 待审核消息的快速操作按钮 */}
                             {message.Status === 'PendingReview' && (
                               <>
@@ -2966,7 +3231,7 @@ const ScheduledMessagesManager: React.FC = () => {
       
       <footer style={styles.footer}>
         <p style={styles.footerText}>
-          提示：可在本页直接新增 / 编辑；批量调整请打开 <a href="#" onClick={handleOpenSheet}>Google Sheet</a>
+          提示：可在本页直接新增 / 编辑；批量调整请打开 <a href="#" onClick={handleOpenMessagesSheet}>Google Sheet</a>
         </p>
       </footer>
       
@@ -3502,15 +3767,40 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
+function formatTimelineSyncPayloadTemplateForClipboard(payloadHelp: TimelineSyncPayloadHelp): string {
+  return [
+    'Jira Automation Send web request',
+    `Method: ${payloadHelp.method}`,
+    `URL: ${payloadHelp.url}`,
+    `Header: Content-Type=${payloadHelp.contentType}`,
+    'Custom data:',
+    payloadHelp.customBody,
+  ].join('\n');
+}
+
+function formatTimelineSyncDryRunForClipboard(dryRunHelp: TimelineSyncDryRunHelp): string {
+  return [
+    'Apps Script cacheReleaseInfo dry-run',
+    `Method: ${dryRunHelp.method}`,
+    `URL: ${dryRunHelp.url}`,
+    `Header: Content-Type=${dryRunHelp.contentType}`,
+    'Body:',
+    dryRunHelp.customBody,
+    'curl:',
+    dryRunHelp.curlCommand,
+  ].join('\n');
+}
+
 const TimelineCacheStatusPanel: React.FC<{
   status: TimelineCacheStatus | null;
   selectedProject?: string;
   selectedMilestone?: string;
+  webAppUrl?: string;
   timelineSyncRuleUrl?: string;
   isLoading: boolean;
   error: string;
   onRefresh: () => void;
-}> = ({ status, selectedProject, selectedMilestone, timelineSyncRuleUrl, isLoading, error, onRefresh }) => {
+}> = ({ status, selectedProject, selectedMilestone, webAppUrl, timelineSyncRuleUrl, isLoading, error, onRefresh }) => {
   const selectedStatus = selectedProject
     ? status?.projects?.find(project => project.project === selectedProject)
     : undefined;
@@ -3530,20 +3820,40 @@ const TimelineCacheStatusPanel: React.FC<{
   const lastAttemptFailureText = selectedStatus?.lastAttempt?.success === false
     ? formatTimelineCacheLastAttempt(selectedStatus.lastAttempt)
     : '';
+  const lastAttemptQuickFixText = selectedStatus?.lastAttempt?.success === false
+    ? getTimelineCacheAttemptQuickFixText(selectedStatus.lastAttempt)
+    : '';
   const shouldShowSyncRuleAction = Boolean(timelineSyncRuleUrl) && (!isReady || Boolean(error));
   const syncRuleActionLabel = error || selectedStatus?.status === 'invalid' || selectedStatus?.status === 'error'
     ? '打开并修复 Rule'
     : '打开并手动同步';
   const shouldShowRefreshAfterRuleHint = shouldShowSyncRuleAction && !isLoading && !isReady;
   const shouldShowDiagnosticAction = Boolean(error || selectedStatus || selectedProjectMissingFromStatus || hasStatus);
+  const payloadHelp = React.useMemo(
+    () => getTimelineSyncPayloadHelp(selectedProject),
+    [selectedProject],
+  );
+  const dryRunHelp = React.useMemo(
+    () => getTimelineSyncDryRunHelp({ project: selectedProject, webAppUrl }),
+    [selectedProject, webAppUrl],
+  );
+  const shouldShowPayloadTemplateAction = Boolean(
+    payloadHelp && (!isReady || error || selectedMilestoneMissing || selectedProjectMissingFromStatus || hasSyncWarning),
+  );
+  const shouldShowDryRunAction = Boolean(
+    dryRunHelp && (!isReady || error || selectedMilestoneMissing || selectedProjectMissingFromStatus || hasSyncWarning),
+  );
   const [diagnosticCopied, setDiagnosticCopied] = React.useState(false);
+  const [payloadTemplateCopied, setPayloadTemplateCopied] = React.useState(false);
+  const [dryRunCopied, setDryRunCopied] = React.useState(false);
   const diagnosticText = React.useMemo(() => buildTimelineCacheDiagnosticText({
     status,
     error,
     selectedProject,
     selectedMilestone,
+    webAppUrl,
     timelineSyncRuleUrl,
-  }), [error, selectedMilestone, selectedProject, status, timelineSyncRuleUrl]);
+  }), [error, selectedMilestone, selectedProject, status, timelineSyncRuleUrl, webAppUrl]);
   const handleCopyDiagnostics = React.useCallback(async () => {
     const copied = await copyTextToClipboard(diagnosticText);
     if (copied) {
@@ -3553,6 +3863,34 @@ const TimelineCacheStatusPanel: React.FC<{
       window.prompt('复制 Timeline 缓存诊断', diagnosticText);
     }
   }, [diagnosticText]);
+  const handleCopyPayloadTemplate = React.useCallback(async () => {
+    if (!payloadHelp) {
+      return;
+    }
+
+    const payloadTemplate = formatTimelineSyncPayloadTemplateForClipboard(payloadHelp);
+    const copied = await copyTextToClipboard(payloadTemplate);
+    if (copied) {
+      setPayloadTemplateCopied(true);
+      window.setTimeout(() => setPayloadTemplateCopied(false), 1800);
+    } else {
+      window.prompt('复制 Jira Send web request 模板', payloadTemplate);
+    }
+  }, [payloadHelp]);
+  const handleCopyDryRun = React.useCallback(async () => {
+    if (!dryRunHelp) {
+      return;
+    }
+
+    const dryRunText = formatTimelineSyncDryRunForClipboard(dryRunHelp);
+    const copied = await copyTextToClipboard(dryRunText);
+    if (copied) {
+      setDryRunCopied(true);
+      window.setTimeout(() => setDryRunCopied(false), 1800);
+    } else {
+      window.prompt('复制 Apps Script dry-run curl', dryRunText);
+    }
+  }, [dryRunHelp]);
 
   return (
     <div style={{
@@ -3602,6 +3940,18 @@ const TimelineCacheStatusPanel: React.FC<{
               {selectedStatus?.status === 'ready' ? '，当前仍使用已有缓存。' : ''}
             </div>
           )}
+          {lastAttemptQuickFixText && !isLoading && !error && (
+            <div style={{
+              marginTop: '6px',
+              padding: '6px 8px',
+              backgroundColor: '#fff',
+              border: `1px solid ${statusBorder}`,
+              borderRadius: '4px',
+              color: '#5c4b00',
+            }}>
+              下一步：{lastAttemptQuickFixText}
+            </div>
+          )}
           {selectedProjectMissingFromStatus && !isLoading && !error && (
             <div style={{marginTop: '4px'}}>
               请更新 App Script 并重新配置 Timeline Sync Rule，让项目清单与扩展保持一致。
@@ -3636,6 +3986,44 @@ const TimelineCacheStatusPanel: React.FC<{
               }}
             >
               {diagnosticCopied ? '已复制' : '复制诊断'}
+            </button>
+          )}
+          {shouldShowPayloadTemplateAction && (
+            <button
+              type="button"
+              onClick={handleCopyPayloadTemplate}
+              title="复制 Jira Send web request JSON 模板"
+              style={{
+                padding: '6px 10px',
+                backgroundColor: '#fff',
+                color: '#495057',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {payloadTemplateCopied ? '已复制模板' : '复制 JSON 模板'}
+            </button>
+          )}
+          {shouldShowDryRunAction && (
+            <button
+              type="button"
+              onClick={handleCopyDryRun}
+              title="复制不会写入缓存的 Apps Script dry-run curl"
+              style={{
+                padding: '6px 10px',
+                backgroundColor: '#fff',
+                color: '#495057',
+                border: '1px solid #ced4da',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {dryRunCopied ? '已复制测试' : '复制测试 curl'}
             </button>
           )}
           {shouldShowSyncRuleAction && (
@@ -3849,14 +4237,6 @@ const AddMessageDialog: React.FC<{
   const [selectedWeekDays, setSelectedWeekDays] = useState<number[]>(() => {
     if (editingMessage && editingMessage.Repeat_Days && editingMessage.Repeat_Unit === 'Week') {
       return editingMessage.Repeat_Days.split(',').map(d => parseInt(d.trim(), 10)).filter(d => !isNaN(d));
-    }
-    // 默认根据 Schedule_Date 的星期初始化
-    if (editingMessage && editingMessage.Schedule_Date) {
-      try {
-        return [getLocalScheduleDayOfWeek(editingMessage.Schedule_Date)];
-      } catch {
-        return [];
-      }
     }
     return [];
   });
@@ -4692,7 +5072,7 @@ ${content}
       }
 
       if (!formData.Outreach_Context || !formData.Outreach_Context.trim()) {
-        alert('请填写主动询问上下文');
+        alert('请填写主动询问的目的与上下文');
         return;
       }
 
@@ -4752,11 +5132,6 @@ ${content}
         alert('请完整填写重复设置');
         return;
       }
-      // 验证周模式下必须选择至少一天
-      if (formData.Repeat_Unit === 'Week' && selectedWeekDays.length === 0) {
-        alert('请至少选择一个执行的星期');
-        return;
-      }
     }
     
     // 合并 userTags 到 Glip_User_Name（转换为存储格式：esone.qiu+john.doe）
@@ -4784,6 +5159,14 @@ ${content}
       outreachTargetRefValue,
       outreachQuestion,
     );
+    const repeatFields = buildRepeatSubmissionFields({
+      isRepeating,
+      repeatEvery: formData.Repeat_Every,
+      repeatUnit: formData.Repeat_Unit,
+      repeatCount: formData.Repeat_Count,
+      selectedWeekDays,
+      endDate: formData.End_Date,
+    });
     
     const finalFormData: CreateMessageFormData = {
       ...formData,
@@ -4834,13 +5217,7 @@ ${content}
       AI_Headers: formData.Push_Method === 'Outreach' ? undefined : formData.AI_Headers,
       AI_Body: formData.Push_Method === 'Outreach' ? undefined : formData.AI_Body,
       Automation_Link: formData.Push_Method === 'Outreach' ? undefined : formData.Automation_Link,
-      Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
-      Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
-      Repeat_Count: isRepeating && formData.Repeat_Unit !== 'Week' ? formData.Repeat_Count : undefined,
-      Repeat_Days: isRepeating && formData.Repeat_Unit === 'Week' && selectedWeekDays.length > 0
-        ? selectedWeekDays.join(',')
-        : undefined,
-      End_Date: isRepeating ? formData.End_Date : undefined,
+      ...repeatFields,
       Schedule_Date: isTimelineTrigger ? '' : formData.Schedule_Date,
       Timeline_Project: timelineProjectForSave,
       Timeline_Milestone: isTimelineTrigger ? formData.Timeline_Milestone : undefined,
@@ -4857,23 +5234,21 @@ ${content}
 
   const handleScheduleDateChange = (dateStr: string) => {
     handleChange('Schedule_Date', dateStr);
-
-    if (isRepeating && formData.Repeat_Unit === 'Week' && selectedWeekDays.length === 0) {
-      try {
-        setSelectedWeekDays([getLocalScheduleDayOfWeek(dateStr)]);
-      } catch {
-        setSelectedWeekDays([]);
-      }
-    }
   };
 
   const defaultScheduleInput = {
     Push_Method: formData.Push_Method,
     AI_Endpoint: formData.AI_Endpoint,
   };
+  const usesExecutorDefaultQueue = isExecutorDrivenSchedule(defaultScheduleInput);
   const defaultScheduleTime = getDefaultScheduleTime(defaultScheduleInput);
   const emptyScheduleTimeHint = getEmptyScheduleTimeHint(defaultScheduleInput);
-  const defaultScheduleQuickActionLabel = `下次 ${defaultScheduleTime}`;
+  const defaultScheduleQuickActionLabel = usesExecutorDefaultQueue
+    ? `下次 ${defaultScheduleTime}（明确时间）`
+    : `下次 ${defaultScheduleTime}`;
+  const clearScheduleTimeLabel = usesExecutorDefaultQueue
+    ? `${defaultScheduleTime} 后队列`
+    : '清空时间';
 
   const applyScheduleDateTime = (date: Date) => {
     const { dateStr, timeStr } = formatLocalScheduleDateTime(date);
@@ -4902,7 +5277,7 @@ ${content}
     : undefined;
 
   const scheduleTimeError = useMemo(() => {
-    if (!formData.Schedule_Time?.trim()) {
+    if (!hasLocalScheduleTime(formData.Schedule_Time)) {
       return '';
     }
 
@@ -4922,6 +5297,7 @@ ${content}
       End_Date: formData.End_Date,
       Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
+      Repeat_Count: isRepeating ? formData.Repeat_Count : undefined,
       Repeat_Days: repeatDaysValue,
       Push_Method: formData.Push_Method,
       AI_Endpoint: formData.AI_Endpoint,
@@ -4933,6 +5309,7 @@ ${content}
     formData.Schedule_Time,
     formData.Repeat_Every,
     formData.Repeat_Unit,
+    formData.Repeat_Count,
     formData.Push_Method,
     isRepeating,
     isTimelineTrigger,
@@ -4944,7 +5321,7 @@ ${content}
       return '';
     }
 
-    const hasExplicitTime = Boolean(formData.Schedule_Time?.trim());
+    const hasExplicitTime = hasLocalScheduleTime(formData.Schedule_Time);
     if (!hasExplicitTime && isExecutorDrivenSchedule({
       Push_Method: formData.Push_Method,
       AI_Endpoint: formData.AI_Endpoint,
@@ -4960,7 +5337,7 @@ ${content}
       return '';
     }
 
-    const hasExplicitTime = Boolean(formData.Schedule_Time?.trim());
+    const hasExplicitTime = hasLocalScheduleTime(formData.Schedule_Time);
     const isExecutorDriven = isExecutorDrivenSchedule({
       Push_Method: formData.Push_Method,
       AI_Endpoint: formData.AI_Endpoint,
@@ -4995,6 +5372,7 @@ ${content}
       End_Date: formData.End_Date,
       Repeat_Every: isRepeating ? formData.Repeat_Every : undefined,
       Repeat_Unit: isRepeating ? formData.Repeat_Unit : undefined,
+      Repeat_Count: isRepeating ? formData.Repeat_Count : undefined,
       Repeat_Days: repeatDaysValue,
       Push_Method: formData.Push_Method,
       Target_Type: formData.Target_Type,
@@ -5013,6 +5391,9 @@ ${content}
     formData.Push_Method,
     formData.Schedule_Date,
     formData.Schedule_Time,
+    formData.Repeat_Every,
+    formData.Repeat_Unit,
+    formData.Repeat_Count,
     formData.Target_Type,
     formData.Topic,
     isRepeating,
@@ -5091,22 +5472,29 @@ ${content}
     }
 
     const now = scheduleNow.getTime();
-    const hasExplicitTime = Boolean(formData.Schedule_Time?.trim());
+    const hasExplicitTime = hasLocalScheduleTime(formData.Schedule_Time);
     const isExecutorDriven = isExecutorDrivenSchedule({
       Push_Method: formData.Push_Method,
       AI_Endpoint: formData.AI_Endpoint,
     });
     const allowedLagMs = hasExplicitTime && isExecutorDriven ? 30 * 60 * 1000 : 0;
 
-    if (!hasExplicitTime && isExecutorDriven) {
-      return '';
-    }
-
     if (candidate.getTime() < now - allowedLagMs) {
       const defaultTime = getDefaultScheduleTime({
         Push_Method: formData.Push_Method,
         AI_Endpoint: formData.AI_Endpoint,
       });
+      if (!hasExplicitTime && isExecutorDriven) {
+        const executionDate = schedulePreview.slice(0, 10);
+        const today = formatLocalScheduleDate(scheduleNow);
+
+        if (executionDate < today) {
+          return `未填写执行时间会按 ${defaultTime} 后队列处理，但当前日期已经过去，请改成今天或未来日期。`;
+        }
+
+        return '';
+      }
+
       return hasExplicitTime
         ? `当前执行时间已超过可补偿窗口，请改成未来时间。`
         : `未填写执行时间会按 ${defaultTime} 处理，当前日期已经错过该时间。`;
@@ -5125,6 +5513,10 @@ ${content}
     scheduleNow,
   ]);
   const schedulePreviewDisplayValue = schedulePreviewLabel || (scheduleBlockReason ? '暂无可执行时间' : '');
+  const scheduleTimezoneHint = useMemo(
+    () => formatLocalScheduleTimezoneHint(schedulePreview || formData.Schedule_Date),
+    [formData.Schedule_Date, schedulePreview],
+  );
 
   const hasScheduleWarning = Boolean(
     scheduleBlockReason ||
@@ -5288,7 +5680,7 @@ ${content}
               </div>
 
               <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>主动询问上下文 *</label>
+                <label style={dialogStyles.label}>主动询问的目的与上下文 *</label>
                 <textarea
                   style={dialogStyles.textarea}
                   value={formData.Outreach_Context || ''}
@@ -5419,7 +5811,7 @@ ${content}
                       </span>
                     )}
                   </label>
-                  <input 
+                  <input
                     style={dialogStyles.input}
                     type="text"
                     value={formData.Topic}
@@ -5528,14 +5920,15 @@ ${content}
                   style={dialogStyles.quickActionButton}
                   onClick={() => handleChange('Schedule_Time', '')}
                 >
-                  清空时间
+                  {clearScheduleTimeLabel}
                 </button>
               </div>
-              <small style={dialogStyles.hint}>按本机本地时间保存到 Sheet，避免跨日误差</small>
+              <small style={dialogStyles.hint}>按本机本地时间保存到 Sheet，避免跨日误差。{scheduleTimezoneHint}</small>
               {schedulePreviewDisplayValue && (
                 <div style={hasScheduleWarning ? dialogStyles.scheduleWarning : dialogStyles.schedulePreview}>
                   <div style={dialogStyles.schedulePreviewLabel}>预计下次执行</div>
                   <div style={dialogStyles.schedulePreviewValue}>{schedulePreviewDisplayValue}</div>
+                  <div style={dialogStyles.schedulePreviewHint}>{scheduleTimezoneHint}</div>
                   {schedulePreviewHint && (
                     <div style={dialogStyles.schedulePreviewHint}>{schedulePreviewHint}</div>
                   )}
@@ -5611,6 +6004,7 @@ ${content}
                   status={timelineCacheStatus}
                   selectedProject={formData.Timeline_Project}
                   selectedMilestone={formData.Timeline_Milestone}
+                  webAppUrl={webAppUrl}
                   timelineSyncRuleUrl={timelineSyncRuleUrl}
                   isLoading={timelineCacheStatusLoading}
                   error={timelineCacheStatusError}
@@ -5732,6 +6126,7 @@ ${content}
                 <TimelineCacheStatusPanel
                   status={timelineCacheStatus}
                   selectedProject={selectedTimelineProjectValue}
+                  webAppUrl={webAppUrl}
                   timelineSyncRuleUrl={timelineSyncRuleUrl}
                   isLoading={timelineCacheStatusLoading}
                   error={timelineCacheStatusError}
@@ -5800,19 +6195,6 @@ ${content}
                         style={getButtonStyle(formData.Repeat_Unit === unit)}
                         onClick={() => {
                           handleChange('Repeat_Unit', unit);
-                          // 切换到 Week 时，根据 Schedule_Date 初始化选中的星期
-                          if (unit === 'Week' && formData.Schedule_Date) {
-                            try {
-                              const dayOfWeek = getLocalScheduleDayOfWeek(formData.Schedule_Date);
-                              if (selectedWeekDays.length === 0) {
-                                setSelectedWeekDays([dayOfWeek]);
-                              }
-                            } catch {
-                              if (selectedWeekDays.length === 0) {
-                                setSelectedWeekDays([]);
-                              }
-                            }
-                          }
                         }}
                       >
                         {unit === 'Day' ? '天' : unit === 'Week' ? '周' : unit === 'Month' ? '月' : '年'}
@@ -5836,7 +6218,7 @@ ${content}
                 {/* 多星期选择器（仅当重复单位为"周"时显示，与结束日期并列） */}
                 {formData.Repeat_Unit === 'Week' && (
                   <div style={dialogStyles.formGroup}>
-                    <label style={dialogStyles.label}>每周几 *</label>
+                    <label style={dialogStyles.label}>每周几（可选）</label>
                     <div style={{display: 'flex', gap: '4px', flexWrap: 'wrap'}}>
                       {[
                         { day: 0, label: 'Sun' },
@@ -5892,21 +6274,18 @@ ${content}
                     </div>
                   </div>
                 )}
-                
-                {/* 重复次数（周模式下隐藏） */}
-                {formData.Repeat_Unit !== 'Week' && (
-                  <div style={dialogStyles.formGroup}>
-                    <label style={dialogStyles.label}>重复次数（可选）</label>
-                    <input 
-                      style={dialogStyles.input}
-                      type="number"
-                      min="1"
-                      value={formData.Repeat_Count || ''}
-                      onChange={(e) => handleChange('Repeat_Count', e.target.value ? parseInt(e.target.value) : undefined)}
-                      placeholder="留空表示无限"
-                    />
-                  </div>
-                )}
+
+                <div style={dialogStyles.formGroup}>
+                  <label style={dialogStyles.label}>重复次数（可选）</label>
+                  <input
+                    style={dialogStyles.input}
+                    type="number"
+                    min="1"
+                    value={formData.Repeat_Count || ''}
+                    onChange={(e) => handleChange('Repeat_Count', e.target.value ? parseInt(e.target.value) : undefined)}
+                    placeholder="留空表示无限"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -7064,8 +7443,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    maxWidth: '300px',
-    display: 'inline-block',
+    maxWidth: '100%',
+    display: 'block',
   },
   categoryTag: {
     display: 'inline-block',
@@ -7221,6 +7600,23 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderBottom: '1px solid #fecaca',
     animation: 'slideDown 0.3s ease-out',
   },
+  updateBannerActions: {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+    marginLeft: '16px',
+    flexShrink: 0,
+  },
+  secondaryUpdateBannerButton: {
+    padding: '8px 14px',
+    backgroundColor: '#fff',
+    color: '#9a3412',
+    border: '1px solid #fdba74',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontWeight: 600,
+  },
   queueInfoBanner: {
     backgroundColor: '#eef6ff',
     borderLeft: '4px solid #0d6efd',
@@ -7262,6 +7658,50 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '13px',
     color: '#9a3412',
   },
+  updateMetaRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px 14px',
+    marginTop: '8px',
+  },
+  updateMetaItem: {
+    fontSize: '12px',
+    color: '#7c2d12',
+    whiteSpace: 'nowrap',
+  },
+  updatePreflightRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+    gap: '6px',
+    marginTop: '10px',
+    maxWidth: '720px',
+  },
+  updatePreflightItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    minHeight: '28px',
+    padding: '4px 8px',
+    backgroundColor: '#ffedd5',
+    border: '1px solid #fed7aa',
+    borderRadius: '6px',
+    color: '#7c2d12',
+    fontSize: '12px',
+    lineHeight: 1.35,
+  },
+  updatePreflightItemNumber: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    borderRadius: '50%',
+    backgroundColor: '#f97316',
+    color: '#fff',
+    fontSize: '11px',
+    lineHeight: 1,
+    flexShrink: 0,
+  },
   updateErrorDescription: {
     margin: '4px 0 0 0',
     fontSize: '13px',
@@ -7284,6 +7724,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     marginTop: '8px',
   },
   queueSlotItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
     padding: '4px 8px',
     backgroundColor: 'rgba(255, 255, 255, 0.75)',
     border: '1px solid rgba(148, 163, 184, 0.45)',
@@ -7291,6 +7734,47 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '12px',
     color: '#334155',
     lineHeight: 1.35,
+    maxWidth: '100%',
+  },
+  queueSlotText: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  queueIssueItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '4px 8px',
+    backgroundColor: 'rgba(255, 255, 255, 0.75)',
+    border: '1px solid rgba(148, 163, 184, 0.45)',
+    borderRadius: '6px',
+    fontSize: '12px',
+    color: '#334155',
+    lineHeight: 1.35,
+    maxWidth: '100%',
+  },
+  queueIssueText: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  queueIssueActions: {
+    display: 'flex',
+    gap: '4px',
+    flexShrink: 0,
+  },
+  queueIssueButton: {
+    padding: '2px 6px',
+    backgroundColor: '#fff',
+    color: '#9a3412',
+    border: '1px solid #fdba74',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 600,
   },
   warningButton: {
     padding: '8px 16px',
@@ -7314,7 +7798,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '14px',
     fontWeight: 'bold',
     whiteSpace: 'nowrap',
-    marginLeft: '16px',
   },
   updateErrorButton: {
     padding: '8px 16px',
@@ -7399,20 +7882,51 @@ const styles: { [key: string]: React.CSSProperties } = {
   messageList: {
     backgroundColor: '#fff',
     borderRadius: '8px',
-    overflow: 'hidden',
+    overflowX: 'auto',
+    overflowY: 'hidden',
   },
   table: {
     width: '100%',
+    minWidth: '1080px',
     borderCollapse: 'collapse',
+    tableLayout: 'fixed',
+  },
+  typeColumn: {
+    width: '7%',
+  },
+  topicColumn: {
+    width: '22%',
+  },
+  categoryColumn: {
+    width: '8%',
+  },
+  recipientColumn: {
+    width: '10%',
+  },
+  frequencyColumn: {
+    width: '21%',
+  },
+  nextExecColumn: {
+    width: '10%',
+  },
+  sentCountColumn: {
+    width: '5%',
+  },
+  statusColumn: {
+    width: '6%',
+  },
+  actionsColumn: {
+    width: '11%',
   },
   th: {
-    padding: '12px',
+    padding: '12px 10px',
     textAlign: 'left',
     backgroundColor: '#f8f9fa',
     borderBottom: '2px solid #e0e0e0',
     fontWeight: 'bold',
     fontSize: '14px',
     color: '#333',
+    whiteSpace: 'nowrap',
   },
   tr: {
     borderBottom: '1px solid #e0e0e0',
@@ -7422,14 +7936,65 @@ const styles: { [key: string]: React.CSSProperties } = {
     boxShadow: 'inset 4px 0 0 #2e7d32',
   },
   td: {
-    padding: '12px',
+    padding: '12px 10px',
     fontSize: '14px',
     color: '#666',
+    verticalAlign: 'top',
+    minWidth: 0,
+  },
+  frequencyCell: {
+    maxWidth: '320px',
+  },
+  frequencyStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    minWidth: 0,
+  },
+  frequencyPrimaryText: {
+    display: 'block',
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   schedulePolicyText: {
+    display: 'block',
+    maxWidth: '100%',
     color: '#6c757d',
     lineHeight: 1.35,
     whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  schedulePolicyWarningText: {
+    display: 'block',
+    maxWidth: '100%',
+    color: '#b45309',
+    lineHeight: 1.35,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    fontWeight: 600,
+  },
+  nextExecCell: {
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
+  },
+  sentCountCell: {
+    whiteSpace: 'nowrap',
+  },
+  statusCell: {
+    whiteSpace: 'nowrap',
+  },
+  actionCell: {
+    whiteSpace: 'normal',
+  },
+  rowActions: {
+    display: 'flex',
+    gap: '6px',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
   },
   footer: {
     padding: '20px',

@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.7.4';
-var APP_SCRIPT_LAST_UPDATED = '2026-05-08';
+var APP_SCRIPT_VERSION = '2.7.9';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-13';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -309,11 +309,24 @@ function getColumnIndex(headers, columnName) {
 }
 
 /**
+ * 判断未填写 Schedule_Time 的消息是否应由执行器 8:00 后兜底队列处理。
+ *
+ * AsMe 即使由 RingCentral sender 接管，也仍应保持 9:00 默认发送语义；
+ * 否则会被 NO_TIME_SPECIFIED 模式提前到 8:00 后执行。
+ */
+function isNoTimeExecutorQueueMessage(rowData) {
+  const hasAiEndpoint = String(rowData.AI_Endpoint || '').trim() !== '';
+  return rowData.Push_Method === 'Bot' ||
+    rowData.Push_Method === 'AI' ||
+    (rowData.Push_Method === 'JiraAutomation' && hasAiEndpoint);
+}
+
+/**
  * 判断消息的时间是否匹配当前分钟（只判断时间条件，日期匹配需在调用前完成）
  * 
  * 时间匹配规则：
  * - 有 Schedule_Time: 匹配当前分钟或最多迟到 1 分钟；不提前发送
- * - 无 Schedule_Time: 在早上 9:00 命中当前分钟；执行器还会在 8:00 后兜底排队
+ * - 无 Schedule_Time: AsMe 在早上 9:00 命中当前分钟；执行器消息只走 8:00 后兜底排队
  * 
  * @param {object} rowData - 消息行数据
  * @param {Date} now - 当前时间
@@ -338,7 +351,10 @@ function matchesCurrentMinuteTime(rowData, now, messageType) {
     const previousDayWrappedDiff = nowMinutes + 1440 - scheduleMinutes;
     return (diff >= 0 && diff <= 1) || (scheduleMinutes > nowMinutes && previousDayWrappedDiff <= 1);
   } else {
-    // 没有指定时间，AsMe 通过当前分钟在 9:00 执行；执行器消息另有 8:00 后兜底排队
+    // 没有指定时间，AsMe 通过当前分钟在 9:00 执行；执行器消息只走 8:00 后兜底排队
+    if (isNoTimeExecutorQueueMessage(rowData)) {
+      return false;
+    }
     return now.getHours() === 9 && now.getMinutes() === 0;
   }
 }
@@ -688,7 +704,8 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
 function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg, replacedContent) {
   const now = new Date();
   const execCount = (parseInt(rowData.Exec_Count) || 0) + 1;
-  const nextExec = calculateNextExecution(rowData, now);
+  const willMarkAsDone = success && shouldMarkAsDone(rowData, now);
+  const nextExec = willMarkAsDone ? '' : calculateNextExecution(rowData, now);
   
   // 获取列索引
   const lastExecCol = getColumnIndex(headers, 'Last_Exec');
@@ -708,8 +725,8 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
     sheet.getRange(rowIndex, execCountCol).setValue(execCount);
   }
   
-  if (nextExecCol > 0 && nextExec) {
-    sheet.getRange(rowIndex, nextExecCol).setValue(nextExec);
+  if (nextExecCol > 0) {
+    sheet.getRange(rowIndex, nextExecCol).setValue(nextExec || '');
   }
   
   if (execLogCol > 0) {
@@ -720,7 +737,7 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   }
   
   // 检查是否应该标记为 Done（统一使用 shouldMarkAsDone 逻辑）
-  if (success && shouldMarkAsDone(rowData, now)) {
+  if (willMarkAsDone) {
     if (statusCol > 0) {
       sheet.getRange(rowIndex, statusCol).setValue('Done');
       Logger.log(`任务已完成所有推送，标记为 Done: ${rowData.ID}`);
@@ -776,6 +793,18 @@ function calculateNextExecution(rowData, currentTime) {
     return '';
     
   } else if (messageType === 'Periodic') {
+    if (rowData.End_Date && isOnOrAfterScheduleEndDate(currentTime, rowData.End_Date)) {
+      return '';
+    }
+
+    if (rowData.Repeat_Count) {
+      const repeatCount = parseInt(rowData.Repeat_Count);
+      const execCountAfterThisRun = (parseInt(rowData.Exec_Count) || 0) + 1;
+      if (!isNaN(repeatCount) && repeatCount > 0 && execCountAfterThisRun >= repeatCount) {
+        return '';
+      }
+    }
+
     const startDate = parseScheduleDate(rowData.Schedule_Date);
     const every = parseInt(rowData.Repeat_Every) || 1;
     const repeatUnit = rowData.Repeat_Unit || 'Day';
@@ -886,6 +915,11 @@ function getPostBodyBytes(e) {
   return getUtf8ByteLength(getRawPostBody(e));
 }
 
+function isTruthyRequestValue(value) {
+  const raw = getRequestParameterValue(value).trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes';
+}
+
 function parseJsonStringFragment(fragment) {
   try {
     return JSON.parse('"' + fragment + '"');
@@ -955,7 +989,13 @@ function recordCachePostJsonParseFailure(action, payload, e, queryParameters) {
     return;
   }
 
+  if (isTruthyRequestValue(queryParameters && queryParameters.dryRun)) {
+    return;
+  }
+
   const projectConfig = resolveCacheReleaseInfoProjectFromPostFailure(e, queryParameters);
+  const fallbackParamKey = extractJsonStringPropertyFromText(getRawPostBody(e), 'project') || 'cacheReleaseInfo';
+  payload.requestId = payload.requestId || createTimelineSyncRequestId(projectConfig ? projectConfig.paramKey : fallbackParamKey);
   if (!projectConfig) {
     return;
   }
@@ -1109,6 +1149,27 @@ function getReleaseInfoTroubleshootingPayload() {
   };
 }
 
+function getReleaseInfoCacheNextAction(errorCode) {
+  switch (errorCode) {
+    case 'MISSING_RELEASE_INFO':
+      return '检查 Timeline Sync Rule 的 Custom data，确保 JSON body 包含 releaseInfo，并且项目变量使用 .asJsonString。';
+    case 'INVALID_POST_JSON':
+      return '检查 Jira Automation 的 Send web request：Method=POST，Custom data 是完整 JSON，Header 包含 Content-Type: application/json，动态文本字段使用 .asJsonString。';
+    case 'INVALID_RELEASE_INFO_SCHEMA':
+      return '确认 releaseInfo.releaseInfo 下至少有一个 MM/DD/YYYY 格式的 Milestone 日期；空日期、ISO 日期和非字符串值不会触发 Timeline。';
+    case 'RELEASE_INFO_TOO_LARGE':
+      return '减少 releaseInfo 字符数到限制内，只同步 Timeline 消息需要的项目字段和 Milestone 日期。';
+    case 'RELEASE_INFO_TOO_DEEP':
+      return '压平 releaseInfo 结构，避免超过 Groovy Map 嵌套层级限制；Timeline 缓存只需要项目字段和 Milestone 日期。';
+    case 'TIMELINE_CACHE_TOO_LARGE':
+      return 'Timeline 缓存超过 Apps Script Script Properties 单值 9KB 限制。请减少同步字段或 Milestone 数量后，手动运行 Timeline Sync Rule；如项目确实需要更大 payload，需要改用 Sheet/Drive 等外部缓存。';
+    case 'UNKNOWN_PROJECT':
+      return '确认 JSON body 的 project 使用生成规则里的项目参数名，例如 mThor、jupiterDesktop、nova。';
+    default:
+      return getReleaseInfoTroubleshootingPayload().nextAction;
+  }
+}
+
 function truncateTimelineSyncDiagnostic(value, maxLength) {
   const text = getRequestParameterValue(value).replace(/\s+/g, ' ').trim();
   if (!text || text.length <= maxLength) {
@@ -1120,6 +1181,15 @@ function truncateTimelineSyncDiagnostic(value, maxLength) {
 
 function getTimelineSyncAttemptKey(paramKey) {
   return TIMELINE_SYNC_ATTEMPT_KEY_PREFIX + paramKey;
+}
+
+function createTimelineSyncRequestId(paramKey) {
+  const safeParamKey = (getRequestParameterValue(paramKey).trim() || 'project')
+    .replace(/[^A-Za-z0-9_-]/g, '_')
+    .substring(0, 40);
+  const timestampPart = new Date().getTime().toString(36);
+  const randomPart = Math.floor(Math.random() * 1679616).toString(36);
+  return `tl_${safeParamKey}_${timestampPart}_${randomPart}`;
 }
 
 function buildTimelineSyncAttempt(projectConfig, payload) {
@@ -1137,7 +1207,11 @@ function buildTimelineSyncAttempt(projectConfig, payload) {
   const parseError = truncateTimelineSyncDiagnostic(payload && payload.parseError, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
   const requestContentType = truncateTimelineSyncDiagnostic(payload && payload.requestContentType, 120);
   const nextAction = truncateTimelineSyncDiagnostic(payload && payload.nextAction, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+  const requestId = truncateTimelineSyncDiagnostic(payload && payload.requestId, 120);
 
+  if (requestId) {
+    attempt.requestId = requestId;
+  }
   if (errorCode) {
     attempt.errorCode = errorCode;
   }
@@ -1193,23 +1267,38 @@ function recordTimelineSyncAttempt(projectConfig, payload) {
   }
 }
 
-function createTimelineCacheResponse(projectConfig, payload) {
-  recordTimelineSyncAttempt(projectConfig, payload);
+function createTimelineCacheResponse(projectConfig, payload, options) {
+  const shouldRecordAttempt = !(options && options.recordAttempt === false);
+  if (shouldRecordAttempt) {
+    recordTimelineSyncAttempt(projectConfig, payload);
+  }
   return createJsonOutput(payload);
 }
 
 function handleCacheReleaseInfoRequest(parameters) {
   let projectConfig = null;
+  let requestId = '';
 
   try {
-    const paramKey = getRequestParameterValue(parameters.project);
+    const paramKey = getRequestParameterValue(parameters.project).trim();
     const rawReleaseInfo = parameters.releaseInfo;
+    const dryRun = isTruthyRequestValue(parameters.dryRun);
+    const responseOptions = dryRun ? { recordAttempt: false } : null;
     projectConfig = getTimelineProjectConfigByParamKey(paramKey);
+    requestId = createTimelineSyncRequestId(projectConfig ? projectConfig.paramKey : paramKey || 'unknown');
 
     if (!projectConfig) {
       const message = `[cacheReleaseInfo] 未知项目参数: ${paramKey || '(empty)'}`;
       Logger.log(message);
-      return createJsonOutput({ success: false, errorCode: 'UNKNOWN_PROJECT', error: message, project: paramKey });
+      return createJsonOutput({
+        success: false,
+        requestId,
+        dryRun,
+        errorCode: 'UNKNOWN_PROJECT',
+        error: message,
+        project: paramKey,
+        nextAction: getReleaseInfoCacheNextAction('UNKNOWN_PROJECT')
+      });
     }
 
     if (isMissingRequestValue(rawReleaseInfo)) {
@@ -1217,11 +1306,14 @@ function handleCacheReleaseInfoRequest(parameters) {
       Logger.log(message);
       return createTimelineCacheResponse(projectConfig, {
         success: false,
+        requestId,
+        dryRun,
         errorCode: 'MISSING_RELEASE_INFO',
         error: message,
         project: projectConfig.project,
-        paramKey: projectConfig.paramKey
-      });
+        paramKey: projectConfig.paramKey,
+        nextAction: getReleaseInfoCacheNextAction('MISSING_RELEASE_INFO')
+      }, responseOptions);
     }
 
     const parseResult = parseSingleProjectReleaseInfoForCache(rawReleaseInfo);
@@ -1229,19 +1321,21 @@ function handleCacheReleaseInfoRequest(parameters) {
     if (!parseResult.success) {
       const message = `[cacheReleaseInfo] releaseInfo 解析失败，项目: ${projectConfig.project}，原因: ${parseResult.parseError || parseResult.errorCode}`;
       Logger.log(message);
-      return createTimelineCacheResponse(projectConfig, Object.assign({
+      return createTimelineCacheResponse(projectConfig, Object.assign({}, getReleaseInfoTroubleshootingPayload(), {
         success: false,
+        requestId,
+        dryRun,
         errorCode: parseResult.errorCode || 'INVALID_RELEASE_INFO',
         error: message,
         parseError: parseResult.parseError || '',
         project: projectConfig.project,
-        paramKey: projectConfig.paramKey
-      }, getReleaseInfoTroubleshootingPayload()));
+        paramKey: projectConfig.paramKey,
+        nextAction: getReleaseInfoCacheNextAction(parseResult.errorCode || 'INVALID_RELEASE_INFO')
+      }), responseOptions);
     }
 
     const projectInfo = parseResult.projectInfo;
     const validMilestoneKeys = getValidTimelineMilestoneKeys(projectInfo.releaseInfo);
-    const props = PropertiesService.getScriptProperties();
     const cacheKey = getTimelineProjectCacheKey(paramKey);
     const updatedAt = new Date().toISOString();
     const cachePayload = {
@@ -1259,6 +1353,7 @@ function handleCacheReleaseInfoRequest(parameters) {
       Logger.log(`${message}，大小: ${cachePayloadBytes}/${TIMELINE_CACHE_PROPERTY_MAX_BYTES} bytes`);
       return createTimelineCacheResponse(projectConfig, Object.assign({}, getReleaseInfoTroubleshootingPayload(), {
         success: false,
+        requestId,
         errorCode: 'TIMELINE_CACHE_TOO_LARGE',
         error: message,
         project: projectConfig.project,
@@ -1267,28 +1362,50 @@ function handleCacheReleaseInfoRequest(parameters) {
         maxBytes: TIMELINE_CACHE_PROPERTY_MAX_BYTES,
         milestoneCount: validMilestoneKeys.length,
         milestoneKeys: validMilestoneKeys.slice(0, 20),
-        nextAction: 'Timeline 缓存超过 Apps Script Script Properties 单值 9KB 限制。请减少同步的 Milestone 数量或字段体积；如项目确实需要更大 payload，需要改用 Sheet/Drive 等外部缓存。'
-      }));
+        nextAction: getReleaseInfoCacheNextAction('TIMELINE_CACHE_TOO_LARGE')
+      }), responseOptions);
     }
 
+    if (dryRun) {
+      Logger.log(`[cacheReleaseInfo] dry-run 校验成功，项目: ${projectConfig.project}`);
+      return createTimelineCacheResponse(projectConfig, {
+        success: true,
+        dryRun: true,
+        wouldCache: true,
+        requestId,
+        project: projectConfig.project,
+        paramKey: projectConfig.paramKey,
+        payloadBytes: cachePayloadBytes,
+        maxBytes: TIMELINE_CACHE_PROPERTY_MAX_BYTES,
+        milestoneCount: validMilestoneKeys.length,
+        milestoneKeys: validMilestoneKeys,
+      }, responseOptions);
+    }
+
+    const props = PropertiesService.getScriptProperties();
     props.setProperty(cacheKey, serializedCachePayload);
     Logger.log(`[cacheReleaseInfo] 缓存成功，项目: ${projectConfig.project}`);
 
     return createTimelineCacheResponse(projectConfig, {
       success: true,
+      requestId,
       project: projectConfig.project,
       paramKey: projectConfig.paramKey,
       updatedAt,
       milestoneCount: validMilestoneKeys.length,
       milestoneKeys: validMilestoneKeys,
-    });
+    }, responseOptions);
   } catch (cacheError) {
     Logger.log(`[cacheReleaseInfo] 错误: ${cacheError.toString()}`);
+    const dryRun = isTruthyRequestValue(parameters && parameters.dryRun);
     return createTimelineCacheResponse(projectConfig, {
       success: false,
+      requestId,
+      dryRun,
       errorCode: 'CACHE_RELEASE_INFO_EXCEPTION',
-      error: cacheError.toString()
-    });
+      error: cacheError.toString(),
+      nextAction: '复制 Timeline 缓存诊断后查看 Apps Script 执行日志，并用请求 ID 对照失败请求。'
+    }, dryRun ? { recordAttempt: false } : null);
   }
 }
 
@@ -1833,9 +1950,10 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
     const rowData = parseRow(row, headers);
     
     // 基本过滤：必须是 Active + Jira 执行器支持的推送方式
+    const hasAiEndpoint = String(rowData.AI_Endpoint || '').trim() !== '';
     const isValidPushMethod = rowData.Push_Method === 'Bot' || 
                               rowData.Push_Method === 'AI' || 
-                              (rowData.Push_Method === 'JiraAutomation' && rowData.AI_Endpoint) ||
+                              (rowData.Push_Method === 'JiraAutomation' && hasAiEndpoint) ||
                               (ringCentralSenderEnabled === true && rowData.Push_Method === 'AsMe');
     if (rowData.Status !== 'Active' || !isValidPushMethod) {
       continue;
@@ -2028,8 +2146,12 @@ function matchesNoSpecifiedTime(rowData, now, messageType) {
   if (rowData.Schedule_Time && rowData.Schedule_Time.toString().trim()) {
     return false;
   }
+
+  if (!isNoTimeExecutorQueueMessage(rowData)) {
+    return false;
+  }
   
-  // 未指定时间的消息在 8 点后执行（作为兜底逻辑）
+  // 未指定时间的执行器消息在 8 点后执行（作为兜底逻辑）
   return now.getHours() >= 8;
 }
 
@@ -2360,7 +2482,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     const executionKey = buildMessageExecutionKey(message, messageId, now);
     
     // === 检查是否是 AI 消息或 JiraAutomation（有 AI_Endpoint）===
-    if (message.Push_Method === 'AI' || (message.Push_Method === 'JiraAutomation' && message.AI_Endpoint)) {
+    if (message.Push_Method === 'AI' || (message.Push_Method === 'JiraAutomation' && String(message.AI_Endpoint || '').trim() !== '')) {
       Logger.log(`处理 ${message.Push_Method} 消息: ${messageId}`);
       
       // 解析 AI 相关字段
@@ -2400,17 +2522,6 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       };
     }
 
-    // RingCentral AsMe sender 由 Jira 调内网 Dify workflow 发送。
-    // 与 AI Report 一样，领取到消息后立即标记，避免 Jira 后续 webhookResponse 被 Dify 响应覆盖导致无法收尾。
-    if (message.targetType === 'ringcentral_sender') {
-      try {
-        markBotMessageExecuted(messageId, message.rowIndex, true, '', message.Topic, message.Content, executionKey);
-        Logger.log(`RingCentral AsMe sender 消息已预标记为成功: ${messageId}`);
-      } catch (markError) {
-        Logger.log(`标记 RingCentral AsMe sender 消息失败: ${markError}`);
-      }
-    }
-    
     // === 返回 Bot 消息数据（供 Jira 调用 Bot API）===
     return {
       executed: true,
@@ -2471,8 +2582,10 @@ function getTimelineTargetDate(rowData, releaseInfo) {
     return null;
   }
   
+  const milestoneMap = getTimelineProjectMilestoneMap(projectInfo);
+
   // 获取 milestone 日期
-  const milestoneDate = getTimelineMilestoneDateText(projectInfo[milestone]);
+  const milestoneDate = getTimelineMilestoneDateText(milestoneMap[milestone]);
   if (!milestoneDate) {
     Logger.log(`未找到有效 Milestone 日期: ${milestone}`);
     return null;
@@ -2502,7 +2615,15 @@ function getTimelineProjectInfo(releaseInfo, project) {
     return null;
   }
 
-  if (projectInfo.releaseInfo && typeof projectInfo.releaseInfo === 'object') {
+  return projectInfo;
+}
+
+function getTimelineProjectMilestoneMap(projectInfo) {
+  if (!projectInfo || typeof projectInfo !== 'object') {
+    return {};
+  }
+
+  if (projectInfo.releaseInfo && typeof projectInfo.releaseInfo === 'object' && !Array.isArray(projectInfo.releaseInfo)) {
     return projectInfo.releaseInfo;
   }
 
@@ -3131,7 +3252,11 @@ function readTimelineSyncAttempt(props, paramKey, nowMs) {
     const parseError = truncateTimelineSyncDiagnostic(parsed.parseError, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
     const requestContentType = truncateTimelineSyncDiagnostic(parsed.requestContentType, 120);
     const nextAction = truncateTimelineSyncDiagnostic(parsed.nextAction, TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS);
+    const requestId = truncateTimelineSyncDiagnostic(parsed.requestId, 120);
 
+    if (requestId) {
+      attempt.requestId = requestId;
+    }
     if (errorCode) {
       attempt.errorCode = errorCode;
     }

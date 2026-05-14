@@ -3,8 +3,7 @@
  *
  * UI 结构：
  * - 短暂停留后显示工具栏（功能按钮 + PAI icon）
- * - 点击"稍后处理"按钮默认触发 1 小时后提醒
- * - hover "稍后处理"按钮时显示 Snooze 快速选项菜单
+ * - 点击或 hover "稍后处理"按钮时显示 Snooze 快速选项菜单
  * - 点击"自动答复"按钮打开自动答复配置
  * - 根据配置开关决定显示哪些按钮
  *
@@ -56,6 +55,9 @@ import {
   buildSnoozeQuickMenuOptions,
   escapeSnoozeMenuText,
 } from './snoozeQuickMenuPresentation';
+import { getSnoozeSuccessToastActions } from './snoozeToastActions';
+
+const SNOOZE_QUICK_MENU_ID = 'personal-ai-snooze-quick-menu';
 
 // 功能开关配置接口
 export interface MessageReactionConfig {
@@ -178,10 +180,14 @@ function injectStyles() {
       align-items: center;
       justify-content: center;
       gap: 6px;
+      height: 26px;
+      min-height: 26px;
+      max-height: 26px;
       padding: 4px 8px;
       font-size: 11px;
+      line-height: 1;
       font-weight: 500;
-      border-radius: 4px 0 0 4px;
+      border-radius: 0;
       cursor: pointer;
       white-space: nowrap;
       transition: all 0.15s ease;
@@ -210,7 +216,7 @@ function injectStyles() {
     .snooze-icon-btn {
       width: 28px;
       min-width: 28px;
-      height: 28px;
+      height: 26px;
       padding: 0;
       color: #2196F3;
       background: rgba(33, 150, 243, 0.08);
@@ -577,13 +583,16 @@ function injectStyles() {
       bottom: 24px;
       left: 50%;
       transform: translateX(-50%) translateY(20px);
+      max-width: calc(100vw - 32px);
       padding: 10px 16px;
       border-radius: 6px;
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 8px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 13px;
+      line-height: 1.35;
       z-index: 99999999;
       opacity: 0;
       transition: all 0.3s ease;
@@ -605,7 +614,13 @@ function injectStyles() {
       font-weight: 600;
     }
 
+    .snooze-toast-message {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
     .snooze-toast-action {
+      flex-shrink: 0;
       margin-left: 4px;
       padding: 3px 8px;
       border: 1px solid rgba(255, 255, 255, 0.65);
@@ -619,6 +634,13 @@ function injectStyles() {
 
     .snooze-toast-action:hover {
       background: rgba(255, 255, 255, 0.25);
+    }
+
+    @media (max-width: 420px) {
+      .snooze-toast {
+        width: calc(100vw - 32px);
+        justify-content: flex-start;
+      }
     }
     
     /* ===== 设置按钮（x 按钮） ===== */
@@ -760,12 +782,44 @@ async function openScheduledMessagesManager() {
   }
 }
 
-function showSnoozeCreatedToast(remindAt: Date, updated = false) {
+async function undoSnoozeReminder(messageId: string) {
+  try {
+    await sendToolbarRuntimeAction(
+      {
+        type: 'CANCEL_SNOOZE_REMINDER',
+        data: { messageId },
+      },
+      '撤销提醒失败，请稍后重试',
+    );
+    showSuccessToast('已撤销提醒');
+  } catch (error) {
+    console.error('撤销 Snooze 提醒失败:', error);
+    showErrorToast(getErrorMessage(error, '撤销提醒失败，请稍后重试'));
+  }
+}
+
+function showSnoozeCreatedToast(
+  remindAt: Date,
+  updated = false,
+  messageId?: string,
+) {
   const prefix = updated ? '已更新提醒' : '已设置提醒';
-  showSuccessToast(`${prefix}：${formatRemindTime(remindAt)}`, {
-    label: '管理',
-    onClick: openScheduledMessagesManager,
-  });
+  const actions = getSnoozeSuccessToastActions(updated, messageId).map(
+    (action) => {
+      if (action.kind === 'undo' && messageId) {
+        return {
+          label: action.label,
+          onClick: () => undoSnoozeReminder(messageId),
+        };
+      }
+
+      return {
+        label: action.label,
+        onClick: openScheduledMessagesManager,
+      };
+    },
+  );
+  showSuccessToast(`${prefix}：${formatRemindTime(remindAt)}`, actions);
 }
 
 function getErrorMessage(error: unknown, fallbackMessage: string): string {
@@ -810,16 +864,34 @@ async function sendToolbarRuntimeAction(
   }
 }
 
+function resetSnoozeMenuAnchorState() {
+  document
+    .querySelectorAll<HTMLElement>('.snooze-icon-btn[aria-expanded="true"]')
+    .forEach((button) => {
+      button.setAttribute('aria-expanded', 'false');
+    });
+}
+
 /**
  * 隐藏 Snooze 快速选项菜单
  */
 function hideSnoozeMenu() {
+  resetSnoozeMenuAnchorState();
   if (currentSnoozeMenu) {
     currentSnoozeMenu.remove();
     currentSnoozeMenu = null;
   }
   isHoveringSnoozeMenu = false;
   isFocusWithinSnoozeMenu = false;
+}
+
+function invalidateSnoozeMenuRequests(anchorElement?: HTMLElement) {
+  if (anchorElement && activeSnoozeMenuAnchor !== anchorElement) {
+    return;
+  }
+
+  activeSnoozeMenuAnchor = null;
+  snoozeMenuRequestSeq += 1;
 }
 
 function clearSnoozePickerDismissHandlers() {
@@ -899,6 +971,7 @@ function hideSnoozePicker() {
  * 隐藏所有 Snooze UI（菜单和选择器）
  */
 function hideAllSnoozeUI() {
+  invalidateSnoozeMenuRequests();
   hideSnoozeMenu();
   hideSnoozePicker();
 }
@@ -1100,7 +1173,11 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     if (result.success) {
       hideAllSnoozeUI();
       hideToolbar();
-      showSnoozeCreatedToast(selectedDate, result.updated === true);
+      showSnoozeCreatedToast(
+        selectedDate,
+        result.updated === true,
+        result.messageId,
+      );
     } else {
       // 恢复按钮状态
       confirmBtn.disabled = false;
@@ -1296,6 +1373,10 @@ async function showSnoozeQuickMenu(
 
   const menu = document.createElement('div');
   menu.className = 'snooze-menu';
+  menu.id = SNOOZE_QUICK_MENU_ID;
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', '稍后处理快捷选项');
+  anchorElement.setAttribute('aria-expanded', 'true');
 
   const quickOptions = getQuickOptions();
   const quickOptionViews = buildSnoozeQuickMenuOptions(
@@ -1308,7 +1389,7 @@ async function showSnoozeQuickMenu(
     ${quickOptionViews
       .map((opt) => {
         return `
-        <button type="button" class="snooze-quick-option" data-option-index="${
+        <button type="button" class="snooze-quick-option" role="menuitem" tabindex="-1" data-option-index="${
           opt.index
         }" aria-label="${escapeSnoozeMenuText(opt.ariaLabel)}">
           <span class="snooze-quick-option-icon" aria-hidden="true">${escapeSnoozeMenuText(
@@ -1327,11 +1408,11 @@ async function showSnoozeQuickMenu(
       })
       .join('')}
     <div class="snooze-divider"></div>
-    <button type="button" class="snooze-custom-option" aria-label="${SNOOZE_CUSTOM_OPTION_LABEL}">
+    <button type="button" class="snooze-custom-option" role="menuitem" tabindex="-1" aria-label="${SNOOZE_CUSTOM_OPTION_LABEL}">
       <span class="snooze-quick-option-icon" aria-hidden="true">📅</span>
       <span>自定义...</span>
     </button>
-    <button type="button" class="snooze-manage-option" aria-label="${SNOOZE_MANAGE_OPTION_LABEL}">
+    <button type="button" class="snooze-manage-option" role="menuitem" tabindex="-1" aria-label="${SNOOZE_MANAGE_OPTION_LABEL}">
       <span class="snooze-quick-option-icon" aria-hidden="true">↗</span>
       <span>${SNOOZE_MANAGE_OPTION_LABEL}</span>
     </button>
@@ -1380,7 +1461,11 @@ async function showSnoozeQuickMenu(
       if (result.success) {
         hideAllSnoozeUI();
         hideToolbar();
-        showSnoozeCreatedToast(remindAt, result.updated === true);
+        showSnoozeCreatedToast(
+          remindAt,
+          result.updated === true,
+          result.messageId,
+        );
       } else {
         // 恢复菜单状态
         menu.style.pointerEvents = '';
@@ -1436,11 +1521,41 @@ async function showSnoozeQuickMenu(
   });
 
   menu.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    hideAllSnoozeUI();
-    hideToolbar();
-    anchorElement.focus();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideAllSnoozeUI();
+      hideToolbar();
+      anchorElement.focus();
+      return;
+    }
+
+    const menuItems = Array.from(
+      menu.querySelectorAll<HTMLElement>('button[role="menuitem"]'),
+    );
+    if (menuItems.length === 0) return;
+
+    const currentIndex = menuItems.indexOf(
+      document.activeElement as HTMLElement,
+    );
+    let nextIndex: number | null = null;
+
+    if (e.key === 'ArrowDown') {
+      nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % menuItems.length;
+    } else if (e.key === 'ArrowUp') {
+      nextIndex =
+        currentIndex < 0
+          ? menuItems.length - 1
+          : (currentIndex - 1 + menuItems.length) % menuItems.length;
+    } else if (e.key === 'Home') {
+      nextIndex = 0;
+    } else if (e.key === 'End') {
+      nextIndex = menuItems.length - 1;
+    }
+
+    if (nextIndex !== null) {
+      e.preventDefault();
+      menuItems[nextIndex]?.focus();
+    }
   });
 }
 
@@ -1539,6 +1654,9 @@ function processMessageElement(messageElement: HTMLElement) {
             style="${borderRadius}${borderLeft}"
             title="${action.label}"
             aria-label="${action.label}"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="${SNOOZE_QUICK_MENU_ID}"
           >
             ${getSnoozeClockIconSvg()}
           </button>
@@ -1783,54 +1901,21 @@ function bindToolbarEvents(
       ) {
         showSnoozeQuickMenu(messageInfo, textBtn);
         if (focusFirstOption) {
-          requestAnimationFrame(() => {
-            currentSnoozeMenu
-              ?.querySelector<HTMLElement>('button.snooze-quick-option')
-              ?.focus();
-          });
+          currentSnoozeMenu
+            ?.querySelector<HTMLElement>('button.snooze-quick-option')
+            ?.focus();
         }
       }
     };
 
-    // 点击：默认 1 小时后提醒
+    // 点击：打开快捷菜单，避免误触时直接创建提醒
     textBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       e.preventDefault();
 
       await runToolbarButtonAction(textBtn, async () => {
-        console.log('💬 MessageReaction: 点击稍后处理按钮（1小时后提醒）');
-
-        // 获取消息信息
-        let messageInfo = getMessageInfo();
-        if (!messageInfo) {
-          messageInfo = await extractMessageInfo(targetElement);
-          if (messageInfo) setMessageInfo(messageInfo);
-        }
-
-        if (!messageInfo) {
-          showErrorToast('无法获取消息信息');
-          return;
-        }
-
-        // 1 小时后提醒
-        const remindAt = new Date();
-        remindAt.setHours(remindAt.getHours() + 1);
-
-        const result = await createSnoozeReminder({
-          messageInfo,
-          remindAt,
-        });
-
-        if (result.success) {
-          hideAllSnoozeUI();
-          hideToolbar();
-          showSnoozeCreatedToast(remindAt, result.updated === true);
-        } else {
-          const failureMessage = getSnoozeCreateFailureMessage(result);
-          if (failureMessage) {
-            showErrorToast(failureMessage);
-          }
-        }
+        console.log('💬 MessageReaction: 点击稍后处理按钮（打开快捷菜单）');
+        await openSnoozeMenuFromButton(true);
       });
     });
 
@@ -1852,8 +1937,7 @@ function bindToolbarEvents(
       const isMovingToSnoozeMenu = relatedTarget?.closest('.snooze-menu');
 
       if (!isMovingToSnoozeMenu && activeSnoozeMenuAnchor === textBtn) {
-        activeSnoozeMenuAnchor = null;
-        snoozeMenuRequestSeq += 1;
+        invalidateSnoozeMenuRequests(textBtn);
       }
 
       if (!isMovingToSnoozeMenu) {
@@ -2155,6 +2239,7 @@ export function initMessageReaction(config?: MessageReactionConfig) {
       !target.closest('.message-reaction-toolbar') &&
       !target.closest('.snooze-picker')
     ) {
+      invalidateSnoozeMenuRequests();
       hideSnoozeMenu();
     }
   });

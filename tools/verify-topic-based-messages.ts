@@ -12,15 +12,35 @@ import {
 import {
   filterTopicConversationsByReadState,
   findTopicConversationByMessageId,
+  getTopicConversationPrimaryId,
   getTopicConversationUnreadMessageCount,
   getTopicConversationUnreadCount,
   getTopicDetailRecentData,
+  getTopicDetailUnreadCount,
   isTopicConversationUnread,
   sortTopicConversationsForTriage,
   topicConversationHasContextMatch,
   topicConversationMatchesQuery,
 } from '../src/modals/topic-detail-data.ts';
 import { renderHighlightedText } from '../src/modals/topic-detail-rendering.ts';
+import { getSafeExternalUrl } from '../src/modals/topic-link-safety.ts';
+import {
+  getTopicTriagePriority,
+  sortTopicsForTriage,
+} from '../src/modals/topic-triage.ts';
+import {
+  getTopicUnreadPreviewCount,
+  getTopicUnreadPreviewMeta,
+  getTopicUnreadRemainingCount,
+  getTopicUnreadTotalCount,
+  getUnreadDiscussionKey,
+  getUnreadDiscussionMessageId,
+  getUnreadDiscussionText,
+} from '../src/modals/topic-unread-preview.ts';
+import {
+  formatTopicRelativeTime,
+  normalizeTopicTimestamp,
+} from '../src/modals/topic-time.ts';
 
 const cacheMessages: any[] = [];
 
@@ -154,6 +174,11 @@ async function verifyTopicDetailFallsBackWhenApiReturnsNoData() {
   assert.ok(
     store.topicDetailData.recentDataDetails.conversations.length > 0,
     'fallback topic detail should include mock conversations',
+  );
+  assert.equal(
+    findTopicConversationByMessageId(store.topicDetailData, 'msg-1')?.id,
+    'msg-1',
+    'fallback topic detail should support list preview message deep links',
   );
 }
 
@@ -594,6 +619,50 @@ function verifyTopicDetailLegacyDataFallback() {
   );
 }
 
+function verifyTopicDetailUnreadCountFallsBackToKnownMessages() {
+  const topic = {
+    id: 'topic-missing-read-status',
+    unreadDiscussions: [{ messageId: 'preview-only', text: 'Preview' }],
+    recentDataDetails: {
+      conversations: [
+        {
+          messageId: 'message-only-id',
+          isRead: true,
+          summary: 'Parent is read',
+          contextMessages: [
+            {
+              conversationId: 'ctx-only-id',
+              isRead: false,
+              content: 'Nested',
+            },
+          ],
+        },
+        {
+          conversationId: 'conversation-only-id',
+          isRead: false,
+          summary: 'No id field here',
+        },
+      ],
+    },
+  };
+
+  assert.equal(getTopicDetailUnreadCount(topic), 2);
+  assert.equal(
+    getTopicConversationPrimaryId(topic.recentDataDetails.conversations[0]),
+    'message-only-id',
+  );
+  assert.equal(
+    getTopicConversationPrimaryId(topic.recentDataDetails.conversations[1]),
+    'conversation-only-id',
+  );
+  assert.equal(
+    getTopicConversationPrimaryId(
+      findTopicConversationByMessageId(topic, 'ctx-only-id'),
+    ),
+    'message-only-id',
+  );
+}
+
 function verifyTopicDetailHighlightEscapesHtml() {
   const rendered = renderHighlightedText(
     '<img src=x onerror=alert(1)> AI & data',
@@ -755,6 +824,140 @@ function verifyTopicDetailUsesSafeTraceableLinks() {
   assert.match(source, /rel="noreferrer"/);
 }
 
+function verifyTopicListResourcePreviewUsesSafeLinks() {
+  const source = readFileSync(
+    new URL('../src/modals/components/EntityListPage.vue', import.meta.url),
+    'utf8',
+  );
+
+  assert.equal(
+    getSafeExternalUrl('https://example.com/resource?x=1'),
+    'https://example.com/resource?x=1',
+  );
+  assert.equal(
+    getSafeExternalUrl('http://example.com/guide'),
+    'http://example.com/guide',
+  );
+  assert.equal(getSafeExternalUrl('javascript:alert(1)'), '');
+  assert.equal(getSafeExternalUrl('file:///tmp/secret'), '');
+  assert.equal(getSafeExternalUrl('#'), '');
+  assert.match(source, /handleResourcePreviewClick/);
+  assert.match(source, /handleUnreadDiscussionClick/);
+  assert.match(source, /navigateToTopicDiscussion/);
+  assert.match(source, /getTopicUnreadPreviewMeta/);
+  assert.match(source, /getUnreadDiscussionMessageId/);
+  assert.match(source, /noopener,noreferrer/);
+  assert.match(source, /查看主题详情中的资源上下文/);
+  assert.match(
+    source,
+    /getSafeExternalUrl\(resource\.url\) \? '打开' : '详情'/,
+  );
+}
+
+function verifyTopicDetailTimeFallbacks() {
+  const now = new Date(2026, 4, 1, 12, 0, 0, 0).getTime();
+
+  assert.equal(formatTopicRelativeTime(undefined, now), '');
+  assert.equal(formatTopicRelativeTime('not-a-date', now), '');
+  assert.equal(formatTopicRelativeTime(0, now), '');
+  assert.equal(formatTopicRelativeTime(now + 1000, now), '刚刚');
+  assert.equal(formatTopicRelativeTime(now + 2 * 60 * 1000, now), '');
+  assert.equal(formatTopicRelativeTime(now - 30 * 60 * 1000, now), '刚刚');
+  assert.equal(
+    formatTopicRelativeTime(now - 2 * 60 * 60 * 1000, now),
+    '2小时前',
+  );
+  assert.equal(
+    formatTopicRelativeTime(now - 2 * 24 * 60 * 60 * 1000, now),
+    '2天前',
+  );
+  assert.equal(
+    normalizeTopicTimestamp(Math.floor((now - 3600000) / 1000)),
+    now - 3600000,
+  );
+  assert.equal(
+    formatTopicRelativeTime(Math.floor((now - 3600000) / 1000), now),
+    '1小时前',
+  );
+}
+
+function verifyTopicTriagePrioritySort() {
+  const now = new Date(2026, 4, 1, 12, 0, 0, 0).getTime();
+  const topics = [
+    {
+      id: 'stale-low',
+      readStatus: { unreadCount: 1, lastUpdateTime: now - 20 * 86400000 },
+      importance: 0.3,
+      statistic: { conversations: 2 },
+    },
+    {
+      id: 'recent-low',
+      readStatus: { unreadCount: 1, lastUpdateTime: now - 10 * 60000 },
+      importance: 0.4,
+      statistic: { conversations: 4 },
+    },
+    {
+      id: 'bulk-unread',
+      readStatus: { unreadCount: 12, lastUpdateTime: now - 10 * 86400000 },
+      importance: 0.3,
+      statistic: { conversations: 18 },
+    },
+    {
+      id: 'urgent',
+      readStatus: { unreadCount: 5, lastUpdateTime: now - 30 * 60000 },
+      importance: 0.9,
+      statistic: { conversations: 30 },
+    },
+  ];
+
+  assert.deepEqual(
+    sortTopicsForTriage(topics, now).map((topic) => topic.id),
+    ['urgent', 'bulk-unread', 'recent-low', 'stale-low'],
+  );
+  assert.equal(getTopicTriagePriority(topics[3], now).label, '优先处理');
+  assert.equal(getTopicTriagePriority(topics[2], now).label, '多条未读');
+  assert.equal(getTopicTriagePriority(topics[1], now).label, '近期更新');
+  assert.match(
+    getTopicTriagePriority(topics[3], now).reasons.join('、'),
+    /未读较多/,
+  );
+}
+
+function verifyTopicUnreadPreviewHelpers() {
+  const topic = {
+    readStatus: { unreadCount: 7 },
+    unreadDiscussions: [
+      { id: 'preview-id', messageId: 'msg-1', text: 'Direct message' },
+      { conversationId: 'conv-2', summary: 'Conversation fallback' },
+      { sourceMessageId: 'src-3', content: 'Source fallback' },
+      { title: 'Untitled source' },
+    ],
+  };
+
+  assert.equal(getTopicUnreadPreviewCount(topic), 4);
+  assert.equal(getTopicUnreadTotalCount(topic), 7);
+  assert.equal(getTopicUnreadPreviewMeta(topic), '(4/7条预览)');
+  assert.equal(getTopicUnreadRemainingCount(topic, 3), 4);
+  assert.equal(
+    getUnreadDiscussionMessageId(topic.unreadDiscussions[0]),
+    'msg-1',
+  );
+  assert.equal(
+    getUnreadDiscussionMessageId(topic.unreadDiscussions[1]),
+    'conv-2',
+  );
+  assert.equal(
+    getUnreadDiscussionText(topic.unreadDiscussions[1]),
+    'Conversation fallback',
+  );
+  assert.equal(
+    getUnreadDiscussionKey(topic.unreadDiscussions[3], 3),
+    'Untitled source:3',
+  );
+  assert.equal(getUnreadDiscussionText({}), '未读讨论');
+  assert.equal(getTopicUnreadPreviewMeta({ unreadDiscussions: [] }), '');
+}
+
 function verifyTopicMuteUiIsReachable() {
   const overviewSource = readFileSync(
     new URL('../src/modals/components/OverviewPage.vue', import.meta.url),
@@ -765,9 +968,13 @@ function verifyTopicMuteUiIsReachable() {
     'utf8',
   );
 
-  assert.match(overviewSource, /handleMuteTopic/);
-  assert.match(overviewSource, /🔕 静音/);
+  assert.doesNotMatch(overviewSource, /handleMuteTopic/);
+  assert.doesNotMatch(overviewSource, /topic-action-btn/);
+  assert.match(overviewSource, /未读主题入口/);
+  assert.match(overviewSource, /\/entity\/Topic/);
   assert.match(listSource, /topicViewMode === 'muted'/);
+  assert.match(listSource, /handleMuteTopic/);
+  assert.match(listSource, /🔕 静音/);
   assert.match(listSource, /取消静音/);
 }
 
@@ -776,13 +983,28 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
     new URL('../src/modals/components/TopicDetailPage.vue', import.meta.url),
     'utf8',
   );
+  const listSource = readFileSync(
+    new URL('../src/modals/components/EntityListPage.vue', import.meta.url),
+    'utf8',
+  );
 
   assert.match(source, /conversationUnreadCount/);
   assert.match(source, /convReadFilter/);
+  assert.match(source, /getTopicDetailUnreadCount/);
+  assert.match(source, /getConversationRenderId/);
+  assert.match(source, /getTopicConversationPrimaryId/);
+  assert.match(
+    source,
+    /store\.markConversationAsRead\(topicId\.value, messageId\)/,
+  );
   assert.match(source, /getConversationContextLabel/);
   assert.match(source, /仅未读/);
   assert.match(source, /isConversationUnread\(conv\)/);
   assert.match(source, /isContextMessageUnread\(contextMsg\)/);
+  assert.match(listSource, /优先处理排序/);
+  assert.match(listSource, /sortTopicsForTriage/);
+  assert.match(listSource, /topic-priority-pill/);
+  assert.match(listSource, /getTopicDisplayTime/);
 }
 
 async function main() {
@@ -803,6 +1025,7 @@ async function main() {
   verifyExpiredMutedTopicReturnsToUnreadQueue();
   await verifyTopLevelConversationReadState();
   verifyTopicDetailLegacyDataFallback();
+  verifyTopicDetailUnreadCountFallsBackToKnownMessages();
   verifyTopicDetailHighlightEscapesHtml();
   verifyTopicConversationSearchCoversContextAndSource();
   verifyTopicConversationReadTriageIncludesContextMessages();
@@ -810,6 +1033,10 @@ async function main() {
   verifyTopicMutePresetOptions();
   verifyTopicDetailHasNoDeadMutationControls();
   verifyTopicDetailUsesSafeTraceableLinks();
+  verifyTopicListResourcePreviewUsesSafeLinks();
+  verifyTopicDetailTimeFallbacks();
+  verifyTopicTriagePrioritySort();
+  verifyTopicUnreadPreviewHelpers();
   verifyTopicMuteUiIsReachable();
   verifyTopicDetailUnreadTriageUiIsReachable();
 

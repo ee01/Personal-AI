@@ -18,6 +18,7 @@ export interface MemoryTimelineEvent {
   scope?: RecallItem['scope'];
   exploreLink?: string;
   channels: string[];
+  feedbackAction?: 'positive' | 'negative';
 }
 
 const MAX_TIMELINE_TEXT_LENGTH = 220;
@@ -96,6 +97,11 @@ export function mapRecallItemsToTimelineEvents(
               typeof channel === 'string' && channel.length > 0,
           )
         : [];
+      const feedbackAction =
+        item.metadata?.recallFeedback === 'positive' ||
+        item.metadata?.recallFeedback === 'negative'
+          ? item.metadata.recallFeedback
+          : undefined;
       return {
         id: item.id,
         resultKey: `${item.type}:${item.id}`,
@@ -109,6 +115,7 @@ export function mapRecallItemsToTimelineEvents(
         scope: item.scope,
         exploreLink: item.exploreLink,
         channels,
+        feedbackAction,
       };
     });
 }

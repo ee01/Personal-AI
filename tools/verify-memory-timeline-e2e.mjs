@@ -21,6 +21,7 @@ const userDataDir = await fs.mkdtemp(
 const nowSeconds = Math.floor(Date.now() / 1000);
 const recallRequests = [];
 const focusRequests = [];
+const feedbackRequests = [];
 
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
@@ -54,7 +55,7 @@ try {
             exploreLink: '#/timeline?type=message&focus=safe',
             timestamp: nowSeconds,
             scope: payload.scope === 'personal' ? 'personal' : 'work',
-            metadata: { channels: ['time'] },
+            metadata: { channels: ['time'], recallFeedback: 'negative' },
           },
           {
             id: `unsafe-${payload.scope}`,
@@ -105,6 +106,15 @@ try {
     },
   );
 
+  await context.route('http://localhost:3210/api/v1/feedback', async (route) => {
+    feedbackRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'ok', targetType: 'message' }),
+    });
+  });
+
   let [worker] = context.serviceWorkers();
   if (!worker) {
     worker = await context.waitForEvent('serviceworker', { timeout: 10000 });
@@ -144,6 +154,63 @@ try {
     .getByRole('button', { name: '打开来源' })
     .count();
   assert.equal(openSourceButtons, 2, 'only http/https source URLs should render');
+
+  const safeTimelineCard = page.locator('article', {
+    hasText: 'Safe timeline memory all',
+  });
+  await safeTimelineCard
+    .getByText('已记录为不相关')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await safeTimelineCard
+      .getByRole('button', { name: '不相关' })
+      .getAttribute('aria-pressed'),
+    'true',
+    'persisted negative feedback should be restored on load',
+  );
+  await safeTimelineCard.getByRole('button', { name: '有用' }).click();
+  await safeTimelineCard.getByText('已记录为有用').waitFor({ timeout: 10000 });
+  assert.equal(
+    await safeTimelineCard
+      .getByRole('button', { name: '有用' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  assert.deepEqual(feedbackRequests[0], {
+    type: 'recall_quality',
+    targetId: 'safe-all',
+    targetType: 'message',
+    action: 'positive',
+  });
+  await safeTimelineCard.getByRole('button', { name: '不相关' }).click();
+  await safeTimelineCard
+    .getByText('已记录为不相关')
+    .waitFor({ timeout: 10000 });
+  assert.deepEqual(feedbackRequests[1], {
+    type: 'recall_quality',
+    targetId: 'safe-all',
+    targetType: 'message',
+    action: 'negative',
+  });
+  await safeTimelineCard.getByRole('button', { name: '撤销反馈' }).click();
+  await safeTimelineCard.getByText('已撤销反馈').waitFor({ timeout: 10000 });
+  assert.deepEqual(feedbackRequests[2], {
+    type: 'recall_quality',
+    targetId: 'safe-all',
+    targetType: 'message',
+    action: 'clear',
+  });
+  assert.equal(
+    await safeTimelineCard
+      .getByRole('button', { name: '不相关' })
+      .getAttribute('aria-pressed'),
+    'false',
+  );
+  assert.equal(
+    await safeTimelineCard.getByRole('button', { name: '撤销反馈' }).count(),
+    0,
+    'clear action should return the card to a neutral feedback state',
+  );
 
   await fs.mkdir(screenshotDir, { recursive: true });
   await page.screenshot({

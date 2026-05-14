@@ -1,3 +1,8 @@
+import {
+  getTimelineSyncDryRunHelp,
+  getTimelineSyncPayloadHelp,
+} from './timelineProjects.js';
+
 export type TimelineCacheProjectStatusCode = 'ready' | 'missing' | 'expired' | 'invalid' | 'error';
 
 export interface TimelineCacheProjectStatus {
@@ -17,6 +22,7 @@ export interface TimelineCacheProjectStatus {
 
 export interface TimelineCacheSyncAttempt {
   success: boolean;
+  requestId?: string;
   attemptedAt?: string;
   ageMs?: number | null;
   errorCode?: string;
@@ -115,6 +121,7 @@ function normalizeTimelineCacheSyncAttempt(value: unknown): TimelineCacheSyncAtt
     success: value.success === true,
   };
   const attemptedAt = getString(value.attemptedAt).trim();
+  const requestId = getString(value.requestId).trim();
   const errorCode = getString(value.errorCode).trim();
   const error = getString(value.error).trim();
   const parseError = getString(value.parseError).trim();
@@ -129,6 +136,9 @@ function normalizeTimelineCacheSyncAttempt(value: unknown): TimelineCacheSyncAtt
 
   if (attemptedAt) {
     attempt.attemptedAt = attemptedAt;
+  }
+  if (requestId) {
+    attempt.requestId = requestId;
   }
   if (ageMs !== undefined) {
     attempt.ageMs = ageMs;
@@ -340,6 +350,9 @@ function formatTimelineCacheAttemptDetails(attempt: TimelineCacheSyncAttempt): s
   if (attempt.requestContentType) {
     details.push(`Content-Type ${attempt.requestContentType}`);
   }
+  if (attempt.requestId) {
+    details.push(`请求 ID ${attempt.requestId}`);
+  }
   if (requestBodyBytes) {
     details.push(`请求体 ${requestBodyBytes}`);
   }
@@ -368,12 +381,20 @@ function formatTimelineCacheAttemptDetails(attempt: TimelineCacheSyncAttempt): s
   return details.join('，');
 }
 
+function formatTimelineCacheAttemptTime(attempt: TimelineCacheSyncAttempt): string {
+  if (typeof attempt.ageMs === 'number' && Number.isFinite(attempt.ageMs)) {
+    return formatTimelineCacheAge(attempt.ageMs);
+  }
+
+  return attempt.attemptedAt || '未知时间';
+}
+
 export function formatTimelineCacheLastAttempt(attempt?: TimelineCacheSyncAttempt): string {
   if (!attempt) {
     return '';
   }
 
-  const ageText = formatTimelineCacheAge(attempt.ageMs);
+  const ageText = formatTimelineCacheAttemptTime(attempt);
   if (attempt.success) {
     return `最近同步成功：${ageText}`;
   }
@@ -385,6 +406,35 @@ export function formatTimelineCacheLastAttempt(attempt?: TimelineCacheSyncAttemp
   const nextAction = attempt.nextAction ? `；建议：${attempt.nextAction}` : '';
 
   return `最近同步失败（${ageText}）${reason ? `：${reason}` : ''}${details ? `；${details}` : ''}${nextAction}`;
+}
+
+export function getTimelineCacheAttemptQuickFixText(attempt?: TimelineCacheSyncAttempt): string {
+  if (!attempt || attempt.success) {
+    return '';
+  }
+
+  switch (attempt.errorCode) {
+    case 'INVALID_POST_JSON':
+      return '检查 Method=POST、Content-Type=application/json，并确认 releaseInfo 使用 .asJsonString。';
+    case 'MISSING_RELEASE_INFO':
+      return '确认 Custom data 包含 releaseInfo，且项目变量使用 .asJsonString。';
+    case 'UNKNOWN_PROJECT':
+      return '确认 JSON body 的 project 使用生成规则里的项目参数名。';
+    case 'TIMELINE_CACHE_TOO_LARGE':
+      return '减少同步字段或 Milestone 数量后，手动运行 Timeline Sync Rule。';
+    case 'RELEASE_INFO_TOO_LARGE':
+      return '减少 releaseInfo 字符数到限制内，或只同步 Timeline 需要的字段。';
+    case 'RELEASE_INFO_TOO_DEEP':
+      return '压平 releaseInfo 结构；Timeline 缓存只需要项目字段和 Milestone 日期。';
+    case 'INVALID_RELEASE_INFO_SCHEMA':
+      return '确认 releaseInfo 下至少有一个 MM/DD/YYYY 格式的 Milestone 日期。';
+    case 'PARSE_RELEASE_INFO_FAILED':
+      return '优先让 Jira 输出标准 JSON；必须用 Groovy Map 时请给复杂文本加引号。';
+    case 'CACHE_RELEASE_INFO_EXCEPTION':
+      return '复制诊断后查看 Apps Script 执行日志，按请求 ID 对照失败请求。';
+    default:
+      return attempt.nextAction || '';
+  }
 }
 
 export function getTimelineCacheStatusLabel(status: TimelineCacheProjectStatusCode): string {
@@ -489,6 +539,7 @@ export function buildTimelineCacheDiagnosticText(input: {
   selectedProject?: string;
   selectedMilestone?: string;
   timelineSyncRuleUrl?: string;
+  webAppUrl?: string;
 }): string {
   const lines = ['Timeline 缓存诊断'];
   const error = input.error.trim();
@@ -507,6 +558,11 @@ export function buildTimelineCacheDiagnosticText(input: {
 
   if (selectedProject) {
     const projectStatus = getTimelineCacheProjectStatus(status, selectedProject);
+    const payloadHelp = getTimelineSyncPayloadHelp(selectedProject);
+    const dryRunHelp = getTimelineSyncDryRunHelp({
+      project: selectedProject,
+      webAppUrl: input.webAppUrl,
+    });
 
     if (projectStatus) {
       lines.push(`项目: ${projectStatus.project}`);
@@ -551,6 +607,20 @@ export function buildTimelineCacheDiagnosticText(input: {
       lines.push('建议操作: 请更新 App Script 并重新配置 Timeline Sync Rule。');
     } else {
       lines.push(`项目: ${selectedProject}`);
+    }
+
+    if (payloadHelp) {
+      lines.push('Jira Send web request 修复模板:');
+      lines.push(`Method: ${payloadHelp.method}`);
+      lines.push(`URL: ${payloadHelp.url}`);
+      lines.push(`Header: Content-Type=${payloadHelp.contentType}`);
+      lines.push('Custom data:');
+      lines.push(payloadHelp.customBody);
+    }
+
+    if (dryRunHelp) {
+      lines.push('Apps Script dry-run 测试 curl:');
+      lines.push(dryRunHelp.curlCommand);
     }
   }
 
