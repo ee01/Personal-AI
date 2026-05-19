@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildTimelineCacheDiagnosticText,
+  formatTimelineSyncDryRunResult,
   formatTimelineCacheAge,
   formatTimelineCacheLastAttempt,
   getTimelineCacheAttemptQuickFixText,
@@ -13,6 +14,7 @@ import {
   getTimelineCacheStatusLabel,
   validateTimelineCacheStatusResponse,
   parseTimelineCacheStatusResponseText,
+  parseTimelineSyncDryRunResponseText,
   shouldAutoRefreshTimelineCacheStatus,
   type TimelineCacheStatus,
 } from '../timelineCacheStatus.js';
@@ -39,35 +41,34 @@ const readyStatus: TimelineCacheStatus = {
   ],
 };
 
-test('Timeline cache readiness blocks save while status is loading', () => {
+test('Timeline cache readiness does not block save while status is loading', () => {
   const reason = getTimelineCacheReadinessBlockText({
     isLoading: true,
     status: null,
     error: '',
   });
 
-  assert.match(reason, /正在读取 Timeline 缓存状态/);
+  assert.equal(reason, '');
 });
 
-test('Timeline cache readiness blocks save when status request failed', () => {
+test('Timeline cache readiness does not block save when status request failed', () => {
   const reason = getTimelineCacheReadinessBlockText({
     isLoading: false,
     status: null,
     error: 'HTTP 500',
   });
 
-  assert.match(reason, /读取失败/);
-  assert.match(reason, /HTTP 500/);
+  assert.equal(reason, '');
 });
 
-test('Timeline cache readiness blocks save before cache status has been read', () => {
+test('Timeline cache readiness does not block save before cache status has been read', () => {
   const reason = getTimelineCacheReadinessBlockText({
     isLoading: false,
     status: null,
     error: '',
   });
 
-  assert.match(reason, /尚未读取 Timeline 缓存状态/);
+  assert.equal(reason, '');
 });
 
 test('Timeline cache readiness allows save when status is available', () => {
@@ -80,18 +81,18 @@ test('Timeline cache readiness allows save when status is available', () => {
   assert.equal(reason, '');
 });
 
-test('Timeline project cache save guard blocks missing and stale project caches', () => {
-  assert.match(
+test('Timeline project cache save guard does not block missing and stale project caches', () => {
+  assert.equal(
     getTimelineProjectCacheSaveBlockText({
       isLoading: false,
       status: readyStatus,
       error: '',
       project: 'Nova',
     }),
-    /未出现在当前 App Script 返回的 Timeline 缓存状态/,
+    '',
   );
 
-  assert.match(
+  assert.equal(
     getTimelineProjectCacheSaveBlockText({
       isLoading: false,
       status: {
@@ -111,7 +112,29 @@ test('Timeline project cache save guard blocks missing and stale project caches'
       error: '',
       project: 'mThor',
     }),
-    /mThor 的 Timeline 缓存状态为 缓存已过期/,
+    '',
+  );
+});
+
+test('Timeline project cache save guard does not block when cache status is unavailable', () => {
+  assert.equal(
+    getTimelineProjectCacheSaveBlockText({
+      isLoading: false,
+      status: null,
+      error: 'HTTP 404',
+      project: 'mThor',
+    }),
+    '',
+  );
+
+  assert.equal(
+    getTimelineProjectCacheSaveBlockText({
+      isLoading: false,
+      status: null,
+      error: '',
+      project: 'mThor',
+    }),
+    '',
   );
 });
 
@@ -300,7 +323,7 @@ test('Timeline cache quick fix text summarizes the next user action', () => {
       errorCode: 'INVALID_POST_JSON',
       nextAction: 'long fallback',
     }),
-    '检查 Method=POST、Content-Type=application/json，并确认 releaseInfo 使用 .asJsonString。',
+    '把 Timeline Sync Rule 的 Apps Script 写缓存请求改回 GET；POST 可能停在 Google 302 重定向。',
   );
 
   assert.equal(
@@ -308,7 +331,7 @@ test('Timeline cache quick fix text summarizes the next user action', () => {
       success: false,
       errorCode: 'MISSING_RELEASE_INFO',
     }),
-    '确认 Custom data 包含 releaseInfo，且项目变量使用 .asJsonString。',
+    '确认变量先保存 {{webhookResponse.body}}，GET URL 包含 project 和 releaseInfo={{变量.replaceAll("\'","").urlEncode.replaceAll("\\+","%20")}}。',
   );
 
   assert.equal(
@@ -369,10 +392,11 @@ test('Timeline cache diagnostic text summarizes selected project troubleshooting
   assert.match(diagnostic, /请求 ID tl_mThor_failed/);
   assert.match(diagnostic, /缓存 Milestone: FF、Release/);
   assert.match(diagnostic, /Jira Send web request 修复模板/);
-  assert.match(diagnostic, /Method: POST/);
-  assert.match(diagnostic, /Header: Content-Type=application\/json/);
-  assert.match(diagnostic, /"project": "mThor"/);
-  assert.match(diagnostic, /"releaseInfo": \{\{mThorReleaseInfo\.asJsonString\}\}/);
+  assert.match(diagnostic, /Method: GET/);
+  assert.match(diagnostic, /project=mThor/);
+  assert.match(diagnostic, /releaseInfo=\{\{mThorReleaseInfo\.replaceAll\("'",""\)\.urlEncode\.replaceAll/);
+  assert.match(diagnostic, /Body: \(empty\)/);
+  assert.match(diagnostic, /必须保持 GET/);
   assert.match(diagnostic, /Apps Script dry-run 测试 curl/);
   assert.match(diagnostic, /dryRun/);
   assert.match(diagnostic, /https:\/\/script\.google\.com\/macros\/s\/example\/exec\?action=cacheReleaseInfo/);
@@ -417,6 +441,60 @@ test('Timeline cache diagnostic text explains ready cache with a later failed sy
   assert.match(diagnostic, /状态: 缓存可用/);
   assert.match(diagnostic, /最近同步失败（10 分钟前）：INVALID_POST_JSON/);
   assert.match(diagnostic, /当前影响: 缓存仍可用/);
+});
+
+test('Timeline dry-run response parser formats successful validation', () => {
+  const result = parseTimelineSyncDryRunResponseText(JSON.stringify({
+    success: true,
+    dryRun: true,
+    wouldCache: true,
+    requestId: 'tl_mThor_dry',
+    project: 'mThor',
+    paramKey: 'mThor',
+    payloadBytes: 2048,
+    maxBytes: 9216,
+    milestoneCount: 2,
+    milestoneKeys: [' FF ', 'Release'],
+  }));
+
+  assert.equal(result.success, true);
+  assert.equal(result.dryRun, true);
+  assert.equal(result.requestId, 'tl_mThor_dry');
+  assert.deepEqual(result.milestoneKeys, ['FF', 'Release']);
+  assert.match(formatTimelineSyncDryRunResult(result), /样例测试通过/);
+  assert.match(formatTimelineSyncDryRunResult(result), /不会写入 Timeline 缓存/);
+  assert.match(formatTimelineSyncDryRunResult(result), /payload 2KB\/9KB/);
+  assert.match(formatTimelineSyncDryRunResult(result), /请求 ID tl_mThor_dry/);
+});
+
+test('Timeline dry-run response parser keeps actionable failure diagnostics', () => {
+  const result = parseTimelineSyncDryRunResponseText(JSON.stringify({
+    success: false,
+    dryRun: true,
+    requestId: 'tl_mThor_bad',
+    errorCode: 'INVALID_RELEASE_INFO_SCHEMA',
+    parseError: 'releaseInfo 必须包含至少一个有效日期',
+    nextAction: '确认 Milestone 日期格式。',
+    payloadBytes: 512,
+    maxBytes: 9216,
+  }));
+
+  assert.equal(result.success, false);
+  assert.equal(result.errorCode, 'INVALID_RELEASE_INFO_SCHEMA');
+  assert.match(formatTimelineSyncDryRunResult(result), /测试失败：INVALID_RELEASE_INFO_SCHEMA/);
+  assert.match(formatTimelineSyncDryRunResult(result), /下一步：确认 Milestone 日期格式。/);
+});
+
+test('Timeline dry-run parser rejects non dry-run success and non-JSON responses', () => {
+  assert.throws(
+    () => parseTimelineSyncDryRunResponseText(JSON.stringify({ success: true })),
+    /不是 dry-run 响应/,
+  );
+
+  assert.throws(
+    () => parseTimelineSyncDryRunResponseText('<html>Sign in</html>'),
+    /dry-run 响应是 HTML 页面/,
+  );
 });
 
 test('Timeline cache auto refresh is throttled while the dialog is loading or freshly refreshed', () => {

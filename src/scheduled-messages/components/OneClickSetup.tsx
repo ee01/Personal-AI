@@ -16,6 +16,7 @@ import {
   formatConfigSyncTimestamp,
 } from '../configSyncFreshness';
 import {
+  getManualBindConfigDiff,
   getManualBindDecision,
   getManualBindRestoreScope,
 } from '../manualBindConfigDecision';
@@ -48,6 +49,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const [needsAppScriptAPI, setNeedsAppScriptAPI] = useState(false);
   const [appScriptAPIUrl, setAppScriptAPIUrl] = useState('');
   const [manualBindDecision, setManualBindDecision] = useState<ManualBindDecision | null>(null);
+  const [showAllManualBindDiffs, setShowAllManualBindDiffs] = useState(false);
   const manualBindFeedback = getManualBindSheetInputFeedback(manualSheetUrl);
   
   const handleOneClickSetup = async () => {
@@ -188,6 +190,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
           return false;
         }
 
+        setShowAllManualBindDiffs(false);
         setManualBindDecision(decision);
         setCurrentStep('');
         setIsInitializing(false);
@@ -285,6 +288,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
 
   const completeManualBind = () => {
     setManualBindDecision(null);
+    setShowAllManualBindDiffs(false);
     setCurrentStep('配置绑定成功，正在刷新...');
     setTimeout(() => {
       window.location.reload();
@@ -292,7 +296,10 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   };
 
   const handleKeepLocalConfig = async () => {
-    if (!manualBindDecision || manualBindDecision.kind !== 'local-newer') {
+    if (
+      !manualBindDecision ||
+      (manualBindDecision.kind !== 'local-newer' && manualBindDecision.kind !== 'content-different')
+    ) {
       return;
     }
 
@@ -360,6 +367,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
 
   const handleCancelManualBindDecision = () => {
     setManualBindDecision(null);
+    setShowAllManualBindDiffs(false);
     setCurrentStep('');
     setIsInitializing(false);
     setError('');
@@ -376,6 +384,9 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   
   const getManualBindErrorMessage = (err: any): string => {
     const message = err?.message || '';
+    if (message.includes('Sheet Config 已更新')) {
+      return '绑定暂停：Sheet Config 刚被其它设备更新。请重新绑定读取最新配置后，再选择保留本机或使用 Sheet。';
+    }
     if (message.includes('401') || message.includes('invalid_token') || message.includes('Unauthorized')) {
       return '绑定失败：Google 授权已失效，请重新授权后再试。';
     }
@@ -402,6 +413,54 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
   const manualBindRestoreScope = manualBindDecision
     ? getManualBindRestoreScope(manualBindDecision.sheetConfig)
     : [];
+  const manualBindDiffItems = manualBindDecision
+    ? getManualBindConfigDiff(manualBindDecision.localConfig, manualBindDecision.sheetConfig)
+    : [];
+  const visibleManualBindDiffItems = showAllManualBindDiffs
+    ? manualBindDiffItems
+    : manualBindDiffItems.slice(0, 6);
+  const hiddenManualBindDiffCount = showAllManualBindDiffs
+    ? 0
+    : Math.max(0, manualBindDiffItems.length - visibleManualBindDiffItems.length);
+
+  const renderManualBindDiffList = () => {
+    if (manualBindDiffItems.length === 0) {
+      return null;
+    }
+
+    return (
+      <div style={styles.diffBox}>
+        <div style={styles.diffTitle}>配置差异</div>
+        {visibleManualBindDiffItems.map((item) => (
+          <div key={`${item.label}:${item.localValue}:${item.sheetValue}`} style={styles.diffRow}>
+            <div style={styles.diffLabel}>{item.label}</div>
+            <div style={styles.diffValues}>
+              <span style={styles.diffValue}>本机：{item.localValue}</span>
+              <span style={styles.diffValue}>Sheet：{item.sheetValue}</span>
+            </div>
+          </div>
+        ))}
+        {hiddenManualBindDiffCount > 0 && (
+          <button
+            type="button"
+            style={styles.diffToggleButton}
+            onClick={() => setShowAllManualBindDiffs(true)}
+          >
+            查看全部 {manualBindDiffItems.length} 项差异
+          </button>
+        )}
+        {showAllManualBindDiffs && manualBindDiffItems.length > 6 && (
+          <button
+            type="button"
+            style={styles.diffToggleButton}
+            onClick={() => setShowAllManualBindDiffs(false)}
+          >
+            收起差异
+          </button>
+        )}
+      </div>
+    );
+  };
   
   return (
     <div style={styles.container}>
@@ -575,7 +634,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
             
             <div style={styles.manualSection}>
               <p style={styles.manualTitle}>如果您已有维护表，可以直接绑定：</p>
-              <p style={styles.manualHint}>支持 Sheet 分享链接、Drive open?id 链接或直接粘贴 Sheet ID；旧维护表缺少 Config 时会自动补齐。</p>
+              <p style={styles.manualHint}>支持 Google Sheets 分享链接、Google Drive open?id 链接或直接粘贴 Sheet ID；旧维护表缺少 Config 时会自动补齐。</p>
               <div style={styles.syncNotice}>
                 绑定会以 Sheet Config 作为跨设备恢复源；当前设备未参与写回的新字段会保留在 Sheet 中，避免旧本地配置覆盖远端设置。
               </div>
@@ -606,6 +665,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                   onChange={(e) => {
                     setManualSheetUrl(e.target.value);
                     setManualBindDecision(null);
+                    setShowAllManualBindDiffs(false);
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !manualBindDisabled) {
@@ -672,7 +732,11 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                     </>
                   ) : (
                     <>
-                      <div style={styles.conflictTitle}>本机配置比 Sheet 更新</div>
+                      <div style={styles.conflictTitle}>
+                        {manualBindDecision.kind === 'content-different'
+                          ? '本机和 Sheet 配置不一致'
+                          : '本机配置比 Sheet 更新'}
+                      </div>
                       <div style={styles.conflictBody}>
                         本机同步时间：{formatConfigSyncTimestamp(manualBindDecision.localConfig.last_sync_time)}
                       </div>
@@ -680,8 +744,11 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                         Sheet 同步时间：{formatConfigSyncTimestamp(manualBindDecision.sheetConfig.last_sync_time)}
                       </div>
                       <div style={styles.conflictBody}>
-                        请选择保留本机最新配置并写回 Sheet，或继续用 Sheet 恢复本机。
+                        {manualBindDecision.kind === 'content-different'
+                          ? '同步时间相同或缺失，但关键配置不同；系统不会自动覆盖，请按最近实际修改过的一侧选择恢复方向。'
+                          : '请选择保留本机最新配置并写回 Sheet，或继续用 Sheet 恢复本机。'}
                       </div>
+                      {renderManualBindDiffList()}
                       <div style={styles.scopeList}>
                         {manualBindRestoreScope.map((item) => (
                           <span key={item} style={styles.scopeItem}>{item}</span>
@@ -898,6 +965,46 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   conflictBody: {
     marginBottom: '4px',
+  },
+  diffBox: {
+    marginTop: '10px',
+    padding: '9px 10px',
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    border: '1px solid rgba(0,0,0,0.08)',
+    borderRadius: '6px',
+  },
+  diffTitle: {
+    fontWeight: 700,
+    marginBottom: '6px',
+  },
+  diffRow: {
+    display: 'grid',
+    gridTemplateColumns: '120px minmax(0, 1fr)',
+    gap: '8px',
+    padding: '5px 0',
+    borderTop: '1px solid rgba(0,0,0,0.06)',
+  },
+  diffLabel: {
+    fontWeight: 600,
+  },
+  diffValues: {
+    display: 'grid',
+    gap: '2px',
+    minWidth: 0,
+  },
+  diffValue: {
+    overflowWrap: 'anywhere',
+  },
+  diffToggleButton: {
+    marginTop: '6px',
+    padding: 0,
+    color: '#495057',
+    backgroundColor: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 600,
+    textAlign: 'left' as const,
   },
   conflictActions: {
     display: 'flex',

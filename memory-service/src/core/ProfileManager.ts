@@ -327,6 +327,7 @@ export class ProfileManager {
         `SELECT se.*, e.name AS entity_name
          FROM social_edges se
          LEFT JOIN entities e ON e.id = se.to_entity_id
+         WHERE se.user_confirmed = 1
          ORDER BY se.strength DESC
          LIMIT 10`,
       )

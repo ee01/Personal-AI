@@ -22,16 +22,49 @@ interface AnalysisData {
 
 type UpdateField = 'status' | 'owner' | 'track' | 'comments';
 type ReviewFilter = 'all' | 'selected' | 'review' | 'risk' | 'blocked';
+type FieldReviewQueueKind = 'review' | 'blocked';
+
+interface FieldReviewQueueItem {
+    suggestion: ProjectUpdateSuggestion;
+    projectIndex: number;
+    field: UpdateField;
+    kind: FieldReviewQueueKind;
+    reason: string;
+}
+
+interface SelectedFieldPreviewItem {
+    projectIndex: number;
+    field: UpdateField;
+    projectLabel: string;
+    fieldLabel: string;
+    previewText: string;
+    reviewKind: 'ready' | 'review';
+    reviewLabel: string;
+}
 
 const GOOGLE_SLIDES_ORIGIN = 'https://docs.google.com';
 const HIGH_CONFIDENCE_THRESHOLD = 0.75;
 const APPLY_TIMEOUT_MS = 45000;
 const INITIAL_DATA_TIMEOUT_MS = 12000;
+const SELECTED_FIELD_PREVIEW_LIMIT = 5;
+const SELECTED_FIELD_PREVIEW_TEXT_LIMIT = 140;
 const UPDATE_FIELD_LABELS: Record<UpdateField, string> = {
     status: '状态列',
     owner: '负责人列',
     track: '赛道列',
     comments: '备注列'
+};
+const UPDATE_FIELD_SHORT_LABELS: Record<UpdateField, string> = {
+    status: '状态',
+    owner: '负责人',
+    track: '赛道',
+    comments: '备注'
+};
+const UPDATE_FIELD_COLUMN_LABELS: Record<UpdateField, string> = {
+    status: UPDATE_FIELD_LABELS.status,
+    owner: UPDATE_FIELD_LABELS.owner,
+    track: UPDATE_FIELD_LABELS.track,
+    comments: UPDATE_FIELD_LABELS.comments
 };
 const REVIEW_FILTER_LABELS: Record<ReviewFilter, string> = {
     all: '全部',
@@ -77,6 +110,43 @@ const addUniqueEvidenceItem = (items: string[], value: unknown): void => {
     items.push(trimmed);
 };
 
+const getFieldEvidenceItems = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string[] => {
+    const items: string[] = [];
+    const jiraIssues = suggestion.sourceInfo?.jiraIssues || [];
+    const chatHistory = suggestion.sourceInfo?.chatHistory || [];
+
+    if (field === 'status') {
+        addUniqueEvidenceItem(items, suggestion.suggestedStatusReason);
+        jiraIssues.slice(0, 3).forEach((issue) => {
+            addUniqueEvidenceItem(items, issue.status ? `Jira ${issue.key}: ${issue.status}` : undefined);
+        });
+    }
+
+    if (field === 'owner') {
+        addUniqueEvidenceItem(items, suggestion.suggestedOwnerReason);
+        const suggestedOwner = normalizeComparableText(suggestion.suggestedOwner);
+        jiraIssues.slice(0, 3).forEach((issue) => {
+            const assignee = normalizeComparableText(issue.assignee);
+            if (suggestedOwner && assignee && assignee === suggestedOwner) {
+                addUniqueEvidenceItem(items, `Jira ${issue.key}: assignee ${issue.assignee}`);
+            }
+        });
+    }
+
+    if (field === 'track') {
+        addUniqueEvidenceItem(items, suggestion.suggestedTrackReason);
+    }
+
+    if (field === 'comments') {
+        addUniqueEvidenceItem(items, suggestion.suggestedCommentsReason);
+        if (items.length === 0 && chatHistory.length > 0) {
+            addUniqueEvidenceItem(items, `历史上下文: ${chatHistory.length} 条记录`);
+        }
+    }
+
+    return items.slice(0, 3);
+};
+
 const getSuggestionEvidenceItems = (suggestion: ProjectUpdateSuggestion): string[] => {
     const items: string[] = [];
     const jiraIssues = suggestion.sourceInfo?.jiraIssues || [];
@@ -113,20 +183,34 @@ const hasVisibleEvidence = (suggestion: ProjectUpdateSuggestion): boolean => (
     getSuggestionEvidenceItems(suggestion).length > 0
 );
 
-const shouldDefaultSelectSuggestion = (suggestion: ProjectUpdateSuggestion): boolean => (
-    getAvailableUpdateFields(suggestion).length > 0 &&
+const shouldDefaultSelectField = (suggestion: ProjectUpdateSuggestion, field: UpdateField): boolean => (
     (suggestion.confidence || 0) >= HIGH_CONFIDENCE_THRESHOLD &&
-    hasVisibleEvidence(suggestion)
+    getFieldEvidenceItems(suggestion, field).length > 0
+);
+
+const getDefaultSelectableFields = (suggestion: ProjectUpdateSuggestion): UpdateField[] => (
+    getAvailableUpdateFields(suggestion).filter((field) => shouldDefaultSelectField(suggestion, field))
+);
+
+const getReviewRequiredFields = (suggestion: ProjectUpdateSuggestion): UpdateField[] => (
+    getAvailableUpdateFields(suggestion).filter((field) => !shouldDefaultSelectField(suggestion, field))
+);
+
+const shouldDefaultSelectSuggestion = (suggestion: ProjectUpdateSuggestion): boolean => (
+    getDefaultSelectableFields(suggestion).length > 0
 );
 
 const isSuggestionReviewRequired = (suggestion: ProjectUpdateSuggestion): boolean => (
-    (suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD || !hasVisibleEvidence(suggestion)
+    (suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD ||
+    getReviewRequiredFields(suggestion).length > 0
 );
 
 const confidenceReviewText = (suggestion: ProjectUpdateSuggestion): string => {
     const confidence = suggestion.confidence || 0;
+    const availableFields = getAvailableUpdateFields(suggestion);
+    const defaultSelectableFields = getDefaultSelectableFields(suggestion);
 
-    if (getAvailableUpdateFields(suggestion).length === 0) {
+    if (availableFields.length === 0) {
         return getUnavailableUpdateFields(suggestion).length > 0
             ? '缺少可写列 · 需手动处理'
             : '无新增可写字段';
@@ -140,8 +224,126 @@ const confidenceReviewText = (suggestion: ProjectUpdateSuggestion): string => {
         return '高可信但缺少来源 · 需复核';
     }
 
-    return '高可信有来源 · 已默认选中';
+    if (defaultSelectableFields.length === availableFields.length) {
+        return '高可信字段有来源 · 已默认选中';
+    }
+
+    if (defaultSelectableFields.length > 0) {
+        return `部分字段有来源 · 默认 ${defaultSelectableFields.length}/${availableFields.length}`;
+    }
+
+    return '高可信但字段来源不足 · 需复核';
 };
+
+const getFieldEvidenceSummary = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string => (
+    getFieldEvidenceItems(suggestion, field).join('；')
+);
+
+const getFieldReviewHint = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string => {
+    if (shouldDefaultSelectField(suggestion, field)) {
+        return `${UPDATE_FIELD_SHORT_LABELS[field]}来源: ${getFieldEvidenceSummary(suggestion, field)}`;
+    }
+
+    if ((suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD) {
+        return `${UPDATE_FIELD_SHORT_LABELS[field]}建议置信度偏低，需人工确认后勾选。`;
+    }
+
+    return `${UPDATE_FIELD_SHORT_LABELS[field]}缺少直接来源，不会默认写回。`;
+};
+
+const formatUpdateFieldNames = (fields: UpdateField[]): string => (
+    fields.map((field) => UPDATE_FIELD_SHORT_LABELS[field]).join('、')
+);
+
+const compactPreviewText = (value: unknown, maxLength = SELECTED_FIELD_PREVIEW_TEXT_LIMIT): string => {
+    if (typeof value !== 'string' || !value.trim()) {
+        return '空';
+    }
+
+    const compacted = value.replace(/\s+/g, ' ').trim();
+    if (compacted.length <= maxLength) {
+        return compacted;
+    }
+
+    return `${compacted.slice(0, Math.max(0, maxLength - 3))}...`;
+};
+
+const getFieldCurrentValue = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string | undefined => {
+    if (field === 'status') {
+        return suggestion.currentStatus;
+    }
+    if (field === 'owner') {
+        return suggestion.currentOwner;
+    }
+    if (field === 'track') {
+        return suggestion.currentTrack;
+    }
+
+    return suggestion.currentComments;
+};
+
+const getFieldSuggestedValue = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string | undefined => {
+    if (field === 'status') {
+        return suggestion.suggestedStatus;
+    }
+    if (field === 'owner') {
+        return suggestion.suggestedOwner;
+    }
+    if (field === 'track') {
+        return suggestion.suggestedTrack;
+    }
+
+    return getNewSuggestedComments(suggestion);
+};
+
+const buildSelectedFieldPreviewItem = (
+    suggestion: ProjectUpdateSuggestion,
+    projectIndex: number,
+    field: UpdateField,
+): SelectedFieldPreviewItem => {
+    const reviewKind = shouldDefaultSelectField(suggestion, field) ? 'ready' : 'review';
+    const currentValue = compactPreviewText(getFieldCurrentValue(suggestion, field));
+    const suggestedValue = compactPreviewText(getFieldSuggestedValue(suggestion, field));
+    const isComments = field === 'comments';
+
+    return {
+        projectIndex,
+        field,
+        projectLabel: `${suggestion.projectId} · ${suggestion.projectName}`,
+        fieldLabel: UPDATE_FIELD_SHORT_LABELS[field],
+        previewText: isComments
+            ? `${suggestion.currentComments ? '追加备注' : '设置备注'}: ${suggestedValue}`
+            : `${currentValue} -> ${suggestedValue}`,
+        reviewKind,
+        reviewLabel: reviewKind === 'ready' ? '来源充分' : '需人工复核',
+    };
+};
+
+const getProjectReviewNote = (suggestion: ProjectUpdateSuggestion): string => {
+    const confidence = suggestion.confidence || 0;
+    const reviewFields = getReviewRequiredFields(suggestion);
+
+    if (confidence < HIGH_CONFIDENCE_THRESHOLD) {
+        const fieldNames = reviewFields.length > 0 ? `（${formatUpdateFieldNames(reviewFields)}）` : '';
+        return `低可信建议${fieldNames}未自动选中，来源或理由不足时保持不写回。`;
+    }
+
+    if (!hasVisibleEvidence(suggestion)) {
+        return '缺少可见来源或理由，需人工确认后手动勾选。';
+    }
+
+    if (reviewFields.length > 0) {
+        return `部分字段缺少直接来源，未默认勾选: ${formatUpdateFieldNames(reviewFields)}。可在字段复核队列中处理。`;
+    }
+
+    return '建议需人工确认后手动勾选。';
+};
+
+const isRiskInsightOnlySuggestion = (suggestion: ProjectUpdateSuggestion): boolean => (
+    getAvailableUpdateFields(suggestion).length === 0 &&
+    getUnavailableUpdateFields(suggestion).length === 0 &&
+    getRiskEvidenceItems(suggestion).length > 0
+);
 
 const getAvailableUpdateFields = (suggestion: ProjectUpdateSuggestion): UpdateField[] => {
     const fields: UpdateField[] = [];
@@ -167,34 +369,38 @@ const getAvailableUpdateFields = (suggestion: ProjectUpdateSuggestion): UpdateFi
 };
 
 const getUnavailableUpdateFields = (suggestion: ProjectUpdateSuggestion): string[] => {
-    const fields: string[] = [];
+    return getUnavailableUpdateFieldTypes(suggestion).map((field) => UPDATE_FIELD_COLUMN_LABELS[field]);
+};
+
+const getUnavailableUpdateFieldTypes = (suggestion: ProjectUpdateSuggestion): UpdateField[] => {
+    const fields: UpdateField[] = [];
 
     if (
         hasMeaningfulSuggestedChange(suggestion.currentStatus, suggestion.suggestedStatus) &&
         !hasWritableColumnIndex(suggestion.columnIndices?.status)
     ) {
-        fields.push(UPDATE_FIELD_LABELS.status);
+        fields.push('status');
     }
 
     if (
         getNewSuggestedComments(suggestion) &&
         !hasWritableColumnIndex(suggestion.columnIndices?.comments)
     ) {
-        fields.push(UPDATE_FIELD_LABELS.comments);
+        fields.push('comments');
     }
 
     if (
         hasMeaningfulSuggestedChange(suggestion.currentOwner, suggestion.suggestedOwner) &&
         !hasWritableColumnIndex(suggestion.columnIndices?.owner)
     ) {
-        fields.push(UPDATE_FIELD_LABELS.owner);
+        fields.push('owner');
     }
 
     if (
         hasMeaningfulSuggestedChange(suggestion.currentTrack, suggestion.suggestedTrack) &&
         !hasWritableColumnIndex(suggestion.columnIndices?.track)
     ) {
-        fields.push(UPDATE_FIELD_LABELS.track);
+        fields.push('track');
     }
 
     return fields;
@@ -291,11 +497,7 @@ const SlidesAnalysis: React.FC = () => {
 
         const defaults: Record<string, boolean> = {};
         analysisResult.updateSuggestions.forEach((suggestion, projectIndex) => {
-            if (!shouldDefaultSelectSuggestion(suggestion)) {
-                return;
-            }
-
-            getAvailableUpdateFields(suggestion).forEach((field) => {
+            getDefaultSelectableFields(suggestion).forEach((field) => {
                 defaults[fieldKey(projectIndex, field)] = true;
             });
         });
@@ -382,6 +584,10 @@ const SlidesAnalysis: React.FC = () => {
     };
 
     const handleSelectAll = (projectIndex: number, isChecked: boolean) => {
+        if (isApplying) {
+            return;
+        }
+
         if (!analysisResult) {
             return;
         }
@@ -401,6 +607,10 @@ const SlidesAnalysis: React.FC = () => {
     };
 
     const handleFieldSelection = (projectIndex: number, field: UpdateField, isChecked: boolean) => {
+        if (isApplying) {
+            return;
+        }
+
         setSelectedFields((current) => ({
             ...current,
             [fieldKey(projectIndex, field)]: isChecked
@@ -419,11 +629,7 @@ const SlidesAnalysis: React.FC = () => {
         }
 
         analysisResult.updateSuggestions.forEach((suggestion, projectIndex) => {
-            if (!shouldDefaultSelectSuggestion(suggestion)) {
-                return;
-            }
-
-            getAvailableUpdateFields(suggestion).forEach((field) => {
+            getDefaultSelectableFields(suggestion).forEach((field) => {
                 defaults[fieldKey(projectIndex, field)] = true;
             });
         });
@@ -482,12 +688,14 @@ const SlidesAnalysis: React.FC = () => {
 
     const defaultSelectedFieldCount = analysisResult
         ? analysisResult.updateSuggestions.reduce((count, suggestion) => {
-            if (!shouldDefaultSelectSuggestion(suggestion)) {
-                return count;
-            }
-
-            return count + getAvailableUpdateFields(suggestion).length;
+            return count + getDefaultSelectableFields(suggestion).length;
         }, 0)
+        : 0;
+
+    const fieldReviewRequiredCount = analysisResult
+        ? analysisResult.updateSuggestions.reduce((count, suggestion) => (
+            count + getReviewRequiredFields(suggestion).length
+        ), 0)
         : 0;
 
     const reviewRequiredCount = analysisResult
@@ -519,6 +727,95 @@ const SlidesAnalysis: React.FC = () => {
             .map((suggestion, index) => ({ suggestion, index }))
             .filter(({ suggestion, index }) => suggestionMatchesReviewFilter(suggestion, index))
         : [];
+
+    const visibleSelectedUpdateCount = filteredSuggestionEntries.reduce((count, { suggestion, index }) => {
+        return count + getAvailableUpdateFields(suggestion)
+            .filter((field) => isFieldSelected(index, field)).length;
+    }, 0);
+
+    const hiddenSelectedUpdateCount = Math.max(0, selectedUpdateCount - visibleSelectedUpdateCount);
+    const selectedReviewFieldCount = analysisResult
+        ? analysisResult.updateSuggestions.reduce((count, suggestion, projectIndex) => {
+            return count + getAvailableUpdateFields(suggestion)
+                .filter((field) => isFieldSelected(projectIndex, field) && !shouldDefaultSelectField(suggestion, field))
+                .length;
+        }, 0)
+        : 0;
+    const selectedSourcedFieldCount = Math.max(0, selectedUpdateCount - selectedReviewFieldCount);
+    const selectedFieldPreviewItems: SelectedFieldPreviewItem[] = analysisResult
+        ? analysisResult.updateSuggestions.flatMap((suggestion, projectIndex) => (
+            getAvailableUpdateFields(suggestion)
+                .filter((field) => isFieldSelected(projectIndex, field))
+                .map((field) => buildSelectedFieldPreviewItem(suggestion, projectIndex, field))
+        ))
+        : [];
+    const selectedFieldPreviewVisibleItems = selectedFieldPreviewItems.slice(0, SELECTED_FIELD_PREVIEW_LIMIT);
+    const selectedFieldPreviewOverflowCount = Math.max(0, selectedFieldPreviewItems.length - selectedFieldPreviewVisibleItems.length);
+
+    const fieldReviewQueueItems: FieldReviewQueueItem[] = analysisResult
+        ? analysisResult.updateSuggestions.flatMap((suggestion, projectIndex) => {
+            const items: FieldReviewQueueItem[] = [];
+
+            getReviewRequiredFields(suggestion).forEach((field) => {
+                items.push({
+                    suggestion,
+                    projectIndex,
+                    field,
+                    kind: 'review',
+                    reason: getFieldReviewHint(suggestion, field)
+                });
+            });
+
+            getUnavailableUpdateFieldTypes(suggestion).forEach((field) => {
+                items.push({
+                    suggestion,
+                    projectIndex,
+                    field,
+                    kind: 'blocked',
+                    reason: `${UPDATE_FIELD_COLUMN_LABELS[field]} 未识别到可写表格列`
+                });
+            });
+
+            return items;
+        })
+        : [];
+    const fieldReviewQueuePreview = fieldReviewQueueItems.slice(0, 8);
+    const reviewFieldQueueCount = fieldReviewQueueItems.filter((item) => item.kind === 'review').length;
+    const blockedFieldQueueCount = fieldReviewQueueItems.filter((item) => item.kind === 'blocked').length;
+
+    const handleShowSelectedFields = () => {
+        setReviewFilter('selected');
+    };
+
+    const handleKeepCurrentViewSelectedFields = () => {
+        if (!analysisResult) {
+            return;
+        }
+
+        const removedCount = hiddenSelectedUpdateCount;
+
+        setSelectedFields((current) => {
+            const next: Record<string, boolean> = {};
+
+            filteredSuggestionEntries.forEach(({ suggestion, index }) => {
+                getAvailableUpdateFields(suggestion).forEach((field) => {
+                    const key = fieldKey(index, field);
+                    if (current[key]) {
+                        next[key] = true;
+                    }
+                });
+            });
+
+            return next;
+        });
+
+        showToast(
+            removedCount > 0
+                ? `已移除 ${removedCount} 个当前筛选外的选择`
+                : '当前筛选没有隐藏选择',
+            removedCount > 0 ? 'info' : 'warning',
+        );
+    };
 
     const handleApplyUpdates = () => {
         try {
@@ -712,7 +1009,7 @@ const SlidesAnalysis: React.FC = () => {
             <div className="summary-section">
                 <h3>📊 分析报告</h3>
                 <div id="summary-info">
-                    <p>检测到 {analysisResult.summary.totalProjects} 个项目，{analysisResult.summary.projectsNeedingUpdate} 个需要更新</p>
+                    <p>检测到 {analysisResult.summary.totalProjects} 个项目，{analysisResult.summary.projectsNeedingUpdate} 个有字段建议</p>
                     {analysisResult.updateSuggestions.length > 0 && (
                         <p className="selection-summary">已选择 {selectedUpdateCount} 个字段</p>
                     )}
@@ -721,6 +1018,9 @@ const SlidesAnalysis: React.FC = () => {
                             <span className="review-chip">可更新字段 {availableUpdateFieldCount}</span>
                             <span className="review-chip review-chip-safe">高可信默认 {defaultSelectedFieldCount}</span>
                             <span className="review-chip review-chip-attention">需复核项目 {reviewRequiredCount}</span>
+                            {fieldReviewRequiredCount > 0 && (
+                                <span className="review-chip review-chip-attention">需复核字段 {fieldReviewRequiredCount}</span>
+                            )}
                             {riskSpotlightCount > 0 && (
                                 <span className="review-chip review-chip-risk">风险项目 {riskSpotlightCount}</span>
                             )}
@@ -772,6 +1072,81 @@ const SlidesAnalysis: React.FC = () => {
                     )}
                 </div>
             </div>
+
+            {fieldReviewQueueItems.length > 0 && (
+                <div className="field-review-queue-section">
+                    <div className="section-header-row">
+                        <div>
+                            <h3>字段复核队列</h3>
+                            <p className="field-review-queue-summary">
+                                需复核 {reviewFieldQueueCount} 个字段，无法写回 {blockedFieldQueueCount} 个字段。
+                            </p>
+                        </div>
+                        <div className="field-review-queue-actions">
+                            {reviewFieldQueueCount > 0 && (
+                                <button
+                                    id="queue-filter-review"
+                                    type="button"
+                                    className="btn-quiet"
+                                    onClick={() => setReviewFilter('review')}
+                                >
+                                    只看需复核
+                                </button>
+                            )}
+                            {blockedFieldQueueCount > 0 && (
+                                <button
+                                    id="queue-filter-blocked"
+                                    type="button"
+                                    className="btn-quiet"
+                                    onClick={() => setReviewFilter('blocked')}
+                                >
+                                    只看无法写回
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    <div className="field-review-queue-list">
+                        {fieldReviewQueuePreview.map(({ suggestion, projectIndex, field, kind, reason }) => {
+                            const inputId = `review-queue-toggle-${projectIndex}-${field}`;
+
+                            return (
+                                <div
+                                    key={`${projectIndex}-${field}-${kind}`}
+                                    className={`field-review-queue-item field-review-queue-item-${kind}`}
+                                >
+                                    {kind === 'review' ? (
+                                        <input
+                                            id={inputId}
+                                            type="checkbox"
+                                            className="field-review-queue-checkbox"
+                                            checked={isFieldSelected(projectIndex, field)}
+                                            aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS[field]} 复核选择`}
+                                            onChange={(event) => handleFieldSelection(projectIndex, field, event.target.checked)}
+                                            disabled={isApplying}
+                                        />
+                                    ) : (
+                                        <span className="field-review-queue-lock">无法写回</span>
+                                    )}
+                                    <div className="field-review-queue-body">
+                                        <label
+                                            htmlFor={kind === 'review' ? inputId : undefined}
+                                            className="field-review-queue-title"
+                                        >
+                                            {suggestion.projectId} · {suggestion.projectName} · {UPDATE_FIELD_SHORT_LABELS[field]}
+                                        </label>
+                                        <div className="field-review-queue-reason">{reason}</div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {fieldReviewQueueItems.length > fieldReviewQueuePreview.length && (
+                        <div className="field-review-queue-more">
+                            还有 {fieldReviewQueueItems.length - fieldReviewQueuePreview.length} 个字段可在筛选视图中处理。
+                        </div>
+                    )}
+                </div>
+            )}
 
             <div className="statistics-section">
                 <h3>📈 项目统计</h3>
@@ -830,7 +1205,7 @@ const SlidesAnalysis: React.FC = () => {
             )}
 
             <div className="suggestions-section">
-                <h3>💡 更新建议</h3>
+                <h3>💡 更新建议与风险关注</h3>
                 {analysisResult.updateSuggestions && analysisResult.updateSuggestions.length > 0 && (
                     <p className="filter-summary">
                         当前视图 {filteredSuggestionEntries.length} / {analysisResult.updateSuggestions.length} 个建议
@@ -849,6 +1224,7 @@ const SlidesAnalysis: React.FC = () => {
                             const riskItems = getRiskEvidenceItems(suggestion);
                             const needsReview = isSuggestionReviewRequired(suggestion);
                             const isDefaultSelectable = shouldDefaultSelectSuggestion(suggestion);
+                            const isRiskInsightOnly = isRiskInsightOnlySuggestion(suggestion);
                             const newSuggestedComments = getNewSuggestedComments(suggestion);
                             const allAvailableSelected = availableFields.length > 0 &&
                                 availableFields.every((field) => isFieldSelected(index, field));
@@ -864,9 +1240,7 @@ const SlidesAnalysis: React.FC = () => {
                                         </div>
                                         {needsReview && (
                                             <div className="project-review-note">
-                                                {(suggestion.confidence || 0) < HIGH_CONFIDENCE_THRESHOLD
-                                                    ? '低可信建议未自动选中，来源或理由不足时保持不写回。'
-                                                    : '缺少可见来源或理由，需人工确认后手动勾选。'}
+                                                {getProjectReviewNote(suggestion)}
                                             </div>
                                         )}
                                         {riskItems.length > 0 && (
@@ -894,6 +1268,11 @@ const SlidesAnalysis: React.FC = () => {
                                         {unavailableFields.length > 0 && (
                                             <div className="project-blocked-note">
                                                 无法写回 {unavailableFields.join('、')}：未识别到可写表格列，请先在 Slides 表格中补齐对应列或手动更新。
+                                            </div>
+                                        )}
+                                        {isRiskInsightOnly && (
+                                            <div className="project-insight-note">
+                                                此项目仅作为风险关注展示，目前没有可写回字段。
                                             </div>
                                         )}
                                         {hasDuplicateOnlySuggestedComments(suggestion) && (
@@ -1023,12 +1402,12 @@ const SlidesAnalysis: React.FC = () => {
                                                     id={`select-all-${index}`} 
                                                     className="select-all-checkbox"
                                                     checked={allAvailableSelected}
-                                                    disabled={availableFields.length === 0}
+                                                    disabled={isApplying || availableFields.length === 0}
                                                     onChange={(e) => handleSelectAll(index, e.target.checked)}
                                                 />
                                                 <label
                                                     htmlFor={`select-all-${index}`}
-                                                    className={availableFields.length === 0 ? 'disabled-label' : undefined}
+                                                    className={isApplying || availableFields.length === 0 ? 'disabled-label' : undefined}
                                                 >
                                                     全选
                                                 </label>
@@ -1044,6 +1423,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 id={`update-status-${index}`} 
                                                 className="update-item-checkbox"
                                                 checked={isFieldSelected(index, 'status')}
+                                                disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'status', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
@@ -1063,6 +1443,9 @@ const SlidesAnalysis: React.FC = () => {
                                                         📝 理由: {suggestion.suggestedStatusReason}
                                                     </div>
                                                 )}
+                                                <div className={`field-source-note ${shouldDefaultSelectField(suggestion, 'status') ? 'field-source-note-ready' : 'field-source-note-review'}`}>
+                                                    {getFieldReviewHint(suggestion, 'status')}
+                                                </div>
                                             </div>
                                         </div>
                                     )}
@@ -1074,6 +1457,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 id={`update-comments-${index}`} 
                                                 className="update-item-checkbox"
                                                 checked={isFieldSelected(index, 'comments')}
+                                                disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'comments', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
@@ -1099,6 +1483,9 @@ const SlidesAnalysis: React.FC = () => {
                                                         📝 理由: {suggestion.suggestedCommentsReason}
                                                     </div>
                                                 )}
+                                                <div className={`field-source-note ${shouldDefaultSelectField(suggestion, 'comments') ? 'field-source-note-ready' : 'field-source-note-review'}`}>
+                                                    {getFieldReviewHint(suggestion, 'comments')}
+                                                </div>
                                             </div>
                                         </div>
                                     )}
@@ -1110,6 +1497,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 id={`update-owner-${index}`} 
                                                 className="update-item-checkbox"
                                                 checked={isFieldSelected(index, 'owner')}
+                                                disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'owner', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
@@ -1129,6 +1517,9 @@ const SlidesAnalysis: React.FC = () => {
                                                         📝 理由: {suggestion.suggestedOwnerReason}
                                                     </div>
                                                 )}
+                                                <div className={`field-source-note ${shouldDefaultSelectField(suggestion, 'owner') ? 'field-source-note-ready' : 'field-source-note-review'}`}>
+                                                    {getFieldReviewHint(suggestion, 'owner')}
+                                                </div>
                                             </div>
                                         </div>
                                     )}
@@ -1140,6 +1531,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 id={`update-track-${index}`} 
                                                 className="update-item-checkbox"
                                                 checked={isFieldSelected(index, 'track')}
+                                                disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'track', e.target.checked)}
                                                 style={{ marginRight: '8px' }}
                                             />
@@ -1148,6 +1540,9 @@ const SlidesAnalysis: React.FC = () => {
                                                 <span style={{ color: '#0066cc', fontWeight: 'bold' }}>{suggestion.suggestedTrack}</span></div>
                                                 <div className="update-tag">
                                                     🔄 更新: Track列{suggestion.currentTrack ? `从"${suggestion.currentTrack}"更新为` : '设置为'}"{suggestion.suggestedTrack}"
+                                                </div>
+                                                <div className={`field-source-note ${shouldDefaultSelectField(suggestion, 'track') ? 'field-source-note-ready' : 'field-source-note-review'}`}>
+                                                    {getFieldReviewHint(suggestion, 'track')}
                                                 </div>
                                             </div>
                                         </div>
@@ -1161,7 +1556,7 @@ const SlidesAnalysis: React.FC = () => {
                         )
                     ) : (
                         <div className="center" style={{ padding: '20px', background: '#f9f9f9', borderRadius: '8px' }}>
-                            <p>所有项目信息均已是最新，无需更新。</p>
+                            <p>没有需要写回的字段建议或风险关注。</p>
                         </div>
                     )}
                 </div>
@@ -1170,14 +1565,97 @@ const SlidesAnalysis: React.FC = () => {
             <div className="apply-section">
                 <div id="apply-button-container">
                     {analysisResult.updateSuggestions && analysisResult.updateSuggestions.length > 0 && (
-                        <button 
-                            id="apply-updates-button" 
-                            className="btn-primary"
-                            onClick={handleApplyUpdates}
-                            disabled={isApplying || selectedUpdateCount === 0}
-                        >
-                            {isApplying ? '正在更新...' : `应用 ${selectedUpdateCount} 个字段到 Slides`}
-                        </button>
+                        <>
+                            {selectedUpdateCount > 0 && (
+                                <div className="apply-selection-context">
+                                    {reviewFilter === 'all'
+                                        ? `全部已选 ${selectedUpdateCount} 个字段。`
+                                        : `当前视图已选 ${visibleSelectedUpdateCount} 个字段，全部已选 ${selectedUpdateCount} 个字段。`}
+                                </div>
+                            )}
+                            {selectedUpdateCount > 0 && (
+                                <div
+                                    className={`selected-risk-summary ${selectedReviewFieldCount > 0 ? 'selected-risk-summary-attention' : 'selected-risk-summary-ready'}`}
+                                    role="status"
+                                >
+                                    已选字段: {selectedSourcedFieldCount} 个来源充分
+                                    {selectedReviewFieldCount > 0
+                                        ? `，${selectedReviewFieldCount} 个需人工复核`
+                                        : '，无需额外复核'}
+                                </div>
+                            )}
+                            {selectedFieldPreviewItems.length > 0 && (
+                                <div
+                                    className="selected-writeback-preview"
+                                    role="status"
+                                    aria-label="已选写回字段预览"
+                                >
+                                    <div className="selected-writeback-preview-title">即将写回</div>
+                                    <ul className="selected-writeback-preview-list">
+                                        {selectedFieldPreviewVisibleItems.map((item) => (
+                                            <li
+                                                key={`${item.projectIndex}-${item.field}`}
+                                                className="selected-writeback-preview-item"
+                                            >
+                                                <span className="selected-writeback-preview-main">
+                                                    <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                                    <span>{item.previewText}</span>
+                                                </span>
+                                                <span className={`selected-writeback-preview-badge selected-writeback-preview-badge-${item.reviewKind}`}>
+                                                    {item.reviewLabel}
+                                                </span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    {selectedFieldPreviewOverflowCount > 0 && (
+                                        <div className="selected-writeback-preview-more">
+                                            还有 {selectedFieldPreviewOverflowCount} 个已选字段会一并写回。
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {hiddenSelectedUpdateCount > 0 && (
+                                <div className="hidden-selection-warning" role="status">
+                                    <span>
+                                        当前筛选隐藏了 {hiddenSelectedUpdateCount} 个已选字段，应用时会一并写回。
+                                    </span>
+                                    <span className="hidden-selection-actions">
+                                        <button
+                                            id="show-selected-fields"
+                                            type="button"
+                                            className="hidden-selection-button"
+                                            onClick={handleShowSelectedFields}
+                                            disabled={isApplying}
+                                        >
+                                            查看已选
+                                        </button>
+                                        <button
+                                            id="keep-visible-selected-fields"
+                                            type="button"
+                                            className="hidden-selection-button"
+                                            onClick={handleKeepCurrentViewSelectedFields}
+                                            disabled={isApplying}
+                                        >
+                                            仅保留当前视图
+                                        </button>
+                                    </span>
+                                </div>
+                            )}
+                            {availableUpdateFieldCount > 0 ? (
+                                <button
+                                    id="apply-updates-button"
+                                    className="btn-primary"
+                                    onClick={handleApplyUpdates}
+                                    disabled={isApplying || selectedUpdateCount === 0}
+                                >
+                                    {isApplying ? '正在更新...' : `应用 ${selectedUpdateCount} 个字段到 Slides`}
+                                </button>
+                            ) : (
+                                <div className="apply-empty-note">
+                                    当前没有可写回字段；请先处理上方风险关注或返回 Slides 手动调整。
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             </div>
@@ -1244,7 +1722,7 @@ const styles = `
         color: #856404;
     }
 
-    .summary-section, .statistics-section, .findings-section, .suggestions-section {
+    .summary-section, .field-review-queue-section, .statistics-section, .findings-section, .suggestions-section {
         margin-bottom: 30px;
         padding: 20px;
         border: 1px solid #e0e0e0;
@@ -1440,6 +1918,88 @@ const styles = `
         margin-top: 10px;
     }
 
+    .field-review-queue-section {
+        background: #f8fbff;
+        border-color: #cfe1ff;
+    }
+
+    .field-review-queue-summary {
+        color: #42526e;
+        font-size: 13px;
+        margin: 6px 0 0;
+    }
+
+    .field-review-queue-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .field-review-queue-list {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+
+    .field-review-queue-item {
+        align-items: flex-start;
+        background: #fff;
+        border: 1px solid #dfe1e6;
+        border-left: 4px solid #ffab00;
+        border-radius: 6px;
+        display: flex;
+        gap: 10px;
+        min-height: 70px;
+        padding: 10px 12px;
+    }
+
+    .field-review-queue-item-blocked {
+        border-left-color: #de350b;
+    }
+
+    .field-review-queue-checkbox {
+        flex: 0 0 auto;
+        margin-top: 3px;
+    }
+
+    .field-review-queue-lock {
+        background: #ffebe6;
+        border-radius: 4px;
+        color: #bf2600;
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 5px 6px;
+        white-space: nowrap;
+    }
+
+    .field-review-queue-body {
+        min-width: 0;
+    }
+
+    .field-review-queue-title {
+        color: #172b4d;
+        display: block;
+        font-size: 13px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+    }
+
+    .field-review-queue-reason {
+        color: #42526e;
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: 4px;
+        overflow-wrap: anywhere;
+    }
+
+    .field-review-queue-more {
+        color: #6b778c;
+        font-size: 12px;
+        margin-top: 10px;
+    }
+
     .project-risk-evidence-panel {
         background: #fff7ed;
         border: 1px solid #fed7aa;
@@ -1532,6 +2092,16 @@ const styles = `
         padding: 6px 8px;
     }
 
+    .project-insight-note {
+        background: #eae6ff;
+        border-left: 3px solid #6554c0;
+        color: #403294;
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 8px;
+        padding: 6px 8px;
+    }
+
     .project-noop-note {
         background: #f4f5f7;
         border-left: 3px solid #8993a4;
@@ -1595,6 +2165,24 @@ const styles = `
         font-style: italic;
     }
 
+    .field-source-note {
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: 6px;
+        padding: 5px 7px;
+    }
+
+    .field-source-note-ready {
+        background: #e3fcef;
+        color: #006644;
+    }
+
+    .field-source-note-review {
+        background: #fffbdd;
+        color: #5f4b00;
+    }
+
     .btn-primary {
         background-color: #007bff;
         color: white;
@@ -1640,6 +2228,154 @@ const styles = `
         padding: 12px;
         background: rgba(255, 255, 255, 0.96);
         border-top: 1px solid #e0e0e0;
+    }
+
+    .apply-selection-context {
+        color: #42526e;
+        font-size: 12px;
+        margin-bottom: 6px;
+    }
+
+    .selected-risk-summary {
+        border-radius: 6px;
+        display: inline-block;
+        font-size: 12px;
+        line-height: 1.4;
+        margin-bottom: 8px;
+        max-width: 760px;
+        padding: 7px 10px;
+    }
+
+    .selected-risk-summary-ready {
+        background: #e3fcef;
+        border: 1px solid #abf5d1;
+        color: #006644;
+    }
+
+    .selected-risk-summary-attention {
+        background: #fff0b3;
+        border: 1px solid #ffe380;
+        color: #5f4b00;
+    }
+
+    .selected-writeback-preview {
+        background: #f7f9fc;
+        border: 1px solid #dfe1e6;
+        border-radius: 6px;
+        color: #253858;
+        display: block;
+        font-size: 12px;
+        line-height: 1.4;
+        margin: 0 auto 8px;
+        max-width: 760px;
+        padding: 8px 10px;
+        text-align: left;
+    }
+
+    .selected-writeback-preview-title {
+        color: #172b4d;
+        font-weight: 700;
+        margin-bottom: 5px;
+    }
+
+    .selected-writeback-preview-list {
+        display: grid;
+        gap: 5px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .selected-writeback-preview-item {
+        align-items: flex-start;
+        display: grid;
+        gap: 8px;
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .selected-writeback-preview-main {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .selected-writeback-preview-badge {
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 4px 6px;
+        white-space: nowrap;
+    }
+
+    .selected-writeback-preview-badge-ready {
+        background: #e3fcef;
+        color: #006644;
+    }
+
+    .selected-writeback-preview-badge-review {
+        background: #fff0b3;
+        color: #7a5d00;
+    }
+
+    .selected-writeback-preview-more {
+        color: #6b778c;
+        margin-top: 5px;
+    }
+
+    .hidden-selection-warning {
+        align-items: center;
+        background: #fffbdd;
+        border: 1px solid #ffe380;
+        border-radius: 6px;
+        color: #5f4b00;
+        display: inline-flex;
+        flex-wrap: wrap;
+        font-size: 12px;
+        gap: 8px;
+        justify-content: center;
+        line-height: 1.4;
+        margin-bottom: 8px;
+        max-width: 760px;
+        padding: 7px 10px;
+    }
+
+    .hidden-selection-actions {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .hidden-selection-button {
+        background: #fff;
+        border: 1px solid #dfe1e6;
+        border-radius: 5px;
+        color: #253858;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        min-height: 28px;
+        padding: 4px 8px;
+    }
+
+    .hidden-selection-button:hover {
+        background: #f4f5f7;
+    }
+
+    .hidden-selection-button:disabled {
+        color: #a5adba;
+        cursor: not-allowed;
+    }
+
+    .apply-empty-note {
+        background: #f4f5f7;
+        border: 1px solid #dfe1e6;
+        border-radius: 6px;
+        color: #42526e;
+        font-size: 13px;
+        line-height: 1.5;
+        padding: 10px 12px;
     }
 
     .center {

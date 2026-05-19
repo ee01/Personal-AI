@@ -149,6 +149,19 @@ try {
     timeout: 15000,
   });
 
+  await page.locator('.decision-brief.critical', {
+    hasText: '先处理阻塞',
+  }).locator('.decision-brief-action', {
+    hasText: '打开任务',
+  }).click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ state: 'detached', timeout: 15000 });
+
   await page.locator('.overview-metrics span', { hasText: '1 计划陈旧' }).waitFor({
     timeout: 15000,
   });
@@ -175,6 +188,61 @@ try {
   }).locator('.review-queue-action', {
     hasText: '预览草稿',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-gap-queue', {
+    hasText: '2 个活动任务缺少 ETA 或来源',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-gap-breakdown', {
+    hasText: 'ETA+来源 1',
+  }).locator('.missing-source', {
+    hasText: '来源 1',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-gap-item.missing-both', {
+    hasText: 'Clarify launch readiness',
+  }).locator('.evidence-gap-next', {
+    hasText: '补 ETA 后关联 Jira 或平台状态',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-gap-item.missing-both', {
+    hasText: 'Clarify launch readiness',
+  }).click();
+  await page.locator('.zoom-title', {
+    hasText: 'Clarify launch readiness',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-repair-section', {
+    hasText: '证据修复',
+  }).locator('.evidence-repair-card.missing', {
+    hasText: 'ETA',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-repair-section').locator('.evidence-repair-card.missing', {
+    hasText: '来源',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-repair-next', {
+    hasText: '先补 ETA，再关联 Jira 或填写平台来源',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-repair-card.missing', {
+    hasText: 'ETA',
+  }).locator('.evidence-repair-card-action', {
+    hasText: '补 ETA',
+  }).click();
+  await page.waitForFunction(() => document.activeElement?.getAttribute('data-evidence-field') === 'eta');
+  await page.locator('.evidence-repair-card.missing', {
+    hasText: '来源',
+  }).locator('.evidence-repair-card-action', {
+    hasText: '补来源',
+  }).click();
+  await page.waitForFunction(() => Boolean(document.activeElement?.closest('[data-evidence-field="platform-source"]')));
+  await page.locator('.platform-item', {
+    hasText: 'QA',
+  }).locator('select[aria-label="QA 平台状态"]').selectOption('blocked');
+  await page.locator('.evidence-repair-section').locator('.evidence-repair-card.complete', {
+    hasText: '来源',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-repair-next', {
+    hasText: '补上可复核 ETA',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.zoom-title', {
+    hasText: 'Clarify launch readiness',
+  }).waitFor({ state: 'detached', timeout: 15000 });
 
   const riskCard = page.locator('.project-card', {
     hasText: 'Risk Demo Project',
@@ -232,10 +300,10 @@ try {
     hasText: '证据不足',
   }).waitFor({ timeout: 15000 });
   await evidenceGapCard.locator('.data-quality-strip.poor', {
-    hasText: '证据覆盖 0%',
+    hasText: '证据覆盖 50%',
   }).waitFor({ timeout: 15000 });
   await evidenceGapCard.locator('.view-reason-strip.warning', {
-    hasText: '证据覆盖 0%',
+    hasText: '证据覆盖 50%',
   }).waitFor({ timeout: 15000 });
 
   await staleCard.locator('button', { hasText: '预览状态草稿' }).click();
@@ -248,6 +316,147 @@ try {
   await page.locator('.status-evidence-label.review', {
     hasText: '复核过期',
   }).waitFor({ timeout: 15000 });
+
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.status-draft-modal').waitFor({ state: 'detached', timeout: 15000 });
+
+  await page.evaluate(async () => {
+    async function send(request) {
+      const response = await chrome.runtime.sendMessage(request);
+      if (!response?.success) {
+        throw new Error(response?.error || `Request failed: ${request.type}`);
+      }
+      return response;
+    }
+
+    async function createProject(project) {
+      const response = await send({
+        type: 'ADD_PROJECT',
+        name: project.name,
+        description: project.description || '',
+        milestones: project.milestones,
+        platformConfig: project.platformConfig || ['sdk', 'qa'],
+      });
+      const projectId = response.project.id;
+
+      if (project.lastStatusReviewAt !== undefined) {
+        await send({
+          type: 'UPDATE_PROJECT_ITEM',
+          projectId,
+          itemType: 'project',
+          itemId: projectId,
+          changes: { lastStatusReviewAt: project.lastStatusReviewAt },
+        });
+      }
+
+      for (const task of project.tasks || []) {
+        await send({
+          type: 'ADD_PROJECT_ITEM',
+          projectId,
+          itemType: 'task',
+          itemData: task,
+        });
+      }
+    }
+
+    await createProject({
+      name: 'Queue Depth Audit',
+      description: 'Project with several hidden evidence gaps',
+      milestones: [{ id: 'ga', label: 'GA', date: '2099-08-01' }],
+      tasks: [
+        {
+          id: 'gap-a',
+          type: 'task',
+          title: 'Add ETA to rollout notes',
+          status: 'progress',
+        },
+        {
+          id: 'gap-b',
+          type: 'task',
+          title: 'Link Jira for dependency review',
+          status: 'testing',
+          eta: '2099-07-15',
+        },
+        {
+          id: 'gap-c',
+          type: 'dep',
+          title: 'Confirm owner for release gate',
+          status: 'blocked',
+        },
+        {
+          id: 'gap-d',
+          type: 'design',
+          title: 'Attach design review source',
+          status: 'review',
+          eta: '2099-07-20',
+        },
+      ],
+      platformConfig: ['sdk', 'qa'],
+    });
+
+    await createProject({
+      name: 'Review Overdue One',
+      lastStatusReviewAt: '2026-04-02T08:00:00+08:00',
+      milestones: [{ id: 'ga', label: 'GA', date: '2099-09-01' }],
+      tasks: [{ id: 'active', type: 'task', title: 'Track review one', status: 'progress', eta: '2099-08-01', jira: [{ key: 'REV-1', title: 'Track review one' }] }],
+    });
+
+    await createProject({
+      name: 'Review Overdue Two',
+      lastStatusReviewAt: '2026-04-03T08:00:00+08:00',
+      milestones: [{ id: 'ga', label: 'GA', date: '2099-09-02' }],
+      tasks: [{ id: 'active', type: 'task', title: 'Track review two', status: 'progress', eta: '2099-08-02', jira: [{ key: 'REV-2', title: 'Track review two' }] }],
+    });
+
+    await createProject({
+      name: 'Review Unreviewed',
+      lastStatusReviewAt: null,
+      milestones: [{ id: 'ga', label: 'GA', date: '2099-09-03' }],
+      tasks: [{ id: 'active', type: 'task', title: 'Track unreviewed', status: 'progress', eta: '2099-08-03', jira: [{ key: 'REV-3', title: 'Track unreviewed' }] }],
+    });
+
+    await createProject({
+      name: 'Review Due One',
+      lastStatusReviewAt: '2026-04-20T08:00:00+08:00',
+      milestones: [{ id: 'ga', label: 'GA', date: '2099-09-04' }],
+      tasks: [{ id: 'active', type: 'task', title: 'Track due review', status: 'progress', eta: '2099-08-04', jira: [{ key: 'REV-4', title: 'Track due review' }] }],
+    });
+  });
+
+  await page.reload({ waitUntil: 'load', timeout: 15000 });
+  await page.locator('h1', { hasText: '项目进度仪表盘' }).waitFor({
+    timeout: 15000,
+  });
+
+  await page.locator('.evidence-gap-header', {
+    hasText: '6 个活动任务缺少 ETA 或来源',
+  }).locator('.queue-toggle', {
+    hasText: '展开全部 6 项',
+  }).click();
+  await page.locator('.evidence-gap-breakdown', {
+    hasText: 'ETA+来源 2',
+  }).locator('.missing-eta', {
+    hasText: 'ETA 1',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-gap-breakdown .missing-source', {
+    hasText: '来源 3',
+  }).waitFor({ timeout: 15000 });
+  await page.waitForFunction(() => document.querySelectorAll('.evidence-gap-item').length === 6);
+  await page.locator('.evidence-gap-header .queue-toggle', {
+    hasText: '收起证据队列',
+  }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.evidence-gap-item').length === 4);
+
+  await page.locator('.review-queue-header', {
+    hasText: '5 个项目待复核',
+  }).locator('.queue-toggle', {
+    hasText: '展开全部 5 项目',
+  }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.review-queue-item').length === 5);
+  await page.locator('.review-queue-header .queue-toggle', {
+    hasText: '收起复核队列',
+  }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.review-queue-item').length === 3);
 
   assertNoPageErrors();
   await context.close();

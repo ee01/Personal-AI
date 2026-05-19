@@ -5,6 +5,7 @@ import {
   getTimelineRangeSeconds,
   mapRecallItemsToTimelineEvents,
   normalizeTimelineScope,
+  parseTimelineFocus,
 } from '../src/modals/timelinePresentation.js';
 
 assert.equal(normalizeTimelineScope('work'), 'work');
@@ -12,6 +13,26 @@ assert.equal(normalizeTimelineScope('personal'), 'personal');
 assert.equal(normalizeTimelineScope('both'), 'both');
 assert.equal(normalizeTimelineScope('all'), 'all');
 assert.equal(normalizeTimelineScope('invalid'), 'all');
+
+assert.deepEqual(parseTimelineFocus('message:msg-1'), {
+  id: 'msg-1',
+  type: 'message',
+  isLegacyTypedFocus: true,
+});
+assert.deepEqual(parseTimelineFocus('chunk:42'), {
+  id: '42',
+  type: 'chunk',
+  isLegacyTypedFocus: true,
+});
+assert.deepEqual(parseTimelineFocus('msg-2', 'message'), {
+  id: 'msg-2',
+  type: 'message',
+  isLegacyTypedFocus: false,
+});
+assert.deepEqual(parseTimelineFocus('msg-3'), {
+  id: 'msg-3',
+  isLegacyTypedFocus: false,
+});
 
 const fixedNoon = new Date(2026, 4, 9, 12, 34, 0).getTime();
 const todayRange = getTimelineRangeSeconds(fixedNoon, 'today');

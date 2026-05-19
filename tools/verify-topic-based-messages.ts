@@ -17,6 +17,7 @@ import {
   getTopicConversationUnreadCount,
   getTopicDetailRecentData,
   getTopicDetailUnreadCount,
+  isTopicMessageExplicitlyUnread,
   isTopicConversationUnread,
   sortTopicConversationsForTriage,
   topicConversationHasContextMatch,
@@ -31,6 +32,7 @@ import {
 import {
   getTopicUnreadPreviewCount,
   getTopicUnreadPreviewMeta,
+  getTopicUnreadConversationCount,
   getTopicUnreadRemainingCount,
   getTopicUnreadTotalCount,
   getUnreadDiscussionKey,
@@ -722,13 +724,24 @@ function verifyTopicConversationReadTriageIncludesContextMessages() {
       summary: 'Parent unread',
       contextMessages: [{ id: 'ctx-parent', isRead: true }],
     },
+    {
+      id: 'conv-unknown',
+      summary: 'Legacy conversation without read fields',
+      contextMessages: [{ id: 'ctx-unknown', content: 'Legacy context' }],
+    },
   ];
 
   assert.equal(isTopicConversationUnread(conversations[0]), false);
   assert.equal(isTopicConversationUnread(conversations[1]), true);
   assert.equal(isTopicConversationUnread(conversations[2]), true);
+  assert.equal(isTopicConversationUnread(conversations[3]), false);
   assert.equal(getTopicConversationUnreadMessageCount(conversations[1]), 1);
   assert.equal(getTopicConversationUnreadMessageCount(conversations[2]), 1);
+  assert.equal(getTopicConversationUnreadMessageCount(conversations[3]), 0);
+  assert.equal(
+    isTopicMessageExplicitlyUnread(conversations[3].contextMessages[0]),
+    false,
+  );
   assert.equal(getTopicConversationUnreadCount(conversations), 2);
   assert.deepEqual(
     filterTopicConversationsByReadState(conversations, 'unread').map(
@@ -740,14 +753,54 @@ function verifyTopicConversationReadTriageIncludesContextMessages() {
     filterTopicConversationsByReadState(conversations, 'read').map(
       (conversation) => conversation.id,
     ),
-    ['conv-read'],
+    ['conv-read', 'conv-unknown'],
   );
   assert.deepEqual(
     sortTopicConversationsForTriage(conversations).map(
       (conversation) => conversation.id,
     ),
-    ['conv-context-unread', 'conv-parent-unread', 'conv-read'],
+    ['conv-context-unread', 'conv-parent-unread', 'conv-read', 'conv-unknown'],
   );
+}
+
+async function verifyUnknownConversationReadStateStaysNeutral() {
+  const store = createStore();
+  const topic = {
+    id: 'topic-legacy-neutral',
+    name: 'Legacy Neutral',
+    type: 'Topic',
+    recentDataDetails: {
+      conversations: [
+        {
+          id: 'legacy-neutral-conv',
+          summary: 'No explicit read state should stay neutral',
+          contextMessages: [{ id: 'legacy-neutral-context', content: 'Context' }],
+        },
+      ],
+    },
+  };
+
+  store.entities = [topic] as any;
+  store.topicDetailData = topic as any;
+  store.updateTopicUnreadCount();
+
+  assert.equal(getTopicDetailUnreadCount(topic), 0);
+  assert.equal(store.getUnreadTopics().length, 0);
+
+  const didMarkRead = await store.markConversationAsRead(
+    'topic-legacy-neutral',
+    'legacy-neutral-conv',
+  );
+
+  assert.equal(didMarkRead, false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      topic.recentDataDetails.conversations[0],
+      'isRead',
+    ),
+    false,
+  );
+  assert.equal(cacheMessages.length, 0);
 }
 
 function verifyTopicDeferPresetOptions() {
@@ -921,6 +974,15 @@ function verifyTopicTriagePrioritySort() {
     getTopicTriagePriority(topics[3], now).reasons.join('、'),
     /未读较多/,
   );
+
+  const driftedTopic = {
+    id: 'preview-drift',
+    readStatus: { unreadCount: 0, lastUpdateTime: now - 60_000 },
+    unreadDiscussions: [{ messageId: 'drift-msg', text: 'Preview says unread' }],
+    importance: 0.4,
+    statistic: { conversations: 1 },
+  };
+  assert.equal(getTopicTriagePriority(driftedTopic, now).unreadCount, 1);
 }
 
 function verifyTopicUnreadPreviewHelpers() {
@@ -956,6 +1018,64 @@ function verifyTopicUnreadPreviewHelpers() {
   );
   assert.equal(getUnreadDiscussionText({}), '未读讨论');
   assert.equal(getTopicUnreadPreviewMeta({ unreadDiscussions: [] }), '');
+  assert.equal(
+    getTopicUnreadTotalCount({
+      readStatus: { unreadCount: 0 },
+      unreadDiscussions: [{ id: 'preview-only' }],
+    }),
+    1,
+  );
+
+  const legacyConversationTopic = {
+    recentDataDetails: {
+      conversations: [
+        { id: 'read-conv', isRead: true },
+        { id: 'unread-parent', isRead: false },
+        {
+          id: 'unread-context',
+          isRead: true,
+          contextMessages: [{ id: 'ctx-unread', isRead: false }],
+        },
+        { id: 'unknown-read-state' },
+      ],
+    },
+  };
+  assert.equal(getTopicUnreadConversationCount(legacyConversationTopic), 2);
+  assert.equal(getTopicUnreadTotalCount(legacyConversationTopic), 2);
+  assert.equal(
+    getTopicUnreadTotalCount({
+      readStatus: { unreadCount: 0 },
+      recentDataDetails: legacyConversationTopic.recentDataDetails,
+    }),
+    2,
+  );
+}
+
+function verifyTopicUnreadSignalsSurviveReadStatusDrift() {
+  const store = createStore();
+  const topic = {
+    id: 'topic-preview-drift',
+    name: 'Preview Drift',
+    type: 'Topic',
+    readStatus: {
+      isRead: true,
+      unreadCount: 0,
+      lastReadTime: 100,
+      lastUpdateTime: 200,
+    },
+    unreadDiscussions: [
+      { messageId: 'preview-drift-msg', text: 'Backend preview is newer' },
+    ],
+  };
+
+  store.entities = [topic] as any;
+  store.updateTopicUnreadCount();
+
+  assert.equal(store.getUnreadTopics().length, 1);
+  assert.equal(
+    store.entityTypes.find((item) => item.type === 'Topic')?.count,
+    1,
+  );
 }
 
 function verifyTopicMuteUiIsReachable() {
@@ -999,12 +1119,19 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   );
   assert.match(source, /getConversationContextLabel/);
   assert.match(source, /仅未读/);
+  assert.match(source, /normalizeReadFilterValue/);
+  assert.match(source, /route\.query\.readFilter/);
+  assert.match(source, /convReadFilter\.value = 'all'/);
   assert.match(source, /isConversationUnread\(conv\)/);
   assert.match(source, /isContextMessageUnread\(contextMsg\)/);
+  assert.match(source, /isTopicMessageExplicitlyUnread\(contextMessage\)/);
   assert.match(listSource, /优先处理排序/);
   assert.match(listSource, /sortTopicsForTriage/);
   assert.match(listSource, /topic-priority-pill/);
   assert.match(listSource, /getTopicDisplayTime/);
+  assert.match(listSource, /navigateToTopicUnread/);
+  assert.match(listSource, /readFilter: 'unread'/);
+  assert.match(listSource, /getTopicUnreadTotalCount\(entity\)/);
 }
 
 async function main() {
@@ -1029,6 +1156,7 @@ async function main() {
   verifyTopicDetailHighlightEscapesHtml();
   verifyTopicConversationSearchCoversContextAndSource();
   verifyTopicConversationReadTriageIncludesContextMessages();
+  await verifyUnknownConversationReadStateStaysNeutral();
   verifyTopicDeferPresetOptions();
   verifyTopicMutePresetOptions();
   verifyTopicDetailHasNoDeadMutationControls();
@@ -1037,6 +1165,7 @@ async function main() {
   verifyTopicDetailTimeFallbacks();
   verifyTopicTriagePrioritySort();
   verifyTopicUnreadPreviewHelpers();
+  verifyTopicUnreadSignalsSurviveReadStatusDrift();
   verifyTopicMuteUiIsReachable();
   verifyTopicDetailUnreadTriageUiIsReachable();
 

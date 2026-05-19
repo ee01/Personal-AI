@@ -1,17 +1,25 @@
 import assert from 'node:assert/strict';
 
 import {
+  CONTEXT_SITE_ALLOW_STORAGE_KEY,
+  CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
+  CONTEXT_PAGE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_MUTE_TTL_MS,
   formatContextSiteMuteRemaining,
   getContextSiteMuteExpiresAt,
   hasSensitiveUrlSignal,
+  isContextHostCoveredBySiteRecord,
+  isContextPageUrlBlockedByPrefix,
   isDisplayableContextRecallMatch,
   isLowValueContextHost,
   isSensitiveControlDescriptor,
   isContextSiteMuteActive,
+  normalizeContextPageBlockPrefix,
   normalizeContextSiteMuteHost,
   normalizeContextPageUrl,
+  pruneContextPageBlockRecord,
+  pruneContextSiteAllowRecord,
   pruneContextSiteBlockRecord,
   pruneContextSiteMuteRecord,
   sanitizeContextExternalUrl,
@@ -115,6 +123,15 @@ assert.deepEqual(
   },
 );
 assert.equal(CONTEXT_SITE_BLOCK_STORAGE_KEY, 'pai-context-blocked-sites-v1');
+assert.equal(CONTEXT_SITE_ALLOW_STORAGE_KEY, 'pai-context-allowed-sites-v1');
+assert.equal(
+  CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
+  'pai-context-site-allowlist-mode-v1',
+);
+assert.equal(
+  CONTEXT_PAGE_BLOCK_STORAGE_KEY,
+  'pai-context-blocked-page-prefixes-v1',
+);
 assert.deepEqual(
   pruneContextSiteBlockRecord({
     ' Example.COM. ': now - 1_000,
@@ -125,6 +142,66 @@ assert.deepEqual(
     record: { 'example.com': now - 1_000 },
     changed: true,
   },
+);
+assert.deepEqual(
+  pruneContextSiteAllowRecord({
+    ' Example.COM. ': now - 1_000,
+    'bad.example': Number.NaN,
+  }),
+  {
+    record: { 'example.com': now - 1_000 },
+    changed: true,
+  },
+);
+assert.equal(
+  isContextHostCoveredBySiteRecord('app.example.com', {
+    'example.com': now,
+  }),
+  true,
+);
+assert.equal(
+  isContextHostCoveredBySiteRecord('example.com', {
+    'app.example.com': now,
+  }),
+  false,
+);
+assert.equal(
+  isContextHostCoveredBySiteRecord('notexample.com', {
+    'example.com': now,
+  }),
+  false,
+);
+assert.equal(
+  normalizeContextPageBlockPrefix(
+    'https://user:pass@example.com/docs/project?a=1&token=secret#section',
+  ),
+  'https://example.com/docs/project',
+);
+assert.equal(normalizeContextPageBlockPrefix('example.com/docs/project/'), 'https://example.com/docs/project');
+assert.equal(normalizeContextPageBlockPrefix('https://example.com/'), null);
+assert.deepEqual(
+  pruneContextPageBlockRecord({
+    'https://Example.com/docs/project/?token=secret#section': now - 1_000,
+    'https://example.com/': now - 1_000,
+    'javascript:alert(1)': now - 1_000,
+    'https://example.com/bad': Number.NaN,
+  }),
+  {
+    record: { 'https://example.com/docs/project': now - 1_000 },
+    changed: true,
+  },
+);
+assert.equal(
+  isContextPageUrlBlockedByPrefix('https://example.com/docs/project/edit?x=1', {
+    'https://example.com/docs/project': now,
+  }),
+  true,
+);
+assert.equal(
+  isContextPageUrlBlockedByPrefix('https://example.com/docs/project-2', {
+    'https://example.com/docs/project': now,
+  }),
+  false,
 );
 
 console.log('[verify-webpage-memory-detection] helper checks passed');

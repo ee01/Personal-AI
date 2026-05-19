@@ -2,8 +2,11 @@ import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { ThoughtStep } from './agentThinking';
 import {
+  buildPendingApprovalActions,
   buildAgentRunReviewItems,
   buildAgentFlowSteps,
+  formatApprovalEffect,
+  formatApprovalRisk,
   formatToolResult,
   getAgentRunReviewSeverity,
   getStepDiagnosticSummary,
@@ -12,6 +15,7 @@ import {
   getStepKindClass,
   getStepVisibleSummary,
   stepHasEmptyToolEvidence,
+  stepHasToolApprovalRequired,
   stepHasToolBlocked,
   stepHasToolError,
   stepWasSkipped,
@@ -22,11 +26,20 @@ interface AgentVisualizerProps {
   isProcessing?: boolean;
 }
 
+type ApprovalCopyStatus = {
+  key: string;
+  target: 'key' | 'payload';
+  state: 'copied' | 'failed';
+  message: string;
+} | null;
+
 const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isProcessing = false }) => {
   const [expandedSteps, setExpandedSteps] = useState<number[]>([]);
+  const [approvalCopyStatus, setApprovalCopyStatus] = useState<ApprovalCopyStatus>(null);
   const runReviewItems = buildAgentRunReviewItems(thoughtProcess, {
     isProcessing,
   });
+  const pendingApprovalActions = buildPendingApprovalActions(thoughtProcess);
   const runReviewSeverity = getAgentRunReviewSeverity(runReviewItems);
   const runReviewLabel: Record<typeof runReviewSeverity, string> = {
     ok: '正常',
@@ -60,6 +73,87 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     event.preventDefault();
     toggleExpand(index);
   };
+
+  const copyTextToClipboard = async (text: string) => {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (error) {
+        console.warn('Clipboard API 复制失败，尝试使用备用复制方式:', error);
+      }
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    try {
+      return document.execCommand('copy');
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  };
+
+  const handleCopyApprovalText = async (
+    approvalKey: string,
+    text: string,
+    target: 'key' | 'payload',
+    successMessage: string,
+  ) => {
+    if (!approvalKey || !text) return;
+
+    try {
+      const copied = await copyTextToClipboard(text);
+      if (!copied) {
+        throw new Error('clipboard copy returned false');
+      }
+      setApprovalCopyStatus({
+        key: approvalKey,
+        target,
+        state: 'copied',
+        message: successMessage,
+      });
+      window.setTimeout(() => {
+        setApprovalCopyStatus(currentStatus =>
+          currentStatus?.key === approvalKey && currentStatus.target === target
+            ? null
+            : currentStatus,
+        );
+      }, 1800);
+    } catch (error) {
+      setApprovalCopyStatus({
+        key: approvalKey,
+        target,
+        state: 'failed',
+        message:
+          target === 'key'
+            ? '复制失败，请手动选择 key'
+            : '复制失败，请手动选择审核包',
+      });
+      console.warn('复制批准 key 失败:', error);
+    }
+  };
+
+  const handleCopyApprovalKey = (approvalKey: string) =>
+    handleCopyApprovalText(approvalKey, approvalKey, 'key', '已复制批准 key');
+
+  const handleCopyApprovalReviewPayload = (
+    approvalKey: string,
+    reviewPayload: string,
+  ) =>
+    handleCopyApprovalText(
+      approvalKey,
+      reviewPayload,
+      'payload',
+      '已复制审核包',
+    );
   
   // 格式化时间戳
   const formatTime = (timestamp: number) => {
@@ -78,6 +172,9 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       // 检查是否有错误
       if (!toolResult || stepHasToolError(step)) {
         return { color: '#F44336', icon: '✗' }; // 错误-红色
+      }
+      if (stepHasToolApprovalRequired(step)) {
+        return { color: '#9A6700', icon: '!' };
       }
       if (stepHasToolBlocked(step)) {
         return { color: '#D97706', icon: '!' };
@@ -130,6 +227,103 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
               ))}
             </div>
           </section>
+
+          {pendingApprovalActions.length > 0 && (
+            <section
+              className="agent-approval-queue"
+              aria-label="待确认动作"
+            >
+              <div className="agent-approval-queue-header">
+                <div>
+                  <h4>待确认动作</h4>
+                  <p>{pendingApprovalActions.length} 个工具动作等待确认。</p>
+                </div>
+              </div>
+              <div className="agent-approval-list">
+                {pendingApprovalActions.map((approval, index) => (
+                  <div
+                    key={`${approval.toolId}-${approval.approvalKey || index}`}
+                    className="agent-approval-item"
+                  >
+                    <div className="agent-approval-main">
+                      <span className="agent-approval-tool">
+                        {approval.toolId}
+                      </span>
+                      <span className="agent-approval-meta">
+                        {formatApprovalEffect(approval.effect)}
+                      </span>
+                      <span className="agent-approval-meta">
+                        {formatApprovalRisk(approval.riskLevel)}
+                      </span>
+                      <span className="agent-approval-step">
+                        步骤 {approval.stepIndex + 1}
+                      </span>
+                    </div>
+                    <div className="agent-approval-message">
+                      {approval.message}
+                    </div>
+                    <div className="agent-approval-review-hint">
+                      <span>复核重点</span>
+                      <p>{approval.reviewHint}</p>
+                    </div>
+                    <div className="agent-approval-params">
+                      <span>参数</span>
+                      <code>{approval.paramsPreview}</code>
+                    </div>
+                    <div className="agent-approval-key-row">
+                      <code
+                        tabIndex={approval.approvalKey ? 0 : undefined}
+                        aria-label={`批准 key: ${approval.approvalKey || '无批准 key'}`}
+                      >
+                        {approval.approvalKey || '无批准 key'}
+                      </code>
+                      <div className="agent-approval-actions">
+                        <button
+                          type="button"
+                          className="agent-approval-copy"
+                          onClick={() => handleCopyApprovalKey(approval.approvalKey)}
+                          aria-label={`复制 ${approval.toolId} 的批准 key`}
+                          disabled={!approval.approvalKey}
+                        >
+                          {approvalCopyStatus?.key === approval.approvalKey &&
+                          approvalCopyStatus.target === 'key' &&
+                          approvalCopyStatus.state === 'copied'
+                            ? '已复制'
+                            : '复制 key'}
+                        </button>
+                        <button
+                          type="button"
+                          className="agent-approval-copy"
+                          onClick={() =>
+                            handleCopyApprovalReviewPayload(
+                              approval.approvalKey,
+                              approval.reviewPayload,
+                            )
+                          }
+                          aria-label={`复制 ${approval.toolId} 的审核包`}
+                          disabled={!approval.approvalKey || !approval.reviewPayload}
+                        >
+                          {approvalCopyStatus?.key === approval.approvalKey &&
+                          approvalCopyStatus.target === 'payload' &&
+                          approvalCopyStatus.state === 'copied'
+                            ? '已复制'
+                            : '复制审核包'}
+                        </button>
+                      </div>
+                    </div>
+                    {approvalCopyStatus?.key === approval.approvalKey && (
+                      <div
+                        className={`agent-approval-copy-status ${approvalCopyStatus.state}`}
+                        role="status"
+                      >
+                        {approvalCopyStatus.message}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <div className="thought-timeline">
             {thoughtProcess.map((step, index) => {

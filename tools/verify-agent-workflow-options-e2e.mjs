@@ -302,6 +302,25 @@ try {
   assert.match(decisionPathText, /置信度 88%/);
   assert.match(decisionPathText, /7 个 Agent \/ 9 个工具/);
   assert.match(decisionPathText, /跳过工具 1/);
+  await page.locator('.agent-workflow-verdict').waitFor({ timeout: 15000 });
+  const verdictText = await page
+    .locator('.agent-workflow-verdict')
+    .innerText();
+  assert.match(verdictText, /需要复核后再执行/);
+  assert.match(verdictText, /执行 Trace/);
+  assert.match(verdictText, /补齐被跳过工具/);
+  await page
+    .locator('.agent-workflow-readiness', { hasText: '运行就绪检查' })
+    .waitFor({ timeout: 15000 });
+  const readinessText = await page
+    .locator('.agent-workflow-readiness')
+    .innerText();
+  assert.match(readinessText, /执行 Trace/);
+  assert.match(readinessText, /有 1 个工具被跳过/);
+  assert.match(readinessText, /通知\/自动化/);
+  assert.match(readinessText, /manual:manual-1/);
+  assert.match(readinessText, /外部信息/);
+  assert.match(readinessText, /Jira\/Wiki adapter/);
   await page
     .locator('.agent-workflow-next-actions', { hasText: '下一步' })
     .waitFor({ timeout: 15000 });
@@ -317,6 +336,38 @@ try {
     .innerText();
   assert.match(storageReviewText, /Trace 状态\s*部分异常/);
   assert.match(storageReviewText, /异常\s*跳过工具 1/);
+
+  await page.locator('#agentId').fill('auditSnapshotAgent');
+  await page.locator('#agentName').fill('Audit Snapshot Agent');
+  await page.locator('#agentDescription').fill('Verifies stale config detection.');
+  await page.locator('#agentPriority').fill('58');
+  await page.locator('.tools-list input[name="replyAdviser"]').check();
+  await page.locator('button', { hasText: '添加 Agent' }).click();
+  await page
+    .locator('.agent-test-stale-banner', { hasText: 'Agent 配置已修改' })
+    .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-test-header button', {
+      hasText: '重新运行测试',
+    })
+    .waitFor({ timeout: 5000 });
+
+  await page
+    .locator('#workflowTestContent')
+    .fill(
+      'API split has a blocker in the auth adapter. Please keep this on the radar today. Added stale-result check.',
+    );
+  await page.locator('.agent-test-stale-banner').waitFor({ timeout: 5000 });
+  const staleBannerText = await page
+    .locator('.agent-test-stale-banner')
+    .innerText();
+  assert.match(staleBannerText, /当前输入和 Agent 配置已修改/);
+  await page
+    .locator('.agent-workflow-test-header button', {
+      hasText: '重新运行测试',
+    })
+    .waitFor({ timeout: 5000 });
+
   assertNoPageErrors();
 
   console.log('verify-agent-workflow-options-e2e: ok');

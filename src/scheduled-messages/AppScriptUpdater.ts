@@ -8,6 +8,7 @@ import { ConfigSyncService } from './ConfigSyncService';
 import { normalizeSheetConfig } from './botAutomationConfig';
 import {
   compareAppScriptVersions,
+  isValidAppScriptVersion,
   isAppScriptVersionOlder,
 } from './appScriptVersioning';
 
@@ -52,11 +53,18 @@ export interface AppScriptVersionUsage {
 }
 
 export const APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR = 'APP_SCRIPT_PROJECT_HISTORY_LIMIT';
+export const APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR = 'APP_SCRIPT_DEPLOYMENT_MISMATCH';
+export const APP_SCRIPT_DEPLOYMENT_NOT_FOUND_ERROR = 'APP_SCRIPT_DEPLOYMENT_NOT_FOUND';
+export const APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR = 'APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED';
 const APP_SCRIPT_VERSION_LIMIT = 200;
 const APP_SCRIPT_VERSION_WARNING_THRESHOLD = 195;
 
 export function buildProjectHistoryUrl(scriptId: string): string {
   return `https://script.google.com/home/projects/${encodeURIComponent(scriptId)}/projecthistory`;
+}
+
+export function buildAppScriptProjectUrl(scriptId: string): string {
+  return `https://script.google.com/home/projects/${encodeURIComponent(scriptId)}/edit`;
 }
 
 export function buildAppScriptWebAppActionUrl(webAppUrl: string, action: string): string {
@@ -110,6 +118,15 @@ function isProjectHistoryLimitError(errorText: string): boolean {
   );
 }
 
+function summarizeVersionProbeResponse(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) {
+    return '空响应';
+  }
+
+  return compact.length > 180 ? `${compact.slice(0, 180)}...` : compact;
+}
+
 class AppScriptProjectHistoryLimitError extends Error {
   readonly errorCode = APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR;
   readonly helpUrl: string;
@@ -123,14 +140,89 @@ class AppScriptProjectHistoryLimitError extends Error {
       : '';
     super(`App Script ${usageText}历史版本已达到 200 个上限，无法创建新版本。${helpMessage} ${helpUrl}`);
     this.name = 'AppScriptProjectHistoryLimitError';
+    Object.setPrototypeOf(this, AppScriptProjectHistoryLimitError.prototype);
     this.helpUrl = helpUrl;
     this.helpMessage = helpMessage;
+  }
+}
+
+class AppScriptDeploymentRecoveryError extends Error {
+  readonly errorCode: string;
+  readonly helpUrl: string;
+  readonly helpMessage: string;
+
+  constructor(input: {
+    scriptId: string;
+    message: string;
+    errorCode: string;
+    helpMessage: string;
+  }) {
+    const helpUrl = buildAppScriptProjectUrl(input.scriptId);
+    super(`${input.message} ${input.helpMessage} ${helpUrl}`);
+    this.name = 'AppScriptDeploymentRecoveryError';
+    Object.setPrototypeOf(this, AppScriptDeploymentRecoveryError.prototype);
+    this.errorCode = input.errorCode;
+    this.helpUrl = helpUrl;
+    this.helpMessage = input.helpMessage;
+  }
+}
+
+class AppScriptDeploymentVerificationError extends Error {
+  readonly errorCode = APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR;
+  readonly helpUrl: string;
+  readonly helpMessage: string;
+  readonly currentVersion?: string;
+  readonly latestVersion: string;
+  readonly rollbackAttempted: boolean;
+  readonly rollbackSucceeded: boolean;
+  readonly rollbackVersionNumber?: number;
+  readonly rollbackError?: string;
+  readonly reason: string;
+
+  constructor(input: {
+    scriptId: string;
+    latestVersion: string;
+    observedVersion?: string;
+    reason: string;
+    rollbackAttempted?: boolean;
+    rollbackSucceeded?: boolean;
+    rollbackVersionNumber?: number;
+    rollbackError?: string;
+  }) {
+    const helpUrl = buildAppScriptProjectUrl(input.scriptId);
+    const observedText = input.observedVersion
+      ? `最后看到的线上版本是 ${input.observedVersion}，`
+      : '';
+    const rollbackText = input.rollbackAttempted
+      ? input.rollbackSucceeded
+        ? `已尝试把 deployment 回退到升级前版本 ${input.rollbackVersionNumber}。`
+        : `已尝试回退到升级前 deployment 版本但失败：${input.rollbackError || '未知错误'}。`
+      : '';
+    const helpMessage = input.rollbackAttempted
+      ? input.rollbackSucceeded
+        ? `已尝试把 deployment 回退到升级前版本 ${input.rollbackVersionNumber}。请稍后重试检查；如果仍需升级，请打开 Apps Script 项目确认 Manage deployments 状态后再重试。`
+        : `尝试回退到升级前 deployment 版本失败：${input.rollbackError || '未知错误'}。请打开 Apps Script 项目，确认 Manage deployments 当前指向的版本。`
+      : '请稍后重试检查；如果仍未生效，请打开 Apps Script 项目，确认 Manage deployments 指向刚创建的新版本。';
+    super(`App Script deployment 已提交，但 Web App 版本端点尚未确认最新版本 ${input.latestVersion}。${observedText}${rollbackText}配置不会被标记为最新。${helpMessage} 原因：${input.reason} ${helpUrl}`);
+    this.name = 'AppScriptDeploymentVerificationError';
+    Object.setPrototypeOf(this, AppScriptDeploymentVerificationError.prototype);
+    this.helpUrl = helpUrl;
+    this.helpMessage = helpMessage;
+    this.currentVersion = input.observedVersion;
+    this.latestVersion = input.latestVersion;
+    this.rollbackAttempted = Boolean(input.rollbackAttempted);
+    this.rollbackSucceeded = Boolean(input.rollbackSucceeded);
+    this.rollbackVersionNumber = input.rollbackVersionNumber;
+    this.rollbackError = input.rollbackError;
+    this.reason = input.reason;
   }
 }
 
 export class AppScriptUpdater {
   private token: string;
   private config: SheetConfig | null = null;
+  private static deploymentVerificationAttempts = 3;
+  private static deploymentVerificationDelayMs = 1000;
   
   // 缓存版本信息，避免重复读取文件
   private static cachedVersionInfo: AppScriptVersionInfo | null = null;
@@ -170,9 +262,13 @@ export class AppScriptUpdater {
       }
       
       const versionInfo = {
-        version: versionMatch[1],
-        lastUpdated: lastUpdatedMatch[1]
+        version: versionMatch[1].trim(),
+        lastUpdated: lastUpdatedMatch[1].trim()
       };
+
+      if (!isValidAppScriptVersion(versionInfo.version)) {
+        throw new Error(`APP_SCRIPT_VERSION 必须是有效 SemVer，例如 2.8.1 或 2.8.1-beta.1，当前值: ${versionInfo.version}`);
+      }
       
       // 缓存结果
       AppScriptUpdater.cachedVersionInfo = versionInfo;
@@ -225,6 +321,15 @@ export class AppScriptUpdater {
       
       // 比较版本
       const needsUpdate = isAppScriptVersionOlder(currentVersion, latestVersion);
+      if (needsUpdate && !this.config.scriptId) {
+        return {
+          needsUpdate: false,
+          currentVersion,
+          latestVersion,
+          error: '检测到 App Script 需要升级，但当前配置缺少 Script ID，无法定位 Apps Script 项目。请重新绑定调度系统配置后再检查。'
+        };
+      }
+
       const versionUsage = needsUpdate && this.config.scriptId
         ? await this.getProjectVersionUsage(this.config.scriptId).catch((error) => {
             console.warn('读取 App Script 历史版本使用量失败:', error);
@@ -269,8 +374,10 @@ export class AppScriptUpdater {
 
     let response: Response;
     try {
+      // Probe anonymously so Google multi-login cookies cannot redirect to a wrong /u/N account context.
       response = await fetch(buildAppScriptWebAppActionUrl(this.config.webAppUrl, 'getVersion'), {
         method: 'GET',
+        credentials: 'omit',
         headers: {
           'Cache-Control': 'no-cache'
         }
@@ -283,12 +390,19 @@ export class AppScriptUpdater {
       throw new Error(`获取 App Script 版本失败: HTTP ${response.status}`);
     }
 
+    let responseText = '';
+    try {
+      responseText = await response.text();
+    } catch (error) {
+      throw new Error(`无法读取 App Script 版本端点响应: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
     let data: any = null;
     try {
-      data = await response.json();
-    } catch (error) {
-      console.warn('App Script 版本端点未返回 JSON，按旧版脚本处理:', error);
-      return { version: '0.0.0', legacyFallback: true };
+      data = JSON.parse(responseText);
+    } catch {
+      const snippet = summarizeVersionProbeResponse(responseText);
+      throw new Error(`App Script 版本端点返回非 JSON 响应，无法确认线上版本。请检查 Web App URL、访问权限或登录状态后重试。响应片段: ${snippet}`);
     }
 
     const deployedVersion = typeof data?.version === 'string' ? data.version.trim() : '';
@@ -386,6 +500,10 @@ export class AppScriptUpdater {
       
       // 2. 先验证存在可更新的正式 deployment，避免预检失败时仍消耗 Apps Script 版本额度
       const deploymentId = await this.getOrCreateDeploymentId();
+      const previousDeploymentVersionNumber = await this.getDeploymentVersionNumber(
+        this.config.scriptId,
+        deploymentId,
+      );
 
       // 3. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
       await this.assertProjectVersionCapacity(this.config.scriptId);
@@ -401,18 +519,47 @@ export class AppScriptUpdater {
       
       // 7. 更新部署到新版本（保持 URL 不变）
       await this.updateDeployment(this.config.scriptId, deploymentId, versionNumber, latestVersion);
+
+      // 8. 确认当前 Web App URL 已经实际返回新版本，再把配置标记为最新。
+      let verifiedVersionInfo: DeployedAppScriptVersionInfo;
+      try {
+        verifiedVersionInfo = await this.verifyUpdatedDeploymentServingVersion(
+          this.config.scriptId,
+          latestVersion,
+        );
+      } catch (error) {
+        if (
+          error instanceof AppScriptDeploymentVerificationError &&
+          previousDeploymentVersionNumber &&
+          previousDeploymentVersionNumber !== versionNumber
+        ) {
+          throw await this.rollbackDeploymentAfterVerificationFailure(
+            error,
+            this.config.scriptId,
+            deploymentId,
+            previousDeploymentVersionNumber,
+            latestVersion,
+          );
+        }
+
+        throw error;
+      }
       
-      // 8. 更新配置中的版本信息
-      await this.updateConfigVersion(latestVersionInfo);
+      // 9. 更新配置中的版本信息
+      const persistedVersionInfo = this.buildPersistedVersionInfoFromVerification(
+        verifiedVersionInfo,
+        latestVersionInfo,
+      );
+      await this.updateConfigVersion(persistedVersionInfo);
       
       console.log('App Script 更新成功！');
       
       return {
         success: true,
-        message: `App Script 已更新到版本 ${latestVersion}`,
-        currentVersion: latestVersion,
+        message: `App Script 已更新到版本 ${persistedVersionInfo.version}`,
+        currentVersion: persistedVersionInfo.version,
         latestVersion,
-        newVersion: latestVersion
+        newVersion: persistedVersionInfo.version
       };
       
     } catch (error) {
@@ -426,6 +573,30 @@ export class AppScriptUpdater {
           errorCode: error.errorCode,
           helpUrl: error.helpUrl,
           helpMessage: error.helpMessage
+        };
+      }
+
+      if (error instanceof AppScriptDeploymentRecoveryError) {
+        return {
+          success: false,
+          message: 'App Script deployment 需要检查',
+          error: error.message,
+          errorCode: error.errorCode,
+          helpUrl: error.helpUrl,
+          helpMessage: error.helpMessage
+        };
+      }
+
+      if (error instanceof AppScriptDeploymentVerificationError) {
+        return {
+          success: false,
+          message: 'App Script deployment 已提交但未确认生效',
+          error: error.message,
+          errorCode: error.errorCode,
+          helpUrl: error.helpUrl,
+          helpMessage: error.helpMessage,
+          currentVersion: error.currentVersion,
+          latestVersion: error.latestVersion
         };
       }
 
@@ -589,6 +760,26 @@ export class AppScriptUpdater {
 
     return usage;
   }
+
+  private async getDeploymentVersionNumber(scriptId: string, deploymentId: string): Promise<number | undefined> {
+    const response = await fetch(
+      `https://script.googleapis.com/v1/projects/${scriptId}/deployments/${deploymentId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${this.token}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`读取 deployment 当前版本失败: ${error}`);
+    }
+
+    const deployment = await response.json();
+    const versionNumber = deployment?.deploymentConfig?.versionNumber;
+    return typeof versionNumber === 'number' ? versionNumber : undefined;
+  }
   
   /**
    * 获取或创建 Deployment ID
@@ -675,7 +866,12 @@ export class AppScriptUpdater {
         version: d.deploymentConfig?.versionNumber,
         webAppUrl: getDeploymentWebAppUrl(d)
       })));
-      throw new Error(this.buildDeploymentMismatchMessage(versionedDeployments));
+      throw new AppScriptDeploymentRecoveryError({
+        scriptId: this.config.scriptId,
+        message: this.buildDeploymentMismatchMessage(versionedDeployments),
+        errorCode: APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR,
+        helpMessage: '请打开 Apps Script 项目，进入 Deploy > Manage deployments，确认当前 Web App URL 对应的正式 deployment 后重试。'
+      });
     }
     
     // 如果没有找到正式版本 deployment，列出所有 deployment 供调试
@@ -687,7 +883,12 @@ export class AppScriptUpdater {
       updateTime: d.updateTime
     })));
     
-    throw new Error('未找到可更新的 Web App deployment（需要有 versionNumber 的正式部署）');
+    throw new AppScriptDeploymentRecoveryError({
+      scriptId: this.config.scriptId,
+      message: '未找到可更新的 Web App deployment（需要有 versionNumber 的正式部署）。',
+      errorCode: APP_SCRIPT_DEPLOYMENT_NOT_FOUND_ERROR,
+      helpMessage: '请打开 Apps Script 项目，创建或重新部署一个 Versioned Web App deployment 后重试。'
+    });
   }
   
   /**
@@ -743,7 +944,8 @@ export class AppScriptUpdater {
     scriptId: string,
     deploymentId: string,
     versionNumber: number,
-    version: string
+    version: string,
+    description = `Personal AI Scheduled Messages v${version}`,
   ): Promise<void> {
     const response = await fetch(
       `https://script.googleapis.com/v1/projects/${scriptId}/deployments/${deploymentId}`,
@@ -757,7 +959,7 @@ export class AppScriptUpdater {
           deploymentConfig: {
             versionNumber: versionNumber,
             manifestFileName: 'appsscript',
-            description: `Personal AI Scheduled Messages v${version}`
+            description
           }
         })
       }
@@ -769,6 +971,112 @@ export class AppScriptUpdater {
     }
     
     console.log('✅ 部署已更新（URL 保持不变）');
+  }
+
+  private async rollbackDeploymentAfterVerificationFailure(
+    verificationError: AppScriptDeploymentVerificationError,
+    scriptId: string,
+    deploymentId: string,
+    previousVersionNumber: number,
+    failedVersion: string,
+  ): Promise<AppScriptDeploymentVerificationError> {
+    try {
+      await this.updateDeployment(
+        scriptId,
+        deploymentId,
+        previousVersionNumber,
+        failedVersion,
+        `Personal AI Scheduled Messages rollback after failed v${failedVersion}`,
+      );
+      console.warn(`⚠️ Web App 新版本未确认生效，已把 deployment 回退到升级前版本 ${previousVersionNumber}`);
+      return new AppScriptDeploymentVerificationError({
+        scriptId,
+        latestVersion: verificationError.latestVersion,
+        observedVersion: verificationError.currentVersion,
+        reason: verificationError.reason,
+        rollbackAttempted: true,
+        rollbackSucceeded: true,
+        rollbackVersionNumber: previousVersionNumber,
+      });
+    } catch (rollbackError) {
+      const rollbackErrorMessage = rollbackError instanceof Error
+        ? rollbackError.message
+        : String(rollbackError);
+      console.error('❌ Web App 新版本未确认生效，且 deployment 回退失败:', rollbackError);
+      return new AppScriptDeploymentVerificationError({
+        scriptId,
+        latestVersion: verificationError.latestVersion,
+        observedVersion: verificationError.currentVersion,
+        reason: verificationError.reason,
+        rollbackAttempted: true,
+        rollbackSucceeded: false,
+        rollbackVersionNumber: previousVersionNumber,
+        rollbackError: rollbackErrorMessage,
+      });
+    }
+  }
+
+  private async verifyUpdatedDeploymentServingVersion(
+    scriptId: string,
+    latestVersion: string
+  ): Promise<DeployedAppScriptVersionInfo> {
+    if (!this.config?.webAppUrl) {
+      return { version: latestVersion };
+    }
+
+    const attempts = Math.max(1, AppScriptUpdater.deploymentVerificationAttempts);
+    const delayMs = Math.max(0, AppScriptUpdater.deploymentVerificationDelayMs);
+    let observedVersion: string | undefined;
+    let lastReason = '版本端点没有返回可确认的结果';
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const deployedVersionInfo = await this.getDeployedVersionInfo();
+        observedVersion = deployedVersionInfo.version;
+        const comparison = compareAppScriptVersions(deployedVersionInfo.version, latestVersion);
+
+        if (!deployedVersionInfo.legacyFallback && comparison >= 0) {
+          console.log(`✅ Web App 版本已确认生效: ${deployedVersionInfo.version}`);
+          return deployedVersionInfo;
+        }
+
+        lastReason = deployedVersionInfo.legacyFallback
+          ? '版本端点仍按旧版脚本响应'
+          : `版本端点仍返回 ${deployedVersionInfo.version}`;
+      } catch (error) {
+        lastReason = error instanceof Error ? error.message : String(error);
+      }
+
+      if (attempt < attempts && delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    throw new AppScriptDeploymentVerificationError({
+      scriptId,
+      latestVersion,
+      observedVersion,
+      reason: lastReason
+    });
+  }
+
+  private buildPersistedVersionInfoFromVerification(
+    verifiedVersionInfo: DeployedAppScriptVersionInfo,
+    bundledVersionInfo: AppScriptVersionInfo
+  ): AppScriptVersionInfo {
+    const comparison = compareAppScriptVersions(
+      verifiedVersionInfo.version,
+      bundledVersionInfo.version,
+    );
+
+    if (comparison === 0) {
+      return bundledVersionInfo;
+    }
+
+    return {
+      version: verifiedVersionInfo.version,
+      lastUpdated: verifiedVersionInfo.lastUpdated || bundledVersionInfo.lastUpdated
+    };
   }
   
   /**
@@ -933,6 +1241,24 @@ export class AppScriptUpdater {
                 iconUrl: 'icons/icon128.png',
                 title: 'Personal AI - App Script 需要清理历史版本',
                 message: '脚本历史版本已达 200 上限。点击打开 Project History 页面，批量删除旧版本后重试升级。',
+                priority: 2
+              }
+            );
+            return;
+          }
+
+          if (updateResult.helpUrl) {
+            const notificationId = `msg_appscript-recovery-${Date.now()}`;
+            await chrome.storage.local.set({
+              [`notification_link_${notificationId}`]: updateResult.helpUrl
+            });
+            chrome.notifications.create(
+              notificationId,
+              {
+                type: 'basic',
+                iconUrl: 'icons/icon128.png',
+                title: 'Personal AI - App Script 需要检查',
+                message: updateResult.helpMessage || 'App Script 自动更新未确认成功。点击打开 Apps Script 项目检查部署状态。',
                 priority: 2
               }
             );

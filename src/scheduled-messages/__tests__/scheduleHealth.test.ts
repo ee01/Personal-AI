@@ -7,6 +7,7 @@ import {
   formatScheduleHealthSummary,
   getScheduleHealthIssue,
   getScheduleHealthIssues,
+  getScheduleHealthRecoverySuggestion,
 } from '../scheduleHealth.js';
 
 function makeMessage(overrides: Partial<ScheduledMessage> = {}): ScheduledMessage {
@@ -49,6 +50,18 @@ test('keeps explicit executor messages healthy inside the compensation window', 
   assert.equal(
     getScheduleHealthIssue(makeMessage(), new Date('2026-05-04T09:59:00')),
     null,
+  );
+});
+
+test('keeps explicit executor messages healthy through the final compensation minute', () => {
+  assert.equal(
+    getScheduleHealthIssue(makeMessage(), new Date('2026-05-04T10:00:30')),
+    null,
+  );
+
+  assert.equal(
+    getScheduleHealthIssue(makeMessage(), new Date('2026-05-04T10:01:00'))?.summary,
+    '已超过 30 分钟补偿窗口',
   );
 });
 
@@ -153,5 +166,72 @@ test('summarizes multiple health issues for the top banner', () => {
   assert.equal(
     formatScheduleHealthSummary(issues),
     '2 条 Active 定时消息需要处理；1 条已错过执行窗口；1 条时间格式异常',
+  );
+});
+
+test('suggests the next minute for missed explicit executor messages', () => {
+  assert.deepEqual(
+    getScheduleHealthRecoverySuggestion(
+      makeMessage(),
+      new Date('2026-05-04T10:01:30'),
+    ),
+    {
+      dateStr: '2026-05-04',
+      timeStr: '10:02',
+      label: '2026-05-04 10:02',
+      clearsScheduleTime: false,
+      reason: '把已错过的明确时间改成下一分钟，恢复到可执行窗口内。',
+    },
+  );
+});
+
+test('suggests today executor queue for no-time executor rows whose date passed', () => {
+  assert.deepEqual(
+    getScheduleHealthRecoverySuggestion(
+      makeMessage({ Schedule_Time: '', Schedule_Date: '2026-05-03' }),
+      new Date('2026-05-04T10:01:30'),
+    ),
+    {
+      dateStr: '2026-05-04',
+      timeStr: '',
+      label: '2026-05-04 08:00 后',
+      clearsScheduleTime: true,
+      reason: '改到今天的执行器默认队列，下一轮 Jira Automation 轮询会继续处理。',
+    },
+  );
+});
+
+test('suggests the next default AsMe date for missed no-time Apps Script rows', () => {
+  assert.deepEqual(
+    getScheduleHealthRecoverySuggestion(
+      makeMessage({
+        Push_Method: 'AsMe',
+        Schedule_Time: '',
+      }),
+      new Date('2026-05-04T09:02:00'),
+    ),
+    {
+      dateStr: '2026-05-05',
+      timeStr: '',
+      label: '2026-05-05 09:00',
+      clearsScheduleTime: true,
+      reason: '保留默认发送时间，并把执行日期移到下一个仍可发送的日期。',
+    },
+  );
+});
+
+test('suggests the next minute for invalid schedule times', () => {
+  assert.deepEqual(
+    getScheduleHealthRecoverySuggestion(
+      makeMessage({ Schedule_Time: '99:00' }),
+      new Date('2026-05-04T08:12:15'),
+    ),
+    {
+      dateStr: '2026-05-04',
+      timeStr: '08:13',
+      label: '2026-05-04 08:13',
+      clearsScheduleTime: false,
+      reason: '把异常时间改成下一分钟的明确本地时间。',
+    },
   );
 });

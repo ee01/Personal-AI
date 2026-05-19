@@ -41,6 +41,24 @@ interface UpdateSessionBody {
   nextCheckAt?: number | null;
 }
 
+interface CreateSessionFromMessageBody {
+  chatId: string;
+  postId: string;
+  messageText: string;
+  messageUrl?: string;
+  messageCreatedAt?: number;
+  messageTimestampText?: string;
+  senderName?: string;
+  groupName?: string;
+  targetType?: string;
+  targetRef?: string;
+  targetResolvedChatId?: string;
+  targetResolvedLabel?: string;
+  followupIntervalSeconds?: number;
+  maxFollowup?: number;
+  context?: string;
+}
+
 interface TargetSearchCacheEntry {
   expiresAt: number;
   payload: {
@@ -151,6 +169,17 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     const engine = new OutreachEngine(db, userDataManager, request.userId);
     const summary = engine.getSummary();
     return reply.status(200).send(summary);
+  });
+
+  app.get<{
+    Querystring: {
+      limit?: string;
+    };
+  }>('/glip-message-markers', async (request, reply) => {
+    const { db, userDataManager } = request.userContext;
+    const engine = new OutreachEngine(db, userDataManager, request.userId);
+    const limit = parseInt(request.query.limit ?? '500', 10) || 500;
+    return reply.status(200).send(engine.listGlipMessageMarkers(limit));
   });
 
   app.get('/outreach/directory/status', async (request, reply) => {
@@ -290,6 +319,20 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       ...result,
       items,
     });
+  });
+
+  app.post<{
+    Body: CreateSessionFromMessageBody;
+  }>('/outreach/sessions/from-message', async (request, reply) => {
+    const { db, userDataManager } = request.userContext;
+    const engine = new OutreachEngine(db, userDataManager, request.userId);
+    try {
+      const session = await engine.createSessionFromMessage(request.body);
+      return reply.status(200).send({ session });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.status(400).send({ error: message });
+    }
   });
 
   app.get<{

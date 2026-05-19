@@ -1,10 +1,19 @@
 export const USER_CONFIG_PROMPT_CHAR_LIMIT = 1500;
+export const USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT = 200;
+export const USER_CONFIG_CONTEXT_ARRAY_LIMIT = 20;
 
 type JsonRecord = Record<string, any>;
 
 const cleanString = (value: any): string => (
   typeof value === 'string' ? value.trim() : ''
 );
+
+const normalizeContextText = (value: any): string => {
+  const text = cleanString(value);
+  return text.length > USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT
+    ? text.slice(0, USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT)
+    : text;
+};
 
 const DEFAULT_USER_CONTEXT_SCALARS = new Set([
   'GMT+8',
@@ -28,11 +37,12 @@ export const normalizePromptContent = (value: any): string => {
 };
 
 const cleanStringArray = (value: any): string[] => (
-  Array.isArray(value)
-    ? value.map(cleanString).filter(Boolean)
-    : cleanString(value)
-      ? [cleanString(value)]
+  (Array.isArray(value)
+    ? value.map(normalizeContextText).filter(Boolean)
+    : normalizeContextText(value)
+      ? [normalizeContextText(value)]
       : []
+  ).slice(0, USER_CONFIG_CONTEXT_ARRAY_LIMIT)
 );
 
 const hasAnyValue = (value: JsonRecord): boolean => (
@@ -53,19 +63,27 @@ const sanitizePrompt = (prompt: any): JsonRecord => ({
   position: cleanString(prompt?.position) || 'after_analysis_guide',
 });
 
+const sanitizePreferenceInjection = (settings: any): JsonRecord => ({
+  ...(settings || {}),
+  enabled: settings?.enabled !== false,
+  customPromptsEnabled: settings?.customPromptsEnabled !== false,
+  userContextEnabled: settings?.userContextEnabled !== false,
+});
+
 const sanitizeStakeholders = (stakeholders: any): JsonRecord => ({
   ...(stakeholders || {}),
-  directManager: cleanString(stakeholders?.directManager),
-  reportingFrequency: cleanString(stakeholders?.reportingFrequency) || '每周',
+  directManager: normalizeContextText(stakeholders?.directManager),
+  reportingFrequency: normalizeContextText(stakeholders?.reportingFrequency) || '每周',
   keyStakeholders: Array.isArray(stakeholders?.keyStakeholders)
     ? stakeholders.keyStakeholders
         .map((item: any) => ({
-          name: cleanString(item?.name),
-          position: cleanString(item?.position),
-          relationship: cleanString(item?.relationship),
-          priority: cleanString(item?.priority),
+          name: normalizeContextText(item?.name),
+          position: normalizeContextText(item?.position),
+          relationship: normalizeContextText(item?.relationship),
+          priority: normalizeContextText(item?.priority),
         }))
         .filter(hasStakeholderValue)
+        .slice(0, USER_CONFIG_CONTEXT_ARRAY_LIMIT)
         .map((item: JsonRecord) => ({
           ...item,
           priority: item.priority || 'medium',
@@ -75,21 +93,22 @@ const sanitizeStakeholders = (stakeholders: any): JsonRecord => ({
 
 const sanitizeTeamInfo = (teamInfo: any): JsonRecord => ({
   ...(teamInfo || {}),
-  teamName: cleanString(teamInfo?.teamName),
-  teamMission: cleanString(teamInfo?.teamMission),
+  teamName: normalizeContextText(teamInfo?.teamName),
+  teamMission: normalizeContextText(teamInfo?.teamMission),
   teamSize: Math.max(0, Number(teamInfo?.teamSize) || 0),
   members: Array.isArray(teamInfo?.members)
     ? teamInfo.members
         .map((item: any) => ({
-          name: cleanString(item?.name),
-          position: cleanString(item?.position),
-          role: cleanString(item?.role),
-          speciality: cleanString(item?.speciality),
+          name: normalizeContextText(item?.name),
+          position: normalizeContextText(item?.position),
+          role: normalizeContextText(item?.role),
+          speciality: normalizeContextText(item?.speciality),
         }))
         .filter(hasAnyValue)
+        .slice(0, USER_CONFIG_CONTEXT_ARRAY_LIMIT)
     : [],
-  workingHours: cleanString(teamInfo?.workingHours),
-  timezone: cleanString(teamInfo?.timezone) || 'GMT+8',
+  workingHours: normalizeContextText(teamInfo?.workingHours),
+  timezone: normalizeContextText(teamInfo?.timezone) || 'GMT+8',
 });
 
 const sanitizeUserContextConfig = (config: any): JsonRecord => {
@@ -105,12 +124,12 @@ const sanitizeUserContextConfig = (config: any): JsonRecord => {
     ...userContext,
     personalInfo: {
       ...personalInfo,
-      name: cleanString(personalInfo.name),
-      email: cleanString(personalInfo.email),
-      title: cleanString(personalInfo.title),
-      department: cleanString(personalInfo.department),
-      location: cleanString(personalInfo.location),
-      timezone: cleanString(personalInfo.timezone) || 'GMT+8',
+      name: normalizeContextText(personalInfo.name),
+      email: normalizeContextText(personalInfo.email),
+      title: normalizeContextText(personalInfo.title),
+      department: normalizeContextText(personalInfo.department),
+      location: normalizeContextText(personalInfo.location),
+      timezone: normalizeContextText(personalInfo.timezone) || 'GMT+8',
     },
     stakeholders: sanitizeStakeholders(userContext.stakeholders),
     teamInfo: sanitizeTeamInfo(userContext.teamInfo),
@@ -119,18 +138,18 @@ const sanitizeUserContextConfig = (config: any): JsonRecord => {
       primaryConcerns: cleanStringArray(workFocus.primaryConcerns),
       businessDomains: cleanStringArray(workFocus.businessDomains),
       keyMetrics: cleanStringArray(workFocus.keyMetrics),
-      riskTolerance: cleanString(workFocus.riskTolerance) || 'medium',
+      riskTolerance: normalizeContextText(workFocus.riskTolerance) || 'medium',
     },
     communicationContext: {
       ...communicationContext,
       audienceType: cleanStringArray(communicationContext.audienceType),
       communicationStyle:
-        cleanString(communicationContext.communicationStyle) || '简洁直接',
-      culturalContext: cleanString(communicationContext.culturalContext),
+        normalizeContextText(communicationContext.communicationStyle) || '简洁直接',
+      culturalContext: normalizeContextText(communicationContext.culturalContext),
       languagePreference:
-        cleanString(communicationContext.languagePreference) || '中英文混合',
+        normalizeContextText(communicationContext.languagePreference) || '中英文混合',
       reportingFormat:
-        cleanString(communicationContext.reportingFormat) || '项目状态报告',
+        normalizeContextText(communicationContext.reportingFormat) || '项目状态报告',
     },
     analysisPreferences: {
       ...analysisPreferences,
@@ -144,7 +163,7 @@ const sanitizeUserContextConfig = (config: any): JsonRecord => {
         ...projectAnalysis,
         riskFactors: cleanStringArray(projectAnalysis.riskFactors),
         successCriteria: cleanStringArray(projectAnalysis.successCriteria),
-        reviewCycle: cleanString(projectAnalysis.reviewCycle) || 'weekly',
+        reviewCycle: normalizeContextText(projectAnalysis.reviewCycle) || 'weekly',
       },
     },
   };
@@ -156,6 +175,7 @@ export function sanitizeIndependentUserConfig(config: any): JsonRecord {
 
   return {
     ...source,
+    preferenceInjection: sanitizePreferenceInjection(source.preferenceInjection),
     customPrompts: {
       ...customPrompts,
       message: sanitizePrompt(customPrompts.message),

@@ -251,6 +251,96 @@ describe('Recall API', () => {
     );
   });
 
+  it('keeps graph entity recall inside the requested memory scope', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO entities
+        (id, type, name, description, importance, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'entity-private-trip',
+      'Project',
+      'Private Trip Plan',
+      'A personal travel planning topic.',
+      0.9,
+      'active',
+      now,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, scope, source_type, sender, group_name, timestamp, importance, sentiment, entities_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'personal-trip-message',
+      'Private Trip Plan has a hotel shortlist and family budget notes.',
+      'personal',
+      'manual',
+      'self',
+      'Personal',
+      now - 30,
+      0.8,
+      'neutral',
+      JSON.stringify([{ id: 'entity-private-trip', name: 'Private Trip Plan' }]),
+      now - 30,
+    );
+
+    const workRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'Private Trip Plan',
+        topK: 5,
+        channels: ['graph'],
+        includeMetadata: true,
+      },
+    });
+
+    expect(workRes.statusCode).toBe(200);
+    expect(workRes.json().items.map((item: any) => item.id)).not.toContain(
+      'entity-private-trip',
+    );
+
+    const personalRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'Private Trip Plan',
+        topK: 5,
+        channels: ['graph'],
+        scope: 'personal',
+        includeMetadata: true,
+      },
+    });
+
+    expect(personalRes.statusCode).toBe(200);
+    const personalBody = personalRes.json();
+    const personalEntity = personalBody.items.find(
+      (item: any) => item.id === 'entity-private-trip',
+    );
+    expect(personalEntity).toMatchObject({
+      id: 'entity-private-trip',
+      type: 'entity',
+      scope: 'personal',
+    });
+    expect(personalEntity.metadata.scopeEvidenceCount).toBe(1);
+
+    const allRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'Private Trip Plan',
+        topK: 5,
+        channels: ['graph'],
+        scope: 'all',
+      },
+    });
+
+    expect(allRes.statusCode).toBe(200);
+    expect(allRes.json().items.map((item: any) => item.id)).toContain(
+      'entity-private-trip',
+    );
+  });
+
   it('applies scope filtering to chunk recall and returns both only when explicitly requested', async () => {
     const now = Math.floor(Date.now() / 1000);
     db.prepare(

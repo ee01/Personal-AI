@@ -32,7 +32,7 @@ Apps Script 会优先解析标准 JSON；如果 Jira 返回 `{key=value}` 这类
 
 ## 用户排障路径
 
-- App Script 部署版本应不低于 `2.7.9`。
+- App Script 部署版本应不低于 `2.8.3`。
 - 修改 Jira Rule 后，先手动运行 `Timeline Sync Rule`。
 - 回到扩展的定时消息表单，点击“刷新状态”。
 - 如果仍失败，先看 Timeline 缓存状态面板里的“下一步”，必要时复制当前项目的 JSON 模板修复 Jira `Send web request`，再复制 Timeline 缓存诊断，对照 Jira Automation Audit Log 中的 `cacheReleaseInfo` 响应。
@@ -41,7 +41,9 @@ Apps Script 会优先解析标准 JSON；如果 Jira 返回 `{key=value}` 这类
 
 状态面板里的 JSON 模板会按当前项目生成正确的 `project` 参数、`{{xxxReleaseInfo.asJsonString}}` 变量和 `Content-Type: application/json`，避免用户在 Jira Rule 中手动猜项目参数名。
 
-状态面板也提供 dry-run 测试 curl：请求会用 `dryRun=true` 走同一套 `cacheReleaseInfo` 解析、schema 校验和 9KB 预检，但不会写入 Timeline 缓存，也不会覆盖最近一次 Jira 同步诊断。它用于区分“Apps Script Web App 部署/权限问题”和“Jira Rule payload 问题”。
+状态面板也提供 Apps Script dry-run 测试：用户可以直接在扩展里测试当前项目的 Web App，也可以复制等价 curl。请求会用 `dryRun=true` 走同一套 `cacheReleaseInfo` 解析、schema 校验和 9KB 预检，但不会写入 Timeline 缓存，也不会覆盖最近一次 Jira 同步诊断。它用于区分“Apps Script Web App 部署/权限问题”和“Jira Rule payload 问题”。
+
+dry-run 发送的是扩展生成的样例 payload，并会优先使用当前选中的 Milestone 作为样例日期键；测试通过只说明 Web App 和缓存预检链路可用，不代表 Jira Rule 已经把真实 releaseInfo 写入缓存。测试通过后仍需手动运行 `Timeline Sync Rule` 并刷新状态。即使用户复制 dry-run curl 后把 JSON 改坏，这次 dry-run 失败也不会覆盖状态面板里的最近一次真实 Jira 同步诊断。
 
 常见错误：
 

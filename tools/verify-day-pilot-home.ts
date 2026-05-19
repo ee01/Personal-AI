@@ -9,6 +9,10 @@ const shellSource = readFileSync(
   new URL('../src/modals/memory-exploring.vue', import.meta.url),
   'utf8',
 );
+const popupSource = readFileSync(
+  new URL('../src/popup.tsx', import.meta.url),
+  'utf8',
+);
 const clientSource = readFileSync(
   new URL('../src/services/MemoryServiceClient.ts', import.meta.url),
   'utf8',
@@ -60,13 +64,13 @@ function verifyRealDataSources() {
   );
   assertContains(
     overviewSource,
-    /sendDayPilotCardFeedback/,
-    'Day Pilot feedback source',
+    /sendTodayPilotCardFeedback/,
+    'Today Pilot feedback source',
   );
   assertContains(
     overviewSource,
-    /renderDayPilotContextPack/,
-    'Day Pilot context pack source',
+    /renderTodayPilotContextPack/,
+    'Today Pilot context pack source',
   );
   assertContains(
     overviewSource,
@@ -184,6 +188,16 @@ function verifyBackendDayPilotApi() {
   );
   assertContains(
     dayPilotServiceSource,
+    /ACTIONABLE_FOLLOWUP_PATTERN/,
+    'general mission actionability gate',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /hasConcreteFollowupSignal/,
+    'generic mission fallback filter',
+  );
+  assertContains(
+    dayPilotServiceSource,
     /relationshipCandidate\(row, currentTime\)/,
     'relationship radar current-time scoring',
   );
@@ -204,8 +218,18 @@ function verifyBackendDayPilotApi() {
   );
   assertContains(
     clientSource,
+    /sendTodayPilotCardFeedback/,
+    'canonical client feedback method',
+  );
+  assertContains(
+    clientSource,
     /renderDayPilotContextPack/,
     'client context pack method',
+  );
+  assertContains(
+    clientSource,
+    /renderTodayPilotContextPack/,
+    'canonical client context pack method',
   );
 }
 
@@ -282,6 +306,45 @@ function verifyShellLabel() {
   assertNotContains(shellSource, /首页概览/, 'old overview label/comment');
 }
 
+function verifyPopupTopThree() {
+  assertContains(
+    popupSource,
+    /topTodayPilotCards\(response\.brief\?\.cards \|\| \[\]\)/,
+    'popup top 3 canonical card mapper',
+  );
+  assertContains(
+    popupSource,
+    /sendTodayPilotCardFeedback/,
+    'popup feedback action',
+  );
+  assertContains(
+    popupSource,
+    /renderTodayPilotContextPack/,
+    'popup canonical context pack renderer',
+  );
+  assertContains(
+    popupSource,
+    /today-pilot-card-why/,
+    'popup why-now line',
+  );
+  assertContains(
+    popupSource,
+    /formatTodayPilotEvidenceMeta/,
+    'popup evidence confidence metadata',
+  );
+  assertContains(
+    popupSource,
+    /today-pilot-card-meta/,
+    'popup compact evidence metadata line',
+  );
+  assertContains(popupSource, /稍后 6 小时/, 'popup later feedback toast');
+  assertContains(
+    popupSource,
+    /setTodayPilotCards\(previousCards\)/,
+    'popup feedback failure restores card',
+  );
+}
+
 verifyDayPilotStructure();
 verifyRealDataSources();
 verifyBackendDayPilotApi();
@@ -289,5 +352,6 @@ verifyHomepageIsReadOnlyOrDelegating();
 verifyMissionCardsAreConcreteItems();
 verifyDemoContentWasRemoved();
 verifyShellLabel();
+verifyPopupTopThree();
 
 console.log('verify-day-pilot-home: ok');

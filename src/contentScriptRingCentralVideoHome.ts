@@ -12,6 +12,7 @@ import {
   loadRingCentralNativeJoinEnabled,
   openRingCentralVideoNativeJoin,
   parseRingCentralVideoJoinTarget,
+  shouldPreserveDefaultNativeJoinClick,
   watchRingCentralNativeJoinEnabled,
 } from './ringcentralNativeJoin';
 import {
@@ -205,7 +206,17 @@ class RingCentralVideoHomePrep {
       return nearbyTarget;
     }
 
-    return this.findEventNativeJoinTarget(getVideoHomeRouteEventId());
+    const routeTarget = this.findEventNativeJoinTarget(
+      getVideoHomeRouteEventId(),
+    );
+    if (routeTarget) {
+      return routeTarget;
+    }
+
+    this.refreshSelectedMeeting();
+    return this.state.selectedEvent?.joinUrl
+      ? parseRingCentralVideoJoinTarget(this.state.selectedEvent.joinUrl)
+      : null;
   }
 
   private findEventNativeJoinTarget(externalId: string | null | undefined) {
@@ -879,13 +890,7 @@ function findJoinButtonLikeTarget(target: Element): HTMLElement | null {
 }
 
 function shouldPreserveVideoHomeNativeJoinClick(event: MouseEvent): boolean {
-  return (
-    event.button !== 0 ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.shiftKey ||
-    event.altKey
-  );
+  return shouldPreserveDefaultNativeJoinClick(event);
 }
 
 function getVideoHomeRouteEventId(): string | null {

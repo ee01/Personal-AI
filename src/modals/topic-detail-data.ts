@@ -41,13 +41,19 @@ const getConversationReadNodes = (conversation: any): any[] => {
   return [conversation, ...contextMessages.filter(Boolean)];
 };
 
+export const isTopicMessageExplicitlyUnread = (message: any): boolean => {
+  return message?.isRead === false;
+};
+
 export const getTopicConversationUnreadMessageCount = (
   conversation: any,
 ): number => {
   const readNodes = getConversationReadNodes(conversation);
   if (readNodes.length === 0) return 0;
 
-  return readNodes.filter((message) => message?.isRead !== true).length;
+  return readNodes.filter((message) =>
+    isTopicMessageExplicitlyUnread(message),
+  ).length;
 };
 
 export const isTopicConversationUnread = (conversation: any): boolean => {

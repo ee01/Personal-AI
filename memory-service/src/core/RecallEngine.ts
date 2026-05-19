@@ -133,6 +133,15 @@ interface MemoryMetaRow {
   access_count: number;
 }
 
+interface EntityEvidenceRow extends MessageRow {
+  scope: MemoryScope | null;
+}
+
+interface EntityEvidenceMatch {
+  matches: boolean;
+  metadata?: Record<string, any>;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -328,6 +337,17 @@ function matchesScope(
   return normalizeStoredScope(storedScope) === requestedScope;
 }
 
+function getSpecificRequestedScope(
+  scope: RecallScope | undefined,
+): MemoryScope | undefined {
+  const requestedScope = normalizeRequestedScope(scope);
+  return requestedScope === 'both' ? undefined : requestedScope;
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
 function matchesTextFilter(value: string | null, filters?: string[]): boolean {
   if (!filters || filters.length === 0) return true;
   if (!value) return false;
@@ -488,10 +508,7 @@ export class RecallEngine {
         id: c.id,
         type: c.type,
         content: c.content,
-        scope:
-          c.type === 'entity'
-            ? undefined
-            : (c.metadata?.scope as MemoryScope | undefined),
+        scope: c.metadata?.scope as MemoryScope | undefined,
         displayTitle: presentation.displayTitle,
         displayText: presentation.displayText,
         previewText: presentation.previewText,
@@ -809,13 +826,18 @@ export class RecallEngine {
       const matchedEntities = this.findMatchingEntities(
         queryText,
         query.entityTypes,
-      );
+      )
+        .map((entity) => ({
+          entity,
+          evidence: this.getEntityEvidenceMatch(entity.id, query),
+        }))
+        .filter(({ evidence }) => evidence.matches);
       if (matchedEntities.length === 0) return candidates;
 
-      const entityIds = matchedEntities.map((e) => e.id);
+      const entityIds = matchedEntities.map(({ entity }) => entity.id);
 
       // Add entities themselves as candidates
-      for (const ent of matchedEntities) {
+      for (const { entity: ent, evidence } of matchedEntities) {
         candidates.push({
           id: ent.id,
           type: 'entity',
@@ -824,6 +846,7 @@ export class RecallEngine {
           timestamp: ent.lastSeen,
           channels: ['graph'],
           entity: ent,
+          metadata: evidence.metadata,
         });
       }
 
@@ -848,7 +871,10 @@ export class RecallEngine {
 
           // Load the related entity
           const relEnt = this.loadEntity(otherEntityId);
-          if (relEnt) {
+          const evidence = relEnt
+            ? this.getEntityEvidenceMatch(relEnt.id, query)
+            : undefined;
+          if (relEnt && evidence?.matches) {
             candidates.push({
               id: relEnt.id,
               type: 'entity',
@@ -858,6 +884,7 @@ export class RecallEngine {
               channels: ['graph'],
               entity: relEnt,
               metadata: {
+                ...(evidence.metadata ?? {}),
                 relationType: rel.relation_type,
                 hopDistance: 1,
                 relationshipStrength: rel.strength,
@@ -896,7 +923,10 @@ export class RecallEngine {
             continue;
 
           const relEnt = this.loadEntity(otherEntityId);
-          if (relEnt) {
+          const evidence = relEnt
+            ? this.getEntityEvidenceMatch(relEnt.id, query)
+            : undefined;
+          if (relEnt && evidence?.matches) {
             candidates.push({
               id: relEnt.id,
               type: 'entity',
@@ -906,6 +936,7 @@ export class RecallEngine {
               channels: ['graph'],
               entity: relEnt,
               metadata: {
+                ...(evidence.metadata ?? {}),
                 relationType: rel.relation_type,
                 hopDistance: 2,
                 relationshipStrength: rel.strength,
@@ -925,12 +956,12 @@ export class RecallEngine {
                       matched_projects_json,
                       metadata_json, importance, entities_json
                FROM messages_raw
-               WHERE entities_json LIKE ?
+               WHERE entities_json LIKE ? ESCAPE '\\'
                ORDER BY timestamp DESC
                LIMIT ?`,
             )
             .all(
-              `%"${entId}"%`,
+              `%"${escapeLikePattern(entId)}"%`,
               Math.ceil(limit / entityIds.length),
             ) as MessageRow[];
 
@@ -1354,6 +1385,67 @@ export class RecallEngine {
       return row ? entityRowToEntity(row) : null;
     } catch {
       return null;
+    }
+  }
+
+  private getEntityEvidenceMatch(
+    entityId: string,
+    query: RecallQuery,
+  ): EntityEvidenceMatch {
+    const requestedScope = getSpecificRequestedScope(query.scope);
+
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
+                  source_url, source_title,
+                  matched_projects_json,
+                  metadata_json, importance, entities_json
+           FROM messages_raw
+           WHERE entities_json LIKE ? ESCAPE '\\'
+           ORDER BY timestamp DESC
+           LIMIT 200`,
+        )
+        .all(`%"${escapeLikePattern(entityId)}"%`) as EntityEvidenceRow[];
+
+      if (rows.length === 0) {
+        return {
+          matches: requestedScope !== 'personal',
+          metadata:
+            requestedScope === 'work'
+              ? { scope: 'work', scopeEvidenceCount: 0 }
+              : undefined,
+        };
+      }
+
+      const matchingRows = rows.filter((row) => this.passesFilters(row, query));
+      if (matchingRows.length === 0) {
+        return { matches: false };
+      }
+
+      const scopes = new Set(
+        matchingRows.map((row) => normalizeStoredScope(row.scope)),
+      );
+      const scope =
+        scopes.size === 1 ? Array.from(scopes)[0] : requestedScope;
+
+      return {
+        matches: true,
+        metadata: {
+          ...(scope ? { scope } : {}),
+          scopeEvidenceCount: matchingRows.length,
+          scopeEvidenceTotal: rows.length,
+        },
+      };
+    } catch (err) {
+      console.warn('[RecallEngine] Entity scope evidence lookup failed:', err);
+      return {
+        matches: requestedScope !== 'personal',
+        metadata:
+          requestedScope === 'work'
+            ? { scope: 'work', scopeEvidenceCount: 0 }
+            : undefined,
+      };
     }
   }
 

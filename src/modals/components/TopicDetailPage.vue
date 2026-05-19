@@ -425,6 +425,7 @@ import {
   getTopicConversationPrimaryId,
   getTopicDetailRecentData,
   getTopicDetailUnreadCount,
+  isTopicMessageExplicitlyUnread,
   isTopicConversationUnread,
   sortTopicConversationsForTriage,
   topicConversationHasContextMatch,
@@ -458,7 +459,19 @@ const topicResources = computed(() => topicRecentData.value.resources);
 const topicTickets = computed(() => topicRecentData.value.jiraTickets);
 
 const convSearchQuery = ref('');
-const convReadFilter = ref<TopicConversationReadFilter>('all');
+const normalizeReadFilterValue = (
+  value: unknown,
+): TopicConversationReadFilter => {
+  const normalizedValue = Array.isArray(value) ? value[0] : value;
+  const normalized = String(normalizedValue || '').trim();
+  if (normalized === 'unread' || normalized === 'read') {
+    return normalized;
+  }
+  return 'all';
+};
+const convReadFilter = ref<TopicConversationReadFilter>(
+  normalizeReadFilterValue(route.query.readFilter),
+);
 const convFilter = ref('all');
 const webSearchQuery = ref('');
 const webTypeFilter = ref('all');
@@ -572,7 +585,7 @@ const toggleConversationExpand = (conversation: any, index = 0) => {
     newExpanded.clear();
     newExpanded.add(conversationId);
     const messageId = getTopicConversationPrimaryId(conversation);
-    if (messageId) {
+    if (messageId && isConversationUnread(conversation)) {
       void store.markConversationAsRead(topicId.value, messageId);
     }
   }
@@ -612,7 +625,7 @@ const getConversationContextLabel = (conversation: any): string => {
 };
 
 const isContextMessageUnread = (contextMessage: any): boolean => {
-  return contextMessage?.isRead !== true;
+  return isTopicMessageExplicitlyUnread(contextMessage);
 };
 
 const formatConversationUndoLabel = (undoState: any): string => {
@@ -645,6 +658,7 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
   if (!targetConversationId) {
     activeTab.value = 'conversations';
     convFilter.value = 'all';
+    convReadFilter.value = 'all';
     convSearchQuery.value = '';
     messageFocusNotice.value = {
       type: 'warning',
@@ -655,10 +669,7 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
 
   activeTab.value = 'conversations';
   convFilter.value = 'all';
-  messageFocusNotice.value = {
-    type: 'info',
-    text: '已定位到链接里的聊天记录，并同步为已读。',
-  };
+  convReadFilter.value = 'all';
 
   if (
     convSearchQuery.value &&
@@ -672,7 +683,16 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
 
   expandedConversations.value = new Set([targetConversationId]);
   highlightedConversationId.value = targetConversationId;
-  await store.markConversationAsRead(topicId.value, messageId);
+  const didSyncReadState = await store.markConversationAsRead(
+    topicId.value,
+    messageId,
+  );
+  messageFocusNotice.value = {
+    type: 'info',
+    text: didSyncReadState
+      ? '已定位到链接里的聊天记录，并同步为已读。'
+      : '已定位到链接里的聊天记录；当前没有明确未读状态需要同步。',
+  };
   await nextTick();
 
   const targetElement = Array.from(
@@ -753,6 +773,14 @@ watch(
   () => route.query.messageId,
   (messageId) => {
     focusConversationFromQuery(messageId);
+  },
+);
+
+watch(
+  () => route.query.readFilter,
+  (readFilter) => {
+    if (normalizeQueryValue(route.query.messageId)) return;
+    convReadFilter.value = normalizeReadFilterValue(readFilter);
   },
 );
 </script>

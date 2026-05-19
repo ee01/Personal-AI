@@ -105,3 +105,47 @@ export function getComposerAssistPreviewText(
 
   return `${preview.slice(0, maxLength).trimEnd()}...`;
 }
+
+export function getComposerAssistRiskLabel(
+  assist?: Pick<ComposerAssistResponse, 'riskLevel' | 'previewRequired'> | null,
+): string {
+  if (!assist) return '低风险';
+  if (assist.riskLevel === 'high') return '高风险 · 先预览';
+  if (assist.riskLevel === 'medium') return '中风险 · 确认后插入';
+  return assist.previewRequired ? '低风险 · 先预览' : '低风险';
+}
+
+export function getComposerAssistSourceSummary(
+  assist?: Pick<
+    ComposerAssistResponse,
+    'evidence' | 'riskLevel' | 'previewRequired'
+  > | null,
+): string {
+  const riskLabel = getComposerAssistRiskLabel(assist);
+  const evidence = assist?.evidence || [];
+  if (evidence.length === 0) return riskLabel;
+
+  const sourceLabels = Array.from(
+    new Set(
+      evidence
+        .map(
+          (item) =>
+            item.sourceTitle ||
+            item.title ||
+            item.sourceLabel ||
+            item.sourceUrl ||
+            '',
+        )
+        .map((value) => value.replace(/\s+/g, ' ').trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 2);
+
+  return [
+    `${evidence.length} 条记忆`,
+    riskLabel,
+    sourceLabels.length ? sourceLabels.join(' / ') : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}

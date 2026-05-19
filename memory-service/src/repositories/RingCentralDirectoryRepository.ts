@@ -232,6 +232,37 @@ export class RingCentralDirectoryRepository {
     return users.length;
   }
 
+  upsertUsers(users: RingCentralDirectoryUserRecord[]): number {
+    if (users.length === 0) return 0;
+    const insert = this.db.prepare(
+      `INSERT INTO rc_directory_users (
+         entity_id, display_name, email, extension_number, search_text, raw_json, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(entity_id) DO UPDATE SET
+         display_name = excluded.display_name,
+         email = excluded.email,
+         extension_number = excluded.extension_number,
+         search_text = excluded.search_text,
+         raw_json = excluded.raw_json,
+         updated_at = excluded.updated_at`,
+    );
+    const trx = this.db.transaction((items: RingCentralDirectoryUserRecord[]) => {
+      for (const item of items) {
+        insert.run(
+          item.entityId,
+          item.displayName,
+          item.email ?? null,
+          item.extensionNumber ?? null,
+          normalizeSearchText(item.searchText),
+          JSON.stringify(item.raw ?? {}),
+          item.updatedAt,
+        );
+      }
+    });
+    trx(users);
+    return users.length;
+  }
+
   replaceTeams(teams: RingCentralDirectoryTeamRecord[]): number {
     const insert = this.db.prepare(
       `INSERT INTO rc_directory_teams (

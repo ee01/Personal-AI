@@ -9,6 +9,7 @@ import {
   normalizeRingCentralSenderConfig,
   normalizeSheetConfig,
 } from './botAutomationConfig.js';
+import { parseConfigSyncTimestamp } from './configSyncFreshness.js';
 
 type ConfigRow = [string, string];
 type SheetMetadata = {
@@ -17,6 +18,10 @@ type SheetMetadata = {
     title?: string;
     index?: number;
   };
+};
+type SaveConfigToSheetOptions = {
+  includeRingCentralSenderKeys?: boolean;
+  expectedLastSyncTime?: string;
 };
 
 const CONFIG_MIN_ROW_COUNT = 56;
@@ -105,26 +110,6 @@ function parseSheetGridId(value: string): number | undefined {
   return Number.isSafeInteger(parsedValue) ? parsedValue : undefined;
 }
 
-function parseConfigTimestamp(value?: string): number | null {
-  if (!value) {
-    return null;
-  }
-
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? null : timestamp;
-}
-
-function isSheetConfigNewer(sheetConfig: Partial<SheetConfig>, localConfig: Partial<SheetConfig>): boolean {
-  const sheetTimestamp = parseConfigTimestamp(sheetConfig.last_sync_time);
-  const localTimestamp = parseConfigTimestamp(localConfig.last_sync_time);
-
-  if (sheetTimestamp === null) {
-    return false;
-  }
-
-  return localTimestamp === null || sheetTimestamp > localTimestamp;
-}
-
 function hasRule(rule?: Partial<BotAutomationRule>): boolean {
   return Boolean(rule?.ruleId);
 }
@@ -145,6 +130,76 @@ function mergeRule(
 
 function parseConfigBoolean(value: string): boolean {
   return ['true', '1', 'yes', 'y', 'on'].includes(value.trim().toLowerCase());
+}
+
+function shouldUseSheetConfigForPartialUpdateBase(
+  sheetConfig: Partial<SheetConfig>,
+  localConfig: Partial<SheetConfig>
+): boolean {
+  if (!sheetConfig.sheet_version) {
+    return false;
+  }
+
+  const sheetTimestamp = parseConfigSyncTimestamp(sheetConfig.last_sync_time);
+  const localTimestamp = parseConfigSyncTimestamp(localConfig.last_sync_time);
+
+  if (sheetTimestamp !== null && localTimestamp !== null) {
+    return sheetTimestamp >= localTimestamp;
+  }
+
+  if (sheetTimestamp !== null) {
+    return true;
+  }
+
+  if (localTimestamp !== null) {
+    return false;
+  }
+
+  // Without reliable freshness, prefer the Sheet snapshot because it is the
+  // cross-device recovery source and partial updates should not erase it.
+  return true;
+}
+
+function getNewestLastSyncTime(rows: ConfigRow[]): { value: string; timestamp: number } | null {
+  let newest: { value: string; timestamp: number } | null = null;
+
+  for (const [rawKey, value] of rows) {
+    if (rawKey.trim() !== 'last_sync_time') {
+      continue;
+    }
+
+    const timestamp = parseConfigSyncTimestamp(value);
+    if (timestamp === null) {
+      continue;
+    }
+
+    if (!newest || timestamp > newest.timestamp) {
+      newest = { value, timestamp };
+    }
+  }
+
+  return newest;
+}
+
+function assertSheetConfigNotNewer(
+  rows: ConfigRow[],
+  expectedLastSyncTime?: string
+): void {
+  const sheetLastSyncTime = getNewestLastSyncTime(rows);
+  if (!sheetLastSyncTime) {
+    return;
+  }
+
+  const expectedTimestamp = parseConfigSyncTimestamp(expectedLastSyncTime);
+  if (expectedTimestamp !== null && sheetLastSyncTime.timestamp <= expectedTimestamp) {
+    return;
+  }
+
+  throw new Error(
+    `Sheet Config 已更新，已暂停写入以避免覆盖其它设备的配置。` +
+    `请先刷新或重新绑定后再保存。` +
+    `本机基准：${expectedLastSyncTime || '未知'}；Sheet：${sheetLastSyncTime.value}`
+  );
 }
 
 export class ConfigSyncService {
@@ -196,51 +251,114 @@ export class ConfigSyncService {
         return config.ringCentralSender;
       };
 
+      const scalarFieldPriority = new Map<string, number>();
+      const setScalarField = <K extends keyof SheetConfig>(
+        field: K,
+        value: SheetConfig[K],
+        priority = 2
+      ) => {
+        const existingPriority = scalarFieldPriority.get(String(field));
+        if (existingPriority !== undefined && existingPriority >= priority) {
+          return;
+        }
+
+        config[field] = value;
+        scalarFieldPriority.set(String(field), priority);
+      };
+
+      const ruleFieldPriority = new Map<string, number>();
+      const setRuleField = (
+        kind: 'executorRule' | 'timelineSyncRule' | 'legacy',
+        field: keyof BotAutomationRule,
+        value: string,
+        priority = 2
+      ) => {
+        const fieldKey = `${kind}.${field}`;
+        const existingPriority = ruleFieldPriority.get(fieldKey);
+        if (existingPriority !== undefined && existingPriority >= priority) {
+          return;
+        }
+
+        (ensureRule(kind) as any)[field] = value;
+        ruleFieldPriority.set(fieldKey, priority);
+      };
+
+      const ringCentralSenderFieldPriority = new Map<string, number>();
+      const setRingCentralSenderField = <K extends keyof RingCentralSenderConfig>(
+        field: K,
+        value: RingCentralSenderConfig[K],
+        priority = 2
+      ) => {
+        const existingPriority = ringCentralSenderFieldPriority.get(String(field));
+        if (existingPriority !== undefined && existingPriority >= priority) {
+          return;
+        }
+
+        ensureRingCentralSender()[field] = value as never;
+        ringCentralSenderFieldPriority.set(String(field), priority);
+      };
+
+      let newestLastSyncTime: { value: string; timestamp: number } | null = null;
+      let fallbackLastSyncTime = '';
+
       for (const row of rows) {
         const [key, value] = row;
         if (!key || !value) continue;
 
         switch (key) {
           case 'minute_trigger_id':
-            config.minute_trigger_id = value;
+            setScalarField('minute_trigger_id', value);
             break;
           case 'daily_trigger_id':
-            config.daily_trigger_id = value;
+            setScalarField('daily_trigger_id', value);
             break;
           case 'web_app_url':
-            config.webAppUrl = value;
+            setScalarField('webAppUrl', value);
             break;
           case 'script_id':
-            config.scriptId = value;
+            setScalarField('scriptId', value);
             break;
           case 'deployment_id':
+            setScalarField('deploymentId', value);
+            break;
           case 'deploymentId':
-            config.deploymentId = value;
+            setScalarField('deploymentId', value, 1);
             break;
           case 'sheet_version':
-            config.sheet_version = value;
+            setScalarField('sheet_version', value);
             break;
           case 'app_script_version':
+            setScalarField('appScriptVersion', value);
+            break;
           case 'appScriptVersion':
-            config.appScriptVersion = value;
+            setScalarField('appScriptVersion', value, 1);
             break;
           case 'app_script_last_updated':
+            setScalarField('appScriptLastUpdated', value);
+            break;
           case 'appScriptLastUpdated':
-            config.appScriptLastUpdated = value;
+            setScalarField('appScriptLastUpdated', value, 1);
             break;
           case 'created_by':
-            config.created_by = value;
+            setScalarField('created_by', value);
             break;
           case 'created_at':
-            config.created_at = value;
+            setScalarField('created_at', value);
             break;
-          case 'last_sync_time':
-            config.last_sync_time = value;
+          case 'last_sync_time': {
+            if (!fallbackLastSyncTime) {
+              fallbackLastSyncTime = value;
+            }
+            const timestamp = parseConfigSyncTimestamp(value);
+            if (timestamp !== null && (!newestLastSyncTime || timestamp > newestLastSyncTime.timestamp)) {
+              newestLastSyncTime = { value, timestamp };
+            }
             break;
+          }
           case 'messages_sheet_id': {
             const messagesSheetId = parseSheetGridId(value);
             if (messagesSheetId !== undefined) {
-              config.messagesSheetId = messagesSheetId;
+              setScalarField('messagesSheetId', messagesSheetId);
             } else {
               console.warn(`忽略无效的 messages_sheet_id: ${value}`);
             }
@@ -249,7 +367,7 @@ export class ConfigSyncService {
           case 'logs_sheet_id': {
             const logsSheetId = parseSheetGridId(value);
             if (logsSheetId !== undefined) {
-              config.logsSheetId = logsSheetId;
+              setScalarField('logsSheetId', logsSheetId);
             } else {
               console.warn(`忽略无效的 logs_sheet_id: ${value}`);
             }
@@ -257,93 +375,99 @@ export class ConfigSyncService {
           }
           // Bot Executor 配置
           case 'bot_executor_rule_id':
-            ensureRule('legacy').ruleId = value;
+            setRuleField('legacy', 'ruleId', value);
             break;
           case 'bot_executor_rule_name':
-            ensureRule('legacy').ruleName = value;
+            setRuleField('legacy', 'ruleName', value);
             break;
           case 'bot_executor_webhook_url':
-            ensureRule('legacy').webhookUrl = value;
+            setRuleField('legacy', 'webhookUrl', value);
             break;
           case 'bot_executor_project_key':
-            ensureRule('legacy').projectKey = value;
+            setRuleField('legacy', 'projectKey', value);
             break;
           case 'bot_executor_jira_url':
-            ensureRule('legacy').jiraUrl = value;
+            setRuleField('legacy', 'jiraUrl', value);
             break;
           case 'bot_executor_created_at':
-            ensureRule('legacy').createdAt = value;
+            setRuleField('legacy', 'createdAt', value);
             break;
           case 'bot_executor_rule_version':
-            ensureRule('legacy').ruleVersion = value;
+            setRuleField('legacy', 'ruleVersion', value);
             break;
           case 'bot_executor_rule_last_updated':
-            ensureRule('legacy').ruleLastUpdated = value;
+            setRuleField('legacy', 'ruleLastUpdated', value);
             break;
           case 'bot_automation_executor_rule_id':
-            ensureRule('executorRule').ruleId = value;
+            setRuleField('executorRule', 'ruleId', value);
             break;
           case 'bot_automation_executor_rule_name':
-            ensureRule('executorRule').ruleName = value;
+            setRuleField('executorRule', 'ruleName', value);
             break;
           case 'bot_automation_executor_webhook_url':
-            ensureRule('executorRule').webhookUrl = value;
+            setRuleField('executorRule', 'webhookUrl', value);
             break;
           case 'bot_automation_executor_project_key':
-            ensureRule('executorRule').projectKey = value;
+            setRuleField('executorRule', 'projectKey', value);
             break;
           case 'bot_automation_executor_jira_url':
-            ensureRule('executorRule').jiraUrl = value;
+            setRuleField('executorRule', 'jiraUrl', value);
             break;
           case 'bot_automation_executor_created_at':
-            ensureRule('executorRule').createdAt = value;
+            setRuleField('executorRule', 'createdAt', value);
             break;
           case 'bot_automation_executor_rule_version':
-            ensureRule('executorRule').ruleVersion = value;
+            setRuleField('executorRule', 'ruleVersion', value);
             break;
           case 'bot_automation_executor_rule_last_updated':
-            ensureRule('executorRule').ruleLastUpdated = value;
+            setRuleField('executorRule', 'ruleLastUpdated', value);
             break;
           case 'bot_automation_timeline_sync_rule_id':
-            ensureRule('timelineSyncRule').ruleId = value;
+            setRuleField('timelineSyncRule', 'ruleId', value);
             break;
           case 'bot_automation_timeline_sync_rule_name':
-            ensureRule('timelineSyncRule').ruleName = value;
+            setRuleField('timelineSyncRule', 'ruleName', value);
             break;
           case 'bot_automation_timeline_sync_webhook_url':
-            ensureRule('timelineSyncRule').webhookUrl = value;
+            setRuleField('timelineSyncRule', 'webhookUrl', value);
             break;
           case 'bot_automation_timeline_sync_project_key':
-            ensureRule('timelineSyncRule').projectKey = value;
+            setRuleField('timelineSyncRule', 'projectKey', value);
             break;
           case 'bot_automation_timeline_sync_jira_url':
-            ensureRule('timelineSyncRule').jiraUrl = value;
+            setRuleField('timelineSyncRule', 'jiraUrl', value);
             break;
           case 'bot_automation_timeline_sync_created_at':
-            ensureRule('timelineSyncRule').createdAt = value;
+            setRuleField('timelineSyncRule', 'createdAt', value);
             break;
           case 'bot_automation_timeline_sync_rule_version':
-            ensureRule('timelineSyncRule').ruleVersion = value;
+            setRuleField('timelineSyncRule', 'ruleVersion', value);
             break;
           case 'bot_automation_timeline_sync_rule_last_updated':
-            ensureRule('timelineSyncRule').ruleLastUpdated = value;
+            setRuleField('timelineSyncRule', 'ruleLastUpdated', value);
             break;
           case 'ringcentral_sender_enabled':
-            ensureRingCentralSender().enabled = parseConfigBoolean(value);
+            setRingCentralSenderField('enabled', parseConfigBoolean(value));
             break;
           case 'ringcentral_sender_client_id':
-            ensureRingCentralSender().clientId = value;
+            setRingCentralSenderField('clientId', value);
             break;
           case 'ringcentral_sender_client_secret':
-            ensureRingCentralSender().clientSecret = value;
+            setRingCentralSenderField('clientSecret', value);
             break;
           case 'ringcentral_sender_jwt':
-            ensureRingCentralSender().jwt = value;
+            setRingCentralSenderField('jwt', value);
             break;
           case 'ringcentral_sender_updated_at':
-            ensureRingCentralSender().updatedAt = value;
+            setRingCentralSenderField('updatedAt', value);
             break;
         }
+      }
+
+      if (newestLastSyncTime) {
+        config.last_sync_time = newestLastSyncTime.value;
+      } else if (fallbackLastSyncTime) {
+        config.last_sync_time = fallbackLastSyncTime;
       }
 
       return normalizeSheetConfig(config);
@@ -359,7 +483,7 @@ export class ConfigSyncService {
   async saveConfigToSheet(
     config: SheetConfig,
     lastSyncTime?: string,
-    options?: { includeRingCentralSenderKeys?: boolean }
+    options?: SaveConfigToSheetOptions
   ): Promise<void> {
     try {
       const includeRingCentralSenderKeys = options?.includeRingCentralSenderKeys ??
@@ -372,6 +496,10 @@ export class ConfigSyncService {
         includeRingCentralSenderKeys,
       });
       const existingRows = await this.readRawConfigRowsForWrite(normalizedConfig.sheetId);
+      assertSheetConfigNotNewer(
+        existingRows,
+        options?.expectedLastSyncTime ?? config.last_sync_time
+      );
       const managedKeysForWrite = getManagedConfigKeysForWrite(includeRingCentralSenderKeys);
       const mergedConfigData = this.mergeConfigRows(existingRows, configData, managedKeysForWrite);
       const rowCount = Math.max(CONFIG_MIN_ROW_COUNT, existingRows.length, mergedConfigData.length);
@@ -428,6 +556,7 @@ export class ConfigSyncService {
    */
   async syncConfig(config: SheetConfig): Promise<SheetConfig> {
     const lastSyncTime = new Date().toISOString();
+    const expectedLastSyncTime = config.last_sync_time;
     const includeRingCentralSenderKeys = config.ringCentralSender !== undefined;
     const normalizedConfig = normalizeSheetConfig({
       ...config,
@@ -437,6 +566,7 @@ export class ConfigSyncService {
     // Sheet 是跨设备恢复来源，先写入成功后再更新本地，避免失败时留下半同步状态。
     await this.saveConfigToSheet(normalizedConfig, lastSyncTime, {
       includeRingCentralSenderKeys,
+      expectedLastSyncTime,
     });
     await this.saveConfigToStorage(normalizedConfig);
 
@@ -560,7 +690,7 @@ export class ConfigSyncService {
   private async readLatestConfigBase(existingConfig: SheetConfig): Promise<SheetConfig> {
     try {
       const sheetConfig = await this.readConfigFromSheet(existingConfig.sheetId);
-      if (!sheetConfig.sheet_version || !isSheetConfigNewer(sheetConfig, existingConfig)) {
+      if (!shouldUseSheetConfigForPartialUpdateBase(sheetConfig, existingConfig)) {
         return existingConfig;
       }
 

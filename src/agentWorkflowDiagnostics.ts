@@ -11,6 +11,16 @@ export type AgentWorkflowRecommendedActionStatus =
   | 'optimize'
   | 'verify'
   | 'done';
+export type AgentWorkflowReadinessStatus =
+  | 'ready'
+  | 'review'
+  | 'blocked'
+  | 'skipped';
+export type AgentWorkflowRunVerdictStatus =
+  | 'ready'
+  | 'review'
+  | 'blocked'
+  | 'idle';
 
 export interface AgentWorkflowDiagnostic {
   id: string;
@@ -34,6 +44,22 @@ export interface AgentWorkflowRecommendedAction {
   title: string;
   summary: string;
   detail?: string;
+}
+
+export interface AgentWorkflowReadinessCheck {
+  id: string;
+  status: AgentWorkflowReadinessStatus;
+  title: string;
+  summary: string;
+  detail?: string;
+}
+
+export interface AgentWorkflowRunVerdict {
+  status: AgentWorkflowRunVerdictStatus;
+  title: string;
+  summary: string;
+  detail?: string;
+  actionLabel?: string;
 }
 
 export interface AgentWorkflowAgentLike {
@@ -67,7 +93,7 @@ export interface AgentWorkflowTraceStepLike {
 export interface AgentWorkflowResultLike {
   shouldStore?: boolean;
   shouldNotify?: boolean;
-  confidence?: number;
+  confidence?: number | string;
   summary?: string;
   matchedRule?: string;
   matchedRuleRefs?: string[];
@@ -79,7 +105,9 @@ export interface AgentWorkflowResultLike {
     reasonSource?: string;
     shouldStore?: boolean;
     shouldNotify?: boolean;
-    confidence?: number;
+    confidence?: number | string;
+    matchedRuleRefs?: string[];
+    matchedRuleIds?: number[];
     traceStatus?: string;
     failedAgents?: string[];
     toolErrorCount?: number;
@@ -110,16 +138,27 @@ function getToolLabel(tool: AgentWorkflowTraceToolLike): string {
   return tool.displayName || tool.name || '未知工具';
 }
 
-function normalizeConfidence(value?: number): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
+export function normalizeAgentWorkflowConfidence(
+  value?: number | string | null,
+): number | null {
+  let numeric: number;
+  if (typeof value === 'number') {
+    numeric = value;
+  } else if (typeof value === 'string') {
+    const normalized = value.trim().replace(/%$/, '');
+    if (!normalized) return null;
+    numeric = Number(normalized);
+  } else {
     return null;
   }
-  const normalized = value > 1 && value <= 100 ? value / 100 : value;
+
+  if (!Number.isFinite(numeric)) return null;
+  const normalized = numeric > 1 && numeric <= 100 ? numeric / 100 : numeric;
   return Math.min(1, Math.max(0, normalized));
 }
 
-function getConfidenceLabel(confidence?: number): string {
-  const normalized = normalizeConfidence(confidence);
+function getConfidenceLabel(confidence?: number | string | null): string {
+  const normalized = normalizeAgentWorkflowConfidence(confidence);
   if (normalized === null) {
     return '';
   }
@@ -135,7 +174,94 @@ function getMatchedRuleLabel(result: AgentWorkflowResultLike): string {
   const ids = Array.isArray(result.matchedRuleIds) ? result.matchedRuleIds : [];
   if (ids.length > 0) return ids.join('、');
 
+  const storageRefs = Array.isArray(result.storageReview?.matchedRuleRefs)
+    ? result.storageReview.matchedRuleRefs
+    : [];
+  if (storageRefs.length > 0) return storageRefs.join('、');
+
+  const storageIds = Array.isArray(result.storageReview?.matchedRuleIds)
+    ? result.storageReview.matchedRuleIds
+    : [];
+  if (storageIds.length > 0) return storageIds.join('、');
+
   return result.matchedRule || '';
+}
+
+function getTrace(result: AgentWorkflowResultLike): AgentWorkflowTraceStepLike[] {
+  return Array.isArray(result.agentWorkflowTrace)
+    ? result.agentWorkflowTrace
+    : [];
+}
+
+function getTraceIssueSummary(trace: AgentWorkflowTraceStepLike[]): {
+  failedSteps: AgentWorkflowTraceStepLike[];
+  skippedToolCount: number;
+  toolErrorCount: number;
+  slowStepLabels: string[];
+  slowToolLabels: string[];
+  externalPlaceholderLabels: string[];
+} {
+  const failedSteps = trace.filter((step) => step.status === 'error');
+  const skippedToolCount = trace.reduce(
+    (count, step) =>
+      count +
+      (step.tools || []).filter((tool) => tool.status === 'skipped').length,
+    0,
+  );
+  const toolErrorCount = trace.reduce(
+    (count, step) =>
+      count +
+      (step.tools || []).filter((tool) => tool.status === 'error').length,
+    0,
+  );
+  const slowStepLabels = trace
+    .filter(
+      (step) =>
+        typeof step.durationMs === 'number' && step.durationMs >= SLOW_AGENT_MS,
+    )
+    .map(
+      (step) =>
+        `${getTraceStepLabel(step)} ${Math.round(step.durationMs || 0)}ms`,
+    );
+  const slowToolLabels = trace.flatMap((step) =>
+    (step.tools || [])
+      .filter(
+        (tool) =>
+          typeof tool.durationMs === 'number' && tool.durationMs >= SLOW_TOOL_MS,
+      )
+      .map(
+        (tool) =>
+          `${getTraceStepLabel(step)} / ${getToolLabel(tool)} ${Math.round(
+            tool.durationMs || 0,
+          )}ms`,
+      ),
+  );
+  const externalPlaceholderLabels = uniq(
+    trace.flatMap((step) =>
+      (step.tools || [])
+        .filter((tool) => {
+          if (tool.name !== 'externalServiceQuery') return false;
+          const summary = String(tool.summary || '');
+          return (
+            tool.status === 'skipped' ||
+            tool.status === 'error' ||
+            /success=false|unsupported|不支持|缺少参数|placeholder|占位/.test(
+              summary,
+            )
+          );
+        })
+        .map((tool) => `${getTraceStepLabel(step)} / ${getToolLabel(tool)}`),
+    ),
+  );
+
+  return {
+    failedSteps,
+    skippedToolCount,
+    toolErrorCount,
+    slowStepLabels,
+    slowToolLabels,
+    externalPlaceholderLabels,
+  };
 }
 
 function getStorageReasonSourceLabel(reasonSource?: string): string {
@@ -254,9 +380,8 @@ export function buildAgentWorkflowResultDiagnostics(
   if (!result) return [];
 
   const diagnostics: AgentWorkflowDiagnostic[] = [];
-  const trace = Array.isArray(result.agentWorkflowTrace)
-    ? result.agentWorkflowTrace
-    : [];
+  const trace = getTrace(result);
+  const matchedRuleLabel = getMatchedRuleLabel(result);
 
   if (result.notificationReview?.required) {
     diagnostics.push({
@@ -266,6 +391,16 @@ export function buildAgentWorkflowResultDiagnostics(
       message:
         result.notificationReview.message ||
         '低置信度关注项命中没有直接触发通知。',
+    });
+  }
+
+  if (result.shouldNotify && !matchedRuleLabel) {
+    diagnostics.push({
+      id: 'notification-without-rule',
+      severity: 'warning',
+      title: '通知缺少规则归因',
+      message: '本次会发送通知，但没有 matchedRuleRefs / matchedRuleIds。',
+      detail: '先补齐规则引用，避免后续误报无法追溯到关注项。',
     });
   }
 
@@ -365,17 +500,13 @@ export function buildAgentWorkflowResultDiagnostics(
     });
   }
 
-  if (
-    Array.isArray(result.matchedRuleRefs) &&
-    result.matchedRuleRefs.length > 0 &&
-    !result.shouldStore &&
-    !result.shouldNotify
-  ) {
+  if (matchedRuleLabel && !result.shouldStore && !result.shouldNotify) {
     diagnostics.push({
       id: 'matched-rule-without-action',
       severity: 'warning',
       title: '命中规则没有后续动作',
-      message: '检查关注项是否只用于存储，或规则引用是否已经过期。',
+      message: matchedRuleLabel,
+      detail: '确认该关注项是否只作静默证据；否则补齐存储、通知或自动化动作。',
     });
   }
 
@@ -526,6 +657,8 @@ export function buildAgentWorkflowDecisionPath(
     detail:
       failedSteps.length > 0
         ? `失败：${failedSteps.map(getTraceStepLabel).join('、')}`
+        : toolErrorCount > 0
+          ? `工具错误 ${toolErrorCount}`
         : effectiveSkippedToolCount > 0
           ? `跳过工具 ${effectiveSkippedToolCount}`
           : undefined,
@@ -576,6 +709,38 @@ export function buildAgentWorkflowRecommendedActions(
       title: '修复失败阶段',
       summary: failedAgents,
       detail: '先处理失败 Agent，再重新运行同一条测试消息。',
+    });
+  }
+
+  if (diagnosticIds.has('partial-trace')) {
+    actions.push({
+      id: 'fix-tool-errors',
+      status: 'fix',
+      title: '修复工具异常',
+      summary:
+        runDiagnostics.find((item) => item.id === 'partial-trace')?.message ||
+        'Trace 标记为部分异常。',
+      detail: '先定位工具错误来源，再重新运行同一条测试消息。',
+    });
+  }
+
+  if (diagnosticIds.has('notification-without-rule')) {
+    actions.push({
+      id: 'fix-notification-attribution',
+      status: 'fix',
+      title: '补齐通知归因',
+      summary: '通知会发送，但没有稳定规则引用。',
+      detail: '优先写入 matchedRuleRefs，matchedRuleIds 只作为旧格式兼容。',
+    });
+  }
+
+  if (diagnosticIds.has('matched-rule-without-action')) {
+    actions.push({
+      id: 'review-rule-without-action',
+      status: 'review',
+      title: '复核无动作规则',
+      summary: matchedRuleLabel || '规则已命中，但没有存储或通知动作。',
+      detail: '确认该关注项是否只作静默证据；需要提醒时补齐存储、通知或自动化动作。',
     });
   }
 
@@ -663,6 +828,279 @@ export function buildAgentWorkflowRecommendedActions(
   }
 
   return actions.slice(0, 5);
+}
+
+export function buildAgentWorkflowReadinessChecks(
+  result?: AgentWorkflowResultLike | null,
+): AgentWorkflowReadinessCheck[] {
+  if (!result) return [];
+
+  const trace = getTrace(result);
+  const matchedRuleLabel = getMatchedRuleLabel(result);
+  const traceIssues = getTraceIssueSummary(trace);
+  const storageToolErrorCount = result.storageReview?.toolErrorCount || 0;
+  const storageFailedAgents = Array.isArray(result.storageReview?.failedAgents)
+    ? result.storageReview.failedAgents.filter(Boolean)
+    : [];
+  const matchedRuleWithoutAction =
+    Boolean(matchedRuleLabel) && !result.shouldStore && !result.shouldNotify;
+  const effectiveSkippedToolCount =
+    traceIssues.skippedToolCount || result.storageReview?.toolSkippedCount || 0;
+  const checks: AgentWorkflowReadinessCheck[] = [];
+
+  if (trace.length === 0) {
+    checks.push({
+      id: 'trace',
+      status: 'blocked',
+      title: '执行 Trace',
+      summary: '缺少 Agent / 工具执行记录',
+      detail: '先确认测试确实走到 Agent Workflow 编排器。',
+    });
+  } else if (
+    traceIssues.failedSteps.length > 0 ||
+    traceIssues.toolErrorCount > 0 ||
+    storageToolErrorCount > 0 ||
+    storageFailedAgents.length > 0
+  ) {
+    checks.push({
+      id: 'trace',
+      status: 'blocked',
+      title: '执行 Trace',
+      summary: `失败：${
+        traceIssues.failedSteps.map(getTraceStepLabel).join('、') ||
+        storageFailedAgents.join('、') ||
+        `工具错误 ${traceIssues.toolErrorCount || storageToolErrorCount}`
+      }`,
+      detail: '修复失败阶段后再允许自动运行。',
+    });
+  } else if (
+    effectiveSkippedToolCount > 0 ||
+    result.storageReview?.traceStatus === 'partial'
+  ) {
+    checks.push({
+      id: 'trace',
+      status: 'review',
+      title: '执行 Trace',
+      summary: effectiveSkippedToolCount
+        ? `有 ${effectiveSkippedToolCount} 个工具被跳过`
+        : 'Trace 标记为部分异常',
+      detail: effectiveSkippedToolCount
+        ? '确认是否为旧自定义 Agent 或未注册工具。'
+        : 'storageReview 缺少具体失败/跳过明细，请查看原始 trace。',
+    });
+  } else {
+    checks.push({
+      id: 'trace',
+      status: 'ready',
+      title: '执行 Trace',
+      summary: `${trace.length} 个 Agent 已完成`,
+    });
+  }
+
+  if (result.shouldStore && !result.storageReview) {
+    checks.push({
+      id: 'storage',
+      status: 'blocked',
+      title: '记忆写入',
+      summary: '缺少 storageReview',
+      detail: '没有存储审计会阻断后续误报复盘。',
+    });
+  } else if (result.shouldStore) {
+    checks.push({
+      id: 'storage',
+      status:
+        result.storageReview?.traceStatus === 'partial' ? 'review' : 'ready',
+      title: '记忆写入',
+      summary:
+        result.storageReview?.primaryReason ||
+        result.storageReview?.summary ||
+        '已有存储审计',
+      detail: result.storageReview?.reasonSource
+        ? `来源：${getStorageReasonSourceLabel(result.storageReview.reasonSource)}`
+        : undefined,
+    });
+  } else {
+    checks.push({
+      id: 'storage',
+      status: 'skipped',
+      title: '记忆写入',
+      summary: '本次不写入 Memory Service',
+    });
+  }
+
+  if (result.notificationReview?.required) {
+    checks.push({
+      id: 'notification',
+      status: 'review',
+      title: '通知/自动化',
+      summary:
+        result.notificationReview.message ||
+        '低置信度命中已暂停通知和自动化。',
+      detail: matchedRuleLabel ? `规则：${matchedRuleLabel}` : undefined,
+    });
+  } else if (result.shouldNotify && !matchedRuleLabel) {
+    checks.push({
+      id: 'notification',
+      status: 'blocked',
+      title: '通知/自动化',
+      summary: '将发送通知但缺少规则归因',
+      detail: '先补 matchedRuleRefs，再允许外部副作用继续。',
+    });
+  } else if (result.shouldNotify) {
+    checks.push({
+      id: 'notification',
+      status: 'ready',
+      title: '通知/自动化',
+      summary: matchedRuleLabel || '通知归因已确认',
+    });
+  } else {
+    checks.push({
+      id: 'notification',
+      status: 'skipped',
+      title: '通知/自动化',
+      summary: '本次不触发通知或规则自动化',
+    });
+  }
+
+  if (matchedRuleWithoutAction) {
+    checks.push({
+      id: 'rule-action',
+      status: 'review',
+      title: '规则动作',
+      summary: '命中关注项但没有后续动作',
+      detail: `规则：${matchedRuleLabel}`,
+    });
+  }
+
+  if (traceIssues.externalPlaceholderLabels.length > 0) {
+    checks.push({
+      id: 'external-info',
+      status: 'review',
+      title: '外部信息',
+      summary: traceIssues.externalPlaceholderLabels.join('、'),
+      detail: '外部查询仍未接真实 Jira/Wiki adapter，只能作为占位结果参考。',
+    });
+  }
+
+  const slowTraceLabels = [
+    ...traceIssues.slowStepLabels,
+    ...traceIssues.slowToolLabels,
+  ];
+  if (slowTraceLabels.length > 0) {
+    checks.push({
+      id: 'performance',
+      status: 'review',
+      title: '耗时',
+      summary: slowTraceLabels.join('、'),
+      detail: '优先缩小 historySearch、外部查询和 LLM 输入。',
+    });
+  }
+
+  return checks;
+}
+
+export function buildAgentWorkflowRunVerdict(
+  result?: AgentWorkflowResultLike | null,
+  readinessChecks?: AgentWorkflowReadinessCheck[],
+  recommendedActions?: AgentWorkflowRecommendedAction[],
+): AgentWorkflowRunVerdict | null {
+  if (!result) return null;
+
+  const checks = readinessChecks || buildAgentWorkflowReadinessChecks(result);
+  const actions =
+    recommendedActions || buildAgentWorkflowRecommendedActions(result);
+  const blockedChecks = checks.filter((item) => item.status === 'blocked');
+  const reviewChecks = checks.filter((item) => item.status === 'review');
+  const firstAction = actions.find((item) => item.status !== 'done');
+  const matchedRuleLabel = getMatchedRuleLabel(result);
+  const confidenceLabel =
+    getConfidenceLabel(result.confidence) ||
+    getConfidenceLabel(result.storageReview?.confidence);
+  const summarizeChecks = (items: AgentWorkflowReadinessCheck[]) =>
+    items
+      .slice(0, 3)
+      .map((item) => item.title)
+      .join('、');
+  const detailChecks = (items: AgentWorkflowReadinessCheck[]) =>
+    items
+      .slice(0, 2)
+      .map((item) => `${item.title}：${item.summary}`)
+      .join('；');
+  const firstFixAction = actions.find((item) => item.status === 'fix');
+  const firstReviewAction = actions.find((item) => item.status === 'review');
+
+  if (blockedChecks.length > 0) {
+    const blockedAction = firstFixAction || firstAction;
+    return {
+      status: 'blocked',
+      title: '先修复阻塞项',
+      summary: summarizeChecks(blockedChecks),
+      detail: detailChecks(blockedChecks),
+      actionLabel: blockedAction?.title,
+    };
+  }
+
+  if (reviewChecks.length > 0 || result.notificationReview?.required) {
+    const reviewAction = firstReviewAction || firstFixAction || firstAction;
+    const reviewSummary =
+      summarizeChecks(reviewChecks) ||
+      result.notificationReview?.message ||
+      '本次运行需要人工复核';
+    return {
+      status: 'review',
+      title: '需要复核后再执行',
+      summary: reviewSummary,
+      detail:
+        reviewAction?.summary ||
+        (matchedRuleLabel
+          ? `规则：${matchedRuleLabel}${confidenceLabel ? ` / ${confidenceLabel}` : ''}`
+          : undefined),
+      actionLabel: reviewAction?.title,
+    };
+  }
+
+  if (result.shouldNotify) {
+    const notificationAction =
+      actions.find((item) => item.id === 'verify-notification') ||
+      firstAction;
+    return {
+      status: 'ready',
+      title: '可执行通知/自动化',
+      summary: matchedRuleLabel
+        ? `规则 ${matchedRuleLabel} 已通过门禁`
+        : '通知动作已通过门禁',
+      detail: confidenceLabel ? `置信度 ${confidenceLabel}` : undefined,
+      actionLabel: notificationAction?.title,
+    };
+  }
+
+  if (result.shouldStore) {
+    const storageAction =
+      actions.find((item) => item.id === 'verify-storage') || firstAction;
+    return {
+      status: 'ready',
+      title: '可写入记忆',
+      summary:
+        result.storageReview?.primaryReason ||
+        result.storageReview?.summary ||
+        result.summary ||
+        '记忆写入已通过门禁',
+      detail: result.storageReview?.reasonSource
+        ? `来源：${getStorageReasonSourceLabel(result.storageReview.reasonSource)}`
+        : undefined,
+      actionLabel: storageAction?.title,
+    };
+  }
+
+  return {
+    status: 'idle',
+    title: '无需后续动作',
+    summary: matchedRuleLabel
+      ? '命中规则但本次没有自动动作'
+      : '本次不会存储，也不会发送通知',
+    detail: firstAction?.summary,
+    actionLabel: firstAction?.title,
+  };
 }
 
 export function getAgentWorkflowHighestSeverity(

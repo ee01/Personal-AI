@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { BridgeSyncManager } from '../syncManager.js';
+import type { BridgeSyncAttemptLogEntry } from '../types.js';
 
 function createSettingsStore() {
   return {
@@ -135,7 +136,9 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
 
   const result = await manager.runNow('reminder_sync');
 
-  assert.deepEqual(result, { status: 'succeeded' });
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(result.packageKinds, ['todo_digest', 'notice_digest']);
+  assert.equal(result.sourceRefCount, 2);
   assert.deepEqual(calls, [
     'render:todo_sync',
     'bridge:todo-memo',
@@ -158,6 +161,78 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
       error: undefined,
     },
   ]);
+});
+
+test('runNow keeps delivery provenance in recent sync attempts', async () => {
+  const memoryClient = {
+    isEnabled: () => true,
+    renderContextPackage: async ({ scenario }: { scenario: string }) => ({
+      provider: 'doubao',
+      scenario,
+      packages: [
+        {
+          title: 'Persona Core',
+          kind: 'persona_core',
+          bodyMd: '- Prefers concise updates',
+          sourceRefs: ['profile_item:response_length'],
+        },
+      ],
+      syncJob: {
+        id: `job-${scenario}`,
+        status: 'queued',
+      },
+    }),
+    reportSyncJob: async () => undefined,
+  };
+  const bridgeService = {
+    syncStableMemoryAsMemo: async () => ({
+      accepted: true,
+      kind: 'stable_memory',
+      targetBindingType: 'memory_sync',
+      threadId: 'thread-persona-1234567890',
+      transcript: '',
+      sentAt: new Date().toISOString(),
+      transportUsed: 'dom',
+      transportMode: 'playwright',
+      transportFallbackReason: 'webpage_mcp send failed',
+      verified: true,
+      messageVisible: true,
+      challengeDetected: false,
+    }),
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  const result = await manager.runNow('stable_memory');
+  const [attempt] = manager.getSnapshot().recentAttempts;
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.externalThreadId, 'thread-persona-1234567890');
+  assert.deepEqual(result.packageKinds, ['persona_core']);
+  assert.equal(result.sourceRefCount, 1);
+  assert.equal(result.verified, true);
+  assert.equal(result.messageVisible, true);
+  assert.equal(result.challengeDetected, false);
+  assert.equal(result.transportMode, 'playwright');
+  assert.equal(result.transportFallbackReason, 'webpage_mcp send failed');
+  assert.equal(attempt.externalThreadId, 'thread-persona-1234567890');
+  assert.deepEqual(attempt.packageKinds, ['persona_core']);
+  assert.equal(attempt.sourceRefCount, 1);
+  assert.equal(attempt.verified, true);
+  assert.equal(attempt.messageVisible, true);
+  assert.equal(attempt.challengeDetected, false);
+  assert.equal(attempt.transportMode, 'playwright');
+  assert.equal(
+    attempt.transportFallbackReason,
+    'webpage_mcp send failed',
+  );
 });
 
 test('runNow falls back to reminder_sync when todo_sync is not supported', async () => {
@@ -210,7 +285,9 @@ test('runNow falls back to reminder_sync when todo_sync is not supported', async
 
   const result = await manager.runNow('reminder_sync');
 
-  assert.deepEqual(result, { status: 'succeeded' });
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(result.packageKinds, ['reminder_digest']);
+  assert.equal(result.sourceRefCount, 1);
   assert.deepEqual(calls, ['render:reminder_sync', 'bridge:todo-memo']);
 });
 
@@ -302,6 +379,8 @@ test('runNow skips placeholder todo and notice digests when itemCount is 0', asy
   assert.deepEqual(result, {
     status: 'skipped',
     errorMessage: 'No pending todos to sync / No notices to sync',
+    packageKinds: ['todo_digest', 'notice_digest'],
+    sourceRefCount: 0,
   });
   assert.deepEqual(calls, ['render:todo_sync', 'render:notice_sync']);
   assert.deepEqual(
@@ -356,11 +435,14 @@ test('runNow reports failed todo delivery and surfaces the send error', async ()
           {
             title: scenario === 'notice_sync' ? 'Notice Digest' : 'Todo Digest',
             kind: scenario === 'notice_sync' ? 'notice_digest' : 'todo_digest',
-            bodyMd: scenario === 'notice_sync' ? '- No notices.' : '- 跟进周报',
-            itemCount: scenario === 'notice_sync' ? 0 : 1,
+            bodyMd:
+              scenario === 'notice_sync'
+                ? '- Weekly Report Ready - Your weekly report is ready'
+                : '- 跟进周报',
+            itemCount: 1,
             sourceRefs:
               scenario === 'notice_sync'
-                ? []
+                ? ['notification:notif-notice-pending']
                 : ['proposed_action:action-failed'],
           },
         ],
@@ -423,11 +505,7 @@ test('runNow reports failed todo delivery and surfaces the send error', async ()
     /Doubao challenge detected before send/,
   );
 
-  assert.deepEqual(calls, [
-    'render:todo_sync',
-    'bridge:todo-memo',
-    'render:notice_sync',
-  ]);
+  assert.deepEqual(calls, ['render:todo_sync', 'bridge:todo-memo']);
   assert.deepEqual(deliveryEvents, [
     {
       sourceRef: 'proposed_action:action-failed',
@@ -449,12 +527,135 @@ test('runNow reports failed todo delivery and surfaces the send error', async ()
         status: 'failed',
         errorMessage: 'Doubao challenge detected before send',
       },
-      {
-        id: 'job-notice_sync',
-        status: 'skipped',
-        errorMessage: 'No notices to sync',
-      },
     ],
+  );
+});
+
+test('runNow preserves the Doubao send error when delivery reporting fails', async () => {
+  const calls: string[] = [];
+  const memoryClient = {
+    isEnabled: () => true,
+    getProviderCapabilities: async () => ({
+      provider: 'doubao',
+      supportedScenarios: ['todo_sync', 'notice_sync', 'reminder_sync'],
+    }),
+    renderContextPackage: async ({ scenario }: { scenario: string }) => {
+      calls.push(`render:${scenario}`);
+      return {
+        provider: 'doubao',
+        scenario,
+        packages: [
+          {
+            title: 'Todo Digest',
+            kind: 'todo_digest',
+            bodyMd: '- 跟进周报',
+            itemCount: 1,
+            sourceRefs: ['proposed_action:action-failed'],
+          },
+        ],
+        syncJob: {
+          id: `job-${scenario}`,
+          status: 'queued',
+        },
+      };
+    },
+    reportSyncJob: async () => undefined,
+    reportNotificationDelivery: async () => {
+      throw new Error('delivery endpoint timeout');
+    },
+  };
+  const bridgeService = {
+    syncTodosAsMemo: async () => {
+      calls.push('bridge:todo-memo');
+      return {
+        accepted: false,
+        kind: 'todo_sync',
+        targetBindingType: 'mobile_context',
+        transcript: '',
+        sentAt: new Date().toISOString(),
+        error: 'Doubao challenge detected before send',
+      };
+    },
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  await assert.rejects(
+    () => manager.runNow('reminder_sync'),
+    /Doubao challenge detected before send/,
+  );
+
+  const [attempt] = manager.getSnapshot().recentAttempts;
+  assert.deepEqual(calls, ['render:todo_sync', 'bridge:todo-memo']);
+  assert.equal(attempt.status, 'failed');
+  assert.equal(attempt.errorMessage, 'Doubao challenge detected before send');
+  assert.match(
+    attempt.telemetryError || '',
+    /Delivery report failed: delivery endpoint timeout/,
+  );
+});
+
+test('runNow keeps successful delivery when sync job reporting fails', async () => {
+  const memoryClient = {
+    isEnabled: () => true,
+    renderContextPackage: async ({ scenario }: { scenario: string }) => ({
+      provider: 'doubao',
+      scenario,
+      packages: [
+        {
+          title: 'Persona Core',
+          kind: 'persona_core',
+          bodyMd: '- Prefers concise updates',
+          sourceRefs: ['profile_item:response_length'],
+        },
+      ],
+      syncJob: {
+        id: `job-${scenario}`,
+        status: 'queued',
+      },
+    }),
+    reportSyncJob: async () => {
+      throw new Error('sync job endpoint timeout');
+    },
+  };
+  const bridgeService = {
+    syncStableMemoryAsMemo: async () => ({
+      accepted: true,
+      kind: 'stable_memory',
+      targetBindingType: 'memory_sync',
+      transcript: '',
+      sentAt: new Date().toISOString(),
+    }),
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  const result = await manager.runNow('stable_memory');
+  const [attempt] = manager.getSnapshot().recentAttempts;
+
+  assert.equal(result.status, 'succeeded');
+  assert.match(
+    result.telemetryError || '',
+    /Sync job report failed: sync job endpoint timeout/,
+  );
+  assert.equal(attempt.status, 'succeeded');
+  assert.match(
+    attempt.telemetryError || '',
+    /Sync job report failed: sync job endpoint timeout/,
   );
 });
 
@@ -521,6 +722,8 @@ test('runNow skips placeholder mobile briefing when itemCount is 0', async () =>
   assert.deepEqual(result, {
     status: 'skipped',
     errorMessage: 'No recent memory highlights to sync',
+    packageKinds: ['active_focus_digest'],
+    sourceRefCount: 0,
   });
   assert.deepEqual(calls, ['render:mobile_briefing']);
   assert.deepEqual(
@@ -613,6 +816,8 @@ test('runNow skips mobile briefing metadata-only packages', async () => {
   assert.deepEqual(result, {
     status: 'skipped',
     errorMessage: 'No mobile briefing bullets extracted',
+    packageKinds: ['active_focus_digest'],
+    sourceRefCount: 1,
   });
   assert.deepEqual(calls, ['render:mobile_briefing']);
   assert.deepEqual(
@@ -693,6 +898,8 @@ test('runNow skips placeholder stable memory when itemCount is 0', async () => {
   assert.deepEqual(result, {
     status: 'skipped',
     errorMessage: 'No stable memory items to sync',
+    packageKinds: ['persona_core'],
+    sourceRefCount: 0,
   });
   assert.deepEqual(calls, ['render:stable_memory']);
   assert.deepEqual(
@@ -869,6 +1076,8 @@ test('runNow records recent manual sync attempts for audit display', async () =>
   assert.deepEqual(skipped, {
     status: 'skipped',
     errorMessage: 'No stable memory items to sync',
+    packageKinds: ['persona_core'],
+    sourceRefCount: 0,
   });
   assert.equal(manager.getSnapshot().recentAttempts.length, 1);
   assert.deepEqual(
@@ -877,12 +1086,16 @@ test('runNow records recent manual sync attempts for audit display', async () =>
       trigger: manager.getSnapshot().recentAttempts[0].trigger,
       status: manager.getSnapshot().recentAttempts[0].status,
       errorMessage: manager.getSnapshot().recentAttempts[0].errorMessage,
+      packageKinds: manager.getSnapshot().recentAttempts[0].packageKinds,
+      sourceRefCount: manager.getSnapshot().recentAttempts[0].sourceRefCount,
     },
     {
       kind: 'stable_memory',
       trigger: 'manual',
       status: 'skipped',
       errorMessage: 'No stable memory items to sync',
+      packageKinds: ['persona_core'],
+      sourceRefCount: 0,
     },
   );
 
@@ -901,4 +1114,84 @@ test('runNow records recent manual sync attempts for audit display', async () =>
   assert.ok(latestAttempt.startedAt);
   assert.ok(latestAttempt.completedAt);
   assert.ok(latestAttempt.durationMs >= 0);
+});
+
+test('sync attempt audit log is restored and persisted after new attempts', async () => {
+  const restoredAttempt: BridgeSyncAttemptLogEntry = {
+    id: 'restored-stable-memory',
+    kind: 'stable_memory' as const,
+    trigger: 'auto' as const,
+    status: 'failed' as const,
+    startedAt: '2026-05-15T10:00:00.000Z',
+    completedAt: '2026-05-15T10:00:02.000Z',
+    durationMs: 2000,
+    errorMessage: 'Previous app run hit Doubao challenge',
+    packageKinds: ['persona_core'],
+    sourceRefCount: 1,
+    verified: false,
+    challengeDetected: true,
+  };
+  const persisted: BridgeSyncAttemptLogEntry[][] = [];
+  const memoryClient = {
+    isEnabled: () => true,
+    renderContextPackage: async ({ scenario }: { scenario: string }) => ({
+      provider: 'doubao',
+      scenario,
+      packages: [
+        {
+          title: 'Persona Core',
+          kind: 'persona_core',
+          bodyMd: '- No stable profile items found.',
+          itemCount: 0,
+          sourceRefs: [],
+        },
+      ],
+      syncJob: {
+        id: `job-${scenario}`,
+        status: 'queued',
+      },
+    }),
+    reportSyncJob: async () => undefined,
+  };
+  const bridgeService = {
+    syncStableMemoryAsMemo: async () => ({
+      accepted: true,
+      kind: 'stable_memory',
+      targetBindingType: 'memory_sync',
+      transcript: '',
+      sentAt: new Date().toISOString(),
+    }),
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+    undefined,
+    undefined,
+    {
+      initialAttempts: [restoredAttempt],
+      onRecentAttemptsChanged: (attempts) => {
+        persisted.push([...attempts]);
+      },
+    },
+  );
+
+  assert.deepEqual(manager.getSnapshot().recentAttempts, [restoredAttempt]);
+
+  await manager.runNow('stable_memory');
+
+  const attempts = manager.getSnapshot().recentAttempts;
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].status, 'skipped');
+  assert.equal(attempts[0].errorMessage, 'No stable memory items to sync');
+  assert.equal(attempts[1].id, 'restored-stable-memory');
+  assert.equal(persisted.length, 1);
+  assert.deepEqual(
+    persisted[0].map((attempt) => attempt.id),
+    attempts.map((attempt) => attempt.id),
+  );
 });

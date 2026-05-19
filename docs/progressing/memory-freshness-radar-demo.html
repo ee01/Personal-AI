@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory Freshness Radar Demo</title>
+  <style>
+    :root {
+      --ink: #17201b;
+      --muted: #66736c;
+      --line: #dce3de;
+      --panel: #ffffff;
+      --soft: #f5f7f4;
+      --soft-2: #eef4f1;
+      --green: #18774d;
+      --green-2: #dff2e9;
+      --amber: #9a5a00;
+      --amber-2: #fff1d2;
+      --red: #a83b36;
+      --red-2: #ffe4e0;
+      --blue: #276fa3;
+      --blue-2: #e0f0fb;
+      --charcoal: #26312b;
+      --shadow: 0 12px 40px rgba(27, 39, 32, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background: #e9eee9;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: 54px 1fr;
+      min-height: 100vh;
+    }
+
+    .browser-bar {
+      display: grid;
+      grid-template-columns: 112px minmax(220px, 1fr) 360px;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 18px;
+      color: #d7ded9;
+      background: #26312b;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .traffic {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #6d7971;
+    }
+
+    .dot:nth-child(1) { background: #db6a61; }
+    .dot:nth-child(2) { background: #d9aa4a; }
+    .dot:nth-child(3) { background: #65b879; }
+
+    .address {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 7px;
+      color: #dce5df;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .scenario-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+
+    .scenario-tabs button {
+      height: 34px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 7px;
+      color: #dce5df;
+      background: rgba(255, 255, 255, 0.08);
+      cursor: pointer;
+    }
+
+    .scenario-tabs button.active {
+      color: #17201b;
+      border-color: transparent;
+      background: #dff2e9;
+    }
+
+    .workbench {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 410px;
+      min-height: calc(100vh - 54px);
+    }
+
+    .page {
+      overflow: auto;
+      padding: 34px;
+      background: #f8faf7;
+    }
+
+    .doc-shell {
+      width: min(920px, 100%);
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 8px 26px rgba(38, 49, 43, 0.08);
+    }
+
+    .doc-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      padding: 24px 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .doc-eyebrow {
+      margin: 0 0 8px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.15;
+      font-weight: 780;
+    }
+
+    .doc-meta {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .watch-pill {
+      align-self: start;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      height: 34px;
+      padding: 0 10px;
+      color: var(--green);
+      background: var(--green-2);
+      border: 1px solid #b9dfcd;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(24, 119, 77, 0.12);
+    }
+
+    .doc-body {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      gap: 30px;
+      padding: 28px;
+    }
+
+    .toc {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.9;
+      border-right: 1px solid var(--line);
+      padding-right: 18px;
+    }
+
+    .toc strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .article {
+      min-width: 0;
+    }
+
+    .article h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .article p {
+      margin: 0 0 16px;
+      color: #34423a;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .callout {
+      margin: 22px 0;
+      padding: 15px 16px;
+      border-left: 4px solid var(--amber);
+      background: var(--amber-2);
+      color: #463820;
+    }
+
+    .code-block {
+      overflow: auto;
+      margin: 18px 0;
+      padding: 16px;
+      border-radius: 8px;
+      color: #d9e7df;
+      background: #24312a;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .side {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 14px;
+      min-height: calc(100vh - 54px);
+      padding: 18px;
+      border-left: 1px solid #cbd7cf;
+      background: #eef3ef;
+      overflow: auto;
+    }
+
+    .radar-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .radar-title {
+      min-width: 0;
+    }
+
+    .radar-title h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .radar-title p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .severity {
+      min-width: 86px;
+      height: 32px;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .severity.high {
+      color: var(--red);
+      background: var(--red-2);
+      border: 1px solid #f4c2bd;
+    }
+
+    .severity.medium {
+      color: var(--amber);
+      background: var(--amber-2);
+      border: 1px solid #efd18d;
+    }
+
+    .severity.info {
+      color: var(--blue);
+      background: var(--blue-2);
+      border: 1px solid #b8d7eb;
+    }
+
+    .impact-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .metric {
+      min-height: 70px;
+      padding: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .metric b {
+      display: block;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .diff-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+
+    .panel-bar strong {
+      font-size: 13px;
+    }
+
+    .panel-bar span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .claim {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .claim:last-child {
+      border-bottom: 0;
+    }
+
+    .claim-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .claim-label mark {
+      padding: 3px 7px;
+      border-radius: 999px;
+      color: inherit;
+      background: var(--soft-2);
+    }
+
+    .claim.old {
+      background: #fff9f7;
+    }
+
+    .claim.new {
+      background: #f6fcf8;
+    }
+
+    .claim p {
+      margin: 0;
+      color: #2d3932;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .affected {
+      display: grid;
+      gap: 8px;
+    }
+
+    .affected-row {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .mini-icon {
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 7px;
+      color: var(--green);
+      background: var(--green-2);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .affected-row strong {
+      display: block;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 13px;
+    }
+
+    .affected-row span {
+      display: block;
+      margin-top: 3px;
+      overflow: hidden;
+      color: var(--muted);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 12px;
+    }
+
+    .badge {
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: var(--amber);
+      background: var(--amber-2);
+      border: 1px solid #efd18d;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding-top: 2px;
+    }
+
+    .actions button {
+      min-height: 38px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--charcoal);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .actions button.primary {
+      color: #fff;
+      background: var(--green);
+      border-color: var(--green);
+    }
+
+    .actions button:disabled {
+      cursor: default;
+      opacity: 0.56;
+    }
+
+    .toast {
+      position: fixed;
+      left: 34px;
+      bottom: 28px;
+      max-width: min(470px, calc(100vw - 68px));
+      display: none;
+      padding: 13px 15px;
+      color: #f4faf6;
+      background: #26312b;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 980px) {
+      .browser-bar {
+        grid-template-columns: 80px minmax(0, 1fr);
+      }
+
+      .scenario-tabs {
+        grid-column: 1 / -1;
+      }
+
+      .workbench {
+        grid-template-columns: 1fr;
+      }
+
+      .side {
+        min-height: auto;
+        border-left: 0;
+        border-top: 1px solid #cbd7cf;
+      }
+
+      .doc-body {
+        grid-template-columns: 1fr;
+      }
+
+      .toc {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        padding-right: 0;
+        padding-bottom: 16px;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .page {
+        padding: 16px;
+      }
+
+      .doc-head {
+        grid-template-columns: 1fr;
+      }
+
+      .impact-grid,
+      .actions {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="browser-bar">
+      <div class="traffic" aria-hidden="true">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </div>
+      <div id="address" class="address">https://docs.example.ai/providers/context-packages</div>
+      <nav class="scenario-tabs" aria-label="Demo scenarios">
+        <button data-scenario="docs" class="active">AI docs</button>
+        <button data-scenario="jira">Jira plan</button>
+        <button data-scenario="release">Release note</button>
+      </nav>
+    </header>
+
+    <main class="workbench">
+      <section class="page" aria-label="Simulated web page">
+        <article class="doc-shell">
+          <div class="doc-head">
+            <div>
+              <p id="eyebrow" class="doc-eyebrow">Provider docs</p>
+              <h1 id="docTitle">Context package bindings</h1>
+              <div id="docMeta" class="doc-meta">Last updated 2026-05-18 · Personal AI remembered this page 33 days ago</div>
+            </div>
+            <div class="watch-pill"><span class="pulse"></span><span>Watched source</span></div>
+          </div>
+          <div class="doc-body">
+            <aside class="toc">
+              <strong>On this page</strong>
+              Overview<br />
+              Binding model<br />
+              Permissions<br />
+              Migration notes<br />
+              Audit events
+            </aside>
+            <div class="article">
+              <h2 id="sectionTitle">Binding model</h2>
+              <p id="paragraphA">Provider context packages now require explicit per-provider binding. The binding records provider, scenario, target format, source memories, and redaction policy.</p>
+              <p id="paragraphB">Legacy global bindings are deprecated. Existing packages should be migrated before they are exported to external AI tools.</p>
+              <div id="callout" class="callout">Personal AI found a newer source snapshot. Review the patch before reusing old context in Codex, Claude, ChatGPT, or Doubao.</div>
+              <pre id="codeBlock" class="code-block">POST /api/v1/providers/context-packages/render
+{
+  "provider": "codex",
+  "scenario": "code_review",
+  "binding": "provider-scoped"
+}</pre>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <aside class="side" aria-label="Personal AI Memory Freshness Radar">
+        <section class="radar-head">
+          <div class="radar-title">
+            <h2>Memory Freshness Radar</h2>
+            <p id="radarSummary">This source changed after Personal AI used it in external AI context packages.</p>
+          </div>
+          <div id="severity" class="severity high">High</div>
+        </section>
+
+        <section class="impact-grid" aria-label="Impact metrics">
+          <div class="metric">
+            <b id="metricMemories">6</b>
+            <span>affected memories</span>
+          </div>
+          <div class="metric">
+            <b id="metricExports">2</b>
+            <span>AI exports</span>
+          </div>
+          <div class="metric">
+            <b id="metricAge">33d</b>
+            <span>since remembered</span>
+          </div>
+        </section>
+
+        <section class="diff-panel" aria-label="Semantic diff">
+          <div class="panel-bar">
+            <strong>Semantic source diff</strong>
+            <span id="diffMeta">old snapshot -> current page</span>
+          </div>
+          <div class="claim old">
+            <div class="claim-label"><span>Old claim in memory</span><mark id="oldDate">2026-04-15</mark></div>
+            <p id="oldClaim">Context packages can use one global provider binding for all external AI tools.</p>
+          </div>
+          <div class="claim new">
+            <div class="claim-label"><span>Current source</span><mark id="newDate">2026-05-18</mark></div>
+            <p id="newClaim">Each provider now needs its own binding with provider-specific redaction and audit fields.</p>
+          </div>
+        </section>
+
+        <section class="affected" aria-label="Affected Personal AI objects">
+          <div class="panel-bar">
+            <strong>Affected objects</strong>
+            <span id="affectedCount">4 need review</span>
+          </div>
+          <div class="affected-row">
+            <span class="mini-icon">CP</span>
+            <div>
+              <strong id="affectedA">AI Context Passport: Codex code review</strong>
+              <span id="affectedADetail">Uses old global provider binding</span>
+            </div>
+            <span class="badge">stale</span>
+          </div>
+          <div class="affected-row">
+            <span class="mini-icon">SK</span>
+            <div>
+              <strong id="affectedB">Personal Skill: provider export helper</strong>
+              <span id="affectedBDetail">Needs provider-specific redaction patch</span>
+            </div>
+            <span class="badge">patch</span>
+          </div>
+          <div class="affected-row">
+            <span class="mini-icon">QA</span>
+            <div>
+              <strong id="affectedC">Ask answer: provider package setup</strong>
+              <span id="affectedCDetail">Should be reworded as historical advice</span>
+            </div>
+            <span class="badge">review</span>
+          </div>
+        </section>
+
+        <div class="actions">
+          <button id="apply" class="primary">Apply patch</button>
+          <button id="snapshot">Open snapshot</button>
+          <button id="mute">Mute source</button>
+          <button id="later">Review later</button>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script>
+    const scenarios = {
+      docs: {
+        address: "https://docs.example.ai/providers/context-packages",
+        eyebrow: "Provider docs",
+        title: "Context package bindings",
+        meta: "Last updated 2026-05-18 · Personal AI remembered this page 33 days ago",
+        section: "Binding model",
+        paragraphA: "Provider context packages now require explicit per-provider binding. The binding records provider, scenario, target format, source memories, and redaction policy.",
+        paragraphB: "Legacy global bindings are deprecated. Existing packages should be migrated before they are exported to external AI tools.",
+        callout: "Personal AI found a newer source snapshot. Review the patch before reusing old context in Codex, Claude, ChatGPT, or Doubao.",
+        code: "POST /api/v1/providers/context-packages/render\n{\n  \"provider\": \"codex\",\n  \"scenario\": \"code_review\",\n  \"binding\": \"provider-scoped\"\n}",
+        summary: "This source changed after Personal AI used it in external AI context packages.",
+        severity: "high",
+        metrics: ["6", "2", "33d"],
+        diffMeta: "old snapshot -> current page",
+        oldDate: "2026-04-15",
+        newDate: "2026-05-18",
+        oldClaim: "Context packages can use one global provider binding for all external AI tools.",
+        newClaim: "Each provider now needs its own binding with provider-specific redaction and audit fields.",
+        affectedCount: "4 need review",
+        affected: [
+          ["CP", "AI Context Passport: Codex code review", "Uses old global provider binding", "stale"],
+          ["SK", "Personal Skill: provider export helper", "Needs provider-specific redaction patch", "patch"],
+          ["QA", "Ask answer: provider package setup", "Should be reworded as historical advice", "review"]
+        ]
+      },
+      jira: {
+        address: "https://jira.example.com/browse/NOVA-4210",
+        eyebrow: "Jira plan",
+        title: "NOVA onboarding flow",
+        meta: "Updated 2026-05-18 · Personal AI brief generated 6 days ago",
+        section: "Delivery plan",
+        paragraphA: "The onboarding flow now has a new owner and a revised delivery estimate. Design review moved behind the platform dependency decision.",
+        paragraphB: "The previous May milestone is no longer current. Teams should use the June checkpoint for meeting prep and follow-up context.",
+        callout: "The next meeting prep should include the new owner, updated ETA, and the unresolved platform dependency.",
+        code: "Owner: Platform Experience\nETA: 2026-06 checkpoint\nDependency: account provisioning API",
+        summary: "The project source changed after Day Pilot generated meeting prep.",
+        severity: "medium",
+        metrics: ["5", "1", "6d"],
+        diffMeta: "Jira updated timestamp -> memory patch",
+        oldDate: "2026-05-12",
+        newDate: "2026-05-18",
+        oldClaim: "NOVA onboarding flow owner is Design Ops and the target milestone is May.",
+        newClaim: "Owner moved to Platform Experience and the target is the June checkpoint.",
+        affectedCount: "3 need review",
+        affected: [
+          ["MP", "Meeting prep: NOVA weekly sync", "Old owner appears in talking points", "stale"],
+          ["DP", "Day Pilot mission: design follow-up", "Next action should mention platform dependency", "patch"],
+          ["JG", "Jira context package", "ETA and owner fields need refresh", "review"]
+        ]
+      },
+      release: {
+        address: "https://github.example.com/ringclaw/releases/v0.0.12",
+        eyebrow: "Release note",
+        title: "RingClaw v0.0.12",
+        meta: "Published 2026-05-17 · Personal AI skill derived from v0.0.11",
+        section: "Agent command changes",
+        paragraphA: "The CLI now supports provider-scoped command routing and separate audit logs for agent task delegation.",
+        paragraphB: "The previous setup command still works, but the recommended install path now writes provider capability metadata.",
+        callout: "A Personal AI skill was generated from the older release note and should be refreshed before reuse.",
+        code: "ringclaw setup --provider codex\nringclaw task delegate --audit provider",
+        summary: "A release note changed the command shape used by one stored skill.",
+        severity: "info",
+        metrics: ["3", "0", "11d"],
+        diffMeta: "release v0.0.11 -> v0.0.12",
+        oldDate: "2026-05-06",
+        newDate: "2026-05-17",
+        oldClaim: "Use ringclaw setup and a global workspace to route all supported agents.",
+        newClaim: "Use provider-scoped setup when delegating tasks that require audit separation.",
+        affectedCount: "2 need review",
+        affected: [
+          ["SK", "Personal Skill: RingClaw task delegate", "Command example uses older routing", "patch"],
+          ["FR", "Flight Recorder episode", "Historical source should stay unchanged", "history"],
+          ["QA", "Ask answer: RingClaw setup", "Answer can cite both old and new syntax", "review"]
+        ]
+      }
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function showToast(message) {
+      const toast = $("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2400);
+    }
+
+    function renderScenario(key) {
+      const data = scenarios[key];
+      $("address").textContent = data.address;
+      $("eyebrow").textContent = data.eyebrow;
+      $("docTitle").textContent = data.title;
+      $("docMeta").textContent = data.meta;
+      $("sectionTitle").textContent = data.section;
+      $("paragraphA").textContent = data.paragraphA;
+      $("paragraphB").textContent = data.paragraphB;
+      $("callout").textContent = data.callout;
+      $("codeBlock").textContent = data.code;
+      $("radarSummary").textContent = data.summary;
+      $("severity").className = "severity " + data.severity;
+      $("severity").textContent = data.severity;
+      $("metricMemories").textContent = data.metrics[0];
+      $("metricExports").textContent = data.metrics[1];
+      $("metricAge").textContent = data.metrics[2];
+      $("diffMeta").textContent = data.diffMeta;
+      $("oldDate").textContent = data.oldDate;
+      $("newDate").textContent = data.newDate;
+      $("oldClaim").textContent = data.oldClaim;
+      $("newClaim").textContent = data.newClaim;
+      $("affectedCount").textContent = data.affectedCount;
+
+      const rows = document.querySelectorAll(".affected-row");
+      data.affected.forEach((item, index) => {
+        const row = rows[index];
+        row.querySelector(".mini-icon").textContent = item[0];
+        row.querySelector("strong").textContent = item[1];
+        row.querySelector("span:not(.mini-icon):not(.badge)").textContent = item[2];
+        row.querySelector(".badge").textContent = item[3];
+      });
+
+      document.querySelectorAll(".scenario-tabs button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.scenario === key);
+      });
+
+      $("apply").disabled = false;
+      $("apply").textContent = "Apply patch";
+    }
+
+    document.querySelectorAll(".scenario-tabs button").forEach((button) => {
+      button.addEventListener("click", () => renderScenario(button.dataset.scenario));
+    });
+
+    $("apply").addEventListener("click", () => {
+      $("apply").disabled = true;
+      $("apply").textContent = "Patch applied";
+      showToast("Memory patch queued: current fact updated, old source preserved as history.");
+    });
+
+    $("snapshot").addEventListener("click", () => {
+      showToast("Opening old snapshot: extracted text, source hash, and capture timestamp.");
+    });
+
+    $("mute").addEventListener("click", () => {
+      showToast("Source muted for minor edits. Breaking changes will still appear.");
+    });
+
+    $("later").addEventListener("click", () => {
+      showToast("Review deferred to Day Pilot tomorrow morning.");
+    });
+  </script>
+</body>
+</html>

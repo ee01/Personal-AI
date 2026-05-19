@@ -51,18 +51,57 @@ interface CreateSessionFromActionInput {
   action: QueuedActionRecord;
 }
 
+interface CreateSessionFromMessageInput {
+  chatId: string;
+  postId: string;
+  messageText: string;
+  messageUrl?: string;
+  messageCreatedAt?: number;
+  messageTimestampText?: string;
+  senderName?: string;
+  groupName?: string;
+  targetType?: string;
+  targetRef?: string;
+  targetResolvedChatId?: string;
+  targetResolvedLabel?: string;
+  followupIntervalSeconds?: number;
+  maxFollowup?: number;
+  context?: string;
+}
+
+export type GlipMessageMarkerType =
+  | 'outreach_initial_ask'
+  | 'outreach_followup';
+
+export interface GlipMessageMarker {
+  id: string;
+  type: GlipMessageMarkerType;
+  label: string;
+  chatId: string;
+  postId: string;
+  source: 'memory_service';
+  sourceId: string;
+  sessionId: string;
+  status: OutreachSessionStatus;
+  tooltip?: string;
+  updatedAt: number;
+  nextCheckAt?: number;
+}
+
 interface OutreachSessionDetail {
   session: OutreachSessionRecord;
   events: ReturnType<OutreachRepository['listEventsBySession']>;
   actions: ReturnType<ActionRepository['list']>['items'];
-  evidence: Array<{
-    sourceKind: string;
-    sourceId?: string;
-    title?: string;
-    content: string;
-    createdAt?: number;
-    metadata?: Record<string, unknown>;
-  }>;
+  evidence: OutreachSessionEvidenceItem[];
+}
+
+interface OutreachSessionEvidenceItem {
+  sourceKind: string;
+  sourceId?: string;
+  title?: string;
+  content: string;
+  createdAt?: number;
+  metadata?: Record<string, unknown>;
 }
 
 interface UpdateOutreachSessionDraftInput {
@@ -121,8 +160,15 @@ const TERMINAL_STATUSES = new Set<OutreachSessionStatus>([
   'cancelled',
   'failed',
 ]);
+const GLIP_MARKER_ACTIVE_STATUSES = new Set<OutreachSessionStatus>([
+  'pending_approval',
+  'scheduled',
+  'waiting_reply',
+  'deferred',
+]);
 const REPLY_BURST_WINDOW_SECONDS = 5 * 60;
 const OUTREACH_RECENT_QA_PAIR_WINDOW_SECONDS = 24 * 60 * 60;
+const PERSON_MENTION_RE = /!\[:Person\]\(([^)]+)\)/g;
 
 function parsePostCreatedAtSeconds(post: RingCentralPost): number | null {
   if (!post.createdAt) return null;
@@ -487,6 +533,59 @@ function normalizeString(value: unknown): string | undefined {
     : undefined;
 }
 
+function normalizeUnixTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value > 1_000_000_000_000 ? value / 1000 : value);
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return Math.floor(numeric > 1_000_000_000_000 ? numeric / 1000 : numeric);
+    }
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return Math.floor(parsed / 1000);
+    }
+  }
+  return undefined;
+}
+
+function extractPersonMentionIds(text: string): string[] {
+  const ids: string[] = [];
+  PERSON_MENTION_RE.lastIndex = 0;
+  for (const match of text.matchAll(PERSON_MENTION_RE)) {
+    const id = match[1]?.trim();
+    if (id) ids.push(id);
+  }
+  return uniqStrings(ids);
+}
+
+function mergeMentionLabelsIntoMetadata(
+  metadata: Record<string, unknown> | undefined,
+  mentionLabels: Record<string, string>,
+): Record<string, unknown> | undefined {
+  if (Object.keys(mentionLabels).length === 0) {
+    return metadata;
+  }
+  return {
+    ...(metadata ?? {}),
+    mentionLabels,
+  };
+}
+
+function mergePostMentionLabels(...posts: RingCentralPost[]): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const post of posts) {
+    if (!post.mentionLabels) continue;
+    for (const [id, label] of Object.entries(post.mentionLabels)) {
+      if (label) {
+        labels[id] = label;
+      }
+    }
+  }
+  return labels;
+}
+
 function sanitizeEvidenceMetadata(
   value: unknown,
 ): Record<string, unknown> | undefined {
@@ -504,6 +603,7 @@ function sanitizeEvidenceMetadata(
     'ruleRef',
     'replyClassification',
     'replyConfidence',
+    'mentionLabels',
   ];
 
   for (const key of allowList) {
@@ -880,6 +980,173 @@ export class OutreachEngine {
     return this.repo.listSessions(filters);
   }
 
+  async createSessionFromMessage(
+    input: CreateSessionFromMessageInput,
+  ): Promise<OutreachSessionRecord> {
+    const chatId = normalizeString(input.chatId);
+    const postId = normalizeString(input.postId);
+    const question = normalizeString(input.messageText);
+    if (!chatId || !postId) {
+      throw new Error('chatId and postId are required.');
+    }
+    if (!question) {
+      throw new Error('messageText is required.');
+    }
+
+    const existing =
+      this.repo.getMessageReactionSessionByPost(chatId, postId) ??
+      this.findMessageReactionSessionByOriginalPost(chatId, postId);
+    if (existing) return existing;
+
+    const createdAt =
+      normalizeUnixTimestamp(input.messageCreatedAt) ??
+      normalizeUnixTimestamp(input.messageTimestampText) ??
+      now();
+    const currentTime = now();
+    const followupIntervalSeconds = Math.max(
+      60,
+      Math.floor(Number(input.followupIntervalSeconds ?? 86400)),
+    );
+    const maxFollowup = Math.max(
+      0,
+      Math.floor(Number(input.maxFollowup ?? 1)),
+    );
+    const targetType = normalizeString(input.targetType) ?? 'group';
+    const targetRef = normalizeString(input.targetRef) ?? chatId;
+    const targetResolvedChatId =
+      normalizeString(input.targetResolvedChatId) ?? chatId;
+    const targetResolvedLabel =
+      normalizeString(input.targetResolvedLabel) ??
+      normalizeString(input.groupName) ??
+      targetRef;
+
+    const session = this.repo.createSession({
+      originKind: 'message_reaction',
+      targetType,
+      targetRef,
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: targetType === 'private' ? 'person' : 'chat',
+      targetResolvedLabel,
+      targetResolvedChatId,
+      renderedQuestion: question,
+      renderedContext: normalizeString(input.context),
+      status: 'waiting_reply',
+      requiresApproval: false,
+      followupCount: 0,
+      maxFollowup,
+      followupIntervalSeconds,
+      waitUntil: createdAt + followupIntervalSeconds,
+      nextCheckAt: currentTime,
+      sentChatId: chatId,
+      sentPostId: postId,
+      createdAt,
+      outcome: {
+        originKind: 'message_reaction',
+        originalChatId: chatId,
+        originalPostId: postId,
+        messageUrl: normalizeString(input.messageUrl),
+        senderName: normalizeString(input.senderName),
+      },
+    });
+    this.repo.createEvent(session.id, 'created', {
+      originKind: 'message_reaction',
+      source: 'glip_message_reaction',
+      chatId,
+      postId,
+    });
+    this.repo.createEvent(session.id, 'manual_initial_ask_registered', {
+      chatId,
+      postId,
+      messageUrl: normalizeString(input.messageUrl) ?? null,
+      senderName: normalizeString(input.senderName) ?? null,
+      messageCreatedAt: createdAt,
+    });
+    this.insertOutreachMessage(
+      'outreach_question',
+      session,
+      question,
+      {
+        chatId,
+        postId,
+        manualInitialAsk: true,
+        messageUrl: normalizeString(input.messageUrl),
+      },
+      createdAt,
+    );
+
+    return this.repo.getSessionById(session.id)!;
+  }
+
+  listGlipMessageMarkers(limit = 500): {
+    items: GlipMessageMarker[];
+    generatedAt: number;
+  } {
+    const sessions = this.repo.listSessions({
+      originKind: 'message_reaction',
+      limit: Math.max(1, Math.min(limit, 500)),
+    }).items;
+    const markers: GlipMessageMarker[] = [];
+
+    for (const session of sessions) {
+      if (!GLIP_MARKER_ACTIVE_STATUSES.has(session.status)) {
+        continue;
+      }
+
+      const events = this.repo.listEventsBySession(session.id, 500);
+      const initialEvent = events.find(
+        (event) => event.eventType === 'manual_initial_ask_registered',
+      );
+      const initialChatId =
+        normalizeString(initialEvent?.payload?.chatId) ??
+        normalizeString(session.outcome?.originalChatId) ??
+        session.sentChatId;
+      const initialPostId =
+        normalizeString(initialEvent?.payload?.postId) ??
+        normalizeString(session.outcome?.originalPostId);
+
+      if (initialChatId && initialPostId) {
+        markers.push({
+          id: `outreach-initial:${session.id}:${initialChatId}:${initialPostId}`,
+          type: 'outreach_initial_ask',
+          label: '跟进中',
+          chatId: initialChatId,
+          postId: initialPostId,
+          source: 'memory_service',
+          sourceId: session.id,
+          sessionId: session.id,
+          status: session.status,
+          tooltip: session.renderedQuestion,
+          updatedAt: session.updatedAt,
+          nextCheckAt: session.nextCheckAt,
+        });
+      }
+
+      events
+        .filter((event) => event.eventType === 'followup_sent')
+        .forEach((event) => {
+          const chatId = normalizeString(event.payload?.chatId);
+          const postId = normalizeString(event.payload?.postId);
+          if (!chatId || !postId) return;
+          markers.push({
+            id: `outreach-followup:${session.id}:${postId}`,
+            type: 'outreach_followup',
+            label: 'AI追问',
+            chatId,
+            postId,
+            source: 'memory_service',
+            sourceId: session.id,
+            sessionId: session.id,
+            status: session.status,
+            tooltip: session.renderedQuestion,
+            updatedAt: event.createdAt,
+            nextCheckAt: session.nextCheckAt,
+          });
+        });
+    }
+
+    return { items: markers, generatedAt: now() };
+  }
+
   async searchTargets(targetType: string, query: string, limit = 8) {
     return this.ringClient.searchTargets({
       targetType,
@@ -916,7 +1183,7 @@ export class OutreachEngine {
       session,
       events: this.repo.listEventsBySession(id, 200),
       actions,
-      evidence: this.buildSessionEvidence(session),
+      evidence: await this.buildSessionEvidence(session),
     };
   }
 
@@ -1423,6 +1690,38 @@ export class OutreachEngine {
     return this.repo.getSessionById(created.id)!;
   }
 
+  private findMessageReactionSessionByOriginalPost(
+    chatId: string,
+    postId: string,
+  ): OutreachSessionRecord | null {
+    const sessions = this.repo.listSessions({
+      originKind: 'message_reaction',
+      limit: 100,
+    }).items;
+
+    for (const session of sessions) {
+      if (
+        normalizeString(session.outcome?.originalChatId) === chatId &&
+        normalizeString(session.outcome?.originalPostId) === postId
+      ) {
+        return session;
+      }
+      const event = this.repo
+        .listEventsBySession(session.id, 50)
+        .find(
+          (item) =>
+            item.eventType === 'manual_initial_ask_registered' &&
+            normalizeString(item.payload?.chatId) === chatId &&
+            normalizeString(item.payload?.postId) === postId,
+        );
+      if (event) {
+        return session;
+      }
+    }
+
+    return null;
+  }
+
   private async dispatchDueTemplates(): Promise<void> {
     const currentTime = now();
     const templates = this.repo.listDueTemplates(currentTime, 100);
@@ -1922,11 +2221,14 @@ export class OutreachEngine {
           ) ?? '目标会话历史',
         content: post.text.trim(),
         createdAt: createdAt ?? currentTime,
-        metadata: {
-          sourceSystem: 'outreach_answer_resolution',
-          answerResolutionPhase: phase,
-          hitSource: 'target_channel_history',
-        },
+        metadata: mergeMentionLabelsIntoMetadata(
+          {
+            sourceSystem: 'outreach_answer_resolution',
+            answerResolutionPhase: phase,
+            hitSource: 'target_channel_history',
+          },
+          post.mentionLabels ?? {},
+        ),
       }));
 
     const deduped = new Set<string>();
@@ -2000,14 +2302,17 @@ export class OutreachEngine {
           session.targetRef,
         )} 回复“${replyText}”。`,
         createdAt: current.createdAt ?? currentTime,
-        metadata: {
-          sourceSystem: 'outreach_answer_resolution',
-          answerResolutionPhase: 'before_dispatch',
-          hitSource: 'target_channel_history',
-          conversationMatched: true,
-          promptPostId: matchedPrompt.post.id,
-          replyText,
-        },
+        metadata: mergeMentionLabelsIntoMetadata(
+          {
+            sourceSystem: 'outreach_answer_resolution',
+            answerResolutionPhase: 'before_dispatch',
+            hitSource: 'target_channel_history',
+            conversationMatched: true,
+            promptPostId: matchedPrompt.post.id,
+            replyText,
+          },
+          mergePostMentionLabels(matchedPrompt.post, current.post),
+        ),
       });
     }
 
@@ -2449,22 +2754,10 @@ export class OutreachEngine {
     return evidence;
   }
 
-  private buildSessionEvidence(session: OutreachSessionRecord): Array<{
-    sourceKind: string;
-    sourceId?: string;
-    title?: string;
-    content: string;
-    createdAt?: number;
-    metadata?: Record<string, unknown>;
-  }> {
-    const evidence: Array<{
-      sourceKind: string;
-      sourceId?: string;
-      title?: string;
-      content: string;
-      createdAt?: number;
-      metadata?: Record<string, unknown>;
-    }> = [];
+  private async buildSessionEvidence(
+    session: OutreachSessionRecord,
+  ): Promise<OutreachSessionEvidenceItem[]> {
+    const evidence: OutreachSessionEvidenceItem[] = [];
 
     if (session.replyRawText?.trim()) {
       evidence.push({
@@ -2546,7 +2839,44 @@ export class OutreachEngine {
       });
     }
 
-    return evidence;
+    return this.attachMentionLabelsToEvidence(evidence, session);
+  }
+
+  private async attachMentionLabelsToEvidence(
+    evidence: OutreachSessionEvidenceItem[],
+    session: OutreachSessionRecord,
+  ): Promise<OutreachSessionEvidenceItem[]> {
+    const mentionIds = uniqStrings(
+      evidence.flatMap((item) => extractPersonMentionIds(item.content)),
+    );
+    if (mentionIds.length === 0) {
+      return evidence;
+    }
+
+    const chatId = this.getAnswerResolutionChatIds(session)[0];
+    const allMentionLabels: Record<string, string> = await this.ringClient
+      .resolvePersonMentionLabels(mentionIds, chatId)
+      .catch(() => ({} as Record<string, string>));
+    if (Object.keys(allMentionLabels).length === 0) {
+      return evidence;
+    }
+
+    return evidence.map((item) => {
+      const itemMentionLabels: Record<string, string> = {};
+      for (const id of extractPersonMentionIds(item.content)) {
+        const label = allMentionLabels[id];
+        if (label) {
+          itemMentionLabels[id] = label;
+        }
+      }
+      return {
+        ...item,
+        metadata: mergeMentionLabelsIntoMetadata(
+          item.metadata,
+          itemMentionLabels,
+        ),
+      };
+    });
   }
 
   private listProcessedReplyPostIds(
@@ -2786,6 +3116,8 @@ export class OutreachEngine {
       });
       this.repo.createEvent(session.id, 'followup_sent', {
         followupCount: session.followupCount + 1,
+        chatId: sent.chatId,
+        postId: sent.postId,
       });
       this.insertOutreachMessage('outreach_question', session, followupText, {
         followup: true,
@@ -2942,9 +3274,9 @@ export class OutreachEngine {
     session: OutreachSessionRecord,
     content: string,
     metadata: Record<string, unknown>,
+    timestamp = now(),
   ): void {
     const id = randomUUID();
-    const currentTime = now();
     this.db
       .prepare(
         `INSERT INTO messages_raw
@@ -2958,13 +3290,13 @@ export class OutreachEngine {
         this.userId ?? 'outreach-engine',
         session.targetType === 'group' ? session.targetRef : null,
         session.targetType === 'group' ? 'outreach-group' : null,
-        currentTime,
+        timestamp,
         JSON.stringify({
           sessionId: session.id,
           originKind: session.originKind,
           ...metadata,
         }),
-        currentTime,
+        timestamp,
       );
   }
 

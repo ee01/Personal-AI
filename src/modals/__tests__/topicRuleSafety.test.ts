@@ -48,3 +48,16 @@ test('rule safety treats scoped approval-based rules as clear', () => {
   assert.equal(summary.label, '范围清晰');
   assert.deepEqual(summary.reasons, ['联动操作需批准']);
 });
+
+test('rule safety does not warn on common two-character CJK scopes', () => {
+  const summary = getRuleSafetySummary({
+    filterGroup: '研发',
+    filterSender: '李雷',
+    notifyMethod: 'bot',
+    digestEnabled: true,
+  });
+
+  assert.equal(summary.tone, 'ok');
+  assert.equal(summary.label, '基础安全');
+  assert.deepEqual(summary.reasons, ['范围明确']);
+});

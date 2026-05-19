@@ -717,11 +717,12 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
       /^\/(?:l\/)?messages\/[^/?#]+/.test(location.pathname)
     );
   },
-  buildSnapshot(doc, location) {
+  buildSnapshot(doc, location, target) {
     const url = normalizeContextPageUrl(location.href);
     const conversationId = getRingCentralConversationId(location);
     const title = getRingCentralConversationTitle(doc);
-    const activeComposer = findRingCentralComposer(doc, doc.activeElement);
+    const activeComposer =
+      target || findRingCentralComposer(doc, doc.activeElement);
     const threadMode = activeComposer?.mode === 'thread';
     const cards = threadMode
       ? getVisibleRingCentralThreadCards(doc)
@@ -1275,6 +1276,9 @@ const webAgentAdapter: SiteContextAdapter = {
         'web',
         'manual',
         'system',
+        'user_core',
+        'markdown',
+        'reflection',
       ],
     };
   },
@@ -1345,7 +1349,7 @@ export function findActiveComposerContext(
     if (!adapter.match(location, doc)) continue;
     const target = adapter.findComposer(doc, fromElement);
     if (!target) continue;
-    const snapshot = adapter.buildSnapshot(doc, location);
+    const snapshot = adapter.buildSnapshot(doc, location, target);
     if (!snapshot) continue;
     return { adapter, target, snapshot };
   }

@@ -180,7 +180,11 @@ export async function extractMessageInfo(
     // 获取时间 - RingCentral 使用 [data-name="time"]
     const timeElement = messageElement.querySelector('[data-name="time"]');
     const timestamp =
-      timeElement?.textContent?.trim() || new Date().toLocaleTimeString();
+      timeElement?.getAttribute('datetime') ||
+      timeElement?.getAttribute('title') ||
+      timeElement?.getAttribute('aria-label') ||
+      timeElement?.textContent?.trim() ||
+      new Date().toISOString();
 
     // 构建消息链接
     const messageLink =

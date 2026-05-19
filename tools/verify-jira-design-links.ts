@@ -10,9 +10,7 @@ import {
   getDesignDisplayLabel,
   getDesignDisplayPriority,
   getDesignDisplayStatusTone,
-  getDesignReadinessDecision,
   getDesignStatusTone,
-  getDesignStatusSummary,
   getDesignSourceLabel,
   getFigmaDisplayLabel,
   getUXEpicStatusTone,
@@ -261,26 +259,6 @@ function verifyDisplayOrdering() {
   assert.equal(getDesignDisplayStatusTone(sorted[2]), 'missing');
   assert.equal(sorted[3].type, 'figma');
   assert.equal(getDesignDisplayStatusTone(sorted[3]), 'neutral');
-
-  assert.deepEqual(getDesignStatusSummary(sorted), [
-    { tone: 'ready', label: 'ready', count: 1 },
-    { tone: 'updated', label: 'updated', count: 1 },
-    { tone: 'missing', label: 'missing', count: 1 },
-  ]);
-
-  assert.deepEqual(getDesignReadinessDecision(sorted), {
-    tone: 'missing',
-    label: 'Missing design links',
-    detail: '1 UX ticket needs design links before implementation',
-    targetTone: 'missing',
-  });
-
-  assert.deepEqual(getDesignReadinessDecision([sorted[0]]), {
-    tone: 'ready',
-    label: 'Ready for dev',
-    detail: '1 ready item available; confirm scope before starting',
-    targetTone: 'ready',
-  });
 }
 
 verifyProjectPatternMatching();

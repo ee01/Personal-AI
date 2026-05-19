@@ -5,11 +5,11 @@ alwaysApply: false
 ---
 # Jira 设计链接显示功能
 
-*最后更新: 2026-05-14*
+*最后更新: 2026-05-15*
 
 ## 功能概述
 
-Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设计入口，让开发、测试、PM 不需要在 description、Jira 原生 Designs 区块、remote links、linked issues、Epic、Parent ticket 之间来回查找。当前实现覆盖 Figma、FigJam、Miro、Loom、Google Slides 和 UX 项目 ticket 上维护的设计链接，并在 Jira summary 下方用紧凑面板先给出开工判定，再展示可行动设计状态、UX Epic 状态和 ETA。
+Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设计入口，让开发、测试、PM 不需要在 description、Jira 原生 Designs 区块、remote links、linked issues、Epic、Parent ticket 之间来回查找。当前实现覆盖 Figma、FigJam、Miro、Loom、Google Slides 和 UX 项目 ticket 上维护的设计链接，并在 Jira summary 下方用紧凑面板逐条展示设计入口、UX ticket、可行动设计状态、UX Epic 状态和 ETA。
 
 ## 主要功能
 
@@ -19,7 +19,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 4. **层级关联分析**：Epic 和非 Epic ticket 都会尝试向上查找相关 UX ticket。
 5. **稳定展示**：在 Jira summary 下方展示紧凑面板，长标题会截断，标签会换行，面板会按实际内容高度自适应，hover 效果与 Backend ETA 卡片保持一致且不挤压页面内容；Jira SPA 切换到无设计链接的 ticket、带尾斜杠的 ticket URL 或非 ticket 页面时会正确识别并清理旧面板。
 6. **状态补充**：对 UX ticket 额外显示 UX Epic、Epic 状态和 ETA（due date 或 fixVersion），对 Jira remote link/UX ticket 设计链接显示可用的设计状态；`ready_for_development`、`not_ready_for_dev` 这类机器状态会显示成人可读标签并映射到正确状态色。
-7. **可行动优先级**：优先展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的设计入口，并用开工判定和可点击状态摘要减少扫描成本；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
+7. **可行动状态展示**：逐条展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的状态；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
 8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态和 UX ticket key，但不展示设计 ticket 标题，并把该项排在普通链接之前，避免开发者误以为没有设计依赖。
 9. **安全和去重**：只接受 http/https 设计链接，过滤重复设计链接/UX 链接，并保留合并后的来源标签。
 
@@ -38,7 +38,6 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 
 例如：
 - `[icon] Design Figma design ↗ [Description]`
-- `[decision] Missing design links 2 UX tickets need design links before implementation`
 - `[icon] Design Ready checkout prototype ↗ [Ready for development] [Remote link]`
 - `[icon] Design Draft onboarding walkthrough ↗ [Not ready for dev] [Remote link]`
 - `[icon] Design UX-12345 页面设计稿 ↗ UX-12345 UXE-88 In Progress ETA: 2026-05-10 [Epic link]`
@@ -154,7 +153,7 @@ interface FigmaLink {
 ### 基本样式
 - 使用浅灰背景和 Atlassian 风格蓝色链接，尽量贴近 Jira 页面本身。
 - 面板 hover 使用与 Backend ETA 卡片一致的轻微浮动和 footer 展开效果，不挤压页面内容。
-- 面板在链接列表上方展示一行开工判定和状态摘要芯片；用户可以先看到 `Missing design links` / `Review design updates` / `Ready for dev` 等判定，再点击判定或芯片定位到第一条对应设计入口。
+- 面板不做顶部开工判定、状态摘要或主行动推荐，因为真实设计入口可能分布在多个 UX ticket 中；用户直接扫描每一条 ticket/link 自行判断。
 - 每个链接项包含 Personal AI 图标、设计入口、UX ticket、设计状态、UX Epic 状态、ETA 和来源标签；缺失设计链接时只展示 UX ticket key 和 `Missing link` 状态，避免设计 ticket 标题占据扫描空间。
 - Jira/Figma 的设计状态会按 tone 展示：Ready for dev、Design updated、Missing link、Not ready、Blocked、Review、Done、Neutral；Ready/Updated/Missing/Not ready 等更需要处理的入口会排在普通 description 链接前面。
 - 重复链接合并时会优先保留 Jira remote link / Designs 提供的结构化标题和状态，UX ticket 行也会优先展示具体设计名，避免 description 或工具默认名覆盖真正可行动的设计状态。
@@ -296,13 +295,12 @@ const PAGE_CHANGE_DELAY = 1000;
 18. 面板整体样式和 hover 效果与 Backend ETA 卡片保持一致；缺失链接行不展示设计 ticket 标题，减少扫描噪音
 19. 设计状态解析避免把 `Not ready for dev`、`Draft`、`Ready for review` 误标成绿色 Ready，降低错误开工风险
 20. 额外设计域名区分精确 host 与通配子域，避免把 `prototype.example.com` 意外放宽成所有子域
-21. 状态摘要芯片会把 Ready / Updated / Missing / Not ready 等有行动意义的入口先聚合展示，适合开发者快速判断是否能开工
-22. Description 中弱锚文本会回退检查 `title` 和 `aria-label`，避免 Jira Smart Link 或 “the design” 这类文本掩盖真实设计名
-23. Jira `/browse/KEY/` 这类带尾斜杠 URL 会按正确 issue key 处理，避免 API 请求空 key 或 SPA 陈旧面板
-24. 状态摘要芯片可点击定位并短暂高亮第一条对应设计入口，让开发者从 `missing` / `updated` 直接跳到需要处理的项
-25. 面板顶部增加开工判定行，并按实际内容高度更新 `max-height`，避免状态摘要或判定文案换行后与 footer 重叠
-26. Jira 设计链接配置读取增加总超时兜底；配置异常时仍用默认 `UX*` 继续渲染可见设计上下文
-27. Jira 设计链接的只读 API 请求复用已读取 token；无 token 时直接走 cookie GET，避免二次配置读取或编辑态检查阻塞设计面板
+21. Description 中弱锚文本会回退检查 `title` 和 `aria-label`，避免 Jira Smart Link 或 “the design” 这类文本掩盖真实设计名
+22. Jira `/browse/KEY/` 这类带尾斜杠 URL 会按正确 issue key 处理，避免 API 请求空 key 或 SPA 陈旧面板
+23. Jira 设计链接配置读取增加总超时兜底；配置异常时仍用默认 `UX*` 继续渲染可见设计上下文
+24. Jira 设计链接的只读 API 请求复用已读取 token；无 token 时直接走 cookie GET，避免二次配置读取或编辑态检查阻塞设计面板
+25. Jira 原生 Designs 卡片优先读取结构化标题元素，避免把 `Design updated` 或 `Open in Figma` 等状态/按钮文案拼进设计名
+26. 面板移除顶部开工判定、状态摘要和主行动推荐，只逐条展示可点击设计入口和 UX ticket，避免错误假设哪一张 ticket 才是真正设计来源
 
 ### 未来增强计划 🔄
 1. 在权限允许时展示轻量预览或缩略图，减少打开外部工具的次数。

@@ -48,10 +48,17 @@ export class FallbackDoubaoSource implements DoubaoConversationCollectorClient {
   }
 
   getClientStatus(): ExplorerTransportStatus {
-    return {
+    const fallbackCooldownUntil = this.isInCooldown()
+      ? new Date(this.webpageMcpCooldownUntil).toISOString()
+      : undefined;
+    const status: ExplorerTransportStatus = {
       mode: this.lastOutcome.mode,
       fallbackReason: this.lastOutcome.fallbackReason,
     };
+    if (fallbackCooldownUntil) {
+      status.fallbackCooldownUntil = fallbackCooldownUntil;
+    }
+    return status;
   }
 
   private async invoke<T>(
@@ -67,6 +74,9 @@ export class FallbackDoubaoSource implements DoubaoConversationCollectorClient {
           fallbackReason:
             this.lastOutcome.fallbackReason ??
             'webpage-mcp transport is cooling down after a recent failure',
+          fallbackCooldownUntil: new Date(
+            this.webpageMcpCooldownUntil,
+          ).toISOString(),
         };
         return result;
       }

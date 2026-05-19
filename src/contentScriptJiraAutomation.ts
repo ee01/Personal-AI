@@ -8,6 +8,7 @@ import {
   JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
   buildJiraAutomationImportedRuleName,
   buildJiraAutomationImportRule,
+  buildJiraAutomationImportReviewFindings,
   buildJiraAutomationImportReviewChecklist,
   buildJiraAutomationImportWarnings,
   buildJiraAutomationUniqueImportedRuleName,
@@ -17,6 +18,7 @@ import {
   summarizeJiraAutomationImportRule,
   type ExportedData,
   type ImportRule,
+  type JiraAutomationImportReviewFinding,
   type JiraAutomationImportReviewChecklistItem,
 } from './jira-automation-import/transform';
 import { 
@@ -508,6 +510,52 @@ function createDialogButton(doc: Document, text: string, variant: 'primary' | 's
   return button;
 }
 
+function getFocusableDialogElements(container: HTMLElement): HTMLElement[] {
+  const elements = container.querySelectorAll<HTMLElement>(
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+  );
+
+  return Array.from(elements).filter((element) => (
+    !element.hasAttribute('disabled') &&
+    element.getAttribute('aria-hidden') !== 'true' &&
+    element.getClientRects().length > 0
+  ));
+}
+
+function trapDialogFocus(event: KeyboardEvent, dialog: HTMLElement, doc: Document): void {
+  if (event.key !== 'Tab') {
+    return;
+  }
+
+  const focusableElements = getFocusableDialogElements(dialog);
+  if (focusableElements.length === 0) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+
+  const firstElement = focusableElements[0];
+  const lastElement = focusableElements[focusableElements.length - 1];
+  const activeElement = doc.activeElement;
+
+  if (!dialog.contains(activeElement)) {
+    event.preventDefault();
+    firstElement.focus();
+    return;
+  }
+
+  if (event.shiftKey && activeElement === firstElement) {
+    event.preventDefault();
+    lastElement.focus();
+    return;
+  }
+
+  if (!event.shiftKey && activeElement === lastElement) {
+    event.preventDefault();
+    firstElement.focus();
+  }
+}
+
 function appendInfoRow(doc: Document, container: HTMLElement, label: string, value: string): void {
   const row = doc.createElement('div');
   row.style.cssText = 'display: flex; gap: 8px; margin-bottom: 6px;';
@@ -617,6 +665,107 @@ function renderReviewChecklist(
   });
 }
 
+function renderImportOutcomeSummary(
+  doc: Document,
+  container: HTMLElement,
+  importedRuleName: string,
+  projectContext: JiraAutomationProjectContext,
+  checklist: JiraAutomationImportReviewChecklistItem[],
+  sourceAllowsChainedTrigger: boolean,
+  preventChainedTrigger: boolean,
+): void {
+  container.textContent = '';
+
+  const highCount = checklist.filter((item) => item.severity === 'high').length;
+  const chainingState = sourceAllowsChainedTrigger
+    ? (preventChainedTrigger ? 'chained triggers blocked' : 'chained triggers preserved')
+    : 'chained triggers disabled';
+
+  const title = doc.createElement('div');
+  title.textContent = 'Disabled import preview';
+  title.style.cssText = 'font-weight: 700; font-size: 14px; margin-bottom: 4px; color: #172B4D;';
+
+  const body = doc.createElement('div');
+  body.textContent = `${importedRuleName} will be created disabled in ${projectContext.projectKey}. ${formatChecklistSeverityCounts(checklist)}; ${highCount} high-risk item(s); ${chainingState}.`;
+  body.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; word-break: break-word;';
+
+  container.appendChild(title);
+  container.appendChild(body);
+}
+
+function renderReviewFindings(
+  doc: Document,
+  container: HTMLElement,
+  findings: JiraAutomationImportReviewFinding[],
+): void {
+  container.textContent = '';
+
+  const title = doc.createElement('div');
+  title.textContent = 'Detected environment bindings';
+  title.style.cssText = 'font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #172B4D;';
+  container.appendChild(title);
+
+  const help = doc.createElement('div');
+  help.textContent = 'These values are copied into the disabled rule description so they are still visible after import.';
+  help.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-bottom: 10px;';
+  container.appendChild(help);
+
+  if (findings.length === 0) {
+    const empty = doc.createElement('div');
+    empty.textContent = 'No JQL, URL, account, sensitive value, custom field, saved filter, connection, smart value, or source-project binding was detected.';
+    empty.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F;';
+    container.appendChild(empty);
+    return;
+  }
+
+  findings.forEach((finding) => {
+    const row = doc.createElement('div');
+    row.style.cssText = `
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 10px;
+      padding: 9px 0;
+      border-top: 1px solid #EBECF0;
+    `;
+
+    const severity = doc.createElement('span');
+    severity.textContent = finding.severity.toUpperCase();
+    severity.style.cssText = `
+      align-self: start;
+      justify-self: start;
+      min-width: 54px;
+      text-align: center;
+      padding: 2px 6px;
+      border: 1px solid;
+      border-radius: 3px;
+      font-size: 11px;
+      line-height: 1.4;
+      font-weight: 700;
+      ${getChecklistSeverityStyle(finding.severity)}
+    `;
+
+    const content = doc.createElement('div');
+    content.style.cssText = 'min-width: 0;';
+
+    const label = doc.createElement('div');
+    label.textContent = `${finding.label} (${finding.count})`;
+    label.style.cssText = 'font-size: 13px; line-height: 1.35; font-weight: 600; color: #172B4D;';
+    content.appendChild(label);
+
+    const samples = finding.samples.length > 0
+      ? finding.samples.join(' | ')
+      : 'Review the rule component that owns this binding.';
+    const detail = doc.createElement('div');
+    detail.textContent = samples;
+    detail.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-top: 2px; word-break: break-word;';
+    content.appendChild(detail);
+
+    row.appendChild(severity);
+    row.appendChild(content);
+    container.appendChild(row);
+  });
+}
+
 function formatChecklistSeverityCounts(items: JiraAutomationImportReviewChecklistItem[]): string {
   const counts = items.reduce(
     (acc, item) => {
@@ -641,6 +790,7 @@ function showImportPreviewDialog(
   existingRuleNames: string[],
 ): Promise<{ confirmed: boolean; selectedRuleIndex: number; allowOtherRuleTrigger: boolean }> {
   return new Promise((resolve) => {
+    const previousActiveElement = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
     const overlay = doc.createElement('div');
     overlay.style.cssText = `
       position: fixed;
@@ -661,6 +811,7 @@ function showImportPreviewDialog(
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
     dialog.setAttribute('aria-labelledby', 'personal-ai-jira-import-title');
+    dialog.tabIndex = -1;
     dialog.style.cssText = `
       width: min(640px, 100%);
       max-height: min(720px, 92vh);
@@ -684,6 +835,16 @@ function showImportPreviewDialog(
     intro.textContent = `Found ${exportedData.rules.length} rule(s) in ${file.name}. Select one rule to import into ${projectContext.projectKey}.`;
     intro.style.cssText = 'margin: 0 0 16px; color: #44546F; font-size: 13px; line-height: 1.5;';
     dialog.appendChild(intro);
+
+    const outcomeBox = doc.createElement('div');
+    outcomeBox.style.cssText = `
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #CCE0FF;
+      border-radius: 6px;
+      background: #E9F2FF;
+    `;
+    dialog.appendChild(outcomeBox);
 
     let selectedRuleIndex = 0;
     let select: HTMLSelectElement | null = null;
@@ -727,6 +888,16 @@ function showImportPreviewDialog(
       background: #F7F8F9;
     `;
     dialog.appendChild(details);
+
+    const findingsBox = doc.createElement('div');
+    findingsBox.style.cssText = `
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #DFE1E6;
+      border-radius: 6px;
+      background: white;
+    `;
+    dialog.appendChild(findingsBox);
 
     const checklistBox = doc.createElement('div');
     checklistBox.style.cssText = `
@@ -778,6 +949,7 @@ function showImportPreviewDialog(
       const summary = summarizeJiraAutomationImportRule(rule);
       const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
       const reviewChecklist = buildJiraAutomationImportReviewChecklist(rule);
+      const reviewFindings = buildJiraAutomationImportReviewFindings(rule);
       const defaultImportedRuleName = buildJiraAutomationImportedRuleName(rule.name);
       const importedRuleName = buildJiraAutomationUniqueImportedRuleName(rule.name, existingRuleNames);
       const importNameWasNumbered = importedRuleName !== defaultImportedRuleName;
@@ -792,6 +964,15 @@ function showImportPreviewDialog(
       chainedTriggerText.textContent = sourceAllowsChainedTrigger
         ? 'Prevent other automation rules from triggering this imported copy until it has been reviewed.'
         : 'The source rule does not allow other automation rules to trigger it.';
+      renderImportOutcomeSummary(
+        doc,
+        outcomeBox,
+        importedRuleName,
+        projectContext,
+        reviewChecklist,
+        sourceAllowsChainedTrigger,
+        preventChainedTrigger,
+      );
 
       details.textContent = '';
       appendInfoRow(doc, details, 'Rule name', rule.name);
@@ -811,12 +992,14 @@ function showImportPreviewDialog(
       appendInfoRow(doc, details, 'Conditions', String(summary.conditionCount));
       appendInfoRow(doc, details, 'Web requests', summary.webRequestCount > 0 ? `${summary.webRequestCount} to review` : 'None detected');
       appendInfoRow(doc, details, 'External actions', summary.externalIntegrationCount > 0 ? `${summary.externalIntegrationCount} to review` : 'None detected');
-      appendInfoRow(doc, details, 'Secrets', summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} reference(s)` : 'None detected');
+      appendInfoRow(doc, details, 'Secrets', formatReviewSignalValue(summary.secretReferenceCount, reviewSignals.secretReferences));
       appendInfoRow(doc, details, 'JQL / filters', formatReviewSignalValue(summary.jqlReferenceCount, reviewSignals.jqlReferences));
       appendInfoRow(doc, details, 'Hard-coded URLs', formatReviewSignalValue(summary.hardcodedUrlCount, reviewSignals.hardcodedUrls));
       appendInfoRow(doc, details, 'Custom fields', formatReviewSignalValue(summary.customFieldReferenceCount, reviewSignals.customFieldReferences));
       appendInfoRow(doc, details, 'Saved filters', formatReviewSignalValue(summary.savedFilterReferenceCount, reviewSignals.savedFilterReferences));
       appendInfoRow(doc, details, 'Connections', formatReviewSignalValue(summary.connectionReferenceCount, reviewSignals.connectionReferences));
+      appendInfoRow(doc, details, 'Sensitive values', formatReviewSignalValue(summary.sensitiveReferenceCount, reviewSignals.sensitiveReferences));
+      appendInfoRow(doc, details, 'Smart values', formatReviewSignalValue(summary.smartValueReferenceCount, reviewSignals.smartValueReferences));
       appendInfoRow(doc, details, 'Accounts', formatReviewSignalValue(accountReferenceCount, accountReferenceSamples));
       appendInfoRow(doc, details, 'Source project refs', formatReviewSignalValue(summary.sourceProjectReferenceCount, reviewSignals.sourceProjectReferences));
       appendInfoRow(doc, details, 'Schedule', summary.scheduledTrigger ? 'Scheduled trigger' : 'No scheduled trigger');
@@ -830,6 +1013,7 @@ function showImportPreviewDialog(
       );
       appendInfoRow(doc, details, 'Target project', `${projectContext.projectKey} (${projectContext.projectId})`);
       appendInfoRow(doc, details, 'Imported state', 'DISABLED');
+      renderReviewFindings(doc, findingsBox, reviewFindings);
       renderReviewChecklist(doc, checklistBox, reviewChecklist);
 
       warningBox.textContent = '';
@@ -882,13 +1066,20 @@ function showImportPreviewDialog(
       if (doc.body.contains(overlay)) {
         doc.body.removeChild(overlay);
       }
+      try {
+        previousActiveElement?.focus();
+      } catch (error) {
+        console.debug('Could not restore Jira import dialog focus:', error);
+      }
       resolve(result);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false });
+        return;
       }
+      trapDialogFocus(event, dialog, doc);
     };
 
     doc.addEventListener('keydown', onKeyDown);
@@ -909,6 +1100,7 @@ function showImportPreviewDialog(
 
     overlay.appendChild(dialog);
     doc.body.appendChild(overlay);
+    (select || cancelButton).focus();
   });
 }
 

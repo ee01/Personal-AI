@@ -62,16 +62,17 @@ import {
   buildTimelineCacheDiagnosticText,
   formatTimelineCacheAge,
   formatTimelineCacheLastAttempt,
+  formatTimelineSyncDryRunResult,
   getTimelineCacheAttemptQuickFixText,
   getTimelineCacheProjectStatus,
-  getTimelineCacheReadinessBlockText,
-  getTimelineCacheSaveBlockText,
   getTimelineCacheStatusActionText,
   getTimelineCacheStatusLabel,
   getTimelineProjectCacheSaveBlockText,
   parseTimelineCacheStatusResponseText,
+  parseTimelineSyncDryRunResponseText,
   shouldAutoRefreshTimelineCacheStatus,
   type TimelineCacheStatus,
+  type TimelineSyncDryRunResult,
 } from './timelineCacheStatus';
 import {
   getMemoryServiceClient,
@@ -103,12 +104,16 @@ import {
   getScheduleQueuePressure,
   getScheduleQueueSuggestion,
   getScheduleQueueSummary,
+  hasScheduleQueueBlockingRisk,
+  hasScheduleQueueSlotRisk,
+  type ScheduleQueueSlotSummary,
 } from './scheduleQueuePressure';
 import {
   formatScheduleHealthIssue,
   formatScheduleHealthSummary,
   getScheduleHealthIssue,
   getScheduleHealthIssues,
+  getScheduleHealthRecoverySuggestion,
 } from './scheduleHealth';
 import {
   filterScheduledMessagesForView,
@@ -122,6 +127,7 @@ import {
   type ScheduledMessagesSheetTab,
 } from './scheduledSheetLinks';
 import { buildRepeatSubmissionFields } from './repeatSubmission';
+import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
 
 // react-select 选项类型
 interface SelectOption {
@@ -155,6 +161,7 @@ interface OutreachRuntimeState {
 }
 
 const OUTREACH_OPTIONS_HASH = 'outreach-config';
+const DEFAULT_QUEUE_SLOT_DISPLAY_LIMIT = 3;
 
 type AddDialogMode = 'default' | 'reminder' | 'outreach';
 
@@ -397,6 +404,37 @@ async function fetchTimelineCacheStatus(webAppUrl?: string): Promise<TimelineCac
   return parseTimelineCacheStatusResponseText(responseText);
 }
 
+async function runTimelineSyncDryRun(dryRunHelp: TimelineSyncDryRunHelp): Promise<TimelineSyncDryRunResult> {
+  const headers: Record<string, string> = {
+    'Cache-Control': 'no-cache',
+  };
+  const init: RequestInit = {
+    method: dryRunHelp.method,
+    headers: {
+      ...headers,
+    },
+  };
+
+  if (dryRunHelp.method !== 'GET' && dryRunHelp.customBody) {
+    init.headers = {
+      ...headers,
+      'Content-Type': dryRunHelp.contentType,
+    };
+    init.body = dryRunHelp.customBody;
+  }
+
+  const response = await fetch(dryRunHelp.url, init);
+
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    const snippet = responseText.replace(/\s+/g, ' ').trim().slice(0, 120);
+    throw new Error(`Apps Script dry-run 失败: HTTP ${response.status}${snippet ? ` - ${snippet}` : ''}`);
+  }
+
+  return parseTimelineSyncDryRunResponseText(responseText);
+}
+
 function formatOutreachSummary(message: ScheduledMessage): string {
   const parts: string[] = [];
 
@@ -429,6 +467,48 @@ function buildStatistics(messages: ScheduledMessage[]): Statistics {
     pendingReview: messages.filter(message => message.Status === 'PendingReview').length,
     executedToday: messages.filter(message => message.Last_Exec && message.Last_Exec.startsWith(today)).length,
   };
+}
+
+function formatQueueSlotLaneLabel(slot: ScheduleQueueSlotSummary): string {
+  return slot.hasExplicitTime ? slot.slotKey : `${slot.slotKey} 后队列`;
+}
+
+function formatQueueSlotDelayLabel(slot: ScheduleQueueSlotSummary): string {
+  return slot.maxDelayMinutes > 0
+    ? `最大延后 ${slot.maxDelayMinutes} 分钟`
+    : '优先执行';
+}
+
+function formatQueueSlotActionLabel(slot: ScheduleQueueSlotSummary): string {
+  return slot.actionTopic
+    ? `建议处理：${slot.actionTopic}（第 ${slot.actionPosition}/${slot.slotSize} 个）`
+    : '';
+}
+
+function formatQueueSlotSuggestionLabel(slot: ScheduleQueueSlotSummary): string {
+  return slot.suggestion ? `建议改到 ${slot.suggestion.label}` : '';
+}
+
+function formatQueueSlotRiskLabel(slot: ScheduleQueueSlotSummary): string {
+  if (slot.exceedsCompensationWindow) {
+    return [
+      '可能超过 30 分钟补偿窗口',
+      slot.remainingCompensationMinutes > 0
+        ? `剩余 ${slot.remainingCompensationMinutes} 分钟`
+        : '',
+    ].filter(Boolean).join(' · ');
+  }
+
+  if (slot.exceedsExecutionWindow) {
+    return [
+      '可能排到执行日期结束后',
+      typeof slot.remainingSameDaySlots === 'number'
+        ? `当天剩余约 ${slot.remainingSameDaySlots} 条`
+        : '',
+    ].filter(Boolean).join(' · ');
+  }
+
+  return '';
 }
 
 function normalizeOutreachTimestamp(value?: number): string | undefined {
@@ -711,6 +791,7 @@ const ScheduledMessagesManager: React.FC = () => {
   });
   const [outreachRuntimeLoaded, setOutreachRuntimeLoaded] = useState(false);
   const [queueSummaryNow, setQueueSummaryNow] = useState(() => new Date());
+  const [showAllQueueSlots, setShowAllQueueSlots] = useState(false);
   const timelineSyncRuleUrl = useMemo(
     () => getJiraAutomationRuleUrl(getTimelineSyncRule(config)),
     [config],
@@ -1243,14 +1324,15 @@ const ScheduledMessagesManager: React.FC = () => {
       ? `\n\n当前 App Script: ${appScriptVersion}\n最新 App Script: ${latestAppScriptVersion}`
       : '';
 
-    if (!confirm(`确定要升级调度系统吗？${versionSummary}\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script Web App 代码升级（先重新确认线上版本，再预检部署和 Web App URL 匹配，保持 Web App URL 不变）\n3. Jira Automation 规则升级\n\n失败项会保留现有版本；如果 App Script 已是最新，会跳过脚本写入和版本创建；如果 deployment 预检或 URL 匹配失败，不会创建新的脚本版本。整个过程可能需要几分钟时间。`)) {
+    if (!confirm(`确定要升级调度系统吗？${versionSummary}\n\n将依次执行以下升级：\n1. Sheet 表结构升级\n2. App Script Web App 代码升级（先重新确认线上版本，再预检部署和 Web App URL 匹配，保持 Web App URL 不变，提交后确认新版本已生效）\n3. Jira Automation 规则升级\n\n失败项会保留现有版本；如果 App Script 已是最新，会跳过脚本写入和版本创建；如果 deployment 预检、URL 匹配或版本生效确认失败，不会把配置标记为最新，并会尝试回退到升级前 deployment 版本。整个过程可能需要几分钟时间。`)) {
       return;
     }
     
     setIsUpdating(true);
     const updateResults: string[] = [];
-    let appScriptHelpUrl = '';
-    let appScriptHelpMessage = '';
+    let appScriptRecoveryUrl = '';
+    let appScriptRecoveryMessage = '';
+    let appScriptRecoveryTitle = 'App Script 需要处理后重试';
     
     try {
       const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.handleUpgrade' });
@@ -1295,10 +1377,18 @@ const ScheduledMessagesManager: React.FC = () => {
           appScriptResult.errorCode === APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR &&
           appScriptResult.helpUrl
         ) {
-          appScriptHelpUrl = appScriptResult.helpUrl;
-          appScriptHelpMessage = appScriptResult.helpMessage || '请先清理旧的历史版本后重试升级。';
+          appScriptRecoveryUrl = appScriptResult.helpUrl;
+          appScriptRecoveryMessage = appScriptResult.helpMessage || '请先清理旧的历史版本后重试升级。';
+          appScriptRecoveryTitle = 'App Script 历史版本已达到 200 个上限';
           updateResults.push(
-            `⚠️ App Script 升级失败：历史版本已达到 200 个上限\n   处理方式：${appScriptHelpMessage}\n   清理页面：${appScriptHelpUrl}`
+            `⚠️ App Script 升级失败：历史版本已达到 200 个上限\n   处理方式：${appScriptRecoveryMessage}\n   清理页面：${appScriptRecoveryUrl}`
+          );
+        } else if (appScriptResult.helpUrl) {
+          appScriptRecoveryUrl = appScriptResult.helpUrl;
+          appScriptRecoveryMessage = appScriptResult.helpMessage || '请检查 Apps Script deployment 配置后重试升级。';
+          appScriptRecoveryTitle = 'App Script deployment 需要检查';
+          updateResults.push(
+            `⚠️ App Script 升级失败：${appScriptResult.message}\n   处理方式：${appScriptRecoveryMessage}\n   检查页面：${appScriptRecoveryUrl}`
           );
         } else {
           throw new Error(appScriptResult.error || '更新失败');
@@ -1334,12 +1424,12 @@ const ScheduledMessagesManager: React.FC = () => {
       const hasWarnings = updateResults.some(result => result.includes('⚠️'));
       alert(`${hasWarnings ? '⚠️ 升级流程已执行完毕（含失败项）' : '🎉 版本升级完成！'}\n\n${updateResults.join('\n\n')}\n\n页面将重新加载以应用更新...`);
 
-      if (appScriptHelpUrl) {
-        const shouldOpenProjectHistory = confirm(
-          `App Script 历史版本已达到 200 个上限。\n\n${appScriptHelpMessage}\n\n是否立即打开 Project History 清理页面？`
+      if (appScriptRecoveryUrl) {
+        const shouldOpenRecoveryPage = confirm(
+          `${appScriptRecoveryTitle}\n\n${appScriptRecoveryMessage}\n\n是否立即打开检查页面？`
         );
-        if (shouldOpenProjectHistory) {
-          window.open(appScriptHelpUrl, '_blank');
+        if (shouldOpenRecoveryPage) {
+          window.open(appScriptRecoveryUrl, '_blank');
         }
       }
       
@@ -1371,19 +1461,21 @@ const ScheduledMessagesManager: React.FC = () => {
     appScriptUpdateCheckedAtText ? `检查于 ${appScriptUpdateCheckedAtText}` : '',
     'URL 匹配后更新',
     'Web App URL 不变',
-    '失败保留旧部署',
+    '失败回退旧部署',
   ].filter(Boolean);
   const appScriptUpgradePreflightSteps = [
     '重新确认线上版本',
     '匹配当前 Web App deployment',
     '检查 Project History 额度',
+    '确认新版本已生效',
+    '失败回退旧 deployment',
     '更新后同步 Sheet 配置',
   ];
   const appScriptUpgradeGuidance = isAppScriptVersionLimitReached
     ? '请先清理旧版本，避免升级流程被 200 个版本上限阻塞。'
     : shouldSuggestAppScriptVersionCleanup
       ? `Project History 只剩 ${appScriptVersionUsage?.remaining} 个版本，建议先打开 Project History 清理旧版本，再执行升级。`
-      : '升级前会重新确认线上版本、预检 deployment 是否匹配当前 Web App URL，并检查版本额度；如果已是最新，会跳过脚本写入和版本创建。';
+      : '升级前会重新确认线上版本、预检 deployment 是否匹配当前 Web App URL，并检查版本额度；提交更新后会确认 Web App URL 已返回新版本，确认失败会尝试回退到升级前 deployment 版本，已是最新则跳过脚本写入和版本创建。';
 
   const handleOpenAppScriptProjectHistory = () => {
     const projectHistoryUrl = appScriptVersionUsage?.projectHistoryUrl
@@ -2474,8 +2566,16 @@ const ScheduledMessagesManager: React.FC = () => {
     selectedCategoryValues.length > 0 ? `类别：${selectedCategoryValues.join('、')}` : '',
   ].filter(Boolean).join(' · ');
   const scheduleQueueSummary = useMemo(
-    () => getScheduleQueueSummary(messages, queueSummaryNow),
-    [messages, queueSummaryNow],
+    () => getScheduleQueueSummary(
+      messages,
+      queueSummaryNow,
+      showAllQueueSlots ? Number.MAX_SAFE_INTEGER : DEFAULT_QUEUE_SLOT_DISPLAY_LIMIT,
+    ),
+    [messages, queueSummaryNow, showAllQueueSlots],
+  );
+  const canToggleQueueSlotDisplay = Boolean(
+    scheduleQueueSummary &&
+    scheduleQueueSummary.congestedSlotCount > DEFAULT_QUEUE_SLOT_DISPLAY_LIMIT,
   );
   const scheduleHealthIssues = useMemo(
     () => getScheduleHealthIssues(messages, queueSummaryNow),
@@ -2487,6 +2587,66 @@ const ScheduledMessagesManager: React.FC = () => {
     const url = new URL(window.location.href);
     url.searchParams.set('messageId', messageId);
     window.history.replaceState(null, document.title, `${url.pathname}${url.search}${url.hash}`);
+  };
+  const handleApplyQueueSlotSuggestion = async (slot: ScheduleQueueSlotSummary) => {
+    if (!service || !slot.actionMessageId || !slot.suggestion) {
+      return;
+    }
+
+    const message = messages.find(candidate => candidate.ID === slot.actionMessageId);
+    if (!message) {
+      alert('未找到需要改期的消息，请先同步数据后重试。');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await service.updateMessage(slot.actionMessageId, {
+        Schedule_Date: slot.suggestion.dateStr,
+        Schedule_Time: slot.suggestion.timeStr,
+      });
+      await loadMessages(service, true);
+      focusMessageById(slot.actionMessageId);
+      alert(`已将「${message.Topic || slot.actionMessageId}」改到 ${slot.suggestion.label}。`);
+    } catch (error: any) {
+      console.error('应用队列建议时间失败:', error);
+      alert(`应用建议时间失败: ${error.message || error}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  const handleApplyScheduleHealthSuggestion = async (messageId: string) => {
+    if (!service || !messageId) {
+      return;
+    }
+
+    const message = messages.find(candidate => candidate.ID === messageId);
+    if (!message) {
+      alert('未找到需要改期的消息，请先同步数据后重试。');
+      return;
+    }
+
+    const suggestion = getScheduleHealthRecoverySuggestion(message, queueSummaryNow);
+    if (!suggestion) {
+      alert('当前消息没有可直接应用的改期建议，请先同步数据后重试。');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await service.updateMessage(messageId, {
+        Schedule_Date: suggestion.dateStr,
+        Schedule_Time: suggestion.timeStr,
+      });
+      await loadMessages(service, true);
+      focusMessageById(messageId);
+      alert(`已将「${message.Topic || messageId}」改到 ${suggestion.label}。`);
+    } catch (error: any) {
+      console.error('应用健康告警改期建议失败:', error);
+      alert(`应用改期建议失败: ${error.message || error}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
   const clearMessageFilters = () => {
     setTargetMessageId('');
@@ -2626,7 +2786,7 @@ const ScheduledMessagesManager: React.FC = () => {
               disabled={isUpdating}
               title={isAppScriptVersionLimitReached
                 ? `${appScriptVersionUsageText}请先清理旧版本后再升级。`
-                : `当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule；升级前会重新确认线上版本并校验 deployment 的 Web App URL 匹配，已是最新时不会重复创建脚本版本。${appScriptVersionUsage ? ` ${appScriptVersionUsageText}` : ''}${shouldSuggestAppScriptVersionCleanup ? ' 版本额度接近上限，建议先清理旧版本。' : ''}`}
+                : `当前 App Script: ${appScriptVersion || '未知'}，最新: ${latestAppScriptVersion || '未知'}。将同时检查 Sheet、Script、Jira Rule；升级前会重新确认线上版本并校验 deployment 的 Web App URL 匹配，提交后确认 Web App URL 已返回新版本，确认失败会尝试回退旧 deployment，已是最新时不会重复创建脚本版本。${appScriptVersionUsage ? ` ${appScriptVersionUsageText}` : ''}${shouldSuggestAppScriptVersionCleanup ? ' 版本额度接近上限，建议先清理旧版本。' : ''}`}
             >
               {isUpdating
                 ? '⏳ 升级中...'
@@ -2783,38 +2943,59 @@ const ScheduledMessagesManager: React.FC = () => {
                 {formatScheduleHealthSummary(scheduleHealthIssues)}
               </p>
               <div style={styles.queueSlotList}>
-                {scheduleHealthIssues.slice(0, 4).map(issue => (
-                  <div
-                    key={issue.messageId}
-                    style={styles.queueIssueItem}
-                    title={formatScheduleHealthIssue(issue)}
-                  >
-                    <span style={styles.queueIssueText}>
-                      {issue.topic}: {formatScheduleHealthIssue(issue)}
-                    </span>
-                    <div style={styles.queueIssueActions}>
-                      <button
-                        type="button"
-                        style={styles.queueIssueButton}
-                        onClick={() => focusMessageById(issue.messageId)}
-                      >
-                        定位
-                      </button>
-                      <button
-                        type="button"
-                        style={styles.queueIssueButton}
-                        onClick={() => {
-                          const message = messages.find(candidate => candidate.ID === issue.messageId);
-                          if (message) {
-                            void handleEditMessage(message);
-                          }
-                        }}
-                      >
-                        编辑
-                      </button>
+                {scheduleHealthIssues.slice(0, 4).map(issue => {
+                  const message = messages.find(candidate => candidate.ID === issue.messageId);
+                  const recoverySuggestion = message
+                    ? getScheduleHealthRecoverySuggestion(message, queueSummaryNow)
+                    : null;
+
+                  return (
+                    <div
+                      key={issue.messageId}
+                      style={styles.queueIssueItem}
+                      title={formatScheduleHealthIssue(issue)}
+                    >
+                      <span style={styles.queueIssueText}>
+                        {issue.topic}: {formatScheduleHealthIssue(issue)}
+                      </span>
+                      <div style={styles.queueIssueActions}>
+                        <button
+                          type="button"
+                          style={styles.queueIssueButton}
+                          onClick={() => focusMessageById(issue.messageId)}
+                        >
+                          定位
+                        </button>
+                        <button
+                          type="button"
+                          style={styles.queueIssueButton}
+                          onClick={() => {
+                            if (message) {
+                              void handleEditMessage(message);
+                            }
+                          }}
+                        >
+                          编辑
+                        </button>
+                        {recoverySuggestion && (
+                          <button
+                            type="button"
+                            style={{
+                              ...styles.queueIssueButton,
+                              ...(isSubmitting ? styles.queueIssueButtonDisabled : {}),
+                            }}
+                            onClick={() => handleApplyScheduleHealthSuggestion(issue.messageId)}
+                            disabled={isSubmitting}
+                            aria-label={`将${issue.topic || issue.messageId}改到${recoverySuggestion.label}`}
+                            title={recoverySuggestion.reason}
+                          >
+                            一键改期
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -2837,11 +3018,47 @@ const ScheduledMessagesManager: React.FC = () => {
                   <div
                     key={`${slot.hasExplicitTime ? 'explicit' : 'no-time'}:${slot.slotKey}`}
                     style={styles.queueSlotItem}
-                    title={slot.actionTopic ? `最晚受影响：${slot.actionTopic}` : undefined}
+                    title={formatScheduleQueueSlotSummary(slot)}
+                    aria-label={formatScheduleQueueSlotSummary(slot)}
                   >
-                    <span style={styles.queueSlotText}>
-                      {formatScheduleQueueSlotSummary(slot)}
-                    </span>
+                    <div style={styles.queueSlotContent}>
+                      <div style={styles.queueSlotHeader}>
+                        <span style={styles.queueSlotLane}>
+                          {formatQueueSlotLaneLabel(slot)}
+                        </span>
+                        <span style={hasScheduleQueueSlotRisk(slot) ? styles.queueSlotRiskPill : styles.queueSlotDelayPill}>
+                          {formatQueueSlotDelayLabel(slot)}
+                        </span>
+                        <span style={styles.queueSlotCountPill}>
+                          {slot.slotSize} 条
+                        </span>
+                      </div>
+                      {hasScheduleQueueSlotRisk(slot) && (
+                        <div style={styles.queueSlotRiskText}>
+                          {formatQueueSlotRiskLabel(slot)}
+                        </div>
+                      )}
+                      {slot.actionTopic && (
+                        <div style={styles.queueSlotActionText}>
+                          {formatQueueSlotActionLabel(slot)}
+                        </div>
+                      )}
+                      {slot.suggestion && (
+                        <div style={styles.queueSlotSuggestionText}>
+                          {formatQueueSlotSuggestionLabel(slot)}
+                        </div>
+                      )}
+                      {slot.sampleTopics.length > 0 && (
+                        <div style={styles.queueSlotSampleList}>
+                          <span style={styles.queueSlotSampleLabel}>示例</span>
+                          {slot.sampleTopics.map(topic => (
+                            <span key={topic} style={styles.queueSlotSampleTopic}>
+                              {topic}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     {slot.actionMessageId && (
                       <div style={styles.queueIssueActions}>
                         <button
@@ -2863,11 +3080,44 @@ const ScheduledMessagesManager: React.FC = () => {
                         >
                           编辑
                         </button>
+                        {slot.suggestion && (
+                          <button
+                            type="button"
+                            style={{
+                              ...styles.queueIssueButton,
+                              ...(isSubmitting ? styles.queueIssueButtonDisabled : {}),
+                            }}
+                            onClick={() => handleApplyQueueSlotSuggestion(slot)}
+                            disabled={isSubmitting}
+                            aria-label={`将${slot.actionTopic || slot.actionMessageId}改到建议时间${slot.suggestion.label}`}
+                            title={`改到 ${slot.suggestion.label}`}
+                          >
+                            改到建议
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
                 ))}
               </div>
+              {canToggleQueueSlotDisplay && (
+                <div style={styles.queueMoreRow}>
+                  <button
+                    type="button"
+                    style={styles.queueIssueButton}
+                    onClick={() => setShowAllQueueSlots(value => !value)}
+                  >
+                    {showAllQueueSlots
+                      ? '收起队列槽位'
+                      : `显示全部 ${scheduleQueueSummary.congestedSlotCount} 个时间槽`}
+                  </button>
+                  {!showAllQueueSlots && scheduleQueueSummary.hiddenSlotCount > 0 && (
+                    <span style={styles.queueMoreText}>
+                      还有 {scheduleQueueSummary.hiddenSlotCount} 个时间槽未显示
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -3047,6 +3297,7 @@ const ScheduledMessagesManager: React.FC = () => {
                     const scheduleHealthIssue = getScheduleHealthIssue(message, queueSummaryNow);
                     const dispatchPolicy = formatDispatchPolicy(message);
                     const nextExecText = formatNextExec(message);
+                    const statusToggleAction = getScheduledMessageStatusToggleAction(message.Status);
                     return (
                       <tr 
                         key={message.ID} 
@@ -3117,9 +3368,8 @@ const ScheduledMessagesManager: React.FC = () => {
                         <td style={{ ...styles.td, ...styles.sentCountCell }}>{message.Exec_Count || 0} 次</td>
                         <td style={{ ...styles.td, ...styles.statusCell }}>
                           <span 
-                            style={{...getStatusStyle(message.Status), cursor: 'pointer'}} 
-                            onClick={() => handleToggleStatus(message)}
-                            title={`点击切换为${message.Status === 'Active' ? '禁用' : '启用'}`}
+                            style={getStatusStyle(message.Status)}
+                            title={statusToggleAction.title}
                           >
                             {message.Status}
                           </span>
@@ -3183,6 +3433,16 @@ const ScheduledMessagesManager: React.FC = () => {
                                 title="打开主动询问会话页面"
                               >
                                 💬 会话
+                              </button>
+                            )}
+                            {statusToggleAction.canToggle && (
+                              <button
+                                type="button"
+                                style={styles.statusActionButton}
+                                onClick={() => handleToggleStatus(message)}
+                                title={statusToggleAction.title}
+                              >
+                                {statusToggleAction.buttonLabel}
                               </button>
                             )}
                             {/* 如果只有 Automation_Link 而没有 Schedule_Date，不显示编辑按钮 */}
@@ -3768,27 +4028,45 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 }
 
 function formatTimelineSyncPayloadTemplateForClipboard(payloadHelp: TimelineSyncPayloadHelp): string {
-  return [
+  const lines = [
     'Jira Automation Send web request',
     `Method: ${payloadHelp.method}`,
     `URL: ${payloadHelp.url}`,
-    `Header: Content-Type=${payloadHelp.contentType}`,
-    'Custom data:',
-    payloadHelp.customBody,
-  ].join('\n');
+  ];
+
+  if (payloadHelp.method === 'GET') {
+    lines.push('Body: (empty)');
+    lines.push('Note: Apps Script callback must stay GET; POST can fail on the Google 302 redirect.');
+  } else {
+    lines.push(`Header: Content-Type=${payloadHelp.contentType}`);
+    lines.push('Custom data:');
+    lines.push(payloadHelp.customBody);
+  }
+
+  return lines.join('\n');
 }
 
 function formatTimelineSyncDryRunForClipboard(dryRunHelp: TimelineSyncDryRunHelp): string {
-  return [
-    'Apps Script cacheReleaseInfo dry-run',
+  const lines = [
+    'Apps Script cacheReleaseInfo dry-run (sample payload, no cache write)',
     `Method: ${dryRunHelp.method}`,
     `URL: ${dryRunHelp.url}`,
-    `Header: Content-Type=${dryRunHelp.contentType}`,
-    'Body:',
-    dryRunHelp.customBody,
-    'curl:',
-    dryRunHelp.curlCommand,
-  ].join('\n');
+    `Sample milestone: ${dryRunHelp.sampleMilestone}`,
+  ];
+
+  if (dryRunHelp.method === 'GET') {
+    lines.push('Body: (empty)');
+    lines.push('Note: Apps Script callback must stay GET; POST can fail on the Google 302 redirect.');
+  } else {
+    lines.push(`Header: Content-Type=${dryRunHelp.contentType}`);
+    lines.push('Body:');
+    lines.push(dryRunHelp.customBody);
+  }
+
+  lines.push('curl:');
+  lines.push(dryRunHelp.curlCommand);
+
+  return lines.join('\n');
 }
 
 const TimelineCacheStatusPanel: React.FC<{
@@ -3834,8 +4112,12 @@ const TimelineCacheStatusPanel: React.FC<{
     [selectedProject],
   );
   const dryRunHelp = React.useMemo(
-    () => getTimelineSyncDryRunHelp({ project: selectedProject, webAppUrl }),
-    [selectedProject, webAppUrl],
+    () => getTimelineSyncDryRunHelp({
+      project: selectedProject,
+      webAppUrl,
+      milestone: selectedMilestone,
+    }),
+    [selectedMilestone, selectedProject, webAppUrl],
   );
   const shouldShowPayloadTemplateAction = Boolean(
     payloadHelp && (!isReady || error || selectedMilestoneMissing || selectedProjectMissingFromStatus || hasSyncWarning),
@@ -3846,6 +4128,9 @@ const TimelineCacheStatusPanel: React.FC<{
   const [diagnosticCopied, setDiagnosticCopied] = React.useState(false);
   const [payloadTemplateCopied, setPayloadTemplateCopied] = React.useState(false);
   const [dryRunCopied, setDryRunCopied] = React.useState(false);
+  const [dryRunTesting, setDryRunTesting] = React.useState(false);
+  const [dryRunResultText, setDryRunResultText] = React.useState('');
+  const [dryRunResultSuccess, setDryRunResultSuccess] = React.useState<boolean | null>(null);
   const diagnosticText = React.useMemo(() => buildTimelineCacheDiagnosticText({
     status,
     error,
@@ -3891,6 +4176,31 @@ const TimelineCacheStatusPanel: React.FC<{
       window.prompt('复制 Apps Script dry-run curl', dryRunText);
     }
   }, [dryRunHelp]);
+  const handleRunDryRun = React.useCallback(async () => {
+    if (!dryRunHelp || dryRunTesting) {
+      return;
+    }
+
+    setDryRunTesting(true);
+    setDryRunResultText('');
+    setDryRunResultSuccess(null);
+
+    try {
+      const result = await runTimelineSyncDryRun(dryRunHelp);
+      setDryRunResultText(formatTimelineSyncDryRunResult(result));
+      setDryRunResultSuccess(result.success);
+    } catch (runError: any) {
+      setDryRunResultText(runError?.message || 'Apps Script dry-run 测试失败');
+      setDryRunResultSuccess(false);
+    } finally {
+      setDryRunTesting(false);
+    }
+  }, [dryRunHelp, dryRunTesting]);
+
+  React.useEffect(() => {
+    setDryRunResultText('');
+    setDryRunResultSuccess(null);
+  }, [dryRunHelp?.url, dryRunHelp?.customBody]);
 
   return (
     <div style={{
@@ -3992,7 +4302,7 @@ const TimelineCacheStatusPanel: React.FC<{
             <button
               type="button"
               onClick={handleCopyPayloadTemplate}
-              title="复制 Jira Send web request JSON 模板"
+              title="复制 Jira Send web request 修复模板"
               style={{
                 padding: '6px 10px',
                 backgroundColor: '#fff',
@@ -4004,14 +4314,34 @@ const TimelineCacheStatusPanel: React.FC<{
                 whiteSpace: 'nowrap',
               }}
             >
-              {payloadTemplateCopied ? '已复制模板' : '复制 JSON 模板'}
+              {payloadTemplateCopied ? '已复制模板' : '复制 Rule 模板'}
+            </button>
+          )}
+          {shouldShowDryRunAction && (
+            <button
+              type="button"
+              onClick={handleRunDryRun}
+              disabled={dryRunTesting}
+              title="用 dryRun=true 发送当前项目的样例 payload；不会写入 Timeline 缓存"
+              style={{
+                padding: '6px 10px',
+                backgroundColor: '#fff',
+                color: '#0f5132',
+                border: '1px solid #75b798',
+                borderRadius: '4px',
+                cursor: dryRunTesting ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {dryRunTesting ? '测试中...' : '样例测试'}
             </button>
           )}
           {shouldShowDryRunAction && (
             <button
               type="button"
               onClick={handleCopyDryRun}
-              title="复制不会写入缓存的 Apps Script dry-run curl"
+              title="复制不会写入缓存的 Apps Script dry-run 样例 curl"
               style={{
                 padding: '6px 10px',
                 backgroundColor: '#fff',
@@ -4023,7 +4353,7 @@ const TimelineCacheStatusPanel: React.FC<{
                 whiteSpace: 'nowrap',
               }}
             >
-              {dryRunCopied ? '已复制测试' : '复制测试 curl'}
+              {dryRunCopied ? '已复制测试' : '复制样例 curl'}
             </button>
           )}
           {shouldShowSyncRuleAction && (
@@ -4064,6 +4394,20 @@ const TimelineCacheStatusPanel: React.FC<{
           </button>
         </div>
       </div>
+      {dryRunResultText && (
+        <div style={{
+          marginTop: '10px',
+          padding: '8px 10px',
+          backgroundColor: dryRunResultSuccess ? '#f0fff4' : '#fff5f5',
+          color: dryRunResultSuccess ? '#0f5132' : '#842029',
+          border: `1px solid ${dryRunResultSuccess ? '#badbcc' : '#f5c2c7'}`,
+          borderRadius: '4px',
+          fontSize: '12px',
+          lineHeight: 1.5,
+        }}>
+          {dryRunResultText}
+        </div>
+      )}
     </div>
   );
 };
@@ -4433,9 +4777,6 @@ const AddMessageDialog: React.FC<{
   const selectedTimelineProjectStatus = useMemo(() => {
     return getTimelineCacheProjectStatus(timelineCacheStatus, selectedTimelineProjectValue);
   }, [selectedTimelineProjectValue, timelineCacheStatus]);
-  const selectedTimelineProjectMissingFromStatus = Boolean(
-    selectedTimelineProjectValue && timelineCacheStatus && !selectedTimelineProjectStatus,
-  );
 
   const selectedTimelineMilestoneKeys = selectedTimelineProjectStatus?.milestoneKeys;
   const selectedTimelineMilestoneMissing = isTimelineMilestoneMissingFromCache(
@@ -4948,41 +5289,8 @@ ${content}
         return;
       }
 
-      const timelineCacheReadinessBlockText = getTimelineCacheReadinessBlockText({
-        isLoading: timelineCacheStatusLoading,
-        status: timelineCacheStatus,
-        error: timelineCacheStatusError,
-      });
-      if (timelineCacheReadinessBlockText) {
-        alert(timelineCacheReadinessBlockText);
-        return;
-      }
-
-      if (selectedTimelineProjectMissingFromStatus) {
-        alert(
-          `${formData.Timeline_Project} 未出现在当前 App Script 返回的 Timeline 缓存状态中。` +
-          '\n\n请先更新 App Script 并重新配置 Timeline Sync Rule。'
-        );
-        return;
-      }
-
-      const timelineCacheBlockText = getTimelineCacheSaveBlockText(selectedTimelineProjectStatus);
-      if (selectedTimelineProjectStatus && timelineCacheBlockText) {
-        alert(
-          `${formData.Timeline_Project} 的 Timeline 缓存状态为 ${getTimelineCacheStatusLabel(selectedTimelineProjectStatus.status)}。` +
-          `\n\n${timelineCacheBlockText}`
-        );
-        return;
-      }
-
-      if (selectedTimelineMilestoneMissing) {
-        alert(
-          `${formData.Timeline_Project} 当前缓存不包含 ${formData.Timeline_Milestone}。` +
-          `\n\n当前可用 Milestone：${formatTimelineMilestoneKeys(selectedTimelineMilestoneKeys)}` +
-          '\n\n请先刷新 Timeline Sync Rule，或改选缓存中已有的 Milestone。'
-        );
-        return;
-      }
+      // Timeline cache status is advisory at creation time. Users can draft
+      // messages before the Jira sync rule has been repaired or refreshed.
     } else {
       // 时间触发验证
       if (!formData.Schedule_Date) {
@@ -5415,7 +5723,11 @@ ${content}
   ]);
 
   const scheduleQueueSuggestion = useMemo(() => {
-    if (!scheduleQueueDraftMessage || !scheduleQueuePressure?.exceedsCompensationWindow) {
+    if (!scheduleQueueDraftMessage || !scheduleQueuePressure) {
+      return null;
+    }
+
+    if (!scheduleQueuePressure.hasExplicitTime && !scheduleQueuePressure.exceedsExecutionWindow) {
       return null;
     }
 
@@ -5423,11 +5735,11 @@ ${content}
   }, [
     existingMessages,
     scheduleQueueDraftMessage,
-    scheduleQueuePressure?.exceedsCompensationWindow,
+    scheduleQueuePressure,
     scheduleNow,
   ]);
 
-  const scheduleQueueBlockReason = scheduleQueuePressure?.exceedsCompensationWindow
+  const scheduleQueueBlockReason = hasScheduleQueueBlockingRisk(scheduleQueuePressure)
     ? formatScheduleQueueBlockReason(scheduleQueuePressure)
     : '';
 
@@ -5521,7 +5833,7 @@ ${content}
   const hasScheduleWarning = Boolean(
     scheduleBlockReason ||
     scheduleQueueBlockReason ||
-    scheduleQueuePressure?.exceedsCompensationWindow,
+    hasScheduleQueueBlockingRisk(scheduleQueuePressure),
   );
   const isSubmitBlockedBySchedule = Boolean(scheduleTimeError || scheduleBlockReason || scheduleQueueBlockReason);
   
@@ -5934,7 +6246,7 @@ ${content}
                   )}
                   {scheduleQueueWarning && (
                     <div style={
-                      scheduleQueuePressure?.exceedsCompensationWindow
+                      hasScheduleQueueBlockingRisk(scheduleQueuePressure)
                         ? dialogStyles.scheduleWarningText
                         : dialogStyles.schedulePreviewHint
                     }>
@@ -7560,6 +7872,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '14px',
     transition: 'all 0.2s',
   },
+  statusActionButton: {
+    padding: '4px 8px',
+    backgroundColor: '#fff',
+    color: '#0d6efd',
+    border: '1px solid #b6d4fe',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 600,
+    lineHeight: 1.2,
+  },
   warningBanner: {
     backgroundColor: '#fff3cd',
     borderLeft: '4px solid #ffc107',
@@ -7721,26 +8044,94 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     flexWrap: 'wrap',
     gap: '6px',
+    alignItems: 'stretch',
     marginTop: '8px',
   },
   queueSlotItem: {
     display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '4px 8px',
+    alignItems: 'flex-start',
+    gap: '10px',
+    padding: '8px 10px',
     backgroundColor: 'rgba(255, 255, 255, 0.75)',
     border: '1px solid rgba(148, 163, 184, 0.45)',
     borderRadius: '6px',
     fontSize: '12px',
     color: '#334155',
-    lineHeight: 1.35,
+    lineHeight: 1.4,
     maxWidth: '100%',
+    minWidth: 'min(100%, 360px)',
+    flex: '1 1 360px',
+    boxSizing: 'border-box',
   },
-  queueSlotText: {
+  queueSlotContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    flex: 1,
     minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+  },
+  queueSlotHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    flexWrap: 'wrap',
+  },
+  queueSlotLane: {
+    fontWeight: 700,
+    color: '#1e293b',
+  },
+  queueSlotDelayPill: {
+    padding: '1px 6px',
+    borderRadius: '4px',
+    backgroundColor: '#e0f2fe',
+    color: '#075985',
+    border: '1px solid #bae6fd',
+    fontWeight: 600,
+  },
+  queueSlotRiskPill: {
+    padding: '1px 6px',
+    borderRadius: '4px',
+    backgroundColor: '#ffedd5',
+    color: '#9a3412',
+    border: '1px solid #fed7aa',
+    fontWeight: 700,
+  },
+  queueSlotCountPill: {
+    padding: '1px 6px',
+    borderRadius: '4px',
+    backgroundColor: '#f8fafc',
+    color: '#475569',
+    border: '1px solid #e2e8f0',
+    fontWeight: 600,
+  },
+  queueSlotRiskText: {
+    color: '#9a3412',
+    fontWeight: 600,
+  },
+  queueSlotActionText: {
+    color: '#7c2d12',
+    fontWeight: 700,
+  },
+  queueSlotSuggestionText: {
+    color: '#0f5132',
+    fontWeight: 600,
+  },
+  queueSlotSampleList: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '4px',
+  },
+  queueSlotSampleLabel: {
+    color: '#64748b',
+    fontWeight: 600,
+  },
+  queueSlotSampleTopic: {
+    padding: '1px 5px',
+    borderRadius: '4px',
+    backgroundColor: '#f8fafc',
+    border: '1px solid #e2e8f0',
+    color: '#475569',
   },
   queueIssueItem: {
     display: 'flex',
@@ -7764,7 +8155,20 @@ const styles: { [key: string]: React.CSSProperties } = {
   queueIssueActions: {
     display: 'flex',
     gap: '4px',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
     flexShrink: 0,
+  },
+  queueMoreRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
+    marginTop: '8px',
+  },
+  queueMoreText: {
+    fontSize: '12px',
+    color: '#9a3412',
   },
   queueIssueButton: {
     padding: '2px 6px',
@@ -7775,6 +8179,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     cursor: 'pointer',
     fontSize: '12px',
     fontWeight: 600,
+  },
+  queueIssueButtonDisabled: {
+    opacity: 0.55,
+    cursor: 'not-allowed',
   },
   warningButton: {
     padding: '8px 16px',

@@ -199,7 +199,7 @@
           :key="entity.id"
           class="content-card topic-card"
           :class="{
-            unread: entity.readStatus?.unreadCount > 0,
+            unread: getTopicUnreadTotalCount(entity) > 0,
             muted: isTopicMuted(entity.id),
           }"
           :data-topic-id="entity.id"
@@ -211,10 +211,10 @@
               <span>💡</span>
               <span>{{ entity.name }}</span>
               <span
-                v-if="entity.readStatus && entity.readStatus.unreadCount > 0"
+                v-if="getTopicUnreadTotalCount(entity) > 0"
                 class="unread-badge"
               >
-                {{ entity.readStatus.unreadCount }}条未读
+                {{ getTopicUnreadTotalCount(entity) }}条未读
               </span>
             </div>
             <div class="card-badge topic-card-badge">
@@ -352,7 +352,7 @@
 
           <div
             v-if="
-              entity.readStatus?.unreadCount > 0 ||
+              getTopicUnreadTotalCount(entity) > 0 ||
               isTopicDeferred(entity.id) ||
               isTopicMuted(entity.id)
             "
@@ -376,7 +376,15 @@
             >
               ↩ 恢复
             </button>
-            <template v-else-if="entity.readStatus?.unreadCount > 0">
+            <template v-else-if="getTopicUnreadTotalCount(entity) > 0">
+              <button
+                type="button"
+                class="topic-action-btn review"
+                :aria-label="`只查看 ${entity.name} 的未读讨论`"
+                @click.stop="navigateToTopicUnread(entity.id)"
+              >
+                未读
+              </button>
               <div class="topic-defer-menu" @click.stop>
                 <button
                   type="button"
@@ -788,6 +796,7 @@ import {
   getTopicUnreadPreviewCount,
   getTopicUnreadPreviewMeta,
   getTopicUnreadRemainingCount,
+  getTopicUnreadTotalCount,
   getUnreadDiscussionKey,
   getUnreadDiscussionMessageId,
   getUnreadDiscussionText,
@@ -874,13 +883,7 @@ const filteredEntities = computed(() => {
       filtered = filtered.filter((entity) => {
         if (isTopicDeferred(entity.id)) return false;
         if (isTopicMuted(entity.id)) return false;
-        // 优先使用 unreadCount 判断，如果存在 readStatus 但 unreadCount > 0 则显示
-        // 如果没有 readStatus 或者 readStatus.isRead === false，也显示
-        if (entity.readStatus) {
-          return entity.readStatus.unreadCount > 0;
-        }
-        // 如果没有 readStatus，说明从未标记过，也应该显示
-        return true;
+        return getTopicUnreadTotalCount(entity) > 0;
       });
     } else if (topicViewMode.value === 'later') {
       filtered = filtered.filter((entity) => isTopicDeferred(entity.id));
@@ -929,8 +932,8 @@ const filteredEntities = computed(() => {
       case 'unread-count':
         // 按未读数量排序
         filtered.sort((a, b) => {
-          const countA = a.readStatus?.unreadCount || 0;
-          const countB = b.readStatus?.unreadCount || 0;
+          const countB = getTopicUnreadTotalCount(b);
+          const countA = getTopicUnreadTotalCount(a);
           return countB - countA;
         });
         break;
@@ -1008,6 +1011,13 @@ const navigateToTopicDiscussion = (topicId: string, messageId: string) => {
   router.push({
     path: `/topic/${topicId}`,
     query: { messageId },
+  });
+};
+
+const navigateToTopicUnread = (topicId: string) => {
+  router.push({
+    path: `/topic/${topicId}`,
+    query: { readFilter: 'unread' },
   });
 };
 
@@ -1708,6 +1718,11 @@ watch(
 .topic-action-btn.read {
   border-color: rgba(34, 197, 94, 0.36);
   color: #22c55e;
+}
+
+.topic-action-btn.review {
+  border-color: rgba(96, 165, 250, 0.38);
+  color: #93c5fd;
 }
 
 .topic-undo-toast {

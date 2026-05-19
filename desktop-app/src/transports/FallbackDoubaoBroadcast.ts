@@ -13,6 +13,7 @@ import type {
   BrowserSendResult,
   BrowserSessionAdapter,
   BrowserStatus,
+  BrowserTransportMode,
   BrowserThreadSnapshot,
 } from '../browserSession.js';
 import type { ExplorerTransport } from '../settings.js';
@@ -58,11 +59,9 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
     options?: BrowserSendOptions,
   ): Promise<BrowserSendResult> {
     if (!this.shouldUseWebpageMcp()) {
-      return this.options.playwrightClient.sendTranscript(
-        transcript,
-        threadUrl,
-        options,
-      );
+      return this.options.playwrightClient
+        .sendTranscript(transcript, threadUrl, options)
+        .then((result) => withTransportResult(result, 'playwright'));
     }
 
     return this.sendTranscriptWithFallback(transcript, threadUrl, options);
@@ -79,11 +78,19 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
   }
 
   status(): BrowserStatus {
-    if (this.shouldUseWebpageMcp()) {
+    const preferredMode = normalizeTransportMode(this.options.getTransport());
+    const inWebpageMcpCooldown =
+      preferredMode === 'webpage_mcp' && this.isInWebpageMcpCooldown();
+
+    if (preferredMode === 'webpage_mcp' && !inWebpageMcpCooldown) {
       const status = this.options.webpageMcpClient.status();
       return {
         ...status,
         lastError: status.lastError || this.lastFallbackReason,
+        transport: {
+          mode: 'webpage_mcp',
+          preferredMode,
+        },
       };
     }
 
@@ -91,6 +98,20 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
     return {
       ...status,
       lastError: status.lastError || this.lastFallbackReason,
+      transport: {
+        mode: 'playwright',
+        preferredMode,
+        ...(inWebpageMcpCooldown
+          ? {
+              fallbackReason:
+                this.lastFallbackReason ||
+                'webpage-mcp transport is cooling down after a recent failure',
+              fallbackCooldownUntil: new Date(
+                this.webpageMcpCooldownUntil,
+              ).toISOString(),
+            }
+          : {}),
+      },
     };
   }
 
@@ -177,7 +198,7 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
     if (result.sent) {
       this.webpageMcpCooldownUntil = 0;
       this.lastFallbackReason = undefined;
-      return result;
+      return withTransportResult(result, 'webpage_mcp');
     }
 
     const reason =
@@ -194,8 +215,12 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
   private shouldUseWebpageMcp(): boolean {
     return (
       this.options.getTransport() === 'webpage_mcp' &&
-      this.webpageMcpCooldownUntil <= Date.now()
+      !this.isInWebpageMcpCooldown()
     );
+  }
+
+  private isInWebpageMcpCooldown(): boolean {
+    return this.webpageMcpCooldownUntil > Date.now();
   }
 
   private rememberWebpageMcpFailure(reason: string, error?: unknown): void {
@@ -214,11 +239,12 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
     options?: BrowserSendOptions,
   ): Promise<BrowserSendResult> {
     try {
-      return await this.options.playwrightClient.sendTranscript(
+      const result = await this.options.playwrightClient.sendTranscript(
         transcript,
         threadUrl,
         options,
       );
+      return withTransportResult(result, 'playwright', reason);
     } catch (fallbackError) {
       this.lastFallbackReason = `${reason}; managed Chromium fallback also failed: ${formatError(fallbackError)}`;
       throw fallbackError;
@@ -228,4 +254,23 @@ export class FallbackDoubaoBroadcast implements BrowserSessionAdapter {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function withTransportResult(
+  result: BrowserSendResult,
+  mode: BrowserTransportMode,
+  fallbackReason?: string,
+): BrowserSendResult {
+  return {
+    ...result,
+    transportMode: result.transportMode || mode,
+    transportFallbackReason:
+      result.transportFallbackReason || fallbackReason || undefined,
+  };
+}
+
+function normalizeTransportMode(
+  transport: ExplorerTransport | undefined,
+): 'playwright' | 'webpage_mcp' {
+  return transport === 'webpage_mcp' ? 'webpage_mcp' : 'playwright';
 }

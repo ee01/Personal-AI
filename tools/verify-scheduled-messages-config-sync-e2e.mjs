@@ -51,8 +51,24 @@ function collectPageErrors(page) {
   };
 }
 
-async function openSetupPage(launched) {
+async function expectDisabledButton(page, text) {
+  const button = page.locator('button', { hasText: text });
+  await button.waitFor({
+    timeout: 15000,
+  });
+  assert.equal(await button.isDisabled(), true, `${text} button should be disabled`);
+}
+
+async function openSetupPage(launched, options = {}) {
   const { context, extensionId, serviceWorker } = launched;
+  const configRows = options.configRows || [
+    ['sheet_version', '2.7'],
+    ['created_by', 'Personal AI Extension'],
+    ['created_at', '2026-05-12T06:00:00.000Z'],
+    ['last_sync_time', '2026-05-12T07:00:00.000Z'],
+    ['messages_sheet_id', '101'],
+    ['logs_sheet_id', '102'],
+  ];
 
   await serviceWorker.evaluate(async () => {
     await chrome.storage.local.clear();
@@ -68,14 +84,7 @@ async function openSetupPage(launched) {
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({
-          values: [
-            ['sheet_version', '2.7'],
-            ['created_by', 'Personal AI Extension'],
-            ['created_at', '2026-05-12T06:00:00.000Z'],
-            ['last_sync_time', '2026-05-12T07:00:00.000Z'],
-            ['messages_sheet_id', '101'],
-            ['logs_sheet_id', '102'],
-          ],
+          values: configRows,
         }),
       });
       return;
@@ -118,6 +127,18 @@ async function withLaunchedExtension(testBody) {
 }
 
 await withLaunchedExtension(async (launched) => {
+  const { page, assertNoPageErrors } = await openSetupPage(launched);
+
+  await page.locator('input[placeholder="粘贴 Sheet URL 或 Sheet ID..."]').fill(`https://example.com/open?id=${sheetId}`);
+  await page.locator('[role="alert"]', { hasText: '无法识别 Sheet 链接或 ID' }).waitFor({
+    timeout: 15000,
+  });
+  await expectDisabledButton(page, '等待有效链接');
+
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
   const { serviceWorker } = launched;
   const { page, assertNoPageErrors } = await openSetupPage(launched);
 
@@ -138,6 +159,99 @@ await withLaunchedExtension(async (launched) => {
   await page.locator('button', { hasText: '绑定已有表' }).click();
 
   await page.locator('text=本机配置比 Sheet 更新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('button', { hasText: '保留本机并同步到 Sheet' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('button', { hasText: '仍用 Sheet 恢复本机' }).waitFor({
+    timeout: 15000,
+  });
+
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
+  const { serviceWorker } = launched;
+  const { page, assertNoPageErrors } = await openSetupPage(launched, {
+    configRows: [
+      ['sheet_version', '2.7'],
+      ['created_by', 'Personal AI Extension'],
+      ['created_at', '2026-05-12T06:00:00.000Z'],
+      ['web_app_url', 'https://script.google.com/macros/s/sheet/exec'],
+      ['script_id', 'sheet-script'],
+      ['deployment_id', 'sheet-deployment'],
+      ['app_script_version', '2.7.1'],
+      ['minute_trigger_id', 'sheet-minute-trigger'],
+      ['daily_trigger_id', 'sheet-daily-trigger'],
+      ['messages_sheet_id', '101'],
+      ['logs_sheet_id', '102'],
+      ['bot_automation_executor_rule_id', 'executor-rule'],
+      ['bot_automation_executor_rule_name', 'Executor'],
+      ['bot_automation_executor_webhook_url', 'https://jira.example.com/rest/cb-automation/latest/hooks/sheet-webhook-secret'],
+      ['bot_automation_executor_project_key', 'MTR'],
+      ['bot_automation_executor_jira_url', 'https://jira.example.com'],
+    ],
+  });
+
+  await serviceWorker.evaluate(async ({ targetSheetId }) => {
+    await chrome.storage.local.set({
+      scheduledMessagesConfig: {
+        sheetId: targetSheetId,
+        sheetUrl: `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit`,
+        sheet_version: '2.7',
+        created_by: 'Personal AI Extension',
+        created_at: '2026-05-12T06:00:00.000Z',
+        webAppUrl: 'https://script.google.com/macros/s/local/exec',
+        scriptId: 'local-script',
+        deploymentId: 'local-deployment',
+        appScriptVersion: '2.7.0',
+        minute_trigger_id: 'local-minute-trigger',
+        daily_trigger_id: 'local-daily-trigger',
+        messagesSheetId: 202,
+        logsSheetId: 203,
+        botAutomation: {
+          executorRule: {
+            ruleId: 'executor-rule',
+            ruleName: 'Executor',
+            webhookUrl: 'https://jira.example.com/rest/cb-automation/latest/hooks/local-webhook-secret',
+            projectKey: 'MTR',
+            jiraUrl: 'https://jira.example.com',
+            createdAt: '2026-05-12T06:00:00.000Z',
+          },
+        },
+      },
+    });
+  }, { targetSheetId: sheetId });
+
+  await page.locator('input[placeholder="粘贴 Sheet URL 或 Sheet ID..."]').fill(sheetId);
+  await page.locator('button', { hasText: '绑定已有表' }).click();
+
+  await page.locator('text=本机和 Sheet 配置不一致').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=同步时间相同或缺失，但关键配置不同').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=配置差异').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Web App URL').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('button', { hasText: '查看全部 9 项差异' }).click();
+  await page.locator('text=Messages 子表 ID').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Logs 子表 ID').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Bot 执行 Webhook').waitFor({
+    timeout: 15000,
+  });
+  assert.equal(await page.locator('text=local-webhook-secret').count(), 0);
+  assert.equal(await page.locator('text=sheet-webhook-secret').count(), 0);
+  await page.locator('button', { hasText: '收起差异' }).waitFor({
     timeout: 15000,
   });
   await page.locator('button', { hasText: '保留本机并同步到 Sheet' }).waitFor({

@@ -20,9 +20,10 @@ import { formatLocalScheduleDate } from './scheduleDateTime';
  * - v2.5: 添加 Outreach_Question 列（已废弃）
  * - v2.6: 改为 Content 保存提问原文，新增 Outreach_Result 保存结果摘要（已废弃）
  * - v2.7: Outreach 模板改为只复用 Content / Glip_User_Name / Glip_Team_ID / Target_Type，运行态和上下文下沉到 memory-service
+ * - v2.8: Glip 发送结果元数据下沉到 Logs，Messages 只保存计划定义
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.7',
+  version: '2.8',
   columns: [
     'ID',
     'Topic',
@@ -51,6 +52,25 @@ export const MESSAGES_SCHEMA = {
     'Next_Exec',
     'Exec_Count',
     'Exec_Log',
+  ],
+};
+
+export const LOGS_SCHEMA = {
+  version: '1.1',
+  columns: [
+    'Timestamp',
+    'Message_ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Target',
+    'Status',
+    'Error',
+    'Exec_Count',
+    'Execution_Key',
+    'Sent_Chat_ID',
+    'Sent_Post_ID',
+    'Sent_At',
   ],
 };
 
@@ -315,17 +335,7 @@ export class SheetInitializer {
     const configHeaders = ['Key', 'Value'];
 
     // Logs 表头
-    const logsHeaders = [
-      'Timestamp',
-      'Message_ID',
-      'Topic',
-      'Content',
-      'Push_Method',
-      'Target',
-      'Status',
-      'Error',
-      'Exec_Count',
-    ];
+    const logsHeaders = LOGS_SCHEMA.columns;
 
     const requests = [
       // 设置 Messages 表头

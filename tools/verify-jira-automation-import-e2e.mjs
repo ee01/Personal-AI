@@ -60,11 +60,14 @@ const exportedRule = {
       component: 'ACTION',
       type: 'jira.issue.outgoing.webhook',
       value: {
-        url: 'https://hooks.example.com/SRC/release',
+        url: 'https://hooks.example.com/SRC/release/releaseSecretPath1234567890ABCD?apiToken=prod-api-token-123&project=SRC',
         usedSecretsKeys: ['release-webhook-token'],
         recipients: 'release-owner@example.com',
         actorAccountId: 'abc-123-account',
         connectionId: 'prod-webhook-connection',
+        authorizationHeader: '*****',
+        apiToken: 'prod-api-token-123',
+        body: '{{issue.assignee.accountId}}',
       },
     },
   ],
@@ -183,12 +186,29 @@ try {
 
   await frame.locator('#personal-ai-jira-import-title').waitFor({ timeout: 10000 });
   const previewText = await frame.locator('body').innerText();
+  assert.match(previewText, /Disabled import preview/);
   assert.match(previewText, /Imported name/);
   assert.match(previewText, /\(Imported by Personal AI\) Notify release owner \(2\)/);
+  assert.match(previewText, /Detected environment bindings/);
   assert.match(previewText, /Enablement checks/);
   assert.match(previewText, /Review note/);
+  assert.match(previewText, /Secrets/);
   assert.match(previewText, /Custom fields/);
   assert.match(previewText, /Connections/);
+  assert.match(previewText, /Sensitive values/);
+  assert.doesNotMatch(previewText, /prod-api-token-123/);
+  assert.doesNotMatch(previewText, /releaseSecretPath1234567890ABCD/);
+  assert.match(previewText, /\/SRC\/release\/REDACTED\?apiToken=REDACTED/);
+  assert.match(previewText, /Smart values/);
+
+  await frame.getByRole('button', { name: 'Import disabled copy' }).focus();
+  await frame.getByRole('button', { name: 'Import disabled copy' }).press('Tab');
+  const focusedAfterTab = await frame.locator(':focus').evaluate(element => ({
+    tagName: element.tagName,
+    type: element.getAttribute('type'),
+    inDialog: Boolean(element.closest('[role="dialog"]')),
+  }));
+  assert.deepEqual(focusedAfterTab, { tagName: 'INPUT', type: 'checkbox', inDialog: true });
 
   await frame.getByRole('button', { name: 'Import disabled copy' }).click();
   await page.waitForTimeout(1000);
@@ -213,6 +233,14 @@ try {
   assert.match(createPayload.description, /Personal AI import review/);
   assert.match(createPayload.description, /Imported as a disabled copy into TGT \(22222\)\./);
   assert.match(createPayload.description, /Detected bindings: .*custom field.*connection\/credential/);
+  assert.match(createPayload.description, /Top detected bindings: .*JQL \/ filters \(1\): project = SRC/);
+  assert.match(createPayload.description, /Secrets \(1\): release-webhook-token/);
+  assert.match(createPayload.description, /Connections \(1\): connectionId: prod-webhook-connection/);
+  assert.match(createPayload.description, /Sensitive \/ hidden values \(4\): URL query apiToken: sensitive value present \| URL path segment: sensitive value present, 2 more/);
+  assert.doesNotMatch(createPayload.description, /prod-api-token-123/);
+  assert.doesNotMatch(createPayload.description, /releaseSecretPath1234567890ABCD/);
+  assert.match(createPayload.description, /\/SRC\/release\/REDACTED\?apiToken=REDACTED/);
+  assert.match(createPayload.description, /Detected bindings: .*smart value/);
   assert.match(createPayload.description, /Rule chaining: blocked in imported copy\./);
 
   console.log('Jira Automation import E2E verification passed');

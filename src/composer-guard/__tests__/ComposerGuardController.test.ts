@@ -5,12 +5,15 @@ import {
   DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
   DEFAULT_ASSIST_PREVIEW_LIMIT,
   getComposerAssistPreviewText,
+  getComposerAssistRiskLabel,
+  getComposerAssistSourceSummary,
   getComposerGuardPrimaryAction,
   getNextComposerAssistThreshold,
   normalizeComposerAssistThreshold,
   sanitizeComposerAssistInsertText,
   shouldPreviewComposerAssistBeforeInsert,
 } from '../assistPreviewPolicy.ts';
+import { isComposerAssistEnabledFromConfig } from '../assistConfig.ts';
 
 test('normalizeComposerAssistThreshold: defaults to 0.78 and clamps bounds', () => {
   assert.equal(normalizeComposerAssistThreshold(undefined), 0.78);
@@ -99,4 +102,54 @@ test('sanitizeComposerAssistInsertText: strips wrapper copy before preview or in
   );
 
   assert.equal(insertText, '请结合 Orbit blocker 回复。');
+});
+
+test('getComposerAssistSourceSummary: exposes source count and insert risk', () => {
+  const summary = getComposerAssistSourceSummary({
+    riskLevel: 'medium',
+    previewRequired: true,
+    evidence: [
+      {
+        id: 'memory-1',
+        type: 'chunk',
+        snippet: 'Factory AI needs security approval.',
+        sourceTitle: 'AI tools selection',
+      },
+      {
+        id: 'memory-2',
+        type: 'message',
+        snippet: 'Do not auto-send prompts.',
+        sourceLabel: 'doubao',
+      },
+    ],
+  });
+
+  assert.match(summary, /2 条记忆/);
+  assert.match(summary, /中风险 · 确认后插入/);
+  assert.match(summary, /AI tools selection/);
+  assert.match(summary, /doubao/);
+  assert.equal(
+    getComposerAssistRiskLabel({ riskLevel: 'high', previewRequired: false }),
+    '高风险 · 先预览',
+  );
+});
+
+test('isComposerAssistEnabledFromConfig: context and compose toggles both gate the feature', () => {
+  assert.equal(isComposerAssistEnabledFromConfig(undefined), true);
+  assert.equal(isComposerAssistEnabledFromConfig({}), true);
+  assert.equal(
+    isComposerAssistEnabledFromConfig({ CONTEXT_ASSIST_ENABLED: false }),
+    false,
+  );
+  assert.equal(
+    isComposerAssistEnabledFromConfig({ COMPOSE_ASSIST_ENABLED: false }),
+    false,
+  );
+  assert.equal(
+    isComposerAssistEnabledFromConfig({
+      CONTEXT_ASSIST_ENABLED: true,
+      COMPOSE_ASSIST_ENABLED: true,
+    }),
+    true,
+  );
 });

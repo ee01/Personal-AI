@@ -95,8 +95,16 @@ export function getQuickOptions(
 
   addOption(
     {
-      label: '30 分钟后',
+      label: '15 分钟后',
       icon: '⏱️',
+      getTime: () => addMinutes(clock(), 15),
+    },
+    addMinutes(now, 15),
+  );
+  addOption(
+    {
+      label: '30 分钟后',
+      icon: '🕧',
       getTime: () => addMinutes(clock(), 30),
     },
     addMinutes(now, 30),

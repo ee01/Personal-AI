@@ -23,7 +23,10 @@ import {
   buildBackendNotificationContextMessage,
   buildBackendNotificationId,
   buildBackendNotificationMessage,
+  getBackendNotificationClosedDeliveryStatus,
+  getBackendNotificationSnoozeSeconds,
   getBackendNotificationMetaStorageKey,
+  getBackendNotificationSecondaryActionDeliveryStatus,
   getBackendTargetHash,
   inferLegacyLane,
   normalizeBackendNotificationMeta,
@@ -50,7 +53,7 @@ import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
 import { formatLocalScheduleDateTime } from './scheduled-messages/scheduleDateTime';
-import type { ScheduledMessage } from './scheduled-messages/types';
+import type { PushLog, ScheduledMessage } from './scheduled-messages/types';
 import {
   getCurrentUser,
   getProjectByKey,
@@ -79,6 +82,13 @@ import {
   updateConcernedItemsDigestTaskSchedule,
 } from './services/DigestQueueService';
 import {
+  buildFollowThreadMarkers,
+  buildScheduledPushLogMarkers,
+  buildScheduledSnoozeMarkers,
+  mergeMarkerIndexes,
+  writeGlipMessageMarkersCache,
+} from './services/GlipMessageMarkerService';
+import {
   syncStoredUserIdentityToMemory,
   syncUserIdentityToMemory,
 } from './services/UserIdentitySyncService';
@@ -90,6 +100,7 @@ import {
   syncCalendarEventsToMemoryService,
   syncOutlookCalendarToMemoryService,
 } from './context-assist/outlookCalendar';
+import { isComposerAssistEnabledFromConfig } from './composer-guard/assistConfig';
 
 console.log('Background script loaded');
 void initMeetingPilotBackgroundRuntime().catch((error) => {
@@ -102,6 +113,21 @@ const backendNotificationMeta = new Map<string, BackendNotificationMeta>();
 const pendingSnoozeReminderKeys = new Set<string>();
 const GLIP_POPUP_DEFAULT_WIDTH = 1100;
 const GLIP_POPUP_DEFAULT_HEIGHT = 900;
+
+function buildComposerAssistDisabledResponse(debug = false) {
+  return {
+    available: false,
+    suggestionType: 'none',
+    title: '写作护航已关闭',
+    summary: 'Compose Assist 当前被配置关闭，不展示输入框提示。',
+    evidence: [],
+    riskLevel: 'low',
+    previewRequired: false,
+    confidence: 0,
+    queryTimeMs: 0,
+    debug: debug ? { rejectedReason: 'composer_assist_disabled' } : undefined,
+  };
+}
 
 function waitForDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -392,9 +418,105 @@ async function cancelOutreachTemplateMirror(messageId: string): Promise<void> {
   await client.cancelOutreachTemplate(messageId);
 }
 
+let glipMarkerRefreshInFlight: Promise<any> | null = null;
+let glipMarkerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function getScheduledSheetDataForMarkers(): Promise<{
+  messages: ScheduledMessage[];
+  pushLogs: PushLog[];
+}> {
+  try {
+    const { scheduledMessagesConfig } = await chrome.storage.local.get([
+      'scheduledMessagesConfig',
+    ]);
+    if (!scheduledMessagesConfig?.sheetId) {
+      return { messages: [], pushLogs: [] };
+    }
+    const token = await getGoogleAuthTokenSilently({
+      caller: 'refreshGlipMessageMarkers',
+    });
+    if (!token) {
+      return { messages: [], pushLogs: [] };
+    }
+    const service = new ScheduledMessageService(token);
+    const [messages, pushLogs] = await Promise.all([
+      service.getAllMessages(),
+      service.getRecentPushLogs(500),
+    ]);
+    return { messages, pushLogs };
+  } catch (error) {
+    console.warn('⚠️ 同步 Scheduled Message Glip 标注失败，跳过 Sheet marker:', error);
+    return { messages: [], pushLogs: [] };
+  }
+}
+
+async function refreshGlipMessageMarkers(): Promise<unknown> {
+  if (glipMarkerRefreshInFlight) {
+    return glipMarkerRefreshInFlight;
+  }
+
+  glipMarkerRefreshInFlight = (async () => {
+    const [{ concernedItems }, outreachSnapshot, scheduledSheetData] =
+      await Promise.all([
+        chrome.storage.local.get(['concernedItems']),
+        getMemoryServiceClient()
+          .getGlipMessageMarkers()
+          .catch((error) => {
+            console.warn('⚠️ 同步 Outreach Glip 标注失败，使用本地 marker:', error);
+            return { items: [], generatedAt: 0 };
+          }),
+        getScheduledSheetDataForMarkers(),
+      ]);
+
+    const markersByChatId = mergeMarkerIndexes(
+      buildFollowThreadMarkers(concernedItems || []),
+      buildScheduledSnoozeMarkers(scheduledSheetData.messages),
+      buildScheduledPushLogMarkers(scheduledSheetData.pushLogs),
+      // memory-service already returns flat marker records; index them via cache writer helper.
+      mergeMarkerIndexes(
+        ...outreachSnapshot.items.map((marker) => ({
+          [marker.chatId]: {
+            [marker.postId]: [marker],
+          },
+        })),
+      ),
+    );
+
+    return writeGlipMessageMarkersCache(markersByChatId);
+  })().finally(() => {
+    glipMarkerRefreshInFlight = null;
+  });
+
+  return glipMarkerRefreshInFlight;
+}
+
+function scheduleGlipMessageMarkerRefresh(delayMs = 1200): void {
+  if (glipMarkerRefreshTimer) {
+    clearTimeout(glipMarkerRefreshTimer);
+  }
+  glipMarkerRefreshTimer = setTimeout(() => {
+    glipMarkerRefreshTimer = null;
+    void refreshGlipMessageMarkers().catch((error) => {
+      console.warn('⚠️ 刷新 Glip 标注缓存失败:', error);
+    });
+  }, delayMs);
+}
+
 // 注册 Digest 任务（关注后续合并通知、concernedItems 每日摘要等）
 registerFollowThreadDigestTask();
 registerConcernedItemsDigestTask();
+ensureBackgroundAlarm(
+  'refreshGlipMessageMarkers',
+  { periodInMinutes: 5 },
+  (alarm) => alarm.periodInMinutes !== 5,
+);
+scheduleGlipMessageMarkerRefresh(3000);
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes.concernedItems) {
+    scheduleGlipMessageMarkerRefresh();
+  }
+});
 
 // 记录扩展启动
 Logger.lifecycle('startup', 'Background script loaded');
@@ -665,6 +787,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       return;
     }
 
+    if (alarm.name === 'refreshGlipMessageMarkers') {
+      await refreshGlipMessageMarkers();
+      return;
+    }
+
     // 处理关注后续清理任务
     if (alarm.name === 'cleanupFollowThreads') {
       await cleanupExpiredFollowThreads();
@@ -754,6 +881,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === 'REFRESH_GLIP_MESSAGE_MARKERS') {
+    (async () => {
+      try {
+        const cache = await refreshGlipMessageMarkers();
+        sendResponse({ success: true, cache });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'refresh_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'CREATE_OUTREACH_FROM_MESSAGE') {
+    (async () => {
+      try {
+        const result = await getMemoryServiceClient().createOutreachSessionFromMessage(
+          request.data,
+        );
+        await refreshGlipMessageMarkers();
+        sendResponse({ success: true, session: result.session });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'create_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
   // 如果不是 background 定时程序，会从页面发送请求到这里执行
   if (request.type === 'MESSAGE_DEALING') {
     const { body } = request.data;
@@ -825,10 +985,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           const result = await taskScheduler.runTaskManuallyWithResult(taskId);
           sendResponse({
             success: result.success,
-            message: result.success
+            message: result.skipped
+              ? result.error || '任务已跳过'
+              : result.success
               ? '任务执行成功'
               : result.error || '任务执行失败',
-            error: result.success ? undefined : result.error || '任务执行失败',
+            error:
+              result.success || result.skipped
+                ? undefined
+                : result.error || '任务执行失败',
             skipped: result.skipped,
           });
         } else if (action === 'repair') {
@@ -1198,6 +1363,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'COMPOSER_ASSIST_REQUEST') {
     (async () => {
       try {
+        const envConfig = await getEnvConfig();
+        if (
+          !isComposerAssistEnabledFromConfig(
+            envConfig as unknown as Record<string, unknown>,
+          )
+        ) {
+          sendResponse({
+            success: true,
+            result: buildComposerAssistDisabledResponse(
+              Boolean(request.request?.debug),
+            ),
+          });
+          return;
+        }
         const client = getMemoryServiceClient();
         const result = await client.composerAssist(request.request);
         sendResponse({ success: true, result });
@@ -2863,7 +3042,7 @@ chrome.notifications.onButtonClicked.addListener(
             {
               sourceRef: meta.sourceRef,
               lane: meta.lane,
-              status: 'dismissed',
+              status: getBackendNotificationSecondaryActionDeliveryStatus(meta),
               externalRef: notificationId,
             },
           ]);
@@ -2872,10 +3051,17 @@ chrome.notifications.onButtonClicked.addListener(
             const notificationRecordId =
               meta.notificationId ||
               meta.sourceRef.slice('notification:'.length);
-            await client.dismissNotification(
-              notificationRecordId,
-              'chrome_notification_dismiss_button',
-            );
+            if (meta.sourceType === 'notification' && meta.lane === 'todo') {
+              await client.snoozeNotification(
+                notificationRecordId,
+                getBackendNotificationSnoozeSeconds(meta),
+              );
+            } else {
+              await client.dismissNotification(
+                notificationRecordId,
+                'chrome_notification_dismiss_button',
+              );
+            }
           }
         }
       } catch (error) {
@@ -2946,7 +3132,7 @@ chrome.notifications.onClosed.addListener((notificationId, byUser) => {
           {
             sourceRef: meta.sourceRef,
             lane: meta.lane,
-            status: 'dismissed',
+            status: getBackendNotificationClosedDeliveryStatus(meta),
             externalRef: notificationId,
           },
         ]);
@@ -3000,8 +3186,10 @@ async function pollBackendNotifications(): Promise<void> {
         const notifId = buildBackendNotificationId(item.sourceRef);
         await storeBackendNotificationMeta(notifId, {
           sourceRef: item.sourceRef,
+          sourceType: item.sourceType,
           lane: item.lane,
           type: item.type,
+          dueAt: item.dueAt,
           targetHash: getBackendTargetHash(
             item.type,
             item.sourceType,
@@ -3025,7 +3213,7 @@ async function pollBackendNotifications(): Promise<void> {
             item.dueAt,
           ),
           priority: item.priority === 'high' ? 2 : 1,
-          buttons: buildBackendNotificationButtons(item.lane),
+          buttons: buildBackendNotificationButtons(item.lane, item.sourceType),
         });
         await safeReportChromeDelivery([
           {
@@ -3242,10 +3430,22 @@ async function handleSlideAnalysisRequest(tabId: number) {
         token,
       });
     } else {
-      console.error('获取Google认证失败');
+      const errorMessage = '获取 Google 认证失败，请重新授权后再试';
+      console.error(errorMessage);
+      chrome.tabs.sendMessage(tabId, {
+        type: 'SLIDES_ANALYSIS_AUTH_FAILED',
+        error: errorMessage,
+      });
     }
   } catch (error) {
-    console.error('处理幻灯片分析请求时出错:', error);
+    const errorMessage = `处理幻灯片分析请求时出错: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    console.error(errorMessage);
+    chrome.tabs.sendMessage(tabId, {
+      type: 'SLIDES_ANALYSIS_AUTH_FAILED',
+      error: errorMessage,
+    });
   }
 }
 

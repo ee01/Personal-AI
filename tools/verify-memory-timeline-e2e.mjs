@@ -124,13 +124,30 @@ try {
 
   const page = await context.newPage();
   await page.goto(
-    `chrome-extension://${extensionId}/memory-exploring.html#/timeline?type=message&focus=focused-old`,
+    `chrome-extension://${extensionId}/memory-exploring.html#/timeline?focus=message:focused-old`,
     {
       waitUntil: 'domcontentloaded',
     },
   );
 
   await page.getByText('今日记忆时间轴').waitFor({ timeout: 10000 });
+  await page.getByText('全部记忆 · 今天 · 时间通道').waitFor({ timeout: 10000 });
+  assert.equal(
+    await page
+      .locator('.search-header .scope-segmented')
+      .getByRole('button', { name: '全部' })
+      .getAttribute('aria-pressed'),
+    'true',
+    'timeline without scope query should align the global scope control to all',
+  );
+  assert.equal(
+    await page
+      .locator('.timeline-controls')
+      .getByRole('button', { name: '全部' })
+      .getAttribute('aria-pressed'),
+    'true',
+    'timeline scope control should expose the active all scope',
+  );
   await page.getByText('Focused memory outside range').waitFor({ timeout: 10000 });
   await page
     .getByText('已置顶定位记忆；它可能不属于当前时间范围。')
@@ -138,6 +155,10 @@ try {
   await page.getByText('Safe timeline memory all').waitFor({ timeout: 10000 });
   await page.getByText('Unsafe source memory').waitFor({ timeout: 10000 });
   assert.equal(focusRequests.length, 1);
+  assert.ok(
+    focusRequests[0].endsWith('/api/v1/memories/message/focused-old'),
+    'legacy focus=message:<id> links should resolve to the typed message lookup',
+  );
   assert.equal(
     await page.locator('.timeline-item.focused').count(),
     1,
@@ -236,6 +257,22 @@ try {
   assert.equal(
     recentRequest?.timeRange?.end - recentRequest?.timeRange?.start,
     7 * 24 * 60 * 60,
+  );
+
+  await page.evaluate(() => {
+    window.location.hash =
+      '#/timeline?scope=personal&range=30d&type=message&focus=focused-old';
+  });
+  await page.getByText('近 30 天记忆时间轴').waitFor({ timeout: 10000 });
+  await page
+    .getByText('Safe timeline memory personal')
+    .waitFor({ timeout: 10000 });
+  const routeSyncedRequest = recallRequests.at(-1);
+  assert.equal(routeSyncedRequest?.scope, 'personal');
+  assert.equal(
+    routeSyncedRequest?.timeRange?.end - routeSyncedRequest?.timeRange?.start,
+    30 * 24 * 60 * 60,
+    'timeline should reload when route scope/range changes without a full page reload',
   );
 
   await page.setViewportSize({ width: 390, height: 780 });

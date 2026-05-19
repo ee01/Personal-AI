@@ -37,6 +37,10 @@ export interface PushLog {
   Status: PushLogStatus;
   Error: string;          // 错误信息（如果有）
   Exec_Count: number;     // 第几次执行
+  Execution_Key?: string; // 单次执行幂等键
+  Sent_Chat_ID?: string;  // 实际发送成功后的 RingCentral chatId
+  Sent_Post_ID?: string;  // 实际发送成功后的 RingCentral postId
+  Sent_At?: string;       // 实际发送时间
 }
 
 // 定时消息接口

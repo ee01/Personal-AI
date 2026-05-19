@@ -35,6 +35,26 @@ const EMPTY_SEARCH_RESULT_DETAILS = {
   cooccurringEntities: [],
 };
 
+function normalizeRecentDataDetails(entity: any) {
+  const details = entity?.recentDataDetails || {};
+  return {
+    conversations: Array.isArray(details.conversations)
+      ? details.conversations
+      : [],
+    webpages: Array.isArray(details.webpages) ? details.webpages : [],
+    resources: Array.isArray(details.resources) ? details.resources : [],
+    projects: Array.isArray(details.projects) ? details.projects : [],
+    people: Array.isArray(details.people) ? details.people : [],
+    topics: Array.isArray(details.topics) ? details.topics : [],
+    jiraTickets: Array.isArray(details.jiraTickets)
+      ? details.jiraTickets
+      : [],
+    cooccurringEntities: Array.isArray(details.cooccurringEntities)
+      ? details.cooccurringEntities
+      : [],
+  };
+}
+
 function getRecallItemTitle(item: RecallItem): string {
   const title =
     item.displayTitle ||
@@ -66,6 +86,7 @@ function mapRecallItemToSearchResult(item: RecallItem) {
   return {
     ...(metadata || {}),
     id: item.id,
+    resultKey: `${item.type}:${item.id}`,
     name: getRecallItemTitle(item),
     type: entityType,
     recallType: item.type,
@@ -81,6 +102,11 @@ function mapRecallItemToSearchResult(item: RecallItem) {
     exploreLink: item.exploreLink,
     timestamp: item.timestamp,
     channels: Array.isArray(metadata.channels) ? metadata.channels : [],
+    feedbackAction:
+      metadata.recallFeedback === 'positive' ||
+      metadata.recallFeedback === 'negative'
+        ? metadata.recallFeedback
+        : undefined,
     recentDataDetails: { ...EMPTY_SEARCH_RESULT_DETAILS },
   };
 }
@@ -180,16 +206,7 @@ const messageHandlers: Record<string, MessageHandler> = {
       // Map new API response to the shape expected by the frontend UI
       const entitiesWithDetails = (result.items || []).map((entity) => ({
         ...entity,
-        recentDataDetails: {
-          conversations: [],
-          webpages: [],
-          resources: [],
-          projects: [],
-          people: [],
-          topics: [],
-          jiraTickets: [],
-          cooccurringEntities: [],
-        },
+        recentDataDetails: normalizeRecentDataDetails(entity),
       }));
 
       return { success: true, data: entitiesWithDetails };
@@ -657,16 +674,7 @@ async function handleGetTopicDetail(request: any): Promise<any> {
     // Map EntityDetailResponse to the shape expected by the frontend UI
     const topicDetail = {
       ...topicEntity,
-      recentDataDetails: {
-        conversations: [],
-        webpages: [],
-        resources: [],
-        projects: [],
-        people: [],
-        topics: [],
-        jiraTickets: [],
-        cooccurringEntities: [],
-      },
+      recentDataDetails: normalizeRecentDataDetails(topicEntity),
       cachedAt: Date.now(),
     };
 

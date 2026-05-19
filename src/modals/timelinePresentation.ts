@@ -4,6 +4,7 @@ import type {
 } from '../services/MemoryServiceClient';
 
 export type TimelineRange = 'today' | 'recent';
+export type TimelineFocusType = 'message' | 'chunk';
 
 export interface MemoryTimelineEvent {
   id: string;
@@ -21,6 +22,12 @@ export interface MemoryTimelineEvent {
   feedbackAction?: 'positive' | 'negative';
 }
 
+export interface ParsedTimelineFocus {
+  id: string;
+  type?: TimelineFocusType;
+  isLegacyTypedFocus: boolean;
+}
+
 const MAX_TIMELINE_TEXT_LENGTH = 220;
 
 export function normalizeTimelineScope(
@@ -33,6 +40,39 @@ export function normalizeTimelineScope(
     value === 'all'
     ? value
     : fallback;
+}
+
+function normalizeTimelineFocusType(value: unknown): TimelineFocusType | undefined {
+  const type = Array.isArray(value) ? value[0] : value;
+  return type === 'message' || type === 'chunk' ? type : undefined;
+}
+
+export function parseTimelineFocus(
+  rawFocus: unknown,
+  rawType?: unknown,
+): ParsedTimelineFocus {
+  const rawValue = Array.isArray(rawFocus) ? rawFocus[0] : rawFocus;
+  const focus = typeof rawValue === 'string' ? rawValue.trim() : '';
+  const explicitType = normalizeTimelineFocusType(rawType);
+
+  if (!focus) {
+    return { id: '', type: explicitType, isLegacyTypedFocus: false };
+  }
+
+  if (explicitType) {
+    return { id: focus, type: explicitType, isLegacyTypedFocus: false };
+  }
+
+  const separatorIndex = focus.indexOf(':');
+  if (separatorIndex > 0) {
+    const prefix = focus.slice(0, separatorIndex);
+    const id = focus.slice(separatorIndex + 1).trim();
+    if ((prefix === 'message' || prefix === 'chunk') && id) {
+      return { id, type: prefix, isLegacyTypedFocus: true };
+    }
+  }
+
+  return { id: focus, isLegacyTypedFocus: false };
 }
 
 export function getTimelineRangeSeconds(

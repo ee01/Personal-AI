@@ -12,8 +12,12 @@ import {
   joinSuggestionText,
   normalizeComparableText,
 } from '../src/utils/slidesAnalyzerSuggestions';
-import { createProjectUpdateSuggestion } from '../src/utils/slidesAnalyzerUpdateSuggestions';
 import {
+  createProjectReviewSuggestion,
+  createProjectUpdateSuggestion,
+} from '../src/utils/slidesAnalyzerUpdateSuggestions';
+import {
+  getRiskEvidenceItems,
   hasAttentionRiskLevelSignal,
   hasProjectRiskSignal,
   hasRiskLevelSignal,
@@ -165,6 +169,20 @@ assert.equal(
     currentStatus: 'On track',
     riskLevel: 'normal',
     jiraIssues: [{
+      key: 'MTR-123414B',
+      status: 'Blocked Done',
+      priority: 'Medium',
+      duedate: '2026-05-01',
+    } as any],
+  }),
+  false,
+);
+
+assert.equal(
+  hasProjectRiskSignal({
+    currentStatus: 'On track',
+    riskLevel: 'normal',
+    jiraIssues: [{
       key: 'MTR-123415',
       status: 'In Progress',
       priority: 'High',
@@ -259,6 +277,46 @@ const partialDuplicateCommentSuggestion = createProjectUpdateSuggestion(
 assert.equal(
   partialDuplicateCommentSuggestion?.suggestedComments,
   'Customer rollout owner confirmed',
+);
+
+const trackReasonSuggestion = createProjectUpdateSuggestion(
+  {
+    id: 'MTR-123417',
+    name: 'Track source reason',
+    status: 'In progress',
+    owner: 'Ada',
+    track: 'Core',
+    comments: '',
+    slideId: 'slide-1',
+    tableId: 'table-1',
+    row: 6,
+    columnIndices: {
+      status: 1,
+      owner: 2,
+      track: 3,
+      comments: 4,
+    },
+  },
+  {
+    type: 'project',
+    projectId: 'MTR-123417',
+    projectName: 'Track source reason',
+    summary: 'Jira component moved this work to Growth',
+    importanceLevel: 'medium',
+    needsProcessing: true,
+    confidence: 0.9,
+    riskLevel: 'normal',
+    suggestions: {
+      track: 'Growth',
+      trackReason: 'Jira component and recent planning notes place this project in Growth.',
+    },
+  },
+);
+
+assert.equal(trackReasonSuggestion?.suggestedTrack, 'Growth');
+assert.equal(
+  trackReasonSuggestion?.suggestedTrackReason,
+  'Jira component and recent planning notes place this project in Growth.',
 );
 
 const fullyDuplicateCommentSuggestion = createProjectUpdateSuggestion(
@@ -365,6 +423,88 @@ const zeroConfidenceSuggestion = createProjectUpdateSuggestion(
 );
 
 assert.equal(zeroConfidenceSuggestion?.confidence, 0);
+
+const riskOnlyReviewSuggestion = createProjectReviewSuggestion(
+  {
+    id: 'MTR-123418',
+    name: 'Risk insight without writeback',
+    status: 'Blocked',
+    owner: 'Ada',
+    comments: 'Waiting for API contract',
+    slideId: 'slide-1',
+    tableId: 'table-1',
+    row: 7,
+    columnIndices: {
+      status: 1,
+      owner: 2,
+      comments: 3,
+    },
+  },
+  {
+    type: 'project',
+    projectId: 'MTR-123418',
+    projectName: 'Risk insight without writeback',
+    summary: 'Current slide already has the latest field values, but the project is still blocked.',
+    importanceLevel: 'high',
+    needsProcessing: true,
+    confidence: 0.87,
+    riskLevel: 'high',
+    jiraIssues: {
+      'MTR-123418': {
+        key: 'MTR-123418',
+        status: 'In Progress',
+        priority: 'High',
+        summary: 'Blocked by API contract',
+      } as any,
+    },
+    suggestions: {
+      risks: ['Blocked by API contract'],
+    },
+  },
+);
+
+assert.equal(riskOnlyReviewSuggestion.suggestedStatus, undefined);
+assert.equal(riskOnlyReviewSuggestion.sourceInfo.jiraIssues?.[0]?.key, 'MTR-123418');
+assert.match(getRiskEvidenceItems(riskOnlyReviewSuggestion).join('\n'), /Blocked by API contract/);
+
+const closedBlockedReviewSuggestion = createProjectReviewSuggestion(
+  {
+    id: 'MTR-123419',
+    name: 'Closed blocker should be quiet',
+    status: 'On track',
+    owner: 'Ada',
+    comments: '',
+    slideId: 'slide-1',
+    tableId: 'table-1',
+    row: 8,
+    columnIndices: {
+      status: 1,
+      owner: 2,
+      comments: 3,
+    },
+  },
+  {
+    type: 'project',
+    projectId: 'MTR-123419',
+    projectName: 'Closed blocker should be quiet',
+    summary: 'The Jira status contains blocker language but is closed.',
+    importanceLevel: 'low',
+    needsProcessing: false,
+    confidence: 0.91,
+    riskLevel: 'normal',
+    jiraIssues: {
+      'MTR-123419': {
+        key: 'MTR-123419',
+        status: 'Blocked Done',
+        priority: 'Medium',
+        summary: 'Closed blocker',
+      } as any,
+    },
+    suggestions: {},
+  },
+);
+
+assert.deepEqual(getRiskEvidenceItems(closedBlockedReviewSuggestion), []);
 
 const makeCell = (content: string) => ({
   text: {

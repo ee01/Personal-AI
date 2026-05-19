@@ -5,6 +5,7 @@
  * POST   /profile/items              - Add a profile item (explicit entry)
  * PUT    /profile/items/:id          - Update a profile item
  * DELETE /profile/items/:id          - Soft-delete (set status='retracted')
+ * POST   /profile/items/:id/restore  - Restore a retracted profile item
  * POST   /profile/items/:id/confirm  - User confirms an inferred item
  * GET    /profile/core               - Get USER_CORE.md content
  * GET    /profile/social             - List social edges
@@ -120,7 +121,7 @@ function formatProfileItem(row: ProfileItemRow) {
 }
 
 function buildProfileFingerprint(itemKey: string, itemValue: string): string {
-  return contentHash(itemKey + ':' + itemValue.toLowerCase().trim());
+  return contentHash(`${itemKey.toLowerCase().trim()}:${itemValue.toLowerCase().trim()}`);
 }
 
 function calculateInferredSalience(
@@ -140,10 +141,63 @@ function calculateInferredSalience(
   );
 }
 
+function stableEvidenceValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableEvidenceValue);
+  }
+  if (value && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((result, key) => {
+        result[key] = stableEvidenceValue((value as Record<string, unknown>)[key]);
+        return result;
+      }, {});
+  }
+  return value;
+}
+
+function evidenceRefKey(ref: unknown): string {
+  if (ref && typeof ref === 'object') {
+    const record = ref as Record<string, unknown>;
+    const sourceType = record.sourceType ?? record.source_kind ?? record.source ?? record.type ?? '';
+    const sourceId =
+      record.sourceId ??
+      record.messageId ??
+      record.memoryId ??
+      record.id ??
+      record.url ??
+      record.sourceUrl ??
+      record.href ??
+      '';
+    const timestamp = record.timestamp ?? record.ts ?? record.capturedAt ?? '';
+    const snippet = record.snippet ?? record.text ?? record.title ?? '';
+
+    if (sourceType || sourceId || snippet) {
+      return JSON.stringify([sourceType, sourceId, snippet]);
+    }
+
+    if (timestamp) {
+      return JSON.stringify(['timestamp', timestamp]);
+    }
+  }
+
+  return JSON.stringify(stableEvidenceValue(ref));
+}
+
 function mergeEvidenceRefs(rawExisting: string | null, incoming?: unknown[]): unknown[] {
   const existing = safeJsonParse<unknown[]>(rawExisting, []);
-  if (!incoming || incoming.length === 0) return existing;
-  return [...existing, ...incoming].slice(-50);
+  const merged = [...existing, ...(incoming ?? [])];
+  const seen = new Set<string>();
+  const deduped: unknown[] = [];
+
+  for (const ref of merged) {
+    const key = evidenceRefKey(ref);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(ref);
+  }
+
+  return deduped.slice(-50);
 }
 
 function formatSocialEdge(row: SocialEdgeRow) {
@@ -418,6 +472,8 @@ export async function profileRoutes(
       }
 
       if (existing) {
+        const nextEvidenceRefs = mergeEvidenceRefs(existing.evidence_refs, evidenceRefs);
+
         db.prepare(
           `UPDATE user_profile_items
            SET source_kind = 'explicit',
@@ -426,9 +482,17 @@ export async function profileRoutes(
                user_confirmed = 1,
                status = 'active',
                last_seen = ?,
+               evidence_refs = ?,
                updated_at = ?
            WHERE id = ?`,
-        ).run(initialScore, initialScore, currentTime, currentTime, existing.id);
+        ).run(
+          initialScore,
+          initialScore,
+          currentTime,
+          nextEvidenceRefs.length > 0 ? JSON.stringify(nextEvidenceRefs) : null,
+          currentTime,
+          existing.id,
+        );
 
         const row = db
           .prepare('SELECT * FROM user_profile_items WHERE id = ?')
@@ -680,6 +744,43 @@ export async function profileRoutes(
 
       await refreshUserCoreSnapshot(request.userContext);
       return reply.status(200).send({ id, deleted: true });
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /profile/items/:id/restore -- Restore a soft-deleted profile item
+  // -----------------------------------------------------------------------
+  app.post<{ Params: { id: string } }>(
+    '/profile/items/:id/restore',
+    async (request, reply) => {
+      const { db } = request.userContext;
+      const { id } = request.params;
+
+      const existing = db
+        .prepare('SELECT * FROM user_profile_items WHERE id = ?')
+        .get(id) as ProfileItemRow | undefined;
+
+      if (!existing) {
+        return reply.status(404).send({ error: 'Profile item not found' });
+      }
+
+      if (existing.status !== 'retracted') {
+        return reply.status(200).send(formatProfileItem(existing));
+      }
+
+      const currentTime = now();
+      const restoredStatus = existing.user_confirmed === 1 ? 'active' : 'pending_confirm';
+
+      db.prepare(
+        'UPDATE user_profile_items SET status = ?, updated_at = ? WHERE id = ?',
+      ).run(restoredStatus, currentTime, id);
+
+      const row = db
+        .prepare('SELECT * FROM user_profile_items WHERE id = ?')
+        .get(id) as ProfileItemRow;
+
+      await refreshUserCoreSnapshot(request.userContext);
+      return reply.status(200).send(formatProfileItem(row));
     },
   );
 

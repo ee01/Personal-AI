@@ -3,7 +3,10 @@ import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { buildApp } from '../server.js';
-import { NotificationCenterService } from '../core/NotificationCenterService.js';
+import {
+  NotificationCenterService,
+  TODO_DELIVERY_RETRY_COOLDOWN_SECONDS,
+} from '../core/NotificationCenterService.js';
 import { cleanupTestDb, getTestDb } from './setup.js';
 
 describe('NotificationCenterService', () => {
@@ -175,6 +178,132 @@ describe('NotificationCenterService', () => {
     ]);
   });
 
+  it('retries unacted todos after the delivery cooldown but keeps notices sticky', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?)`,
+    ).run(
+      'notif-deadline-retry',
+      'Deadline needs attention',
+      'No user action has been recorded yet',
+      now,
+      now,
+    );
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+    ).run(
+      'notif-notice-sticky',
+      'Weekly report ready',
+      'Informational digest',
+      now,
+      now,
+    );
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 9)`,
+    ).run(
+      'action-retry',
+      'Review proposed action',
+      'Still waiting for an explicit decision',
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-deadline-retry',
+        channel: 'chrome',
+        lane: 'todo',
+        status: 'delivered',
+      },
+      {
+        sourceRef: 'notification:notif-notice-sticky',
+        channel: 'chrome',
+        lane: 'notice',
+        status: 'delivered',
+      },
+      {
+        sourceRef: 'proposed_action:action-retry',
+        channel: 'chrome',
+        lane: 'todo',
+        status: 'delivered',
+      },
+    ]);
+
+    const recentFeed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['todo', 'notice'],
+      limit: 10,
+    });
+    expect(recentFeed.map((item) => item.sourceRef)).not.toContain(
+      'notification:notif-deadline-retry',
+    );
+    expect(recentFeed.map((item) => item.sourceRef)).not.toContain(
+      'proposed_action:action-retry',
+    );
+    expect(recentFeed.map((item) => item.sourceRef)).not.toContain(
+      'notification:notif-notice-sticky',
+    );
+
+    const staleDeliveredAt =
+      now - TODO_DELIVERY_RETRY_COOLDOWN_SECONDS - 60;
+    db.prepare(
+      `UPDATE channel_delivery_records
+          SET first_delivered_at = ?,
+              last_delivered_at = ?,
+              updated_at = ?
+        WHERE source_ref IN (?, ?, ?)`,
+    ).run(
+      staleDeliveredAt,
+      staleDeliveredAt,
+      staleDeliveredAt,
+      'notification:notif-deadline-retry',
+      'notification:notif-notice-sticky',
+      'proposed_action:action-retry',
+    );
+
+    const retryFeed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['todo', 'notice'],
+      limit: 10,
+    });
+    expect(retryFeed.map((item) => item.sourceRef)).toContain(
+      'notification:notif-deadline-retry',
+    );
+    expect(retryFeed.map((item) => item.sourceRef)).toContain(
+      'proposed_action:action-retry',
+    );
+    expect(retryFeed.map((item) => item.sourceRef)).not.toContain(
+      'notification:notif-notice-sticky',
+    );
+
+    service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-deadline-retry',
+        channel: 'chrome',
+        lane: 'todo',
+        status: 'clicked',
+      },
+    ]);
+
+    const clickedFeed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['todo'],
+      limit: 10,
+    });
+    expect(clickedFeed.map((item) => item.sourceRef)).not.toContain(
+      'notification:notif-deadline-retry',
+    );
+  });
+
   it('does not surface expired proposed actions as todos', () => {
     const now = Math.floor(Date.now() / 1000);
 
@@ -298,6 +427,44 @@ describe('NotificationCenterService', () => {
 
     expect(feedAfterDelivery.statusCode).toBe(200);
     expect(feedAfterDelivery.json().total).toBe(0);
+  });
+
+  it('snoozes notifications with a caller-provided delay', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?)`,
+    ).run(
+      'notif-deadline-snooze',
+      'Deadline needs attention',
+      'This should come back before the deadline',
+      now,
+      now,
+    );
+
+    const before = Math.floor(Date.now() / 1000);
+    const snoozeRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/notifications/notif-deadline-snooze/action',
+      payload: {
+        action: 'snooze',
+        delaySeconds: 45 * 60,
+      },
+    });
+    const after = Math.floor(Date.now() / 1000);
+
+    expect(snoozeRes.statusCode).toBe(200);
+    const snoozeBody = snoozeRes.json();
+    expect(snoozeBody.delaySeconds).toBe(45 * 60);
+    expect(snoozeBody.scheduledAt).toBeGreaterThanOrEqual(before + 45 * 60);
+    expect(snoozeBody.scheduledAt).toBeLessThanOrEqual(after + 45 * 60);
+
+    const created = db
+      .prepare('SELECT sent_at FROM notification_records WHERE id = ?')
+      .get(snoozeBody.newNotificationId) as { sent_at: number } | undefined;
+    expect(created?.sent_at).toBe(snoozeBody.scheduledAt);
   });
 
   it('rejects invalid feed query parameters', async () => {

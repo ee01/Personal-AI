@@ -496,14 +496,32 @@ body {
 }
 
 .sync-audit-meta,
+.sync-audit-details,
 .sync-audit-reason {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
+.sync-audit-details {
+  padding-top: 2px;
+}
+
 .sync-audit-reason {
   margin: 0;
+}
+
+.sync-audit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.sync-audit-action {
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 .settings-form-wide {

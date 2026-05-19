@@ -1,6 +1,6 @@
 # Today Pilot / 今日领航
 
-_最后更新: 2026-05-13_
+_最后更新: 2026-05-18_
 
 ## 是什么
 
@@ -41,6 +41,7 @@ Today Pilot 的 mission 必须是“事情”，不是“分类”或“系统�
 - 有今日理由：会议临近、近期消息集中、动作待确认、事实冲突会影响今天上下文、技能建议有复用价值等。
 - 标题可读：避免直接暴露 opaque id、内部 topic uuid 或系统化标题。
 - 不制造假紧急：陈旧信号和重复系统通知不能因为分数高而成为 critical mission。
+- 只有泛泛 FYI 或高重要度但没有 follow-up / 决策 / 截止 / 失败 / 会议 / 反思 / 技能等行动信号的消息，不进入主列表。
 
 以下内容默认不进入 Today Pilot 主列表：
 
@@ -79,6 +80,9 @@ Meeting Pilot 在进入会议时读取这份 handoff，并在会中展示会前�
 
 - meeting card 可引导用户打开 Video Home 或复制 context pack。
 - 非 meeting card 点击进入 Today Pilot 首页。
+- popup 折叠态同样展示 `你要做` 和 `为什么出现` 两条信息，避免只看到标题或优先级。
+- popup 折叠态还展示简短证据数和信心值，帮助用户判断是否值得打开详情。
+- popup 可直接把 card 标记完成、稍后 6 小时或复制 context pack；反馈失败时必须恢复卡片并提示。
 - API 不可用时显示 degraded empty state，不回退假数据。
 
 ### 5. Context Pack
@@ -115,9 +119,11 @@ P0/P1 生成逻辑以 deterministic rules 为主，不依赖 LLM 聚类。当前
 生成后用户反馈会影响下一次排序：
 
 - `done`：今日不再显示。
-- `later`：snooze 到期前不再显示。
+- `later`：snooze 到期前不再显示；当前首页和 popup 按钮使用 6 小时稍后。后端会为缺少 `snoozeUntil` 的 `later` 请求补默认 6 小时，避免旧客户端让“稍后”立即失效。
 - `mute`：同类 source hash 静默。
 - `wrong/useful`：影响后续 rank penalty/boost。
+
+反馈、静默和 context pack 生成都必须限定在当前用户自己的 brief/mission/card 内。即使前端拿到旧 card id 或 mission id，后端也不能跨用户读取、写入或返回上下文包。
 
 ## 后端入口
 
@@ -158,4 +164,5 @@ Compose Assist 负责：
 - 过滤低可操作性的系统 heartbeat、巡检、重复事实跟进通知。
 - 对旧证据保守降权，避免 Today Pilot 变成历史通知收件箱。
 - 不自动替用户发送消息、创建动作或把私有内容发给外部 AI。
+- 首页反馈可以先做乐观隐藏，但写入失败必须恢复卡片并提示用户。
 - 首页是导航和提醒层，强状态处理留给对应子页面。

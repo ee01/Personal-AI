@@ -13,6 +13,9 @@ const repoRoot = path.resolve(appRoot, '..');
 const extensionPath = path.join(repoRoot, 'dist');
 const siteMuteStorageKey = 'pai-context-muted-sites-v1';
 const siteBlockStorageKey = 'pai-context-blocked-sites-v1';
+const pageBlockStorageKey = 'pai-context-blocked-page-prefixes-v1';
+const siteAllowStorageKey = 'pai-context-allowed-sites-v1';
+const siteAllowlistModeStorageKey = 'pai-context-site-allowlist-mode-v1';
 
 function log(message) {
   console.log(`[webpage-memory-detection] ${message}`);
@@ -296,18 +299,31 @@ async function launchExtensionContext(apiBaseUrl) {
   };
 
   await serviceWorker.evaluate(
-    async ({ envConfig, muteStorageKey, blockStorageKey }) => {
+    async ({
+      envConfig,
+      muteStorageKey,
+      blockStorageKey,
+      pageBlockKey,
+      allowStorageKey,
+      allowlistModeKey,
+    }) => {
       await chrome.storage.local.set({
         envConfig,
         userinfo: { username: 'webpage-memory-e2e' },
         [muteStorageKey]: {},
         [blockStorageKey]: {},
+        [pageBlockKey]: {},
+        [allowStorageKey]: {},
+        [allowlistModeKey]: false,
       });
     },
     {
       envConfig: config,
       muteStorageKey: siteMuteStorageKey,
       blockStorageKey: siteBlockStorageKey,
+      pageBlockKey: pageBlockStorageKey,
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
     },
   );
 
@@ -427,7 +443,67 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   assert.match(cardText, /相关记忆/);
   assert.match(cardText, /消息记忆/);
   assert.match(cardText, /这条有用/);
+  assert.match(cardText, /允许此站点/);
   assert.match(cardText, /此网站今天不提示/);
+  assert.match(cardText, /此页面永久不提示/);
+
+  await page.locator('.pai-context-site-allow').click();
+  await page.waitForSelector('.pai-context-toast', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /已开启白名单并允许此网站/,
+  );
+  const storedAllowShortcut = await serviceWorker.evaluate(
+    async ({ allowStorageKey, allowlistModeKey }) =>
+      chrome.storage.local.get([allowStorageKey, allowlistModeKey]),
+    {
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+  assert.equal(
+    storedAllowShortcut[siteAllowlistModeStorageKey],
+    true,
+    '卡片快捷允许站点应开启白名单模式',
+  );
+  assert.equal(
+    typeof storedAllowShortcut[siteAllowStorageKey]?.['127.0.0.1'],
+    'number',
+    '卡片快捷允许站点应写入当前 host',
+  );
+  await page
+    .getByRole('button', { name: '撤销此站点白名单快捷设置' })
+    .click();
+  await page.waitForSelector('.pai-context-toast', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /已恢复白名单设置/,
+  );
+  const restoredAllowShortcut = await serviceWorker.evaluate(
+    async ({ allowStorageKey, allowlistModeKey }) =>
+      chrome.storage.local.get([allowStorageKey, allowlistModeKey]),
+    {
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+  assert.equal(
+    restoredAllowShortcut[siteAllowlistModeStorageKey],
+    false,
+    '撤销卡片快捷允许站点后应恢复白名单模式开关',
+  );
+  assert.equal(
+    restoredAllowShortcut[siteAllowStorageKey]?.['127.0.0.1'],
+    undefined,
+    '撤销卡片快捷允许站点后应移除当前 host',
+  );
+  await page.waitForSelector('.pai-context-bubble', { timeout: 5000 });
 
   await page.locator('.pai-context-recall-positive').click();
   await waitForRequestCount(
@@ -446,6 +522,25 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     await page.locator('.pai-context-recall-positive').innerText(),
     '已标记有用',
     '标记有用后应立即给出按钮状态反馈',
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-positive').isDisabled(),
+    true,
+    '标记有用后应锁定正向反馈按钮，避免重复提交',
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-negative').isDisabled(),
+    true,
+    '标记有用后应锁定反向反馈按钮，避免提交矛盾反馈',
+  );
+  await page
+    .locator('.pai-context-recall-negative')
+    .evaluate((button) => button.click());
+  await page.waitForTimeout(300);
+  assert.equal(
+    server.feedbackRequests.length,
+    startFeedbackCount + 1,
+    '锁定后的反向反馈按钮不应再提交第二条反馈',
   );
 
   const hrefs = await page.$$eval('.pai-context-card a', (anchors) =>
@@ -526,7 +621,7 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     waitUntil: 'load',
     timeout: 15000,
   });
-  await optionsPage.waitForSelector('text=网页记忆提示静默站点', {
+  await optionsPage.waitForSelector('text=网页记忆提示控制', {
     timeout: 5000,
   });
   await optionsPage.waitForSelector('text=127.0.0.1', { timeout: 5000 });
@@ -628,6 +723,271 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   );
   await restoredPage.close();
   await page.close();
+}
+
+async function verifyAllowlistMode(server, context, serviceWorker, extensionId) {
+  await serviceWorker.evaluate(
+    async ({ allowStorageKey, allowlistModeKey }) => {
+      await chrome.storage.local.set({
+        [allowStorageKey]: {},
+        [allowlistModeKey]: true,
+      });
+    },
+    {
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+
+  const blockedPage = await context.newPage();
+  const blockedStartCount = server.contextRecallRequests.length;
+  await blockedPage.goto(`${server.origin}/normal?allowlist=blocked`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await blockedPage.waitForTimeout(3500);
+  assert.equal(
+    server.contextRecallRequests.length,
+    blockedStartCount,
+    '白名单模式开启且站点未允许时不应触发被动召回',
+  );
+  assert.equal(
+    await blockedPage.locator('.pai-context-bubble').count(),
+    0,
+    '白名单模式开启且站点未允许时不应显示记忆提示',
+  );
+  await blockedPage.close();
+
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await optionsPage.waitForSelector('text=允许站点白名单', {
+    timeout: 5000,
+  });
+  await optionsPage.getByLabel('添加允许站点').fill('127.0.0.1');
+  await optionsPage.getByRole('button', { name: '允许', exact: true }).click();
+  await optionsPage.waitForSelector('text=已允许 127.0.0.1 显示网页记忆提示', {
+    timeout: 5000,
+  });
+  await optionsPage.waitForSelector('text=允许站点 · 添加于', {
+    timeout: 5000,
+  });
+
+  const storedAllowedSites = await serviceWorker.evaluate(
+    async (storageKey) => chrome.storage.local.get(storageKey),
+    siteAllowStorageKey,
+  );
+  assert.equal(
+    typeof storedAllowedSites[siteAllowStorageKey]?.['127.0.0.1'],
+    'number',
+    '允许站点未写入 extension storage',
+  );
+
+  const allowedPage = await context.newPage();
+  const allowedStartCount = server.contextRecallRequests.length;
+  await allowedPage.goto(`${server.origin}/normal?allowlist=allowed`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await waitForRequestCount(server, allowedStartCount + 1, 12000);
+  assert.equal(
+    server.contextRecallRequests.length,
+    allowedStartCount + 1,
+    '白名单模式下已允许站点应触发被动召回',
+  );
+  await allowedPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await allowedPage.close();
+
+  await optionsPage
+    .getByRole('button', { name: '移除允许站点 127.0.0.1' })
+    .click();
+  await optionsPage.waitForSelector('text=当前没有允许站点', {
+    timeout: 5000,
+  });
+  await optionsPage.close();
+
+  const removedPage = await context.newPage();
+  const removedStartCount = server.contextRecallRequests.length;
+  await removedPage.goto(`${server.origin}/normal?allowlist=removed`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await removedPage.waitForTimeout(3500);
+  assert.equal(
+    server.contextRecallRequests.length,
+    removedStartCount,
+    '允许站点移除后白名单模式应再次阻止被动召回',
+  );
+  await removedPage.close();
+
+  await serviceWorker.evaluate(
+    async ({ allowStorageKey, allowlistModeKey }) => {
+      await chrome.storage.local.set({
+        [allowStorageKey]: {},
+        [allowlistModeKey]: false,
+      });
+    },
+    {
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+}
+
+async function verifyPagePathBlock(server, context, serviceWorker, extensionId) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'page-path-block');
+  const startCount = server.contextRecallRequests.length;
+  const targetUrl = `${server.origin}/normal/path-block?source=first`;
+  await page.goto(targetUrl, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `page path block bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    '路径屏蔽前应先触发一次被动召回',
+  );
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await page.locator('.pai-context-page-block').click();
+  await page.waitForSelector('.pai-context-toast', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /已永久关闭此页面路径记忆提示/,
+  );
+  const blockedPrefix = `${server.origin}/normal/path-block`;
+  const storedPageBlocks = await serviceWorker.evaluate(
+    async (storageKey) => chrome.storage.local.get(storageKey),
+    pageBlockStorageKey,
+  );
+  assert.equal(
+    typeof storedPageBlocks[pageBlockStorageKey]?.[blockedPrefix],
+    'number',
+    '页面路径屏蔽状态未写入 extension storage',
+  );
+  await page
+    .getByRole('button', { name: '撤销此页面路径不提示' })
+    .click();
+  await page.waitForSelector('.pai-context-toast', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /已恢复此页面路径记忆提示/,
+  );
+  await page.waitForSelector('.pai-context-bubble', { timeout: 5000 });
+  const restoredPageBlocks = await serviceWorker.evaluate(
+    async (storageKey) => chrome.storage.local.get(storageKey),
+    pageBlockStorageKey,
+  );
+  assert.equal(
+    restoredPageBlocks[pageBlockStorageKey]?.[blockedPrefix],
+    undefined,
+    '撤销后页面路径屏蔽状态应从 extension storage 移除',
+  );
+
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await page.locator('.pai-context-page-block').click();
+  await page.waitForSelector('.pai-context-toast', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await page.locator('.pai-context-toast').innerText(),
+    /已永久关闭此页面路径记忆提示/,
+  );
+  await page.close();
+
+  const blockedChildPage = await context.newPage();
+  const blockedStartCount = server.contextRecallRequests.length;
+  await blockedChildPage.goto(`${blockedPrefix}/child?source=blocked`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await blockedChildPage.waitForTimeout(3500);
+  assert.equal(
+    server.contextRecallRequests.length,
+    blockedStartCount,
+    '已屏蔽页面路径及其子路径不应触发被动召回',
+  );
+  assert.equal(
+    await blockedChildPage.locator('.pai-context-bubble').count(),
+    0,
+    '已屏蔽页面路径及其子路径不应显示记忆提示',
+  );
+  await blockedChildPage.close();
+
+  const siblingPage = await context.newPage();
+  const siblingStartCount = server.contextRecallRequests.length;
+  await siblingPage.goto(`${server.origin}/normal-other?source=sibling`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await waitForRequestCount(server, siblingStartCount + 1, 12000);
+  assert.equal(
+    server.contextRecallRequests.length,
+    siblingStartCount + 1,
+    '同域其他路径不应被页面路径屏蔽误伤',
+  );
+  await siblingPage.close();
+
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await optionsPage.waitForSelector('text=永久屏蔽页面/路径', {
+    timeout: 5000,
+  });
+  await optionsPage.waitForSelector(`text=${blockedPrefix}`, { timeout: 5000 });
+  await optionsPage
+    .getByRole('button', { name: `恢复页面路径 ${blockedPrefix}` })
+    .click();
+  await optionsPage.waitForSelector('text=当前没有被永久屏蔽的页面路径', {
+    timeout: 5000,
+  });
+  await optionsPage.close();
+
+  const restoredPage = await context.newPage();
+  const restoredStartCount = server.contextRecallRequests.length;
+  await restoredPage.goto(`${blockedPrefix}/child?source=restored`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await waitForRequestCount(server, restoredStartCount + 1, 12000);
+  assert.equal(
+    server.contextRecallRequests.length,
+    restoredStartCount + 1,
+    '从设置页恢复页面路径后应重新触发被动召回',
+  );
+  await restoredPage.close();
 }
 
 async function verifyIrrelevantFeedback(server, context) {
@@ -1009,7 +1369,9 @@ try {
   await verifyUnsafeExploreRoute(server, context);
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
   await verifyIrrelevantFeedback(server, context);
+  await verifyAllowlistMode(server, context, launch.serviceWorker, launch.extensionId);
   await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
+  await verifyPagePathBlock(server, context, launch.serviceWorker, launch.extensionId);
   await verifySensitivePage(server, context);
   log('browser checks passed');
 } finally {

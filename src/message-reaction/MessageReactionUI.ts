@@ -58,6 +58,10 @@ import {
 import { getSnoozeSuccessToastActions } from './snoozeToastActions';
 
 const SNOOZE_QUICK_MENU_ID = 'personal-ai-snooze-quick-menu';
+const FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS = 24;
+const FOLLOWUP_ASK_MAX_INTERVAL_HOURS = 720;
+const FOLLOWUP_ASK_DEFAULT_MAX_FOLLOWUP = 1;
+const FOLLOWUP_ASK_MAX_FOLLOWUP = 10;
 
 // 功能开关配置接口
 export interface MessageReactionConfig {
@@ -249,6 +253,23 @@ function injectStyles() {
       background: rgba(217, 119, 6, 0.24);
     }
 
+    /* ===== 跟进追问按钮 ===== */
+    .followup-ask-btn {
+      color: #0f766e;
+      background: rgba(15, 118, 110, 0.1);
+      border: 1px solid rgba(15, 118, 110, 0.2);
+      border-left: none;
+    }
+
+    .followup-ask-btn:hover {
+      background: rgba(15, 118, 110, 0.16);
+      border-color: rgba(15, 118, 110, 0.38);
+    }
+
+    .followup-ask-btn:active {
+      background: rgba(15, 118, 110, 0.24);
+    }
+
     /* ===== 关注后续按钮 ===== */
     .follow-thread-btn {
       color: #9c27b0;
@@ -380,6 +401,19 @@ function injectStyles() {
     .snooze-quick-option:active {
       background: #ffecec;
     }
+
+    .snooze-menu[aria-busy="true"] .snooze-quick-option,
+    .snooze-menu[aria-busy="true"] .snooze-custom-option,
+    .snooze-menu[aria-busy="true"] .snooze-manage-option {
+      cursor: wait;
+      opacity: 0.56;
+    }
+
+    .snooze-menu[aria-busy="true"] .snooze-quick-option[data-processing="true"] {
+      opacity: 1;
+      background: #fff5f5;
+      color: #ee5a5a;
+    }
     
     .snooze-quick-option-icon {
       font-size: 12px;
@@ -459,6 +493,11 @@ function injectStyles() {
     }
     
     .snooze-picker-back {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding: 0;
       display: flex;
       align-items: center;
       gap: 4px;
@@ -470,6 +509,11 @@ function injectStyles() {
     
     .snooze-picker-back:hover {
       opacity: 1;
+    }
+
+    .snooze-picker-back:focus-visible {
+      outline: 2px solid rgba(255, 255, 255, 0.72);
+      outline-offset: 2px;
     }
     
     .snooze-picker-title {
@@ -646,13 +690,16 @@ function injectStyles() {
     /* ===== 设置按钮（x 按钮） ===== */
     .reaction-settings-btn {
       appearance: none;
+      position: absolute;
+      left: -24px;
+      top: 50%;
+      transform: translateY(-50%);
       padding: 0;
       width: 20px;
       height: 20px;
-      border-radius: 4px 0 0 4px;
+      border-radius: 4px;
       background: rgba(102, 102, 102, 0.08);
       border: 1px solid rgba(102, 102, 102, 0.2);
-      border-right: none;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -736,6 +783,326 @@ function injectStyles() {
       color: #888;
       padding: 0 14px 10px;
     }
+
+    .followup-ask-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1000000;
+      background: rgba(17, 24, 39, 0.36);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      backdrop-filter: blur(2px);
+    }
+
+    .followup-ask-dialog {
+      width: min(440px, calc(100vw - 36px));
+      max-height: calc(100vh - 36px);
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28), 0 4px 16px rgba(15, 23, 42, 0.12);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      animation: followup-dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes followup-dialog-in {
+      from { opacity: 0; transform: scale(0.96) translateY(8px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    .followup-ask-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%);
+      color: white;
+    }
+
+    .followup-ask-header-icon {
+      font-size: 16px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .followup-ask-title {
+      font-size: 14px;
+      font-weight: 650;
+      color: #fff;
+      flex: 1;
+      line-height: 1.3;
+    }
+
+    .followup-ask-close {
+      appearance: none;
+      width: 26px;
+      height: 26px;
+      border: 0;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.15);
+      color: rgba(255, 255, 255, 0.9);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+
+    .followup-ask-close:hover {
+      background: rgba(255, 255, 255, 0.28);
+      color: #fff;
+    }
+
+    .followup-ask-close:disabled {
+      cursor: wait;
+      opacity: 0.6;
+    }
+
+    .followup-ask-body {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+      overflow: auto;
+    }
+
+    .followup-ask-target {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      padding: 8px 10px;
+      border-radius: 7px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .followup-ask-target-label {
+      flex-shrink: 0;
+      font-weight: 600;
+      color: #64748b;
+    }
+
+    .followup-ask-target-value {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #0f766e;
+      font-weight: 650;
+    }
+
+    .followup-ask-preview {
+      max-height: 72px;
+      overflow: auto;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: #f0fdf4;
+      color: #374151;
+      font-size: 12px;
+      line-height: 1.5;
+      border: 1px solid #d1fae5;
+      white-space: pre-wrap;
+      margin-top: 8px;
+    }
+
+    .followup-ask-row {
+      display: grid;
+      gap: 6px;
+    }
+
+    .followup-ask-inline {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .followup-ask-label {
+      color: #4b5563;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .followup-ask-label-primary {
+      color: #111827;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .followup-ask-required-mark {
+      color: #ef4444;
+      font-size: 13px;
+    }
+
+    .followup-ask-input,
+    .followup-ask-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1.5px solid #d1d5db;
+      border-radius: 7px;
+      padding: 8px 10px;
+      color: #111827;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+      background: #fff;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .followup-ask-input:focus,
+    .followup-ask-textarea:focus {
+      border-color: #0f766e;
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+    }
+
+    .followup-ask-textarea {
+      min-height: 84px;
+      resize: vertical;
+      line-height: 1.55;
+    }
+
+    .followup-ask-textarea.input-error {
+      border-color: #ef4444;
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+    }
+
+    .followup-ask-details {
+      border: 0;
+      padding: 0;
+      margin: 0;
+    }
+
+    .followup-ask-details summary {
+      cursor: pointer;
+      color: #6b7280;
+      font-size: 12px;
+      font-weight: 500;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      user-select: none;
+      transition: color 0.12s;
+    }
+
+    .followup-ask-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .followup-ask-details summary::before {
+      content: '▸';
+      font-size: 10px;
+      transition: transform 0.15s;
+      color: #9ca3af;
+    }
+
+    .followup-ask-details[open] summary::before {
+      transform: rotate(90deg);
+    }
+
+    .followup-ask-details summary:hover {
+      color: #374151;
+    }
+
+    .followup-ask-details-body {
+      margin-top: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .followup-ask-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid #f3f4f6;
+      background: #fafafa;
+    }
+
+    .followup-ask-cancel,
+    .followup-ask-submit {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .followup-ask-cancel {
+      background: #fff;
+      border-color: #e5e7eb;
+      color: #374151;
+    }
+
+    .followup-ask-cancel:hover {
+      background: #f9fafb;
+      border-color: #d1d5db;
+    }
+
+    .followup-ask-submit {
+      background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(15, 118, 110, 0.28);
+    }
+
+    .followup-ask-submit:hover:not(:disabled) {
+      box-shadow: 0 4px 14px rgba(15, 118, 110, 0.38);
+      transform: translateY(-1px);
+    }
+
+    .followup-ask-submit:disabled {
+      cursor: wait;
+      opacity: 0.65;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .followup-ask-cancel:disabled {
+      cursor: wait;
+      opacity: 0.6;
+    }
+
+    .followup-ask-error {
+      min-height: 18px;
+      color: #b91c1c;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .followup-ask-error[hidden] {
+      display: none;
+    }
+
+    @media (max-width: 420px) {
+      .followup-ask-inline {
+        grid-template-columns: 1fr;
+      }
+
+      .followup-ask-footer {
+        flex-direction: column-reverse;
+      }
+
+      .followup-ask-cancel,
+      .followup-ask-submit {
+        width: 100%;
+      }
+    }
   `;
 
   document.head.appendChild(style);
@@ -760,6 +1127,100 @@ function getSettingsIconSvg(): string {
       <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.07A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.07 14H3a2 2 0 1 1 0-4h.07A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.07V3a2 2 0 1 1 4 0v.07A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.37 9c.27.61.88 1 1.56 1H21a2 2 0 1 1 0 4h-.07A1.7 1.7 0 0 0 19.4 15Z"></path>
     </svg>
   `;
+}
+
+function escapeDialogText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function normalizeIdentityCandidate(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/gu, '');
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+async function isOwnMessage(
+  messageInfo: MessageInfo | null,
+  targetElement: HTMLElement,
+): Promise<boolean> {
+  const sender = normalizeIdentityCandidate(messageInfo?.senderName);
+  if (!sender) return false;
+
+  if (['me', 'you', '我', '自己'].includes(sender)) {
+    return true;
+  }
+
+  const avatarUid =
+    targetElement
+      .querySelector('[data-name="avatar"]')
+      ?.getAttribute('data-uid') || '';
+
+  try {
+    const result = await chrome.storage.local.get(['userinfo']);
+    const userinfo = result.userinfo || {};
+    const rawCandidates = [
+      userinfo.fullName,
+      userinfo.name,
+      userinfo.username,
+      userinfo.displayName,
+      userinfo.userEmail,
+      userinfo.email,
+      typeof userinfo.userEmail === 'string'
+        ? userinfo.userEmail.split('@')[0]
+        : undefined,
+      typeof userinfo.email === 'string' ? userinfo.email.split('@')[0] : undefined,
+    ];
+    const candidates = new Set(
+      rawCandidates
+        .map((value) => normalizeIdentityCandidate(value))
+        .filter((value): value is string => Boolean(value)),
+    );
+
+    if (candidates.has(sender)) {
+      return true;
+    }
+
+    const extensionId = String(userinfo.extensionId || '').trim();
+    return Boolean(
+      extensionId &&
+        avatarUid &&
+        avatarUid.replace(/^GLIP_PERSON\./, '') === extensionId,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function inferFollowupTarget(messageInfo: MessageInfo): string {
+  const mention = messageInfo.content.match(/@([^\s@:,，：]{2,40}(?:\s+[^\s@:,，：]{1,40})?)/);
+  if (mention?.[1]) {
+    return mention[1].trim();
+  }
+  return messageInfo.groupName || messageInfo.groupId || '当前会话';
+}
+
+function parseMessageTimestampSeconds(messageInfo: MessageInfo): number | undefined {
+  const parsed = Date.parse(messageInfo.timestamp);
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+}
+
+function parseBoundedInteger(
+  value: FormDataEntryValue | null,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
 async function openScheduledMessagesManager() {
@@ -862,6 +1323,217 @@ async function sendToolbarRuntimeAction(
   if (errorMessage) {
     throw new Error(errorMessage);
   }
+}
+
+function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.followup-ask-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'followup-ask-overlay';
+    const defaultTarget = inferFollowupTarget(messageInfo);
+    const escapedTarget = escapeDialogText(defaultTarget);
+    overlay.innerHTML = `
+      <form class="followup-ask-dialog" novalidate>
+        <div class="followup-ask-header">
+          <div class="followup-ask-header-icon">💬</div>
+          <div class="followup-ask-title">跟进追问</div>
+          <button type="button" class="followup-ask-close" aria-label="关闭">×</button>
+        </div>
+        <div class="followup-ask-body">
+          <details class="followup-ask-details">
+            <summary>原消息</summary>
+            <div class="followup-ask-preview">${escapeDialogText(messageInfo.content || '(空消息)')}</div>
+          </details>
+          <div class="followup-ask-target" title="${escapedTarget}">
+            <span class="followup-ask-target-label">跟进范围</span>
+            <span class="followup-ask-target-value">${escapedTarget}</span>
+          </div>
+          <div class="followup-ask-row">
+            <label class="followup-ask-label followup-ask-label-primary" for="followup-ask-objective">
+              追问的目的是为了拿到什么信息
+              <span class="followup-ask-required-mark">*</span>
+            </label>
+            <textarea
+              id="followup-ask-objective"
+              class="followup-ask-textarea"
+              name="context"
+              placeholder="例如：确认项目最终的交付时间，以及是否需要额外资源支持"
+              required
+              aria-required="true"
+            ></textarea>
+          </div>
+          <details class="followup-ask-details">
+            <summary>更多选项</summary>
+            <div class="followup-ask-details-body">
+              <div class="followup-ask-inline">
+                <div class="followup-ask-row">
+                  <label class="followup-ask-label" for="followup-ask-interval">追问间隔（小时）</label>
+                  <input id="followup-ask-interval" class="followup-ask-input" name="intervalHours" type="number" min="1" max="${FOLLOWUP_ASK_MAX_INTERVAL_HOURS}" value="${FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS}" />
+                </div>
+                <div class="followup-ask-row">
+                  <label class="followup-ask-label" for="followup-ask-max">最多追问次数</label>
+                  <input id="followup-ask-max" class="followup-ask-input" name="maxFollowup" type="number" min="0" max="${FOLLOWUP_ASK_MAX_FOLLOWUP}" value="${FOLLOWUP_ASK_DEFAULT_MAX_FOLLOWUP}" />
+                </div>
+              </div>
+            </div>
+          </details>
+          <div class="followup-ask-error" role="alert" hidden></div>
+        </div>
+        <div class="followup-ask-footer">
+          <button type="button" class="followup-ask-cancel">取消</button>
+          <button type="submit" class="followup-ask-submit">开始追问</button>
+        </div>
+      </form>
+    `;
+
+    const close = () => {
+      document.removeEventListener('keydown', handleKeydown);
+      overlay.remove();
+    };
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (overlay.dataset.submitting === 'true') return;
+      if (event.key === 'Escape') {
+        close();
+        resolve();
+      }
+    };
+    document.addEventListener('keydown', handleKeydown);
+    overlay.addEventListener('mousedown', (event) => {
+      if (overlay.dataset.submitting === 'true') return;
+      if (event.target === overlay) {
+        close();
+        resolve();
+      }
+    });
+
+    const form = overlay.querySelector('form') as HTMLFormElement;
+    const submitBtn = overlay.querySelector(
+      '.followup-ask-submit',
+    ) as HTMLButtonElement;
+    const cancelBtn = overlay.querySelector(
+      '.followup-ask-cancel',
+    ) as HTMLButtonElement;
+    const closeBtn = overlay.querySelector(
+      '.followup-ask-close',
+    ) as HTMLButtonElement;
+
+    cancelBtn.addEventListener('click', () => {
+      close();
+      resolve();
+    });
+    closeBtn.addEventListener('click', () => {
+      close();
+      resolve();
+    });
+
+    const objectiveTextarea = overlay.querySelector(
+      '#followup-ask-objective',
+    ) as HTMLTextAreaElement | null;
+    const intervalInput = overlay.querySelector(
+      '#followup-ask-interval',
+    ) as HTMLInputElement | null;
+    const maxFollowupInput = overlay.querySelector(
+      '#followup-ask-max',
+    ) as HTMLInputElement | null;
+    const errorEl = overlay.querySelector(
+      '.followup-ask-error',
+    ) as HTMLElement | null;
+
+    const setError = (message: string | null) => {
+      if (!errorEl) return;
+      if (!message) {
+        errorEl.textContent = '';
+        errorEl.hidden = true;
+        return;
+      }
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+    };
+
+    const setSubmitting = (submitting: boolean) => {
+      overlay.dataset.submitting = submitting ? 'true' : 'false';
+      submitBtn.disabled = submitting;
+      cancelBtn.disabled = submitting;
+      closeBtn.disabled = submitting;
+      submitBtn.textContent = submitting ? '创建中...' : '开始追问';
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const context = String(formData.get('context') || '').trim();
+
+      if (!context) {
+        objectiveTextarea?.classList.add('input-error');
+        setError('请先填写追问目的。');
+        objectiveTextarea?.focus();
+        return;
+      }
+      objectiveTextarea?.classList.remove('input-error');
+      setError(null);
+
+      setSubmitting(true);
+      try {
+        const intervalHours = parseBoundedInteger(
+          formData.get('intervalHours'),
+          FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS,
+          1,
+          FOLLOWUP_ASK_MAX_INTERVAL_HOURS,
+        );
+        const maxFollowup = parseBoundedInteger(
+          formData.get('maxFollowup'),
+          FOLLOWUP_ASK_DEFAULT_MAX_FOLLOWUP,
+          0,
+          FOLLOWUP_ASK_MAX_FOLLOWUP,
+        );
+        if (intervalInput) intervalInput.value = String(intervalHours);
+        if (maxFollowupInput) maxFollowupInput.value = String(maxFollowup);
+
+        await sendToolbarRuntimeAction(
+          {
+            type: 'CREATE_OUTREACH_FROM_MESSAGE',
+            data: {
+              chatId: messageInfo.groupId,
+              postId: messageInfo.id,
+              messageText: messageInfo.content,
+              messageUrl: messageInfo.messageLink,
+              messageCreatedAt: parseMessageTimestampSeconds(messageInfo),
+              messageTimestampText: messageInfo.timestamp,
+              senderName: messageInfo.senderName,
+              groupName: messageInfo.groupName,
+              targetType: 'group',
+              targetRef: messageInfo.groupId,
+              targetResolvedChatId: messageInfo.groupId,
+              targetResolvedLabel: defaultTarget || messageInfo.groupName,
+              followupIntervalSeconds: Math.floor(intervalHours * 3600),
+              maxFollowup,
+              context,
+            },
+          },
+          '创建跟进追问失败，请稍后重试',
+        );
+        close();
+        showSuccessToast('已开始跟进');
+        resolve();
+      } catch (error) {
+        console.error('创建跟进追问失败:', error);
+        setSubmitting(false);
+        setError(getErrorMessage(error, '创建跟进追问失败，请稍后重试'));
+      }
+    });
+
+    if (objectiveTextarea) {
+      objectiveTextarea.addEventListener('input', () => {
+        objectiveTextarea.classList.remove('input-error');
+        setError(null);
+      });
+    }
+
+    document.body.appendChild(overlay);
+    objectiveTextarea?.focus();
+  });
 }
 
 function resetSnoozeMenuAnchorState() {
@@ -1050,15 +1722,15 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
 
   picker.innerHTML = `
     <div class="snooze-picker-header">
-      <div class="snooze-picker-back">
+      <button type="button" class="snooze-picker-back" aria-label="返回稍后处理快捷选项">
         <span>← 返回</span>
-      </div>
+      </button>
       <span class="snooze-picker-title">自定义时间</span>
     </div>
     <div class="snooze-picker-body">
       <div class="snooze-input-group">
-        <label class="snooze-input-label">选择日期和时间</label>
-        <input type="datetime-local" class="snooze-input snooze-datetime-input" value="${formatForInput(
+        <label class="snooze-input-label" for="personal-ai-snooze-datetime">选择日期和时间</label>
+        <input id="personal-ai-snooze-datetime" type="datetime-local" class="snooze-input snooze-datetime-input" value="${formatForInput(
           selectedDate,
         )}" min="${minDateValue}">
       </div>
@@ -1145,6 +1817,9 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
       const anchor = snoozeButton || toolbar;
       if (anchor) {
         showSnoozeQuickMenu(messageInfo, anchor as HTMLElement);
+        currentSnoozeMenu
+          ?.querySelector<HTMLElement>('button.snooze-quick-option')
+          ?.focus();
       }
     }
   });
@@ -1197,6 +1872,9 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   picker.addEventListener('click', (e) => {
     e.stopPropagation();
   });
+
+  datetimeInput.focus();
+  datetimeInput.select();
 }
 
 // 当前显示的设置弹出框
@@ -1376,6 +2054,7 @@ async function showSnoozeQuickMenu(
   menu.id = SNOOZE_QUICK_MENU_ID;
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', '稍后处理快捷选项');
+  menu.setAttribute('aria-busy', 'false');
   anchorElement.setAttribute('aria-expanded', 'true');
 
   const quickOptions = getQuickOptions();
@@ -1436,10 +2115,26 @@ async function showSnoozeQuickMenu(
   menu.classList.toggle('position-above', menuPosition.placement === 'above');
   menu.classList.toggle('position-below', menuPosition.placement === 'below');
 
+  const setMenuBusy = (busy: boolean, activeOption?: HTMLElement) => {
+    menu.setAttribute('aria-busy', busy ? 'true' : 'false');
+    menu
+      .querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')
+      .forEach((button) => {
+        button.disabled = busy;
+        button.dataset.processing =
+          busy && button === activeOption ? 'true' : 'false';
+      });
+  };
+
   // 绑定快速选项点击
   menu.querySelectorAll('.snooze-quick-option').forEach((opt) => {
     opt.addEventListener('click', async (e) => {
       e.stopPropagation();
+      if (menu.getAttribute('aria-busy') === 'true') {
+        return;
+      }
+
+      const optionButton = opt as HTMLButtonElement;
       const optionIndex = Number((opt as HTMLElement).dataset.optionIndex);
       const quickOption = quickOptions[optionIndex];
       if (!quickOption) {
@@ -1448,9 +2143,14 @@ async function showSnoozeQuickMenu(
       }
       const remindAt = quickOption.getTime();
 
-      // 禁用菜单
-      menu.style.pointerEvents = 'none';
-      menu.style.opacity = '0.7';
+      const labelElement = optionButton.querySelector(
+        '.snooze-quick-option-time',
+      );
+      const previousTimeLabel = labelElement?.textContent || '';
+      if (labelElement) {
+        labelElement.textContent = '创建中...';
+      }
+      setMenuBusy(true, optionButton);
 
       const result = await createSnoozeReminder({
         messageInfo,
@@ -1467,9 +2167,11 @@ async function showSnoozeQuickMenu(
           result.messageId,
         );
       } else {
-        // 恢复菜单状态
-        menu.style.pointerEvents = '';
-        menu.style.opacity = '';
+        if (labelElement) {
+          labelElement.textContent = previousTimeLabel;
+        }
+        setMenuBusy(false);
+        optionButton.focus();
         const failureMessage = getSnoozeCreateFailureMessage(result);
         if (failureMessage) {
           showErrorToast(failureMessage);
@@ -1632,8 +2334,22 @@ function processMessageElement(messageElement: HTMLElement) {
     // 设置按钮在最左边，初始隐藏
     buttonsHtml += `<button type="button" class="reaction-settings-btn" title="消息交互设置" aria-label="消息交互设置">${getSettingsIconSvg()}</button>`;
 
-    const enabledButtons = getMessageReactionActionDefinitions(config);
+    if (!messageInfo) {
+      messageInfo = await extractMessageInfo(targetElement);
+    }
+    const ownMessage = await isOwnMessage(messageInfo, targetElement);
+    toolbar.dataset.isOwnMessage = ownMessage ? 'true' : 'false';
+
+    const enabledButtons = getMessageReactionActionDefinitions(config, {
+      isOwnMessage: ownMessage,
+    });
     const buttonCount = enabledButtons.length;
+    toolbar.dataset.buttonCount = String(buttonCount);
+    if (buttonCount === 0) {
+      toolbar.classList.remove('visible');
+      toolbar.innerHTML = '';
+      return config;
+    }
 
     enabledButtons.forEach((action, index) => {
       const isFirst = index === 0;
@@ -1753,15 +2469,10 @@ function processMessageElement(messageElement: HTMLElement) {
     }
     showTriggerTimeout = setTimeout(async () => {
       // 实时获取配置并更新工具栏内容
-      const config = await updateToolbarContent();
+      await updateToolbarContent();
 
-      // 如果所有功能都禁用，不显示
-      if (
-        !config.enableSnooze &&
-        !config.enableFollowThread &&
-        !config.enableAutoReply &&
-        !config.enableLinkedAction
-      ) {
+      // 如果当前消息没有可用按钮，不显示
+      if (toolbar.dataset.buttonCount === '0') {
         return;
       }
 
@@ -2053,6 +2764,45 @@ function bindToolbarEvents(
         } catch (error) {
           console.error('打开关注后续配置失败:', error);
           showErrorToast(getErrorMessage(error, '打开配置失败，请稍后重试'));
+        }
+      });
+    });
+  }
+
+  // 跟进追问按钮事件绑定
+  const followupAskBtn = toolbar.querySelector(
+    '.followup-ask-btn',
+  ) as HTMLElement | null;
+
+  if (followupAskBtn) {
+    followupAskBtn.addEventListener('mouseenter', () => {
+      hideSnoozeMenu();
+    });
+
+    followupAskBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+
+      await runToolbarButtonAction(followupAskBtn, async () => {
+        let messageInfo = getMessageInfo();
+        if (!messageInfo) {
+          messageInfo = await extractMessageInfo(targetElement);
+          if (messageInfo) setMessageInfo(messageInfo);
+        }
+
+        if (!messageInfo) {
+          showErrorToast('无法获取消息信息');
+          return;
+        }
+
+        try {
+          await showFollowupAskDialog(messageInfo);
+          hideAllSnoozeUI();
+          hideToolbar();
+        } catch (error) {
+          console.error('创建跟进追问失败:', error);
+          showErrorToast(
+            getErrorMessage(error, '创建跟进追问失败，请稍后重试'),
+          );
         }
       });
     });

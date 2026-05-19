@@ -1,0 +1,971 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Conversation Memory Loom Demo</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --ink: #17202a;
+      --muted: #5b6472;
+      --line: #d7dce3;
+      --panel: #ffffff;
+      --nav: #18212f;
+      --nav-soft: #243044;
+      --blue: #2563eb;
+      --green: #0f766e;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --purple: #6d28d9;
+      --shadow: 0 16px 40px rgba(22, 32, 45, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 292px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: var(--nav);
+      color: #eef3f8;
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 6px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+    }
+
+    .mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #f6c85f;
+      color: #17202a;
+      font-weight: 800;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 2px 0 0;
+      color: #aab5c4;
+      font-size: 12px;
+    }
+
+    .search {
+      padding: 0 4px;
+    }
+
+    .search input {
+      width: 100%;
+      height: 38px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background: var(--nav-soft);
+      color: #eef3f8;
+      border-radius: 8px;
+      padding: 0 12px;
+      outline: none;
+    }
+
+    .search input::placeholder {
+      color: #8e9bae;
+    }
+
+    .cluster-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .cluster {
+      width: 100%;
+      text-align: left;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      color: #eef3f8;
+      border-radius: 8px;
+      padding: 12px;
+      cursor: pointer;
+    }
+
+    .cluster[aria-selected="true"] {
+      background: #ffffff;
+      color: var(--ink);
+      border-color: #ffffff;
+    }
+
+    .cluster-title {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 1.3;
+    }
+
+    .cluster-meta {
+      margin-top: 9px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      font-size: 11px;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: rgba(255,255,255,0.12);
+      color: inherit;
+      white-space: nowrap;
+    }
+
+    .cluster[aria-selected="true"] .tag {
+      background: #edf1f7;
+      color: #334155;
+    }
+
+    .badge-warn {
+      color: #fef3c7;
+      background: rgba(180,83,9,0.34);
+    }
+
+    .cluster[aria-selected="true"] .badge-warn {
+      color: #92400e;
+      background: #fef3c7;
+    }
+
+    .main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .topbar {
+      height: 68px;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+      padding: 0 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .title-block h2 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .title-block p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--ink);
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #ffffff;
+    }
+
+    .btn.dark {
+      background: #17202a;
+      border-color: #17202a;
+      color: #ffffff;
+    }
+
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    .workspace {
+      min-height: 0;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 18px;
+      overflow: hidden;
+    }
+
+    .center {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 18px;
+    }
+
+    .source-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .source {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 118px;
+      box-shadow: 0 6px 18px rgba(22,32,45,0.04);
+    }
+
+    .source.active {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+    }
+
+    .source-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .provider {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--blue);
+      flex: none;
+    }
+
+    .dot.green { background: var(--green); }
+    .dot.amber { background: var(--amber); }
+    .dot.purple { background: var(--purple); }
+
+    .source time {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .source p {
+      margin: 0;
+      color: #344054;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .synthesis {
+      min-height: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .tabs {
+      height: 54px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 14px;
+      overflow: auto;
+    }
+
+    .tab {
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .tab[aria-selected="true"] {
+      border-color: var(--line);
+      background: #f8fafc;
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .tab-panel {
+      min-height: 0;
+      overflow: auto;
+      padding: 18px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #ffffff;
+    }
+
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    .claim-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .claim {
+      border-left: 3px solid var(--green);
+      padding: 2px 0 2px 10px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .claim.amber { border-left-color: var(--amber); }
+    .claim.red { border-left-color: var(--red); }
+    .claim.blue { border-left-color: var(--blue); }
+
+    .claim small {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .quote-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #f8fafc;
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 120px;
+    }
+
+    .right {
+      min-height: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+
+    .right-head {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .right-head h3 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    .right-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .patches {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .patch {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #ffffff;
+    }
+
+    .patch.selected {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+    }
+
+    .patch-top {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .patch input {
+      margin-top: 3px;
+      width: 16px;
+      height: 16px;
+      flex: none;
+    }
+
+    .patch strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .patch p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .risk {
+      display: inline-flex;
+      margin-top: 8px;
+      border-radius: 999px;
+      padding: 3px 7px;
+      font-size: 11px;
+      background: #ecfdf5;
+      color: #047857;
+    }
+
+    .risk.medium {
+      background: #fffbeb;
+      color: #92400e;
+    }
+
+    .risk.high {
+      background: #fef2f2;
+      color: #991b1b;
+    }
+
+    .impact {
+      border-top: 1px solid var(--line);
+      padding: 14px 16px;
+      background: #f8fafc;
+    }
+
+    .impact h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+
+    .impact p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      background: #17202a;
+      color: #ffffff;
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .app {
+        grid-template-columns: 250px minmax(0, 1fr);
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+        overflow: auto;
+      }
+
+      .right {
+        min-height: 560px;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .topbar {
+        height: auto;
+        min-height: 68px;
+        align-items: flex-start;
+        padding: 14px;
+        flex-direction: column;
+      }
+
+      .actions {
+        justify-content: flex-start;
+      }
+
+      .workspace {
+        padding: 12px;
+      }
+
+      .source-strip,
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">AI</div>
+        <div>
+          <h1>Conversation Loom</h1>
+          <p>多 AI 对话织片</p>
+        </div>
+      </div>
+
+      <div class="search">
+        <input aria-label="搜索织片" placeholder="搜索项目、Jira、prompt" />
+      </div>
+
+      <div class="cluster-list" aria-label="AI 对话织片列表">
+        <button class="cluster" aria-selected="true" data-cluster="notes">
+          <span class="cluster-title">
+            <span>AI Notes long polling migration</span>
+            <span class="tag badge-warn">2 分歧</span>
+          </span>
+          <span class="cluster-meta">
+            <span class="tag">ChatGPT</span>
+            <span class="tag">Claude</span>
+            <span class="tag">豆包</span>
+            <span class="tag">Codex</span>
+          </span>
+        </button>
+
+        <button class="cluster" aria-selected="false" data-cluster="codex">
+          <span class="cluster-title">
+            <span>Codex rollout and Cursor policy</span>
+            <span class="tag">3 patches</span>
+          </span>
+          <span class="cluster-meta">
+            <span class="tag">ChatGPT</span>
+            <span class="tag">RingCentral</span>
+            <span class="tag">Manual</span>
+          </span>
+        </button>
+
+        <button class="cluster" aria-selected="false" data-cluster="project">
+          <span class="cluster-title">
+            <span>Project epic estimation method</span>
+            <span class="tag badge-warn">1 需确认</span>
+          </span>
+          <span class="cluster-meta">
+            <span class="tag">豆包</span>
+            <span class="tag">Claude</span>
+            <span class="tag">Jira</span>
+          </span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="title-block">
+          <h2 id="clusterTitle">AI Notes long polling migration</h2>
+          <p id="clusterSubtitle">4 个 AI 对话来源 · 8 条候选结论 · 3 条记忆补丁 · 最近更新 12 分钟前</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="splitBtn" title="把误聚合的对话拆出去">拆分</button>
+          <button class="btn" id="passportBtn" title="生成可交给另一个 AI 的最小上下文包">导出 Passport</button>
+          <button class="btn primary" id="commitBtn" title="保存勾选的记忆补丁">提交为记忆</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="center">
+          <div class="source-strip" aria-label="来源证据">
+            <article class="source active" data-source="ChatGPT">
+              <div class="source-head">
+                <span class="provider"><span class="dot"></span>ChatGPT</span>
+                <time>09:42</time>
+              </div>
+              <p>建议先把 fixed interval polling 改成长轮询，再补失败重试和服务端 event cursor，避免 AI Notes 反复消费同一条消息。</p>
+            </article>
+
+            <article class="source" data-source="Claude">
+              <div class="source-head">
+                <span class="provider"><span class="dot purple"></span>Claude</span>
+                <time>10:08</time>
+              </div>
+              <p>强调 host-only editing 权限边界，建议把 post-meeting edits 与 live generation 状态拆成两个状态机。</p>
+            </article>
+
+            <article class="source" data-source="豆包">
+              <div class="source-head">
+                <span class="provider"><span class="dot green"></span>豆包</span>
+                <time>10:21</time>
+              </div>
+              <p>把中文讨论整理成三步：迁移拉取机制、回填 Jira 估算、提醒相关 owner 确认 test plan。</p>
+            </article>
+
+            <article class="source" data-source="Codex">
+              <div class="source-head">
+                <span class="provider"><span class="dot amber"></span>Codex</span>
+                <time>10:34</time>
+              </div>
+              <p>从代码角度指出测试应覆盖 duplicate delivery、cursor resume、host permission 和 stale draft 四个路径。</p>
+            </article>
+          </div>
+
+          <section class="synthesis">
+            <nav class="tabs" aria-label="合成视图">
+              <button class="tab" aria-selected="true" data-tab="consensus">共识</button>
+              <button class="tab" aria-selected="false" data-tab="divergence">分歧</button>
+              <button class="tab" aria-selected="false" data-tab="prompt">下一次 Prompt</button>
+              <button class="tab" aria-selected="false" data-tab="evidence">来源摘录</button>
+            </nav>
+
+            <div class="tab-panel" id="panel-consensus">
+              <div class="grid-2">
+                <div class="section">
+                  <h3>可保存结论</h3>
+                  <div class="claim-list">
+                    <div class="claim">
+                      AI Notes migration 的高风险点不是“长轮询本身”，而是 duplicate delivery 和 cursor resume。
+                      <small>ChatGPT + Codex 支持；可保存为 project note。</small>
+                    </div>
+                    <div class="claim blue">
+                      用户倾向让 AI 先补 Jira 估算和 sprint/fixVersion 同步，再由自己做最终 review。
+                      <small>豆包 + Jira comments + profile signal 支持。</small>
+                    </div>
+                    <div class="claim">
+                      这类任务适合沉淀为 “AI Notes migration review checklist” prompt recipe。
+                      <small>4 个来源都产生了可复用检查项。</small>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="section">
+                  <h3>推荐动作</h3>
+                  <div class="claim-list">
+                    <div class="claim amber">
+                      保存 2 条低风险项目记忆，1 条中风险偏好进入确认队列。
+                      <small>中风险原因：用户偏好来自推断，不是显式声明。</small>
+                    </div>
+                    <div class="claim">
+                      导出给 Codex 的 context pack 只包含检查清单，不包含 Claude 原文。
+                      <small>避免跨平台静默外发。</small>
+                    </div>
+                    <div class="claim blue">
+                      将 checklist 发送到 Skill Foundry 作为 suggestion，而不是直接 active。
+                      <small>需要至少一次真实运行 receipt。</small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-panel hidden" id="panel-divergence">
+              <div class="grid-2">
+                <div class="section">
+                  <h3>状态机拆分</h3>
+                  <div class="claim-list">
+                    <div class="claim red">
+                      Claude 建议拆成 live generation 与 post-meeting edit 两个状态机；ChatGPT 没有提这点。
+                      <small>建议作为设计提醒，不直接保存为事实。</small>
+                    </div>
+                    <div class="claim amber">
+                      豆包把 Jira 估算视为下一步；Codex 更关注测试路径。
+                      <small>不是冲突，而是面向不同执行阶段。</small>
+                    </div>
+                  </div>
+                </div>
+                <div class="section">
+                  <h3>待确认问题</h3>
+                  <div class="claim-list">
+                    <div class="claim red">
+                      host-only editing 是否已经是产品定案，还是 research 阶段假设？
+                      <small>建议创建 confirm request 或从 Jira 读取最新状态。</small>
+                    </div>
+                    <div class="claim amber">
+                      long polling 是否需要服务端 cursor contract，当前没有权威证据。
+                      <small>建议只保存为 open question。</small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-panel hidden" id="panel-prompt">
+              <div class="section">
+                <h3>给 Codex 的最小上下文包</h3>
+                <div class="quote-box">
+                  任务：检查 AI Notes long polling migration 的实现和测试计划。<br />
+                  已知共识：重点覆盖 duplicate delivery、cursor resume、host-only edit permission、stale draft。<br />
+                  不要假设：host-only editing 已经最终定案；如需要请先查 Jira MTR-148213。<br />
+                  输出：列出风险、建议测试、需要 Jira/产品确认的问题。
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-panel hidden" id="panel-evidence">
+              <div class="grid-2">
+                <div class="section">
+                  <h3 id="evidenceTitle">ChatGPT 摘录</h3>
+                  <div class="quote-box" id="evidenceText">
+                    “Move update detection to long polling, keep event cursors durable, and add idempotency checks before writing generated notes back to the meeting artifact.”
+                  </div>
+                </div>
+                <div class="section">
+                  <h3>来源收据</h3>
+                  <div class="claim-list">
+                    <div class="claim blue">provider: chatgpt · thread hash: 9af3...21c</div>
+                    <div class="claim">cluster reason: Jira key + title overlap + prompt fingerprint</div>
+                    <div class="claim amber">egress policy: summary only, no raw transcript by default</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="right">
+          <div class="right-head">
+            <h3>Memory Patch Queue</h3>
+            <p>勾选后才会写入 Personal AI。事实类和偏好类会保留证据链。</p>
+          </div>
+
+          <div class="patches">
+            <label class="patch selected">
+              <span class="patch-top">
+                <input type="checkbox" checked />
+                <span>
+                  <strong>保存为项目记忆</strong>
+                  <p>AI Notes migration 的关键风险是 duplicate delivery 和 cursor resume。</p>
+                  <span class="risk">低风险</span>
+                </span>
+              </span>
+            </label>
+
+            <label class="patch selected">
+              <span class="patch-top">
+                <input type="checkbox" checked />
+                <span>
+                  <strong>保存为 prompt recipe</strong>
+                  <p>AI Notes migration review checklist：权限、重复投递、cursor、stale draft。</p>
+                  <span class="risk">低风险</span>
+                </span>
+              </span>
+            </label>
+
+            <label class="patch">
+              <span class="patch-top">
+                <input type="checkbox" />
+                <span>
+                  <strong>进入偏好确认队列</strong>
+                  <p>用户偏好先让 AI 更新 Jira estimate/sprint/fixVersion，再人工 review。</p>
+                  <span class="risk medium">中风险</span>
+                </span>
+              </span>
+            </label>
+
+            <label class="patch">
+              <span class="patch-top">
+                <input type="checkbox" />
+                <span>
+                  <strong>创建待确认问题</strong>
+                  <p>host-only editing 是否已经是产品定案？需要从 Jira 或产品 owner 确认。</p>
+                  <span class="risk high">高风险</span>
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div class="impact">
+            <h4>Impact Preview</h4>
+            <p id="impactText">将写入 2 条低风险记忆；后续 Compose Assist、Context Passport 和 Project Dashboard 可引用这些检查项。</p>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite">已模拟提交</div>
+
+  <script>
+    const clusters = {
+      notes: {
+        title: 'AI Notes long polling migration',
+        subtitle: '4 个 AI 对话来源 · 8 条候选结论 · 3 条记忆补丁 · 最近更新 12 分钟前'
+      },
+      codex: {
+        title: 'Codex rollout and Cursor policy',
+        subtitle: '3 个来源 · 5 条候选结论 · 3 条记忆补丁 · 有成本和采用策略分歧'
+      },
+      project: {
+        title: 'Project epic estimation method',
+        subtitle: '3 个来源 · 4 条候选结论 · 1 条需确认偏好 · 关联 Jira 估算口径'
+      }
+    };
+
+    const evidence = {
+      ChatGPT: '“Move update detection to long polling, keep event cursors durable, and add idempotency checks before writing generated notes back to the meeting artifact.”',
+      Claude: '“Separate live generation from post-meeting editing. The host-only path has a different permission boundary and should not reuse the same state transitions.”',
+      '豆包': '“可以拆成迁移拉取机制、回填 Jira 估算、提醒 owner 确认 test plan 三个动作，避免只讨论技术实现。”',
+      Codex: '“Tests should cover duplicate delivery, cursor resume, host permission, and stale draft behavior. Treat provider callbacks as at-least-once.”'
+    };
+
+    document.querySelectorAll('.cluster').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.cluster').forEach((item) => item.setAttribute('aria-selected', 'false'));
+        button.setAttribute('aria-selected', 'true');
+        const next = clusters[button.dataset.cluster];
+        document.getElementById('clusterTitle').textContent = next.title;
+        document.getElementById('clusterSubtitle').textContent = next.subtitle;
+        showToast('已切换织片');
+      });
+    });
+
+    document.querySelectorAll('.tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach((item) => item.setAttribute('aria-selected', 'false'));
+        tab.setAttribute('aria-selected', 'true');
+        document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.add('hidden'));
+        document.getElementById(`panel-${tab.dataset.tab}`).classList.remove('hidden');
+      });
+    });
+
+    document.querySelectorAll('.source').forEach((source) => {
+      source.addEventListener('click', () => {
+        document.querySelectorAll('.source').forEach((item) => item.classList.remove('active'));
+        source.classList.add('active');
+        const provider = source.dataset.source;
+        document.getElementById('evidenceTitle').textContent = `${provider} 摘录`;
+        document.getElementById('evidenceText').textContent = evidence[provider];
+        document.querySelector('[data-tab="evidence"]').click();
+      });
+    });
+
+    document.querySelectorAll('.patch input').forEach((input) => {
+      input.addEventListener('change', () => {
+        input.closest('.patch').classList.toggle('selected', input.checked);
+        updateImpact();
+      });
+    });
+
+    document.getElementById('commitBtn').addEventListener('click', () => {
+      const count = document.querySelectorAll('.patch input:checked').length;
+      showToast(`已模拟提交 ${count} 条记忆补丁`);
+    });
+
+    document.getElementById('passportBtn').addEventListener('click', () => {
+      showToast('已模拟生成 Context Passport');
+    });
+
+    document.getElementById('splitBtn').addEventListener('click', () => {
+      showToast('已模拟拆分所选来源');
+    });
+
+    function updateImpact() {
+      const count = document.querySelectorAll('.patch input:checked').length;
+      const text = count === 0
+        ? '当前没有选择要写入的补丁；织片仍会保留为 AI 对话证据。'
+        : `将写入 ${count} 条补丁；高风险项会进入确认队列，低风险项可被 Compose Assist 和 Context Passport 引用。`;
+      document.getElementById('impactText').textContent = text;
+    }
+
+    let toastTimer = null;
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+  </script>
+</body>
+</html>

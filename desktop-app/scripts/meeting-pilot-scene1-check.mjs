@@ -485,6 +485,51 @@ try {
     )}`,
   );
 
+  log('附加校验: 会前准备 cue 可直接转成行动项');
+  await panelPage
+    .locator('.meeting-prep-cue.question .meeting-prep-action-btn', {
+      hasText: '加入行动项',
+    })
+    .click();
+  await panelPage
+    .locator('.meeting-prep-cue.question .meeting-prep-action-btn', {
+      hasText: '已加入行动项',
+    })
+    .waitFor({ state: 'attached', timeout: 15000 });
+  await panelPage.locator('.panel-tab', { hasText: '行动项' }).click();
+  await panelPage.waitForFunction(() => {
+    const cardText =
+      Array.from(document.querySelectorAll('.action-card'))
+        .map((card) => card.textContent || '')
+        .find((text) => text.includes('确认：预算风险现在卡在哪里')) || '';
+    return (
+      /已确认/.test(cardText) &&
+      /本次会议/.test(cardText) &&
+      /Budget risk should be confirmed/.test(cardText)
+    );
+  });
+  const prepActionState = await panelPage.evaluate(() => {
+    const card =
+      Array.from(document.querySelectorAll('.action-card')).find((item) =>
+        (item.textContent || '').includes('确认：预算风险现在卡在哪里'),
+      ) || null;
+    return {
+      text: card?.textContent || '',
+      hasTimelineButton: Boolean(
+        Array.from(card?.querySelectorAll('button') || []).some((button) =>
+          /时间线/.test(button.textContent || ''),
+        ),
+      ),
+    };
+  });
+  assert.match(prepActionState.text, /Esone Qiu/);
+  assert.equal(
+    prepActionState.hasTimelineButton,
+    true,
+    `会前准备行动项缺少时间线入口: ${JSON.stringify(prepActionState)}`,
+  );
+  await panelPage.locator('.panel-tab', { hasText: '实时' }).click();
+
   log('附加校验: side panel 可直接打开 Capture 授权步骤');
   await panelPage
     .locator('.capture-start-primary', { hasText: '查看开启步骤' })

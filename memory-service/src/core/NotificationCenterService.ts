@@ -11,6 +11,8 @@ import { formatDateTime, now } from '../utils/time.js';
 
 export type NotificationPriority = 'high' | 'normal';
 
+export const TODO_DELIVERY_RETRY_COOLDOWN_SECONDS = 6 * 60 * 60;
+
 export interface NotificationEnvelope {
   sourceRef: string;
   sourceType: 'notification' | 'proposed_action';
@@ -180,11 +182,23 @@ export class NotificationCenterService {
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
     const currentTime = now();
+    const deliveredAfter = currentTime - TODO_DELIVERY_RETRY_COOLDOWN_SECONDS;
     const successfulDeliverySql = `(
-      c.status IN ('delivered', 'clicked', 'dismissed')
-      OR c.first_delivered_at IS NOT NULL
+      c.status IN ('clicked', 'dismissed')
       OR c.seen_at IS NOT NULL
       OR c.dismissed_at IS NOT NULL
+      OR (
+        c.lane = 'notice'
+        AND (
+          c.status = 'delivered'
+          OR c.first_delivered_at IS NOT NULL
+          OR c.last_delivered_at IS NOT NULL
+        )
+      )
+      OR (
+        c.lane = 'todo'
+        AND COALESCE(c.last_delivered_at, c.first_delivered_at) > ?
+      )
     )`;
     const notificationLaneSql = `CASE n.type
       WHEN 'truth_conflict' THEN 'todo'
@@ -227,6 +241,7 @@ export class NotificationCenterService {
         currentTime,
         ...lanes,
         input.channel,
+        deliveredAfter,
         limit,
       ) as NotificationFeedRow[];
 
@@ -270,7 +285,12 @@ export class NotificationCenterService {
               ORDER BY priority DESC, created_at DESC
               LIMIT ?`,
             )
-            .all(currentTime, input.channel, limit) as ProposedActionRow[]
+            .all(
+              currentTime,
+              input.channel,
+              deliveredAfter,
+              limit,
+            ) as ProposedActionRow[]
         ).map<NotificationEnvelope>((action) => {
           const payload = safeJsonParse<Record<string, unknown>>(
             action.params_json,

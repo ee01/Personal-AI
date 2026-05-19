@@ -22,6 +22,10 @@ function parseAppScriptVersion(version: string): ParsedAppScriptVersion | null {
   };
 }
 
+export function isValidAppScriptVersion(version: string): boolean {
+  return parseAppScriptVersion(version) !== null;
+}
+
 function isNumericIdentifier(identifier: string): boolean {
   return /^(0|[1-9]\d*)$/.test(identifier);
 }

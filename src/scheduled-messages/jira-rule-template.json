@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.4.3",
-    "lastUpdated": "2026-05-11",
+    "version": "1.4.5",
+    "lastUpdated": "2026-05-19",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
       "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com."
@@ -246,7 +246,7 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.groupId.urlEncode}}&sentChatIdAlt={{webhookResponse.body.data.chatId.urlEncode}}&sentPostId={{webhookResponse.body.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.id.urlEncode}}&sentPostIdAlt={{webhookResponse.body.data.postId.urlEncode}}&sentPostIdExtra={{webhookResponse.body.data.id.urlEncode}}&sentAt={{webhookResponse.body.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.creationTime.urlEncode}}&sentAtAlt={{webhookResponse.body.data.sentAt.urlEncode}}",
                 "headers": [],
                 "sendIssue": false,
                 "contentType": "empty",
@@ -341,7 +341,7 @@
                       "schemaVersion": 2,
                       "type": "jira.issue.outgoing.webhook",
                       "value": {
-                        "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}",
+                        "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.data.outputs.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.data.outputs.groupId.urlEncode}}&sentPostId={{webhookResponse.body.data.outputs.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.data.outputs.id.urlEncode}}&sentAt={{webhookResponse.body.data.outputs.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.data.outputs.creationTime.urlEncode}}",
                         "headers": [],
                         "sendIssue": false,
                         "contentType": "empty",
@@ -494,7 +494,7 @@
               "schemaVersion": 2,
               "type": "jira.issue.outgoing.webhook",
               "value": {
-                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}",
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.groupId.urlEncode}}&sentChatIdAlt={{webhookResponse.body.data.chatId.urlEncode}}&sentPostId={{webhookResponse.body.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.id.urlEncode}}&sentPostIdAlt={{webhookResponse.body.data.postId.urlEncode}}&sentPostIdExtra={{webhookResponse.body.data.id.urlEncode}}&sentAt={{webhookResponse.body.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.creationTime.urlEncode}}&sentAtAlt={{webhookResponse.body.data.sentAt.urlEncode}}",
                 "headers": [],
                 "sendIssue": false,
                 "contentType": "empty",
@@ -674,6 +674,24 @@
                 "sendIssue": false,
                 "contentType": "empty",
                 "method": "GET",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.data.outputs.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.data.outputs.groupId.urlEncode}}&sentPostId={{webhookResponse.body.data.outputs.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.data.outputs.id.urlEncode}}&sentAt={{webhookResponse.body.data.outputs.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.data.outputs.creationTime.urlEncode}}&sentPayload={{webhookResponse.body.answer.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
                 "responseEnabled": false,
                 "usedSecretsKeys": []
               },
@@ -778,6 +796,24 @@
                 "contentType": "custom",
                 "customBody": "{{webhookResponse.body.aiBody}}",
                 "method": "POST",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=markBotMessageExecuted&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&executionKey={{executionKey.urlEncode}}&sentChatId={{webhookResponse.body.data.outputs.chatId.urlEncode}}&sentChatIdFallback={{webhookResponse.body.data.outputs.groupId.urlEncode}}&sentPostId={{webhookResponse.body.data.outputs.postId.urlEncode}}&sentPostIdFallback={{webhookResponse.body.data.outputs.id.urlEncode}}&sentAt={{webhookResponse.body.data.outputs.sentAt.urlEncode}}&sentAtFallback={{webhookResponse.body.data.outputs.creationTime.urlEncode}}&sentPayload={{webhookResponse.body.answer.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
                 "responseEnabled": false,
                 "usedSecretsKeys": []
               },

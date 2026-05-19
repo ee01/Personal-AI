@@ -1,6 +1,6 @@
 # Agent Workflow 智能工作流系统
 
-*最后更新: 2026-05-14*
+*最后更新: 2026-05-19*
 
 ## 功能概述
 
@@ -23,7 +23,7 @@ Agent Workflow 是消息入口的标准化多 Agent 编排模式。它在 `ANALY
 
 写入 Memory Service metadata 的 `agentWorkflowTrace` 会做降敏处理：保留 Agent / 工具状态、耗时、跳过或失败信息，但省略输入摘要里的消息原文和 `historySearch` 查询文本。Options 页面里的“关注项测试”仍使用本次运行返回的实时 trace，方便调试当前配置；长期存储侧只保留足够审计的结构化摘要。若有旧自定义 Agent 引用已移除工具，跳过工具会计入 `storageReview.toolSkippedCount`，并把 `traceStatus` 标为 `partial`，避免长期审计误显示为完整链路。
 
-低置信度手动关注项命中不会直接触发通知和规则自动化。当前阈值是 70%：低于阈值时，系统会把原始命中、置信度、阈值和复核原因写入 `notificationReview`，并保留到 Memory Service 审计元数据；`shouldNotify` 会降级为 false，消息入口也会暂停该命中规则的 `automationPrompt` 规划，避免误触发外部副作用。为了兼容不同模型输出，Agent Workflow 会把 `0.42`、`42`、`"42%"` 这类置信度统一归一化到 0-1 区间后再做通知门控和 UI 展示。
+低置信度手动关注项命中不会直接触发通知和规则自动化。当前阈值是 70%：低于阈值时，系统会把原始命中、置信度、阈值和复核原因写入 `notificationReview`，并保留到 Memory Service 审计元数据；`shouldNotify` 会降级为 false，消息入口也会暂停该命中规则的 `automationPrompt` 规划，避免误触发外部副作用。为了兼容不同模型输出，Agent Workflow 会把 `0.42`、`42`、`"42%"` 这类置信度统一归一化到 0-1 区间后再做通知门控、诊断和 UI 展示。
 
 ## 关注项与自动化
 
@@ -35,13 +35,13 @@ Agent Workflow 是消息入口的标准化多 Agent 编排模式。它在 `ANALY
 
 Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数、启用工具数、首个执行阶段和记忆审计字段，并用按优先级排序的卡片展示每个 Agent 的阶段、状态、优先级和工具。页面会先做轻量配置检查，提示重复 Agent ID、启用但无工具、未注册工具、关系分析缺少前置实体，以及外部查询仍是占位实现等问题。
 
-页面提供“关注项测试”入口，可以手动输入消息，也可以从内置样例或最近 Memory Service 消息中选择一条回放；默认会填入当前内置样例，用户第一次进入页面就能直接运行测试。回放会兼容 Memory Service 的秒级/毫秒级时间戳并保留群组 ID，最近消息标签会带上来源和相似度等上下文，方便选择真实样本。用户可以切换样例、手动编辑消息，也可以直接一键回放测试，预览存储、通知、置信度、复核状态、`storageReview` 存储原因、匹配规则、实体/关系摘要和每个 Agent/工具的执行 trace。测试结果会先展示一条面向用户的决策路径，把关注项匹配、存储归因、通知复核和 trace 健康状态压缩成可读步骤；然后给出“下一步”动作，把低置信度复核、失败 Agent、跳过工具、慢步骤、存储审计和通知/自动化确认转换为可执行提示；旁边仍保留运行诊断，集中提示低置信度复核、缺失 trace、失败 Agent、跳过工具和慢 Agent/工具。存储审计区域会把失败 Agent、工具错误和跳过工具合并成一条异常摘要，方便用户先修旧配置再继续测试。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`，表单会校验 ID、工具选择并预览插入顺序；旧配置里没有 `enabled` 字段的自定义 Agent 会按启用处理，和 Options 的配置检查一致。
+页面提供“关注项测试”入口，可以手动输入消息，也可以从内置样例或最近 Memory Service 消息中选择一条回放；默认会填入当前内置样例，用户第一次进入页面就能直接运行测试。回放会兼容 Memory Service 的秒级/毫秒级时间戳并保留群组 ID，最近消息标签会带上来源和相似度等上下文，方便选择真实样本。用户可以切换样例、手动编辑消息，也可以直接一键回放测试，预览存储、通知、置信度、复核状态、`storageReview` 存储原因、匹配规则、实体/关系摘要和每个 Agent/工具的执行 trace。每次测试会记录对应输入和 Agent 配置快照；如果用户在结果展示后改动消息、群组、时间或 Agent 配置，页面会提示当前看到的是上一次运行结果，并把主按钮切换为重新运行测试。测试结果会先展示“运行结论”，把本次运行压成就绪、复核、阻塞或无动作，并给出最应该处理的下一步；随后展示面向用户的决策路径，把关注项匹配、存储归因、通知复核和 trace 健康状态压缩成可读步骤；再给出“运行就绪检查”，把执行 trace、记忆写入、通知/自动化、规则动作、外部查询占位和慢 Agent/工具压成就绪/复核/阻塞/跳过的门禁结论；然后给出“下一步”动作，把低置信度复核、无动作规则命中、失败 Agent、工具错误、缺失通知归因、跳过工具、慢 Agent/工具、存储审计和通知/自动化确认转换为可执行提示；旁边仍保留运行诊断，集中提示低置信度复核、通知缺少规则归因、命中规则但没有后续动作、缺失 trace、失败 Agent、工具错误、跳过工具和慢 Agent/工具。存储审计区域会把失败 Agent、工具错误和跳过工具合并成一条异常摘要，方便用户先修旧配置再继续测试。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`，表单会校验 ID、工具选择并预览插入顺序；旧配置里没有 `enabled` 字段的自定义 Agent 会按启用处理，和 Options 的配置检查一致。
 
 ## 当前边界
 
 - 当前编排是单次顺序执行，没有持久 checkpoint、暂停恢复或时间旅行调试。
 - `externalServiceQuery` 仍是占位实现，还没有接真实 Jira/Wiki adapter。
-- Agent 级错误会被隔离并继续后续流程，轻量 trace 和 `storageReview` 会保存到记忆元数据；Options 已支持最近消息回放、trace 明细查看和运行诊断，但还没有可暂停/恢复的完整逐步回放页面。
+- Agent 级错误会被隔离并继续后续流程，轻量 trace 和 `storageReview` 会保存到记忆元数据；Options 已支持最近消息回放、trace 明细查看、运行就绪检查和运行诊断，但还没有可暂停/恢复的完整逐步回放页面。
 - 批量处理仍按消息逐条调用，适合稳定性优先的消息入口，不适合作为复杂长任务执行器。
 
 ## 行业参考带来的改进方向
@@ -52,9 +52,10 @@ Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数
 - [CrewAI Flows](https://docs.crewai.com/en/concepts/flows) 和 [Human Feedback in Flows](https://docs.crewai.com/en/learn/human-feedback-in-flows) 强调可控流程、人工反馈和反馈历史；Agent Workflow 的 Options 测试路径应继续优先服务“配置后立即验证”，并让复核原因能被审计。
 - [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/) 把 workflow、agent、tool、guardrail 等运行片段组织成 trace，并单独提醒敏感数据处理；[Human-in-the-loop](https://openai.github.io/openai-agents-js/guides/human-in-the-loop/) 则把需要审批的工具调用暂停并允许恢复。Agent Workflow 当前适合继续保留轻量 trace 摘要，把敏感原文留在消息本体而不是审计字段，同时在测试面板把 trace 转成“复核/修复/优化/确认”的下一步动作。
 - [LangSmith observability](https://docs.langchain.com/oss/python/langchain/observability) 强调按工具调用、提示和决策点追踪执行；Agent Workflow 的测试面板应继续把用户最关心的决策摘要前置，而不是只暴露原始 trace。
+- [OpenTelemetry GenAI agent spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/) 已把 agent、workflow、tool execution 作为可观测 span 建模，并提醒输入/输出内容可能包含敏感信息；Agent Workflow 的“运行结论”继续沿用轻量摘要，不默认把完整消息原文写进审计字段。
 - Generative Agents 论文强调 observation、planning、reflection 对行为质量的作用；Reflexion 论文强调把反馈写入 episodic memory 改进后续决策。Agent Workflow 更适合先加入失败/误报反馈回流，而不是增加更多固定 Agent。
 - [AgentTrace](https://arxiv.org/abs/2602.10133) 等 Agent observability 论文强调结构化 trace 对排障、风险分析和信任校准的价值；当前已把每条存储消息的存储原因和 trace 健康状态压缩进 `storageReview`，后续应保持轻量，避免把完整隐私上下文写入审计字段。
-- [Agentproof](https://arxiv.org/abs/2603.20356) 和 [Agent Workflow Optimization](https://arxiv.org/abs/2601.22037) 分别强调工作流拓扑校验和基于 trace 的冗余工具优化；当前系统是固定顺序编排，已经先做配置静态检查、决策路径、下一步动作和慢工具提示，后续再考虑自动重排 Agent。
+- [Agentproof](https://arxiv.org/abs/2603.20356) 和 [Agent Workflow Optimization](https://arxiv.org/abs/2601.22037) 分别强调工作流拓扑校验和基于 trace 的冗余工具优化；当前系统是固定顺序编排，已经先做配置静态检查、决策路径、运行就绪检查、下一步动作以及慢 Agent/工具提示，后续再考虑自动重排 Agent。
 - [TRAIL](https://arxiv.org/abs/2505.08638) 指出复杂 Agent trace 的问题定位很难完全交给 LLM 自动完成；Agent Workflow 因此把诊断做成面向用户的结构化提示，而不是只生成一段自然语言解释。
 
 ## 下一步建议

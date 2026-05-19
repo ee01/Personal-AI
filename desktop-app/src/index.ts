@@ -127,6 +127,10 @@ async function main(): Promise<void> {
     service,
     explorerManager,
     localSkillSyncManager,
+    {
+      initialAttempts: service.getSyncAttempts(),
+      onRecentAttemptsChanged: (attempts) => service.saveSyncAttempts(attempts),
+    },
   );
 
   const app = await createBridgeServer(config, service, {

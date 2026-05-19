@@ -1,4 +1,5 @@
 import { normalizeTopicTimestamp } from './topic-time';
+import { getTopicUnreadTotalCount } from './topic-unread-preview';
 
 export interface TopicTriagePriority {
   score: number;
@@ -12,14 +13,7 @@ const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
 
 export const getTopicUnreadCount = (topic: any): number => {
-  const readStatusCount = Number(topic?.readStatus?.unreadCount);
-  if (Number.isFinite(readStatusCount)) {
-    return Math.max(0, readStatusCount);
-  }
-
-  return Array.isArray(topic?.unreadDiscussions)
-    ? topic.unreadDiscussions.length
-    : 0;
+  return getTopicUnreadTotalCount(topic);
 };
 
 export const getTopicLastActivityTime = (topic: any): number | null => {

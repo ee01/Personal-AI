@@ -161,6 +161,9 @@ const elements = {
   broadcastTransportMessage: document.getElementById(
     'broadcast-transport-message',
   ),
+  broadcastTransportStatus: document.getElementById(
+    'broadcast-transport-status',
+  ),
 };
 
 let refreshTimer;
@@ -189,6 +192,35 @@ function setMcpTestMessage(msgEl, text, success) {
   msgEl.className = success
     ? 'field-hint webpage-mcp-status-connected'
     : 'field-hint webpage-mcp-status-error';
+}
+
+function formatCooldownRetry(cooldownUntil) {
+  if (!cooldownUntil) return '';
+  const untilMs = new Date(cooldownUntil).getTime();
+  if (!Number.isFinite(untilMs)) return '';
+  const remainingMs = untilMs - Date.now();
+  if (remainingMs <= 0) {
+    return '下次操作会重新尝试日常浏览器';
+  }
+  const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+  return `约 ${minutes} 分钟后自动重试日常浏览器`;
+}
+
+function formatTransportFallbackCopy({
+  prefix,
+  reason,
+  cooldownUntil,
+  immediateRetryHint,
+}) {
+  const retry = formatCooldownRetry(cooldownUntil);
+  return [
+    `${prefix}：已临时回退到内置 Chromium`,
+    retry,
+    immediateRetryHint,
+    reason ? `原因：${reason}` : '',
+  ]
+    .filter(Boolean)
+    .join('；');
 }
 
 async function runMcpConnectionTest(msgEl) {
@@ -309,6 +341,17 @@ function formatSyncKind(kind) {
   return kind || '同步';
 }
 
+function formatPackageKind(kind) {
+  if (kind === 'persona_core') return 'Persona';
+  if (kind === 'voice_mode') return 'Voice';
+  if (kind === 'active_focus_digest') return '近期重点包';
+  if (kind === 'todo_digest') return '待办包';
+  if (kind === 'notice_digest') return '通知包';
+  if (kind === 'reminder_digest') return '提醒包';
+  if (kind === 'query_answer_card') return '查询卡片';
+  return kind;
+}
+
 function formatSyncTrigger(trigger) {
   return trigger === 'manual' ? '手动' : '自动';
 }
@@ -318,6 +361,19 @@ function formatAttemptStatus(status) {
   if (status === 'skipped') return '已跳过';
   if (status === 'failed') return '失败';
   return '待确认';
+}
+
+function formatTransportMode(mode) {
+  if (mode === 'webpage_mcp') return '日常 Chrome';
+  if (mode === 'playwright') return '内置 Chromium';
+  return '';
+}
+
+function formatAttemptTransport(attempt) {
+  const modeLabel = formatTransportMode(attempt?.transportMode);
+  if (modeLabel) return modeLabel;
+  if (attempt?.transportUsed === 'dom') return 'DOM';
+  return attempt?.transportUsed || '';
 }
 
 function attemptTone(status) {
@@ -331,6 +387,46 @@ function formatDuration(ms) {
   if (!Number.isFinite(value) || value < 0) return '';
   if (value < 1000) return `${Math.round(value)}ms`;
   return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}s`;
+}
+
+function shortThreadId(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.length > 18 ? `${text.slice(0, 8)}...${text.slice(-6)}` : text;
+}
+
+function formatAttemptDetails(attempt) {
+  const details = [];
+  const packageKinds = Array.isArray(attempt?.packageKinds)
+    ? attempt.packageKinds.filter(Boolean)
+    : [];
+  if (packageKinds.length > 0) {
+    details.push(`包：${packageKinds.map(formatPackageKind).join(' / ')}`);
+  }
+  if (typeof attempt?.sourceRefCount === 'number') {
+    details.push(`来源引用：${attempt.sourceRefCount}`);
+  }
+  if (attempt?.externalThreadId) {
+    details.push(`线程：${shortThreadId(attempt.externalThreadId)}`);
+  }
+  const verification = [];
+  if (attempt?.verified === true) verification.push('已验证');
+  if (attempt?.verified === false) verification.push('未验证');
+  if (attempt?.messageVisible === true) verification.push('消息可见');
+  if (attempt?.messageVisible === false) verification.push('未看到正文');
+  if (attempt?.challengeDetected === true) verification.push('命中验证');
+  const transportLabel = formatAttemptTransport(attempt);
+  if (transportLabel) verification.push(`传输：${transportLabel}`);
+  if (verification.length > 0) {
+    details.push(verification.join(' · '));
+  }
+  if (attempt?.transportFallbackReason) {
+    details.push(`回退原因：${attempt.transportFallbackReason}`);
+  }
+  if (attempt?.telemetryError) {
+    details.push(`状态回写异常：${attempt.telemetryError}`);
+  }
+  return details;
 }
 
 function formatAttemptMessage(attempt) {
@@ -439,6 +535,173 @@ function formatBridgeIssueMessage(message) {
   return text;
 }
 
+function pushUniqueRecoveryAction(actions, action) {
+  if (
+    !actions.some(
+      (item) => item.action === action.action && item.kind === action.kind,
+    )
+  ) {
+    actions.push(action);
+  }
+}
+
+function getAttemptRecoveryActions(attempt) {
+  if (!attempt || attempt.status !== 'failed') return [];
+
+  const actions = [];
+  const issueText = [attempt.errorMessage, attempt.telemetryError]
+    .filter(Boolean)
+    .join(' ');
+  const kind = attempt.kind;
+  const isStableKind = kind === 'stable_memory';
+  const isMobileKind = kind === 'mobile_briefing' || kind === 'reminder_sync';
+
+  if (
+    /challenge|安全验证|真人验证|风险验证|No editable element|没有找到可输入区域|no composer|did not show the message|消息不可见|Browser page not available|browser has been closed|No existing doubao\.com tab|豆包浏览器/i.test(
+      issueText,
+    )
+  ) {
+    pushUniqueRecoveryAction(actions, {
+      action: 'open_doubao',
+      label: '打开豆包检查',
+    });
+  }
+
+  if (
+    /different thread|不同线程|mobile conversation|mobile_context|手机版对话|手机对话尚未绑定/i.test(
+      issueText,
+    ) ||
+    isMobileKind
+  ) {
+    pushUniqueRecoveryAction(actions, {
+      action: 'bind_mobile',
+      label: '重新绑定手机对话',
+    });
+  }
+
+  if (
+    /memory_sync|目标线程尚未绑定|长期记忆线程|memory-sync/i.test(
+      issueText,
+    ) ||
+    isStableKind
+  ) {
+    pushUniqueRecoveryAction(actions, {
+      action: 'bind_memory',
+      label: '修复长期记忆线程',
+    });
+  }
+
+  if (
+    /Memory Service|ECONN|fetch|timeout|connection|report failed|endpoint/i.test(
+      issueText,
+    )
+  ) {
+    pushUniqueRecoveryAction(actions, {
+      action: 'test_memory',
+      label: '测试 Memory Service',
+    });
+  }
+
+  if (kind) {
+    pushUniqueRecoveryAction(actions, {
+      action: 'retry',
+      kind,
+      label: `重试${formatSyncKind(kind)}`,
+    });
+  }
+
+  if (attempt.telemetryError) {
+    pushUniqueRecoveryAction(actions, {
+      action: 'open_log',
+      label: '查看日志',
+    });
+  }
+
+  return actions.slice(0, 4);
+}
+
+function triggerButtonOrExplain(button, messageElement, blockedMessage) {
+  if (button && !button.disabled) {
+    button.click();
+    return;
+  }
+  setMessage(
+    messageElement,
+    blockedMessage ||
+      '当前前置条件还不完整，请先按“下一步建议”修复后再重试。',
+    'warn',
+  );
+}
+
+function handleSyncAuditAction(action, kind) {
+  if (action === 'open_doubao') {
+    triggerButtonOrExplain(
+      elements.loginButton,
+      elements.loginMessage,
+      '登录入口暂不可用，请先刷新状态。',
+    );
+    return;
+  }
+
+  if (action === 'bind_mobile') {
+    triggerButtonOrExplain(
+      elements.mobileThreadButton,
+      elements.mobileThreadMessage,
+      '请先完成豆包登录，然后再重新绑定手机对话。',
+    );
+    return;
+  }
+
+  if (action === 'bind_memory') {
+    triggerButtonOrExplain(
+      elements.memoryThreadButton,
+      elements.memoryThreadMessage,
+      '请先完成豆包登录，然后再修复长期记忆线程。',
+    );
+    return;
+  }
+
+  if (action === 'test_memory') {
+    triggerButtonOrExplain(
+      elements.testMemoryButton,
+      elements.settingsMessage,
+      '请先填写 Memory Service 配置，然后再测试连接。',
+    );
+    return;
+  }
+
+  if (action === 'retry') {
+    if (kind === 'stable_memory') {
+      triggerButtonOrExplain(
+        elements.runStableButton,
+        elements.memoryThreadMessage,
+        '请先连接 Memory Service、完成豆包登录并绑定长期记忆线程，再重试 persona 同步。',
+      );
+      return;
+    }
+    if (kind === 'mobile_briefing') {
+      triggerButtonOrExplain(
+        elements.runBriefingButton,
+        elements.mobileThreadMessage,
+        '请先连接 Memory Service、完成豆包登录并绑定手机对话，再重试近期记忆重点同步。',
+      );
+      return;
+    }
+    if (kind === 'reminder_sync') {
+      triggerButtonOrExplain(
+        elements.runReminderButton,
+        elements.mobileThreadMessage,
+        '请先连接 Memory Service、完成豆包登录并绑定手机对话，再重试待办 / 通知同步。',
+      );
+    }
+    return;
+  }
+
+  if (action === 'open_log') {
+    void appShell.openLogFile();
+  }
+}
+
 function collectRuntimeSettings() {
   return {
     memoryServiceBaseUrl: elements.memoryBaseUrl.value.trim() || undefined,
@@ -489,6 +752,35 @@ function describeBroadcastTransport(transport = selectedBroadcastTransport()) {
   return transport === 'webpage_mcp'
     ? '日常 Chrome 登录态'
     : '桌面端 Chromium profile';
+}
+
+function formatLoginOpenedMessage(result) {
+  const selectedDailyBrowser = selectedBroadcastTransport() === 'webpage_mcp';
+  const transport = result?.browserTransport;
+  const actualMode = transport?.mode;
+  const fallbackReason = transport?.fallbackReason;
+
+  if (selectedDailyBrowser && actualMode === 'playwright') {
+    return [
+      `日常 Chrome 暂不可用，已打开内置 Chromium 登录窗口：${result.url}`,
+      fallbackReason ? `原因：${fallbackReason}` : '',
+    ]
+      .filter(Boolean)
+      .join('；');
+  }
+
+  if (selectedDailyBrowser) {
+    return `已打开 Chrome 豆包标签页：${result.url}`;
+  }
+
+  return `已打开登录窗口：${result.url}`;
+}
+
+function loginOpenedTone(result) {
+  return selectedBroadcastTransport() === 'webpage_mcp' &&
+    result?.browserTransport?.mode === 'playwright'
+    ? 'warn'
+    : 'success';
 }
 
 function syncBroadcastTransportPresentation() {
@@ -858,7 +1150,7 @@ function renderSyncAudit(status) {
     const empty = document.createElement('div');
     empty.className = 'sync-audit-empty';
     empty.textContent =
-      '还没有同步记录。手动推送或后台自动同步后会显示最近结果。';
+      '还没有同步记录。手动推送或后台自动同步后会显示最近结果，并在本机重启后保留。';
     elements.syncAuditList.appendChild(empty);
     return;
   }
@@ -900,12 +1192,38 @@ function renderSyncAudit(status) {
     item.appendChild(head);
     item.appendChild(meta);
 
+    const details = formatAttemptDetails(attempt);
+    if (details.length > 0) {
+      const detailRow = document.createElement('div');
+      detailRow.className = 'sync-audit-details';
+      detailRow.textContent = details.join(' · ');
+      item.appendChild(detailRow);
+    }
+
     const message = formatAttemptMessage(attempt);
     if (message) {
       const reason = document.createElement('p');
       reason.className = 'sync-audit-reason';
       reason.textContent = message;
       item.appendChild(reason);
+    }
+
+    const recoveryActions = getAttemptRecoveryActions(attempt);
+    if (recoveryActions.length > 0) {
+      const actionRow = document.createElement('div');
+      actionRow.className = 'sync-audit-actions';
+      for (const recoveryAction of recoveryActions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary compact-button sync-audit-action';
+        button.dataset.syncAuditAction = recoveryAction.action;
+        if (recoveryAction.kind) {
+          button.dataset.syncAuditKind = recoveryAction.kind;
+        }
+        button.textContent = recoveryAction.label;
+        actionRow.appendChild(button);
+      }
+      item.appendChild(actionRow);
     }
 
     elements.syncAuditList.appendChild(item);
@@ -924,6 +1242,58 @@ function renderShortcutStatus(shortcutStatus) {
     ? 'warn'
     : 'muted';
   setMessage(elements.metaShortcut, shortcutStatus.message, tone);
+}
+
+function renderBroadcastTransportStatus(status) {
+  const banner = elements.broadcastTransportStatus;
+  if (!banner) return;
+
+  if (!status) {
+    banner.hidden = true;
+    banner.textContent = '';
+    return;
+  }
+
+  const transport = status?.browserTransport;
+  const preferredDailyBrowser =
+    transport?.preferredMode === 'webpage_mcp' ||
+    latestSettingsPayload?.effective?.explorer?.doubao?.broadcastTransport ===
+      'webpage_mcp';
+
+  if (!preferredDailyBrowser) {
+    banner.hidden = true;
+    banner.textContent = '';
+    return;
+  }
+
+  banner.hidden = false;
+
+  if (transport?.fallbackReason) {
+    banner.className = 'inline-message status-blocked';
+    banner.textContent = formatTransportFallbackCopy({
+      prefix: '当前广播传输',
+      reason: transport.fallbackReason,
+      cooldownUntil: transport.fallbackCooldownUntil,
+      immediateRetryHint: '点击“打开 Chrome 豆包”或重新绑定线程会立即重新尝试',
+    });
+    return;
+  }
+
+  if (transport?.mode === 'webpage_mcp') {
+    banner.className =
+      status?.authStatus === 'connected'
+        ? 'inline-message success'
+        : 'inline-message';
+    banner.textContent =
+      status?.authStatus === 'connected'
+        ? '当前广播传输：日常 Chrome（webpage-mcp），已借用豆包登录态。'
+        : '当前广播传输：日常 Chrome（webpage-mcp）。请先在 Chrome 打开 doubao.com 并登录。';
+    return;
+  }
+
+  banner.className = 'inline-message';
+  banner.textContent =
+    '当前广播传输：日常 Chrome（webpage-mcp）。保存后会优先借用日常 Chrome 中的豆包登录态。';
 }
 
 function renderSourceCard(source, sourceStatus) {
@@ -1009,7 +1379,12 @@ function renderSourceTransportBanner(source, sourceStatus) {
 
   if (transport?.fallbackReason) {
     banner.className = 'inline-message status-blocked';
-    banner.textContent = `当前传输：已临时回退到内置 Chromium。日常浏览器不可用：${transport.fallbackReason}`;
+    banner.textContent = formatTransportFallbackCopy({
+      prefix: '当前传输',
+      reason: transport.fallbackReason,
+      cooldownUntil: transport.fallbackCooldownUntil,
+      immediateRetryHint: '点击“登录来源”会立即重新尝试',
+    });
     return;
   }
 
@@ -1196,6 +1571,7 @@ async function refreshStatus() {
   renderNextStep(status);
   renderBlockingReasons(status);
   renderStepStatuses(status);
+  renderBroadcastTransportStatus(status);
   renderSyncAudit(status);
   applyRuntimeSettings(settings.effective);
   renderExplorerOverview(explorerStatus, settings.effective.explorer);
@@ -1435,6 +1811,7 @@ async function handleRefresh() {
       ],
     });
     renderStepStatuses(null);
+    renderBroadcastTransportStatus(null);
     renderSyncAudit(null);
     renderExplorerOverview(null, latestSettingsPayload?.effective?.explorer);
   }
@@ -1442,6 +1819,15 @@ async function handleRefresh() {
 
 elements.refreshButton.addEventListener('click', () => {
   void withAction(elements.refreshButton, '刷新中...', handleRefresh);
+});
+
+elements.syncAuditList?.addEventListener('click', (event) => {
+  const button = event.target?.closest?.('[data-sync-audit-action]');
+  if (!button) return;
+  handleSyncAuditAction(
+    button.dataset.syncAuditAction,
+    button.dataset.syncAuditKind,
+  );
 });
 
 elements.openMemoryListButton?.addEventListener('click', () => {
@@ -1678,10 +2064,8 @@ elements.loginButton.addEventListener('click', () => {
       const result = await bridgeApi.openLogin();
       setMessage(
         elements.loginMessage,
-        selectedBroadcastTransport() === 'webpage_mcp'
-          ? `已打开 Chrome 豆包标签页：${result.url}`
-          : `已打开登录窗口：${result.url}`,
-        'success',
+        formatLoginOpenedMessage(result),
+        loginOpenedTone(result),
       );
       await refreshStatus();
     } catch (error) {

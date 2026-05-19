@@ -24,13 +24,28 @@ export interface UserProfileInterestItem {
   canUseForPersonalization: boolean;
   contextUseState: 'usable' | 'needs_confirmation';
   evidenceRefs: unknown[];
+  evidencePreview: UserProfileEvidencePreview[];
+  calibrationPriority: UserProfileCalibrationPriority;
+  calibrationPriorityScore: number;
+  calibrationReason: string;
 }
+
+export interface UserProfileEvidencePreview {
+  label: string;
+  detail: string;
+  sourceUrl?: string;
+}
+
+export type UserProfileCalibrationPriority = 'critical' | 'high' | 'medium' | 'low';
 
 export interface UserProfileViewModel {
   userId: string;
   core: string;
   items: unknown[];
   totalItems: number;
+  loadedItems: number;
+  isTruncated: boolean;
+  viewLimit?: number;
   allItems: UserProfileInterestItem[];
   interests: Record<UserProfileCategory, UserProfileInterestItem[]>;
   statistics: {
@@ -73,6 +88,10 @@ export interface UserProfileReviewQueueItem {
   lastSeen: number;
   canUseForPersonalization: boolean;
   reason: string;
+  evidencePreview: UserProfileEvidencePreview[];
+  calibrationPriority: UserProfileCalibrationPriority;
+  calibrationPriorityScore: number;
+  calibrationReason: string;
 }
 
 export interface UserProfileAnalysisViewModel {
@@ -99,10 +118,31 @@ export interface UserProfilePayloadViewModel {
   analysis: UserProfileAnalysisViewModel;
 }
 
+export type UserProfileItemStatusFilter =
+  | 'all'
+  | 'needsReview'
+  | 'highImpact'
+  | 'usable'
+  | 'withoutEvidence';
+
+export type UserProfileItemSortMode =
+  | 'priority'
+  | 'newest'
+  | 'confidence'
+  | 'evidence';
+
+export interface UserProfileItemFilterOptions {
+  query?: string;
+  statusFilter?: UserProfileItemStatusFilter;
+  sortMode?: UserProfileItemSortMode;
+}
+
 interface BuildUserProfileInput {
   core?: string;
   items?: unknown[];
   totalItems?: number;
+  truncated?: boolean;
+  viewLimit?: number;
   opinions?: unknown[];
   totalOpinions?: number;
   userId?: string;
@@ -147,6 +187,17 @@ function parseItemValue(rawValue: unknown): unknown {
   }
 }
 
+function parseEvidenceRefs(rawEvidenceRefs: unknown): unknown[] {
+  if (Array.isArray(rawEvidenceRefs)) return rawEvidenceRefs;
+  if (typeof rawEvidenceRefs !== 'string') return [];
+  try {
+    const parsed = JSON.parse(rawEvidenceRefs);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function stringifyValue(value: unknown): string {
   if (value == null) return '';
   if (typeof value === 'string') return value;
@@ -158,6 +209,55 @@ function stringifyValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function pickEvidenceString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (value == null) continue;
+    const text = stringifyValue(value).trim();
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function truncateText(value: string, maxLength = 140): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}...`;
+}
+
+function buildEvidencePreview(ref: unknown, index: number): UserProfileEvidencePreview {
+  if (ref && typeof ref === 'object') {
+    const record = ref as Record<string, unknown>;
+    const sourceType = pickEvidenceString(record, ['sourceType', 'source_kind', 'source', 'type', 'kind']);
+    const title = pickEvidenceString(record, ['sourceTitle', 'title', 'name', 'label']);
+    const sourceId = pickEvidenceString(record, ['sourceId', 'messageId', 'memoryId', 'id']);
+    const sourceUrl = pickEvidenceString(record, ['sourceUrl', 'url', 'href']);
+    const snippet = pickEvidenceString(record, ['snippet', 'text', 'content', 'summary', 'rationale']);
+    const timestamp = pickEvidenceString(record, ['timestamp', 'ts', 'capturedAt']);
+    const label = [sourceType, title, sourceId]
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(' · ') || `证据 ${index + 1}`;
+    const detail = truncateText(
+      snippet || sourceUrl || timestamp || stringifyValue(ref),
+    );
+
+    return {
+      label: truncateText(label, 80),
+      detail,
+      sourceUrl,
+    };
+  }
+
+  return {
+    label: `证据 ${index + 1}`,
+    detail: truncateText(stringifyValue(ref)),
+  };
 }
 
 function escapeRegExp(value: string): string {
@@ -258,10 +358,75 @@ function itemSortScore(item: UserProfileInterestItem): number {
   return item.salienceScore * 0.45 + item.confidence * 0.45 + mentionBoost * 0.1;
 }
 
+function calibrationPriorityFromScore(score: number): UserProfileCalibrationPriority {
+  if (score >= 1.5) return 'critical';
+  if (score >= 1.1) return 'high';
+  if (score >= 0.65) return 'medium';
+  return 'low';
+}
+
+function calculateCalibrationPriorityScore(args: {
+  confidence: number;
+  salienceScore: number;
+  mentionCount: number;
+  status: string;
+  userConfirmed: boolean;
+  evidenceCount: number;
+}): number {
+  const impact = Math.max(args.confidence, args.salienceScore);
+  const mentionBoost = Math.min(1, args.mentionCount / 5);
+  const confirmationGap = args.userConfirmed
+    ? 0
+    : args.status === 'pending_confirm'
+      ? 0.8
+      : 0.55;
+  const evidenceGap = args.evidenceCount === 0 ? 0.35 : 0;
+
+  if (args.userConfirmed && args.status === 'active') {
+    return evidenceGap > 0 && impact >= 0.7
+      ? 0.7 + impact * 0.25
+      : impact * 0.25;
+  }
+
+  return confirmationGap + impact * 0.45 + mentionBoost * 0.25 + evidenceGap;
+}
+
+function buildCalibrationReason(args: {
+  priority: UserProfileCalibrationPriority;
+  confidence: number;
+  salienceScore: number;
+  mentionCount: number;
+  status: string;
+  userConfirmed: boolean;
+  evidenceCount: number;
+  canUseForPersonalization: boolean;
+}): string {
+  const impact = Math.max(args.confidence, args.salienceScore);
+  if (!args.canUseForPersonalization && args.evidenceCount === 0 && impact >= 0.65) {
+    return '高影响但缺少可审计证据，建议优先确认或排除。';
+  }
+  if (args.status === 'pending_confirm') {
+    return args.evidenceCount > 0
+      ? '待确认推断，有证据可先复核。'
+      : '待确认推断，确认前不会进入个性化上下文。';
+  }
+  if (!args.userConfirmed) {
+    return args.mentionCount > 1
+      ? '多次命中但尚未确认，建议校准。'
+      : '尚未确认，暂不会用于个性化上下文。';
+  }
+  if (args.evidenceCount === 0 && args.priority !== 'low') {
+    return '已确认但缺少证据，后续推荐漂移时可复查。';
+  }
+  return '已确认，可用于个性化。';
+}
+
 function normalizeItem(rawItem: unknown): UserProfileInterestItem {
   const item = (rawItem ?? {}) as any;
   const parsedValue = parseItemValue(item.itemValue ?? item.item_value);
   const name = pickDisplayName(item, parsedValue);
+  const evidenceRefs = parseEvidenceRefs(item.evidenceRefs ?? item.evidence_refs);
+  const evidencePreview = evidenceRefs.map(buildEvidencePreview);
   const confidence = clamp01(item.confidence, 0.5);
   const salienceScore = clamp01(item.salienceScore ?? item.salience_score, confidence);
   const category = detectCategory(item, name);
@@ -272,6 +437,26 @@ function normalizeItem(rawItem: unknown): UserProfileInterestItem {
   const status = String(item.status ?? 'active');
   const userConfirmed = Boolean(item.userConfirmed ?? item.user_confirmed);
   const canUseForPersonalization = userConfirmed && status === 'active';
+  const mentionCount = positiveNumber(item.mentionCount ?? item.mention_count, 1);
+  const calibrationPriorityScore = calculateCalibrationPriorityScore({
+    confidence,
+    salienceScore,
+    mentionCount,
+    status,
+    userConfirmed,
+    evidenceCount: evidenceRefs.length,
+  });
+  const calibrationPriority = calibrationPriorityFromScore(calibrationPriorityScore);
+  const calibrationReason = buildCalibrationReason({
+    priority: calibrationPriority,
+    confidence,
+    salienceScore,
+    mentionCount,
+    status,
+    userConfirmed,
+    evidenceCount: evidenceRefs.length,
+    canUseForPersonalization,
+  });
 
   return {
     id: String(item.id ?? `${category}:${name}`),
@@ -283,16 +468,18 @@ function normalizeItem(rawItem: unknown): UserProfileInterestItem {
     explicitImportance: confidence,
     confidence,
     salienceScore,
-    mentionCount: positiveNumber(item.mentionCount ?? item.mention_count, 1),
+    mentionCount,
     lastSeen,
     sourceKind: String(item.sourceKind ?? item.source_kind ?? 'unknown'),
     userConfirmed,
     status,
     canUseForPersonalization,
     contextUseState: canUseForPersonalization ? 'usable' : 'needs_confirmation',
-    evidenceRefs: Array.isArray(item.evidenceRefs ?? item.evidence_refs)
-      ? (item.evidenceRefs ?? item.evidence_refs)
-      : [],
+    evidenceRefs,
+    evidencePreview,
+    calibrationPriority,
+    calibrationPriorityScore,
+    calibrationReason,
   };
 }
 
@@ -426,7 +613,83 @@ function buildSuggestions(profile: UserProfileViewModel): string[] {
 function pendingReviewScore(item: UserProfileInterestItem): number {
   const statusBoost = item.status === 'pending_confirm' ? 1 : 0;
   const evidenceBoost = item.evidenceRefs.length > 0 ? 0.25 : 0;
-  return statusBoost + evidenceBoost + itemSortScore(item);
+  return item.calibrationPriorityScore + statusBoost * 0.2 + evidenceBoost;
+}
+
+function buildProfileItemSearchText(item: UserProfileInterestItem): string {
+  return [
+    item.name,
+    item.itemType,
+    item.itemKey,
+    stringifyValue(item.itemValue),
+    item.category,
+    item.sourceKind,
+    item.status,
+    stringifyValue(item.evidenceRefs),
+    ...item.evidencePreview.flatMap((evidence) => [
+      evidence.label,
+      evidence.detail,
+      evidence.sourceUrl ?? '',
+    ]),
+  ]
+    .join(' ')
+    .toLowerCase();
+}
+
+function matchesProfileItemStatusFilter(
+  item: UserProfileInterestItem,
+  statusFilter: UserProfileItemStatusFilter,
+): boolean {
+  switch (statusFilter) {
+    case 'needsReview':
+      return !item.userConfirmed || item.status === 'pending_confirm' || !item.canUseForPersonalization;
+    case 'highImpact':
+      return (
+        !item.canUseForPersonalization &&
+        (item.calibrationPriority === 'critical' || item.calibrationPriority === 'high')
+      );
+    case 'usable':
+      return item.canUseForPersonalization;
+    case 'withoutEvidence':
+      return item.evidenceRefs.length === 0;
+    default:
+      return true;
+  }
+}
+
+function compareProfileItems(
+  a: UserProfileInterestItem,
+  b: UserProfileInterestItem,
+  sortMode: UserProfileItemSortMode,
+): number {
+  switch (sortMode) {
+    case 'newest':
+      return b.lastSeen - a.lastSeen || itemSortScore(b) - itemSortScore(a);
+    case 'confidence':
+      return b.confidence - a.confidence || b.salienceScore - a.salienceScore;
+    case 'evidence':
+      return b.evidenceRefs.length - a.evidenceRefs.length || b.lastSeen - a.lastSeen;
+    default:
+      return pendingReviewScore(b) - pendingReviewScore(a) || itemSortScore(b) - itemSortScore(a);
+  }
+}
+
+export function filterAndSortProfileItems(
+  items: UserProfileInterestItem[],
+  options: UserProfileItemFilterOptions = {},
+): UserProfileInterestItem[] {
+  const query = String(options.query ?? '').trim().toLowerCase();
+  const statusFilter = options.statusFilter ?? 'all';
+  const sortMode = options.sortMode ?? 'priority';
+
+  return items
+    .filter((item) => {
+      if (!matchesProfileItemStatusFilter(item, statusFilter)) return false;
+      if (!query) return true;
+      return buildProfileItemSearchText(item).includes(query);
+    })
+    .slice()
+    .sort((a, b) => compareProfileItems(a, b, sortMode) || a.name.localeCompare(b.name));
 }
 
 function buildReviewQueueItem(item: UserProfileInterestItem): UserProfileReviewQueueItem {
@@ -441,14 +704,18 @@ function buildReviewQueueItem(item: UserProfileInterestItem): UserProfileReviewQ
     evidenceCount: item.evidenceRefs.length,
     lastSeen: item.lastSeen,
     canUseForPersonalization: item.canUseForPersonalization,
+    evidencePreview: item.evidencePreview,
+    calibrationPriority: item.calibrationPriority,
+    calibrationPriorityScore: item.calibrationPriorityScore,
+    calibrationReason: item.calibrationReason,
     reason:
       item.status === 'pending_confirm'
-        ? '待确认后再进入核心画像。'
+        ? item.calibrationReason
         : !item.canUseForPersonalization
-          ? '尚未确认，暂不会用于个性化上下文。'
-        : item.sourceKind === 'explicit'
-          ? '来自显式配置'
-          : '来自历史记忆推断，建议人工确认。',
+          ? item.calibrationReason
+          : item.sourceKind === 'explicit'
+            ? '来自显式配置'
+            : item.calibrationReason,
   };
 }
 
@@ -502,6 +769,8 @@ export function buildUserProfileViewModel(
     .map(normalizeItem)
     .filter((item) => item.status !== 'retracted')
     .sort((a, b) => itemSortScore(b) - itemSortScore(a));
+  const totalItems = input.totalItems ?? normalizedItems.length;
+  const isTruncated = Boolean(input.truncated) || (input.items ?? []).length < totalItems;
 
   const interests = CATEGORY_KEYS.reduce((result, category) => {
     result[category] = normalizedItems.filter((item) => item.category === category);
@@ -526,14 +795,17 @@ export function buildUserProfileViewModel(
     userId: input.userId ?? 'default',
     core: input.core ?? '',
     items: input.items ?? [],
-    totalItems: input.totalItems ?? normalizedItems.length,
+    totalItems,
+    loadedItems: normalizedItems.length,
+    isTruncated,
+    viewLimit: input.viewLimit,
     allItems: normalizedItems,
     interests,
     statistics: {
       totalInteractions,
       averageDailyActivity: totalInteractions / activeDays,
       lastActiveTime,
-      totalItems: input.totalItems ?? normalizedItems.length,
+      totalItems,
       confirmedItems: normalizedItems.filter((item) => item.userConfirmed).length,
       inferredItems: normalizedItems.filter((item) => !item.userConfirmed).length,
     },
@@ -556,12 +828,21 @@ export function buildUserProfileViewModel(
 
 export function normalizeUserProfilePayload(data: any): UserProfilePayloadViewModel {
   if (data?.viewModel?.profile?.allItems && data?.viewModel?.analysis?.insights) {
-    return data.viewModel as UserProfilePayloadViewModel;
+    const viewModel = data.viewModel as UserProfilePayloadViewModel;
+    const profile = viewModel.profile;
+    profile.loadedItems = profile.loadedItems ?? profile.allItems.length;
+    profile.totalItems = profile.totalItems ?? profile.loadedItems;
+    profile.isTruncated = profile.isTruncated ?? profile.loadedItems < profile.totalItems;
+    return viewModel;
   }
 
   if (data?.profile?.allItems && data?.analysis?.insights) {
+    const profile = data.profile as UserProfileViewModel;
+    profile.loadedItems = profile.loadedItems ?? profile.allItems.length;
+    profile.totalItems = profile.totalItems ?? profile.loadedItems;
+    profile.isTruncated = profile.isTruncated ?? profile.loadedItems < profile.totalItems;
     return {
-      profile: data.profile as UserProfileViewModel,
+      profile,
       analysis: data.analysis as UserProfileAnalysisViewModel,
     };
   }
@@ -570,6 +851,8 @@ export function normalizeUserProfilePayload(data: any): UserProfilePayloadViewMo
     core: data?.profile?.core ?? '',
     items: data?.profile?.items ?? [],
     totalItems: data?.profile?.totalItems ?? data?.profile?.total ?? undefined,
+    truncated: data?.profile?.truncated ?? data?.profile?.isTruncated ?? undefined,
+    viewLimit: data?.profile?.viewLimit ?? undefined,
     opinions: data?.analysis?.opinions ?? [],
     totalOpinions: data?.analysis?.totalOpinions ?? undefined,
     userId: data?.profile?.userId ?? 'default',

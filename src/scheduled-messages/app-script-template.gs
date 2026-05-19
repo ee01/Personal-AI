@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.7.9';
-var APP_SCRIPT_LAST_UPDATED = '2026-05-13';
+var APP_SCRIPT_VERSION = '2.8.4';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-19';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -42,6 +42,21 @@ var TIMELINE_SYNC_ATTEMPT_ERROR_MAX_CHARS = 260;
 // Preflight the serialized Timeline cache so Jira gets an actionable error
 // instead of a generic setProperty exception.
 var TIMELINE_CACHE_PROPERTY_MAX_BYTES = 9 * 1024;
+var PUSH_LOG_SCHEMA_COLUMNS = [
+  'Timestamp',
+  'Message_ID',
+  'Topic',
+  'Content',
+  'Push_Method',
+  'Target',
+  'Status',
+  'Error',
+  'Exec_Count',
+  'Execution_Key',
+  'Sent_Chat_ID',
+  'Sent_Post_ID',
+  'Sent_At'
+];
 
 var TIMELINE_PROJECT_PARAM_MAP = [
   { project: 'mThor', paramKey: 'mThor' },
@@ -127,6 +142,7 @@ function executeScheduledMessages() {
   if (shouldHandoffAsMeToJira) {
     Logger.log('RingCentral AsMe sender 已启用，AsMe 消息由 Jira Automation 处理，AppScript 邮件 fallback 暂停');
   }
+  reactivateDoneFutureOneTimeMessages(sheet, data, headers, now);
   
   // 遍历每一行（跳过表头）
   for (let i = 1; i < data.length; i++) {
@@ -306,6 +322,97 @@ function isRingCentralSenderReady(config) {
  */
 function getColumnIndex(headers, columnName) {
   return headers.indexOf(columnName) + 1;
+}
+
+function isExecutorDefaultSchedule(rowData) {
+  const hasAiEndpoint = String(rowData.AI_Endpoint || '').trim() !== '';
+  return rowData.Push_Method === 'Bot' ||
+    rowData.Push_Method === 'AI' ||
+    (rowData.Push_Method === 'JiraAutomation' && hasAiEndpoint);
+}
+
+function getDefaultScheduleTimeForRow(rowData) {
+  return isExecutorDefaultSchedule(rowData) ? '08:00' : '09:00';
+}
+
+function getOneTimeScheduledAt(rowData) {
+  if (determineMessageType(rowData) !== 'OneTime' || !rowData.Schedule_Date) {
+    return null;
+  }
+
+  const scheduledAt = parseScheduleDate(rowData.Schedule_Date);
+  if (!scheduledAt) {
+    return null;
+  }
+
+  const rawTime = rowData.Schedule_Time && rowData.Schedule_Time.toString().trim()
+    ? rowData.Schedule_Time.toString().trim()
+    : getDefaultScheduleTimeForRow(rowData);
+  const scheduleMinutes = parseTimeToMinutes(rawTime);
+  if (scheduleMinutes === null) {
+    return null;
+  }
+
+  scheduledAt.setHours(Math.floor(scheduleMinutes / 60), scheduleMinutes % 60, 0, 0);
+  return scheduledAt;
+}
+
+function formatOneTimeNextExecution(rowData) {
+  const scheduledAt = getOneTimeScheduledAt(rowData);
+  return scheduledAt
+    ? Utilities.formatDate(scheduledAt, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
+    : '';
+}
+
+function reactivateDoneFutureOneTimeMessages(sheet, data, headers, now) {
+  const statusCol = getColumnIndex(headers, 'Status');
+  if (statusCol <= 0) {
+    return 0;
+  }
+
+  const lastExecCol = getColumnIndex(headers, 'Last_Exec');
+  const execLogCol = getColumnIndex(headers, 'Exec_Log');
+  const nextExecCol = getColumnIndex(headers, 'Next_Exec');
+  let reactivatedCount = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const rowData = parseRow(row, headers);
+    const status = (rowData.Status || '').toString().trim().toLowerCase();
+    if (status !== 'done') {
+      continue;
+    }
+
+    const scheduledAt = getOneTimeScheduledAt(rowData);
+    if (!scheduledAt || scheduledAt.getTime() <= now.getTime()) {
+      continue;
+    }
+
+    const rowIndex = i + 1;
+    sheet.getRange(rowIndex, statusCol).setValue('Active');
+    row[statusCol - 1] = 'Active';
+
+    if (lastExecCol > 0) {
+      sheet.getRange(rowIndex, lastExecCol).setValue('');
+      row[lastExecCol - 1] = '';
+    }
+
+    if (execLogCol > 0) {
+      sheet.getRange(rowIndex, execLogCol).setValue('待执行');
+      row[execLogCol - 1] = '待执行';
+    }
+
+    if (nextExecCol > 0) {
+      const nextExec = formatOneTimeNextExecution(rowData);
+      sheet.getRange(rowIndex, nextExecCol).setValue(nextExec);
+      row[nextExecCol - 1] = nextExec;
+    }
+
+    reactivatedCount++;
+    Logger.log(`已将未来单次消息从 Done 恢复为 Active: ${rowData.ID || rowData.Topic || rowIndex}`);
+  }
+
+  return reactivatedCount;
 }
 
 /**
@@ -644,8 +751,10 @@ function generateEmailFromName(name) {
  * @param {boolean} success - 是否成功
  * @param {string} errorMsg - 错误信息（可选）
  * @param {number} execCount - 执行次数
+ * @param {string} executionKey - 单次执行幂等键（可选）
+ * @param {object} sendResultMeta - 实际发送结果元数据（可选）
  */
-function insertPushLog(messageId, topic, content, pushMethod, target, success, errorMsg, execCount) {
+function insertPushLog(messageId, topic, content, pushMethod, target, success, errorMsg, execCount, executionKey, sendResultMeta) {
   try {
     const logsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Logs');
     if (!logsSheet) {
@@ -657,20 +766,30 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
     const timestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
     const status = success ? 'Success' : 'Failed';
     const error = errorMsg || '';
-    
-    // 构建日志记录（按 Logs 表头顺序）
-    // Timestamp, Message_ID, Topic, Content, Push_Method, Target, Status, Error, Exec_Count
-    const logRow = [
-      timestamp,
-      messageId,
-      topic,
-      content,
-      pushMethod,
-      target,
-      status,
-      error,
-      execCount
-    ];
+    const sentChatId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentChatId) : '';
+    const sentPostId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentPostId) : '';
+    const sentAt = sendResultMeta && getRequestParameterValue(sendResultMeta.sentAt)
+      ? getRequestParameterValue(sendResultMeta.sentAt)
+      : (success && (sentChatId || sentPostId) ? now.toISOString() : '');
+    const headers = ensurePushLogHeaders(logsSheet);
+    const entry = {
+      Timestamp: timestamp,
+      Message_ID: messageId,
+      Topic: topic,
+      Content: content,
+      Push_Method: pushMethod,
+      Target: target,
+      Status: status,
+      Error: error,
+      Exec_Count: execCount,
+      Execution_Key: getRequestParameterValue(executionKey),
+      Sent_Chat_ID: sentChatId,
+      Sent_Post_ID: sentPostId,
+      Sent_At: sentAt
+    };
+    const logRow = headers.map(function(header) {
+      return entry[header] === undefined || entry[header] === null ? '' : entry[header];
+    });
     
     // 在第2行插入新行（表头是第1行）
     logsSheet.insertRowAfter(1);
@@ -684,6 +803,34 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
     Logger.log(`插入推送记录失败: ${error}`);
     // 不抛出错误，避免影响主流程
   }
+}
+
+function ensurePushLogHeaders(logsSheet) {
+  let headers = [];
+  try {
+    const data = logsSheet.getDataRange().getDisplayValues();
+    headers = data && data.length > 0 ? data[0] : [];
+  } catch (error) {
+    Logger.log(`读取 Logs 表头失败，使用默认表头: ${error}`);
+  }
+
+  headers = (headers || []).map(function(header) {
+    return header ? header.toString().trim() : '';
+  }).filter(function(header) {
+    return header !== '';
+  });
+
+  const missing = PUSH_LOG_SCHEMA_COLUMNS.filter(function(column) {
+    return headers.indexOf(column) < 0;
+  });
+
+  if (missing.length > 0) {
+    const startCol = headers.length + 1;
+    logsSheet.getRange(1, startCol, 1, missing.length).setValues([missing]);
+    headers = headers.concat(missing);
+  }
+
+  return headers.length > 0 ? headers : PUSH_LOG_SCHEMA_COLUMNS.slice();
 }
 
 /**
@@ -701,7 +848,7 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
  * 
  * @param {object} replacedContent - 可选，替换变量后的内容 { topic, content }
  */
-function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg, replacedContent) {
+function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg, replacedContent, executionKey) {
   const now = new Date();
   const execCount = (parseInt(rowData.Exec_Count) || 0) + 1;
   const willMarkAsDone = success && shouldMarkAsDone(rowData, now);
@@ -730,12 +877,12 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   }
   
   if (execLogCol > 0) {
-    const logMessage = success ? 
-      '✅ 推送成功' : 
+    let logMessage = success ?
+      '✅ 推送成功' :
       ('❌ 推送失败' + (errorMsg ? ': ' + errorMsg : ''));
     sheet.getRange(rowIndex, execLogCol).setValue(logMessage);
   }
-  
+
   // 检查是否应该标记为 Done（统一使用 shouldMarkAsDone 逻辑）
   if (willMarkAsDone) {
     if (statusCol > 0) {
@@ -765,7 +912,9 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
     target,
     success,
     errorMsg || '',
-    execCount
+    execCount,
+    executionKey || '',
+    replacedContent || null
   );
 }
 
@@ -939,6 +1088,16 @@ function extractJsonStringPropertyFromText(text, propertyName) {
   return match ? parseJsonStringFragment(match[1]) : '';
 }
 
+function hasTruthyJsonBooleanPropertyInText(text, propertyName) {
+  const source = getRequestParameterValue(text);
+  if (!source || !propertyName) {
+    return false;
+  }
+
+  const pattern = new RegExp('"' + propertyName + '"\\s*:\\s*(true|"true"|1|"1")', 'i');
+  return pattern.test(source);
+}
+
 function resolveCacheReleaseInfoProjectFromPostFailure(e, queryParameters) {
   const queryProject = getRequestParameterValue(queryParameters && queryParameters.project).trim();
   const bodyProject = extractJsonStringPropertyFromText(getRawPostBody(e), 'project').trim();
@@ -961,23 +1120,34 @@ function buildPostJsonParseErrorPayload(action, error, e) {
     acceptedFormats: [
       'POST JSON body with Content-Type: application/json',
       'Jira text smart values must use .asJsonString before being inserted into JSON',
-      'Avoid putting releaseInfo, topic, or content in the URL query string'
+      'Generated Timeline Sync Rule should use GET query parameters for Apps Script callbacks; POST can stop on Google 302 redirects'
     ],
-    nextAction: '检查 Jira Automation 的 Send web request：Method=POST，Custom data 是完整 JSON，动态文本字段使用 .asJsonString，Header 包含 Content-Type: application/json。'
+    nextAction: '检查 Jira Automation 的 Send web request：生成规则中的 Apps Script cacheReleaseInfo 必须使用 Method=GET，并在 URL 中包含 project 和 releaseInfo；不要改成 POST，否则 Jira 可能停在 Google 302 重定向。'
   };
 
   if (actionName === 'cacheReleaseInfo') {
     const troubleshooting = getReleaseInfoTroubleshootingPayload();
-    return Object.assign({}, troubleshooting, payload, {
+    const projectConfig = resolveCacheReleaseInfoProjectFromPostFailure(e, e.parameter || {});
+    const fallbackParamKey = extractJsonStringPropertyFromText(getRawPostBody(e), 'project') || 'cacheReleaseInfo';
+    const isDryRun = hasTruthyJsonBooleanPropertyInText(getRawPostBody(e), 'dryRun');
+    const cachePayload = Object.assign({}, troubleshooting, payload, {
+      dryRun: isDryRun || undefined,
+      requestId: createTimelineSyncRequestId(projectConfig ? projectConfig.paramKey : fallbackParamKey),
       acceptedFormats: payload.acceptedFormats.concat(troubleshooting.acceptedFormats),
       nextAction: `${payload.nextAction} ${troubleshooting.nextAction}`,
-      expectedBody: '{"project":"mThor","releaseInfo":{{mThorReleaseInfo.asJsonString}}}'
+      expectedBody: '{{WEB_APP_URL}}?action=cacheReleaseInfo&project=mThor&releaseInfo={{mThorReleaseInfo.replaceAll("\'","").urlEncode.replaceAll("\\+","%20")}}',
+      expectedVariable: '{{webhookResponse.body}}'
     });
+    if (projectConfig) {
+      cachePayload.project = projectConfig.project;
+      cachePayload.paramKey = projectConfig.paramKey;
+    }
+    return cachePayload;
   }
 
   if (actionName === 'markBotMessageExecuted') {
     return Object.assign(payload, {
-      expectedBody: '{"messageId":{{messageId.asJsonString}},"rowIndex":{{webhookResponse.body.rowIndex}},"success":true,"topic":{{replacedTopic.asJsonString}},"content":{{replacedContent.asJsonString}}}'
+      expectedBody: '{"messageId":{{messageId.asJsonString}},"rowIndex":{{webhookResponse.body.rowIndex}},"success":true,"topic":{{replacedTopic.asJsonString}},"content":{{replacedContent.asJsonString}},"sentChatId":{{webhookResponse.body.data.outputs.chatId.asJsonString}},"sentPostId":{{webhookResponse.body.data.outputs.postId.asJsonString}},"sentAt":{{webhookResponse.body.data.outputs.sentAt.asJsonString}}}'
     });
   }
 
@@ -989,12 +1159,16 @@ function recordCachePostJsonParseFailure(action, payload, e, queryParameters) {
     return;
   }
 
-  if (isTruthyRequestValue(queryParameters && queryParameters.dryRun)) {
+  const rawPostBody = getRawPostBody(e);
+  if (
+    isTruthyRequestValue(queryParameters && queryParameters.dryRun) ||
+    hasTruthyJsonBooleanPropertyInText(rawPostBody, 'dryRun')
+  ) {
     return;
   }
 
   const projectConfig = resolveCacheReleaseInfoProjectFromPostFailure(e, queryParameters);
-  const fallbackParamKey = extractJsonStringPropertyFromText(getRawPostBody(e), 'project') || 'cacheReleaseInfo';
+  const fallbackParamKey = extractJsonStringPropertyFromText(rawPostBody, 'project') || 'cacheReleaseInfo';
   payload.requestId = payload.requestId || createTimelineSyncRequestId(projectConfig ? projectConfig.paramKey : fallbackParamKey);
   if (!projectConfig) {
     return;
@@ -1025,6 +1199,147 @@ function mergeRequestParameters(queryParameters, bodyParameters) {
   });
 
   return merged;
+}
+
+function getFirstRequestParameterValue(parameters, keys) {
+  const source = parameters || {};
+  for (let i = 0; i < keys.length; i++) {
+    const value = getRequestParameterValue(source[keys[i]]);
+    if (value) {
+      return value;
+    }
+  }
+  return '';
+}
+
+function getFirstObjectValue(object, keys) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) {
+    return '';
+  }
+  for (let i = 0; i < keys.length; i++) {
+    const value = object[keys[i]];
+    if (!isMissingRequestValue(value)) {
+      return value.toString();
+    }
+  }
+  return '';
+}
+
+function parseJsonObjectParameter(value) {
+  const text = getRequestParameterValue(value);
+  if (!text) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    Logger.log(`发送结果 JSON 解析失败，忽略 marker 元数据: ${error}`);
+    return {};
+  }
+}
+
+function extractSendResultMetaFromObject(object) {
+  const candidates = [];
+  if (object && typeof object === 'object' && !Array.isArray(object)) {
+    candidates.push(object);
+    if (object.data && typeof object.data === 'object') {
+      candidates.push(object.data);
+      if (object.data.outputs && typeof object.data.outputs === 'object') {
+        candidates.push(object.data.outputs);
+      }
+    }
+    if (object.outputs && typeof object.outputs === 'object') {
+      candidates.push(object.outputs);
+    }
+    if (object.result && typeof object.result === 'object') {
+      candidates.push(object.result);
+    }
+    if (object.post && typeof object.post === 'object') {
+      candidates.push(object.post);
+    }
+    if (object.message && typeof object.message === 'object') {
+      candidates.push(object.message);
+    }
+  }
+
+  const meta = { sentChatId: '', sentPostId: '', sentAt: '' };
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    if (!meta.sentChatId) {
+      meta.sentChatId = getFirstObjectValue(candidate, [
+        'sentChatId',
+        'chatId',
+        'groupId',
+        'chat_id',
+        'group_id',
+        'resolved_chat_id'
+      ]);
+    }
+    if (!meta.sentPostId) {
+      meta.sentPostId = getFirstObjectValue(candidate, [
+        'sentPostId',
+        'postId',
+        'post_id',
+        'id'
+      ]);
+    }
+    if (!meta.sentAt) {
+      meta.sentAt = getFirstObjectValue(candidate, [
+        'sentAt',
+        'creationTime',
+        'createdAt',
+        'created_at',
+        'timestamp'
+      ]);
+    }
+  }
+  return meta;
+}
+
+function extractSendResultMetaFromParameters(parameters) {
+  const directMeta = {
+    sentChatId: getFirstRequestParameterValue(parameters, [
+      'sentChatId',
+      'sentChatIdFallback',
+      'sentChatIdAlt',
+      'sentChatIdExtra',
+      'chatId',
+      'groupId'
+    ]),
+    sentPostId: getFirstRequestParameterValue(parameters, [
+      'sentPostId',
+      'sentPostIdFallback',
+      'sentPostIdAlt',
+      'sentPostIdExtra',
+      'postId',
+      'id'
+    ]),
+    sentAt: getFirstRequestParameterValue(parameters, [
+      'sentAt',
+      'sentAtFallback',
+      'sentAtAlt',
+      'sentAtExtra',
+      'creationTime',
+      'createdAt'
+    ])
+  };
+
+  const payload = getFirstRequestParameterValue(parameters, [
+    'sentPayload',
+    'sendResult',
+    'responsePayload'
+  ]);
+  if (!payload) {
+    return directMeta;
+  }
+
+  const payloadMeta = extractSendResultMetaFromObject(parseJsonObjectParameter(payload));
+  return {
+    sentChatId: directMeta.sentChatId || payloadMeta.sentChatId || '',
+    sentPostId: directMeta.sentPostId || payloadMeta.sentPostId || '',
+    sentAt: directMeta.sentAt || payloadMeta.sentAt || ''
+  };
 }
 
 function normalizeExecutionKey(executionKey) {
@@ -1137,6 +1452,8 @@ function getReleaseInfoTroubleshootingPayload() {
   return {
     expectedShape: '{releaseInfo={Milestone=MM/DD/YYYY, ...}}',
     acceptedFormats: [
+      'GET query: ?action=cacheReleaseInfo&project=mThor&releaseInfo={{mThorReleaseInfo.replaceAll("\'","").urlEncode.replaceAll("\\+","%20")}}',
+      'Saved variable: {{webhookResponse.body}}',
       'POST JSON body: {"project":"mThor","releaseInfo":{"releaseInfo":{"FF":"MM/DD/YYYY"}}}',
       'Groovy Map fallback: {currentRelease=Version, releaseInfo={FF=MM/DD/YYYY}}'
     ],
@@ -1145,16 +1462,16 @@ function getReleaseInfoTroubleshootingPayload() {
       maxNestingDepth: JIRA_GROOVY_MAX_NESTING_DEPTH,
       maxCachePropertyBytes: TIMELINE_CACHE_PROPERTY_MAX_BYTES
     },
-    nextAction: '优先让 Jira Rule 使用 POST JSON 和 asJsonString；如果只能传 Groovy Map，请给包含逗号、等号或换行的值加引号，并保持 payload 在限制内。'
+    nextAction: '生成的 Jira Rule 必须用 GET 调 Apps Script cacheReleaseInfo；先用 {{webhookResponse.body}} 保存变量，再用 .replaceAll("\'","").urlEncode.replaceAll("\\+","%20") 放进 URL；不要改成 POST，否则 Jira 可能停在 Google 302 重定向。'
   };
 }
 
 function getReleaseInfoCacheNextAction(errorCode) {
   switch (errorCode) {
     case 'MISSING_RELEASE_INFO':
-      return '检查 Timeline Sync Rule 的 Custom data，确保 JSON body 包含 releaseInfo，并且项目变量使用 .asJsonString。';
+      return '检查 Timeline Sync Rule：releaseInfo 变量应保存 {{webhookResponse.body}}，Apps Script webhook Method=GET，URL 包含 project 和 releaseInfo={{变量.replaceAll("\'","").urlEncode.replaceAll("\\+","%20")}}。';
     case 'INVALID_POST_JSON':
-      return '检查 Jira Automation 的 Send web request：Method=POST，Custom data 是完整 JSON，Header 包含 Content-Type: application/json，动态文本字段使用 .asJsonString。';
+      return '不要把 Jira Automation 到 Apps Script 的 cacheReleaseInfo 配成 POST；生成规则应使用 GET，避免 Jira 停在 Google 302 重定向。';
     case 'INVALID_RELEASE_INFO_SCHEMA':
       return '确认 releaseInfo.releaseInfo 下至少有一个 MM/DD/YYYY 格式的 Milestone 日期；空日期、ISO 日期和非字符串值不会触发 Timeline。';
     case 'RELEASE_INFO_TOO_LARGE':
@@ -1488,8 +1805,8 @@ function doGet(e) {
     `);
   }
   
-  // 按项目缓存 releaseInfo 到 Script Properties
-  // Timeline Sync Rule 会逐项目写入，避免 URL 过长和单 value 过大
+  // 按项目缓存 releaseInfo 到 Script Properties。
+  // Jira Automation 调 Apps Script Web App 必须用 GET；POST 可能停在 Google 302 重定向。
   if (action === 'cacheReleaseInfo') {
     return handleCacheReleaseInfoRequest(e.parameter);
   }
@@ -1548,12 +1865,13 @@ function doGet(e) {
     const success = e.parameter.success === 'true';
     const error = e.parameter.error || '';
     const executionKey = getRequestParameterValue(e.parameter.executionKey);
+    const sendResultMeta = extractSendResultMetaFromParameters(e.parameter || {});
     // 接收替换后的内容（用于日志记录）
     const replacedTopic = getRequestParameterValue(e.parameter.topic);
     const replacedContent = getRequestParameterValue(e.parameter.content);
     
     return ContentService.createTextOutput(
-      JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey))
+      JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, sendResultMeta.sentChatId, sendResultMeta.sentPostId, sendResultMeta.sentAt))
     ).setMimeType(ContentService.MimeType.JSON);
   }
   
@@ -1616,9 +1934,10 @@ function doPost(e) {
       const replacedTopic = getRequestParameterValue(parameters.topic);
       const replacedContent = getRequestParameterValue(parameters.content);
       const executionKey = getRequestParameterValue(parameters.executionKey);
+      const sendResultMeta = extractSendResultMetaFromParameters(parameters);
 
       return ContentService.createTextOutput(
-        JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey))
+        JSON.stringify(markBotMessageExecuted(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, sendResultMeta.sentChatId, sendResultMeta.sentPostId, sendResultMeta.sentAt))
       ).setMimeType(ContentService.MimeType.JSON);
     }
     
@@ -1702,14 +2021,27 @@ function setupTriggersInternal() {
  * @param {string} replacedTopic - 替换变量后的主题（可选，用于日志记录）
  * @param {string} replacedContent - 替换变量后的内容（可选，用于日志记录）
  * @param {string} executionKey - 单次执行的幂等键（可选，用于规避 Jira/网络重试重复记账）
+ * @param {string} sentChatId - 实际发送成功后的 RingCentral chatId（可选）
+ * @param {string} sentPostId - 实际发送成功后的 RingCentral postId（可选）
+ * @param {string} sentAt - 实际发送时间（可选）
  * @returns {object} 更新结果
  */
-function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent, executionKey) {
+function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent, executionKey, sentChatId, sentPostId, sentAt) {
   try {
     // 构建替换后的内容对象（用于日志记录）
-    const replacedContentObj = (replacedTopic || replacedContent) ? {
+    const sendResultMeta = {
+      sentChatId: getRequestParameterValue(sentChatId),
+      sentPostId: getRequestParameterValue(sentPostId),
+      sentAt: getRequestParameterValue(sentAt)
+    };
+    const hasReplacedContent = replacedTopic || replacedContent;
+    const hasSendResultMeta = sendResultMeta.sentChatId || sendResultMeta.sentPostId || sendResultMeta.sentAt;
+    const replacedContentObj = (hasReplacedContent || hasSendResultMeta) ? {
       topic: replacedTopic || '',
-      content: replacedContent || ''
+      content: replacedContent || '',
+      sentChatId: sendResultMeta.sentChatId || '',
+      sentPostId: sendResultMeta.sentPostId || '',
+      sentAt: sendResultMeta.sentAt || ''
     } : null;
 
     const normalizedExecutionKey = normalizeExecutionKey(executionKey);
@@ -1753,7 +2085,7 @@ function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replaced
       const rowData = resolvedRow.rowData;
 
       // 更新执行日志（已包含 shouldMarkAsDone 判断和 insertPushLog 调用）
-      updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg, replacedContentObj);
+      updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg, replacedContentObj, normalizedExecutionKey);
       if (props) {
         recordExecutionMark(props, propertyKey, normalizedExecutionKey, messageId, actualRowIndex, success, now);
       }
@@ -2420,6 +2752,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     const currentHour = now.getHours();
     const ringCentralSenderConfig = getRingCentralSenderConfigFromSheet();
     const ringCentralSenderReady = isRingCentralSenderReady(ringCentralSenderConfig);
+    reactivateDoneFutureOneTimeMessages(sheet, data, headers, now);
     
     Logger.log(`[三匹配模式查找] 开始查找消息，当前时间: ${currentDate} ${currentHour}:${now.getMinutes()}`);
     if (ringCentralSenderReady) {
@@ -2497,15 +2830,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       
       Logger.log(`AI URL 解析结果: host=${endpointInfo.host}, uri=${endpointInfo.uri}, method=${endpointInfo.method}`);
       
-      // 立即标记为成功（避免超时重复），传递替换后的内容用于日志记录
-      try {
-        markBotMessageExecuted(messageId, message.rowIndex, true, '', message.Topic, message.Content, executionKey);
-        Logger.log(`AI 消息已标记为成功: ${messageId}`);
-      } catch (markError) {
-        Logger.log(`标记 AI 消息失败: ${markError}`);
-      }
-      
-      // 返回 AI 消息数据（host 和 uri 分开）
+      // 返回 AI 消息数据（host 和 uri 分开），由 Jira 在 endpoint 调用后回写执行日志。
       return {
         executed: true,
         messageId: messageId,
@@ -2518,6 +2843,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
         aiBody: bodyStr,
         rowIndex: message.rowIndex,
         executionKey: executionKey,
+        requiresExecutionCallback: true,
         timestamp: new Date().toISOString()
       };
     }
@@ -2684,7 +3010,7 @@ function replaceProjectVariablesInText(text, projectInfo) {
 /**
  * 解析 Jira Automation 返回的 JSON/Groovy Map 格式
  * 
- * Jira 的 {{webhookResponse.body.asJsonString}} 返回的是 Groovy Map 格式：
+ * Jira 的 {{webhookResponse.body}} 返回的是 Groovy Map 格式：
  * {currentRelease=25.4.20, currentPhase=Dev}
  * 
  * 而不是标准 JSON 格式：
@@ -2720,7 +3046,14 @@ function parseJiraJsonStrict(jsonStr) {
   
   // 尝试 1: 标准 JSON 解析
   try {
-    return JSON.parse(str);
+    const parsed = JSON.parse(str);
+    if (typeof parsed === 'string') {
+      const nested = parsed.trim();
+      if (nested && /^[{\[]/.test(nested) && nested !== str) {
+        return parseJiraJsonStrict(nested);
+      }
+    }
+    return parsed;
   } catch (e) {
     jsonParseError = e;
     Logger.log(`标准 JSON 解析失败，尝试 Groovy Map 格式: ${e.toString()}`);
@@ -2900,6 +3233,23 @@ function isQuotedGroovyString(value) {
   return (first === '"' || first === "'") && first === last;
 }
 
+function isGroovyQuoteStart(text, index) {
+  const char = text[index];
+  if (char !== '"' && char !== "'") {
+    return false;
+  }
+
+  for (let i = index - 1; i >= 0; i--) {
+    const previous = text[i];
+    if (/\s/.test(previous)) {
+      continue;
+    }
+    return previous === '=' || previous === ',' || previous === '{' || previous === '[';
+  }
+
+  return true;
+}
+
 function parseGroovyQuotedString(value) {
   const quote = value[0];
   const inner = value.substring(1, value.length - 1);
@@ -2969,7 +3319,7 @@ function findGroovyMapPairSeparator(pairText, depth) {
       continue;
     }
 
-    if (char === '"' || char === "'") {
+    if (isGroovyQuoteStart(pairText, i)) {
       quoteChar = char;
     } else if (char === '{') {
       braceDepth++;
@@ -3464,7 +3814,7 @@ function splitGroovyMapPairs(content, depth) {
       } else if (char === quoteChar) {
         quoteChar = '';
       }
-    } else if (char === '"' || char === "'") {
+    } else if (isGroovyQuoteStart(content, i)) {
       quoteChar = char;
       currentPair += char;
     } else if (char === '{') {

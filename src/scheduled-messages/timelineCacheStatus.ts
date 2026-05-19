@@ -50,6 +50,23 @@ export interface TimelineCacheStatus {
   error?: string;
 }
 
+export interface TimelineSyncDryRunResult {
+  success: boolean;
+  dryRun?: boolean;
+  wouldCache?: boolean;
+  requestId?: string;
+  project?: string;
+  paramKey?: string;
+  errorCode?: string;
+  error?: string;
+  parseError?: string;
+  nextAction?: string;
+  payloadBytes?: number;
+  maxBytes?: number;
+  milestoneCount?: number;
+  milestoneKeys?: string[];
+}
+
 export const TIMELINE_CACHE_AUTO_REFRESH_MIN_INTERVAL_MS = 5000;
 
 const TIMELINE_CACHE_STATUS_CODES: TimelineCacheProjectStatusCode[] = [
@@ -96,6 +113,20 @@ function buildNonJsonTimelineCacheStatusError(responseText: string): string {
   }
 
   return `Timeline 缓存状态响应不是 JSON，请确认 App Script Web App URL 指向最新部署。响应片段：${snippet}`;
+}
+
+function buildNonJsonTimelineDryRunError(responseText: string): string {
+  const trimmed = responseText.trim();
+  if (!trimmed) {
+    return 'Apps Script dry-run 响应为空，请确认 Web App 已重新部署并允许扩展访问。';
+  }
+
+  const snippet = summarizeResponseSnippet(trimmed);
+  if (/^(<!doctype\s+html|<html|<head|<body|<)/i.test(trimmed)) {
+    return `Apps Script dry-run 响应是 HTML 页面，通常是 Web App URL、权限或登录页问题。响应片段：${snippet}`;
+  }
+
+  return `Apps Script dry-run 响应不是 JSON，请确认 Web App URL 指向最新部署。响应片段：${snippet}`;
 }
 
 function isTimelineCacheProjectStatusCode(value: unknown): value is TimelineCacheProjectStatusCode {
@@ -288,6 +319,93 @@ export function parseTimelineCacheStatusResponseText(responseText: string): Time
   }
 }
 
+export function validateTimelineSyncDryRunResponse(data: unknown): TimelineSyncDryRunResult {
+  if (!isRecord(data)) {
+    throw new Error('Apps Script dry-run 响应格式异常，请复制测试 curl 手动确认。');
+  }
+
+  const explicitSuccess = data.success === true || data.success === false;
+  const statusText = getString(data.status).trim().toUpperCase();
+  if (!explicitSuccess && statusText !== 'ERROR') {
+    throw new Error('Apps Script dry-run 响应格式异常，请升级 App Script 后重试。');
+  }
+
+  const result: TimelineSyncDryRunResult = {
+    success: data.success === true,
+  };
+
+  if (data.dryRun === true) {
+    result.dryRun = true;
+  }
+  if (data.wouldCache === true) {
+    result.wouldCache = true;
+  }
+
+  const requestId = getString(data.requestId).trim();
+  const project = getString(data.project).trim();
+  const paramKey = getString(data.paramKey).trim();
+  const errorCode = getString(data.errorCode).trim() || (statusText === 'ERROR' ? 'DRY_RUN_ERROR' : '');
+  const error = getString(data.error).trim() || getString(data.message).trim();
+  const parseError = getString(data.parseError).trim();
+  const nextAction = getString(data.nextAction).trim();
+  const payloadBytes = getOptionalFiniteNumber(data.payloadBytes);
+  const maxBytes = getOptionalFiniteNumber(data.maxBytes);
+  const milestoneCount = getOptionalFiniteNumber(data.milestoneCount);
+  const milestoneKeys = normalizeMilestoneKeys(data.milestoneKeys);
+
+  if (requestId) {
+    result.requestId = requestId;
+  }
+  if (project) {
+    result.project = project;
+  }
+  if (paramKey) {
+    result.paramKey = paramKey;
+  }
+  if (errorCode) {
+    result.errorCode = errorCode;
+  }
+  if (error) {
+    result.error = error;
+  }
+  if (parseError) {
+    result.parseError = parseError;
+  }
+  if (nextAction) {
+    result.nextAction = nextAction;
+  }
+  if (payloadBytes !== undefined && payloadBytes !== null) {
+    result.payloadBytes = payloadBytes;
+  }
+  if (maxBytes !== undefined && maxBytes !== null) {
+    result.maxBytes = maxBytes;
+  }
+  if (milestoneCount !== undefined && milestoneCount !== null) {
+    result.milestoneCount = milestoneCount;
+  }
+  if (milestoneKeys) {
+    result.milestoneKeys = milestoneKeys;
+  }
+
+  if (result.success && result.dryRun !== true) {
+    throw new Error('Apps Script 返回了成功结果，但不是 dry-run 响应；请确认请求 URL 包含 dryRun=true。');
+  }
+
+  return result;
+}
+
+export function parseTimelineSyncDryRunResponseText(responseText: string): TimelineSyncDryRunResult {
+  try {
+    return validateTimelineSyncDryRunResponse(JSON.parse(responseText));
+  } catch (error: any) {
+    if (error instanceof SyntaxError) {
+      throw new Error(buildNonJsonTimelineDryRunError(responseText));
+    }
+
+    throw error;
+  }
+}
+
 export function shouldAutoRefreshTimelineCacheStatus(input: {
   enabled: boolean;
   isLoading: boolean;
@@ -415,11 +533,11 @@ export function getTimelineCacheAttemptQuickFixText(attempt?: TimelineCacheSyncA
 
   switch (attempt.errorCode) {
     case 'INVALID_POST_JSON':
-      return '检查 Method=POST、Content-Type=application/json，并确认 releaseInfo 使用 .asJsonString。';
+      return '把 Timeline Sync Rule 的 Apps Script 写缓存请求改回 GET；POST 可能停在 Google 302 重定向。';
     case 'MISSING_RELEASE_INFO':
-      return '确认 Custom data 包含 releaseInfo，且项目变量使用 .asJsonString。';
+      return '确认变量先保存 {{webhookResponse.body}}，GET URL 包含 project 和 releaseInfo={{变量.replaceAll("\'","").urlEncode.replaceAll("\\+","%20")}}。';
     case 'UNKNOWN_PROJECT':
-      return '确认 JSON body 的 project 使用生成规则里的项目参数名。';
+      return '确认 URL 里的 project 使用生成规则里的项目参数名。';
     case 'TIMELINE_CACHE_TOO_LARGE':
       return '减少同步字段或 Milestone 数量后，手动运行 Timeline Sync Rule。';
     case 'RELEASE_INFO_TOO_LARGE':
@@ -429,12 +547,45 @@ export function getTimelineCacheAttemptQuickFixText(attempt?: TimelineCacheSyncA
     case 'INVALID_RELEASE_INFO_SCHEMA':
       return '确认 releaseInfo 下至少有一个 MM/DD/YYYY 格式的 Milestone 日期。';
     case 'PARSE_RELEASE_INFO_FAILED':
-      return '优先让 Jira 输出标准 JSON；必须用 Groovy Map 时请给复杂文本加引号。';
+      return '确认 Jira 变量保存的是 webhookResponse.body；GET URL 先移除 ASCII 撇号再编码，避免旧版 Apps Script 把字段名里的撇号当成字符串边界。';
     case 'CACHE_RELEASE_INFO_EXCEPTION':
       return '复制诊断后查看 Apps Script 执行日志，按请求 ID 对照失败请求。';
     default:
       return attempt.nextAction || '';
   }
+}
+
+export function formatTimelineSyncDryRunResult(result: TimelineSyncDryRunResult): string {
+  const details = formatTimelineCacheAttemptDetails({
+    success: result.success,
+    requestId: result.requestId,
+    errorCode: result.errorCode,
+    error: result.error,
+    parseError: result.parseError,
+    nextAction: result.nextAction,
+    payloadBytes: result.payloadBytes,
+    maxBytes: result.maxBytes,
+    milestoneCount: result.milestoneCount,
+    milestoneKeys: result.milestoneKeys,
+  });
+
+  if (result.success) {
+    return [
+      '样例测试通过：Apps Script Web App 可访问，payload 可解析并通过缓存预检；不会写入 Timeline 缓存，也不会代表 Jira Rule 已同步。',
+      details,
+    ].filter(Boolean).join(' ');
+  }
+
+  const reason = [result.errorCode, result.parseError || result.error]
+    .filter(Boolean)
+    .join(' - ');
+  const nextAction = result.nextAction ? ` 下一步：${result.nextAction}` : '';
+
+  return [
+    `测试失败${reason ? `：${reason}` : ''}。`,
+    details,
+    nextAction,
+  ].filter(Boolean).join(' ');
 }
 
 export function getTimelineCacheStatusLabel(status: TimelineCacheProjectStatusCode): string {
@@ -488,19 +639,9 @@ export function getTimelineCacheReadinessBlockText(input: {
   status: TimelineCacheStatus | null;
   error: string;
 }): string {
-  if (input.isLoading) {
-    return '正在读取 Timeline 缓存状态，请稍后再保存。';
-  }
-
-  const error = input.error.trim();
-  if (error) {
-    return `Timeline 缓存状态读取失败：${error}\n\n请刷新状态，或打开 Timeline Sync Rule 排查后重新同步。`;
-  }
-
-  if (!input.status) {
-    return '尚未读取 Timeline 缓存状态，请先刷新状态，确认项目 Milestone 缓存可用后再保存。';
-  }
-
+  void input;
+  // Cache status is advisory for create/save. The status panel still explains
+  // missing, expired, and failed sync states, but it should not block drafting.
   return '';
 }
 
@@ -518,16 +659,6 @@ export function getTimelineProjectCacheSaveBlockText(input: {
   const project = input.project?.trim();
   if (!project) {
     return '请选择需要替换项目变量的项目。';
-  }
-
-  const projectStatus = getTimelineCacheProjectStatus(input.status, project);
-  if (!projectStatus) {
-    return `${project} 未出现在当前 App Script 返回的 Timeline 缓存状态中。\n\n请先更新 App Script 并重新配置 Timeline Sync Rule。`;
-  }
-
-  const cacheBlockText = getTimelineCacheSaveBlockText(projectStatus);
-  if (cacheBlockText) {
-    return `${project} 的 Timeline 缓存状态为 ${getTimelineCacheStatusLabel(projectStatus.status)}。\n\n${cacheBlockText}`;
   }
 
   return '';
@@ -613,9 +744,14 @@ export function buildTimelineCacheDiagnosticText(input: {
       lines.push('Jira Send web request 修复模板:');
       lines.push(`Method: ${payloadHelp.method}`);
       lines.push(`URL: ${payloadHelp.url}`);
-      lines.push(`Header: Content-Type=${payloadHelp.contentType}`);
-      lines.push('Custom data:');
-      lines.push(payloadHelp.customBody);
+      if (payloadHelp.method === 'GET') {
+        lines.push('Body: (empty)');
+        lines.push('注意: Apps Script callback 必须保持 GET；POST 可能停在 Google 302 重定向。');
+      } else {
+        lines.push(`Header: Content-Type=${payloadHelp.contentType}`);
+        lines.push('Custom data:');
+        lines.push(payloadHelp.customBody);
+      }
     }
 
     if (dryRunHelp) {

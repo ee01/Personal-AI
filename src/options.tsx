@@ -34,6 +34,9 @@ import {
   buildAgentWorkflowConfigDiagnostics,
   buildAgentWorkflowResultDiagnostics,
   buildAgentWorkflowRecommendedActions,
+  buildAgentWorkflowReadinessChecks,
+  buildAgentWorkflowRunVerdict,
+  normalizeAgentWorkflowConfidence,
   type AgentWorkflowDiagnostic,
 } from './agentWorkflowDiagnostics';
 import { IntelligentAgent, type AgentToolDescription } from './agentThinking';
@@ -43,11 +46,17 @@ import {
   AgentResultSummary,
 } from './agent-visualizer';
 import {
+  CONTEXT_SITE_ALLOW_STORAGE_KEY,
+  CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
+  CONTEXT_PAGE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_MUTE_STORAGE_KEY,
   formatContextSiteMuteRemaining,
   getContextSiteMuteExpiresAt,
+  normalizeContextPageBlockPrefix,
   normalizeContextSiteMuteHost,
+  pruneContextPageBlockRecord,
+  pruneContextSiteAllowRecord,
   pruneContextSiteBlockRecord,
   pruneContextSiteMuteRecord,
 } from './web-intelligence/contextRecallGuards';
@@ -770,6 +779,16 @@ interface ContextBlockedSiteView {
   blockedAtLabel: string;
 }
 
+interface ContextBlockedPageView {
+  prefix: string;
+  blockedAtLabel: string;
+}
+
+interface ContextAllowedSiteView {
+  host: string;
+  allowedAtLabel: string;
+}
+
 function ContextSiteMuteSettings() {
   const [mutedSites, setMutedSites] = React.useState<ContextMutedSiteView[]>(
     [],
@@ -777,7 +796,16 @@ function ContextSiteMuteSettings() {
   const [blockedSites, setBlockedSites] = React.useState<ContextBlockedSiteView[]>(
     [],
   );
+  const [blockedPages, setBlockedPages] = React.useState<ContextBlockedPageView[]>(
+    [],
+  );
+  const [allowlistMode, setAllowlistMode] = React.useState(false);
+  const [allowedSites, setAllowedSites] = React.useState<ContextAllowedSiteView[]>(
+    [],
+  );
+  const [allowHostInput, setAllowHostInput] = React.useState('');
   const [blockHostInput, setBlockHostInput] = React.useState('');
+  const [blockPageInput, setBlockPageInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState('');
 
@@ -822,6 +850,42 @@ function ContextSiteMuteSettings() {
       }));
   };
 
+  const toAllowedSiteViews = (
+    record: Record<string, number>,
+  ): ContextAllowedSiteView[] => {
+    const formatter = new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return Object.entries(record)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([host, allowedAt]) => ({
+        host,
+        allowedAtLabel: formatter.format(new Date(allowedAt)),
+      }));
+  };
+
+  const toBlockedPageViews = (
+    record: Record<string, number>,
+  ): ContextBlockedPageView[] => {
+    const formatter = new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return Object.entries(record)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([prefix, blockedAt]) => ({
+        prefix,
+        blockedAtLabel: formatter.format(new Date(blockedAt)),
+      }));
+  };
+
   const normalizeSiteControlHost = (rawValue: string): string => {
     const trimmed = rawValue.trim();
     if (!trimmed) return '';
@@ -835,6 +899,23 @@ function ContextSiteMuteSettings() {
       return normalizeContextSiteMuteHost(trimmed.split(/[/:?#]/)[0] || '');
     }
   };
+
+  const siteControlInputIncludesPath = (rawValue: string): boolean => {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return false;
+
+    try {
+      const parsed = new URL(
+        trimmed.includes('://') ? trimmed : `https://${trimmed}`,
+      );
+      return parsed.pathname !== '' && parsed.pathname !== '/';
+    } catch (_error) {
+      return /\/.+/.test(trimmed);
+    }
+  };
+
+  const normalizePageControlPrefix = (rawValue: string): string | null =>
+    normalizeContextPageBlockPrefix(rawValue);
 
   const readMutedSiteRecord = async (): Promise<Record<string, number>> => {
     const result = await chrome.storage.local.get(CONTEXT_SITE_MUTE_STORAGE_KEY);
@@ -862,15 +943,60 @@ function ContextSiteMuteSettings() {
     return pruned.record;
   };
 
+  const readAllowedSiteRecord = async (): Promise<Record<string, number>> => {
+    const result = await chrome.storage.local.get(CONTEXT_SITE_ALLOW_STORAGE_KEY);
+    const pruned = pruneContextSiteAllowRecord(
+      result?.[CONTEXT_SITE_ALLOW_STORAGE_KEY],
+    );
+    if (pruned.changed) {
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_ALLOW_STORAGE_KEY]: pruned.record,
+      });
+    }
+    return pruned.record;
+  };
+
+  const readAllowlistMode = async (): Promise<boolean> => {
+    const result = await chrome.storage.local.get(
+      CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
+    );
+    return result?.[CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY] === true;
+  };
+
+  const readBlockedPageRecord = async (): Promise<Record<string, number>> => {
+    const result = await chrome.storage.local.get(CONTEXT_PAGE_BLOCK_STORAGE_KEY);
+    const pruned = pruneContextPageBlockRecord(
+      result?.[CONTEXT_PAGE_BLOCK_STORAGE_KEY],
+    );
+    if (pruned.changed) {
+      await chrome.storage.local.set({
+        [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: pruned.record,
+      });
+    }
+    return pruned.record;
+  };
+
   const refreshSiteControls = async (nextMessage = '') => {
     setLoading(true);
     try {
-      const [muteRecord, blockRecord] = await Promise.all([
+      const [
+        muteRecord,
+        blockRecord,
+        pageBlockRecord,
+        allowRecord,
+        nextAllowlistMode,
+      ] = await Promise.all([
         readMutedSiteRecord(),
         readBlockedSiteRecord(),
+        readBlockedPageRecord(),
+        readAllowedSiteRecord(),
+        readAllowlistMode(),
       ]);
       setMutedSites(toMutedSiteViews(muteRecord));
       setBlockedSites(toBlockedSiteViews(blockRecord));
+      setBlockedPages(toBlockedPageViews(pageBlockRecord));
+      setAllowedSites(toAllowedSiteViews(allowRecord));
+      setAllowlistMode(nextAllowlistMode);
       setMessage(nextMessage);
     } catch (error) {
       console.warn('Failed to load context site controls:', error);
@@ -916,7 +1042,104 @@ function ContextSiteMuteSettings() {
     }
   };
 
+  const setAllowlistModeValue = async (nextValue: boolean) => {
+    setLoading(true);
+    try {
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY]: nextValue,
+      });
+      setAllowlistMode(nextValue);
+      setMessage(
+        nextValue
+          ? '已开启白名单模式：仅允许列表内站点显示网页记忆提示'
+          : '已关闭白名单模式：恢复默认站点规则',
+      );
+    } catch (error) {
+      console.warn('Failed to update context allowlist mode:', error);
+      setMessage('更新白名单模式失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const allowSite = async () => {
+    if (siteControlInputIncludesPath(allowHostInput)) {
+      setMessage('允许站点只接受域名；页面路径请继续使用路径屏蔽规则');
+      return;
+    }
+
+    const host = normalizeSiteControlHost(allowHostInput);
+    if (!host) {
+      setMessage('请输入有效网站域名');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const [muteRecord, blockRecord, allowRecord] = await Promise.all([
+        readMutedSiteRecord(),
+        readBlockedSiteRecord(),
+        readAllowedSiteRecord(),
+      ]);
+      delete muteRecord[host];
+      delete blockRecord[host];
+      allowRecord[host] = Date.now();
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_MUTE_STORAGE_KEY]: muteRecord,
+        [CONTEXT_SITE_BLOCK_STORAGE_KEY]: blockRecord,
+        [CONTEXT_SITE_ALLOW_STORAGE_KEY]: allowRecord,
+      });
+      setMutedSites(toMutedSiteViews(muteRecord));
+      setBlockedSites(toBlockedSiteViews(blockRecord));
+      setAllowedSites(toAllowedSiteViews(allowRecord));
+      setAllowHostInput('');
+      setMessage(`已允许 ${host} 显示网页记忆提示`);
+    } catch (error) {
+      console.warn('Failed to allow context site:', error);
+      setMessage('添加允许站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const removeAllowedSite = async (host: string) => {
+    setLoading(true);
+    try {
+      const record = await readAllowedSiteRecord();
+      delete record[host];
+      await chrome.storage.local.set({
+        [CONTEXT_SITE_ALLOW_STORAGE_KEY]: record,
+      });
+      setAllowedSites(toAllowedSiteViews(record));
+      setMessage(`已从允许列表移除 ${host}`);
+    } catch (error) {
+      console.warn('Failed to remove context allowed site:', error);
+      setMessage('移除允许站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearAllowedSites = async () => {
+    setLoading(true);
+    try {
+      await chrome.storage.local.set({ [CONTEXT_SITE_ALLOW_STORAGE_KEY]: {} });
+      setAllowedSites([]);
+      setMessage('已清空允许站点列表');
+    } catch (error) {
+      console.warn('Failed to clear context allowed sites:', error);
+      setMessage('清空允许站点失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const blockSite = async () => {
+    if (siteControlInputIncludesPath(blockHostInput)) {
+      setMessage('整站屏蔽只接受域名；页面路径请使用下方输入框');
+      return;
+    }
+
     const host = normalizeSiteControlHost(blockHostInput);
     if (!host) {
       setMessage('请输入有效网站域名');
@@ -979,9 +1202,66 @@ function ContextSiteMuteSettings() {
     }
   };
 
+  const blockPage = async () => {
+    const prefix = normalizePageControlPrefix(blockPageInput);
+    if (!prefix) {
+      setMessage('请输入包含路径的 http/https URL；整站屏蔽请使用上方域名');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const record = await readBlockedPageRecord();
+      record[prefix] = Date.now();
+      await chrome.storage.local.set({
+        [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: record,
+      });
+      setBlockedPages(toBlockedPageViews(record));
+      setBlockPageInput('');
+      setMessage(`已永久关闭 ${prefix} 下的网页记忆提示`);
+    } catch (error) {
+      console.warn('Failed to block context page prefix:', error);
+      setMessage('永久关闭页面路径失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const unblockPage = async (prefix: string) => {
+    setLoading(true);
+    try {
+      const record = await readBlockedPageRecord();
+      delete record[prefix];
+      await chrome.storage.local.set({
+        [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: record,
+      });
+      setBlockedPages(toBlockedPageViews(record));
+      setMessage(`已恢复 ${prefix} 下的网页记忆提示`);
+    } catch (error) {
+      console.warn('Failed to unblock context page prefix:', error);
+      setMessage('恢复页面路径失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearBlockedPages = async () => {
+    setLoading(true);
+    try {
+      await chrome.storage.local.set({ [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: {} });
+      setBlockedPages([]);
+      setMessage('已恢复全部页面路径屏蔽规则');
+    } catch (error) {
+      console.warn('Failed to clear context page blocks:', error);
+      setMessage('恢复全部页面路径失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="form-group">
-      <label>网页记忆提示静默站点</label>
+      <label>网页记忆提示控制</label>
       <div
         style={{
           border: '1px solid #e5e7eb',
@@ -1000,7 +1280,7 @@ function ContextSiteMuteSettings() {
           }}
         >
           <small style={{ color: '#64748b' }}>
-            管理右下角记忆卡片的站点级提示控制。
+            管理右下角记忆卡片的临时静默、整站屏蔽和页面路径屏蔽。
           </small>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
@@ -1020,6 +1300,136 @@ function ContextSiteMuteSettings() {
               全部恢复
             </button>
           </div>
+        </div>
+
+        <div
+          style={{
+            borderTop: '1px solid #e2e8f0',
+            marginTop: 14,
+            paddingTop: 14,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <strong style={{ color: '#0f172a', fontSize: 13 }}>
+                允许站点白名单
+              </strong>
+              <small style={{ color: '#64748b', display: 'block', marginTop: 2 }}>
+                开启后，只在允许列表内的站点及其子域名显示网页记忆提示。
+              </small>
+            </div>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                color: '#334155',
+                fontSize: 12,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={allowlistMode}
+                onChange={(event) =>
+                  setAllowlistModeValue(event.currentTarget.checked)
+                }
+                disabled={loading}
+              />
+              仅允许白名单站点
+            </label>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) auto',
+              gap: 8,
+              marginTop: 10,
+            }}
+          >
+            <input
+              type="text"
+              value={allowHostInput}
+              onChange={(event) => setAllowHostInput(event.target.value)}
+              placeholder="docs.example.com"
+              aria-label="添加允许站点"
+              disabled={loading}
+              style={{ fontSize: 12, padding: '6px 8px' }}
+            />
+            <button
+              type="button"
+              onClick={allowSite}
+              disabled={loading || !allowHostInput.trim()}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              允许
+            </button>
+          </div>
+
+          {allowedSites.length > 0 ? (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+              {allowedSites.map((site) => (
+                <div
+                  key={site.host}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    gap: 10,
+                    alignItems: 'center',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 6,
+                    background: '#fff',
+                    padding: '9px 10px',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <strong
+                      style={{
+                        display: 'block',
+                        color: '#0f172a',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      {site.host}
+                    </strong>
+                    <small style={{ color: '#64748b' }}>
+                      允许站点 · 添加于 {site.allowedAtLabel}
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`移除允许站点 ${site.host}`}
+                    onClick={() => removeAllowedSite(site.host)}
+                    disabled={loading}
+                    style={{ fontSize: 12, padding: '4px 10px' }}
+                  >
+                    移除
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <small style={{ color: '#64748b', display: 'block', marginTop: 10 }}>
+              当前没有允许站点；开启白名单模式后将不会显示网页记忆提示。
+            </small>
+          )}
+
+          <button
+            type="button"
+            onClick={clearAllowedSites}
+            disabled={loading || allowedSites.length === 0}
+            style={{ fontSize: 12, padding: '4px 10px', marginTop: 10 }}
+          >
+            清空允许站点
+          </button>
         </div>
 
         <div style={{ marginTop: 12 }}>
@@ -1094,7 +1504,7 @@ function ContextSiteMuteSettings() {
           >
             <div>
               <strong style={{ color: '#0f172a', fontSize: 13 }}>
-                永久屏蔽
+                永久屏蔽站点
               </strong>
               <small style={{ color: '#64748b', display: 'block', marginTop: 2 }}>
                 这些站点不会再触发网页记忆提示，直到你手动恢复。
@@ -1122,7 +1532,7 @@ function ContextSiteMuteSettings() {
               type="text"
               value={blockHostInput}
               onChange={(event) => setBlockHostInput(event.target.value)}
-              placeholder="example.com 或 https://example.com/path"
+              placeholder="example.com"
               disabled={loading}
               style={{ fontSize: 12, padding: '6px 8px' }}
             />
@@ -1180,6 +1590,115 @@ function ContextSiteMuteSettings() {
           ) : (
             <small style={{ color: '#64748b', display: 'block', marginTop: 10 }}>
               当前没有被永久屏蔽的网站。
+            </small>
+          )}
+        </div>
+
+        <div
+          style={{
+            borderTop: '1px solid #e2e8f0',
+            marginTop: 14,
+            paddingTop: 14,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <strong style={{ color: '#0f172a', fontSize: 13 }}>
+                永久屏蔽页面/路径
+              </strong>
+              <small style={{ color: '#64748b', display: 'block', marginTop: 2 }}>
+                只关闭某个页面路径及其子路径，不影响同域名其他页面。
+              </small>
+            </div>
+            <button
+              type="button"
+              onClick={clearBlockedPages}
+              disabled={loading || blockedPages.length === 0}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              清空路径屏蔽
+            </button>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) auto',
+              gap: 8,
+              marginTop: 10,
+            }}
+          >
+            <input
+              type="text"
+              value={blockPageInput}
+              onChange={(event) => setBlockPageInput(event.target.value)}
+              placeholder="https://docs.example.com/doc/123"
+              disabled={loading}
+              style={{ fontSize: 12, padding: '6px 8px' }}
+            />
+            <button
+              type="button"
+              onClick={blockPage}
+              disabled={loading || !blockPageInput.trim()}
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              添加
+            </button>
+          </div>
+
+          {blockedPages.length > 0 ? (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+              {blockedPages.map((page) => (
+                <div
+                  key={page.prefix}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    gap: 10,
+                    alignItems: 'center',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 6,
+                    background: '#fff',
+                    padding: '9px 10px',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <strong
+                      style={{
+                        display: 'block',
+                        color: '#0f172a',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      {page.prefix}
+                    </strong>
+                    <small style={{ color: '#64748b' }}>
+                      页面路径屏蔽 · 添加于 {page.blockedAtLabel}
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`恢复页面路径 ${page.prefix}`}
+                    onClick={() => unblockPage(page.prefix)}
+                    disabled={loading}
+                    style={{ fontSize: 12, padding: '4px 10px' }}
+                  >
+                    恢复
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <small style={{ color: '#64748b', display: 'block', marginTop: 10 }}>
+              当前没有被永久屏蔽的页面路径。
             </small>
           )}
         </div>
@@ -2233,6 +2752,9 @@ const Options = () => {
       if (name === 'MEETING_PILOT_ENABLED') {
         nextConfig.MEETING_FEATURE_ENABLED = Boolean(nextValue);
       }
+      if (name === 'CONTEXT_ASSIST_ENABLED' && nextValue === false) {
+        nextConfig.COMPOSE_ASSIST_ENABLED = false;
+      }
       if (name === 'MEETING_MINUTES_API_URL') {
         nextConfig.MEETING_DIGEST_API_BASE_URL = String(nextValue || '');
       }
@@ -2998,8 +3520,8 @@ const Options = () => {
           name="MEETING_NATIVE_CLIENT_JOIN_ENABLED"
           checked={config.MEETING_NATIVE_CLIENT_JOIN_ENABLED !== false}
           onChange={handleInputChange}
-          label="使用 Native Client 加会"
-          description="开启后会拦截 RingCentral Web 中的 Video Join 链接和部分 Join 按钮，改用本机 RingCentral app 打开会议。"
+          label="优先用 RingCentral app 加会"
+          description="开启后会拦截 RingCentral Web 中的 Video Join 链接和部分 Join 按钮，改用本机 RingCentral app 打开会议；若 app 没有接管，页面会保留浏览器加入兜底，也可在兜底浮层里改为默认使用浏览器。"
         />
         {config.MEETING_PILOT_ENABLED === true &&
         config.MEETING_PILOT_FLOATING_ICON_VISIBLE === false ? (
@@ -3034,6 +3556,18 @@ const Options = () => {
             onChange={handleInputChange}
             label="启用 Context Assist"
             description="统一启用会前准备和写作护航的场景化记忆提示。"
+          />
+          <ToggleField
+            id="COMPOSE_ASSIST_ENABLED"
+            name="COMPOSE_ASSIST_ENABLED"
+            checked={
+              config.CONTEXT_ASSIST_ENABLED !== false &&
+              config.COMPOSE_ASSIST_ENABLED !== false
+            }
+            onChange={handleInputChange}
+            label="启用写作护航"
+            description="在支持的消息、Jira 和网页 AI 输入框旁显示可预览、可插入的 Personal AI 建议。"
+            disabled={config.CONTEXT_ASSIST_ENABLED === false}
           />
           <ToggleField
             id="MEETING_PREP_ENABLED"
@@ -4051,6 +4585,40 @@ const Options = () => {
 };
 
 // Agent系统设置组件
+const buildWorkflowTestInputComparisonKey = (
+  input: AgentWorkflowTestInput,
+): string => {
+  const datetime = input.datetime.trim()
+    ? normalizeAgentWorkflowInputDatetime(input.datetime)
+    : '';
+
+  return JSON.stringify({
+    sender: input.sender.trim(),
+    teamName: input.teamName.trim(),
+    teamId: input.teamId.trim(),
+    datetime,
+    content: input.content.trim(),
+  });
+};
+
+const buildWorkflowAgentConfigComparisonKey = (agents: any[]): string => {
+  const comparableAgents = agents
+    .map((agent) => ({
+      id: String(agent.id || '').trim(),
+      enabled: agent.enabled !== false,
+      priority: Number(agent.priority || 0),
+      tools: Array.isArray(agent.tools)
+        ? agent.tools.map((tool: any) => String(tool)).sort()
+        : [],
+    }))
+    .sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return a.id.localeCompare(b.id);
+    });
+
+  return JSON.stringify(comparableAgents);
+};
+
 const AgentSettings = () => {
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4087,6 +4655,10 @@ const AgentSettings = () => {
     );
   const [workflowTestRunning, setWorkflowTestRunning] = useState(false);
   const [workflowTestResult, setWorkflowTestResult] = useState<any>(null);
+  const [workflowTestResultInput, setWorkflowTestResultInput] =
+    useState<AgentWorkflowTestInput | null>(null);
+  const [workflowTestResultConfigKey, setWorkflowTestResultConfigKey] =
+    useState('');
   const [workflowTestError, setWorkflowTestError] = useState('');
   const [workflowReplaySamples, setWorkflowReplaySamples] = useState<
     AgentWorkflowReplayMessage[]
@@ -4246,13 +4818,22 @@ const AgentSettings = () => {
     if (!messageContent) {
       setWorkflowTestError('请输入测试消息');
       setWorkflowTestResult(null);
+      setWorkflowTestResultInput(null);
+      setWorkflowTestResultConfigKey('');
       return;
     }
 
+    let resultConfigKey = buildWorkflowAgentConfigComparisonKey(agents);
     setWorkflowTestRunning(true);
     setWorkflowTestError('');
     setWorkflowTestResult(null);
+    setWorkflowTestResultInput(null);
+    setWorkflowTestResultConfigKey('');
     try {
+      const agentsForRun = await agentCoordinator.getAgents();
+      setAgents(agentsForRun);
+      resultConfigKey = buildWorkflowAgentConfigComparisonKey(agentsForRun);
+
       const result = await agentCoordinator.processMessage({
         post_id: `agent-workflow-test-${Date.now()}`,
         team_id: input.teamId.trim() || 'agent-workflow-test',
@@ -4262,11 +4843,15 @@ const AgentSettings = () => {
         datetime: normalizeAgentWorkflowInputDatetime(input.datetime),
       });
       setWorkflowTestResult(result);
+      setWorkflowTestResultInput(input);
+      setWorkflowTestResultConfigKey(resultConfigKey);
     } catch (error) {
       console.error('Agent Workflow 测试失败:', error);
       setWorkflowTestError(
         error instanceof Error ? error.message : 'Agent Workflow 测试失败',
       );
+      setWorkflowTestResultInput(null);
+      setWorkflowTestResultConfigKey('');
     } finally {
       setWorkflowTestRunning(false);
     }
@@ -4431,6 +5016,31 @@ const AgentSettings = () => {
     /^[a-zA-Z][a-zA-Z0-9_-]{1,63}$/.test(sanitizedNewAgentId) &&
     !agents.some((agent) => agent.id === sanitizedNewAgentId);
   const workflowTestMessageReady = workflowTestInput.content.trim().length > 0;
+  const workflowCurrentConfigKey = buildWorkflowAgentConfigComparisonKey(agents);
+  const workflowResultInputIsStale = Boolean(
+    workflowTestResult &&
+      workflowTestResultInput &&
+      buildWorkflowTestInputComparisonKey(workflowTestInput) !==
+        buildWorkflowTestInputComparisonKey(workflowTestResultInput),
+  );
+  const workflowResultConfigIsStale = Boolean(
+    workflowTestResult &&
+      workflowTestResultConfigKey &&
+      workflowCurrentConfigKey !== workflowTestResultConfigKey,
+  );
+  const workflowResultIsStale =
+    workflowResultInputIsStale || workflowResultConfigIsStale;
+  const workflowStaleReason =
+    workflowResultInputIsStale && workflowResultConfigIsStale
+      ? '当前输入和 Agent 配置已修改'
+      : workflowResultConfigIsStale
+        ? 'Agent 配置已修改'
+        : '当前输入已修改';
+  const workflowRunButtonLabel = workflowTestRunning
+    ? '测试中...'
+    : workflowResultIsStale
+      ? '重新运行测试'
+      : '运行测试';
   const firstAgent = enabledAgents[0];
   const storageAuditFields = [
     '存储原因',
@@ -4441,17 +5051,17 @@ const AgentSettings = () => {
     '通知复核',
   ];
   const workflowTestTrace = workflowTestResult?.agentWorkflowTrace || [];
+  const workflowTestStorageReview = workflowTestResult?.storageReview;
   const workflowTestConfidence =
-    typeof workflowTestResult?.confidence === 'number'
-      ? workflowTestResult.confidence
-      : 0;
+    normalizeAgentWorkflowConfidence(workflowTestResult?.confidence) ??
+    normalizeAgentWorkflowConfidence(workflowTestStorageReview?.confidence) ??
+    0;
   const workflowTestNotificationLabel = workflowTestResult?.notificationReview
     ?.required
     ? '待复核'
     : workflowTestResult?.shouldNotify
       ? '发送'
       : '不发送';
-  const workflowTestStorageReview = workflowTestResult?.storageReview;
   const workflowTraceStatusLabels: Record<string, string> = {
     complete: '完整',
     partial: '部分异常',
@@ -4488,6 +5098,13 @@ const AgentSettings = () => {
     workflowTestResult,
     workflowRunDiagnostics,
   );
+  const workflowReadinessChecks =
+    buildAgentWorkflowReadinessChecks(workflowTestResult);
+  const workflowRunVerdict = buildAgentWorkflowRunVerdict(
+    workflowTestResult,
+    workflowReadinessChecks,
+    workflowRecommendedActions,
+  );
   const workflowDiagnosticSeverityLabels: Record<string, string> = {
     error: '阻塞',
     warning: '注意',
@@ -4507,6 +5124,18 @@ const AgentSettings = () => {
     optimize: '优化',
     verify: '确认',
     done: '完成',
+  };
+  const workflowReadinessStatusLabels: Record<string, string> = {
+    ready: '就绪',
+    review: '复核',
+    blocked: '阻塞',
+    skipped: '跳过',
+  };
+  const workflowRunVerdictStatusLabels: Record<string, string> = {
+    ready: '就绪',
+    review: '复核',
+    blocked: '阻塞',
+    idle: '无动作',
   };
 
   const formatWorkflowTraceDuration = (durationMs?: number) => {
@@ -4665,7 +5294,7 @@ const AgentSettings = () => {
             onClick={handleRunWorkflowTest}
             disabled={workflowTestRunning || !workflowTestMessageReady}
           >
-            {workflowTestRunning ? '测试中...' : '运行测试'}
+            {workflowRunButtonLabel}
           </button>
         </div>
         <div className="agent-workflow-scenario-row">
@@ -4827,7 +5456,14 @@ const AgentSettings = () => {
           <p className="error-message">{workflowTestError}</p>
         )}
         {workflowTestResult && (
-          <div className="agent-workflow-test-result">
+          <div
+            className={`agent-workflow-test-result ${workflowResultIsStale ? 'stale' : ''}`}
+          >
+            {workflowResultIsStale && (
+              <div className="agent-test-stale-banner" aria-live="polite">
+                {workflowStaleReason}，下面仍是上一次运行结果；重新运行后再作为门禁依据。
+              </div>
+            )}
             <div className="agent-test-decision-row">
               <span
                 className={`agent-test-decision ${workflowTestResult.shouldStore ? 'on' : 'off'}`}
@@ -4843,6 +5479,27 @@ const AgentSettings = () => {
                 置信度 {Math.round(workflowTestConfidence * 100)}%
               </span>
             </div>
+            {workflowRunVerdict && (
+              <div
+                className={`agent-workflow-verdict ${workflowRunVerdict.status}`}
+                aria-label="Agent Workflow 运行结论"
+              >
+                <span>
+                  {workflowRunVerdictStatusLabels[workflowRunVerdict.status] ||
+                    workflowRunVerdict.status}
+                </span>
+                <div>
+                  <strong>{workflowRunVerdict.title}</strong>
+                  <small>{workflowRunVerdict.summary}</small>
+                  {workflowRunVerdict.detail && (
+                    <em>{workflowRunVerdict.detail}</em>
+                  )}
+                </div>
+                {workflowRunVerdict.actionLabel && (
+                  <b>{workflowRunVerdict.actionLabel}</b>
+                )}
+              </div>
+            )}
             {workflowDecisionPath.length > 0 && (
               <div className="agent-workflow-path" aria-label="Agent Workflow 决策路径">
                 {workflowDecisionPath.map((item) => (
@@ -4859,6 +5516,30 @@ const AgentSettings = () => {
                     {item.detail && <em>{item.detail}</em>}
                   </div>
                 ))}
+              </div>
+            )}
+            {workflowReadinessChecks.length > 0 && (
+              <div
+                className="agent-workflow-readiness"
+                aria-label="Agent Workflow 运行就绪检查"
+              >
+                <div className="agent-test-section-title">运行就绪检查</div>
+                <div className="agent-workflow-readiness-list">
+                  {workflowReadinessChecks.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`agent-workflow-readiness-item ${item.status}`}
+                    >
+                      <span>
+                        {workflowReadinessStatusLabels[item.status] ||
+                          item.status}
+                      </span>
+                      <strong>{item.title}</strong>
+                      <small>{item.summary}</small>
+                      {item.detail && <em>{item.detail}</em>}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             {workflowRecommendedActions.length > 0 && (
@@ -5126,6 +5807,26 @@ const IntelligentAgentSettings = () => {
       .join('、');
   };
 
+  const formatToolEffect = (effect: AgentToolDescription['effect']) => {
+    const labels: Record<AgentToolDescription['effect'], string> = {
+      read: '只读',
+      external_read: '外部只读',
+      write: '写入',
+      notify: '通知',
+      delete: '删除',
+    };
+    return labels[effect] || effect;
+  };
+
+  const formatToolRisk = (riskLevel: AgentToolDescription['riskLevel']) => {
+    const labels: Record<AgentToolDescription['riskLevel'], string> = {
+      low: '低风险',
+      medium: '中风险',
+      high: '高风险',
+    };
+    return labels[riskLevel] || riskLevel;
+  };
+
   // 获取可用工具
   useEffect(() => {
     try {
@@ -5151,6 +5852,9 @@ const IntelligentAgentSettings = () => {
     const jiraToolId = 'jiraQuery';
     const historyToolName = getToolLabel(historyToolId);
     const jiraToolName = getToolLabel(jiraToolId);
+    const approvalTailToken = 'approval-tail-token-visible-in-ui';
+    const notificationApprovalKey =
+      'messageNotification:{"channel":"project-alerts","message":"提醒团队确认 PROJ-1001 的 2026-05-12 截止时间，并同步 owner、风险级别和下一步行动，这是一段较长的待确认通知参数，用来验证完整批准 key 不会在界面里被截断。","reason":"deadline-risk-review","token":"approval-tail-token-visible-in-ui"}';
 
     // 模拟思考过程
     const simulateThoughtProcess = async () => {
@@ -5274,6 +5978,39 @@ const IntelligentAgentSettings = () => {
         },
       ]);
 
+      // 模拟需要人工确认的工具调用
+      await wait(1400);
+      if (!isDemoRunActive()) return;
+      setDemoThoughtProcess((prev) => [
+        ...prev,
+        {
+          timestamp: Date.now(),
+          thought:
+            '模型建议发出项目风险通知。系统识别这是外部通知动作，未获得用户确认前暂停执行。',
+          publicSummary:
+            '通知动作需要人工确认，系统已暂停执行并生成精确批准 key。',
+          action: 'use_tool',
+          toolUsed: 'messageNotification',
+          result: {
+            messageNotification: {
+              blocked: true,
+              approvalRequired: true,
+              reason: 'approval_required',
+              effect: 'notify',
+              riskLevel: 'medium',
+              message:
+                `工具 messageNotification 属于中风险通知动作，需要人工确认，已阻断执行。 批准 key: ${notificationApprovalKey}`,
+              approvalKey: notificationApprovalKey,
+              params: {
+                channel: 'project-alerts',
+                reason: 'deadline-risk-review',
+                token: approvalTailToken,
+              },
+            },
+          },
+        },
+      ]);
+
       // 模拟最终判断
       await wait(2000);
       if (!isDemoRunActive()) return;
@@ -5304,6 +6041,7 @@ const IntelligentAgentSettings = () => {
           `通过 ${jiraToolName} 获得任务状态和截止时间`,
           '精确历史查询未返回补充证据，已在运行检查中标记',
           '本轮重复工具调用已被跳过，避免浪费和重复证据',
+          '外部通知动作进入待确认状态，未在演示中自动执行',
         ],
       });
     };
@@ -5329,6 +6067,7 @@ const IntelligentAgentSettings = () => {
               <th>ID</th>
               <th>名称</th>
               <th>描述</th>
+              <th>安全边界</th>
               <th>参数</th>
             </tr>
           </thead>
@@ -5338,6 +6077,28 @@ const IntelligentAgentSettings = () => {
                 <td>{tool.id}</td>
                 <td>{tool.name}</td>
                 <td>{tool.description}</td>
+                <td>
+                  <div className="tool-safety">
+                    <span className={`tool-safety-badge effect ${tool.effect}`}>
+                      {formatToolEffect(tool.effect)}
+                    </span>
+                    <span className={`tool-safety-badge risk ${tool.riskLevel}`}>
+                      {formatToolRisk(tool.riskLevel)}
+                    </span>
+                    <span
+                      className={`tool-safety-badge approval ${
+                        tool.requiresHumanApproval ? 'required' : 'clear'
+                      }`}
+                    >
+                      {tool.requiresHumanApproval ? '需要确认' : '无需确认'}
+                    </span>
+                    {tool.safetyNote && (
+                      <small className="tool-safety-note">
+                        {tool.safetyNote}
+                      </small>
+                    )}
+                  </div>
+                </td>
                 <td>{formatToolParameters(tool)}</td>
               </tr>
             ))}

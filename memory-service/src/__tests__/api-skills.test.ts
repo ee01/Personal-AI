@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -116,6 +117,28 @@ describe('Personal Skill Library API', () => {
     return text;
   }
 
+  function localFilesystemSha(
+    skillMd: string,
+    files: Array<{ path?: string; relativePath?: string; content: string; sha256?: string; byteSize?: number }> = [],
+  ) {
+    return createHash('sha256')
+      .update(JSON.stringify({
+        skillMd,
+        files: files
+          .map((file) => ({
+            path: file.relativePath || file.path || '',
+            content: file.content || '',
+            sha256:
+              file.sha256 ||
+              createHash('sha256').update(file.content || '').digest('hex'),
+            byteSize:
+              file.byteSize ?? Buffer.byteLength(file.content || '', 'utf8'),
+          }))
+          .sort((left, right) => left.path.localeCompare(right.path)),
+      }))
+      .digest('hex');
+  }
+
   it('keeps suggestions out of the main list until promoted', async () => {
     const suggestion = await createSuggestion();
 
@@ -155,12 +178,21 @@ describe('Personal Skill Library API', () => {
   });
 
   it('serves tokenized skill URLs with ETag support', async () => {
-    const suggestion = await createSuggestion();
+    const suggestion = await createSuggestion({
+      files: [
+        {
+          relativePath: 'scripts/report.py',
+          content: 'print("report")\n',
+          sha256: 'report-script-sha',
+          byteSize: 16,
+        },
+      ],
+    });
     await app.inject({
       method: 'POST',
       url: `/api/v1/skills/suggestions/${suggestion.id}/use`,
       headers: { 'x-user-id': USER_ID },
-      payload: {},
+      payload: { reviewConfirmed: true },
     });
 
     const detailRes = await app.inject({
@@ -173,6 +205,17 @@ describe('Personal Skill Library API', () => {
     expect(detail.share.urlPath).toContain('/skills/jira-headcount-trend-report%40v0.1');
     const [sharePath, shareQuery] = String(detail.share.urlPath).split('?');
     const skillMdPath = `${sharePath}/SKILL.md?${shareQuery}`;
+    const packagePath = `${sharePath}/package.json?${shareQuery}`;
+    const filePath = `${sharePath}/files/scripts/report.py?${shareQuery}`;
+
+    const htmlRes = await app.inject({
+      method: 'GET',
+      url: detail.share.urlPath,
+    });
+    expect(htmlRes.statusCode).toBe(200);
+    expect(htmlRes.body).toContain('package.json');
+    expect(htmlRes.body).toContain('/SKILL.md?token=');
+    expect(htmlRes.body).toContain('/files/scripts/report.py?token=');
 
     const mdRes = await app.inject({
       method: 'GET',
@@ -188,6 +231,23 @@ describe('Personal Skill Library API', () => {
       headers: { 'if-none-match': detail.share.etag },
     });
     expect(notModified.statusCode).toBe(304);
+
+    const packageRes = await app.inject({
+      method: 'GET',
+      url: packagePath,
+    });
+    expect(packageRes.statusCode).toBe(200);
+    expect(packageRes.json().files[0]).toMatchObject({
+      relativePath: 'scripts/report.py',
+      content: 'print("report")\n',
+    });
+
+    const fileRes = await app.inject({
+      method: 'GET',
+      url: filePath,
+    });
+    expect(fileRes.statusCode).toBe(200);
+    expect(fileRes.body).toBe('print("report")\n');
   });
 
   it('manages sync settings with platform-level constraints', async () => {
@@ -667,6 +727,40 @@ describe('Personal Skill Library API', () => {
       slug: 'meeting-prep',
       version: 'v1',
     });
+    const installPackage = pushRes.json().packagesToInstall[0];
+    const filesystemSha = localFilesystemSha(
+      installPackage.skillMd,
+      installPackage.files,
+    );
+    expect(installPackage.sha256).toBe(filesystemSha);
+
+    const echoedPushRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/sync/local-platform',
+      headers: { 'x-user-id': USER_ID },
+      payload: {
+        platform: 'codex',
+        skills: [
+          {
+            slug: 'meeting-prep',
+            title: 'Meeting Prep',
+            description: 'Prepare meetings from memory.',
+            version: 'v1',
+            sha256: filesystemSha,
+            mtime: 1,
+            skillMd: installPackage.skillMd,
+            files: [],
+          },
+        ],
+      },
+    });
+    expect(echoedPushRes.statusCode).toBe(200);
+    expect(echoedPushRes.json()).toMatchObject({
+      externalChanges: 0,
+      pushed: 0,
+      skipped: 1,
+    });
+    expect(echoedPushRes.json().packagesToInstall).toHaveLength(0);
 
     const pullRes = await app.inject({
       method: 'POST',

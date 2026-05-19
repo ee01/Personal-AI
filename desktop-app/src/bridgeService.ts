@@ -5,6 +5,7 @@ import type {
   BindingType,
   BridgePairResult,
   BridgeServiceStatus,
+  BridgeSyncAttemptLogEntry,
   MemoSyncRequest,
   MobileBriefingRequest,
   NoticeSyncRequest,
@@ -27,6 +28,7 @@ import { StateStore, type BridgeStateFile } from './persistence.js';
 import type {
   BrowserSendOptions,
   BrowserSessionAdapter,
+  BrowserTransportStatus,
   BrowserThreadSnapshot,
 } from './browserSession.js';
 
@@ -191,6 +193,7 @@ export class DoubaoBridgeService {
     authStatus: 'unknown',
     bindings: {},
     threads: [],
+    syncAttempts: [],
   };
 
   constructor(
@@ -213,6 +216,15 @@ export class DoubaoBridgeService {
 
   private async persist(): Promise<void> {
     await this.store.save(this.state);
+  }
+
+  getSyncAttempts(): BridgeSyncAttemptLogEntry[] {
+    return [...(this.state.syncAttempts || [])];
+  }
+
+  async saveSyncAttempts(attempts: BridgeSyncAttemptLogEntry[]): Promise<void> {
+    this.state.syncAttempts = [...attempts];
+    await this.persist();
   }
 
   getHealth(): Record<string, unknown> {
@@ -274,6 +286,7 @@ export class DoubaoBridgeService {
       authStatus: this.state.authStatus,
       browserRunning: browserStatus.running,
       currentUrl: browserStatus.currentUrl,
+      browserTransport: browserStatus.transport,
       pairToken: this.state.pairToken,
       bindings: this.state.bindings,
       threads: this.state.threads,
@@ -282,11 +295,15 @@ export class DoubaoBridgeService {
     };
   }
 
-  async openLogin(): Promise<{ url: string }> {
+  async openLogin(): Promise<{
+    url: string;
+    browserTransport?: BrowserTransportStatus;
+  }> {
     const url = await this.browser.openLogin();
+    const browserTransport = this.browser.status().transport;
     this.state.authStatus = 'needs_login';
     await this.persist();
-    return { url };
+    return { url, browserTransport };
   }
 
   async listThreads(): Promise<{
@@ -636,6 +653,8 @@ export class DoubaoBridgeService {
         transcript,
         sentAt: nowIso(),
         transportUsed: result.transportUsed,
+        transportMode: result.transportMode,
+        transportFallbackReason: result.transportFallbackReason,
         error: effectiveSent
           ? undefined
           : effectiveError ||

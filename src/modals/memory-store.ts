@@ -5,6 +5,7 @@ import {
   type RecallItem,
   type RecallScope,
 } from '../services/MemoryServiceClient';
+import { getTopicUnreadTotalCount } from './topic-unread-preview';
 
 // 实体类型配置
 export const ENTITY_TYPE_CONFIG = {
@@ -222,6 +223,11 @@ const mapRecallItemToSearchResult = (item: RecallItem) => {
     exploreLink: item.exploreLink,
     timestamp: item.timestamp,
     channels: Array.isArray(metadata.channels) ? metadata.channels : [],
+    feedbackAction:
+      metadata.recallFeedback === 'positive' ||
+      metadata.recallFeedback === 'negative'
+        ? metadata.recallFeedback
+        : undefined,
     recentDataDetails: { ...EMPTY_SEARCH_RESULT_DETAILS },
   };
 };
@@ -335,9 +341,9 @@ const getConversationReadStateNodes = (conversation: any): any[] => {
   return nodes;
 };
 
-const isConversationRead = (conversation: any): boolean => {
-  return getConversationReadStateNodes(conversation).every(
-    (message) => message?.isRead === true,
+const hasExplicitUnreadReadStateNode = (conversation: any): boolean => {
+  return getConversationReadStateNodes(conversation).some(
+    (message) => message?.isRead === false,
   );
 };
 
@@ -387,7 +393,8 @@ const inferUnreadCountFromConversations = (topic: any): number => {
     ...lists.map(
       (conversations) =>
         conversations.filter(
-          (conversation: any) => !isConversationRead(conversation),
+          (conversation: any) =>
+            hasExplicitUnreadReadStateNode(conversation),
         ).length,
     ),
   );
@@ -400,6 +407,10 @@ const inferUnreadCountFromTopic = (topic: any): number => {
       ? topic.unreadDiscussions.length
       : 0,
   );
+};
+
+const getTopicUnreadSignalCount = (topic: any): number => {
+  return getTopicUnreadTotalCount(topic);
 };
 
 const setTopicReadStatus = (
@@ -484,7 +495,7 @@ const hasUnreadConversationMatch = (
       (conversation: any) =>
         getConversationIdentitySet(conversation).has(
           normalizedConversationId,
-        ) && !isConversationRead(conversation),
+        ) && hasExplicitUnreadReadStateNode(conversation),
     ),
   );
 };
@@ -1952,11 +1963,20 @@ export const useMemoryStore = defineStore('memory', () => {
 
       entities.value.forEach((entity: any) => {
         if (entity.type === 'Topic' && entity.readStatus) {
-          // 使用 unreadCount 判断是否已读（而不是 isRead 字段）
-          const isRead = entity.readStatus.unreadCount === 0;
+          const unreadSignalCount = getTopicUnreadSignalCount(entity);
+          if (
+            entity.readStatus.unreadCount === 0 &&
+            unreadSignalCount > 0
+          ) {
+            setTopicReadStatus(
+              entity,
+              unreadSignalCount,
+              entity.readStatus?.lastUpdateTime || Date.now(),
+            );
+          }
 
           // 如果已读,清空未读讨论
-          if (isRead) {
+          if (unreadSignalCount === 0) {
             entity.unreadDiscussions = [];
             markKnownConversationsAsRead(
               entity,
@@ -2434,7 +2454,7 @@ export const useMemoryStore = defineStore('memory', () => {
         : null,
     ].filter((topic, index, all) => topic && all.indexOf(topic) === index);
 
-    if (targets.length === 0) return;
+    if (targets.length === 0) return false;
 
     const changedTargets = targets.filter(
       (topic: any) =>
@@ -2442,7 +2462,7 @@ export const useMemoryStore = defineStore('memory', () => {
         hasUnreadDiscussionMatch(topic, conversationId),
     );
 
-    if (changedTargets.length === 0) return;
+    if (changedTargets.length === 0) return false;
 
     const conversationLabel = getConversationDisplayLabel(
       changedTargets[0],
@@ -2511,6 +2531,7 @@ export const useMemoryStore = defineStore('memory', () => {
     updateTopicUnreadCount();
 
     console.log(`[消息阅读] 消息 "${conversationId}" 已标记为已读`);
+    return true;
   };
 
   const undoLastConversationRead = async () => {
@@ -2553,12 +2574,7 @@ export const useMemoryStore = defineStore('memory', () => {
       if (e.type !== 'Topic') return false;
       if (isTopicDeferred(e.id)) return false;
       if (isTopicMuted(e.id)) return false;
-      // 如果有 readStatus，只根据 unreadCount 判断
-      if (e.readStatus) {
-        return e.readStatus.unreadCount > 0;
-      }
-      // 如果没有 readStatus，视为未读
-      return true;
+      return getTopicUnreadSignalCount(e) > 0;
     });
   };
 

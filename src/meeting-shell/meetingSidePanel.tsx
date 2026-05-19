@@ -17,7 +17,9 @@ import {
   sanitizeExploreRoute,
 } from '../web-intelligence/contextRecallGuards';
 import {
+  getActionReviewExceptionHint,
   getActionReviewWarningLabel,
+  getActionReviewWarningSummary,
   getActionReviewWarnings,
 } from './actionItemReview';
 import { getDemoMeetingSessionSnapshot } from './demo';
@@ -109,6 +111,14 @@ type BulkActionReviewFeedback = {
   status: 'updating' | 'confirmed' | 'failed';
   total: number;
   completed: number;
+};
+
+type MeetingPrepActionFeedbackState = 'adding' | 'added' | 'failed';
+type MeetingPrepActionDraft = {
+  title: string;
+  owner: string;
+  deadline: string;
+  evidence: string;
 };
 
 const PANEL_UI_STORAGE_PREFIX = 'meetingPilot.panelUi.';
@@ -348,10 +358,7 @@ function isActionOwnerUnassigned(owner?: string): boolean {
 function formatActionReviewWarningLine(
   item: MeetingPilotActionItem,
 ): string | undefined {
-  const warnings = getActionReviewWarnings(item).map(
-    getActionReviewWarningLabel,
-  );
-  return warnings.length ? warnings.join(' / ') : undefined;
+  return getActionReviewWarningSummary(item);
 }
 
 function formatActionItemForClipboard(item: MeetingPilotActionItem): string {
@@ -730,6 +737,74 @@ function getMeetingPrepEvidenceLinks(
   return links.slice(0, 2);
 }
 
+function isMeetingPrepCueActionable(card: ContextAssistCueCard): boolean {
+  return card.kind === 'question' || card.kind === 'action';
+}
+
+function trimMeetingPrepActionText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function buildMeetingPrepCueActionDraft(
+  card: ContextAssistCueCard,
+  handoff: MeetingPrepHandoff,
+  selfName?: string,
+): MeetingPrepActionDraft | null {
+  if (!isMeetingPrepCueActionable(card)) {
+    return null;
+  }
+
+  const cardTitle = String(card.title || '').trim();
+  const cardBody = String(card.body || '').trim();
+  const baseTitle =
+    card.kind === 'question'
+      ? `确认：${cardBody || cardTitle}`
+      : cardBody || cardTitle;
+  const title = trimMeetingPrepActionText(baseTitle, 160);
+  if (!title) {
+    return null;
+  }
+
+  const evidenceParts = [
+    cardTitle ? `会前准备「${cardTitle}」` : '会前准备',
+    cardBody,
+    handoff.goal ? `会议目标：${handoff.goal}` : '',
+    handoff.evidence[0]?.snippet
+      ? `来源：${handoff.evidence[0].snippet}`
+      : '',
+  ].filter(Boolean);
+
+  return {
+    title,
+    owner: String(selfName || '').trim(),
+    deadline: '本次会议',
+    evidence: trimMeetingPrepActionText(evidenceParts.join('；'), 240),
+  };
+}
+
+function hasMeetingPrepCueActionItem(
+  session: MeetingPilotSessionSnapshot,
+  card: ContextAssistCueCard,
+  handoff: MeetingPrepHandoff,
+): boolean {
+  const draft = buildMeetingPrepCueActionDraft(card, handoff, session.selfName);
+  const normalizedTitle = normalizeTimelineMatchText(draft?.title);
+  if (!normalizedTitle) {
+    return false;
+  }
+
+  return session.actionItems.some((item) => {
+    if (getActionReviewState(item) === 'dismissed') {
+      return false;
+    }
+    return normalizeTimelineMatchText(item.title) === normalizedTitle;
+  });
+}
+
 const shellStyle = `
   :root {
     color-scheme: dark;
@@ -1003,6 +1078,39 @@ const shellStyle = `
     font-size: 11.5px;
     line-height: 1.5;
     overflow-wrap: anywhere;
+  }
+
+  .meeting-prep-cue-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+  }
+
+  .meeting-prep-action-btn {
+    border: 1px solid rgba(126,226,168,0.42);
+    background: rgba(46,204,113,0.12);
+    color: #b9f6ca;
+    border-radius: 7px;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .meeting-prep-action-btn:hover:not(:disabled) {
+    background: rgba(46,204,113,0.18);
+  }
+
+  .meeting-prep-action-btn.added,
+  .meeting-prep-action-btn:disabled {
+    cursor: default;
+    opacity: 0.72;
+  }
+
+  .meeting-prep-action-btn.failed {
+    border-color: rgba(255,107,107,0.46);
+    background: rgba(255,107,107,0.12);
+    color: #fecaca;
   }
 
   .meeting-prep-evidence {
@@ -2251,6 +2359,9 @@ function MeetingSidePanel() {
   >(null);
   const [meetingPrepHandoff, setMeetingPrepHandoff] =
     useState<MeetingPrepHandoff | null>(null);
+  const [meetingPrepActionFeedback, setMeetingPrepActionFeedback] = useState<
+    Record<string, MeetingPrepActionFeedbackState>
+  >({});
   const [panelUiReady, setPanelUiReady] = useState(false);
   const [settings, setSettings] = useState({
     autoDetect: true,
@@ -2706,6 +2817,63 @@ function MeetingSidePanel() {
       setManualActionError(
         (error as Error)?.message || '添加失败，请稍后重试。',
       );
+    }
+  };
+  const addMeetingPrepCueAsActionItem = async (
+    card: ContextAssistCueCard,
+  ) => {
+    if (!meetingPrepHandoff) {
+      return;
+    }
+    const draft = buildMeetingPrepCueActionDraft(
+      card,
+      meetingPrepHandoff,
+      session.selfName,
+    );
+    if (!draft || meetingPrepActionFeedback[card.id] === 'adding') {
+      return;
+    }
+    if (hasMeetingPrepCueActionItem(session, card, meetingPrepHandoff)) {
+      setMeetingPrepActionFeedback((current) => ({
+        ...current,
+        [card.id]: 'added',
+      }));
+      return;
+    }
+
+    setMeetingPrepActionFeedback((current) => ({
+      ...current,
+      [card.id]: 'adding',
+    }));
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_ADD_ACTION_ITEM',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+        title: draft.title,
+        owner: draft.owner,
+        deadline: draft.deadline,
+        evidence: draft.evidence,
+        chapterId: currentChapter?.id,
+      });
+      if (!response?.success) {
+        throw new Error(response?.message || '添加会前准备行动项失败');
+      }
+      setMeetingPrepActionFeedback((current) => ({
+        ...current,
+        [card.id]: 'added',
+      }));
+      setActionFilter('open');
+      await refresh();
+    } catch (error) {
+      console.warn('[Meeting Pilot][sidepanel] add prep action item failed', {
+        cueCardId: card.id,
+        error: String((error as Error)?.message || error),
+      });
+      setMeetingPrepActionFeedback((current) => ({
+        ...current,
+        [card.id]: 'failed',
+      }));
     }
   };
   const copyActionItem = async (item: MeetingPilotActionItem) => {
@@ -3504,6 +3672,41 @@ function MeetingSidePanel() {
                           <strong>{card.title}</strong>
                         </div>
                         <div className="meeting-prep-cue-body">{card.body}</div>
+                        {isMeetingPrepCueActionable(card) ? (
+                          <div className="meeting-prep-cue-actions">
+                            {(() => {
+                              const status = hasMeetingPrepCueActionItem(
+                                session,
+                                card,
+                                meetingPrepHandoff,
+                              )
+                                ? 'added'
+                                : meetingPrepActionFeedback[card.id];
+                              return (
+                                <button
+                                  className={`meeting-prep-action-btn ${
+                                    status === 'added' ? 'added' : ''
+                                  } ${status === 'failed' ? 'failed' : ''}`}
+                                  type="button"
+                                  disabled={
+                                    status === 'adding' || status === 'added'
+                                  }
+                                  onClick={() =>
+                                    void addMeetingPrepCueAsActionItem(card)
+                                  }
+                                >
+                                  {status === 'adding'
+                                    ? '加入中'
+                                    : status === 'added'
+                                    ? '已加入行动项'
+                                    : status === 'failed'
+                                    ? '重试加入'
+                                    : '加入行动项'}
+                                </button>
+                              );
+                            })()}
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                   </div>
@@ -3993,6 +4196,8 @@ function MeetingSidePanel() {
                 );
                 const itemReviewState = getActionReviewState(item);
                 const itemReviewWarnings = getActionReviewWarnings(item);
+                const itemReviewExceptionHint =
+                  getActionReviewExceptionHint(item);
                 return (
                   <div
                     className={`action-card ${itemReviewState} ${
@@ -4169,18 +4374,26 @@ function MeetingSidePanel() {
                                 <button
                                   className="ac-button primary"
                                   type="button"
+                                  title={itemReviewExceptionHint}
                                   onClick={() =>
                                     void updateActionItemReview(item, {
                                       reviewState: 'confirmed',
                                     })
                                   }
                                 >
-                                  确认
+                                  {itemReviewExceptionHint
+                                    ? '确认例外'
+                                    : '确认'}
                                 </button>
                               ) : null}
                               <button
                                 className="ac-button"
                                 type="button"
+                                title={
+                                  itemReviewState === 'suggested'
+                                    ? itemReviewExceptionHint
+                                    : undefined
+                                }
                                 onClick={() =>
                                   void updateActionItemReview(item, {
                                     status:
@@ -4194,7 +4407,9 @@ function MeetingSidePanel() {
                                 {item.status === 'done'
                                   ? '撤回完成'
                                   : itemReviewState === 'suggested'
-                                  ? '确认并完成'
+                                  ? itemReviewExceptionHint
+                                    ? '确认例外并完成'
+                                    : '确认并完成'
                                   : '完成'}
                               </button>
                               <button

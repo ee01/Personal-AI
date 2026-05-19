@@ -51,6 +51,8 @@ export interface ExplorerTransportStatus {
   mode: ExplorerTransportMode;
   /** Human-readable reason if a fallback occurred, e.g. webpage-mcp → playwright. */
   fallbackReason?: string;
+  /** ISO timestamp when the temporary fallback cooldown ends. */
+  fallbackCooldownUntil?: string;
 }
 
 export interface ExplorerSourceStatus {

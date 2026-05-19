@@ -85,6 +85,63 @@ test('ConfigSyncService reads App Script deployment metadata from Config sheet',
   assert.equal(config.appScriptLastUpdated, '2026-04-03');
 });
 
+test('ConfigSyncService keeps canonical Config keys ahead of stale duplicate aliases', async () => {
+  installFetchMock(() =>
+    new Response(
+      JSON.stringify({
+        values: [
+          ['web_app_url', 'https://script.google.com/macros/s/current/exec'],
+          ['web_app_url', 'https://script.google.com/macros/s/stale/exec'],
+          ['deployment_id', 'deployment-current'],
+          ['deploymentId', 'deployment-stale'],
+          ['app_script_version', '2.8.0'],
+          ['appScriptVersion', '2.7.0'],
+          ['messages_sheet_id', '101'],
+          ['messages_sheet_id', '202'],
+          ['bot_automation_executor_rule_id', 'executor-current'],
+          ['bot_automation_executor_rule_id', 'executor-stale'],
+          ['sheet_version', '2.7'],
+          ['created_by', 'Personal AI Extension'],
+          ['created_at', '2026-04-30 12:00:00'],
+        ],
+      }),
+      { status: 200 },
+    ),
+  );
+
+  const service = new ConfigSyncService('token');
+  const config = await service.readConfigFromSheet('sheet-123');
+
+  assert.equal(config.webAppUrl, 'https://script.google.com/macros/s/current/exec');
+  assert.equal(config.deploymentId, 'deployment-current');
+  assert.equal(config.appScriptVersion, '2.8.0');
+  assert.equal(config.messagesSheetId, 101);
+  assert.equal(config.botAutomation?.executorRule?.ruleId, 'executor-current');
+});
+
+test('ConfigSyncService reads the newest duplicate last_sync_time from Config sheet', async () => {
+  installFetchMock(() =>
+    new Response(
+      JSON.stringify({
+        values: [
+          ['last_sync_time', '2026-05-12T09:00:00.000Z'],
+          ['last_sync_time', '2026-05-12T07:00:00.000Z'],
+          ['last_sync_time', 'not-a-date'],
+          ['sheet_version', '2.7'],
+          ['created_by', 'Personal AI Extension'],
+          ['created_at', '2026-04-30 12:00:00'],
+        ],
+      }),
+      { status: 200 },
+    ),
+  );
+
+  const service = new ConfigSyncService('token');
+  const config = await service.readConfigFromSheet('sheet-123');
+
+  assert.equal(config.last_sync_time, '2026-05-12T09:00:00.000Z');
+});
+
 test('ConfigSyncService reads RingCentral sender config from Config sheet', async () => {
   installFetchMock(() =>
     new Response(
@@ -344,6 +401,112 @@ test('ConfigSyncService deduplicates stale managed Config keys when saving', asy
   assert.equal(configMap.get('bot_automation_executor_rule_id'), 'executor-new');
   assert.equal(configMap.get('bot_automation_executor_rule_name'), 'Executor New');
   assert.equal(configMap.get('custom_owner_note'), 'keep me');
+});
+
+test('ConfigSyncService stops writes when Sheet Config is newer than the local base', async () => {
+  let putCount = 0;
+  installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      putCount += 1;
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        values: [
+          ['last_sync_time', '2026-05-12T09:00:00.000Z'],
+          ['web_app_url', 'https://script.google.com/macros/s/remote/exec'],
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  await assert.rejects(
+    () => service.saveConfigToSheet({
+      sheetId: 'sheet-123',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      webAppUrl: 'https://script.google.com/macros/s/local/exec',
+      sheet_version: '2.7',
+      created_by: 'Personal AI Extension',
+      created_at: '2026-04-30 12:00:00',
+      last_sync_time: '2026-05-12T08:00:00.000Z',
+    }),
+    /Sheet Config 已更新/,
+  );
+
+  assert.equal(putCount, 0);
+});
+
+test('ConfigSyncService stops writes when local freshness is unknown but Sheet has a sync time', async () => {
+  let putCount = 0;
+  installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      putCount += 1;
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        values: [
+          ['last_sync_time', '2026-05-12T09:00:00.000Z'],
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  await assert.rejects(
+    () => service.saveConfigToSheet({
+      sheetId: 'sheet-123',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      webAppUrl: 'https://script.google.com/macros/s/local/exec',
+      sheet_version: '2.7',
+      created_by: 'Personal AI Extension',
+      created_at: '2026-04-30 12:00:00',
+    }),
+    /本机基准：未知/,
+  );
+
+  assert.equal(putCount, 0);
+});
+
+test('ConfigSyncService allows an explicitly newer local config to replace older Sheet Config', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        values: [
+          ['last_sync_time', '2026-05-12T07:00:00.000Z'],
+          ['web_app_url', 'https://script.google.com/macros/s/remote/exec'],
+        ],
+      }),
+      { status: 200 },
+    );
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    webAppUrl: 'https://script.google.com/macros/s/local/exec',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-04-30 12:00:00',
+    last_sync_time: '2026-05-12T08:00:00.000Z',
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+
+  assert.equal(configMap.get('web_app_url'), 'https://script.google.com/macros/s/local/exec');
 });
 
 test('ConfigSyncService clears remote sender credentials when sender is explicitly disabled', async () => {
@@ -744,6 +907,81 @@ test('ConfigSyncService uses newer Sheet Config as base for partial updates', as
   assert.equal(config.botAutomation?.timelineSyncRule?.ruleId, 'timeline-remote');
   assert.equal(storedConfig.botAutomation.timelineSyncRule.ruleId, 'timeline-remote');
   assert.equal(configMap.get('bot_automation_executor_rule_name'), 'Executor Updated');
+  assert.equal(configMap.get('bot_automation_timeline_sync_rule_id'), 'timeline-remote');
+});
+
+test('ConfigSyncService uses same-timestamp Sheet Config as base for partial updates', async () => {
+  let storedConfig: any;
+  const remoteRows = [
+    ['sheet_version', '2.7'],
+    ['created_by', 'Personal AI Extension'],
+    ['created_at', '2026-05-01T00:00:00.000Z'],
+    ['last_sync_time', '2026-05-01T10:00:00.000Z'],
+    ['web_app_url', 'https://script.google.com/macros/s/remote/exec'],
+    ['bot_automation_executor_rule_id', 'executor-remote'],
+    ['bot_automation_executor_rule_name', 'Executor Remote'],
+    ['bot_automation_timeline_sync_rule_id', 'timeline-remote'],
+    ['bot_automation_timeline_sync_rule_name', 'Timeline Remote'],
+  ];
+
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: remoteRows }), { status: 200 });
+  });
+
+  (globalThis as any).chrome = {
+    storage: {
+      local: {
+        get: async () => ({
+          scheduledMessagesConfig: {
+            sheetId: 'sheet-123',
+            sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+            sheet_version: '2.7',
+            created_by: 'Personal AI Extension',
+            created_at: '2026-05-01T00:00:00.000Z',
+            last_sync_time: '2026-05-01T10:00:00.000Z',
+            webAppUrl: 'https://script.google.com/macros/s/local/exec',
+            botAutomation: {
+              executorRule: {
+                ruleId: 'executor-local',
+                ruleName: 'Executor Local',
+                webhookUrl: 'https://local.example.com/executor',
+                projectKey: 'OLD',
+                jiraUrl: 'https://jira.example.com',
+                createdAt: '2026-04-30T00:00:00.000Z',
+              },
+            },
+          },
+        }),
+        set: async (value: any) => {
+          storedConfig = value.scheduledMessagesConfig;
+        },
+      },
+    },
+  };
+
+  const service = new ConfigSyncService('token');
+  const config = await service.updatePartialConfig({
+    appScriptVersion: '2.8.0',
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+
+  assert.equal(config.webAppUrl, 'https://script.google.com/macros/s/remote/exec');
+  assert.equal(config.appScriptVersion, '2.8.0');
+  assert.equal(config.botAutomation?.executorRule?.ruleId, 'executor-remote');
+  assert.equal(config.botAutomation?.timelineSyncRule?.ruleId, 'timeline-remote');
+  assert.equal(storedConfig.webAppUrl, 'https://script.google.com/macros/s/remote/exec');
+  assert.equal(storedConfig.botAutomation.timelineSyncRule.ruleId, 'timeline-remote');
+  assert.equal(configMap.get('web_app_url'), 'https://script.google.com/macros/s/remote/exec');
+  assert.equal(configMap.get('app_script_version'), '2.8.0');
+  assert.equal(configMap.get('bot_automation_executor_rule_id'), 'executor-remote');
   assert.equal(configMap.get('bot_automation_timeline_sync_rule_id'), 'timeline-remote');
 });
 

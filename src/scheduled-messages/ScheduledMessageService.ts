@@ -42,7 +42,7 @@
  */
 
 import { Sheet } from '../sheet';
-import { ScheduledMessage, CreateMessageFormData, SheetConfig, Statistics, MessageType } from './types';
+import { ScheduledMessage, CreateMessageFormData, SheetConfig, Statistics, MessageType, PushLog } from './types';
 import { getGoogleAuthTokenSilently } from '../utils/googleAuth';
 import { normalizeSheetConfig } from './botAutomationConfig';
 import { formatTimelineNextExecutionText } from './timelineFormatting';
@@ -54,6 +54,8 @@ import {
   calculateScheduledMessageNextExecution,
   hasConfiguredAiEndpoint,
 } from './scheduleNextExecution';
+import { shouldReactivateDoneOneTimeMessageAfterScheduleChange } from './scheduleStatusReactivation';
+import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
 
 const NON_PERSISTED_OUTREACH_FIELDS = new Set([
   'Outreach_Target_Type',
@@ -198,6 +200,31 @@ export class ScheduledMessageService {
       return messages;
     });
   }
+
+  async getRecentPushLogs(limit = 500): Promise<PushLog[]> {
+    if (!this.config) {
+      await this.loadConfig();
+    }
+
+    if (!this.config) {
+      throw new Error('未找到配置，请先初始化系统');
+    }
+
+    return await this.withTokenRetry(async () => {
+      const sheet = new Sheet(this.token, this.config.sheetId, 'Logs');
+      const data = await sheet.readSheet();
+
+      if (!data || data.length <= 1) {
+        return [];
+      }
+
+      const headers = data[0];
+      return data
+        .slice(1, Math.max(1, limit + 1))
+        .map((row) => this.parseRowToPushLog(row, headers))
+        .filter((log): log is PushLog => Boolean(log));
+    });
+  }
   
   /**
    * 根据 ID 获取消息
@@ -271,8 +298,22 @@ export class ScheduledMessageService {
       throw new Error(`未找到消息: ${id}`);
     }
     
-    const updatedMessage = { ...messages[index], ...updates };
+    const previousMessage = messages[index];
+    const updatedMessage = { ...previousMessage, ...updates };
     normalizeExecutorTargetType(updatedMessage);
+
+    if (
+      shouldReactivateDoneOneTimeMessageAfterScheduleChange(
+        previousMessage,
+        updatedMessage,
+        updates,
+      )
+    ) {
+      updatedMessage.Status = 'Active';
+      updatedMessage.Last_Exec = '';
+      updatedMessage.Exec_Log = '待执行';
+      console.log(`✅ 消息 ${id} 已从 Done 自动恢复为 Active，等待新的未来执行时间`);
+    }
     
     // 重新计算下次执行时间
     if (
@@ -345,17 +386,13 @@ export class ScheduledMessageService {
     if (!message) {
       throw new Error(`未找到消息: ${id}`);
     }
-    
-    const newStatus = message.Status === 'Active' ? 'Paused' : 'Active';
-    
-    // 如果从 Done 状态切换到 Active，清空 Last_Exec（允许重新推送）
-    const updates: any = { Status: newStatus };
-    if (message.Status === 'Done' && newStatus === 'Active') {
-      updates.Last_Exec = '';
-      console.log(`✅ 消息 ${id} 从 Done 切换到 Active，已清空 Last_Exec 以允许重新推送`);
+
+    const action = getScheduledMessageStatusToggleAction(message.Status);
+    if (!action.canToggle || !action.nextStatus) {
+      throw new Error(action.title);
     }
     
-    return await this.updateMessage(id, updates);
+    return await this.updateMessage(id, { Status: action.nextStatus });
   }
   
   /**
@@ -466,6 +503,26 @@ export class ScheduledMessageService {
     }
     
     return message as ScheduledMessage;
+  }
+
+  private parseRowToPushLog(row: any[], headers: string[]): PushLog | null {
+    if (!row || row.length === 0) return null;
+
+    const log: any = {};
+    headers.forEach((header, index) => {
+      log[header] = row[index] || '';
+    });
+
+    if (!log.Message_ID && !log.Timestamp && !log.Content) {
+      return null;
+    }
+
+    const execCount = log.Exec_Count === '' || log.Exec_Count === undefined || log.Exec_Count === null
+      ? 0
+      : Number(log.Exec_Count);
+    log.Exec_Count = Number.isNaN(execCount) ? 0 : execCount;
+
+    return log as PushLog;
   }
   
   /**

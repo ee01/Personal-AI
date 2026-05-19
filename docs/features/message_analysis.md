@@ -1,6 +1,6 @@
 # 记忆入口消息观察规则
 
-_最后更新: 2026-05-13_
+_最后更新: 2026-05-17_
 
 > 说明：旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
 
@@ -478,6 +478,26 @@ Popup 中的入口名称已改为：
 
 - [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
 - [Zapier：Filter & Paths](https://help.zapier.com/hc/en-us/sections/16074338520461)
+- [Trigger-Action Programming in the Wild](https://www.blaseur.com/papers/chi16-ifttt.pdf)
+- [Attention-Sensitive Alerting](https://erichorvitz.com/attend.htm)
+
+## 2026-05-17 更新：Agent Thinking 最终校验与范围提示降噪
+
+本轮复查发现，普通 filter 模式已经会在入库前做最终范围校验，但 `agentThinking` 模式仍可能直接相信模型返回的 `shouldStore=true`。如果模型输出了越界的 `matchedRuleRefs`，消息可能被错误写入记忆。
+
+当前实现已收敛为：
+
+- `agentThinking` 在每条消息完成思考后，会用统一的 `resolveMatchedWatchRules` 再解析 `matchedRuleRefs` / `matchedRuleIds` / `matchedRule`。
+- 规则命中必须通过发送人、群组和系统观察规则的最终范围校验，才保留入库或通知决策。
+- 未通过校验的命中会清空规则引用，并把 `shouldStore` / `shouldNotify` 置为 `false`，避免污染记忆和触发通知。
+- 规则安全提示与运行时匹配策略对齐：两字中文范围名（例如 `研发`）不再被当成短范围风险；英文短词（例如 `AI`）仍会提醒用户复核。
+
+产品依据继续沿用触发器 + 条件 + 动作的心智：Slack 的消息关键词 workflow 需要先指定 channel，再配置关键词条件；Zapier 的 filter / paths 会在条件不满足时停止后续动作。结合触发-动作编程和注意力感知通知研究，记忆入口规则应把范围校验作为执行前硬边界，同时减少误报式安全提示对用户配置路径的干扰。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811)
+- [Zapier：Filter and path rules in Zaps](https://help.zapier.com/hc/en-us/articles/8496180919949-Filter-and-path-rules-in-Zaps)
 - [Trigger-Action Programming in the Wild](https://www.blaseur.com/papers/chi16-ifttt.pdf)
 - [Attention-Sensitive Alerting](https://erichorvitz.com/attend.htm)
 

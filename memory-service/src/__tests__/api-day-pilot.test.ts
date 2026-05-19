@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { buildApp } from '../server.js';
+import { DayPilotService } from '../core/DayPilotService.js';
 import { getTestDb } from './setup.js';
 
 describe('Day Pilot API', () => {
@@ -332,6 +333,42 @@ describe('Day Pilot API', () => {
     expect(alias.json().brief.id).toBe(body.brief.id);
   });
 
+  it('filters high-importance messages without a concrete today action', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, summary, source_type, sender, group_id, group_name,
+         timestamp, entities_json, matched_projects_json, importance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-fyi-only',
+      'The team shared the office lunch photo album and a retrospective note for awareness only.',
+      'Team shared an office lunch photo album for awareness.',
+      'glip',
+      'Taylor',
+      'group-social',
+      'Office Social',
+      current - 900,
+      JSON.stringify([{ type: 'Person', name: 'Taylor' }]),
+      JSON.stringify([{ name: 'Office Social' }]),
+      0.96,
+      current - 900,
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.messages.scanned).toBe(1);
+    expect(body.brief.cards).toHaveLength(0);
+    expect(body.brief.summary).toContain('暂未发现');
+  });
+
   it('does not promote generic relationship radar context without a follow-up signal', async () => {
     const current = Math.floor(Date.now() / 1000);
     const localDate = new Date(current * 1000).toISOString().slice(0, 10);
@@ -532,6 +569,48 @@ describe('Day Pilot API', () => {
     expect(nextIds.has(muteCard.id)).toBe(false);
   });
 
+  it('defaults later feedback to a six-hour snooze when omitted by the client', async () => {
+    const { localDate } = seedDayPilotData();
+    const first = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+    const card = first.json().brief.cards[0];
+    expect(card).toBeTruthy();
+
+    const beforeFeedback = Math.floor(Date.now() / 1000);
+    const feedback = await app.inject({
+      method: 'POST',
+      url: `/api/v1/today-pilot/cards/${card.id}/feedback`,
+      payload: {
+        action: 'later',
+      },
+    });
+
+    expect(feedback.statusCode).toBe(200);
+    const feedbackRow = db
+      .prepare(
+        `SELECT snooze_until
+         FROM day_brief_feedback
+         WHERE card_id = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(card.id) as { snooze_until: number } | undefined;
+    expect(feedbackRow?.snooze_until).toBeGreaterThanOrEqual(
+      beforeFeedback + 6 * 3600 - 1,
+    );
+
+    const reloaded = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=false`,
+    });
+    const visibleIds = new Set(
+      reloaded.json().brief.cards.map((item: any) => item.id),
+    );
+    expect(visibleIds.has(card.id)).toBe(false);
+  });
+
   it('renders deterministic context packs from mission evidence', async () => {
     const { localDate } = seedDayPilotData();
     const first = await app.inject({
@@ -606,5 +685,118 @@ describe('Day Pilot API', () => {
     expect(nextWebCard).toBeTruthy();
     expect(nextWebCard.score).toBeLessThan(webCard.score);
     expect(nextWebCard.contextPack.feedback.wrongCount).toBe(1);
+  });
+
+  it('rejects feedback and context pack access for another user brief', () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+    db.prepare(
+      `INSERT INTO day_briefs
+        (id, user_id, local_date, timezone, generated_at, horizon_from,
+         horizon_to, status, summary, attention_budget_json, source_stats_json,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?)`,
+    ).run(
+      'foreign-brief',
+      'owner-a',
+      localDate,
+      'Asia/Shanghai',
+      current,
+      current - 3600,
+      current + 86400,
+      'foreign brief',
+      JSON.stringify({
+        maxInterruptions: 3,
+        usedInterruptions: 0,
+        quietWindows: [],
+      }),
+      JSON.stringify({
+        messages: { scanned: 1, totalRecent: 1 },
+        calendar: { scanned: 0, upcoming: 0 },
+        notifications: { scanned: 0, pending: 0 },
+        actions: { scanned: 0, queued: 0 },
+        reflections: { scanned: 0, active: 0 },
+        skills: { scanned: 0, suggestions: 0 },
+        relationships: { scanned: 0, highFrequencyPeople: 0 },
+      }),
+      current,
+      current,
+    );
+    db.prepare(
+      `INSERT INTO day_missions
+        (id, brief_id, mission_key, title, status, source_kinds_json,
+         time_window_json, related_refs_json, current_state, desired_outcome,
+         next_actions_json, score, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'foreign-mission',
+      'foreign-brief',
+      'foreign:key',
+      'Foreign mission',
+      JSON.stringify(['message']),
+      JSON.stringify({ from: current, to: current }),
+      JSON.stringify({ sources: ['message:foreign-message'] }),
+      'Foreign state',
+      'Foreign action',
+      JSON.stringify([{ title: 'Foreign action', desc: 'Foreign desc' }]),
+      0.8,
+      current,
+      current,
+    );
+    db.prepare(
+      `INSERT INTO day_brief_cards
+        (id, brief_id, mission_id, card_type, title, priority, state, why_now,
+         next_best_action, people_json, projects_json, evidence_refs_json,
+         open_questions_json, trust_json, context_pack_json, source_hash, score,
+         created_at, updated_at)
+       VALUES (?, ?, ?, 'thread_followup', ?, 'high', 'now', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'foreign-card',
+      'foreign-brief',
+      'foreign-mission',
+      'Foreign card',
+      'Foreign why',
+      'Foreign next',
+      '[]',
+      '[]',
+      JSON.stringify([
+        {
+          sourceKind: 'message',
+          sourceId: 'foreign-message',
+          title: 'Foreign evidence',
+          snippet: 'Foreign private snippet',
+          timestamp: current,
+        },
+      ]),
+      '[]',
+      JSON.stringify({
+        confidence: 0.8,
+        riskLevel: 'low',
+        staleEvidenceCount: 0,
+        sensitiveEvidenceCount: 0,
+      }),
+      '{}',
+      'foreign-source-hash',
+      0.8,
+      current,
+      current,
+    );
+
+    const foreignService = new DayPilotService(db, 'owner-b');
+    expect(() =>
+      foreignService.recordCardFeedback('foreign-card', { action: 'done' }),
+    ).toThrow('Day Pilot card not found');
+    expect(() =>
+      foreignService.renderMissionContextPack('foreign-mission'),
+    ).toThrow('Day Pilot mission not found');
+
+    const ownerService = new DayPilotService(db, 'owner-a');
+    const feedback = ownerService.recordCardFeedback('foreign-card', {
+      action: 'done',
+    });
+    expect(feedback.brief.userId).toBe('owner-a');
+    expect(
+      feedback.brief.cards.some((card: any) => card.id === 'foreign-card'),
+    ).toBe(false);
   });
 });

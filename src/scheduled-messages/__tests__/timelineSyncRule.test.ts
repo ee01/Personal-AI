@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 import {
   TIMELINE_PROJECTS,
-  buildJiraJsonStringSmartValue,
+  buildJiraTimelineReleaseInfoSmartValue,
   buildJiraUrlEncodedSmartValue,
   buildTimelineSyncComponents,
   buildTimelineSyncComponentsFragment,
@@ -17,7 +17,7 @@ import { redactJiraRulePayloadForLog, redactJiraRuleTextForLog } from '../jiraRu
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const scheduledMessagesDir = resolve(__dirname, '..');
 
-test('Timeline Sync components use POST JSON cache webhooks for every Apps Script callback', () => {
+test('Timeline Sync components use GET cache webhooks for every Apps Script callback', () => {
   const components = buildTimelineSyncComponents();
   assert.equal(components.length, TIMELINE_PROJECTS.length * 3);
 
@@ -25,33 +25,24 @@ test('Timeline Sync components use POST JSON cache webhooks for every Apps Scrip
     const cacheWebhookIndex = components.findIndex((component: any) =>
       component.type === 'jira.issue.outgoing.webhook' &&
         String(component.value?.url || '').includes('action=cacheReleaseInfo') &&
-        String(component.value?.customBody || '').includes(`"project": "${project.paramKey}"`),
+        String(component.value?.url || '').includes(`project=${project.paramKey}`),
     );
     const cacheWebhook = components[cacheWebhookIndex] as any;
 
     assert.ok(cacheWebhook, `missing cache webhook for ${project.value}`);
-    assert.equal(cacheWebhook.value.method, 'POST');
-    assert.equal(cacheWebhook.value.contentType, 'custom');
+    assert.equal(cacheWebhook.value.method, 'GET');
+    assert.equal(cacheWebhook.value.contentType, 'empty');
     assert.equal(cacheWebhook.value.responseEnabled, true);
-    assert.deepEqual(cacheWebhook.value.headers, [
-      {
-        id: `_header_${project.paramKey}_content_type`,
-        name: 'Content-Type',
-        value: {
-          keyOrValue: 'application/json',
-          secret: false,
-        },
-      },
-    ]);
+    assert.deepEqual(cacheWebhook.value.headers, []);
     assert.equal(
       cacheWebhook.value.url,
-      '{{WEB_APP_URL}}?action=cacheReleaseInfo',
+      `{{WEB_APP_URL}}?action=cacheReleaseInfo&project=${project.paramKey}&releaseInfo=${buildJiraTimelineReleaseInfoSmartValue(project.variableName)}`,
     );
-    assert.doesNotMatch(cacheWebhook.value.url, /project=|releaseInfo=/);
-    assert.equal(
-      cacheWebhook.value.customBody,
-      `{\n  "project": "${project.paramKey}",\n  "releaseInfo": ${buildJiraJsonStringSmartValue(project.variableName)}\n}`,
-    );
+    assert.equal(cacheWebhook.value.customBody, undefined);
+
+    const variableAction = components[cacheWebhookIndex - 1] as any;
+    assert.equal(variableAction.type, 'jira.create.variable');
+    assert.equal(variableAction.value.query.value, '{{webhookResponse.body}}');
 
     assert.notEqual(
       components[cacheWebhookIndex + 1]?.type,
@@ -83,10 +74,10 @@ test('Jira URL encoding helper keeps explicit %20 space encoding', () => {
   );
 });
 
-test('Jira JSON string helper emits safe smart value JSON fragments', () => {
+test('Jira Timeline release info helper strips apostrophes before GET query encoding', () => {
   assert.equal(
-    buildJiraJsonStringSmartValue('mThorReleaseInfo'),
-    '{{mThorReleaseInfo.asJsonString}}',
+    buildJiraTimelineReleaseInfoSmartValue('mThorReleaseInfo'),
+    '{{mThorReleaseInfo.replaceAll("\'","").urlEncode.replaceAll("\\+","%20")}}',
   );
 });
 
@@ -242,6 +233,27 @@ test('Apps Script parses nested Groovy arrays without flattening object values',
   assert.equal(context.result.blockers[2], false);
   assert.equal(context.result.blockers[3], null);
   assert.equal(context.result.blockers[4], 3.5);
+});
+
+test('Apps Script parses unquoted Groovy keys containing apostrophes', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const groovyMap =
+    "{currentRelease=26.2.30, releaseInfo={FF=6/9/2026, Kira's group DF=, Rollout 100%=7/1/2026}}";
+  const context = {
+    Logger: { log: () => undefined },
+    groovyMap,
+    result: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}\nresult = parseSingleProjectReleaseInfo(groovyMap);`,
+    context,
+  );
+
+  assert.equal(context.result.currentRelease, '26.2.30');
+  assert.equal(context.result.releaseInfo.FF, '6/9/2026');
+  assert.equal(context.result.releaseInfo["Kira's group DF"], '');
+  assert.equal(context.result.releaseInfo['Rollout 100%'], '7/1/2026');
 });
 
 test('Apps Script keeps quoted commas and equals signs inside Groovy map values', () => {
@@ -1115,9 +1127,10 @@ test('Apps Script cacheReleaseInfo reports actionable diagnostics for malformed 
   assert.equal(body.requestContentType, 'application/json');
   assert.ok(body.requestBodyBytes >= body.bodyLength);
   assert.match(body.error, /POST JSON 解析失败/);
-  assert.match(body.nextAction, /POST JSON/);
-  assert.match(body.nextAction, /asJsonString/);
-  assert.match(body.expectedBody, /asJsonString/);
+  assert.match(body.nextAction, /Method=GET/);
+  assert.match(body.nextAction, /302/);
+  assert.match(body.expectedBody, /urlEncode\.replaceAll/);
+  assert.ok(Array.from(body.acceptedFormats).some((format: any) => String(format).includes('GET query')));
   assert.ok(Array.from(body.acceptedFormats).some((format: any) => String(format).includes('asJsonString')));
   assert.ok(Array.from(body.acceptedFormats).some((format: any) => String(format).includes('Groovy Map fallback')));
   assert.equal(body.expectedShape, '{releaseInfo={Milestone=MM/DD/YYYY, ...}}');
@@ -1180,6 +1193,59 @@ status = getTimelineCacheStatus();`,
   assert.ok(mThorStatus.lastAttempt.requestBodyBytes >= context.postBody.length);
   assert.match(mThorStatus.lastAttempt.parseError, /POST JSON 解析失败/);
   assert.doesNotMatch(JSON.stringify(mThorStatus), /25\.4\.20/);
+});
+
+test('Apps Script does not record malformed cache dry-run POST JSON as a sync attempt', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const properties: Record<string, string> = {};
+  const context = {
+    Logger: { log: () => undefined },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text: string) => {
+        const output = {
+          text,
+          mimeType: '',
+          setMimeType(mimeType: string) {
+            output.mimeType = mimeType;
+            return output;
+          },
+        };
+        return output;
+      },
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key: string) => properties[key] || null,
+        setProperty: (key: string, value: string) => {
+          properties[key] = value;
+        },
+      }),
+    },
+    postBody: '{"project":"mThor","dryRun": true,"releaseInfo": {currentRelease=25.4.20}}',
+    result: null as any,
+    status: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+result = doPost({ parameter: { action: 'cacheReleaseInfo' }, postData: { contents: postBody, type: 'application/json' } });
+status = getTimelineCacheStatus();`,
+    context,
+  );
+
+  const body = JSON.parse(context.result.text);
+  const mThorStatus = context.status.projects.find((project: any) => project.project === 'mThor');
+
+  assert.equal(body.success, false);
+  assert.equal(body.dryRun, true);
+  assert.equal(body.errorCode, 'INVALID_POST_JSON');
+  assert.equal(body.project, 'mThor');
+  assert.equal(body.paramKey, 'mThor');
+  assert.match(body.requestId, /^tl_mThor_/);
+  assert.equal(properties.TIMELINE_SYNC_ATTEMPT_mThor, undefined);
+  assert.equal(mThorStatus.status, 'missing');
+  assert.equal(mThorStatus.lastAttempt, undefined);
 });
 
 test('Apps Script cacheReleaseInfo rejects cache payloads over Script Properties value limit', () => {
@@ -1286,10 +1352,10 @@ test('Apps Script cacheReleaseInfo returns parse diagnostics without caching mal
   assert.equal(body.paramKey, 'mThor');
   assert.match(body.parseError, /未闭合的嵌套结构/);
   assert.equal(body.expectedShape, '{releaseInfo={Milestone=MM/DD/YYYY, ...}}');
-  assert.equal(Array.from(body.acceptedFormats).length, 2);
+  assert.equal(Array.from(body.acceptedFormats).length, 4);
   assert.equal(body.limits.maxChars, 12000);
   assert.equal(body.limits.maxNestingDepth, 12);
-  assert.match(body.nextAction, /POST JSON/);
+  assert.match(body.nextAction, /必须用 GET/);
   assert.doesNotMatch(context.result.text, /11\/13\/2025/);
   assert.equal(properties.TIMELINE_CACHE_mThor, undefined);
 });
@@ -1521,7 +1587,7 @@ test('Executor rule marks sent messages through GET Apps Script callbacks with s
   assert.equal(variables.messageId, '{{webhookResponse.body.messageId}}');
   assert.equal(variables.rowIndex, '{{webhookResponse.body.rowIndex}}');
   assert.equal(variables.executionKey, '{{webhookResponse.body.executionKey}}');
-  assert.equal(webhooks.length, 5);
+  assert.equal(webhooks.length, 7);
   for (const webhook of webhooks) {
     const url = webhook.value.url;
 
@@ -1536,7 +1602,7 @@ test('Executor rule marks sent messages through GET Apps Script callbacks with s
     assert.doesNotMatch(url, /webhookResponse\.body\.rowIndex|webhookResponse\.body\.executionKey|topic=|content=/);
     assert.equal(webhook.value.customBody, undefined);
   }
-  assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=true')).length, 4);
+  assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=true')).length, 6);
   assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=false')).length, 1);
 });
 
@@ -1648,6 +1714,9 @@ test('Executor rule sends RingCentral AsMe messages through the Dify workflow br
   assert.match(serializedRule, /"first":"\{\{webhookResponse\.body\.data\.status\}\}","second":"succeeded"/);
   assert.match(serializedRule, /"first":"\{\{webhookResponse\.body\.data\.status\}\}","second":"failed"/);
   assert.match(serializedRule, /success=true&executionKey=\{\{executionKey\.urlEncode\}\}/);
+  assert.match(serializedRule, /sentChatId=\{\{webhookResponse\.body\.data\.outputs\.chatId\.urlEncode\}\}/);
+  assert.match(serializedRule, /sentPostId=\{\{webhookResponse\.body\.data\.outputs\.postId\.urlEncode\}\}/);
+  assert.match(serializedRule, /sentAt=\{\{webhookResponse\.body\.data\.outputs\.sentAt\.urlEncode\}\}/);
   assert.match(serializedRule, /success=false&executionKey=\{\{executionKey\.urlEncode\}\}&error=\{\{webhookResponse\.body\.data\.error\.urlEncode\}\}/);
 });
 
@@ -1685,7 +1754,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.7\.9';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.8\.4';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -1754,6 +1823,54 @@ test('Apps Script mark-executed accepts the last data row index without ID fallb
   assert.equal(context.result.duplicate, false);
   assert.equal(updates.some(update => update.row === 2 && update.value === 'Done'), true);
   assert.equal(logs.length, 1);
+});
+
+test('Apps Script mark-executed records RingCentral post metadata in Logs for Glip markers', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_User_Name',
+    'Glip_Team_ID',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    ['MSG-1', 'Original topic', 'Original content', 'AsMe', 'esone.qiu', '', '2026-05-03', '12:00', '', '0', '', '', 'Active'],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+
+  vm.runInNewContext(
+    `${appScript}\nresult = markBotMessageExecuted('MSG-1', 2, true, '', 'Sent topic', 'Sent content', 'exec-with-post-id', 'chat-1', 'post-1', '2026-05-03T12:00:00Z');`,
+    context,
+  );
+
+  assert.equal(context.result.success, true);
+  assert.ok(
+    updates.some(
+      (update) =>
+        update.row === 2 &&
+        update.col === headers.indexOf('Exec_Log') + 1 &&
+        update.value === '✅ 推送成功',
+    ),
+  );
+  assert.equal(logs.length, 1);
+  const logRow = logs[0][0];
+  assert.equal(logRow[PUSH_LOG_HEADERS.indexOf('Execution_Key')], context.result.executionKey);
+  assert.equal(logRow[PUSH_LOG_HEADERS.indexOf('Sent_Chat_ID')], 'chat-1');
+  assert.equal(logRow[PUSH_LOG_HEADERS.indexOf('Sent_Post_ID')], 'post-1');
+  assert.equal(logRow[PUSH_LOG_HEADERS.indexOf('Sent_At')], '2026-05-03T12:00:00Z');
 });
 
 test('Apps Script mark-executed falls back to message ID when row index moved', () => {
@@ -1965,6 +2082,71 @@ test('Apps Script clears stale Next_Exec when a one-time message is marked done'
   assert.equal(updates.some(update => update.row === 2 && update.col === 13 && update.value === 'Done'), true);
 });
 
+test('Apps Script reactivates Done one-time messages rescheduled to a future time', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_User_Name',
+    'Glip_Team_ID',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    ['MSG-ONE', 'One-time topic', 'content', 'Bot', 'esone.qiu', '', '2026-05-03', '12:30', '2026-05-03 12:00', '1', '', '✅ 推送成功', 'Done'],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties) as any;
+  context.data = data;
+  context.now = new Date(2026, 4, 3, 12, 0);
+  context.Utilities.formatDate = (date: Date, _timeZone: string, format: string) => {
+    const pad = (value: number) => String(value).padStart(2, '0');
+    const dateText = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    const timeText = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    if (format === 'yyyy-MM-dd HH:mm:ss') {
+      return `${dateText} ${timeText}:${pad(date.getSeconds())}`;
+    }
+    if (format === 'yyyy-MM-dd HH:mm') {
+      return `${dateText} ${timeText}`;
+    }
+    if (format === 'yyyy-MM-dd') {
+      return dateText;
+    }
+    return `${dateText.replace(/-/g, '')}${timeText.replace(':', '')}`;
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+result = reactivateDoneFutureOneTimeMessages(
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages'),
+  data,
+  data[0],
+  now
+);`,
+    context,
+  );
+
+  assert.equal(context.result, 1);
+  assert.equal(data[1][headers.indexOf('Status')], 'Active');
+  assert.equal(data[1][headers.indexOf('Last_Exec')], '');
+  assert.equal(data[1][headers.indexOf('Exec_Log')], '待执行');
+  assert.equal(data[1][headers.indexOf('Next_Exec')], '2026-05-03 12:30');
+  assert.equal(updates.some(update => update.row === 2 && update.col === 13 && update.value === 'Active'), true);
+  assert.equal(updates.some(update => update.row === 2 && update.col === 9 && update.value === ''), true);
+  assert.equal(updates.some(update => update.row === 2 && update.col === 12 && update.value === '待执行'), true);
+  assert.equal(updates.some(update => update.row === 2 && update.col === 11 && update.value === '2026-05-03 12:30'), true);
+});
+
 test('Apps Script clears Next_Exec when a periodic message reaches End_Date', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const headers = [
@@ -2050,6 +2232,22 @@ test('Apps Script clears Next_Exec when a periodic message reaches Repeat_Count'
   assert.equal(updates.some(update => update.row === 2 && update.col === 16 && update.value === 'Done'), true);
 });
 
+const PUSH_LOG_HEADERS = [
+  'Timestamp',
+  'Message_ID',
+  'Topic',
+  'Content',
+  'Push_Method',
+  'Target',
+  'Status',
+  'Error',
+  'Exec_Count',
+  'Execution_Key',
+  'Sent_Chat_ID',
+  'Sent_Post_ID',
+  'Sent_At',
+];
+
 function createMarkExecutedVmContext(
   data: string[][],
   updates: any[],
@@ -2066,6 +2264,9 @@ function createMarkExecutedVmContext(
     }),
   };
   const logsSheet = {
+    getDataRange: () => ({
+      getDisplayValues: () => [PUSH_LOG_HEADERS],
+    }),
     insertRowAfter: () => undefined,
     getRange: () => ({
       setValues: (values: unknown[][]) => logs.push(values),

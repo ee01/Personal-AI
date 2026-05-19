@@ -74,37 +74,47 @@ test('AsMe and messages without project variables do not save timeline project c
   );
 });
 
-test('Timeline sync payload help returns the exact Jira custom data for a project', () => {
+test('Timeline sync payload help returns the exact Jira GET request for a project', () => {
   const help = getTimelineSyncPayloadHelp('Jupiter web');
 
   assert.equal(help?.project, 'Jupiter web');
   assert.equal(help?.paramKey, 'jupiterWeb');
   assert.equal(help?.variableName, 'jupiterWebReleaseInfo');
-  assert.equal(help?.method, 'POST');
-  assert.equal(help?.url, '{{WEB_APP_URL}}?action=cacheReleaseInfo');
-  assert.equal(help?.contentType, 'application/json');
+  assert.equal(help?.method, 'GET');
   assert.equal(
-    help?.customBody,
-    '{\n  "project": "jupiterWeb",\n  "releaseInfo": {{jupiterWebReleaseInfo.asJsonString}}\n}',
+    help?.url,
+    '{{WEB_APP_URL}}?action=cacheReleaseInfo&project=jupiterWeb&releaseInfo={{jupiterWebReleaseInfo.replaceAll("\'","").urlEncode.replaceAll("\\+","%20")}}',
   );
+  assert.equal(help?.contentType, 'empty');
+  assert.equal(help?.customBody, '');
 });
 
 test('Timeline sync dry-run help builds a safe Apps Script probe request', () => {
   const help = getTimelineSyncDryRunHelp({
     project: 'Jupiter web',
     webAppUrl: 'https://script.google.com/macros/s/example/exec',
+    milestone: 'Release',
   });
 
   assert.equal(help?.project, 'Jupiter web');
-  assert.equal(help?.method, 'POST');
-  assert.equal(help?.url, 'https://script.google.com/macros/s/example/exec?action=cacheReleaseInfo');
-  assert.equal(help?.contentType, 'application/json');
-  assert.match(help?.customBody || '', /"project": "jupiterWeb"/);
-  assert.match(help?.customBody || '', /"dryRun": true/);
-  assert.match(help?.customBody || '', /"FF": "12\/31\/2026"/);
-  assert.match(help?.curlCommand || '', /curl -sS -X POST/);
-  assert.match(help?.curlCommand || '', /Content-Type: application\/json/);
-  assert.match(help?.curlCommand || '', /dryRun/);
+  assert.equal(help?.sampleMilestone, 'Release');
+  assert.equal(help?.method, 'GET');
+  assert.match(help?.url || '', /^https:\/\/script\.google\.com\/macros\/s\/example\/exec\?action=cacheReleaseInfo&project=jupiterWeb&dryRun=true&releaseInfo=/);
+  assert.match(decodeURIComponent(help?.url || ''), /"Release":"12\/31\/2026"/);
+  assert.equal(help?.contentType, 'empty');
+  assert.equal(help?.customBody, '');
+  assert.match(help?.curlCommand || '', /^curl -sS /);
+  assert.match(help?.curlCommand || '', /dryRun=true/);
+});
+
+test('Timeline sync dry-run help falls back to FF when no milestone is selected', () => {
+  const help = getTimelineSyncDryRunHelp({
+    project: 'mThor',
+    webAppUrl: 'https://script.google.com/macros/s/example/exec',
+  });
+
+  assert.equal(help?.sampleMilestone, 'FF');
+  assert.match(decodeURIComponent(help?.url || ''), /"FF":"12\/31\/2026"/);
 });
 
 test('Timeline sync dry-run help appends action to URLs with existing query strings', () => {
@@ -113,5 +123,5 @@ test('Timeline sync dry-run help appends action to URLs with existing query stri
     webAppUrl: 'https://script.google.com/macros/s/example/exec?debug=1',
   });
 
-  assert.equal(help?.url, 'https://script.google.com/macros/s/example/exec?debug=1&action=cacheReleaseInfo');
+  assert.match(help?.url || '', /^https:\/\/script\.google\.com\/macros\/s\/example\/exec\?debug=1&action=cacheReleaseInfo&project=mThor&dryRun=true&releaseInfo=/);
 });

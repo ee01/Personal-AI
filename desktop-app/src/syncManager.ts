@@ -11,6 +11,7 @@ import type {
   AutoSyncKind,
   BridgeSyncAttemptLogEntry,
   BridgeSyncAttemptStatus,
+  SyncResult,
 } from './types.js';
 import type { ExplorerManager } from './explorer/index.js';
 import type { LocalSkillSyncManager } from './skillSync/localSkillSyncManager.js';
@@ -26,6 +27,16 @@ export type SyncAttemptStatus = BridgeSyncAttemptStatus;
 export interface SyncAttemptResult {
   status: SyncAttemptStatus;
   errorMessage?: string;
+  externalThreadId?: string;
+  packageKinds?: string[];
+  sourceRefCount?: number;
+  transportUsed?: SyncResult['transportUsed'];
+  transportMode?: SyncResult['transportMode'];
+  transportFallbackReason?: string;
+  verified?: boolean;
+  messageVisible?: boolean;
+  challengeDetected?: boolean;
+  telemetryError?: string;
 }
 
 export interface SyncTaskSnapshot {
@@ -52,6 +63,29 @@ export interface BridgeSyncManagerSnapshot {
 }
 
 const MAX_RECENT_ATTEMPTS = 8;
+
+export interface BridgeSyncManagerOptions {
+  initialAttempts?: BridgeSyncAttemptLogEntry[];
+  onRecentAttemptsChanged?: (
+    attempts: BridgeSyncAttemptLogEntry[],
+  ) => void | Promise<void>;
+}
+
+function normalizeRecentAttempts(
+  attempts: BridgeSyncAttemptLogEntry[] | undefined,
+): BridgeSyncAttemptLogEntry[] {
+  if (!Array.isArray(attempts)) return [];
+  return attempts
+    .filter(
+      (attempt) =>
+        attempt &&
+        typeof attempt.id === 'string' &&
+        typeof attempt.kind === 'string' &&
+        typeof attempt.startedAt === 'string' &&
+        typeof attempt.completedAt === 'string',
+    )
+    .slice(0, MAX_RECENT_ATTEMPTS);
+}
 
 function stripMarkdown(line: string): string {
   return line
@@ -160,18 +194,194 @@ function extractNotices(pkg: ProviderMemoryProduct, limit = 8) {
 function syncResultToAttempt(result: {
   accepted?: boolean;
   error?: string;
-}): SyncAttemptResult {
+  threadId?: string;
+  transportUsed?: SyncResult['transportUsed'];
+  transportMode?: SyncResult['transportMode'];
+  transportFallbackReason?: string;
+  verified?: boolean;
+  challengeDetected?: boolean;
+  messageVisible?: boolean;
+}, metadata: SyncAttemptMetadata = {}): SyncAttemptResult {
+  const attemptMetadata = cleanAttemptMetadata({
+    ...metadata,
+    externalThreadId: result.threadId || metadata.externalThreadId,
+    transportUsed: result.transportUsed || metadata.transportUsed,
+    transportMode: result.transportMode || metadata.transportMode,
+    transportFallbackReason:
+      result.transportFallbackReason || metadata.transportFallbackReason,
+    verified: result.verified ?? metadata.verified,
+    challengeDetected: result.challengeDetected ?? metadata.challengeDetected,
+    messageVisible: result.messageVisible ?? metadata.messageVisible,
+  });
   if (result.accepted && !result.error) {
-    return { status: 'succeeded' };
+    return { status: 'succeeded', ...attemptMetadata };
   }
   return {
     status: 'failed',
     errorMessage: result.error || 'Transcript was not sent',
+    ...attemptMetadata,
   };
 }
 
 function shouldAdvanceSyncState(result: SyncAttemptResult): boolean {
   return result.status !== 'failed';
+}
+
+type SyncAttemptMetadata = Omit<
+  SyncAttemptResult,
+  'status' | 'errorMessage'
+>;
+type AttemptBooleanMetadataKey =
+  | 'verified'
+  | 'messageVisible'
+  | 'challengeDetected';
+
+function formatTelemetryError(prefix: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return `${prefix}: ${message}`;
+}
+
+function mergeTelemetryErrors(
+  ...errors: Array<string | undefined>
+): string | undefined {
+  const unique = Array.from(
+    new Set(errors.map((error) => error?.trim()).filter(Boolean) as string[]),
+  );
+  return unique.length > 0 ? unique.join(' / ') : undefined;
+}
+
+function mergeTextValues(
+  ...values: Array<string | undefined>
+): string | undefined {
+  const unique = Array.from(
+    new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]),
+  );
+  return unique.length > 0 ? unique.join(' / ') : undefined;
+}
+
+function withTelemetryError<T extends SyncAttemptResult>(
+  result: T,
+  ...errors: Array<string | undefined>
+): T {
+  const telemetryError = mergeTelemetryErrors(result.telemetryError, ...errors);
+  return telemetryError ? { ...result, telemetryError } : result;
+}
+
+function cleanAttemptMetadata(
+  metadata: SyncAttemptMetadata,
+): SyncAttemptMetadata {
+  const cleaned: SyncAttemptMetadata = {};
+  if (metadata.externalThreadId) {
+    cleaned.externalThreadId = metadata.externalThreadId;
+  }
+  if (metadata.packageKinds?.length) {
+    cleaned.packageKinds = metadata.packageKinds;
+  }
+  if (typeof metadata.sourceRefCount === 'number') {
+    cleaned.sourceRefCount = metadata.sourceRefCount;
+  }
+  if (metadata.transportUsed) {
+    cleaned.transportUsed = metadata.transportUsed;
+  }
+  if (metadata.transportMode) {
+    cleaned.transportMode = metadata.transportMode;
+  }
+  if (metadata.transportFallbackReason) {
+    cleaned.transportFallbackReason = metadata.transportFallbackReason;
+  }
+  if (typeof metadata.verified === 'boolean') {
+    cleaned.verified = metadata.verified;
+  }
+  if (typeof metadata.messageVisible === 'boolean') {
+    cleaned.messageVisible = metadata.messageVisible;
+  }
+  if (typeof metadata.challengeDetected === 'boolean') {
+    cleaned.challengeDetected = metadata.challengeDetected;
+  }
+  if (metadata.telemetryError) {
+    cleaned.telemetryError = metadata.telemetryError;
+  }
+  return cleaned;
+}
+
+function packageMetadata(
+  rendered: RenderContextPackageResponse,
+): Pick<SyncAttemptResult, 'packageKinds' | 'sourceRefCount'> {
+  const packageKinds = Array.from(
+    new Set(rendered.packages.map((pkg) => pkg.kind).filter(Boolean)),
+  );
+  const sourceRefCount = new Set(
+    rendered.packages
+      .flatMap((pkg) => pkg.sourceRefs || [])
+      .filter(Boolean),
+  ).size;
+
+  return {
+    packageKinds,
+    sourceRefCount,
+  };
+}
+
+function mergeAttemptMetadata(
+  results: SyncAttemptResult[],
+): SyncAttemptMetadata {
+  const packageKinds = Array.from(
+    new Set(results.flatMap((result) => result.packageKinds || [])),
+  );
+  const sourceRefCount = results.reduce(
+    (total, result) => total + (result.sourceRefCount || 0),
+    0,
+  );
+  const delivered = results.filter((result) => result.status === 'succeeded');
+  const transportUsed =
+    delivered.find((result) => result.transportUsed)?.transportUsed ||
+    results.find((result) => result.transportUsed)?.transportUsed;
+  const transportMode =
+    delivered.find((result) => result.transportMode)?.transportMode ||
+    results.find((result) => result.transportMode)?.transportMode;
+  const transportFallbackReason = mergeTextValues(
+    ...results.map((result) => result.transportFallbackReason),
+  );
+  const externalThreadId =
+    [...delivered].reverse().find((result) => result.externalThreadId)
+      ?.externalThreadId ||
+    [...results].reverse().find((result) => result.externalThreadId)
+      ?.externalThreadId;
+
+  const boolValues = <Key extends AttemptBooleanMetadataKey>(
+    key: Key,
+  ): boolean[] =>
+    results
+      .map((result) => result[key])
+      .filter((value): value is boolean => typeof value === 'boolean');
+  const verifiedValues = boolValues('verified');
+  const messageVisibleValues = boolValues('messageVisible');
+  const challengeValues = boolValues('challengeDetected');
+  const telemetryError = mergeTelemetryErrors(
+    ...results.map((result) => result.telemetryError),
+  );
+
+  return cleanAttemptMetadata({
+    packageKinds,
+    sourceRefCount,
+    externalThreadId,
+    transportUsed,
+    transportMode,
+    transportFallbackReason,
+    verified:
+      verifiedValues.length > 0
+        ? verifiedValues.every((value) => value)
+        : undefined,
+    messageVisible:
+      messageVisibleValues.length > 0
+        ? messageVisibleValues.every((value) => value)
+        : undefined,
+    challengeDetected:
+      challengeValues.length > 0
+        ? challengeValues.some((value) => value)
+        : undefined,
+    telemetryError,
+  });
 }
 
 export class BridgeSyncManager {
@@ -183,6 +393,7 @@ export class BridgeSyncManager {
   private lastError?: { message: string; occurredAt: number };
   private recentAttempts: BridgeSyncAttemptLogEntry[] = [];
   private attemptSequence = 0;
+  private readonly onRecentAttemptsChanged?: BridgeSyncManagerOptions['onRecentAttemptsChanged'];
 
   constructor(
     private readonly config: BridgeConfig,
@@ -191,7 +402,11 @@ export class BridgeSyncManager {
     private readonly bridgeService: DoubaoBridgeService,
     private readonly explorerManager?: ExplorerManager,
     private readonly localSkillSyncManager?: LocalSkillSyncManager,
-  ) {}
+    options: BridgeSyncManagerOptions = {},
+  ) {
+    this.recentAttempts = normalizeRecentAttempts(options.initialAttempts);
+    this.onRecentAttemptsChanged = options.onRecentAttemptsChanged;
+  }
 
   start(): void {
     if (this.settingsUnsubscribe) return;
@@ -333,8 +548,19 @@ export class BridgeSyncManager {
     startedAtMs: number;
     completedAtMs: number;
     errorMessage?: string;
+    externalThreadId?: string;
+    packageKinds?: string[];
+    sourceRefCount?: number;
+    transportUsed?: SyncResult['transportUsed'];
+    transportMode?: SyncResult['transportMode'];
+    transportFallbackReason?: string;
+    verified?: boolean;
+    messageVisible?: boolean;
+    challengeDetected?: boolean;
+    telemetryError?: string;
   }): void {
     this.attemptSequence += 1;
+    const metadata = cleanAttemptMetadata(input);
     const entry: BridgeSyncAttemptLogEntry = {
       id: `${input.startedAtMs}-${this.attemptSequence}-${input.kind}`,
       kind: input.kind,
@@ -344,10 +570,25 @@ export class BridgeSyncManager {
       completedAt: new Date(input.completedAtMs).toISOString(),
       durationMs: Math.max(0, input.completedAtMs - input.startedAtMs),
       errorMessage: input.errorMessage,
+      ...metadata,
     };
     this.recentAttempts = [entry, ...this.recentAttempts].slice(
       0,
       MAX_RECENT_ATTEMPTS,
+    );
+    this.notifyRecentAttemptsChanged();
+  }
+
+  private notifyRecentAttemptsChanged(): void {
+    if (!this.onRecentAttemptsChanged) return;
+    const snapshot = [...this.recentAttempts];
+    void Promise.resolve(this.onRecentAttemptsChanged(snapshot)).catch(
+      (error) => {
+        console.warn(
+          '[doubao-bridge] failed to persist sync attempt audit log:',
+          error,
+        );
+      },
     );
   }
 
@@ -366,6 +607,16 @@ export class BridgeSyncManager {
         startedAtMs,
         completedAtMs: Date.now(),
         errorMessage: result.errorMessage,
+        externalThreadId: result.externalThreadId,
+        packageKinds: result.packageKinds,
+        sourceRefCount: result.sourceRefCount,
+        transportUsed: result.transportUsed,
+        transportMode: result.transportMode,
+        transportFallbackReason: result.transportFallbackReason,
+        verified: result.verified,
+        messageVisible: result.messageVisible,
+        challengeDetected: result.challengeDetected,
+        telemetryError: result.telemetryError,
       });
       return result;
     } catch (error) {
@@ -396,9 +647,9 @@ export class BridgeSyncManager {
     lane: 'todo' | 'notice',
     status: 'delivered' | 'failed',
     error?: string,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const sourceRefs = this.collectSourceRefs(rendered);
-    if (sourceRefs.length === 0) return;
+    if (sourceRefs.length === 0) return undefined;
 
     try {
       await this.memoryClient.reportNotificationDelivery(
@@ -418,9 +669,14 @@ export class BridgeSyncManager {
         console.warn(
           '[doubao-bridge] memory-service does not support notification-center delivery reporting yet',
         );
-        return;
+        return undefined;
       }
-      throw deliveryError;
+      const telemetryError = formatTelemetryError(
+        'Delivery report failed',
+        deliveryError,
+      );
+      console.warn('[doubao-bridge] delivery report failed:', deliveryError);
+      return telemetryError;
     }
   }
 
@@ -564,10 +820,18 @@ export class BridgeSyncManager {
       deviceContext: 'doubao_bridge_daemon',
     });
     const packages = actionablePackages(rendered);
+    const metadata = packageMetadata(rendered);
     if (packages.length === 0) {
       const reason = 'No stable memory items to sync';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const result = await this.bridgeService.syncStableMemory({
@@ -577,7 +841,7 @@ export class BridgeSyncManager {
       })),
     });
 
-    await this.report(
+    const telemetryError = await this.report(
       rendered,
       result.accepted && !result.error ? 'succeeded' : 'failed',
       startedAt,
@@ -585,7 +849,7 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result);
+    return syncResultToAttempt(result, { ...metadata, telemetryError });
   }
 
   private async syncMobileBriefing(): Promise<SyncAttemptResult> {
@@ -596,10 +860,18 @@ export class BridgeSyncManager {
       deviceContext: 'doubao_bridge_daemon',
     });
     const packages = actionablePackages(rendered);
+    const metadata = packageMetadata(rendered);
     if (packages.length === 0) {
       const reason = 'No recent memory highlights to sync';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const bullets = packages
@@ -607,8 +879,15 @@ export class BridgeSyncManager {
       .slice(0, 12);
     if (bullets.length === 0) {
       const reason = 'No mobile briefing bullets extracted';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const result = await this.bridgeService.syncMobileBriefing({
@@ -616,7 +895,7 @@ export class BridgeSyncManager {
       bullets,
     });
 
-    await this.report(
+    const telemetryError = await this.report(
       rendered,
       result.accepted && !result.error ? 'succeeded' : 'failed',
       startedAt,
@@ -624,7 +903,7 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result);
+    return syncResultToAttempt(result, { ...metadata, telemetryError });
   }
 
   private async syncReminders(): Promise<SyncAttemptResult> {
@@ -637,15 +916,20 @@ export class BridgeSyncManager {
     const reminders = rendered.packages
       .flatMap((pkg) => extractReminders(pkg))
       .slice(0, 8);
+    const metadata = packageMetadata(rendered);
     if (reminders.length === 0) {
-      return { status: 'skipped' };
+      return {
+        status: 'skipped',
+        errorMessage: 'No reminders to sync',
+        ...metadata,
+      };
     }
 
     const result = await this.bridgeService.syncReminders({
       reminders,
     });
 
-    await this.report(
+    const telemetryError = await this.report(
       rendered,
       result.accepted && !result.error ? 'succeeded' : 'failed',
       startedAt,
@@ -653,7 +937,7 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result);
+    return syncResultToAttempt(result, { ...metadata, telemetryError });
   }
 
   /**
@@ -668,10 +952,18 @@ export class BridgeSyncManager {
       deviceContext: 'doubao_bridge_daemon',
     });
     const packages = actionablePackages(rendered);
+    const metadata = packageMetadata(rendered);
     if (packages.length === 0) {
       const reason = 'No stable memory items to sync';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const result = await this.bridgeService.syncStableMemoryAsMemo({
@@ -681,7 +973,7 @@ export class BridgeSyncManager {
       })),
     });
 
-    await this.report(
+    const telemetryError = await this.report(
       rendered,
       result.accepted && !result.error ? 'succeeded' : 'failed',
       startedAt,
@@ -689,17 +981,31 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return syncResultToAttempt(result);
+    return syncResultToAttempt(result, { ...metadata, telemetryError });
   }
 
   private async syncReminderChannels(): Promise<SyncAttemptResult> {
-    const results = [await this.syncTodosAsMemo(), await this.syncNotices()];
+    const results: SyncAttemptResult[] = [];
+
+    const todoResult = await this.syncTodosAsMemo();
+    results.push(todoResult);
+    if (todoResult.status === 'failed') {
+      const metadata = mergeAttemptMetadata(results);
+      return {
+        ...todoResult,
+        ...metadata,
+        errorMessage: todoResult.errorMessage,
+      };
+    }
+
+    results.push(await this.syncNotices());
+    const metadata = mergeAttemptMetadata(results);
     const failed = results.find((result) => result.status === 'failed');
     if (failed) {
-      return failed;
+      return { ...failed, ...metadata, errorMessage: failed.errorMessage };
     }
     if (results.some((result) => result.status === 'succeeded')) {
-      return { status: 'succeeded' };
+      return { status: 'succeeded', ...metadata };
     }
     const skippedReasons = results
       .map((result) => result.errorMessage)
@@ -708,6 +1014,7 @@ export class BridgeSyncManager {
       status: 'skipped',
       errorMessage:
         skippedReasons.join(' / ') || 'No pending todos or notices to sync',
+      ...metadata,
     };
   }
 
@@ -715,10 +1022,18 @@ export class BridgeSyncManager {
     const startedAt = Date.now();
     const rendered = await this.renderTodoPackage();
     const packages = actionablePackages(rendered);
+    const metadata = packageMetadata(rendered);
     if (packages.length === 0) {
       const reason = 'No pending todos to sync';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const reminders = packages
@@ -726,23 +1041,30 @@ export class BridgeSyncManager {
       .slice(0, 8);
     if (reminders.length === 0) {
       const reason = 'No todo titles extracted';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const result = await this.bridgeService.syncTodosAsMemo({
       reminders,
     });
 
-    const attempt = syncResultToAttempt(result);
-    await this.reportDelivery(
+    const attempt = syncResultToAttempt(result, metadata);
+    const deliveryTelemetryError = await this.reportDelivery(
       rendered,
       'todo',
       attempt.status === 'succeeded' ? 'delivered' : 'failed',
       attempt.errorMessage,
     );
 
-    await this.report(
+    const syncJobTelemetryError = await this.report(
       rendered,
       attempt.status === 'succeeded' ? 'succeeded' : 'failed',
       startedAt,
@@ -750,7 +1072,11 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return attempt;
+    return withTelemetryError(
+      attempt,
+      deliveryTelemetryError,
+      syncJobTelemetryError,
+    );
   }
 
   async syncRemindersAsMemo(): Promise<SyncAttemptResult> {
@@ -776,32 +1102,47 @@ export class BridgeSyncManager {
       deviceContext: 'doubao_bridge_daemon',
     });
     const packages = actionablePackages(rendered);
+    const metadata = packageMetadata(rendered);
     if (packages.length === 0) {
       const reason = 'No notices to sync';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const notices = packages.flatMap((pkg) => extractNotices(pkg)).slice(0, 8);
     if (notices.length === 0) {
       const reason = 'No notice titles extracted';
-      await this.reportSkipped(rendered, startedAt, reason);
-      return { status: 'skipped', errorMessage: reason };
+      const telemetryError = await this.reportSkipped(
+        rendered,
+        startedAt,
+        reason,
+      );
+      return withTelemetryError(
+        { status: 'skipped', errorMessage: reason, ...metadata },
+        telemetryError,
+      );
     }
 
     const result = await this.bridgeService.syncNotices({
       notices,
     });
 
-    const attempt = syncResultToAttempt(result);
-    await this.reportDelivery(
+    const attempt = syncResultToAttempt(result, metadata);
+    const deliveryTelemetryError = await this.reportDelivery(
       rendered,
       'notice',
       attempt.status === 'succeeded' ? 'delivered' : 'failed',
       attempt.errorMessage,
     );
 
-    await this.report(
+    const syncJobTelemetryError = await this.report(
       rendered,
       attempt.status === 'succeeded' ? 'succeeded' : 'failed',
       startedAt,
@@ -809,7 +1150,11 @@ export class BridgeSyncManager {
       result.threadId,
     );
 
-    return attempt;
+    return withTelemetryError(
+      attempt,
+      deliveryTelemetryError,
+      syncJobTelemetryError,
+    );
   }
 
   private async renderTodoPackage(): Promise<RenderContextPackageResponse> {
@@ -825,23 +1170,33 @@ export class BridgeSyncManager {
     rendered: RenderContextPackageResponse,
     startedAt: number,
     reason: string,
-  ): Promise<void> {
-    if (!rendered.syncJob?.id) return;
+  ): Promise<string | undefined> {
+    if (!rendered.syncJob?.id) return undefined;
 
-    await this.memoryClient.reportSyncJob(
-      rendered.provider,
-      rendered.syncJob.id,
-      {
-        status: 'skipped',
-        errorMessage: reason,
-        result: {
-          packageKinds: rendered.packages.map((pkg) => pkg.kind),
-          reason,
+    try {
+      await this.memoryClient.reportSyncJob(
+        rendered.provider,
+        rendered.syncJob.id,
+        {
+          status: 'skipped',
+          errorMessage: reason,
+          result: {
+            packageKinds: rendered.packages.map((pkg) => pkg.kind),
+            reason,
+          },
+          startedAt,
+          completedAt: Date.now(),
         },
-        startedAt,
-        completedAt: Date.now(),
-      },
-    );
+      );
+      return undefined;
+    } catch (error) {
+      const telemetryError = formatTelemetryError(
+        'Sync job report failed',
+        error,
+      );
+      console.warn('[doubao-bridge] skipped sync job report failed:', error);
+      return telemetryError;
+    }
   }
 
   private async report(
@@ -850,22 +1205,32 @@ export class BridgeSyncManager {
     startedAt: number,
     errorMessage?: string,
     externalThreadId?: string,
-  ): Promise<void> {
-    if (!rendered.syncJob?.id) return;
+  ): Promise<string | undefined> {
+    if (!rendered.syncJob?.id) return undefined;
 
-    await this.memoryClient.reportSyncJob(
-      rendered.provider,
-      rendered.syncJob.id,
-      {
-        status,
-        errorMessage,
-        externalThreadId,
-        result: {
-          packageKinds: rendered.packages.map((pkg) => pkg.kind),
+    try {
+      await this.memoryClient.reportSyncJob(
+        rendered.provider,
+        rendered.syncJob.id,
+        {
+          status,
+          errorMessage,
+          externalThreadId,
+          result: {
+            packageKinds: rendered.packages.map((pkg) => pkg.kind),
+          },
+          startedAt,
+          completedAt: Date.now(),
         },
-        startedAt,
-        completedAt: Date.now(),
-      },
-    );
+      );
+      return undefined;
+    } catch (error) {
+      const telemetryError = formatTelemetryError(
+        'Sync job report failed',
+        error,
+      );
+      console.warn('[doubao-bridge] sync job report failed:', error);
+      return telemetryError;
+    }
   }
 }

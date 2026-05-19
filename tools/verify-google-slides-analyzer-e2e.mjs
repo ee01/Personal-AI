@@ -20,6 +20,8 @@ const analysisResult = {
       suggestedStatus: 'On track',
       currentOwner: 'Ada',
       currentTrack: 'Core',
+      suggestedTrack: 'Growth',
+      suggestedTrackReason: 'Planning source confirms Growth track',
       currentComments: 'Existing note\nJira moved to resolved',
       suggestedComments: 'Jira moved to resolved\nRelease notes are ready',
       reason: ['Jira status changed to resolved'],
@@ -43,6 +45,7 @@ const analysisResult = {
         status: 1,
         owner: 2,
         comments: 3,
+        track: 4,
       },
     },
     {
@@ -164,10 +167,41 @@ const analysisResult = {
         comments: 4,
       },
     },
+    {
+      projectId: 'RISK-ONLY-1',
+      projectName: 'Risk insight without writeback',
+      currentStatus: 'Blocked',
+      currentOwner: 'Eve',
+      currentTrack: 'Platform',
+      currentComments: 'Waiting for API contract',
+      reason: ['Blocked by API contract'],
+      sourceInfo: {
+        jiraIssues: [
+          {
+            key: 'RISK-ONLY-1',
+            status: 'In Progress',
+            priority: 'High',
+            summary: 'API contract follow-up',
+            assignee: 'Eve',
+            url: 'https://jira.ringcentral.com/browse/RISK-ONLY-1',
+          },
+        ],
+      },
+      confidence: 0.9,
+      slideId: 'slide-1',
+      tableId: 'table-1',
+      rowIndex: 6,
+      columnIndices: {
+        status: 1,
+        owner: 2,
+        track: 3,
+        comments: 4,
+      },
+    },
   ],
   summary: {
-    totalProjects: 5,
-    projectsNeedingUpdate: 5,
+    totalProjects: 6,
+    projectsNeedingUpdate: 3,
     normalProjects: 0,
     attentionProjects: 1,
     riskProjects: 1,
@@ -209,6 +243,31 @@ try {
     <button id="open-analysis">Open analysis</button>
     <script>
       window.appliedUpdates = null;
+      window.pendingUpdateResponse = null;
+      window.sendPendingUpdateSuccess = () => {
+        if (!window.pendingUpdateResponse) {
+          return false;
+        }
+
+        const { source, origin, selectedUpdates } = window.pendingUpdateResponse;
+        const updatedCount = selectedUpdates.reduce((count, update) => {
+          return count + [
+            update.suggestedStatus,
+            update.suggestedOwner,
+            update.suggestedTrack,
+            update.suggestedComments,
+          ].filter(Boolean).length;
+        }, 0);
+
+        source.postMessage({
+          type: 'UPDATE_SUCCESS',
+          updatedCount,
+          updates: selectedUpdates,
+          errors: []
+        }, origin);
+        window.pendingUpdateResponse = null;
+        return true;
+      };
       window.addEventListener('message', event => {
         if (event.data && event.data.type === 'REQUEST_ANALYSIS_DATA') {
           event.source.postMessage({
@@ -222,20 +281,11 @@ try {
 
         if (event.data && event.data.type === 'APPLY_PROJECT_UPDATES') {
           window.appliedUpdates = event.data.selectedUpdates;
-          const updatedCount = event.data.selectedUpdates.reduce((count, update) => {
-            return count + [
-              update.suggestedStatus,
-              update.suggestedOwner,
-              update.suggestedTrack,
-              update.suggestedComments,
-            ].filter(Boolean).length;
-          }, 0);
-          event.source.postMessage({
-            type: 'UPDATE_SUCCESS',
-            updatedCount,
-            updates: event.data.selectedUpdates,
-            errors: []
-          }, event.origin);
+          window.pendingUpdateResponse = {
+            source: event.source,
+            origin: event.origin,
+            selectedUpdates: event.data.selectedUpdates,
+          };
         }
       });
 
@@ -257,9 +307,20 @@ try {
   const opener = await context.newPage();
   await opener.goto('https://docs.google.com/presentation/d/test/edit#slide=id.slide-1');
   await opener.waitForSelector('#analyze-projects-button', { timeout: 15000 });
+  const toolbarButton = opener.locator('#analyze-projects-button');
   assert.match(
-    await opener.locator('#analyze-projects-button').innerText(),
+    await toolbarButton.innerText(),
     /分析项目/,
+  );
+  assert.equal(await toolbarButton.getAttribute('role'), 'button');
+  assert.equal(await toolbarButton.getAttribute('tabindex'), '0');
+  assert.match(
+    await toolbarButton.getAttribute('aria-label'),
+    /分析当前 Google Slides 项目信息/,
+  );
+  assert.match(
+    await toolbarButton.getAttribute('title'),
+    /分析当前 Google Slides 项目信息/,
   );
 
   await opener.evaluate(() => {
@@ -282,29 +343,50 @@ try {
 
   await analysisPage.waitForSelector('.review-strip', { timeout: 15000 });
   const pageText = await analysisPage.locator('.slides-analysis').innerText();
-  assert.match(pageText, /可更新字段 3/);
+  assert.match(pageText, /可更新字段 4/);
   assert.match(pageText, /高可信默认 2/);
   assert.match(pageText, /需复核项目 2/);
-  assert.match(pageText, /风险项目 3/);
+  assert.match(pageText, /需复核字段 2/);
+  assert.match(pageText, /风险项目 4/);
   assert.match(pageText, /缺少来源 1/);
   assert.match(pageText, /无法写回字段 1/);
+  assert.match(pageText, /字段复核队列/);
+  assert.match(pageText, /需复核 2 个字段，无法写回 1 个字段/);
+  assert.match(pageText, /MTR-123407 · Quarterly status deck · 备注/);
+  assert.match(pageText, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(pageText, /NO-COLUMN-1 · Missing status column · 状态/);
   assert.match(pageText, /风险焦点/);
   assert.match(pageText, /状态提示风险: At risk -> On track/);
   assert.match(pageText, /已逾期 Jira: AIT2-11063/);
-  assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 3);
+  assert.match(pageText, /Risk insight without writeback/);
+  assert.match(pageText, /此项目仅作为风险关注展示，目前没有可写回字段/);
+  assert.equal(await analysisPage.locator('.field-review-queue-item').count(), 3);
+  assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 4);
   assert.match(pageText, /来源证据/);
   assert.match(pageText, /Jira: MTR-123407/);
   assert.match(pageText, /Release notes are ready/);
   assert.doesNotMatch(pageText, /Jira moved to resolved and release notes are ready/);
-  assert.match(pageText, /缺少可见来源或理由/);
-  assert.match(pageText, /低可信建议未自动选中/);
+  assert.match(pageText, /部分字段缺少直接来源，未默认勾选: 备注/);
+  assert.match(pageText, /低可信建议（负责人）未自动选中/);
+  assert.match(pageText, /状态来源: Jira MTR-123407: Resolved/);
+  assert.match(pageText, /赛道来源: Planning source confirms Growth track/);
+  assert.match(pageText, /备注缺少直接来源，不会默认写回/);
   assert.match(pageText, /无法写回 状态列/);
   assert.match(pageText, /备注建议已存在于当前备注/);
   assert.match(pageText, /应用 2 个字段到 Slides/);
-  assert.match(pageText, /当前视图 5 \/ 5 个建议/);
+  assert.match(pageText, /已选字段: 2 个来源充分，无需额外复核/);
+  assert.match(pageText, /即将写回/);
+  assert.match(pageText, /MTR-123407 · Quarterly status deck · 状态/);
+  assert.match(pageText, /At risk -> On track/);
+  assert.match(pageText, /MTR-123407 · Quarterly status deck · 赛道/);
+  assert.match(pageText, /Core -> Growth/);
+  assert.match(pageText, /当前视图 6 \/ 6 个建议/);
 
   assert.equal(await analysisPage.locator('#update-status-0').isChecked(), true);
-  assert.equal(await analysisPage.locator('#update-comments-0').isChecked(), true);
+  assert.equal(await analysisPage.locator('#update-track-0').isChecked(), true);
+  assert.equal(await analysisPage.locator('#update-comments-0').isChecked(), false);
+  assert.equal(await analysisPage.locator('#review-queue-toggle-0-comments').isChecked(), false);
+  assert.equal(await analysisPage.locator('#review-queue-toggle-1-owner').isChecked(), false);
   assert.equal(await analysisPage.locator('#update-owner-1').isChecked(), false);
   assert.equal(await analysisPage.locator('#select-all-2').isDisabled(), true);
   assert.equal(await analysisPage.locator('#select-all-3').isDisabled(), true);
@@ -313,21 +395,24 @@ try {
   assert.equal(await analysisPage.locator('#update-track-3').count(), 0);
   assert.equal(await analysisPage.locator('#select-all-4').isDisabled(), true);
   assert.equal(await analysisPage.locator('#update-comments-4').count(), 0);
+  assert.equal(await analysisPage.locator('#select-all-5').isDisabled(), true);
 
   await analysisPage.locator('#review-filter-review').click();
   assert.equal(await analysisPage.locator('.project-item').count(), 2);
   const reviewText = await analysisPage.locator('.slides-analysis').innerText();
+  assert.match(reviewText, /Quarterly status deck/);
   assert.match(reviewText, /Leadership summary/);
-  assert.match(reviewText, /Missing status column/);
+  assert.match(reviewText, /当前视图已选 2 个字段，全部已选 2 个字段/);
 
   await analysisPage.locator('#review-filter-risk').click();
-  assert.equal(await analysisPage.locator('.project-item').count(), 3);
+  assert.equal(await analysisPage.locator('.project-item').count(), 4);
   const riskText = await analysisPage.locator('.slides-analysis').innerText();
   assert.match(riskText, /Quarterly status deck/);
   assert.match(riskText, /Leadership summary/);
   assert.match(riskText, /Missing status column/);
+  assert.match(riskText, /Risk insight without writeback/);
   assert.doesNotMatch(riskText, /Formatting only noise/);
-  assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 3);
+  assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 4);
 
   await analysisPage.locator('#review-filter-selected').click();
   assert.equal(await analysisPage.locator('.project-item').count(), 1);
@@ -336,6 +421,7 @@ try {
   await analysisPage.locator('#review-filter-blocked').click();
   assert.equal(await analysisPage.locator('.project-item').count(), 1);
   assert.match(await analysisPage.locator('.slides-analysis').innerText(), /Missing status column/);
+  assert.match(await analysisPage.locator('.slides-analysis').innerText(), /当前筛选隐藏了 2 个已选字段/);
 
   await analysisPage.locator('#clear-selected-fields').click();
   assert.equal(await analysisPage.locator('#apply-updates-button').isDisabled(), true);
@@ -343,23 +429,41 @@ try {
 
   await analysisPage.locator('#restore-high-confidence-fields').click();
   assert.match(await analysisPage.locator('#apply-updates-button').innerText(), /应用 2 个字段到 Slides/);
+  assert.match(await analysisPage.locator('.slides-analysis').innerText(), /当前筛选隐藏了 2 个已选字段/);
+  await analysisPage.locator('#show-selected-fields').click();
+  assert.equal(await analysisPage.locator('.project-item').count(), 1);
+  assert.match(await analysisPage.locator('.slides-analysis').innerText(), /Quarterly status deck/);
 
   await analysisPage.locator('#review-filter-all').click();
-  await analysisPage.locator('#update-owner-1').check();
+  await analysisPage.locator('#review-queue-toggle-1-owner').check();
   await analysisPage.waitForFunction(() => {
     const button = document.querySelector('#apply-updates-button');
     return button && button.textContent?.includes('应用 3 个字段到 Slides');
   });
+  assert.match(
+    await analysisPage.locator('.selected-risk-summary').innerText(),
+    /已选字段: 2 个来源充分，1 个需人工复核/,
+  );
+  const selectedPreviewText = await analysisPage.locator('.selected-writeback-preview').innerText();
+  assert.match(selectedPreviewText, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(selectedPreviewText, /Ben -> Cara/);
+  assert.match(selectedPreviewText, /需人工复核/);
 
   await analysisPage.locator('#apply-updates-button').click();
   await opener.waitForFunction(() => Array.isArray(window.appliedUpdates) && window.appliedUpdates.length === 2);
+  assert.equal(await analysisPage.locator('#update-status-0').isDisabled(), true);
+  assert.equal(await analysisPage.locator('#update-track-0').isDisabled(), true);
+  assert.equal(await analysisPage.locator('#select-all-0').isDisabled(), true);
+  assert.equal(await analysisPage.locator('#review-queue-toggle-1-owner').isDisabled(), true);
 
   const appliedUpdates = await opener.evaluate(() => window.appliedUpdates);
   assert.equal(appliedUpdates[0].suggestedStatus, 'On track');
-  assert.equal(appliedUpdates[0].suggestedComments, 'Release notes are ready');
+  assert.equal(appliedUpdates[0].suggestedTrack, 'Growth');
+  assert.equal(appliedUpdates[0].suggestedComments, undefined);
   assert.equal(appliedUpdates[1].suggestedOwner, 'Cara');
   assert.equal(appliedUpdates[1].suggestedStatus, undefined);
 
+  assert.equal(await opener.evaluate(() => window.sendPendingUpdateSuccess()), true);
   await analysisPage.waitForSelector('.success-message', { timeout: 15000 });
   const successText = await analysisPage.locator('.success-message').innerText();
   assert.match(successText, /已写回 3 个字段/);

@@ -1,6 +1,6 @@
 # Meeting Pilot
 
-_最后更新: 2026-05-14_
+_最后更新: 2026-05-16_
 
 ## 是什么
 
@@ -67,6 +67,7 @@ _最后更新: 2026-05-14_
 
 - 当前话题
 - Catch Up 轻量快照
+- Today Pilot / Context Assist 会前准备 handoff（目标、问题、证据来源）
 - 时间线（支持展开详情）
 - 行动项列表（owner / deadline / transcript 依据）
 - readiness 状态
@@ -153,12 +154,15 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Side Panel 每条行动项支持人工校正标题、负责人和截止时间；保存后会自动进入已确认状态，并在后续实时分析刷新时按 AI 原始身份继续继承，避免用户修正被新一轮结构化分析覆盖。
 - Side Panel 行动项页支持手动补充 AI 漏掉的行动项；人工新增项默认已确认，会写入当前会话时间线，并在后续实时分析刷新后优先保留；负责人可先留空并标记为 `待分配`，避免会中只想先记录任务时被分配信息阻塞。
 - 人工新增行动项的时间线锚点会在后续实时分析刷新后继续保留；用户修改标题、负责人或截止时间后，回跳时间线仍会定位到同一条人工记录，避免补录任务失去上下文依据。
+- Today Pilot / Context Assist 带入的会前准备问题或目标可以在实时页一键加入行动项；系统会默认归给自己、截止标记为本次会议、保留会前证据，并按当前会议去重，避免用户会中手动抄写准备事项。
 - Side Panel 每条行动项支持回跳到同章时间线证据；点击 `时间线` 后会切到时间线 tab、展开并高亮最相关的 action / chapter 事件，便于从任务回看会议上下文。
 - Side Panel 的 Live 卡片和页脚会在 Capture 未开启时提供 `查看开启步骤`，直接在会议页打开扩展 icon / popup 授权 coachmark，避免用户只看到静态说明。
 - Side Panel 的实时页会在存在待复核或处理中行动项时显示 `Action Review` 卡片，直接跳到行动项复核筛选，避免用户只看实时提醒而漏掉会后跟进。
 - Side Panel 行动项工具栏支持一键确认当前筛选中信息完整的待复核项；未复核项的完成按钮会显示为 `确认并完成`，避免用户无意绕过 AI 建议复核。
 - Side Panel 会在行动项卡片、实时页下一项提示和复制文本里标出 `补负责人` / `补截止` / `缺依据`，提醒用户在把 AI 建议流入外部任务系统前补齐关键信息。
 - Side Panel 行动项增加 `需补信息` 筛选；批量确认只处理当前筛选里已具备负责人、截止和依据的待复核项，缺信息项仍可单条确认，作为用户明确接受的例外路径。
+- 缺负责人、截止或依据的待复核项在单条确认/完成时会显示 `确认例外` / `确认例外并完成`，避免用户把低置信 AI 建议误当成已完整复核的正式任务。
+- 行动项更新会同时校验 `tabId` 和 `meetingId`；如果会议标签页已经切换到另一场会议，旧 side panel / 独立窗口不能继续改写新会议的行动项。
 - 被忽略的行动项不会进入会议记忆 recap 的主行动项列表，但仍会保留在 session 的完整结构化数据里，方便排查 AI 误判。
 - LLM 结构化分析 prompt 要求输出 `actionItems.evidence`，启发式路径会把触发行动项的 transcript 句子写入 `evidence`。
 - 启发式行动项需要明确 owner / 第一人称承诺 / 显式行动项标签之一才会生成；owner 不明确的显式行动项会以待分配状态进入复核，而不是直接绑定到发言人。
@@ -174,6 +178,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Otter 的 Conversation / Summary 体验支持复制单条或全部 action items；Teams Facilitator 把 AI 会议笔记放到可编辑的 Loop 页面。Meeting Pilot 的行动项卡片因此需要保留低摩擦的“带依据复制”和“确认后跟进清单复制”能力，先满足会后跟进，再考虑写入外部任务系统。
 - Otter 的行动项支持回看 transcript 位置，也支持手动新增、改名和分配；Granola 也强调每条增强笔记可追溯到 transcript / raw notes；Meeting Pilot 因此把行动项和时间线章节互链，并允许用户手动补充 AI 漏掉的跟进项。
 - Teams Facilitator 的 follow-up tasks 需要用户接受后同步到 Planner，Zoom / Teams recap 也会把 action items、转写、共享材料和摘要状态显性放在 recap 里；Meeting Pilot 的行动项因此先走“待复核 → 补信息/确认/完成”的显性状态机，再考虑写入外部任务系统。
+- Teams Facilitator 会检查会议议程、提示目标并管理议题时间；Meeting Pilot 的 Today Pilot handoff 因此不应只显示会前摘要，还要允许用户把关键问题/目标直接转成会中待处理行动项。
 - Notion AI Meeting Notes 把 transcript citation 和 consent 放在会议笔记体验里；Meeting Pilot 的行动项也应持续保留依据、待分配/缺依据标记和用户确认路径，而不是把 AI 猜测当成正式任务。
 - Read AI 的 meeting intelligence 强调跨会议检索 action items、decisions 和 transcript；Meeting Pilot 的会议归档因此要保持可检索结构化字段，同时避免把低置信泛泛承诺写成错误 owner。
 - 业内会议助手普遍把用户编辑后的 notes / tasks 视为会后协作材料的一部分；Meeting Pilot 因此需要把人工补录和 AI 识别的行动项放进同一条“可复核、可回看、可复制”的路径，而不是把人工记录降级成一次性备注。
@@ -264,7 +269,7 @@ Tier 3: Cloud ASR (Cloud) — 现有远程 /v1/audio/transcriptions
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/meeting-shell/__tests__/actionItems.test.ts`
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/meeting-shell/__tests__/actionItemReview.test.ts`
 - `npm run test:meeting-pilot`
-- `npm run test:meeting-pilot-scene1`
+- `npm run test:meeting-pilot-scene1`（含 Today Pilot 会前准备 cue 加入行动项）
 - `npm --prefix desktop-app run test:meeting-pilot-scene2`
 - `npm start` 首次 dev compile
 - `git diff --check -- <Meeting Pilot changed files>`

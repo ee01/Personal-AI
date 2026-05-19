@@ -126,7 +126,9 @@ Notification Center 对外主要暴露两个接口：
 - 给指定 channel 拉取还没有在该 channel 成功投递的 `todo` / `notice`
 - `channel` 必须是 `chrome`、`doubao` 或 `glip`
 - `lanes` 只接受 `todo` / `notice`，非法值会直接返回 400
-- 已经成功送达、点击或忽略过的 source 不会因为后续失败回执又重新进入 feed
+- 对 `notice` 来说，已经成功送达、点击或忽略过的 source 不会因为后续失败回执又重新进入 feed
+- 对 `todo` 来说，`delivered` 只是 6 小时短期冷却；如果用户没有点击或明确忽略，冷却后会重新进入 feed
+- `clicked` / `dismissed` 是终止性的用户处理回执，不会因为冷却时间过去而重新进入 feed
 - feed 会先排除该 channel 已成功投递的 source，再做 `limit` 截断，避免旧的未投递通知被新的已投递记录挡住
 
 `delivery` 的语义是：
@@ -184,9 +186,9 @@ Doubao 现在分两条同步路径：
 
 对应实现：
 
-- `doubao-bridge/src/syncManager.ts`
-- `doubao-bridge/src/bridgeService.ts`
-- `doubao-bridge/src/memoFormatter.ts`
+- `desktop-app/src/syncManager.ts`
+- `desktop-app/src/bridgeService.ts`
+- `desktop-app/src/memoFormatter.ts`
 
 ### 2.3 Chrome
 
@@ -196,19 +198,21 @@ Chrome extension 优先从 `notification-center/feed` 拉取消息。
 
 - 展示成功 -> 记录 `delivered`
 - 用户点“查看” -> 记录 `clicked`，并对 `notification:*` 做全局 `acknowledge`
-- 用户点“忽略” -> 记录 `dismissed`，并对 `notification:*` 做全局 `dismiss`
-- `proposed_action:*` 只记录渠道事件，不直接改全局通知状态
-- 用户直接关闭系统通知时，只记录 Chrome 渠道的 `dismissed`，不自动改全局通知状态
+- 用户点关闭类按钮 -> 记录 Chrome 渠道 `dismissed`；`notification:*` 的 notice 做全局 `dismiss`，待办类通知走 snooze 延后
+- `proposed_action:*` 只记录渠道事件，不直接改全局通知状态；“暂不提醒”写回 `delivered` 触发待办冷却，而不是永久 `dismissed`
+- 用户直接关闭系统通知时，不自动改全局通知状态；todo 写回 `delivered` 进入短期冷却，notice 写回 `dismissed` 不再重复打扰
 - 通知弹窗会用 `contextMessage` 标出“待处理/通知”、优先级和待办截止时间，降低用户判断成本
 - `dream_digest` 这类通知的系统弹窗预览会优先用 payload 摘要片段，而不是只展示计数型 body
 - `proposed_action:*` 的“查看待办”会打开动作队列并定位对应 action；`project_update` / `property_change` 这类 notice 会打开时间轴；周报和 dream digest 仍进入梦境重放
 - Chrome 通知的来源元数据会同时保存在 `chrome.storage.local`，避免 MV3 service worker 被回收后点击 / 忽略操作无法回写通知中心
+- 对 `notification:*` 的待办类系统通知，第二按钮是“稍后提醒”；没有截止时间时默认延后 24 小时，有截止时间时会尽量在截止前再次提醒，避免把待办直接延到过期后。notice 使用“不再提示”，`proposed_action:*` 使用“暂不提醒”且只记录渠道事件
 
 对应实现：
 
 - `src/background.ts`
 - `src/backendNotifications.ts`
 - `src/services/MemoryServiceClient.ts`
+- `memory-service/src/routes/notifications.ts`
 
 ### 2.4 Glip
 
@@ -318,23 +322,42 @@ DigestQueueService 的处理流程是：
 
 它们相关，但不是同一个系统。
 
+## 5. 设计依据和当前优化点
+
+本轮对通知按钮做了轻量 UX 收敛，并让待办 snooze 变得更贴近截止时间：
+
+- 业内产品普遍把通知拆成可扫读 feed、可操作入口和用户可控的提醒强度。Android 通知设计强调明确通知目的、给出直接 action、设置类别/渠道，并清理过期通知；Teams Activity Feed 则把 unread、mention、reply 等类型做成可过滤队列；Slack 新 Activity 也把通知、提醒、过滤视图和清理动作放在一个可处理队列里。
+- 通知研究也支持“不要把所有通知都立即打断用户”：Intelligent Notification Systems survey 把核心挑战归纳为根据用户上下文和偏好选择合适时机；Yahoo! JAPAN 的大规模 adaptive scheduling 研究显示，延迟到更可打断的时机能改善响应速度；DOIG 研究提示要记录用户实际响应层级，而不是只看是否触达。
+- 对 Personal AI 来说，待办通知的“稍后提醒/暂不提醒”不能和 notice 的“不再提示”混成同一种操作，也不能固定延后 24 小时。当前实现会保留 notice 的低干扰关闭路径，让带截止时间的待办在截止前回到用户面前；即使只是展示成功、暂不提醒或直接关闭但没有真正处理，`todo` 也会在 6 小时冷却后重新进入 feed。
+
+参考：
+
+- [Android Notifications](https://developer.android.com/design/ui/mobile/guides/home-screen/notifications)
+- [Microsoft Teams Activity Feed](https://support.microsoft.com/en-us/office/explore-the-activity-feed-in-microsoft-teams-91c635a1-644a-4c60-9c98-233db3e13a56)
+- [Slack Activity view](https://slack.com/help/articles/46751260742035-Introducing-the-new-Activity-view-in-Slack)
+- [GitHub Notifications Inbox](https://docs.github.com/en/account-and-profile/managing-subscriptions-and-notifications-on-github/viewing-and-triaging-notifications/managing-notifications-from-your-inbox)
+- [Intelligent Notification Systems: A Survey](https://arxiv.org/abs/1711.10171)
+- [Real-world large-scale study on adaptive notification scheduling](https://www.sciencedirect.com/science/article/abs/pii/S1574119217304388)
+- [Reachable but not receptive](https://www.sciencedirect.com/science/article/abs/pii/S1574119217300640)
+
 ---
 
-## 5. 关键文件
+## 6. 关键文件
 
 ### Notification Center
 
 - `memory-service/src/core/NotificationCenterService.ts`
 - `memory-service/src/repositories/ChannelDeliveryRepository.ts`
 - `memory-service/src/routes/notificationCenter.ts`
+- `memory-service/src/routes/notifications.ts`
 - `memory-service/src/core/ProviderContextService.ts`
 - `memory-service/src/storage/migrations/015_channel_delivery_records.sql`
 
 ### Doubao / Chrome / Glip 接入
 
-- `doubao-bridge/src/syncManager.ts`
-- `doubao-bridge/src/bridgeService.ts`
-- `doubao-bridge/src/memoFormatter.ts`
+- `desktop-app/src/syncManager.ts`
+- `desktop-app/src/bridgeService.ts`
+- `desktop-app/src/memoFormatter.ts`
 - `src/background.ts`
 - `src/backendNotifications.ts`
 - `src/services/MemoryServiceClient.ts`

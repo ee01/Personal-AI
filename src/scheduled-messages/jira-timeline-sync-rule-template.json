@@ -1,8 +1,12 @@
 {
   "_metadata": {
-    "version": "1.3.4",
-    "lastUpdated": "2026-05-04",
-    "description": "Personal AI Scheduled Messages Timeline Sync Rule Template"
+    "version": "1.4.7",
+    "lastUpdated": "2026-05-19",
+    "description": "Personal AI Scheduled Messages Timeline Sync Rule Template",
+    "notes": [
+      "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com.",
+      "Release info variables intentionally save {{webhookResponse.body}}. The Apps Script GET URL removes ASCII apostrophes before urlEncode so older deployed Apps Script parsers do not treat unquoted field names such as Kira's group DF as quoted strings."
+    ]
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
   "state": "ENABLED",

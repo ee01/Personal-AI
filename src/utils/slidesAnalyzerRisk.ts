@@ -178,7 +178,7 @@ export function getRiskEvidenceItems(suggestion: ProjectUpdateSuggestion, now = 
       addUniqueEvidenceItem(items, `已逾期 Jira: ${issue.key} · ${formatDisplayDate(issue.duedate)}`);
     }
 
-    if (includesRiskKeyword(issue.status)) {
+    if (isOpenIssue && includesRiskKeyword(issue.status)) {
       addUniqueEvidenceItem(items, `Jira 状态提示风险: ${issue.key} · ${issue.status}`);
     }
   }
@@ -236,7 +236,7 @@ export function hasProjectRiskSignal(input: {
 
   return (input.jiraIssues || []).some((issue) => (
     (isOpenJiraIssue(issue) && hasHighPrioritySignal(issue.priority)) ||
-    includesRiskKeyword(issue.status) ||
+    (isOpenJiraIssue(issue) && includesRiskKeyword(issue.status)) ||
     (isOpenJiraIssue(issue) && isPastDueDate(issue.duedate, input.now))
   ));
 }

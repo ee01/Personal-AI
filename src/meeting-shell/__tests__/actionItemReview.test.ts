@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  getActionReviewExceptionHint,
   getActionReviewWarningLabel,
+  getActionReviewWarningSummary,
   getActionReviewWarnings,
   getActiveMeetingActionItems,
   mergeActionItemReviewStates,
@@ -28,6 +30,26 @@ test('getActionReviewWarnings surfaces incomplete follow-up fields', () => {
     '补截止',
     '缺依据',
   ]);
+  assert.equal(
+    getActionReviewWarningSummary({
+      id: 'action-needs-review',
+      title: 'Send customer recap',
+      owner: 'Unknown',
+      status: 'pending',
+      reviewState: 'suggested',
+    }),
+    '补负责人 / 补截止 / 缺依据',
+  );
+  assert.equal(
+    getActionReviewExceptionHint({
+      id: 'action-needs-review',
+      title: 'Send customer recap',
+      owner: 'Unknown',
+      status: 'pending',
+      reviewState: 'suggested',
+    }),
+    '仍有 补负责人 / 补截止 / 缺依据；确认表示你接受这个例外。',
+  );
 });
 
 test('getActionReviewWarnings accepts evidence-backed assigned items', () => {
@@ -42,6 +64,18 @@ test('getActionReviewWarnings accepts evidence-backed assigned items', () => {
   });
 
   assert.deepEqual(warnings, []);
+  assert.equal(
+    getActionReviewExceptionHint({
+      id: 'action-ready',
+      title: 'Send customer recap',
+      owner: 'Bella',
+      deadline: 'Friday',
+      status: 'pending',
+      reviewState: 'confirmed',
+      evidence: 'Bella will send the recap by Friday.',
+    }),
+    undefined,
+  );
 });
 
 test('mergeActionItemReviewStates preserves review state by stable identity', () => {

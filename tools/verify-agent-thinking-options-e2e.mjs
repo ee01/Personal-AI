@@ -85,6 +85,15 @@ try {
   await page.locator('.tools-table td', { hasText: /^jiraQuery$/ }).waitFor({
     timeout: 15000,
   });
+  await page.locator('.tools-table', { hasText: '安全边界' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.tool-safety-badge.effect', { hasText: '只读' }).first().waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.tool-safety-badge.approval.clear', {
+    hasText: '无需确认',
+  }).first().waitFor({ timeout: 15000 });
 
   await page.locator('button', { hasText: '启动演示' }).click();
 
@@ -94,9 +103,50 @@ try {
   await page.locator('.flow-node.tool.blocked .node-result.blocked', {
     hasText: '已阻断',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.tool.approval .node-result.approval', {
+    hasText: '待确认',
+  }).waitFor({ timeout: 12000 });
+  assert.equal(
+    await page.locator('.flow-node.decision', { hasText: '最终决策' }).count(),
+    0,
+    '流程运行中不应提前显示最终决策节点',
+  );
   await page.locator('.agent-run-review.warning', {
     hasText: '工具被阻断',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-run-review-item.warning', {
+    hasText: '需要人工确认',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-queue', {
+    hasText: '待确认动作',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-item', {
+    hasText: 'messageNotification',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-item', {
+    hasText: 'approval-tail-token-visible-in-ui',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-copy', {
+    hasText: '复制 key',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-copy', {
+    hasText: '复制审核包',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-review-hint', {
+    hasText: '确认通知内容、接收渠道和触发原因后再批准。',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-copy', {
+    hasText: '复制 key',
+  }).click();
+  await page.locator('.agent-approval-copy-status', {
+    hasText: /已复制批准 key|复制失败，请手动选择 key/,
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy', {
+    hasText: '复制审核包',
+  }).click();
+  await page.locator('.agent-approval-copy-status', {
+    hasText: /已复制审核包|复制失败，请手动选择审核包/,
+  }).waitFor({ timeout: 3000 });
   await page.locator('.agent-run-review-item.info', {
     hasText: '重复调用已跳过',
   }).waitFor({ timeout: 12000 });
@@ -149,9 +199,35 @@ try {
     0,
   );
 
+  const approvalHeader = page
+    .locator('.thought-step', { hasText: 'messageNotification' })
+    .locator('.step-header')
+    .first();
+  await approvalHeader.waitFor({ timeout: 12000 });
+  await page.locator('.thought-step .step-summary', {
+    hasText: 'messageNotification 需要人工确认，当前未执行。',
+  }).waitFor({ timeout: 3000 });
+  await approvalHeader.click();
+  await page.locator('.thought-step.expanded .diagnostic-content', {
+    hasText: 'approval-tail-token-visible-in-ui',
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.thought-step.expanded .diagnostic-content', {
+    hasText: '批准 key: messageNotification',
+  }).waitFor({ timeout: 3000 });
+
   await page.locator('.agent-result-summary', { hasText: '处理结果' }).waitFor({
     timeout: 12000,
   });
+  assert.equal(
+    await page.locator('.flow-node.decision', { hasText: '最终决策' }).count(),
+    1,
+    '流程完成后应显示最终决策节点',
+  );
+  assert.equal(
+    await page.locator('.agent-run-review-item', { hasText: '正在运行' }).count(),
+    0,
+    '流程完成后不应继续显示正在运行',
+  );
   await assertNoPageErrors();
 
   console.log('verify-agent-thinking-options-e2e: ok');

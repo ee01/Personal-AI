@@ -107,6 +107,7 @@ test('FallbackDoubaoBroadcast uses webpage-mcp when selected and healthy', async
   const result = await broadcast.sendTranscript('hello');
 
   assert.equal(result.threadId, 'webpage_mcp');
+  assert.equal(result.transportMode, 'webpage_mcp');
   assert.deepEqual(webpageMcp.calls, ['sendTranscript']);
   assert.deepEqual(playwright.calls, []);
 });
@@ -126,7 +127,15 @@ test('FallbackDoubaoBroadcast falls back to managed Chromium and keeps cooldown'
   const second = await broadcast.sendTranscript('second');
 
   assert.equal(first.threadId, 'playwright');
+  assert.equal(first.transportMode, 'playwright');
+  assert.match(first.transportFallbackReason || '', /webpage_mcp send failed/);
   assert.equal(second.threadId, 'playwright');
+  assert.equal(second.transportMode, 'playwright');
+  const status = broadcast.status();
+  assert.equal(status.transport?.mode, 'playwright');
+  assert.equal(status.transport?.preferredMode, 'webpage_mcp');
+  assert.match(status.transport?.fallbackCooldownUntil || '', /^\d{4}-/);
+  assert.match(status.transport?.fallbackReason || '', /webpage_mcp send failed/);
   assert.deepEqual(webpageMcp.calls, ['sendTranscript']);
   assert.deepEqual(playwright.calls, ['sendTranscript', 'sendTranscript']);
 });
@@ -189,7 +198,13 @@ test('FallbackDoubaoBroadcast falls back when webpage-mcp reports an unsent tran
 
   assert.equal(first.sent, true);
   assert.equal(first.threadId, 'playwright');
+  assert.equal(first.transportMode, 'playwright');
+  assert.match(first.transportFallbackReason || '', /did not verify sent text/);
   assert.equal(second.threadId, 'playwright');
+  assert.match(
+    broadcast.status().transport?.fallbackCooldownUntil || '',
+    /^\d{4}-/,
+  );
   assert.deepEqual(webpageMcp.calls, ['sendTranscript']);
   assert.deepEqual(playwright.calls, ['sendTranscript', 'sendTranscript']);
   assert.match(
@@ -234,6 +249,8 @@ test('FallbackDoubaoBroadcast uses managed Chromium when selected', async () => 
   });
 
   assert.equal(await broadcast.probeAuthStatus(), 'connected');
+  const result = await broadcast.sendTranscript('hello');
+  assert.equal(result.transportMode, 'playwright');
   assert.deepEqual(webpageMcp.calls, []);
-  assert.deepEqual(playwright.calls, ['probeAuthStatus']);
+  assert.deepEqual(playwright.calls, ['probeAuthStatus', 'sendTranscript']);
 });

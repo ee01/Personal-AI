@@ -1,6 +1,6 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-05-13*
+*最后更新: 2026-05-19*
 
 ## 功能概述
 
@@ -37,6 +37,7 @@
 - 周期任务的 `End_Date` 包含结束日当天；达到 `Repeat_Count` 后会在本次成功发送后收尾
 - 所有周期单位（天 / 周 / 月 / 年）都可以设置重复次数上限；周重复不会再丢失 `Repeat_Count`
 - 一次性任务、到达 `End_Date` 或达到 `Repeat_Count` 的周期任务成功收尾后会清空 `Next_Exec`，列表中显示为已完成，避免误以为还有下一次发送
+- 已完成的单次任务如果被改到未来执行时间，会自动从 `Done` 恢复为 `Active`，并清空上次执行时间以允许重新推送
 - Outreach / 帮我问模板同步到 memory-service 后会保留 `Repeat_Days`、`End_Date` 和 `Repeat_Count`，运行态发问节奏与表单预览保持一致
 - 周期任务的预计执行和保存校验会同步检查 `End_Date`；如果结束日前已经没有下一次可执行日期，表单会阻止保存并提示用户调整结束日或重复规则
 - 周重复任务的预览和 `Next_Exec` 始终指向未来的有效执行日，今天时间已过时会自动跳到下一个匹配星期
@@ -55,13 +56,17 @@
 - 筛选逻辑由共享 helper 统一处理，便于入口链接和 UI 保持一致
 - 自动答复通知中的“点击审核或取消”链接会带上 `messageId`，管理页打开后直接定位目标消息，并提供返回完整列表的恢复路径
 - 管理页的表格入口按任务拆分：“推送记录”打开 Logs；空状态和页脚的 Google Sheet 入口打开 Messages 维护表，避免批量编辑时误进日志页
+- 状态列只展示状态；暂停 / 恢复改为行内显式按钮。`PendingReview` 必须通过批准 / 拒绝处理，`Done` / `Completed` 需要编辑到未来执行时间后恢复，避免误触绕过审核或重启已完成消息
 
 ### 7. 队列健康提示
 - Bot / AI / JiraAutomation 消息由 Jira Automation 每分钟执行一条；管理页会汇总同一执行时间的排队情况
 - 只有带有效 `AI_Endpoint` 的 JiraAutomation 消息会进入统一执行器队列；空白 endpoint 的外部规则不会被误判为 Bot / AI 队列
 - 当同一时间槽可能超过 30 分钟补偿窗口时，顶部会显示风险提示，并列出受影响的时间槽和示例消息
+- 明确时间的同槽排队会给出“改到建议”操作；即使尚未超出补偿窗口，也能把最晚受影响的消息改到下一个清晰分钟
 - 新增 / 编辑表单会实时提示当前消息在同槽队列中的位置；高风险时间会阻止保存，避免创建后才发现不会按预期发送
+- 新增 / 编辑表单在明确时间已经拥挤时会直接给出“使用建议时间”；无时间队列如果快排到执行日结束后，也会建议一个明确时间，减少手工试错
 - 已有 Active 消息如果因为手工改 Sheet 或长期未打开而错过可执行窗口，管理页会在顶部和行内提示需要改期；用户可以编辑为未来明确时间，或对执行器消息清空时间进入 08:00 后队列
+- 错过执行窗口或执行时间格式异常时，顶部健康告警会给出“一键改期”：明确时间改到下一分钟，未设时间的执行器消息改回今天的 08:00 后队列，减少手工编辑阻塞
 
 ## 使用方法
 
@@ -138,8 +143,11 @@
 
 - 顶部队列提示只在存在同槽排队时出现；没有排队风险时不会占用界面
 - 普通排队提示用于说明最大同槽数量和预计延后时间
+- 明确时间槽出现排队时可以直接定位、编辑或把最晚受影响消息改到建议时间
 - 风险提示表示至少一个时间槽可能超过 30 分钟补偿窗口，建议改成未来明确时间，或清空执行时间进入 08:00 后队列
+- 创建或编辑消息时，如果系统已经能算出可避开拥挤队列的空闲分钟，预计执行区域会提供“使用建议时间”
 - 如果顶部提示“有定时消息需要改期”，表示有 Active 一次性消息已经错过实际执行窗口或时间格式异常；这些消息不会只靠等待自动恢复，需要从列表行进入编辑并改成未来时间
+- 健康提示里的“一键改期”会直接把目标消息恢复到可执行窗口：明确时间改到下一分钟，未设时间的执行器消息改到今天的默认队列，AsMe 默认时间已过时会移到下一个默认发送日
 - 表单打开时会自动刷新时间判断，长时间停留后仍能正确阻止已错过的执行时间
 
 ### 消息类型说明
@@ -178,7 +186,7 @@
   - 或直接使用群组 ID：`{teamId}@reply.ringcentral.glip.com`
 - 如果 Bot 初始化时配置了 RingCentral Client ID / Client Secret / JWT，AsMe 会改由 **Jira Automation** 调内网 Dify RingCentral sender workflow 发送
 - RingCentral sender 路径继续复用 `Glip_User_Name` / `Glip_Team_ID` 作为 Dify `chatId`；例如 `Glip_User_Name = esone.qiu` 会传给 Dify 的 `chatId`
-- RingCentral sender 不再在领取消息时预标记完成；Jira Rule 会在 Dify workflow 返回 `data.status = succeeded` 后通过 GET 调用 `markBotMessageExecuted` 写回 Done 和 Logs，返回 `failed` 时写入失败日志避免当天重复发送
+- RingCentral sender 不再在领取消息时预标记完成；Jira Rule 会在 Dify workflow 返回 `data.status = succeeded` 后通过 GET 调用 `markBotMessageExecuted` 写回 Done 和 Logs，返回 `failed` 时写入失败日志避免当天重复发送；发送成功后的 `chatId/postId/sentAt` 记录在 Logs 单次执行行中，用于 Glip message marker
 - 未配置或关闭 RingCentral sender 时，仍由 **AppScript 引擎**执行邮件 fallback
 - 老版本 Sheet 如果已有 Bot executor rule 但没有 `ringcentral_sender_*` 配置，新建消息弹窗选择 AsMe 时会提示配置 @ 人发送能力；提交完整 RingCentral credentials 后，会先删除低于 v1.4.0 的旧 executor rule，再创建支持 Dify sender 的新版 rule
 
@@ -341,7 +349,7 @@ memory-service runtime（Outreach）
 - 由两条 Jira Automation Rule 组成：
   - Executor Rule 每分钟触发一次 Webhook 调用 AppScript
   - Timeline Sync Rule 每天 05:00 按项目刷新 releaseInfo 缓存
-- Timeline 缓存状态在创建/编辑相关消息时展示；用户从 Jira 手动同步或修复规则后回到扩展，会自动刷新状态并在诊断中区分“缓存不可用”和“缓存仍可用但最近同步失败”。
+- Timeline 缓存状态在创建/编辑相关消息时展示；用户从 Jira 手动同步或修复规则后回到扩展，会自动刷新状态并在诊断中区分“缓存不可用”和“缓存仍可用但最近同步失败”。状态面板可直接运行 Apps Script dry-run 测试，也保留复制 curl 的手工排障路径。
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
 - 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
 - `cacheReleaseInfo` 按项目缓存并记录最近同步尝试摘要；`markBotMessageExecuted` 携带 `messageId` / `rowIndex` / `executionKey` 做行定位和幂等写回，避免 Sheet 行移动、Jira 重试或特殊字符导致误标记、重复记账或静默失败。
@@ -402,7 +410,25 @@ memory-service runtime（Outreach）
 | Exec_Count | Number | ❌ | 执行次数（自动） |
 | Exec_Log | String | ❌ | 执行日志（自动） |
 
-说明：`Type` 由程序根据日期、时间和重复字段自动判断，不再作为新表 schema 保存。旧表中的 `Target_Type`、`Outreach_*`、`Outreach_Question` 等列会继续兼容读取，但 v2.7 新表只把 Outreach 入口保存在 `Content / Glip_User_Name / Glip_Team_ID / Push_Method` 等基础列中，运行态以上游 memory-service 为准。
+说明：`Type` 由程序根据日期、时间和重复字段自动判断，不再作为新表 schema 保存。旧表中的 `Target_Type`、`Outreach_*`、`Outreach_Question` 等列会继续兼容读取，但 v2.7 起新表只把 Outreach 入口保存在 `Content / Glip_User_Name / Glip_Team_ID / Push_Method` 等基础列中，运行态以上游 memory-service 为准。`Sent_Chat_ID` / `Sent_Post_ID` / `Sent_At` 不属于 Messages 计划定义，发送结果统一写入 Logs。
+
+### Logs 表字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Timestamp | DateTime | 日志写入时间 |
+| Message_ID | String | 对应 Messages.ID |
+| Topic | String | 实际发送主题 |
+| Content | String | 实际发送内容 |
+| Push_Method | Enum | AsMe / Bot / AI / JiraAutomation / Outreach |
+| Target | String | 发送目标 |
+| Status | Enum | Success / Failed |
+| Error | String | 错误信息 |
+| Exec_Count | Number | 第几次执行 |
+| Execution_Key | String | 单次执行幂等键 |
+| Sent_Chat_ID | String | 实际 RingCentral chatId，用于 Glip 标注 |
+| Sent_Post_ID | String | 实际 RingCentral postId，用于 Glip 标注 |
+| Sent_At | DateTime | 实际发送时间 |
 
 ### Config 表字段
 
@@ -450,8 +476,9 @@ A:
 
 ### Q: 如何暂停消息？
 A:
-1. 在管理界面点击状态标签切换 Active / Paused，或在 Sheet 中将 Status 改为 "Paused"
+1. 在管理界面点击消息右侧的“暂停 / 恢复”按钮，或在 Sheet 中将 Status 改为 "Paused"
 2. 系统将跳过该消息的执行
+3. 待审核消息不能直接恢复为 Active，请使用“批准 / 拒绝”；已完成消息要先编辑为未来执行时间再恢复
 
 ### Q: 如何删除消息？
 A:

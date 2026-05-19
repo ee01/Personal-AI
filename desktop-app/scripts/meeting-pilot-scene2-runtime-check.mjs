@@ -343,8 +343,8 @@ try {
   assert.match(actionText, /待复核/, `行动项未进入用户复核状态: ${actionText}`);
   assert.match(
     actionText,
-    /确认并完成/,
-    `未复核行动项的完成按钮没有显式确认语义: ${actionText}`,
+    /确认(?:例外)?并完成/,
+    `未复核行动项的完成按钮没有显式确认或例外确认语义: ${actionText}`,
   );
   const actionReviewStates = await panelPage.evaluate(() =>
     Array.from(document.querySelectorAll('.action-card')).map((card) => ({
@@ -372,6 +372,16 @@ try {
   assert.ok(
     blockedAction.warnings.some((warning) => /补截止|补负责人|缺依据/.test(warning)),
     `缺信息行动项未展示复核提示: ${JSON.stringify(blockedAction)}`,
+  );
+  assert.match(
+    blockedAction.text,
+    /确认例外/,
+    `缺信息行动项没有显示例外确认文案: ${JSON.stringify(blockedAction)}`,
+  );
+  assert.doesNotMatch(
+    confirmableAction.text,
+    /确认例外/,
+    `信息完整行动项不应显示例外确认文案: ${JSON.stringify(confirmableAction)}`,
   );
   await panelPage.locator('[data-action-filter="needs-info"]').click();
   await panelPage.waitForFunction(

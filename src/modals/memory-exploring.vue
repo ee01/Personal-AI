@@ -182,11 +182,12 @@
               :key="option.value"
               type="button"
               :title="option.title"
+              :aria-pressed="selectedRecallScope === option.value"
               :class="[
                 'scope-option',
                 { active: selectedRecallScope === option.value },
               ]"
-              @click="selectedRecallScope = option.value"
+              @click="selectRecallScope(option.value)"
             >
               {{ option.label }}
             </button>
@@ -269,7 +270,8 @@ function getRouteSearchQuery() {
 }
 
 function getRouteRecallScope(): RecallScope {
-  return isRecallScope(route.query.scope) ? route.query.scope : 'work';
+  if (isRecallScope(route.query.scope)) return route.query.scope;
+  return route.path === '/timeline' ? 'all' : 'work';
 }
 
 function syncSearchControlsFromRoute() {
@@ -513,6 +515,16 @@ const handleSearchInput = () => {
 
 const handleSearch = () => {
   if (searchQuery.value.trim()) {
+    performSearch();
+  }
+};
+
+const selectRecallScope = (scope: RecallScope) => {
+  if (selectedRecallScope.value === scope) return;
+  selectedRecallScope.value = scope;
+
+  const query = searchQuery.value.trim();
+  if (router.currentRoute.value.path === '/search' && query.length >= 2) {
     performSearch();
   }
 };

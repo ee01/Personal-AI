@@ -73,6 +73,44 @@ function createStatus() {
       autoSyncEnabled: true,
       memoryServiceConfigured: false,
       pollIntervalMs: 300_000,
+      recentAttempts: [
+        {
+          id: 'attempt-mobile-1',
+          kind: 'mobile_briefing',
+          trigger: 'manual',
+          status: 'succeeded',
+          startedAt: now,
+          completedAt: now,
+          durationMs: 1200,
+          externalThreadId: 'mobile-context-thread-1234567890',
+          packageKinds: ['active_focus_digest'],
+          sourceRefCount: 2,
+          transportUsed: 'dom',
+          transportMode: 'webpage_mcp',
+          verified: true,
+          messageVisible: true,
+          challengeDetected: false,
+          telemetryError: 'Sync job report failed: endpoint timeout',
+        },
+        {
+          id: 'attempt-reminder-failed',
+          kind: 'reminder_sync',
+          trigger: 'auto',
+          status: 'failed',
+          startedAt: now,
+          completedAt: now,
+          durationMs: 900,
+          errorMessage: 'Doubao challenge detected before send',
+          packageKinds: ['todo_digest'],
+          sourceRefCount: 1,
+          transportUsed: 'dom',
+          transportMode: 'playwright',
+          transportFallbackReason: 'No existing doubao.com tab found in Chrome',
+          verified: false,
+          messageVisible: false,
+          challengeDetected: true,
+        },
+      ],
       tasks: {
         stableMemory: {
           intervalMs: 43_200_000,
@@ -227,9 +265,13 @@ async function main() {
           ok: false,
           error: 'Memory Service not configured',
         }),
-        openLogin: async () => ({
-          url: 'https://www.doubao.com/',
-        }),
+        openLogin: async () => {
+          window.__actionSequence.push('openLogin');
+          return {
+            url: 'https://www.doubao.com/',
+            browserTransport: window.__status.browserTransport,
+          };
+        },
         createMemorySyncThread: async () => ({
           id: 'memory-thread',
           title: '长期记忆同步线程',
@@ -339,6 +381,25 @@ async function main() {
     assert.equal(await page.evaluate(() => window.__paiInjected), false);
     assert.equal(await page.locator('#blocking-reasons img').count(), 0);
     assert.equal(await page.locator('#doubao-source-revoke-button').isDisabled(), true);
+    await expectText(page, '#sync-audit-list', /近期记忆重点/);
+    await expectText(page, '#sync-audit-list', /包：近期重点包/);
+    await expectText(page, '#sync-audit-list', /来源引用：2/);
+    await expectText(page, '#sync-audit-list', /线程：mobile-c...567890/);
+    await expectText(page, '#sync-audit-list', /已验证 · 消息可见 · 传输：日常 Chrome/);
+    await expectText(page, '#sync-audit-list', /状态回写异常：Sync job report failed/);
+    await expectText(page, '#sync-audit-list', /待办 \/ 通知/);
+    await expectText(page, '#sync-audit-list', /Doubao challenge detected before send/);
+    await expectText(page, '#sync-audit-list', /传输：内置 Chromium/);
+    await expectText(page, '#sync-audit-list', /回退原因：No existing doubao\.com tab found in Chrome/);
+    await expectText(page, '#sync-audit-list', /打开豆包检查/);
+    await expectText(page, '#sync-audit-list', /重新绑定手机对话/);
+    await expectText(page, '#sync-audit-list', /重试待办 \/ 通知/);
+
+    await page
+      .locator('[data-sync-audit-action="open_doubao"]')
+      .first()
+      .click();
+    await page.waitForFunction(() => window.__actionSequence.includes('openLogin'));
 
     await page.locator('#doubao-source-lookback-days').fill('9');
     await page.waitForFunction(
@@ -399,6 +460,68 @@ async function main() {
       'webpage_mcp',
     );
     assert.deepEqual(manualRunState.runNow, { source: 'doubao' });
+
+    await page.evaluate(() => {
+      const fallbackCooldownUntil = new Date(
+        Date.now() + 10 * 60_000,
+      ).toISOString();
+      const nextDoubaoSettings = {
+        ...window.__effectiveSettings.explorer.doubao,
+        transport: 'webpage_mcp',
+        broadcastTransport: 'webpage_mcp',
+      };
+      window.__effectiveSettings = {
+        ...window.__effectiveSettings,
+        explorer: {
+          ...window.__effectiveSettings.explorer,
+          doubao: nextDoubaoSettings,
+        },
+      };
+      window.__status = {
+        ...window.__status,
+        authStatus: 'connected',
+        browserTransport: {
+          mode: 'playwright',
+          preferredMode: 'webpage_mcp',
+          fallbackReason: 'No existing doubao.com tab found in Chrome',
+          fallbackCooldownUntil,
+        },
+      };
+      window.__explorerStatus = {
+        ...window.__explorerStatus,
+        sources: {
+          ...window.__explorerStatus.sources,
+          doubao: {
+            ...window.__explorerStatus.sources.doubao,
+            authStatus: 'connected',
+            settings: nextDoubaoSettings,
+            transport: {
+              mode: 'playwright',
+              fallbackReason: 'No existing doubao.com tab found in Chrome',
+              fallbackCooldownUntil,
+            },
+          },
+        },
+      };
+    });
+    await page.locator('#refresh-button').click();
+    await expectText(
+      page,
+      '#broadcast-transport-status',
+      /当前广播传输：已临时回退到内置 Chromium/,
+    );
+    await expectText(page, '#broadcast-transport-status', /约 \d+ 分钟后自动重试日常浏览器/);
+    await expectText(
+      page,
+      '#broadcast-transport-status',
+      /打开 Chrome 豆包.*立即重新尝试/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-transport-banner',
+      /当前传输：已临时回退到内置 Chromium/,
+    );
+    await expectText(page, '#doubao-source-transport-banner', /登录来源.*立即重新尝试/);
 
     await page.evaluate(() => {
       window.__status = {

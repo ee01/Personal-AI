@@ -2,7 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import type { BridgeStatus, BindingType, ThreadBinding, ThreadRecord } from './types.js';
+import type {
+  BridgeStatus,
+  BridgeSyncAttemptLogEntry,
+  BindingType,
+  ThreadBinding,
+  ThreadRecord,
+} from './types.js';
 
 export interface BridgeStateFile {
   paired: boolean;
@@ -10,6 +16,7 @@ export interface BridgeStateFile {
   authStatus: BridgeStatus['authStatus'];
   bindings: Partial<Record<BindingType, ThreadBinding>>;
   threads: ThreadRecord[];
+  syncAttempts: BridgeSyncAttemptLogEntry[];
   lastSyncAt?: string;
   lastError?: string;
 }
@@ -19,6 +26,7 @@ const DEFAULT_STATE: BridgeStateFile = {
   authStatus: 'unknown',
   bindings: {},
   threads: [],
+  syncAttempts: [],
 };
 
 export class StateStore {
@@ -37,6 +45,9 @@ export class StateStore {
         ...parsed,
         bindings: parsed.bindings || {},
         threads: parsed.threads || [],
+        syncAttempts: Array.isArray(parsed.syncAttempts)
+          ? parsed.syncAttempts
+          : [],
       };
     } catch {
       return structuredClone(DEFAULT_STATE);

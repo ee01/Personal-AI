@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   compareAppScriptVersions,
+  isValidAppScriptVersion,
   isAppScriptVersionOlder,
 } from '../src/scheduled-messages/appScriptVersioning';
 import {
   AppScriptUpdater,
+  APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR,
+  APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR,
   APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR,
+  buildAppScriptProjectUrl,
   buildAppScriptWebAppActionUrl,
   type AppScriptVersionUsage,
 } from '../src/scheduled-messages/AppScriptUpdater';
@@ -143,8 +147,35 @@ assert.ok(
   'App Script updates should stop when the deployed version cannot be confirmed',
 );
 assert.ok(
+  updaterSource.includes("credentials: 'omit'"),
+  'App Script version probes should not send Chrome profile cookies to script.google.com',
+);
+assert.ok(
+  updaterSource.includes('版本端点返回非 JSON 响应') &&
+    updaterSource.includes('无法确认线上版本'),
+  'App Script version probes should not treat non-JSON login/error pages as legacy scripts',
+);
+assert.ok(
+  updaterSource.includes('verifyUpdatedDeploymentServingVersion') &&
+    updaterSource.includes('配置不会被标记为最新'),
+  'App Script updates should verify the Web App URL serves the new version before syncing config metadata',
+);
+assert.ok(
+  updaterSource.includes('msg_appscript-recovery') &&
+    updaterSource.includes('App Script 需要检查'),
+  'Background auto-update failures with recovery links should create actionable notifications',
+);
+assert.ok(
+  updaterSource.includes('当前配置缺少 Script ID'),
+  'Update checks should not present an upgrade action when the Script ID needed for deployment updates is missing',
+);
+assert.ok(
   updaterSource.includes('无法读取最新 App Script 模板版本'),
   'App Script updates should fail closed when the bundled template version cannot be read',
+);
+assert.ok(
+  updaterSource.includes('APP_SCRIPT_VERSION 必须是有效 SemVer'),
+  'App Script updates should fail closed when the bundled template version is not valid SemVer',
 );
 assert.equal(
   updaterSource.includes('fallbackVersion'),
@@ -193,8 +224,23 @@ assert.ok(
   'Feature doc should describe Web App URL matching before deployment updates',
 );
 assert.ok(
-  featureDoc.includes('版本探测临时失败不会被当成旧版脚本'),
+  featureDoc.includes('版本探测临时失败或非 JSON 响应不会被当成旧版脚本'),
   'Feature doc should describe transient version-probe failure handling',
+);
+assert.ok(
+  featureDoc.includes('不携带 Chrome profile cookie') &&
+    featureDoc.includes('重定向到错误的 `/u/N/`'),
+  'Feature doc should describe anonymous App Script version probes',
+);
+assert.ok(
+  featureDoc.includes('非 JSON') &&
+    featureDoc.includes('不会按旧版脚本继续升级'),
+  'Feature doc should describe non-JSON version-probe responses as uncertain state',
+);
+assert.ok(
+  featureDoc.includes('部署生效确认') &&
+    featureDoc.includes('未确认返回目标版本时，不会把配置标记为最新'),
+  'Feature doc should describe post-deployment version verification before config sync',
 );
 assert.ok(
   managerSource.includes('清理脚本版本'),
@@ -207,7 +253,7 @@ assert.ok(
 );
 assert.ok(
   managerSource.includes('检查于') &&
-    managerSource.includes('失败保留旧部署') &&
+    managerSource.includes('失败回退旧部署') &&
     managerSource.includes('Web App URL 不变'),
   'Scheduled Messages UI should summarize update status, safety, and last check context',
 );
@@ -215,8 +261,22 @@ assert.ok(
   managerSource.includes('App Script 升级前检查') &&
     managerSource.includes('重新确认线上版本') &&
     managerSource.includes('匹配当前 Web App deployment') &&
+    managerSource.includes('确认新版本已生效') &&
+    managerSource.includes('失败回退旧 deployment') &&
     managerSource.includes('更新后同步 Sheet 配置'),
   'Scheduled Messages UI should show the preflight path before upgrade',
+);
+assert.ok(
+  managerSource.includes('提交后确认新版本已生效') &&
+    managerSource.includes('不会把配置标记为最新') &&
+    managerSource.includes('尝试回退到升级前 deployment 版本'),
+  'Scheduled Messages UI should explain post-deployment verification, rollback, and stale-config protection',
+);
+assert.ok(
+  managerSource.includes('appScriptRecoveryUrl') &&
+    managerSource.includes('App Script deployment 需要检查') &&
+    managerSource.includes('检查页面'),
+  'Scheduled Messages UI should offer a recovery link when deployment preflight fails',
 );
 const authFailureIndex = managerSource.indexOf('if (!token) {');
 const resultErrorIndex = managerSource.indexOf('if (result.error) {', authFailureIndex);
@@ -249,6 +309,9 @@ assert.equal(compareAppScriptVersions('2.6.16-beta.1', '2.6.16'), -1);
 assert.equal(compareAppScriptVersions('2.10.0', '2.9.9'), 1);
 assert.equal(isAppScriptVersionOlder('legacy', '2.6.16'), true);
 assert.equal(isAppScriptVersionOlder('2.6.16+build.7', '2.6.16'), false);
+assert.equal(isValidAppScriptVersion('2.6.16'), true);
+assert.equal(isValidAppScriptVersion('v2.6.16-beta.1+build.7'), true);
+assert.equal(isValidAppScriptVersion('2.6'), false);
 assert.equal(
   buildAppScriptWebAppActionUrl('https://example.com/exec?releaseInfo=abc#debug', 'getVersion'),
   'https://example.com/exec?releaseInfo=abc&action=getVersion#debug',
@@ -344,7 +407,7 @@ async function verifyAlreadyCurrentUpdateSkipsScriptMutations(): Promise<void> {
   };
 
   try {
-    globalThis.fetch = (async (input) => {
+    globalThis.fetch = (async (input, init) => {
       const url = String(input);
 
       if (url === 'chrome-extension://test/app-script-template.gs') {
@@ -355,6 +418,11 @@ async function verifyAlreadyCurrentUpdateSkipsScriptMutations(): Promise<void> {
       }
 
       if (url === 'https://example.com/exec?action=getVersion') {
+        assert.equal(
+          init?.credentials,
+          'omit',
+          'getVersion probes should omit Chrome profile credentials',
+        );
         return new Response(JSON.stringify({
           version: templateVersion,
           lastUpdated: templateLastUpdated,
@@ -396,6 +464,74 @@ async function verifyAlreadyCurrentUpdateSkipsScriptMutations(): Promise<void> {
 }
 
 await verifyAlreadyCurrentUpdateSkipsScriptMutations();
+
+async function verifyMissingScriptIdBlocksUpgradeState(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let scriptApiCalls = 0;
+
+  (AppScriptUpdater as any).cachedVersionInfo = null;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+  };
+
+  try {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(appScriptTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://example.com/exec?action=getVersion') {
+        return new Response(JSON.stringify({
+          version: '1.0.0',
+          lastUpdated: '2025-01-01',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.startsWith('https://script.googleapis.com/')) {
+        scriptApiCalls += 1;
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      sheetId: 'sheet-123',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      webAppUrl: 'https://example.com/exec',
+      sheet_version: '2.7',
+      created_by: 'Personal AI Extension',
+      created_at: '2026-04-30 12:00:00',
+      appScriptVersion: '1.0.0',
+      appScriptLastUpdated: '2025-01-01',
+    } as any);
+
+    const result = await updater.checkForUpdates();
+
+    assert.equal(result.needsUpdate, false);
+    assert.equal(result.currentVersion, '1.0.0');
+    assert.equal(result.latestVersion, templateVersion);
+    assert.match(result.error || '', /Script ID/);
+    assert.equal(scriptApiCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+  }
+}
+
+await verifyMissingScriptIdBlocksUpgradeState();
 
 async function verifyVersionMetadataUsesSheetFirstConfigSync(): Promise<void> {
   const originalFetch = globalThis.fetch;
@@ -472,6 +608,7 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
   let versionCreated = false;
   let updatedDeploymentId = '';
   let storedConfig: any;
+  let deploymentUpdated = false;
 
   (AppScriptUpdater as any).cachedVersionInfo = null;
 
@@ -518,8 +655,8 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
 
       if (url === 'https://script.google.com/macros/s/match/exec?debug=1&action=getVersion') {
         return new Response(JSON.stringify({
-          version: '1.0.0',
-          lastUpdated: '2025-01-01',
+          version: deploymentUpdated ? templateVersion : '1.0.0',
+          lastUpdated: deploymentUpdated ? templateLastUpdated : '2025-01-01',
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -528,6 +665,13 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
 
       if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-wrong') {
         return new Response(JSON.stringify(wrongDeployment), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-match' && init?.method !== 'PUT') {
+        return new Response(JSON.stringify(matchingDeployment), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -562,6 +706,7 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
 
       if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-match' && init?.method === 'PUT') {
         updatedDeploymentId = 'deployment-match';
+        deploymentUpdated = true;
         return new Response('{}', { status: 200 });
       }
 
@@ -608,6 +753,137 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
 }
 
 await verifyDeploymentSelectionMatchesConfiguredWebAppUrl();
+
+async function verifyPostDeploymentVersionMismatchDoesNotSyncConfig(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  const originalAttempts = (AppScriptUpdater as any).deploymentVerificationAttempts;
+  const originalDelay = (AppScriptUpdater as any).deploymentVerificationDelayMs;
+  let contentUpdated = false;
+  let versionCreated = false;
+  const deploymentVersionUpdates: number[] = [];
+  let configWrites = 0;
+
+  (AppScriptUpdater as any).cachedVersionInfo = null;
+  (AppScriptUpdater as any).deploymentVerificationAttempts = 2;
+  (AppScriptUpdater as any).deploymentVerificationDelayMs = 0;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: {
+        set: async () => {
+          configWrites += 1;
+        },
+      },
+    },
+  };
+
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(appScriptTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://example.com/exec?action=getVersion') {
+        return new Response(JSON.stringify({
+          version: '1.0.0',
+          lastUpdated: '2025-01-01',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-123' && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        deploymentVersionUpdates.push(body.deploymentConfig.versionNumber);
+        return new Response('{}', { status: 200 });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-123') {
+        return new Response(JSON.stringify({
+          deploymentId: 'deployment-123',
+          deploymentConfig: { versionNumber: 7 },
+          entryPoints: [{
+            entryPointType: 'WEB_APP',
+            webApp: { url: 'https://example.com/exec' },
+          }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/versions?pageSize=200') {
+        return new Response(JSON.stringify({ versions: [{ versionNumber: 1 }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/content' && init?.method === 'PUT') {
+        contentUpdated = true;
+        return new Response('{}', { status: 200 });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/versions' && init?.method === 'POST') {
+        versionCreated = true;
+        return new Response(JSON.stringify({ versionNumber: 8 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('https://sheets.googleapis.com/')) {
+        configWrites += 1;
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      sheetId: 'sheet-123',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      scriptId: 'script-123',
+      webAppUrl: 'https://example.com/exec',
+      deploymentId: 'deployment-123',
+      sheet_version: '2.7',
+      created_by: 'Personal AI Extension',
+      created_at: '2026-04-30 12:00:00',
+      appScriptVersion: '1.0.0',
+      appScriptLastUpdated: '2025-01-01',
+    } as any);
+
+    const result = await updater.updateAppScript();
+
+    assert.equal(result.success, false);
+    assert.equal(result.errorCode, APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR);
+    assert.equal(result.currentVersion, '1.0.0');
+    assert.equal(result.latestVersion, templateVersion);
+    assert.match(result.error || '', /配置不会被标记为最新/);
+    assert.match(result.error || '', /回退到升级前版本 7/);
+    assert.equal(contentUpdated, true);
+    assert.equal(versionCreated, true);
+    assert.deepEqual(deploymentVersionUpdates, [8, 7]);
+    assert.equal(configWrites, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+    (AppScriptUpdater as any).deploymentVerificationAttempts = originalAttempts;
+    (AppScriptUpdater as any).deploymentVerificationDelayMs = originalDelay;
+  }
+}
+
+await verifyPostDeploymentVersionMismatchDoesNotSyncConfig();
 
 async function verifyDeploymentUrlMismatchStopsScriptMutations(): Promise<void> {
   const originalFetch = globalThis.fetch;
@@ -686,7 +962,10 @@ async function verifyDeploymentUrlMismatchStopsScriptMutations(): Promise<void> 
     const result = await updater.updateAppScript();
 
     assert.equal(result.success, false);
+    assert.equal(result.errorCode, APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR);
     assert.match(result.error || '', /Web App URL 匹配/);
+    assert.equal(result.helpUrl, buildAppScriptProjectUrl('script-123'));
+    assert.match(result.helpMessage || '', /Manage deployments/);
     assert.equal(mutationCalls, 0);
   } finally {
     globalThis.fetch = originalFetch;
@@ -761,6 +1040,144 @@ async function verifyTransientVersionProbeStopsScriptMutations(): Promise<void> 
 }
 
 await verifyTransientVersionProbeStopsScriptMutations();
+
+async function verifyNonJsonVersionProbeStopsScriptMutations(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let scriptApiCalls = 0;
+
+  (AppScriptUpdater as any).cachedVersionInfo = null;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: {
+        set: async () => undefined,
+      },
+    },
+  };
+
+  try {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(appScriptTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://example.com/exec?action=getVersion') {
+        return new Response('<html><body>Please sign in</body></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+
+      if (url.startsWith('https://script.googleapis.com/')) {
+        scriptApiCalls += 1;
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      scriptId: 'script-123',
+      webAppUrl: 'https://example.com/exec',
+      deploymentId: 'deployment-123',
+      appScriptVersion: '1.0.0',
+      appScriptLastUpdated: '2025-01-01',
+    } as any);
+
+    const result = await updater.updateAppScript();
+
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /无法确认线上 App Script 版本/);
+    assert.match(result.error || '', /非 JSON/);
+    assert.equal(scriptApiCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+  }
+}
+
+await verifyNonJsonVersionProbeStopsScriptMutations();
+
+async function verifyInvalidTemplateSemverStopsScriptMutations(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let remoteCalls = 0;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: {
+        set: async () => undefined,
+      },
+    },
+  };
+
+  try {
+    const invalidTemplate = appScriptTemplate.replace(
+      /var APP_SCRIPT_VERSION = '[^']+';/,
+      "var APP_SCRIPT_VERSION = '2.8';",
+    );
+
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(invalidTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      remoteCalls += 1;
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      scriptId: 'script-123',
+      webAppUrl: 'https://example.com/exec',
+      deploymentId: 'deployment-123',
+      appScriptVersion: '1.0.0',
+      appScriptLastUpdated: '2025-01-01',
+    } as any);
+
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+    const checkResult = await updater.checkForUpdates();
+    assert.equal(checkResult.needsUpdate, false);
+    assert.equal(checkResult.currentVersion, 'unknown');
+    assert.equal(checkResult.latestVersion, 'unknown');
+    assert.match(checkResult.error || '', /有效 SemVer/);
+
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+    const updateResult = await updater.updateAppScript();
+    assert.equal(updateResult.success, false);
+    assert.match(updateResult.error || '', /有效 SemVer/);
+    assert.equal(remoteCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+  }
+}
+
+await verifyInvalidTemplateSemverStopsScriptMutations();
 
 async function verifyTemplateVersionLoadFailureStopsScriptMutations(): Promise<void> {
   const originalFetch = globalThis.fetch;

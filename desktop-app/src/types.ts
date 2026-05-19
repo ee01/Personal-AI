@@ -22,6 +22,7 @@ export type AutoSyncKind =
   | 'mobile_briefing'
   | 'reminder_sync';
 export type BridgeSyncAttemptStatus = 'succeeded' | 'skipped' | 'failed';
+export type BridgeTransportMode = 'playwright' | 'webpage_mcp' | 'unknown';
 export type BridgeAssistantStatusKind =
   | 'setup_blocker'
   | 'sync_issue'
@@ -64,6 +65,8 @@ export interface SyncResult {
   sentAt: string;
   error?: string;
   transportUsed?: 'dom';
+  transportMode?: BridgeTransportMode;
+  transportFallbackReason?: string;
   verified?: boolean;
   challengeDetected?: boolean;
   messageVisible?: boolean;
@@ -81,6 +84,12 @@ export interface BridgeServiceStatus {
   authStatus: BridgeAuthStatus;
   browserRunning: boolean;
   currentUrl?: string;
+  browserTransport?: {
+    mode: 'playwright' | 'webpage_mcp' | 'unknown';
+    preferredMode?: 'playwright' | 'webpage_mcp' | 'unknown';
+    fallbackReason?: string;
+    fallbackCooldownUntil?: string;
+  };
   pairToken?: string;
   bindings: Partial<Record<BindingType, ThreadBinding>>;
   threads: ThreadRecord[];
@@ -144,6 +153,16 @@ export interface BridgeSyncAttemptLogEntry {
   completedAt: string;
   durationMs: number;
   errorMessage?: string;
+  externalThreadId?: string;
+  packageKinds?: string[];
+  sourceRefCount?: number;
+  transportUsed?: 'dom';
+  transportMode?: BridgeTransportMode;
+  transportFallbackReason?: string;
+  verified?: boolean;
+  messageVisible?: boolean;
+  challengeDetected?: boolean;
+  telemetryError?: string;
 }
 
 export interface BridgeBlockingReason {

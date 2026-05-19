@@ -3780,6 +3780,8 @@ async function handleMeetingPilotMessage(
       await ensureInitialized();
       const actionTabId = Number(request.tabId || tabId || 0);
       const actionItemId = String(request.actionItemId || '');
+      const requestMeetingId = String(request.meetingId || '');
+      const current = registry.getSessionByTabId(actionTabId);
       const status =
         request.status === 'done'
           ? 'done'
@@ -3807,8 +3809,19 @@ async function handleMeetingPilotMessage(
         return;
       }
       const hasContentEdit = titleProvided || ownerProvided || deadlineProvided;
-      if (!Number.isFinite(actionTabId) || !actionItemId) {
-        sendResponse({ success: false });
+      if (
+        !Number.isFinite(actionTabId) ||
+        !actionItemId ||
+        !current ||
+        (requestMeetingId && requestMeetingId !== current.meetingId)
+      ) {
+        sendResponse({
+          success: false,
+          message:
+            requestMeetingId && current
+              ? '会议已切换，请刷新 Meeting Pilot 面板。'
+              : undefined,
+        });
         return;
       }
       const reviewedAt = Date.now();

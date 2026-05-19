@@ -12,6 +12,9 @@ import {
 import {
   buildCustomPromptPreferenceSection,
   buildUserContextPreferenceSection,
+  isCustomPromptsInjectionEnabled,
+  isPreferenceInjectionEnabled,
+  isUserContextInjectionEnabled,
 } from './services/userConfigPreview';
 import { getEnvConfig } from './utils';
 import { jiraFetch, getJiraBaseUrl, getJiraToken } from './jira';
@@ -30,6 +33,7 @@ import {
 import { buildRuleText } from './utils/ruleTextBuilder';
 import {
   filterWatchRulesForMessageGroups,
+  resolveMatchedWatchRules,
   type WatchRule,
 } from './watchRules';
 // uuid 已移除，如需要请重新导入
@@ -37,10 +41,17 @@ import {
 /**
  * 工具接口定义
  */
+export type ToolEffectType = 'read' | 'external_read' | 'write' | 'notify' | 'delete';
+export type ToolRiskLevel = 'low' | 'medium' | 'high';
+
 interface Tool {
   id: string;
   name: string;
   description: string;
+  effect?: ToolEffectType;
+  riskLevel?: ToolRiskLevel;
+  requiresHumanApproval?: boolean;
+  safetyNote?: string;
   execute: (
     params: any,
     state?: any,
@@ -68,12 +79,82 @@ export interface AgentToolDescription {
   name: string;
   description: string;
   parameters: ParameterDefinition[];
+  effect: ToolEffectType;
+  riskLevel: ToolRiskLevel;
+  requiresHumanApproval: boolean;
+  safetyNote?: string;
 }
 
 /**
  * 工具注册表
  */
 const toolRegistry: Record<string, Tool> = {};
+
+const TOOL_EFFECT_LABELS: Record<ToolEffectType, string> = {
+  read: '只读',
+  external_read: '外部只读',
+  write: '写入',
+  notify: '通知',
+  delete: '删除',
+};
+
+const TOOL_RISK_LABELS: Record<ToolRiskLevel, string> = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+};
+
+function normalizeRuleRefs(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    : [];
+}
+
+function normalizeRuleIds(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item >= 0)
+    : [];
+}
+
+function normalizeMatchedRules(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    : [];
+}
+
+function getToolSafety(tool: Tool): {
+  effect: ToolEffectType;
+  riskLevel: ToolRiskLevel;
+  requiresHumanApproval: boolean;
+  safetyNote?: string;
+} {
+  const effect = tool.effect || 'read';
+  const riskLevel = tool.riskLevel || 'low';
+  return {
+    effect,
+    riskLevel,
+    requiresHumanApproval:
+      tool.requiresHumanApproval === true ||
+      riskLevel !== 'low' ||
+      !['read', 'external_read'].includes(effect),
+    safetyNote: tool.safetyNote,
+  };
+}
+
+function formatToolSafety(tool: Tool): string {
+  const safety = getToolSafety(tool);
+  const approvalText = safety.requiresHumanApproval
+    ? '需要人工确认'
+    : '无需人工确认';
+  const note = safety.safetyNote ? `；${safety.safetyNote}` : '';
+  return `${TOOL_EFFECT_LABELS[safety.effect]} / ${TOOL_RISK_LABELS[safety.riskLevel]} / ${approvalText}${note}`;
+}
 
 /**
  * 注册工具
@@ -151,11 +232,19 @@ interface ActionHistoryItem {
   actionKey?: string;
   skipped?: boolean;
   blocked?: boolean;
+  approvalRequired?: boolean;
 }
 
 type ToolCallValidationResult =
   | { ok: true; tool: Tool }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      reason?: 'unknown_tool' | 'missing_params' | 'approval_required';
+      effect?: ToolEffectType;
+      riskLevel?: ToolRiskLevel;
+      approvalKey?: string;
+    };
 
 /**
  * 思考步骤
@@ -258,11 +347,89 @@ export class IntelligentAgent {
     return '';
   }
 
+  private applyMessageRuleScopeGuard(
+    result: MessageAnalysisResult,
+    message: any,
+    initialAnalysis: any,
+    context?: AnalysisContext,
+  ): void {
+    const watchRules = (context?.concernedRules || []) as WatchRule[];
+    if (watchRules.length === 0) {
+      return;
+    }
+
+    const matchedRuleRefs = normalizeRuleRefs(result.matchedRuleRefs);
+    const matchedRuleIds = normalizeRuleIds(result.matchedRuleIds);
+    const matchedRules = normalizeMatchedRules(initialAnalysis?.matchedRules);
+    const matchedRule =
+      result.matchedRule ||
+      this.buildMatchedRuleString(matchedRuleRefs, matchedRules, matchedRuleIds);
+    const hasRuleSignal =
+      matchedRuleRefs.length > 0 ||
+      matchedRuleIds.length > 0 ||
+      matchedRules.length > 0 ||
+      matchedRule.length > 0;
+
+    if (!hasRuleSignal) {
+      return;
+    }
+
+    const resolvedMatch = resolveMatchedWatchRules({
+      watchRules,
+      matchedRule,
+      matchedRuleRefs,
+      matchedRuleIds: matchedRuleRefs.length > 0 ? [] : matchedRuleIds,
+      messageContext: {
+        sender: message?.sender || message?.creator,
+        creator: message?.creator || message?.sender,
+        groupId: result.groupId || message?.groupId || context?.groupInfo?.id,
+        groupName:
+          result.groupName || message?.groupName || context?.groupInfo?.name,
+      },
+    });
+
+    if (resolvedMatch.watchRules.length > 0) {
+      result.matchedRuleRefs = resolvedMatch.matchedRuleRefs;
+      result.matchedRuleIds =
+        matchedRuleRefs.length > 0
+          ? matchedRuleIds
+          : resolvedMatch.matchedRuleIds;
+      result.matchedRule = this.buildMatchedRuleString(
+        resolvedMatch.matchedRuleRefs,
+        matchedRules,
+        result.matchedRuleIds,
+      );
+      return;
+    }
+
+    result.matchedRule = '';
+    result.matchedRuleRefs = [];
+    result.matchedRuleIds = [];
+    result.shouldStore = false;
+    result.shouldNotify = false;
+    result.notificationPriority = 'low';
+    result.reasonsToStore = [
+      ...(result.reasonsToStore || []),
+      '未通过记忆入口规则最终范围校验',
+    ];
+
+    const guardStep: ThoughtStep = {
+      timestamp: Date.now(),
+      thought:
+        '模型返回了规则命中，但该命中未通过记忆入口规则的最终范围校验，已跳过入库和通知。',
+      publicSummary: '未通过规则范围校验，已跳过入库和通知。',
+      action: 'invalid_rule_scope',
+    };
+    this.thoughtProcess.push(guardStep);
+    result.thoughtProcess?.push(guardStep);
+  }
+
   /**
    * 从本地缓存和记忆服务备份加载用户自定义配置。
    * 本地配置优先，记忆服务用于跨页面/跨设备恢复。
    */
   private async loadUserConfiguration(): Promise<{
+    preferenceInjection: any;
     customPrompts: any;
     userContextConfig: any;
     userProfile?: any;
@@ -280,6 +447,11 @@ export class IntelligentAgent {
           content: '',
           position: 'after_analysis_guide',
         },
+      },
+      preferenceInjection: {
+        enabled: true,
+        customPromptsEnabled: true,
+        userContextEnabled: true,
       },
       userContextConfig: {
         personalInfo: {
@@ -359,7 +531,11 @@ export class IntelligentAgent {
     };
 
     const hasConfig = (config: any): boolean =>
-      Boolean(config?.customPrompts || config?.userContextConfig);
+      Boolean(
+        config?.preferenceInjection ||
+          config?.customPrompts ||
+          config?.userContextConfig,
+      );
 
     const withTimeout = async <T>(
       promise: Promise<T>,
@@ -387,7 +563,7 @@ export class IntelligentAgent {
         return;
       }
       chromeApi.storage.local.get(
-        ['customPrompts', 'userContextConfig', 'cloudSyncTime'],
+        ['preferenceInjection', 'customPrompts', 'userContextConfig', 'cloudSyncTime'],
         resolve,
       );
     });
@@ -428,9 +604,19 @@ export class IntelligentAgent {
     const mergedConfig = sanitizeIndependentUserConfig(
       deepMerge(defaultConfig, chosenConfig || {}),
     );
+    const preferenceInjectionEnabled = isPreferenceInjectionEnabled(mergedConfig);
+    const customPromptsInjectionEnabled =
+      isCustomPromptsInjectionEnabled(mergedConfig);
+    const userContextInjectionEnabled = isUserContextInjectionEnabled(mergedConfig);
+
     return {
-      customPrompts: mergedConfig.customPrompts,
-      userContextConfig: mergedConfig.userContextConfig,
+      preferenceInjection: mergedConfig.preferenceInjection,
+      customPrompts: preferenceInjectionEnabled && customPromptsInjectionEnabled
+        ? mergedConfig.customPrompts
+        : defaultConfig.customPrompts,
+      userContextConfig: preferenceInjectionEnabled && userContextInjectionEnabled
+        ? mergedConfig.userContextConfig
+        : defaultConfig.userContextConfig,
       userProfile: null,
       userProfileAnalysis: null,
     };
@@ -465,6 +651,10 @@ export class IntelligentAgent {
       id: 'historySearch',
       name: '历史消息搜索',
       description: '搜索与当前消息相关的历史消息',
+      effect: 'read',
+      riskLevel: 'low',
+      requiresHumanApproval: false,
+      safetyNote: '仅查询本地/后端记忆，不写入外部系统。',
       parameterDefs: [
         {
           name: 'content',
@@ -583,6 +773,10 @@ export class IntelligentAgent {
       name: 'JIRA信息查询',
       description:
         '直接调用JIRA REST API查询任务、需求和bug信息。如果有issueId可直接查询单issue结果，否则用其他参数进行多issues查询',
+      effect: 'external_read',
+      riskLevel: 'low',
+      requiresHumanApproval: false,
+      safetyNote: '只读取 JIRA 数据，不修改 issue。',
       parameterDefs: [
         {
           name: 'issueId',
@@ -1274,6 +1468,7 @@ export class IntelligentAgent {
           context,
           usedTools,
         );
+        this.applyMessageRuleScopeGuard(result, message, analysis, context);
 
         // 添加到最终结果列表
         finalResults.push(result);
@@ -1367,12 +1562,19 @@ export class IntelligentAgent {
    * 获取可用于 UI 展示的工具目录
    */
   public getToolCatalog(): AgentToolDescription[] {
-    return this.getAvailableTools().map((tool) => ({
-      id: tool.id,
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameterDefs || [],
-    }));
+    return this.getAvailableTools().map((tool) => {
+      const safety = getToolSafety(tool);
+      return {
+        id: tool.id,
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameterDefs || [],
+        effect: safety.effect,
+        riskLevel: safety.riskLevel,
+        requiresHumanApproval: safety.requiresHumanApproval,
+        safetyNote: safety.safetyNote,
+      };
+    });
   }
 
   /**
@@ -1381,6 +1583,7 @@ export class IntelligentAgent {
   public getToolDescriptions(): string[] {
     return this.getAvailableTools().map((tool) => {
       let description = `- ${tool.name} (${tool.id}): ${tool.description}`;
+      description += `\n  安全: ${formatToolSafety(tool)}`;
 
       // 添加参数描述
       if (tool.parameterDefs && tool.parameterDefs.length > 0) {
@@ -1397,6 +1600,10 @@ export class IntelligentAgent {
 
       return description;
     });
+  }
+
+  private getToolSafetyPromptGuidance(): string {
+    return `\n工具安全规则:\n- 只能直接调用“无需人工确认”的工具。\n- 如果工具标记为“需要人工确认”，或工具效果是写入、通知、删除，未获得明确批准前不要调用；请先结束本轮并把需要确认的动作写入摘要或建议。\n- 如果调用方已经提供批准，系统仍会按 tool id + 参数生成的批准 key 做执行前校验；批准 key 必须精确匹配本次工具和参数。`;
   }
 
   /**
@@ -2335,14 +2542,21 @@ ${context}
           const validation = this.validateToolCall(
             toolCall.id,
             toolCall.params || {},
+            { result, config, context },
+            actionKey,
           );
 
           if (!validation.ok) {
             this.appendToolResult(toolResults, toolCall.id, {
               blocked: true,
+              approvalRequired: validation.reason === 'approval_required',
+              reason: validation.reason,
               message: validation.message,
               params: toolCall.params,
               actionKey,
+              effect: validation.effect,
+              riskLevel: validation.riskLevel,
+              approvalKey: validation.approvalKey,
             });
             continue;
           }
@@ -2355,7 +2569,7 @@ ${context}
             const toolResult = await this.executeTool(
               toolCall.id,
               toolCall.params || {},
-              result,
+              { result, config, context },
             );
             console.log(`🔧 工具 ${toolCall.id} 执行结果:`, toolResult.message);
             this.appendToolResult(toolResults, toolCall.id, toolResult);
@@ -2427,7 +2641,8 @@ Chrome AI预分析: ${input.chromeAIResult ? '已完成，相关性' + input.chr
 当前分析总结: ${result.summary}
 
 可用工具:
-${this.getToolDescriptions().join('\n')}`;
+${this.getToolDescriptions().join('\n')}
+${this.getToolSafetyPromptGuidance()}`;
   }
 
   /**
@@ -2458,6 +2673,7 @@ ${context}
 
 可选工具及其用途：
 ${this.getToolDescriptions().join('\n')}
+${this.getToolSafetyPromptGuidance()}
 
 只允许使用上述工具ID: ${this.getAvailableToolIdList()}。不要调用未列出的工具。
 
@@ -2548,7 +2764,7 @@ ${this.getToolDescriptions().join('\n')}
     params: Record<string, any>,
     state: any,
   ): Promise<any> {
-    const validation = this.validateToolCall(toolId, params);
+    const validation = this.validateToolCall(toolId, params, state);
     if (!validation.ok) {
       throw new Error(validation.message);
     }
@@ -2568,12 +2784,15 @@ ${this.getToolDescriptions().join('\n')}
   private validateToolCall(
     toolId: string,
     params: Record<string, any> = {},
+    state?: any,
+    actionKey = buildAgentToolCallKey({ id: toolId, params }),
   ): ToolCallValidationResult {
     const tool = toolRegistry[toolId];
 
     if (!tool) {
       return {
         ok: false,
+        reason: 'unknown_tool',
         message: `工具 ${toolId} 未注册，已阻断调用。当前可用工具: ${this.getAvailableToolIdList()}`,
       };
     }
@@ -2591,11 +2810,51 @@ ${this.getToolDescriptions().join('\n')}
     if (missingParams.length > 0) {
       return {
         ok: false,
+        reason: 'missing_params',
         message: `工具 ${toolId} 缺少必填参数 ${missingParams.join(', ')}，已阻断调用。`,
       };
     }
 
+    const safety = getToolSafety(tool);
+    if (
+      safety.requiresHumanApproval &&
+      !this.isToolActionApproved(toolId, actionKey, state)
+    ) {
+      return {
+        ok: false,
+        reason: 'approval_required',
+        effect: safety.effect,
+        riskLevel: safety.riskLevel,
+        approvalKey: actionKey,
+        message:
+          `工具 ${toolId} 属于${TOOL_RISK_LABELS[safety.riskLevel]}${TOOL_EFFECT_LABELS[safety.effect]}动作，需要人工确认，已阻断执行。` +
+          ` 批准 key: ${actionKey}`,
+      };
+    }
+
     return { ok: true, tool };
+  }
+
+  private isToolActionApproved(
+    _toolId: string,
+    actionKey: string,
+    state?: any,
+  ): boolean {
+    const approvalSources = [
+      state?.approvedToolActionKeys,
+      state?.toolApprovalKeys,
+      state?.config?.approvedToolActionKeys,
+      state?.config?.toolApprovalKeys,
+      state?.context?.approvedToolActionKeys,
+      state?.context?.toolApprovalKeys,
+    ];
+
+    return approvalSources.some((source) => {
+      if (Array.isArray(source)) return source.includes(actionKey);
+      if (source instanceof Set) return source.has(actionKey);
+      if (!source || typeof source !== 'object') return false;
+      return source[actionKey] === true;
+    });
   }
 
   private appendToolResult(
@@ -2632,13 +2891,19 @@ ${this.getToolDescriptions().join('\n')}
     const existingActionKeys = new Set<string>(
       (state.actionHistory || [])
         .map((action: ActionHistoryItem) => {
-          return (
+          const actionKey =
             action.actionKey ||
             buildAgentToolCallKey({
               id: action.tool,
               params: action.params || {},
-            })
-          );
+            });
+          if (
+            action.approvalRequired &&
+            this.isToolActionApproved(action.tool, actionKey, state)
+          ) {
+            return '';
+          }
+          return actionKey;
         })
         .filter(Boolean),
     );
@@ -2665,7 +2930,12 @@ ${this.getToolDescriptions().join('\n')}
 
         existingActionKeys.add(actionKey);
 
-        const validation = this.validateToolCall(toolId, t.params || {});
+        const validation = this.validateToolCall(
+          toolId,
+          t.params || {},
+          state,
+          actionKey,
+        );
         if (!validation.ok) {
           console.warn(`阻断无效工具调用: ${toolId}`, t.params);
           return {
@@ -2673,7 +2943,12 @@ ${this.getToolDescriptions().join('\n')}
             params: t.params,
             actionKey,
             blocked: true,
+            approvalRequired: validation.reason === 'approval_required',
+            reason: validation.reason,
             message: validation.message,
+            effect: validation.effect,
+            riskLevel: validation.riskLevel,
+            approvalKey: validation.approvalKey,
           };
         }
 
@@ -2722,9 +2997,14 @@ ${this.getToolDescriptions().join('\n')}
             : curr.blocked
               ? {
                   blocked: true,
+                  approvalRequired: curr.approvalRequired,
+                  reason: curr.reason,
                   message: curr.message,
                   params: curr.params,
                   actionKey: curr.actionKey,
+                  effect: curr.effect,
+                  riskLevel: curr.riskLevel,
+                  approvalKey: curr.approvalKey,
                 }
             : curr.skipped
               ? {
@@ -2764,6 +3044,7 @@ ${this.getToolDescriptions().join('\n')}
           actionKey: tr.actionKey,
           skipped: tr.skipped,
           blocked: tr.blocked,
+          approvalRequired: tr.approvalRequired,
         });
       }
     });
@@ -3276,6 +3557,7 @@ ${userContextInfo}
 # 可用工具
 以下是可用于处理消息的工具，可以在分析时考虑是否需要使用这些工具：
 ${toolDescriptions}
+${this.getToolSafetyPromptGuidance()}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
 
 ${analysisPoints}
@@ -3505,6 +3787,7 @@ ${userContextInfo}
 # 可用工具
 以下是可用于分析项目的工具:
 ${toolDescriptions}
+${this.getToolSafetyPromptGuidance()}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
 
 # 分析指南
@@ -3564,6 +3847,7 @@ ${customPromptSection}
     "owner": "", // 用英文直接填入具体的人名，没有变化可留空
     "ownerReason": "建议修改负责人的原因", // 用中文给出修改负责人的原因
     "track": "", // 用英文直接填入具体的赛道名称或团队名，没有变化可留空
+    "trackReason": "建议修改赛道的原因", // 用中文给出修改赛道的原因
     "highlights": ["highlight1", "highlight2"], // 用英文直接填入具体的备注内容，没有变化可留空
     "highlightsReason": "建议修改备注的原因", // 用中文给出备注变化的原因
     "actionItems": ["actionItem1", "actionItem2"],  // 用英文直接填入具体的行动项，没有变化可留空
@@ -3673,6 +3957,7 @@ ${depthNote}
 # 可用工具
 以下是可用于分析会议的工具:
 ${toolDescriptions}
+${this.getToolSafetyPromptGuidance()}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
 
 # 分析指南
@@ -3827,6 +4112,7 @@ ${depthNote}
 # 可用工具
 以下是可用于分析文档的工具:
 ${toolDescriptions}
+${this.getToolSafetyPromptGuidance()}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
 
 # 分析指南
@@ -3993,6 +4279,7 @@ ${customPromptSection}
 # 可用工具
 以下是可用于分析的工具:
 ${toolDescriptions}
+${this.getToolSafetyPromptGuidance()}
 ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${config.preferredTools.join(', ')}` : ''}
 
 # 分析指南
@@ -4218,6 +4505,7 @@ ${memoryContent}
 
 ## 可用工具
 ${toolDescriptions}
+${this.getToolSafetyPromptGuidance()}
 ${state.config.preferredTools && state.config.preferredTools.length > 0 ? `\n推荐优先考虑使用这些工具: ${state.config.preferredTools.join(', ')}` : ''}
 
 ## 思考指南

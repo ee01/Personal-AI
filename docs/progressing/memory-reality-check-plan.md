@@ -1,14 +1,31 @@
-# 新能力：Memory Reality Check / 记忆事实核验器
+# 新能力：Memory Reality Check / 记忆事实核验器（搁置）
 
 > 生成日期：2026-05-14  
-> Codex 会话标题建议：新能力：记忆事实核验器  
+> Codex 会话标题建议：新能力：记忆事实核验器（搁置）  
 > Demo：[`memory-reality-check-demo.html`](./memory-reality-check-demo.html)
+
+## 搁置原因
+
+当前暂不建议把 Memory Reality Check 作为独立新能力推进。
+
+核心原因是阶段优先级不匹配：现阶段 `docs/features/compose_assist.md` 已经覆盖“用户正在输入时”的低打扰记忆辅助，包括 RingCentral 回复、Jira comment、Web AI 输入框、可预览插入、证据过滤、置信度阈值、thumb-down 反馈和 sendable 校验。当前真正影响体验的是 Compose Assist 本身还不够准确，尤其是召回相关性、场景理解、可发送文本质量和错误提示收敛。因此，比起在用户输入错误或 AI 输出错误之后再做核验纠错，优先级更高的是把 `/composer/assist` 的输入阶段做准，让系统少给错建议、少插入无关上下文、少打扰用户。
+
+换句话说，Reality Check 的“输出后审稿”方向只有在 Compose Assist 的输入质量稳定后才有价值。否则它会变成给不稳定建议再补一个纠错层，产品链路更长，用户负担更重，也会分散当前最该解决的准确率问题。
+
+同时，本方案和多个已搁置或低优先级方向存在相同风险：
+
+- `Memory Trust Console` 已标记为搁置，它解决的是记忆库自身的可信度、隐私、证据和修复控制台；Reality Check 中的冲突、过期、敏感判断如果扩大，很容易重复这个治理台。
+- `Memory Rehearsal Studio` 已标记为搁置，其推荐优先级明确要求 Relationship Radar 和 Context Assist 先做稳；Reality Check 也依赖高质量场景入口和高质量召回，同样不应早于 Compose Assist 准确率提升。
+- `Agent Memory Control Tower` 已标记为搁置，原因是偏离 Personal AI 作为记忆系统的主线、会变成调度其他 AI 的工作台；Reality Check 如果扩展到所有外部 AI 输出审稿，也会把产品重心拉向“AI 审稿/评测平台”，而不是当前的“记忆提示与输入辅助”。
+- 现有 `Decision Center / confirm_requests` 已经承接“需要用户判断哪个事实正确”的场景。若 Reality Check 发现真正的记忆冲突，不应另建一个确认 inbox，而应该创建 confirm request 并回到决策中心处理。
+
+因此本方案保留为未来参考，不作为近期实施项。可复用部分是：claim-level evidence diff、输出 patch prompt、Meeting Pilot 摘要 action item 核验等思路；这些应在 Compose Assist 准确率稳定、Memory Trust/Decision Center 边界更清楚后，再作为局部能力嵌入现有入口，而不是独立一级功能。
 
 ## 结论
 
 本次没有从 Reminders 选题。本机 Reminders 的 `Personal AI` 清单当前没有未完成事项；清单里可见的 4 条历史项都已经 completed，且都是豆包同步问题或测试类反馈，不是全新的功能 idea，因此不需要标记 done。
 
-我建议设计一个新能力：**Memory Reality Check / 记忆事实核验器**。
+本方案记录为搁置方向：**Memory Reality Check / 记忆事实核验器**。
 
 它不是新的搜索页，也不是又一个跨 AI 上下文包。它做的是在 ChatGPT、Claude、豆包、Codex、RingClaw、Meeting Pilot、Jira comment、Google Sheet 总结等内容已经生成之后，Personal AI 把这段输出拆成可核验 claim，然后用用户自己的私有记忆逐条判断：
 
@@ -728,4 +745,3 @@ POST /api/v1/reality-check/:checkId/export
 - 先不做自动发送、不做外部 verifier、不做完整 Trust Console 依赖。
 
 如果 demo 体验成立，再把它接入 Context Assist、Meeting Pilot 和 MCP。
-

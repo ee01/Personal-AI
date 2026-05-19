@@ -57,10 +57,10 @@ test('FallbackDoubaoSource falls back to managed Chromium when webpage-mcp read 
 
   assert.equal(first[0]?.conversationId, 'playwright');
   assert.equal(second[0]?.conversationId, 'playwright');
-  assert.deepEqual(source.getClientStatus(), {
-    mode: 'playwright',
-    fallbackReason: 'webpage_mcp collect failed',
-  });
+  const transportStatus = source.getClientStatus();
+  assert.equal(transportStatus.mode, 'playwright');
+  assert.equal(transportStatus.fallbackReason, 'webpage_mcp collect failed');
+  assert.match(transportStatus.fallbackCooldownUntil || '', /^\d{4}-/);
   assert.deepEqual(webpageMcp.calls, ['collectConversationSnapshots']);
   assert.deepEqual(playwright.calls, [
     'collectConversationSnapshots',

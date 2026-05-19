@@ -21,6 +21,8 @@ export interface ScheduleQueuePressure {
   remainingCompensationMinutes: number;
   hasExplicitTime: boolean;
   exceedsCompensationWindow: boolean;
+  remainingSameDaySlots?: number;
+  exceedsExecutionWindow?: boolean;
 }
 
 export interface ScheduleQueueSuggestion {
@@ -38,6 +40,8 @@ export interface ScheduleQueueSlotSummary {
   remainingCompensationMinutes: number;
   hasExplicitTime: boolean;
   exceedsCompensationWindow: boolean;
+  remainingSameDaySlots?: number;
+  exceedsExecutionWindow?: boolean;
   messageIds: string[];
   sampleTopics: string[];
   actionMessageId: string;
@@ -52,6 +56,7 @@ export interface ScheduleQueueSummary {
   riskSlotCount: number;
   largestSlotSize: number;
   maxDelayMinutes: number;
+  hiddenSlotCount: number;
   topSlots: ScheduleQueueSlotSummary[];
 }
 
@@ -144,6 +149,29 @@ function getElapsedCompensationMinutes(slotKey: string, now: Date): number {
   return Math.floor(elapsedMs / 60000);
 }
 
+function getNoTimeQueueRemainingSameDaySlots(slotKey: string, now: Date): number {
+  const slotTime = parseScheduleSlotKey(slotKey);
+  if (!slotTime) {
+    return 0;
+  }
+
+  const queueStart = new Date(Math.max(slotTime.getTime(), getNextCandidateMinute(now).getTime()));
+  const executionDayEnd = new Date(slotTime);
+  executionDayEnd.setHours(23, 59, 0, 0);
+
+  if (queueStart.getTime() > executionDayEnd.getTime()) {
+    return 0;
+  }
+
+  return Math.floor((executionDayEnd.getTime() - queueStart.getTime()) / 60000) + 1;
+}
+
+function hasScheduleQueueExecutionRisk(
+  input: Pick<ScheduleQueuePressure | ScheduleQueueSlotSummary, 'exceedsCompensationWindow' | 'exceedsExecutionWindow'>,
+): boolean {
+  return Boolean(input.exceedsCompensationWindow || input.exceedsExecutionWindow);
+}
+
 function isExpiredExplicitSlot(slotKey: string, slotMessages: ScheduledMessage[], now: Date): boolean {
   return slotMessages.some(hasExplicitScheduleTime) &&
     getElapsedCompensationMinutes(slotKey, now) > COMPENSATION_WINDOW_MINUTES;
@@ -203,7 +231,13 @@ function buildSlotSummary(
   const actionMessage = slotMessages[slotMessages.length - 1];
   const exceedsCompensationWindow = hasExplicitTime &&
     elapsedCompensationMinutes + maxDelayMinutes > COMPENSATION_WINDOW_MINUTES;
-  const suggestion = actionMessage && exceedsCompensationWindow
+  const remainingSameDaySlots = hasExplicitTime
+    ? undefined
+    : getNoTimeQueueRemainingSameDaySlots(slotKey, now);
+  const exceedsExecutionWindow = !hasExplicitTime &&
+    typeof remainingSameDaySlots === 'number' &&
+    maxDelayMinutes >= remainingSameDaySlots;
+  const suggestion = actionMessage && maxDelayMinutes > 0 && (hasExplicitTime || exceedsExecutionWindow)
     ? getScheduleQueueSuggestion(allMessages, actionMessage, now)
     : null;
 
@@ -215,6 +249,10 @@ function buildSlotSummary(
     remainingCompensationMinutes,
     hasExplicitTime,
     exceedsCompensationWindow,
+    ...(exceedsExecutionWindow ? {
+      remainingSameDaySlots,
+      exceedsExecutionWindow,
+    } : {}),
     messageIds: slotMessages.map(message => message.ID).filter(Boolean),
     sampleTopics: slotMessages
       .slice(0, 3)
@@ -327,8 +365,10 @@ export function getScheduleQueueSummary(
     ))
     .map(({ slotKey, messages: slotMessages }) => buildSlotSummary(slotKey, slotMessages, messages, now))
     .sort((left, right) => {
-      if (left.exceedsCompensationWindow !== right.exceedsCompensationWindow) {
-        return left.exceedsCompensationWindow ? -1 : 1;
+      const leftHasRisk = hasScheduleQueueExecutionRisk(left);
+      const rightHasRisk = hasScheduleQueueExecutionRisk(right);
+      if (leftHasRisk !== rightHasRisk) {
+        return leftHasRisk ? -1 : 1;
       }
 
       if (left.maxDelayMinutes !== right.maxDelayMinutes) {
@@ -348,9 +388,10 @@ export function getScheduleQueueSummary(
   return {
     congestedSlotCount: congestedSlots.length,
     queuedMessageCount: congestedSlots.reduce((sum, slot) => sum + slot.slotSize, 0),
-    riskSlotCount: congestedSlots.filter(slot => slot.exceedsCompensationWindow).length,
+    riskSlotCount: congestedSlots.filter(hasScheduleQueueExecutionRisk).length,
     largestSlotSize,
     maxDelayMinutes,
+    hiddenSlotCount: Math.max(0, congestedSlots.length - Math.max(0, limit)),
     topSlots: congestedSlots.slice(0, Math.max(0, limit)),
   };
 }
@@ -415,6 +456,12 @@ export function getScheduleQueuePressure(
   const remainingCompensationMinutes = hasExplicitTime
     ? Math.max(0, COMPENSATION_WINDOW_MINUTES - elapsedCompensationMinutes)
     : 0;
+  const remainingSameDaySlots = hasExplicitTime
+    ? undefined
+    : getNoTimeQueueRemainingSameDaySlots(targetSlotKey, now);
+  const exceedsExecutionWindow = !hasExplicitTime &&
+    typeof remainingSameDaySlots === 'number' &&
+    delayMinutes >= remainingSameDaySlots;
 
   return {
     slotKey: targetSlotKey,
@@ -426,7 +473,23 @@ export function getScheduleQueuePressure(
     hasExplicitTime,
     exceedsCompensationWindow: hasExplicitTime &&
       elapsedCompensationMinutes + delayMinutes > COMPENSATION_WINDOW_MINUTES,
+    ...(exceedsExecutionWindow ? {
+      remainingSameDaySlots,
+      exceedsExecutionWindow,
+    } : {}),
   };
+}
+
+export function hasScheduleQueueBlockingRisk(
+  pressure: ScheduleQueuePressure | null | undefined,
+): boolean {
+  return Boolean(pressure && hasScheduleQueueExecutionRisk(pressure));
+}
+
+export function hasScheduleQueueSlotRisk(
+  slot: ScheduleQueueSlotSummary,
+): boolean {
+  return hasScheduleQueueExecutionRisk(slot);
 }
 
 export function getScheduleQueueSuggestion(
@@ -439,7 +502,17 @@ export function getScheduleQueueSuggestion(
     return null;
   }
 
-  if (!hasExplicitScheduleTime(targetMessage) || !isValidLocalScheduleTime(targetMessage.Schedule_Time)) {
+  const targetHasExplicitTime = hasExplicitScheduleTime(targetMessage);
+  if (targetHasExplicitTime && !isValidLocalScheduleTime(targetMessage.Schedule_Time)) {
+    return null;
+  }
+
+  const targetPressure = getScheduleQueuePressure(messages, targetMessage, now);
+  if (!targetPressure) {
+    return null;
+  }
+
+  if (!targetHasExplicitTime && !targetPressure.exceedsExecutionWindow) {
     return null;
   }
 
@@ -476,6 +549,11 @@ export function getScheduleQueueSuggestion(
       Schedule_Date: dateStr,
       Schedule_Time: timeStr,
     };
+    const candidateSlotKey = getScheduleSlotKey(candidateMessage, now);
+    if (!candidateSlotKey) {
+      continue;
+    }
+
     const pressure = getScheduleQueuePressure(existingMessages, candidateMessage, now);
     if (pressure?.exceedsCompensationWindow) {
       continue;
@@ -504,7 +582,9 @@ export function formatScheduleQueuePressure(pressure: ScheduleQueuePressure): st
     : '';
   const riskLabel = pressure.exceedsCompensationWindow
     ? '可能超过 30 分钟补偿窗口'
-    : '';
+    : pressure.exceedsExecutionWindow
+      ? '可能排到执行日期结束后'
+      : '';
 
   return [queueLabel, delayLabel, remainingWindowLabel, riskLabel].filter(Boolean).join('，');
 }
@@ -514,8 +594,20 @@ export function formatScheduleQueueSuggestion(suggestion: ScheduleQueueSuggestio
 }
 
 export function formatScheduleQueueBlockReason(pressure: ScheduleQueuePressure): string {
-  if (!pressure.exceedsCompensationWindow) {
+  if (!hasScheduleQueueBlockingRisk(pressure)) {
     return '';
+  }
+
+  if (pressure.exceedsExecutionWindow && !pressure.hasExplicitTime) {
+    return [
+      `当前 08:00 后队列排在第 ${pressure.position}/${pressure.slotSize} 个`,
+      `预计延后 ${pressure.delayMinutes} 分钟`,
+      typeof pressure.remainingSameDaySlots === 'number'
+        ? `当天剩余可执行约 ${pressure.remainingSameDaySlots} 条`
+        : '',
+      '可能排到执行日期结束后',
+      '请改成未来日期，或填写明确时间。',
+    ].filter(Boolean).join('，');
   }
 
   return [
@@ -536,9 +628,17 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
     : '优先执行';
   const riskLabel = slot.exceedsCompensationWindow
     ? '可能超过 30 分钟补偿窗口'
+    : slot.exceedsExecutionWindow
+      ? '可能排到执行日期结束后'
+      : '';
+  const remainingWindowLabel = slot.exceedsExecutionWindow && typeof slot.remainingSameDaySlots === 'number'
+    ? `当天剩余可执行约 ${slot.remainingSameDaySlots} 条`
     : '';
   const sampleLabel = slot.sampleTopics.length > 0
     ? `示例：${slot.sampleTopics.join('、')}`
+    : '';
+  const actionLabel = slot.actionTopic
+    ? `建议处理：${slot.actionTopic}（第 ${slot.actionPosition}/${slot.slotSize} 个）`
     : '';
   const suggestionLabel = slot.suggestion
     ? `建议改到 ${slot.suggestion.label}`
@@ -548,6 +648,8 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
     `${slotLabel}: ${slot.slotSize} 条`,
     delayLabel,
     riskLabel,
+    remainingWindowLabel,
+    actionLabel,
     suggestionLabel,
     sampleLabel,
   ].filter(Boolean).join('，');
@@ -555,8 +657,8 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
 
 export function formatScheduleQueueSummary(summary: ScheduleQueueSummary): string {
   const riskLabel = summary.riskSlotCount > 0
-    ? `${summary.riskSlotCount} 个时间槽可能超过 30 分钟补偿窗口`
-    : '暂无超出补偿窗口的时间槽';
+    ? `${summary.riskSlotCount} 个时间槽存在执行窗口风险`
+    : '暂无执行窗口风险';
 
   return [
     `${summary.congestedSlotCount} 个时间槽同时排队`,

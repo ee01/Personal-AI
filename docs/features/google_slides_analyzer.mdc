@@ -14,12 +14,20 @@ Source of truth: [google_slides_analyzer.md](./google_slides_analyzer.md).
 Keep this feature aligned with the current implementation:
 
 - The user starts analysis from a Google Slides page or the extension popup.
-- `contentScriptGoogleSlide.tsx` keeps the Google Slides toolbar entry available, extracts the current presentation/slide, and opens `slides-analysis.html`.
+- `contentScriptGoogleSlide.tsx` keeps the Google Slides toolbar entry available and keyboard-accessible, surfaces auth failures on the Slides page, extracts the current presentation/slide, and opens `slides-analysis.html`.
 - `slide.ts` reads and updates Slides through the Google Slides API.
 - `tableAnalyzer.ts` handles table header detection, Jira Key columns, project row extraction, and merges multiple credible project tables on the same slide.
 - `textAnalyzer.ts` merges duplicate Jira projects found by overlapping text/list extraction passes before suggestions are shown.
 - `slides-analysis.tsx` is the review UI; users can inspect risk spotlight/filter views, verify per-project risk evidence, and select specific fields before writing updates.
+- Default selection in `slides-analysis.tsx` is field-level: a high-confidence suggestion may still leave owner/track/comments unchecked when that specific field lacks direct source evidence.
+- The review UI keeps a field-level queue for review-required and blocked fields, so users can act on ambiguous writable fields without scanning every project card.
+- Project-level review notes name the exact fields that were left for manual review, instead of implying the whole suggestion has no source.
+- The sticky writeback area summarizes selected sourced fields vs selected review-required fields before applying updates.
+- The sticky writeback area previews the selected project fields and concise before/after text, including selected fields hidden by the current filter.
+- While an apply request is pending, field checkboxes, select-all controls, and queue toggles stay disabled so the visible selection cannot drift from the payload already sent to Google Slides.
+- Track updates carry `trackReason` through the project-analysis schema into `ProjectUpdateSuggestion`, so sourced track changes can be default-selected like sourced status/owner/comment changes.
 - `slidesAnalyzerRisk.ts` keeps summary and review-page risk detection aligned, including negated phrases such as `No risk`, open statuses such as `Not done`, and closed Jira issues that should not count as active priority/overdue risks.
+- Risk-only projects without field changes still appear as review cards and risk spotlight entries, but they do not add writable fields or default selections.
 - Project risk levels are normalized before summary counts: `medium` and legacy `normal` are attention, `high` / `critical` are risk, and `low` is normal.
 
 When changing this feature, verify:
@@ -27,6 +35,14 @@ When changing this feature, verify:
 - Invalid row/column indexes such as `-1` are not sent to Slides API update requests.
 - Cell replacement uses `deleteText.textRange.type = ALL` and `insertText.insertionIndex = 0`.
 - The review window and Slides page use constrained `postMessage` origins.
+- High-confidence defaults are selected per field, not per project suggestion.
+- Review-required fields remain visible in the field queue and can be toggled from that queue.
+- Partial-source suggestions show a project-card review note that lists the specific field names left unchecked.
+- Manually selected review-required fields remain visible in the writeback summary before submit.
+- Selected field previews identify the actual project, field, and before/after or appended comment text that will be written.
+- Selection controls are locked during pending writeback and re-enabled only after success, error, or timeout.
+- Track suggestions with a direct `trackReason` remain part of field-level source evidence and writeback payloads.
 - Risk detection does not treat negated phrases such as `No risk` or open statuses such as `Incomplete` / `Not done` as closed, and closed high-priority Jira issues do not become active risk by priority alone.
+- Closed Jira issues whose status text still contains blocker/risk wording must not create active risk evidence by status alone.
 - `medium` project risk from the project-analysis prompt must not be counted as normal.
 - `docs/features/google_slides_analyzer.md` stays concise and current.

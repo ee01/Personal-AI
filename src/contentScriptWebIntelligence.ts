@@ -4,16 +4,24 @@
  */
 
 import {
+    CONTEXT_PAGE_BLOCK_STORAGE_KEY,
+    CONTEXT_SITE_ALLOW_STORAGE_KEY,
+    CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
     CONTEXT_SITE_BLOCK_STORAGE_KEY,
     CONTEXT_SITE_MUTE_STORAGE_KEY,
     formatRecallTimestamp,
     isContextSiteMuteActive,
+    isContextHostCoveredBySiteRecord,
+    isContextPageUrlBlockedByPrefix,
     hasSensitiveUrlSignal,
     isDisplayableContextRecallMatch,
     isLowValueContextHost,
     isSensitiveControlDescriptor,
+    normalizeContextPageBlockPrefix,
     normalizeContextSiteMuteHost,
     normalizeContextPageUrl,
+    pruneContextPageBlockRecord,
+    pruneContextSiteAllowRecord,
     pruneContextSiteBlockRecord,
     pruneContextSiteMuteRecord,
     sanitizeContextExternalUrl,
@@ -77,6 +85,12 @@ interface ContextRecallMatch {
     links: Array<{ label: string; url: string }>;
     whyMatched?: string;
     timestamp?: number;
+}
+
+interface ContextToastAction {
+    label: string;
+    ariaLabel?: string;
+    onClick: () => void;
 }
 
 function escapeHtml(text: string): string {
@@ -197,10 +211,17 @@ class WebIntelligenceContentScript {
     private dismissedContextKeys = new Map<string, number>();
     private mutedSiteHosts = new Map<string, number>();
     private blockedSiteHosts = new Map<string, number>();
+    private blockedPagePrefixes = new Map<string, number>();
+    private allowedSiteHosts = new Map<string, number>();
+    private siteAllowlistMode = false;
     private siteMutesLoaded = false;
     private siteMutesLoadPromise: Promise<void> | null = null;
     private siteBlocksLoaded = false;
     private siteBlocksLoadPromise: Promise<void> | null = null;
+    private pageBlocksLoaded = false;
+    private pageBlocksLoadPromise: Promise<void> | null = null;
+    private siteAllowlistLoaded = false;
+    private siteAllowlistLoadPromise: Promise<void> | null = null;
     private sentOwnerLearningKeys = new Set<string>();
 
     constructor() {
@@ -795,7 +816,12 @@ class WebIntelligenceContentScript {
                 this.scheduleContextMatch(0);
             });
             return;
-        } else if (this.isCurrentSiteMuted() || this.isCurrentSiteBlocked()) {
+        } else if (
+            this.isCurrentSiteMuted() ||
+            this.isCurrentSiteBlocked() ||
+            this.isCurrentPageBlocked() ||
+            this.isCurrentSiteOutsideAllowlist()
+        ) {
             this.clearContextBubble();
             return;
         }
@@ -884,6 +910,8 @@ class WebIntelligenceContentScript {
                 this.isSensitiveContextPage() ||
                 this.isCurrentSiteMuted() ||
                 this.isCurrentSiteBlocked() ||
+                this.isCurrentPageBlocked() ||
+                this.isCurrentSiteOutsideAllowlist() ||
                 this.isContextDismissed(payload.contextKey)
             ) {
                 this.clearContextBubble();
@@ -1180,11 +1208,21 @@ class WebIntelligenceContentScript {
     }
 
     private areSiteControlsLoaded(): boolean {
-        return this.siteMutesLoaded && this.siteBlocksLoaded;
+        return (
+            this.siteMutesLoaded &&
+            this.siteBlocksLoaded &&
+            this.pageBlocksLoaded &&
+            this.siteAllowlistLoaded
+        );
     }
 
     private loadSiteControls(): Promise<void> {
-        return Promise.all([this.loadSiteMutes(), this.loadSiteBlocks()]).then(() => undefined);
+        return Promise.all([
+            this.loadSiteMutes(),
+            this.loadSiteBlocks(),
+            this.loadPageBlocks(),
+            this.loadSiteAllowlist(),
+        ]).then(() => undefined);
     }
 
     private loadSiteMutes(): Promise<void> {
@@ -1269,6 +1307,92 @@ class WebIntelligenceContentScript {
         return this.siteBlocksLoadPromise;
     }
 
+    private loadPageBlocks(): Promise<void> {
+        if (this.pageBlocksLoaded) {
+            return Promise.resolve();
+        }
+        if (this.pageBlocksLoadPromise) {
+            return this.pageBlocksLoadPromise;
+        }
+
+        this.pageBlocksLoadPromise = new Promise((resolve) => {
+            try {
+                let settled = false;
+                const finish = (result?: Record<string, any>): void => {
+                    if (settled) return;
+                    settled = true;
+                    const pruned = pruneContextPageBlockRecord(
+                        result?.[CONTEXT_PAGE_BLOCK_STORAGE_KEY],
+                    );
+                    this.blockedPagePrefixes = new Map(Object.entries(pruned.record));
+                    if (pruned.changed) {
+                        this.savePageBlocks();
+                    }
+                    this.pageBlocksLoaded = true;
+                    resolve();
+                };
+
+                const maybePromise = chrome.storage.local.get(
+                    CONTEXT_PAGE_BLOCK_STORAGE_KEY,
+                    finish,
+                ) as unknown as Promise<Record<string, any>> | undefined;
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                    maybePromise.then(finish).catch(() => finish());
+                }
+            } catch (_error) {
+                this.pageBlocksLoaded = true;
+                resolve();
+            }
+        });
+
+        return this.pageBlocksLoadPromise;
+    }
+
+    private loadSiteAllowlist(): Promise<void> {
+        if (this.siteAllowlistLoaded) {
+            return Promise.resolve();
+        }
+        if (this.siteAllowlistLoadPromise) {
+            return this.siteAllowlistLoadPromise;
+        }
+
+        this.siteAllowlistLoadPromise = new Promise((resolve) => {
+            try {
+                let settled = false;
+                const finish = (result?: Record<string, any>): void => {
+                    if (settled) return;
+                    settled = true;
+                    const pruned = pruneContextSiteAllowRecord(
+                        result?.[CONTEXT_SITE_ALLOW_STORAGE_KEY],
+                    );
+                    this.allowedSiteHosts = new Map(Object.entries(pruned.record));
+                    this.siteAllowlistMode = result?.[CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY] === true;
+                    if (pruned.changed) {
+                        this.saveSiteAllowlist();
+                    }
+                    this.siteAllowlistLoaded = true;
+                    resolve();
+                };
+
+                const maybePromise = chrome.storage.local.get(
+                    [
+                        CONTEXT_SITE_ALLOW_STORAGE_KEY,
+                        CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
+                    ],
+                    finish,
+                ) as unknown as Promise<Record<string, any>> | undefined;
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                    maybePromise.then(finish).catch(() => finish());
+                }
+            } catch (_error) {
+                this.siteAllowlistLoaded = true;
+                resolve();
+            }
+        });
+
+        return this.siteAllowlistLoadPromise;
+    }
+
     private saveSiteMutes(): void {
         const payload: Record<string, number> = {};
         for (const [host, mutedAt] of this.mutedSiteHosts.entries()) {
@@ -1295,6 +1419,35 @@ class WebIntelligenceContentScript {
         }
     }
 
+    private savePageBlocks(): void {
+        const payload: Record<string, number> = {};
+        for (const [prefix, blockedAt] of this.blockedPagePrefixes.entries()) {
+            payload[prefix] = blockedAt;
+        }
+
+        try {
+            chrome.storage.local.set({ [CONTEXT_PAGE_BLOCK_STORAGE_KEY]: payload });
+        } catch (_error) {
+            // Storage is best-effort; in-memory block still applies until reload.
+        }
+    }
+
+    private saveSiteAllowlist(): void {
+        const payload: Record<string, number> = {};
+        for (const [host, allowedAt] of this.allowedSiteHosts.entries()) {
+            payload[host] = allowedAt;
+        }
+
+        try {
+            chrome.storage.local.set({
+                [CONTEXT_SITE_ALLOW_STORAGE_KEY]: payload,
+                [CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY]: this.siteAllowlistMode,
+            });
+        } catch (_error) {
+            // Storage is best-effort; in-memory allowlist still applies until reload.
+        }
+    }
+
     private getCurrentSiteMuteHost(): string {
         return normalizeContextSiteMuteHost(window.location.hostname);
     }
@@ -1302,31 +1455,182 @@ class WebIntelligenceContentScript {
     private isCurrentSiteMuted(): boolean {
         this.pruneMutedSiteHosts();
         const host = this.getCurrentSiteMuteHost();
-        const mutedAt = this.mutedSiteHosts.get(host);
-        return mutedAt !== undefined && isContextSiteMuteActive(mutedAt);
+        const payload: Record<string, number> = {};
+        for (const [mutedHost, mutedAt] of this.mutedSiteHosts.entries()) {
+            if (isContextSiteMuteActive(mutedAt)) {
+                payload[mutedHost] = mutedAt;
+            }
+        }
+        return isContextHostCoveredBySiteRecord(host, payload);
     }
 
     private isCurrentSiteBlocked(): boolean {
         const host = this.getCurrentSiteMuteHost();
-        return this.blockedSiteHosts.has(host);
+        const payload: Record<string, number> = {};
+        for (const [blockedHost, blockedAt] of this.blockedSiteHosts.entries()) {
+            payload[blockedHost] = blockedAt;
+        }
+        return isContextHostCoveredBySiteRecord(host, payload);
+    }
+
+    private isCurrentPageBlocked(): boolean {
+        const payload: Record<string, number> = {};
+        for (const [prefix, blockedAt] of this.blockedPagePrefixes.entries()) {
+            payload[prefix] = blockedAt;
+        }
+        return isContextPageUrlBlockedByPrefix(window.location.href, payload);
+    }
+
+    private isCurrentSiteOutsideAllowlist(): boolean {
+        if (!this.siteAllowlistMode) {
+            return false;
+        }
+
+        const host = this.getCurrentSiteMuteHost();
+        const payload: Record<string, number> = {};
+        for (const [allowedHost, allowedAt] of this.allowedSiteHosts.entries()) {
+            payload[allowedHost] = allowedAt;
+        }
+        return !isContextHostCoveredBySiteRecord(host, payload);
     }
 
     private muteCurrentSite(): void {
-        this.mutedSiteHosts.set(this.getCurrentSiteMuteHost(), Date.now());
+        const host = this.getCurrentSiteMuteHost();
+        const previousMutedAt = this.mutedSiteHosts.get(host);
+        const hadPreviousMute = previousMutedAt !== undefined;
+
+        this.mutedSiteHosts.set(host, Date.now());
         this.pruneMutedSiteHosts();
         this.saveSiteMutes();
         this.clearContextBubble();
-        this.showContextToast('已暂停此网站记忆提示 24 小时');
+        this.showContextToast('已暂停此网站记忆提示 24 小时', {
+            label: '撤销',
+            ariaLabel: '撤销此网站今天不提示',
+            onClick: () => {
+                if (hadPreviousMute && previousMutedAt !== undefined) {
+                    this.mutedSiteHosts.set(host, previousMutedAt);
+                } else {
+                    this.mutedSiteHosts.delete(host);
+                }
+                this.saveSiteMutes();
+                this.showContextToast('已恢复此网站记忆提示');
+                this.scheduleContextMatch(0);
+            },
+        });
     }
 
     private blockCurrentSite(): void {
         const host = this.getCurrentSiteMuteHost();
+        const previousBlockedAt = this.blockedSiteHosts.get(host);
+        const hadPreviousBlock = previousBlockedAt !== undefined;
+        const previousMutedAt = this.mutedSiteHosts.get(host);
+        const hadPreviousMute = previousMutedAt !== undefined;
+
         this.blockedSiteHosts.set(host, Date.now());
         this.mutedSiteHosts.delete(host);
         this.saveSiteBlocks();
         this.saveSiteMutes();
         this.clearContextBubble();
-        this.showContextToast('已永久关闭此网站记忆提示');
+        this.showContextToast('已永久关闭此网站记忆提示', {
+            label: '撤销',
+            ariaLabel: '撤销永久不提示此站点',
+            onClick: () => {
+                if (hadPreviousBlock && previousBlockedAt !== undefined) {
+                    this.blockedSiteHosts.set(host, previousBlockedAt);
+                } else {
+                    this.blockedSiteHosts.delete(host);
+                }
+                if (hadPreviousMute && previousMutedAt !== undefined) {
+                    this.mutedSiteHosts.set(host, previousMutedAt);
+                } else {
+                    this.mutedSiteHosts.delete(host);
+                }
+                this.saveSiteBlocks();
+                this.saveSiteMutes();
+                this.showContextToast('已恢复此网站记忆提示');
+                this.scheduleContextMatch(0);
+            },
+        });
+    }
+
+    private blockCurrentPage(): void {
+        const prefix = normalizeContextPageBlockPrefix(window.location.href);
+        if (!prefix) {
+            this.showContextToast('此页面地址无法添加路径屏蔽');
+            return;
+        }
+
+        const previousBlockedAt = this.blockedPagePrefixes.get(prefix);
+        const hadPreviousBlock = previousBlockedAt !== undefined;
+
+        this.blockedPagePrefixes.set(prefix, Date.now());
+        this.savePageBlocks();
+        this.clearContextBubble();
+        this.showContextToast('已永久关闭此页面路径记忆提示', {
+            label: '撤销',
+            ariaLabel: '撤销此页面路径不提示',
+            onClick: () => {
+                if (hadPreviousBlock && previousBlockedAt !== undefined) {
+                    this.blockedPagePrefixes.set(prefix, previousBlockedAt);
+                } else {
+                    this.blockedPagePrefixes.delete(prefix);
+                }
+                this.savePageBlocks();
+                this.showContextToast('已恢复此页面路径记忆提示');
+                this.scheduleContextMatch(0);
+            },
+        });
+    }
+
+    private allowCurrentSiteAndEnableAllowlist(): void {
+        const host = this.getCurrentSiteMuteHost();
+        if (!host) {
+            this.showContextToast('此网站地址无法加入允许列表');
+            return;
+        }
+
+        const previousAllowlistMode = this.siteAllowlistMode;
+        const previousAllowedAt = this.allowedSiteHosts.get(host);
+        const hadPreviousAllow = previousAllowedAt !== undefined;
+        const previousBlockedAt = this.blockedSiteHosts.get(host);
+        const hadPreviousBlock = previousBlockedAt !== undefined;
+        const previousMutedAt = this.mutedSiteHosts.get(host);
+        const hadPreviousMute = previousMutedAt !== undefined;
+
+        this.allowedSiteHosts.set(host, Date.now());
+        this.siteAllowlistMode = true;
+        this.blockedSiteHosts.delete(host);
+        this.mutedSiteHosts.delete(host);
+        this.saveSiteAllowlist();
+        this.saveSiteBlocks();
+        this.saveSiteMutes();
+        this.showContextToast('已开启白名单并允许此网站', {
+            label: '撤销',
+            ariaLabel: '撤销此站点白名单快捷设置',
+            onClick: () => {
+                this.siteAllowlistMode = previousAllowlistMode;
+                if (hadPreviousAllow && previousAllowedAt !== undefined) {
+                    this.allowedSiteHosts.set(host, previousAllowedAt);
+                } else {
+                    this.allowedSiteHosts.delete(host);
+                }
+                if (hadPreviousBlock && previousBlockedAt !== undefined) {
+                    this.blockedSiteHosts.set(host, previousBlockedAt);
+                } else {
+                    this.blockedSiteHosts.delete(host);
+                }
+                if (hadPreviousMute && previousMutedAt !== undefined) {
+                    this.mutedSiteHosts.set(host, previousMutedAt);
+                } else {
+                    this.mutedSiteHosts.delete(host);
+                }
+                this.saveSiteAllowlist();
+                this.saveSiteBlocks();
+                this.saveSiteMutes();
+                this.showContextToast('已恢复白名单设置');
+                this.scheduleContextMatch(0);
+            },
+        });
     }
 
     private pruneMutedSiteHosts(): void {
@@ -1350,12 +1654,33 @@ class WebIntelligenceContentScript {
     }
 
     private dismissContext(contextKey: string): void {
+        const previousDismissedAt = this.dismissedContextKeys.get(contextKey);
+        const hadPreviousDismissal = previousDismissedAt !== undefined;
+        const previousCachedMatch = contextMatchCache.get(contextKey);
+
         this.dismissedContextKeys.set(contextKey, Date.now());
         this.pruneDismissedContextKeys();
         contextMatchCache.set(contextKey, { match: null, ts: Date.now() });
         pruneContextMatchCache();
         this.clearContextBubble();
-        this.showContextToast('已隐藏此条记忆提示 30 分钟');
+        this.showContextToast('已隐藏此条记忆提示 30 分钟', {
+            label: '撤销',
+            ariaLabel: '撤销隐藏此条记忆提示',
+            onClick: () => {
+                if (hadPreviousDismissal && previousDismissedAt !== undefined) {
+                    this.dismissedContextKeys.set(contextKey, previousDismissedAt);
+                } else {
+                    this.dismissedContextKeys.delete(contextKey);
+                }
+                if (previousCachedMatch) {
+                    contextMatchCache.set(contextKey, previousCachedMatch);
+                } else {
+                    contextMatchCache.delete(contextKey);
+                }
+                this.showContextToast('已恢复此条记忆提示');
+                this.scheduleContextMatch(0);
+            },
+        });
     }
 
     private markContextMatchIrrelevant(match: ContextRecallMatch, contextKey: string): void {
@@ -1529,12 +1854,39 @@ class WebIntelligenceContentScript {
                 background: rgba(15, 23, 42, 0.94);
                 color: #fff;
                 padding: 10px 12px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 font-size: 12px;
                 line-height: 1.45;
                 box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
                 z-index: 2147483646;
                 animation: pai-context-toast-enter 0.18s ease-out;
+            }
+
+            .pai-context-toast-message {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-toast-button {
+                border: 1px solid rgba(255, 255, 255, 0.38);
+                background: rgba(255, 255, 255, 0.12);
+                color: #fff;
+                border-radius: 6px;
+                cursor: pointer;
+                font: inherit;
+                font-size: 12px;
+                line-height: 1;
+                padding: 6px 8px;
+                white-space: nowrap;
+            }
+
+            .pai-context-toast-button:hover,
+            .pai-context-toast-button:focus-visible {
+                background: rgba(255, 255, 255, 0.2);
             }
 
             @keyframes pai-context-bubble-enter {
@@ -1606,7 +1958,7 @@ class WebIntelligenceContentScript {
         this.toastElement = null;
     }
 
-    private showContextToast(message: string): void {
+    private showContextToast(message: string, action?: ContextToastAction): void {
         this.clearContextToast();
         this.ensureContextBubbleStyles();
 
@@ -1617,7 +1969,27 @@ class WebIntelligenceContentScript {
         const toast = document.createElement('div');
         toast.className = 'pai-context-toast';
         toast.setAttribute('role', 'status');
-        toast.textContent = message;
+
+        const text = document.createElement('span');
+        text.className = 'pai-context-toast-message';
+        text.textContent = message;
+        toast.appendChild(text);
+
+        if (action) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'pai-context-toast-button';
+            button.textContent = action.label;
+            if (action.ariaLabel) {
+                button.setAttribute('aria-label', action.ariaLabel);
+            }
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                action.onClick();
+            });
+            toast.appendChild(button);
+        }
 
         document.body.appendChild(toast);
         this.toastElement = toast;
@@ -1713,7 +2085,9 @@ class WebIntelligenceContentScript {
                 ${linksHtml}
                 <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="标记这条记忆提示有用">这条有用</button>
                 <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="标记这条记忆提示不相关">这条不相关</button>
+                <button type="button" class="pai-context-action-button pai-context-site-allow" aria-label="允许此网站并开启网页记忆提示白名单">允许此站点</button>
                 <button type="button" class="pai-context-action-button pai-context-site-mute" aria-label="此网站今天不再显示记忆提示">此网站今天不提示</button>
+                <button type="button" class="pai-context-action-button pai-context-page-block" aria-label="永久关闭此页面路径记忆提示">此页面永久不提示</button>
                 <button type="button" class="pai-context-action-button pai-context-site-block" aria-label="永久关闭此网站记忆提示">永久不提示此站点</button>
             </div>
         `;
@@ -1768,22 +2142,37 @@ class WebIntelligenceContentScript {
             this.dismissContext(contextKey);
         });
 
-        card.querySelector<HTMLButtonElement>('.pai-context-recall-positive')?.addEventListener('click', (event) => {
+        const positiveFeedbackButton = card.querySelector<HTMLButtonElement>('.pai-context-recall-positive');
+        const negativeFeedbackButton = card.querySelector<HTMLButtonElement>('.pai-context-recall-negative');
+
+        positiveFeedbackButton?.addEventListener('click', (event) => {
             event.stopPropagation();
-            const button = event.currentTarget as HTMLButtonElement;
-            button.disabled = true;
-            button.textContent = '已标记有用';
+            positiveFeedbackButton.disabled = true;
+            positiveFeedbackButton.textContent = '已标记有用';
+            if (negativeFeedbackButton) {
+                negativeFeedbackButton.disabled = true;
+            }
             this.markContextMatchRelevant(match);
         });
 
-        card.querySelector<HTMLButtonElement>('.pai-context-recall-negative')?.addEventListener('click', (event) => {
+        negativeFeedbackButton?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.markContextMatchIrrelevant(match, contextKey);
+        });
+
+        card.querySelector<HTMLButtonElement>('.pai-context-site-allow')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.allowCurrentSiteAndEnableAllowlist();
         });
 
         card.querySelector<HTMLButtonElement>('.pai-context-site-mute')?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.muteCurrentSite();
+        });
+
+        card.querySelector<HTMLButtonElement>('.pai-context-page-block')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.blockCurrentPage();
         });
 
         card.querySelector<HTMLButtonElement>('.pai-context-site-block')?.addEventListener('click', (event) => {
@@ -1794,7 +2183,11 @@ class WebIntelligenceContentScript {
         this.outsideClickListener = (event: MouseEvent) => {
             const target = event.target as Node | null;
             if (!target) return;
-            if (bubble.contains(target) || card.contains(target)) {
+            if (
+                bubble.contains(target) ||
+                card.contains(target) ||
+                this.toastElement?.contains(target)
+            ) {
                 return;
             }
 

@@ -13,11 +13,16 @@ import { NotificationRepository } from '../repositories/NotificationRepository.j
 interface NotificationActionBody {
   action: 'acknowledge' | 'dismiss' | 'snooze';
   detail?: string;
+  delaySeconds?: number;
 }
 
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
+
+const DEFAULT_NOTIFICATION_SNOOZE_SECONDS = 24 * 3600;
+const MIN_NOTIFICATION_SNOOZE_SECONDS = 5 * 60;
+const MAX_NOTIFICATION_SNOOZE_SECONDS = 7 * 24 * 3600;
 
 const notificationActionBodySchema = {
   type: 'object' as const,
@@ -28,9 +33,25 @@ const notificationActionBodySchema = {
       enum: ['acknowledge', 'dismiss', 'snooze'],
     },
     detail: { type: 'string' as const },
+    delaySeconds: {
+      type: 'integer' as const,
+      minimum: MIN_NOTIFICATION_SNOOZE_SECONDS,
+      maximum: MAX_NOTIFICATION_SNOOZE_SECONDS,
+    },
   },
   additionalProperties: false,
 };
+
+function normalizeNotificationSnoozeDelaySeconds(raw?: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return DEFAULT_NOTIFICATION_SNOOZE_SECONDS;
+  }
+
+  return Math.max(
+    MIN_NOTIFICATION_SNOOZE_SECONDS,
+    Math.min(Math.floor(raw), MAX_NOTIFICATION_SNOOZE_SECONDS),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Route plugin
@@ -91,12 +112,16 @@ export async function notificationRoutes(
           return reply.status(200).send(repo.dismiss(id, detail));
         }
         case 'snooze': {
-          const result = repo.snooze(id);
+          const delaySeconds = normalizeNotificationSnoozeDelaySeconds(
+            request.body.delaySeconds,
+          );
+          const result = repo.snooze(id, delaySeconds);
           return reply.status(200).send({
             id,
             action: 'snooze',
             newNotificationId: result.newNotificationId,
             scheduledAt: result.scheduledAt,
+            delaySeconds,
           });
         }
       }

@@ -1,6 +1,6 @@
 # RingCentral Native Join
 
-_最后更新: 2026-05-12_
+_最后更新: 2026-05-19_
 
 ## 是什么
 
@@ -8,15 +8,15 @@ _最后更新: 2026-05-12_
 
 当用户点击可识别的 `https://v.ringcentral.com/join/...` 或 `https://v.ringcentral.com/conf/on/...` 入口时，扩展会转换为 `rcvdt://join/...`，交给 macOS 上已安装的 RingCentral native client 处理。
 
-打开 native client 时，页面会显示可关闭的兜底浮层；如果本机 app 未安装、外部协议弹窗被取消，或 native client 没有正常接管，用户可以选择 `Join in browser`。该按钮只打开一个新的浏览器窗口，并会关闭当前兜底浮层；浏览器兜底会直接打开 `https://v.ringcentral.com/conf/on/:meetingId`，避开 RingCentral `/launcher/:meetingId` 中间页。
+打开 native client 时，页面会显示可关闭的兜底浮层；如果本机 app 未安装、外部协议弹窗被取消，或 native client 没有正常接管，用户可以选择 `Join in browser` 或复制浏览器会议链接。兜底浮层不会自动消失，避免用户处理系统外部协议弹窗后丢失恢复路径；如果用户几秒后仍停留在网页，浮层会把状态切换成更明确的恢复提示。`Join in browser` 会先打开新的浏览器窗口、断开 opener，再跳到 Web 会场；如果浏览器拦截了新窗口，会自动改为在当前 tab 打开。浏览器兜底会直接打开 `https://v.ringcentral.com/conf/on/:meetingId`，避开 RingCentral `/launcher/:meetingId` 中间页。
 
 ## 开关
 
 配置项：`MEETING_NATIVE_CLIENT_JOIN_ENABLED`
 
-入口：`Options -> Meeting Pilot -> 使用 Native Client 加会`
+入口：`Options -> Meeting Pilot -> 优先用 RingCentral app 加会`
 
-默认开启。关闭后扩展不再拦截 RingCentral Web 的加会入口，恢复 RingCentral Web 原始点击行为。
+默认开启。关闭后扩展不再拦截 RingCentral Web 的加会入口，恢复 RingCentral Web 原始点击行为。兜底浮层里的 `Use browser by default` 会写入同一个配置，相当于关闭 Options 里的这个开关。
 
 ## 覆盖范围
 
@@ -33,13 +33,14 @@ _最后更新: 2026-05-12_
 - 共享解析逻辑在 `src/ringcentralNativeJoin.ts`。
 - Glip 普通链接由 `src/contentScriptGlip.tsx` 捕获 click。
 - Glip rich invite 卡片需要在页面上下文读取 RingCentral React props，逻辑在 `src/glipNativePopoutPage.ts`。
-- Video Home 由于是 SPA/PWA，`src/contentScriptRingCentralVideoHome.ts` 会在 `app.ringcentral.com/*` 注入并监听路由变化；因为 content script 的 isolated world 不能可靠拦截页面自身的 React Router `pushState`，这里同时用短间隔 URL 轮询兜底，覆盖“刷新 Messages 页面后切到 Video Home”的路径。会议列表优先用 DOM 上的 `data-calendar-event-item-id` 匹配 RingCentral 本地 Calendar IndexedDB event；如果按钮没有稳定的测试属性，会退回到可见的 `Join` button 语义识别。会议详情页会从详情 DOM 或当前 `/video/home/:eventId` 路由回查 event。会议链接提取会检查 `joinUrl`、`meetingUrl`、`meetingUri`、`location`、`description`，并递归扫描 event 嵌套字段中的 RingCentral Video URL / meetingId。相关逻辑在 `src/contentScriptRingCentralVideoHome.ts` 和 `src/context-assist/ringCentralCalendar.ts`。
-- 解析层只接受 `https://v.ringcentral.com/...`、`http://v.ringcentral.com/...` 和已生成的 `rcvdt://join/...`；`http` 入口会在浏览器兜底里升级为 `https`，其他 scheme 即使 host 看起来正确也不会被转换。
+- Video Home 由于是 SPA/PWA，`src/contentScriptRingCentralVideoHome.ts` 会在 `app.ringcentral.com/*` 注入并监听路由变化；因为 content script 的 isolated world 不能可靠拦截页面自身的 React Router `pushState`，这里同时用短间隔 URL 轮询兜底，覆盖“刷新 Messages 页面后切到 Video Home”的路径。会议列表优先用 DOM 上的 `data-calendar-event-item-id` 匹配 RingCentral 本地 Calendar IndexedDB event；如果按钮没有稳定的测试属性，会退回到可见的 `Join` button 语义识别。会议详情页会从详情 DOM、当前 `/video/home/:eventId` 路由或当前选中的会议回查 event。会议链接提取会检查 `joinUrl`、`meetingUrl`、`meetingUri`、`location`、`description`，并递归扫描 event 嵌套字段中的 RingCentral Video URL / meetingId。相关逻辑在 `src/contentScriptRingCentralVideoHome.ts` 和 `src/context-assist/ringCentralCalendar.ts`。
+- Native scheme 触发使用当前用户点击链路中的临时顶层链接，不依赖 iframe 发起外部协议导航。
+- 解析层只接受 `https://v.ringcentral.com/...`、`http://v.ringcentral.com/...` 和已生成的 `rcvdt://join/...`；`http` 入口会在浏览器兜底里升级为 `https`，其他 scheme 即使 host 看起来正确也不会被转换。meetingId 只允许短的安全字母、数字、`-`、`_` 片段，避免异常 path 被透传给 native scheme。
 
 ## 产品参考
 
 - RingCentral、Teams 和 Zoom 都把浏览器加入作为无下载或失败恢复路径呈现；本功能保持 native 优先，但必须让 Web fallback 一直可见。
-- 深链研究和安全资料反复强调 deep link 覆盖、稳定性、失效反馈和 scheme hijack 风险；本功能只从可信 RingCentral Video host 提取 join URL，不把任意 URL 或敏感 token 透传给外部协议。
+- 深链研究和安全资料反复强调 deep link 覆盖、稳定性、失效反馈和 scheme hijack 风险；本功能只从可信 RingCentral Video host 提取 join URL，并尽量把失败恢复路径留在浏览器内。
 
 ## 边界
 

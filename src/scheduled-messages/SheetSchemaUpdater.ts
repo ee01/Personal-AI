@@ -6,7 +6,7 @@
  */
 
 import { SheetConfig } from './types';
-import { MESSAGES_SCHEMA } from './SheetInitializer';
+import { LOGS_SCHEMA, MESSAGES_SCHEMA } from './SheetInitializer';
 import { normalizeSheetConfig } from './botAutomationConfig';
 
 const OBSOLETE_OUTREACH_COLUMNS = [
@@ -22,6 +22,13 @@ const OBSOLETE_OUTREACH_COLUMNS = [
   'Outreach_Last_Result',
   'Outreach_Last_Updated',
   'Outreach_Question',
+] as const;
+
+const OBSOLETE_MESSAGE_COLUMNS = [
+  ...OBSOLETE_OUTREACH_COLUMNS,
+  'Sent_Chat_ID',
+  'Sent_Post_ID',
+  'Sent_At',
 ] as const;
 
 export interface SchemaUpdateResult {
@@ -55,7 +62,7 @@ export class SheetSchemaUpdater {
       console.log('当前表头:', currentHeaders);
 
       const obsoleteColumns = currentHeaders.filter((col) =>
-        OBSOLETE_OUTREACH_COLUMNS.includes(col as typeof OBSOLETE_OUTREACH_COLUMNS[number]),
+        OBSOLETE_MESSAGE_COLUMNS.includes(col as typeof OBSOLETE_MESSAGE_COLUMNS[number]),
       );
 
       if (obsoleteColumns.length > 0) {
@@ -71,8 +78,13 @@ export class SheetSchemaUpdater {
       const missingColumns = MESSAGES_SCHEMA.columns.filter(
         col => !refreshedHeaders.includes(col)
       );
+
+      const currentLogHeaders = await this.getLogsHeaders();
+      const missingLogColumns = LOGS_SCHEMA.columns.filter(
+        col => !currentLogHeaders.includes(col)
+      );
       
-      if (missingColumns.length === 0 && obsoleteColumns.length === 0) {
+      if (missingColumns.length === 0 && obsoleteColumns.length === 0 && missingLogColumns.length === 0) {
         console.log('✅ Sheet 表结构已是最新');
         return {
           success: true,
@@ -82,10 +94,17 @@ export class SheetSchemaUpdater {
       }
       
       console.log('📝 发现缺失的列:', missingColumns);
+      if (missingLogColumns.length > 0) {
+        console.log('📝 Logs 表发现缺失的列:', missingLogColumns);
+      }
       
       // 3. 为缺失的列添加到表末尾
       if (missingColumns.length > 0) {
         await this.addMissingColumns(refreshedHeaders, missingColumns);
+      }
+
+      if (missingLogColumns.length > 0) {
+        await this.addMissingLogColumns(currentLogHeaders, missingLogColumns);
       }
       
       // 4. 更新配置中的 sheet_version
@@ -95,8 +114,8 @@ export class SheetSchemaUpdater {
       
       return {
         success: true,
-        updated: missingColumns.length > 0 || obsoleteColumns.length > 0,
-        addedColumns: missingColumns
+        updated: missingColumns.length > 0 || obsoleteColumns.length > 0 || missingLogColumns.length > 0,
+        addedColumns: missingColumns.concat(missingLogColumns.map((column) => `Logs.${column}`))
       };
       
     } catch (error) {
@@ -239,6 +258,28 @@ export class SheetSchemaUpdater {
     const data = await response.json();
     return data.values?.[0] || [];
   }
+
+  /**
+   * 获取 Logs 表的当前表头
+   */
+  private async getLogsHeaders(): Promise<string[]> {
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}/values/Logs!1:1`,
+      {
+        headers: {
+          'Authorization': `Bearer ${this.token}`
+        }
+      }
+    );
+    
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`获取 Logs 表头失败: ${error}`);
+    }
+    
+    const data = await response.json();
+    return data.values?.[0] || [];
+  }
   
   /**
    * 添加缺失的列
@@ -277,12 +318,43 @@ export class SheetSchemaUpdater {
     
     console.log(`✅ 已添加 ${missingColumns.length} 个新列: ${missingColumns.join(', ')}`);
   }
+
+  private async addMissingLogColumns(currentHeaders: string[], missingColumns: string[]): Promise<void> {
+    const startColumn = this.columnIndexToLetter(currentHeaders.length);
+    const endColumn = this.columnIndexToLetter(currentHeaders.length + missingColumns.length - 1);
+    const requiredColumns = currentHeaders.length + missingColumns.length;
+    await this.ensureColumnCountForSheet(this.config.logsSheetId || 0, requiredColumns);
+
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${this.config.sheetId}/values/Logs!${startColumn}1:${endColumn}1?valueInputOption=USER_ENTERED`,
+      {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${this.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          values: [missingColumns]
+        })
+      }
+    );
+    
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`添加 Logs 列失败: ${error}`);
+    }
+
+    console.log(`✅ Logs 已添加 ${missingColumns.length} 个新列: ${missingColumns.join(', ')}`);
+  }
   
   /**
    * 确保表格有足够的列数
    */
   private async ensureColumnCount(requiredColumns: number): Promise<void> {
-    const messagesSheetId = this.config.messagesSheetId || 0;
+    await this.ensureColumnCountForSheet(this.config.messagesSheetId || 0, requiredColumns);
+  }
+
+  private async ensureColumnCountForSheet(sheetId: number, requiredColumns: number): Promise<void> {
     
     // 获取当前表格的列数
     const metaResponse = await fetch(
@@ -297,16 +369,16 @@ export class SheetSchemaUpdater {
     if (!metaResponse.ok) {
       console.warn('无法获取表格元数据，尝试直接扩展列');
       // 直接尝试扩展列
-      await this.appendColumns(messagesSheetId, requiredColumns);
+      await this.appendColumns(sheetId, requiredColumns);
       return;
     }
     
     const metaData = await metaResponse.json();
-    const messagesSheet = metaData.sheets?.find(
-      (s: { properties: { sheetId: number } }) => s.properties.sheetId === messagesSheetId
+    const targetSheet = metaData.sheets?.find(
+      (s: { properties: { sheetId: number } }) => s.properties.sheetId === sheetId
     );
     
-    const currentColumnCount = messagesSheet?.properties?.gridProperties?.columnCount || 26;
+    const currentColumnCount = targetSheet?.properties?.gridProperties?.columnCount || 26;
     
     if (currentColumnCount >= requiredColumns) {
       console.log(`表格列数足够: ${currentColumnCount} >= ${requiredColumns}`);
@@ -317,7 +389,7 @@ export class SheetSchemaUpdater {
     const columnsToAdd = requiredColumns - currentColumnCount + 5; // 多预留 5 列
     console.log(`扩展表格列数: ${currentColumnCount} + ${columnsToAdd} = ${currentColumnCount + columnsToAdd}`);
     
-    await this.appendColumns(messagesSheetId, columnsToAdd);
+    await this.appendColumns(sheetId, columnsToAdd);
   }
   
   /**

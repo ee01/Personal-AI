@@ -56,6 +56,7 @@ test('workday Snooze options skip weekends and past workday end', () => {
   assert.deepEqual(
     options.map((option) => option.label),
     [
+      '15 分钟后',
       '30 分钟后',
       '1 小时后',
       '2 小时后',
@@ -66,14 +67,18 @@ test('workday Snooze options skip weekends and past workday end', () => {
   );
   assert.equal(
     options[0].getTime().toISOString(),
+    new Date('2026-05-08T19:15:00+08:00').toISOString(),
+  );
+  assert.equal(
+    options[1].getTime().toISOString(),
     new Date('2026-05-08T19:30:00+08:00').toISOString(),
   );
   assert.equal(
-    options[4].getTime().toISOString(),
+    options[5].getTime().toISOString(),
     new Date('2026-05-11T18:00:00+08:00').toISOString(),
   );
   assert.equal(
-    options[5].getTime().toISOString(),
+    options[6].getTime().toISOString(),
     new Date('2026-05-11T09:00:00+08:00').toISOString(),
   );
 });
@@ -85,6 +90,7 @@ test('workday Snooze options include next Monday only when it is not a duplicate
   assert.deepEqual(
     options.map((option) => option.label),
     [
+      '15 分钟后',
       '30 分钟后',
       '1 小时后',
       '2 小时后',
@@ -103,6 +109,7 @@ test('workday Snooze options hide duplicate minute-equivalent choices', () => {
   assert.deepEqual(
     options.map((option) => option.label),
     [
+      '15 分钟后',
       '30 分钟后',
       '1 小时后',
       '2 小时后',

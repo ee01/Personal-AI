@@ -242,7 +242,10 @@
                 v-if="evidenceSnapshot(session).summary"
                 class="evidence-summary"
               >
-                {{ evidenceSnapshot(session).summary }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).summary"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
               <p
                 v-if="
@@ -252,7 +255,10 @@
                 "
                 class="evidence-related"
               >
-                {{ evidenceSnapshot(session).relatedMessage }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).relatedMessage"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
             </div>
 
@@ -373,7 +379,10 @@
                 v-if="evidenceSnapshot(session).summary"
                 class="evidence-summary"
               >
-                {{ evidenceSnapshot(session).summary }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).summary"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
               <p
                 v-if="
@@ -383,7 +392,10 @@
                 "
                 class="evidence-related"
               >
-                {{ evidenceSnapshot(session).relatedMessage }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).relatedMessage"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
             </div>
 
@@ -480,7 +492,10 @@
                 v-if="evidenceSnapshot(session).summary"
                 class="evidence-summary"
               >
-                {{ evidenceSnapshot(session).summary }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).summary"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
               <p
                 v-if="
@@ -490,7 +505,10 @@
                 "
                 class="evidence-related"
               >
-                {{ evidenceSnapshot(session).relatedMessage }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).relatedMessage"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
             </div>
 
@@ -597,7 +615,10 @@
                 v-if="evidenceSnapshot(session).summary"
                 class="evidence-summary"
               >
-                {{ evidenceSnapshot(session).summary }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).summary"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
               <p
                 v-if="
@@ -607,7 +628,10 @@
                 "
                 class="evidence-related"
               >
-                {{ evidenceSnapshot(session).relatedMessage }}
+                <RichEvidenceText
+                  :text="evidenceSnapshot(session).relatedMessage"
+                  :mention-labels="evidenceMentionLabels(session)"
+                />
               </p>
             </div>
 
@@ -664,6 +688,10 @@ import {
   type RuntimeConfigResponse,
 } from '../../services/MemoryServiceClient';
 import { getOutreachEvidenceSnapshot } from './outreachEvidence';
+import {
+  collectEvidenceMentionLabels,
+  RichEvidenceText,
+} from './evidenceText';
 
 declare const chrome: any;
 
@@ -1156,6 +1184,10 @@ function extractOutcomeSummary(outcome?: Record<string, unknown>) {
 function evidenceSnapshot(session: OutreachSession) {
   return getOutreachEvidenceSnapshot(session);
 }
+
+function evidenceMentionLabels(session: OutreachSession): Record<string, string> {
+  return collectEvidenceMentionLabels(session);
+}
 </script>
 
 <style scoped>
@@ -1419,6 +1451,17 @@ function evidenceSnapshot(session: OutreachSession) {
   margin-top: 0.45rem;
   color: #cbd5e1;
   font-size: 0.86rem;
+}
+
+:deep(.rich-evidence-text) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+:deep(.rich-evidence-link) {
+  color: #7dd3fc;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
 }
 
 .badge {

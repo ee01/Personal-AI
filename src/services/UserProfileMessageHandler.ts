@@ -10,7 +10,17 @@ export type ProfileItemsPage = {
     items: any[];
     total: number;
     truncated: boolean;
+    viewLimit?: number;
 };
+
+type ProfileItemsMaxItems = number | 'all' | undefined;
+
+function normalizeProfileItemsMaxItems(value: ProfileItemsMaxItems): number {
+    if (value === 'all') return Number.POSITIVE_INFINITY;
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return 1000;
+    return Math.max(1, Math.floor(numericValue));
+}
 
 export async function getProfileItemsForView(
     client: ReturnType<typeof getMemoryServiceClient>,
@@ -36,7 +46,12 @@ export async function getProfileItemsForView(
         items.push(...nextPage.items);
     }
 
-    return { items, total, truncated: items.length < total };
+    return {
+        items,
+        total,
+        truncated: items.length < total,
+        viewLimit: Number.isFinite(itemLimit) ? itemLimit : undefined,
+    };
 }
 
 /**
@@ -60,9 +75,10 @@ export class UserProfileMessageHandler {
         if (request.type === 'GET_USER_PROFILE') {
             console.log('处理用户画像获取请求');
             const client = getMemoryServiceClient();
+            const maxItems = normalizeProfileItemsMaxItems(request.maxItems);
             Promise.all([
                 client.getUserCore(),
-                getProfileItemsForView(client),
+                getProfileItemsForView(client, maxItems),
                 client.getOpinions({ limit: 50 })
             ])
             .then(([coreResult, profileItems, opinions]) => {
@@ -70,6 +86,8 @@ export class UserProfileMessageHandler {
                     core: coreResult.content,
                     items: profileItems.items,
                     totalItems: profileItems.total,
+                    truncated: profileItems.truncated,
+                    viewLimit: profileItems.viewLimit,
                     opinions: opinions.items,
                     totalOpinions: opinions.total,
                 });
@@ -81,6 +99,9 @@ export class UserProfileMessageHandler {
                             core: coreResult.content,
                             items: profileItems.items,
                             totalItems: profileItems.total,
+                            loadedItems: profileItems.items.length,
+                            truncated: profileItems.truncated,
+                            viewLimit: profileItems.viewLimit,
                         },
                         analysis: {
                             opinions: opinions.items,
@@ -205,6 +226,38 @@ export class UserProfileMessageHandler {
             return true;
         }
 
+        if (request.type === 'RESTORE_PROFILE_ITEM') {
+            console.log('处理画像条目恢复请求:', request.itemId);
+            const { itemId } = request;
+
+            if (!itemId) {
+                sendResponse({
+                    success: false,
+                    error: '缺少画像条目ID',
+                });
+                return true;
+            }
+
+            const client = getMemoryServiceClient();
+            client.restoreProfileItem(itemId)
+            .then(result => {
+                sendResponse({
+                    success: true,
+                    data: result,
+                    message: '画像条目已恢复'
+                });
+            })
+            .catch(error => {
+                console.error('画像条目恢复失败:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message,
+                    message: '画像条目恢复失败'
+                });
+            });
+            return true;
+        }
+
         if (request.type === 'CREATE_PROFILE_ITEM') {
             console.log('处理显式画像条目创建请求:', request);
             const { itemType, itemKey, itemValue, confidence } = request;
@@ -270,6 +323,8 @@ export class UserProfileMessageHandler {
                     core: coreResult.content,
                     items: profileItems.items,
                     totalItems: profileItems.total,
+                    truncated: profileItems.truncated,
+                    viewLimit: profileItems.viewLimit,
                 });
 
                 // 构建导出数据结构
@@ -478,15 +533,18 @@ export class UserProfileMessageHandler {
             (async () => {
                 try {
                     const client = getMemoryServiceClient();
+                    const maxItems = normalizeProfileItemsMaxItems(request.maxItems);
                     const [coreResult, profileItems, opinions] = await Promise.all([
                         client.getUserCore(),
-                        getProfileItemsForView(client),
+                        getProfileItemsForView(client, maxItems),
                         client.getOpinions({ limit: 50 })
                     ]);
                     const viewModel = buildUserProfileViewModel({
                         core: coreResult.content,
                         items: profileItems.items,
                         totalItems: profileItems.total,
+                        truncated: profileItems.truncated,
+                        viewLimit: profileItems.viewLimit,
                         opinions: opinions.items,
                         totalOpinions: opinions.total,
                     });
@@ -499,6 +557,9 @@ export class UserProfileMessageHandler {
                                 core: coreResult.content,
                                 items: profileItems.items,
                                 totalItems: profileItems.total,
+                                loadedItems: profileItems.items.length,
+                                truncated: profileItems.truncated,
+                                viewLimit: profileItems.viewLimit,
                             },
                             analysis: {
                                 opinions: opinions.items,

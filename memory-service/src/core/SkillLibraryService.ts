@@ -344,6 +344,24 @@ function hashContent(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+export function hashSkillFilesystemPackage(
+  skillMd: string,
+  files: SkillPackageFile[] = [],
+): string {
+  const normalizedFiles = files
+    .map((file) => {
+      const content = file.content || '';
+      return {
+        path: file.relativePath,
+        content,
+        sha256: file.sha256 || hashContent(content),
+        byteSize: file.byteSize ?? Buffer.byteLength(content, 'utf8'),
+      };
+    })
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return hashContent(JSON.stringify({ skillMd, files: normalizedFiles }));
+}
+
 function hashToken(value: string): string {
   return hashContent(value);
 }
@@ -873,6 +891,11 @@ export class SkillLibraryService {
       lastError: input.error ?? null,
       metadata: input.metadata,
     });
+  }
+
+  platformBindingMatchesSha(skillId: string, platform: string, sha256?: string): boolean {
+    if (!sha256) return false;
+    return this.getBinding(skillId, platform)?.installedSha256 === sha256;
   }
 
   updateActiveSkillFromExternal(input: ImportedExternalSkillPackage): SkillImportResult {

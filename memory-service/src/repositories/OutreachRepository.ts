@@ -5,7 +5,11 @@ import { now } from '../utils/time.js';
 
 export type OutreachTemplateSyncState = 'synced' | 'sync_error' | 'paused' | 'cancelled';
 export type OutreachApprovalPolicy = 'manual_direct' | 'reflection_review' | 'always_review';
-export type OutreachOriginKind = 'scheduled_template' | 'reflection_action' | 'manual_action';
+export type OutreachOriginKind =
+  | 'scheduled_template'
+  | 'reflection_action'
+  | 'manual_action'
+  | 'message_reaction';
 export type OutreachTargetResolutionStatus = 'unresolved' | 'ambiguous' | 'resolved';
 export type OutreachSessionStatus =
   | 'pending_approval'
@@ -25,6 +29,7 @@ export type OutreachEventType =
   | 'answer_hit_target_channel'
   | 'answer_hit_global_memory'
   | 'dispatched'
+  | 'manual_initial_ask_registered'
   | 'reply_received'
   | 'reply_classified'
   | 'deferred_by_reply'
@@ -699,6 +704,24 @@ export class OutreachRepository {
     return row ? this.rowToSession(row) : null;
   }
 
+  getMessageReactionSessionByPost(
+    chatId: string,
+    postId: string,
+  ): OutreachSessionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT *
+         FROM outreach_sessions
+         WHERE origin_kind = 'message_reaction'
+           AND sent_chat_id = ?
+           AND sent_post_id = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(chatId, postId) as OutreachSessionRow | undefined;
+    return row ? this.rowToSession(row) : null;
+  }
+
   listSessions(filters: OutreachSessionListFilters = {}): {
     items: OutreachSessionRecord[];
     total: number;
@@ -707,7 +730,7 @@ export class OutreachRepository {
   } {
     const conditions: string[] = [];
     const params: unknown[] = [];
-    const limit = Math.max(1, Math.min(filters.limit ?? 20, 100));
+    const limit = Math.max(1, Math.min(filters.limit ?? 20, 500));
     const offset = Math.max(0, filters.offset ?? 0);
 
     const requestedStatuses =

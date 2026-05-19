@@ -47,24 +47,52 @@ function renderFixtureHtml() {
     <script>
       window.__paiOriginalJoinReached = false;
       window.__paiOpenedUrls = [];
-      const iframeSrcDescriptor = Object.getOwnPropertyDescriptor(
-        HTMLIFrameElement.prototype,
-        'src',
-      );
-      Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
+      window.__paiNativeLaunches = [];
+      window.__paiBlockWindowOpen = false;
+      window.__paiCopiedText = '';
+      window.__paiClickLog = [];
+      Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
-        get() {
-          return this.getAttribute('src') || '';
-        },
-        set(value) {
-          const url = String(value || '');
-          if (url.startsWith('rcvdt://')) {
-            this.setAttribute('src', url);
-            return;
-          }
-          iframeSrcDescriptor?.set?.call(this, value);
+        value: {
+          writeText: async (text) => {
+            window.__paiCopiedText = String(text || '');
+          },
         },
       });
+      window.open = (url, target, features) => {
+        const entry = {
+          url: String(url || ''),
+          target: String(target || ''),
+          features: String(features || ''),
+          assignedUrl: '',
+        };
+        window.__paiOpenedUrls.push(entry);
+        if (window.__paiBlockWindowOpen) {
+          return null;
+        }
+        return {
+          opener: window,
+          closed: false,
+          location: {
+            get href() {
+              return entry.assignedUrl || entry.url;
+            },
+            set href(value) {
+              entry.assignedUrl = String(value || '');
+            },
+          },
+          close() {},
+        };
+      };
+      const originalAnchorClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () {
+        const href = String(this.href || '');
+        if (href.startsWith('rcvdt://')) {
+          window.__paiNativeLaunches.push(href);
+          return;
+        }
+        return originalAnchorClick.call(this);
+      };
 
       function renderMessageView() {
         document.querySelector('#app').innerHTML = '<div class="message-view"><h1>Messages</h1><button id="nav-to-video">Video</button></div>';
@@ -94,6 +122,21 @@ function renderFixtureHtml() {
           </main>
         \`;
       }
+
+      document.addEventListener('click', (event) => {
+        const target = event.target;
+        window.__paiClickLog.push({
+          text: String(target?.textContent || '').trim(),
+          tag: String(target?.tagName || ''),
+          testId:
+            target?.getAttribute?.('data-test-automation-id') ||
+            target?.closest?.('[data-test-automation-id]')?.getAttribute?.(
+              'data-test-automation-id',
+            ) ||
+            '',
+          defaultPrevented: event.defaultPrevented === true,
+        });
+      }, true);
 
       document.addEventListener('click', (event) => {
         if (event.target?.closest?.('#nav-to-video')) {
@@ -169,6 +212,9 @@ async function seedCalendarIndexedDb(page) {
 async function installChromeMock(page) {
   await page.addInitScript(() => {
     window.__paiCalendarSyncCount = 0;
+    window.__paiStorageEnvConfig = {
+      MEETING_NATIVE_CLIENT_JOIN_ENABLED: true,
+    };
     window.chrome = {
       runtime: {
         lastError: null,
@@ -208,11 +254,13 @@ async function installChromeMock(page) {
       storage: {
         local: {
           get: async () => ({
-            envConfig: {
-              MEETING_NATIVE_CLIENT_JOIN_ENABLED: true,
-            },
+            envConfig: { ...window.__paiStorageEnvConfig },
           }),
-          set: async () => undefined,
+          set: async (items) => {
+            if (items?.envConfig) {
+              window.__paiStorageEnvConfig = { ...items.envConfig };
+            }
+          },
         },
       },
     };
@@ -264,28 +312,34 @@ async function main() {
       const browserLink = fallback?.querySelector(
         '[data-pai-ringcentral-native-join-fallback-link]',
       );
-      const launchFrame = document.querySelector(
-        '#pai-ringcentral-native-join-launch-frame',
+      const copyButton = fallback?.querySelector(
+        '[data-pai-ringcentral-native-join-copy-link]',
+      );
+      const launchLink = document.querySelector(
+        '#pai-ringcentral-native-join-launch-link',
       );
       return {
         fallbackText: fallback?.textContent || '',
         fallbackRole: fallback?.getAttribute('role') || '',
         fallbackLabel: fallback?.getAttribute('aria-label') || '',
         browserTag: browserLink?.tagName || '',
+        copyTag: copyButton?.tagName || '',
         browserUrl:
           browserLink?.getAttribute(
             'data-pai-ringcentral-native-join-browser-url',
           ) || '',
-        launchSrc:
-          launchFrame instanceof HTMLIFrameElement ? launchFrame.src : '',
+        launchHref:
+          launchLink instanceof HTMLAnchorElement ? launchLink.href : '',
+        nativeLaunches: window.__paiNativeLaunches || [],
         originalJoinReached: window.__paiOriginalJoinReached === true,
       };
     });
 
     assert(
       result.fallbackText.includes('Join in browser') &&
+        result.fallbackText.includes('Copy link') &&
         !result.fallbackText.includes('Open app again'),
-      'Native join fallback should expose browser fallback without app retry',
+      'Native join fallback should expose browser fallback and copy action without app retry',
     );
     assert(
       result.fallbackRole === 'region' &&
@@ -297,17 +351,101 @@ async function main() {
       'Browser fallback action should be a button so it does not open a second default link',
     );
     assert(
+      result.copyTag === 'BUTTON',
+      'Copy fallback action should be a button so it remains an explicit user action',
+    );
+    assert(
       result.browserUrl ===
         'https://v.ringcentral.com/conf/on/123456?passcode=abc',
       'Browser fallback should point at the direct browser meeting route',
     );
     assert(
-      result.launchSrc === 'rcvdt://join/123456?passcode=abc',
-      'Native protocol URL was not launched with the parsed meeting target',
+      result.launchHref === 'rcvdt://join/123456?passcode=abc' &&
+        result.nativeLaunches.includes('rcvdt://join/123456?passcode=abc'),
+      `Native protocol URL was not launched from the parsed meeting target: ${JSON.stringify(
+        result,
+      )}`,
     );
     assert(
       !result.originalJoinReached,
       'Original RingCentral join click should be blocked after native handoff',
+    );
+
+    assert(
+      result.fallbackText.includes('Prefer browser next time?') &&
+        result.fallbackText.includes('Use browser by default'),
+      'Native join fallback should include a subtle browser-default hint',
+    );
+    await page.click('[data-pai-ringcentral-native-join-copy-link]');
+    await page.waitForFunction(
+      () =>
+        window.__paiCopiedText ===
+        'https://v.ringcentral.com/conf/on/123456?passcode=abc',
+    );
+    const copyState = await page.evaluate(() => ({
+      copiedText: window.__paiCopiedText,
+      status:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-status]',
+        )?.textContent || '',
+      fallbackStillVisible: Boolean(
+        document.querySelector('#pai-ringcentral-native-join-fallback'),
+      ),
+    }));
+    assert(
+      copyState.status.includes('copied'),
+      `Copy link should confirm the copied browser meeting link: ${JSON.stringify(
+        copyState,
+      )}`,
+    );
+    assert(
+      copyState.fallbackStillVisible,
+      'Copying the browser link should keep the native handoff fallback panel visible',
+    );
+
+    await page.evaluate(() => {
+      const button = document.querySelector(
+        '[data-pai-ringcentral-native-join-prefer-browser]',
+      );
+      button?.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    });
+    await page.waitForFunction(
+      () =>
+        window.__paiStorageEnvConfig?.MEETING_NATIVE_CLIENT_JOIN_ENABLED ===
+        false,
+    );
+    const browserDefaultState = await page.evaluate(() => ({
+      nativeJoinEnabled:
+        window.__paiStorageEnvConfig?.MEETING_NATIVE_CLIENT_JOIN_ENABLED,
+      status:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-status]',
+        )?.textContent || '',
+      fallbackStillVisible: Boolean(
+        document.querySelector('#pai-ringcentral-native-join-fallback'),
+      ),
+    }));
+    assert(
+      browserDefaultState.nativeJoinEnabled === false,
+      'Browser-default hint should disable native client join in envConfig',
+    );
+    assert(
+      browserDefaultState.status.includes(
+        'Future RingCentral joins will use the browser',
+      ),
+      `Browser-default hint should confirm the saved default: ${JSON.stringify(
+        browserDefaultState,
+      )}`,
+    );
+    assert(
+      browserDefaultState.fallbackStillVisible,
+      'Saving the browser default should keep the current fallback controls available',
     );
 
     await page.evaluate(() => {
@@ -344,12 +482,16 @@ async function main() {
       ),
     }));
     const observedBrowserUrls = browserFallback.openedUrls.map(
-      (item) => item.url,
+      (item) => item.assignedUrl || item.url,
     );
     if (observedBrowserUrls.length > 0) {
       assert(
         observedBrowserUrls.length === 1,
         'Join in browser should open exactly one browser window',
+      );
+      assert(
+        browserFallback.openedUrls[0]?.url === 'about:blank',
+        'Join in browser should detach opener before navigating the popup',
       );
       assert(
         observedBrowserUrls[0] ===
@@ -366,6 +508,81 @@ async function main() {
       `Join in browser should close the native handoff fallback panel: ${JSON.stringify(
         browserFallback,
       )}`,
+    );
+
+    await page.evaluate(() => {
+      window.__paiOriginalJoinReached = false;
+    });
+    await page.evaluate(() => {
+      const detailButton = document.querySelector(
+        '[data-test-automation-id="join-meeting-button"]',
+      );
+      detailButton?.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    });
+    await page
+      .waitForFunction(
+        () =>
+          Boolean(document.querySelector('#pai-ringcentral-native-join-fallback')) ||
+          window.__paiOriginalJoinReached === true,
+        undefined,
+        { timeout: 3000 },
+      )
+      .catch(() => undefined);
+    const detailJoinState = await page.evaluate(() => ({
+      fallbackVisible: Boolean(
+        document.querySelector('#pai-ringcentral-native-join-fallback'),
+      ),
+      originalJoinReached: window.__paiOriginalJoinReached === true,
+      selectedEventId:
+        document
+          .querySelector(
+            '[data-at="calendar-event-item-wrapper"][data-calendar-event-item-id][aria-selected="true"]',
+          )
+          ?.getAttribute('data-calendar-event-item-id') || '',
+      calendarSyncCount: window.__paiCalendarSyncCount || 0,
+      clickLog: window.__paiClickLog || [],
+      locationPath: window.location.pathname,
+    }));
+    assert(
+      !detailJoinState.originalJoinReached,
+      `Detail join click should be intercepted before RingCentral handles it: ${JSON.stringify(
+        detailJoinState,
+      )}`,
+    );
+    assert(
+      detailJoinState.fallbackVisible,
+      `Detail join click should show the native handoff fallback: ${JSON.stringify(
+        detailJoinState,
+      )}`,
+    );
+    await page.evaluate(() => {
+      window.__paiBlockWindowOpen = true;
+      window.__paiOpenedUrls = [];
+    });
+    await page.evaluate(() => {
+      const button = document.querySelector(
+        '[data-pai-ringcentral-native-join-fallback-link]',
+      );
+      button?.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    });
+    await page.waitForURL(
+      'https://v.ringcentral.com/conf/on/123456?passcode=abc',
+    );
+    assert(
+      page.url() === 'https://v.ringcentral.com/conf/on/123456?passcode=abc',
+      'Blocked popup fallback should continue in the current tab',
     );
 
     console.log('RingCentral native join E2E passed.');

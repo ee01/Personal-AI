@@ -97,7 +97,11 @@ export interface SiteContextSnapshot {
 export interface SiteContextAdapter {
   id: string;
   match(location: Location, doc: Document): boolean;
-  buildSnapshot(doc: Document, location: Location): SiteContextSnapshot | null;
+  buildSnapshot(
+    doc: Document,
+    location: Location,
+    target?: ComposerTarget,
+  ): SiteContextSnapshot | null;
   findComposer(
     doc: Document,
     fromElement?: Element | null,

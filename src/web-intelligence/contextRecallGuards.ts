@@ -2,6 +2,10 @@ const SAFE_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:']);
 
 export const CONTEXT_SITE_MUTE_STORAGE_KEY = 'pai-context-muted-sites-v1';
 export const CONTEXT_SITE_BLOCK_STORAGE_KEY = 'pai-context-blocked-sites-v1';
+export const CONTEXT_PAGE_BLOCK_STORAGE_KEY = 'pai-context-blocked-page-prefixes-v1';
+export const CONTEXT_SITE_ALLOW_STORAGE_KEY = 'pai-context-allowed-sites-v1';
+export const CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY =
+  'pai-context-site-allowlist-mode-v1';
 export const CONTEXT_SITE_MUTE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const LOW_VALUE_CONTEXT_HOSTS = new Set([
@@ -132,6 +136,8 @@ export interface SensitiveControlDescriptor {
 
 export type ContextSiteMuteRecord = Record<string, number>;
 export type ContextSiteBlockRecord = Record<string, number>;
+export type ContextPageBlockRecord = Record<string, number>;
+export type ContextSiteAllowRecord = Record<string, number>;
 
 export interface DisplayableContextRecallCandidate {
   title?: string;
@@ -142,6 +148,31 @@ export interface DisplayableContextRecallCandidate {
 
 export function normalizeContextSiteMuteHost(rawHostname: string): string {
   return rawHostname.trim().toLowerCase().replace(/\.$/, '');
+}
+
+export function normalizeContextPageBlockPrefix(
+  rawUrl: string,
+): string | null {
+  const value = rawUrl.trim();
+  if (!value) return null;
+
+  try {
+    const url = new URL(
+      value.includes('://') ? value : `https://${value}`,
+    );
+    if (!SAFE_EXTERNAL_PROTOCOLS.has(url.protocol)) return null;
+
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+
+    const pathname = url.pathname.replace(/\/+$/, '');
+    if (!pathname || pathname === '/') return null;
+    return `${url.origin}${pathname}`;
+  } catch (_error) {
+    return null;
+  }
 }
 
 export function isContextSiteMuteActive(
@@ -213,7 +244,19 @@ export function pruneContextSiteMuteRecord(
 export function pruneContextSiteBlockRecord(
   rawValue: unknown,
 ): { record: ContextSiteBlockRecord; changed: boolean } {
-  const record: ContextSiteBlockRecord = {};
+  return prunePersistentContextSiteRecord(rawValue);
+}
+
+export function pruneContextSiteAllowRecord(
+  rawValue: unknown,
+): { record: ContextSiteAllowRecord; changed: boolean } {
+  return prunePersistentContextSiteRecord(rawValue);
+}
+
+function prunePersistentContextSiteRecord(
+  rawValue: unknown,
+): { record: Record<string, number>; changed: boolean } {
+  const record: Record<string, number> = {};
   let changed = false;
 
   if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
@@ -234,6 +277,68 @@ export function pruneContextSiteBlockRecord(
   }
 
   return { record, changed };
+}
+
+export function isContextHostCoveredBySiteRecord(
+  rawHostname: string,
+  record: Record<string, number>,
+): boolean {
+  const hostname = normalizeContextSiteMuteHost(rawHostname);
+  if (!hostname) return false;
+
+  return Object.keys(record).some((rawHost) => {
+    const host = normalizeContextSiteMuteHost(rawHost);
+    if (!host) return false;
+    return hostname === host || hostname.endsWith(`.${host}`);
+  });
+}
+
+export function pruneContextPageBlockRecord(
+  rawValue: unknown,
+): { record: ContextPageBlockRecord; changed: boolean } {
+  const record: ContextPageBlockRecord = {};
+  let changed = false;
+
+  if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+    return { record, changed: Boolean(rawValue) };
+  }
+
+  for (const [rawPrefix, rawBlockedAt] of Object.entries(rawValue)) {
+    const prefix = normalizeContextPageBlockPrefix(rawPrefix);
+    if (
+      !prefix ||
+      typeof rawBlockedAt !== 'number' ||
+      !Number.isFinite(rawBlockedAt) ||
+      rawBlockedAt <= 0
+    ) {
+      changed = true;
+      continue;
+    }
+
+    if (prefix !== rawPrefix) {
+      changed = true;
+    }
+    record[prefix] = rawBlockedAt;
+  }
+
+  return { record, changed };
+}
+
+export function isContextPageUrlBlockedByPrefix(
+  rawUrl: string,
+  record: ContextPageBlockRecord,
+): boolean {
+  const currentPrefix = normalizeContextPageBlockPrefix(rawUrl);
+  if (!currentPrefix) return false;
+
+  return Object.keys(record).some((rawPrefix) => {
+    const prefix = normalizeContextPageBlockPrefix(rawPrefix);
+    if (!prefix) return false;
+    return (
+      currentPrefix === prefix ||
+      currentPrefix.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`)
+    );
+  });
 }
 
 export function sanitizeContextExternalUrl(

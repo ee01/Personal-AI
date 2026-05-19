@@ -165,6 +165,13 @@ describe('Relationships API', () => {
     expect(body.contextMd).toContain('Alice Radar');
     expect(body.retrievalHints.entityIds).toContain(personId);
     expect(body.evidenceRefs.length).toBeGreaterThan(0);
+    expect(
+      body.evidenceRefs.some((ref: { exploreLink?: string }) =>
+        ref.exploreLink?.startsWith(
+          '#/timeline?type=message&focus=relationship-test-message-',
+        ),
+      ),
+    ).toBe(true);
   });
 
   it('consolidates relationship radar projections in the background', async () => {

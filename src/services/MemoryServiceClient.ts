@@ -1354,6 +1354,55 @@ export interface OutreachEvent {
   createdAt: number;
 }
 
+export type GlipMessageMarkerType =
+  | 'follow_thread_original'
+  | 'follow_thread_related'
+  | 'snooze_pending'
+  | 'outreach_initial_ask'
+  | 'outreach_followup'
+  | 'scheduled_asme'
+  | 'scheduled_bot'
+  | 'scheduled_ai_report';
+
+export interface GlipMessageMarker {
+  id: string;
+  type: GlipMessageMarkerType;
+  label: string;
+  chatId: string;
+  postId: string;
+  source: 'local' | 'memory_service' | 'sheet';
+  sourceId: string;
+  sessionId?: string;
+  status?: string;
+  tooltip?: string;
+  updatedAt: number;
+  nextCheckAt?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface GlipMessageMarkersSnapshot {
+  items: GlipMessageMarker[];
+  generatedAt: number;
+}
+
+export interface CreateOutreachSessionFromMessageRequest {
+  chatId: string;
+  postId: string;
+  messageText: string;
+  messageUrl?: string;
+  messageCreatedAt?: number;
+  messageTimestampText?: string;
+  senderName?: string;
+  groupName?: string;
+  targetType?: string;
+  targetRef?: string;
+  targetResolvedChatId?: string;
+  targetResolvedLabel?: string;
+  followupIntervalSeconds?: number;
+  maxFollowup?: number;
+  context?: string;
+}
+
 export interface OutreachTargetCandidate {
   kind: 'user' | 'chat';
   entityId: string;
@@ -1892,6 +1941,21 @@ export interface DayPilotContextPackResponse {
   warnings: string[];
   redactionPreview: string[];
   redactionApplied: boolean;
+}
+
+export type DayPilotFeedbackAction =
+  | 'done'
+  | 'later'
+  | 'mute'
+  | 'wrong'
+  | 'useful';
+
+export interface DayPilotFeedbackPayload {
+  action: DayPilotFeedbackAction;
+  note?: string;
+  reason?: string;
+  snoozeUntil?: number;
+  muteKey?: string;
 }
 
 export type TodayPilotMeetingPrepStatus =
@@ -3124,18 +3188,25 @@ export class MemoryServiceClient {
   }
 
   /**
-   * Snooze a notification (creates a new notification 24 hours later).
+   * Snooze a notification with an optional caller-selected delay.
    */
-  async snoozeNotification(id: string): Promise<{
+  async snoozeNotification(
+    id: string,
+    delaySeconds?: number,
+  ): Promise<{
     id: string;
     action: string;
     newNotificationId: string;
     scheduledAt: number;
+    delaySeconds: number;
   }> {
     return this.request(
       'POST',
       `/notifications/${encodeURIComponent(id)}/action`,
-      { action: 'snooze' },
+      {
+        action: 'snooze',
+        ...(typeof delaySeconds === 'number' ? { delaySeconds } : {}),
+      },
     );
   }
 
@@ -3550,6 +3621,25 @@ export class MemoryServiceClient {
     );
   }
 
+  async createOutreachSessionFromMessage(
+    body: CreateOutreachSessionFromMessageRequest,
+  ): Promise<{ session: OutreachSession }> {
+    return this.request(
+      'POST',
+      '/outreach/sessions/from-message',
+      body,
+    );
+  }
+
+  async getGlipMessageMarkers(limit = 500): Promise<GlipMessageMarkersSnapshot> {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    return this.request<GlipMessageMarkersSnapshot>(
+      'GET',
+      `/glip-message-markers?${params.toString()}`,
+    );
+  }
+
   async getOutreachSession(id: string): Promise<OutreachSession> {
     const response = await this.request<any>(
       'GET',
@@ -3739,6 +3829,16 @@ export class MemoryServiceClient {
     id: string,
   ): Promise<{ id: string; deleted: boolean }> {
     return this.request('DELETE', `/profile/items/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Restore a soft-deleted profile item.
+   */
+  async restoreProfileItem(id: string): Promise<any> {
+    return this.request(
+      'POST',
+      `/profile/items/${encodeURIComponent(id)}/restore`,
+    );
   }
 
   /**
@@ -3981,17 +4081,18 @@ export class MemoryServiceClient {
 
   async sendDayPilotCardFeedback(
     cardId: string,
-    payload: {
-      action: 'done' | 'later' | 'mute' | 'wrong' | 'useful';
-      note?: string;
-      reason?: string;
-      snoozeUntil?: number;
-      muteKey?: string;
-    },
+    payload: DayPilotFeedbackPayload,
+  ): Promise<DayPilotTodayResponse> {
+    return this.sendTodayPilotCardFeedback(cardId, payload);
+  }
+
+  async sendTodayPilotCardFeedback(
+    cardId: string,
+    payload: DayPilotFeedbackPayload,
   ): Promise<DayPilotTodayResponse> {
     return this.request<DayPilotTodayResponse>(
       'POST',
-      `/day-pilot/cards/${encodeURIComponent(cardId)}/feedback`,
+      `/today-pilot/cards/${encodeURIComponent(cardId)}/feedback`,
       payload,
     );
   }
@@ -4004,9 +4105,20 @@ export class MemoryServiceClient {
       includeSensitive?: boolean;
     },
   ): Promise<DayPilotContextPackResponse> {
+    return this.renderTodayPilotContextPack(missionId, payload);
+  }
+
+  async renderTodayPilotContextPack(
+    missionId: string,
+    payload?: {
+      tokenBudget?: number;
+      targetProvider?: DayPilotProviderTarget;
+      includeSensitive?: boolean;
+    },
+  ): Promise<DayPilotContextPackResponse> {
     return this.request<DayPilotContextPackResponse>(
       'POST',
-      `/day-pilot/missions/${encodeURIComponent(missionId)}/context-pack`,
+      `/today-pilot/missions/${encodeURIComponent(missionId)}/context-pack`,
       payload ?? {},
     );
   }

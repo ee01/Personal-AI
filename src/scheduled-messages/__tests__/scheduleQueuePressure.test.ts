@@ -139,6 +139,50 @@ test('reports no-time executor queue without compensation-window risk', () => {
   );
 });
 
+test('flags no-time executor queues that cannot finish before the execution date ends', () => {
+  const messages = Array.from({ length: 10 }, (_, index) => makeMessage(`late-${index + 1}`, {
+    Schedule_Time: '',
+  }));
+  const now = new Date('2026-05-04T23:50:30');
+  const pressure = getPressure(messages, messages[9], now);
+
+  assert.deepEqual(pressure, {
+    slotKey: '2026-05-04 08:00',
+    slotSize: 10,
+    position: 10,
+    delayMinutes: 9,
+    elapsedCompensationMinutes: 0,
+    remainingCompensationMinutes: 0,
+    hasExplicitTime: false,
+    exceedsCompensationWindow: false,
+    remainingSameDaySlots: 9,
+    exceedsExecutionWindow: true,
+  });
+  assert.equal(
+    formatScheduleQueuePressure(pressure!),
+    '08:00 后队列第 10/10 个，预计延后 9 分钟，可能排到执行日期结束后',
+  );
+  assert.equal(
+    formatScheduleQueueBlockReason(pressure!),
+    '当前 08:00 后队列排在第 10/10 个，预计延后 9 分钟，当天剩余可执行约 9 条，可能排到执行日期结束后，请改成未来日期，或填写明确时间。',
+  );
+
+  const summary = getScheduleQueueSummary(messages, now);
+  assert.equal(summary?.riskSlotCount, 1);
+  assert.equal(summary?.topSlots[0].exceedsExecutionWindow, true);
+  assert.equal(summary?.topSlots[0].remainingSameDaySlots, 9);
+  assert.deepEqual(summary?.topSlots[0].suggestion, {
+    dateStr: '2026-05-04',
+    timeStr: '23:51',
+    label: '2026-05-04 23:51',
+    inspectedMinutes: 1,
+  });
+  assert.equal(
+    formatScheduleQueueSlotSummary(summary!.topSlots[0]),
+    '2026-05-04 08:00 后队列: 10 条，最大预计延后 9 分钟，可能排到执行日期结束后，当天剩余可执行约 9 条，建议处理：late-10（第 10/10 个），建议改到 2026-05-04 23:51，示例：late-1、late-2、late-3',
+  );
+});
+
 test('uses the caller clock when grouping repeating executor queues', () => {
   const first = makeMessage('repeat-1', {
     Repeat_Every: 1,
@@ -351,11 +395,107 @@ test('summarizes congested executor queue slots and sorts risk first', () => {
   });
   assert.equal(
     formatScheduleQueueSlotSummary(summary!.topSlots[0]),
-    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，建议改到 2026-05-04 09:51，示例：Risk 1、Risk 2、Risk 3',
+    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，建议处理：Risk 12（第 12/12 个），建议改到 2026-05-04 09:51，示例：Risk 1、Risk 2、Risk 3',
   );
   assert.equal(
     formatScheduleQueueSummary(summary!),
-    '2 个时间槽同时排队；14 条执行器消息受影响；最大同槽 12 条；最大预计延后 11 分钟；1 个时间槽可能超过 30 分钟补偿窗口',
+    '2 个时间槽同时排队；14 条执行器消息受影响；最大同槽 12 条；最大预计延后 11 分钟；1 个时间槽存在执行窗口风险',
+  );
+});
+
+test('reports hidden queue slots when the summary is display-limited', () => {
+  const messages = [
+    makeMessage('slot-1a', { Schedule_Time: '10:00' }),
+    makeMessage('slot-1b', { Schedule_Time: '10:00' }),
+    makeMessage('slot-2a', { Schedule_Time: '10:15' }),
+    makeMessage('slot-2b', { Schedule_Time: '10:15' }),
+    makeMessage('slot-3a', { Schedule_Time: '10:30' }),
+    makeMessage('slot-3b', { Schedule_Time: '10:30' }),
+    makeMessage('slot-4a', { Schedule_Time: '10:45' }),
+    makeMessage('slot-4b', { Schedule_Time: '10:45' }),
+  ];
+
+  const compactSummary = getScheduleQueueSummary(messages, beforeSlot, 3);
+  assert.equal(compactSummary?.congestedSlotCount, 4);
+  assert.equal(compactSummary?.hiddenSlotCount, 1);
+  assert.equal(compactSummary?.topSlots.length, 3);
+
+  const expandedSummary = getScheduleQueueSummary(messages, beforeSlot, 10);
+  assert.equal(expandedSummary?.hiddenSlotCount, 0);
+  assert.equal(expandedSummary?.topSlots.length, 4);
+});
+
+test('suggests a clear explicit minute for safe but congested slots', () => {
+  const first = makeMessage('safe-1', {
+    Topic: 'Safe one',
+    Schedule_Time: '10:30',
+  });
+  const second = makeMessage('safe-2', {
+    Topic: 'Safe two',
+    Schedule_Time: '10:30',
+  });
+
+  const summary = getScheduleQueueSummary([first, second], beforeSlot);
+
+  assert.equal(summary?.riskSlotCount, 0);
+  assert.deepEqual(summary?.topSlots[0].suggestion, {
+    dateStr: '2026-05-04',
+    timeStr: '10:31',
+    label: '2026-05-04 10:31',
+    inspectedMinutes: 2,
+  });
+  assert.equal(
+    formatScheduleQueueSlotSummary(summary!.topSlots[0]),
+    '2026-05-04 10:30: 2 条，最大预计延后 1 分钟，建议处理：Safe two（第 2/2 个），建议改到 2026-05-04 10:31，示例：Safe one、Safe two',
+  );
+});
+
+test('does not suggest a time when the target slot is not congested', () => {
+  const message = makeMessage('solo-1', {
+    Schedule_Time: '10:30',
+  });
+
+  assert.equal(getScheduleQueueSuggestion([message], message, beforeSlot), null);
+});
+
+test('suggests an explicit time for no-time queues that cannot finish on the execution date', () => {
+  const messages = Array.from({ length: 10 }, (_, index) => makeMessage(`late-${index + 1}`, {
+    Schedule_Time: '',
+  }));
+  const now = new Date('2026-05-04T23:50:30');
+
+  assert.deepEqual(
+    getScheduleQueueSuggestion(messages, messages[9], now),
+    {
+      dateStr: '2026-05-04',
+      timeStr: '23:51',
+      label: '2026-05-04 23:51',
+      inspectedMinutes: 1,
+    },
+  );
+});
+
+test('does not suggest candidates outside the repeating end date', () => {
+  const messages = [
+    makeMessage('ending-1', {
+      Schedule_Date: '2026-05-04',
+      Schedule_Time: '23:59',
+      End_Date: '2026-05-04',
+      Repeat_Every: 1,
+      Repeat_Unit: 'Day',
+    }),
+    makeMessage('ending-2', {
+      Schedule_Date: '2026-05-04',
+      Schedule_Time: '23:59',
+      End_Date: '2026-05-04',
+      Repeat_Every: 1,
+      Repeat_Unit: 'Day',
+    }),
+  ];
+
+  assert.equal(
+    getScheduleQueueSuggestion(messages, messages[1], new Date('2026-05-04T23:58:30'), 5),
+    null,
   );
 });
 

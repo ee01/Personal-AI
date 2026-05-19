@@ -1820,4 +1820,120 @@ describe('OutreachEngine', () => {
       title: 'release calendar',
     });
   });
+
+  it('adds mention label metadata for RingCentral person placeholders in evidence', async () => {
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'group',
+      targetRef: 'chat-evidence',
+      renderedQuestion: '要不要约 Zora？',
+      status: 'resolved',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      outcome: {
+        resolutionState: 'complete',
+        externalEvidence: [
+          {
+            kind: 'target_channel_history',
+            title: 'Barry Li',
+            content:
+              '同一会话中你已经问过相近问题“![:Person](3137233020) 要，需要我可以约一个今天”，Barry Li 回复“好多啊”。',
+            metadata: {
+              sourceSystem: 'outreach_answer_resolution',
+            },
+          },
+        ],
+      },
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/team-messaging/v1/persons/3137233020')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              firstName: 'Zora',
+              lastName: 'Zheng',
+              email: 'zora@example.com',
+            }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    const detail = await engine.getSessionDetail(session.id);
+
+    expect(detail?.evidence[0]?.metadata?.mentionLabels).toMatchObject({
+      '3137233020': 'Zora Zheng',
+    });
+  });
+
+  it('creates waiting outreach sessions from existing Glip messages and exposes markers', async () => {
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+
+    const session = await engine.createSessionFromMessage({
+      chatId: 'chat-1',
+      postId: 'post-1',
+      messageText: '请在明天前确认 release owner。',
+      messageCreatedAt: 1_700_000_000,
+      senderName: 'Esone Qiu',
+      groupName: 'Release room',
+      followupIntervalSeconds: 86400,
+      maxFollowup: 1,
+    });
+
+    expect(session.originKind).toBe('message_reaction');
+    expect(session.status).toBe('waiting_reply');
+    expect(session.sentChatId).toBe('chat-1');
+    expect(session.sentPostId).toBe('post-1');
+    expect(session.waitUntil).toBe(1_700_086_400);
+    expect(session.nextCheckAt).toBeGreaterThan(0);
+
+    const duplicate = await engine.createSessionFromMessage({
+      chatId: 'chat-1',
+      postId: 'post-1',
+      messageText: '请在明天前确认 release owner。',
+    });
+    expect(duplicate.id).toBe(session.id);
+
+    outreachRepo.createEvent(session.id, 'followup_sent', {
+      chatId: 'chat-1',
+      postId: 'post-followup-1',
+      followupCount: 1,
+    });
+
+    const markerTypes = engine
+      .listGlipMessageMarkers()
+      .items.map((marker) => ({
+        type: marker.type,
+        label: marker.label,
+        chatId: marker.chatId,
+        postId: marker.postId,
+      }));
+
+    expect(markerTypes).toContainEqual({
+      type: 'outreach_initial_ask',
+      label: '跟进中',
+      chatId: 'chat-1',
+      postId: 'post-1',
+    });
+    expect(markerTypes).toContainEqual({
+      type: 'outreach_followup',
+      label: 'AI追问',
+      chatId: 'chat-1',
+      postId: 'post-followup-1',
+    });
+  });
 });

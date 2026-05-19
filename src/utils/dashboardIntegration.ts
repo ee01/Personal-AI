@@ -215,6 +215,13 @@ export interface ProjectTaskRiskSummary {
   drivers: string[];
 }
 
+export interface ProjectTaskSourceSummary {
+  hasSource: boolean;
+  jiraKeys: string[];
+  platformSourceLabels: string[];
+  sourceLabels: string[];
+}
+
 export interface ProjectFocusItem {
   projectId: string;
   projectName: string;
@@ -281,6 +288,37 @@ export interface ProjectDashboardViewReason {
   severity: ProjectDecisionSignalSeverity;
 }
 
+export type ProjectDashboardDecisionBriefAction =
+  | {
+      type: 'open-task';
+      label: string;
+      projectId: string;
+      taskId: string;
+    }
+  | {
+      type: 'review-project';
+      label: string;
+      projectId: string;
+    }
+  | {
+      type: 'filter-projects';
+      label: string;
+      filter: ProjectDashboardViewFilter;
+    }
+  | {
+      type: 'create-project';
+      label: string;
+    };
+
+export interface ProjectDashboardDecisionBrief {
+  tone: ProjectDecisionSignalSeverity;
+  label: string;
+  headline: string;
+  detail: string;
+  primaryAction: ProjectDashboardDecisionBriefAction;
+  supportingSignals: string[];
+}
+
 export type ProjectDataQualityState = 'complete' | 'partial' | 'poor' | 'empty';
 
 export interface ProjectDataQualitySummary {
@@ -294,6 +332,31 @@ export interface ProjectDataQualitySummary {
   sourceCoverage: number;
   overallCoverage: number;
   nextStep: string;
+}
+
+export type ProjectEvidenceGapType = 'missing-both' | 'missing-eta' | 'missing-source';
+
+export interface ProjectEvidenceGapItem {
+  projectId: string;
+  projectName: string;
+  taskId: string;
+  taskTitle: string;
+  gapType: ProjectEvidenceGapType;
+  label: string;
+  headline: string;
+  detail: string;
+  nextStep: string;
+  eta?: string;
+  risk: ProjectTaskRiskSummary;
+  priority: number;
+}
+
+export interface ProjectEvidenceGapSummary {
+  totalItems: number;
+  visibleItems: ProjectEvidenceGapItem[];
+  hiddenItems: number;
+  counts: Record<ProjectEvidenceGapType, number>;
+  breakdownLabel: string;
 }
 
 export interface ProjectSyncSourceStatus {
@@ -820,23 +883,27 @@ export function buildProjectReviewQueueSummary(
       return a.project.name.localeCompare(b.project.name);
     });
 
-  const visibleItems = candidates.slice(0, maxItems).map(({ project, review, health, viewReason }) => ({
-    projectId: project.id,
-    projectName: project.name,
-    reviewState: review.state,
-    label: review.label,
-    headline: review.headline,
-    nextStep: review.nextStep,
-    daysSinceReview: review.daysSinceReview,
-    nextDueDate: review.nextDueDate,
-    healthLabel: health.label,
-    viewLabel: viewReason.label,
-    severity: health.state === 'off-track'
+  const visibleItems: ProjectReviewQueueItem[] = candidates.slice(0, maxItems).map(({ project, review, health, viewReason }) => {
+    const severity: ProjectDecisionSignalSeverity = health.state === 'off-track'
       ? 'critical'
       : review.state === 'overdue' || review.state === 'unreviewed'
         ? 'warning'
-        : 'info',
-  }));
+        : 'info';
+
+    return {
+      projectId: project.id,
+      projectName: project.name,
+      reviewState: review.state,
+      label: review.label,
+      headline: review.headline,
+      nextStep: review.nextStep,
+      daysSinceReview: review.daysSinceReview,
+      nextDueDate: review.nextDueDate,
+      healthLabel: health.label,
+      viewLabel: viewReason.label,
+      severity,
+    };
+  });
 
   return {
     totalItems: candidates.length,
@@ -926,13 +993,20 @@ export function buildProjectDashboardViewReason(
           severity: 'warning',
         };
       }
+      if (dataQuality.state === 'partial') {
+        return {
+          filter: 'watch',
+          label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS.watch,
+          headline: dataQuality.headline,
+          detail: dataQuality.nextStep,
+          severity: 'info',
+        };
+      }
       return {
         filter: 'on-track',
         label: PROJECT_DASHBOARD_VIEW_FILTER_LABELS['on-track'],
         headline: health.headline,
-        detail: dataQuality.state === 'partial'
-          ? dataQuality.nextStep
-          : '继续维护任务状态、ETA 和来源链接',
+        detail: '继续维护任务状态、ETA 和来源链接',
         severity: 'neutral',
       };
   }
@@ -1049,6 +1123,253 @@ export function buildProjectFocusSummary(
   };
 }
 
+export function buildProjectEvidenceGapSummary(
+  projects: FishboneProject[],
+  options: { now?: Date; maxItems?: number } = {},
+): ProjectEvidenceGapSummary {
+  const now = options.now || new Date();
+  const maxItems = options.maxItems ?? 6;
+  const items = collectProjectEvidenceGapItems(projects, now);
+  const visibleItems = items.slice(0, maxItems);
+  const counts = buildProjectEvidenceGapCounts(items);
+
+  return {
+    totalItems: items.length,
+    visibleItems,
+    hiddenItems: Math.max(0, items.length - visibleItems.length),
+    counts,
+    breakdownLabel: formatProjectEvidenceGapBreakdown(counts),
+  };
+}
+
+export function buildProjectDashboardDecisionBrief(
+  projects: FishboneProject[],
+  options: { now?: Date } = {},
+): ProjectDashboardDecisionBrief {
+  const now = options.now || new Date();
+  const projectList = Array.isArray(projects) ? projects : [];
+
+  if (!projectList.length) {
+    return {
+      tone: 'info',
+      label: '先建立工作台',
+      headline: '暂无本地项目',
+      detail: '先新增一个项目，补齐里程碑和首批可跟踪任务',
+      primaryAction: {
+        type: 'create-project',
+        label: '新增项目',
+      },
+      supportingSignals: ['0 个项目', '0 个焦点任务', '0 个证据缺口'],
+    };
+  }
+
+  const focusItems = collectProjectFocusItems(projectList, now);
+  const evidenceGapItems = collectProjectEvidenceGapItems(projectList, now);
+  const evidenceGapCounts = buildProjectEvidenceGapCounts(evidenceGapItems);
+  const reviewQueue = buildProjectReviewQueueSummary(projectList, {
+    now,
+    maxItems: 1,
+  });
+  const reviewItem = reviewQueue.visibleItems[0];
+  const staleProjects = projectList.filter((project) => {
+    const freshness = buildProjectFreshnessSummary(project, now);
+    return freshness.state === 'stale' || freshness.state === 'aging';
+  }).length;
+  const support = [
+    focusItems.length
+      ? `${focusItems.length} 个阻塞/过期/临期任务`
+      : '无阻塞、过期或 7 天内到期任务',
+    evidenceGapItems.length
+      ? `${evidenceGapItems.length} 个证据缺口：${formatProjectEvidenceGapBreakdown(evidenceGapCounts)}`
+      : '证据覆盖暂无明显缺口',
+    reviewQueue.totalItems
+      ? `${reviewQueue.totalItems} 个项目待复核`
+      : '状态复核节奏正常',
+  ];
+
+  if (staleProjects > 0) {
+    support.push(`${staleProjects} 个项目计划需复核`);
+  }
+
+  const topFocus = focusItems[0];
+  if (topFocus) {
+    const tone: ProjectDecisionSignalSeverity = topFocus.level === 'due-soon' ? 'warning' : 'critical';
+    const label = topFocus.level === 'blocked'
+      ? '先处理阻塞'
+      : topFocus.level === 'overdue'
+        ? '先重估过期项'
+        : '先确认临期项';
+    const nextStep = topFocus.level === 'blocked'
+      ? '打开任务确认负责人、解除条件和下一次检查时间'
+      : topFocus.level === 'overdue'
+        ? '打开任务重估 ETA，并同步受影响里程碑'
+        : '打开任务确认资源和排期是否仍可达成';
+    const driverDetail = topFocus.risk.drivers.slice(0, 3).join('；');
+
+    return {
+      tone,
+      label,
+      headline: `${topFocus.projectName} · ${topFocus.task.title}`,
+      detail: `${topFocus.detail}；${topFocus.risk.label} ${topFocus.risk.score}/100${driverDetail ? `；${driverDetail}` : ''}`,
+      primaryAction: {
+        type: 'open-task',
+        label: '打开任务',
+        projectId: topFocus.projectId,
+        taskId: topFocus.task.id,
+      },
+      supportingSignals: [nextStep, ...support],
+    };
+  }
+
+  const topEvidenceGap = evidenceGapItems[0];
+  if (topEvidenceGap) {
+    const tone: ProjectDecisionSignalSeverity = topEvidenceGap.gapType === 'missing-both' ? 'warning' : 'info';
+    return {
+      tone,
+      label: '先补齐证据',
+      headline: `${topEvidenceGap.projectName} · ${topEvidenceGap.taskTitle}`,
+      detail: `${topEvidenceGap.label}：${topEvidenceGap.headline}；${topEvidenceGap.nextStep}`,
+      primaryAction: {
+        type: 'open-task',
+        label: '补任务证据',
+        projectId: topEvidenceGap.projectId,
+        taskId: topEvidenceGap.taskId,
+      },
+      supportingSignals: [
+        `风险分 ${topEvidenceGap.risk.score}/100`,
+        ...support,
+      ],
+    };
+  }
+
+  if (reviewItem) {
+    return {
+      tone: reviewItem.severity,
+      label: '先复核状态',
+      headline: `${reviewItem.projectName} · ${reviewItem.headline}`,
+      detail: reviewItem.nextStep,
+      primaryAction: {
+        type: 'review-project',
+        label: '预览状态草稿',
+        projectId: reviewItem.projectId,
+      },
+      supportingSignals: support,
+    };
+  }
+
+  return {
+    tone: 'neutral',
+    label: '节奏正常',
+    headline: '暂无需要立即升级的项目',
+    detail: '继续按当前节奏维护 ETA、来源和状态更新',
+    primaryAction: {
+      type: 'filter-projects',
+      label: '查看全部项目',
+      filter: 'all',
+    },
+    supportingSignals: support,
+  };
+}
+
+function buildProjectEvidenceGapCounts(
+  items: ProjectEvidenceGapItem[],
+): Record<ProjectEvidenceGapType, number> {
+  return items.reduce<Record<ProjectEvidenceGapType, number>>(
+    (counts, item) => {
+      counts[item.gapType] += 1;
+      return counts;
+    },
+    {
+      'missing-both': 0,
+      'missing-eta': 0,
+      'missing-source': 0,
+    },
+  );
+}
+
+function formatProjectEvidenceGapBreakdown(
+  counts: Record<ProjectEvidenceGapType, number>,
+): string {
+  const parts = [
+    counts['missing-both'] ? `${counts['missing-both']} 个缺 ETA+来源` : '',
+    counts['missing-eta'] ? `${counts['missing-eta']} 个缺 ETA` : '',
+    counts['missing-source'] ? `${counts['missing-source']} 个缺来源` : '',
+  ].filter(Boolean);
+
+  return parts.length ? parts.join('，') : '无明显证据缺口';
+}
+
+function collectProjectEvidenceGapItems(projects: FishboneProject[], now: Date): ProjectEvidenceGapItem[] {
+  return (Array.isArray(projects) ? projects : [])
+    .flatMap((project) => {
+      const tasks = Array.isArray(project.tasks) ? project.tasks : [];
+
+      return tasks
+        .filter((task) => !isCompletedStatus(task.status))
+        .map((task): ProjectEvidenceGapItem | null => {
+          const missingEta = !parseDateOnly(task.eta);
+          const missingSource = !hasTaskSourceEvidence(task);
+          if (!missingEta && !missingSource) return null;
+
+          const risk = buildProjectTaskRiskSummary(project, task, { now });
+          const gapType: ProjectEvidenceGapType = missingEta && missingSource
+            ? 'missing-both'
+            : missingEta
+              ? 'missing-eta'
+              : 'missing-source';
+          const label = gapType === 'missing-both'
+            ? '缺 ETA 和来源'
+            : gapType === 'missing-eta'
+              ? '缺 ETA'
+              : '缺来源';
+          const headline = gapType === 'missing-both'
+            ? '风险排序缺少时间和外部证据'
+            : gapType === 'missing-eta'
+              ? '风险排序缺少目标日期'
+              : '状态判断缺少 Jira / 平台来源';
+          const nextStep = gapType === 'missing-both'
+            ? '补 ETA 后关联 Jira 或平台状态'
+            : gapType === 'missing-eta'
+              ? '补上可复核 ETA'
+              : '关联 Jira 或平台状态';
+          const priority = gapType === 'missing-both' ? 0 : gapType === 'missing-eta' ? 1 : 2;
+
+          return {
+            projectId: project.id,
+            projectName: project.name,
+            taskId: task.id,
+            taskTitle: task.title,
+            gapType,
+            label,
+            headline,
+            detail: risk.drivers.join('；'),
+            nextStep,
+            eta: task.eta,
+            risk,
+            priority,
+          };
+        })
+        .filter((item): item is ProjectEvidenceGapItem => Boolean(item));
+    })
+    .sort((a, b) => {
+      const priorityDelta = a.priority - b.priority;
+      if (priorityDelta !== 0) return priorityDelta;
+
+      const riskDelta = b.risk.score - a.risk.score;
+      if (riskDelta !== 0) return riskDelta;
+
+      const leftDate = daysUntil(a.eta, now) ?? Number.POSITIVE_INFINITY;
+      const rightDate = daysUntil(b.eta, now) ?? Number.POSITIVE_INFINITY;
+      const dateDelta = leftDate - rightDate;
+      if (dateDelta !== 0) return dateDelta;
+
+      const projectDelta = a.projectName.localeCompare(b.projectName);
+      if (projectDelta !== 0) return projectDelta;
+
+      return a.taskTitle.localeCompare(b.taskTitle);
+    });
+}
+
 function collectProjectFocusItems(projects: FishboneProject[], now: Date): ProjectFocusItem[] {
   return (Array.isArray(projects) ? projects : [])
     .flatMap((project) => {
@@ -1142,6 +1463,55 @@ function buildTaskJiraKeys(task: FishboneTask): string[] {
   return Array.from(keys);
 }
 
+function buildTaskPlatformJiraKeys(task: FishboneTask): Set<string> {
+  const keys = new Set<string>();
+
+  Object.values(task.platforms || {}).forEach((platform) => {
+    const key = String(platform?.jira || '').trim();
+    if (key) keys.add(key);
+  });
+
+  return keys;
+}
+
+function buildTaskPlatformSourceLabels(task: FishboneTask): string[] {
+  return Object.entries(task.platforms || {})
+    .map(([platformName, platform]) => {
+      const status = String(platform?.status || '').trim();
+      const assignee = String(platform?.assignee || '').trim();
+      const jira = String(platform?.jira || '').trim();
+      if (!status && !assignee && !jira) return '';
+
+      const details = [status, assignee, jira ? `Jira ${jira}` : ''].filter(Boolean);
+      return `${platformName.toUpperCase()}${details.length ? ` ${details.join(' · ')}` : ''}`;
+    })
+    .filter(Boolean);
+}
+
+export function buildProjectTaskSourceSummary(task: FishboneTask): ProjectTaskSourceSummary {
+  const jiraKeys = buildTaskJiraKeys(task);
+  const platformJiraKeys = buildTaskPlatformJiraKeys(task);
+  const platformSourceLabels = buildTaskPlatformSourceLabels(task);
+  const standaloneJiraLabels = jiraKeys
+    .filter((key) => !platformJiraKeys.has(key))
+    .map((key) => `Jira ${key}`);
+  const sourceLabels = [
+    ...standaloneJiraLabels,
+    ...platformSourceLabels,
+  ];
+
+  return {
+    hasSource: sourceLabels.length > 0,
+    jiraKeys,
+    platformSourceLabels,
+    sourceLabels,
+  };
+}
+
+function hasTaskSourceEvidence(task: FishboneTask): boolean {
+  return buildProjectTaskSourceSummary(task).hasSource;
+}
+
 function clampRiskScore(score: number): number {
   if (!Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score)));
@@ -1192,7 +1562,7 @@ export function buildProjectTaskRiskSummary(
     drivers.push(`${delta} 天后到期`);
   }
 
-  if (buildTaskJiraKeys(task).length === 0) {
+  if (!hasTaskSourceEvidence(task)) {
     score += 8;
     drivers.push('缺 Jira / 平台来源');
   }
@@ -1266,7 +1636,7 @@ export function buildProjectDataQualitySummary(project: FishboneProject): Projec
   }
 
   const missingEtaTasks = activeTasks.filter((task) => !parseDateOnly(task.eta)).length;
-  const missingSourceTasks = activeTasks.filter((task) => buildTaskJiraKeys(task).length === 0).length;
+  const missingSourceTasks = activeTasks.filter((task) => !hasTaskSourceEvidence(task)).length;
   const etaCoverage = calculateCoveragePercent(activeTaskCount - missingEtaTasks, activeTaskCount);
   const sourceCoverage = calculateCoveragePercent(activeTaskCount - missingSourceTasks, activeTaskCount);
   const overallCoverage = calculateCoveragePercent(
@@ -1430,7 +1800,7 @@ export function buildProjectDecisionSummary(
     });
   }
 
-  const missingSourceTasks = activeTasks.filter((task) => buildTaskJiraKeys(task).length === 0);
+  const missingSourceTasks = activeTasks.filter((task) => !hasTaskSourceEvidence(task));
   if (missingSourceTasks.length) {
     signals.push({
       id: 'missing-source',
@@ -1590,13 +1960,17 @@ export function buildProjectStatusEvidenceItems(
   const attentionTasks = buildStatusDraftAttentionTasks(project, now, maxItems);
 
   attentionTasks.forEach(({ task, label, detail, priority, risk }) => {
-    const jiraKeys = buildTaskJiraKeys(task);
-    const jiraDetail = jiraKeys.length ? `；Jira ${jiraKeys.join(', ')}` : '';
+    const sourceSummary = buildProjectTaskSourceSummary(task);
+    const sourceDetail = sourceSummary.jiraKeys.length
+      ? `；Jira ${sourceSummary.jiraKeys.join(', ')}`
+      : sourceSummary.platformSourceLabels.length
+        ? `；平台来源 ${sourceSummary.platformSourceLabels.join(', ')}`
+        : '';
     evidence.push({
       type: 'task',
       label,
       title: task.title,
-      detail: `${detail}；${risk.label} ${risk.score}/100${jiraDetail}`,
+      detail: `${detail}；${risk.label} ${risk.score}/100${sourceDetail}`,
       source: '本地任务状态 / ETA',
       priority,
       taskId: task.id,
@@ -1749,8 +2123,12 @@ export function buildProjectStatusUpdateDraft(
     lines.push('- 暂无阻塞、过期或 7 天内到期任务。');
   } else {
     attentionTasks.forEach(({ task, label, detail, risk }) => {
-      const jiraKeys = buildTaskJiraKeys(task);
-      const evidence = jiraKeys.length ? `；Jira ${jiraKeys.join(', ')}` : '';
+      const sourceSummary = buildProjectTaskSourceSummary(task);
+      const evidence = sourceSummary.jiraKeys.length
+        ? `；Jira ${sourceSummary.jiraKeys.join(', ')}`
+        : sourceSummary.platformSourceLabels.length
+          ? `；平台来源 ${sourceSummary.platformSourceLabels.join(', ')}`
+          : '';
       lines.push(`- [${label}] ${task.title} (${detail}；${risk.label} ${risk.score}/100${evidence})`);
     });
   }

@@ -23,7 +23,16 @@
         class="status-message"
         :class="statusTone"
       >
-        {{ statusMessage }}
+        <span>{{ statusMessage }}</span>
+        <button
+          v-if="recentlyRetractedProfileItem"
+          type="button"
+          class="status-action-btn"
+          :disabled="isRestoringProfileItem"
+          @click="restoreRetractedProfileItem"
+        >
+          {{ isRestoringProfileItem ? '恢复中...' : '撤销排除' }}
+        </button>
       </div>
     </div>
     
@@ -94,7 +103,15 @@
             <option value="communication_style">通用沟通风格</option>
             <option value="response_style">默认回复风格</option>
             <option value="owner_response_constraint">不要替我说的话</option>
+            <option :value="CUSTOM_PROFILE_KEY">自定义画像键</option>
           </select>
+          <input
+            v-if="explicitProfileDraft.itemKey === CUSTOM_PROFILE_KEY"
+            v-model.trim="explicitProfileDraft.customItemKey"
+            class="custom-profile-key-input"
+            type="text"
+            placeholder="例如：project.personal_ai.priority"
+          />
           <textarea
             v-model="explicitProfileDraft.itemValue"
             rows="3"
@@ -103,7 +120,7 @@
           <button
             type="button"
             class="primary-action-btn"
-            :disabled="isCreatingExplicitProfile || !explicitProfileDraft.itemValue.trim()"
+            :disabled="isCreatingExplicitProfile || !resolvedExplicitProfileItemKey || !explicitProfileDraft.itemValue.trim()"
             @click="createExplicitProfileItem"
           >
             {{ isCreatingExplicitProfile ? '添加中...' : '添加到画像' }}
@@ -312,6 +329,12 @@
           >
             <div class="prediction-header">
               <span class="prediction-type">{{ prediction.type }}</span>
+              <span
+                class="calibration-priority-pill"
+                :class="`priority-${prediction.calibrationPriority}`"
+              >
+                {{ getCalibrationPriorityLabel(prediction.calibrationPriority) }}
+              </span>
               <span class="prediction-confidence">
                 置信度: {{ Math.round(prediction.confidence * 100) }}%
               </span>
@@ -321,7 +344,16 @@
               <span>{{ getCategoryDisplayName(prediction.category) }}</span>
               <span>{{ getProfileStatusDisplayName(prediction.status) }}</span>
               <span>{{ getSourceDisplayName(prediction.sourceKind) }}</span>
-              <span>{{ prediction.evidenceCount > 0 ? `${prediction.evidenceCount} 条证据` : '暂无证据' }}</span>
+              <button
+                v-if="prediction.evidenceCount > 0"
+                type="button"
+                class="evidence-toggle-btn"
+                :aria-expanded="isEvidenceExpanded(prediction.id)"
+                @click="toggleEvidence(prediction.id)"
+              >
+                {{ prediction.evidenceCount }} 条证据 · {{ isEvidenceExpanded(prediction.id) ? '收起' : '查看' }}
+              </button>
+              <span v-else>暂无证据</span>
               <span
                 class="context-use-pill"
                 :class="{ usable: prediction.canUseForPersonalization }"
@@ -331,6 +363,22 @@
               <span>{{ formatTime(prediction.lastSeen) }}</span>
             </div>
             <div class="prediction-reason">{{ prediction.reason }}</div>
+            <div
+              v-if="(prediction.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(prediction.id)"
+              class="profile-evidence-panel"
+            >
+              <a
+                v-for="(evidence, evidenceIndex) in (prediction.evidencePreview || []).slice(0, 3)"
+                :key="`${prediction.id}-evidence-${evidenceIndex}`"
+                class="profile-evidence-item"
+                :href="evidence.sourceUrl || undefined"
+                :target="evidence.sourceUrl ? '_blank' : undefined"
+                :rel="evidence.sourceUrl ? 'noreferrer' : undefined"
+              >
+                <span class="profile-evidence-label">{{ evidence.label }}</span>
+                <span class="profile-evidence-detail">{{ evidence.detail }}</span>
+              </a>
+            </div>
             <div class="prediction-actions">
               <button
                 class="secondary-action-btn"
@@ -377,14 +425,66 @@
       <div id="profile-items" class="profile-card">
         <div class="items-header">
           <h3>🧭 画像条目</h3>
-          <span class="items-count">{{ userProfile.allItems.length }} 条</span>
+          <span class="items-count">{{ profileItemsCountLabel }}</span>
         </div>
-        <div v-if="userProfile.allItems.length === 0" class="inline-empty">
-          暂无可校准的画像条目
+        <div class="profile-items-toolbar">
+          <label class="profile-search-control">
+            <span>搜索</span>
+            <input
+              v-model.trim="profileItemSearchQuery"
+              type="search"
+              placeholder="名称、键、来源、状态或证据"
+            />
+          </label>
+          <label class="profile-filter-control">
+            <span>状态</span>
+            <select v-model="profileItemStatusFilter">
+              <option
+                v-for="option in profileItemStatusOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="profile-filter-control">
+            <span>排序</span>
+            <select v-model="profileItemSortMode">
+              <option
+                v-for="option in profileItemSortOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="tertiary-action-btn"
+            :disabled="!hasProfileItemFilters"
+            @click="clearProfileItemFilters"
+          >
+            清除
+          </button>
+          <button
+            v-if="profileItemsAreTruncated"
+            type="button"
+            class="secondary-action-btn load-all-items-btn"
+            :disabled="isLoadingAllProfileItems"
+            @click="loadAllProfileItems"
+          >
+            {{ isLoadingAllProfileItems ? '加载中...' : '加载全部' }}
+          </button>
+        </div>
+        <div class="profile-items-summary">{{ profileItemsDisplaySummary }}</div>
+        <div v-if="filteredProfileItems.length === 0" class="inline-empty">
+          {{ profileItemsEmptyMessage }}
         </div>
         <div v-else class="profile-items-list">
           <div
-            v-for="item in userProfile.allItems.slice(0, 20)"
+            v-for="item in visibleProfileItems"
             :key="item.id"
             class="profile-item-row"
             :class="{ updating: isItemPending(item.id) }"
@@ -402,12 +502,27 @@
                 >
                   {{ getProfileStatusDisplayName(item.status, item.userConfirmed) }}
                 </span>
+                <span
+                  class="calibration-priority-pill"
+                  :class="`priority-${item.calibrationPriority}`"
+                >
+                  {{ getCalibrationPriorityLabel(item.calibrationPriority) }}
+                </span>
               </div>
               <div class="profile-item-meta">
                 <span>重要性 {{ formatPercent(item.explicitImportance) }}</span>
                 <span>命中 {{ item.mentionCount }} 次</span>
                 <span>{{ getSourceDisplayName(item.sourceKind) }}</span>
-                <span>{{ getEvidenceLabel(item) }}</span>
+                <button
+                  v-if="(item.evidenceRefs?.length || 0) > 0"
+                  type="button"
+                  class="evidence-toggle-btn"
+                  :aria-expanded="isEvidenceExpanded(item.id)"
+                  @click="toggleEvidence(item.id)"
+                >
+                  {{ getEvidenceLabel(item) }} · {{ isEvidenceExpanded(item.id) ? '收起' : '查看' }}
+                </button>
+                <span v-else>{{ getEvidenceLabel(item) }}</span>
                 <span
                   class="context-use-pill"
                   :class="{ usable: item.canUseForPersonalization }"
@@ -415,6 +530,23 @@
                   {{ getContextUseLabel(item.canUseForPersonalization) }}
                 </span>
                 <span>{{ formatTime(item.lastSeen) }}</span>
+                <span class="profile-calibration-reason">{{ item.calibrationReason }}</span>
+              </div>
+              <div
+                v-if="(item.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(item.id)"
+                class="profile-evidence-panel"
+              >
+                <a
+                  v-for="(evidence, evidenceIndex) in (item.evidencePreview || []).slice(0, 4)"
+                  :key="`${item.id}-evidence-${evidenceIndex}`"
+                  class="profile-evidence-item"
+                  :href="evidence.sourceUrl || undefined"
+                  :target="evidence.sourceUrl ? '_blank' : undefined"
+                  :rel="evidence.sourceUrl ? 'noreferrer' : undefined"
+                >
+                  <span class="profile-evidence-label">{{ evidence.label }}</span>
+                  <span class="profile-evidence-detail">{{ evidence.detail }}</span>
+                </a>
               </div>
             </div>
             <div class="profile-item-actions">
@@ -434,6 +566,18 @@
                 {{ isItemPending(item.id) ? '处理中' : '排除' }}
               </button>
             </div>
+          </div>
+          <div
+            v-if="hiddenProfileItemsCount > 0"
+            class="load-more-row"
+          >
+            <button
+              type="button"
+              class="secondary-action-btn"
+              @click="loadMoreProfileItems"
+            >
+              显示更多 {{ hiddenProfileItemsCount }} 条
+            </button>
           </div>
         </div>
       </div>
@@ -699,13 +843,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, toRaw } from 'vue';
+import { computed, ref, onMounted, toRaw, watch } from 'vue';
 import { chromeAPI } from '../memory-store';
 import {
   buildUserProfileViewModel,
+  filterAndSortProfileItems,
   normalizeUserProfilePayload,
   type UserProfileAnalysisViewModel,
+  type UserProfileCalibrationPriority,
   type UserProfileCategory,
+  type UserProfileItemSortMode,
+  type UserProfileItemStatusFilter,
   type UserProfileInterestItem,
   type UserProfileReviewQueueItem,
   type UserProfileViewModel,
@@ -713,19 +861,26 @@ import {
 
 const isLoading = ref(true);
 const isExporting = ref(false);
+const isLoadingAllProfileItems = ref(false);
 const showAdvancedSettings = ref(false);
 const isApplyingSettings = ref(false);
 const isCreatingExplicitProfile = ref(false);
+const isRestoringProfileItem = ref(false);
 const statusMessage = ref('');
 const statusTone = ref<'success' | 'error' | 'info'>('info');
 const userProfile = ref<UserProfileViewModel | null>(null);
 const userProfileAnalysis = ref<UserProfileAnalysisViewModel | null>(null);
 const pendingItemIds = ref<Set<string>>(new Set());
+const expandedEvidenceItemIds = ref<Set<string>>(new Set());
+const recentlyRetractedProfileItem = ref<{ id: string; name: string } | null>(null);
+const CUSTOM_PROFILE_KEY = '__custom__';
 const explicitProfileDraft = ref({
   itemType: 'preference',
   itemKey: 'writing_style.ringcentral.reply',
+  customItemKey: '',
   itemValue: '',
 });
+const PROFILE_ITEMS_PAGE_SIZE = 50;
 type ReviewQueueFilter = 'all' | 'pending' | 'withEvidence' | 'withoutEvidence';
 const reviewQueueFilter = ref<ReviewQueueFilter>('all');
 const reviewFilterOptions: Array<{ value: ReviewQueueFilter; label: string }> = [
@@ -733,6 +888,23 @@ const reviewFilterOptions: Array<{ value: ReviewQueueFilter; label: string }> = 
   { value: 'pending', label: '待确认' },
   { value: 'withEvidence', label: '有证据' },
   { value: 'withoutEvidence', label: '缺证据' },
+];
+const profileItemSearchQuery = ref('');
+const profileItemStatusFilter = ref<UserProfileItemStatusFilter>('all');
+const profileItemSortMode = ref<UserProfileItemSortMode>('priority');
+const profileItemsVisibleLimit = ref(PROFILE_ITEMS_PAGE_SIZE);
+const profileItemStatusOptions: Array<{ value: UserProfileItemStatusFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'needsReview', label: '需校准' },
+  { value: 'highImpact', label: '高影响' },
+  { value: 'usable', label: '可个性化' },
+  { value: 'withoutEvidence', label: '缺证据' },
+];
+const profileItemSortOptions: Array<{ value: UserProfileItemSortMode; label: string }> = [
+  { value: 'priority', label: '优先处理' },
+  { value: 'newest', label: '最近更新' },
+  { value: 'confidence', label: '置信度' },
+  { value: 'evidence', label: '证据数' },
 ];
 
 const getReviewQueue = (): UserProfileReviewQueueItem[] =>
@@ -753,6 +925,57 @@ const profileReviewQueue = computed(() => {
     default:
       return queue;
   }
+});
+const filteredProfileItems = computed(() =>
+  filterAndSortProfileItems(userProfile.value?.allItems ?? [], {
+    query: profileItemSearchQuery.value,
+    statusFilter: profileItemStatusFilter.value,
+    sortMode: profileItemSortMode.value,
+  })
+);
+const visibleProfileItems = computed(() =>
+  filteredProfileItems.value.slice(0, profileItemsVisibleLimit.value)
+);
+const hiddenProfileItemsCount = computed(() =>
+  Math.max(0, filteredProfileItems.value.length - visibleProfileItems.value.length)
+);
+const profileItemsLoadedCount = computed(() => userProfile.value?.loadedItems ?? userProfile.value?.allItems.length ?? 0);
+const profileItemsTotalCount = computed(() => userProfile.value?.totalItems ?? profileItemsLoadedCount.value);
+const profileItemsAreTruncated = computed(() =>
+  Boolean(userProfile.value?.isTruncated || profileItemsLoadedCount.value < profileItemsTotalCount.value)
+);
+const profileItemsCountLabel = computed(() =>
+  profileItemsAreTruncated.value
+    ? `${profileItemsLoadedCount.value}/${profileItemsTotalCount.value} 条`
+    : `${profileItemsTotalCount.value} 条`
+);
+const hasProfileItemFilters = computed(() =>
+  Boolean(profileItemSearchQuery.value.trim()) ||
+  profileItemStatusFilter.value !== 'all' ||
+  profileItemSortMode.value !== 'priority'
+);
+const profileItemsDisplaySummary = computed(() => {
+  const loaded = profileItemsLoadedCount.value;
+  const total = profileItemsTotalCount.value;
+  const matched = filteredProfileItems.value.length;
+  const visible = visibleProfileItems.value.length;
+  if (total === 0) return '0 条';
+  const scopeLabel = profileItemsAreTruncated.value
+    ? `已加载 ${loaded}/${total} 条`
+    : `共 ${total} 条`;
+  if (matched === loaded) return `显示 ${visible}/${loaded} 条（${scopeLabel}）`;
+  return `显示 ${visible}/${matched} 条匹配结果（${scopeLabel}）`;
+});
+const profileItemsEmptyMessage = computed(() => {
+  if (profileItemsLoadedCount.value === 0) return '暂无可校准的画像条目';
+  if (profileItemsAreTruncated.value) {
+    return '当前已加载条目中没有匹配结果，可先加载全部画像后再搜索';
+  }
+  return '当前筛选没有匹配的画像条目';
+});
+
+watch([profileItemSearchQuery, profileItemStatusFilter, profileItemSortMode], () => {
+  profileItemsVisibleLimit.value = PROFILE_ITEMS_PAGE_SIZE;
 });
 
 const weightDecaySettings = ref({
@@ -781,12 +1004,32 @@ const profileHealthMetrics = ref({
   categoryCoverage: 0
 });
 
-const setStatus = (message: string, tone: 'success' | 'error' | 'info' = 'info') => {
+const setStatus = (
+  message: string,
+  tone: 'success' | 'error' | 'info' = 'info',
+  options: { keepUndoAction?: boolean } = {},
+) => {
   statusMessage.value = message;
   statusTone.value = tone;
+  if (!options.keepUndoAction) {
+    recentlyRetractedProfileItem.value = null;
+  }
 };
 
 const isItemPending = (itemId?: string) => Boolean(itemId && pendingItemIds.value.has(itemId));
+
+const isEvidenceExpanded = (itemId?: string) =>
+  Boolean(itemId && expandedEvidenceItemIds.value.has(itemId));
+
+const toggleEvidence = (itemId: string) => {
+  const nextExpanded = new Set(expandedEvidenceItemIds.value);
+  if (nextExpanded.has(itemId)) {
+    nextExpanded.delete(itemId);
+  } else {
+    nextExpanded.add(itemId);
+  }
+  expandedEvidenceItemIds.value = nextExpanded;
+};
 
 const setItemPending = (itemId: string, pending: boolean) => {
   const nextPending = new Set(pendingItemIds.value);
@@ -805,16 +1048,22 @@ const applyViewModel = (payload: any) => {
   updateChartData();
 };
 
-const loadUserProfile = async (options: { showLoading?: boolean } = {}) => {
+const loadUserProfile = async (options: { showLoading?: boolean; maxItems?: number | 'all' } = {}) => {
   const showLoading = options.showLoading ?? true;
   if (showLoading) {
     isLoading.value = true;
   }
   try {
-    let response = await chromeAPI.sendMessage({ type: 'GET_FUSED_USER_PROFILE' });
+    let response = await chromeAPI.sendMessage({
+      type: 'GET_FUSED_USER_PROFILE',
+      maxItems: options.maxItems,
+    });
 
     if (!response || !(response as any).success) {
-      response = await chromeAPI.sendMessage({ type: 'GET_USER_PROFILE' });
+      response = await chromeAPI.sendMessage({
+        type: 'GET_USER_PROFILE',
+        maxItems: options.maxItems,
+      });
     }
 
     if (response && (response as any).success) {
@@ -846,6 +1095,35 @@ const scrollToSection = (sectionId: string) => {
     behavior: 'smooth',
     block: 'start',
   });
+};
+
+const clearProfileItemFilters = () => {
+  profileItemSearchQuery.value = '';
+  profileItemStatusFilter.value = 'all';
+  profileItemSortMode.value = 'priority';
+};
+
+const resolvedExplicitProfileItemKey = computed(() => {
+  if (explicitProfileDraft.value.itemKey === CUSTOM_PROFILE_KEY) {
+    return explicitProfileDraft.value.customItemKey.trim();
+  }
+  return explicitProfileDraft.value.itemKey.trim();
+});
+
+const loadMoreProfileItems = () => {
+  profileItemsVisibleLimit.value += PROFILE_ITEMS_PAGE_SIZE;
+};
+
+const loadAllProfileItems = async () => {
+  if (!profileItemsAreTruncated.value || isLoadingAllProfileItems.value) return;
+  isLoadingAllProfileItems.value = true;
+  try {
+    await loadUserProfile({ showLoading: false, maxItems: 'all' });
+    profileItemsVisibleLimit.value = PROFILE_ITEMS_PAGE_SIZE;
+    setStatus('已加载全部画像条目', 'success');
+  } finally {
+    isLoadingAllProfileItems.value = false;
+  }
 };
 
 const formatPercent = (value: number) => `${Math.round((value || 0) * 100)}%`;
@@ -885,6 +1163,16 @@ const getProfileStatusDisplayName = (status: string, userConfirmed = false): str
     archived: '已归档',
   };
   return names[status] || '待确认';
+};
+
+const getCalibrationPriorityLabel = (priority: UserProfileCalibrationPriority): string => {
+  const names: Record<UserProfileCalibrationPriority, string> = {
+    critical: '优先复核',
+    high: '高影响',
+    medium: '需校准',
+    low: '低风险',
+  };
+  return names[priority] || '需校准';
 };
 
 const getEvidenceLabel = (item: UserProfileInterestItem): string => {
@@ -979,6 +1267,7 @@ const confirmProfileItem = async (itemId: string) => {
 
 const retractProfileItem = async (itemId: string) => {
   if (!itemId || isItemPending(itemId)) return;
+  const targetItem = userProfile.value?.allItems.find((item) => item.id === itemId);
   setItemPending(itemId, true);
   try {
     const response = await chromeAPI.sendMessage({
@@ -986,7 +1275,13 @@ const retractProfileItem = async (itemId: string) => {
       itemId
     });
     if (response && (response as any).success) {
-      setStatus('画像条目已排除', 'success');
+      recentlyRetractedProfileItem.value = {
+        id: itemId,
+        name: targetItem?.name || '该画像条目',
+      };
+      setStatus(`已排除“${recentlyRetractedProfileItem.value.name}”`, 'success', {
+        keepUndoAction: true,
+      });
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '画像条目排除失败', 'error');
@@ -998,16 +1293,45 @@ const retractProfileItem = async (itemId: string) => {
   }
 };
 
+const restoreRetractedProfileItem = async () => {
+  const item = recentlyRetractedProfileItem.value;
+  if (!item || isRestoringProfileItem.value) return;
+
+  isRestoringProfileItem.value = true;
+  try {
+    const response = await chromeAPI.sendMessage({
+      type: 'RESTORE_PROFILE_ITEM',
+      itemId: item.id,
+    });
+
+    if (response && (response as any).success) {
+      setStatus(`已恢复“${item.name}”`, 'success');
+      await loadUserProfile({ showLoading: false });
+    } else {
+      setStatus((response as any)?.error || '画像条目恢复失败', 'error', {
+        keepUndoAction: true,
+      });
+    }
+  } catch (error: any) {
+    setStatus(error?.message || '画像条目恢复失败', 'error', {
+      keepUndoAction: true,
+    });
+  } finally {
+    isRestoringProfileItem.value = false;
+  }
+};
+
 const createExplicitProfileItem = async () => {
   const itemValue = explicitProfileDraft.value.itemValue.trim();
-  if (!itemValue || isCreatingExplicitProfile.value) return;
+  const itemKey = resolvedExplicitProfileItemKey.value;
+  if (!itemValue || !itemKey || isCreatingExplicitProfile.value) return;
 
   isCreatingExplicitProfile.value = true;
   try {
     const response = await chromeAPI.sendMessage({
       type: 'CREATE_PROFILE_ITEM',
       itemType: explicitProfileDraft.value.itemType,
-      itemKey: explicitProfileDraft.value.itemKey,
+      itemKey,
       itemValue,
       confidence: 1,
     });
@@ -1252,6 +1576,10 @@ onMounted(() => {
 }
 
 .status-message {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 0 0 16px 0;
   padding: 10px 14px;
   border-radius: 8px;
@@ -1271,6 +1599,24 @@ onMounted(() => {
   background: #fff4f3;
   border-color: #f3c4bd;
   color: #a33a2b;
+}
+
+.status-action-btn {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 5px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .loading-container {
@@ -1398,7 +1744,8 @@ onMounted(() => {
 }
 
 .owner-profile-form select,
-.owner-profile-form textarea {
+.owner-profile-form textarea,
+.owner-profile-form input {
   width: 100%;
   border: 1px solid #d7dee5;
   border-radius: 6px;
@@ -1408,9 +1755,14 @@ onMounted(() => {
   min-width: 0;
 }
 
-.owner-profile-form select {
+.owner-profile-form select,
+.owner-profile-form input {
   height: 38px;
   padding: 0 10px;
+}
+
+.custom-profile-key-input {
+  grid-column: 1 / -1;
 }
 
 .owner-profile-form textarea {
@@ -1421,7 +1773,8 @@ onMounted(() => {
 }
 
 .owner-profile-form select:focus,
-.owner-profile-form textarea:focus {
+.owner-profile-form textarea:focus,
+.owner-profile-form input:focus {
   border-color: #1976d2;
   outline: none;
   box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.12);
@@ -1539,7 +1892,8 @@ onMounted(() => {
 .review-filter-btn:focus-visible,
 .primary-action-btn:focus-visible,
 .secondary-action-btn:focus-visible,
-.danger-action-btn:focus-visible {
+.danger-action-btn:focus-visible,
+.tertiary-action-btn:focus-visible {
   outline: 2px solid #1976d2;
   outline-offset: 2px;
 }
@@ -1682,7 +2036,9 @@ onMounted(() => {
 /* 预测兴趣样式 */
 .prediction-header {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-start;
   align-items: center;
   width: 100%;
   margin-bottom: 8px;
@@ -1770,6 +2126,60 @@ onMounted(() => {
   font-weight: 600;
 }
 
+.profile-items-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(140px, auto) minmax(140px, auto) auto auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.profile-search-control,
+.profile-filter-control {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: #5f6f7f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.profile-search-control input,
+.profile-filter-control select {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #d7dee5;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #2c3e50;
+  font: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.profile-search-control input {
+  padding: 0 10px;
+}
+
+.profile-filter-control select {
+  padding: 0 8px;
+}
+
+.profile-search-control input:focus,
+.profile-filter-control select:focus {
+  border-color: #1976d2;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.12);
+}
+
+.profile-items-summary {
+  margin-bottom: 12px;
+  color: #6c757d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .inline-empty {
   padding: 16px;
   background: #f8f9fa;
@@ -1841,12 +2251,95 @@ onMounted(() => {
   color: #8a5a00;
 }
 
+.calibration-priority-pill {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #eef2f7;
+  color: #4b5563;
+  white-space: nowrap;
+}
+
+.calibration-priority-pill.priority-critical {
+  background: #fdecea;
+  color: #b42318;
+}
+
+.calibration-priority-pill.priority-high {
+  background: #fff4db;
+  color: #8a5a00;
+}
+
+.calibration-priority-pill.priority-medium {
+  background: #e8f1ff;
+  color: #1557a8;
+}
+
+.profile-calibration-reason {
+  flex-basis: 100%;
+  color: #51606f;
+  line-height: 1.35;
+}
+
 .profile-item-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   color: #6c757d;
   font-size: 12px;
+}
+
+.evidence-toggle-btn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #1565c0;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.evidence-toggle-btn:hover {
+  color: #0d47a1;
+  text-decoration: underline;
+}
+
+.profile-evidence-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid #dfe7ef;
+  border-radius: 6px;
+}
+
+.profile-evidence-item {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.profile-evidence-item:hover .profile-evidence-label {
+  color: #1565c0;
+  text-decoration: underline;
+}
+
+.profile-evidence-label {
+  color: #34495e;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.profile-evidence-detail {
+  color: #6c757d;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .profile-item-actions {
@@ -1857,7 +2350,8 @@ onMounted(() => {
 }
 
 .secondary-action-btn,
-.danger-action-btn {
+.danger-action-btn,
+.tertiary-action-btn {
   border: 1px solid #d7dee5;
   border-radius: 6px;
   padding: 7px 12px;
@@ -1880,17 +2374,41 @@ onMounted(() => {
   color: #a33a2b;
 }
 
+.tertiary-action-btn:hover {
+  background: #f8f9fa;
+  border-color: #adb5bd;
+}
+
 .secondary-action-btn:disabled,
-.danger-action-btn:disabled {
-  cursor: wait;
+.danger-action-btn:disabled,
+.tertiary-action-btn:disabled {
+  cursor: not-allowed;
   opacity: 0.6;
 }
 
 .secondary-action-btn:disabled:hover,
-.danger-action-btn:disabled:hover {
+.danger-action-btn:disabled:hover,
+.tertiary-action-btn:disabled:hover {
   background: white;
   border-color: #d7dee5;
   color: #34495e;
+}
+
+.profile-item-row.updating .secondary-action-btn:disabled,
+.profile-item-row.updating .danger-action-btn:disabled,
+.prediction-item.updating .secondary-action-btn:disabled,
+.prediction-item.updating .danger-action-btn:disabled {
+  cursor: wait;
+}
+
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.load-all-items-btn {
+  white-space: nowrap;
 }
 
 .stat-card {
@@ -2521,6 +3039,14 @@ onMounted(() => {
     justify-content: flex-end;
   }
 
+  .profile-items-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .profile-search-control {
+    grid-column: 1 / -1;
+  }
+
   .queue-header {
     flex-direction: column;
   }
@@ -2562,6 +3088,10 @@ onMounted(() => {
   
   .toggle-settings-btn {
     align-self: center;
+  }
+
+  .profile-items-toolbar {
+    grid-template-columns: 1fr;
   }
   
   .setting-section {

@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import {
   DashboardDataManager,
   DashboardMessageHandler,
+  buildProjectDashboardDecisionBrief,
   buildProjectDashboardLaunchPath,
   buildProjectDashboardViewFilterCounts,
   buildProjectDashboardViewReason,
   buildProjectDataQualitySummary,
   buildProjectDecisionSummary,
+  buildProjectEvidenceGapSummary,
   buildMilestoneClassToken,
   buildMilestoneMarkerText,
   buildProjectFocusItems,
@@ -18,6 +20,7 @@ import {
   buildProjectReviewSummary,
   buildProjectStatusEvidenceItems,
   buildProjectStatusUpdateDraft,
+  buildProjectTaskSourceSummary,
   buildProjectTaskRiskSummary,
   compareProjectsByDashboardPriority,
   filterProjectsByDashboardView,
@@ -378,6 +381,23 @@ function verifyProjectDashboardViewFilters() {
         { id: 'active', type: 'task', title: 'Needs source', status: 'progress', eta: '2026-06-10' },
       ],
     },
+    {
+      id: 'partial-evidence',
+      name: 'Partial Evidence Project',
+      lastStatusReviewAt: '2026-04-29T08:00:00+08:00',
+      milestones: [{ id: 'partial-ga', label: 'GA', date: '2026-06-20' }],
+      tasks: [
+        {
+          id: 'with-source',
+          type: 'task',
+          title: 'Has source',
+          status: 'progress',
+          eta: '2026-06-10',
+          jira: [{ key: 'SRC-1', title: 'Has source' }],
+        },
+        { id: 'missing-source', type: 'task', title: 'Needs source', status: 'progress', eta: '2026-06-12' },
+      ],
+    },
   ] as any[];
 
   const now = new Date('2026-04-30T12:00:00+08:00');
@@ -389,6 +409,7 @@ function verifyProjectDashboardViewFilters() {
   assert.equal(getProjectDashboardViewFilter(projects[4], now), 'watch');
   assert.equal(getProjectDashboardViewFilter(projects[5], now), 'empty');
   assert.equal(getProjectDashboardViewFilter(projects[6], now), 'watch');
+  assert.equal(getProjectDashboardViewFilter(projects[7], now), 'watch');
   assert.deepEqual(buildProjectDashboardViewReason(projects[6], now), {
     filter: 'watch',
     label: '需关注',
@@ -396,13 +417,20 @@ function verifyProjectDashboardViewFilters() {
     detail: '补充 Jira 或平台来源，方便状态回溯',
     severity: 'warning',
   });
+  assert.deepEqual(buildProjectDashboardViewReason(projects[7], now), {
+    filter: 'watch',
+    label: '需关注',
+    headline: '证据覆盖 75%：0 个缺 ETA，1 个缺来源',
+    detail: '补充 Jira 或平台来源，方便状态回溯',
+    severity: 'info',
+  });
 
   assert.deepEqual(
     buildProjectDashboardViewFilterCounts(projects, now),
     {
-      all: 7,
+      all: 8,
       'needs-action': 1,
-      watch: 3,
+      watch: 4,
       empty: 2,
       'on-track': 1,
     },
@@ -414,7 +442,7 @@ function verifyProjectDashboardViewFilters() {
   );
   assert.deepEqual(
     filterProjectsByDashboardView(projects, 'watch', now).map((project) => project.id),
-    ['soon', 'stale', 'poor-evidence'],
+    ['soon', 'stale', 'poor-evidence', 'partial-evidence'],
   );
   assert.deepEqual(
     filterProjectsByDashboardView(projects, 'empty', now).map((project) => project.id),
@@ -426,7 +454,7 @@ function verifyProjectDashboardViewFilters() {
   );
   assert.deepEqual(
     filterProjectsByDashboardView(projects, 'all', now).map((project) => project.id),
-    ['steady', 'soon', 'blocked', 'empty', 'stale', 'unscheduled', 'poor-evidence'],
+    ['steady', 'soon', 'blocked', 'empty', 'stale', 'unscheduled', 'poor-evidence', 'partial-evidence'],
   );
 }
 
@@ -510,14 +538,29 @@ function verifyProjectTaskRiskSummary() {
   );
 
   assert.equal(risk.label, '高风险');
-  assert.equal(risk.score, 86);
+  assert.equal(risk.score, 78);
   assert.deepEqual(risk.drivers, [
     '任务阻塞',
     '过期 2 天',
-    '缺 Jira / 平台来源',
     '1 个平台阻塞',
     'GA 里程碑临近',
   ]);
+
+  const sourceSummary = buildProjectTaskSourceSummary({
+    id: 'platform-source',
+    type: 'task',
+    title: 'Platform source only',
+    status: 'progress',
+    platforms: {
+      qa: { status: 'blocked', assignee: 'Dana' },
+      sdk: { jira: 'SDK-42' },
+    },
+  } as any);
+
+  assert.equal(sourceSummary.hasSource, true);
+  assert.deepEqual(sourceSummary.jiraKeys, ['SDK-42']);
+  assert.deepEqual(sourceSummary.platformSourceLabels, ['QA blocked · Dana', 'SDK Jira SDK-42']);
+  assert.deepEqual(sourceSummary.sourceLabels, ['QA blocked · Dana', 'SDK Jira SDK-42']);
 }
 
 function verifyProjectDataQualitySummary() {
@@ -539,6 +582,28 @@ function verifyProjectDataQualitySummary() {
 
   assert.equal(complete.state, 'complete');
   assert.equal(complete.overallCoverage, 100);
+
+  const platformComplete = buildProjectDataQualitySummary({
+    id: 'platform-quality',
+    name: 'Platform Quality',
+    milestones: [],
+    tasks: [
+      {
+        id: 'task-1',
+        type: 'task',
+        title: 'Platform sourced task',
+        status: 'progress',
+        eta: '2026-05-10',
+        platforms: {
+          qa: { status: 'blocked', assignee: 'Dana' },
+        },
+      },
+    ],
+  } as any);
+
+  assert.equal(platformComplete.state, 'complete');
+  assert.equal(platformComplete.missingSourceTasks, 0);
+  assert.equal(platformComplete.sourceCoverage, 100);
 
   const partial = buildProjectDataQualitySummary({
     id: 'partial-quality',
@@ -598,6 +663,139 @@ function verifyProjectDataQualitySummary() {
 
   assert.match(draft, /证据覆盖：证据不足 - 证据覆盖 0%：1 个缺 ETA，1 个缺来源/);
   assert.match(draft, /\[证据不足\] 0% 覆盖：1 个缺 ETA，1 个缺来源/);
+}
+
+function verifyProjectEvidenceGapSummary() {
+  const summary = buildProjectEvidenceGapSummary(
+    [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        milestones: [{ id: 'ga', label: 'GA', date: '2026-05-04' }],
+        tasks: [
+          { id: 'missing-both', type: 'task', title: 'Missing both', status: 'progress' },
+          { id: 'missing-source', type: 'task', title: 'Missing source', status: 'testing', eta: '2026-05-03' },
+          { id: 'complete', type: 'task', title: 'Complete evidence', status: 'progress', eta: '2026-05-08', jira: [{ key: 'A-1', title: 'Complete evidence' }] },
+          { id: 'platform-source', type: 'task', title: 'Platform source', status: 'progress', eta: '2026-05-09', platforms: { qa: { status: 'pending', assignee: 'Dana' } } },
+        ],
+      },
+      {
+        id: 'beta',
+        name: 'Beta',
+        milestones: [],
+        tasks: [
+          { id: 'missing-eta', type: 'dep', title: 'Missing eta', status: 'blocked', jira: [{ key: 'B-1', title: 'Missing eta' }] },
+          { id: 'done-gap', type: 'task', title: 'Done without evidence', status: 'closed' },
+        ],
+      },
+    ] as any[],
+    { now: new Date('2026-04-30T12:00:00+08:00'), maxItems: 2 },
+  );
+
+  assert.equal(summary.totalItems, 3);
+  assert.equal(summary.hiddenItems, 1);
+  assert.deepEqual(summary.counts, {
+    'missing-both': 1,
+    'missing-eta': 1,
+    'missing-source': 1,
+  });
+  assert.equal(summary.breakdownLabel, '1 个缺 ETA+来源，1 个缺 ETA，1 个缺来源');
+  assert.deepEqual(
+    summary.visibleItems.map((item) => `${item.projectId}:${item.taskId}:${item.gapType}:${item.label}`),
+    [
+      'alpha:missing-both:missing-both:缺 ETA 和来源',
+      'beta:missing-eta:missing-eta:缺 ETA',
+    ],
+  );
+  assert.deepEqual(
+    summary.visibleItems.map((item) => item.nextStep),
+    ['补 ETA 后关联 Jira 或平台状态', '补上可复核 ETA'],
+  );
+}
+
+function verifyProjectDashboardDecisionBrief() {
+  const now = new Date('2026-04-30T12:00:00+08:00');
+  const brief = buildProjectDashboardDecisionBrief(
+    [
+      {
+        id: 'blocked',
+        name: 'Blocked Brief Project',
+        lastStatusReviewAt: '2026-04-29T08:00:00+08:00',
+        milestones: [{ id: 'ga', label: 'GA', date: '2026-05-04' }],
+        tasks: [
+          {
+            id: 'blocked-task',
+            type: 'task',
+            title: 'Resolve release blocker',
+            status: 'blocked',
+            eta: '2026-05-01',
+          },
+        ],
+      },
+      {
+        id: 'gap',
+        name: 'Evidence Gap Brief Project',
+        lastStatusReviewAt: '2026-04-29T08:00:00+08:00',
+        milestones: [{ id: 'ga', label: 'GA', date: '2026-06-01' }],
+        tasks: [{ id: 'gap-task', type: 'task', title: 'Add status source', status: 'progress' }],
+      },
+    ] as any[],
+    { now },
+  );
+
+  assert.equal(brief.tone, 'critical');
+  assert.equal(brief.label, '先处理阻塞');
+  assert.equal(brief.primaryAction.type, 'open-task');
+  assert.match(brief.headline, /Blocked Brief Project · Resolve release blocker/);
+  assert.equal(brief.supportingSignals.some((signal) => signal.includes('阻塞/过期/临期任务')), true);
+
+  const evidenceBrief = buildProjectDashboardDecisionBrief(
+    [
+      {
+        id: 'gap-only',
+        name: 'Evidence Only Project',
+        lastStatusReviewAt: '2026-04-29T08:00:00+08:00',
+        milestones: [{ id: 'ga', label: 'GA', date: '2026-06-01' }],
+        tasks: [{ id: 'gap-task', type: 'task', title: 'Add ETA and source', status: 'progress' }],
+      },
+    ] as any[],
+    { now },
+  );
+
+  assert.equal(evidenceBrief.label, '先补齐证据');
+  assert.equal(evidenceBrief.primaryAction.type, 'open-task');
+  assert.match(evidenceBrief.detail, /缺 ETA 和来源/);
+  assert.equal(evidenceBrief.supportingSignals.some((signal) => signal.includes('1 个缺 ETA+来源')), true);
+
+  const reviewBrief = buildProjectDashboardDecisionBrief(
+    [
+      {
+        id: 'review',
+        name: 'Review Brief Project',
+        lastStatusReviewAt: '2026-04-01T08:00:00+08:00',
+        milestones: [{ id: 'ga', label: 'GA', date: '2026-06-01' }],
+        tasks: [
+          {
+            id: 'ready',
+            type: 'task',
+            title: 'Ready work',
+            status: 'progress',
+            eta: '2026-06-01',
+            jira: [{ key: 'RB-1', title: 'Ready work' }],
+          },
+        ],
+      },
+    ] as any[],
+    { now },
+  );
+
+  assert.equal(reviewBrief.label, '先复核状态');
+  assert.equal(reviewBrief.primaryAction.type, 'review-project');
+  assert.match(reviewBrief.headline, /Review Brief Project/);
+
+  const emptyBrief = buildProjectDashboardDecisionBrief([], { now });
+  assert.equal(emptyBrief.label, '先建立工作台');
+  assert.equal(emptyBrief.primaryAction.type, 'create-project');
 }
 
 function verifyProjectFreshnessSummary() {
@@ -868,6 +1066,8 @@ async function main() {
   verifyProjectDecisionSummary();
   verifyProjectTaskRiskSummary();
   verifyProjectDataQualitySummary();
+  verifyProjectEvidenceGapSummary();
+  verifyProjectDashboardDecisionBrief();
   verifyProjectFreshnessSummary();
   verifyProjectReviewSummary();
   verifyProjectReviewQueueSummary();

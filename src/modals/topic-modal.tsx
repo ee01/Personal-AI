@@ -120,6 +120,9 @@ const isShortScopeValue = (value?: string): boolean => {
   const normalized = normalizeOptionalRuleText(value);
   if (!normalized) return false;
   const compact = normalized.replace(/[\s_-]+/g, '');
+  if (/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(compact)) {
+    return compact.length === 1;
+  }
   return compact.length > 0 && compact.length <= 2;
 };
 

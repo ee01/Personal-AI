@@ -142,6 +142,10 @@
     <div v-if="!isLoading && entities.length > 0" class="entities-section-header">
       <h3>{{ getSectionTitle() }}</h3>
     </div>
+
+    <div v-if="feedbackError" class="feedback-error">
+      {{ feedbackError }}
+    </div>
     
     <div v-if="isLoading" class="loading-container">
       <div class="loading-spinner"></div>
@@ -223,6 +227,52 @@
               </span>
             </div>
           </div>
+
+          <div
+            v-if="canSubmitResultFeedback(entity)"
+            class="result-feedback"
+            @click.stop
+          >
+            <span
+              v-if="getFeedbackLabel(entity)"
+              class="feedback-status"
+            >
+              {{ getFeedbackLabel(entity) }}
+            </span>
+            <button
+              type="button"
+              :class="[
+                'feedback-btn',
+                { active: isFeedbackActive(entity, 'positive') },
+              ]"
+              :aria-pressed="isFeedbackActive(entity, 'positive')"
+              :disabled="isFeedbackPending(entity)"
+              @click.stop="submitResultFeedback(entity, 'positive')"
+            >
+              有用
+            </button>
+            <button
+              type="button"
+              :class="[
+                'feedback-btn',
+                { active: isFeedbackActive(entity, 'negative') },
+              ]"
+              :aria-pressed="isFeedbackActive(entity, 'negative')"
+              :disabled="isFeedbackPending(entity)"
+              @click.stop="submitResultFeedback(entity, 'negative')"
+            >
+              不相关
+            </button>
+            <button
+              v-if="canClearFeedback(entity)"
+              type="button"
+              class="feedback-btn clear-feedback-btn"
+              :disabled="isFeedbackPending(entity)"
+              @click.stop="submitResultFeedback(entity, 'clear')"
+            >
+              撤销
+            </button>
+          </div>
           
           <div class="result-actions">
             <button
@@ -249,7 +299,7 @@
         </div>
       </div>
     </div>
-    
+
     <div v-else class="empty-search-state">
       <span>🔍</span>
       <p>没有找到相关结果</p>
@@ -271,7 +321,15 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useMemoryStore, ENTITY_TYPE_CONFIG } from '../memory-store';
+import {
+  chromeAPI,
+  useMemoryStore,
+  ENTITY_TYPE_CONFIG,
+} from '../memory-store';
+import type {
+  MemoryFeedbackAction,
+  MemoryFeedbackTargetType,
+} from '../../services/MemoryServiceClient';
 import {
   MEMORY_RESULT_TYPE_CONFIG,
   getRecallChannelLabel,
@@ -295,6 +353,15 @@ const isLoading = computed(() => store.isLoading);
 const searchContext = computed(() => store.searchContext);
 const selectedTypeFilter = ref('all');
 const isAiAnswerExpanded = ref(true);
+const feedbackError = ref('');
+
+type SearchFeedbackChoice = Extract<
+  MemoryFeedbackAction,
+  'positive' | 'negative'
+>;
+type SearchFeedbackState = SearchFeedbackChoice | 'pending' | 'cleared';
+
+const feedbackByResultKey = ref<Record<string, SearchFeedbackState>>({});
 
 const renderedAnswer = computed(() => {
   const ans = searchContext.value.askResult?.answer;
@@ -404,6 +471,12 @@ watch(
   { immediate: true },
 );
 
+watch(
+  entities,
+  (results) => hydrateFeedbackStateFromResults(results),
+  { immediate: true },
+);
+
 // 根据类型过滤的结果
 const filteredResults = computed(() => {
   if (selectedTypeFilter.value === 'all') {
@@ -411,6 +484,153 @@ const filteredResults = computed(() => {
   }
   return entities.value.filter(entity => entity.type === selectedTypeFilter.value);
 });
+
+function getFeedbackKey(entity: any): string {
+  return getSearchResultKey(entity);
+}
+
+function getFeedbackTargetType(
+  entity: any,
+): MemoryFeedbackTargetType | undefined {
+  const recallType = entity?.recallType;
+  if (
+    recallType === 'message' ||
+    recallType === 'chunk' ||
+    recallType === 'entity'
+  ) {
+    return recallType;
+  }
+
+  if (
+    entity?.type === 'message' ||
+    entity?.type === 'chunk' ||
+    entity?.type === 'entity'
+  ) {
+    return entity.type;
+  }
+
+  if (entity?.type && ENTITY_TYPE_CONFIG[entity.type]) return 'entity';
+  return undefined;
+}
+
+function getInitialFeedbackAction(entity: any): SearchFeedbackChoice | undefined {
+  const value = entity?.feedbackAction || entity?.recallFeedback;
+  return value === 'positive' || value === 'negative' ? value : undefined;
+}
+
+function canSubmitResultFeedback(entity: any): boolean {
+  return Boolean(entity?.id && getFeedbackTargetType(entity));
+}
+
+function setFeedbackState(
+  entity: any,
+  state: SearchFeedbackState | undefined,
+) {
+  const key = getFeedbackKey(entity);
+  const next = { ...feedbackByResultKey.value };
+  if (state) {
+    next[key] = state;
+  } else {
+    delete next[key];
+  }
+  feedbackByResultKey.value = next;
+}
+
+function hydrateFeedbackStateFromResults(results: any[]) {
+  const next = { ...feedbackByResultKey.value };
+  const visibleKeys = new Set(results.map(getFeedbackKey));
+
+  for (const key of Object.keys(next)) {
+    if (!visibleKeys.has(key) || next[key] === 'cleared') {
+      delete next[key];
+    }
+  }
+
+  for (const entity of results) {
+    const key = getFeedbackKey(entity);
+    const feedbackAction = getInitialFeedbackAction(entity);
+    if (feedbackAction) {
+      next[key] = feedbackAction;
+    } else if (next[key] !== 'pending') {
+      delete next[key];
+    }
+  }
+
+  feedbackByResultKey.value = next;
+}
+
+function getFeedbackLabel(entity: any): string {
+  const state = feedbackByResultKey.value[getFeedbackKey(entity)];
+  if (state === 'pending') return '提交中...';
+  if (state === 'positive') return '已记录为有用';
+  if (state === 'negative') return '已记录为不相关';
+  if (state === 'cleared') return '已撤销反馈';
+  return '';
+}
+
+function isFeedbackPending(entity: any): boolean {
+  return feedbackByResultKey.value[getFeedbackKey(entity)] === 'pending';
+}
+
+function isFeedbackActive(
+  entity: any,
+  action: SearchFeedbackChoice,
+): boolean {
+  return feedbackByResultKey.value[getFeedbackKey(entity)] === action;
+}
+
+function canClearFeedback(entity: any): boolean {
+  const state = feedbackByResultKey.value[getFeedbackKey(entity)];
+  return state === 'positive' || state === 'negative';
+}
+
+async function submitResultFeedback(
+  entity: any,
+  action: MemoryFeedbackAction,
+) {
+  const targetType = getFeedbackTargetType(entity);
+  const targetId = String(entity?.id || '').trim();
+  if (!targetType || !targetId) return;
+
+  const previousState = feedbackByResultKey.value[getFeedbackKey(entity)];
+  if (
+    action === 'clear' &&
+    previousState !== 'positive' &&
+    previousState !== 'negative'
+  ) {
+    return;
+  }
+  if (previousState === 'pending' || previousState === action) return;
+
+  setFeedbackState(entity, 'pending');
+  try {
+    const response = (await chromeAPI.sendMessage({
+      type: 'SUBMIT_MEMORY_FEEDBACK',
+      feedbackType: 'recall_quality',
+      targetId,
+      targetType,
+      action,
+    })) as any;
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'feedback_request_failed');
+    }
+
+    feedbackError.value = '';
+    setFeedbackState(entity, action === 'clear' ? 'cleared' : action);
+  } catch (error: any) {
+    setFeedbackState(
+      entity,
+      previousState === 'positive' ||
+        previousState === 'negative' ||
+        previousState === 'cleared'
+        ? previousState
+        : undefined,
+    );
+    feedbackError.value =
+      error?.message || '反馈暂时无法提交，请稍后再试。';
+  }
+}
 
 const getEntityIcon = (type: string) => {
   return ENTITY_TYPE_CONFIG[type]?.icon || MEMORY_RESULT_TYPE_CONFIG[type]?.icon || '📂';
@@ -1037,6 +1257,68 @@ const handleResultClick = (entity: any) => {
   justify-content: flex-end;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.result-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.feedback-status {
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  margin-right: 0.15rem;
+}
+
+.feedback-btn {
+  min-height: 2rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.62);
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: all 0.2s ease;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.42);
+  color: #dbeafe;
+}
+
+.feedback-btn.active {
+  border-color: rgba(34, 197, 94, 0.46);
+  background: rgba(22, 163, 74, 0.18);
+  color: #bbf7d0;
+}
+
+.feedback-btn:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.clear-feedback-btn {
+  color: #94a3b8;
+}
+
+.feedback-error {
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 0.5rem;
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  font-size: 0.875rem;
 }
 
 .action-btn {

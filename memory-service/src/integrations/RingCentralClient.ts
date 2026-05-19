@@ -16,6 +16,7 @@ export interface RingCentralPost {
   text: string;
   creatorId?: string;
   creatorName?: string;
+  mentionLabels?: Record<string, string>;
   createdAt?: string;
   raw?: Record<string, unknown>;
 }
@@ -26,6 +27,7 @@ export interface RingCentralChatSummary {
   name?: string;
   description?: string;
   members?: string[];
+  memberLabels?: Record<string, string>;
 }
 
 export interface RingCentralActorIdentity {
@@ -163,6 +165,7 @@ function allowedChatTypesForTargetType(targetType: string): Set<string> {
 }
 
 const TARGET_ALIAS_PATH = 'agent/ringcentral-target-aliases.json';
+const PERSON_MENTION_RE = /!\[:Person\]\(([^)]+)\)/g;
 
 function toDisplayString(...values: unknown[]): string {
   for (const value of values) {
@@ -171,6 +174,64 @@ function toDisplayString(...values: unknown[]): string {
     }
   }
   return '';
+}
+
+function extractPersonMentionIds(text: string): string[] {
+  const ids: string[] = [];
+  PERSON_MENTION_RE.lastIndex = 0;
+  for (const match of text.matchAll(PERSON_MENTION_RE)) {
+    const id = match[1]?.trim();
+    if (id) ids.push(id);
+  }
+  return Array.from(new Set(ids));
+}
+
+function pickMentionLabels(
+  personIds: string[],
+  labels: Record<string, string>,
+): Record<string, string> {
+  const picked: Record<string, string> = {};
+  for (const id of personIds) {
+    const label = labels[id];
+    if (label) {
+      picked[id] = label;
+    }
+  }
+  return picked;
+}
+
+function extractMemberLabel(member: Record<string, unknown>): string {
+  const contact = ensureObject(member.contact);
+  return toDisplayString(
+    `${toDisplayString(member.firstName, contact.firstName)} ${toDisplayString(member.lastName, contact.lastName)}`.trim(),
+    member.name,
+    member.displayName,
+    member.email,
+    contact.email,
+  );
+}
+
+function extractMemberIds(members: unknown): string[] | undefined {
+  if (!Array.isArray(members)) return undefined;
+  const ids = members
+    .map((member) => ensureObject(member))
+    .map((member) => toDisplayString(member.id))
+    .filter(Boolean);
+  return ids.length > 0 ? ids : undefined;
+}
+
+function buildMemberLabelMap(members: unknown): Record<string, string> | undefined {
+  if (!Array.isArray(members)) return undefined;
+  const labels: Record<string, string> = {};
+  for (const rawMember of members) {
+    const member = ensureObject(rawMember);
+    const id = toDisplayString(member.id);
+    const label = extractMemberLabel(member);
+    if (id && label) {
+      labels[id] = label;
+    }
+  }
+  return Object.keys(labels).length > 0 ? labels : undefined;
 }
 
 function buildScore(query: string, ...values: Array<string | undefined>): number {
@@ -767,24 +828,43 @@ export class RingCentralClient {
       );
     }
     const records = Array.isArray(result.body.records) ? result.body.records : [];
-    const posts = await Promise.all(
-      records
-        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-        .map(async (item) => {
-          const creator = ensureObject(item.creator);
-          const creatorId = toDisplayString(creator.id, item.creatorId) || undefined;
-          return {
-            id: typeof item.id === 'string' ? item.id : '',
-            chatId,
-            text: typeof item.text === 'string' ? item.text : '',
-            creatorId,
-            creatorName: await this.resolvePostCreatorLabel(creator, creatorId),
-            createdAt: typeof item.creationTime === 'string' ? item.creationTime : undefined,
-            raw: item,
-          };
-        }),
+    const posts = (
+      await Promise.all(
+        records
+          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+          .map(async (item) => {
+            const creator = ensureObject(item.creator);
+            const creatorId = toDisplayString(creator.id, item.creatorId) || undefined;
+            return {
+              id: typeof item.id === 'string' ? item.id : '',
+              chatId,
+              text: typeof item.text === 'string' ? item.text : '',
+              creatorId,
+              creatorName: await this.resolvePostCreatorLabel(creator, creatorId),
+              createdAt: typeof item.creationTime === 'string' ? item.creationTime : undefined,
+              raw: item,
+            };
+          }),
+      )
+    ).filter((item) => item.id.length > 0);
+
+    const mentionLabels = await this.resolvePostMentionLabels(
+      chatId,
+      posts.map((post) => post.text),
     );
-    return posts.filter((item) => item.id.length > 0);
+    if (Object.keys(mentionLabels).length === 0) {
+      return posts;
+    }
+
+    return posts.map((post) => {
+      const postMentionLabels = pickMentionLabels(
+        extractPersonMentionIds(post.text),
+        mentionLabels,
+      );
+      return Object.keys(postMentionLabels).length > 0
+        ? { ...post, mentionLabels: postMentionLabels }
+        : post;
+    });
   }
 
   async getCurrentActorIdentity(): Promise<RingCentralActorIdentity> {
@@ -833,6 +913,160 @@ export class RingCentralClient {
     };
   }
 
+  async resolvePersonMentionLabels(
+    personIds: string[],
+    chatId?: string,
+  ): Promise<Record<string, string>> {
+    const labels: Record<string, string> = {};
+    const uniqueIds = Array.from(
+      new Set(personIds.map((id) => id.trim()).filter(Boolean)),
+    );
+    await Promise.all(
+      uniqueIds.map(async (id) => {
+        const directoryLabel = this.getDirectoryUserDisplayName(id);
+        if (directoryLabel) {
+          labels[id] = directoryLabel;
+          return;
+        }
+        if (!this.isConfigured()) {
+          return;
+        }
+        const person = await this.getPersonById(id).catch(() => null);
+        if (person) {
+          const resolvedLabel = this.formatPersonLabel(person);
+          if (!resolvedLabel) return;
+          labels[id] = resolvedLabel;
+          this.upsertDirectoryPerson(person, id);
+        }
+      }),
+    );
+    const unresolvedIds = uniqueIds.filter((id) => !labels[id]);
+    if (chatId && unresolvedIds.length > 0) {
+      Object.assign(
+        labels,
+        await this.resolveChatMemberMentionLabels(chatId, unresolvedIds),
+      );
+    }
+    return labels;
+  }
+
+  private async resolvePostMentionLabels(
+    chatId: string,
+    postTexts: string[],
+  ): Promise<Record<string, string>> {
+    const ids = Array.from(
+      new Set(postTexts.flatMap((text) => extractPersonMentionIds(text))),
+    );
+    if (ids.length === 0) {
+      return {};
+    }
+    return this.resolvePersonMentionLabels(ids, chatId);
+  }
+
+  private async resolveChatMemberMentionLabels(
+    chatId: string,
+    personIds: string[],
+  ): Promise<Record<string, string>> {
+    const chat = await this.getChatById(chatId).catch(() => null);
+    if (!chat) return {};
+    this.upsertChatMemberLabels(chatId, chat.memberLabels);
+    const labels: Record<string, string> = {};
+    const memberIds = new Set(chat.members ?? []);
+
+    for (const id of personIds) {
+      const memberLabel = chat.memberLabels?.[id];
+      if (memberLabel) {
+        labels[id] = memberLabel;
+        continue;
+      }
+      if (!memberIds.has(id)) {
+        continue;
+      }
+      const person = await this.getPersonById(id).catch(() => null);
+      if (person) {
+        const resolvedLabel = this.formatPersonLabel(person);
+        if (!resolvedLabel) continue;
+        labels[id] = resolvedLabel;
+        this.upsertDirectoryPerson(person, id);
+      }
+    }
+
+    return labels;
+  }
+
+  private upsertChatMemberLabels(
+    chatId: string,
+    memberLabels?: Record<string, string>,
+  ): void {
+    if (!memberLabels) return;
+    const missingMemberLabels = Object.entries(memberLabels).filter(
+      ([entityId, displayName]) =>
+        entityId && displayName && !this.getDirectoryUserDisplayName(entityId),
+    );
+    this.upsertDirectoryUserLabels(
+      missingMemberLabels.map(([entityId, displayName]) => ({
+        entityId,
+        displayName,
+        raw: {
+          source: 'chat_member',
+          chatId,
+        },
+      })),
+    );
+  }
+
+  private upsertDirectoryPerson(
+    person: Record<string, unknown>,
+    fallbackId: string,
+  ): void {
+    const entityId = toDisplayString(person.id, fallbackId);
+    const displayName = this.formatPersonLabel(person);
+    if (!entityId || !displayName) return;
+    this.upsertDirectoryUserLabels([
+      {
+        entityId,
+        displayName,
+        email: toDisplayString(person.email),
+        extensionNumber: toDisplayString(person.extensionNumber),
+        raw: {
+          source: 'person_lookup',
+          person,
+        },
+      },
+    ]);
+  }
+
+  private upsertDirectoryUserLabels(
+    users: Array<{
+      entityId: string;
+      displayName: string;
+      email?: string;
+      extensionNumber?: string;
+      raw?: Record<string, unknown>;
+    }>,
+  ): void {
+    if (!this.directoryRepo || users.length === 0) return;
+    const currentTime = now();
+    this.directoryRepo.upsertUsers(
+      users
+        .filter((user) => user.entityId && user.displayName)
+        .map((user) => ({
+          entityId: user.entityId,
+          displayName: user.displayName,
+          email: user.email || undefined,
+          extensionNumber: user.extensionNumber || undefined,
+          searchText: [
+            user.displayName,
+            user.email ?? '',
+            user.extensionNumber ?? '',
+            user.entityId,
+          ].join(' '),
+          raw: user.raw,
+          updatedAt: currentTime,
+        })),
+    );
+  }
+
   private getDirectoryUserDisplayName(entityId?: string): string {
     if (!entityId || !this.directoryRepo) {
       return '';
@@ -866,14 +1100,16 @@ export class RingCentralClient {
     }
 
     const person = await this.getPersonById(creatorId).catch(() => null);
-    const resolvedLabel = person
-      ? toDisplayString(
-          `${toDisplayString(person.firstName)} ${toDisplayString(person.lastName)}`.trim(),
-          toDisplayString(person.name),
-          toDisplayString(person.email),
-        )
-      : '';
+    const resolvedLabel = person ? this.formatPersonLabel(person) : '';
     return resolvedLabel || creatorId;
+  }
+
+  private formatPersonLabel(person: Record<string, unknown>): string {
+    return toDisplayString(
+      `${toDisplayString(person.firstName)} ${toDisplayString(person.lastName)}`.trim(),
+      toDisplayString(person.name),
+      toDisplayString(person.email),
+    );
   }
 
   private async resolveChatIdForSend(input: SendRingCentralMessageInput): Promise<string> {
@@ -1461,12 +1697,8 @@ export class RingCentralClient {
           type: typeof item.type === 'string' ? item.type : '',
           name: typeof item.name === 'string' ? item.name : undefined,
           description: typeof item.description === 'string' ? item.description : undefined,
-          members: Array.isArray(item.members)
-            ? item.members
-                .map((member) => ensureObject(member))
-                .map((member) => (typeof member.id === 'string' ? member.id : ''))
-                .filter(Boolean)
-            : undefined,
+          members: extractMemberIds(item.members),
+          memberLabels: buildMemberLabelMap(item.members),
         }))
         .filter((item) => item.id.length > 0),
       nextPageToken:
@@ -1576,12 +1808,8 @@ export class RingCentralClient {
         type: typeof body.type === 'string' ? body.type : '',
         name: typeof body.name === 'string' ? body.name : undefined,
         description: typeof body.description === 'string' ? body.description : undefined,
-        members: Array.isArray(body.members)
-          ? body.members
-              .map((member) => ensureObject(member))
-              .map((member) => (typeof member.id === 'string' ? member.id : ''))
-              .filter(Boolean)
-          : undefined,
+        members: extractMemberIds(body.members),
+        memberLabels: buildMemberLabelMap(body.members),
       };
       RingCentralClient.chatDetailCache.set(cacheKey, {
         value: chat,

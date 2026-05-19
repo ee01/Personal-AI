@@ -1,11 +1,15 @@
 import type { ScheduledMessage } from './types';
 import {
   formatLocalScheduleDate,
+  formatLocalScheduleDateTime,
   hasLocalScheduleTime,
   normalizeLocalScheduleTime,
+  parseLocalScheduleTime,
 } from './scheduleDateTime.js';
 import {
   calculateScheduledMessageNextExecution,
+  getDefaultScheduleTime,
+  getDefaultScheduleTimeLabel,
   isExecutorDrivenSchedule,
 } from './scheduleNextExecution.js';
 
@@ -22,6 +26,14 @@ export interface ScheduleHealthIssue {
   isExecutorDriven: boolean;
   summary: string;
   action: string;
+}
+
+export interface ScheduleHealthRecoverySuggestion {
+  dateStr: string;
+  timeStr: string;
+  label: string;
+  clearsScheduleTime: boolean;
+  reason: string;
 }
 
 type ScheduleHealthMessage = Pick<
@@ -77,6 +89,17 @@ function parseScheduleDateTime(value: string): Date | null {
   return date;
 }
 
+function hasMissedMinuteWindow(scheduledAt: Date, now: Date, allowedLagMinutes: number): boolean {
+  const lastAllowedMinute = new Date(scheduledAt);
+  lastAllowedMinute.setSeconds(0, 0);
+  lastAllowedMinute.setMinutes(lastAllowedMinute.getMinutes() + allowedLagMinutes);
+
+  const currentMinute = new Date(now);
+  currentMinute.setSeconds(0, 0);
+
+  return currentMinute.getTime() > lastAllowedMinute.getTime();
+}
+
 function isTerminalExecutionForDate(
   message: Pick<ScheduledMessage, 'Last_Exec' | 'Exec_Log'>,
   executionDate: string,
@@ -105,6 +128,39 @@ function getMissedExecutionAction(message: ScheduleHealthMessage, isExecutorDriv
   return isExecutorDriven
     ? '改成未来明确时间，或清空时间进入 08:00 后队列。'
     : '改成未来时间后才会发送。';
+}
+
+function getNextCandidateMinute(now: Date): Date {
+  const date = new Date(now);
+  date.setSeconds(0, 0);
+  if (date.getTime() <= now.getTime()) {
+    date.setMinutes(date.getMinutes() + 1);
+  }
+  return date;
+}
+
+function buildExplicitRecoverySuggestion(now: Date, reason: string): ScheduleHealthRecoverySuggestion {
+  const { dateStr, timeStr } = formatLocalScheduleDateTime(getNextCandidateMinute(now));
+  return {
+    dateStr,
+    timeStr,
+    label: `${dateStr} ${timeStr}`,
+    clearsScheduleTime: false,
+    reason,
+  };
+}
+
+function getNextDefaultScheduleDate(
+  message: ScheduleHealthMessage,
+  now: Date,
+): string {
+  const { hours, minutes } = parseLocalScheduleTime(getDefaultScheduleTime(message));
+  const nextDefault = new Date(now);
+  nextDefault.setHours(hours, minutes, 0, 0);
+  if (nextDefault.getTime() <= now.getTime()) {
+    nextDefault.setDate(nextDefault.getDate() + 1);
+  }
+  return formatLocalScheduleDate(nextDefault);
 }
 
 export function getScheduleHealthIssue(
@@ -180,8 +236,7 @@ export function getScheduleHealthIssue(
   const allowedLagMinutes = isExecutorDriven
     ? EXECUTOR_COMPENSATION_WINDOW_MINUTES
     : APPS_SCRIPT_GRACE_WINDOW_MINUTES;
-  const missedAfterMs = nextDate.getTime() + allowedLagMinutes * 60 * 1000;
-  if (missedAfterMs >= now.getTime()) {
+  if (!hasMissedMinuteWindow(nextDate, now, allowedLagMinutes)) {
     return null;
   }
 
@@ -205,6 +260,50 @@ export function getScheduleHealthIssues(
   return messages
     .map(message => getScheduleHealthIssue(message, now))
     .filter((issue): issue is ScheduleHealthIssue => Boolean(issue));
+}
+
+export function getScheduleHealthRecoverySuggestion(
+  message: ScheduleHealthMessage,
+  now = new Date(),
+): ScheduleHealthRecoverySuggestion | null {
+  const issue = getScheduleHealthIssue(message, now);
+  if (!issue) {
+    return null;
+  }
+
+  if (issue.code === 'invalid_time' || hasExplicitScheduleTime(message)) {
+    return buildExplicitRecoverySuggestion(
+      now,
+      issue.code === 'invalid_time'
+        ? '把异常时间改成下一分钟的明确本地时间。'
+        : '把已错过的明确时间改成下一分钟，恢复到可执行窗口内。',
+    );
+  }
+
+  const isExecutorDriven = isExecutorDrivenSchedule({
+    Push_Method: message.Push_Method,
+    AI_Endpoint: message.AI_Endpoint,
+  });
+
+  if (isExecutorDriven) {
+    const dateStr = formatLocalScheduleDate(now);
+    return {
+      dateStr,
+      timeStr: '',
+      label: `${dateStr} ${getDefaultScheduleTimeLabel(message)}`,
+      clearsScheduleTime: true,
+      reason: '改到今天的执行器默认队列，下一轮 Jira Automation 轮询会继续处理。',
+    };
+  }
+
+  const dateStr = getNextDefaultScheduleDate(message, now);
+  return {
+    dateStr,
+    timeStr: '',
+    label: `${dateStr} ${getDefaultScheduleTimeLabel(message)}`,
+    clearsScheduleTime: true,
+    reason: '保留默认发送时间，并把执行日期移到下一个仍可发送的日期。',
+  };
 }
 
 export function formatScheduleHealthIssue(issue: ScheduleHealthIssue): string {

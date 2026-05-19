@@ -287,11 +287,26 @@
           >
         </div>
         <p v-if="currentEvidenceSnapshot().summary" class="summary-text">
-          {{ currentEvidenceSnapshot().summary }}
+          <RichEvidenceText
+            :text="currentEvidenceSnapshot().summary"
+            :mention-labels="currentMentionLabels()"
+          />
         </p>
         <div v-if="currentEvidenceSnapshot().relatedMessage" class="reply-box">
-          <div class="box-title">对应消息</div>
-          <p>{{ currentEvidenceSnapshot().relatedMessage }}</p>
+          <div class="inline-head">
+            <span class="box-title">对应消息</span>
+            <span
+              v-if="currentEvidenceSnapshot().relatedMessageSpeaker"
+              class="muted small"
+              >{{ currentEvidenceSnapshot().relatedMessageSpeaker }}</span
+            >
+          </div>
+          <p>
+            <RichEvidenceText
+              :text="currentEvidenceSnapshot().relatedMessage"
+              :mention-labels="currentMentionLabels()"
+            />
+          </p>
           <div
             v-if="currentEvidenceSnapshot().relatedMessageId"
             class="muted small"
@@ -316,7 +331,12 @@
               <span>{{ item.title || item.sourceKind }}</span>
               <span class="muted small">{{ item.sourceId || 'no-id' }}</span>
             </div>
-            <p class="summary-text">{{ item.content }}</p>
+            <p class="summary-text">
+              <RichEvidenceText
+                :text="item.content"
+                :mention-labels="currentMentionLabels()"
+              />
+            </p>
             <pre
               v-if="item.metadata && Object.keys(item.metadata).length > 0"
               class="json-block"
@@ -335,7 +355,12 @@
               replyClassificationLabel(detail.replyClassification)
             }}</span>
           </div>
-          <p>{{ detail.replyRawText }}</p>
+          <p>
+            <RichEvidenceText
+              :text="detail.replyRawText"
+              :mention-labels="currentMentionLabels()"
+            />
+          </p>
           <div v-if="replySenderIsInferred(detail)" class="muted small">
             当前未拿到原始 reply sender，先按目标对象回退展示。
           </div>
@@ -435,6 +460,10 @@ import {
   getLatestReplyEvent,
   getOutreachEvidenceSnapshot,
 } from './outreachEvidence';
+import {
+  collectEvidenceMentionLabels,
+  RichEvidenceText,
+} from './evidenceText';
 
 const client = getMemoryServiceClient();
 const route = useRoute();
@@ -958,7 +987,12 @@ function currentEvidenceSnapshot() {
         summary: '',
         relatedMessage: '',
         relatedMessageId: '',
+        relatedMessageSpeaker: '',
       };
+}
+
+function currentMentionLabels() {
+  return collectEvidenceMentionLabels(detail.value);
 }
 
 function replySenderDisplay(session: OutreachSession) {
@@ -1341,6 +1375,17 @@ function followUpActionStatusLabel(action: RuntimeAction) {
   color: #f8fafc;
   font-size: 1rem;
   font-weight: 600;
+}
+
+:deep(.rich-evidence-text) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+:deep(.rich-evidence-link) {
+  color: #7dd3fc;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
 }
 
 .summary-highlight-panel {

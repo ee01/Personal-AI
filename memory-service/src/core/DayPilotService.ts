@@ -247,6 +247,16 @@ const HEARTBEAT_FACT_NOTIFICATION_PATTERN =
   /was revisited by heartbeat|事实跟进:|recent evidence item\(s\)|newest signal pointing to|事实变化/i;
 const ACTIONABLE_RELATIONSHIP_PATTERN =
   /follow[-\s]?up|open loop|reply|respond|unanswered|pending|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|commitment|promise|owed|going cold|touch base|check in|跟进|待回复|未回复|回复|承诺|答应|欠|未关闭|待确认|确认.{0,12}(owner|负责人|时间|下一步)|阻塞|风险|变冷|冷却|久未|重新联系|会前|准备/i;
+const ACTIONABLE_FOLLOWUP_PATTERN =
+  /follow[-\s]?up|todo|action item|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|pending|unanswered|reply|respond|needs? to|should|confirm|investigate|fix|retry|failing?|跟进|待回复|未回复|回复|承诺|待确认|确认|需要|阻塞|风险|负责人|下一步|审批|排查|修复|上传|准备/i;
+const STRUCTURED_ACTIONABLE_SOURCE_KINDS = new Set([
+  'action',
+  'calendar',
+  'notification',
+  'reflection',
+  'skill',
+  'relationship',
+]);
 const ACTIONABLE_NOTIFICATION_TYPES = new Set([
   'truth_conflict',
   'deadline',
@@ -254,6 +264,7 @@ const ACTIONABLE_NOTIFICATION_TYPES = new Set([
   'approval_required',
   'decision_required',
 ]);
+const DEFAULT_LATER_SNOOZE_SECONDS = 6 * 3600;
 
 function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -511,15 +522,37 @@ export class DayPilotService {
   ): DayPilotTodayResponse {
     const card = this.repo.findCardById(cardId);
     const brief = this.repo.findBriefForCard(cardId);
-    if (!brief) {
+    if (!card || !brief || brief.userId !== this.userId) {
       throw new Error('Day Pilot card not found');
     }
-    this.repo.insertFeedback(brief.id, card, payload);
+    this.repo.insertFeedback(
+      brief.id,
+      card,
+      this.normalizeFeedbackInput(payload),
+    );
     const reloaded = this.repo.getBriefById(brief.id);
     if (!reloaded) {
       throw new Error('Day Pilot brief not found after feedback');
     }
     return { brief: reloaded, generated: false, stale: false };
+  }
+
+  private normalizeFeedbackInput(
+    payload: DayPilotFeedbackInput,
+  ): DayPilotFeedbackInput {
+    if (payload.action !== 'later') return payload;
+    const currentTime = now();
+    if (
+      payload.snoozeUntil &&
+      Number.isFinite(payload.snoozeUntil) &&
+      payload.snoozeUntil > currentTime
+    ) {
+      return payload;
+    }
+    return {
+      ...payload,
+      snoozeUntil: currentTime + DEFAULT_LATER_SNOOZE_SECONDS,
+    };
   }
 
   renderMissionContextPack(
@@ -534,6 +567,10 @@ export class DayPilotService {
     const providerProfile = PROVIDER_PROFILES[targetProvider];
     const mission = this.repo.findMissionById(missionId);
     if (!mission) {
+      throw new Error('Day Pilot mission not found');
+    }
+    const brief = this.repo.getBriefById(mission.briefId);
+    if (!brief || brief.userId !== this.userId) {
       throw new Error('Day Pilot mission not found');
     }
     const card = this.repo.findCardByMissionId(missionId);
@@ -2160,7 +2197,41 @@ export class DayPilotService {
       return '整理一版可复用的配置说明并回复相关人';
     if (/capacity|poster|上传/i.test(text))
       return '确认 owner 是否已经上传，必要时保留 follow-up';
+    if (cardType === 'ai_tool_shift') {
+      return '整理这条 AI 工具变化的影响，确认是否需要沉淀为团队说明或个人 skill';
+    }
+    if (cardType === 'project_risk') {
+      return '确认风险 owner、证据和下一步排查路径';
+    }
+    if (candidates.some((item) => item.sourceKind === 'action')) {
+      return '处理这条排队动作，确认执行状态、失败原因或下一步 owner';
+    }
+    if (candidates.some((item) => item.sourceKind === 'notification')) {
+      return '核对这条提醒的证据，确认今天是否仍需要处理';
+    }
+    if (candidates.some((item) => item.sourceKind === 'reflection')) {
+      return '复核反思线程里的待确认问题，决定今天是否继续推进';
+    }
+    if (!this.hasConcreteFollowupSignal(candidates)) return '';
     return '打开相关上下文，确认今天是否需要推进或暂缓';
+  }
+
+  private hasConcreteFollowupSignal(candidates: Candidate[]): boolean {
+    const text = candidates
+      .map(
+        (item) =>
+          `${item.title} ${item.snippet} ${item.openQuestions.join(' ')}`,
+      )
+      .join(' ');
+    return candidates.some(
+      (item) =>
+        Boolean(item.dueAt) ||
+        item.openQuestions.length > 0 ||
+        item.cardType !== 'thread_followup' ||
+        STRUCTURED_ACTIONABLE_SOURCE_KINDS.has(item.sourceKind),
+    )
+      ? true
+      : ACTIONABLE_FOLLOWUP_PATTERN.test(text) || hasOpenLoopSignal(text);
   }
 
   private nextActionDesc(cardType: DayPilotCardType): string {

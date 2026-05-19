@@ -6,7 +6,11 @@ import {
   buildBackendNotificationContextMessage,
   buildBackendNotificationId,
   buildBackendNotificationMessage,
+  DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS,
+  getBackendNotificationClosedDeliveryStatus,
   getBackendNotificationMetaStorageKey,
+  getBackendNotificationSecondaryActionDeliveryStatus,
+  getBackendNotificationSnoozeSeconds,
   getBackendTargetHash,
   inferLegacyLane,
   normalizeBackendNotificationMeta,
@@ -49,9 +53,21 @@ test('labels notification actions by lane', () => {
     { title: '查看待办' },
     { title: '忽略' },
   ]);
+  assert.deepEqual(buildBackendNotificationButtons('todo', 'notification'), [
+    { title: '查看待办' },
+    { title: '稍后提醒' },
+  ]);
+  assert.deepEqual(buildBackendNotificationButtons('todo', 'proposed_action'), [
+    { title: '查看待办' },
+    { title: '暂不提醒' },
+  ]);
   assert.deepEqual(buildBackendNotificationButtons('notice'), [
     { title: '查看通知' },
     { title: '忽略' },
+  ]);
+  assert.deepEqual(buildBackendNotificationButtons('notice', 'notification'), [
+    { title: '查看通知' },
+    { title: '不再提示' },
   ]);
 });
 
@@ -66,6 +82,68 @@ test('builds concise context labels with todo due time', () => {
   assert.equal(
     buildBackendNotificationContextMessage('notice', 'normal', 1_778_408_100),
     '通知 · 普通',
+  );
+});
+
+test('keeps todo snooze reminders before their due time', () => {
+  const now = 1_778_400_000;
+
+  assert.equal(
+    getBackendNotificationSnoozeSeconds({ lane: 'notice' }, now),
+    DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS,
+  );
+  assert.equal(
+    getBackendNotificationSnoozeSeconds(
+      { lane: 'todo', dueAt: now + 60 * 60 },
+      now,
+    ),
+    45 * 60,
+  );
+  assert.equal(
+    getBackendNotificationSnoozeSeconds(
+      { lane: 'todo', dueAt: now + 10 * 60 },
+      now,
+    ),
+    5 * 60,
+  );
+  assert.equal(
+    getBackendNotificationSnoozeSeconds(
+      { lane: 'todo', dueAt: now - 60 },
+      now,
+    ),
+    15 * 60,
+  );
+});
+
+test('keeps temporary todo hides retryable in notification center', () => {
+  assert.equal(
+    getBackendNotificationSecondaryActionDeliveryStatus({
+      lane: 'todo',
+      sourceType: 'proposed_action',
+    }),
+    'delivered',
+  );
+  assert.equal(
+    getBackendNotificationSecondaryActionDeliveryStatus({
+      lane: 'todo',
+      sourceType: 'notification',
+    }),
+    'dismissed',
+  );
+  assert.equal(
+    getBackendNotificationSecondaryActionDeliveryStatus({
+      lane: 'notice',
+      sourceType: 'notification',
+    }),
+    'dismissed',
+  );
+  assert.equal(
+    getBackendNotificationClosedDeliveryStatus({ lane: 'todo' }),
+    'delivered',
+  );
+  assert.equal(
+    getBackendNotificationClosedDeliveryStatus({ lane: 'notice' }),
+    'dismissed',
   );
 });
 
@@ -93,18 +171,22 @@ test('normalizes persisted backend notification metadata defensively', () => {
   assert.deepEqual(
     normalizeBackendNotificationMeta({
       sourceRef: 'notification:abc',
+      sourceType: 'notification',
       lane: 'todo',
       type: 'deadline',
       targetHash: '/decisions',
       notificationId: 'abc',
+      dueAt: 1_778_408_100,
       ignored: true,
     }),
     {
       sourceRef: 'notification:abc',
+      sourceType: 'notification',
       lane: 'todo',
       type: 'deadline',
       targetHash: '/decisions',
       notificationId: 'abc',
+      dueAt: 1_778_408_100,
     },
   );
 

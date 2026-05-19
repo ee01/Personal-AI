@@ -163,6 +163,204 @@
   color: #3f4a54;
 }
 
+.agent-approval-queue {
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid #d0d7de;
+  border-left: 4px solid #9a6700;
+  background: #fff;
+  border-radius: 6px;
+}
+
+.agent-approval-queue-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-approval-queue-header h4 {
+  margin: 0;
+  color: #24292f;
+  font-size: 14px;
+}
+
+.agent-approval-queue-header p {
+  margin: 4px 0 0;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agent-approval-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.agent-approval-item {
+  padding: 10px;
+  border: 1px solid #eaeef2;
+  border-radius: 6px;
+  background: #fffdf0;
+}
+
+.agent-approval-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-approval-tool {
+  color: #24292f;
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-meta,
+.agent-approval-step {
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #9a6700;
+  background: #fff8c5;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-approval-step {
+  color: #57606a;
+  background: #f6f8fa;
+}
+
+.agent-approval-message {
+  margin-top: 8px;
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-review-hint {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.agent-approval-review-hint span {
+  color: #9a6700;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-approval-review-hint p {
+  margin: 0;
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-params {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.agent-approval-params span {
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-approval-params code,
+.agent-approval-key-row code {
+  display: block;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 4px;
+  background: #f6f8fa;
+  color: #24292f;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.agent-approval-key-row code:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+.agent-approval-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  margin-top: 8px;
+}
+
+.agent-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.agent-approval-copy {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #bf8700;
+  border-radius: 4px;
+  color: #7d4e00;
+  background: #fff8c5;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-approval-copy:disabled {
+  border-color: #d0d7de;
+  color: #8c959f;
+  background: #f6f8fa;
+  cursor: not-allowed;
+}
+
+.agent-approval-copy-status {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-approval-copy-status.copied {
+  color: #1a7f37;
+}
+
+.agent-approval-copy-status.failed {
+  color: #cf222e;
+}
+
+@media (max-width: 640px) {
+  .agent-approval-key-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-approval-copy {
+    justify-self: start;
+  }
+
+  .agent-approval-actions {
+    justify-content: flex-start;
+  }
+}
+
 .thought-step {
   border-left: 4px solid #ccc;
   padding-left: 15px;
@@ -262,6 +460,11 @@
   color: #cf222e;
 }
 
+.step-status.approval {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
 .step-status.blocked {
   background: #fff1d6;
   color: #9a6700;
@@ -327,6 +530,8 @@
 .diagnostic-content p {
   margin: 0;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tool-result pre {
@@ -396,6 +601,11 @@
   border-left: 4px solid #F44336;
 }
 
+.flow-node.tool.approval {
+  background-color: #fff8c5;
+  border-left: 4px solid #9a6700;
+}
+
 .flow-node.tool.blocked {
   background-color: #FFF8E1;
   border-left: 4px solid #D97706;
@@ -448,6 +658,10 @@
 
 .flow-node.tool.error .icon-tool {
   background-color: #F44336;
+}
+
+.flow-node.tool.approval .icon-tool {
+  background-color: #9a6700;
 }
 
 .flow-node.tool.blocked .icon-tool {
@@ -510,6 +724,11 @@
 .node-result.error {
   color: #cf222e;
   background: #ffebe9;
+}
+
+.node-result.approval {
+  color: #9a6700;
+  background: #fff8c5;
 }
 
 .node-result.blocked {

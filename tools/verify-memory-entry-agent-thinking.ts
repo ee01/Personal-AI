@@ -4,16 +4,21 @@ import { readFileSync } from 'node:fs';
 import {
   buildAgentToolCallKey,
   IntelligentAgent,
+  registerTool,
 } from '../src/agentThinking.ts';
 import {
+  buildPendingApprovalActions,
   buildAgentRunReviewItems,
   buildAgentFlowSteps,
+  formatApprovalEffect,
+  formatApprovalRisk,
   getAgentRunReviewSeverity,
   getStepDiagnosticSummary,
   getStepIntentSummary,
   getStepKind,
   getStepSummary,
   getStepVisibleSummary,
+  stepHasToolApprovalRequired,
   stepHasEmptyToolEvidence,
   getToolStepResultPresentation,
 } from '../src/agentVisualizerPresentation.ts';
@@ -235,6 +240,33 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('Daily Standup') && prompt.includes('blocker update')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify([
+              {
+                post_id: 'post-thinking-out-of-scope',
+                summary: 'LLM hallucinated a release-only rule match',
+                importanceLevel: 'high',
+                needsProcessing: true,
+                isNoiseMessage: false,
+                matchedRuleRefs: ['manual:release-only'],
+                matchedRuleIds: [],
+                matchedRules: ['[RULE_REF:manual:release-only] Release blockers'],
+                nextAction: 'finish',
+                tools: [],
+                shouldStore: true,
+                shouldNotify: true,
+                confidence: 0.91,
+                user_relation_type: 'general_interest',
+                entities: {},
+              },
+            ]),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       if (prompt.includes('关注规则')) {
         return new Response(
           JSON.stringify({
@@ -332,6 +364,23 @@ async function main() {
   const toolIds = catalog.map((tool) => tool.id).sort();
 
   assert.deepEqual(toolIds, ['historySearch', 'jiraQuery']);
+  assert.deepEqual(
+    catalog.map((tool) => [
+      tool.id,
+      tool.effect,
+      tool.riskLevel,
+      tool.requiresHumanApproval,
+    ]),
+    [
+      ['historySearch', 'read', 'low', false],
+      ['jiraQuery', 'external_read', 'low', false],
+    ],
+  );
+  assert.ok(
+    agent
+      .getToolDescriptions()
+      .some((description) => description.includes('安全: 只读 / 低风险 / 无需人工确认')),
+  );
   assert.equal(
     buildAgentToolCallKey({
       id: 'historySearch',
@@ -356,10 +405,16 @@ async function main() {
   assert.ok(!optionsSource.includes("toolUsed: 'orgChart'"));
   assert.ok(optionsSource.includes("const historyToolId = 'historySearch'"));
   assert.ok(optionsSource.includes("const jiraToolId = 'jiraQuery'"));
+  assert.ok(optionsSource.includes('安全边界'));
+  assert.ok(optionsSource.includes('tool.requiresHumanApproval'));
+  assert.ok(optionsSource.includes('approval-tail-token-visible-in-ui'));
   const agentThinkingSource = readFileSync('src/agentThinking.ts', 'utf8');
   assert.ok(!agentThinkingSource.includes('考虑使用orgStructure'));
   assert.ok(agentThinkingSource.includes('已阻断调用'));
   assert.ok(agentThinkingSource.includes('publicSummary'));
+  assert.ok(agentThinkingSource.includes('工具安全规则'));
+  assert.ok(agentThinkingSource.includes('需要人工确认'));
+  assert.ok(agentThinkingSource.includes('批准 key 必须精确匹配'));
   assert.ok(!agentThinkingSource.includes('详细解释你的思考过程'));
   assert.ok(!agentThinkingSource.includes('分析当前情况和下一步行动的详细思考过程'));
   const agentVisualizerSource = readFileSync('src/agent-visualizer.tsx', 'utf8');
@@ -370,6 +425,11 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('调用意图:'));
   assert.ok(agentVisualizerSource.includes('状态说明:'));
   assert.ok(agentVisualizerSource.includes('运行检查'));
+  assert.ok(agentVisualizerSource.includes('待确认动作'));
+  assert.ok(agentVisualizerSource.includes('复制 key'));
+  assert.ok(agentVisualizerSource.includes('复制审核包'));
+  assert.ok(agentVisualizerSource.includes('复制失败，请手动选择 key'));
+  assert.ok(agentVisualizerSource.includes('复制失败，请手动选择审核包'));
   assert.ok(!agentVisualizerSource.includes('思考过程:'));
   const agentVisualizerPresentationSource = readFileSync(
     'src/agentVisualizerPresentation.ts',
@@ -382,13 +442,25 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('buildAgentRunReviewItems'));
   assert.ok(agentVisualizerPresentationSource.includes('stepHasEmptyToolEvidence'));
   assert.ok(agentVisualizerPresentationSource.includes('证据不足'));
+  assert.ok(agentVisualizerPresentationSource.includes('stepHasToolApprovalRequired'));
+  assert.ok(agentVisualizerPresentationSource.includes('需要人工确认'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildPendingApprovalActions'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildApprovalReviewHint'));
   const agentVisualizerCss = readFileSync('static/agent-visualizer.css', 'utf8');
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
   assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.empty'));
   assert.ok(agentVisualizerCss.includes('.node-result.empty'));
+  assert.ok(agentVisualizerCss.includes('.flow-node.tool.approval'));
+  assert.ok(agentVisualizerCss.includes('.node-result.approval'));
   assert.ok(agentVisualizerCss.includes('.diagnostic-content'));
   assert.ok(agentVisualizerCss.includes('.agent-run-review'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-queue'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-review-hint'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-actions'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-copy-status'));
+  const optionsCss = readFileSync('static/options.css', 'utf8');
+  assert.ok(optionsCss.includes('.tool-safety-badge'));
 
   const timestamp = Date.parse('2026-05-08T00:00:00.000Z');
   const blockedStep = {
@@ -438,6 +510,179 @@ async function main() {
     '工具被阻断',
     '缺少完成状态',
   ]);
+
+  registerTool({
+    id: 'approvalWriteTest',
+    name: '审批写入测试',
+    description: '测试需要人工确认的写入工具',
+    effect: 'write',
+    riskLevel: 'high',
+    requiresHumanApproval: true,
+    safetyNote: '测试工具，不应在未批准时执行。',
+    parameterDefs: [
+      {
+        name: 'target',
+        description: '写入目标',
+        required: true,
+        type: 'string',
+      },
+    ],
+    execute: async () => ({
+      message: 'approval write executed',
+      result: { ok: true },
+    }),
+  });
+
+  const approvalParams = {
+    target:
+      'external-system-with-long-human-review-payload-that-must-remain-copyable-because-approval-keys-need-exact-matching-and-visible-tail-approval-tail-token-visible-in-ui',
+  };
+  const approvalKey = buildAgentToolCallKey({
+    id: 'approvalWriteTest',
+    params: approvalParams,
+  });
+  const approvalStep: any = {
+    timestamp: timestamp + 500,
+    thought: '尝试写入外部系统',
+    publicSummary: '准备执行需要确认的写入动作。',
+    action: 'use_tool',
+  };
+  const approvalState: any = {
+    actionHistory: [],
+    memory: {},
+    config: {},
+    context: {},
+  };
+  const approvalUsedTools = new Set<string>();
+  await (agent as any).executeTools(
+    [{ id: 'approvalWriteTest', params: approvalParams }],
+    approvalState,
+    approvalStep,
+    approvalUsedTools,
+  );
+  const approvalToolResult = JSON.parse(approvalStep.toolResult);
+  assert.equal(approvalToolResult.approvalWriteTest.blocked, true);
+  assert.equal(approvalToolResult.approvalWriteTest.approvalRequired, true);
+  assert.equal(approvalToolResult.approvalWriteTest.approvalKey, approvalKey);
+  assert.equal(approvalUsedTools.has('approvalWriteTest'), false);
+  assert.equal(stepHasToolApprovalRequired(approvalStep), true);
+  assert.equal(getStepKind(approvalStep), '待确认');
+  assert.equal(
+    getStepSummary(approvalStep),
+    'approvalWriteTest 需要人工确认，当前未执行。',
+  );
+  assert.deepEqual(getToolStepResultPresentation(approvalStep), {
+    label: '待确认',
+    className: 'approval',
+  });
+  const approvalReviewItems = buildAgentRunReviewItems([approvalStep]);
+  assert.equal(approvalReviewItems[0].title, '需要人工确认');
+  const pendingApprovalActions = buildPendingApprovalActions([approvalStep]);
+  assert.equal(pendingApprovalActions.length, 1);
+  assert.deepEqual(
+    {
+      toolId: pendingApprovalActions[0].toolId,
+      approvalKey: pendingApprovalActions[0].approvalKey,
+      effect: pendingApprovalActions[0].effect,
+      riskLevel: pendingApprovalActions[0].riskLevel,
+      paramsPreview: pendingApprovalActions[0].paramsPreview,
+      reviewHint: pendingApprovalActions[0].reviewHint,
+    },
+    {
+      toolId: 'approvalWriteTest',
+      approvalKey,
+      effect: 'write',
+      riskLevel: 'high',
+      paramsPreview: JSON.stringify(approvalParams),
+      reviewHint:
+        '确认写入对象、字段变化和回滚方式后再批准。 高风险动作需要明确用户授权。',
+    },
+  );
+  assert.match(
+    pendingApprovalActions[0].reviewPayload,
+    /"type": "agent_tool_approval_review"/,
+  );
+  assert.match(
+    pendingApprovalActions[0].reviewPayload,
+    /"allowedDecisions": \[/,
+  );
+  assert.match(
+    pendingApprovalActions[0].reviewPayload,
+    /"edit_params_then_regenerate_key"/,
+  );
+  const pendingApprovalReviewPayload = JSON.parse(
+    pendingApprovalActions[0].reviewPayload,
+  );
+  assert.equal(pendingApprovalReviewPayload.approvalKey, approvalKey);
+  assert.deepEqual(pendingApprovalReviewPayload.params, approvalParams);
+  assert.equal(formatApprovalEffect(pendingApprovalActions[0].effect), '写入');
+  assert.equal(formatApprovalRisk(pendingApprovalActions[0].riskLevel), '高风险');
+  assert.match(
+    getStepDiagnosticSummary(approvalStep),
+    new RegExp(`批准 key: ${approvalKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+  );
+  assert.ok(
+    getStepDiagnosticSummary(approvalStep).includes(
+      'approval-tail-token-visible-in-ui',
+    ),
+  );
+  assert.equal(getStepDiagnosticSummary(approvalStep).includes('...'), false);
+
+  const toolIdOnlyApprovalStep: any = {
+    timestamp: timestamp + 550,
+    thought: '只批准工具 ID 不应放行',
+    publicSummary: '工具 ID 不能作为所有参数的通配批准。',
+    action: 'use_tool',
+  };
+  const toolIdOnlyApprovalState: any = {
+    actionHistory: [],
+    memory: {},
+    config: {
+      approvedToolActionKeys: ['approvalWriteTest'],
+    },
+    context: {},
+  };
+  const toolIdOnlyApprovalUsedTools = new Set<string>();
+  await (agent as any).executeTools(
+    [{ id: 'approvalWriteTest', params: approvalParams }],
+    toolIdOnlyApprovalState,
+    toolIdOnlyApprovalStep,
+    toolIdOnlyApprovalUsedTools,
+  );
+  const toolIdOnlyApprovalResult = JSON.parse(
+    toolIdOnlyApprovalStep.toolResult,
+  );
+  assert.equal(toolIdOnlyApprovalResult.approvalWriteTest.blocked, true);
+  assert.equal(
+    toolIdOnlyApprovalResult.approvalWriteTest.approvalRequired,
+    true,
+  );
+  assert.equal(toolIdOnlyApprovalUsedTools.has('approvalWriteTest'), false);
+
+  const approvedStep: any = {
+    timestamp: timestamp + 600,
+    thought: '已获得用户确认',
+    publicSummary: '批准后执行写入动作。',
+    action: 'use_tool',
+  };
+  const approvedState: any = {
+    actionHistory: [],
+    memory: {},
+    config: {
+      approvedToolActionKeys: [approvalKey],
+    },
+    context: {},
+  };
+  const approvedUsedTools = new Set<string>();
+  await (agent as any).executeTools(
+    [{ id: 'approvalWriteTest', params: approvalParams }],
+    approvedState,
+    approvedStep,
+    approvedUsedTools,
+  );
+  const approvedToolResult = JSON.parse(approvedStep.toolResult);
+  assert.equal(approvedToolResult.approvalWriteTest.result.ok, true);
+  assert.equal(approvedUsedTools.has('approvalWriteTest'), true);
 
   const mixedSkippedStep = {
     timestamp: timestamp + 1000,
@@ -596,6 +841,10 @@ async function main() {
     [blockedStep, mixedSkippedStep, emptyEvidenceStep, errorStep],
     (time) => String(time),
   );
+  assert.equal(
+    flowSteps.some((step) => step.type === 'decision'),
+    false,
+  );
   assert.deepEqual(
     flowSteps
       .filter((step) => step.type === 'tool')
@@ -606,6 +855,24 @@ async function main() {
       'historySearch:证据不足:empty',
       'jiraQuery:失败:error',
     ],
+  );
+  const completedFlowSteps = buildAgentFlowSteps(
+    [
+      blockedStep,
+      {
+        timestamp: timestamp + 5000,
+        thought: '完成',
+        publicSummary: '已有足够信息，结束分析。',
+        action: 'finish',
+      },
+    ],
+    (time) => String(time),
+  );
+  assert.deepEqual(
+    completedFlowSteps
+      .filter((step) => step.type === 'decision')
+      .map((step) => step.name),
+    ['最终决策'],
   );
 
   const completedGroups: any[][] = [];
@@ -778,6 +1045,59 @@ async function main() {
   assert.equal(standaloneResult[0].postId, 'post-thinking-standalone');
   assert.equal(standaloneResult[0].shouldStore, true);
   assert.equal(standaloneCompletedGroups.length, 1);
+
+  const outOfScopeRules = buildRuntimeWatchRules({
+    manualItems: [
+      {
+        id: 'release-only',
+        text: 'Release blockers',
+        expiredAt: 0,
+        notifyMethod: 'bot',
+        filterGroup: 'Release Chat',
+      },
+    ],
+  });
+  const outOfScopeResult = await agent.analyze(
+    [
+      {
+        groupName: 'Daily Standup',
+        groupId: 'daily-standup',
+        posts: [
+          {
+            content: 'blocker update is ready',
+            sender: 'Priya',
+            datetime: '2026-04-15T01:00:00.000Z',
+            post_id: 'post-thinking-out-of-scope',
+          },
+        ],
+      },
+    ],
+    {
+      type: 'message',
+      analysisDepth: 'normal',
+      maxActions: 1,
+    },
+    {
+      currentUser: 'Current User',
+      concernedRules: outOfScopeRules,
+      groupInfo: {
+        id: 'daily-standup',
+        name: 'Daily Standup',
+        members: [],
+      },
+    },
+  );
+
+  assert.ok(Array.isArray(outOfScopeResult));
+  assert.equal(outOfScopeResult.length, 1);
+  assert.equal(outOfScopeResult[0].shouldStore, false);
+  assert.equal(outOfScopeResult[0].shouldNotify, false);
+  assert.deepEqual(outOfScopeResult[0].matchedRuleRefs, []);
+  assert.ok(
+    outOfScopeResult[0].thoughtProcess?.some(
+      (step) => step.action === 'invalid_rule_scope',
+    ),
+  );
 
   console.log('verify-memory-entry-agent-thinking: ok');
 }

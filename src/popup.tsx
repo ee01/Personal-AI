@@ -10,6 +10,19 @@ import {
 } from './services/MemoryServiceClient';
 import { getTaskEnabled } from './services/taskSchedulerDefinitions';
 import {
+  countTasksByStatusFilter,
+  getTaskFailureStreak,
+  getTaskAttentionRank,
+  getTaskPrimaryAttentionRank,
+  getTaskStatusKind,
+  hasTaskRecentSkip,
+  hasTaskScheduleWarning,
+  shouldRecommendTaskPause,
+  taskMatchesStatusFilter,
+  taskNeedsAttention,
+  type TaskSchedulerStatusFilter,
+} from './services/taskSchedulerStatusFilters';
+import {
   extractMeetingIdFromUrl,
   MeetingPilotSessionSnapshot,
 } from './meeting-shell/protocol';
@@ -100,10 +113,10 @@ function formatTaskInterval(minutes: number): string {
   return `${minutes} 分钟`;
 }
 
-function formatTaskRelativeTime(value?: number): string {
+function formatTaskRelativeTime(value?: number, now = Date.now()): string {
   if (!value) return '未排程';
 
-  const diffMs = value - Date.now();
+  const diffMs = value - now;
   if (diffMs <= 0) {
     return '等待触发';
   }
@@ -134,20 +147,32 @@ function formatTaskTime(value?: number): string {
   });
 }
 
+function formatTaskRefreshTime(value: number): string {
+  return new Date(value).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getLocalTaskTimeZoneLabel(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || '本机时区';
+}
+
 function formatTaskResult(task: TaskSchedulerTask): string {
+  const failureStreak = getTaskFailureStreak(task);
   if (task.isExecuting) {
     return `执行中 · 开始 ${formatTaskTime(task.lastRun)}`;
   }
-  if (
-    task.lastSkippedAt &&
-    (!task.lastCompletedAt || task.lastSkippedAt > task.lastCompletedAt)
-  ) {
+  if (hasTaskRecentSkip(task)) {
     return `上次跳过 · ${task.lastSkipReason || '已有执行中任务'}`;
   }
   if (!task.lastCompletedAt) {
     return '尚未执行';
   }
   if (task.lastSuccess === false) {
+    if (failureStreak > 1) {
+      return `连续失败 ${failureStreak} 次 · ${task.lastError || '查看后台日志'}`;
+    }
     return `上次失败 · ${task.lastError || '查看后台日志'}`;
   }
   return `上次成功 · ${formatTaskTime(task.lastCompletedAt)}`;
@@ -200,24 +225,15 @@ function formatTaskRunHistoryTitle(task: TaskSchedulerTask): string {
     .join('\n');
 }
 
-function hasTaskScheduleWarning(task: TaskSchedulerTask): boolean {
-  return Boolean(
-    task.enabled &&
-      (task.scheduleHealth === 'missing_alarm' ||
-        task.scheduleHealth === 'period_mismatch' ||
-        task.scheduleHealth === 'overdue' ||
-        task.scheduleHealth === 'repair_failed'),
-  );
+function formatTaskScheduleHealthLabel(task: TaskSchedulerTask): string {
+  if (task.scheduleHealth === 'missing_alarm') return '未排程';
+  if (task.scheduleHealth === 'period_mismatch') return '需重排';
+  if (task.scheduleHealth === 'overdue') return '逾期';
+  if (task.scheduleHealth === 'repair_failed') return '修复失败';
+  return '排程异常';
 }
 
-function hasTaskRecentSkip(task: TaskSchedulerTask): boolean {
-  return Boolean(
-    task.lastSkippedAt &&
-      (!task.lastCompletedAt || task.lastSkippedAt > task.lastCompletedAt),
-  );
-}
-
-function formatTaskSchedule(task: TaskSchedulerTask): string {
+function formatTaskSchedule(task: TaskSchedulerTask, now = Date.now()): string {
   if (!task.enabled) {
     return '停用 · 可手动执行';
   }
@@ -227,28 +243,125 @@ function formatTaskSchedule(task: TaskSchedulerTask): string {
   if (!task.nextRun) {
     return '等待 Chrome 排程';
   }
-  return `下次 ${formatTaskRelativeTime(task.nextRun)} · ${formatTaskTime(
+  return `下次 ${formatTaskRelativeTime(task.nextRun, now)} · ${formatTaskTime(
     task.nextRun,
   )}`;
 }
 
-function getTaskAttentionRank(task: TaskSchedulerTask): number {
+function formatTaskActionHint(task: TaskSchedulerTask): string {
+  const failureStreak = getTaskFailureStreak(task);
   if (task.isExecuting) {
-    return 0;
+    return '';
   }
   if (hasTaskScheduleWarning(task)) {
-    return 1;
+    if (task.scheduleHealth === 'overdue') {
+      return '建议先立即执行，再重排下一次';
+    }
+    if (task.scheduleHealth === 'repair_failed') {
+      return '旧排程会尽量保留，可稍后重试重排';
+    }
+    return '建议重排 Chrome alarm';
   }
   if (hasTaskRecentSkip(task)) {
-    return 2;
+    return '当前任务完成后再重试';
+  }
+  if (shouldRecommendTaskPause(task)) {
+    return `连续失败 ${failureStreak} 次，建议先暂停排程并检查服务配置`;
+  }
+  if (failureStreak > 1) {
+    return `连续失败 ${failureStreak} 次，建议检查后台日志后重试`;
   }
   if (task.lastSuccess === false) {
-    return 3;
+    return '建议重试一次，重复失败再查后台日志';
   }
-  if (task.enabled) {
-    return 4;
+  return '';
+}
+
+function getTaskRunButtonTitle(task: TaskSchedulerTask, isBusy: boolean): string {
+  if (isBusy || task.isExecuting) {
+    return '正在执行';
   }
-  return 5;
+  if (hasTaskScheduleWarning(task)) {
+    return '立即执行一次，不会修复排程';
+  }
+  if (task.lastSuccess === false) {
+    return '立即重试';
+  }
+  if (!task.enabled) {
+    return '手动执行一次，不启用排程';
+  }
+  return '立即执行';
+}
+
+function formatTaskFilterEmptyState(
+  filter: TaskSchedulerStatusFilter,
+  isLoading: boolean,
+): string {
+  if (isLoading) {
+    return '正在加载后台任务';
+  }
+  if (filter === 'attention') return '当前没有需要处理的后台任务';
+  if (filter === 'executing') return '当前没有执行中的后台任务';
+  if (filter === 'warning') return '当前没有排程异常';
+  if (filter === 'skipped') return '当前没有最近跳过的任务';
+  if (filter === 'failed') return '当前没有失败任务';
+  if (filter === 'disabled') return '当前没有停用任务';
+  return '暂无后台任务状态';
+}
+
+function formatTaskSchedulerNextStep(task?: TaskSchedulerTask): {
+  tone: 'executing' | 'warning' | 'failed' | 'skipped';
+  message: string;
+} | null {
+  if (!task) {
+    return null;
+  }
+
+  const statusKind = getTaskStatusKind(task);
+  if (statusKind === 'executing') {
+    return {
+      tone: 'executing',
+      message: `${task.name} 正在执行，等待完成后再触发新操作。`,
+    };
+  }
+  if (statusKind === 'warning') {
+    if (task.scheduleHealth === 'overdue') {
+      return {
+        tone: 'warning',
+        message: `${task.name} 排程逾期，先立即执行一次，再重排下一次。`,
+      };
+    }
+    if (task.scheduleHealth === 'repair_failed') {
+      return {
+        tone: 'warning',
+        message: `${task.name} 排程修复失败，保留旧排程并稍后重试。`,
+      };
+    }
+    return {
+      tone: 'warning',
+      message: `${task.name} 排程异常，优先点击重排恢复 Chrome alarm。`,
+    };
+  }
+  if (statusKind === 'failed') {
+    const failureStreak = getTaskFailureStreak(task);
+    if (failureStreak > 1) {
+      return {
+        tone: 'failed',
+        message: `${task.name} 连续失败 ${failureStreak} 次，先检查服务配置或网络，再重试。`,
+      };
+    }
+    return {
+      tone: 'failed',
+      message: `${task.name} 上次失败，可重试一次；重复失败先查服务状态。`,
+    };
+  }
+  if (statusKind === 'skipped') {
+    return {
+      tone: 'skipped',
+      message: `${task.name} 最近被跳过，等待当前执行完成后再重试。`,
+    };
+  }
+  return null;
 }
 
 function isMeetingPilotCaptureActive(
@@ -274,7 +387,12 @@ function isMeetingPilotTranscriptPilotActive(
 }
 
 function formatTodayPilotDue(card: DayPilotCard): string {
-  if (!card.dueAt) return card.priority;
+  if (!card.dueAt) {
+    if (card.state === 'now') return '现在';
+    if (card.state === 'prepare') return '准备';
+    if (card.state === 'waiting') return '等待';
+    return getTodayPilotPriorityLabel(card);
+  }
   return new Date(card.dueAt * 1000).toLocaleString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -293,6 +411,23 @@ function getTodayPilotPriorityLabel(card: DayPilotCard): string {
 function isTodayPilotMeetingCard(card: DayPilotCard): boolean {
   return card.cardType === 'meeting_prepare';
 }
+
+function formatTodayPilotEvidenceMeta(card: DayPilotCard): string {
+  const evidenceCount = card.evidenceRefs?.length ?? 0;
+  const confidence =
+    typeof card.trust?.confidence === 'number'
+      ? Math.round(Math.max(0, Math.min(1, card.trust.confidence)) * 100)
+      : 0;
+  return `证据 ${evidenceCount} · 信心 ${confidence}%`;
+}
+
+function topTodayPilotCards(cards: DayPilotCard[]): DayPilotCard[] {
+  return cards
+    .filter((card) => card.state !== 'done' && card.state !== 'muted')
+    .slice(0, 3);
+}
+
+type TodayPilotPopupFeedbackAction = 'done' | 'later';
 
 async function focusMeetingPilotRecordingTab(
   session: MeetingPilotSessionSnapshot,
@@ -322,15 +457,22 @@ const Popup = () => {
   const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
   const [isScheduleUpdating, setIsScheduleUpdating] = useState(false);
   const [isTaskStatusLoading, setIsTaskStatusLoading] = useState(false);
+  const [isTaskPanelOpen, setIsTaskPanelOpen] = useState(false);
+  const [taskStatusNow, setTaskStatusNow] = useState(() => Date.now());
   const [taskSchedulerTasks, setTaskSchedulerTasks] = useState<
     TaskSchedulerTask[]
   >([]);
+  const [taskSchedulerFilter, setTaskSchedulerFilter] =
+    useState<TaskSchedulerStatusFilter>('all');
   const [taskSchedulerError, setTaskSchedulerError] = useState('');
   const [busyTaskIds, setBusyTaskIds] = useState<Record<string, boolean>>({});
   const [todayPilotCards, setTodayPilotCards] = useState<DayPilotCard[]>([]);
   const [todayPilotLoading, setTodayPilotLoading] = useState(false);
   const [todayPilotError, setTodayPilotError] = useState('');
+  const [todayPilotNotice, setTodayPilotNotice] = useState('');
   const [todayPilotCopyingMissionId, setTodayPilotCopyingMissionId] =
+    useState('');
+  const [todayPilotFeedbackingCardId, setTodayPilotFeedbackingCardId] =
     useState('');
 
   const loadTaskSchedulerStatus = async (showLoading = false) => {
@@ -349,6 +491,7 @@ const Popup = () => {
       }
 
       setTaskSchedulerTasks(response.tasks);
+      setTaskStatusNow(Date.now());
       setTaskSchedulerError('');
 
       const messageAnalysisTask = response.tasks.find(
@@ -374,15 +517,13 @@ const Popup = () => {
         timezone: timezone || 'Asia/Shanghai',
         autoGenerate: true,
       });
-      setTodayPilotCards(
-        (response.brief?.cards || [])
-          .filter((card) => card.state !== 'done' && card.state !== 'muted')
-          .slice(0, 3),
-      );
+      setTodayPilotCards(topTodayPilotCards(response.brief?.cards || []));
       setTodayPilotError('');
+      setTodayPilotNotice('');
     } catch (error: any) {
       setTodayPilotCards([]);
       setTodayPilotError(error?.message || 'today_pilot_unavailable');
+      setTodayPilotNotice('');
     } finally {
       setTodayPilotLoading(false);
     }
@@ -423,6 +564,21 @@ const Popup = () => {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!isTaskPanelOpen) {
+      return undefined;
+    }
+
+    const refreshTimer = window.setInterval(() => {
+      setTaskStatusNow(Date.now());
+      void loadTaskSchedulerStatus(false);
+    }, 60_000);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+    };
+  }, [isTaskPanelOpen]);
 
   useEffect(() => {
     if (!activeRingCentralTab?.id) {
@@ -803,19 +959,55 @@ const Popup = () => {
     }
     setTodayPilotCopyingMissionId(card.missionId);
     try {
-      const response = await getMemoryServiceClient().renderDayPilotContextPack(
-        card.missionId,
-        {
-          targetProvider: 'generic',
-          includeSensitive: false,
-        },
-      );
+      const response =
+        await getMemoryServiceClient().renderTodayPilotContextPack(
+          card.missionId,
+          {
+            targetProvider: 'generic',
+            includeSensitive: false,
+          },
+        );
       await navigator.clipboard.writeText(response.bodyMd);
       setTodayPilotError('');
+      setTodayPilotNotice('已复制上下文包');
     } catch (error: any) {
       setTodayPilotError(error?.message || 'context_pack_copy_failed');
+      setTodayPilotNotice('');
     } finally {
       setTodayPilotCopyingMissionId('');
+    }
+  };
+
+  const sendTodayPilotPopupFeedback = async (
+    card: DayPilotCard,
+    action: TodayPilotPopupFeedbackAction,
+  ) => {
+    const previousCards = todayPilotCards;
+    const feedbackKey = `${card.id}:${action}`;
+    setTodayPilotFeedbackingCardId(feedbackKey);
+    setTodayPilotCards((cards) => cards.filter((item) => item.id !== card.id));
+    try {
+      const response = await getMemoryServiceClient().sendTodayPilotCardFeedback(
+        card.id,
+        {
+          action,
+          snoozeUntil:
+            action === 'later'
+              ? Math.floor(Date.now() / 1000) + 6 * 3600
+              : undefined,
+        },
+      );
+      setTodayPilotCards(topTodayPilotCards(response.brief?.cards || []));
+      setTodayPilotError('');
+      setTodayPilotNotice(
+        action === 'done' ? '已在今日领航标记完成' : '已稍后 6 小时',
+      );
+    } catch (error: any) {
+      setTodayPilotCards(previousCards);
+      setTodayPilotError(error?.message || 'today_pilot_feedback_failed');
+      setTodayPilotNotice('');
+    } finally {
+      setTodayPilotFeedbackingCardId('');
     }
   };
 
@@ -879,12 +1071,25 @@ const Popup = () => {
               type: 'ANALYZE_SLIDES_PROJECTS',
               token,
             },
-            (_response) => {
+            (response) => {
+              const runtimeError = chrome.runtime.lastError;
+
+              if (runtimeError) {
+                const errorMessage = `无法连接 Google Slides 页面: ${runtimeError.message}`;
+                console.error(errorMessage);
+                alert(errorMessage);
+              } else if (!response?.success) {
+                const errorMessage = response?.error || 'Slides 分析启动失败，请刷新页面后重试';
+                console.error('Slides分析失败:', errorMessage);
+                alert(errorMessage);
+              }
+
               // 当收到响应时关闭loading状态
               setIsAnalyzingSlides(false);
             },
           );
         } else {
+          alert('未找到当前 Google Slides 标签页，请切回 Slides 页面后重试');
           setIsAnalyzingSlides(false);
         }
       });
@@ -911,15 +1116,74 @@ const Popup = () => {
   const enabledTaskCount = taskSchedulerTasks.filter(
     (task) => task.enabled,
   ).length;
-  const executingTaskCount = taskSchedulerTasks.filter(
-    (task) => task.isExecuting,
-  ).length;
-  const failedTaskCount = taskSchedulerTasks.filter(
-    (task) => task.lastSuccess === false,
-  ).length;
-  const scheduleWarningTaskCount = taskSchedulerTasks.filter(
-    hasTaskScheduleWarning,
-  ).length;
+  const attentionTaskCount = countTasksByStatusFilter(
+    taskSchedulerTasks,
+    'attention',
+  );
+  const executingTaskCount = countTasksByStatusFilter(
+    taskSchedulerTasks,
+    'executing',
+  );
+  const failedTaskCount = countTasksByStatusFilter(
+    taskSchedulerTasks,
+    'failed',
+  );
+  const recentSkippedTaskCount = countTasksByStatusFilter(
+    taskSchedulerTasks,
+    'skipped',
+  );
+  const scheduleWarningTaskCount = countTasksByStatusFilter(
+    taskSchedulerTasks,
+    'warning',
+  );
+  const disabledTaskCount = countTasksByStatusFilter(
+    taskSchedulerTasks,
+    'disabled',
+  );
+  const taskFilterChips = [
+    {
+      key: 'all' as const,
+      label: '全部',
+      count: taskSchedulerTasks.length,
+      className: 'all',
+    },
+    {
+      key: 'attention' as const,
+      label: '需处理',
+      count: attentionTaskCount,
+      className: 'attention',
+    },
+    {
+      key: 'executing' as const,
+      label: '执行中',
+      count: executingTaskCount,
+      className: 'executing',
+    },
+    {
+      key: 'warning' as const,
+      label: '排程异常',
+      count: scheduleWarningTaskCount,
+      className: 'warning',
+    },
+    {
+      key: 'skipped' as const,
+      label: '跳过',
+      count: recentSkippedTaskCount,
+      className: 'skipped',
+    },
+    {
+      key: 'failed' as const,
+      label: '失败',
+      count: failedTaskCount,
+      className: 'failed',
+    },
+    {
+      key: 'disabled' as const,
+      label: '停用',
+      count: disabledTaskCount,
+      className: 'disabled',
+    },
+  ];
   const taskStatusSummary = taskSchedulerError
     ? '状态不可用'
     : isTaskStatusLoading
@@ -936,8 +1200,13 @@ const Popup = () => {
     ? `${failedTaskCount} 失败 · ${enabledTaskCount}/${
         taskSchedulerTasks.length || '-'
       } 启用`
+    : recentSkippedTaskCount > 0
+    ? `${recentSkippedTaskCount} 跳过 · ${enabledTaskCount}/${
+        taskSchedulerTasks.length || '-'
+      } 启用`
     : `${enabledTaskCount}/${taskSchedulerTasks.length || '-'} 启用`;
   const visibleTaskSchedulerTasks = taskSchedulerTasks
+    .filter((task) => taskMatchesStatusFilter(task, taskSchedulerFilter))
     .map((task, index) => ({ task, index }))
     .sort(
       (left, right) =>
@@ -945,6 +1214,16 @@ const Popup = () => {
         left.index - right.index,
     )
     .map(({ task }) => task);
+  const primaryAttentionTask = taskSchedulerTasks
+    .filter(taskNeedsAttention)
+    .map((task, index) => ({ task, index }))
+    .sort(
+      (left, right) =>
+        getTaskPrimaryAttentionRank(left.task) -
+          getTaskPrimaryAttentionRank(right.task) || left.index - right.index,
+    )[0]?.task;
+  const taskSchedulerNextStep =
+    formatTaskSchedulerNextStep(primaryAttentionTask);
 
   const openJiraQueryDialog = async () => {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1044,16 +1323,32 @@ const Popup = () => {
           activeTab.url?.includes('docs.google.com/presentation')
         ) {
           // 获取token并发送回内容脚本
-          const token = await getGoogleAuthToken({
-            caller: 'popup.handleSlidesAnalysis',
-          });
-          if (token) {
-            chrome.tabs.sendMessage(activeTab.id, {
-              type: 'ANALYZE_SLIDES_PROJECTS',
-              token,
+          try {
+            const token = await getGoogleAuthToken({
+              caller: 'popup.handleSlidesAnalysis',
             });
-          } else {
-            console.error('获取Google认证失败');
+            if (token) {
+              chrome.tabs.sendMessage(activeTab.id, {
+                type: 'ANALYZE_SLIDES_PROJECTS',
+                token,
+              });
+            } else {
+              const errorMessage = '获取 Google 认证失败，请重新授权后再试';
+              console.error(errorMessage);
+              chrome.tabs.sendMessage(activeTab.id, {
+                type: 'SLIDES_ANALYSIS_AUTH_FAILED',
+                error: errorMessage,
+              });
+            }
+          } catch (error) {
+            const errorMessage = `获取 Google 认证失败: ${
+              error instanceof Error ? error.message : String(error)
+            }`;
+            console.error(errorMessage);
+            chrome.tabs.sendMessage(activeTab.id, {
+              type: 'SLIDES_ANALYSIS_AUTH_FAILED',
+              error: errorMessage,
+            });
           }
         }
       })();
@@ -1111,84 +1406,26 @@ const Popup = () => {
         </div>
       </div>
 
-      <section className="today-pilot-panel">
-        <div className="today-pilot-head">
-          <button
-            className="today-pilot-title"
-            onClick={openTodayPilotHome}
-            title="打开 Today Pilot 首页"
-          >
-            今日领航
-          </button>
-          <button
-            className="today-pilot-refresh"
-            onClick={() => void loadTodayPilotCards()}
-            disabled={todayPilotLoading}
-            title="刷新今日领航"
-            aria-label="刷新今日领航"
-          >
-            ↻
-          </button>
-        </div>
-        <div className="today-pilot-list">
-          {todayPilotLoading && todayPilotCards.length === 0 ? (
-            <div className="today-pilot-empty">正在读取今日 mission</div>
-          ) : todayPilotError && todayPilotCards.length === 0 ? (
-            <div className="today-pilot-empty">Today Pilot 暂不可用</div>
-          ) : todayPilotCards.length === 0 ? (
-            <div className="today-pilot-empty">暂时没有需要处理的事项</div>
-          ) : (
-            todayPilotCards.map((card) => {
-              const isMeeting = isTodayPilotMeetingCard(card);
-              const copying = todayPilotCopyingMissionId === card.missionId;
-              return (
-                <article className="today-pilot-card" key={card.id}>
-                  <button
-                    className="today-pilot-card-main"
-                    onClick={openTodayPilotHome}
-                    title={card.whyNow}
-                  >
-                    <span className={`today-pilot-priority ${card.priority}`}>
-                      {getTodayPilotPriorityLabel(card)}
-                    </span>
-                    <span className="today-pilot-card-text">
-                      <span className="today-pilot-card-title">
-                        {card.title}
-                      </span>
-                      <span className="today-pilot-card-sub">
-                        {card.nextBestAction}
-                      </span>
-                    </span>
-                    <span className="today-pilot-due">
-                      {formatTodayPilotDue(card)}
-                    </span>
-                  </button>
-                  {isMeeting ? (
-                    <div className="today-pilot-card-actions">
-                      <button onClick={openRingCentralVideoHome}>
-                        打开 Video Home
-                      </button>
-                      <button
-                        onClick={() => void copyTodayPilotContextPack(card)}
-                        disabled={copying}
-                      >
-                        {copying ? '复制中' : '复制 context pack'}
-                      </button>
-                    </div>
-                  ) : null}
-                </article>
-              );
-            })
-          )}
-        </div>
-      </section>
-
-      <details className="task-status-panel">
+      <details
+        className="task-status-panel"
+        onToggle={(event) => {
+          const isOpen = event.currentTarget.open;
+          setIsTaskPanelOpen(isOpen);
+          if (isOpen) {
+            setTaskStatusNow(Date.now());
+            void loadTaskSchedulerStatus(true);
+          }
+        }}
+      >
         <summary>
           <span>后台任务</span>
           <span className="task-summary">{taskStatusSummary}</span>
         </summary>
         <div className="task-status-toolbar">
+          <span className="task-refresh-meta">
+            刷新 {formatTaskRefreshTime(taskStatusNow)} ·{' '}
+            {getLocalTaskTimeZoneLabel()}
+          </span>
           <button
             className="task-refresh-btn"
             onClick={() => void loadTaskSchedulerStatus(true)}
@@ -1199,44 +1436,66 @@ const Popup = () => {
             ↻
           </button>
         </div>
+        {taskFilterChips.length > 0 && (
+          <div className="task-health-strip" aria-label="筛选后台任务状态">
+            {taskFilterChips.map((chip) => (
+              <button
+                className={`task-health-chip ${chip.className} ${
+                  taskSchedulerFilter === chip.key ? 'active' : ''
+                } ${chip.count === 0 ? 'empty' : ''}`}
+                key={chip.key}
+                type="button"
+                onClick={() => setTaskSchedulerFilter(chip.key)}
+                title={`筛选${chip.label}任务`}
+                aria-pressed={taskSchedulerFilter === chip.key}
+              >
+                {chip.label} {chip.count}
+              </button>
+            ))}
+          </div>
+        )}
+        {taskSchedulerNextStep && (
+          <div
+            className={`task-next-step ${taskSchedulerNextStep.tone}`}
+            role="status"
+          >
+            {taskSchedulerNextStep.message}
+          </div>
+        )}
         {taskSchedulerError && (
           <div className="task-status-error">{taskSchedulerError}</div>
         )}
         <div className="task-list">
-          {!taskSchedulerError && taskSchedulerTasks.length === 0 && (
+          {!taskSchedulerError && visibleTaskSchedulerTasks.length === 0 && (
             <div className="task-empty-state">
-              {isTaskStatusLoading ? '正在加载后台任务' : '暂无后台任务状态'}
+              {formatTaskFilterEmptyState(
+                taskSchedulerFilter,
+                isTaskStatusLoading,
+              )}
             </div>
           )}
           {visibleTaskSchedulerTasks.map((task) => {
             const isBusy = Boolean(busyTaskIds[task.id]);
             const hasScheduleWarning = hasTaskScheduleWarning(task);
             const hasRecentSkip = hasTaskRecentSkip(task);
-            const statusClass = task.isExecuting
-              ? 'executing'
-              : hasScheduleWarning
-              ? 'warning'
-              : hasRecentSkip
-              ? 'skipped'
-              : task.lastSuccess === false
-              ? 'failed'
-              : task.enabled && task.status === 'running'
-              ? 'running'
-              : 'stopped';
-            const stateLabel = task.isExecuting
-              ? '执行中'
-              : hasScheduleWarning
-              ? task.scheduleHealth === 'repair_failed'
-                ? '修复失败'
-                : '排程异常'
-              : hasRecentSkip
-              ? '跳过'
-              : task.lastSuccess === false
-              ? '失败'
-              : task.enabled
-              ? '启用'
-              : '停用';
+            const statusKind = getTaskStatusKind(task);
+            const canPauseFailedSchedule = shouldRecommendTaskPause(task);
+            const statusClass =
+              statusKind === 'disabled' ? 'stopped' : statusKind;
+            const stateLabel =
+              statusKind === 'executing'
+                ? '执行中'
+                : statusKind === 'warning'
+                ? formatTaskScheduleHealthLabel(task)
+                : statusKind === 'skipped'
+                ? '跳过'
+                : statusKind === 'failed'
+                ? '失败'
+                : statusKind === 'running'
+                ? '启用'
+                : '停用';
             const runHistorySummary = formatTaskRunHistorySummary(task);
+            const actionHint = formatTaskActionHint(task);
             return (
               <div className="task-row" key={task.id} title={task.description}>
                 <div className="task-main">
@@ -1257,7 +1516,7 @@ const Popup = () => {
                   >
                     每 {formatTaskInterval(task.intervalMinutes)}
                     {' · '}
-                    {formatTaskSchedule(task)}
+                    {formatTaskSchedule(task, taskStatusNow)}
                   </div>
                   <div
                     className={`task-result ${
@@ -1283,6 +1542,21 @@ const Popup = () => {
                       title={formatTaskRunHistoryTitle(task)}
                     >
                       {runHistorySummary}
+                    </div>
+                  )}
+                  {actionHint && (
+                    <div
+                      className={`task-action-hint ${
+                        hasScheduleWarning
+                          ? 'warning'
+                          : hasRecentSkip
+                          ? 'skipped'
+                          : task.lastSuccess === false
+                          ? 'failed'
+                          : ''
+                      }`}
+                    >
+                      {actionHint}
                     </div>
                   )}
                 </div>
@@ -1315,17 +1589,22 @@ const Popup = () => {
                       ↻
                     </button>
                   )}
+                  {canPauseFailedSchedule && (
+                    <button
+                      className="task-pause-btn"
+                      onClick={() => void updateTaskEnabled(task, false)}
+                      disabled={isBusy}
+                      title="暂停排程，保留手动执行入口"
+                      aria-label={`暂停${task.name}排程`}
+                    >
+                      暂停
+                    </button>
+                  )}
                   <button
                     className="task-run-btn"
                     onClick={() => void runTaskNow(task)}
                     disabled={isBusy || task.isExecuting}
-                    title={
-                      isBusy || task.isExecuting
-                        ? '正在执行'
-                        : task.enabled
-                        ? '立即执行'
-                        : '手动执行一次，不启用排程'
-                    }
+                    title={getTaskRunButtonTitle(task, isBusy)}
                     aria-label={`立即执行${task.name}`}
                   >
                     {isBusy || task.isExecuting ? '...' : '▶'}
@@ -1405,6 +1684,119 @@ const Popup = () => {
         </button>
       )}
 
+      <section className="today-pilot-panel">
+        <div className="today-pilot-head">
+          <button
+            className="today-pilot-title"
+            onClick={openTodayPilotHome}
+            title="打开 Today Pilot 首页"
+          >
+            今日领航
+          </button>
+          <button
+            className="today-pilot-refresh"
+            onClick={() => void loadTodayPilotCards()}
+            disabled={todayPilotLoading}
+            title="刷新今日领航"
+            aria-label="刷新今日领航"
+          >
+            ↻
+          </button>
+        </div>
+        <div className="today-pilot-list">
+          {todayPilotLoading && todayPilotCards.length === 0 ? (
+            <div className="today-pilot-empty">正在读取今日 mission</div>
+          ) : todayPilotError && todayPilotCards.length === 0 ? (
+            <div className="today-pilot-empty">Today Pilot 暂不可用</div>
+          ) : todayPilotCards.length === 0 ? (
+            <div className="today-pilot-empty">暂时没有需要处理的事项</div>
+          ) : (
+            todayPilotCards.map((card) => {
+              const isMeeting = isTodayPilotMeetingCard(card);
+              const copying = todayPilotCopyingMissionId === card.missionId;
+              const doneKey = `${card.id}:done`;
+              const laterKey = `${card.id}:later`;
+              return (
+                <article className="today-pilot-card" key={card.id}>
+                  <button
+                    className="today-pilot-card-main"
+                    onClick={openTodayPilotHome}
+                    title={card.whyNow}
+                  >
+                    <span className={`today-pilot-priority ${card.priority}`}>
+                      {getTodayPilotPriorityLabel(card)}
+                    </span>
+                    <span className="today-pilot-card-text">
+                      <span className="today-pilot-card-title">
+                        {card.title}
+                      </span>
+                      <span className="today-pilot-card-sub">
+                        <strong>做</strong>
+                        <span>{card.nextBestAction}</span>
+                      </span>
+                      <span className="today-pilot-card-why">
+                        <strong>因</strong>
+                        <span>{card.whyNow}</span>
+                      </span>
+                      <span className="today-pilot-card-meta">
+                        {formatTodayPilotEvidenceMeta(card)}
+                      </span>
+                    </span>
+                    <span className="today-pilot-due">
+                      {formatTodayPilotDue(card)}
+                    </span>
+                  </button>
+                  <div className="today-pilot-card-actions">
+                    {isMeeting ? (
+                      <button onClick={openRingCentralVideoHome}>
+                        Video Home
+                      </button>
+                    ) : null}
+                    <button
+                      onClick={() =>
+                        void sendTodayPilotPopupFeedback(card, 'done')
+                      }
+                      disabled={todayPilotFeedbackingCardId === doneKey}
+                      title="今天不再显示这张 mission"
+                    >
+                      {todayPilotFeedbackingCardId === doneKey
+                        ? '处理中'
+                        : '完成'}
+                    </button>
+                    <button
+                      onClick={() =>
+                        void sendTodayPilotPopupFeedback(card, 'later')
+                      }
+                      disabled={todayPilotFeedbackingCardId === laterKey}
+                      title="6 小时内不再显示"
+                    >
+                      {todayPilotFeedbackingCardId === laterKey
+                        ? '处理中'
+                        : '稍后'}
+                    </button>
+                    <button
+                      onClick={() => void copyTodayPilotContextPack(card)}
+                      disabled={copying}
+                    >
+                      {copying ? '复制中' : '复制'}
+                    </button>
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+        {(todayPilotError || todayPilotNotice) && todayPilotCards.length > 0 ? (
+          <div
+            className={`today-pilot-message ${
+              todayPilotError ? 'error' : ''
+            }`}
+          >
+            {todayPilotError || todayPilotNotice}
+          </div>
+        ) : null}
+      </section>
+
       {/* <button onClick={openOptionsPage}>
                 设置
             </button> */}
@@ -1433,8 +1825,8 @@ const Popup = () => {
 
                 .today-pilot-panel {
                     padding: 8px;
-                    border-bottom: 1px solid #eeeeee;
-                    margin-bottom: 4px;
+                    border-top: 1px solid #eeeeee;
+                    margin-top: 4px;
                 }
 
                 .today-pilot-head {
@@ -1490,7 +1882,7 @@ const Popup = () => {
 
                 .today-pilot-card-main {
                     width: 100%;
-                    min-height: 56px;
+                    min-height: 72px;
                     border: 0;
                     background: transparent;
                     display: grid;
@@ -1533,7 +1925,9 @@ const Popup = () => {
                 }
 
                 .today-pilot-card-title,
-                .today-pilot-card-sub {
+                .today-pilot-card-sub,
+                .today-pilot-card-why,
+                .today-pilot-card-meta {
                     overflow: hidden;
                     text-overflow: ellipsis;
                     white-space: nowrap;
@@ -1546,9 +1940,39 @@ const Popup = () => {
                 }
 
                 .today-pilot-card-sub,
+                .today-pilot-card-why,
+                .today-pilot-card-meta,
                 .today-pilot-due {
                     color: #64748b;
                     font-size: 11px;
+                }
+
+                .today-pilot-card-sub,
+                .today-pilot-card-why {
+                    display: flex;
+                    gap: 4px;
+                    align-items: center;
+                    min-width: 0;
+                }
+
+                .today-pilot-card-sub strong,
+                .today-pilot-card-why strong {
+                    flex: 0 0 auto;
+                    color: #334155;
+                    font-size: 10px;
+                }
+
+                .today-pilot-card-meta {
+                    color: #475569;
+                    font-size: 10px;
+                }
+
+                .today-pilot-card-sub span,
+                .today-pilot-card-why span {
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
                 }
 
                 .today-pilot-card-actions {
@@ -1561,12 +1985,29 @@ const Popup = () => {
                 .today-pilot-card-actions button {
                     flex: 1;
                     min-height: 26px;
+                    min-width: 0;
                     border: 1px solid #d4d4d8;
                     border-radius: 4px;
                     background: #f8fafc;
                     color: #334155;
                     font-size: 11px;
                     font-weight: 600;
+                }
+
+                .today-pilot-card-actions button:disabled {
+                    opacity: 0.55;
+                    cursor: not-allowed;
+                }
+
+                .today-pilot-message {
+                    margin-top: 6px;
+                    color: #2563eb;
+                    font-size: 11px;
+                    line-height: 1.35;
+                }
+
+                .today-pilot-message.error {
+                    color: #b91c1c;
                 }
 
                 .task-status-panel {
@@ -1599,13 +2040,25 @@ const Popup = () => {
 
                 .task-status-toolbar {
                     display: flex;
-                    justify-content: flex-end;
+                    justify-content: space-between;
+                    gap: 8px;
                     height: 28px;
                     align-items: center;
                 }
 
+                .task-refresh-meta {
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    color: #71717a;
+                    font-size: 10px;
+                    line-height: 1.4;
+                }
+
                 .task-refresh-btn,
                 .task-repair-btn,
+                .task-pause-btn,
                 .task-run-btn {
                     width: 26px !important;
                     min-width: 26px !important;
@@ -1624,15 +2077,27 @@ const Popup = () => {
 
                 .task-refresh-btn:hover,
                 .task-repair-btn:hover,
+                .task-pause-btn:hover,
                 .task-run-btn:hover {
                     background: #f4f4f5;
                 }
 
                 .task-refresh-btn:disabled,
                 .task-repair-btn:disabled,
+                .task-pause-btn:disabled,
                 .task-run-btn:disabled {
                     cursor: wait;
                     opacity: 0.55;
+                }
+
+                .task-pause-btn {
+                    width: 34px !important;
+                    min-width: 34px !important;
+                    border-color: #fecaca;
+                    background: #fef2f2;
+                    color: #991b1b;
+                    font-size: 10px;
+                    font-weight: 700;
                 }
 
                 .task-list {
@@ -1648,8 +2113,116 @@ const Popup = () => {
                     line-height: 1.4;
                 }
 
+                .task-next-step {
+                    margin: 0 0 6px;
+                    padding: 6px 8px;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 4px;
+                    background: #f8fafc;
+                    color: #334155;
+                    font-size: 11px;
+                    font-weight: 600;
+                    line-height: 1.35;
+                }
+
+                .task-next-step.executing {
+                    border-color: #bae6fd;
+                    background: #f0f9ff;
+                    color: #075985;
+                }
+
+                .task-next-step.warning {
+                    border-color: #fde68a;
+                    background: #fffbeb;
+                    color: #92400e;
+                }
+
+                .task-next-step.failed {
+                    border-color: #fecaca;
+                    background: #fef2f2;
+                    color: #991b1b;
+                }
+
+                .task-next-step.skipped {
+                    border-color: #cbd5e1;
+                    background: #f8fafc;
+                    color: #475569;
+                }
+
+                .task-health-strip {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 4px;
+                    padding: 0 0 6px;
+                }
+
+                .task-health-chip {
+                    flex: 0 0 auto;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    background: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    color: #475569;
+                    cursor: pointer;
+                    font-family: inherit;
+                    font-size: 10px;
+                    font-weight: 700;
+                    line-height: 1.4;
+                }
+
+                .task-health-chip:hover,
+                .task-health-chip.active {
+                    border-color: #94a3b8;
+                    background: #e2e8f0;
+                    color: #1f2937;
+                }
+
+                .task-health-chip.attention {
+                    background: #f8fafc;
+                    border-color: #cbd5e1;
+                    color: #334155;
+                }
+
+                .task-health-chip.executing {
+                    background: #e0f2fe;
+                    border-color: #bae6fd;
+                    color: #075985;
+                }
+
+                .task-health-chip.warning {
+                    background: #fef3c7;
+                    border-color: #fde68a;
+                    color: #92400e;
+                }
+
+                .task-health-chip.skipped {
+                    background: #f1f5f9;
+                    border-color: #cbd5e1;
+                    color: #475569;
+                }
+
+                .task-health-chip.failed {
+                    background: #fee2e2;
+                    border-color: #fecaca;
+                    color: #991b1b;
+                }
+
+                .task-health-chip.disabled {
+                    background: #f4f4f5;
+                    border-color: #d4d4d8;
+                    color: #52525b;
+                }
+
+                .task-health-chip.active {
+                    box-shadow: inset 0 0 0 1px currentColor;
+                }
+
+                .task-health-chip.empty:not(.active) {
+                    opacity: 0.72;
+                }
+
                 .task-row {
-                    min-height: 70px;
+                    min-height: 78px;
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
@@ -1769,6 +2342,28 @@ const Popup = () => {
                     white-space: nowrap;
                     color: #71717a;
                     font-size: 10px;
+                }
+
+                .task-action-hint {
+                    margin-top: 2px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    color: #475569;
+                    font-size: 10px;
+                    font-weight: 600;
+                }
+
+                .task-action-hint.warning {
+                    color: #92400e;
+                }
+
+                .task-action-hint.failed {
+                    color: #b91c1c;
+                }
+
+                .task-action-hint.skipped {
+                    color: #475569;
                 }
 
                 .task-dot {

@@ -8,12 +8,15 @@ import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useMemo } from 'react';
 import {
     sanitizeIndependentUserConfig,
+    USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT,
     USER_CONFIG_PROMPT_CHAR_LIMIT
 } from '../services/userConfigSanitizer';
 import {
+    buildIndependentUserConfigFootprint,
     buildIndependentUserConfigSummary,
     buildIndependentUserConfigPreview,
     createConfigHistoryEntry,
+    describeIndependentUserConfigChange,
     detectPromptImprovementHints,
     detectPromptRiskHints,
     mergeConfigHistory,
@@ -104,6 +107,11 @@ interface UserContextConfig {
 }
 
 interface ConfigData {
+    preferenceInjection: {
+        enabled: boolean;
+        customPromptsEnabled: boolean;
+        userContextEnabled: boolean;
+    };
     customPrompts: CustomPrompts;
     userContextConfig: UserContextConfig;
 }
@@ -144,6 +152,11 @@ const PROMPT_EXAMPLES: Record<PromptScope, Array<{ label: string; content: strin
 };
 
 const createDefaultConfig = (): ConfigData => ({
+    preferenceInjection: {
+        enabled: true,
+        customPromptsEnabled: true,
+        userContextEnabled: true
+    },
     customPrompts: {
         message: {
             enabled: false,
@@ -223,6 +236,7 @@ const deepMerge = <T,>(base: T, override: any): T => {
 const normalizeConfig = (config: any): ConfigData => {
     const source = config || {};
     return sanitizeIndependentUserConfig(deepMerge(createDefaultConfig(), {
+        preferenceInjection: source.preferenceInjection || {},
         customPrompts: source.customPrompts || {},
         userContextConfig: source.userContextConfig || {}
     })) as ConfigData;
@@ -242,7 +256,7 @@ const getConfigTimestamp = (config: any): number => {
 };
 
 const hasStoredConfig = (config: any): boolean => (
-    Boolean(config?.customPrompts || config?.userContextConfig)
+    Boolean(config?.preferenceInjection || config?.customPrompts || config?.userContextConfig)
 );
 
 const isUsableIdentityValue = (value: string): boolean => (
@@ -299,10 +313,15 @@ const PromptConfig: React.FC = () => {
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [syncSource, setSyncSource] = useState('');
     const [configData, setConfigData] = useState<ConfigData>(createDefaultConfig);
+    const [lastPersistedConfig, setLastPersistedConfig] = useState<ConfigData | null>(null);
     const [configHistory, setConfigHistory] = useState<ConfigHistoryEntry[]>([]);
     const [promptRiskAcknowledgedKey, setPromptRiskAcknowledgedKey] = useState('');
     const injectedPreview = useMemo(
         () => buildIndependentUserConfigPreview(configData),
+        [configData]
+    );
+    const preferenceFootprint = useMemo(
+        () => buildIndependentUserConfigFootprint(configData),
         [configData]
     );
     const configSummary = useMemo(
@@ -313,25 +332,39 @@ const PromptConfig: React.FC = () => {
         () => detectPromptRiskHints(configData),
         [configData]
     );
+    const activePromptRiskHints = useMemo(
+        () => configSummary.customPromptsInjectionEnabled ? promptRiskHints : [],
+        [configSummary.customPromptsInjectionEnabled, promptRiskHints]
+    );
     const promptImprovementHints = useMemo(
         () => detectPromptImprovementHints(configData),
         [configData]
     );
     const promptRiskAcknowledgementKey = useMemo(() => {
-        if (promptRiskHints.length === 0) return '';
-        const riskyPromptContents = promptRiskHints.map((hint) => ({
+        if (activePromptRiskHints.length === 0) return '';
+        const riskyPromptContents = activePromptRiskHints.map((hint) => ({
             scope: hint.scope,
             content: configData.customPrompts[hint.scope]?.content || ''
         }));
         return JSON.stringify({
-            hints: promptRiskHints,
+            hints: activePromptRiskHints,
             promptContents: riskyPromptContents
         });
-    }, [configData.customPrompts, promptRiskHints]);
+    }, [activePromptRiskHints, configData.customPrompts]);
     const hasUnacknowledgedPromptRisk = (
-        promptRiskHints.length > 0 &&
+        activePromptRiskHints.length > 0 &&
         promptRiskAcknowledgedKey !== promptRiskAcknowledgementKey
     );
+    const pendingChangeDescription = useMemo(() => {
+        if (!hasUnsavedChanges) return null;
+        return describeIndependentUserConfigChange(lastPersistedConfig, configData);
+    }, [configData, hasUnsavedChanges, lastPersistedConfig]);
+    const pendingChangeSummary = useMemo(() => {
+        if (!pendingChangeDescription) return '';
+        return pendingChangeDescription.changedLabels.length > 0
+            ? `未保存变更：${pendingChangeDescription.changedLabels.join('、')}`
+            : '未保存变更：无实质变化';
+    }, [pendingChangeDescription]);
 
     useEffect(() => {
         initializeConfigPage();
@@ -381,6 +414,7 @@ const PromptConfig: React.FC = () => {
 	    setIsLoading(true);
 	    try {
             const localResult = await chrome.storage.local.get([
+                'preferenceInjection',
                 'customPrompts',
                 'userContextConfig',
                 'cloudSyncTime'
@@ -403,6 +437,7 @@ const PromptConfig: React.FC = () => {
                         nextConfig = cloudConfig;
                         sourceLabel = '记忆服务备份';
                         await chrome.storage.local.set({
+                            preferenceInjection: cloudConfig.preferenceInjection,
                             customPrompts: cloudConfig.customPrompts,
                             userContextConfig: cloudConfig.userContextConfig,
                             cloudSyncTime: Date.now()
@@ -413,7 +448,9 @@ const PromptConfig: React.FC = () => {
                 console.warn('记忆服务配置读取失败，继续使用本机配置:', cloudError);
             }
 
-            setConfigData(mergeIdentityFallback(nextConfig, identityFallback));
+            const displayConfig = mergeIdentityFallback(nextConfig, identityFallback);
+            setConfigData(displayConfig);
+            setLastPersistedConfig(displayConfig);
             setHasUnsavedChanges(false);
             setSyncSource(sourceLabel);
             showStatusMessage(`已加载${sourceLabel}`, 'success');
@@ -438,12 +475,13 @@ const PromptConfig: React.FC = () => {
 	// 🆕 数据迁移：从本地存储迁移到云端
 	const _migrateFromLocalToCloud = async () => {
         try {
-            const result = await chrome.storage.local.get(['customPrompts', 'userContextConfig']);
+            const result = await chrome.storage.local.get(['preferenceInjection', 'customPrompts', 'userContextConfig']);
             
-            if (result.customPrompts || result.userContextConfig) {
+            if (result.preferenceInjection || result.customPrompts || result.userContextConfig) {
                 console.log('发现本地配置，开始迁移到云端...');
                 
                 const localConfig = {
+                    preferenceInjection: result.preferenceInjection || {},
                     customPrompts: result.customPrompts || {},
                     userContextConfig: result.userContextConfig || {}
                 };
@@ -459,13 +497,17 @@ const PromptConfig: React.FC = () => {
                     
                     // 加载迁移后的配置到界面
                     setConfigData(prev => ({
+                        preferenceInjection: {
+                            ...prev.preferenceInjection,
+                            ...localConfig.preferenceInjection
+                        },
                         customPrompts: { ...prev.customPrompts, ...localConfig.customPrompts },
                         userContextConfig: { ...prev.userContextConfig, ...localConfig.userContextConfig }
                     }));
                     
                     // 删除本地配置（可选）
                     try {
-                        await chrome.storage.local.remove(['customPrompts', 'userContextConfig']);
+                        await chrome.storage.local.remove(['preferenceInjection', 'customPrompts', 'userContextConfig']);
                         console.log('本地配置已清理');
                     } catch (cleanupError) {
                         console.warn('清理本地配置失败:', cleanupError);
@@ -532,28 +574,34 @@ const PromptConfig: React.FC = () => {
 	    if (!validateConfiguration()) return null;
 
         const savedAt = Date.now();
-	    const updatedConfig = sanitizeIndependentUserConfig({
-	        customPrompts: configData.customPrompts,
-	        userContextConfig: {
+	        const updatedConfig = sanitizeIndependentUserConfig({
+                preferenceInjection: configData.preferenceInjection,
+		        customPrompts: configData.customPrompts,
+		        userContextConfig: {
 	            ...configData.userContextConfig,
 	            lastUpdated: savedAt,
 	            version: '1.0'
 	        }
 	    }) as ConfigData;
         const historyResult = await chrome.storage.local.get(USER_CONFIG_HISTORY_KEY);
+        const normalizedHistory = normalizeConfigHistoryEntries(
+            historyResult?.[USER_CONFIG_HISTORY_KEY]
+        );
         const nextHistory = mergeConfigHistory(
-            historyResult?.[USER_CONFIG_HISTORY_KEY],
-            createConfigHistoryEntry(updatedConfig, savedAt)
+            normalizedHistory,
+            createConfigHistoryEntry(updatedConfig, savedAt, normalizedHistory[0]?.config)
         );
 
-	    await chrome.storage.local.set({
-	        customPrompts: updatedConfig.customPrompts,
+		    await chrome.storage.local.set({
+                preferenceInjection: updatedConfig.preferenceInjection,
+		        customPrompts: updatedConfig.customPrompts,
 	        userContextConfig: updatedConfig.userContextConfig,
 	        cloudSyncTime: savedAt,
             [USER_CONFIG_HISTORY_KEY]: nextHistory
 	    });
 
 	    setConfigData(updatedConfig);
+        setLastPersistedConfig(updatedConfig);
         setConfigHistory(nextHistory);
 	    setHasUnsavedChanges(false);
 
@@ -797,6 +845,42 @@ const PromptConfig: React.FC = () => {
         </div>
     );
 
+    const renderInjectionControl = () => (
+        <div className={`injection-control-row ${configSummary.preferenceInjectionEnabled ? '' : 'paused'}`}>
+            <div className="injection-main-control">
+                <label className="injection-toggle">
+                    <input
+                        type="checkbox"
+                        checked={configData.preferenceInjection.enabled}
+                        onChange={(e) => updateValue('preferenceInjection.enabled', e.target.checked)}
+                    />
+                    <span>参与分析注入</span>
+                </label>
+                <strong>{configSummary.preferenceInjectionEnabled ? '开启' : '暂停'}</strong>
+            </div>
+            <div className="injection-source-controls" aria-label="偏好来源开关">
+                <label className="source-toggle">
+                    <input
+                        type="checkbox"
+                        checked={configData.preferenceInjection.customPromptsEnabled}
+                        disabled={!configData.preferenceInjection.enabled}
+                        onChange={(e) => updateValue('preferenceInjection.customPromptsEnabled', e.target.checked)}
+                    />
+                    <span>自定义提示词</span>
+                </label>
+                <label className="source-toggle">
+                    <input
+                        type="checkbox"
+                        checked={configData.preferenceInjection.userContextEnabled}
+                        disabled={!configData.preferenceInjection.enabled}
+                        onChange={(e) => updateValue('preferenceInjection.userContextEnabled', e.target.checked)}
+                    />
+                    <span>用户上下文</span>
+                </label>
+            </div>
+        </div>
+    );
+
 	const updateStakeholder = (index: number, key: keyof Stakeholder, value: string) => {
 	    updateConfigAtPath(
 	        'userContextConfig.stakeholders.keyStakeholders',
@@ -824,6 +908,7 @@ const PromptConfig: React.FC = () => {
                         <input
                             type="text"
                             value={item}
+                            maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
                             onChange={(e) => {
                                 const newItems = [...items];
                                 newItems[index] = e.target.value;
@@ -939,11 +1024,15 @@ const PromptConfig: React.FC = () => {
         <div className="effect-preview-section">
             <div className="section-title-row">
                 <h4>生效预览</h4>
-                <span>{configSummary.hasInjectablePreferences ? '清洗后' : '未注入'}</span>
+                <span>
+                    {configSummary.hasInjectablePreferences
+                        ? `清洗后 · ${preferenceFootprint.previewCharCount} 字符 · 约 ${preferenceFootprint.estimatedTokenCount} token`
+                        : '未注入'}
+                </span>
             </div>
-            {promptRiskHints.length > 0 && (
+            {activePromptRiskHints.length > 0 && (
                 <div className="preference-warnings" role="status">
-                    {promptRiskHints.map((hint, index) => (
+                    {activePromptRiskHints.map((hint, index) => (
                         <div key={`${hint.scope}-${index}`}>
                             <strong>{hint.scopeLabel}</strong>
                             <span>{hint.message}</span>
@@ -980,6 +1069,9 @@ const PromptConfig: React.FC = () => {
                             <div>
                                 <strong>{formatHistoryTimestamp(entry.savedAt)}</strong>
                                 <span>{entry.summary}</span>
+                                {entry.changeSummary && (
+                                    <span className="history-change">{entry.changeSummary}</span>
+                                )}
                             </div>
                             <button
                                 type="button"
@@ -1031,6 +1123,7 @@ const PromptConfig: React.FC = () => {
                             <input
                                 type="text"
                                 value={configData.userContextConfig.personalInfo.title}
+                                maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
                                 onChange={(e) => updateValue('userContextConfig.personalInfo.title', e.target.value)}
                                 placeholder="您的职位"
                             />
@@ -1041,6 +1134,7 @@ const PromptConfig: React.FC = () => {
                             <input
                                 type="text"
                                 value={configData.userContextConfig.personalInfo.department}
+                                maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
                                 onChange={(e) => updateValue('userContextConfig.personalInfo.department', e.target.value)}
                                 placeholder="所在部门"
                             />
@@ -1051,6 +1145,7 @@ const PromptConfig: React.FC = () => {
                             <input
                                 type="text"
                                 value={configData.userContextConfig.personalInfo.location}
+                                maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
                                 onChange={(e) => updateValue('userContextConfig.personalInfo.location', e.target.value)}
                                 placeholder="工作地点"
                             />
@@ -1074,6 +1169,7 @@ const PromptConfig: React.FC = () => {
 	                            <input
 	                                type="text"
 	                                value={configData.userContextConfig.stakeholders.directManager}
+                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
                                 onChange={(e) => updateValue('userContextConfig.stakeholders.directManager', e.target.value)}
 	                                placeholder="直接主管姓名"
 	                            />
@@ -1102,18 +1198,21 @@ const PromptConfig: React.FC = () => {
 	                                            <input
 	                                                type="text"
 	                                                value={stakeholder.name}
+                                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                                onChange={(e) => updateStakeholder(index, 'name', e.target.value)}
 	                                                placeholder="姓名"
 	                                            />
 	                                            <input
 	                                                type="text"
 	                                                value={stakeholder.position}
+                                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                                onChange={(e) => updateStakeholder(index, 'position', e.target.value)}
 	                                                placeholder="职位"
 	                                            />
 	                                            <input
 	                                                type="text"
 	                                                value={stakeholder.relationship}
+                                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                                onChange={(e) => updateStakeholder(index, 'relationship', e.target.value)}
 	                                                placeholder="关系"
 	                                            />
@@ -1157,6 +1256,7 @@ const PromptConfig: React.FC = () => {
 	                            <input
 	                                type="text"
 	                                value={configData.userContextConfig.teamInfo.teamName}
+                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                onChange={(e) => updateValue('userContextConfig.teamInfo.teamName', e.target.value)}
 	                                placeholder="团队名称"
 	                            />
@@ -1166,6 +1266,7 @@ const PromptConfig: React.FC = () => {
 	                            <label>团队使命</label>
 	                            <textarea
 	                                value={configData.userContextConfig.teamInfo.teamMission}
+                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                onChange={(e) => updateValue('userContextConfig.teamInfo.teamMission', e.target.value)}
 	                                placeholder="团队当前使命或主要目标"
 	                                rows={3}
@@ -1187,6 +1288,7 @@ const PromptConfig: React.FC = () => {
 	                                <input
 	                                    type="text"
 	                                    value={configData.userContextConfig.teamInfo.workingHours}
+                                        maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                    onChange={(e) => updateValue('userContextConfig.teamInfo.workingHours', e.target.value)}
 	                                    placeholder="例如 10:00-19:00"
 	                                />
@@ -1214,24 +1316,28 @@ const PromptConfig: React.FC = () => {
 	                                            <input
 	                                                type="text"
 	                                                value={member.name}
+                                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                                onChange={(e) => updateTeamMember(index, 'name', e.target.value)}
 	                                                placeholder="姓名"
 	                                            />
 	                                            <input
 	                                                type="text"
 	                                                value={member.position}
+                                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                                onChange={(e) => updateTeamMember(index, 'position', e.target.value)}
 	                                                placeholder="职位"
 	                                            />
 	                                            <input
 	                                                type="text"
 	                                                value={member.role}
+                                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                                onChange={(e) => updateTeamMember(index, 'role', e.target.value)}
 	                                                placeholder="职责"
 	                                            />
 	                                            <input
 	                                                type="text"
 	                                                value={member.speciality}
+                                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                                onChange={(e) => updateTeamMember(index, 'speciality', e.target.value)}
 	                                                placeholder="专长"
 	                                            />
@@ -1305,6 +1411,7 @@ const PromptConfig: React.FC = () => {
 	                            <input
 	                                type="text"
 	                                value={configData.userContextConfig.communicationContext.culturalContext}
+                                    maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                onChange={(e) => updateValue('userContextConfig.communicationContext.culturalContext', e.target.value)}
 	                                placeholder="例如 跨时区协作、中文为主"
 	                            />
@@ -1327,6 +1434,7 @@ const PromptConfig: React.FC = () => {
 	                                <input
 	                                    type="text"
 	                                    value={configData.userContextConfig.communicationContext.reportingFormat}
+                                        maxLength={USER_CONFIG_CONTEXT_TEXT_CHAR_LIMIT}
 	                                    onChange={(e) => updateValue('userContextConfig.communicationContext.reportingFormat', e.target.value)}
 	                                    placeholder="例如 项目状态报告"
 	                                />
@@ -1413,6 +1521,9 @@ const PromptConfig: React.FC = () => {
                 <div className="sync-summary">
                     <span>{syncSource || '尚未保存'}</span>
                     {hasUnsavedChanges && <strong>有未保存修改</strong>}
+                    {pendingChangeSummary && (
+                        <span className="pending-change-summary">{pendingChangeSummary}</span>
+                    )}
                 </div>
             )}
 
@@ -1442,6 +1553,7 @@ const PromptConfig: React.FC = () => {
             </div>
 
             <div className="config-content">
+                {renderInjectionControl()}
                 {renderConfigSummary()}
                 {renderTab()}
                 {renderEffectPreview()}
@@ -1550,6 +1662,7 @@ const PromptConfig: React.FC = () => {
 
                 .sync-summary {
                     display: flex;
+                    flex-wrap: wrap;
                     align-items: center;
                     gap: 12px;
                     padding: 10px 12px;
@@ -1564,6 +1677,12 @@ const PromptConfig: React.FC = () => {
                 .sync-summary strong {
                     color: #b7791f;
                     font-weight: 600;
+                }
+
+                .pending-change-summary {
+                    min-width: 0;
+                    color: #475569;
+                    overflow-wrap: anywhere;
                 }
 
                 .status-message.success {
@@ -1605,14 +1724,86 @@ const PromptConfig: React.FC = () => {
                 }
 
                 .config-content {
-                    background: white;
-                    border-radius: 8px;
-                    padding: 24px;
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                  background: white;
+                  border-radius: 8px;
+                  padding: 24px;
+                  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                }
+
+                .injection-control-row {
+                    display: grid;
+                    grid-template-columns: minmax(0, 1fr) auto;
+                    align-items: center;
+                    gap: 12px;
+                    margin: -4px 0 16px;
+                    padding: 10px 12px;
+                    border: 1px solid #bfdbfe;
+                    border-radius: 6px;
+                    background: #eff6ff;
+                    color: #1e3a8a;
+                }
+
+                .injection-control-row.paused {
+                    border-color: #fed7aa;
+                    background: #fff7ed;
+                    color: #9a3412;
+                }
+
+                .injection-main-control {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 12px;
+                    min-width: 0;
+                }
+
+                .injection-toggle {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-weight: 600;
+                }
+
+                .injection-toggle input {
+                    margin: 0;
+                }
+
+                .injection-control-row strong {
+                    flex: 0 0 auto;
+                    font-size: 13px;
+                }
+
+                .injection-source-controls {
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: flex-end;
+                    gap: 8px;
+                }
+
+                .source-toggle {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    min-height: 28px;
+                    padding: 4px 8px;
+                    border: 1px solid rgba(59, 130, 246, 0.28);
+                    border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.7);
+                    color: inherit;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+
+                .source-toggle input {
+                    margin: 0;
+                }
+
+                .source-toggle:has(input:disabled) {
+                    opacity: 0.55;
                 }
 
                 .config-summary-strip {
-                    display: grid;
+                  display: grid;
                     grid-template-columns: repeat(4, minmax(0, 1fr));
                     gap: 0;
                     margin: -4px 0 24px;
@@ -1796,6 +1987,11 @@ const PromptConfig: React.FC = () => {
                     color: #64748b;
                     font-size: 12px;
                     overflow-wrap: anywhere;
+                }
+
+                .history-item .history-change {
+                    color: #475569;
+                    font-weight: 500;
                 }
 
                 .history-item button {
@@ -2076,6 +2272,14 @@ const PromptConfig: React.FC = () => {
 
                         .history-item {
                             grid-template-columns: 1fr;
+                        }
+
+                        .injection-control-row {
+                            grid-template-columns: 1fr;
+                        }
+
+                        .injection-source-controls {
+                            justify-content: flex-start;
                         }
 
                         .config-summary-strip {

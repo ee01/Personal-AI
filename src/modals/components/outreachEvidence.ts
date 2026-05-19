@@ -15,6 +15,7 @@ export interface OutreachEvidenceSnapshot {
   summary: string;
   relatedMessage: string;
   relatedMessageId: string;
+  relatedMessageSpeaker: string;
 }
 
 export function getLatestReplyEvent(
@@ -146,6 +147,13 @@ export function getOutreachEvidenceSnapshot(
     primaryEvidence?.sourceId ||
     session.replyPostId ||
     '';
+  const relatedMessageSpeaker =
+    primaryEvidence?.title ||
+    readString(evidenceMeta, 'sender') ||
+    readString(evidenceMeta, 'replySender') ||
+    readString(payload, 'replySender') ||
+    session.replySender?.trim() ||
+    '';
 
   const phaseLabel = phaseDisplayLabel(phaseKey);
   const stateLabel = evidenceStateLabel(
@@ -167,6 +175,7 @@ export function getOutreachEvidenceSnapshot(
     summary,
     relatedMessage,
     relatedMessageId,
+    relatedMessageSpeaker,
   };
 }
 

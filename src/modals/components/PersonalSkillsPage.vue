@@ -1296,9 +1296,15 @@ async function runOpenClawSync() {
       syncResultMessage.value = [
         `已处理 ${openclaw.processed} 条`,
         `新增建议 ${openclaw.imported} 条`,
+        `待审核变更 ${openclaw.externalChanges} 条`,
         `更新绑定 ${openclaw.updated} 条`,
+        `推送 ${openclaw.pushed} 条`,
         openclaw.errors.length ? `失败 ${openclaw.errors.length} 条` : '',
-        openclaw.hasMore ? '还有更多远端技能，可继续同步。' : '已无待导入远端技能。',
+        openclaw.externalChanges
+          ? '请到顶部 Inbox 审核外部变更。'
+          : openclaw.hasMore
+            ? '还有更多远端技能，可继续同步。'
+            : '已无待导入远端技能。',
       ].filter(Boolean).join(' · ');
       await loadData(selectedId.value);
     }

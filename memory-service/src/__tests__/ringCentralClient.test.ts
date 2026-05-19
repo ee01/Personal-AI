@@ -499,4 +499,78 @@ describe('RingCentralClient', () => {
     expect(posts[0].creatorName).toBe('Ada Lovelace');
     expect(posts[1].creatorName).toBe('Grace Hopper');
   });
+
+  it('hydrates person mention labels from chat members when listing posts', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.includes('/team-messaging/v1/chats/chat-123/posts?recordCount=50')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'post-1',
+                  text: '![:Person](1654568021) 周三差不多可以定大致的scope边界么',
+                  creator: {
+                    id: 'user-42',
+                    firstName: 'Ada',
+                    lastName: 'Lovelace',
+                  },
+                  creationTime: '2026-03-30T08:00:00Z',
+                },
+              ],
+            }),
+        };
+      }
+      if (url.endsWith('/team-messaging/v1/persons/1654568021')) {
+        return {
+          ok: false,
+          status: 404,
+          text: async () => JSON.stringify({ message: 'not found' }),
+        };
+      }
+      if (url.endsWith('/team-messaging/v1/chats/chat-123')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'chat-123',
+              type: 'Team',
+              members: [
+                {
+                  id: '1654568021',
+                  firstName: 'Rebecca',
+                  lastName: 'Cao',
+                  email: 'rebecca.cao@example.com',
+                },
+              ],
+            }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const client = new RingCentralClient(userDataManager, db);
+    const posts = await client.listPosts('chat-123');
+
+    expect(posts[0].mentionLabels).toMatchObject({
+      '1654568021': 'Rebecca Cao',
+    });
+
+    const stored = db
+      .prepare(`SELECT display_name FROM rc_directory_users WHERE entity_id = ?`)
+      .get('1654568021') as { display_name: string } | undefined;
+    expect(stored?.display_name).toBe('Rebecca Cao');
+  });
 });

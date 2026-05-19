@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 import { contentHash } from '../utils/hashing.js';
+import { buildExploreLink } from '../utils/exploreLink.js';
 import { now } from '../utils/time.js';
 
 type RadarState = 'core' | 'active' | 'rising' | 'dormant' | 'watch';
@@ -1798,7 +1799,7 @@ function toMessageEvidenceRef(message: MessageRow): RelationshipEvidenceRef {
     snippet: cleanText(message.summary || message.content).slice(0, 220),
     timestamp: message.timestamp,
     sourceUrl: message.source_url ?? undefined,
-    exploreLink: `#/timeline?focus=message:${encodeURIComponent(message.id)}`,
+    exploreLink: buildExploreLink({ type: 'message', id: message.id }),
   };
 }
 

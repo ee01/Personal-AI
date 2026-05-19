@@ -1,6 +1,6 @@
 # Compose Assist
 
-_最后更新: 2026-05-14_
+_最后更新: 2026-05-19_
 
 ## 定位
 
@@ -53,12 +53,16 @@ Compose Assist 不做：
 
 UI 行为：
 
+- 只有 `CONTEXT_ASSIST_ENABLED` 和 `COMPOSE_ASSIST_ENABLED` 都不是 `false` 时才启动；任一开关关闭时，前端清理 icon/glow，background 也会拒绝新的 assist 请求。
 - 输入框右上角吸附 `static/icons/icon48.png`。
 - hover icon 时，左侧展开“建议内容”预览。
 - 有建议时，当前输入框显示同色红色 glow。
 - 切换输入框或焦点离开可支持输入框时，旧输入框的 glow 会被清理，避免误导用户还有可插入建议。
 - 低风险建议点击 icon 只插入建议内容，不发送、不提交。
 - `previewRequired=true` 或高风险建议必须先打开固定预览，再点击预览内“插入”按钮；固定预览展示完整待插入内容，hover 预览可以裁短。Web AI context pack 默认走这条路径，避免把隐私上下文误插入 prompt。
+- 预览框会显示命中的记忆数量、风险级别和简短来源，帮助用户判断是否应该插入；靠近视口底部时会自动向上展开并限制高度，避免“插入”按钮被屏幕边缘挡住。
+- 需要预览的建议支持先“复制”而不修改输入框；用户可以把 context pack 放到别处检查，再决定是否插入。
+- 用户在建议生成中或建议出现后继续编辑草稿时，前端会立刻收起旧建议并重新 debounce 请求；旧草稿版本返回的响应会被丢弃，避免插入过期回复。
 - 建议框右上角有小 thumb-down。点击后隐藏当前建议，并降低后续同类低质建议的出现概率。
 - `Escape` 或 thumb-down 会 dismiss 当前 context，一段时间内不再重复展示同一条。
 
@@ -68,6 +72,7 @@ Compose Assist 的展示阈值是输入框 surface 自己的 UI gating，不影�
 
 配置：
 
+- 功能开关：`chrome.storage.local.envConfig.COMPOSE_ASSIST_ENABLED`，同时受父级 `CONTEXT_ASSIST_ENABLED` 控制。
 - 存储位置：`chrome.storage.local.envConfig.COMPOSER_GUARD_CONFIDENCE_THRESHOLD`
 - 默认值：`0.78`
 - 下界：`0.62`
@@ -104,6 +109,7 @@ Thread 回复框：
 - 只读取 thread root + 当前 thread 可见回复，默认最多 12 条。
 - 不混入主群底部消息。
 - `thread_root` 必须进入 `contextItems`。
+- 前端用当前命中的输入框判断 main/thread snapshot，避免焦点状态变化时把 thread 回复误当主会话回复。
 
 自我发言识别：
 
@@ -124,7 +130,7 @@ Thread 回复框：
 
 - 覆盖 ChatGPT、豆包、Claude、Gemini 的网页输入框。
 - 读取当前页面可见的最近 conversation turns，默认不 live 抓取完整外部平台历史。
-- 召回来源可以包含已沉淀的 `ai_chat`、`doubao`、网页记忆、用户偏好和 skill。
+- 召回来源可以包含已沉淀的 `ai_chat`、`doubao`、网页记忆、用户画像、Markdown 沉淀和 reflection/skill 记忆。
 - 输出是可插入到 prompt 输入框的 context pack，不自动提交。
 
 ## 请求模型
@@ -213,8 +219,8 @@ Today Pilot 负责“今天要注意什么”和“会议前已经准备了什�
 本轮调研后保留的产品原则：
 
 - Gmail Smart Compose 适合短补全：低打扰、用户显式接受、可关闭个性化。
-- Grammarly rewrite / Outlook Copilot 适合整段生成：先展示候选内容，再由用户选择 accept/insert/keep。
-- 论文讨论里对 AI 写作助手的共同建议是保留用户 agency、显式控制个性化和隐私边界。Compose Assist 因为会带入 Personal AI 记忆，所以整段建议和 Web AI context pack 不能只依赖 hover 预览。
+- Grammarly rewrite / Outlook Copilot 适合整段生成：先展示候选内容，再由用户选择 accept/insert/keep，并保留改写、丢弃或继续编辑路径。
+- 论文讨论里对 AI 写作助手的共同建议是保留用户 agency、显式控制个性化和隐私边界，并让用户能看懂建议来源和风险。Compose Assist 因为会带入 Personal AI 记忆，所以整段建议和 Web AI context pack 不能只依赖 hover 预览。
 
 ## 验证
 
@@ -229,6 +235,8 @@ npm --prefix memory-service test -- --run src/__tests__/api-composer-assist.test
 ```bash
 TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/composer-guard/__tests__/ComposerGuardController.test.ts
 npm start
+node tools/verify-compose-assist-draft-staleness-e2e.mjs
+node tools/verify-compose-assist-preview-actions-e2e.mjs
 ```
 
 等待首次 webpack dev compile 成功后停止 watch。
@@ -242,5 +250,7 @@ npm start
 - Jira comment 输出正式 comment，不输出即时通讯口吻。
 - 同一事实面向老板、开发小群、Jira comment 时语气不同。
 - 用户 draft 里的无关关键词不污染主召回。
+- 用户在旧建议请求未返回前继续输入时，不渲染也不能插入旧草稿版本的建议；输入停下后只展示基于最新 draft 的建议。
+- `previewRequired=true` 的 Web AI context pack 可以先复制且不会写入输入框，只有点击“插入”才修改输入框。
 - 默认阈值 `0.78` 下，低置信建议不展示；插入会降低阈值，thumb-down 会提高阈值。
 - `previewRequired=true` 或 `riskLevel=high` 时，点击 icon 只打开固定预览，必须点预览里的“插入”才会写入输入框。

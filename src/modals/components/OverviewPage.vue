@@ -236,7 +236,7 @@
                   class="card-action secondary"
                   @click.stop="hideCardForToday(card, 'later')"
                 >
-                  稍后
+                  稍后 6h
                 </button>
                 <button
                   type="button"
@@ -897,7 +897,7 @@ async function loadContextPack(card: MissionCard, force = false) {
   loading.add(card.id);
   contextPackLoadingIds.value = loading;
   try {
-    const pack = await client.renderDayPilotContextPack(card.missionId, {
+    const pack = await client.renderTodayPilotContextPack(card.missionId, {
       tokenBudget: 1600,
       targetProvider: contextProvider.value,
       includeSensitive: includeSensitiveContext.value,
@@ -918,7 +918,7 @@ async function loadContextPack(card: MissionCard, force = false) {
 
 async function sendCardSignal(card: MissionCard, action: 'useful' | 'wrong') {
   try {
-    const feedback = await client.sendDayPilotCardFeedback(card.id, {
+    const feedback = await client.sendTodayPilotCardFeedback(card.id, {
       action,
       muteKey: card.sourceHash,
     });
@@ -936,12 +936,13 @@ async function hideCardForToday(
   card: MissionCard,
   reason: 'done' | 'later' | 'mute',
 ) {
+  const previousHiddenIds = new Set(hiddenDayPilotCardIds.value);
   hiddenDayPilotCardIds.value = new Set([
-    ...Array.from(hiddenDayPilotCardIds.value),
+    ...Array.from(previousHiddenIds),
     card.id,
   ]);
   try {
-    const feedback = await client.sendDayPilotCardFeedback(card.id, {
+    const feedback = await client.sendTodayPilotCardFeedback(card.id, {
       action: reason,
       snoozeUntil:
         reason === 'later'
@@ -952,10 +953,13 @@ async function hideCardForToday(
     dayBrief.value = feedback.brief;
   } catch (error) {
     console.error('写入 Day Pilot feedback 失败:', error);
+    hiddenDayPilotCardIds.value = previousHiddenIds;
+    showToast('反馈写入失败，卡片已恢复。');
+    return;
   }
   const messages = {
     done: '已从今日首页移除。',
-    later: '已放到稍后，今天首页不再显示。',
+    later: '已放到稍后，6 小时内不再显示。',
     mute: '已静默同类提醒。',
   };
   showToast(messages[reason]);

@@ -4,6 +4,7 @@ export type AgentFlowStepType = 'analysis' | 'thought' | 'tool' | 'decision';
 export type AgentFlowStepResultClass =
   | 'success'
   | 'error'
+  | 'approval'
   | 'blocked'
   | 'empty'
   | 'skipped'
@@ -16,6 +17,18 @@ export interface AgentRunReviewItem {
   title: string;
   detail: string;
   action: string;
+}
+
+export interface AgentPendingApprovalAction {
+  stepIndex: number;
+  toolId: string;
+  approvalKey: string;
+  effect?: string;
+  riskLevel?: string;
+  paramsPreview: string;
+  reviewPayload: string;
+  message: string;
+  reviewHint: string;
 }
 
 export interface AgentFlowStep {
@@ -69,6 +82,12 @@ export const stepHasToolBlocked = (step: ThoughtStep) => {
   return getToolResultValues(step).some((value: any) => Boolean(value?.blocked));
 };
 
+export const stepHasToolApprovalRequired = (step: ThoughtStep) => {
+  return getToolResultValues(step).some((value: any) =>
+    Boolean(value?.approvalRequired || value?.reason === 'approval_required'),
+  );
+};
+
 const isEmptyEvidenceValue = (value: any) => {
   if (!value || typeof value !== 'object') return false;
   if (
@@ -117,6 +136,16 @@ export const stepAllToolResultsBlocked = (step: ThoughtStep) => {
   return values.length > 0 && values.every((value: any) => Boolean(value?.blocked));
 };
 
+export const stepAllToolResultsApprovalRequired = (step: ThoughtStep) => {
+  const values = getToolResultValues(step);
+  return (
+    values.length > 0 &&
+    values.every((value: any) =>
+      Boolean(value?.approvalRequired || value?.reason === 'approval_required'),
+    )
+  );
+};
+
 export const stepAllToolResultsSkipped = (step: ThoughtStep) => {
   const values = getToolResultValues(step);
   return values.length > 0 && values.every((value: any) => Boolean(value?.skipped));
@@ -128,12 +157,163 @@ export const clipText = (text: string, maxLength = 120) => {
   return `${cleanText.substring(0, maxLength)}...`;
 };
 
+const getFirstApprovalKey = (step: ThoughtStep) => {
+  const approvalValue = getToolResultValues(step).find(
+    (value: any) => typeof value?.approvalKey === 'string' && value.approvalKey,
+  );
+  return approvalValue?.approvalKey || '';
+};
+
+const isApprovalRequiredValue = (value: any) => {
+  return Boolean(value?.approvalRequired || value?.reason === 'approval_required');
+};
+
+const normalizeApprovalValueList = (value: any): any[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => normalizeApprovalValueList(item));
+  }
+  if (value && typeof value === 'object') return [value];
+  return [];
+};
+
+const stringifyApprovalParams = (params: any) => {
+  if (!params || typeof params !== 'object') return '无参数';
+
+  try {
+    return JSON.stringify(params);
+  } catch (_error) {
+    return '参数无法显示';
+  }
+};
+
+const stringifyApprovalReviewPayload = (payload: Record<string, any>) => {
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch (_error) {
+    return JSON.stringify({
+      ...payload,
+      params: undefined,
+      paramsPreview: payload.paramsPreview || '参数无法显示',
+    }, null, 2);
+  }
+};
+
+export const formatApprovalEffect = (effect?: string) => {
+  const labels: Record<string, string> = {
+    read: '只读',
+    external_read: '外部只读',
+    write: '写入',
+    notify: '通知',
+    delete: '删除',
+  };
+  return labels[effect || ''] || effect || '未知动作';
+};
+
+export const formatApprovalRisk = (riskLevel?: string) => {
+  const labels: Record<string, string> = {
+    low: '低风险',
+    medium: '中风险',
+    high: '高风险',
+  };
+  return labels[riskLevel || ''] || riskLevel || '未知风险';
+};
+
+export const buildApprovalReviewHint = (
+  effect?: string,
+  riskLevel?: string,
+) => {
+  const effectHints: Record<string, string> = {
+    read: '确认读取范围和敏感数据边界。',
+    external_read: '确认外部读取范围、账号权限和敏感数据边界。',
+    write: '确认写入对象、字段变化和回滚方式后再批准。',
+    notify: '确认通知内容、接收渠道和触发原因后再批准。',
+    delete: '确认删除对象、影响范围和恢复方式后再批准。',
+  };
+  const riskHints: Record<string, string> = {
+    low: '',
+    medium: '中风险动作需要确认参数无误。',
+    high: '高风险动作需要明确用户授权。',
+  };
+  return [
+    effectHints[effect || ''] || '确认工具动作、参数和影响范围后再批准。',
+    riskHints[riskLevel || ''],
+  ]
+    .filter(Boolean)
+    .join(' ');
+};
+
+export function buildPendingApprovalActions(
+  thoughtProcess: ThoughtStep[],
+): AgentPendingApprovalAction[] {
+  return thoughtProcess.flatMap((step, stepIndex) => {
+    const result = getToolResultObject(step);
+    if (!result || typeof result !== 'object') return [];
+
+    const entries = Array.isArray(result)
+      ? [[step.toolUsed || '工具', result] as const]
+      : Object.entries(result);
+
+    return entries.flatMap(([toolId, value]) =>
+      normalizeApprovalValueList(value)
+        .filter(isApprovalRequiredValue)
+        .map((approvalValue: any) => {
+          const approvalKey =
+            typeof approvalValue.approvalKey === 'string'
+              ? approvalValue.approvalKey
+              : '';
+          const paramsPreview = stringifyApprovalParams(approvalValue.params);
+          const message =
+            typeof approvalValue.message === 'string'
+              ? approvalValue.message
+              : `${toolId} 需要人工确认。`;
+          const reviewHint = buildApprovalReviewHint(
+            approvalValue.effect,
+            approvalValue.riskLevel,
+          );
+          const reviewPayload = stringifyApprovalReviewPayload({
+            type: 'agent_tool_approval_review',
+            toolId,
+            approvalKey,
+            effect: approvalValue.effect || 'unknown',
+            riskLevel: approvalValue.riskLevel || 'unknown',
+            stepNumber: stepIndex + 1,
+            params: approvalValue.params ?? null,
+            paramsPreview,
+            message,
+            reviewHint,
+            allowedDecisions: [
+              'approve_with_approvalKey',
+              'reject',
+              'edit_params_then_regenerate_key',
+            ],
+            resumeInstruction:
+              '批准时把 approvalKey 放入 approvedToolActionKeys 后重新运行；拒绝或修改参数时不要复用旧 key。',
+          });
+
+          return {
+            stepIndex,
+            toolId,
+            approvalKey,
+            effect: approvalValue.effect,
+            riskLevel: approvalValue.riskLevel,
+            paramsPreview,
+            reviewPayload,
+            message,
+            reviewHint,
+          };
+        }),
+    );
+  });
+}
+
 export const getStepKind = (step: ThoughtStep) => {
   if (step.action === 'finish') return '完成';
   if (step.action === 'max_actions_reached') return '已截断';
   if (step.action === 'stopped') return '已停止';
   if (step.toolUsed) {
     if (stepHasToolError(step)) return '失败';
+    if (stepAllToolResultsApprovalRequired(step)) return '待确认';
+    if (stepHasToolApprovalRequired(step)) return '部分待确认';
     if (stepAllToolResultsBlocked(step)) return '已阻断';
     if (stepHasToolBlocked(step)) return '部分阻断';
     if (stepAllToolResultsEmptyEvidence(step)) return '证据不足';
@@ -151,6 +331,7 @@ export const getStepKindClass = (step: ThoughtStep) => {
   if (step.action === 'stopped') return 'stopped';
   if (step.toolUsed) {
     if (stepHasToolError(step)) return 'error';
+    if (stepHasToolApprovalRequired(step)) return 'approval';
     if (stepHasToolBlocked(step)) return 'blocked';
     if (stepHasEmptyToolEvidence(step)) return 'empty';
     if (stepAllToolResultsSkipped(step)) return 'skipped';
@@ -170,6 +351,12 @@ export const getStepSummary = (step: ThoughtStep) => {
 
     if (stepHasToolError(step)) {
       return `${toolList || '工具'} 调用失败，需要查看调试详情。`;
+    }
+    if (stepHasToolApprovalRequired(step)) {
+      if (stepAllToolResultsApprovalRequired(step)) {
+        return `${toolList || '工具'} 需要人工确认，当前未执行。`;
+      }
+      return `${toolList || '工具'} 中部分调用需要人工确认，未确认的动作已阻断。`;
     }
     if (stepHasToolBlocked(step)) {
       if (stepAllToolResultsBlocked(step)) {
@@ -220,6 +407,11 @@ export const getStepDiagnosticSummary = (step: ThoughtStep) => {
     if (stepHasToolError(step)) {
       return '工具调用失败。请检查工具配置、网络/API 权限或参数后重试。';
     }
+    if (stepHasToolApprovalRequired(step)) {
+      const approvalKey = getFirstApprovalKey(step);
+      const approvalKeyText = approvalKey ? ` 批准 key: ${approvalKey}。` : '';
+      return `工具涉及写入、通知、删除或更高风险动作，需要调用方先展示给用户确认；确认后用精确匹配工具和参数的批准 key 重新执行。${approvalKeyText}`;
+    }
     if (stepHasToolBlocked(step)) {
       return '工具调用被执行前校验拦截，通常是工具未注册或缺少必填参数。';
     }
@@ -257,7 +449,14 @@ export function buildAgentRunReviewItems(
   if (thoughtProcess.length === 0) return [];
 
   const toolErrorCount = countSteps(thoughtProcess, stepHasToolError);
-  const blockedCount = countSteps(thoughtProcess, stepHasToolBlocked);
+  const approvalRequiredCount = countSteps(
+    thoughtProcess,
+    stepHasToolApprovalRequired,
+  );
+  const blockedCount = countSteps(
+    thoughtProcess,
+    (step) => stepHasToolBlocked(step) && !stepHasToolApprovalRequired(step),
+  );
   const emptyEvidenceCount = countSteps(thoughtProcess, stepHasEmptyToolEvidence);
   const skippedCount = countSteps(thoughtProcess, stepWasSkipped);
   const budgetCount = countSteps(
@@ -279,6 +478,15 @@ export function buildAgentRunReviewItems(
       title: '工具调用失败',
       detail: `${toolErrorCount} 个工具步骤失败，最终判断可能缺少证据。`,
       action: '检查工具配置、网络/API 权限或参数后重新运行。',
+    });
+  }
+
+  if (approvalRequiredCount > 0) {
+    items.push({
+      severity: 'warning',
+      title: '需要人工确认',
+      detail: `${approvalRequiredCount} 个工具步骤涉及高风险或外部副作用动作，已暂停执行。`,
+      action: '先让用户确认具体工具和参数，再带对应批准 key 重新运行。',
     });
   }
 
@@ -391,6 +599,12 @@ export function getToolStepResultPresentation(step: ThoughtStep): {
   if (stepHasToolError(step)) {
     return { label: '失败', className: 'error' };
   }
+  if (stepAllToolResultsApprovalRequired(step)) {
+    return { label: '待确认', className: 'approval' };
+  }
+  if (stepHasToolApprovalRequired(step)) {
+    return { label: '部分待确认', className: 'approval' };
+  }
   if (stepAllToolResultsBlocked(step)) {
     return { label: '已阻断', className: 'blocked' };
   }
@@ -417,6 +631,9 @@ export function buildAgentFlowSteps(
   formatTime: (timestamp: number) => string,
 ): AgentFlowStep[] {
   if (thoughtProcess.length === 0) return [];
+  const terminalStep = thoughtProcess.find((step) =>
+    ['finish', 'max_actions_reached', 'stopped'].includes(step.action),
+  );
 
   const flowSteps: AgentFlowStep[] = [
     {
@@ -426,7 +643,7 @@ export function buildAgentFlowSteps(
     },
   ];
 
-  thoughtProcess.forEach((step, index) => {
+  thoughtProcess.forEach((step) => {
     if (step.toolUsed) {
       const presentation = getToolStepResultPresentation(step);
       flowSteps.push({
@@ -436,7 +653,9 @@ export function buildAgentFlowSteps(
         resultClass: presentation.className,
         time: formatTime(step.timestamp),
       });
-    } else if (index > 0 || step.action !== 'finish') {
+    } else if (
+      !['finish', 'max_actions_reached', 'stopped'].includes(step.action)
+    ) {
       flowSteps.push({
         type: 'thought',
         name: '思考分析',
@@ -445,11 +664,19 @@ export function buildAgentFlowSteps(
     }
   });
 
-  flowSteps.push({
-    type: 'decision',
-    name: '最终决策',
-    time: formatTime(thoughtProcess[thoughtProcess.length - 1].timestamp + 1000),
-  });
+  if (terminalStep) {
+    const terminalName =
+      terminalStep.action === 'max_actions_reached'
+        ? '预算耗尽'
+        : terminalStep.action === 'stopped'
+          ? '已停止'
+          : '最终决策';
+    flowSteps.push({
+      type: 'decision',
+      name: terminalName,
+      time: formatTime(terminalStep.timestamp),
+    });
+  }
 
   return flowSteps;
 }

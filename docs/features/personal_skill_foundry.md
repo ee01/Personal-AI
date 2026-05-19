@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-05-13_
+_最后更新: 2026-05-16_
 
 ## 是什么
 
@@ -184,6 +184,8 @@ Codex CLI / Claude Code / Cursor 的 skill 目录在本机文件系统里，Chro
 
 如果 Desktop App 未安装或未运行，UI 对 Codex CLI / Claude Code / Cursor 显示 `状态未知`，而不是 `未安装`。绑定 tab 顶部会引导用户下载安装最新版 Desktop App。
 
+同步到本机目录时，Memory Service 会使用和 Desktop App 扫描器一致的文件系统包哈希（`SKILL.md` + files）记录平台绑定。这样刚推送到本机目录的 skill 下一轮扫描不会因为 Personal AI 内部 package 哈希不同而被误判为外部变更。
+
 ### Manual-only 平台
 
 ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句安装指引。
@@ -230,7 +232,7 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 
 ## 建设性改进方向
 
-结合 Claude Skills、LangChain long-term memory、OpenAI Agents SDK guardrails / tracing，以及 Skill-Pro、SkillX、SSL skill representation 等近期 agent skill / procedural memory 论文，后续优先级建议：
+结合 Claude Skills、LangChain long-term memory、OpenAI Agents SDK guardrails / tracing，以及 SkillX、SkillFoundry、SkillGen、GoSkills 等近期 agent skill / procedural memory 论文，后续优先级建议：
 
 - Skill package 继续保持 `SKILL.md` 主文件轻量，把大参考、模板、脚本放到 files 中按需加载，减少 agent 上下文常驻成本。
 - 审核 gate 后续可以加入更细的来源可信度、脚本权限分类和安装前 diff 预览，让用户更快判断外部导入技能是否可信。
@@ -238,17 +240,18 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - 将 trigger、执行结构、工具/文件副作用和证据状态提取成结构化摘要，用于搜索、风险评估和审核，而不是只依赖 `SKILL.md` 原文。
 - 为长期演进增加 run receipt / 失败反馈的轻量入口，不做重 eval 面板，但让用户能把“这个 skill 不好用”的证据回流到版本记录。
 - 同步链路继续保留 per-platform 开关；如需例外，优先通过 skill risk / scope 做过滤，而不是在首屏引入 per-skill 多平台矩阵。
+- 如果技能库继续扩大，后续检索不应只返回扁平 skill 列表；可以按任务入口、支持技能、检查点和避免事项组织成小型执行包，减少 agent 误选或漏读。
 
 本轮调研后新增的短期产品判断：
 
 - Claude Skills 把 skill 明确定义为包含 instructions、metadata、scripts、templates 的能力包，并强调 progressive disclosure；因此 Foundry 应继续把短触发描述和完整资源分层，而不是把所有资料塞进主 `SKILL.md`。
 - Claude 官方文档也提醒第三方 skill 可能带来工具滥用和数据外泄风险；这支持了本轮把外部 active 更新改成审核建议，而不是自动覆盖。
 - OpenAI Agents SDK 的 guardrails / tracing 说明生产 agent 需要围绕工具调用和运行轨迹做可审计边界；Foundry 后续应把“确认覆盖”记录成版本证据，而不只做一次 UI 弹窗。
-- SkillX、AutoSkill 等 2026 年论文都把执行反馈、技能库自演进和跨 agent 共享作为核心方向；Foundry 目前不需要重 eval 面板，但需要保留轻量 run receipt / 失败反馈入口。
+- SkillX、SkillFoundry、SkillGen 等 2026 年论文都把执行反馈、来源证据、验证测试和技能库自演进作为核心方向；Foundry 目前不需要重 eval 面板，但需要保留轻量 run receipt / 失败反馈入口。
 
 ## Reminders 反馈
 
-本轮尝试检查本机 Reminders 的 `Personal AI` 列表：Computer Use 能看到 Reminders 正在运行，但无法取得可读窗口；AppleScript 枚举列表在 5 秒超时内没有返回；本地 Reminders 数据目录也被 macOS 隐私权限拒绝。因此本轮没有可靠读取到新的 Reminder item，也没有可标记 done 的条目。
+2026-05-16 自动化核对：本机 Reminders 未发现名为 `Personal AI` 的列表；跨列表关键词检索在当前 Reminders 数据量下触发 AppleEvent 超时。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
 
 外部参考：
 
@@ -258,6 +261,9 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/)
 - [Skill-Pro: Learning Reusable Skills from Experience](https://arxiv.org/abs/2602.01869)
 - [SkillX: Automatically Constructing Skill Knowledge Bases for Agents](https://arxiv.org/abs/2604.04804)
+- [SKILLFOUNDRY: Building Self-Evolving Agent Skill Libraries from Heterogeneous Scientific Resources](https://arxiv.org/abs/2604.03964)
+- [SkillGen: Verified Inference-Time Agent Skill Synthesis](https://arxiv.org/abs/2605.10999)
+- [Group of Skills: Group-Structured Skill Retrieval for Agent Skill Libraries](https://arxiv.org/abs/2605.06978)
 - [From Skill Text to Skill Structure: SSL Representation for Agent Skills](https://arxiv.org/abs/2604.24026)
 
 ## 验证建议

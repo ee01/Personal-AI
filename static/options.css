@@ -222,6 +222,20 @@
   padding-top: 12px;
 }
 
+.agent-workflow-test-result.stale {
+  border-top-color: #eac54f;
+}
+
+.agent-test-stale-banner {
+  border: 1px solid #f0d98c;
+  border-radius: 6px;
+  background: #fff8c5;
+  color: #7d4e00;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .agent-test-decision-row {
   display: flex;
   flex-wrap: wrap;
@@ -251,6 +265,92 @@
 .agent-test-decision.review {
   background: #fff8c5;
   color: #9a6700;
+}
+
+.agent-workflow-verdict {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  border: 1px solid #d8dee4;
+  border-left: 5px solid #0969da;
+  border-radius: 6px;
+  background: #fff;
+  padding: 10px 11px;
+  color: #24292f;
+  line-height: 1.45;
+}
+
+.agent-workflow-verdict > span,
+.agent-workflow-verdict > b {
+  width: fit-content;
+  border-radius: 999px;
+  background: #ddf4ff;
+  color: #0969da;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.agent-workflow-verdict > b {
+  align-self: start;
+  background: #f6f8fa;
+  color: #57606a;
+  font-style: normal;
+}
+
+.agent-workflow-verdict strong {
+  display: block;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-verdict small,
+.agent-workflow-verdict em {
+  display: block;
+  color: #57606a;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-verdict.ready {
+  border-left-color: #1a7f37;
+}
+
+.agent-workflow-verdict.ready > span {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.agent-workflow-verdict.review {
+  border-left-color: #bf8700;
+}
+
+.agent-workflow-verdict.review > span {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
+.agent-workflow-verdict.blocked {
+  border-left-color: #cf222e;
+}
+
+.agent-workflow-verdict.blocked > span {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.agent-workflow-verdict.idle {
+  border-left-color: #8c959f;
+  background: #f6f8fa;
+}
+
+.agent-workflow-verdict.idle > span {
+  background: #eaeef2;
+  color: #57606a;
 }
 
 .agent-workflow-path {
@@ -329,6 +429,93 @@
 }
 
 .agent-workflow-path-item.muted > span {
+  background: #eaeef2;
+  color: #57606a;
+}
+
+.agent-workflow-readiness {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-workflow-readiness-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.agent-workflow-readiness-item {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d8dee4;
+  border-left: 4px solid #57606a;
+  border-radius: 6px;
+  background: #fff;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-workflow-readiness-item > span {
+  width: fit-content;
+  border-radius: 999px;
+  background: #f6f8fa;
+  color: #57606a;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.agent-workflow-readiness-item strong {
+  color: #24292f;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-readiness-item small,
+.agent-workflow-readiness-item em {
+  min-width: 0;
+  color: #57606a;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.agent-workflow-readiness-item.ready {
+  border-left-color: #1a7f37;
+}
+
+.agent-workflow-readiness-item.ready > span {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.agent-workflow-readiness-item.review {
+  border-left-color: #bf8700;
+}
+
+.agent-workflow-readiness-item.review > span {
+  background: #fff8c5;
+  color: #9a6700;
+}
+
+.agent-workflow-readiness-item.blocked {
+  border-left-color: #cf222e;
+}
+
+.agent-workflow-readiness-item.blocked > span {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.agent-workflow-readiness-item.skipped {
+  border-left-color: #8c959f;
+  background: #f6f8fa;
+}
+
+.agent-workflow-readiness-item.skipped > span {
   background: #eaeef2;
   color: #57606a;
 }
@@ -818,6 +1005,7 @@
   .agent-test-trace-step summary,
   .agent-test-tool,
   .agent-workflow-diagnostic,
+  .agent-workflow-verdict,
   .agent-workflow-next-action {
     grid-template-columns: 1fr;
   }
@@ -879,6 +1067,61 @@
 
 .tools-table tr:nth-child(even) {
   background-color: #f9f9f9;
+}
+
+.tool-safety {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.tool-safety-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  border: 1px solid #d0d7de;
+  color: #57606a;
+  background: #f6f8fa;
+  white-space: nowrap;
+}
+
+.tool-safety-badge.effect.read,
+.tool-safety-badge.effect.external_read,
+.tool-safety-badge.risk.low,
+.tool-safety-badge.approval.clear {
+  color: #1a7f37;
+  border-color: #aceebb;
+  background: #dafbe1;
+}
+
+.tool-safety-badge.effect.write,
+.tool-safety-badge.effect.notify,
+.tool-safety-badge.risk.medium,
+.tool-safety-badge.approval.required {
+  color: #9a6700;
+  border-color: #eac54f;
+  background: #fff8c5;
+}
+
+.tool-safety-badge.effect.delete,
+.tool-safety-badge.risk.high {
+  color: #cf222e;
+  border-color: #ffb3ad;
+  background: #ffebe9;
+}
+
+.tool-safety-note {
+  flex-basis: 100%;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .demo-section {

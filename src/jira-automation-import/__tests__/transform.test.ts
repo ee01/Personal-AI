@@ -6,6 +6,7 @@ import {
   JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH,
   buildJiraAutomationImportedRuleName,
   buildJiraAutomationImportRule,
+  buildJiraAutomationImportReviewFindings,
   buildJiraAutomationImportReviewChecklist,
   buildJiraAutomationImportReviewNote,
   buildJiraAutomationImportWarnings,
@@ -116,6 +117,7 @@ test('buildJiraAutomationImportRule preserves source description and appends rev
   assert.ok(importRule.description?.includes('Personal AI import review'));
   assert.ok(importRule.description?.includes('Imported as a disabled copy into TGT (22222).'));
   assert.ok(importRule.description?.includes('custom field'));
+  assert.ok(importRule.description?.includes('Top detected bindings: JQL / filters (1): project = SRC AND customfield_12345 is not EMPTY'));
   assert.ok(importRule.description?.includes('Rule chaining: blocked in imported copy.'));
 });
 
@@ -314,7 +316,7 @@ test('summarizeJiraAutomationImportRule detects environment-bound references for
         type: 'jira.issue.outgoing.webhook',
         value: {
           url: 'https://hooks.example.com/SRC/release',
-          payload: '{"projectId":"11111","field":"customfield_54321"}',
+          payload: '{"projectId":"11111","field":"customfield_54321","owner":"{{issue.assignee.accountId}}"}',
           recipients: 'release-owner@example.com',
           actorAccountId: 'abc-123-account',
           connectionId: 'prod-webhook-connection',
@@ -335,6 +337,7 @@ test('summarizeJiraAutomationImportRule detects environment-bound references for
   assert.equal(summary.savedFilterReferenceCount, 2);
   assert.equal(summary.connectionReferenceCount, 1);
   assert.equal(summary.sourceProjectReferenceCount, 3);
+  assert.equal(summary.smartValueReferenceCount, 1);
   assert.deepEqual(reviewSignals.jqlReferences, ['project = SRC AND status = Done AND customfield_12345 is not EMPTY AND filter = 98765']);
   assert.deepEqual(reviewSignals.hardcodedUrls, ['https://hooks.example.com/SRC/release']);
   assert.deepEqual(reviewSignals.emailReferences, ['release-owner@example.com']);
@@ -342,8 +345,188 @@ test('summarizeJiraAutomationImportRule detects environment-bound references for
   assert.deepEqual(reviewSignals.customFieldReferences, ['customfield_12345', 'customfield_54321']);
   assert.deepEqual(reviewSignals.savedFilterReferences, ['filter = 98765', 'savedFilterId: 13579']);
   assert.deepEqual(reviewSignals.connectionReferences, ['connectionId: prod-webhook-connection']);
+  assert.deepEqual(reviewSignals.smartValueReferences, ['{{issue.assignee.accountId}}']);
   assert.ok(reviewSignals.sourceProjectReferences.some((reference) => reference.includes('project = SRC')));
   assert.ok(reviewSignals.sourceProjectReferences.some((reference) => reference.includes('projectId')));
+});
+
+test('collectJiraAutomationImportReviewSignals redacts sensitive and masked values', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          authorizationHeader: '*****',
+          apiToken: 'prod-api-token-123',
+        },
+      },
+    ],
+  };
+
+  const summary = summarizeJiraAutomationImportRule(rule);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const findings = buildJiraAutomationImportReviewFindings(rule);
+  const warnings = buildJiraAutomationImportWarnings(rule);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+
+  assert.equal(summary.sensitiveReferenceCount, 2);
+  assert.deepEqual(reviewSignals.sensitiveReferences, [
+    'authorizationHeader: hidden/masked value',
+    'apiToken: sensitive value present',
+  ]);
+  assert.equal(findings.find((finding) => finding.id === 'sensitive-values')?.severity, 'high');
+  assert.ok(warnings.some((warning) => warning.includes('Re-enter masked web request headers')));
+  assert.ok(note.includes('Sensitive / hidden values (2): authorizationHeader: hidden/masked value | apiToken: sensitive value present'));
+  assert.ok(!note.includes('prod-api-token-123'));
+});
+
+test('collectJiraAutomationImportReviewSignals redacts sensitive URL credentials and parameters', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://user:pass@hooks.example.com/SRC/release?apiToken=prod-api-token-123&project=SRC&debug=true#access_token=secret-fragment',
+        },
+      },
+    ],
+  };
+
+  const summary = summarizeJiraAutomationImportRule(rule);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+
+  assert.equal(summary.hardcodedUrlCount, 1);
+  assert.equal(summary.sensitiveReferenceCount, 3);
+  assert.deepEqual(reviewSignals.hardcodedUrls, [
+    'https://REDACTED:REDACTED@hooks.example.com/SRC/release?apiToken=REDACTED&project=SRC&debug=true#REDACTED',
+  ]);
+  assert.deepEqual(reviewSignals.sensitiveReferences, [
+    'URL credentials: sensitive value present',
+    'URL query apiToken: sensitive value present',
+    'URL fragment: sensitive value present',
+  ]);
+  assert.ok(note.includes('Hard-coded URLs (1): https://REDACTED:REDACTED@hooks.example.com/SRC/release?apiToken=REDACTED'));
+  assert.ok(note.includes('Sensitive / hidden values (3): URL credentials: sensitive value present | URL query apiToken: sensitive value present'));
+  assert.ok(!note.includes('prod-api-token-123'));
+  assert.ok(!note.includes('secret-fragment'));
+});
+
+test('collectJiraAutomationImportReviewSignals redacts sensitive webhook URL path tokens', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://hooks.slack.com/services/T00000000/B00000000/xoxb123456789ABCDEFGHIJKLMNOP',
+        },
+      },
+    ],
+  };
+
+  const summary = summarizeJiraAutomationImportRule(rule);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+
+  assert.equal(summary.hardcodedUrlCount, 1);
+  assert.equal(summary.sensitiveReferenceCount, 1);
+  assert.deepEqual(reviewSignals.hardcodedUrls, [
+    'https://hooks.slack.com/services/REDACTED/REDACTED/REDACTED',
+  ]);
+  assert.deepEqual(reviewSignals.sensitiveReferences, [
+    'URL path segment: sensitive value present',
+  ]);
+  assert.ok(note.includes('Hard-coded URLs (1): https://hooks.slack.com/services/REDACTED/REDACTED/REDACTED'));
+  assert.ok(note.includes('Sensitive / hidden values (1): URL path segment: sensitive value present'));
+  assert.ok(!note.includes('xoxb123456789ABCDEFGHIJKLMNOP'));
+});
+
+test('buildJiraAutomationImportReviewFindings groups environment-bound values for preview and review note', () => {
+  const findings = buildJiraAutomationImportReviewFindings({
+    ...baseRule,
+    projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    trigger: {
+      ...baseRule.trigger,
+      value: {
+        jql: 'project = SRC AND customfield_12345 is not EMPTY AND filter = 98765',
+      },
+    },
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://hooks.example.com/SRC/release',
+          usedSecretsKeys: ['release-webhook-token'],
+          recipients: 'release-owner@example.com',
+          connectionId: 'prod-webhook-connection',
+          savedFilterId: 13579,
+          body: '{{issue.assignee.accountId}}',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    findings.map((finding) => finding.id),
+    [
+      'jql-filters',
+      'source-project-references',
+      'custom-fields',
+      'saved-filters',
+      'secrets',
+      'connections',
+      'smart-values',
+      'hard-coded-urls',
+      'accounts',
+    ],
+  );
+  assert.equal(findings.find((finding) => finding.id === 'jql-filters')?.severity, 'high');
+  assert.equal(findings.find((finding) => finding.id === 'hard-coded-urls')?.severity, 'medium');
+  assert.deepEqual(findings.find((finding) => finding.id === 'secrets')?.samples, ['release-webhook-token']);
+  assert.deepEqual(findings.find((finding) => finding.id === 'connections')?.samples, ['connectionId: prod-webhook-connection']);
+  assert.deepEqual(findings.find((finding) => finding.id === 'smart-values')?.samples, ['{{issue.assignee.accountId}}']);
+
+  const note = buildJiraAutomationImportReviewNote({
+    ...baseRule,
+    projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    trigger: {
+      ...baseRule.trigger,
+      value: {
+        jql: 'project = SRC AND status = Done',
+      },
+    },
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          connectionId: 'prod-webhook-connection',
+        },
+      },
+    ],
+  }, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+
+  assert.ok(note.includes('Top detected bindings: JQL / filters (1): project = SRC AND status = Done'));
+  assert.ok(note.includes('Connections (1): connectionId: prod-webhook-connection'));
 });
 
 test('buildJiraAutomationImportWarnings calls out disabled import and project remap', () => {
@@ -383,6 +566,7 @@ test('buildJiraAutomationImportWarnings calls out environment-bound references',
           actorAccountId: 'abc-123-account',
           connectionId: 'prod-webhook-connection',
           fieldId: 'customfield_12345',
+          body: '{{webhookData.targetUrl}}',
         },
       },
     ],
@@ -393,6 +577,7 @@ test('buildJiraAutomationImportWarnings calls out environment-bound references',
   assert.ok(warnings.some((warning) => warning.includes('hard-coded URL')));
   assert.ok(warnings.some((warning) => warning.includes('email or account')));
   assert.ok(warnings.some((warning) => warning.includes('Environment-bound references detected')));
+  assert.ok(warnings.some((warning) => warning.includes('smart value reference')));
 });
 
 test('buildJiraAutomationImportReviewChecklist groups enablement review risks by severity', () => {
@@ -416,6 +601,7 @@ test('buildJiraAutomationImportReviewChecklist groups enablement review risks by
           recipients: 'release-owner@example.com',
           fieldId: 'customfield_12345',
           savedFilterId: 24680,
+          body: '{{issue.assignee.accountId}}',
         },
       },
     ],
@@ -429,6 +615,7 @@ test('buildJiraAutomationImportReviewChecklist groups enablement review risks by
       'source-project-references',
       'external-effects',
       'environment-bindings',
+      'smart-values',
       'schedule',
       'rule-chaining',
       'version-compatibility',
@@ -437,6 +624,7 @@ test('buildJiraAutomationImportReviewChecklist groups enablement review risks by
   assert.equal(checklist.find((item) => item.id === 'target-project')?.severity, 'high');
   assert.equal(checklist.find((item) => item.id === 'external-effects')?.severity, 'high');
   assert.equal(checklist.find((item) => item.id === 'environment-bindings')?.severity, 'high');
+  assert.equal(checklist.find((item) => item.id === 'smart-values')?.severity, 'medium');
   assert.equal(checklist.find((item) => item.id === 'schedule')?.severity, 'medium');
   assert.equal(checklist.find((item) => item.id === 'version-compatibility')?.severity, 'low');
 });

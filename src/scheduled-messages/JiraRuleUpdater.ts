@@ -312,7 +312,11 @@ export class JiraRuleUpdater {
           newRulePayload
         );
 
-        await this.updateRuleConfigVersion(kind, latestVersion, updatedRule.name);
+        await this.updateRuleConfigVersion(
+          kind,
+          kind === 'timelineSync' ? JIRA_TIMELINE_SYNC_RULE_VERSION : latestVersion,
+          updatedRule.name
+        );
       }
       
       console.log('✅ Jira Automation Rule 更新成功！');

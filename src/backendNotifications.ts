@@ -1,17 +1,29 @@
 export type BackendNotificationLane = 'todo' | 'notice';
 export type BackendNotificationPriority = 'high' | 'normal';
 export type BackendNotificationSourceType = 'notification' | 'proposed_action';
+export type BackendNotificationDeliveryStatus =
+  | 'delivered'
+  | 'failed'
+  | 'clicked'
+  | 'dismissed';
 
 export interface BackendNotificationMeta {
   sourceRef: string;
+  sourceType?: BackendNotificationSourceType;
   lane: BackendNotificationLane;
   type?: string;
   targetHash: string;
   notificationId?: string;
+  dueAt?: number;
 }
 
 export const BACKEND_NOTIFICATION_META_STORAGE_PREFIX =
   'backend_notification_meta_';
+export const DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS = 24 * 60 * 60;
+
+const MIN_DUE_AWARE_SNOOZE_SECONDS = 5 * 60;
+const OVERDUE_NOTIFICATION_SNOOZE_SECONDS = 15 * 60;
+const DUE_REMINDER_BUFFER_SECONDS = 15 * 60;
 
 export function getBackendNotificationMetaStorageKey(
   notificationId: string,
@@ -130,11 +142,67 @@ export function buildBackendNotificationContextMessage(
 
 export function buildBackendNotificationButtons(
   lane: BackendNotificationLane,
+  sourceType?: BackendNotificationSourceType,
 ): Array<{ title: string }> {
+  let secondaryTitle = '忽略';
+  if (sourceType === 'notification' && lane === 'todo') {
+    secondaryTitle = '稍后提醒';
+  } else if (sourceType === 'notification' && lane === 'notice') {
+    secondaryTitle = '不再提示';
+  } else if (sourceType === 'proposed_action') {
+    secondaryTitle = '暂不提醒';
+  }
+
   return [
     { title: lane === 'todo' ? '查看待办' : '查看通知' },
-    { title: '忽略' },
+    { title: secondaryTitle },
   ];
+}
+
+export function getBackendNotificationSnoozeSeconds(
+  meta: Pick<BackendNotificationMeta, 'lane' | 'dueAt'>,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): number {
+  if (
+    meta.lane !== 'todo' ||
+    typeof meta.dueAt !== 'number' ||
+    !Number.isFinite(meta.dueAt)
+  ) {
+    return DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS;
+  }
+
+  const secondsUntilDue = Math.floor(meta.dueAt - nowSeconds);
+  if (secondsUntilDue <= 0) {
+    return OVERDUE_NOTIFICATION_SNOOZE_SECONDS;
+  }
+
+  if (secondsUntilDue <= DUE_REMINDER_BUFFER_SECONDS) {
+    return Math.max(
+      MIN_DUE_AWARE_SNOOZE_SECONDS,
+      Math.floor(secondsUntilDue / 2),
+    );
+  }
+
+  return Math.min(
+    DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS,
+    secondsUntilDue - DUE_REMINDER_BUFFER_SECONDS,
+  );
+}
+
+export function getBackendNotificationSecondaryActionDeliveryStatus(
+  meta: Pick<BackendNotificationMeta, 'lane' | 'sourceType'>,
+): BackendNotificationDeliveryStatus {
+  if (meta.lane === 'todo' && meta.sourceType === 'proposed_action') {
+    return 'delivered';
+  }
+
+  return 'dismissed';
+}
+
+export function getBackendNotificationClosedDeliveryStatus(
+  meta: Pick<BackendNotificationMeta, 'lane'>,
+): BackendNotificationDeliveryStatus {
+  return meta.lane === 'todo' ? 'delivered' : 'dismissed';
 }
 
 export function normalizeBackendNotificationMeta(
@@ -160,6 +228,12 @@ export function normalizeBackendNotificationMeta(
     lane: record.lane,
     targetHash: record.targetHash,
   };
+  if (
+    record.sourceType === 'notification' ||
+    record.sourceType === 'proposed_action'
+  ) {
+    meta.sourceType = record.sourceType;
+  }
   if (typeof record.type === 'string' && record.type.trim()) {
     meta.type = record.type;
   }
@@ -168,6 +242,13 @@ export function normalizeBackendNotificationMeta(
     record.notificationId.trim()
   ) {
     meta.notificationId = record.notificationId;
+  }
+  if (
+    typeof record.dueAt === 'number' &&
+    Number.isFinite(record.dueAt) &&
+    record.dueAt > 0
+  ) {
+    meta.dueAt = record.dueAt;
   }
   return meta;
 }

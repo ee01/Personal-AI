@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { UserContextManager } from '../core/UserContextManager.js';
 import {
+  hashSkillFilesystemPackage,
   normalizeSkillSlug,
   SkillLibraryService,
   type CreateSkillSuggestionInput,
@@ -90,6 +91,13 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function encodeSkillFilePath(relativePath: string): string {
+  return relativePath
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
 function sendError(reply: FastifyReply, error: unknown, statusCode = 400) {
   const message = error instanceof Error ? error.message : String(error);
   return reply.status(statusCode).send({ error: message });
@@ -128,13 +136,13 @@ function localPackageFiles(files: NonNullable<LocalPlatformSkillPackage['files']
     .filter((file) => file.relativePath && file.relativePath !== 'SKILL.md');
 }
 
-function skillPackageForPlatform(pkg: SkillSyncPackage) {
+function skillPackageForPlatform(pkg: SkillSyncPackage, options?: { sha256?: string }) {
   return {
     slug: pkg.slug,
     title: pkg.title,
     description: pkg.summary,
     version: pkg.version,
-    sha256: pkg.sha256,
+    sha256: options?.sha256 || pkg.sha256,
     skillMd: pkg.skillMd,
     files: pkg.files.map((file) => ({
       path: file.relativePath,
@@ -586,7 +594,11 @@ function runLocalPlatformSkillSync(
         continue;
       }
 
-      if (local.sha256 && existing.currentSha256 === local.sha256) {
+      if (
+        local.sha256 &&
+        (existing.currentSha256 === local.sha256 ||
+          service.platformBindingMatchesSha(existing.id, platform, local.sha256))
+      ) {
         service.recordPlatformSync({
           skillId: existing.id,
           platform,
@@ -628,6 +640,12 @@ function runLocalPlatformSkillSync(
 
   for (const active of service.listActiveSyncPackages()) {
     const local = localBySlug.get(normalizeSkillSlug(active.slug));
+    if (
+      local?.sha256 &&
+      service.platformBindingMatchesSha(active.skillId, platform, local.sha256)
+    ) {
+      continue;
+    }
     if (local?.sha256 === active.sha256) continue;
     if (
       local &&
@@ -642,14 +660,21 @@ function runLocalPlatformSkillSync(
     ) {
       continue;
     }
-    result.packagesToInstall.push(skillPackageForPlatform(active));
+    const installPackage = skillPackageForPlatform(active, {
+      sha256: hashSkillFilesystemPackage(active.skillMd, active.files),
+    });
+    result.packagesToInstall.push(installPackage);
     result.pushed += 1;
     service.recordPlatformSync({
       skillId: active.skillId,
       platform,
       version: active.version,
-      sha256: active.sha256,
-      metadata: { source: 'personal_ai_desktop_push', pendingWrite: true },
+      sha256: installPackage.sha256,
+      metadata: {
+        source: 'personal_ai_desktop_push',
+        pendingWrite: true,
+        personalAiSha256: active.sha256,
+      },
     });
   }
 
@@ -916,6 +941,25 @@ export async function publicSkillRoutes(
       if (!resolved) return;
       const { detail } = resolved;
       const version = detail.activeVersion!;
+      const token = request.query.token || '';
+      const slugVersion = request.params.slugVersion;
+      const basePath = `/skills/${encodeURIComponent(slugVersion)}`;
+      const query = `token=${encodeURIComponent(token)}`;
+      const packageUrl = `${basePath}/package.json?${query}`;
+      const skillMdUrl = `${basePath}/SKILL.md?${query}`;
+      const fileLinks = version.files
+        .map((file) => {
+          const href = `${basePath}/files/${encodeSkillFilePath(file.relativePath)}?${query}`;
+          const hashLabel = file.sha256 ? ` ${escapeHtml(file.sha256.slice(0, 12))}` : '';
+          return `<li><a href="${escapeHtml(href)}">${escapeHtml(file.relativePath)}</a><span class="muted">${hashLabel}</span></li>`;
+        })
+        .join('\n');
+      const installPrompt = [
+        `Install this Personal AI skill from ${packageUrl}.`,
+        'Read package.json first; it contains SKILL.md plus the files array.',
+        'If your installer needs separate files, fetch SKILL.md and every files/* link shown on the preview page.',
+        'Preserve relative file paths when writing the skill directory.',
+      ].join(' ');
       reply.type('text/html; charset=utf-8');
       return reply.send(`<!doctype html>
 <html lang="zh-CN">
@@ -924,15 +968,29 @@ export async function publicSkillRoutes(
   <title>${escapeHtml(detail.title)}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 880px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #111827; }
+    a { color: #2563eb; }
     code, pre { background: #f3f4f6; border-radius: 6px; }
     pre { padding: 16px; overflow: auto; }
     .muted { color: #6b7280; }
+    .panel { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 24px 0; }
+    .links { margin: 8px 0 0; padding-left: 20px; }
   </style>
 </head>
 <body>
   <p class="muted">Personal AI Skill · ${escapeHtml(version.version)} · ${escapeHtml(version.sha256.slice(0, 12))}</p>
   <h1>${escapeHtml(detail.title)}</h1>
   <p>${escapeHtml(detail.summary)}</p>
+  <section class="panel">
+    <h2>完整安装</h2>
+    <p>让你的 agent 先读取 <a href="${escapeHtml(packageUrl)}">package.json</a>；它包含 SKILL.md 和已打包的脚本/资源文件内容。</p>
+    <pre>${escapeHtml(installPrompt)}</pre>
+    <h3>直接链接</h3>
+    <ul class="links">
+      <li><a href="${escapeHtml(packageUrl)}">package.json</a> <span class="muted">完整 package</span></li>
+      <li><a href="${escapeHtml(skillMdUrl)}">SKILL.md</a> <span class="muted">技能说明</span></li>
+      ${fileLinks || '<li class="muted">这个版本没有额外 files。</li>'}
+    </ul>
+  </section>
   <h2>SKILL.md</h2>
   <pre>${escapeHtml(version.skillMd)}</pre>
 </body>

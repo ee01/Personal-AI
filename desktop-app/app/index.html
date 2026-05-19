@@ -262,6 +262,11 @@
               <button id="login-button" type="button">打开登录窗口</button>
             </div>
             <p id="broadcast-transport-message" class="inline-message"></p>
+            <p
+              id="broadcast-transport-status"
+              class="inline-message"
+              hidden
+            ></p>
             <p id="login-message" class="inline-message"></p>
           </article>
 
@@ -358,7 +363,7 @@
             <div class="sync-audit-head">
               <div>
                 <p class="column-label">Delivery Audit</p>
-                <h3>最近同步流水</h3>
+                <h3>最近同步流水（本机保留）</h3>
               </div>
               <span
                 id="sync-audit-status"

@@ -4,6 +4,9 @@
       <div>
         <h2>{{ selectedRangeOption.heading }}</h2>
         <p>{{ selectedRangeOption.description }}</p>
+        <div class="timeline-context" aria-label="当前时间轴检索范围">
+          {{ timelineContextLabel }}
+        </div>
       </div>
       <div class="timeline-controls">
         <div class="control-tabs range-tabs" role="group" aria-label="时间范围">
@@ -11,6 +14,7 @@
             v-for="option in rangeOptions"
             :key="option.key"
             :class="['control-tab', { active: selectedRangeKey === option.key }]"
+            :aria-pressed="selectedRangeKey === option.key"
             type="button"
             @click="selectRange(option.key)"
           >
@@ -22,6 +26,7 @@
             v-for="option in scopeOptions"
             :key="option.key"
             :class="['control-tab', { active: selectedScope === option.key }]"
+            :aria-pressed="selectedScope === option.key"
             type="button"
             @click="selectScope(option.key)"
           >
@@ -140,6 +145,22 @@
       <span>📭</span>
       <p>{{ selectedRangeOption.emptyTitle }}</p>
       <p class="empty-hint">{{ selectedRangeOption.emptyHint }}</p>
+      <div class="empty-actions">
+        <button
+          v-if="selectedRangeKey === 'today'"
+          type="button"
+          @click="selectRange('7d')"
+        >
+          查看近7天
+        </button>
+        <button
+          v-if="selectedScope !== 'all'"
+          type="button"
+          @click="selectScope('all')"
+        >
+          切到全部
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -152,10 +173,14 @@ import type {
   MemoryFeedbackAction,
   RecallScope,
 } from '../../services/MemoryServiceClient';
-import type { MemoryTimelineEvent } from '../timelinePresentation';
+import type {
+  MemoryTimelineEvent,
+  TimelineFocusType,
+} from '../timelinePresentation';
 import {
   formatTimelineTime,
   getTimelineIcon,
+  parseTimelineFocus,
 } from '../timelinePresentation';
 import {
   getRecallChannelLabel,
@@ -169,7 +194,6 @@ const router = useRouter();
 const route = useRoute();
 
 type TimelineRangeKey = 'today' | '7d' | '30d';
-type TimelineFocusType = 'message' | 'chunk';
 type TimelineFeedbackChoice = Extract<
   MemoryFeedbackAction,
   'positive' | 'negative'
@@ -238,6 +262,12 @@ const selectedRangeOption = computed(
     rangeOptions.find((option) => option.key === selectedRangeKey.value) ||
     rangeOptions[0],
 );
+const timelineContextLabel = computed(
+  () =>
+    `${getScopeLabel(selectedScope.value)} · ${
+      selectedRangeOption.value.label
+    } · 时间通道`,
+);
 
 function firstQueryValue(value: unknown): string {
   if (Array.isArray(value)) return String(value[0] || '');
@@ -256,13 +286,16 @@ function getInitialRangeKey(): TimelineRangeKey {
   return 'today';
 }
 
+function getRouteFocus() {
+  return parseTimelineFocus(route.query.focus, route.query.type);
+}
+
 function getRouteFocusId(): string {
-  return firstQueryValue(route.query.focus).trim();
+  return getRouteFocus().id;
 }
 
 function getRouteFocusType(): TimelineFocusType | undefined {
-  const type = firstQueryValue(route.query.type);
-  return type === 'message' || type === 'chunk' ? type : undefined;
+  return getRouteFocus().type;
 }
 
 function isFocusedEvent(event: MemoryTimelineEvent): boolean {
@@ -511,6 +544,24 @@ watch(
   },
 );
 
+watch(
+  () => [route.query.scope, route.query.range],
+  () => {
+    const routeScope = getInitialTimelineScope();
+    const routeRange = getInitialRangeKey();
+    if (
+      routeScope === selectedScope.value &&
+      routeRange === selectedRangeKey.value
+    ) {
+      return;
+    }
+
+    selectedScope.value = routeScope;
+    selectedRangeKey.value = routeRange;
+    void loadTimeline();
+  },
+);
+
 onMounted(() => {
   void loadTimeline();
 });
@@ -541,6 +592,18 @@ onMounted(() => {
   margin: 0;
   color: #94a3b8;
   line-height: 1.6;
+}
+
+.timeline-context {
+  display: inline-flex;
+  margin-top: 0.65rem;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(8, 47, 73, 0.24);
+  color: #bae6fd;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .timeline-controls {
@@ -762,6 +825,25 @@ onMounted(() => {
   max-width: 420px;
   line-height: 1.6;
   color: #64748b;
+}
+
+.empty-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.empty-actions button {
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.45rem;
+  background: rgba(59, 130, 246, 0.08);
+  color: #bfdbfe;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.42rem 0.7rem;
 }
 
 @media (max-width: 720px) {

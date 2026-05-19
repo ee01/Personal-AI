@@ -81,6 +81,32 @@ test('parseRingCentralVideoJoinTarget preserves native join links', () => {
   });
 });
 
+test('parseRingCentralVideoJoinTarget accepts safe alphanumeric meeting ids', () => {
+  const target = parseRingCentralVideoJoinTarget(
+    'https://v.ringcentral.com/join/abc-DEF_123?pw=secret',
+  );
+
+  assert.deepEqual(target, {
+    originalUrl: 'https://v.ringcentral.com/join/abc-DEF_123?pw=secret',
+    nativeUrl: 'rcvdt://join/abc-DEF_123?pw=secret',
+    browserUrl: 'https://v.ringcentral.com/conf/on/abc-DEF_123?pw=secret',
+    meetingId: 'abc-DEF_123',
+  });
+});
+
+test('parseRingCentralVideoJoinTarget rejects unsafe encoded meeting ids', () => {
+  assert.equal(
+    parseRingCentralVideoJoinTarget(
+      'https://v.ringcentral.com/join/%2F123456?pw=secret',
+    ),
+    null,
+  );
+  assert.equal(
+    parseRingCentralVideoJoinTarget('rcvdt://join/123%0A456?pw=secret'),
+    null,
+  );
+});
+
 test('parseRingCentralVideoJoinTarget builds browser fallback for native links', () => {
   const target = parseRingCentralVideoJoinTarget(
     'rcvdt://join/246810?foo=bar#speaker',
@@ -141,7 +167,9 @@ test('shouldPreserveDefaultNativeJoinClick keeps modified and fallback-link clic
   }).Element;
   class TestElement {
     closest(selector: string) {
-      return selector === '[data-pai-ringcentral-native-join-fallback-link]'
+      return selector.includes(
+        '[data-pai-ringcentral-native-join-fallback-link]',
+      )
         ? {}
         : null;
     }
@@ -172,7 +200,8 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
   const originalWindow = (globalThis as typeof globalThis & {
     window?: unknown;
   }).window;
-  const timeoutDelays: number[] = [];
+  const scheduledTimeouts: Array<{ callback: () => void; delay: number }> = [];
+  const clearedTimeouts: number[] = [];
   const elementsById = new Map<string, FakeElement>();
 
   class FakeElement {
@@ -186,6 +215,7 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
     public parent: FakeElement | null = null;
     public children: FakeElement[] = [];
     public attributes = new Map<string, string>();
+    public listeners = new Map<string, Array<() => void>>();
     public style = { cssText: '', display: '' };
 
     constructor(public readonly tagName: string) {}
@@ -214,13 +244,59 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
       this.attributes.set(name, value);
     }
 
-    addEventListener() {
-      return undefined;
+    addEventListener(type: string, listener: () => void) {
+      const listeners = this.listeners.get(type) || [];
+      listeners.push(listener);
+      this.listeners.set(type, listeners);
+    }
+
+    dispatchTestEvent(type: string) {
+      for (const listener of this.listeners.get(type) || []) {
+        listener();
+      }
+    }
+
+    contains(element: FakeElement | null) {
+      if (!element) return false;
+      if (element === this) return true;
+      return this.children.some((child) => child.contains(element));
     }
 
     click() {
       return undefined;
     }
+  }
+
+  function findElementByAttribute(
+    root: FakeElement,
+    name: string,
+  ): FakeElement | null {
+    if (root.attributes.has(name)) {
+      return root;
+    }
+    for (const child of root.children) {
+      const match = findElementByAttribute(child, name);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  function findElementByText(
+    root: FakeElement,
+    text: string,
+  ): FakeElement | null {
+    if (root.textContent === text) {
+      return root;
+    }
+    for (const child of root.children) {
+      const match = findElementByText(child, text);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
   }
 
   const body = new FakeElement('body');
@@ -234,9 +310,12 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
       assign: () => undefined,
     },
     open: () => null,
-    setTimeout: (_callback: () => void, delay: number) => {
-      timeoutDelays.push(delay);
-      return timeoutDelays.length;
+    setTimeout: (callback: () => void, delay: number) => {
+      scheduledTimeouts.push({ callback, delay });
+      return scheduledTimeouts.length;
+    },
+    clearTimeout: (timerId: number) => {
+      clearedTimeouts.push(timerId);
     },
   };
 
@@ -252,7 +331,54 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
       elementsById.get('pai-ringcentral-native-join-fallback'),
       'fallback panel should be mounted',
     );
-    assert.deepEqual(timeoutDelays, [10000]);
+    assert.deepEqual(
+      scheduledTimeouts.map((item) => item.delay),
+      [6000, 10000],
+    );
+    assert.equal(
+      elementsById.get('pai-ringcentral-native-join-launch-link')?.href,
+      'rcvdt://join/123456',
+      'native protocol should be launched from a top-level link click',
+    );
+
+    const status = findElementByAttribute(
+      elementsById.get('pai-ringcentral-native-join-fallback')!,
+      'data-pai-ringcentral-native-join-status',
+    );
+    assert.equal(status?.textContent, 'Meeting 123456');
+    scheduledTimeouts[0].callback();
+    assert.match(
+      status?.textContent || '',
+      /may not have opened/,
+      'fallback panel should escalate to a clear recovery prompt when the app handoff stalls',
+    );
+
+    scheduledTimeouts[1].callback();
+    assert.ok(
+      elementsById.get('pai-ringcentral-native-join-fallback'),
+      'native launch link cleanup should not dismiss the browser fallback panel',
+    );
+    assert.equal(
+      elementsById.get('pai-ringcentral-native-join-launch-link'),
+      undefined,
+      'native launch link should be removed after its cleanup timer',
+    );
+
+    const dismissButton = findElementByText(
+      elementsById.get('pai-ringcentral-native-join-fallback')!,
+      'Dismiss',
+    );
+    dismissButton?.dispatchTestEvent('click');
+    assert.equal(
+      elementsById.get('pai-ringcentral-native-join-fallback'),
+      undefined,
+      'fallback panel should close only after an explicit dismiss action',
+    );
+    assert.deepEqual(
+      clearedTimeouts,
+      [1],
+      'explicit dismiss should clear the pending handoff status timer',
+    );
   } finally {
     if (originalDocument === undefined) {
       delete (globalThis as typeof globalThis & { document?: unknown })

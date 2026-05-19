@@ -29,7 +29,10 @@ import { JiraTicket } from './types';
 import {
   extractJiraTicketKeys,
 } from './utils/slidesAnalyzerSuggestions';
-import { createProjectUpdateSuggestion } from './utils/slidesAnalyzerUpdateSuggestions';
+import {
+  createProjectReviewSuggestion,
+  createProjectUpdateSuggestion,
+} from './utils/slidesAnalyzerUpdateSuggestions';
 import {
   hasAttentionRiskLevelSignal,
   hasProjectRiskSignal,
@@ -37,6 +40,15 @@ import {
 
 const ANALYSIS_BUTTON_ID = 'analyze-projects-button';
 const GOOGLE_SLIDES_TOOLBAR_SELECTOR = '.goog-toolbar-horizontal';
+
+function hasSuggestedWritebackField(suggestion: ProjectUpdateSuggestion): boolean {
+  return Boolean(
+    suggestion.suggestedStatus ||
+    suggestion.suggestedOwner ||
+    suggestion.suggestedTrack ||
+    suggestion.suggestedComments
+  );
+}
 
 // 分析结果接口
 export interface DisplaySlideAnalysisResult {
@@ -73,7 +85,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     analyzeSlideProjects(token).then(() => {
       sendResponse({ success: true });
+    }).catch((error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      sendResponse({ success: false, error: errorMessage });
     });
+  } else if (type === 'SLIDES_ANALYSIS_AUTH_FAILED') {
+    const errorMessage = message.error || '获取 Google 认证失败，请重新授权后再试';
+    console.error('Slides分析认证失败:', errorMessage);
+    showToast(errorMessage, 'error');
+    sendResponse({ success: true });
   } else {
     console.log('未处理的消息类型:', type);
   }
@@ -159,7 +179,10 @@ function addAnalysisButton(): boolean {
   button.id = ANALYSIS_BUTTON_ID;
   button.className = 'goog-toolbar-button';
   button.setAttribute('role', 'button');
+  button.setAttribute('tabindex', '0');
   button.setAttribute('aria-disabled', 'false');
+  button.setAttribute('aria-label', '分析当前 Google Slides 项目信息');
+  button.setAttribute('title', '分析当前 Google Slides 项目信息');
   button.style.display = 'inline-flex';
   button.style.alignItems = 'center';
   button.style.padding = '0 8px';
@@ -167,11 +190,21 @@ function addAnalysisButton(): boolean {
   button.style.color = '#444';
   button.style.fontWeight = 'bold';
   button.innerHTML = '📊 分析项目';
-  
-  // 添加事件监听
-  button.addEventListener('click', () => {
+
+  const requestAnalysis = () => {
     // 通知background脚本或popup我们需要token
     chrome.runtime.sendMessage({ type: 'REQUEST_SLIDES_ANALYSIS' });
+  };
+
+  // 添加事件监听
+  button.addEventListener('click', requestAnalysis);
+  button.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+
+    event.preventDefault();
+    requestAnalysis();
   });
   
   // 添加到工具栏
@@ -210,6 +243,7 @@ async function analyzeSlideProjects(token: string) {
   } catch (error) {
     console.error('分析项目信息时出错:', error);
     showToast(`分析失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    throw error;
   }
 }
 
@@ -315,16 +349,15 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
       const result = analysisResults[i] as ProjectAnalysisResult;
       
       if (result && result.suggestions) {
-        const suggestion = createProjectUpdateSuggestion(project, result);
-        const needsUpdate = Boolean(suggestion);
-
-        if (suggestion) {
-          analysisResult.updateSuggestions.push(suggestion);
-        }
-        
         const requestJiraIssues = projectAnalysisRequests[i]?.jiraIssues || {};
         const resultJiraIssues = result.jiraIssues || requestJiraIssues;
         const jiraIssueList = Object.values(resultJiraIssues);
+        const resultWithJiraIssues: ProjectAnalysisResult = {
+          ...result,
+          jiraIssues: resultJiraIssues
+        };
+        const suggestion = createProjectUpdateSuggestion(project, resultWithJiraIssues);
+        const needsUpdate = Boolean(suggestion);
         const hasRiskSignal = hasProjectRiskSignal({
           currentStatus: project.status,
           suggestedStatus: suggestion?.suggestedStatus,
@@ -340,11 +373,19 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
         } else {
           analysisResult.summary.normalProjects++;
         }
+
+        if (suggestion) {
+          analysisResult.updateSuggestions.push(suggestion);
+        } else if (hasRiskSignal) {
+          analysisResult.updateSuggestions.push(createProjectReviewSuggestion(project, resultWithJiraIssues));
+        }
       }
     }
     
     // 设置需要更新的项目总数
-    analysisResult.summary.projectsNeedingUpdate = analysisResult.updateSuggestions.length;
+    analysisResult.summary.projectsNeedingUpdate = analysisResult.updateSuggestions
+      .filter(hasSuggestedWritebackField)
+      .length;
     
     // 生成关键发现
     if (analysisResult.updateSuggestions.length > 0) {

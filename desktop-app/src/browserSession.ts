@@ -13,10 +13,20 @@ import type { BridgeConfig } from './config.js';
 
 const execFileAsync = promisify(execFile);
 
+export type BrowserTransportMode = 'playwright' | 'webpage_mcp' | 'unknown';
+
+export interface BrowserTransportStatus {
+  mode: BrowserTransportMode;
+  preferredMode?: BrowserTransportMode;
+  fallbackReason?: string;
+  fallbackCooldownUntil?: string;
+}
+
 export interface BrowserStatus {
   running: boolean;
   currentUrl?: string;
   lastError?: string;
+  transport?: BrowserTransportStatus;
 }
 
 export interface BrowserThreadSnapshot {
@@ -42,6 +52,8 @@ export interface BrowserSendResult extends BrowserThreadSnapshot {
   sent: boolean;
   error?: string;
   transportUsed?: 'dom';
+  transportMode?: BrowserTransportMode;
+  transportFallbackReason?: string;
   verified?: boolean;
   challengeDetected?: boolean;
   messageVisible?: boolean;
@@ -309,6 +321,10 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
       running: !!page,
       currentUrl: page?.url(),
       lastError: this.lastError,
+      transport: {
+        mode: 'playwright',
+        preferredMode: 'playwright',
+      },
     };
   }
 
@@ -489,6 +505,7 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
         ...snapshot,
         sent: false,
         transportUsed: 'dom',
+        transportMode: 'playwright',
         verified: false,
         challengeDetected: true,
         messageVisible: false,
@@ -553,6 +570,7 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
           ...snapshot,
           sent: false,
           transportUsed: 'dom',
+          transportMode: 'playwright',
           verified: false,
           challengeDetected: false,
           messageVisible: postSend.messageVisible,
@@ -566,6 +584,7 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
           ...snapshot,
           sent: false,
           transportUsed: 'dom',
+          transportMode: 'playwright',
           verified: false,
           challengeDetected: true,
           messageVisible: postSend.messageVisible,
@@ -579,6 +598,7 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
           ...snapshot,
           sent: false,
           transportUsed: 'dom',
+          transportMode: 'playwright',
           verified: false,
           challengeDetected: false,
           messageVisible: false,
@@ -591,6 +611,7 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
         ...snapshot,
         sent: true,
         transportUsed: 'dom',
+        transportMode: 'playwright',
         verified: postSend.messageVisible,
         challengeDetected: false,
         messageVisible: postSend.messageVisible,
@@ -610,6 +631,7 @@ export class DoubaoBrowserSession implements BrowserSessionAdapter {
       sent: false,
       error: this.lastError,
       transportUsed: 'dom',
+      transportMode: 'playwright',
     };
   }
 

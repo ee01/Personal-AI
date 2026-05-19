@@ -20,8 +20,6 @@ import {
   formatDesignStatusLabel,
   getDesignDisplayLabel,
   getDesignDisplayStatusTone,
-  getDesignReadinessDecision,
-  getDesignStatusSummary,
   getDesignStatusTone,
   getDesignSourceLabel,
   getUXEpicStatusTone,
@@ -416,13 +414,41 @@ function stripNativeDesignStatusText(text: string): string {
     .trim();
 }
 
+function getNativeDesignTitleElementCandidates(card: HTMLElement, link: HTMLAnchorElement): string[] {
+  const selectors = [
+    'strong',
+    '[role="heading"]',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    '[data-testid*="title" i]',
+    '[data-test-id*="title" i]',
+    '[class*="title" i]',
+    '[aria-label*="title" i]',
+  ];
+  const candidates: string[] = [];
+
+  card.querySelectorAll<HTMLElement>(selectors.join(',')).forEach(element => {
+    if (element === link) return;
+    if (element.closest('a') === link) return;
+
+    candidates.push(element.getAttribute('title') || '');
+    candidates.push(element.getAttribute('aria-label') || '');
+    candidates.push(getCompactElementText(element));
+  });
+
+  return candidates;
+}
+
 function getNativeDesignTitle(link: HTMLAnchorElement, candidate: DesignLinkCandidate, card: HTMLElement): string | undefined {
   const values = [
-    link.textContent,
     link.getAttribute('title'),
     link.getAttribute('aria-label'),
     card.getAttribute('title'),
     card.getAttribute('aria-label'),
+    ...getNativeDesignTitleElementCandidates(card, link),
+    link.textContent,
   ];
 
   const textLines = (card.innerText || card.textContent || '')
@@ -910,38 +936,6 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   designLinksContainer.className = 'design-links-container';
   designLinksContainer.setAttribute('role', 'region');
   designLinksContainer.setAttribute('aria-label', 'Design context');
-
-  const readinessDecision = getDesignReadinessDecision(designData);
-  const readinessHtml = `
-    <button
-      type="button"
-      class="design-readiness design-readiness--${readinessDecision.tone}"
-      ${readinessDecision.targetTone ? `data-design-readiness-tone="${escapeAttribute(readinessDecision.targetTone)}"` : ''}
-      title="${escapeAttribute(readinessDecision.detail)}"
-      aria-label="${escapeAttribute(`${readinessDecision.label}. ${readinessDecision.detail}`)}"
-    >
-      <span class="design-readiness-label">${escapeHtml(readinessDecision.label)}</span>
-      <span class="design-readiness-detail">${escapeHtml(readinessDecision.detail)}</span>
-    </button>
-  `;
-  const statusSummary = getDesignStatusSummary(designData);
-  const statusSummaryHtml = statusSummary.length > 0
-    ? `
-      <div class="design-status-summary" aria-label="Design status summary">
-        ${statusSummary.map(item => `
-          <button
-            type="button"
-            class="design-status-summary-chip design-status-summary-chip--${item.tone}"
-            data-design-summary-tone="${escapeAttribute(item.tone)}"
-            title="${escapeAttribute(`Show ${item.count} ${item.label} design ${item.count === 1 ? 'item' : 'items'}`)}"
-            aria-label="${escapeAttribute(`Show ${item.count} ${item.label} design ${item.count === 1 ? 'item' : 'items'}`)}"
-          >
-            ${escapeHtml(item.label)}${item.count > 1 ? ` ${item.count}` : ''}
-          </button>
-        `).join('')}
-      </div>
-    `
-    : '';
   
   let linksHtml = '';
   designData.forEach((design, _index) => {
@@ -1020,8 +1014,6 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   
   designLinksContainer.innerHTML = `
     <div class="design-links-content">
-      ${readinessHtml}
-      ${statusSummaryHtml}
       ${linksHtml}
     </div>
     <div class="design-links-footer">
@@ -1033,41 +1025,10 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   // 插入到Summary下方
   summaryElement.insertAdjacentElement('afterend', designLinksContainer);
   bindDesignLinksDynamicHeight(designLinksContainer);
-
-  const focusFirstItemByTone = (targetTone?: string): void => {
-    if (!targetTone) return;
-
-    const targetItem = Array.from(
-      designLinksContainer.querySelectorAll<HTMLElement>('.design-link-item')
-    ).find(item => item.dataset.designStatusTone === targetTone);
-    if (!targetItem) return;
-
-    designLinksContainer
-      .querySelectorAll('.design-link-item--highlight')
-      .forEach(item => item.classList.remove('design-link-item--highlight'));
-    targetItem.classList.add('design-link-item--highlight');
-    targetItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    targetItem.focus({ preventScroll: true });
-    window.setTimeout(() => {
-      targetItem.classList.remove('design-link-item--highlight');
-    }, 1800);
-  };
-
-  designLinksContainer.querySelector<HTMLButtonElement>('.design-readiness')?.addEventListener('click', event => {
-    focusFirstItemByTone((event.currentTarget as HTMLButtonElement).dataset.designReadinessTone);
-  });
-
-  designLinksContainer.querySelectorAll<HTMLButtonElement>('.design-status-summary-chip').forEach(button => {
-    button.addEventListener('click', () => {
-      focusFirstItemByTone(button.dataset.designSummaryTone);
-    });
-  });
   
   // 添加样式
-  const readinessHeight = 28;
-  const statusSummaryHeight = statusSummary.length > 0 ? 28 : 0;
-  const collapsedMaxHeight = 40 + readinessHeight + statusSummaryHeight + (designData.length - 1) * 30;
-  const hoverMaxHeight = 80 + readinessHeight + statusSummaryHeight + (designData.length - 1) * 30;
+  const collapsedMaxHeight = 40 + (designData.length - 1) * 30;
+  const hoverMaxHeight = 80 + (designData.length - 1) * 30;
   let style = document.getElementById('personal-ai-design-links-style') as HTMLStyleElement | null;
   if (!style) {
     style = document.createElement('style');
@@ -1104,135 +1065,6 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       position: relative;
       z-index: 2;
     }
-    .design-readiness {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 6px;
-      width: 100%;
-      border: 0;
-      padding: 0 0 4px;
-      margin: 0 0 4px;
-      background: transparent;
-      color: #172b4d;
-      text-align: left;
-      font-family: inherit;
-      cursor: pointer;
-    }
-    .design-readiness:hover .design-readiness-label,
-    .design-readiness:focus-visible .design-readiness-label {
-      box-shadow: 0 0 0 2px rgba(38, 132, 255, 0.22);
-    }
-    .design-readiness:focus-visible {
-      outline: none;
-    }
-    .design-readiness-label {
-      display: inline-flex;
-      align-items: center;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 10px;
-      font-weight: 800;
-      line-height: 1.5;
-      letter-spacing: 0;
-      white-space: nowrap;
-      color: #172b4d;
-      background-color: #e6fcff;
-    }
-    .design-readiness-detail {
-      min-width: 0;
-      color: #42526e;
-      font-size: 11px;
-      font-weight: 600;
-      line-height: 1.45;
-    }
-    .design-readiness--ready .design-readiness-label {
-      color: #006644;
-      background-color: #dcfff1;
-    }
-    .design-readiness--updated .design-readiness-label {
-      color: #0747a6;
-      background-color: #deebff;
-    }
-    .design-readiness--missing .design-readiness-label {
-      color: #7a3e00;
-      background-color: #fff0b3;
-    }
-    .design-readiness--not-ready .design-readiness-label {
-      color: #974f0c;
-      background-color: #fffae6;
-    }
-    .design-readiness--blocked .design-readiness-label {
-      color: #7a3e00;
-      background-color: #fff0b3;
-    }
-    .design-readiness--review .design-readiness-label {
-      color: #403294;
-      background-color: #eae6ff;
-    }
-    .design-readiness--done .design-readiness-label {
-      color: #44546f;
-      background-color: #f1f2f4;
-    }
-    .design-status-summary {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 4px;
-      margin-bottom: 6px;
-      padding-bottom: 6px;
-      border-bottom: 1px solid rgba(9, 30, 66, 0.08);
-    }
-    .design-status-summary-chip {
-      display: inline-flex;
-      align-items: center;
-      border: 0;
-      padding: 2px 7px;
-      border-radius: 999px;
-      font-size: 10px;
-      font-weight: 700;
-      line-height: 1.5;
-      letter-spacing: 0;
-      color: #172b4d;
-      background-color: #e6fcff;
-      white-space: nowrap;
-      text-transform: capitalize;
-      cursor: pointer;
-      font-family: inherit;
-    }
-    .design-status-summary-chip:hover,
-    .design-status-summary-chip:focus-visible {
-      box-shadow: 0 0 0 2px rgba(38, 132, 255, 0.22);
-      outline: none;
-    }
-    .design-status-summary-chip--ready {
-      color: #006644;
-      background-color: #dcfff1;
-    }
-    .design-status-summary-chip--updated {
-      color: #0747a6;
-      background-color: #deebff;
-    }
-    .design-status-summary-chip--missing {
-      color: #7a3e00;
-      background-color: #fff0b3;
-    }
-    .design-status-summary-chip--not-ready {
-      color: #974f0c;
-      background-color: #fffae6;
-    }
-    .design-status-summary-chip--blocked {
-      color: #7a3e00;
-      background-color: #fff0b3;
-    }
-    .design-status-summary-chip--review {
-      color: #403294;
-      background-color: #eae6ff;
-    }
-    .design-status-summary-chip--done {
-      color: #44546f;
-      background-color: #f1f2f4;
-    }
     .design-link-item {
       display: flex;
       align-items: center;
@@ -1248,11 +1080,6 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
     }
     .design-link-item:focus {
       outline: none;
-    }
-    .design-link-item--highlight {
-      background: rgba(255, 171, 0, 0.18);
-      box-shadow: 0 0 0 2px rgba(255, 171, 0, 0.35);
-      border-radius: 4px;
     }
     .design-links-footer {
       font-size: 12px;

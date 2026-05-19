@@ -8,7 +8,10 @@ import { fetchUserData } from './metadata';
 import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
 import { getLocalStorageItem, getCurrentUserInfo } from './storage';
 import { initMessageReaction, MessageReactionConfig } from './message-reaction';
-import { isManualConcernedItem } from './watchRules';
+import {
+  GLIP_MESSAGE_MARKERS_KEY,
+  type GlipMessageMarkerCache,
+} from './services/GlipMessageMarkerService';
 import {
   loadRingCentralNativeJoinEnabled,
   openRingCentralVideoNativeJoin,
@@ -2680,36 +2683,109 @@ function injectFollowThreadStyles() {
       -webkit-box-orient: vertical;
       line-height: 1.4;
     }
+
+    .glip-ai-marker {
+      position: relative;
+      border-right: 3px solid rgba(14, 165, 233, 0.55) !important;
+    }
+
+    .glip-ai-marker-badge {
+      position: absolute;
+      top: 8px;
+      right: 80px;
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 10px;
+      line-height: 1.2;
+      font-weight: 600;
+      color: white;
+      cursor: help;
+      z-index: 10;
+      white-space: nowrap;
+      background: #0ea5e9;
+      box-shadow: 0 2px 4px rgba(14, 165, 233, 0.3);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .glip-ai-marker-badge.outreach-initial-ask {
+      background: #0ea5e9;
+    }
+
+    .glip-ai-marker-badge.snooze-pending {
+      background: #ea580c;
+    }
+
+    .glip-ai-marker-badge.outreach-followup {
+      background: #2563eb;
+    }
+
+    .glip-ai-marker-badge.scheduled-asme {
+      background: #059669;
+    }
+
+    .glip-ai-marker-badge.scheduled-ai-report {
+      background: #7c3aed;
+    }
+
+    .glip-ai-marker-badge.scheduled-bot {
+      background: #0f766e;
+    }
+
+    .glip-ai-marker-badge:hover {
+      transform: scale(1.05);
+      box-shadow: 0 4px 8px rgba(14, 165, 233, 0.4);
+    }
+
+    .glip-ai-marker-tooltip {
+      position: absolute;
+      right: 60px;
+      background: white;
+      color: #1f2937;
+      border: 1px solid #dbeafe;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 1000;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+      min-width: 220px;
+      max-width: 340px;
+    }
+
+    .glip-ai-marker-tooltip.position-below {
+      top: 30px;
+      transform: translateY(-4px);
+    }
+
+    .glip-ai-marker-tooltip.position-above {
+      bottom: 30px;
+      transform: translateY(4px);
+    }
+
+    .glip-ai-marker-badge:hover + .glip-ai-marker-tooltip,
+    .glip-ai-marker-tooltip:hover {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .glip-ai-marker-tooltip-title {
+      font-weight: 600;
+      color: #0369a1;
+      margin-bottom: 6px;
+    }
+
+    .glip-ai-marker-tooltip-line {
+      color: #4b5563;
+      line-height: 1.4;
+      margin-top: 4px;
+    }
   `;
   document.head.appendChild(style);
-}
-
-/**
- * 获取所有关注后续项
- */
-async function getFollowThreadItems(): Promise<any[]> {
-  try {
-    // eslint-disable-next-line no-undef
-    const result = await chrome.storage.local.get('concernedItems');
-    const items = (result.concernedItems || []).filter(isManualConcernedItem);
-    return items.filter((item: any) => item.followThread && item.followConfig);
-  } catch (error) {
-    console.error('❌ 获取关注后续项失败:', error);
-    return [];
-  }
-}
-
-/**
- * 获取关联类型的文本描述
- */
-function getRelationTypeText(type: string): string {
-  const map: Record<string, string> = {
-    thread_reply: '线程回复',
-    mention: '@提及',
-    quote: '引用',
-    semantic: '语义相关',
-  };
-  return map[type] || type;
 }
 
 /**
@@ -2762,6 +2838,32 @@ function calculateTimeElementWidth(card: Element): number {
   return 120;
 }
 
+async function getGlipMessageMarkerCache(): Promise<GlipMessageMarkerCache | null> {
+  try {
+    // eslint-disable-next-line no-undef
+    const result = await chrome.storage.local.get(GLIP_MESSAGE_MARKERS_KEY);
+    const cache = result[GLIP_MESSAGE_MARKERS_KEY] as
+      | GlipMessageMarkerCache
+      | undefined;
+    if (!cache || !cache.markersByChatId) {
+      return null;
+    }
+    return cache;
+  } catch (error) {
+    console.error('❌ 获取 Glip message markers 失败:', error);
+    return null;
+  }
+}
+
+function getChatIdForMessageCard(card: Element): string {
+  const groupId =
+    card.getAttribute('groupid') ||
+    card.closest('.conversation-card-wrapper')?.getAttribute('groupid');
+  if (groupId) return groupId;
+  const urlMatch = window.location.href.match(/\/messages\/(\d+)/);
+  return urlMatch ? urlMatch[1] : '';
+}
+
 /**
  * 智能定位 tooltip：检测屏幕空间，决定显示在上方还是下方
  */
@@ -2806,8 +2908,8 @@ function positionTooltip(tooltip: HTMLElement, triggerElement: HTMLElement) {
  * 装饰消息：添加视觉标识
  */
 async function decorateFollowThreadMessages() {
-  const followItems = await getFollowThreadItems();
-  if (followItems.length === 0) return;
+  const markerCache = await getGlipMessageMarkerCache();
+  const markersByChatId = markerCache?.markersByChatId || {};
 
   // 获取所有消息卡片
   const messageCards = Array.from(
@@ -2819,41 +2921,33 @@ async function decorateFollowThreadMessages() {
     if (!postId) continue;
 
     // 移除已有的装饰，避免重复
-    card.classList.remove('follow-thread-original', 'follow-thread-related');
-    const existingTooltip = card.querySelector(
-      '.follow-thread-tooltip, .follow-thread-related-tooltip',
+    card.classList.remove(
+      'follow-thread-original',
+      'follow-thread-related',
+      'glip-ai-marker',
     );
-    if (existingTooltip) {
-      existingTooltip.remove();
-    }
-    const existingBadge = card.querySelector('.follow-thread-related-badge');
-    if (existingBadge) {
-      existingBadge.remove();
-    }
-    const existingEyeIcon = card.querySelector('.follow-thread-eye-icon');
-    if (existingEyeIcon) {
-      existingEyeIcon.remove();
-    }
+    card
+      .querySelectorAll(
+        '.follow-thread-tooltip, .follow-thread-related-tooltip, .follow-thread-related-badge, .follow-thread-eye-icon, .glip-ai-marker-badge, .glip-ai-marker-tooltip',
+      )
+      .forEach((element) => element.remove());
 
-    // 检查是否是原消息
-    const originalItem = followItems.find(
-      (item: any) => item.followConfig?.originalMessage.postId === postId,
-    );
+    const chatId = getChatIdForMessageCard(card);
+    if (!chatId) continue;
+    const markers = markersByChatId[chatId]?.[postId] || [];
+    if (markers.length === 0) continue;
 
-    if (originalItem) {
+    const primaryMarker = markers[0];
+    if (primaryMarker.type === 'follow_thread_original') {
       // 添加原消息样式
       card.classList.add('follow-thread-original');
 
       // 计算剩余时间
-      const now = Date.now();
-      const timeLeft = originalItem.expiredAt - now;
-      let timeText = '';
-      if (timeLeft <= 0) {
-        timeText = '已过期';
-      } else {
-        const daysLeft = Math.ceil(timeLeft / (1000 * 60 * 60 * 24));
-        timeText = `${daysLeft}天后过期`;
-      }
+      const daysLeft = Number(primaryMarker.metadata?.expiresInDays);
+      const timeText =
+        Number.isFinite(daysLeft) && daysLeft > 0
+          ? `${daysLeft}天后过期`
+          : '关注后续';
 
       // 计算时间元素宽度，动态设置 right 值
       const rightOffset = calculateTimeElementWidth(card);
@@ -2866,40 +2960,11 @@ async function decorateFollowThreadMessages() {
       eyeIcon.title = '正在关注后续';
       card.appendChild(eyeIcon);
 
-      // 获取原消息信息
-      const originalMsg = originalItem.followConfig.originalMessage;
-      const originalSummary = originalItem.summary || originalMsg.content;
-      const relatedMessages = originalItem.followConfig.relatedMessages || [];
-
       // 创建丰富的浮出层
       const tooltip = document.createElement('div');
       tooltip.className = 'follow-thread-tooltip';
 
-      // 构建关联消息列表
-      let relatedListHtml = '';
-      if (relatedMessages.length > 0) {
-        relatedListHtml = relatedMessages
-          .slice(0, 5)
-          .map(
-            (msg: any) => `
-          <div class="tooltip-related-item">
-            <span class="tooltip-related-type">${getRelationTypeIcon(msg.relationType)}</span>
-            <div class="tooltip-related-info">
-              <div class="tooltip-related-sender">${escapeHtml(msg.sender)} · ${getRelationTypeText(msg.relationType)}</div>
-              <div class="tooltip-related-summary">${escapeHtml(truncateText(msg.summary || '暂无摘要', 60))}</div>
-            </div>
-          </div>
-        `,
-          )
-          .join('');
-
-        if (relatedMessages.length > 5) {
-          relatedListHtml += `<div class="tooltip-no-related">还有 ${relatedMessages.length - 5} 条关联消息...</div>`;
-        }
-      } else {
-        relatedListHtml = '<div class="tooltip-no-related">暂无关联消息</div>';
-      }
-
+      const relatedCount = Number(primaryMarker.metadata?.relatedCount) || 0;
       tooltip.innerHTML = `
         <div class="tooltip-title">
           👁 正在关注后续
@@ -2907,11 +2972,10 @@ async function decorateFollowThreadMessages() {
         </div>
         <div class="tooltip-section">
           <div class="tooltip-section-label">原消息摘要</div>
-          <div class="tooltip-original-content">${escapeHtml(truncateText(originalSummary, 100))}</div>
+          <div class="tooltip-original-content">${escapeHtml(truncateText(primaryMarker.tooltip || '', 100))}</div>
         </div>
         <div class="tooltip-section tooltip-related-list">
-          <div class="tooltip-section-label">关联消息 (${relatedMessages.length})</div>
-          ${relatedListHtml}
+          <div class="tooltip-section-label">关联消息 (${relatedCount})</div>
         </div>
       `;
       card.appendChild(tooltip);
@@ -2922,84 +2986,65 @@ async function decorateFollowThreadMessages() {
       continue;
     }
 
-    // 检查是否是关联消息
-    for (const item of followItems) {
-      const relatedMsg = item.followConfig?.relatedMessages.find(
-        (msg: any) => msg.postId === postId,
-      );
+    if (primaryMarker.type === 'follow_thread_related') {
+      // 添加关联消息样式
+      card.classList.add('follow-thread-related');
 
-      if (relatedMsg) {
-        // 添加关联消息样式
-        card.classList.add('follow-thread-related');
+      // 计算时间元素宽度，动态设置 right 值
+      const rightOffset = calculateTimeElementWidth(card);
 
-        // 计算时间元素宽度，动态设置 right 值
-        const rightOffset = calculateTimeElementWidth(card);
+      // 添加关联徽章
+      const badge = document.createElement('div');
+      badge.className = 'follow-thread-related-badge';
+      badge.style.right = `${rightOffset}px`;
+      const relationType = String(primaryMarker.metadata?.relationType || '');
+      badge.textContent = `${getRelationTypeIcon(relationType)} 关联`;
+      card.appendChild(badge);
 
-        // 添加关联徽章
-        const badge = document.createElement('div');
-        badge.className = 'follow-thread-related-badge';
-        badge.style.right = `${rightOffset}px`;
-        badge.textContent = `${getRelationTypeIcon(relatedMsg.relationType)} 关联`;
-        card.appendChild(badge);
+      // 添加详细 Tooltip
+      const tooltip = document.createElement('div');
+      tooltip.className = 'follow-thread-related-tooltip';
+      tooltip.innerHTML = `
+        <div class="tooltip-header">
+          ${getRelationTypeIcon(relationType)} 关注后续的关联消息
+        </div>
+        <div class="tooltip-row">
+          <span class="tooltip-label">原消息发送者:</span>
+          <span class="tooltip-value">${escapeHtml(String(primaryMarker.metadata?.originalSender || ''))}</span>
+        </div>
+        <div class="tooltip-original-section">
+          <div class="tooltip-section-label">关联摘要</div>
+          <div class="tooltip-original-preview">${escapeHtml(truncateText(primaryMarker.tooltip || '', 80))}</div>
+        </div>
+      `;
+      card.appendChild(tooltip);
 
-        // 获取原消息和所有关联消息信息
-        const originalMsg = item.followConfig.originalMessage;
-        const originalSummary = item.summary || originalMsg.content;
-        const allRelatedMessages = item.followConfig.relatedMessages || [];
-
-        // 构建其他关联消息列表（排除当前消息）
-        const otherRelated = allRelatedMessages.filter(
-          (m: any) => m.postId !== postId,
-        );
-        let otherRelatedHtml = '';
-        if (otherRelated.length > 0) {
-          otherRelatedHtml = `
-            <div class="tooltip-all-related">
-              <div class="tooltip-section-label">其他关联消息 (${otherRelated.length})</div>
-              ${otherRelated
-                .slice(0, 5)
-                .map(
-                  (m: any) => `
-                <div class="tooltip-related-compact">
-                  <span class="tooltip-related-compact-icon">${getRelationTypeIcon(m.relationType)}</span>
-                  <span class="tooltip-related-compact-text">${escapeHtml(m.sender)}: ${escapeHtml(truncateText(m.summary || '暂无摘要', 120))}</span>
-                </div>
-              `,
-                )
-                .join('')}
-              ${otherRelated.length > 5 ? `<div class="tooltip-related-compact" style="color: #9ca3af; padding: 8px 0; text-align: center; font-size: 10px;">还有 ${otherRelated.length - 5} 条...</div>` : ''}
-            </div>
-          `;
-        }
-
-        // 添加详细 Tooltip
-        const tooltip = document.createElement('div');
-        tooltip.className = 'follow-thread-related-tooltip';
-        tooltip.innerHTML = `
-          <div class="tooltip-header">
-            ${getRelationTypeIcon(relatedMsg.relationType)} 关注后续的关联消息
-          </div>
-          <div class="tooltip-row">
-            <span class="tooltip-label">原消息发送者:</span>
-            <span class="tooltip-value">${escapeHtml(originalMsg.sender)}</span>
-          </div>
-          <div class="tooltip-original-section">
-            <div class="tooltip-section-label">原消息摘要</div>
-            <div class="tooltip-original-preview">${escapeHtml(truncateText(originalSummary, 80))}</div>
-          </div>
-          ${otherRelatedHtml}
-          <div class="tooltip-original-link">
-            <a href="${originalMsg.messageUrl}" target="_blank" onclick="event.stopPropagation();">🔗 查看原消息</a>
-          </div>
-        `;
-        card.appendChild(tooltip);
-
-        // 智能定位 tooltip
-        positionTooltip(tooltip, badge);
-
-        break;
-      }
+      // 智能定位 tooltip
+      positionTooltip(tooltip, badge);
+      continue;
     }
+
+    card.classList.add('glip-ai-marker');
+    const rightOffset = calculateTimeElementWidth(card);
+    const badge = document.createElement('div');
+    badge.className = `glip-ai-marker-badge ${primaryMarker.type.replace(/_/g, '-')}`;
+    badge.style.right = `${rightOffset}px`;
+    badge.textContent = primaryMarker.label;
+    card.appendChild(badge);
+
+    const tooltip = document.createElement('div');
+    tooltip.className = 'glip-ai-marker-tooltip';
+    tooltip.innerHTML = `
+      <div class="glip-ai-marker-tooltip-title">${escapeHtml(primaryMarker.label)}</div>
+      ${markers
+        .map(
+          (marker) =>
+            `<div class="glip-ai-marker-tooltip-line">${escapeHtml(marker.label)}${marker.tooltip ? `：${escapeHtml(truncateText(marker.tooltip, 90))}` : ''}</div>`,
+        )
+        .join('')}
+    `;
+    card.appendChild(tooltip);
+    positionTooltip(tooltip, badge);
   }
 }
 
@@ -3013,6 +3058,12 @@ export function initFollowThreadVisuals() {
   injectFollowThreadStyles();
 
   // 2. 初次装饰消息
+  // eslint-disable-next-line no-undef
+  chrome.runtime
+    .sendMessage({ type: 'REFRESH_GLIP_MESSAGE_MARKERS' })
+    .catch(() => {
+      // 后台刷新失败时仍使用已有本地缓存装饰。
+    });
   setTimeout(() => decorateFollowThreadMessages(), 2000);
 
   // 3. 防抖函数，避免频繁执行
@@ -3145,9 +3196,18 @@ export function initFollowThreadVisuals() {
   // 9. 监听 storage 变化，实时更新装饰
   // eslint-disable-next-line no-undef
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes.concernedItems) {
-      console.log('📦 关注项已更新，重新装饰消息...');
+    if (areaName !== 'local') return;
+    if (changes[GLIP_MESSAGE_MARKERS_KEY]) {
+      console.log('📦 Glip 标注缓存已更新，重新装饰消息...');
       debouncedDecorate(500);
+    }
+    if (changes.concernedItems) {
+      // 关注后续源数据变化时由后台刷新统一 marker cache。
+      chrome.runtime
+        .sendMessage({ type: 'REFRESH_GLIP_MESSAGE_MARKERS' })
+        .catch((error) => {
+          console.warn('刷新 Glip 标注缓存失败:', error);
+        });
     }
   });
 

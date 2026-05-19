@@ -242,6 +242,7 @@ export interface ProjectAnalysisResult extends BaseAnalysisResult {
     owner?: string;
     ownerReason?: string;
     track?: string;
+    trackReason?: string;
     highlights?: Array<string>;
     highlightsReason?: string;
     timeline?: string[];

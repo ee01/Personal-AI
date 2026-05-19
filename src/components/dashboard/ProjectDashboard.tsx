@@ -4,10 +4,12 @@ import {
   PROJECT_DASHBOARD_VIEW_FILTER_LABELS,
   buildMilestoneClassToken,
   buildMilestoneMarkerText,
+  buildProjectDashboardDecisionBrief,
   buildProjectDashboardViewFilterCounts,
   buildProjectDashboardViewReason,
   buildProjectDataQualitySummary,
   buildProjectDecisionSummary,
+  buildProjectEvidenceGapSummary,
   buildProjectFocusSummary,
   buildProjectFreshnessSummary,
   buildProjectHealthSummary,
@@ -15,6 +17,7 @@ import {
   buildProjectReviewSummary,
   buildProjectStatusEvidenceItems,
   buildProjectStatusUpdateDraft,
+  buildProjectTaskSourceSummary,
   buildProjectTaskRiskSummary,
   compareProjectsByDashboardPriority,
   filterProjectsByDashboardView,
@@ -73,6 +76,12 @@ type TaskAttention = {
   };
 };
 
+const ALL_PLATFORM_KEYS: PlatformKey[] = ['sdk', 'ios', 'android', 'qa', 'dev'];
+const DEFAULT_PLATFORM_CONFIG: PlatformKey[] = ['sdk', 'ios', 'android', 'qa'];
+const PLATFORM_STATUS_OPTIONS = ['pending', 'todo', 'progress', 'testing', 'blocked', 'done', 'rollout'];
+
+const isPlatformKey = (value: string): value is PlatformKey => ALL_PLATFORM_KEYS.includes(value as PlatformKey);
+
 const clampPercent = (value: number, min = 10, max = 90) => {
   if (!Number.isFinite(value)) return 50;
   return Math.max(min, Math.min(max, value));
@@ -88,6 +97,11 @@ const buildStatusClassToken = (status: string | undefined) => normalizeStatusTok
 const isCompletedTask = (task: FishboneTask) => {
   const token = normalizeStatusToken(task.status);
   return token === 'done' || token === 'closed' || token === 'complete' || token === 'completed';
+};
+
+const hasValidDateOnly = (date: string | undefined) => {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  return !Number.isNaN(new Date(`${date}T00:00:00`).getTime());
 };
 
 const parseDateOnly = (date: string | undefined): Date | null => {
@@ -185,6 +199,8 @@ const ProjectDashboard: React.FC = () => {
   const [syncPanelOpen, setSyncPanelOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState<ProjectDashboardViewFilter>('all');
   const [focusExpanded, setFocusExpanded] = useState(false);
+  const [reviewQueueExpanded, setReviewQueueExpanded] = useState(false);
+  const [evidenceGapExpanded, setEvidenceGapExpanded] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // 新增项目入口
@@ -238,12 +254,73 @@ const ProjectDashboard: React.FC = () => {
     return null;
   }, [projects, detailTaskRef]);
 
+  const dashboardNow = useMemo(() => lastRefresh, [lastRefresh]);
+
+  const selectedTaskEvidenceState = useMemo(() => {
+    if (!selectedTask) return null;
+
+    const risk = buildProjectTaskRiskSummary(selectedTask.project, selectedTask.task, { now: dashboardNow });
+    const sourceSummary = buildProjectTaskSourceSummary(selectedTask.task);
+    const hasEta = hasValidDateOnly(selectedTask.task.eta);
+    const riskTone = risk.label === '高风险'
+      ? 'high'
+      : risk.label === '中风险'
+        ? 'medium'
+        : 'low';
+    const nextStep = (() => {
+      if (!hasEta && !sourceSummary.hasSource) return '先补 ETA，再关联 Jira 或填写平台来源';
+      if (!hasEta) return '补上可复核 ETA';
+      if (!sourceSummary.hasSource) return '关联 Jira，或填写平台状态/负责人';
+      if (risk.score >= 70) return '先处理高风险驱动项，再同步状态草稿';
+      return '证据可用，继续维护状态和来源';
+    })();
+
+    return {
+      hasEta,
+      risk,
+      riskTone,
+      sourceSummary,
+      nextStep,
+    };
+  }, [selectedTask, dashboardNow]);
+
+  const selectedTaskPlatformKeys = useMemo<PlatformKey[]>(() => {
+    if (!selectedTask) return [];
+
+    const configured = Array.isArray(selectedTask.project.platformConfig)
+      ? selectedTask.project.platformConfig.filter(isPlatformKey)
+      : [];
+    const existing = Object.keys(selectedTask.task.platforms || {}).filter(isPlatformKey);
+    const keys = [...configured, ...existing];
+    const uniqueKeys = Array.from(new Set(keys));
+
+    return uniqueKeys.length ? uniqueKeys : DEFAULT_PLATFORM_CONFIG;
+  }, [selectedTask]);
+
+  const focusEvidenceRepairTarget = (target: 'eta' | 'source') => {
+    const selectors = target === 'eta'
+      ? ['[data-evidence-field="eta"]']
+      : [
+          '[data-evidence-field="platform-source"] input',
+          '[data-evidence-field="platform-source"] select',
+          '[data-evidence-field="jira-source"] button',
+        ];
+
+    window.requestAnimationFrame(() => {
+      const element = selectors
+        .map(selector => document.querySelector(selector) as HTMLElement | null)
+        .find((candidate): candidate is HTMLElement => Boolean(candidate));
+
+      if (!element) return;
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      element.focus({ preventScroll: true });
+    });
+  };
+
   const launchContextProject = useMemo(
     () => projects.find(project => projectMatchesDashboardLaunchContext(project, launchContext)) || null,
     [projects, launchContext],
   );
-
-  const dashboardNow = useMemo(() => lastRefresh, [lastRefresh]);
 
   const dashboardStats = useMemo(() => projects.reduce(
     (acc, project) => {
@@ -294,14 +371,30 @@ const ProjectDashboard: React.FC = () => {
   );
   const focusItems = focusSummary.visibleItems;
 
+  const decisionBrief = useMemo(
+    () => buildProjectDashboardDecisionBrief(projects, { now: dashboardNow }),
+    [projects, dashboardNow],
+  );
+
   const projectFilterCounts = useMemo(
     () => buildProjectDashboardViewFilterCounts(projects, dashboardNow),
     [projects, dashboardNow],
   );
 
   const reviewQueue = useMemo(
-    () => buildProjectReviewQueueSummary(projects, { now: dashboardNow, maxItems: 3 }),
-    [projects, dashboardNow],
+    () => buildProjectReviewQueueSummary(projects, {
+      now: dashboardNow,
+      maxItems: reviewQueueExpanded ? Number.POSITIVE_INFINITY : 3,
+    }),
+    [projects, dashboardNow, reviewQueueExpanded],
+  );
+
+  const evidenceGapQueue = useMemo(
+    () => buildProjectEvidenceGapSummary(projects, {
+      now: dashboardNow,
+      maxItems: evidenceGapExpanded ? Number.POSITIVE_INFINITY : 4,
+    }),
+    [projects, dashboardNow, evidenceGapExpanded],
   );
 
   const prioritizedProjects = useMemo(
@@ -322,6 +415,31 @@ const ProjectDashboard: React.FC = () => {
     () => filterProjectsByDashboardView(prioritizedProjects, projectFilter, dashboardNow),
     [prioritizedProjects, projectFilter, dashboardNow],
   );
+
+  const runDecisionBriefAction = () => {
+    const action = decisionBrief.primaryAction;
+
+    switch (action.type) {
+      case 'open-task':
+        openDetail(action.projectId, action.taskId);
+        return;
+      case 'review-project': {
+        const project = projects.find(item => item.id === action.projectId);
+        if (project) {
+          handleOpenStatusDraftPreview(project);
+        }
+        return;
+      }
+      case 'filter-projects':
+        setProjectFilter(action.filter);
+        return;
+      case 'create-project':
+        handleOpenCreateModal();
+        return;
+      default:
+        return;
+    }
+  };
 
   useEffect(() => {
     getEnvConfig().then(setEnv).catch(() => setEnv(null));
@@ -1299,6 +1417,21 @@ const ProjectDashboard: React.FC = () => {
               )}
             </div>
           </div>
+          <div className={`decision-brief ${decisionBrief.tone}`} aria-label="项目仪表盘决策摘要">
+            <div className="decision-brief-main">
+              <span>{decisionBrief.label}</span>
+              <strong>{decisionBrief.headline}</strong>
+              <em>{decisionBrief.detail}</em>
+            </div>
+            <div className="decision-brief-support">
+              {decisionBrief.supportingSignals.slice(0, 4).map(signal => (
+                <span key={signal}>{signal}</span>
+              ))}
+            </div>
+            <button type="button" className="decision-brief-action" onClick={runDecisionBriefAction}>
+              {decisionBrief.primaryAction.label}
+            </button>
+          </div>
           <div className="focus-list" aria-label="跨项目优先处理任务">
             {focusItems.length === 0 ? (
               <div className="focus-empty">当前没有需要立即处理的任务；项目列表会按风险优先排序。</div>
@@ -1345,6 +1478,63 @@ const ProjectDashboard: React.FC = () => {
               </>
             )}
           </div>
+          {evidenceGapQueue.totalItems > 0 && (
+            <div className="evidence-gap-queue" aria-label="项目证据补全队列">
+              <div className="evidence-gap-header">
+                <div>
+                  <span>证据补全</span>
+                  <strong>{evidenceGapQueue.totalItems} 个活动任务缺少 ETA 或来源</strong>
+                  <div className="evidence-gap-breakdown" aria-label={`证据缺口构成：${evidenceGapQueue.breakdownLabel}`}>
+                    {evidenceGapQueue.counts['missing-both'] > 0 && (
+                      <span className="missing-both">ETA+来源 {evidenceGapQueue.counts['missing-both']}</span>
+                    )}
+                    {evidenceGapQueue.counts['missing-eta'] > 0 && (
+                      <span className="missing-eta">ETA {evidenceGapQueue.counts['missing-eta']}</span>
+                    )}
+                    {evidenceGapQueue.counts['missing-source'] > 0 && (
+                      <span className="missing-source">来源 {evidenceGapQueue.counts['missing-source']}</span>
+                    )}
+                  </div>
+                </div>
+                {(evidenceGapQueue.hiddenItems > 0 || evidenceGapExpanded) && (
+                  <div className="queue-header-actions">
+                    {evidenceGapQueue.hiddenItems > 0 && (
+                      <em>先显示影响风险判断最大的 {evidenceGapQueue.visibleItems.length} 个</em>
+                    )}
+                    <button
+                      type="button"
+                      className="queue-toggle"
+                      onClick={() => setEvidenceGapExpanded(prev => !prev)}
+                    >
+                      {evidenceGapExpanded ? '收起证据队列' : `展开全部 ${evidenceGapQueue.totalItems} 项`}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="evidence-gap-list">
+                {evidenceGapQueue.visibleItems.map(item => (
+                  <button
+                    key={`${item.projectId}-${item.taskId}-${item.gapType}`}
+                    type="button"
+                    className={`evidence-gap-item ${item.gapType}`}
+                    onClick={() => openDetail(item.projectId, item.taskId)}
+                    title={`${item.projectName} · ${item.taskTitle}`}
+                  >
+                    <span className="evidence-gap-label">{item.label}</span>
+                    <span className="evidence-gap-main">
+                      <strong>{item.taskTitle}</strong>
+                      <em>{item.projectName}</em>
+                    </span>
+                    <span className="evidence-gap-detail">{item.headline}</span>
+                    <span className={`evidence-gap-risk risk-${item.risk.label === '高风险' ? 'high' : item.risk.label === '中风险' ? 'medium' : 'low'}`}>
+                      {item.risk.score}
+                    </span>
+                    <span className="evidence-gap-next">{item.nextStep}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {reviewQueue.totalItems > 0 && (
             <div className="review-queue" aria-label="项目状态复核队列">
               <div className="review-queue-header">
@@ -1352,8 +1542,19 @@ const ProjectDashboard: React.FC = () => {
                   <span>状态复核</span>
                   <strong>{reviewQueue.totalItems} 个项目待复核</strong>
                 </div>
-                {reviewQueue.hiddenItems > 0 && (
-                  <em>先显示最需要处理的 {reviewQueue.visibleItems.length} 个</em>
+                {(reviewQueue.hiddenItems > 0 || reviewQueueExpanded) && (
+                  <div className="queue-header-actions">
+                    {reviewQueue.hiddenItems > 0 && (
+                      <em>先显示最需要处理的 {reviewQueue.visibleItems.length} 个</em>
+                    )}
+                    <button
+                      type="button"
+                      className="queue-toggle"
+                      onClick={() => setReviewQueueExpanded(prev => !prev)}
+                    >
+                      {reviewQueueExpanded ? '收起复核队列' : `展开全部 ${reviewQueue.totalItems} 项目`}
+                    </button>
+                  </div>
                 )}
               </div>
               <div className="review-queue-list">
@@ -1826,6 +2027,54 @@ const ProjectDashboard: React.FC = () => {
               <button className="close-btn" onClick={closeDetail}>×</button>
                   </div>
             <div className="zoom-body">
+              {selectedTaskEvidenceState && (
+                <div className={`detail-section evidence-repair-section ${selectedTaskEvidenceState.hasEta && selectedTaskEvidenceState.sourceSummary.hasSource ? 'complete' : 'missing'}`}>
+                  <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--warning)' }}>E</span>证据修复</h3>
+                  <div className="evidence-repair-grid">
+                    <div className={`evidence-repair-card ${selectedTaskEvidenceState.hasEta ? 'complete' : 'missing'}`}>
+                      <span>ETA</span>
+                      <strong>{selectedTaskEvidenceState.hasEta ? '已补齐' : '缺失'}</strong>
+                      <em>{selectedTaskEvidenceState.hasEta ? selectedTask.task.eta : '在基本信息里补上预计完成时间'}</em>
+                      {!selectedTaskEvidenceState.hasEta && (
+                        <button
+                          type="button"
+                          className="evidence-repair-card-action"
+                          onClick={() => focusEvidenceRepairTarget('eta')}
+                        >
+                          补 ETA
+                        </button>
+                      )}
+                    </div>
+                    <div className={`evidence-repair-card ${selectedTaskEvidenceState.sourceSummary.hasSource ? 'complete' : 'missing'}`}>
+                      <span>来源</span>
+                      <strong>{selectedTaskEvidenceState.sourceSummary.hasSource ? '已补齐' : '缺失'}</strong>
+                      <em>
+                        {selectedTaskEvidenceState.sourceSummary.sourceLabels.length
+                          ? selectedTaskEvidenceState.sourceSummary.sourceLabels.join('；')
+                          : '关联 Jira，或填写平台状态/负责人'}
+                      </em>
+                      {!selectedTaskEvidenceState.sourceSummary.hasSource && (
+                        <button
+                          type="button"
+                          className="evidence-repair-card-action"
+                          onClick={() => focusEvidenceRepairTarget('source')}
+                        >
+                          补来源
+                        </button>
+                      )}
+                    </div>
+                    <div className={`evidence-repair-card risk-${selectedTaskEvidenceState.riskTone}`}>
+                      <span>风险</span>
+                      <strong>{selectedTaskEvidenceState.risk.label} {selectedTaskEvidenceState.risk.score}</strong>
+                      <em>{selectedTaskEvidenceState.risk.drivers.join('；')}</em>
+                    </div>
+                  </div>
+                  <div className="evidence-repair-next">
+                    <span>下一步</span>
+                    <strong>{selectedTaskEvidenceState.nextStep}</strong>
+                  </div>
+                </div>
+              )}
               <div className="detail-section">
                 <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--primary)' }}>ℹ️</span>基本信息</h3>
                 <div className="info-grid">
@@ -1883,7 +2132,13 @@ const ProjectDashboard: React.FC = () => {
                   </div>
                   <div className="info-item">
                     <span className="info-label">预计完成时间</span>
-                    <input className="edit-input" type="date" value={selectedTask.task.eta || ''} onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, { eta: e.target.value })} />
+                    <input
+                      className="edit-input"
+                      data-evidence-field="eta"
+                      type="date"
+                      value={selectedTask.task.eta || ''}
+                      onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, { eta: e.target.value })}
+                    />
                   </div>
                 </div>
                 <div style={{ marginTop: 16 }}>
@@ -1898,26 +2153,72 @@ const ProjectDashboard: React.FC = () => {
                 </div>
               </div>
 
-              {selectedTask.task.platforms && (
+              {selectedTaskPlatformKeys.length > 0 && (
                 <div className="detail-section">
                   <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--info)' }}>📱</span>平台开发进展</h3>
                   <div className="platform-grid">
-                    {Object.entries(selectedTask.task.platforms).map(([name, p]) => (
-                      <div className="platform-item" key={name}>
-                        <div className="platform-name">{name.toUpperCase()}</div>
-                        <span className={`platform-status status-${buildStatusClassToken(p?.status)}`}>{p?.status || 'pending'}</span>
-                        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
-                          <div><strong>负责人:</strong> <input className="edit-input" value={p?.assignee || ''} onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, { platforms: { ...selectedTask.task.platforms, [name]: { ...(p || {}), assignee: e.target.value } } })} /></div>
-                          <div><strong>JIRA:</strong> <input className="edit-input" value={p?.jira || ''} onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, { platforms: { ...selectedTask.task.platforms, [name]: { ...(p || {}), jira: e.target.value } } })} /></div>
-                    </div>
-                      </div>
-                    ))}
+                    {selectedTaskPlatformKeys.map((name) => {
+                      const platformState = selectedTask.task.platforms?.[name];
+                      const currentStatus = platformState?.status || 'pending';
+                      const statusOptions = PLATFORM_STATUS_OPTIONS.includes(currentStatus)
+                        ? PLATFORM_STATUS_OPTIONS
+                        : [currentStatus, ...PLATFORM_STATUS_OPTIONS];
+
+                      return (
+                        <div className="platform-item" key={name}>
+                          <div className="platform-name">{name.toUpperCase()}</div>
+                          <select
+                            className={`platform-status-select status-${buildStatusClassToken(currentStatus)}`}
+                            aria-label={`${name.toUpperCase()} 平台状态`}
+                            value={currentStatus}
+                            onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, {
+                              platforms: {
+                                ...(selectedTask.task.platforms || {}),
+                                [name]: { ...(platformState || {}), status: e.target.value },
+                              },
+                            })}
+                          >
+                            {statusOptions.map(option => (
+                              <option key={option} value={option}>{option}</option>
+                            ))}
+                          </select>
+                          <div className="platform-source-fields" data-evidence-field="platform-source">
+                            <label>
+                              <strong>负责人</strong>
+                              <input
+                                className="edit-input"
+                                value={platformState?.assignee || ''}
+                                onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, {
+                                  platforms: {
+                                    ...(selectedTask.task.platforms || {}),
+                                    [name]: { ...(platformState || {}), assignee: e.target.value },
+                                  },
+                                })}
+                              />
+                            </label>
+                            <label>
+                              <strong>Jira</strong>
+                              <input
+                                className="edit-input"
+                                value={platformState?.jira || ''}
+                                onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, {
+                                  platforms: {
+                                    ...(selectedTask.task.platforms || {}),
+                                    [name]: { ...(platformState || {}), jira: e.target.value },
+                                  },
+                                })}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                       </div>
                     )}
 
               <div className="detail-section">
-                <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--success)' }}>🎯</span>关联 JIRA <button className="add-jira-btn" onClick={() => addJira(selectedTask.project.id, selectedTask.task)}>➕</button></h3>
+                <h3 className="section-title" data-evidence-field="jira-source"><span className="section-icon" style={{ background: 'var(--success)' }}>🎯</span>关联 JIRA <button className="add-jira-btn" onClick={() => addJira(selectedTask.project.id, selectedTask.task)}>➕</button></h3>
                 <div className="jira-list">
                   {(selectedTask.task.jira || []).map((j, idx) => (
                     <div className="jira-item-editable" key={j.key + idx}>
@@ -2118,6 +2419,44 @@ const ProjectDashboard: React.FC = () => {
         .focus-overflow { display: flex; align-items: center; min-height: 44px; padding: 10px 12px; color: var(--primary); background: var(--bg); border: 1px dashed #bfdbfe; border-radius: 8px; font-size: 12px; line-height: 1.35; text-align: left; cursor: pointer; }
         .focus-overflow:hover { background: var(--primary-light); border-style: solid; }
         .focus-overflow.collapse { color: var(--text-muted); border-color: var(--border); }
+        .decision-brief { margin: 0 0 14px; display: grid; grid-template-columns: minmax(260px, 1fr) minmax(240px, auto) auto; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-left: 5px solid var(--info); border-radius: 8px; background: var(--bg); }
+        .decision-brief.critical { border-left-color: var(--danger); background: #fef2f2; }
+        .decision-brief.warning { border-left-color: var(--warning); background: #fffbeb; }
+        .decision-brief.info { border-left-color: var(--info); background: #ecfeff; }
+        .decision-brief.neutral { border-left-color: var(--success); background: #ecfdf5; }
+        .decision-brief-main { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; align-items: center; }
+        .decision-brief-main span { grid-row: span 2; align-self: start; border-radius: 999px; padding: 3px 9px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 800; white-space: nowrap; }
+        .decision-brief-main strong { color: var(--text); font-size: 14px; line-height: 1.3; overflow-wrap: anywhere; }
+        .decision-brief-main em { color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.4; overflow-wrap: anywhere; }
+        .decision-brief-support { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; }
+        .decision-brief-support span { border-radius: 999px; padding: 3px 8px; background: rgba(255,255,255,.78); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+        .decision-brief-action { border: 1px solid #bfdbfe; border-radius: 6px; background: var(--primary); color: white; padding: 7px 12px; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+        .decision-brief-action:hover { filter: brightness(.96); transform: translateY(-1px); }
+        .evidence-gap-queue { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+        .evidence-gap-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
+        .evidence-gap-header span { display: block; color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; }
+        .evidence-gap-header strong { color: var(--text); font-size: 14px; }
+        .evidence-gap-header em { color: var(--text-muted); font-size: 12px; font-style: normal; }
+        .evidence-gap-breakdown { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+        .evidence-gap-breakdown span { margin: 0; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: none; white-space: nowrap; }
+        .evidence-gap-breakdown .missing-both { color: #b91c1c; border-color: #fecaca; background: #fee2e2; }
+        .evidence-gap-breakdown .missing-eta { color: #92400e; border-color: #fde68a; background: #fef3c7; }
+        .evidence-gap-breakdown .missing-source { color: #0f766e; border-color: #99f6e4; background: #ccfbf1; }
+        .queue-header-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .queue-toggle { border: 1px solid #bfdbfe; border-radius: 6px; background: var(--primary-light); color: #1d4ed8; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+        .queue-toggle:hover { background: #bfdbfe; }
+        .evidence-gap-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+        .evidence-gap-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; text-align: left; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--bg); color: var(--text); padding: 10px; cursor: pointer; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }
+        .evidence-gap-item:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: var(--shadow); }
+        .evidence-gap-item.missing-both { border-left-color: var(--danger); background: #fef2f2; }
+        .evidence-gap-item.missing-eta { border-left-color: var(--warning); background: #fffbeb; }
+        .evidence-gap-label { grid-row: span 2; align-self: start; border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .evidence-gap-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .evidence-gap-main strong { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .evidence-gap-main em { color: var(--text-muted); font-size: 12px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .evidence-gap-detail { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+        .evidence-gap-risk { border-radius: 999px; padding: 3px 7px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+        .evidence-gap-next { grid-column: 1 / -1; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
         .review-queue { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
         .review-queue-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
         .review-queue-header span { display: block; color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; }
@@ -2403,6 +2742,20 @@ const ProjectDashboard: React.FC = () => {
         .info-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
         .edit-input, .edit-select, .edit-textarea { padding: 8px 12px; border: 2px solid var(--primary); border-radius: 6px; font-size: 14px; background: var(--card); color: var(--text); min-width: 150px; }
         .edit-textarea { min-height: 80px; resize: vertical; }
+        .platform-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+        .platform-item { min-width: 0; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+        .platform-name { color: var(--text); font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+        .platform-status-select { width: 100%; border: 1px solid var(--border); border-radius: 999px; padding: 5px 8px; color: white; font-size: 12px; font-weight: 700; background: var(--text-muted); }
+        .platform-status-select.status-progress { background: var(--info); }
+        .platform-status-select.status-testing, .platform-status-select.status-testbuild { background: var(--warning); }
+        .platform-status-select.status-done, .platform-status-select.status-closed, .platform-status-select.status-complete, .platform-status-select.status-completed { background: var(--success); }
+        .platform-status-select.status-rollout { background: var(--primary); }
+        .platform-status-select.status-blocked { background: var(--danger); }
+        .platform-status-select.status-pending, .platform-status-select.status-todo, .platform-status-select.status-unknown { background: var(--text-muted); }
+        .platform-source-fields { display: flex; flex-direction: column; gap: 8px; }
+        .platform-source-fields label { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 12px; }
+        .platform-source-fields .edit-input { width: 100%; min-width: 0; box-sizing: border-box; border-color: var(--border); }
+        .platform-source-fields .edit-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14); }
         .jira-list { display: flex; flex-direction: column; gap: 8px; }
         .jira-item { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); transition: all .2s ease; }
         .jira-item:hover { border-color: var(--primary); background: var(--primary-light); }
@@ -2418,6 +2771,23 @@ const ProjectDashboard: React.FC = () => {
         .timeline-context { min-height: 38px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text-muted); font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
         .timeline-context strong { color: var(--text); font-size: 14px; }
         .task-bone:hover .drag-indicator { opacity: 1; }
+        .evidence-repair-section { border-left: 4px solid var(--warning); background: #fffbeb; }
+        .evidence-repair-section.complete { border-left-color: var(--success); background: #ecfdf5; }
+        .evidence-repair-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+        .evidence-repair-card { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--card); }
+        .evidence-repair-card.missing { border-left-color: var(--warning); }
+        .evidence-repair-card.complete { border-left-color: var(--success); }
+        .evidence-repair-card.risk-high { border-left-color: var(--danger); }
+        .evidence-repair-card.risk-medium { border-left-color: var(--warning); }
+        .evidence-repair-card.risk-low { border-left-color: var(--success); }
+        .evidence-repair-card span { display: block; color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; margin-bottom: 4px; }
+        .evidence-repair-card strong { display: block; color: var(--text); font-size: 14px; margin-bottom: 3px; overflow-wrap: anywhere; }
+        .evidence-repair-card em { display: block; color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.35; overflow-wrap: anywhere; }
+        .evidence-repair-card-action { margin-top: 9px; border: 1px solid #bfdbfe; border-radius: 6px; background: var(--primary-light); color: #1d4ed8; padding: 6px 10px; font-size: 12px; font-weight: 800; cursor: pointer; }
+        .evidence-repair-card-action:hover { background: #bfdbfe; }
+        .evidence-repair-next { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.72); display: flex; gap: 10px; align-items: center; }
+        .evidence-repair-next span { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+        .evidence-repair-next strong { color: var(--text); font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
         .status-draft-modal { width: min(1100px, 95vw); }
         .status-draft-layout { display: grid; grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr); gap: 18px; align-items: stretch; }
         .status-draft-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
@@ -2476,9 +2846,19 @@ const ProjectDashboard: React.FC = () => {
           .overview-side { align-items: flex-start; min-width: 0; width: 100%; }
           .overview-metrics { justify-content: flex-start; }
           .project-filter-bar { margin: 0 10px 10px; }
+          .decision-brief { grid-template-columns: 1fr; }
+          .decision-brief-main { grid-template-columns: 1fr; }
+          .decision-brief-main span { grid-row: auto; justify-self: start; }
+          .decision-brief-support { justify-content: flex-start; }
+          .decision-brief-action { justify-self: start; }
           .focus-item { grid-template-columns: auto minmax(0, 1fr); }
           .focus-detail { grid-column: 2; }
           .focus-risk { grid-column: 2; justify-self: start; }
+          .evidence-gap-header { flex-direction: column; align-items: flex-start; }
+          .queue-header-actions { justify-content: flex-start; }
+          .evidence-gap-item { grid-template-columns: auto minmax(0, 1fr); }
+          .evidence-gap-detail { grid-column: 2; }
+          .evidence-gap-risk { grid-column: 2; justify-self: start; }
           .review-queue-header { flex-direction: column; align-items: flex-start; }
           .review-queue-item { grid-template-columns: 1fr; }
           .review-queue-meta { justify-content: flex-start; }

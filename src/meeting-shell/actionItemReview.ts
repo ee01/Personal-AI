@@ -71,6 +71,20 @@ export function getActionReviewWarningLabel(
   return '缺依据';
 }
 
+export function getActionReviewWarningSummary(
+  item: MeetingPilotActionItem,
+): string | undefined {
+  const labels = getActionReviewWarnings(item).map(getActionReviewWarningLabel);
+  return labels.length ? labels.join(' / ') : undefined;
+}
+
+export function getActionReviewExceptionHint(
+  item: MeetingPilotActionItem,
+): string | undefined {
+  const summary = getActionReviewWarningSummary(item);
+  return summary ? `仍有 ${summary}；确认表示你接受这个例外。` : undefined;
+}
+
 function buildManualActionTimelineDescription(
   item: MeetingPilotActionItem,
 ): string {

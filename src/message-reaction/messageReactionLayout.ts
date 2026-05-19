@@ -9,6 +9,7 @@ export type MessageReactionActionKey =
   | 'snooze'
   | 'followThread'
   | 'autoReply'
+  | 'followupAsk'
   | 'linkedAction';
 
 export interface MessageReactionActionDefinition {
@@ -41,6 +42,12 @@ const ALL_ACTIONS: MessageReactionActionDefinition[] = [
     runtimeMessageType: 'OPEN_AUTO_REPLY_CONFIG',
   },
   {
+    key: 'followupAsk',
+    label: '跟进追问',
+    className: 'message-reaction-action-btn followup-ask-btn',
+    runtimeMessageType: 'CREATE_OUTREACH_FROM_MESSAGE',
+  },
+  {
     key: 'linkedAction',
     label: '联动操作',
     className: 'message-reaction-action-btn linked-action-btn',
@@ -50,6 +57,7 @@ const ALL_ACTIONS: MessageReactionActionDefinition[] = [
 
 export function getMessageReactionActionDefinitions(
   config: MessageReactionToolbarConfig,
+  context: { isOwnMessage?: boolean } = {},
 ): MessageReactionActionDefinition[] {
   return ALL_ACTIONS.filter((action) => {
     switch (action.key) {
@@ -58,7 +66,9 @@ export function getMessageReactionActionDefinitions(
       case 'followThread':
         return config.enableFollowThread;
       case 'autoReply':
-        return config.enableAutoReply;
+        return config.enableAutoReply && !context.isOwnMessage;
+      case 'followupAsk':
+        return config.enableAutoReply && context.isOwnMessage;
       case 'linkedAction':
         return config.enableLinkedAction;
     }

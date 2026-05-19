@@ -93,7 +93,14 @@ class FakeBrowser {
   }
 
   status() {
-    return { running: this.running, currentUrl: this.currentUrl };
+    return {
+      running: this.running,
+      currentUrl: this.currentUrl,
+      transport: {
+        mode: 'playwright' as const,
+        preferredMode: 'playwright' as const,
+      },
+    };
   }
 
   async close(): Promise<void> {}
@@ -164,6 +171,23 @@ test('bridge health and pairing flow', async () => {
       'mobile_context_not_bound',
     ].sort(),
   );
+
+  const openLogin = await app.inject({
+    method: 'POST',
+    url: '/auth/open-login',
+    headers: { 'x-bridge-token': pairBody.token },
+    payload: {},
+  });
+  assert.equal(openLogin.statusCode, 200);
+  const openLoginBody = openLogin.json() as {
+    url: string;
+    browserTransport?: { mode?: string; preferredMode?: string };
+  };
+  assert.equal(openLoginBody.url, 'https://www.doubao.com/');
+  assert.deepEqual(openLoginBody.browserTransport, {
+    mode: 'playwright',
+    preferredMode: 'playwright',
+  });
 
   syncManager.stop();
   await app.close();

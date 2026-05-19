@@ -216,6 +216,12 @@ try {
   assert.match(itemTexts[1], /Native pricing handoff/);
   assert.match(itemTexts[1], /Design updated/);
   assert.match(itemTexts[1], /Jira Designs/);
+  assert.doesNotMatch(itemTexts[1], /Open in Figma/);
+  assert.equal(
+    (await page.locator('.design-link-item', { hasText: 'Jira Designs' }).locator('.design-link').textContent()).replace(/\s+/g, ' ').trim(),
+    'Native pricing handoff ↗',
+    'native Jira Designs card title should not include status or CTA text',
+  );
   assert.match(itemTexts[2], /UX-200/);
   assert.doesNotMatch(itemTexts[2], /Missing design spec/);
   assert.match(itemTexts[2], /Missing link/);
@@ -235,21 +241,10 @@ try {
   assert.match(itemTexts[5], /Checkout mobile handoff/);
   assert.match(itemTexts[5], /Description/);
   assert.match(itemTexts[6], /Miro board/);
-
-  const readinessText = await page.locator('.design-readiness').textContent();
-  assert.match(
-    (readinessText || '').replace(/\s+/g, ' ').trim(),
-    /Missing design links 2 UX tickets need design links before implementation/,
-    'design panel should show the highest-priority handoff decision before status chips',
-  );
-  const readinessClass = await page.locator('.design-readiness').getAttribute('class');
-  assert.match(readinessClass, /design-readiness--missing/);
-
-  const statusSummaryTexts = await page.locator('.design-status-summary-chip').allTextContents();
-  assert.deepEqual(
-    statusSummaryTexts.map(text => text.trim()),
-    ['ready', 'updated', 'missing 2', 'not ready'],
-    'design panel should summarize actionable states before the link list',
+  assert.equal(
+    await page.locator('.design-readiness, .design-readiness-action, .design-status-summary-chip').count(),
+    0,
+    'design panel should render ticket rows directly without a top summary or primary action',
   );
 
   const firstHref = await page.locator('.design-link').first().getAttribute('href');
@@ -315,21 +310,6 @@ try {
     containerTransformAfterHover > 3.5 && containerTransformAfterHover < 4.5,
     'design links panel should use the same hover translate as the backend progress card',
   );
-  await page.locator('.design-readiness').click();
-  await page.waitForFunction(() => {
-    const highlighted = document.querySelector('.design-link-item--highlight');
-    return highlighted?.getAttribute('data-design-status-tone') === 'missing'
-      && highlighted.textContent.includes('UX-200')
-      && document.activeElement === highlighted;
-  }, null, { timeout: 2000 });
-  await page.locator('.design-status-summary-chip[data-design-summary-tone="missing"]').click();
-  await page.waitForFunction(() => {
-    const highlighted = document.querySelector('.design-link-item--highlight');
-    return highlighted?.getAttribute('data-design-status-tone') === 'missing'
-      && highlighted.textContent.includes('UX-200')
-      && document.activeElement === highlighted;
-  }, null, { timeout: 2000 });
-
   await page.evaluate(() => {
     history.pushState({}, '', '/issues/?jql=project%20%3D%20ABC');
     const marker = document.createElement('span');

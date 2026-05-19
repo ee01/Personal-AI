@@ -15,6 +15,8 @@ export interface ConfigHistoryEntry {
   savedAt: number;
   summary: string;
   fingerprint: string;
+  changedLabels?: string[];
+  changeSummary?: string;
   config: JsonRecord;
 }
 
@@ -34,13 +36,65 @@ export interface IndependentUserConfigSummary {
   enabledPromptLabels: string[];
   contextSignalCount: number;
   riskHintCount: number;
+  preferenceInjectionEnabled: boolean;
+  customPromptsInjectionEnabled: boolean;
+  userContextInjectionEnabled: boolean;
   hasInjectablePreferences: boolean;
+}
+
+export interface IndependentUserConfigFootprint {
+  previewCharCount: number;
+  estimatedTokenCount: number;
+  customPromptCharCount: number;
+  contextSignalCount: number;
 }
 
 const PROMPT_SCOPE_LABELS: Record<'message' | 'project', string> = {
   message: '消息分析',
   project: '项目分析',
 };
+
+const CONFIG_CHANGE_SECTIONS: Array<{
+  label: string;
+  select: (config: JsonRecord) => any;
+}> = [
+  {
+    label: '注入开关',
+    select: (config) => config.preferenceInjection,
+  },
+  {
+    label: '消息提示词',
+    select: (config) => config.customPrompts?.message,
+  },
+  {
+    label: '项目提示词',
+    select: (config) => config.customPrompts?.project,
+  },
+  {
+    label: '个人信息',
+    select: (config) => config.userContextConfig?.personalInfo,
+  },
+  {
+    label: '干系人',
+    select: (config) => config.userContextConfig?.stakeholders,
+  },
+  {
+    label: '团队信息',
+    select: (config) => config.userContextConfig?.teamInfo,
+  },
+  {
+    label: '工作关注',
+    select: (config) => config.userContextConfig?.workFocus,
+  },
+  {
+    label: '沟通偏好',
+    select: (config) => config.userContextConfig?.communicationContext,
+  },
+  {
+    label: '分析偏好',
+    select: (config) => config.userContextConfig?.analysisPreferences,
+  },
+];
 
 const VOLATILE_CONFIG_KEYS = new Set([
   'cloudSyncTime',
@@ -90,6 +144,16 @@ const RISK_HINTS: Array<{ pattern: RegExp; message: string }> = [
       /(permanent|forever|always|永久|永远|始终).{0,24}(override|replace|覆盖|替代|取代).{0,24}(system|developer|rules?|memory|系统|开发者|规则|记忆)/i,
     message: '包含疑似将偏好写成永久记忆或上级提示词的表述',
   },
+  {
+    pattern:
+      /(ignroe|dsiregard|ovverride|bpyass|jialbreak|jailbreak).{0,40}(prevoius|previous|systme|system|developer|instruc?tions?|rules?|safety|saftey)/i,
+    message: '包含疑似混淆拼写的规则绕过表述',
+  },
+  {
+    pattern:
+      /(base64|rot13|decode|解码).{0,40}(instruction|prompt|指令|提示词).{0,40}(follow|execute|执行|遵守|服从)/i,
+    message: '包含疑似要求解码并执行隐藏指令的表述',
+  },
 ];
 
 const ABSOLUTE_LANGUAGE_PATTERN =
@@ -101,6 +165,11 @@ const PROJECT_SCOPE_DRIFT_PATTERN =
 
 const cleanString = (value: any): string =>
   typeof value === 'string' ? value.trim() : '';
+
+export const estimatePreferenceTokenCount = (value: any): number => {
+  const text = cleanString(value);
+  return text ? Math.ceil(text.length / 4) : 0;
+};
 
 const toArray = (value: any): string[] =>
   Array.isArray(value)
@@ -145,6 +214,20 @@ const formatPerson = (person: any): string => {
 
 const escapePreferenceTag = (content: string): string =>
   content.replace(/<\/user_preference_data>/gi, '<\\/user_preference_data>');
+
+export function isPreferenceInjectionEnabled(config: any): boolean {
+  return sanitizeIndependentUserConfig(config).preferenceInjection?.enabled !== false;
+}
+
+export function isCustomPromptsInjectionEnabled(config: any): boolean {
+  const settings = sanitizeIndependentUserConfig(config).preferenceInjection || {};
+  return settings.enabled !== false && settings.customPromptsEnabled !== false;
+}
+
+export function isUserContextInjectionEnabled(config: any): boolean {
+  const settings = sanitizeIndependentUserConfig(config).preferenceInjection || {};
+  return settings.enabled !== false && settings.userContextEnabled !== false;
+}
 
 export function buildUserContextPreferenceSection(
   userContextConfig: JsonRecord,
@@ -258,17 +341,27 @@ ${escapePreferenceTag(cleanString(prompt.content))}
 
 export function buildIndependentUserConfigPreview(config: any): string {
   const sanitized = sanitizeIndependentUserConfig(config);
+  if (!isPreferenceInjectionEnabled(sanitized)) {
+    return '偏好注入已暂停，当前分析不会读取自定义提示词或用户上下文。';
+  }
+
   const customPrompts = sanitized.customPrompts || {};
   const sections = [
-    buildUserContextPreferenceSection(sanitized.userContextConfig || {}),
-    buildCustomPromptPreferenceSection(
-      customPrompts.message,
-      PROMPT_SCOPE_LABELS.message,
-    ),
-    buildCustomPromptPreferenceSection(
-      customPrompts.project,
-      PROMPT_SCOPE_LABELS.project,
-    ),
+    isUserContextInjectionEnabled(sanitized)
+      ? buildUserContextPreferenceSection(sanitized.userContextConfig || {})
+      : '',
+    isCustomPromptsInjectionEnabled(sanitized)
+      ? buildCustomPromptPreferenceSection(
+          customPrompts.message,
+          PROMPT_SCOPE_LABELS.message,
+        )
+      : '',
+    isCustomPromptsInjectionEnabled(sanitized)
+      ? buildCustomPromptPreferenceSection(
+          customPrompts.project,
+          PROMPT_SCOPE_LABELS.project,
+        )
+      : '',
   ].filter(Boolean);
 
   return sections.length > 0
@@ -282,13 +375,73 @@ function countContextSignals(userContextConfig: JsonRecord): number {
   return preview.split('\n').filter((line) => line && !line.startsWith('#')).length;
 }
 
+export function buildIndependentUserConfigFootprint(
+  config: any,
+): IndependentUserConfigFootprint {
+  const sanitized = sanitizeIndependentUserConfig(config);
+  if (!isPreferenceInjectionEnabled(sanitized)) {
+    return {
+      previewCharCount: 0,
+      estimatedTokenCount: 0,
+      customPromptCharCount: 0,
+      contextSignalCount: 0,
+    };
+  }
+
+  const customPrompts = sanitized.customPrompts || {};
+  const sections = [
+    isUserContextInjectionEnabled(sanitized)
+      ? buildUserContextPreferenceSection(sanitized.userContextConfig || {})
+      : '',
+    isCustomPromptsInjectionEnabled(sanitized)
+      ? buildCustomPromptPreferenceSection(
+          customPrompts.message,
+          PROMPT_SCOPE_LABELS.message,
+        )
+      : '',
+    isCustomPromptsInjectionEnabled(sanitized)
+      ? buildCustomPromptPreferenceSection(
+          customPrompts.project,
+          PROMPT_SCOPE_LABELS.project,
+        )
+      : '',
+  ].filter(Boolean);
+  const previewText = sections.join('\n\n');
+  const customPromptCharCount = (
+    Object.keys(PROMPT_SCOPE_LABELS) as Array<'message' | 'project'>
+  ).reduce((total, scope) => {
+    const prompt = customPrompts[scope];
+    return isCustomPromptsInjectionEnabled(sanitized) && prompt?.enabled
+      ? total + cleanString(prompt.content).length
+      : total;
+  }, 0);
+
+  return {
+    previewCharCount: previewText.length,
+    estimatedTokenCount: estimatePreferenceTokenCount(previewText),
+    customPromptCharCount,
+    contextSignalCount: isUserContextInjectionEnabled(sanitized)
+      ? countContextSignals(sanitized.userContextConfig || {})
+      : 0,
+  };
+}
+
 export function summarizeIndependentUserConfig(config: any): string {
   const sanitized = sanitizeIndependentUserConfig(config);
   const prompts = sanitized.customPrompts || {};
+  const customPromptsInjectionEnabled = isCustomPromptsInjectionEnabled(sanitized);
+  const userContextInjectionEnabled = isUserContextInjectionEnabled(sanitized);
   const enabledScopes = (Object.keys(PROMPT_SCOPE_LABELS) as Array<
     'message' | 'project'
-  >).filter((scope) => prompts[scope]?.enabled && cleanString(prompts[scope].content));
-  const contextSignalCount = countContextSignals(sanitized.userContextConfig || {});
+  >).filter(
+    (scope) =>
+      customPromptsInjectionEnabled &&
+      prompts[scope]?.enabled &&
+      cleanString(prompts[scope].content),
+  );
+  const contextSignalCount = userContextInjectionEnabled
+    ? countContextSignals(sanitized.userContextConfig || {})
+    : 0;
   const parts: string[] = [];
 
   if (enabledScopes.length > 0) {
@@ -299,6 +452,12 @@ export function summarizeIndependentUserConfig(config: any): string {
     );
   }
   if (contextSignalCount > 0) parts.push(`${contextSignalCount} 项上下文信号`);
+  if (!isPreferenceInjectionEnabled(sanitized)) {
+    parts.unshift('偏好注入已暂停');
+  } else {
+    if (!customPromptsInjectionEnabled) parts.push('提示词注入已暂停');
+    if (!userContextInjectionEnabled) parts.push('上下文注入已暂停');
+  }
 
   return parts.length > 0 ? parts.join(' · ') : '默认配置';
 }
@@ -332,18 +491,72 @@ export function getIndependentUserConfigFingerprint(config: any): string {
   );
 }
 
+const getSectionFingerprint = (value: any): string =>
+  JSON.stringify(normalizeForFingerprint(value ?? null));
+
+export function getIndependentUserConfigChangedLabels(
+  previousConfig: any,
+  nextConfig: any,
+): string[] {
+  const previous = sanitizeIndependentUserConfig(previousConfig || {});
+  const next = sanitizeIndependentUserConfig(nextConfig || {});
+
+  return CONFIG_CHANGE_SECTIONS
+    .filter(
+      (section) =>
+        getSectionFingerprint(section.select(previous)) !==
+        getSectionFingerprint(section.select(next)),
+    )
+    .map((section) => section.label);
+}
+
+export function describeIndependentUserConfigChange(
+  previousConfig: any,
+  nextConfig: any,
+): { changedLabels: string[]; changeSummary: string } {
+  const changedLabels = getIndependentUserConfigChangedLabels(
+    previousConfig,
+    nextConfig,
+  );
+
+  if (!previousConfig) {
+    return {
+      changedLabels,
+      changeSummary:
+        changedLabels.length > 0
+          ? `首次保存：${changedLabels.join('、')}`
+          : '首次保存',
+    };
+  }
+
+  return {
+    changedLabels,
+    changeSummary:
+      changedLabels.length > 0
+        ? `变更：${changedLabels.join('、')}`
+        : '无实质变化',
+  };
+}
+
 export function createConfigHistoryEntry(
   config: any,
   savedAt = Date.now(),
+  previousConfig?: any,
 ): ConfigHistoryEntry {
   const sanitized = sanitizeIndependentUserConfig(config);
   const fingerprint = getIndependentUserConfigFingerprint(sanitized);
+  const changeDescription = describeIndependentUserConfigChange(
+    previousConfig,
+    sanitized,
+  );
 
   return {
     id: `${savedAt}-${hashString(fingerprint)}`,
     savedAt,
     summary: summarizeIndependentUserConfig(sanitized),
     fingerprint,
+    changedLabels: changeDescription.changedLabels,
+    changeSummary: changeDescription.changeSummary,
     config: sanitized,
   };
 }
@@ -379,6 +592,12 @@ export function normalizeConfigHistoryEntries(
       const config = sanitizeIndependentUserConfig(entry.config || {});
       const fingerprint =
         cleanString(entry.fingerprint) || getIndependentUserConfigFingerprint(config);
+      const changedLabels = Array.isArray(entry.changedLabels)
+        ? entry.changedLabels.map(cleanString).filter(Boolean)
+        : [];
+      const changeSummary =
+        cleanString(entry.changeSummary) ||
+        (changedLabels.length > 0 ? `变更：${changedLabels.join('、')}` : '');
 
       return {
         id: cleanString(entry.id) || `${savedAt}-${hashString(fingerprint)}`,
@@ -386,6 +605,8 @@ export function normalizeConfigHistoryEntries(
         summary:
           cleanString(entry.summary) || summarizeIndependentUserConfig(config),
         fingerprint,
+        changedLabels,
+        changeSummary,
         config,
       };
     })
@@ -515,22 +736,34 @@ export function buildIndependentUserConfigSummary(
 ): IndependentUserConfigSummary {
   const sanitized = sanitizeIndependentUserConfig(config);
   const customPrompts = sanitized.customPrompts || {};
+  const preferenceInjectionEnabled = isPreferenceInjectionEnabled(sanitized);
+  const customPromptsInjectionEnabled = isCustomPromptsInjectionEnabled(sanitized);
+  const userContextInjectionEnabled = isUserContextInjectionEnabled(sanitized);
   const enabledPromptLabels = (Object.keys(PROMPT_SCOPE_LABELS) as Array<
     'message' | 'project'
   >)
     .filter(
       (scope) =>
+        customPromptsInjectionEnabled &&
         customPrompts[scope]?.enabled && cleanString(customPrompts[scope].content),
     )
     .map((scope) => PROMPT_SCOPE_LABELS[scope]);
-  const contextSignalCount = countContextSignals(sanitized.userContextConfig || {});
-  const riskHintCount = detectPromptRiskHints(sanitized).length;
+  const contextSignalCount = userContextInjectionEnabled
+    ? countContextSignals(sanitized.userContextConfig || {})
+    : 0;
+  const riskHintCount = customPromptsInjectionEnabled
+    ? detectPromptRiskHints(sanitized).length
+    : 0;
 
   return {
     enabledPromptLabels,
     contextSignalCount,
     riskHintCount,
+    preferenceInjectionEnabled,
+    customPromptsInjectionEnabled,
+    userContextInjectionEnabled,
     hasInjectablePreferences:
-      enabledPromptLabels.length > 0 || contextSignalCount > 0,
+      preferenceInjectionEnabled &&
+      (enabledPromptLabels.length > 0 || contextSignalCount > 0),
   };
 }

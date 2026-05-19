@@ -18,7 +18,13 @@ const profileItems = Array.from({ length: 1250 }, (_, index) => ({
   itemType: 'interest',
   itemKey: 'focus_project',
   itemValue: `Export Project ${index + 1}`,
-  evidenceRefs: [{ sourceType: 'unit', id: `e-${index + 1}` }],
+  evidenceRefs: [{
+    sourceType: 'unit',
+    id: `e-${index + 1}`,
+    sourceTitle: `Evidence ${index + 1}`,
+    sourceUrl: `https://example.test/evidence/${index + 1}`,
+    snippet: `Profile evidence snippet ${index + 1}`,
+  }],
   sourceKind: index % 2 === 0 ? 'explicit' : 'inferred',
   confidence: 0.8,
   userConfirmed: index % 2 === 0,
@@ -29,6 +35,7 @@ const profileItems = Array.from({ length: 1250 }, (_, index) => ({
 }));
 
 const profileItemRequests = [];
+const profileMutations = [];
 let phase = 'initial-load';
 let server;
 
@@ -41,8 +48,17 @@ function sendJson(res, body) {
   res.end(JSON.stringify(body));
 }
 
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+  if (chunks.length === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
 async function startMemoryFixtureServer() {
-  server = http.createServer((req, res) => {
+  server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'access-control-allow-origin': '*',
@@ -54,16 +70,71 @@ async function startMemoryFixtureServer() {
     }
 
     const url = new URL(req.url || '/', memoryBaseUrl);
-    if (url.pathname === '/api/v1/profile/items') {
+    if (url.pathname === '/api/v1/profile/items' && req.method === 'GET') {
       const limit = Number(url.searchParams.get('limit') || '50');
       const offset = Number(url.searchParams.get('offset') || '0');
+      const visibleProfileItems = profileItems.filter((item) =>
+        item.status === 'active' || item.status === 'pending_confirm'
+      );
       profileItemRequests.push({ phase, limit, offset });
       sendJson(res, {
-        items: profileItems.slice(offset, offset + limit),
-        total: profileItems.length,
+        items: visibleProfileItems.slice(offset, offset + limit),
+        total: visibleProfileItems.length,
         limit,
         offset,
       });
+      return;
+    }
+
+    if (url.pathname === '/api/v1/profile/items' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      profileMutations.push({ type: 'create', body });
+      const created = {
+        id: `created-profile-${profileMutations.length}`,
+        itemType: body.itemType,
+        itemKey: body.itemKey,
+        itemValue: body.itemValue,
+        evidenceRefs: body.evidenceRefs || [],
+        sourceKind: 'explicit',
+        confidence: body.confidence ?? 1,
+        userConfirmed: true,
+        status: 'active',
+        salienceScore: body.confidence ?? 1,
+        mentionCount: 1,
+        lastSeen: Math.floor(Date.now() / 1000),
+      };
+      profileItems.unshift(created);
+      sendJson(res, created);
+      return;
+    }
+
+    const deleteMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)$/);
+    if (deleteMatch && req.method === 'DELETE') {
+      const id = decodeURIComponent(deleteMatch[1]);
+      const item = profileItems.find((candidate) => candidate.id === id);
+      if (!item) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Profile item not found' }));
+        return;
+      }
+      item.status = 'retracted';
+      profileMutations.push({ type: 'delete', id });
+      sendJson(res, { id, deleted: true });
+      return;
+    }
+
+    const restoreMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)\/restore$/);
+    if (restoreMatch && req.method === 'POST') {
+      const id = decodeURIComponent(restoreMatch[1]);
+      const item = profileItems.find((candidate) => candidate.id === id);
+      if (!item) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Profile item not found' }));
+        return;
+      }
+      item.status = item.userConfirmed ? 'active' : 'pending_confirm';
+      profileMutations.push({ type: 'restore', id, status: item.status });
+      sendJson(res, item);
       return;
     }
 
@@ -198,7 +269,82 @@ try {
     'user profile page should request profile items from the memory service',
   );
   await page.locator('.items-count').waitFor({ state: 'attached', timeout: 15000 });
-  assert.equal((await page.locator('.items-count').textContent())?.trim(), '1000 条');
+  assert.equal((await page.locator('.items-count').textContent())?.trim(), '1000/1250 条');
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/1000 条（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('.profile-item-row').count(), 50);
+
+  const firstProfileRow = page.locator('.profile-item-row').first();
+  await firstProfileRow.locator('button.evidence-toggle-btn').click();
+  await firstProfileRow.locator('.profile-evidence-panel', {
+    hasText: 'Profile evidence snippet 1',
+  }).waitFor({ timeout: 10000 });
+  await firstProfileRow.locator('.profile-evidence-item', {
+    hasText: 'unit',
+  }).waitFor({ timeout: 10000 });
+
+  await page.getByPlaceholder('名称、键、来源、状态或证据').fill('Export Project 999');
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 1/1 条匹配结果（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('.profile-item-row').count(), 1);
+  await page.locator('.profile-item-row', {
+    hasText: 'Export Project 999',
+  }).waitFor({ timeout: 10000 });
+
+  await page.locator('button.tertiary-action-btn').click();
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/1000 条（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+
+  await page.getByPlaceholder('名称、键、来源、状态或证据').fill('Profile evidence snippet 999');
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 1/1 条匹配结果（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-item-row', {
+    hasText: 'Export Project 999',
+  }).waitFor({ timeout: 10000 });
+
+  await page.locator('button.tertiary-action-btn').click();
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/1000 条（已加载 1000/1250 条）',
+  }).waitFor({ timeout: 10000 });
+
+  phase = 'load-all';
+  await page.locator('button.load-all-items-btn').click();
+  await page.locator('.status-message.success', {
+    hasText: '已加载全部画像条目',
+  }).waitFor({ timeout: 10000 });
+  assert.equal((await page.locator('.items-count').textContent())?.trim(), '1250 条');
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/1250 条（共 1250 条）',
+  }).waitFor({ timeout: 10000 });
+
+  await page.getByPlaceholder('名称、键、来源、状态或证据').fill('Export Project 1200');
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 1/1 条匹配结果（共 1250 条）',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.profile-item-row', {
+    hasText: 'Export Project 1200',
+  }).waitFor({ timeout: 10000 });
+
+  await page.locator('button.tertiary-action-btn').click();
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/1250 条（共 1250 条）',
+  }).waitFor({ timeout: 10000 });
+
+  await page.locator('.profile-filter-control select').first().selectOption('usable');
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 50/625 条匹配结果（共 1250 条）',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('.profile-item-row').count(), 50);
+
+  await page.locator('.load-more-row button').click();
+  await page.locator('.profile-items-summary', {
+    hasText: '显示 100/625 条匹配结果（共 1250 条）',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('.profile-item-row').count(), 100);
 
   phase = 'export';
   const [download] = await Promise.all([
@@ -226,19 +372,80 @@ try {
   const exportRequests = profileItemRequests.filter(
     (request) => request.phase === 'export',
   );
+  const loadAllRequests = profileItemRequests.filter(
+    (request) => request.phase === 'load-all',
+  );
 
   assert.equal(initialRequests.length, 5, 'profile page should keep the 1000-item view cap');
+  assert.equal(loadAllRequests.length, 7, 'load all should fetch every profile page');
   assert.equal(exportRequests.length, 7, 'profile export should fetch every page');
+  assert.deepEqual(loadAllRequests.at(-1), {
+    phase: 'load-all',
+    limit: 200,
+    offset: 1200,
+  });
   assert.deepEqual(exportRequests.at(-1), {
     phase: 'export',
     limit: 200,
     offset: 1200,
   });
-  assert.deepEqual(pageErrors, [], `Page errors: ${pageErrors.join('; ')}`);
 
   await page.locator('.status-message.success', {
     hasText: '画像已导出',
   }).waitFor({ timeout: 10000 });
+
+  await page.locator('.owner-profile-form select').nth(1).selectOption('__custom__');
+  await page.locator('.custom-profile-key-input').fill('project.personal_ai.priority');
+  await page.locator('.owner-profile-form textarea').fill(
+    'Personal AI profile calibration should surface reversible changes.',
+  );
+  await page.locator('.owner-profile-form button.primary-action-btn').click();
+  await page.locator('.status-message.success', {
+    hasText: '主人表达画像已添加',
+  }).waitFor({ timeout: 10000 });
+  assert.deepEqual(profileMutations.at(-1), {
+    type: 'create',
+    body: {
+      itemType: 'preference',
+      itemKey: 'project.personal_ai.priority',
+      itemValue: 'Personal AI profile calibration should surface reversible changes.',
+      confidence: 1,
+      evidenceRefs: [{
+        sourceType: 'manual',
+        source: 'user_profile_page',
+        capturedAt: profileMutations.at(-1).body.evidenceRefs[0].capturedAt,
+      }],
+    },
+  });
+
+  await page.getByPlaceholder('名称、键、来源、状态或证据').fill('Export Project 999');
+  const undoTargetRow = page.locator('.profile-item-row', {
+    hasText: 'Export Project 999',
+  });
+  await undoTargetRow.waitFor({ timeout: 10000 });
+  await undoTargetRow.locator('button.danger-action-btn').click();
+  await page.locator('.status-message.success', {
+    hasText: '已排除“Export Project 999”',
+  }).waitFor({ timeout: 10000 });
+  assert.deepEqual(profileMutations.at(-1), {
+    type: 'delete',
+    id: 'profile-export-999',
+  });
+
+  await page.locator('.status-action-btn', { hasText: '撤销排除' }).click();
+  await page.locator('.status-message.success', {
+    hasText: '已恢复“Export Project 999”',
+  }).waitFor({ timeout: 10000 });
+  assert.deepEqual(profileMutations.at(-1), {
+    type: 'restore',
+    id: 'profile-export-999',
+    status: 'active',
+  });
+  await page.locator('.profile-item-row', {
+    hasText: 'Export Project 999',
+  }).waitFor({ timeout: 10000 });
+
+  assert.deepEqual(pageErrors, [], `Page errors: ${pageErrors.join('; ')}`);
 
   console.log('verify-user-profile-export-e2e: ok');
 } finally {

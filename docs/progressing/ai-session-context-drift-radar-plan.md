@@ -1,13 +1,29 @@
-# 新能力：AI Session Context Drift Radar / AI 会话上下文漂移雷达
+# 新能力：AI Session Context Drift Radar / AI 会话上下文漂移雷达（搁置）
 
 > 生成日期：2026-05-13 CST  
-> Codex 会话标题建议：新能力：AI 会话上下文漂移雷达  
+> Codex 会话标题建议：新能力：AI 会话上下文漂移雷达（搁置）
 > 交付物：功能计划 + 可预览 Demo  
 > Demo：[`ai-session-context-drift-radar-demo.html`](./ai-session-context-drift-radar-demo.html)
 
+## 搁置原因
+
+当前暂不建议推进这个方向。
+
+核心原因是它依赖 Personal AI 可靠判断“某段记忆或 Context Passport 是否已经 handoff 到某个外部 AI 平台输入框/会话”。要做到这件事，系统需要 Chrome Extension / Desktop App 持续观察 ChatGPT、豆包、Codex Web、Claude、Cursor、Codex CLI 等不同入口的输入、复制、注入、会话标题、线程 URL 或运行状态，并把这些行为登记成 `ai_session` 和 `context_contract`。这已经不只是记忆召回或上下文生成，而是更重的 app 行为检测与跨平台会话观察能力。
+
+现阶段给 app 这么强的行为能力太重，也容易带来稳定性、权限、隐私和误判问题：
+
+- Web AI 页面 DOM 和输入框结构经常变化，content script 很难长期可靠识别“已交付上下文”。
+- 桌面 AI、Codex CLI、Claude Code、Cursor / VS Code 等场景并不都在浏览器内，通常需要 Desktop App、MCP、CLI hook 或用户手动登记。
+- 如果无法确认 handoff 发生过，就不能可靠判断“哪个 AI 会话拿着旧上下文继续工作”。
+- 如果误判 handoff，会产生错误的 drift 提醒，反而变成新的通知噪音。
+- 持续观察外部 AI 输入和会话状态会提高隐私边界复杂度，和当前 Personal AI 的轻量记忆提示路线不匹配。
+
+更合理的处理方式是：暂时不把 **AI Session Context Drift Radar** 作为独立能力推进。保留其中可复用的概念，例如 `Context Patch`、`Passport stale`、`Mark as stale`、`手动 Attach/Mark used`，作为 `AI Context Passport` 或 `Context Assist` 的低成本扩展；只有在未来 app / Desktop App / MCP adapter 已经有稳定会话登记能力后，再考虑恢复这个方向。
+
 ## 结论
 
-建议设计一个新的 Personal AI 能力：**AI Session Context Drift Radar / AI 会话上下文漂移雷达**。
+本方案记录为搁置方向：**AI Session Context Drift Radar / AI 会话上下文漂移雷达**。
 
 它不是再做一个“上下文包导出器”。`AI Context Passport` 已经解决“把一件事的上下文交给 ChatGPT / Claude / Codex / 豆包 / Cursor / OpenClaw”。本能力解决的是下一步更真实的问题：
 
@@ -834,13 +850,12 @@ Demo 展示：
 
 ## 结论建议
 
-建议把 **AI 会话上下文漂移雷达** 作为 `AI Context Passport` 的后续能力，而不是独立孤岛。它非常贴合 Personal AI 的目标：
+暂不建议把 **AI 会话上下文漂移雷达** 作为独立能力推进。它在产品价值上贴合 Personal AI 的目标：
 
 - 保存用户和 AI 的所有记忆。
 - 在其他平台的 AI 对话中提供记忆关联提示。
 - 把记忆从“能查”推进到“能保证当前 AI 会话不拿旧上下文继续错”。
 
-这个能力的亮点不是炫技，而是非常实用：
+但它的关键前提是 app / Desktop App / MCP adapter 能可靠登记 AI 会话 handoff。这个前提当前过重，因此本方案先搁置，只保留为 `AI Context Passport` 的未来 watch layer 概念。
 
 > 当用户同时使用多个 AI 工具、多个会议和多个聊天线程时，Personal AI 能告诉用户：哪个 AI 需要补上下文，补什么，为什么补，以及哪些内容不能外发。
-

@@ -94,6 +94,7 @@ test('webpage-mcp Doubao broadcast opens a Doubao tab and verifies visible sent 
   assert.equal(result.sent, true);
   assert.equal(result.verified, true);
   assert.equal(result.threadId, 'generated-alpha_1');
+  assert.equal(result.transportMode, 'webpage_mcp');
   assert.equal(result.error, undefined);
   assert.deepEqual(calls[0], {
     name: 'chrome_navigate',
@@ -117,6 +118,7 @@ test('webpage-mcp Doubao broadcast does not submit when no composer can be fille
 
   assert.equal(result.sent, false);
   assert.equal(result.verified, false);
+  assert.equal(result.transportMode, 'webpage_mcp');
   assert.equal(result.messageVisible, false);
   assert.match(result.error || '', /No editable element/);
   assert.equal(calls.some((call) => call.name === 'chrome_keyboard'), false);
@@ -136,6 +138,7 @@ test('webpage-mcp Doubao broadcast reports failure when submitted text is not vi
 
   assert.equal(result.sent, false);
   assert.equal(result.verified, false);
+  assert.equal(result.transportMode, 'webpage_mcp');
   assert.equal(result.threadId, 'team-memory-42');
   assert.match(result.error || '', /did not show the message/);
 });
@@ -155,6 +158,7 @@ test('webpage-mcp Doubao broadcast waits until submitted text becomes visible', 
 
   assert.equal(result.sent, true);
   assert.equal(result.verified, true);
+  assert.equal(result.transportMode, 'webpage_mcp');
   assert.equal(result.threadId, 'slow-thread');
 });
 
@@ -171,6 +175,7 @@ test('webpage-mcp Doubao broadcast does not type into a challenge page', async (
 
   assert.equal(result.sent, false);
   assert.equal(result.verified, false);
+  assert.equal(result.transportMode, 'webpage_mcp');
   assert.equal(result.challengeDetected, true);
   assert.match(result.error || '', /challenge detected before send/i);
   assert.equal(calls.some((call) => call.name === 'chrome_fill_or_select'), false);
@@ -241,6 +246,7 @@ test('webpage-mcp Doubao broadcast refuses to send when navigation leaves no Dou
 
   assert.equal(result.sent, false);
   assert.equal(result.verified, false);
+  assert.equal(result.transportMode, 'webpage_mcp');
   assert.match(result.error || '', /No doubao\.com tab/);
   assert.equal(evalCalls, 0);
   assert.equal(calls.some((call) => call.name === 'chrome_fill_or_select'), false);
