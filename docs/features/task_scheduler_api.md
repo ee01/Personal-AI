@@ -30,6 +30,18 @@
 
 `background.ts` 仍有少量非 `TaskScheduler` 的专用 alarm，例如 `cleanupFollowThreads` 和 `pollBackendNotifications`。这些不是 `scheduled_task_*` 任务，但创建时也会先检查现有 alarm，避免 Service Worker 每次唤醒都重置下一次触发时间。
 
+## 大白话运行逻辑
+
+Task Scheduler 是扩展后台的“闹钟管家”。它不负责具体业务怎么做，只负责根据任务定义和用户开关创建 Chrome alarm、恢复丢失的 alarm、记录最近执行结果，并让 popup 能手动执行或修复。
+
+结果主要受这些因素影响：
+
+1. 任务定义默认值：每个任务的默认启用状态、间隔和执行函数是基础。
+2. `chrome.storage.local.taskSchedulerStates`：这是开关、上次执行、下次执行和历史结果的真源。
+3. Chrome alarm 实况：MV3 Service Worker 可能重启或 alarm 丢失，所以每次启动/查询都要对齐实况。
+4. 执行返回语义：success、failure、skipped、overdue、repair_failed 会进入 UI，而不是只看有没有抛错。
+5. 手动执行与启用分离：禁用任务也可以手动跑一次，但不会因此重新启用排程。
+
 ## 当前任务
 
 | 任务 ID                       | 名称             | 默认间隔 | 当前执行逻辑                                    |
@@ -193,6 +205,7 @@ Popup 还提供可展开的后台任务概览：
 - 下次执行时间同时显示相对倒计时和本地时间，并给任务打上消息、同步、维护、画像等轻量类别标签
 - 查看最近一次执行成功/失败结果，失败时显示简短错误
 - 只要有运行记录，就显示最近最多 5 次运行的成功/失败概览，悬停可看到每次运行的触发来源和耗时
+- 最近一次运行会直接显示触发来源、结果、耗时以及失败/跳过原因，避免排障时只能依赖悬停提示
 - 如果最近多次完成记录连续失败，会直接显示连续失败次数；连续失败达到 3 次时，会在任务行提供“暂停”按钮，方便先暂停排程并检查配置或服务状态
 - 查看最近 5 次运行里的跳过记录，用于判断是否存在长任务挤压后续排程
 - 刷新任务状态
@@ -228,4 +241,4 @@ Popup 还提供可展开的后台任务概览：
 8. 对一个 `overdue` 任务点击重排，确认 `nextRun` 回到未来时间，且不会更新 `lastRun`
 9. 运行 `npm run verify:task-scheduler-api`，覆盖首次启动不安排隐藏执行、启用不立即执行、alarm 显式跨会话持久化、alarm 创建失败回滚、手动执行、失败记录、跳过记录、最近运行历史、重复执行跳过、停用任务手动执行、状态刷新补齐丢失 alarm、自动修复失败时仍返回任务列表、重排失败时保留旧 alarm、识别并修复明显滞后的 alarm，以及清理旧版本遗留的未知 `scheduled_task_*` alarm
 10. 运行 `npm run verify:task-scheduler-status-filters`，覆盖 popup 后台任务筛选、需处理计数、状态优先级和空状态判定
-11. 运行 `npm run verify:task-scheduler-popup-filters:e2e`，用 fresh Chromium 扩展实例验证 popup 筛选标签、空状态、任务列表过滤和失败详情呈现
+11. 运行 `npm run verify:task-scheduler-popup-filters:e2e`，用 fresh Chromium 扩展实例验证 popup 筛选标签、空状态、任务列表过滤、最近一次运行解释和失败详情呈现

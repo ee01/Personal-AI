@@ -140,7 +140,7 @@ export async function syncOutlookCalendarToMemoryService(
   const events = await fetchOutlookCalendarEvents(token);
   const result = await client.syncCalendarEvents({
     sourceSystem: 'outlook',
-    events,
+    events: normalizeCalendarEventsForSync(events),
     syncedAt: Date.now(),
   });
   await writeStatus({
@@ -159,7 +159,7 @@ export async function syncCalendarEventsToMemoryService(
 ): Promise<CalendarEventsSyncResponse> {
   const result = await client.syncCalendarEvents({
     sourceSystem,
-    events,
+    events: normalizeCalendarEventsForSync(events),
     syncedAt: Date.now(),
   });
   await writeStatus({
@@ -168,6 +168,112 @@ export async function syncCalendarEventsToMemoryService(
     lastError: undefined,
   });
   return result;
+}
+
+function normalizeCalendarEventsForSync(
+  events: CalendarEventSyncItem[],
+): CalendarEventSyncItem[] {
+  return events
+    .map(normalizeCalendarEventForSync)
+    .filter((event): event is CalendarEventSyncItem => Boolean(event));
+}
+
+function normalizeCalendarEventForSync(
+  event: CalendarEventSyncItem | null | undefined,
+): CalendarEventSyncItem | null {
+  if (!event) return null;
+  const externalId = compactString(event.externalId);
+  const title = compactString(event.title);
+  const startTime = finiteNumber(event.startTime);
+  if (!externalId || !title || startTime == null) {
+    return null;
+  }
+
+  const normalized: CalendarEventSyncItem = {
+    externalId,
+    title,
+    startTime,
+  };
+  const seriesKey = compactString(event.seriesKey);
+  const descriptionPreview = compactString(event.descriptionPreview);
+  const endTime = finiteNumber(event.endTime);
+  const organizer = normalizeCalendarParticipantForSync(event.organizer);
+  const location = compactString(event.location);
+  const joinUrl = compactString(event.joinUrl);
+  const sourceUrl = compactString(event.sourceUrl);
+  const lastModifiedTime = finiteNumber(event.lastModifiedTime);
+  const metadata = normalizeCalendarMetadataForSync(event.metadata);
+
+  if (seriesKey) normalized.seriesKey = seriesKey;
+  if (descriptionPreview) normalized.descriptionPreview = descriptionPreview;
+  if (endTime != null) normalized.endTime = endTime;
+  if (organizer) normalized.organizer = organizer;
+  if (Array.isArray(event.attendees)) {
+    const attendees = event.attendees
+      .map(normalizeCalendarParticipantForSync)
+      .filter(
+        (
+          attendee,
+        ): attendee is NonNullable<CalendarEventSyncItem['organizer']> =>
+          Boolean(attendee),
+      );
+    if (attendees.length > 0) normalized.attendees = attendees;
+  }
+  if (location) normalized.location = location;
+  if (joinUrl) normalized.joinUrl = joinUrl;
+  if (sourceUrl) normalized.sourceUrl = sourceUrl;
+  if (typeof event.cancelled === 'boolean') normalized.cancelled = event.cancelled;
+  if (lastModifiedTime != null) normalized.lastModifiedTime = lastModifiedTime;
+  if (metadata) normalized.metadata = metadata;
+
+  return normalized;
+}
+
+function normalizeCalendarParticipantForSync(
+  participant: CalendarEventSyncItem['organizer'] | null | undefined,
+): CalendarEventSyncItem['organizer'] | undefined {
+  if (!participant) return undefined;
+  const normalized: NonNullable<CalendarEventSyncItem['organizer']> = {};
+  const name = compactString(participant.name);
+  const email = compactString(participant.email);
+  const responseStatus = compactString(participant.responseStatus);
+  if (name) normalized.name = name;
+  if (email) normalized.email = email;
+  if (responseStatus) normalized.responseStatus = responseStatus;
+  return normalized.name || normalized.email || normalized.responseStatus
+    ? normalized
+    : undefined;
+}
+
+function normalizeCalendarMetadataForSync(
+  metadata: CalendarEventSyncItem['metadata'] | null | undefined,
+): CalendarEventSyncItem['metadata'] | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value !== undefined) {
+      normalized[key] = value;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function compactString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact || undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const numeric =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : NaN;
+  return Number.isFinite(numeric) ? numeric : undefined;
 }
 
 async function getValidAccessToken(

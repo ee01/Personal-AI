@@ -550,6 +550,7 @@ export class ProviderContextService {
         `SELECT item_key, item_value, salience_score, user_confirmed, last_seen, created_at
          FROM user_profile_items
          WHERE status = 'active'
+           AND user_confirmed = 1
            AND item_type IN ('preference', 'habit', 'constraint')
          ORDER BY user_confirmed DESC, salience_score DESC, last_seen DESC
          LIMIT 12`,
@@ -630,6 +631,7 @@ export class ProviderContextService {
         `SELECT item_key, item_value, salience_score, user_confirmed, last_seen, created_at
          FROM user_profile_items
          WHERE status = 'active'
+           AND user_confirmed = 1
            AND last_seen >= ?
            AND salience_score >= 0.35
          ORDER BY user_confirmed DESC, salience_score DESC, last_seen DESC

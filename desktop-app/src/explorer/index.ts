@@ -6,6 +6,7 @@ import { CursorStore } from './CursorStore.js';
 import { toExplorerIngestSourceId } from './sourceIds.js';
 import type {
   ExplorerPreviewResult,
+  ExplorerRunSummary,
   ExplorerStatusSnapshot,
   ExplorerTransportStatus,
   SourceId,
@@ -18,7 +19,7 @@ interface ExplorerSourceAdapter {
     opened?: boolean;
     implemented?: boolean;
   }>;
-  runNow?: () => Promise<{ insertedCount?: number; implemented?: boolean }>;
+  runNow?: () => Promise<Partial<ExplorerRunSummary> & { implemented?: boolean }>;
   getTransportStatus?: () => ExplorerTransportStatus | undefined;
   close?: () => Promise<void> | void;
 }
@@ -29,6 +30,7 @@ interface ExplorerRunState {
   lastRunAt?: string;
   lastRunOutcome: 'idle' | 'success' | 'error' | 'stub';
   lastError?: string;
+  lastRunSummary?: ExplorerRunSummary;
 }
 
 interface ExplorerManagerOptions {
@@ -78,6 +80,7 @@ export class ExplorerManager {
           lastRunAt: this.runState.doubao.lastRunAt,
           lastRunOutcome: this.runState.doubao.lastRunOutcome,
           lastError: this.runState.doubao.lastError,
+          lastRunSummary: this.runState.doubao.lastRunSummary,
           cache: this.options.rawStore.getStats('doubao'),
           transport: this.sourceAdapters.doubao?.getTransportStatus?.(),
         },
@@ -90,6 +93,7 @@ export class ExplorerManager {
           lastRunAt: this.runState.chatgpt.lastRunAt,
           lastRunOutcome: this.runState.chatgpt.lastRunOutcome,
           lastError: this.runState.chatgpt.lastError,
+          lastRunSummary: this.runState.chatgpt.lastRunSummary,
           cache: this.options.rawStore.getStats('chatgpt'),
           transport: this.sourceAdapters.chatgpt?.getTransportStatus?.(),
         },
@@ -127,6 +131,10 @@ export class ExplorerManager {
     finishedAt: string;
     implemented: boolean;
     insertedCount: number;
+    extractedConversationCount: number;
+    extractedMessageCount: number;
+    artifactCount: number;
+    skippedConversationCount: number;
   }> {
     const state = this.runState[source];
     if (state.running) {
@@ -143,15 +151,17 @@ export class ExplorerManager {
       const implemented = result?.implemented ?? false;
       const finishedAtMs = Date.now();
       const finishedAt = new Date(finishedAtMs).toISOString();
+      const runSummary = normalizeExplorerRunSummary(result);
       state.lastRunAtMs = finishedAtMs;
       state.lastRunAt = finishedAt;
       state.lastRunOutcome = implemented ? 'success' : 'stub';
+      state.lastRunSummary = runSummary;
       return {
         source,
         startedAt,
         finishedAt,
         implemented,
-        insertedCount: Number(result?.insertedCount ?? 0),
+        ...runSummary,
       };
     } catch (error) {
       const finishedAtMs = Date.now();
@@ -160,6 +170,7 @@ export class ExplorerManager {
       state.lastRunAt = finishedAt;
       state.lastRunOutcome = 'error';
       state.lastError = error instanceof Error ? error.message : String(error);
+      state.lastRunSummary = undefined;
       throw error;
     } finally {
       state.running = false;
@@ -353,6 +364,7 @@ export type {
   Artifact,
   ExplorationCursor,
   ExplorerPreviewResult,
+  ExplorerRunSummary,
   ExplorerSourceStatus,
   ExplorerStatusSnapshot,
   RawMessageRecord,
@@ -371,4 +383,16 @@ function cleanPreviewMessageContent(content: string): string {
     )
     .join('\n')
     .trim();
+}
+
+function normalizeExplorerRunSummary(
+  result: (Partial<ExplorerRunSummary> & { implemented?: boolean }) | undefined,
+): ExplorerRunSummary {
+  return {
+    insertedCount: Number(result?.insertedCount ?? 0),
+    extractedConversationCount: Number(result?.extractedConversationCount ?? 0),
+    extractedMessageCount: Number(result?.extractedMessageCount ?? 0),
+    artifactCount: Number(result?.artifactCount ?? 0),
+    skippedConversationCount: Number(result?.skippedConversationCount ?? 0),
+  };
 }

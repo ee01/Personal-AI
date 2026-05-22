@@ -19,10 +19,12 @@ import {
     describeIndependentUserConfigChange,
     detectPromptImprovementHints,
     detectPromptRiskHints,
+    isCustomPromptScopeInjectionEnabled,
     mergeConfigHistory,
     normalizeConfigHistoryEntries,
     USER_CONFIG_HISTORY_KEY,
-    type ConfigHistoryEntry
+    type ConfigHistoryEntry,
+    type UserContextPreferenceScope
 } from '../services/userConfigPreview';
 
 // 数据类型定义
@@ -110,6 +112,8 @@ interface ConfigData {
     preferenceInjection: {
         enabled: boolean;
         customPromptsEnabled: boolean;
+        messagePromptEnabled: boolean;
+        projectPromptEnabled: boolean;
         userContextEnabled: boolean;
     };
     customPrompts: CustomPrompts;
@@ -151,10 +155,18 @@ const PROMPT_EXAMPLES: Record<PromptScope, Array<{ label: string; content: strin
     ]
 };
 
+const PREVIEW_SCOPE_OPTIONS: Array<{ value: UserContextPreferenceScope; label: string }> = [
+    { value: 'all', label: '全部' },
+    { value: 'message', label: '消息' },
+    { value: 'project', label: '项目' }
+];
+
 const createDefaultConfig = (): ConfigData => ({
     preferenceInjection: {
         enabled: true,
         customPromptsEnabled: true,
+        messagePromptEnabled: true,
+        projectPromptEnabled: true,
         userContextEnabled: true
     },
     customPrompts: {
@@ -316,13 +328,18 @@ const PromptConfig: React.FC = () => {
     const [lastPersistedConfig, setLastPersistedConfig] = useState<ConfigData | null>(null);
     const [configHistory, setConfigHistory] = useState<ConfigHistoryEntry[]>([]);
     const [promptRiskAcknowledgedKey, setPromptRiskAcknowledgedKey] = useState('');
+    const [previewScope, setPreviewScope] = useState<UserContextPreferenceScope>('all');
     const injectedPreview = useMemo(
-        () => buildIndependentUserConfigPreview(configData),
-        [configData]
+        () => buildIndependentUserConfigPreview(configData, {
+            userContextScope: previewScope
+        }),
+        [configData, previewScope]
     );
     const preferenceFootprint = useMemo(
-        () => buildIndependentUserConfigFootprint(configData),
-        [configData]
+        () => buildIndependentUserConfigFootprint(configData, {
+            userContextScope: previewScope
+        }),
+        [configData, previewScope]
     );
     const configSummary = useMemo(
         () => buildIndependentUserConfigSummary(configData),
@@ -333,8 +350,10 @@ const PromptConfig: React.FC = () => {
         [configData]
     );
     const activePromptRiskHints = useMemo(
-        () => configSummary.customPromptsInjectionEnabled ? promptRiskHints : [],
-        [configSummary.customPromptsInjectionEnabled, promptRiskHints]
+        () => promptRiskHints.filter((hint) =>
+            isCustomPromptScopeInjectionEnabled(configData, hint.scope)
+        ),
+        [configData, promptRiskHints]
     );
     const promptImprovementHints = useMemo(
         () => detectPromptImprovementHints(configData),
@@ -868,6 +887,30 @@ const PromptConfig: React.FC = () => {
                     />
                     <span>自定义提示词</span>
                 </label>
+                <label className="source-toggle scope-toggle">
+                    <input
+                        type="checkbox"
+                        checked={configData.preferenceInjection.messagePromptEnabled}
+                        disabled={
+                            !configData.preferenceInjection.enabled ||
+                            !configData.preferenceInjection.customPromptsEnabled
+                        }
+                        onChange={(e) => updateValue('preferenceInjection.messagePromptEnabled', e.target.checked)}
+                    />
+                    <span>消息提示词</span>
+                </label>
+                <label className="source-toggle scope-toggle">
+                    <input
+                        type="checkbox"
+                        checked={configData.preferenceInjection.projectPromptEnabled}
+                        disabled={
+                            !configData.preferenceInjection.enabled ||
+                            !configData.preferenceInjection.customPromptsEnabled
+                        }
+                        onChange={(e) => updateValue('preferenceInjection.projectPromptEnabled', e.target.checked)}
+                    />
+                    <span>项目提示词</span>
+                </label>
                 <label className="source-toggle">
                     <input
                         type="checkbox"
@@ -942,6 +985,7 @@ const PromptConfig: React.FC = () => {
         placeholder: string
     ) => {
         const prompt = configData.customPrompts[scope];
+        const scopeInjectionEnabled = isCustomPromptScopeInjectionEnabled(configData, scope);
         const scopedRiskHints = promptRiskHints.filter((hint) => hint.scope === scope);
         const scopedImprovementHints = promptImprovementHints.filter((hint) => hint.scope === scope);
 
@@ -972,8 +1016,16 @@ const PromptConfig: React.FC = () => {
                     )}
                 </div>
 
-                {(scopedRiskHints.length > 0 || scopedImprovementHints.length > 0) && (
+                {((prompt.enabled && !scopeInjectionEnabled) ||
+                    scopedRiskHints.length > 0 ||
+                    scopedImprovementHints.length > 0) && (
                     <div className="prompt-inline-hints" role="status">
+                        {prompt.enabled && !scopeInjectionEnabled && (
+                            <div className="prompt-inline-hint muted">
+                                <strong>已暂停</strong>
+                                <span>{title}内容会保留，但当前不会进入分析注入。</span>
+                            </div>
+                        )}
                         {scopedRiskHints.map((hint, index) => (
                             <div
                                 key={`risk-${scope}-${index}`}
@@ -1023,7 +1075,21 @@ const PromptConfig: React.FC = () => {
     const renderEffectPreview = () => (
         <div className="effect-preview-section">
             <div className="section-title-row">
-                <h4>生效预览</h4>
+                <div className="preview-title-group">
+                    <h4>生效预览</h4>
+                    <div className="preview-scope-switch" aria-label="预览注入范围">
+                        {PREVIEW_SCOPE_OPTIONS.map((option) => (
+                            <button
+                                key={option.value}
+                                type="button"
+                                className={previewScope === option.value ? 'active' : ''}
+                                onClick={() => setPreviewScope(option.value)}
+                            >
+                                {option.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
                 <span>
                     {configSummary.hasInjectablePreferences
                         ? `清洗后 · ${preferenceFootprint.previewCharCount} 字符 · 约 ${preferenceFootprint.estimatedTokenCount} token`
@@ -1893,6 +1959,49 @@ const PromptConfig: React.FC = () => {
                     margin: 0;
                 }
 
+                .preview-title-group {
+                    display: flex;
+                    flex-wrap: wrap;
+                    align-items: center;
+                    gap: 10px;
+                    min-width: 0;
+                }
+
+                .preview-scope-switch {
+                    display: inline-flex;
+                    min-height: 30px;
+                    overflow: hidden;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 6px;
+                    background: #f8fafc;
+                }
+
+                .preview-scope-switch button {
+                    min-width: 44px;
+                    padding: 5px 10px;
+                    border: 0;
+                    border-right: 1px solid #cbd5e1;
+                    background: transparent;
+                    color: #475569;
+                    cursor: pointer;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+
+                .preview-scope-switch button:last-child {
+                    border-right: 0;
+                }
+
+                .preview-scope-switch button.active {
+                    background: #2563eb;
+                    color: white;
+                }
+
+                .preview-scope-switch button:focus-visible {
+                    outline: 2px solid #93c5fd;
+                    outline-offset: -2px;
+                }
+
                 .section-title-row span {
                     color: #64748b;
                     font-size: 12px;
@@ -2124,6 +2233,16 @@ const PromptConfig: React.FC = () => {
 
                 .prompt-inline-hint.suggestion strong {
                     color: #1d4ed8;
+                }
+
+                .prompt-inline-hint.muted {
+                    border: 1px solid #cbd5e1;
+                    background: #f8fafc;
+                    color: #475569;
+                }
+
+                .prompt-inline-hint.muted strong {
+                    color: #334155;
                 }
 
                 .prompt-example-row {

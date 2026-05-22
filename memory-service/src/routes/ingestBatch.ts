@@ -31,6 +31,48 @@ interface BatchIngestResponse {
 // JSON schema for Fastify validation
 // ---------------------------------------------------------------------------
 
+const sourceTypeEnum = [
+  'glip',
+  'jira',
+  'web',
+  'manual',
+  'system',
+  'meeting',
+  'calendar',
+  'ai_chat',
+  'doubao',
+] as const;
+
+const ingestDecisionSchema = {
+  type: 'object' as const,
+  properties: {
+    storage: {
+      type: 'string' as const,
+      enum: ['indexed', 'stored_unindexed', 'duplicate', 'error'],
+    },
+    reason: {
+      type: 'string' as const,
+      enum: [
+        'salience_indexed',
+        'salience_below_threshold',
+        'extraction_skipped',
+        'extraction_unavailable',
+        'duplicate_post_id',
+        'duplicate_content_source_sender',
+        'insert_failed',
+      ],
+    },
+    salienceScore: { type: 'number' as const },
+    shouldIndex: { type: 'boolean' as const },
+    indexed: { type: 'boolean' as const },
+    duplicateOf: { type: 'string' as const },
+    dedupeReason: {
+      type: 'string' as const,
+      enum: ['post_id', 'content_source_sender'],
+    },
+  },
+};
+
 const ingestPayloadItemSchema = {
   type: 'object' as const,
   required: ['content', 'sourceType'],
@@ -43,7 +85,7 @@ const ingestPayloadItemSchema = {
     source: { type: 'string' as const, minLength: 1 },
     sourceType: {
       type: 'string' as const,
-      enum: ['glip', 'jira', 'web', 'manual', 'system', 'meeting'],
+      enum: sourceTypeEnum,
     },
     sender: { type: 'string' as const },
     groupId: { type: 'string' as const },
@@ -100,6 +142,7 @@ export async function ingestBatchRoutes(app: FastifyInstance): Promise<void> {
                       type: 'array',
                       items: { type: 'string' },
                     },
+                    decision: ingestDecisionSchema,
                   },
                 },
               },
@@ -146,6 +189,11 @@ export async function ingestBatchRoutes(app: FastifyInstance): Promise<void> {
           results.push({
             id: '',
             status: 'error',
+            decision: {
+              storage: 'error',
+              reason: 'insert_failed',
+              indexed: false,
+            },
           });
           totalError++;
         }

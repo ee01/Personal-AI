@@ -25,22 +25,20 @@ const headers = [
   'Last_Exec',
   'Next_Exec',
 ];
-let messageRows = [
-  [
-    'missed-1',
-    'Missed Bot',
-    'content',
-    '2026-05-04',
-    '09:30',
-    'Bot',
-    'group',
-    'Active',
-    '0',
-    '待执行',
-    '',
-    '2026-05-04 09:30',
-  ],
-];
+let messageRows = Array.from({ length: 5 }, (_, index) => [
+  `missed-${index + 1}`,
+  `Missed Bot ${index + 1}`,
+  'content',
+  '2026-05-04',
+  '09:30',
+  'Bot',
+  'group',
+  'Active',
+  '0',
+  '待执行',
+  '',
+  '2026-05-04 09:30',
+]);
 let appliedUpdate = null;
 
 async function launchExtensionContext() {
@@ -214,16 +212,31 @@ try {
   await page.locator('text=有定时消息需要改期').waitFor({
     timeout: 15000,
   });
-  await page.locator('text=Missed Bot: 2026-05-04 09:30').waitFor({
+  await page.locator('text=Missed Bot 1: 2026-05-04 09:30').waitFor({
+    timeout: 15000,
+  });
+  assert.equal(
+    await page.getByRole('button', {
+      name: '将Missed Bot 5改到2026-05-04 10:02',
+    }).count(),
+    0,
+    'health banner should collapse issues after the first four by default',
+  );
+  await page.getByRole('button', {
+    name: '显示全部 5 条需处理消息',
+  }).click();
+  await page.getByRole('button', {
+    name: '将Missed Bot 5改到2026-05-04 10:02',
+  }).waitFor({
     timeout: 15000,
   });
 
   const dialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
   await page.getByRole('button', {
-    name: '将Missed Bot改到2026-05-04 10:02',
+    name: '将Missed Bot 1改到2026-05-04 10:02',
   }).click();
   const dialog = await dialogPromise;
-  assert.match(dialog.message(), /已将「Missed Bot」改到 2026-05-04 10:02/);
+  assert.match(dialog.message(), /已将「Missed Bot 1」改到 2026-05-04 10:02/);
   await dialog.accept();
 
   assert.deepEqual(appliedUpdate, {

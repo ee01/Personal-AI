@@ -18,6 +18,14 @@
     </div>
 
     <template v-else>
+      <div v-if="loadError" class="load-error">
+        <div>
+          <div class="load-error-title">决策中心暂时不可用</div>
+          <p>{{ loadError }}</p>
+        </div>
+        <button class="load-error-retry" @click="loadQueues()">重试</button>
+      </div>
+
       <section class="lane-section">
         <div class="lane-header">
           <div>
@@ -71,6 +79,44 @@
               {{ req.context }}
             </p>
 
+            <div class="review-context">
+              <div class="review-context-header">
+                <span>审核上下文</span>
+                <button
+                  class="copy-review-btn"
+                  :disabled="submitting[req.id]"
+                  @click="copyDecisionReview(req)"
+                >
+                  复制审核包
+                </button>
+              </div>
+              <div v-if="req.evidenceRefs?.length" class="evidence-list">
+                <span
+                  v-for="ref in visibleEvidenceRefs(req)"
+                  :key="ref"
+                  class="evidence-chip"
+                  :title="ref"
+                >
+                  {{ evidenceRefLabel(ref) }}
+                </span>
+                <span
+                  v-if="hiddenEvidenceCount(req) > 0"
+                  class="evidence-chip muted"
+                >
+                  另有 {{ hiddenEvidenceCount(req) }} 条
+                </span>
+              </div>
+              <div v-else class="evidence-empty">
+                未附带证据引用；请根据问题和上下文判断。
+              </div>
+              <div class="option-preview">
+                可选项：{{ optionPreview(req) }}
+              </div>
+              <div v-if="copyStatus[req.id]" class="copy-status">
+                {{ copyStatus[req.id] }}
+              </div>
+            </div>
+
             <div class="meta-row">
               <span>来源 {{ routeLabel(req) }}</span>
               <span v-if="req.updatedAt"
@@ -100,14 +146,14 @@
                   :disabled="submitting[req.id]"
                   @click="openMessageRuleImprovement(req)"
                 >
-                  打开规则并应用建议
+                  {{ submitting[req.id] ? '打开中...' : '打开规则并应用建议' }}
                 </button>
                 <button
                   class="option-btn quiet"
                   :disabled="submitting[req.id]"
                   @click="submitAnswer(req.id, 'dismissed')"
                 >
-                  忽略
+                  {{ submitting[req.id] ? '提交中...' : '忽略' }}
                 </button>
               </template>
               <template v-else-if="req.options && req.options.length > 0">
@@ -118,7 +164,7 @@
                   :disabled="submitting[req.id]"
                   @click="submitAnswer(req.id, opt.value)"
                 >
-                  {{ opt.label }}
+                  {{ submitting[req.id] ? '提交中...' : opt.label }}
                 </button>
               </template>
               <template v-else>
@@ -127,14 +173,14 @@
                   :disabled="submitting[req.id]"
                   @click="submitAnswer(req.id, 'yes')"
                 >
-                  是
+                  {{ submitting[req.id] ? '提交中...' : '是' }}
                 </button>
                 <button
                   class="option-btn no"
                   :disabled="submitting[req.id]"
                   @click="submitAnswer(req.id, 'no')"
                 >
-                  否
+                  {{ submitting[req.id] ? '提交中...' : '否' }}
                 </button>
               </template>
             </div>
@@ -280,6 +326,8 @@ const showDetail = reactive<Record<string, boolean>>({});
 const detailTexts = reactive<Record<string, string>>({});
 const submitting = reactive<Record<string, boolean>>({});
 const cardErrors = reactive<Record<string, string>>({});
+const copyStatus = reactive<Record<string, string>>({});
+const loadError = ref<string | null>(null);
 
 interface MessageRuleImprovementContext {
   schema: 'message_rule_improvement.v1';
@@ -305,6 +353,7 @@ onMounted(async () => {
 async function loadQueues(showLoading = true) {
   if (showLoading) loading.value = true;
   try {
+    loadError.value = null;
     const [decisionRes, watchSnoozedRes, watchPendingRes] = await Promise.all([
       client.getConfirmRequests('pending', 50, 'decision'),
       client.getConfirmRequests('snoozed', 50, 'watch'),
@@ -316,10 +365,11 @@ async function loadQueues(showLoading = true) {
     watchRequests.value = [...watchPendingRes.items, ...watchSnoozedRes.items];
   } catch (e: any) {
     console.error('Failed to load confirm requests', e);
-    decisionTotal.value = 0;
-    watchTotal.value = 0;
-    decisionRequests.value = [];
-    watchRequests.value = [];
+    loadError.value = e?.message || '无法连接 Memory Service，请稍后重试。';
+    if (decisionRequests.value.length === 0 && watchRequests.value.length === 0) {
+      decisionTotal.value = 0;
+      watchTotal.value = 0;
+    }
   } finally {
     if (showLoading) loading.value = false;
   }
@@ -361,6 +411,10 @@ async function submitAnswer(id: string, answer: string) {
     const detail = detailTexts[id]?.trim() || undefined;
     await client.answerConfirmRequest(id, answer, detail);
     decisionRequests.value = decisionRequests.value.filter((r) => r.id !== id);
+    decisionTotal.value = Math.max(0, decisionTotal.value - 1);
+    delete detailTexts[id];
+    delete showDetail[id];
+    delete copyStatus[id];
   } catch (e: any) {
     cardErrors[id] = e.message || '提交失败，请重试';
   } finally {
@@ -402,6 +456,94 @@ function messageRuleImprovementSummary(req: ConfirmRequest) {
 function messageRuleImprovementReason(req: ConfirmRequest) {
   const improvement = parseMessageRuleImprovement(req);
   return improvement?.reason || '根据关联操作运行结果建议改进规则文案';
+}
+
+function visibleEvidenceRefs(req: ConfirmRequest) {
+  return (req.evidenceRefs ?? []).slice(0, 4);
+}
+
+function hiddenEvidenceCount(req: ConfirmRequest) {
+  return Math.max(0, (req.evidenceRefs?.length ?? 0) - 4);
+}
+
+function evidenceRefLabel(ref: string) {
+  const [kind, ...rest] = ref.split(':');
+  const id = rest.join(':');
+  const labels: Record<string, string> = {
+    action: '动作',
+    thread: '反思线程',
+    message: '消息',
+    memory: '记忆',
+    meeting: '会议',
+    outreach: '主动询问',
+    notification: '通知',
+    confirm_request: '确认项',
+  };
+  const label = labels[kind] || kind || '证据';
+  const tail = id || ref;
+  return tail.length > 12 ? `${label} · ...${tail.slice(-12)}` : `${label} · ${tail}`;
+}
+
+function optionPreview(req: ConfirmRequest) {
+  const options =
+    req.options && req.options.length > 0
+      ? req.options.map((opt) => opt.label)
+      : ['是', '否'];
+  return options.join(' / ');
+}
+
+function buildDecisionReviewText(req: ConfirmRequest) {
+  const lines = [
+    `# 决策审核包: ${req.question}`,
+    '',
+    `优先级: ${priorityLabel(req.priority)}`,
+    `原因: ${reasonLabel(req)}`,
+    `来源: ${routeLabel(req)}`,
+    `创建: ${relativeTime(req.createdAt)}`,
+  ];
+  if (req.updatedAt) lines.push(`最近更新: ${relativeTime(req.updatedAt)}`);
+  if (req.context) lines.push('', '上下文:', req.context);
+  const improvement = parseMessageRuleImprovement(req);
+  if (improvement) {
+    lines.push(
+      '',
+      '规则改进:',
+      `当前规则: ${improvement.currentPrompt}`,
+      `建议规则: ${improvement.proposedPrompt}`,
+      `理由: ${improvement.reason}`,
+    );
+  }
+  lines.push('', `可选项: ${optionPreview(req)}`);
+  if (req.evidenceRefs?.length) {
+    lines.push('', '证据引用:', ...req.evidenceRefs.map((ref) => `- ${ref}`));
+  }
+  return lines.join('\n');
+}
+
+async function writeClipboardText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
+}
+
+async function copyDecisionReview(req: ConfirmRequest) {
+  delete copyStatus[req.id];
+  try {
+    await writeClipboardText(buildDecisionReviewText(req));
+    copyStatus[req.id] = '已复制审核包';
+  } catch {
+    copyStatus[req.id] = '复制失败，请手动选择问题、上下文和证据';
+  }
 }
 
 async function openMessageRuleImprovement(req: ConfirmRequest) {
@@ -541,6 +683,41 @@ function relativeTime(ts: number) {
 .refresh-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.load-error {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  border-radius: 0.8rem;
+  background: rgba(127, 29, 29, 0.18);
+  color: #fecaca;
+}
+
+.load-error-title {
+  color: #fee2e2;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.load-error p {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.load-error-retry {
+  flex: 0 0 auto;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+  cursor: pointer;
 }
 
 .lane-section {
@@ -743,6 +920,83 @@ function relativeTime(ts: number) {
   color: #a5f3fc;
   font-size: 0.8rem;
   line-height: 1.45;
+}
+
+.review-context {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(30, 41, 59, 0.32);
+}
+
+.review-context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  font-weight: 600;
+  margin-bottom: 0.55rem;
+}
+
+.copy-review-btn {
+  flex: 0 0 auto;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.65rem;
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.copy-review-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.evidence-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.evidence-chip {
+  max-width: 100%;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.45rem;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(14, 165, 233, 0.2);
+  color: #a5f3fc;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.evidence-chip.muted {
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+
+.evidence-empty,
+.option-preview,
+.copy-status {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.option-preview {
+  margin-top: 0.25rem;
+}
+
+.copy-status {
+  margin-top: 0.35rem;
+  color: #86efac;
 }
 
 .meta-row {

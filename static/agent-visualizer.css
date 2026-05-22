@@ -272,14 +272,16 @@
   margin-top: 8px;
 }
 
-.agent-approval-params span {
+.agent-approval-params span,
+.agent-approval-retry-config span {
   color: #57606a;
   font-size: 11px;
   font-weight: 700;
 }
 
 .agent-approval-params code,
-.agent-approval-key-row code {
+.agent-approval-key-row code,
+.agent-approval-retry-config code {
   display: block;
   min-width: 0;
   padding: 7px 8px;
@@ -291,6 +293,12 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.agent-approval-retry-config {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
 }
 
 .agent-approval-key-row code:focus-visible {
@@ -578,6 +586,8 @@
   padding: 10px 15px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   min-width: 160px;
+  width: min(100%, 520px);
+  box-sizing: border-box;
   position: relative;
 }
 
@@ -704,6 +714,14 @@
   min-width: 0;
 }
 
+.node-detail {
+  margin-top: 4px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .node-result {
   border-radius: 999px;
   padding: 2px 7px;
@@ -806,6 +824,51 @@
   padding: 15px;
 }
 
+.result-pending-approval {
+  margin-bottom: 15px;
+  padding: 10px 12px;
+  border-left: 4px solid #9a6700;
+  background: #fff8c5;
+  color: #3f4a54;
+}
+
+.result-pending-approval h4 {
+  margin: 0 0 5px;
+  color: #7d4e00;
+  font-size: 13px;
+}
+
+.result-pending-approval p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.result-pending-approval ul {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.result-pending-approval li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.result-pending-approval strong {
+  overflow-wrap: anywhere;
+}
+
+.result-pending-approval span {
+  color: #57606a;
+}
+
 .summary-section {
   margin-bottom: 15px;
 }
@@ -852,6 +915,12 @@
 .decision-badge.notify {
   background-color: #2196F3;
   color: white;
+}
+
+.decision-badge.pending-notify {
+  background-color: #fff8c5;
+  color: #7d4e00;
+  border: 1px solid #bf8700;
 }
 
 .decision-badge.no-notify {

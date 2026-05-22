@@ -67,6 +67,8 @@ const sanitizePreferenceInjection = (settings: any): JsonRecord => ({
   ...(settings || {}),
   enabled: settings?.enabled !== false,
   customPromptsEnabled: settings?.customPromptsEnabled !== false,
+  messagePromptEnabled: settings?.messagePromptEnabled !== false,
+  projectPromptEnabled: settings?.projectPromptEnabled !== false,
   userContextEnabled: settings?.userContextEnabled !== false,
 });
 

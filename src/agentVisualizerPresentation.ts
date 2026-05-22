@@ -27,6 +27,7 @@ export interface AgentPendingApprovalAction {
   riskLevel?: string;
   paramsPreview: string;
   reviewPayload: string;
+  retryConfigPatch: string;
   message: string;
   reviewHint: string;
 }
@@ -36,6 +37,7 @@ export interface AgentFlowStep {
   name: string;
   result?: string;
   resultClass?: AgentFlowStepResultClass;
+  detail?: string;
   time: string;
 }
 
@@ -198,6 +200,11 @@ const stringifyApprovalReviewPayload = (payload: Record<string, any>) => {
   }
 };
 
+const buildApprovalRetryConfigPatch = (approvalKey: string) =>
+  stringifyApprovalReviewPayload({
+    approvedToolActionKeys: approvalKey ? [approvalKey] : [],
+  });
+
 export const formatApprovalEffect = (effect?: string) => {
   const labels: Record<string, string> = {
     read: '只读',
@@ -270,6 +277,7 @@ export function buildPendingApprovalActions(
             approvalValue.effect,
             approvalValue.riskLevel,
           );
+          const retryConfigPatch = buildApprovalRetryConfigPatch(approvalKey);
           const reviewPayload = stringifyApprovalReviewPayload({
             type: 'agent_tool_approval_review',
             toolId,
@@ -286,6 +294,9 @@ export function buildPendingApprovalActions(
               'reject',
               'edit_params_then_regenerate_key',
             ],
+            retryConfigPatch: approvalKey
+              ? { approvedToolActionKeys: [approvalKey] }
+              : { approvedToolActionKeys: [] },
             resumeInstruction:
               '批准时把 approvalKey 放入 approvedToolActionKeys 后重新运行；拒绝或修改参数时不要复用旧 key。',
           });
@@ -298,6 +309,7 @@ export function buildPendingApprovalActions(
             riskLevel: approvalValue.riskLevel,
             paramsPreview,
             reviewPayload,
+            retryConfigPatch,
             message,
             reviewHint,
           };
@@ -646,11 +658,13 @@ export function buildAgentFlowSteps(
   thoughtProcess.forEach((step) => {
     if (step.toolUsed) {
       const presentation = getToolStepResultPresentation(step);
+      const detail = getStepIntentSummary(step) || getStepVisibleSummary(step);
       flowSteps.push({
         type: 'tool',
         name: step.toolUsed,
         result: presentation.label,
         resultClass: presentation.className,
+        detail,
         time: formatTime(step.timestamp),
       });
     } else if (
@@ -659,6 +673,7 @@ export function buildAgentFlowSteps(
       flowSteps.push({
         type: 'thought',
         name: '思考分析',
+        detail: getStepVisibleSummary(step),
         time: formatTime(step.timestamp),
       });
     }
@@ -674,6 +689,7 @@ export function buildAgentFlowSteps(
     flowSteps.push({
       type: 'decision',
       name: terminalName,
+      detail: getStepVisibleSummary(terminalStep),
       time: formatTime(terminalStep.timestamp),
     });
   }

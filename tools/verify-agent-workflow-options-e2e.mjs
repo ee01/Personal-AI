@@ -265,6 +265,8 @@ try {
       scenarioButtons: allDisabled('.agent-workflow-scenario-actions button'),
       replaySelect: disabled('#workflowReplaySample'),
       replayButtons: allDisabled('.agent-workflow-replay-actions button'),
+      savedSelect: disabled('#workflowSavedScenario'),
+      savedButtons: allDisabled('.agent-workflow-saved-actions button'),
       sender: disabled('#workflowTestSender'),
       teamName: disabled('#workflowTestTeamName'),
       teamId: disabled('#workflowTestTeamId'),
@@ -278,6 +280,8 @@ try {
     scenarioButtons: true,
     replaySelect: true,
     replayButtons: true,
+    savedSelect: true,
+    savedButtons: true,
     sender: true,
     teamName: true,
     teamId: true,
@@ -336,6 +340,58 @@ try {
     .innerText();
   assert.match(storageReviewText, /Trace 状态\s*部分异常/);
   assert.match(storageReviewText, /异常\s*跳过工具 1/);
+
+  await page
+    .locator('.agent-workflow-saved-actions button', {
+      hasText: '保存当前用例',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-saved-status', {
+      hasText: '已保存当前用例和结果基线',
+    })
+    .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-baseline', { hasText: '保存基线对比' })
+    .waitFor({ timeout: 5000 });
+  const baselineText = await page.locator('.agent-workflow-baseline').innerText();
+  assert.match(baselineText, /存储/);
+  assert.match(baselineText, /通知/);
+  assert.match(baselineText, /Trace/);
+  assert.match(baselineText, /一致/);
+  const savedScenarioState = await page.evaluate(async () => {
+    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    return result.agentWorkflowSavedScenarios;
+  });
+  assert.equal(savedScenarioState.length, 1);
+  assert.equal(savedScenarioState[0].expectedResult.shouldStore, true);
+  assert.equal(savedScenarioState[0].expectedResult.shouldNotify, true);
+  assert.equal(savedScenarioState[0].expectedResult.traceStatus, 'partial');
+  assert.deepEqual(savedScenarioState[0].expectedResult.matchedRuleRefs, [
+    'manual:manual-1',
+  ]);
+  await page
+    .locator('.agent-workflow-saved-actions button', {
+      hasText: '批量回归',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-saved-status', {
+      hasText: /批量回归完成：通过 1 \/ 变化 0 \/ 无基线 0 \/ 失败 0/,
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.agent-workflow-regression', {
+      hasText: '保存样例批量回归',
+    })
+    .waitFor({ timeout: 5000 });
+  const regressionText = await page
+    .locator('.agent-workflow-regression')
+    .innerText();
+  assert.match(regressionText, /总数 1/);
+  assert.match(regressionText, /通过 1/);
+  assert.match(regressionText, /基线一致/);
+  assert.match(regressionText, /存储、通知、复核、Trace、规则和置信度都未漂移/);
 
   await page.locator('#agentId').fill('auditSnapshotAgent');
   await page.locator('#agentName').fill('Audit Snapshot Agent');

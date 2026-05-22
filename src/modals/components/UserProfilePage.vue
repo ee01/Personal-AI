@@ -388,6 +388,13 @@
                 {{ isItemPending(prediction.id) ? '处理中' : '确认' }}
               </button>
               <button
+                class="secondary-action-btn influence-action-btn"
+                :disabled="isItemPending(prediction.id)"
+                @click="setProfileItemInfluence(prediction.id, prediction.type, 0.25, '已降低画像影响')"
+              >
+                {{ isItemPending(prediction.id) ? '处理中' : '降低影响' }}
+              </button>
+              <button
                 class="danger-action-btn"
                 :disabled="isItemPending(prediction.id)"
                 @click="retractProfileItem(prediction.id)"
@@ -550,6 +557,22 @@
               </div>
             </div>
             <div class="profile-item-actions">
+              <button
+                v-if="canBoostProfileItem(item)"
+                class="secondary-action-btn influence-action-btn"
+                :disabled="isItemPending(item.id)"
+                @click="setProfileItemInfluence(item.id, item.itemType, 0.95, '已设为重点画像')"
+              >
+                {{ isItemPending(item.id) ? '处理中' : '设为重点' }}
+              </button>
+              <button
+                v-if="canLowerProfileItem(item)"
+                class="secondary-action-btn influence-action-btn"
+                :disabled="isItemPending(item.id)"
+                @click="setProfileItemInfluence(item.id, item.itemType, 0.25, '已降低画像影响')"
+              >
+                {{ isItemPending(item.id) ? '处理中' : '降低影响' }}
+              </button>
               <button
                 v-if="!item.userConfirmed"
                 class="secondary-action-btn"
@@ -1195,7 +1218,18 @@ const replaceProfileItem = (itemId: string, updates: Partial<UserProfileInterest
   }
 };
 
-const setImportance = async (itemId: string, type: string, importance: number) => {
+const canBoostProfileItem = (item: UserProfileInterestItem) =>
+  (item.explicitImportance ?? item.confidence ?? 0) < 0.85;
+
+const canLowerProfileItem = (item: UserProfileInterestItem) =>
+  (item.explicitImportance ?? item.confidence ?? 0) > 0.3;
+
+const setImportance = async (
+  itemId: string,
+  type: string,
+  importance: number,
+  options: { successMessage?: string } = {},
+) => {
   if (!itemId) {
     setStatus('缺少画像条目ID，无法设置重要性', 'error');
     return;
@@ -1223,7 +1257,7 @@ const setImportance = async (itemId: string, type: string, importance: number) =
     });
 
     if (response && (response as any).success) {
-      setStatus('重要性已更新', 'success');
+      setStatus(options.successMessage || '重要性已更新', 'success');
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '重要性更新失败', 'error');
@@ -1236,6 +1270,15 @@ const setImportance = async (itemId: string, type: string, importance: number) =
   } finally {
     setItemPending(itemId, false);
   }
+};
+
+const setProfileItemInfluence = async (
+  itemId: string,
+  type: string,
+  importance: number,
+  successMessage: string,
+) => {
+  await setImportance(itemId, type || 'profile', importance, { successMessage });
 };
 
 const confirmProfileItem = async (itemId: string) => {
@@ -1363,7 +1406,8 @@ const exportUserProfile = async () => {
       const now = new Date();
       const timestamp = now.toISOString().slice(0, 19).replace(/[:.]/g, '-');
       const fileName = `用户画像_${timestamp}.json`;
-      const jsonData = JSON.stringify((response as any).data, null, 2);
+      const exportData = (response as any).data;
+      const jsonData = JSON.stringify(exportData, null, 2);
       const blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1374,7 +1418,20 @@ const exportUserProfile = async () => {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      setStatus(`画像已导出：${fileName}`, 'success');
+      const pagination = exportData?.exportInfo?.pagination;
+      const warnings = Array.isArray(exportData?.exportInfo?.warnings)
+        ? exportData.exportInfo.warnings
+        : [];
+      const itemCountLabel = pagination
+        ? `（${pagination.exportedProfileItems}/${pagination.totalProfileItems} 条）`
+        : '';
+      const warningLabel = warnings.length > 0
+        ? `；${warnings.length} 个诊断项未同步`
+        : '';
+      setStatus(
+        `画像已导出：${fileName}${itemCountLabel}${warningLabel}`,
+        warnings.length > 0 ? 'info' : 'success',
+      );
     } else {
       setStatus((response as any)?.error || '用户画像导出失败', 'error');
     }
@@ -2096,6 +2153,7 @@ onMounted(() => {
 
 .prediction-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
   width: 100%;
@@ -2345,6 +2403,8 @@ onMounted(() => {
 .profile-item-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   flex-shrink: 0;
 }
@@ -2377,6 +2437,18 @@ onMounted(() => {
 .tertiary-action-btn:hover {
   background: #f8f9fa;
   border-color: #adb5bd;
+}
+
+.influence-action-btn {
+  border-color: #d7e3f4;
+  background: #f8fbff;
+  color: #1d4f91;
+}
+
+.influence-action-btn:hover {
+  background: #e8f2ff;
+  border-color: #9ec5fe;
+  color: #0d47a1;
 }
 
 .secondary-action-btn:disabled,

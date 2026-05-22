@@ -242,7 +242,10 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
   assert.equal(sync.statusCode, 200);
   const syncBody = sync.json() as { accepted: boolean; transcript: string };
   assert.equal(syncBody.accepted, true);
-  assert.match(syncBody.transcript, /存入随手记/);
+  assert.match(
+    syncBody.transcript,
+    /来自 Personal AI \(私人 AI\) 的长期稳定信息存入随手记/,
+  );
   assert.match(syncBody.transcript, /Prefers concise replies/);
 
   const reminderSync = await app.inject({
@@ -260,7 +263,10 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
     transcript: string;
   };
   assert.equal(reminderSyncBody.accepted, true);
-  assert.match(reminderSyncBody.transcript, /请在随手记中记录以下待办事项/);
+  assert.match(
+    reminderSyncBody.transcript,
+    /来自 Personal AI \(私人 AI\) 的待办事项记录到随手记/,
+  );
   assert.doesNotMatch(reminderSyncBody.transcript, /不要长期记住/);
 
   const briefingSync = await app.inject({
@@ -279,7 +285,10 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
     transcript: string;
   };
   assert.equal(briefingSyncBody.accepted, true);
-  assert.match(briefingSyncBody.transcript, /请把以下近期记忆重点记录到随手记/);
+  assert.match(
+    briefingSyncBody.transcript,
+    /来自 Personal AI \(私人 AI\) 的近期记忆重点记录到随手记/,
+  );
   assert.match(briefingSyncBody.transcript, /不要把关注规则或同步配置当作记忆重点/);
   assert.doesNotMatch(briefingSyncBody.transcript, /当前会话上下文/);
 
@@ -298,7 +307,10 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
     transcript: string;
   };
   assert.equal(memoStableBody.accepted, true);
-  assert.match(memoStableBody.transcript, /请把以下信息存入随手记/);
+  assert.match(
+    memoStableBody.transcript,
+    /来自 Personal AI \(私人 AI\) 的长期记忆信息存入随手记/,
+  );
   assert.match(memoStableBody.transcript, /妈妈生日/);
 
   const memoReminderSync = await app.inject({
@@ -318,7 +330,10 @@ test('sync endpoints require a paired token and accept dry-run payloads', async 
     transcript: string;
   };
   assert.equal(memoReminderBody.accepted, true);
-  assert.match(memoReminderBody.transcript, /请在随手记中记录以下待办事项/);
+  assert.match(
+    memoReminderBody.transcript,
+    /来自 Personal AI \(私人 AI\) 的待办事项记录到随手记/,
+  );
   assert.doesNotMatch(memoReminderBody.transcript, /✅/);
   assert.doesNotMatch(memoReminderBody.transcript, /不要长期记住/);
 
@@ -422,6 +437,80 @@ test('createMemorySyncThread creates a real chat-style binding', async () => {
   assert.equal(status.bindings.memory_sync?.threadUrl, thread.url);
 });
 
+test('status treats stale memory-sync binding without a chat URL as not ready', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-stale-thread-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(
+    config,
+    path.join(tempDir, 'bridge-settings.json'),
+  );
+  await settingsStore.init();
+  await settingsStore.update({ memoryServiceUserId: 'tester' });
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+
+  const browser = new FakeBrowser();
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+  await service.openLogin();
+  await service.bindThread('memory_sync', {
+    threadUrl: 'https://www.doubao.com/not-a-thread',
+    title: '旧长期记忆线程',
+  });
+
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(
+    config,
+    settingsStore,
+    memoryClient,
+    service,
+  );
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version: '2.0.0-test',
+  });
+  const pair = await app.inject({ method: 'POST', url: '/pair', payload: {} });
+  const token = (pair.json() as { token: string }).token;
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/auth/status',
+    headers: { 'x-bridge-token': token },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const statusBody = response.json() as {
+    setupChecklist: { memorySyncBound: boolean };
+    syncReadiness: { stableMemory: { ready: boolean } };
+    blockingReasons: Array<{ code: string; message: string }>;
+    bindings: { memory_sync?: { threadUrl?: string } };
+  };
+  assert.equal(
+    statusBody.bindings.memory_sync?.threadUrl,
+    'https://www.doubao.com/not-a-thread',
+  );
+  assert.equal(statusBody.setupChecklist.memorySyncBound, false);
+  assert.equal(statusBody.syncReadiness.stableMemory.ready, false);
+  assert.match(
+    statusBody.blockingReasons.find(
+      (reason) => reason.code === 'memory_sync_not_bound',
+    )?.message || '',
+    /缺少可打开的豆包会话链接/,
+  );
+
+  syncManager.stop();
+  await app.close();
+});
+
 test('mobile sync refuses to send when mobile context is not bound', async () => {
   const tempDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'doubao-bridge-test-mobile-unbound-'),
@@ -456,6 +545,46 @@ test('mobile sync refuses to send when mobile context is not bound', async () =>
   assert.match(result.error || '', /手机对话尚未绑定/);
   assert.equal(sendCalls, 0);
   assert.match(status.lastError || '', /手机对话尚未绑定/);
+});
+
+test('mobile sync refuses stale mobile binding without a usable chat URL', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-mobile-stale-url-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const browser = new FakeBrowser();
+  let sendCalls = 0;
+  browser.sendTranscriptImpl = async () => {
+    sendCalls += 1;
+    return {
+      sent: true,
+      url: 'https://www.doubao.com/chat/unexpected',
+      threadId: 'unexpected',
+    };
+  };
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+  await service.bindThread('mobile_context', {
+    threadUrl: 'https://www.doubao.com/not-a-thread',
+    title: '旧手机版对话',
+  });
+
+  const result = await service.syncMobileBriefing({
+    title: '自动同步的近期重点',
+    bullets: ['不应该发到当前豆包页'],
+  });
+  const status = await service.getStatus();
+
+  assert.equal(result.accepted, false);
+  assert.match(result.error || '', /缺少可打开的豆包/);
+  assert.equal(sendCalls, 0);
+  assert.match(status.lastError || '', /缺少可打开的豆包/);
 });
 
 test('settings endpoint updates effective sync configuration', async () => {

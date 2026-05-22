@@ -71,6 +71,7 @@ export interface CandidateArtifact {
 export interface EvidenceResolutionInput {
   question: string;
   context?: string;
+  informationGoal?: string;
   evidence: EvidenceResolutionEvidenceItem[];
   policy: EvidenceResolutionPolicy;
 }
@@ -89,6 +90,8 @@ export interface EvidenceResolutionPlan {
   actionParams?: Record<string, unknown>;
   confidence: number;
   legacyClassification: LegacyReplyClassification;
+  goalSatisfied?: boolean;
+  goalGaps: string[];
   summary: string;
   reason?: string;
   etaAt?: number;
@@ -108,6 +111,8 @@ interface PlannerLlmResponse {
   actionParams?: Record<string, unknown>;
   confidence?: number;
   legacyClassification?: LegacyReplyClassification;
+  goalSatisfied?: boolean;
+  goalGaps?: string[];
   summary?: string;
   reason?: string;
 }
@@ -132,6 +137,8 @@ const OWNER_ETA_PATTERN =
   /负责人|owner|eta|时间表|上线时间|何时|什么时候|进展|deadline|due date|排期/iu;
 const APPROVAL_PATTERN =
   /审批|批准|授权|approval|approve|permission|决定怎么做|帮我决定|should we|是否要|选方向/iu;
+const GOAL_GAP_SIGNAL_PATTERN =
+  /尚未|还没有|没有.*明确|未.*(回复|完成|提供|确认|添加|补充)|缺少|仍需|还缺|不足以|not yet|missing|no explicit|no .*reply|does not satisfy/iu;
 
 function uniqStrings(values: Array<string | undefined | null>): string[] {
   return Array.from(
@@ -150,6 +157,35 @@ function clampConfidence(value: number | undefined, fallback: number): number {
 
 function collapseWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeOptionalText(value?: string | null): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return collapseWhitespace(value) || undefined;
+}
+
+function getInformationGoal(input: EvidenceResolutionInput): string | undefined {
+  return (
+    normalizeOptionalText(input.informationGoal) ??
+    (input.policy.scene === 'outreach'
+      ? normalizeOptionalText(input.context)
+      : undefined)
+  );
+}
+
+function normalizeGoalSatisfied(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function buildInformationGoalGap(informationGoal: string): string {
+  return `仍需满足信息目标：${informationGoal}`;
+}
+
+function textSignalsGoalGap(values: Array<string | undefined | null>): boolean {
+  const combined = values
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .join('\n');
+  return combined.length > 0 && GOAL_GAP_SIGNAL_PATTERN.test(combined);
 }
 
 function extractTerms(value: string): string[] {
@@ -384,7 +420,13 @@ function buildDelegateActionParams(
     '请基于以下上下文执行外部核实，并返回可验证 artifact。',
     `场景: ${input.policy.scene}`,
     input.question.trim() ? `原问题: ${input.question.trim()}` : undefined,
-    input.context?.trim() ? `上下文: ${input.context.trim()}` : undefined,
+    getInformationGoal(input)
+      ? `信息目标 / 完成标准: ${getInformationGoal(input)}`
+      : undefined,
+    normalizeOptionalText(input.context) &&
+    normalizeOptionalText(input.context) !== getInformationGoal(input)
+      ? `补充上下文: ${normalizeOptionalText(input.context)}`
+      : undefined,
     directFindings.length > 0
       ? `已知结论: ${directFindings.join('；')}`
       : undefined,
@@ -413,6 +455,7 @@ function buildDelegateActionParams(
       scene: input.policy.scene,
       question: input.question,
       context: input.context,
+      informationGoal: getInformationGoal(input),
       directFindings,
       remainingQuestions,
       candidateArtifacts,
@@ -528,7 +571,11 @@ function inferDisposition(
   reasonCode?: EvidenceResolutionReasonCode;
   gapType?: EvidenceResolutionGapType;
 } {
-  const combinedQuestion = [input.question, input.context ?? '']
+  const combinedQuestion = [
+    input.question,
+    input.context ?? '',
+    getInformationGoal(input) ?? '',
+  ]
     .filter(Boolean)
     .join('\n');
 
@@ -610,6 +657,8 @@ export class EvidenceResolutionPlanner {
     const heuristic = this.resolveHeuristically(input);
     try {
       const llm = getLLMClient();
+      const informationGoal = getInformationGoal(input);
+      const auxiliaryContext = normalizeOptionalText(input.context);
       const evidenceText = input.evidence
         .slice(0, 8)
         .map((item, index) => {
@@ -631,6 +680,8 @@ export class EvidenceResolutionPlanner {
         '  "actionParams": {},',
         '  "confidence": 0.0,',
         '  "legacyClassification": "answer|defer|irrelevant|decline|unclear",',
+        '  "goalSatisfied": true,',
+        '  "goalGaps": ["信息目标还缺什么"],',
         '  "summary": "用户可读摘要",',
         '  "reason": "短原因"',
         '}',
@@ -640,6 +691,10 @@ export class EvidenceResolutionPlanner {
         '- 若已有直接结论，但还缺更精确的时间/细节，resolutionState 用 partial。',
         '- 若只有可继续查证的线索，没有直接结论，resolutionState 用 insufficient。',
         '- 只有在没有直接结论、且对方明确表示稍后回复时，才用 deferred。',
+        '- 如果给出了“信息目标 / 完成标准”，complete 只能用于证据已经明确满足该目标；只回答了原问题的一部分，或摘要里说明“尚未/没有/缺少”目标信息时，必须用 partial 或 insufficient。',
+        '- goalSatisfied 表示证据是否已经满足“信息目标 / 完成标准”；goalGaps 写仍缺的目标信息。没有信息目标时可省略 goalGaps。',
+        '- resolvedConclusion 和 summary 必须与 resolutionState 一致；如果仍有 remainingQuestions，不要写成“已成功获取完整结果”。',
+        '- outreach 场景下，如果补充上下文说明这是周期性执行，不要把上一周期的旧回复当成本周期答案。',
         '- 仅在策略允许时才推荐动作。',
         `- scene=${input.policy.scene}`,
         `- userIntentMode=${input.policy.userIntentMode}`,
@@ -649,7 +704,12 @@ export class EvidenceResolutionPlanner {
         `- allowCreateConfirmRequest=${input.policy.allowCreateConfirmRequest}`,
         '',
         `问题: ${input.question || '无'}`,
-        `上下文: ${input.context || '无'}`,
+        `信息目标 / 完成标准: ${informationGoal || '无'}`,
+        `补充上下文: ${
+          auxiliaryContext && auxiliaryContext !== informationGoal
+            ? auxiliaryContext
+            : '无'
+        }`,
         '',
         '证据:',
         evidenceText || '无',
@@ -679,20 +739,74 @@ export class EvidenceResolutionPlanner {
       parsed.candidateArtifacts.length > 0
         ? parsed.candidateArtifacts.slice(0, 8)
         : fallback.candidateArtifacts;
-    const remainingQuestions = uniqStrings(
+    let remainingQuestions = uniqStrings(
       parsed.remainingQuestions ?? fallback.remainingQuestions,
     );
     const legacyClassification = normalizeLegacyClassification(
       parsed.legacyClassification,
       fallback.legacyClassification,
     );
-    const resolutionState =
+    let resolutionState =
       parsed.resolutionState === 'complete' ||
       parsed.resolutionState === 'partial' ||
       parsed.resolutionState === 'insufficient' ||
       parsed.resolutionState === 'deferred'
         ? parsed.resolutionState
         : fallback.resolutionState;
+    const informationGoal = getInformationGoal(input);
+    const parsedGoalSatisfied = normalizeGoalSatisfied(parsed.goalSatisfied);
+    let goalSatisfied =
+      informationGoal === undefined
+        ? undefined
+        : parsedGoalSatisfied ?? fallback.goalSatisfied;
+    let goalGaps =
+      informationGoal === undefined
+        ? []
+        : uniqStrings([
+            ...(Array.isArray(parsed.goalGaps) ? parsed.goalGaps : []),
+            ...(Array.isArray(fallback.goalGaps) ? fallback.goalGaps : []),
+          ]);
+    if (informationGoal) {
+      const hasGoalGapSignal = textSignalsGoalGap([
+        parsed.summary,
+        parsed.resolvedConclusion,
+        ...remainingQuestions,
+      ]);
+      if (
+        parsedGoalSatisfied === false ||
+        remainingQuestions.length > 0 ||
+        hasGoalGapSignal
+      ) {
+        goalSatisfied = false;
+        if (goalGaps.length === 0) {
+          goalGaps = [buildInformationGoalGap(informationGoal)];
+        }
+      }
+      if (
+        resolutionState === 'complete' &&
+        legacyClassification !== 'decline' &&
+        (goalSatisfied === false || remainingQuestions.length > 0)
+      ) {
+        resolutionState =
+          directFindings.length > 0 || parsed.resolvedConclusion
+            ? 'partial'
+            : 'insufficient';
+        remainingQuestions = uniqStrings([
+          ...remainingQuestions,
+          ...goalGaps,
+        ]);
+      }
+      if (resolutionState === 'complete' && goalSatisfied !== false) {
+        goalSatisfied = true;
+        goalGaps = [];
+      }
+    } else if (
+      resolutionState === 'complete' &&
+      remainingQuestions.length > 0 &&
+      legacyClassification !== 'decline'
+    ) {
+      resolutionState = 'partial';
+    }
     let recommendedAction = normalizeRecommendedAction(
       parsed.recommendedAction,
       fallback.recommendedAction,
@@ -812,9 +926,21 @@ export class EvidenceResolutionPlanner {
           : (fallback.resolvedConclusion ?? ''),
       ) || undefined;
     const etaAt = resolutionState === 'deferred' ? fallback.etaAt : undefined;
-    const summary = collapseWhitespace(
+    const parsedSummary =
       typeof parsed.summary === 'string' && parsed.summary.trim().length > 0
         ? parsed.summary
+        : undefined;
+    const summaryShouldUseParsed =
+      Boolean(parsedSummary) &&
+      !(
+        informationGoal &&
+        goalSatisfied === false &&
+        parsed.resolutionState === 'complete' &&
+        !textSignalsGoalGap([parsedSummary])
+      );
+    const summary = collapseWhitespace(
+      summaryShouldUseParsed && parsedSummary
+        ? parsedSummary
         : buildSummary(
             resolutionState,
             resolvedConclusion,
@@ -846,6 +972,8 @@ export class EvidenceResolutionPlanner {
       actionParams: normalizedActionParams,
       confidence: clampConfidence(parsed.confidence, fallback.confidence),
       legacyClassification,
+      goalSatisfied,
+      goalGaps,
       summary: summary || fallback.summary,
       reason:
         typeof parsed.reason === 'string' && parsed.reason.trim().length > 0
@@ -871,8 +999,11 @@ export class EvidenceResolutionPlanner {
           .filter(Boolean),
       ),
     );
+    const informationGoal = getInformationGoal(input);
     const terms = extractTerms(
-      [input.question, input.context ?? ''].filter(Boolean).join('\n'),
+      [input.question, input.context ?? '', informationGoal ?? '']
+        .filter(Boolean)
+        .join('\n'),
     );
 
     const decline = DECLINE_PATTERN.test(combinedText);
@@ -918,6 +1049,8 @@ export class EvidenceResolutionPlanner {
     let remainingQuestions: string[] = [];
     let etaAt: number | undefined;
     let reason = 'fallback_heuristic';
+    let goalSatisfied: boolean | undefined;
+    let goalGaps: string[] = [];
 
     if (directFindings.length > 0) {
       legacyClassification = decline ? 'decline' : 'answer';
@@ -965,6 +1098,27 @@ export class EvidenceResolutionPlanner {
     ) {
       recommendedAction = 'create_confirm_request';
       disposition = inferredDisposition.disposition;
+    }
+
+    if (informationGoal) {
+      const hasGoalGapSignal = textSignalsGoalGap([
+        combinedText,
+        resolvedConclusion,
+        ...remainingQuestions,
+      ]);
+      if (legacyClassification === 'decline') {
+        goalSatisfied = false;
+        goalGaps = [buildInformationGoalGap(informationGoal)];
+      } else if (resolutionState === 'complete' && !hasGoalGapSignal) {
+        goalSatisfied = true;
+      } else {
+        goalSatisfied = false;
+        goalGaps = [buildInformationGoalGap(informationGoal)];
+        remainingQuestions = uniqStrings([...remainingQuestions, ...goalGaps]);
+        if (resolutionState === 'complete') {
+          resolutionState = directFindings.length > 0 ? 'partial' : 'insufficient';
+        }
+      }
     }
 
     const actionParams =
@@ -1015,6 +1169,8 @@ export class EvidenceResolutionPlanner {
               ? 0.75
               : 0.55,
       legacyClassification,
+      goalSatisfied,
+      goalGaps,
       summary: buildSummary(
         resolutionState,
         resolvedConclusion,

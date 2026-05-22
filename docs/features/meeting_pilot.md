@@ -1,6 +1,6 @@
 # Meeting Pilot
 
-_最后更新: 2026-05-16_
+_最后更新: 2026-05-21_
 
 ## 是什么
 
@@ -14,6 +14,18 @@ _最后更新: 2026-05-16_
    - 用于查看当前话题、时间线、行动项、摘要状态与配置状态。
 3. **会后复盘（Panorama）**
    - 查看归档后的会议摘要、时间线、行动项、决议、参会者立场，以及 PDF 会议纪要状态。
+
+## 大白话运行逻辑
+
+Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统把会前上下文、实时转写、会中事件和会后复盘串起来”。它不会静默录制，也不会在没有 readiness 检查时假装完整可用。
+
+结果主要受这些因素影响：
+
+1. 用户是否主动开始 Capture：这是最强门槛，没有开始就只显示入口和准备状态。
+2. Readiness 状态：Meeting Pilot 开关、ASR、memory-service、分析模型、Minutes API 任一不可用都会影响能力完整度。
+3. 会前 handoff：Today Pilot / Video Home 提前准备的 meeting prep 会影响会中 cue cards 和目标提示。
+4. ASR 层级：浏览器 ASR、Desktop Whisper、远端分析可用性决定实时文本质量和延迟。
+5. 会议结束归档：停止 capture 后的摘要、行动项、Panorama 依赖已收集转写和事件是否完整。
 
 ## 用户主流程
 
@@ -155,13 +167,17 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Side Panel 行动项页支持手动补充 AI 漏掉的行动项；人工新增项默认已确认，会写入当前会话时间线，并在后续实时分析刷新后优先保留；负责人可先留空并标记为 `待分配`，避免会中只想先记录任务时被分配信息阻塞。
 - 人工新增行动项的时间线锚点会在后续实时分析刷新后继续保留；用户修改标题、负责人或截止时间后，回跳时间线仍会定位到同一条人工记录，避免补录任务失去上下文依据。
 - Today Pilot / Context Assist 带入的会前准备问题或目标可以在实时页一键加入行动项；系统会默认归给自己、截止标记为本次会议、保留会前证据，并按当前会议去重，避免用户会中手动抄写准备事项。
+- RingCentral Video Home 的 Today Pilot 卡片初始只读取预生成 meeting prep；用户点击刷新时会先为当前日期 backfill meeting prep，再把缓存结果写入 Meeting Pilot handoff，避免缺少 nightly 预生成缓存时会中面板拿不到准备内容。
 - Side Panel 每条行动项支持回跳到同章时间线证据；点击 `时间线` 后会切到时间线 tab、展开并高亮最相关的 action / chapter 事件，便于从任务回看会议上下文。
 - Side Panel 的 Live 卡片和页脚会在 Capture 未开启时提供 `查看开启步骤`，直接在会议页打开扩展 icon / popup 授权 coachmark，避免用户只看到静态说明。
+- popup 开始 Capture 失败时会直接展示阻断原因、已有录制冲突或授权失败的下一步；配置阻断时可从提示里直达 Meeting Pilot 配置页。
+- Capture 停止后重新开始会重置本次 `startedAt` 并清空旧 `stoppedAt`，避免 REC 计时、归档时长和会后记录沿用上一段录制时间。
 - Side Panel 的实时页会在存在待复核或处理中行动项时显示 `Action Review` 卡片，直接跳到行动项复核筛选，避免用户只看实时提醒而漏掉会后跟进。
 - Side Panel 行动项工具栏支持一键确认当前筛选中信息完整的待复核项；未复核项的完成按钮会显示为 `确认并完成`，避免用户无意绕过 AI 建议复核。
 - Side Panel 会在行动项卡片、实时页下一项提示和复制文本里标出 `补负责人` / `补截止` / `缺依据`，提醒用户在把 AI 建议流入外部任务系统前补齐关键信息。
 - Side Panel 行动项增加 `需补信息` 筛选；批量确认只处理当前筛选里已具备负责人、截止和依据的待复核项，缺信息项仍可单条确认，作为用户明确接受的例外路径。
 - 缺负责人、截止或依据的待复核项在单条确认/完成时会显示 `确认例外` / `确认例外并完成`，避免用户把低置信 AI 建议误当成已完整复核的正式任务。
+- Side Panel 实时页会把本轮最重要的关联记忆提升到顶部 `会中关联记忆` 卡片；这些已提升的记忆不会再重复进入下方提醒 feed，`displayPriority: hidden` 的记忆也不会展示，避免同一条 context 在会中主控面重复打扰用户。
 - 行动项更新会同时校验 `tabId` 和 `meetingId`；如果会议标签页已经切换到另一场会议，旧 side panel / 独立窗口不能继续改写新会议的行动项。
 - 被忽略的行动项不会进入会议记忆 recap 的主行动项列表，但仍会保留在 session 的完整结构化数据里，方便排查 AI 误判。
 - LLM 结构化分析 prompt 要求输出 `actionItems.evidence`，启发式路径会把触发行动项的 transcript 句子写入 `evidence`。
@@ -169,10 +185,14 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - LLM 返回的行动项 / 决议会补齐当前 chapterId，避免时间线展开时找不到同章行动项。
 - 实时分析刷新时优先保留当前识别到的行动项；已确认/已忽略的旧项只在容量有余时继续保留，避免旧复核记录挤掉新任务。
 - 从会议历史归档打开 Panorama 时，会保留行动项的 evidence、timestamp、source、chapterId 和 review 状态。
+- Panorama 会单独展示 `会后跟进状态`：区分可直接跟进、待复核、需补信息和已完成行动项，并支持复制带负责人、截止、状态和依据的 Markdown 跟进清单，避免用户把未复核或缺依据的 AI 行动项直接外发。
 
 ## 行业与论文参考方向
 
 - Zoom AI Companion 和 Teams Intelligent recap 都把会议 AI 的启动/停止、转写质量、会后 recap 分享作为显性状态，而不是隐藏后台动作。
+- Zoom AI Companion 要求 host/co-host 在会中控件里显式开始/停止摘要，并在参与者侧显示 AI Companion 正在运行；Microsoft Teams 的转写也有开始、停止、权限和通知路径。Meeting Pilot 因此保持“用户主动从 popup 授权开始”的路径，并在开始失败时给出可见恢复步骤。
+- Zoom AI Companion 的会中 side panel 把会议问答、复制、发送到聊天、创建任务/文档放在同一上下文里；Teams Facilitator 则把实时 notes、agenda timer、open questions 和 follow-up tasks 放在会议期间/会后同一条协作路径中。Meeting Pilot 的 side panel 因此应减少重复 context，把“当前要看什么”和“下一步能做什么”分层呈现。
+- AI meeting assistant governance 讨论强调 consent、transparency、accountability 和 audit 应进入系统设计；Meeting Pilot 的 Capture 路径因此优先暴露授权、阻断、降级、单场录制冲突和计时状态，而不是只在后台静默失败。
 - Otter 的 Meeting Summary 把 topics、action items、highlights、slides 放在同一封会后摘要里，说明行动项最好和会议材料/上下文并列呈现。
 - Granola 的 AI-enhanced notes 支持回看增强笔记来自 transcript / raw notes 的依据，并允许用户编辑单次会议笔记；Meeting Pilot 的行动项 review 因此把证据、确认/忽略/完成状态和人工校正入口放在同一条任务上。
 - Otter 的 Conversation / Summary 体验支持复制单条或全部 action items；Teams Facilitator 把 AI 会议笔记放到可编辑的 Loop 页面。Meeting Pilot 的行动项卡片因此需要保留低摩擦的“带依据复制”和“确认后跟进清单复制”能力，先满足会后跟进，再考虑写入外部任务系统。
@@ -182,6 +202,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Notion AI Meeting Notes 把 transcript citation 和 consent 放在会议笔记体验里；Meeting Pilot 的行动项也应持续保留依据、待分配/缺依据标记和用户确认路径，而不是把 AI 猜测当成正式任务。
 - Read AI 的 meeting intelligence 强调跨会议检索 action items、decisions 和 transcript；Meeting Pilot 的会议归档因此要保持可检索结构化字段，同时避免把低置信泛泛承诺写成错误 owner。
 - 业内会议助手普遍把用户编辑后的 notes / tasks 视为会后协作材料的一部分；Meeting Pilot 因此需要把人工补录和 AI 识别的行动项放进同一条“可复核、可回看、可复制”的路径，而不是把人工记录降级成一次性备注。
+- Zoom 的 summary template 和 Teams Intelligent recap 都把不同会议类型的后续动作、推荐任务、章节和录制/转写依赖放在 recap 里；Panorama 因此需要先暴露跟进清单是否可交付，再提供复制或外发入口。
 - Action Item Detection 相关论文强调行动项依赖 local/global context；Meeting Pilot 因此不应只显示一句“任务”，而应保留 owner、deadline 和证据句。
 - LLM-powered meeting recap 研究建议提供结构化 minutes 和 highlights 两种视图，并允许用户编辑/删除 AI recap；Meeting Pilot 当前先落地了行动项确认、忽略、完成和人工校正，后续再补编辑正文与导出到任务系统。
 - Meetalk 等会议纪要研究强调从用户校正中学习并标记不确定内容；Meeting Pilot 当前优先把校正和确认行为保存在单次会议行动项上，后续可再用于个性化模板或质量反馈。

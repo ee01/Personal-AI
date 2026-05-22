@@ -15,8 +15,11 @@ import type Database from 'better-sqlite3';
 
 import type {
   RecallQuery,
+  RecallOptions,
   RecallResult,
   RecallItem,
+  RecallChannelDiagnostic,
+  RecallChannelName,
   Entity,
   EntityType,
   MemoryScope,
@@ -74,6 +77,7 @@ interface MessageRow {
   source_title: string | null;
   timestamp: number;
   sender: string | null;
+  group_id: string | null;
   group_name: string | null;
   matched_projects_json: string | null;
   metadata_json: string | null;
@@ -152,6 +156,15 @@ const SALIENCE_WEIGHT = 0.1;
 const SALIENCE_REINFORCE_BOOST = 0.02;
 const DEFAULT_TOP_K = 10;
 const VEC_OVER_FETCH_FACTOR = 3; // fetch more from each channel to allow MMR pruning
+const DEFAULT_CHANNELS: RecallChannelName[] = [
+  'vector',
+  'fts',
+  'graph',
+  'time',
+];
+const CHANNEL_ORDER = new Map(
+  DEFAULT_CHANNELS.map((channel, index) => [channel, index]),
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -256,6 +269,13 @@ function safeJsonParse<T>(json: string): T | undefined {
   }
 }
 
+function getErrorReason(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message.slice(0, 160);
+  }
+  return 'channel_failed';
+}
+
 function buildMessageMetadata(
   msg: MessageRow,
 ): Record<string, any> | undefined {
@@ -276,6 +296,14 @@ function buildMessageMetadata(
   }
   if (msg.sender && !metadata.sender) {
     metadata.sender = msg.sender;
+  }
+  if (msg.group_id) {
+    if (!metadata.groupId) {
+      metadata.groupId = msg.group_id;
+    }
+    if (!metadata.group_id) {
+      metadata.group_id = msg.group_id;
+    }
   }
   if (msg.group_name) {
     if (!metadata.groupName) {
@@ -397,11 +425,15 @@ export class RecallEngine {
   /**
    * Execute a multi-channel recall query and return MMR-reranked results.
    */
-  async recall(query: RecallQuery): Promise<RecallResult> {
+  async recall(
+    query: RecallQuery,
+    options: RecallOptions = {},
+  ): Promise<RecallResult> {
     const startMs = Date.now();
     const topK = query.topK ?? DEFAULT_TOP_K;
-    const activeChannels = query.channels ?? ['vector', 'fts', 'graph', 'time'];
-    const usedChannels: string[] = [];
+    const activeChannels: RecallChannelName[] =
+      query.channels ?? DEFAULT_CHANNELS;
+    const skippedDiagnostics: RecallChannelDiagnostic[] = [];
 
     // Generate query embedding (needed for vector search and MMR diversity)
     let queryEmbedding: number[] | null = null;
@@ -414,54 +446,73 @@ export class RecallEngine {
           '[RecallEngine] Embedding generation failed, skipping vector channel:',
           err,
         );
+        skippedDiagnostics.push({
+          channel: 'vector',
+          status: 'skipped',
+          candidateCount: 0,
+          reason: 'embedding_unavailable',
+        });
       }
     }
 
     // Run channels in parallel
-    const channelPromises: Promise<RecallCandidate[]>[] = [];
+    const channelPromises: Promise<{
+      channel: RecallChannelName;
+      candidates: RecallCandidate[];
+      diagnostic: RecallChannelDiagnostic;
+    }>[] = [];
 
     const fetchLimit = topK * VEC_OVER_FETCH_FACTOR;
 
     if (activeChannels.includes('vector') && queryEmbedding) {
       channelPromises.push(
-        this.vectorSearch(queryEmbedding, fetchLimit, query).then((r) => {
-          if (r.length > 0) usedChannels.push('vector');
-          return r;
-        }),
+        this.runChannel('vector', () =>
+          this.vectorSearch(queryEmbedding!, fetchLimit, query),
+        ),
       );
     }
 
     if (activeChannels.includes('fts')) {
       channelPromises.push(
-        this.ftsSearch(query.query, fetchLimit, query).then((r) => {
-          if (r.length > 0) usedChannels.push('fts');
-          return r;
-        }),
+        this.runChannel('fts', () =>
+          this.ftsSearch(query.query, fetchLimit, query),
+        ),
       );
     }
 
     if (activeChannels.includes('graph')) {
       channelPromises.push(
-        this.graphSearch(query.query, fetchLimit, query).then((r) => {
-          if (r.length > 0) usedChannels.push('graph');
-          return r;
-        }),
+        this.runChannel('graph', () =>
+          this.graphSearch(query.query, fetchLimit, query),
+        ),
       );
     }
 
     if (activeChannels.includes('time')) {
       channelPromises.push(
-        this.timeWindowSearch(query.query, fetchLimit, query).then((r) => {
-          if (r.length > 0) usedChannels.push('time');
-          return r;
-        }),
+        this.runChannel('time', () =>
+          this.timeWindowSearch(query.query, fetchLimit, query),
+        ),
       );
     }
 
     const channelResults = await Promise.all(channelPromises);
+    const channelDiagnostics = [
+      ...skippedDiagnostics,
+      ...channelResults.map((result) => result.diagnostic),
+    ].sort(
+      (a, b) =>
+        (CHANNEL_ORDER.get(a.channel) ?? 99) -
+        (CHANNEL_ORDER.get(b.channel) ?? 99),
+    );
+    const usedChannels = channelDiagnostics
+      .filter((diagnostic) => diagnostic.status === 'hit')
+      .map((diagnostic) => diagnostic.channel);
 
     // Merge and deduplicate
-    const merged = this.mergeAndDeduplicate(channelResults.flat());
+    const merged = this.mergeAndDeduplicate(
+      channelResults.flatMap((result) => result.candidates),
+    );
 
     if (merged.length === 0) {
       return {
@@ -469,6 +520,7 @@ export class RecallEngine {
         totalFound: 0,
         queryTimeMs: Date.now() - startMs,
         channels: usedChannels,
+        channelDiagnostics,
       };
     }
 
@@ -540,14 +592,51 @@ export class RecallEngine {
       id: item.id,
       type: item.type,
     }));
-    this.reinforceAccessedMemories(accessTargets);
+    if (options.reinforceAccess ?? true) {
+      this.reinforceAccessedMemories(accessTargets);
+    }
 
     return {
       items,
       totalFound: merged.length,
       queryTimeMs: Date.now() - startMs,
       channels: usedChannels,
+      channelDiagnostics,
     };
+  }
+
+  private async runChannel(
+    channel: RecallChannelName,
+    search: () => Promise<RecallCandidate[]>,
+  ): Promise<{
+    channel: RecallChannelName;
+    candidates: RecallCandidate[];
+    diagnostic: RecallChannelDiagnostic;
+  }> {
+    try {
+      const candidates = await search();
+      return {
+        channel,
+        candidates,
+        diagnostic: {
+          channel,
+          status: candidates.length > 0 ? 'hit' : 'empty',
+          candidateCount: candidates.length,
+        },
+      };
+    } catch (err) {
+      console.warn(`[RecallEngine] ${channel} channel failed:`, err);
+      return {
+        channel,
+        candidates: [],
+        diagnostic: {
+          channel,
+          status: 'failed',
+          candidateCount: 0,
+          reason: getErrorReason(err),
+        },
+      };
+    }
   }
 
   // =========================================================================
@@ -579,7 +668,7 @@ export class RecallEngine {
         const ph = ids.map(() => '?').join(', ');
         const msgs = this.db
           .prepare(
-            `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
+            `SELECT id, content, scope, source, source_type, timestamp, sender, group_id, group_name,
                     source_url, source_title,
                     matched_projects_json,
                     metadata_json, importance, entities_json
@@ -671,6 +760,7 @@ export class RecallEngine {
             sourceTitle: sourceRef.sourceTitle,
             channels: ['vector'],
             metadata: {
+              ...(sourceRef.metadata ?? {}),
               filePath: chunk.file_path,
               scope: normalizeStoredScope(chunk.scope),
               source: chunk.source ?? undefined,
@@ -761,6 +851,7 @@ export class RecallEngine {
           sourceTitle: sourceRef.sourceTitle,
           channels: ['fts'],
           metadata: {
+            ...(sourceRef.metadata ?? {}),
             filePath: chunk.file_path,
             scope: normalizeStoredScope(chunk.scope),
             source: chunk.source ?? undefined,
@@ -777,7 +868,11 @@ export class RecallEngine {
 
   private resolveChunkSourceRef(
     chunk: ChunkRow,
-  ): { sourceUrl?: string; sourceTitle?: string } {
+  ): {
+    sourceUrl?: string;
+    sourceTitle?: string;
+    metadata?: Record<string, any>;
+  } {
     const messageIds = getChunkMessageRefCandidates(chunk);
     if (messageIds.length === 0) return {};
 
@@ -785,7 +880,7 @@ export class RecallEngine {
       const placeholders = messageIds.map(() => '?').join(', ');
       const rows = this.db
         .prepare(
-          `SELECT id, source_url, source_title
+          `SELECT id, source_url, source_title, group_id, group_name, metadata_json
            FROM messages_raw
            WHERE id IN (${placeholders})`,
         )
@@ -793,14 +888,29 @@ export class RecallEngine {
         id: string;
         source_url: string | null;
         source_title: string | null;
+        group_id: string | null;
+        group_name: string | null;
+        metadata_json: string | null;
       }>;
       const byId = new Map(rows.map((row) => [row.id, row]));
       for (const id of messageIds) {
         const row = byId.get(id);
         if (!row) continue;
+        const metadata = row.metadata_json
+          ? (safeJsonParse<Record<string, any>>(row.metadata_json) ?? {})
+          : {};
+        if (row.group_id) {
+          metadata.groupId = metadata.groupId ?? row.group_id;
+          metadata.group_id = metadata.group_id ?? row.group_id;
+        }
+        if (row.group_name) {
+          metadata.groupName = metadata.groupName ?? row.group_name;
+          metadata.group_name = metadata.group_name ?? row.group_name;
+        }
         return {
           sourceUrl: row.source_url ?? undefined,
           sourceTitle: row.source_title ?? undefined,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         };
       }
     } catch {
@@ -951,7 +1061,7 @@ export class RecallEngine {
         try {
           const mentionMsgs = this.db
             .prepare(
-              `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
+              `SELECT id, content, scope, source, source_type, timestamp, sender, group_id, group_name,
                       source_url, source_title,
                       matched_projects_json,
                       metadata_json, importance, entities_json
@@ -1017,7 +1127,7 @@ export class RecallEngine {
     try {
       const msgs = this.db
         .prepare(
-          `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
+          `SELECT id, content, scope, source, source_type, timestamp, sender, group_id, group_name,
                   source_url, source_title,
                   matched_projects_json,
                   metadata_json, importance, entities_json
@@ -1397,7 +1507,7 @@ export class RecallEngine {
     try {
       const rows = this.db
         .prepare(
-          `SELECT id, content, scope, source, source_type, timestamp, sender, group_name,
+          `SELECT id, content, scope, source, source_type, timestamp, sender, group_id, group_name,
                   source_url, source_title,
                   matched_projects_json,
                   metadata_json, importance, entities_json

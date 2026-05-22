@@ -7,6 +7,8 @@
 import type { MemoType, MemoItem } from './memoTypes.js';
 import { MEMO_TYPE_NAMES, MEMO_TYPE_ICONS } from './memoTypes.js';
 
+const PERSONAL_AI_SOURCE_LABEL = 'Personal AI (私人 AI)';
+
 function formatTypeHeading(type: MemoType): string {
   const icon = MEMO_TYPE_ICONS[type];
   const typeName = MEMO_TYPE_NAMES[type];
@@ -127,7 +129,7 @@ export function formatMemoBatch(items: MemoItem[], title?: string): string {
   lines.push('');
   lines.push('---');
   lines.push('');
-  lines.push('_以上内容已同步到豆包随手记，可在手机端查看和管理。_');
+  lines.push(`_以上内容来自 ${PERSONAL_AI_SOURCE_LABEL}，已同步到豆包随手记，可在手机端查看和管理。_`);
   
   return lines.join('\n');
 }
@@ -280,15 +282,27 @@ export function smartFormat(items: MemoItem[], context?: 'stable' | 'briefing' |
 
   switch (context) {
     case 'stable':
-      return prependInstruction('请把以下信息存入随手记：', formatted);
+      return prependInstruction(
+        `请把以下来自 ${PERSONAL_AI_SOURCE_LABEL} 的长期记忆信息存入随手记：`,
+        formatted,
+      );
 
     case 'briefing':
-      return formatted;
+      return prependInstruction(
+        `请把以下来自 ${PERSONAL_AI_SOURCE_LABEL} 的近期重点记录到随手记：`,
+        formatted,
+      );
 
     case 'reminder':
-      return prependInstruction('请在随手记中记录以下待办事项，不要加已完成标记：', formatted);
+      return prependInstruction(
+        `请把以下来自 ${PERSONAL_AI_SOURCE_LABEL} 的待办事项记录到随手记，不要加已完成标记：`,
+        formatted,
+      );
 
     default:
-      return prependInstruction('请把以下内容存入随手记：', formatted);
+      return prependInstruction(
+        `请把以下来自 ${PERSONAL_AI_SOURCE_LABEL} 的内容存入随手记：`,
+        formatted,
+      );
   }
 }

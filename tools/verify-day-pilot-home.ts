@@ -198,6 +198,16 @@ function verifyBackendDayPilotApi() {
   );
   assertContains(
     dayPilotServiceSource,
+    /source_type = 'calendar' AND timestamp <= \?/,
+    'raw calendar memories respect Today Pilot horizon',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /!ACTIONABLE_NOTIFICATION_TYPES\.has\(row\.type \|\| ''\)/,
+    'ordinary notification actionability gate',
+  );
+  assertContains(
+    dayPilotServiceSource,
     /relationshipCandidate\(row, currentTime\)/,
     'relationship radar current-time scoring',
   );
@@ -278,6 +288,16 @@ function verifyMissionCardsAreConcreteItems() {
   }
 
   assertContains(overviewSource, /mapDayPilotCard/, 'Day Pilot card mapper');
+  assertContains(
+    overviewSource,
+    /const loaded = await loadContextPack\(card\)/,
+    'context pack copy waits for generated pack',
+  );
+  assertContains(
+    overviewSource,
+    /上下文包生成失败，未复制/,
+    'context pack copy failure does not claim success',
+  );
 }
 
 function verifyDemoContentWasRemoved() {

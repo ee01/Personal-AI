@@ -451,6 +451,45 @@ async function queueMatchedRuleAutomations(params: {
   }
 }
 
+function shouldQueueRuleDigest(
+  item?: TopicItemWithAutoReply,
+): item is TopicItemWithAutoReply & {
+  digestConfig: NonNullable<TopicItemWithAutoReply['digestConfig']>;
+} {
+  return Boolean(item && item.digestConfig?.enabled && !item.followThread);
+}
+
+async function queueMatchedRuleDigest(params: {
+  item?: TopicItemWithAutoReply;
+  matchedRule?: string;
+  sender?: string;
+  teamName?: string;
+  teamId?: string;
+  messageContent?: string;
+  summary?: string;
+  datetime?: string;
+  postId?: string;
+}): Promise<boolean> {
+  if (!shouldQueueRuleDigest(params.item)) {
+    return false;
+  }
+
+  await enqueueConcernedItemDigest({
+    matchedRule: params.matchedRule || params.item.text || '',
+    sender: params.sender || '',
+    teamName: params.teamName || '',
+    teamId: params.teamId || '',
+    messageContent: params.messageContent || '',
+    summary: params.summary || '',
+    datetime: params.datetime || '',
+    postId: params.postId,
+    ruleId: params.item.id,
+    digestConfig: params.item.digestConfig,
+  });
+  console.log('📥 消息已加入摘要队列（非即时推送）');
+  return true;
+}
+
 // 整理所有消息，发送给 LLM 分析，然后推送给 bot
 export async function analyzeMessages(
   data: any[],
@@ -873,27 +912,21 @@ export async function analyzeMessagesInBackground(
         // 获取通知方式
         const notifyMethod = matchedConcernedItem?.notifyMethod || '';
         const shouldMention = matchedConcernedItem?.mentionMe || false;
+        const digestQueued = await queueMatchedRuleDigest({
+          item: matchedConcernedItem,
+          matchedRule: result.matchedRule,
+          sender: originalMessage.sender || '',
+          teamName: originalMessage.groupName || '',
+          teamId: originalMessage.groupId || '',
+          messageContent: originalMessage.messageContent || '',
+          summary: result.summary || '',
+          datetime: originalMessage.datetime || '',
+          postId,
+        });
 
         // 如果需要通知且有配置通知方式，则发送通知
         if ((result.shouldNotify || followThreadItem) && notifyMethod) {
-          // 检查是否启用了每日摘要模式
-          if (matchedConcernedItem?.digestConfig?.enabled) {
-            // 加入摘要队列，不立即推送
-            await enqueueConcernedItemDigest({
-              matchedRule:
-                result.matchedRule || matchedConcernedItem.text || '',
-              sender: originalMessage.sender || '',
-              teamName: originalMessage.groupName || '',
-              teamId: originalMessage.groupId || '',
-              messageContent: originalMessage.messageContent || '',
-              summary: result.summary || '',
-              datetime: originalMessage.datetime || '',
-              postId,
-              ruleId: matchedConcernedItem.id,
-              digestConfig: matchedConcernedItem.digestConfig,
-            });
-            console.log('📥 消息已加入摘要队列（非即时推送）');
-          } else {
+          if (!digestQueued) {
             // 构建自动答复信息（如果有）
             const autoReplyInfo =
               autoReplyResult.handled && autoReplyResult.replyInfo
@@ -1133,6 +1166,17 @@ export async function analyzeMessagesInBackground(
         const matchedConcernedItem = getFirstManualItemFromMatchedRules(
           resolvedMatchedRules.watchRules,
         );
+        const digestQueued = await queueMatchedRuleDigest({
+          item: matchedConcernedItem,
+          matchedRule: processResult.matchedRule,
+          sender: processResult.messageContext?.sender || '',
+          teamName: processResult.messageContext?.groupName || '',
+          teamId: processResult.messageContext?.groupId || '',
+          messageContent: processResult.messageContext?.messageContent || '',
+          summary: processResult.summary || '',
+          datetime: processResult.messageContext?.datetime || '',
+          postId: post.id || '',
+        });
 
         // 如果需要发送通知
         if (processResult.shouldNotify) {
@@ -1142,24 +1186,7 @@ export async function analyzeMessagesInBackground(
 
           // 如果有配置通知方式，则发送通知
           if (notifyMethod) {
-            // 检查是否启用了每日摘要模式
-            if (matchedConcernedItem?.digestConfig?.enabled) {
-              await enqueueConcernedItemDigest({
-                matchedRule:
-                  processResult.matchedRule || matchedConcernedItem.text || '',
-                sender: processResult.messageContext?.sender || '',
-                teamName: processResult.messageContext?.groupName || '',
-                teamId: processResult.messageContext?.groupId || '',
-                messageContent:
-                  processResult.messageContext?.messageContent || '',
-                summary: processResult.summary || '',
-                datetime: processResult.messageContext?.datetime || '',
-                postId: post.id || '',
-                ruleId: matchedConcernedItem.id,
-                digestConfig: matchedConcernedItem.digestConfig,
-              });
-              console.log('📥 消息已加入摘要队列（非即时推送）');
-            } else {
+            if (!digestQueued) {
               const notificationData: NotificationData = {
                 teamId: processResult.messageContext?.groupId || '',
                 teamName: processResult.messageContext?.groupName || '',
@@ -1524,7 +1551,9 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             metadata: { ...messageMetadata },
           });
           if (ingestResult.status === 'duplicate') {
-            console.log(`⏭️ 跳过重复消息 [post_id=${json.post_id}]`);
+            console.log(`⏭️ 跳过重复消息 [post_id=${json.post_id}]`, {
+              decision: (ingestResult as any).decision,
+            });
             continue;
           }
           console.log(
@@ -1533,6 +1562,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
               status: ingestResult.status,
               entitiesExtracted: (ingestResult as any).entitiesExtracted,
               matchedProjects: (ingestResult as any).matchedProjects,
+              decision: (ingestResult as any).decision,
             },
           );
         } catch (memoryError) {
@@ -1628,29 +1658,21 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
         // 获取通知方式
         const notifyMethod = matchedConcernedItem?.notifyMethod || '';
         const shouldMention = matchedConcernedItem?.mentionMe || false;
+        const digestQueued = await queueMatchedRuleDigest({
+          item: matchedConcernedItem,
+          matchedRule: matched_rule,
+          sender: json.sender,
+          teamName: body.messageData ? body.messageData.groupName : json.team_name,
+          teamId: body.messageData ? body.messageData.groupId : json.team_id,
+          messageContent: json.message_content,
+          summary: json.summary || '',
+          datetime: json.datetime,
+          postId: json.post_id,
+        });
 
         // 如果有配置通知方式，则发送通知
         if (notifyMethod) {
-          // 检查是否启用了每日摘要模式
-          if (matchedConcernedItem?.digestConfig?.enabled) {
-            await enqueueConcernedItemDigest({
-              matchedRule: matched_rule || matchedConcernedItem.text || '',
-              sender: json.sender,
-              teamName: body.messageData
-                ? body.messageData.groupName
-                : json.team_name,
-              teamId: body.messageData
-                ? body.messageData.groupId
-                : json.team_id,
-              messageContent: json.message_content,
-              summary: json.summary || '',
-              datetime: json.datetime,
-              postId: json.post_id,
-              ruleId: matchedConcernedItem.id,
-              digestConfig: matchedConcernedItem.digestConfig,
-            });
-            console.log('📥 消息已加入摘要队列（非即时推送）');
-          } else {
+          if (!digestQueued) {
             // 构建自动答复信息（如果有）
             const autoReplyInfo =
               autoReplyResult.handled && autoReplyResult.replyInfo

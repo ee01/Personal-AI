@@ -94,6 +94,13 @@ const normalizeStatusToken = (status: string | undefined) =>
 
 const buildStatusClassToken = (status: string | undefined) => normalizeStatusToken(status) || 'unknown';
 
+const hasFilledPlatformSource = (platformState?: Partial<PlatformState>) =>
+  Boolean(
+    String(platformState?.status || '').trim()
+      || String(platformState?.assignee || '').trim()
+      || String(platformState?.jira || '').trim(),
+  );
+
 const isCompletedTask = (task: FishboneTask) => {
   const token = normalizeStatusToken(task.status);
   return token === 'done' || token === 'closed' || token === 'complete' || token === 'completed';
@@ -194,6 +201,7 @@ const ProjectDashboard: React.FC = () => {
     generatedDraft: string;
     evidence: ProjectStatusEvidenceItem[];
     lastGeneratedAt: Date;
+    reviewIntent?: 'mark-reviewed';
   } | null>(null);
   const [syncReadiness, setSyncReadiness] = useState<ProjectSyncReadiness | null>(null);
   const [syncPanelOpen, setSyncPanelOpen] = useState(false);
@@ -301,8 +309,8 @@ const ProjectDashboard: React.FC = () => {
     const selectors = target === 'eta'
       ? ['[data-evidence-field="eta"]']
       : [
-          '[data-evidence-field="platform-source"] input',
           '[data-evidence-field="platform-source"] select',
+          '[data-evidence-field="platform-source"] input',
           '[data-evidence-field="jira-source"] button',
         ];
 
@@ -550,9 +558,9 @@ const ProjectDashboard: React.FC = () => {
   };
 
   const addJira = async (projectId: string, task: FishboneTask) => {
-    const key = prompt('请输入JIRA Key (例如: PROJ-123):');
-    const title = prompt('请输入JIRA标题:');
-    if (!key || !title) return;
+    const key = prompt('请输入 JIRA Key (例如: PROJ-123):')?.trim();
+    if (!key) return;
+    const title = prompt('请输入 JIRA 标题（可选）:')?.trim() || key;
     const newList = [...(task.jira || []), { key, title }];
     await updateTask(projectId, task.type, task.id, { jira: newList });
   };
@@ -662,12 +670,18 @@ const ProjectDashboard: React.FC = () => {
         throw new Error(response?.error || '同步失败');
       }
 
-      if (response.result) {
-        setSyncReadiness(response.result as ProjectSyncReadiness);
+      const result = response.result as ProjectSyncReadiness | undefined;
+
+      if (result) {
+        setSyncReadiness(result);
         setSyncPanelOpen(true);
       }
 
-      showActionStatus('success', response.result?.summary || '数据源状态已检查');
+      const memorySource = result?.sources?.find(source => source.source === 'memory');
+      showActionStatus(
+        memorySource?.status === 'not_configured' ? 'error' : 'success',
+        result?.summary || '数据源已同步/检查',
+      );
       await loadProjects({ silent: true });
     } catch (error) {
       console.error('同步数据失败:', error);
@@ -710,7 +724,11 @@ const ProjectDashboard: React.FC = () => {
     }
   };
 
-  const buildStatusDraftPreviewState = (project: FishboneProject, draftOverride?: string) => {
+  const buildStatusDraftPreviewState = (
+    project: FishboneProject,
+    draftOverride?: string,
+    reviewIntent?: 'mark-reviewed',
+  ) => {
     const generatedDraft = buildProjectStatusUpdateDraft(project, { now: dashboardNow });
     return {
       project,
@@ -718,6 +736,7 @@ const ProjectDashboard: React.FC = () => {
       generatedDraft,
       evidence: buildProjectStatusEvidenceItems(project, { now: dashboardNow, maxAttentionTasks: 8 }),
       lastGeneratedAt: new Date(),
+      reviewIntent,
     };
   };
 
@@ -725,11 +744,15 @@ const ProjectDashboard: React.FC = () => {
     setStatusDraftPreview(buildStatusDraftPreviewState(project));
   };
 
+  const handleOpenReviewGate = (project: FishboneProject) => {
+    setStatusDraftPreview(buildStatusDraftPreviewState(project, undefined, 'mark-reviewed'));
+  };
+
   const handleResetStatusDraft = () => {
     setStatusDraftPreview(prev => {
       if (!prev) return prev;
 
-      return buildStatusDraftPreviewState(prev.project);
+      return buildStatusDraftPreviewState(prev.project, undefined, prev.reviewIntent);
     });
   };
 
@@ -751,7 +774,7 @@ const ProjectDashboard: React.FC = () => {
       if (!prev || prev.project.id !== project.id) return prev;
       const nextProject = { ...prev.project, lastStatusReviewAt: reviewedAt };
       const draftOverride = prev.draft === prev.generatedDraft ? undefined : prev.draft;
-      return buildStatusDraftPreviewState(nextProject, draftOverride);
+      return buildStatusDraftPreviewState(nextProject, draftOverride, prev.reviewIntent);
     });
 
     try {
@@ -771,7 +794,7 @@ const ProjectDashboard: React.FC = () => {
       setStatusDraftPreview(prev => {
         if (!prev || prev.project.id !== project.id) return prev;
         const draftOverride = prev.draft === prev.generatedDraft ? undefined : prev.draft;
-        return buildStatusDraftPreviewState(reviewedProject, draftOverride);
+        return buildStatusDraftPreviewState(reviewedProject, draftOverride, prev.reviewIntent);
       });
       await loadProjects({ silent: true });
       return true;
@@ -1302,7 +1325,7 @@ const ProjectDashboard: React.FC = () => {
             🔄 {isLoading ? '刷新中...' : '刷新数据'}
           </button>
           <button className="control-button secondary" onClick={handleSyncData} disabled={isSyncing}>
-            ⚡ {isSyncing ? '检查中...' : '检查数据源'}
+            ⚡ {isSyncing ? '同步中...' : '同步/检查数据源'}
           </button>
           <button className="control-button warning" onClick={handleOpenImportReport} disabled={isImporting}>
             📥 {isImporting ? '导入中...' : '导入报告'}
@@ -1320,12 +1343,12 @@ const ProjectDashboard: React.FC = () => {
         <div className="data-source-copy">
           <span className="data-source-pill">本地工作台</span>
           <div>
-            <strong>当前显示的是本地项目数据</strong>
-            <span>Jira、GitHub、Confluence 自动同步尚未接入；健康状态基于本地任务、ETA 和阻塞状态计算。</span>
+            <strong>当前以本地项目数据为准</strong>
+            <span>可从 Memory Service 关注项目补齐本地工作台；Jira、GitHub、Confluence 自动同步尚未接入。</span>
           </div>
         </div>
         <button className="data-source-action" type="button" onClick={handleSyncData} disabled={isSyncing}>
-          {isSyncing ? '检查中...' : '检查数据源'}
+          {isSyncing ? '同步中...' : '同步/检查数据源'}
         </button>
       </div>
 
@@ -1373,9 +1396,23 @@ const ProjectDashboard: React.FC = () => {
               <div className={`data-source-card ${source.status}`} key={source.source}>
                 <div className="data-source-card-top">
                   <strong>{source.label}</strong>
-                  <span>{source.configured ? '已配置' : '未配置'}</span>
+                  <span>{source.badge || (source.configured ? '已配置' : '未配置')}</span>
                 </div>
                 <p>{source.detail}</p>
+                {!!source.highlights?.length && (
+                  <div className="data-source-highlights" aria-label={`${source.label} 同步项目`}>
+                    {source.highlights.map(highlight => (
+                      <span key={highlight}>{highlight}</span>
+                    ))}
+                  </div>
+                )}
+                {!!source.boundaries?.length && (
+                  <ul className="data-source-boundaries" aria-label={`${source.label} 使用边界`}>
+                    {source.boundaries.map(boundary => (
+                      <li key={boundary}>{boundary}</li>
+                    ))}
+                  </ul>
+                )}
                 <div className="data-source-next">{source.nextStep}</div>
               </div>
             ))}
@@ -1586,9 +1623,9 @@ const ProjectDashboard: React.FC = () => {
                           type="button"
                           className="review-queue-action primary"
                           disabled={!queueProject}
-                          onClick={() => queueProject && markProjectReviewed(queueProject)}
+                          onClick={() => queueProject && handleOpenReviewGate(queueProject)}
                         >
-                          标记已复核
+                          复核草稿
                         </button>
                       </div>
                     </div>
@@ -1670,9 +1707,9 @@ const ProjectDashboard: React.FC = () => {
                     <button
                       className="badge review-badge"
                       type="button"
-                      onClick={() => markProjectReviewed(project)}
+                      onClick={() => handleOpenReviewGate(project)}
                     >
-                      标记已复核
+                      复核草稿
                     </button>
                     <button
                       className="badge"
@@ -1955,6 +1992,14 @@ const ProjectDashboard: React.FC = () => {
               <button className="close-btn" onClick={() => setStatusDraftPreview(null)}>×</button>
             </div>
             <div className="zoom-body">
+              <div className={`status-review-gate ${statusDraftPreview.reviewIntent ? 'active' : ''}`}>
+                <strong>{statusDraftPreview.reviewIntent ? '确认前先检查证据' : '复核记录会写入本地工作台'}</strong>
+                <span>
+                  {statusDraftPreview.reviewIntent
+                    ? '请先确认左侧证据和右侧草稿，再记录本次状态复核；这一步只更新本地复核时间，不会反写 Jira/GitHub/Confluence。'
+                    : '如果这份草稿已经反映当前状态，可以在下方确认已复核；复制草稿会保留可发给相关人的状态文本。'}
+                </span>
+              </div>
               <div className="status-draft-layout">
                 <section className="status-draft-panel">
                   <h3 className="section-title"><span className="section-icon" style={{ background: 'var(--info)' }}>E</span>证据来源</h3>
@@ -2003,6 +2048,12 @@ const ProjectDashboard: React.FC = () => {
                   onClick={() => handleCopyAndMarkStatusDraft(statusDraftPreview.project, statusDraftPreview.draft)}
                 >
                   复制并标记复核
+                </button>
+                <button
+                  className="save-btn review-confirm-btn"
+                  onClick={() => markProjectReviewed(statusDraftPreview.project)}
+                >
+                  确认已复核
                 </button>
                 <button
                   className="cancel-btn"
@@ -2159,17 +2210,21 @@ const ProjectDashboard: React.FC = () => {
                   <div className="platform-grid">
                     {selectedTaskPlatformKeys.map((name) => {
                       const platformState = selectedTask.task.platforms?.[name];
-                      const currentStatus = platformState?.status || 'pending';
-                      const statusOptions = PLATFORM_STATUS_OPTIONS.includes(currentStatus)
+                      const currentStatus = String(platformState?.status || '').trim();
+                      const statusOptions = currentStatus && PLATFORM_STATUS_OPTIONS.includes(currentStatus)
                         ? PLATFORM_STATUS_OPTIONS
-                        : [currentStatus, ...PLATFORM_STATUS_OPTIONS];
+                        : currentStatus
+                          ? [currentStatus, ...PLATFORM_STATUS_OPTIONS]
+                          : PLATFORM_STATUS_OPTIONS;
+                      const hasSource = hasFilledPlatformSource(platformState);
 
                       return (
-                        <div className="platform-item" key={name}>
+                        <div className={`platform-item ${hasSource ? 'has-source' : 'missing-source'}`} key={name} data-evidence-field="platform-source">
                           <div className="platform-name">{name.toUpperCase()}</div>
                           <select
                             className={`platform-status-select status-${buildStatusClassToken(currentStatus)}`}
                             aria-label={`${name.toUpperCase()} 平台状态`}
+                            data-evidence-control="platform-status"
                             value={currentStatus}
                             onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, {
                               platforms: {
@@ -2178,15 +2233,21 @@ const ProjectDashboard: React.FC = () => {
                               },
                             })}
                           >
+                            <option value="">未填写状态</option>
                             {statusOptions.map(option => (
                               <option key={option} value={option}>{option}</option>
                             ))}
                           </select>
-                          <div className="platform-source-fields" data-evidence-field="platform-source">
+                          <div className={`platform-source-state ${hasSource ? 'complete' : 'missing'}`}>
+                            {hasSource ? '来源已记录' : '未填写来源'}
+                          </div>
+                          <div className="platform-source-fields">
                             <label>
                               <strong>负责人</strong>
                               <input
                                 className="edit-input"
+                                aria-label={`${name.toUpperCase()} 平台负责人`}
+                                placeholder="负责人或对接人"
                                 value={platformState?.assignee || ''}
                                 onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, {
                                   platforms: {
@@ -2200,6 +2261,8 @@ const ProjectDashboard: React.FC = () => {
                               <strong>Jira</strong>
                               <input
                                 className="edit-input"
+                                aria-label={`${name.toUpperCase()} 平台 Jira`}
+                                placeholder="例如 SDK-42"
                                 value={platformState?.jira || ''}
                                 onChange={e => updateTask(selectedTask.project.id, selectedTask.task.type, selectedTask.task.id, {
                                   platforms: {
@@ -2376,10 +2439,15 @@ const ProjectDashboard: React.FC = () => {
         .data-source-card { border: 1px solid var(--border); border-left: 4px solid var(--text-muted); border-radius: 8px; background: var(--bg); padding: 12px; min-width: 0; }
         .data-source-card.ready { border-left-color: var(--success); }
         .data-source-card.not_configured { border-left-color: var(--warning); }
+        .data-source-card.unavailable { border-left-color: var(--danger); }
         .data-source-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 8px; }
         .data-source-card-top strong { color: var(--text); font-size: 13px; }
         .data-source-card-top span { border-radius: 999px; padding: 2px 7px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
         .data-source-card p { margin: 0 0 8px; color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .data-source-highlights { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+        .data-source-highlights span { border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+        .data-source-boundaries { margin: 0 0 8px; padding: 8px 10px 8px 24px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+        .data-source-boundaries li + li { margin-top: 3px; }
         .data-source-next { color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
         .launch-context-panel { margin: 0 20px 16px; background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--primary); border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; box-shadow: var(--shadow); }
         .launch-context-panel.missing { border-left-color: var(--warning); }
@@ -2744,6 +2812,8 @@ const ProjectDashboard: React.FC = () => {
         .edit-textarea { min-height: 80px; resize: vertical; }
         .platform-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
         .platform-item { min-width: 0; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+        .platform-item.missing-source { border-color: #fbbf24; background: #fffbeb; }
+        .platform-item.has-source { border-color: #a7f3d0; background: #f0fdf4; }
         .platform-name { color: var(--text); font-size: 12px; font-weight: 800; letter-spacing: .04em; }
         .platform-status-select { width: 100%; border: 1px solid var(--border); border-radius: 999px; padding: 5px 8px; color: white; font-size: 12px; font-weight: 700; background: var(--text-muted); }
         .platform-status-select.status-progress { background: var(--info); }
@@ -2752,6 +2822,9 @@ const ProjectDashboard: React.FC = () => {
         .platform-status-select.status-rollout { background: var(--primary); }
         .platform-status-select.status-blocked { background: var(--danger); }
         .platform-status-select.status-pending, .platform-status-select.status-todo, .platform-status-select.status-unknown { background: var(--text-muted); }
+        .platform-source-state { align-self: flex-start; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 800; border: 1px solid var(--border); background: var(--card); color: var(--text-muted); }
+        .platform-source-state.complete { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }
+        .platform-source-state.missing { border-color: #fde68a; background: #fff7ed; color: #92400e; }
         .platform-source-fields { display: flex; flex-direction: column; gap: 8px; }
         .platform-source-fields label { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 12px; }
         .platform-source-fields .edit-input { width: 100%; min-width: 0; box-sizing: border-box; border-color: var(--border); }
@@ -2789,6 +2862,10 @@ const ProjectDashboard: React.FC = () => {
         .evidence-repair-next span { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
         .evidence-repair-next strong { color: var(--text); font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
         .status-draft-modal { width: min(1100px, 95vw); }
+        .status-review-gate { margin-bottom: 14px; padding: 11px 13px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--bg); }
+        .status-review-gate.active { border-left-color: var(--warning); background: #fffbeb; }
+        .status-review-gate strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 3px; }
+        .status-review-gate span { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
         .status-draft-layout { display: grid; grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr); gap: 18px; align-items: stretch; }
         .status-draft-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
         .status-evidence-list { display: flex; flex-direction: column; gap: 10px; }
@@ -2813,6 +2890,8 @@ const ProjectDashboard: React.FC = () => {
         .save-btn, .cancel-btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
         .save-btn { background: var(--success); color: white; }
         .save-btn:hover:not(:disabled) { background: #0ea55c; }
+        .save-btn.review-confirm-btn { background: #0f766e; }
+        .save-btn.review-confirm-btn:hover:not(:disabled) { background: #0d665f; }
         .save-btn:disabled { background: var(--text-muted); cursor: not-allowed; }
         .cancel-btn { background: var(--border); color: var(--text); }
         .cancel-btn:hover:not(:disabled) { background: var(--text-muted); color: white; }

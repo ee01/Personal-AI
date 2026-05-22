@@ -56,6 +56,7 @@ export const APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR = 'APP_SCRIPT_PROJECT_HISTOR
 export const APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR = 'APP_SCRIPT_DEPLOYMENT_MISMATCH';
 export const APP_SCRIPT_DEPLOYMENT_NOT_FOUND_ERROR = 'APP_SCRIPT_DEPLOYMENT_NOT_FOUND';
 export const APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR = 'APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED';
+export const APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR = 'APP_SCRIPT_PROJECT_CONTENT_MISMATCH';
 const APP_SCRIPT_VERSION_LIMIT = 200;
 const APP_SCRIPT_VERSION_WARNING_THRESHOLD = 195;
 
@@ -125,6 +126,31 @@ function summarizeVersionProbeResponse(text: string): string {
   }
 
   return compact.length > 180 ? `${compact.slice(0, 180)}...` : compact;
+}
+
+function isPersonalAiScheduledMessagesSource(source: string): boolean {
+  const hasVersionMarker = /\bAPP_SCRIPT_VERSION\b/.test(source);
+  const hasScheduledExecutor = /function\s+executeScheduledMessages\s*\(/.test(source);
+  const hasMinuteTrigger = /function\s+minuteTrigger\s*\(/.test(source);
+  const hasProductMarker = /Personal AI|Scheduled Messages|定时消息/.test(source);
+
+  return hasScheduledExecutor && (hasVersionMarker || hasMinuteTrigger || hasProductMarker);
+}
+
+function summarizeProjectContentFiles(files: any[]): string {
+  const fileSummaries = files
+    .map((file) => {
+      const name = typeof file?.name === 'string' && file.name.trim()
+        ? file.name.trim()
+        : 'unnamed';
+      const type = typeof file?.type === 'string' && file.type.trim()
+        ? file.type.trim()
+        : 'unknown';
+      return `${name}(${type})`;
+    })
+    .slice(0, 8);
+
+  return fileSummaries.length > 0 ? fileSummaries.join(', ') : '未返回文件列表';
 }
 
 class AppScriptProjectHistoryLimitError extends Error {
@@ -505,22 +531,25 @@ export class AppScriptUpdater {
         deploymentId,
       );
 
-      // 3. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
+      // 3. 确认 Script ID 指向 Personal AI 管理的调度脚本，避免覆盖错误项目或用户自定义脚本
+      await this.assertCurrentProjectLooksManagedByPersonalAi(this.config.scriptId);
+
+      // 4. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
       await this.assertProjectVersionCapacity(this.config.scriptId);
       
-      // 4. 加载最新的 App Script 模板代码
+      // 5. 加载最新的 App Script 模板代码
       const scriptCode = await this.loadAppScriptTemplate();
       
-      // 5. 更新 App Script 项目代码
+      // 6. 更新 App Script 项目代码
       await this.updateProjectContent(this.config.scriptId, scriptCode);
       
-      // 6. 创建新版本
+      // 7. 创建新版本
       const versionNumber = await this.createVersion(this.config.scriptId, latestVersion);
       
-      // 7. 更新部署到新版本（保持 URL 不变）
+      // 8. 更新部署到新版本（保持 URL 不变）
       await this.updateDeployment(this.config.scriptId, deploymentId, versionNumber, latestVersion);
 
-      // 8. 确认当前 Web App URL 已经实际返回新版本，再把配置标记为最新。
+      // 9. 确认当前 Web App URL 已经实际返回新版本，再把配置标记为最新。
       let verifiedVersionInfo: DeployedAppScriptVersionInfo;
       try {
         verifiedVersionInfo = await this.verifyUpdatedDeploymentServingVersion(
@@ -545,7 +574,7 @@ export class AppScriptUpdater {
         throw error;
       }
       
-      // 9. 更新配置中的版本信息
+      // 10. 更新配置中的版本信息
       const persistedVersionInfo = this.buildPersistedVersionInfoFromVerification(
         verifiedVersionInfo,
         latestVersionInfo,
@@ -670,6 +699,66 @@ export class AppScriptUpdater {
     }
     
     console.log('✅ 项目代码已更新');
+  }
+
+  private async assertCurrentProjectLooksManagedByPersonalAi(scriptId: string): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://script.googleapis.com/v1/projects/${scriptId}/content`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.token}`
+          }
+        }
+      );
+    } catch (error) {
+      throw new AppScriptDeploymentRecoveryError({
+        scriptId,
+        message: `无法读取 Apps Script 项目当前代码，已停止升级以避免覆盖未知项目。原因：${error instanceof Error ? error.message : String(error)}`,
+        errorCode: APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR,
+        helpMessage: '请打开 Apps Script 项目确认 Script ID、Web App URL 和 Personal AI 调度脚本是否对应；如需升级，请重新绑定正确项目后重试。'
+      });
+    }
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new AppScriptDeploymentRecoveryError({
+        scriptId,
+        message: `无法读取 Apps Script 项目当前代码，已停止升级以避免覆盖未知项目。Apps Script API 返回: ${error}`,
+        errorCode: APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR,
+        helpMessage: '请打开 Apps Script 项目确认 Script ID、Web App URL 和 Personal AI 调度脚本是否对应；如需升级，请重新绑定正确项目后重试。'
+      });
+    }
+
+    let data: any;
+    try {
+      data = await response.json();
+    } catch (error) {
+      throw new AppScriptDeploymentRecoveryError({
+        scriptId,
+        message: `Apps Script 项目代码响应无法解析，已停止升级以避免覆盖未知项目。原因：${error instanceof Error ? error.message : String(error)}`,
+        errorCode: APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR,
+        helpMessage: '请打开 Apps Script 项目确认 Script ID、Web App URL 和 Personal AI 调度脚本是否对应；如需升级，请重新绑定正确项目后重试。'
+      });
+    }
+
+    const files = Array.isArray(data?.files) ? data.files : [];
+    const serverFiles = files.filter(
+      (file: any) => file?.type === 'SERVER_JS' && typeof file?.source === 'string',
+    );
+    const matchedFile = serverFiles.find((file: any) => isPersonalAiScheduledMessagesSource(file.source));
+
+    if (!matchedFile) {
+      throw new AppScriptDeploymentRecoveryError({
+        scriptId,
+        message: `当前 Script ID 对应的项目代码未发现 Personal AI Scheduled Messages 标记，已停止升级以避免覆盖用户自定义或错误项目。项目文件: ${summarizeProjectContentFiles(files)}。`,
+        errorCode: APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR,
+        helpMessage: '请打开 Apps Script 项目确认 Script ID、Web App URL 和 Personal AI 调度脚本是否对应；如需升级，请重新绑定正确项目后重试。'
+      });
+    }
+
+    console.log(`✅ App Script 项目代码归属已确认: ${matchedFile.name || 'SERVER_JS'}`);
   }
   
   /**

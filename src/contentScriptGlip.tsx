@@ -13,9 +13,11 @@ import {
   type GlipMessageMarkerCache,
 } from './services/GlipMessageMarkerService';
 import {
+  extractRingCentralVideoJoinUrl,
   loadRingCentralNativeJoinEnabled,
   openRingCentralVideoNativeJoin,
   parseRingCentralVideoJoinTarget,
+  type RingCentralVideoJoinTarget,
   setRingCentralNativeJoinEnabledAttribute,
   shouldPreserveDefaultNativeJoinClick,
   watchRingCentralNativeJoinEnabled,
@@ -1248,6 +1250,140 @@ function findClickedAnchor(event: MouseEvent): HTMLAnchorElement | null {
   return target.closest<HTMLAnchorElement>('a[href]');
 }
 
+const GLIP_RINGCENTRAL_VIDEO_JOIN_LINK_SELECTOR = [
+  'a[href*="v.ringcentral.com/join/"]',
+  'a[href*="v.ringcentral.com/launcher/"]',
+  'a[href*="v.ringcentral.com/conf/on/"]',
+].join(', ');
+
+const GLIP_RINGCENTRAL_VIDEO_JOIN_TRIGGER_SELECTOR = [
+  'button',
+  '[role="button"]',
+  '[data-test-automation-id*="join" i]',
+  '[aria-label*="join" i]',
+  '[title*="join" i]',
+].join(', ');
+
+const GLIP_RINGCENTRAL_VIDEO_JOIN_CONTEXT_SELECTOR = [
+  '[data-at*="calendar-event" i]',
+  '[data-test-automation-id*="calendar-event" i]',
+  '[data-test-automation-id*="meeting" i]',
+  '[data-calendar-event-item-id]',
+  '.conversation-card-wrapper[data-id]',
+].join(', ');
+
+function getRingCentralVideoJoinTargetFromValue(
+  value: unknown,
+): RingCentralVideoJoinTarget | null {
+  if (!value) {
+    return null;
+  }
+
+  const directTarget = parseRingCentralVideoJoinTarget(String(value));
+  if (directTarget) {
+    return directTarget;
+  }
+
+  const extractedUrl = extractRingCentralVideoJoinUrl(value);
+  return extractedUrl ? parseRingCentralVideoJoinTarget(extractedUrl) : null;
+}
+
+function findRingCentralVideoJoinTargetInElement(
+  element: Element | null,
+): RingCentralVideoJoinTarget | null {
+  if (!element) {
+    return null;
+  }
+
+  if (element instanceof HTMLAnchorElement) {
+    const anchorTarget = getRingCentralVideoJoinTargetFromValue(element.href);
+    if (anchorTarget) {
+      return anchorTarget;
+    }
+  }
+
+  const joinAnchor = element.querySelector<HTMLAnchorElement>(
+    GLIP_RINGCENTRAL_VIDEO_JOIN_LINK_SELECTOR,
+  );
+  if (joinAnchor?.href) {
+    const anchorTarget = getRingCentralVideoJoinTargetFromValue(
+      joinAnchor.href,
+    );
+    if (anchorTarget) {
+      return anchorTarget;
+    }
+  }
+
+  for (const attribute of Array.from(element.attributes || [])) {
+    const attributeTarget = getRingCentralVideoJoinTargetFromValue(
+      attribute.value,
+    );
+    if (attributeTarget) {
+      return attributeTarget;
+    }
+  }
+
+  return getRingCentralVideoJoinTargetFromValue(element.textContent || '');
+}
+
+function findRingCentralVideoNativeJoinTarget(
+  event: MouseEvent,
+): RingCentralVideoJoinTarget | null {
+  const clicked = event.target;
+  if (!(clicked instanceof Element)) {
+    return null;
+  }
+
+  const anchor = findClickedAnchor(event);
+  const anchorTarget = findRingCentralVideoJoinTargetInElement(anchor);
+  if (anchorTarget) {
+    return anchorTarget;
+  }
+
+  const trigger = clicked.closest<HTMLElement>(
+    GLIP_RINGCENTRAL_VIDEO_JOIN_TRIGGER_SELECTOR,
+  );
+  if (!trigger) {
+    return null;
+  }
+
+  const label = [
+    trigger.getAttribute('aria-label'),
+    trigger.getAttribute('title'),
+    trigger.textContent,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!/\bjoin\b/i.test(label)) {
+    return null;
+  }
+
+  const roots = new Set<Element>([trigger]);
+  const contextRoot = trigger.closest<HTMLElement>(
+    GLIP_RINGCENTRAL_VIDEO_JOIN_CONTEXT_SELECTOR,
+  );
+  if (contextRoot) {
+    roots.add(contextRoot);
+  }
+
+  let current = trigger.parentElement;
+  while (current && current !== document.body && roots.size < 5) {
+    roots.add(current);
+    current = current.parentElement;
+  }
+
+  for (const root of roots) {
+    const target = findRingCentralVideoJoinTargetInElement(root);
+    if (target) {
+      return target;
+    }
+  }
+
+  return null;
+}
+
 function handleRingCentralVideoNativeJoinClick(event: MouseEvent) {
   if (
     !ringCentralVideoNativeJoinEnabled ||
@@ -1256,12 +1392,7 @@ function handleRingCentralVideoNativeJoinClick(event: MouseEvent) {
     return;
   }
 
-  const anchor = findClickedAnchor(event);
-  if (!anchor) {
-    return;
-  }
-
-  const target = parseRingCentralVideoJoinTarget(anchor.href);
+  const target = findRingCentralVideoNativeJoinTarget(event);
   if (!target) {
     return;
   }

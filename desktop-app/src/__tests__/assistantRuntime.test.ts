@@ -217,3 +217,32 @@ test('buildAssistantRuntimeSummary explains failed Doubao sync lane in status ca
   ]);
   assert.equal(issue?.actionHint, '完成验证后重试');
 });
+
+test('buildAssistantRuntimeSummary labels outreach pending approvals distinctly', () => {
+  const summary = buildAssistantRuntimeSummary({
+    status: createStatus(),
+    outreachSummary: {
+      waitingReplyCount: 0,
+      pendingApprovalCount: 2,
+      escalatedCount: 0,
+    },
+    pendingApprovalSessions: {
+      items: [
+        {
+          id: 'outreach-1',
+          status: 'pending_approval',
+          renderedQuestion: '是否向 Chris 追问发布窗口？',
+        },
+      ],
+    },
+  });
+
+  const outreach = summary.items[0];
+  assert.equal(summary.topStatus?.label, '外部询问待批准发送');
+  assert.equal(outreach?.kind, 'waiting_reply');
+  assert.equal(outreach?.title, '外部询问待批准发送');
+  assert.equal(outreach?.summary, '是否向 Chris 追问发布窗口？');
+  assert.equal(outreach?.badgeLabel, '待发 2');
+  assert.deepEqual(outreach?.detailLines, ['待你确认发送：2']);
+  assert.equal(outreach?.actionHint, '查看待发内容');
+});

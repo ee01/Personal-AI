@@ -62,7 +62,8 @@ try {
             type: 'message',
             content: 'Unsafe source should not become a button.',
             displayTitle: 'Unsafe source memory',
-            displayText: 'The unsafe URL is present in data but not exposed as an external action.',
+            displayText:
+              'The unsafe URL is present in data but not exposed as an external action.',
             score: 0.72,
             source: 'manual',
             sourceUrl: 'javascript:alert(1)',
@@ -106,14 +107,17 @@ try {
     },
   );
 
-  await context.route('http://localhost:3210/api/v1/feedback', async (route) => {
-    feedbackRequests.push(route.request().postDataJSON());
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok', targetType: 'message' }),
-    });
-  });
+  await context.route(
+    'http://localhost:3210/api/v1/feedback',
+    async (route) => {
+      feedbackRequests.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'ok', targetType: 'message' }),
+      });
+    },
+  );
 
   let [worker] = context.serviceWorkers();
   if (!worker) {
@@ -131,7 +135,9 @@ try {
   );
 
   await page.getByText('今日记忆时间轴').waitFor({ timeout: 10000 });
-  await page.getByText('全部记忆 · 今天 · 时间通道').waitFor({ timeout: 10000 });
+  await page
+    .getByText('全部记忆 · 今天 · 时间通道')
+    .waitFor({ timeout: 10000 });
   assert.equal(
     await page
       .locator('.search-header .scope-segmented')
@@ -148,12 +154,32 @@ try {
     'true',
     'timeline scope control should expose the active all scope',
   );
-  await page.getByText('Focused memory outside range').waitFor({ timeout: 10000 });
+  await page
+    .getByText('Focused memory outside range')
+    .waitFor({ timeout: 10000 });
   await page
     .getByText('已置顶定位记忆；它可能不属于当前时间范围。')
     .waitFor({ timeout: 10000 });
   await page.getByText('Safe timeline memory all').waitFor({ timeout: 10000 });
   await page.getByText('Unsafe source memory').waitFor({ timeout: 10000 });
+  const dayHeaderTexts = await page
+    .locator('.timeline-day-header')
+    .allInnerTexts();
+  assert.ok(
+    dayHeaderTexts.some(
+      (text) => text.includes('1 条记忆') && text.includes('Focused source'),
+    ),
+    'focused out-of-range item should keep its own dated group with source context',
+  );
+  assert.ok(
+    dayHeaderTexts.some(
+      (text) =>
+        text.includes('2 条记忆') &&
+        text.includes('Timeline source') &&
+        text.includes('Unsafe source'),
+    ),
+    'timeline should group same-day recall rows with a source summary',
+  );
   assert.equal(focusRequests.length, 1);
   assert.ok(
     focusRequests[0].endsWith('/api/v1/memories/message/focused-old'),
@@ -174,7 +200,11 @@ try {
   const openSourceButtons = await page
     .getByRole('button', { name: '打开来源' })
     .count();
-  assert.equal(openSourceButtons, 2, 'only http/https source URLs should render');
+  assert.equal(
+    openSourceButtons,
+    2,
+    'only http/https source URLs should render',
+  );
 
   const safeTimelineCard = page.locator('article', {
     hasText: 'Safe timeline memory all',
@@ -277,7 +307,9 @@ try {
 
   await page.setViewportSize({ width: 390, height: 780 });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByText('Focused memory outside range').waitFor({ timeout: 10000 });
+  await page
+    .getByText('Focused memory outside range')
+    .waitFor({ timeout: 10000 });
   await page.waitForFunction(() => {
     const element = document.querySelector('.timeline-item.focused h3');
     const box = element?.getBoundingClientRect();

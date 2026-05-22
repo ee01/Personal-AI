@@ -15,6 +15,7 @@ interface UpsertTemplateBody {
   title: string;
   questionTemplate: string;
   contextTemplate?: string;
+  informationGoalTemplate?: string;
   targetType: string;
   targetRef: string;
   scheduleSpec?: Record<string, unknown>;
@@ -57,6 +58,7 @@ interface CreateSessionFromMessageBody {
   followupIntervalSeconds?: number;
   maxFollowup?: number;
   context?: string;
+  informationGoal?: string;
 }
 
 interface TargetSearchCacheEntry {
@@ -113,7 +115,11 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
     try {
-      const template = engine.upsertTemplate(request.body);
+      const template = engine.upsertTemplate({
+        ...request.body,
+        contextTemplate:
+          request.body.informationGoalTemplate ?? request.body.contextTemplate,
+      });
       return reply.status(200).send({ template });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

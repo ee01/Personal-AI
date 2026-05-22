@@ -68,6 +68,51 @@ describe('Calendar Events API (POST /calendar-events/sync)', () => {
     expect(chunk.content).toContain('Nova leads internal weekly sync up');
   });
 
+  it('accepts null optional fields from Chrome runtime calendar sync', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/calendar-events/sync',
+      payload: {
+        sourceSystem: 'ringcentral_indexeddb',
+        events: [
+          {
+            externalId: 'event-runtime-null-optionals',
+            seriesKey: null,
+            title: 'RCVSDK Weekly',
+            descriptionPreview: null,
+            startTime: Date.now() + 30 * 60 * 1000,
+            endTime: null,
+            organizer: null,
+            attendees: [
+              null,
+              { name: 'Esone', email: null, responseStatus: null },
+            ],
+            location: null,
+            joinUrl: null,
+            sourceUrl: null,
+            cancelled: null,
+            lastModifiedTime: null,
+            metadata: null,
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ created: 1, total: 1 });
+
+    const row = db
+      .prepare(
+        `SELECT title, organizer_json, attendees_json
+         FROM calendar_events
+         WHERE external_id = ?`,
+      )
+      .get('event-runtime-null-optionals') as any;
+    expect(row.title).toBe('RCVSDK Weekly');
+    expect(row.organizer_json).toBe('null');
+    expect(JSON.parse(row.attendees_json)).toEqual([{ name: 'Esone' }]);
+  });
+
   it('uses hash diff for unchanged and updated events', async () => {
     const payload = {
       sourceSystem: 'outlook',

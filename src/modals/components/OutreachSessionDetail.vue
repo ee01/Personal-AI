@@ -54,7 +54,7 @@
         <div class="hero-top">
           <div>
             <h2>{{ detail.renderedQuestion || '(空问题)' }}</h2>
-            <p>{{ detail.renderedContext || '无上下文信息' }}</p>
+            <p>{{ detail.renderedContext || '无信息目标' }}</p>
           </div>
           <div class="hero-metrics">
             <span class="metric-pill" :class="statusClass(detail.status)"
@@ -211,12 +211,12 @@
             />
           </label>
           <label class="field-block full-span">
-            <span>上下文</span>
+            <span>信息目标 / 完成标准</span>
             <textarea
               v-model="draft.renderedContext"
               class="field-input field-textarea"
               rows="4"
-              placeholder="补充对方需要的上下文"
+              placeholder="写清楚这次询问达到什么条件才算完成"
             />
           </label>
           <label class="field-block">

@@ -10,6 +10,7 @@ import {
   APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR,
   APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR,
   APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR,
+  APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR,
   buildAppScriptProjectUrl,
   buildAppScriptWebAppActionUrl,
   type AppScriptVersionUsage,
@@ -28,7 +29,7 @@ const appScriptTemplate = readFileSync(
   'utf8',
 );
 const featureDoc = readFileSync(
-  'docs/features/appscript-auto-update.mdc',
+  'docs/features/scheduled_messages_manager.md',
   'utf8',
 );
 
@@ -122,9 +123,21 @@ const versionCapacityIndex = updaterSource.indexOf(
   'await this.assertProjectVersionCapacity(this.config.scriptId);',
   updateMethodIndex,
 );
+const projectContentGuardIndex = updaterSource.indexOf(
+  'await this.assertCurrentProjectLooksManagedByPersonalAi(this.config.scriptId);',
+  updateMethodIndex,
+);
 assert.ok(
   versionCapacityIndex > deploymentPreflightIndex,
   'App Script updates should check Project History capacity after deployment preflight',
+);
+assert.ok(
+  projectContentGuardIndex > deploymentPreflightIndex,
+  'App Script updates should verify project content ownership after deployment preflight',
+);
+assert.ok(
+  projectContentGuardIndex < contentUpdateIndex,
+  'App Script updates should verify project content ownership before mutating project content',
 );
 assert.ok(
   versionCapacityIndex < contentUpdateIndex,
@@ -192,6 +205,12 @@ assert.ok(
   'App Script updates should only update a deployment that matches the configured Web App URL',
 );
 assert.ok(
+  updaterSource.includes('assertCurrentProjectLooksManagedByPersonalAi') &&
+    updaterSource.includes(APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR) &&
+    updaterSource.includes('避免覆盖用户自定义或错误项目'),
+  'App Script updates should fail closed when the configured script content is not a Personal AI scheduled script',
+);
+assert.ok(
   updaterSource.includes('private async syncConfigSheetFirst()') &&
     updaterSource.includes('await this.syncConfigSheetFirst();'),
   'App Script version metadata should use the same Sheet-first Config sync path',
@@ -222,6 +241,10 @@ assert.ok(
 assert.ok(
   featureDoc.includes('Web App URL 匹配'),
   'Feature doc should describe Web App URL matching before deployment updates',
+);
+assert.ok(
+  featureDoc.includes('读取远端项目代码确认 Personal AI 调度脚本标记'),
+  'Feature doc should describe the remote project-content ownership preflight',
 );
 assert.ok(
   featureDoc.includes('版本探测临时失败或非 JSON 响应不会被当成旧版脚本'),
@@ -696,6 +719,19 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
         return new Response('{}', { status: 200 });
       }
 
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/content') {
+        return new Response(JSON.stringify({
+          files: [{
+            name: 'Code',
+            type: 'SERVER_JS',
+            source: appScriptTemplate,
+          }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
       if (url === 'https://script.googleapis.com/v1/projects/script-123/versions' && init?.method === 'POST') {
         versionCreated = true;
         return new Response(JSON.stringify({ versionNumber: 13 }), {
@@ -753,6 +789,113 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
 }
 
 await verifyDeploymentSelectionMatchesConfiguredWebAppUrl();
+
+async function verifyProjectContentMismatchStopsScriptMutations(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let mutationCalls = 0;
+
+  (AppScriptUpdater as any).cachedVersionInfo = null;
+
+  (globalThis as any).chrome = {
+    runtime: {
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: {
+        set: async () => undefined,
+      },
+    },
+  };
+
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+
+      if (url === 'chrome-extension://test/app-script-template.gs') {
+        return new Response(appScriptTemplate, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+
+      if (url === 'https://example.com/exec?action=getVersion') {
+        return new Response(JSON.stringify({
+          version: '1.0.0',
+          lastUpdated: '2025-01-01',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-123') {
+        return new Response(JSON.stringify({
+          deploymentId: 'deployment-123',
+          deploymentConfig: { versionNumber: 7 },
+          entryPoints: [{
+            entryPointType: 'WEB_APP',
+            webApp: { url: 'https://example.com/exec' },
+          }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/content' && init?.method !== 'PUT') {
+        return new Response(JSON.stringify({
+          files: [{
+            name: 'Code',
+            type: 'SERVER_JS',
+            source: 'function unrelatedAutomation() { return true; }',
+          }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (
+        (url === 'https://script.googleapis.com/v1/projects/script-123/content' && init?.method === 'PUT') ||
+        (url === 'https://script.googleapis.com/v1/projects/script-123/versions' && init?.method === 'POST') ||
+        (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-123' && init?.method === 'PUT')
+      ) {
+        mutationCalls += 1;
+        return new Response('{}', { status: 200 });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const updater = new AppScriptUpdater('test-token', {
+      sheetId: 'sheet-123',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      scriptId: 'script-123',
+      webAppUrl: 'https://example.com/exec',
+      deploymentId: 'deployment-123',
+      sheet_version: '2.7',
+      created_by: 'Personal AI Extension',
+      created_at: '2026-04-30 12:00:00',
+      appScriptVersion: '1.0.0',
+      appScriptLastUpdated: '2025-01-01',
+    } as any);
+
+    const result = await updater.updateAppScript();
+
+    assert.equal(result.success, false);
+    assert.equal(result.errorCode, APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR);
+    assert.equal(result.helpUrl, buildAppScriptProjectUrl('script-123'));
+    assert.match(result.error || '', /Personal AI Scheduled Messages/);
+    assert.equal(mutationCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+  }
+}
+
+await verifyProjectContentMismatchStopsScriptMutations();
 
 async function verifyPostDeploymentVersionMismatchDoesNotSyncConfig(): Promise<void> {
   const originalFetch = globalThis.fetch;
@@ -832,6 +975,19 @@ async function verifyPostDeploymentVersionMismatchDoesNotSyncConfig(): Promise<v
       if (url === 'https://script.googleapis.com/v1/projects/script-123/content' && init?.method === 'PUT') {
         contentUpdated = true;
         return new Response('{}', { status: 200 });
+      }
+
+      if (url === 'https://script.googleapis.com/v1/projects/script-123/content') {
+        return new Response(JSON.stringify({
+          files: [{
+            name: 'Code',
+            type: 'SERVER_JS',
+            source: appScriptTemplate,
+          }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
       }
 
       if (url === 'https://script.googleapis.com/v1/projects/script-123/versions' && init?.method === 'POST') {

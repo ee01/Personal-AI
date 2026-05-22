@@ -32,6 +32,27 @@ export interface AgentWorkflowTestInput {
   content: string;
 }
 
+export interface AgentWorkflowSavedExpectation {
+  capturedAt: string;
+  shouldStore: boolean;
+  shouldNotify: boolean;
+  notificationReviewRequired: boolean;
+  confidence: number | null;
+  traceStatus: string;
+  matchedRuleRefs: string[];
+  matchedRuleIds: number[];
+  summary?: string;
+}
+
+export interface AgentWorkflowSavedScenario {
+  id: string;
+  label: string;
+  createdAt: string;
+  updatedAt: string;
+  input: AgentWorkflowTestInput;
+  expectedResult?: AgentWorkflowSavedExpectation;
+}
+
 export interface AgentWorkflowTestScenario {
   id: string;
   label: string;
@@ -41,6 +62,7 @@ export interface AgentWorkflowTestScenario {
 
 const UNKNOWN_SENDER = 'Unknown Sender';
 const UNKNOWN_GROUP = 'Unknown Group';
+export const AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT = 12;
 
 export const AGENT_WORKFLOW_TEST_SCENARIOS: AgentWorkflowTestScenario[] = [
   {
@@ -83,6 +105,23 @@ export const AGENT_WORKFLOW_TEST_SCENARIOS: AgentWorkflowTestScenario[] = [
 
 function normalizeText(value: any): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+function normalizeConfidence(value: any): number | null {
+  let numeric: number;
+  if (typeof value === 'number') {
+    numeric = value;
+  } else if (typeof value === 'string') {
+    const normalized = value.trim().replace(/%$/, '');
+    if (!normalized) return null;
+    numeric = Number(normalized);
+  } else {
+    return null;
+  }
+
+  if (!Number.isFinite(numeric)) return null;
+  const normalized = numeric > 1 && numeric <= 100 ? numeric / 100 : numeric;
+  return Math.min(1, Math.max(0, normalized));
 }
 
 function firstString(...values: any[]): string {
@@ -194,6 +233,196 @@ export function buildAgentWorkflowScenarioInput(
     ...scenario.input,
     datetime: formatAgentWorkflowDatetimeInputValue(now.toISOString()),
   };
+}
+
+function normalizeSavedScenarioInput(value: any): AgentWorkflowTestInput | null {
+  if (!value || typeof value !== 'object') return null;
+  const content = normalizeText(value.content);
+  if (!content) return null;
+
+  return {
+    sender: normalizeText(value.sender) || UNKNOWN_SENDER,
+    teamName: normalizeText(value.teamName) || UNKNOWN_GROUP,
+    teamId: normalizeText(value.teamId),
+    datetime: formatAgentWorkflowDatetimeInputValue(value.datetime),
+    content,
+  };
+}
+
+function normalizeStringArray(value: any): string[] {
+  return Array.isArray(value)
+    ? Array.from(
+        new Set(
+          value
+            .map((item) => normalizeText(item))
+            .filter((item) => item.length > 0),
+        ),
+      )
+    : [];
+}
+
+function normalizeNumberArray(value: any): number[] {
+  return Array.isArray(value)
+    ? Array.from(
+        new Set(
+          value
+            .map((item) => Number(item))
+            .filter((item) => Number.isFinite(item)),
+        ),
+      )
+    : [];
+}
+
+function getAgentWorkflowTraceStatus(result: any): string {
+  const explicitStatus = normalizeText(result?.storageReview?.traceStatus);
+  if (explicitStatus) return explicitStatus;
+
+  const trace = Array.isArray(result?.agentWorkflowTrace)
+    ? result.agentWorkflowTrace
+    : [];
+  if (trace.length === 0) return 'missing';
+
+  const hasIssue = trace.some(
+    (step: any) =>
+      step?.status === 'error' ||
+      (Array.isArray(step?.tools) &&
+        step.tools.some(
+          (tool: any) => tool?.status === 'error' || tool?.status === 'skipped',
+        )),
+  );
+  return hasIssue ? 'partial' : 'complete';
+}
+
+export function buildAgentWorkflowResultExpectation(
+  result: any,
+  now: Date = new Date(),
+): AgentWorkflowSavedExpectation | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+
+  const matchedRuleRefs = normalizeStringArray([
+    ...(Array.isArray(result.matchedRuleRefs) ? result.matchedRuleRefs : []),
+    ...(Array.isArray(result.storageReview?.matchedRuleRefs)
+      ? result.storageReview.matchedRuleRefs
+      : []),
+  ]);
+  const matchedRuleIds = normalizeNumberArray([
+    ...(Array.isArray(result.matchedRuleIds) ? result.matchedRuleIds : []),
+    ...(Array.isArray(result.storageReview?.matchedRuleIds)
+      ? result.storageReview.matchedRuleIds
+      : []),
+  ]);
+
+  return {
+    capturedAt: now.toISOString(),
+    shouldStore: Boolean(result.shouldStore),
+    shouldNotify: Boolean(result.shouldNotify),
+    notificationReviewRequired: Boolean(result.notificationReview?.required),
+    confidence:
+      normalizeConfidence(result.confidence) ??
+      normalizeConfidence(result.storageReview?.confidence),
+    traceStatus: getAgentWorkflowTraceStatus(result),
+    matchedRuleRefs,
+    matchedRuleIds,
+    summary: normalizeText(result.summary || result.storageReview?.summary),
+  };
+}
+
+function normalizeSavedExpectation(value: any): AgentWorkflowSavedExpectation | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const capturedAt = normalizeDatetimeValue(value.capturedAt);
+  return {
+    capturedAt: capturedAt || new Date().toISOString(),
+    shouldStore: Boolean(value.shouldStore),
+    shouldNotify: Boolean(value.shouldNotify),
+    notificationReviewRequired: Boolean(value.notificationReviewRequired),
+    confidence: normalizeConfidence(value.confidence),
+    traceStatus: normalizeText(value.traceStatus) || 'missing',
+    matchedRuleRefs: normalizeStringArray(value.matchedRuleRefs),
+    matchedRuleIds: normalizeNumberArray(value.matchedRuleIds),
+    summary: normalizeText(value.summary) || undefined,
+  };
+}
+
+function buildSavedScenarioLabel(input: AgentWorkflowTestInput): string {
+  const snippet =
+    input.content.length > 42
+      ? `${input.content.slice(0, 39)}...`
+      : input.content;
+  return `${input.sender} @ ${input.teamName} | ${snippet}`;
+}
+
+export function buildAgentWorkflowSavedScenario(
+  input: AgentWorkflowTestInput,
+  result?: any,
+  now: Date = new Date(),
+): AgentWorkflowSavedScenario {
+  const normalizedInput = normalizeSavedScenarioInput(input) || {
+    sender: UNKNOWN_SENDER,
+    teamName: UNKNOWN_GROUP,
+    teamId: '',
+    datetime: formatAgentWorkflowDatetimeInputValue(now.toISOString()),
+    content: normalizeText(input?.content) || 'Untitled test case',
+  };
+  const timestamp = now.toISOString();
+
+  return {
+    id: `workflow-saved-${now.getTime()}`,
+    label: buildSavedScenarioLabel(normalizedInput),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    input: normalizedInput,
+    expectedResult: buildAgentWorkflowResultExpectation(result, now),
+  };
+}
+
+export function normalizeAgentWorkflowSavedScenarios(
+  value: any,
+  limit = AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
+): AgentWorkflowSavedScenario[] {
+  if (!Array.isArray(value)) return [];
+
+  const scenarios: AgentWorkflowSavedScenario[] = [];
+  const seenInputs = new Set<string>();
+
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const input = normalizeSavedScenarioInput(item.input);
+    if (!input) continue;
+
+    const dedupeKey = JSON.stringify(input);
+    if (seenInputs.has(dedupeKey)) continue;
+    seenInputs.add(dedupeKey);
+
+    const updatedAt =
+      normalizeDatetimeValue(item.updatedAt) ||
+      normalizeDatetimeValue(item.createdAt) ||
+      new Date().toISOString();
+    const createdAt = normalizeDatetimeValue(item.createdAt) || updatedAt;
+
+    scenarios.push({
+      id: normalizeText(item.id) || `workflow-saved-${scenarios.length + 1}`,
+      label: normalizeText(item.label) || buildSavedScenarioLabel(input),
+      createdAt,
+      updatedAt,
+      input,
+      expectedResult: normalizeSavedExpectation(item.expectedResult),
+    });
+
+    if (scenarios.length >= limit) break;
+  }
+
+  return scenarios;
+}
+
+export function formatAgentWorkflowSavedScenarioLabel(
+  scenario: AgentWorkflowSavedScenario,
+): string {
+  const time = new Date(scenario.updatedAt);
+  const timeLabel = Number.isFinite(time.getTime())
+    ? time.toLocaleString()
+    : scenario.updatedAt;
+  const baselineLabel = scenario.expectedResult ? '有基线' : '无基线';
+  return `${timeLabel} | ${baselineLabel} | ${scenario.label}`;
 }
 
 export function buildAgentWorkflowReplayMessage(

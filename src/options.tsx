@@ -20,12 +20,19 @@ import {
 } from './services/MemoryServiceClient';
 import { agentCoordinator } from './agentWorkflow';
 import {
+  AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
   AGENT_WORKFLOW_TEST_SCENARIOS,
+  buildAgentWorkflowResultExpectation,
+  buildAgentWorkflowSavedScenario,
   buildAgentWorkflowScenarioInput,
   buildAgentWorkflowReplayMessages,
+  formatAgentWorkflowSavedScenarioLabel,
   formatAgentWorkflowReplayLabel,
   formatAgentWorkflowDatetimeInputValue,
+  normalizeAgentWorkflowSavedScenarios,
   normalizeAgentWorkflowInputDatetime,
+  type AgentWorkflowSavedExpectation,
+  type AgentWorkflowSavedScenario,
   type AgentWorkflowTestInput,
   type AgentWorkflowReplayMessage,
 } from './agentWorkflowReplay';
@@ -4619,6 +4626,132 @@ const buildWorkflowAgentConfigComparisonKey = (agents: any[]): string => {
   return JSON.stringify(comparableAgents);
 };
 
+const AGENT_WORKFLOW_SAVED_SCENARIOS_STORAGE_KEY =
+  'agentWorkflowSavedScenarios';
+
+type WorkflowSavedBaselineStatus = 'same' | 'changed';
+type WorkflowSavedRegressionStatus =
+  | 'same'
+  | 'changed'
+  | 'no-baseline'
+  | 'error';
+
+interface WorkflowSavedBaselineRow {
+  id: string;
+  label: string;
+  expected: string;
+  actual: string;
+  status: WorkflowSavedBaselineStatus;
+}
+
+interface WorkflowSavedRegressionResult {
+  id: string;
+  label: string;
+  status: WorkflowSavedRegressionStatus;
+  summary: string;
+  detail?: string;
+}
+
+interface WorkflowSavedRegressionSummary {
+  total: number;
+  same: number;
+  changed: number;
+  noBaseline: number;
+  failed: number;
+  results: WorkflowSavedRegressionResult[];
+}
+
+const formatWorkflowBoolean = (value: boolean): string => (value ? '是' : '否');
+
+const formatWorkflowConfidence = (value: number | null): string =>
+  typeof value === 'number' && Number.isFinite(value)
+    ? `${Math.round(value * 100)}%`
+    : '-';
+
+const formatWorkflowRuleRefs = (
+  refs: string[] = [],
+  ids: number[] = [],
+): string => refs.join('、') || ids.join('、') || '-';
+
+const buildWorkflowSavedBaselineRows = (
+  expected: AgentWorkflowSavedExpectation,
+  actual: AgentWorkflowSavedExpectation,
+): WorkflowSavedBaselineRow[] => {
+  const confidenceChanged =
+    expected.confidence === null || actual.confidence === null
+      ? expected.confidence !== actual.confidence
+      : Math.abs(expected.confidence - actual.confidence) >= 0.05;
+  const expectedRules = formatWorkflowRuleRefs(
+    expected.matchedRuleRefs,
+    expected.matchedRuleIds,
+  );
+  const actualRules = formatWorkflowRuleRefs(
+    actual.matchedRuleRefs,
+    actual.matchedRuleIds,
+  );
+  const rows: WorkflowSavedBaselineRow[] = [
+    {
+      id: 'store',
+      label: '存储',
+      expected: formatWorkflowBoolean(expected.shouldStore),
+      actual: formatWorkflowBoolean(actual.shouldStore),
+      status: expected.shouldStore === actual.shouldStore ? 'same' : 'changed',
+    },
+    {
+      id: 'notify',
+      label: '通知',
+      expected: formatWorkflowBoolean(expected.shouldNotify),
+      actual: formatWorkflowBoolean(actual.shouldNotify),
+      status: expected.shouldNotify === actual.shouldNotify ? 'same' : 'changed',
+    },
+    {
+      id: 'review',
+      label: '复核',
+      expected: expected.notificationReviewRequired ? '待复核' : '无需',
+      actual: actual.notificationReviewRequired ? '待复核' : '无需',
+      status:
+        expected.notificationReviewRequired ===
+        actual.notificationReviewRequired
+          ? 'same'
+          : 'changed',
+    },
+    {
+      id: 'trace',
+      label: 'Trace',
+      expected: expected.traceStatus,
+      actual: actual.traceStatus,
+      status: expected.traceStatus === actual.traceStatus ? 'same' : 'changed',
+    },
+    {
+      id: 'rules',
+      label: '规则',
+      expected: expectedRules,
+      actual: actualRules,
+      status: expectedRules === actualRules ? 'same' : 'changed',
+    },
+    {
+      id: 'confidence',
+      label: '置信度',
+      expected: formatWorkflowConfidence(expected.confidence),
+      actual: formatWorkflowConfidence(actual.confidence),
+      status: confidenceChanged ? 'changed' : 'same',
+    },
+  ];
+
+  return rows;
+};
+
+const buildWorkflowSavedRegressionSummary = (
+  results: WorkflowSavedRegressionResult[],
+): WorkflowSavedRegressionSummary => ({
+  total: results.length,
+  same: results.filter((item) => item.status === 'same').length,
+  changed: results.filter((item) => item.status === 'changed').length,
+  noBaseline: results.filter((item) => item.status === 'no-baseline').length,
+  failed: results.filter((item) => item.status === 'error').length,
+  results,
+});
+
 const AgentSettings = () => {
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4669,6 +4802,19 @@ const AgentSettings = () => {
   const [workflowScenarioSelectedId, setWorkflowScenarioSelectedId] = useState(
     AGENT_WORKFLOW_TEST_SCENARIOS[0]?.id || '',
   );
+  const [workflowSavedScenarios, setWorkflowSavedScenarios] = useState<
+    AgentWorkflowSavedScenario[]
+  >([]);
+  const [workflowSavedScenarioSelectedId, setWorkflowSavedScenarioSelectedId] =
+    useState('');
+  const [workflowSavedScenarioError, setWorkflowSavedScenarioError] =
+    useState('');
+  const [workflowSavedScenarioStatus, setWorkflowSavedScenarioStatus] =
+    useState('');
+  const [workflowSavedRegressionRunning, setWorkflowSavedRegressionRunning] =
+    useState(false);
+  const [workflowSavedRegressionSummary, setWorkflowSavedRegressionSummary] =
+    useState<WorkflowSavedRegressionSummary | null>(null);
 
   // 获取可用工具列表
   const availableTools = [
@@ -4752,6 +4898,25 @@ const AgentSettings = () => {
     loadWorkflowReplaySamples();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    chrome.storage.local.get(
+      [AGENT_WORKFLOW_SAVED_SCENARIOS_STORAGE_KEY],
+      (result) => {
+        if (cancelled) return;
+        const savedScenarios = normalizeAgentWorkflowSavedScenarios(
+          result[AGENT_WORKFLOW_SAVED_SCENARIOS_STORAGE_KEY],
+        );
+        setWorkflowSavedScenarios(savedScenarios);
+        setWorkflowSavedScenarioSelectedId(savedScenarios[0]?.id || '');
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // 处理新Agent表单变化
   const handleNewAgentChange = (
     e: React.ChangeEvent<
@@ -4791,6 +4956,7 @@ const AgentSettings = () => {
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => {
     const { name, value } = e.target;
+    setWorkflowSavedRegressionSummary(null);
     setWorkflowTestInput((prev) => ({
       ...prev,
       [name]: value,
@@ -4811,6 +4977,9 @@ const AgentSettings = () => {
     setWorkflowTestResult(null);
     setWorkflowTestError('');
     setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedRegressionSummary(null);
   };
 
   const runWorkflowTest = async (input: AgentWorkflowTestInput) => {
@@ -4820,7 +4989,7 @@ const AgentSettings = () => {
       setWorkflowTestResult(null);
       setWorkflowTestResultInput(null);
       setWorkflowTestResultConfigKey('');
-      return;
+      return null;
     }
 
     let resultConfigKey = buildWorkflowAgentConfigComparisonKey(agents);
@@ -4845,6 +5014,7 @@ const AgentSettings = () => {
       setWorkflowTestResult(result);
       setWorkflowTestResultInput(input);
       setWorkflowTestResultConfigKey(resultConfigKey);
+      return result;
     } catch (error) {
       console.error('Agent Workflow 测试失败:', error);
       setWorkflowTestError(
@@ -4852,12 +5022,15 @@ const AgentSettings = () => {
       );
       setWorkflowTestResultInput(null);
       setWorkflowTestResultConfigKey('');
+      return null;
     } finally {
       setWorkflowTestRunning(false);
     }
   };
 
   const handleRunWorkflowTest = () => {
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedRegressionSummary(null);
     runWorkflowTest(workflowTestInput);
   };
 
@@ -4890,6 +5063,9 @@ const AgentSettings = () => {
     setWorkflowTestResult(null);
     setWorkflowTestError('');
     setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedRegressionSummary(null);
   };
 
   const handleRunWorkflowReplaySample = async () => {
@@ -4899,6 +5075,9 @@ const AgentSettings = () => {
     const nextInput = buildWorkflowInputFromReplaySample(sample);
     setWorkflowTestInput(nextInput);
     setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedRegressionSummary(null);
     await runWorkflowTest(nextInput);
   };
 
@@ -4915,6 +5094,9 @@ const AgentSettings = () => {
     setWorkflowTestResult(null);
     setWorkflowTestError('');
     setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedRegressionSummary(null);
   };
 
   const handleRunWorkflowScenario = async () => {
@@ -4924,7 +5106,201 @@ const AgentSettings = () => {
     const nextInput = buildAgentWorkflowScenarioInput(scenario);
     setWorkflowTestInput(nextInput);
     setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedRegressionSummary(null);
     await runWorkflowTest(nextInput);
+  };
+
+  const persistWorkflowSavedScenarios = async (
+    scenarios: AgentWorkflowSavedScenario[],
+  ) => {
+    const normalizedScenarios = normalizeAgentWorkflowSavedScenarios(scenarios);
+    setWorkflowSavedScenarios(normalizedScenarios);
+    await chrome.storage.local.set({
+      [AGENT_WORKFLOW_SAVED_SCENARIOS_STORAGE_KEY]: normalizedScenarios,
+    });
+    return normalizedScenarios;
+  };
+
+  const getSelectedWorkflowSavedScenario = () => {
+    const scenario = workflowSavedScenarios.find(
+      (item) => item.id === workflowSavedScenarioSelectedId,
+    );
+    if (!scenario) {
+      setWorkflowSavedScenarioError('请选择一个保存样例');
+      setWorkflowSavedScenarioStatus('');
+      return null;
+    }
+    return scenario;
+  };
+
+  const handleSaveWorkflowScenario = async () => {
+    if (!workflowTestInput.content.trim()) {
+      setWorkflowSavedScenarioError('请输入测试消息后再保存样例');
+      setWorkflowSavedScenarioStatus('');
+      return;
+    }
+
+    const baselineResult =
+      workflowTestResult && !workflowResultIsStale ? workflowTestResult : null;
+    const snapshot = buildAgentWorkflowSavedScenario(
+      workflowTestInput,
+      baselineResult,
+    );
+    const snapshotInputKey = buildWorkflowTestInputComparisonKey(snapshot.input);
+    const nextScenarios = [
+      snapshot,
+      ...workflowSavedScenarios.filter(
+        (scenario) =>
+          buildWorkflowTestInputComparisonKey(scenario.input) !==
+          snapshotInputKey,
+      ),
+    ].slice(0, AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT);
+
+    await persistWorkflowSavedScenarios(nextScenarios);
+    setWorkflowSavedScenarioSelectedId(snapshot.id);
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedRegressionSummary(null);
+    setWorkflowSavedScenarioStatus(
+      baselineResult
+        ? '已保存当前用例和结果基线'
+        : '已保存当前用例；运行后可再次保存基线',
+    );
+  };
+
+  const handleLoadWorkflowSavedScenario = () => {
+    const scenario = getSelectedWorkflowSavedScenario();
+    if (!scenario) return;
+
+    setWorkflowTestInput(scenario.input);
+    setWorkflowTestResult(null);
+    setWorkflowTestError('');
+    setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedRegressionSummary(null);
+    setWorkflowSavedScenarioStatus(
+      scenario.expectedResult ? '已填入保存样例和基线' : '已填入保存样例',
+    );
+  };
+
+  const handleRunWorkflowSavedScenario = async () => {
+    const scenario = getSelectedWorkflowSavedScenario();
+    if (!scenario) return;
+
+    setWorkflowTestInput(scenario.input);
+    setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus('');
+    setWorkflowSavedRegressionSummary(null);
+    const result = await runWorkflowTest(scenario.input);
+    if (result) {
+      setWorkflowSavedScenarioStatus(
+        scenario.expectedResult
+          ? '已运行保存样例；下方显示基线对比'
+          : '已运行保存样例；再次保存可记录基线',
+      );
+    }
+  };
+
+  const handleRunWorkflowSavedRegression = async () => {
+    if (workflowSavedScenarios.length === 0) {
+      setWorkflowSavedScenarioError('请先保存至少一个样例');
+      setWorkflowSavedScenarioStatus('');
+      setWorkflowSavedRegressionSummary(null);
+      return;
+    }
+
+    setWorkflowReplayError('');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedRegressionRunning(true);
+    setWorkflowSavedRegressionSummary(null);
+
+    const results: WorkflowSavedRegressionResult[] = [];
+
+    try {
+      for (const [index, scenario] of workflowSavedScenarios.entries()) {
+        setWorkflowSavedScenarioSelectedId(scenario.id);
+        setWorkflowTestInput(scenario.input);
+        setWorkflowSavedScenarioStatus(
+          `正在批量回归 ${index + 1}/${workflowSavedScenarios.length}：${scenario.label}`,
+        );
+
+        const result = await runWorkflowTest(scenario.input);
+        const actual = buildAgentWorkflowResultExpectation(result);
+
+        if (!result || !actual) {
+          results.push({
+            id: scenario.id,
+            label: scenario.label,
+            status: 'error',
+            summary: '运行失败',
+            detail: '该样例未产出可对比结果，请查看下方错误并单独重跑。',
+          });
+          continue;
+        }
+
+        if (!scenario.expectedResult) {
+          results.push({
+            id: scenario.id,
+            label: scenario.label,
+            status: 'no-baseline',
+            summary: '没有保存基线',
+            detail: '本次已能运行；单独打开后保存一次可建立后续对比基线。',
+          });
+          continue;
+        }
+
+        const baselineRows = buildWorkflowSavedBaselineRows(
+          scenario.expectedResult,
+          actual,
+        );
+        const changedRows = baselineRows.filter(
+          (row) => row.status === 'changed',
+        );
+
+        results.push({
+          id: scenario.id,
+          label: scenario.label,
+          status: changedRows.length > 0 ? 'changed' : 'same',
+          summary:
+            changedRows.length > 0
+              ? `${changedRows.length} 项变化`
+              : '基线一致',
+          detail:
+            changedRows.length > 0
+              ? changedRows
+                  .map(
+                    (row) =>
+                      `${row.label}: ${row.expected} -> ${row.actual}`,
+                  )
+                  .join('；')
+              : '存储、通知、复核、Trace、规则和置信度都未漂移。',
+        });
+      }
+
+      const summary = buildWorkflowSavedRegressionSummary(results);
+      setWorkflowSavedRegressionSummary(summary);
+      setWorkflowSavedScenarioStatus(
+        `批量回归完成：通过 ${summary.same} / 变化 ${summary.changed} / 无基线 ${summary.noBaseline} / 失败 ${summary.failed}`,
+      );
+    } finally {
+      setWorkflowSavedRegressionRunning(false);
+    }
+  };
+
+  const handleDeleteWorkflowSavedScenario = async () => {
+    const scenario = getSelectedWorkflowSavedScenario();
+    if (!scenario) return;
+
+    const nextScenarios = workflowSavedScenarios.filter(
+      (item) => item.id !== scenario.id,
+    );
+    const persistedScenarios = await persistWorkflowSavedScenarios(nextScenarios);
+    setWorkflowSavedScenarioSelectedId(persistedScenarios[0]?.id || '');
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedRegressionSummary(null);
+    setWorkflowSavedScenarioStatus('已删除保存样例');
   };
 
   // 添加新Agent
@@ -5015,6 +5391,8 @@ const AgentSettings = () => {
     newAgent.tools.length > 0 &&
     /^[a-zA-Z][a-zA-Z0-9_-]{1,63}$/.test(sanitizedNewAgentId) &&
     !agents.some((agent) => agent.id === sanitizedNewAgentId);
+  const workflowExecutionBusy =
+    workflowTestRunning || workflowSavedRegressionRunning;
   const workflowTestMessageReady = workflowTestInput.content.trim().length > 0;
   const workflowCurrentConfigKey = buildWorkflowAgentConfigComparisonKey(agents);
   const workflowResultInputIsStale = Boolean(
@@ -5038,7 +5416,9 @@ const AgentSettings = () => {
         : '当前输入已修改';
   const workflowRunButtonLabel = workflowTestRunning
     ? '测试中...'
-    : workflowResultIsStale
+    : workflowSavedRegressionRunning
+      ? '批量运行中...'
+      : workflowResultIsStale
       ? '重新运行测试'
       : '运行测试';
   const firstAgent = enabledAgents[0];
@@ -5137,6 +5517,46 @@ const AgentSettings = () => {
     blocked: '阻塞',
     idle: '无动作',
   };
+  const workflowSavedRegressionStatusLabels: Record<
+    WorkflowSavedRegressionStatus,
+    string
+  > = {
+    same: '通过',
+    changed: '变化',
+    'no-baseline': '无基线',
+    error: '失败',
+  };
+  const workflowSavedRegressionHasIssues = Boolean(
+    workflowSavedRegressionSummary &&
+      (workflowSavedRegressionSummary.changed > 0 ||
+        workflowSavedRegressionSummary.noBaseline > 0 ||
+        workflowSavedRegressionSummary.failed > 0),
+  );
+  const selectedWorkflowSavedScenario = workflowSavedScenarios.find(
+    (scenario) => scenario.id === workflowSavedScenarioSelectedId,
+  );
+  const workflowResultMatchesSavedScenario = Boolean(
+    selectedWorkflowSavedScenario &&
+      workflowTestResult &&
+      workflowTestResultInput &&
+      buildWorkflowTestInputComparisonKey(selectedWorkflowSavedScenario.input) ===
+        buildWorkflowTestInputComparisonKey(workflowTestResultInput),
+  );
+  const workflowCurrentResultExpectation = workflowTestResult
+    ? buildAgentWorkflowResultExpectation(workflowTestResult)
+    : undefined;
+  const workflowSavedBaselineRows =
+    selectedWorkflowSavedScenario?.expectedResult &&
+    workflowCurrentResultExpectation &&
+    workflowResultMatchesSavedScenario
+      ? buildWorkflowSavedBaselineRows(
+          selectedWorkflowSavedScenario.expectedResult,
+          workflowCurrentResultExpectation,
+        )
+      : [];
+  const workflowSavedBaselineHasChanges = workflowSavedBaselineRows.some(
+    (row) => row.status === 'changed',
+  );
 
   const formatWorkflowTraceDuration = (durationMs?: number) => {
     if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
@@ -5284,7 +5704,7 @@ const AgentSettings = () => {
 
       <div
         className="agent-workflow-test-panel"
-        aria-busy={workflowTestRunning}
+        aria-busy={workflowExecutionBusy}
       >
         <div className="agent-workflow-test-header">
           <div>
@@ -5292,7 +5712,7 @@ const AgentSettings = () => {
           </div>
           <button
             onClick={handleRunWorkflowTest}
-            disabled={workflowTestRunning || !workflowTestMessageReady}
+            disabled={workflowExecutionBusy || !workflowTestMessageReady}
           >
             {workflowRunButtonLabel}
           </button>
@@ -5304,7 +5724,7 @@ const AgentSettings = () => {
               id="workflowScenario"
               value={workflowScenarioSelectedId}
               onChange={handleWorkflowScenarioChange}
-              disabled={workflowTestRunning}
+              disabled={workflowExecutionBusy}
             >
               {AGENT_WORKFLOW_TEST_SCENARIOS.map((scenario) => (
                 <option key={scenario.id} value={scenario.id}>
@@ -5317,16 +5737,16 @@ const AgentSettings = () => {
             <button
               type="button"
               onClick={handleLoadWorkflowScenario}
-              disabled={workflowTestRunning}
+              disabled={workflowExecutionBusy}
             >
               填入样例
             </button>
             <button
               type="button"
               onClick={handleRunWorkflowScenario}
-              disabled={workflowTestRunning}
+              disabled={workflowExecutionBusy}
             >
-              {workflowTestRunning ? '测试中...' : '运行样例'}
+              {workflowExecutionBusy ? '测试中...' : '运行样例'}
             </button>
           </div>
         </div>
@@ -5341,6 +5761,7 @@ const AgentSettings = () => {
               }
               disabled={
                 workflowTestRunning ||
+                workflowSavedRegressionRunning ||
                 workflowReplayLoading ||
                 workflowReplaySamples.length === 0
               }
@@ -5364,6 +5785,7 @@ const AgentSettings = () => {
               onClick={handleLoadWorkflowReplaySample}
               disabled={
                 workflowTestRunning ||
+                workflowSavedRegressionRunning ||
                 workflowReplayLoading ||
                 workflowReplaySamples.length === 0
               }
@@ -5376,22 +5798,134 @@ const AgentSettings = () => {
               disabled={
                 workflowReplayLoading ||
                 workflowTestRunning ||
+                workflowSavedRegressionRunning ||
                 workflowReplaySamples.length === 0
               }
             >
-              {workflowTestRunning ? '测试中...' : '回放测试'}
+              {workflowExecutionBusy ? '测试中...' : '回放测试'}
             </button>
             <button
               type="button"
               onClick={loadWorkflowReplaySamples}
-              disabled={workflowTestRunning || workflowReplayLoading}
+              disabled={workflowExecutionBusy || workflowReplayLoading}
             >
               {workflowReplayLoading ? '刷新中...' : '刷新'}
             </button>
           </div>
         </div>
+        <div className="agent-workflow-saved-row">
+          <div className="form-group">
+            <label htmlFor="workflowSavedScenario">保存样例</label>
+            <select
+              id="workflowSavedScenario"
+              value={workflowSavedScenarioSelectedId}
+              onChange={(event) => {
+                setWorkflowSavedScenarioSelectedId(event.target.value);
+                setWorkflowSavedScenarioError('');
+                setWorkflowSavedScenarioStatus('');
+                setWorkflowSavedRegressionSummary(null);
+              }}
+              disabled={
+                workflowExecutionBusy || workflowSavedScenarios.length === 0
+              }
+            >
+              {workflowSavedScenarios.length === 0 ? (
+                <option value="">还没有保存样例</option>
+              ) : (
+                workflowSavedScenarios.map((scenario) => (
+                  <option key={scenario.id} value={scenario.id}>
+                    {formatAgentWorkflowSavedScenarioLabel(scenario)}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+          <div className="agent-workflow-saved-actions">
+            <button
+              type="button"
+              onClick={handleSaveWorkflowScenario}
+              disabled={workflowExecutionBusy || !workflowTestMessageReady}
+            >
+              保存当前用例
+            </button>
+            <button
+              type="button"
+              onClick={handleLoadWorkflowSavedScenario}
+              disabled={
+                workflowExecutionBusy || workflowSavedScenarios.length === 0
+              }
+            >
+              填入
+            </button>
+            <button
+              type="button"
+              onClick={handleRunWorkflowSavedScenario}
+              disabled={
+                workflowExecutionBusy || workflowSavedScenarios.length === 0
+              }
+            >
+              {workflowExecutionBusy ? '测试中...' : '运行保存样例'}
+            </button>
+            <button
+              type="button"
+              onClick={handleRunWorkflowSavedRegression}
+              disabled={
+                workflowExecutionBusy || workflowSavedScenarios.length === 0
+              }
+            >
+              {workflowSavedRegressionRunning ? '批量运行中...' : '批量回归'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteWorkflowSavedScenario}
+              disabled={
+                workflowExecutionBusy || workflowSavedScenarios.length === 0
+              }
+            >
+              删除
+            </button>
+          </div>
+        </div>
         {workflowReplayError && (
           <p className="error-message">{workflowReplayError}</p>
+        )}
+        {workflowSavedScenarioError && (
+          <p className="error-message">{workflowSavedScenarioError}</p>
+        )}
+        {workflowSavedScenarioStatus && (
+          <p className="agent-workflow-saved-status">
+            {workflowSavedScenarioStatus}
+          </p>
+        )}
+        {workflowSavedRegressionSummary && (
+          <div
+            className={`agent-workflow-regression ${workflowSavedRegressionHasIssues ? 'changed' : 'same'}`}
+            aria-label="Agent Workflow 保存样例批量回归"
+          >
+            <div className="agent-test-section-title">保存样例批量回归</div>
+            <div className="agent-workflow-regression-metrics">
+              <span>总数 {workflowSavedRegressionSummary.total}</span>
+              <span>通过 {workflowSavedRegressionSummary.same}</span>
+              <span>变化 {workflowSavedRegressionSummary.changed}</span>
+              <span>无基线 {workflowSavedRegressionSummary.noBaseline}</span>
+              <span>失败 {workflowSavedRegressionSummary.failed}</span>
+            </div>
+            <div className="agent-workflow-regression-list">
+              {workflowSavedRegressionSummary.results.map((item) => (
+                <div
+                  className={`agent-workflow-regression-item ${item.status}`}
+                  key={item.id}
+                >
+                  <span>{workflowSavedRegressionStatusLabels[item.status]}</span>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <small>{item.summary}</small>
+                    {item.detail && <em>{item.detail}</em>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
         <div className="agent-workflow-test-grid">
           <div className="form-group">
@@ -5402,7 +5936,7 @@ const AgentSettings = () => {
               name="sender"
               value={workflowTestInput.sender}
               onChange={handleWorkflowTestInputChange}
-              disabled={workflowTestRunning}
+              disabled={workflowExecutionBusy}
             />
           </div>
           <div className="form-group">
@@ -5413,7 +5947,7 @@ const AgentSettings = () => {
               name="teamName"
               value={workflowTestInput.teamName}
               onChange={handleWorkflowTestInputChange}
-              disabled={workflowTestRunning}
+              disabled={workflowExecutionBusy}
             />
           </div>
           <div className="form-group">
@@ -5425,7 +5959,7 @@ const AgentSettings = () => {
               value={workflowTestInput.teamId}
               onChange={handleWorkflowTestInputChange}
               placeholder="可选，用于范围匹配"
-              disabled={workflowTestRunning}
+              disabled={workflowExecutionBusy}
             />
           </div>
           <div className="form-group">
@@ -5437,7 +5971,7 @@ const AgentSettings = () => {
               step="1"
               value={workflowTestInput.datetime}
               onChange={handleWorkflowTestInputChange}
-              disabled={workflowTestRunning}
+              disabled={workflowExecutionBusy}
             />
           </div>
         </div>
@@ -5449,7 +5983,7 @@ const AgentSettings = () => {
             value={workflowTestInput.content}
             onChange={handleWorkflowTestInputChange}
             placeholder="消息内容"
-            disabled={workflowTestRunning}
+            disabled={workflowExecutionBusy}
           />
         </div>
         {workflowTestError && (
@@ -5479,6 +6013,28 @@ const AgentSettings = () => {
                 置信度 {Math.round(workflowTestConfidence * 100)}%
               </span>
             </div>
+            {workflowSavedBaselineRows.length > 0 && (
+              <div
+                className={`agent-workflow-baseline ${workflowSavedBaselineHasChanges ? 'changed' : 'same'}`}
+                aria-label="Agent Workflow 保存基线对比"
+              >
+                <div className="agent-test-section-title">保存基线对比</div>
+                <div className="agent-workflow-baseline-list">
+                  {workflowSavedBaselineRows.map((row) => (
+                    <div
+                      key={row.id}
+                      className={`agent-workflow-baseline-item ${row.status}`}
+                    >
+                      <span>{row.status === 'changed' ? '变化' : '一致'}</span>
+                      <strong>{row.label}</strong>
+                      <small>
+                        基线 {row.expected} / 当前 {row.actual}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {workflowRunVerdict && (
               <div
                 className={`agent-workflow-verdict ${workflowRunVerdict.status}`}
@@ -6125,7 +6681,12 @@ const IntelligentAgentSettings = () => {
 
             <AgentFlowVisualizer thoughtProcess={demoThoughtProcess} />
 
-            {demoResult && <AgentResultSummary result={demoResult} />}
+            {demoResult && (
+              <AgentResultSummary
+                result={demoResult}
+                thoughtProcess={demoThoughtProcess}
+              />
+            )}
           </>
         )}
       </div>

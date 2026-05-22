@@ -81,6 +81,7 @@ interface _DeferredTopicState {
 interface _MutedTopicState {
   until: number | null;
   createdAt: number;
+  reason?: TopicMuteReasonKey;
 }
 
 interface _TopicReadUndoConversationState {
@@ -134,6 +135,17 @@ export interface TopicMutePresetOption {
   key: TopicMutePresetKey;
   label: string;
   until: number | null;
+}
+
+export type TopicMuteReasonKey =
+  | 'low-relevance'
+  | 'duplicate-discussion'
+  | 'not-now';
+
+export interface TopicMuteReasonOption {
+  key: TopicMuteReasonKey;
+  label: string;
+  description: string;
 }
 
 const TOPIC_DEFER_STORAGE_KEY = 'personal-ai-deferred-topics-v1';
@@ -288,6 +300,47 @@ export const getTopicMutePresetOptions = (
       until: null,
     },
   ];
+};
+
+const TOPIC_MUTE_REASON_OPTIONS: TopicMuteReasonOption[] = [
+  {
+    key: 'not-now',
+    label: '暂不关注',
+    description: '以后再回到未读流',
+  },
+  {
+    key: 'low-relevance',
+    label: '低相关度',
+    description: '减少弱相关主题干扰',
+  },
+  {
+    key: 'duplicate-discussion',
+    label: '重复讨论',
+    description: '合并同类噪声主题',
+  },
+];
+
+const TOPIC_MUTE_REASON_KEYS = new Set(
+  TOPIC_MUTE_REASON_OPTIONS.map((option) => option.key),
+);
+
+export const getTopicMuteReasonOptions = (): TopicMuteReasonOption[] =>
+  TOPIC_MUTE_REASON_OPTIONS.map((option) => ({ ...option }));
+
+export const getTopicMuteReasonLabel = (reason?: string): string => {
+  return (
+    TOPIC_MUTE_REASON_OPTIONS.find((option) => option.key === reason)?.label ||
+    '手动静音'
+  );
+};
+
+const normalizeTopicMuteReason = (
+  reason: unknown,
+): TopicMuteReasonKey | undefined => {
+  const normalized = String(reason || '').trim();
+  return TOPIC_MUTE_REASON_KEYS.has(normalized as TopicMuteReasonKey)
+    ? (normalized as TopicMuteReasonKey)
+    : undefined;
 };
 
 const TOPIC_CONVERSATION_CONTAINERS = [
@@ -2103,10 +2156,12 @@ export const useMemoryStore = defineStore('memory', () => {
           prunedCount++;
           return;
         }
+        const reason = normalizeTopicMuteReason(state?.reason);
         next[topicId] = {
           until,
           createdAt:
             typeof state?.createdAt === 'number' ? state.createdAt : now,
+          ...(reason ? { reason } : {}),
         };
       });
 
@@ -2242,10 +2297,12 @@ export const useMemoryStore = defineStore('memory', () => {
           return;
         }
 
+        const reason = normalizeTopicMuteReason(state?.reason);
         next[topicId] = {
           until,
           createdAt:
             typeof state?.createdAt === 'number' ? state.createdAt : now,
+          ...(reason ? { reason } : {}),
         };
       });
 
@@ -2296,18 +2353,21 @@ export const useMemoryStore = defineStore('memory', () => {
   const muteTopic = async (
     topicId: string,
     until: number | null = getTopicMutePresetOptions()[0].until,
+    reason?: TopicMuteReasonKey,
   ) => {
     const normalizedTopicId = String(topicId || '').trim();
     if (!normalizedTopicId) return;
 
     const now = Date.now();
     const mutedUntil = normalizeTopicMuteUntil(until, now);
+    const mutedReason = normalizeTopicMuteReason(reason);
 
     mutedTopics.value = {
       ...mutedTopics.value,
       [normalizedTopicId]: {
         until: mutedUntil,
         createdAt: now,
+        ...(mutedReason ? { reason: mutedReason } : {}),
       },
     };
     saveMutedTopicsToLocalStorage();
@@ -2659,6 +2719,7 @@ export const useMemoryStore = defineStore('memory', () => {
         answer: result.answer,
         structuredAnswer: result.structuredAnswer,
         blocks: result.blocks || [],
+        channelDiagnostics: result.channelDiagnostics || [],
         evidence,
         entitiesByType: {},
         metadata: {

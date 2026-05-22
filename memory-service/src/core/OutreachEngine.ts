@@ -39,6 +39,7 @@ import type {
 } from '../integrations/OpenClawDelegationService.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { NotificationCenterService } from './NotificationCenterService.js';
+import { getConfig } from '../config.js';
 
 interface ParsedReply {
   classification: 'answer' | 'defer' | 'irrelevant' | 'decline' | 'unclear';
@@ -67,6 +68,7 @@ interface CreateSessionFromMessageInput {
   followupIntervalSeconds?: number;
   maxFollowup?: number;
   context?: string;
+  informationGoal?: string;
 }
 
 export type GlipMessageMarkerType =
@@ -661,14 +663,127 @@ function isResolvedTargetStatus(status: string | undefined): boolean {
   return status === 'resolved';
 }
 
+function sanitizeScheduleTimeZone(value: unknown): string {
+  const candidates = [
+    typeof value === 'string' ? value.trim() : '',
+    getConfig().todayPilotTimezone,
+    'Asia/Shanghai',
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(0);
+      return candidate;
+    } catch {
+      // Try the next fallback.
+    }
+  }
+
+  return 'UTC';
+}
+
+function readDateTimePartsInTimeZone(timestampMs: number, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    hourCycle: 'h23',
+  });
+  const parts = formatter.formatToParts(new Date(timestampMs));
+  const read = (type: string) => {
+    const value = parts.find((part) => part.type === type)?.value;
+    return value ? parseInt(value, 10) : 0;
+  };
+  return {
+    year: read('year'),
+    month: read('month'),
+    day: read('day'),
+    hour: read('hour'),
+    minute: read('minute'),
+    second: read('second'),
+  };
+}
+
+function getTimeZoneOffsetMs(timeZone: string, utcMs: number): number {
+  const parts = readDateTimePartsInTimeZone(utcMs, timeZone);
+  const asUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  return asUtc - utcMs;
+}
+
+function zonedLocalDateTimeToUtcMs(
+  parts: {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second: number;
+  },
+  timeZone: string,
+): number {
+  const guessUtcMs = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    0,
+  );
+  const firstOffset = getTimeZoneOffsetMs(timeZone, guessUtcMs);
+  const firstPass = guessUtcMs - firstOffset;
+  const secondOffset = getTimeZoneOffsetMs(timeZone, firstPass);
+  return secondOffset === firstOffset ? firstPass : guessUtcMs - secondOffset;
+}
+
 function parseScheduleSeed(
   scheduleDate: string,
   scheduleTime: string,
 ): Date | null {
-  const seed = new Date(
-    `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
-  );
-  return Number.isNaN(seed.getTime()) ? null : seed;
+  const dateMatch = scheduleDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = scheduleTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!dateMatch || !timeMatch) return null;
+
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const second = Number(timeMatch[3] ?? 0);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    !Number.isInteger(second) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59 ||
+    second < 0 ||
+    second > 59
+  ) {
+    return null;
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, hour, minute, second, 0));
 }
 
 function parseRepeatDays(value: unknown): number[] {
@@ -688,7 +803,9 @@ function parseRepeatDays(value: unknown): number[] {
 }
 
 function getDayStart(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
 }
 
 function getWeekIndexSinceStart(candidate: Date, start: Date): number {
@@ -720,18 +837,20 @@ function findNextWeeklyRepeatDay(
 
   for (let offset = 0; offset <= 366; offset += 1) {
     const candidate = new Date(
-      searchDay.getFullYear(),
-      searchDay.getMonth(),
-      searchDay.getDate() + offset,
-      seed.getHours(),
-      seed.getMinutes(),
-      0,
-      0,
+      Date.UTC(
+        searchDay.getUTCFullYear(),
+        searchDay.getUTCMonth(),
+        searchDay.getUTCDate() + offset,
+        seed.getUTCHours(),
+        seed.getUTCMinutes(),
+        0,
+        0,
+      ),
     );
 
     if (isAfterScheduleEndDate(candidate, endDate)) return null;
     if (candidate.getTime() <= baselineDate.getTime()) continue;
-    if (!allowedDays.includes(candidate.getDay())) continue;
+    if (!allowedDays.includes(candidate.getUTCDay())) continue;
 
     const weekIndex = getWeekIndexSinceStart(candidate, seed);
     if (weekIndex >= 0 && weekIndex % every === 0) {
@@ -742,11 +861,50 @@ function findNextWeeklyRepeatDay(
   return null;
 }
 
+function getScheduleTimeZone(scheduleSpec: Record<string, unknown>): string {
+  return sanitizeScheduleTimeZone(scheduleSpec.timezone);
+}
+
+function floatingDateToEpochSeconds(date: Date, timeZone: string): number {
+  return Math.floor(
+    zonedLocalDateTimeToUtcMs(
+      {
+        year: date.getUTCFullYear(),
+        month: date.getUTCMonth() + 1,
+        day: date.getUTCDate(),
+        hour: date.getUTCHours(),
+        minute: date.getUTCMinutes(),
+        second: date.getUTCSeconds(),
+      },
+      timeZone,
+    ) / 1000,
+  );
+}
+
+function epochSecondsToFloatingDate(
+  timestampSeconds: number,
+  timeZone: string,
+): Date {
+  const parts = readDateTimePartsInTimeZone(timestampSeconds * 1000, timeZone);
+  return new Date(
+    Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+      0,
+    ),
+  );
+}
+
 function parseNextDispatch(
   scheduleSpec: Record<string, unknown> | undefined,
   baseline: number,
 ): number | null {
   if (!scheduleSpec) return null;
+  const timeZone = getScheduleTimeZone(scheduleSpec);
   const scheduleDate = normalizeString(scheduleSpec.scheduleDate);
   const scheduleTime = normalizeString(scheduleSpec.scheduleTime) ?? '09:00';
   const repeatEvery = Number(scheduleSpec.repeatEvery);
@@ -755,7 +913,7 @@ function parseNextDispatch(
     ? parseRepeatDays(scheduleSpec.repeatDays)
     : [];
   const endDate = normalizeString(scheduleSpec.endDate);
-  const baselineDate = new Date(baseline * 1000);
+  const baselineDate = epochSecondsToFloatingDate(baseline, timeZone);
 
   if (scheduleDate) {
     const seed = parseScheduleSeed(scheduleDate, scheduleTime);
@@ -771,7 +929,7 @@ function parseNextDispatch(
             endDate,
           );
           return nextWeeklyDay
-            ? Math.floor(nextWeeklyDay.getTime() / 1000)
+            ? floatingDateToEpochSeconds(nextWeeklyDay, timeZone)
             : null;
         }
 
@@ -781,20 +939,20 @@ function parseNextDispatch(
           if (candidate.getTime() > baselineDate.getTime()) {
             if (
               repeatUnit !== 'Day' ||
-              (candidate.getDay() >= 1 && candidate.getDay() <= 5)
+              (candidate.getUTCDay() >= 1 && candidate.getUTCDay() <= 5)
             ) {
-              return Math.floor(candidate.getTime() / 1000);
+              return floatingDateToEpochSeconds(candidate, timeZone);
             }
           }
 
           if (repeatUnit === 'Day') {
-            candidate.setDate(candidate.getDate() + repeatEvery);
+            candidate.setUTCDate(candidate.getUTCDate() + repeatEvery);
           } else if (repeatUnit === 'Week') {
-            candidate.setDate(candidate.getDate() + repeatEvery * 7);
+            candidate.setUTCDate(candidate.getUTCDate() + repeatEvery * 7);
           } else if (repeatUnit === 'Month') {
-            candidate.setMonth(candidate.getMonth() + repeatEvery);
+            candidate.setUTCMonth(candidate.getUTCMonth() + repeatEvery);
           } else if (repeatUnit === 'Year') {
-            candidate.setFullYear(candidate.getFullYear() + repeatEvery);
+            candidate.setUTCFullYear(candidate.getUTCFullYear() + repeatEvery);
           } else {
             break;
           }
@@ -802,7 +960,7 @@ function parseNextDispatch(
         return null;
       }
 
-      const oneShotAt = Math.floor(seed.getTime() / 1000);
+      const oneShotAt = floatingDateToEpochSeconds(seed, timeZone);
       return oneShotAt > baseline && !isAfterScheduleEndDate(seed, endDate)
         ? oneShotAt
         : null;
@@ -818,6 +976,171 @@ function parseNextDispatch(
     return Math.floor(nextDispatchAt);
   }
   return null;
+}
+
+function isRecurringSchedule(scheduleSpec: Record<string, unknown>): boolean {
+  const repeatEvery = Number(scheduleSpec.repeatEvery);
+  const repeatUnit = normalizeString(scheduleSpec.repeatUnit);
+  return Number.isFinite(repeatEvery) && repeatEvery > 0 && Boolean(repeatUnit);
+}
+
+function formatOccurrenceKey(
+  scheduledFor: number,
+  timeZone: string,
+): string {
+  const parts = readDateTimePartsInTimeZone(scheduledFor * 1000, timeZone);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(
+    parts.hour,
+  )}:${pad(parts.minute)}@${timeZone}`;
+}
+
+function isScheduledOccurrenceCandidate(
+  candidate: Date,
+  seed: Date,
+  repeatEvery: number,
+  repeatUnit: string,
+  repeatDays: number[],
+): boolean {
+  if (candidate.getTime() < seed.getTime()) return false;
+  if (candidate.getUTCHours() !== seed.getUTCHours()) return false;
+  if (candidate.getUTCMinutes() !== seed.getUTCMinutes()) return false;
+
+  if (repeatUnit === 'Day') {
+    const daysSinceStart = Math.floor(
+      (getDayStart(candidate).getTime() - getDayStart(seed).getTime()) /
+        86400000,
+    );
+    return (
+      daysSinceStart >= 0 &&
+      daysSinceStart % repeatEvery === 0 &&
+      candidate.getUTCDay() >= 1 &&
+      candidate.getUTCDay() <= 5
+    );
+  }
+
+  if (repeatUnit === 'Week') {
+    if (
+      repeatDays.length > 0 &&
+      !repeatDays.includes(candidate.getUTCDay())
+    ) {
+      return false;
+    }
+    if (
+      repeatDays.length === 0 &&
+      candidate.getUTCDay() !== seed.getUTCDay()
+    ) {
+      return false;
+    }
+    const weekIndex = getWeekIndexSinceStart(candidate, seed);
+    return weekIndex >= 0 && weekIndex % repeatEvery === 0;
+  }
+
+  if (repeatUnit === 'Month') {
+    const monthDiff =
+      (candidate.getUTCFullYear() - seed.getUTCFullYear()) * 12 +
+      (candidate.getUTCMonth() - seed.getUTCMonth());
+    return (
+      monthDiff >= 0 &&
+      monthDiff % repeatEvery === 0 &&
+      candidate.getUTCDate() === seed.getUTCDate()
+    );
+  }
+
+  if (repeatUnit === 'Year') {
+    const yearDiff = candidate.getUTCFullYear() - seed.getUTCFullYear();
+    return (
+      yearDiff >= 0 &&
+      yearDiff % repeatEvery === 0 &&
+      candidate.getUTCMonth() === seed.getUTCMonth() &&
+      candidate.getUTCDate() === seed.getUTCDate()
+    );
+  }
+
+  return false;
+}
+
+function parsePreviousDispatch(
+  scheduleSpec: Record<string, unknown> | undefined,
+  scheduledFor: number,
+): number | null {
+  if (!scheduleSpec || !isRecurringSchedule(scheduleSpec)) return null;
+  const scheduleDate = normalizeString(scheduleSpec.scheduleDate);
+  if (!scheduleDate) return null;
+  const scheduleTime = normalizeString(scheduleSpec.scheduleTime) ?? '09:00';
+  const seed = parseScheduleSeed(scheduleDate, scheduleTime);
+  if (!seed) return null;
+
+  const repeatEvery = Number(scheduleSpec.repeatEvery);
+  const repeatUnit = normalizeString(scheduleSpec.repeatUnit);
+  if (!Number.isFinite(repeatEvery) || repeatEvery <= 0 || !repeatUnit) {
+    return null;
+  }
+
+  const timeZone = getScheduleTimeZone(scheduleSpec);
+  const repeatDays =
+    repeatUnit === 'Week' ? parseRepeatDays(scheduleSpec.repeatDays) : [];
+  const scheduledLocal = epochSecondsToFloatingDate(scheduledFor, timeZone);
+  const searchDay = getDayStart(scheduledLocal);
+
+  for (let offset = 1; offset <= 3660; offset += 1) {
+    const candidate = new Date(
+      Date.UTC(
+        searchDay.getUTCFullYear(),
+        searchDay.getUTCMonth(),
+        searchDay.getUTCDate() - offset,
+        seed.getUTCHours(),
+        seed.getUTCMinutes(),
+        0,
+        0,
+      ),
+    );
+
+    if (candidate.getTime() < seed.getTime()) return null;
+    if (candidate.getTime() >= scheduledLocal.getTime()) continue;
+    if (
+      isScheduledOccurrenceCandidate(
+        candidate,
+        seed,
+        repeatEvery,
+        repeatUnit,
+        repeatDays,
+      )
+    ) {
+      return floatingDateToEpochSeconds(candidate, timeZone);
+    }
+  }
+
+  return null;
+}
+
+function buildScheduledTemplateOccurrence(
+  template: { scheduleSpec: Record<string, unknown>; createdAt: number },
+  currentTime: number,
+): {
+  scheduledFor: number;
+  occurrenceKey: string;
+  occurrenceStartAt: number;
+} {
+  const rawNextDispatchAt = Number(template.scheduleSpec.nextDispatchAt);
+  const scheduledFor =
+    Number.isFinite(rawNextDispatchAt) && rawNextDispatchAt > 0
+      ? Math.floor(rawNextDispatchAt)
+      : currentTime;
+  const timeZone = getScheduleTimeZone(template.scheduleSpec);
+  const previousDispatch = parsePreviousDispatch(
+    template.scheduleSpec,
+    scheduledFor,
+  );
+  return {
+    scheduledFor,
+    occurrenceKey: formatOccurrenceKey(scheduledFor, timeZone),
+    occurrenceStartAt:
+      previousDispatch ??
+      (Number.isFinite(template.createdAt) && template.createdAt > 0
+        ? template.createdAt
+        : scheduledFor),
+  };
 }
 
 function parseEtaFromText(
@@ -1029,7 +1352,8 @@ export class OutreachEngine {
       targetResolvedLabel,
       targetResolvedChatId,
       renderedQuestion: question,
-      renderedContext: normalizeString(input.context),
+      renderedContext:
+        normalizeString(input.informationGoal) ?? normalizeString(input.context),
       status: 'waiting_reply',
       requiresApproval: false,
       followupCount: 0,
@@ -1115,7 +1439,7 @@ export class OutreachEngine {
           sourceId: session.id,
           sessionId: session.id,
           status: session.status,
-          tooltip: session.renderedQuestion,
+          tooltip: normalizeString(session.renderedContext),
           updatedAt: session.updatedAt,
           nextCheckAt: session.nextCheckAt,
         });
@@ -1217,6 +1541,7 @@ export class OutreachEngine {
     const synthesis = await this.evidencePlanner.resolve({
       question: session.renderedQuestion,
       context: session.renderedContext,
+      informationGoal: this.getSessionInformationGoal(session),
       evidence,
       policy: {
         scene: 'outreach',
@@ -1275,8 +1600,10 @@ export class OutreachEngine {
         id: item.id,
         queueStatus: item.queueStatus,
       }));
+    const hasInformationGoal = Boolean(this.getSessionInformationGoal(session));
     const summary =
-      resolutionState === 'complete' || resolutionState === 'partial'
+      resolutionState === 'complete' ||
+      (!hasInformationGoal && resolutionState === 'partial')
         ? await this.buildResolvedOutcomeSummary(
             session,
             replyText,
@@ -1294,6 +1621,8 @@ export class OutreachEngine {
       resolvedConclusion,
       remainingQuestions,
       candidateArtifacts,
+      goalSatisfied: synthesis.goalSatisfied,
+      goalGaps: synthesis.goalGaps,
       recommendedAction: baseOutcome.recommendedAction ?? action.actionType,
       spawnedActionIds: uniqStrings([
         ...readStringArray(baseOutcome.spawnedActionIds),
@@ -1319,18 +1648,27 @@ export class OutreachEngine {
           ? outcome.payload
           : undefined,
     };
+    const shouldResolveSession =
+      resolutionState === 'complete' ||
+      classification === 'decline' ||
+      session.status === 'resolved' ||
+      (!hasInformationGoal && resolutionState === 'partial');
 
     this.repo.updateSession(session.id, {
-      status: 'resolved',
+      status: shouldResolveSession ? 'resolved' : session.status,
       replyClassification: classification,
       replyConfidence: confidence,
       outcome: mergedOutcome,
-      nextCheckAt: null,
+      nextCheckAt: shouldResolveSession ? null : now() + 300,
       errorCode: null,
       errorMessage: null,
-      resolvedAt: now(),
+      resolvedAt: shouldResolveSession ? now() : session.resolvedAt ?? null,
     });
-    this.repo.createEvent(session.id, 'resolved', mergedOutcome);
+    this.repo.createEvent(
+      session.id,
+      shouldResolveSession ? 'resolved' : 'reply_resolution_pending',
+      mergedOutcome,
+    );
   }
 
   async syncDelegationFailureToSession(
@@ -1730,6 +2068,40 @@ export class OutreachEngine {
     const runtime = this.getRuntimeConfig();
     for (const template of templates) {
       const requiresApproval = runtime.outreachRequireApprovalForManual;
+      const occurrence = buildScheduledTemplateOccurrence(template, currentTime);
+      const existingSession = this.repo.getSessionByTemplateOccurrence(
+        template.id,
+        occurrence.occurrenceKey,
+      );
+      if (existingSession) {
+        const nextDispatch = parseNextDispatch(
+          template.scheduleSpec,
+          currentTime,
+        );
+        this.repo.markTemplateDispatch(
+          template.id,
+          nextDispatch,
+          existingSession.id,
+        );
+        continue;
+      }
+
+      const priorOccurrence =
+        this.repo.getLatestSessionBeforeTemplateOccurrence(
+          template.id,
+          occurrence.scheduledFor,
+        );
+      const priorBoundary =
+        priorOccurrence?.resolvedAt ??
+        priorOccurrence?.updatedAt ??
+        priorOccurrence?.createdAt;
+      if (Number.isFinite(priorBoundary) && (priorBoundary ?? 0) > 0) {
+        occurrence.occurrenceStartAt = Math.max(
+          occurrence.occurrenceStartAt,
+          priorBoundary!,
+        );
+      }
+
       const session = this.repo.createSession({
         templateId: template.id,
         originKind: 'scheduled_template',
@@ -1742,6 +2114,9 @@ export class OutreachEngine {
         maxFollowup: template.maxFollowup,
         followupIntervalSeconds: template.followupIntervalSeconds,
         nextCheckAt: requiresApproval ? null : currentTime,
+        scheduledFor: occurrence.scheduledFor,
+        occurrenceKey: occurrence.occurrenceKey,
+        occurrenceStartAt: occurrence.occurrenceStartAt,
       });
       const resolved = await this.resolveSessionTarget(session);
       this.repo.createEvent(resolved.id, 'created', {
@@ -1971,12 +2346,17 @@ export class OutreachEngine {
           followUpActions,
         );
 
-        if (
+        const hasInformationGoal = Boolean(
+          this.getSessionInformationGoal(session),
+        );
+        const shouldResolveReply =
           resolution.resolutionState === 'complete' ||
-          resolution.resolutionState === 'partial' ||
           resolution.legacyClassification === 'decline' ||
-          followUpActions.length > 0
-        ) {
+          (!hasInformationGoal &&
+            (resolution.resolutionState === 'partial' ||
+              followUpActions.length > 0));
+
+        if (shouldResolveReply) {
           const summary =
             resolution.resolutionState === 'insufficient'
               ? (baseOutcome.summary as string)
@@ -2118,12 +2498,20 @@ export class OutreachEngine {
         : runtime.outreachBeforeDispatchGlobalMemoryLookbackSeconds;
     const fallbackStart = currentTime - fallbackWindowSeconds;
     if (phase === 'before_dispatch') {
+      if (
+        Number.isFinite(session.occurrenceStartAt) &&
+        (session.occurrenceStartAt ?? 0) > 0
+      ) {
+        return Math.max(session.occurrenceStartAt!, fallbackStart);
+      }
       const templateCreatedAt = session.templateId
         ? this.repo.getTemplateById(session.templateId)?.createdAt
         : undefined;
-      const baseline = templateCreatedAt ?? session.createdAt;
-      return Number.isFinite(baseline) && baseline > 0
-        ? Math.min(baseline, fallbackStart)
+      if (Number.isFinite(templateCreatedAt) && (templateCreatedAt ?? 0) > 0) {
+        return Math.max(templateCreatedAt!, fallbackStart);
+      }
+      return Number.isFinite(session.createdAt) && session.createdAt > 0
+        ? Math.min(session.createdAt, fallbackStart)
         : fallbackStart;
     }
 
@@ -2414,6 +2802,7 @@ export class OutreachEngine {
   }
 
   private shouldResolveFromAnswerResolution(
+    session: OutreachSessionRecord,
     phase: Exclude<OutreachAnswerResolutionPhase, 'direct_reply'>,
     resolution: EvidenceResolutionPlan,
     evidence: OutreachAnswerEvidenceItem[],
@@ -2426,14 +2815,39 @@ export class OutreachEngine {
           typeof item.metadata === 'object' &&
           item.metadata.conversationMatched === true,
       );
-    if (hasRecentConversationMatch) {
+    if (
+      resolution.resolutionState === 'complete' ||
+      resolution.legacyClassification === 'decline'
+    ) {
       return true;
     }
-    return (
-      resolution.resolutionState === 'complete' ||
-      resolution.resolutionState === 'partial' ||
-      resolution.legacyClassification === 'decline'
+
+    if (this.getSessionInformationGoal(session)) {
+      return false;
+    }
+
+    const hasDirectFindings = resolution.directFindings.some(
+      (item) => item.trim().length > 0,
     );
+    const hasOpenQuestions = resolution.remainingQuestions.some(
+      (item) => item.trim().length > 0,
+    );
+    if (phase === 'before_followup') {
+      return resolution.resolutionState === 'partial' && hasDirectFindings;
+    }
+
+    return (
+      hasRecentConversationMatch &&
+      resolution.resolutionState === 'partial' &&
+      hasDirectFindings &&
+      !hasOpenQuestions
+    );
+  }
+
+  private getSessionInformationGoal(
+    session: OutreachSessionRecord,
+  ): string | undefined {
+    return normalizeString(session.renderedContext);
   }
 
   private buildAnswerResolutionOutcome(params: {
@@ -2463,6 +2877,8 @@ export class OutreachEngine {
       resolvedConclusion: params.resolution.resolvedConclusion,
       remainingQuestions: params.resolution.remainingQuestions,
       candidateArtifacts: params.resolution.candidateArtifacts,
+      goalSatisfied: params.resolution.goalSatisfied,
+      goalGaps: params.resolution.goalGaps,
       recommendedAction: params.resolution.recommendedAction,
       spawnedActionIds: actions.map((action) => action.id),
       followUpActions: actions.map((action) => ({
@@ -2532,9 +2948,27 @@ export class OutreachEngine {
       return null;
     }
 
+    const resolutionContext = [
+      session.renderedContext,
+      session.occurrenceKey
+        ? [
+            `本次是周期性主动询问的一次独立执行，执行标识：${session.occurrenceKey}。`,
+            session.occurrenceStartAt
+              ? `只把 ${new Date(session.occurrenceStartAt * 1000).toISOString()} 之后的证据当成本周期上下文。`
+              : '',
+            '不要把上一个周期的结论当成本周期已经完成，除非证据明确回答了本周期问题。',
+          ]
+            .filter(Boolean)
+            .join(' ')
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     const resolution = await this.evidencePlanner.resolve({
       question: session.renderedQuestion,
-      context: session.renderedContext,
+      context: resolutionContext,
+      informationGoal: this.getSessionInformationGoal(session),
       evidence,
       policy: {
         scene: 'outreach',
@@ -2546,18 +2980,27 @@ export class OutreachEngine {
       },
     });
 
-    if (!this.shouldResolveFromAnswerResolution(phase, resolution, evidence)) {
+    if (
+      !this.shouldResolveFromAnswerResolution(
+        session,
+        phase,
+        resolution,
+        evidence,
+      )
+    ) {
       return null;
     }
 
     const primaryEvidence = evidence[0];
-    const summary = await this.buildResolvedOutcomeSummary(
-      session,
-      normalizeString(primaryEvidence.metadata?.replyText) ??
-        primaryEvidence.content,
-      resolution.legacyClassification === 'decline' ? 'decline' : 'answer',
-      resolution.resolvedConclusion,
-    );
+    const summary =
+      resolution.summary ||
+      (await this.buildResolvedOutcomeSummary(
+        session,
+        normalizeString(primaryEvidence.metadata?.replyText) ??
+          primaryEvidence.content,
+        resolution.legacyClassification === 'decline' ? 'decline' : 'answer',
+        resolution.resolvedConclusion,
+      ));
 
     return {
       phase,
@@ -2642,6 +3085,7 @@ export class OutreachEngine {
     const resolved = await this.evidencePlanner.resolve({
       question: session.renderedQuestion,
       context: session.renderedContext,
+      informationGoal: this.getSessionInformationGoal(session),
       evidence: [
         {
           sourceKind: 'outreach_reply',
@@ -3034,7 +3478,7 @@ export class OutreachEngine {
         '- 如果对方拒绝或暂时无法提供信息，直接说明结论。',
         '',
         `问题：${session.renderedQuestion}`,
-        `上下文：${session.renderedContext ?? '无'}`,
+        `信息目标 / 完成标准：${session.renderedContext ?? '无'}`,
         `回复：${replyText}`,
       ].join('\n');
       const response = await llm.generate(prompt, {

@@ -19,8 +19,30 @@ test('smartFormat uses explicit memo wording for stable-memory sync', () => {
     'stable',
   );
 
-  assert.match(transcript, /请把以下信息存入随手记/);
+  assert.match(
+    transcript,
+    /来自 Personal AI \(私人 AI\) 的长期记忆信息存入随手记/,
+  );
   assert.match(transcript, /停车位置/);
+});
+
+test('smartFormat uses explicit source wording for briefing sync', () => {
+  const transcript = smartFormat(
+    [
+      {
+        type: 'note',
+        title: '项目 A 卡在接口联调',
+        content: '项目 A 卡在接口联调，本周优先处理发布问题。',
+      },
+    ],
+    'briefing',
+  );
+
+  assert.match(
+    transcript,
+    /来自 Personal AI \(私人 AI\) 的近期重点记录到随手记/,
+  );
+  assert.match(transcript, /项目 A 卡在接口联调/);
 });
 
 test('smartFormat uses explicit memo wording for reminder sync', () => {
@@ -39,7 +61,10 @@ test('smartFormat uses explicit memo wording for reminder sync', () => {
     'reminder',
   );
 
-  assert.match(transcript, /请在随手记中记录以下待办事项/);
+  assert.match(
+    transcript,
+    /来自 Personal AI \(私人 AI\) 的待办事项记录到随手记/,
+  );
   assert.doesNotMatch(transcript, /不要长期记住/);
   assert.doesNotMatch(transcript, /✅/);
 });

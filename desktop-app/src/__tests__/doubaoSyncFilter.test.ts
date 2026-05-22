@@ -29,13 +29,20 @@ test('isPersonalAiSyncUserMessage matches all known sync prefixes', () => {
   const samples = [
     '建立长期记忆同步线程。后续我会同步...',
     '请把以下长期稳定信息存入随手记：- A',
-    '请把以下近期记忆重点记录到随手记：',
+    '请把以下来自 Personal AI (私人 AI) 的长期稳定信息存入随手记：- A',
+    '请把以下来自 Personal AI (私人 AI) 的近期记忆重点记录到随手记：',
     '请把以下近期重点记录到随手记：',
+    '请把以下来自 Personal AI (私人 AI) 的近期重点记录到随手记：',
     '请把以下信息存入随手记：',
+    '请把以下来自 Personal AI (私人 AI) 的长期记忆信息存入随手记：',
     '请把以下内容存入随手记：',
+    '请把以下来自 Personal AI (私人 AI) 的内容存入随手记：',
     '请在随手记中记录以下待办事项：- todo',
+    '请把以下来自 Personal AI (私人 AI) 的待办事项记录到随手记：- todo',
     '下面是一些通知推送，请不要记录为待办，也不要当作长期记忆。',
+    '下面是一些来自 Personal AI (私人 AI) 的通知推送，请不要记录为待办，也不要当作长期记忆。',
     '问题：今天天气怎么样\n服务端检索结论：晴天',
+    '问题：今天天气怎么样\nPersonal AI (私人 AI) 检索结论：晴天',
     '📚 长期记忆同步\n\n📊 类型分布:',
     '📦 随手记同步 (3 条)',
     '📋 随手记概览:\n',
@@ -64,7 +71,11 @@ test('isPersonalAiSyncUserMessage ignores ordinary user content', () => {
 test('filterDoubaoSyncMessages drops sync user message and assistant ack pair', () => {
   const messages = [
     makeMessage(
-      { role: 'user', content: '请把以下长期稳定信息存入随手记：- A' },
+      {
+        role: 'user',
+        content:
+          '请把以下来自 Personal AI (私人 AI) 的长期稳定信息存入随手记：- A',
+      },
       0,
     ),
     makeMessage({ role: 'assistant', content: '已存入随手记。' }, 1),
@@ -89,7 +100,11 @@ test('filterDoubaoSyncMessages does not drop assistant turn that is not an ack',
   const messages = [
     makeMessage({ role: 'user', content: '帮我列张清单' }, 0),
     makeMessage(
-      { role: 'user', content: '请把以下信息存入随手记：- A' },
+      {
+        role: 'user',
+        content:
+          '请把以下来自 Personal AI (私人 AI) 的长期记忆信息存入随手记：- A',
+      },
       1,
     ),
     makeMessage({ role: 'user', content: '继续帮我写' }, 2),

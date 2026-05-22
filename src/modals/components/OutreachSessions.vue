@@ -4,13 +4,13 @@
       <div>
         <h2>主动询问</h2>
         <p>
-          查看待触发模板、已发出会话、等待回复和已完成的主动询问。系统内部观察规则采集到的证据会在这里按会话展示。
+          查看待触发计划、已排程待发出、等待回复和已完成的主动询问。系统内部观察规则采集到的证据会在这里按会话展示。
         </p>
       </div>
 
       <div class="summary-row">
         <span class="summary-pill"
-          >待触发模板 {{ visibleTemplates.length }}</span
+          >待触发计划 {{ visibleTemplates.length }}</span
         >
         <span class="summary-pill"
           >已排程待发出 {{ queuedSessions.length }}</span
@@ -66,7 +66,7 @@
       <input
         v-model="templateId"
         class="filter-input"
-        placeholder="templateId"
+        placeholder="计划 ID"
         @keydown.enter="applyFilters"
       />
       <input
@@ -93,11 +93,11 @@
     <div v-else>
       <section v-if="visibleTemplates.length > 0" class="group-section">
         <div class="group-head">
-          <h3>待触发模板</h3>
+          <h3>待触发计划</h3>
           <span class="group-count">{{ visibleTemplates.length }}</span>
         </div>
         <p class="group-desc">
-          这些是后续仍会继续触发的模板；如果模板之前已经执行过，那次会话会单独出现在历史记录里。
+          这些是未来会触发的主动询问计划；循环计划会保留在这里，已发出的每次询问会单独进入历史记录。
         </p>
 
         <div class="session-list">
@@ -119,12 +119,12 @@
                 </h3>
                 <p class="context-text">
                   {{
-                    item.template.contextTemplate || '模板已同步，等待触发。'
+                    item.template.contextTemplate || '计划已同步，等待触发。'
                   }}
                 </p>
               </div>
               <div class="head-badges">
-                <span class="badge queued">待触发模板</span>
+                <span class="badge queued">待触发计划</span>
                 <span class="badge muted">{{
                   templateSyncStateLabel(item.template.syncState)
                 }}</span>
@@ -199,7 +199,7 @@
                   </router-link>
                 </h3>
                 <p class="context-text">
-                  {{ session.renderedContext || '无上下文' }}
+                  {{ session.renderedContext || '无信息目标' }}
                 </p>
               </div>
               <div class="head-badges">
@@ -336,7 +336,7 @@
                   </router-link>
                 </h3>
                 <p class="context-text">
-                  {{ session.renderedContext || '无上下文' }}
+                  {{ session.renderedContext || '无信息目标' }}
                 </p>
               </div>
               <div class="head-badges">
@@ -449,7 +449,7 @@
                   </router-link>
                 </h3>
                 <p class="context-text">
-                  {{ session.renderedContext || '无上下文' }}
+                  {{ session.renderedContext || '无信息目标' }}
                 </p>
               </div>
               <div class="head-badges">
@@ -572,7 +572,7 @@
                   </router-link>
                 </h3>
                 <p class="context-text">
-                  {{ session.renderedContext || '无上下文' }}
+                  {{ session.renderedContext || '无信息目标' }}
                 </p>
               </div>
               <div class="head-badges">
@@ -756,7 +756,7 @@ const setupBannerTitle = computed(() => {
 });
 const setupBannerText = computed(() => {
   if (!runtimeConfig.value?.outreachEnabled) {
-    return '当前页面显示的是历史记录或待触发模板，但引擎关闭时不会真正派发新的主动询问。请先到 Options 页面开启。';
+    return '当前页面显示的是历史记录或待触发计划，但引擎关闭时不会真正派发新的主动询问。请先到 Options 页面开启。';
   }
   return '你已经进入了主动询问页面，但缺少发送所需的 RingCentral 配置。补齐后，待审批和待发送会话才会继续推进。';
 });
@@ -1389,7 +1389,14 @@ function evidenceMentionLabels(session: OutreachSession): Record<string, string>
 .card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem;
+  gap: 0.45rem;
+}
+
+.head-badges {
+  align-self: flex-start;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 60%;
 }
 
 .card-meta {
@@ -1465,44 +1472,61 @@ function evidenceMentionLabels(session: OutreachSession): Record<string, string>
 }
 
 .badge {
-  padding: 0.18rem 0.58rem;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 0.22rem 0.65rem;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.24);
 }
 
 .badge.muted {
-  background: rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.14);
   color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.22);
 }
 
 .badge.evidence {
   background: rgba(34, 197, 94, 0.16);
   color: #86efac;
+  border-color: rgba(34, 197, 94, 0.28);
 }
 
 .badge.queued {
   background: rgba(14, 165, 233, 0.16);
   color: #7dd3fc;
+  border-color: rgba(14, 165, 233, 0.28);
 }
 
 .badge.waiting {
   background: rgba(245, 158, 11, 0.16);
   color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.28);
 }
 
 .badge.resolved {
   background: rgba(34, 197, 94, 0.16);
   color: #86efac;
+  border-color: rgba(34, 197, 94, 0.28);
 }
 
 .badge.error {
   background: rgba(239, 68, 68, 0.16);
   color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.28);
 }
 
 .badge.warn {
   background: rgba(245, 158, 11, 0.16);
   color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.28);
 }
 
 .session-link {

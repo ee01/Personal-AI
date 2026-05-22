@@ -226,7 +226,14 @@ test('DoubaoChatSource collects cached history and extracts pending chat', async
     assert.equal(openLoginResult.opened, true);
 
     const result = await source.runNow();
-    assert.deepEqual(result, { insertedCount: 3, implemented: true });
+    assert.deepEqual(result, {
+      insertedCount: 3,
+      extractedConversationCount: 1,
+      extractedMessageCount: 3,
+      artifactCount: 1,
+      skippedConversationCount: 0,
+      implemented: true,
+    });
     assert.equal(collector.collectCalls, 1);
     assert.deepEqual(rawStore.getStats('doubao'), {
       messageCount: 3,
@@ -324,7 +331,14 @@ test('DoubaoChatSource collects cached history and extracts pending chat', async
     assert.ok(cursor?.lastProcessedUpdateTime);
 
     const secondResult = await source.runNow();
-    assert.deepEqual(secondResult, { insertedCount: 0, implemented: true });
+    assert.deepEqual(secondResult, {
+      insertedCount: 0,
+      extractedConversationCount: 0,
+      extractedMessageCount: 0,
+      artifactCount: 0,
+      skippedConversationCount: 0,
+      implemented: true,
+    });
     assert.equal(collector.collectCalls, 2);
     assert.equal(fetchCalls.length, 1);
   } finally {
@@ -466,6 +480,10 @@ test('DoubaoChatSource skips conversations that still look in progress', async (
 
     assert.deepEqual(await source.runNow(), {
       insertedCount: 0,
+      extractedConversationCount: 0,
+      extractedMessageCount: 0,
+      artifactCount: 0,
+      skippedConversationCount: 0,
       implemented: true,
     });
     assert.equal(fetchCalls, 0);

@@ -15,6 +15,20 @@ export interface RuleSafetySummary {
   reasons: string[];
 }
 
+export type RuleAutoReplyMode = 'immediate' | 'delayed' | 'manual';
+
+export interface RuleActionSummaryInput {
+  notifyMethod?: string;
+  mentionMe?: boolean;
+  digestEnabled?: boolean;
+  digestFrequency?: 'daily' | 'weekly';
+  autoReply?: boolean;
+  autoReplyMode?: RuleAutoReplyMode;
+  followThread?: boolean;
+  automationPrompt?: string;
+  automationRequiresApproval?: boolean;
+}
+
 const normalizeOptionalText = (value?: string): string => value?.trim() || '';
 
 const hasNotifyMethod = (
@@ -35,6 +49,50 @@ const isShortScopeValue = (value?: string): boolean => {
   }
   return compact.length > 0 && compact.length <= 2;
 };
+
+export function getRuleActionSummaryItems(
+  input: RuleActionSummaryInput,
+): string[] {
+  const items = ['写入记忆'];
+
+  if (input.digestEnabled) {
+    items.push(
+      `${input.digestFrequency === 'weekly' ? '每周' : '每日'}摘要（不即时推送）`,
+    );
+  }
+  if (!input.digestEnabled) {
+    if (hasNotifyMethod(input.notifyMethod, 'bot')) {
+      items.push('Glip 推送');
+    }
+    if (hasNotifyMethod(input.notifyMethod, 'chrome')) {
+      items.push('Chrome 通知');
+    }
+    if (input.mentionMe && hasNotifyMethod(input.notifyMethod, 'bot')) {
+      items.push('@我');
+    }
+  }
+  if (input.autoReply) {
+    const modeLabel =
+      input.autoReplyMode === 'manual'
+        ? '手动审核'
+        : input.autoReplyMode === 'delayed'
+          ? '延迟可拦截'
+          : '直接发送';
+    items.push(`自动答复：${modeLabel}`);
+  }
+  if (input.followThread) {
+    items.push('关注后续');
+  }
+  if (normalizeOptionalText(input.automationPrompt)) {
+    items.push(
+      input.automationRequiresApproval
+        ? '联动操作：需批准'
+        : '联动操作：自动执行',
+    );
+  }
+
+  return items;
+}
 
 export function getRuleSafetySummary(
   input: RuleSafetyInput,

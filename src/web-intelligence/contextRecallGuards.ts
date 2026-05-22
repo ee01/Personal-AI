@@ -74,6 +74,8 @@ const SENSITIVE_QUERY_PARAM_NAMES = new Set([
 const TRACKING_QUERY_PARAM_PATTERN =
   /^(?:utm_.+|fbclid|gclid|gbraid|wbraid|msclkid|mc_cid|mc_eid|igshid|yclid|_hsenc|_hsmi|vero_id|mkt_tok|ref|ref_src|spm)$/i;
 const UNSAFE_EXPLORE_ROUTE_VISIBLE_CHARS_PATTERN = /[\s<>"'`]/;
+const LOW_INFORMATION_CONTEXT_RECALL_SHELL_PATTERN =
+  /(发送位置|当前位置|当前这个|当前.*(?:群|群聊|会话)|ringcentral\s*(?:群|group)|send(?:ing)?\s+location|current\s+(?:ringcentral\s+)?(?:group|chat|thread)|content\s*[:：]?)/i;
 const CONTEXT_RECALL_GENERIC_TERMS = new Set([
   'about',
   'accepted',
@@ -117,12 +119,18 @@ const CONTEXT_RECALL_GENERIC_TERMS = new Set([
   'webpage',
   'wed',
 ]);
+const CONTEXT_SELECTION_MIN_SIGNAL_CHARS = 12;
+const CONTEXT_SELECTION_MIN_CJK_CHARS = 6;
 
 const CONTEXT_RECALL_SPECIFIC_SIGNAL_PATTERN =
-  /\b(action|android|api|approval|blocked|bug|commit|customer|decision|decided|dependency|design|estimate|follow[-\s]?up|handoff|incident|ios|issue|jira|launch|layout|migration|owner|plan|planning|project|release|review|risk|ship|task|thread|todo|ux)\b/i;
+  /\b(action|android|api|approval|billing|blocked|budget|bug|claude|codex|commit|composer|cost|credit|cursor|customer|decision|decided|dependency|design|dollar|estimate|fast|follow[-\s]?up|freshservice|goal|gpt[-\s]?5(?:\.5)?|handoff|hard\s+limit|incident|ios|issue|jira|launch|layout|limit|migration|model|openai|owner|plan|planning|premium\s+request|price|project|quota|rate\s+limit|release|review|risk|ship|soft\s+limit|task|thread|token|todo|usage|ux)\b/i;
 const CONTEXT_RECALL_CJK_SPECIFIC_SIGNAL_PATTERN =
-  /承诺|依赖|进展|问题|风险|决定|结论|待办|阻塞|负责人|排期|评审|方案|上线|需求|修复|讨论|计划|跟进|设计|布局|客户|事故|审批|迁移/;
+  /承诺|依赖|进展|问题|风险|决定|结论|待办|阻塞|负责人|排期|评审|方案|上线|需求|修复|讨论|计划|跟进|设计|布局|客户|事故|审批|迁移|预算|额度|限额|超限|用量|费用|成本|价格|模型|令牌|申请|工具|每月|一个月/;
 const CONTEXT_RECALL_ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/;
+const CONTEXT_SELECTION_SECRET_PATTERN =
+  /(?:-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----|\b(?:sk|rk|pk|org|proj)-[A-Za-z0-9_-]{20,}\b|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bxox[abprs]-[A-Za-z0-9-]{20,}\b|\bAKIA[0-9A-Z]{16}\b|(?:api[_\s-]?key|access[_\s-]?token|refresh[_\s-]?token|client[_\s-]?secret|id[_\s-]?token|password|passcode|credential|credentials)\s*[:=]\s*['"]?[A-Za-z0-9._~+/=-]{8,})/i;
+const CONTEXT_SELECTION_CARD_NUMBER_PATTERN =
+  /(?:\b\d[ -]*?){13,19}\b/;
 
 export interface SensitiveControlDescriptor {
   type?: string | null;
@@ -141,10 +149,88 @@ export type ContextSiteAllowRecord = Record<string, number>;
 
 export interface DisplayableContextRecallCandidate {
   title?: string;
+  uiSummary?: string;
   snippet?: string;
   sourceLabel?: string;
   sourceTitle?: string;
+  displayPriority?: string | null;
+  whyRelevant?: string[] | null;
 }
+
+export interface ContextRecallMetaCandidate {
+  type?: string | null;
+  uiSummary?: string | null;
+  sourceLabel?: string | null;
+  sourceTitle?: string | null;
+  timestamp?: number | null;
+  whyMatched?: string | null;
+  whyRelevant?: string[] | null;
+  reasonType?: string | null;
+  evidenceRole?: string | null;
+  sourceContext?: string | null;
+}
+
+const CONTEXT_RECALL_SOURCE_LABELS: Record<string, string> = {
+  ai_chat: 'AI 对话',
+  chatgpt: 'ChatGPT',
+  claude: 'Claude',
+  doubao: '豆包',
+  entity: '实体',
+  gemini: 'Gemini',
+  glip: 'RingCentral 消息',
+  jira: 'Jira',
+  manual: '手动记忆',
+  markdown: 'Markdown',
+  meeting: '会议',
+  message: '消息',
+  reflection: '反思记录',
+  system: '系统记忆',
+  user_core: '用户画像',
+  web: '网页',
+  webpage: '网页',
+};
+
+const CONTEXT_RECALL_REASON_TYPE_LABELS: Record<string, string> = {
+  context_overlap: '上下文相关',
+  direct_reference: '直接关联',
+  entity_match: '实体关联',
+  entity: '实体关联',
+  keyword: '关键词匹配',
+  keyword_match: '关键词匹配',
+  keyword_overlap: '关键词匹配',
+  linked_artifact: '相关资料',
+  meeting_series: '同系列会议',
+  open_action: '未关闭行动项',
+  prior_decision: '历史决策',
+  recent_context: '近期上下文',
+  recent: '近期上下文',
+  same_people: '相关人员',
+  same_project: '同一项目',
+  semantic: '语义相关',
+  semantic_match: '语义相关',
+  source: '来源相关',
+  source_match: '来源相关',
+  time_relevant: '时间相关',
+  weak_related: '相关背景',
+};
+
+const CONTEXT_RECALL_EVIDENCE_ROLE_LABELS: Record<string, string> = {
+  action: '行动项',
+  action_item: '行动项',
+  artifact: '资料',
+  background: '背景信息',
+  contradiction: '相反证据',
+  context: '背景信息',
+  decision: '决策依据',
+  direct_evidence: '直接证据',
+  evidence: '证据',
+  follow_up: '后续事项',
+  issue: '问题线索',
+  open_question: '开放问题',
+  related_context: '相关上下文',
+  risk: '风险',
+  supporting: '支持证据',
+};
 
 export function normalizeContextSiteMuteHost(rawHostname: string): string {
   return rawHostname.trim().toLowerCase().replace(/\.$/, '');
@@ -371,15 +457,21 @@ export function isDisplayableContextRecallMatch(
   match: DisplayableContextRecallCandidate | null | undefined,
 ): boolean {
   if (!match) return false;
+  if (normalizeContextRecallInfo(match.displayPriority).toLowerCase() === 'hidden') {
+    return false;
+  }
 
   const title = normalizeContextRecallInfo(match.title);
+  const uiSummary = normalizeContextRecallInfo(match.uiSummary);
   const snippet = normalizeContextRecallInfo(match.snippet);
   const sourceTitle = normalizeContextRecallInfo(match.sourceTitle);
   const sourceLabel = normalizeContextRecallInfo(match.sourceLabel);
 
-  if (!title && !snippet) return false;
+  if (!title && !uiSummary && !snippet) return false;
 
-  const combined = [title, snippet, sourceTitle].filter(Boolean).join(' ');
+  const combined = [title, uiSummary, snippet, sourceTitle]
+    .filter(Boolean)
+    .join(' ');
   const stripped = stripContextRecallShellLabels(combined);
   const hasSpecificSignal = hasSpecificContextRecallSignal(stripped);
   const meaningfulTokenCount = countContextRecallMeaningfulTokens(stripped);
@@ -415,6 +507,212 @@ export function isDisplayableContextRecallMatch(
   return hasSpecificSignal || meaningfulTokenCount >= 3 || cjkSignalChars >= 8;
 }
 
+export function formatContextRecallMemoryType(
+  type?: string | null,
+): string {
+  const normalized = normalizeContextRecallInfo(type).toLowerCase();
+  switch (normalized) {
+    case 'message':
+      return '消息记忆';
+    case 'chunk':
+      return '片段记忆';
+    case 'entity':
+      return '实体记忆';
+    default: {
+      const cleaned = normalizeContextRecallInfo(type);
+      return cleaned ? `${cleaned}记忆` : '记忆';
+    }
+  }
+}
+
+export function formatContextRecallSourceLabel(
+  sourceLabel?: string | null,
+): string | null {
+  const cleaned = normalizeContextRecallInfo(sourceLabel);
+  if (!cleaned) return null;
+  return CONTEXT_RECALL_SOURCE_LABELS[cleaned.toLowerCase()] || cleaned;
+}
+
+export function formatContextRecallReasonType(
+  reasonType?: string | null,
+): string | null {
+  return formatContextRecallEnumLabel(
+    reasonType,
+    CONTEXT_RECALL_REASON_TYPE_LABELS,
+  );
+}
+
+export function formatContextRecallEvidenceRole(
+  evidenceRole?: string | null,
+): string | null {
+  return formatContextRecallEnumLabel(
+    evidenceRole,
+    CONTEXT_RECALL_EVIDENCE_ROLE_LABELS,
+  );
+}
+
+export function formatContextRecallDisplayPriorityLabel(
+  displayPriority?: string | null,
+): string | null {
+  const normalized = normalizeContextRecallInfo(displayPriority).toLowerCase();
+  if (normalized === 'p1') return '强相关';
+  if (normalized === 'p2') return '可能相关';
+  return null;
+}
+
+export function buildContextRecallPeekFooterItems(
+  match: ContextRecallMetaCandidate,
+): string[] {
+  const sourceLabel = formatContextRecallSourceLabel(match.sourceLabel);
+  const sourceTitle = clipContextRecallMetaValue(match.sourceTitle);
+  const reasonType = formatContextRecallReasonType(match.reasonType);
+  const evidenceRole = formatContextRecallEvidenceRole(match.evidenceRole);
+  const items: string[] = [];
+
+  if (
+    sourceTitle &&
+    (!sourceLabel || sourceTitle.toLowerCase() !== sourceLabel.toLowerCase())
+  ) {
+    items.push(sourceTitle);
+  } else if (sourceLabel) {
+    items.push(sourceLabel);
+  }
+  if (reasonType) items.push(reasonType);
+  if (evidenceRole && evidenceRole !== reasonType) items.push(evidenceRole);
+
+  return items.slice(0, 3);
+}
+
+export function normalizeContextSelectionText(value?: string | null): string {
+  return normalizeContextRecallInfo(value)
+    .replace(/[\u200b-\u200f\ufeff]/g, '')
+    .trim();
+}
+
+export function isContextSelectionTextEligible(value?: string | null): boolean {
+  const text = normalizeContextSelectionText(value);
+  if (!text) return false;
+  if (hasSensitiveContextSelectionSignal(text)) return false;
+  const signalChars = (text.match(/[A-Za-z0-9\u3400-\u9fff]/g) || []).length;
+  const cjkChars = (text.match(/[\u3400-\u9fff]/g) || []).length;
+  if (
+    signalChars < CONTEXT_SELECTION_MIN_SIGNAL_CHARS &&
+    cjkChars < CONTEXT_SELECTION_MIN_CJK_CHARS
+  ) {
+    return false;
+  }
+
+  return (
+    hasSpecificContextRecallSignal(text) ||
+    countContextRecallMeaningfulTokens(text) >= 3 ||
+    cjkChars >= CONTEXT_SELECTION_MIN_CJK_CHARS
+  );
+}
+
+function hasSensitiveContextSelectionSignal(text: string): boolean {
+  if (CONTEXT_SELECTION_SECRET_PATTERN.test(text)) {
+    return true;
+  }
+
+  const cardLike = text.match(CONTEXT_SELECTION_CARD_NUMBER_PATTERN)?.[0];
+  if (!cardLike) {
+    return false;
+  }
+
+  const digits = cardLike.replace(/\D/g, '');
+  return digits.length >= 13 && digits.length <= 19 && passesLuhnCheck(digits);
+}
+
+function passesLuhnCheck(digits: string): boolean {
+  let sum = 0;
+  let doubleDigit = false;
+  for (let index = digits.length - 1; index >= 0; index--) {
+    let value = Number(digits[index]);
+    if (!Number.isInteger(value)) return false;
+    if (doubleDigit) {
+      value *= 2;
+      if (value > 9) value -= 9;
+    }
+    sum += value;
+    doubleDigit = !doubleDigit;
+  }
+  return sum > 0 && sum % 10 === 0;
+}
+
+export function buildContextRecallMetaItems(
+  match: ContextRecallMetaCandidate,
+): string[] {
+  const items = [`记忆类型：${formatContextRecallMemoryType(match.type)}`];
+  const sourceLabel = formatContextRecallSourceLabel(match.sourceLabel);
+  const sourceTitle = clipContextRecallMetaValue(match.sourceTitle);
+  const timestamp = formatRecallTimestamp(match.timestamp ?? undefined);
+  const whyMatched = clipContextRecallMetaValue(match.whyMatched);
+  const whyRelevant = (match.whyRelevant || [])
+    .map((item) => clipContextRecallMetaValue(item))
+    .filter(Boolean)
+    .slice(0, 3);
+  const reasonType = formatContextRecallReasonType(match.reasonType);
+  const evidenceRole = formatContextRecallEvidenceRole(match.evidenceRole);
+  const sourceContext = clipContextRecallMetaValue(match.sourceContext);
+
+  if (sourceLabel) {
+    items.push(`来源：${sourceLabel}`);
+  }
+  if (
+    sourceTitle &&
+    (!sourceLabel || sourceTitle.toLowerCase() !== sourceLabel.toLowerCase())
+  ) {
+    items.push(`来源标题：${sourceTitle}`);
+  }
+  if (timestamp) {
+    items.push(`记录时间：${timestamp}`);
+  }
+  if (reasonType) {
+    items.push(`匹配类型：${reasonType}`);
+  }
+  if (evidenceRole) {
+    items.push(`证据角色：${evidenceRole}`);
+  }
+  if (whyMatched) {
+    items.push(`匹配原因：${whyMatched}`);
+  }
+  if (whyRelevant.length) {
+    items.push(`关联锚点：${whyRelevant.join(' / ')}`);
+  }
+  if (sourceContext) {
+    items.push(`来源上下文：${sourceContext}`);
+  }
+
+  return items;
+}
+
+export function buildContextRecallCompactMetaItems(
+  match: ContextRecallMetaCandidate,
+): string[] {
+  const sourceLabel = formatContextRecallSourceLabel(match.sourceLabel);
+  const sourceTitle = clipContextRecallMetaValue(match.sourceTitle);
+  const timestamp = formatRecallTimestamp(match.timestamp ?? undefined);
+  const reasonType = formatContextRecallReasonType(match.reasonType);
+  const items: string[] = [];
+
+  if (
+    sourceTitle &&
+    (!sourceLabel || sourceTitle.toLowerCase() !== sourceLabel.toLowerCase())
+  ) {
+    items.push(sourceTitle);
+  } else if (sourceLabel) {
+    items.push(sourceLabel);
+  }
+  if (timestamp) {
+    items.push(timestamp);
+  }
+  if (reasonType) {
+    items.push(reasonType);
+  }
+
+  return items;
+}
+
 export function isLowValueContextHost(rawHostname: string): boolean {
   const hostname = rawHostname.trim().toLowerCase();
   if (!hostname) return true;
@@ -428,6 +726,29 @@ function normalizeContextRecallInfo(value?: string | null): string {
   return (value || '').replace(/\s+/g, ' ').trim();
 }
 
+function clipContextRecallMetaValue(value?: string | null): string {
+  const cleaned = normalizeContextRecallInfo(value);
+  if (cleaned.length <= 90) return cleaned;
+  return `${cleaned.slice(0, 90).trimEnd()}...`;
+}
+
+function formatContextRecallEnumLabel(
+  value: string | null | undefined,
+  labels: Record<string, string>,
+): string | null {
+  const cleaned = normalizeContextRecallInfo(value);
+  if (!cleaned) return null;
+
+  const normalized = cleaned.toLowerCase();
+  const label = labels[normalized];
+  if (label) return label;
+
+  return cleaned
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function normalizeContextRecallComparable(value: string): string {
   return stripContextRecallShellLabels(value)
     .toLowerCase()
@@ -439,10 +760,10 @@ function normalizeContextRecallComparable(value: string): string {
 function stripContextRecallShellLabels(value: string): string {
   return value
     .replace(
-      /\b(calendar event|current context|meeting|memory|related memory|source|webpage|web page|page)\b\s*[:：-]*/gi,
+      /\b(calendar event|content|current context|current group|current chat|current thread|group|meeting|memory|related memory|send(?:ing)? location|source|webpage|web page|page)\b\s*[:：-]*/gi,
       ' ',
     )
-    .replace(/(?:^|\s)(会议|网页|页面|来源|记忆|相关记忆)\s*[:：-]*/g, ' ')
+    .replace(/(?:^|\s)(会议|网页|页面|来源|记忆|相关记忆|内容|发送位置|当前位置|当前这个|当前|这个|群聊|群|会话|消息)\s*[:：-]*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -460,6 +781,13 @@ function areEquivalentContextRecallTexts(left: string, right: string): boolean {
 function looksLikeContextRecallShell(value: string): boolean {
   const comparable = normalizeContextRecallComparable(value);
   if (!comparable) return true;
+  if (
+    LOW_INFORMATION_CONTEXT_RECALL_SHELL_PATTERN.test(value) &&
+    countContextRecallMeaningfulTokens(comparable) < 2 &&
+    countContextRecallCjkSignalChars(comparable) < 8
+  ) {
+    return true;
+  }
   return (
     comparable === 'ringcentral video' ||
     comparable === 'video meetings' ||

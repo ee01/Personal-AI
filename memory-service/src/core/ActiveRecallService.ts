@@ -109,6 +109,7 @@ export class ActiveRecallService {
         totalFound: baseResult.totalFound,
         queryTimeMs: Date.now() - startedAt,
         channels: baseResult.channels,
+        channelDiagnostics: baseResult.channelDiagnostics,
       };
     }
 
@@ -173,6 +174,7 @@ export class ActiveRecallService {
       totalFound: baseResult.totalFound,
       queryTimeMs: Date.now() - startedAt,
       channels: baseResult.channels,
+      channelDiagnostics: baseResult.channelDiagnostics,
       blocks,
       analysis,
     };

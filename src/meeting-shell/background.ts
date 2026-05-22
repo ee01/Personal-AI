@@ -8,6 +8,7 @@ import {
   MeetingPilotCaptureState,
   MeetingPilotDetectionPayload,
   MeetingPilotDecisionItem,
+  MeetingPilotMemoryRef,
   MeetingPilotParticipant,
   MeetingPilotParticipantStance,
   MeetingPilotSessionSnapshot,
@@ -42,6 +43,7 @@ import {
 import {
   buildMeetingPilotContextRecallRequest,
   contextMatchToMeetingPilotMemoryRef,
+  isContextRecallMatchVisibleForMeetingPilot,
 } from './memoryPresentation';
 import {
   createAliasResolverFromEnv,
@@ -80,6 +82,24 @@ export { mergeActionItemReviewStates } from './actionItemReview';
 const UNASSIGNED_ACTION_OWNER = '待分配';
 
 const registry = new MeetingPilotRegistry();
+
+const MEETING_MEMORY_PRIORITY_ORDER: Record<string, number> = {
+  p1: 0,
+  p2: 1,
+  hidden: 9,
+};
+
+function compareMeetingMemoryRefs(
+  left: MeetingPilotMemoryRef,
+  right: MeetingPilotMemoryRef,
+): number {
+  const leftPriority = MEETING_MEMORY_PRIORITY_ORDER[left.displayPriority || 'p2'] ?? 2;
+  const rightPriority = MEETING_MEMORY_PRIORITY_ORDER[right.displayPriority || 'p2'] ?? 2;
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+  return right.score - left.score;
+}
 let initPromise: Promise<void> | null = null;
 let offscreenReady = false;
 const memoryRefreshTimers = new Map<number, number>();
@@ -1885,9 +1905,10 @@ async function startMeetingCapture(
     isMeetingRingCentralTranscriptEnabled(envConfig) &&
     isRecentRingCentralTranscriptActive(session);
   const selfName = resolveSessionSelfName(session);
+  const captureStartedAt = Date.now();
   const armed = await registry.setCaptureState(tabId, {
     kind: 'armed',
-    startedAt: Date.now(),
+    startedAt: captureStartedAt,
     stoppedAt: undefined,
     chunkCount: session.capture.chunkCount,
     lastError: undefined,
@@ -1916,7 +1937,8 @@ async function startMeetingCapture(
       });
       const updated = await registry.setCaptureState(tabId, {
         kind: 'recording',
-        startedAt: session.capture.startedAt || Date.now(),
+        startedAt: captureStartedAt,
+        stoppedAt: undefined,
         streamId: fallbackStreamId,
         chunkCount: session.capture.chunkCount,
         lastError: undefined,
@@ -1976,7 +1998,8 @@ async function startMeetingCapture(
 
   const updated = await registry.setCaptureState(tabId, {
     kind: 'recording',
-    startedAt: session.capture.startedAt || Date.now(),
+    startedAt: captureStartedAt,
+    stoppedAt: undefined,
     streamId,
     chunkCount: session.capture.chunkCount,
     lastError: undefined,
@@ -3378,6 +3401,19 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
   ]
     .filter(Boolean)
     .join(' ');
+  const actionSummary = session.actionItems
+    .slice(0, 5)
+    .map((item) =>
+      [item.title, item.owner ? `owner: ${item.owner}` : '', item.deadline]
+        .filter(Boolean)
+        .join(' · '),
+    )
+    .join('\n');
+  const decisionSummary = session.decisions
+    .slice(0, 5)
+    .map((decision) => decision.text)
+    .filter(Boolean)
+    .join('\n');
 
   // Don't fire recall if there is no meaningful content beyond the meeting
   // title. "RingCentral Video" / generic titles are useless as recall signals
@@ -3403,18 +3439,19 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
   // self-echoing recall noise.
   const requestBody = buildMeetingPilotContextRecallRequest({
     excludeMeetingId: session.meetingId,
+    meetingUrl: session.url,
     meetingTitle: session.title,
+    participants: session.participants.map((participant) => participant.name),
     currentTopic: session.currentTopic,
     summary: session.summary,
     transcriptSummary,
     screenObservation,
+    actionSummary,
+    decisionSummary,
     meetingMetadata,
   });
 
-  if (
-    !requestBody.primaryText?.trim() &&
-    !requestBody.secondaryTexts?.some((part) => part.trim())
-  ) {
+  if (!requestBody) {
     return;
   }
 
@@ -3423,12 +3460,11 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
     const result = await client.contextRecall(requestBody);
 
     const memoryRefs = result.matches
-      .filter((match) => {
-        const itemMeetingId = (match as any)?.metadata?.meetingId;
-        return !itemMeetingId || itemMeetingId !== session.meetingId;
-      })
+      .filter(isContextRecallMatchVisibleForMeetingPilot)
       .map(contextMatchToMeetingPilotMemoryRef)
-      .filter((ref) => ref && (ref.snippet?.trim() || ref.fullSnippet?.trim()));
+      .filter((ref) => ref && (ref.snippet?.trim() || ref.fullSnippet?.trim()))
+      .sort(compareMeetingMemoryRefs)
+      .slice(0, 3);
 
     const updated = await registry.updateObservation(tabId, { memoryRefs });
     if (updated) {

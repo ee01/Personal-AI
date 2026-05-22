@@ -11,6 +11,7 @@ import type { FastifyInstance } from 'fastify';
 import type {
   RecallAnalysis,
   RecallBlock,
+  RecallChannelDiagnostic,
   RecallItem,
   RecallScope,
 } from '../types/index.js';
@@ -79,6 +80,8 @@ interface AskResponse {
   blocks?: AskBlock[];
   /** Higher-level synthesis derived from the recalled evidence. */
   analysis?: RecallAnalysis;
+  /** Per-channel recall coverage used by search UIs to explain hybrid retrieval. */
+  channelDiagnostics?: RecallChannelDiagnostic[];
   resolutionState?: EvidenceResolutionState;
   missingInfo?: string[];
   followUpActions?: Array<{
@@ -99,6 +102,7 @@ interface PreparedAskContext {
   recalledItems: RecallItem[];
   recallBlocks?: AskBlock[];
   recallAnalysis?: RecallAnalysis;
+  recallChannelDiagnostics?: RecallChannelDiagnostic[];
   intentContext: string;
   combinedMemoryContext: string;
   actionOutcome: {
@@ -441,6 +445,7 @@ async function recallForAsk(
   parsedIntent: ParsedQueryIntent;
   recalledItems: RecallItem[];
   recallBlocks?: RecallBlock[];
+  recallChannelDiagnostics?: RecallChannelDiagnostic[];
   memoryContext: string;
   intentContext: string;
 }> {
@@ -478,6 +483,7 @@ async function recallForAsk(
     parsedIntent,
     recalledItems,
     recallBlocks: recallResult.blocks,
+    recallChannelDiagnostics: recallResult.channelDiagnostics,
     memoryContext: formatRecalledContext(recalledItems),
     intentContext: formatIntentContext(parsedIntent),
   };
@@ -716,8 +722,13 @@ async function prepareAskContext(
   reportStatus?: AskStatusReporter,
 ): Promise<PreparedAskContext> {
   await reportStatus?.('正在检索相关记忆...');
-  const { recalledItems, recallBlocks, memoryContext, intentContext } =
-    await recallForAsk(db, query, includeEvidence, scope);
+  const {
+    recalledItems,
+    recallBlocks,
+    recallChannelDiagnostics,
+    memoryContext,
+    intentContext,
+  } = await recallForAsk(db, query, includeEvidence, scope);
   await reportStatus?.('正在分析已知信息...');
   const resolutionPlanner = new EvidenceResolutionPlanner();
   const initialPlan = await resolutionPlanner.resolve({
@@ -756,6 +767,7 @@ async function prepareAskContext(
   return {
     recalledItems,
     recallBlocks: askBlocks.length > 0 ? askBlocks : undefined,
+    recallChannelDiagnostics,
     intentContext,
     combinedMemoryContext,
     actionOutcome,
@@ -817,6 +829,19 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
                 },
               },
               queryTimeMs: { type: 'number' },
+              channelDiagnostics: {
+                type: 'array',
+                nullable: true,
+                items: {
+                  type: 'object',
+                  properties: {
+                    channel: { type: 'string' },
+                    status: { type: 'string' },
+                    candidateCount: { type: 'number' },
+                    reason: { type: 'string' },
+                  },
+                },
+              },
               structuredAnswer: {
                 type: 'object',
                 nullable: true,
@@ -931,6 +956,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         const {
           recalledItems,
           recallBlocks,
+          recallChannelDiagnostics,
           intentContext,
           combinedMemoryContext,
           actionOutcome,
@@ -974,6 +1000,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           structuredAnswer: parsedAnswer.structuredAnswer,
           blocks: recallBlocks,
           analysis: structuredAnswerToAnalysis(parsedAnswer.structuredAnswer),
+          channelDiagnostics: recallChannelDiagnostics,
           resolutionState: actionOutcome.finalResolutionState,
           missingInfo: actionOutcome.missingInfo,
         };
@@ -1045,6 +1072,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         const {
           recalledItems,
           recallBlocks,
+          recallChannelDiagnostics,
           intentContext,
           combinedMemoryContext,
           actionOutcome,
@@ -1064,6 +1092,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         // immediately, in parallel with LLM token streaming.
         writeSseEvent(reply, 'recall_done', {
           itemsCount: recalledItems.length,
+          channelDiagnostics: recallChannelDiagnostics ?? [],
           blocks: recallBlocks ?? [],
           evidence: includeEvidence
             ? recalledItems
@@ -1156,6 +1185,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           structuredAnswer,
           blocks: recallBlocks,
           analysis: structuredAnswerToAnalysis(structuredAnswer),
+          channelDiagnostics: recallChannelDiagnostics,
           resolutionState: actionOutcome.finalResolutionState,
           missingInfo: actionOutcome.missingInfo,
         };

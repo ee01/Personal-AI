@@ -1,6 +1,6 @@
 # 智能网页分析详细实现说明
 
-> 说明：本文是早期 Web Intelligence 设计说明，包含较多未成为现行主链路的实验架构。当前实际运行的网页记忆提示链路请优先参考 `docs/features/webpage_memory_detection.md`。
+> 说明：本文是早期 Web Intelligence 设计说明，包含较多未成为现行主链路的实验架构。当前实际运行的 Memory Lens 链路请优先参考 `docs/features/memory_lens.md`。
 
 *最后更新: 2024-12-20*
 

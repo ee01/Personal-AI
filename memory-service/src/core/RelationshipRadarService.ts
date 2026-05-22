@@ -9,6 +9,8 @@ type ReviewStatus = 'pending' | 'confirmed' | 'rejected' | 'snoozed';
 type ReviewAction = 'confirm' | 'reject' | 'snooze';
 type DataQuality = 'indexed' | 'generated' | 'confirmed' | 'stale';
 type ProjectionSource = 'lazy' | 'background' | 'user_confirmed';
+type AttendeeMatchKind = 'name' | 'alias' | 'email' | 'email_local_part' | 'none';
+type AttendeeCoverageState = 'ready' | 'thin' | 'missing';
 
 interface EntityRow {
   id: string;
@@ -118,6 +120,11 @@ interface CalendarEventRow {
   end_at: number | null;
   organizer_json: string | null;
   attendees_json: string | null;
+}
+
+interface MeetingAttendeeIdentity {
+  name: string;
+  email?: string;
 }
 
 export interface RelationshipEvidenceRef {
@@ -236,6 +243,16 @@ export interface RelationshipContextCard {
     boostTerms: string[];
     sourceTypes: string[];
   };
+  privacySummary: {
+    sensitiveIncluded: boolean;
+    redactedAliases: number;
+    redactedFacts: number;
+    redactedRelationshipHints: number;
+    redactedEvidenceRefs: number;
+    redactedOpenLoops: number;
+    redactedRetrievalHints: number;
+    redactionNote?: string;
+  };
   generatedAt: number;
 }
 
@@ -251,12 +268,26 @@ export interface RelationshipMeetingBrief {
   generatedAt: number;
   title: string;
   startAt?: number;
+  coverage: {
+    totalAttendees: number;
+    matchedAttendees: number;
+    unmatchedAttendees: number;
+    attendeesWithEvidence: number;
+    attendeesWithOpenLoops: number;
+    evidenceRefs: number;
+    coverageNote: string;
+  };
   attendees: Array<{
     displayName: string;
+    email?: string;
     personId?: string;
     personName?: string;
     radarState?: RadarState;
     dataQuality?: DataQuality;
+    matchedBy: AttendeeMatchKind;
+    matchConfidence: number;
+    matchReason: string;
+    coverageState: AttendeeCoverageState;
     summary: string;
     openLoops: RelationshipContextCard['openLoops'];
     suggestedQuestions: string[];
@@ -268,6 +299,8 @@ export interface RelationshipMeetingBrief {
     openLoop: string;
     suggestedAsk: string;
     evidenceCount: number;
+    matchStatus: string;
+    coverageState: AttendeeCoverageState;
   }>;
 }
 
@@ -337,6 +370,7 @@ export class RelationshipRadarService {
     search?: string;
     includeBelowThreshold?: boolean;
   } = {}): RelationshipPeopleResponse {
+    this.releaseDueSnoozedReviewItems();
     const limit = normalizeLimit(options.limit);
     const generatedAt = now();
     const rows = this.loadPersonRows(options.search);
@@ -384,6 +418,7 @@ export class RelationshipRadarService {
     personName?: string;
     surface?: string;
     tokenBudget?: number;
+    includeSensitive?: boolean;
     preferStored?: boolean;
   }): RelationshipContextCard | null {
     const entity = input.personId
@@ -393,8 +428,14 @@ export class RelationshipRadarService {
         : null;
     if (!entity) return null;
 
+    const includeSensitive = input.includeSensitive === true;
     if (input.preferStored !== false) {
-      const stored = this.loadStoredContextCard(entity.id, input.surface, input.tokenBudget);
+      const stored = this.loadStoredContextCard(
+        entity.id,
+        input.surface,
+        input.tokenBudget,
+        includeSensitive,
+      );
       if (stored) return stored;
     }
 
@@ -483,18 +524,33 @@ export class RelationshipRadarService {
   private buildLazyContextCard(inputEntity: EntityRow, input: {
     surface?: string;
     tokenBudget?: number;
+    includeSensitive?: boolean;
   }): RelationshipContextCard {
     const tokenBudget = Math.min(Math.max(input.tokenBudget ?? 900, 300), 2400);
-    const person = this.applyStoredProjection(
+    const rawPerson = this.applyStoredProjection(
       this.buildPersonSummary(inputEntity, now()),
     );
+    const includeSensitive = input.includeSensitive === true;
+    const person = includeSensitive ? rawPerson : redactSensitivePersonAliases(rawPerson);
     const properties = this.loadProperties(inputEntity.id);
     const relationships = this.loadRelationships(inputEntity.id);
     const messages = this.loadMessagesForPerson(inputEntity, 12);
-    const openLoops = this.listOpenLoops(inputEntity.id, 5);
+    const openLoops = this.listOpenLoops(inputEntity.id, 5, { includeSensitive: true });
+    const visibleProperties = includeSensitive
+      ? properties
+      : properties.filter((property) => !isSensitiveProperty(property));
+    const visibleRelationships = includeSensitive
+      ? relationships
+      : relationships.filter((relationship) => !isSensitiveRelationship(relationship));
+    const visibleMessages = includeSensitive
+      ? messages
+      : messages.filter((message) => !isSensitiveMessage(message));
+    const visibleOpenLoops = includeSensitive
+      ? openLoops
+      : openLoops.filter((loop) => !isSensitiveOpenLoop(loop));
     const evidenceRefs = uniqueEvidenceRefs([
-      ...messages.slice(0, 6).map(toMessageEvidenceRef),
-      ...properties.slice(0, 4).map((property) => ({
+      ...visibleMessages.slice(0, 6).map(toMessageEvidenceRef),
+      ...visibleProperties.slice(0, 4).map((property) => ({
         sourceKind: 'entity_property' as const,
         sourceId: String(property.id),
         title: property.property_key,
@@ -503,14 +559,14 @@ export class RelationshipRadarService {
       })),
     ]);
 
-    const knownFacts = properties.slice(0, 8).map((property) => ({
+    const knownFacts = visibleProperties.slice(0, 8).map((property) => ({
       key: property.property_key,
       value: property.property_value,
       confidence: roundScore(property.confidence),
       confirmed: Boolean(property.is_final),
     }));
 
-    const relationshipHints = relationships.slice(0, 8).map((relationship) => ({
+    const relationshipHints = visibleRelationships.slice(0, 8).map((relationship) => ({
       relationType: relationship.relation_type,
       targetId: relationship.entity_id,
       targetName: relationship.entity_name,
@@ -524,9 +580,27 @@ export class RelationshipRadarService {
     const retrievalHints = {
       entityIds: [inputEntity.id, ...relationshipHints.map((item) => item.targetId)].slice(0, 12),
       names: [inputEntity.name, ...person.aliases].slice(0, 8),
-      boostTerms: buildBoostTerms(inputEntity, properties, relationships),
-      sourceTypes: getSourceTypes(messages),
+      boostTerms: buildBoostTerms(inputEntity, visibleProperties, visibleRelationships),
+      sourceTypes: getSourceTypes(visibleMessages),
     };
+    const safeRetrievalHints = includeSensitive
+      ? retrievalHints
+      : redactSensitiveRetrievalHints(retrievalHints);
+    const privacySummary = buildContextPrivacySummary({
+      includeSensitive,
+      rawPerson,
+      person,
+      properties,
+      visibleProperties,
+      relationships,
+      visibleRelationships,
+      messages,
+      visibleMessages,
+      openLoops,
+      visibleOpenLoops,
+      retrievalHints,
+      visibleRetrievalHints: safeRetrievalHints,
+    });
 
     return {
       person,
@@ -534,14 +608,23 @@ export class RelationshipRadarService {
       tokenBudget,
       dataQuality: person.dataQuality,
       projectionSource: person.projectionSource,
-      contextMd: renderContextMarkdown(person, bullets, knownFacts, openLoops, tokenBudget),
+      contextMd: renderContextMarkdown(
+        person,
+        bullets,
+        knownFacts,
+        visibleOpenLoops,
+        tokenBudget,
+        privacySummary,
+        doNotAssume,
+      ),
       bullets,
       knownFacts,
       relationshipHints,
-      openLoops,
+      openLoops: visibleOpenLoops,
       doNotAssume,
       evidenceRefs,
-      retrievalHints,
+      retrievalHints: safeRetrievalHints,
+      privacySummary,
       generatedAt: now(),
     };
   }
@@ -600,7 +683,8 @@ export class RelationshipRadarService {
     const startAt = input.startAt ?? event?.start_at ?? undefined;
 
     const attendeeCards = attendees.slice(0, 16).map((attendee) => {
-      const person = this.findPersonByName(attendee.name || attendee.email || '');
+      const match = this.findPersonForAttendee(attendee);
+      const person = match.person;
       const card = person
         ? this.buildContextCard({
             personId: person.id,
@@ -613,12 +697,20 @@ export class RelationshipRadarService {
         attendee.name || attendee.email,
         card,
       );
+      const coverageState: AttendeeCoverageState = card
+        ? (card.evidenceRefs.length > 0 || openLoops.length > 0 ? 'ready' : 'thin')
+        : 'missing';
       return {
         displayName: attendee.name || attendee.email || 'Unknown attendee',
+        email: attendee.email,
         personId: card?.person.id,
         personName: card?.person.name,
         radarState: card?.person.radarState,
         dataQuality: card?.dataQuality,
+        matchedBy: match.matchedBy,
+        matchConfidence: match.confidence,
+        matchReason: match.reason,
+        coverageState,
         summary: card
           ? card.bullets.slice(0, 2).join('；')
           : '暂无已沉淀的人物上下文，会议中可先确认角色和关注点。',
@@ -628,10 +720,13 @@ export class RelationshipRadarService {
       };
     });
 
+    const coverage = buildMeetingBriefCoverage(attendeeCards);
+
     return {
       generatedAt: now(),
       title,
       startAt,
+      coverage,
       attendees: attendeeCards,
       matrix: attendeeCards.map((item) => ({
         person: item.personName || item.displayName,
@@ -639,6 +734,11 @@ export class RelationshipRadarService {
         openLoop: item.openLoops[0]?.snippet || '无明确 open loop',
         suggestedAsk: item.suggestedQuestions[0] || '先确认本次会议中 TA 关注什么。',
         evidenceCount: item.evidenceRefs.length,
+        matchStatus:
+          item.matchedBy === 'none'
+            ? '未匹配'
+            : `${item.matchReason} · ${Math.round(item.matchConfidence * 100)}%`,
+        coverageState: item.coverageState,
       })),
     };
   }
@@ -810,13 +910,18 @@ export class RelationshipRadarService {
     return { personId, items, total: items.length };
   }
 
-  listOpenLoops(personId: string, limit = 10): RelationshipContextCard['openLoops'] {
+  listOpenLoops(
+    personId: string,
+    limit = 10,
+    options: { includeSensitive?: boolean } = {},
+  ): RelationshipContextCard['openLoops'] {
     const entity = this.getPersonRow(personId);
     if (!entity) return [];
 
     const messages = this
       .loadMessagesForPerson(entity, 80)
       .filter((message) => OPEN_LOOP_PATTERN.test(message.content))
+      .filter((message) => options.includeSensitive === true || !isSensitiveMessage(message))
       .slice(0, normalizeLimit(limit));
 
     return messages.map((message) => {
@@ -843,6 +948,7 @@ export class RelationshipRadarService {
     total: number;
     generatedAt: number;
   } {
+    this.releaseDueSnoozedReviewItems();
     this.ensureReviewCandidates();
     const status = options.status ?? 'pending';
     const limit = normalizeLimit(options.limit);
@@ -988,6 +1094,7 @@ export class RelationshipRadarService {
     personId: string,
     surface?: string,
     tokenBudget?: number,
+    includeSensitive = false,
   ): RelationshipContextCard | null {
     const row = this.db
       .prepare(
@@ -1002,13 +1109,15 @@ export class RelationshipRadarService {
 
     try {
       const card = JSON.parse(row.context_json) as RelationshipContextCard;
-      return {
+      const hydrated: RelationshipContextCard = {
         ...card,
         surface: surface ?? card.surface,
         tokenBudget: tokenBudget ?? card.tokenBudget,
         dataQuality: row.data_quality,
         projectionSource:
-          row.data_quality === 'confirmed' ? 'user_confirmed' : 'background',
+          row.data_quality === 'confirmed'
+            ? ('user_confirmed' as const)
+            : ('background' as const),
         contextMd: row.context_md,
         evidenceRefs: safeJsonParse<RelationshipEvidenceRef[]>(
           row.evidence_refs_json,
@@ -1016,6 +1125,14 @@ export class RelationshipRadarService {
         ),
         generatedAt: row.generated_at,
       };
+      if (
+        includeSensitive &&
+        hydrated.privacySummary?.sensitiveIncluded === false &&
+        countRedactedContextItems(hydrated.privacySummary) > 0
+      ) {
+        return null;
+      }
+      return applyContextPrivacy(hydrated, includeSensitive);
     } catch {
       return null;
     }
@@ -1190,19 +1307,55 @@ export class RelationshipRadarService {
   }
 
   private findPersonByName(name: string): EntityRow | null {
-    const row = this.db
+    return this.findPersonForAttendee({ name }).person;
+  }
+
+  private findPersonForAttendee(attendee: MeetingAttendeeIdentity): {
+    person: EntityRow | null;
+    matchedBy: AttendeeMatchKind;
+    confidence: number;
+    reason: string;
+  } {
+    const candidates = this.db
       .prepare(
         `SELECT id, name, aliases_json, description, importance, first_seen,
                 last_seen, mention_count, tags_json
          FROM entities
-         WHERE type = 'Person'
-           AND status = 'active'
-           AND (name = ? OR aliases_json LIKE ? ESCAPE '\\')
-         ORDER BY importance DESC
-         LIMIT 1`,
+         WHERE type = 'Person' AND status = 'active'
+         ORDER BY importance DESC, last_seen DESC
+         LIMIT 500`,
       )
-      .get(name, likePattern(name)) as EntityRow | undefined;
-    return row ?? null;
+      .all() as EntityRow[];
+    const identity = normalizeAttendeeIdentity(attendee);
+    let best:
+      | {
+          person: EntityRow;
+          matchedBy: AttendeeMatchKind;
+          confidence: number;
+          reason: string;
+        }
+      | null = null;
+
+    for (const candidate of candidates) {
+      const match = scoreAttendeePersonMatch(identity, candidate);
+      if (!match) continue;
+      if (!best || match.confidence > best.confidence) {
+        best = {
+          person: candidate,
+          ...match,
+        };
+      }
+    }
+
+    if (best) return best;
+    return {
+      person: null,
+      matchedBy: 'none',
+      confidence: 0,
+      reason: identity.email
+        ? `没有找到与 ${identity.email} 或显示名匹配的 Person 记录`
+        : '没有找到与该显示名匹配的 Person 记录',
+    };
   }
 
   private buildPersonSummary(row: EntityRow, generatedAt: number): RelationshipPersonSummary {
@@ -1455,12 +1608,26 @@ export class RelationshipRadarService {
     return Boolean(row);
   }
 
+  private releaseDueSnoozedReviewItems(timestamp = now()): void {
+    this.db
+      .prepare(
+        `UPDATE relationship_review_items
+         SET status = 'pending',
+             snooze_until = NULL,
+             updated_at = ?
+         WHERE status = 'snoozed'
+           AND snooze_until IS NOT NULL
+           AND snooze_until <= ?`,
+      )
+      .run(timestamp, timestamp);
+  }
+
   private countPendingReviewItems(personId: string): number {
     const row = this.db
       .prepare(
         `SELECT COUNT(*) AS count
          FROM relationship_review_items
-         WHERE entity_id = ? AND status IN ('pending', 'snoozed')`,
+         WHERE entity_id = ? AND status = 'pending'`,
       )
       .get(personId) as { count: number } | undefined;
     return row?.count ?? 0;
@@ -1520,6 +1687,257 @@ function safeJsonParse<T>(raw: string | null, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+const SENSITIVE_KEY_PATTERN =
+  /(email|e-mail|mail|phone|mobile|address|birthday|birth_date|ssn|passport|salary|compensation|medical|health|secret|password|token|credential|private|personal|手机号|电话|邮箱|邮件|地址|生日|薪资|工资|医疗|健康|隐私|私人|密钥|密码|令牌)/i;
+const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const US_PHONE_PATTERN = /(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/;
+const SECRET_VALUE_PATTERN =
+  /\b(sk-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]+|gh[pousr]_[A-Za-z0-9_]{12,}|api[_\s-]?key|password|secret|token|jwt|bearer\s+[A-Za-z0-9._-]{16,})\b/i;
+const SENSITIVE_SOURCE_PATTERN = /(private|personal|profile|user_core|manual|secret)/i;
+
+function isSensitiveText(value: string | null | undefined): boolean {
+  const text = value || '';
+  return EMAIL_PATTERN.test(text) || US_PHONE_PATTERN.test(text) || SECRET_VALUE_PATTERN.test(text);
+}
+
+function isSensitiveKey(value: string | null | undefined): boolean {
+  return SENSITIVE_KEY_PATTERN.test(value || '');
+}
+
+function isSensitiveTerm(value: string | null | undefined): boolean {
+  return isSensitiveKey(value) || isSensitiveText(value);
+}
+
+function isSensitiveProperty(property: PropertyRow): boolean {
+  return (
+    isSensitiveKey(property.property_key) ||
+    isSensitiveText(property.property_value) ||
+    isSensitiveKey(property.source_context) ||
+    isSensitiveText(property.source_context)
+  );
+}
+
+function isSensitiveMessage(message: MessageRow): boolean {
+  return (
+    SENSITIVE_SOURCE_PATTERN.test(message.source_type) ||
+    isSensitiveText(message.source_url) ||
+    isSensitiveText(message.summary) ||
+    isSensitiveText(message.content)
+  );
+}
+
+function isSensitiveRelationship(relationship: RelationshipRow): boolean {
+  return (
+    isSensitiveKey(relationship.relation_type) ||
+    isSensitiveKey(relationship.context) ||
+    isSensitiveText(relationship.context)
+  );
+}
+
+function isSensitiveEvidenceRef(ref: RelationshipEvidenceRef): boolean {
+  return (
+    isSensitiveKey(ref.title) ||
+    isSensitiveText(ref.snippet) ||
+    isSensitiveText(ref.sourceUrl)
+  );
+}
+
+function isSensitiveOpenLoop(loop: RelationshipContextCard['openLoops'][number]): boolean {
+  return (
+    isSensitiveKey(loop.title) ||
+    isSensitiveText(loop.snippet) ||
+    isSensitiveEvidenceRef(loop.evidenceRef)
+  );
+}
+
+function isSensitiveFact(fact: RelationshipContextCard['knownFacts'][number]): boolean {
+  return isSensitiveKey(fact.key) || isSensitiveText(fact.value);
+}
+
+function isSensitiveHint(
+  hint: RelationshipContextCard['relationshipHints'][number],
+): boolean {
+  return (
+    isSensitiveKey(hint.relationType) ||
+    isSensitiveKey(hint.context) ||
+    isSensitiveText(hint.context)
+  );
+}
+
+function redactSensitivePersonAliases(
+  person: RelationshipPersonSummary,
+): RelationshipPersonSummary {
+  return {
+    ...person,
+    aliases: person.aliases.filter((alias) => !isSensitiveTerm(alias)),
+  };
+}
+
+function redactSensitiveRetrievalHints(
+  hints: RelationshipContextCard['retrievalHints'],
+): RelationshipContextCard['retrievalHints'] {
+  return {
+    entityIds: hints.entityIds,
+    names: hints.names.filter((name) => !isSensitiveTerm(name)),
+    boostTerms: hints.boostTerms.filter((term) => !isSensitiveTerm(term)),
+    sourceTypes: hints.sourceTypes.filter((sourceType) => !SENSITIVE_SOURCE_PATTERN.test(sourceType)),
+  };
+}
+
+function countRedactedContextItems(
+  summary: RelationshipContextCard['privacySummary'] | undefined,
+): number {
+  if (!summary) return 0;
+  return (
+    summary.redactedAliases +
+    summary.redactedFacts +
+    summary.redactedRelationshipHints +
+    summary.redactedEvidenceRefs +
+    summary.redactedOpenLoops +
+    summary.redactedRetrievalHints
+  );
+}
+
+function withRedactionNote(
+  summary: Omit<RelationshipContextCard['privacySummary'], 'redactionNote'>,
+): RelationshipContextCard['privacySummary'] {
+  const hidden = countRedactedContextItems(summary);
+  if (summary.sensitiveIncluded || hidden === 0) return summary;
+  return {
+    ...summary,
+    redactionNote: `${hidden} 条可能敏感的人物上下文默认未纳入；只有显式 includeSensitive 才会返回。`,
+  };
+}
+
+function buildContextPrivacySummary(input: {
+  includeSensitive: boolean;
+  rawPerson: RelationshipPersonSummary;
+  person: RelationshipPersonSummary;
+  properties: PropertyRow[];
+  visibleProperties: PropertyRow[];
+  relationships: RelationshipRow[];
+  visibleRelationships: RelationshipRow[];
+  messages: MessageRow[];
+  visibleMessages: MessageRow[];
+  openLoops: RelationshipContextCard['openLoops'];
+  visibleOpenLoops: RelationshipContextCard['openLoops'];
+  retrievalHints: RelationshipContextCard['retrievalHints'];
+  visibleRetrievalHints: RelationshipContextCard['retrievalHints'];
+}): RelationshipContextCard['privacySummary'] {
+  return withRedactionNote({
+    sensitiveIncluded: input.includeSensitive,
+    redactedAliases: Math.max(input.rawPerson.aliases.length - input.person.aliases.length, 0),
+    redactedFacts: Math.max(input.properties.length - input.visibleProperties.length, 0),
+    redactedRelationshipHints: Math.max(
+      input.relationships.length - input.visibleRelationships.length,
+      0,
+    ),
+    redactedEvidenceRefs: Math.max(
+      input.messages.length +
+        Math.min(input.properties.length, 4) -
+        input.visibleMessages.length -
+        Math.min(input.visibleProperties.length, 4),
+      0,
+    ),
+    redactedOpenLoops: Math.max(input.openLoops.length - input.visibleOpenLoops.length, 0),
+    redactedRetrievalHints: Math.max(
+      input.retrievalHints.names.length +
+        input.retrievalHints.boostTerms.length +
+        input.retrievalHints.sourceTypes.length -
+        input.visibleRetrievalHints.names.length -
+        input.visibleRetrievalHints.boostTerms.length -
+        input.visibleRetrievalHints.sourceTypes.length,
+      0,
+    ),
+  });
+}
+
+function applyContextPrivacy(
+  card: RelationshipContextCard,
+  includeSensitive: boolean,
+): RelationshipContextCard {
+  if (includeSensitive) {
+    return {
+      ...card,
+      privacySummary: {
+        ...(card.privacySummary ?? emptyContextPrivacySummary(true)),
+        sensitiveIncluded: true,
+        redactionNote: undefined,
+      },
+    };
+  }
+
+  const person = redactSensitivePersonAliases(card.person);
+  const knownFacts = card.knownFacts.filter((fact) => !isSensitiveFact(fact));
+  const relationshipHints = card.relationshipHints.filter((hint) => !isSensitiveHint(hint));
+  const evidenceRefs = card.evidenceRefs.filter((ref) => !isSensitiveEvidenceRef(ref));
+  const openLoops = card.openLoops.filter((loop) => !isSensitiveOpenLoop(loop));
+  const retrievalHints = redactSensitiveRetrievalHints(card.retrievalHints);
+  const previousSummary = card.privacySummary?.sensitiveIncluded === false
+    ? card.privacySummary
+    : emptyContextPrivacySummary(false);
+  const privacySummary = withRedactionNote({
+    sensitiveIncluded: false,
+    redactedAliases:
+      previousSummary.redactedAliases + Math.max(card.person.aliases.length - person.aliases.length, 0),
+    redactedFacts:
+      previousSummary.redactedFacts + Math.max(card.knownFacts.length - knownFacts.length, 0),
+    redactedRelationshipHints:
+      previousSummary.redactedRelationshipHints +
+      Math.max(card.relationshipHints.length - relationshipHints.length, 0),
+    redactedEvidenceRefs:
+      previousSummary.redactedEvidenceRefs +
+      Math.max(card.evidenceRefs.length - evidenceRefs.length, 0),
+    redactedOpenLoops:
+      previousSummary.redactedOpenLoops + Math.max(card.openLoops.length - openLoops.length, 0),
+    redactedRetrievalHints:
+      previousSummary.redactedRetrievalHints +
+      Math.max(
+        card.retrievalHints.names.length +
+          card.retrievalHints.boostTerms.length +
+          card.retrievalHints.sourceTypes.length -
+          retrievalHints.names.length -
+          retrievalHints.boostTerms.length -
+          retrievalHints.sourceTypes.length,
+        0,
+      ),
+  });
+
+  return {
+    ...card,
+    person,
+    knownFacts,
+    relationshipHints,
+    evidenceRefs,
+    openLoops,
+    retrievalHints,
+    privacySummary,
+    contextMd: renderContextMarkdown(
+      person,
+      card.bullets,
+      knownFacts,
+      openLoops,
+      card.tokenBudget,
+      privacySummary,
+      card.doNotAssume,
+    ),
+  };
+}
+
+function emptyContextPrivacySummary(
+  sensitiveIncluded: boolean,
+): RelationshipContextCard['privacySummary'] {
+  return {
+    sensitiveIncluded,
+    redactedAliases: 0,
+    redactedFacts: 0,
+    redactedRelationshipHints: 0,
+    redactedEvidenceRefs: 0,
+    redactedOpenLoops: 0,
+    redactedRetrievalHints: 0,
+  };
 }
 
 function likePattern(value: string): string {
@@ -1752,6 +2170,8 @@ function renderContextMarkdown(
   facts: RelationshipContextCard['knownFacts'],
   openLoops: RelationshipContextCard['openLoops'],
   tokenBudget: number,
+  privacySummary?: RelationshipContextCard['privacySummary'],
+  doNotAssume: string[] = [],
 ): string {
   const lines = [
     `# ${person.name} 关系上下文`,
@@ -1774,6 +2194,16 @@ function renderContextMarkdown(
     for (const item of openLoops.slice(0, 3)) {
       lines.push(`- ${item.snippet}`);
     }
+  }
+
+  if (privacySummary?.redactionNote) {
+    lines.push('', '## 隐私边界', `- ${privacySummary.redactionNote}`);
+  } else if (privacySummary?.sensitiveIncluded) {
+    lines.push('', '## 隐私边界', '- 已按显式请求包含敏感上下文，外发前需要人工复核。');
+  }
+
+  if (doNotAssume.length > 0) {
+    lines.push('', '## 不要假设', ...doNotAssume.map((note) => `- ${note}`));
   }
 
   return lines.join('\n').slice(0, tokenBudget * 4);
@@ -1847,21 +2277,40 @@ function renderShortPersonSummary(card: RelationshipContextCard): string {
 
 function normalizeAttendees(
   raw: unknown,
-): Array<{ name: string; email?: string }> {
+): MeetingAttendeeIdentity[] {
   const items = Array.isArray(raw) ? raw : [];
   const attendees = items
     .map((item) => {
       if (typeof item === 'string') {
-        return { name: cleanText(item) };
+        return parseDisplayNameAndEmail(item);
       }
       if (item && typeof item === 'object') {
         const record = item as Record<string, unknown>;
+        const emailAddress =
+          record.emailAddress && typeof record.emailAddress === 'object'
+            ? (record.emailAddress as Record<string, unknown>)
+            : {};
         const rawName =
-          record.name ?? record.displayName ?? record.summary ?? record.email ?? '';
-        const rawEmail = record.email ?? record.mail ?? record.address ?? '';
+          record.name ??
+          record.displayName ??
+          record.summary ??
+          emailAddress.name ??
+          record.email ??
+          record.mail ??
+          record.address ??
+          '';
+        const rawEmail =
+          record.email ??
+          record.mail ??
+          record.address ??
+          emailAddress.address ??
+          emailAddress.email ??
+          '';
+        const parsedName = parseDisplayNameAndEmail(String(rawName || ''));
+        const parsedEmail = parseDisplayNameAndEmail(String(rawEmail || ''));
         return {
-          name: cleanText(String(rawName)),
-          email: rawEmail ? cleanText(String(rawEmail)) : undefined,
+          name: cleanText(parsedName.name || parsedEmail.name),
+          email: parsedName.email || parsedEmail.email,
         };
       }
       return { name: '' };
@@ -1870,11 +2319,145 @@ function normalizeAttendees(
 
   const seen = new Set<string>();
   return attendees.filter((item) => {
-    const key = `${item.name.toLowerCase()}|${item.email?.toLowerCase() ?? ''}`;
+    const key = item.email
+      ? `email:${item.email.toLowerCase()}`
+      : `name:${normalizeIdentityToken(item.name)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function parseDisplayNameAndEmail(value: string): MeetingAttendeeIdentity {
+  const text = cleanText(value);
+  if (!text) return { name: '' };
+  const angle = text.match(/^(.*?)\s*<([^>]+)>$/);
+  if (angle) {
+    return {
+      name: cleanText(angle[1] || ''),
+      email: normalizeEmailToken(angle[2] || '') ?? undefined,
+    };
+  }
+
+  const email = normalizeEmailToken(text);
+  if (!email) return { name: text };
+  const name = cleanText(text.replace(email, '').replace(/[<>()]/g, ''));
+  return {
+    name: name || '',
+    email,
+  };
+}
+
+function normalizeAttendeeIdentity(attendee: MeetingAttendeeIdentity): {
+  name: string;
+  email?: string;
+  nameToken: string;
+  emailLocalPart?: string;
+} {
+  const parsedName = parseDisplayNameAndEmail(attendee.name || '');
+  const email = attendee.email
+    ? normalizeEmailToken(attendee.email)
+    : parsedName.email;
+  return {
+    name: cleanText(parsedName.name || attendee.name || ''),
+    email: email ?? undefined,
+    nameToken: normalizeIdentityToken(parsedName.name || attendee.name || ''),
+    emailLocalPart: email ? normalizeIdentityToken(email.split('@')[0] || '') : undefined,
+  };
+}
+
+function scoreAttendeePersonMatch(
+  identity: ReturnType<typeof normalizeAttendeeIdentity>,
+  person: EntityRow,
+): {
+  matchedBy: AttendeeMatchKind;
+  confidence: number;
+  reason: string;
+} | null {
+  const aliases = safeJsonParse<string[]>(person.aliases_json, []);
+  const labels = uniqueStrings([person.name, ...aliases]);
+  const labelTokens = labels.map(normalizeIdentityToken).filter(Boolean);
+  const labelEmails = labels
+    .map((label) => normalizeEmailToken(label))
+    .filter((value): value is string => Boolean(value));
+
+  if (identity.email && labelEmails.includes(identity.email)) {
+    return {
+      matchedBy: 'email',
+      confidence: 0.98,
+      reason: '按邮箱或邮箱别名匹配',
+    };
+  }
+
+  if (identity.nameToken && normalizeIdentityToken(person.name) === identity.nameToken) {
+    return {
+      matchedBy: 'name',
+      confidence: 0.96,
+      reason: '按参会人显示名匹配',
+    };
+  }
+
+  if (identity.nameToken && labelTokens.includes(identity.nameToken)) {
+    return {
+      matchedBy: 'alias',
+      confidence: 0.9,
+      reason: '按人物别名匹配',
+    };
+  }
+
+  if (
+    identity.emailLocalPart &&
+    identity.emailLocalPart.length >= 4 &&
+    labelTokens.includes(identity.emailLocalPart)
+  ) {
+    return {
+      matchedBy: 'email_local_part',
+      confidence: 0.72,
+      reason: '按邮箱前缀匹配，建议会中确认身份',
+    };
+  }
+
+  return null;
+}
+
+function normalizeIdentityToken(value: string): string {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/^mailto:/, '')
+    .replace(/[^\p{L}\p{N}@._+-]+/gu, ' ')
+    .trim();
+}
+
+function normalizeEmailToken(value: string): string | null {
+  const match = String(value || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : null;
+}
+
+function buildMeetingBriefCoverage(
+  attendees: RelationshipMeetingBrief['attendees'],
+): RelationshipMeetingBrief['coverage'] {
+  const totalAttendees = attendees.length;
+  const matchedAttendees = attendees.filter((item) => item.personId).length;
+  const attendeesWithEvidence = attendees.filter((item) => item.evidenceRefs.length > 0).length;
+  const attendeesWithOpenLoops = attendees.filter((item) => item.openLoops.length > 0).length;
+  const evidenceRefs = attendees.reduce((total, item) => total + item.evidenceRefs.length, 0);
+  const unmatchedAttendees = totalAttendees - matchedAttendees;
+  const coverageNote =
+    totalAttendees === 0
+      ? '未提供参会人，会议简报只能给出通用准备问题。'
+      : unmatchedAttendees === 0
+        ? `已匹配全部 ${totalAttendees} 位参会人，其中 ${attendeesWithEvidence} 位有可引用证据。`
+        : `已匹配 ${matchedAttendees}/${totalAttendees} 位参会人；${unmatchedAttendees} 位需要会中确认角色或补充人物别名。`;
+
+  return {
+    totalAttendees,
+    matchedAttendees,
+    unmatchedAttendees,
+    attendeesWithEvidence,
+    attendeesWithOpenLoops,
+    evidenceRefs,
+    coverageNote,
+  };
 }
 
 function buildSuggestedQuestions(

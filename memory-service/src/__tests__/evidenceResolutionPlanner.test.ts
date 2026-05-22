@@ -17,6 +17,59 @@ describe('EvidenceResolutionPlanner', () => {
     generateJsonMock.mockReset();
   });
 
+  it('uses the information goal as the completion criterion for outreach', async () => {
+    generateJsonMock.mockResolvedValue({
+      resolutionState: 'complete',
+      directFindings: ['Nova AI Algorithm Team 的 benchmark tickets 已经录入表格。'],
+      resolvedConclusion:
+        '目前只有 Nova AI Algorithm Team 的 benchmark tickets 已经录入表格。',
+      remainingQuestions: [],
+      candidateArtifacts: [],
+      recommendedAction: 'none',
+      confidence: 0.82,
+      legacyClassification: 'answer',
+      goalSatisfied: false,
+      goalGaps: ['尚未有 Zong Zheng 或 Ryan Chen 明确回复。'],
+      summary:
+        '目前只有 Nova AI Algorithm Team 的 benchmark tickets 已经录入表格，尚未有 Zong Zheng 或 Ryan Chen 明确回复。',
+    });
+
+    const planner = new EvidenceResolutionPlanner();
+    const plan = await planner.resolve({
+      question: '请大家把新收集来的 benchmark tickets 都放进这个 sheet。',
+      informationGoal:
+        '至少拿到 zong, ryan 的回复说已经添加好表格，或回复了 benchmark tickets',
+      evidence: [
+        {
+          sourceKind: 'outreach_reply',
+          sourceId: 'reply-benchmark',
+          content:
+            '目前只有 Nova AI Algorithm Team 的 benchmark tickets 已经录入表格，尚未有 Zong Zheng 或 Ryan Chen 明确回复。',
+        },
+      ],
+      policy: {
+        scene: 'outreach',
+        userIntentMode: 'informational',
+        externalRead: 'disabled',
+        externalWrite: 'disabled',
+        allowAskExternalUser: false,
+        allowCreateConfirmRequest: false,
+      },
+    });
+
+    expect(plan.resolutionState).toBe('partial');
+    expect(plan.goalSatisfied).toBe(false);
+    expect(plan.goalGaps).toContain(
+      '尚未有 Zong Zheng 或 Ryan Chen 明确回复。',
+    );
+    expect(plan.remainingQuestions).toContain(
+      '尚未有 Zong Zheng 或 Ryan Chen 明确回复。',
+    );
+    expect(generateJsonMock.mock.calls[0]?.[0]).toContain(
+      '信息目标 / 完成标准: 至少拿到 zong, ryan',
+    );
+  });
+
   it('prefers delegate_openclaw when artifacts remain to be checked even if the LLM suggests a confirm request', async () => {
     generateJsonMock.mockResolvedValue({
       resolutionState: 'partial',

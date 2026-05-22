@@ -75,6 +75,13 @@ describe('Ingest API', () => {
     expect(body.id).toBeTruthy();
     expect(body).toHaveProperty('status');
     expect(body.status).toBe('created');
+    expect(body.decision).toMatchObject({
+      storage: 'stored_unindexed',
+      reason: 'extraction_unavailable',
+      shouldIndex: true,
+      indexed: false,
+    });
+    expect(typeof body.decision.salienceScore).toBe('number');
   });
 
   it('defaults scope to work and keeps source separate from sourceType during ingest', async () => {
@@ -143,6 +150,13 @@ describe('Ingest API', () => {
     const body2 = res2.json();
     expect(body2.status).toBe('duplicate');
     expect(body2).toHaveProperty('id');
+    expect(body2.decision).toMatchObject({
+      storage: 'duplicate',
+      reason: 'duplicate_content_source_sender',
+      duplicateOf: body2.id,
+      dedupeReason: 'content_source_sender',
+      indexed: false,
+    });
   });
 
   // -------------------------------------------------------------------
@@ -184,7 +198,31 @@ describe('Ingest API', () => {
       payload: payload2,
     });
     expect(res2.statusCode).toBe(200);
-    expect(res2.json().status).toBe('duplicate');
+    const body2 = res2.json();
+    expect(body2.status).toBe('duplicate');
+    expect(body2.decision).toMatchObject({
+      storage: 'duplicate',
+      reason: 'duplicate_post_id',
+      duplicateOf: body2.id,
+      dedupeReason: 'post_id',
+      indexed: false,
+    });
+  });
+
+  it('POST /api/v1/ingest accepts ai_chat source type for external AI memory sources', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      payload: {
+        content: `AI chat ingest source type parity ${Date.now()}`,
+        sourceType: 'ai_chat',
+        sender: 'test-user',
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('created');
   });
 
   // -------------------------------------------------------------------
@@ -281,7 +319,40 @@ describe('Ingest API', () => {
       expect(result).toHaveProperty('id');
       expect(result).toHaveProperty('status');
       expect(['created', 'duplicate', 'error']).toContain(result.status);
+      expect(result).toHaveProperty('decision');
     }
+  });
+
+  it('POST /api/v1/ingest/batch accepts the same source types as single ingest', async () => {
+    const ts = Date.now();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest/batch',
+      payload: {
+        items: [
+          {
+            content: `Batch calendar source parity ${ts}`,
+            sourceType: 'calendar',
+            sender: 'batch-user',
+            timestamp: Math.floor(ts / 1000),
+          },
+          {
+            content: `Batch Doubao source parity ${ts}`,
+            sourceType: 'doubao',
+            sender: 'batch-user',
+            timestamp: Math.floor(ts / 1000),
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.totalCreated).toBe(2);
+    expect(body.results.map((result: any) => result.status)).toEqual([
+      'created',
+      'created',
+    ]);
   });
 
   // -------------------------------------------------------------------

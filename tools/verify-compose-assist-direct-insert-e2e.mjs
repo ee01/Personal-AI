@@ -22,7 +22,7 @@ if (!fs.existsSync(contentScriptPath)) {
   );
 }
 
-const fixtureUrl = 'https://chatgpt.com/c/pai-compose-preview';
+const fixtureUrl = 'https://chatgpt.com/c/pai-compose-direct-insert';
 
 const fixtureHtml = `<!doctype html>
 <html>
@@ -62,17 +62,6 @@ function installChromeStub(page) {
     };
     const storageListeners = [];
     window.__paiComposeAssistRequests = [];
-    window.__paiCopiedText = '';
-
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: {
-        writeText: async (text) => {
-          window.__paiCopiedText = text;
-        },
-      },
-    });
-
     function normalizeKeys(keys) {
       if (Array.isArray(keys)) return keys;
       if (typeof keys === 'string') return [keys];
@@ -125,6 +114,18 @@ function installChromeStub(page) {
                     snippet:
                       'Factory AI passed security approval, but production still needs RingCentral email login.',
                     sourceTitle: 'Factory AI rollout',
+                    sourceUrl: 'https://example.com/factory-ai-rollout',
+                    exploreLink: '#/thread/factory-ai?focus=memory-1',
+                    links: [
+                      {
+                        label: '打开来源',
+                        url: 'https://example.com/factory-ai-rollout',
+                      },
+                      {
+                        label: 'unsafe',
+                        url: 'javascript:alert(1)',
+                      },
+                    ],
                     score: 0.9,
                   },
                 ],
@@ -174,7 +175,7 @@ function installChromeStub(page) {
 
 async function main() {
   const userDataDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'pai-compose-preview-'),
+    path.join(os.tmpdir(), 'pai-compose-direct-insert-'),
   );
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
@@ -208,27 +209,29 @@ async function main() {
     assert.ok(requests[0].sourceTypes.includes('markdown'));
     assert.ok(requests[0].sourceTypes.includes('reflection'));
 
-    await page.locator('.pai-composer-guard-icon-button').click();
-    await page.waitForSelector('.pai-composer-guard--preview-open');
-    await page.locator('.pai-composer-guard-copy-button').click();
-    await page.waitForFunction(
-      () => document.documentElement.innerText.includes('已复制'),
-      null,
-      { timeout: 3000 },
-    );
-
-    const afterCopy = await page.evaluate(() => ({
-      copiedText: window.__paiCopiedText,
-      composerText: document.querySelector('#prompt-textarea')?.textContent || '',
+    const controlsBeforeClick = await page.evaluate(() => ({
+      copyButtons: document.querySelectorAll('[data-action="copy"]').length,
+      dismissButtons: document.querySelectorAll('[data-action="dismiss"]').length,
+      confirmInsertButtons: document.querySelectorAll(
+        '[data-action="confirm-insert"]',
+      ).length,
+      provenanceBlocks: document.querySelectorAll(
+        '.pai-composer-guard-provenance',
+      ).length,
     }));
-    assert.match(afterCopy.copiedText, /Factory AI passed security approval/);
-    assert.equal(afterCopy.composerText.trim(), '');
+    assert.deepEqual(controlsBeforeClick, {
+      copyButtons: 0,
+      dismissButtons: 0,
+      confirmInsertButtons: 0,
+      provenanceBlocks: 0,
+    });
 
-    await page.locator('.pai-composer-guard-insert-button').click();
+    await page.locator('.pai-composer-guard-icon-button').click();
     const composerText = await page.locator('#prompt-textarea').innerText();
     assert.match(composerText, /Factory AI passed security approval/);
+    assert.equal(await page.locator('#pai-composer-guard-root').count(), 0);
 
-    console.log('Compose Assist preview actions E2E passed.');
+    console.log('Compose Assist direct insert E2E passed.');
   } finally {
     await context.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });

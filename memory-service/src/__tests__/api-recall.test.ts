@@ -110,6 +110,38 @@ describe('Recall API', () => {
     expect(body.items[0].previewText.length).toBeGreaterThan(0);
   });
 
+  it('reports stable channel diagnostics for hybrid recall coverage', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'Q2 planning review',
+        topK: 5,
+        timeRange: {
+          start: now - 3600,
+          end: now + 60,
+        },
+        includeMetadata: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.channels).toEqual(['time']);
+    expect(body.channelDiagnostics).toEqual([
+      {
+        channel: 'vector',
+        status: 'skipped',
+        candidateCount: 0,
+        reason: 'embedding_unavailable',
+      },
+      { channel: 'fts', status: 'empty', candidateCount: 0 },
+      { channel: 'graph', status: 'empty', candidateCount: 0 },
+      { channel: 'time', status: 'hit', candidateCount: 1 },
+    ]);
+  });
+
   it('includes persisted recall feedback when metadata is requested', async () => {
     const now = Math.floor(Date.now() / 1000);
     db.prepare(
@@ -137,6 +169,35 @@ describe('Recall API', () => {
     const body = res.json();
     const item = body.items.find((entry: any) => entry.id === 'meeting-memory-1');
     expect(item?.metadata?.recallFeedback).toBe('negative');
+  });
+
+  it('reinforces access_count for active recall items by default', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'recent meeting memories',
+        topK: 1,
+        channels: ['time'],
+        timeRange: {
+          start: now - 3600,
+          end: now + 60,
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items[0].id).toBe('meeting-memory-1');
+
+    const row = db
+      .prepare(
+        `SELECT access_count
+         FROM memory_metadata
+         WHERE target_type = 'message' AND target_id = ?`,
+      )
+      .get('meeting-memory-1') as { access_count: number } | undefined;
+    expect(row?.access_count).toBe(1);
   });
 
   it('includes meeting records in generic recall when no sourceTypes filter is provided', async () => {

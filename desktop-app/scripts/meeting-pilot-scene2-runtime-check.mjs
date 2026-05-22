@@ -266,6 +266,67 @@ try {
       startResult?.session?.capture?.kind,
     )}`,
   );
+  const initialCaptureStartedAt = startResult?.session?.capture?.startedAt;
+  assert.equal(
+    typeof initialCaptureStartedAt,
+    'number',
+    `启动 Capture 后缺少 startedAt: ${JSON.stringify(startResult?.session?.capture)}`,
+  );
+
+  log('停止后重新开始 Capture，验证计时从本次授权重新计算');
+  const stoppedResult = await panelPage.evaluate(
+    async ({ meetingId, tabId }) =>
+      chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_STOP_CAPTURE',
+        meetingId,
+        tabId,
+      }),
+    { meetingId, tabId: meetingTabId },
+  );
+  assert.equal(
+    stoppedResult?.session?.capture?.kind,
+    'stopped',
+    `停止 Capture 未进入 stopped: ${JSON.stringify(stoppedResult)}`,
+  );
+  await panelPage.waitForTimeout(30);
+  const restartedResult = await panelPage.evaluate(
+    async ({ meetingId, tabId, title, url }) =>
+      chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_START_CAPTURE',
+        meetingId,
+        tabId,
+        title,
+        url,
+      }),
+    { meetingId, tabId: meetingTabId, title: meetingTitle, url: meetingUrl },
+  );
+  assert.equal(
+    restartedResult?.success,
+    true,
+    `重新开始 Capture 未成功: ${JSON.stringify(restartedResult)}`,
+  );
+  assert.ok(
+    ['armed', 'recording', 'uploading', 'completed'].includes(
+      restartedResult?.session?.capture?.kind,
+    ),
+    `重启后 capture 状态无效: ${JSON.stringify(
+      restartedResult?.session?.capture,
+    )}`,
+  );
+  assert.ok(
+    restartedResult?.session?.capture?.startedAt > initialCaptureStartedAt,
+    `重启后 startedAt 沿用了旧值: ${JSON.stringify({
+      initialCaptureStartedAt,
+      restartedCapture: restartedResult?.session?.capture,
+    })}`,
+  );
+  assert.equal(
+    restartedResult?.session?.capture?.stoppedAt,
+    undefined,
+    `重启后不应保留 stoppedAt: ${JSON.stringify(
+      restartedResult?.session?.capture,
+    )}`,
+  );
 
   await panelPage.evaluate(
     async ({ meetingId }) => {

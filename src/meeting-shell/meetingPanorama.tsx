@@ -250,11 +250,42 @@ const panoramaStyle = `
   .action-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: flex-start; gap: 6px; }
   .action-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 8px; flex-wrap: wrap; }
   .action-evidence { margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--orange); border-radius: 6px; background: rgba(255,165,2,0.08); color: var(--text-dim); font-size: 11px; line-height: 1.45; }
+  .action-gap-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .action-gap-tag { font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,165,2,0.28); color: var(--orange); background: rgba(255,165,2,0.08); font-weight: 600; }
   .action-status { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
   .status-pending { background: rgba(255, 165, 2, 0.15); color: var(--orange); }
   .status-done { background: rgba(105, 219, 124, 0.15); color: var(--p2); }
   .status-confirmed { background: rgba(116,185,255,0.15); color: var(--blue); }
   .status-dismissed { background: rgba(148,163,184,0.12); color: var(--text-dim); }
+  .followup-readiness { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 12px; }
+  .followup-readiness.ready { border-color: rgba(105,219,124,0.35); }
+  .followup-readiness.needs-review { border-color: rgba(255,165,2,0.34); }
+  .followup-readiness.empty { border-color: var(--border); opacity: 0.86; }
+  .followup-head { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 10px; }
+  .followup-icon { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: rgba(116,185,255,0.12); color: var(--blue); flex-shrink: 0; }
+  .followup-title { font-size: 13px; font-weight: 700; color: var(--text); line-height: 1.35; }
+  .followup-subtitle { margin-top: 2px; font-size: 11px; color: var(--text-dim); line-height: 1.45; }
+  .followup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+  .followup-metric { border: 1px solid var(--border); border-radius: 8px; background: rgba(11,13,20,0.36); padding: 8px; min-width: 0; }
+  .followup-metric strong { display: block; font-size: 17px; line-height: 1.1; color: var(--text); }
+  .followup-metric span { display: block; margin-top: 3px; font-size: 10px; color: var(--text-dim); }
+  .followup-blockers { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+  .followup-blocker { border-left: 2px solid var(--orange); border-radius: 7px; background: rgba(255,165,2,0.07); padding: 7px 8px; font-size: 11px; color: var(--text-dim); line-height: 1.45; }
+  .followup-blocker strong { color: var(--text); }
+  .followup-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .followup-copy {
+    padding: 7px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .followup-copy:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+  .followup-copy:disabled { opacity: 0.48; cursor: not-allowed; }
+  .followup-copy-state { font-size: 11px; color: var(--text-muted); }
   .decision-item { border-left: 3px solid var(--teal); font-size: 13px; line-height: 1.5; }
   .decision-item:hover { border-color: var(--teal); transform: translateX(2px); }
   .dec-time { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
@@ -727,6 +758,116 @@ function getActionStatusClass(item: MeetingPilotActionItem): string {
   return 'status-pending';
 }
 
+function isMissingActionOwner(owner: string | undefined): boolean {
+  const normalized = (owner || '').trim().toLowerCase();
+  return (
+    !normalized ||
+    normalized === 'unknown' ||
+    normalized === 'unassigned' ||
+    normalized === '待分配'
+  );
+}
+
+function getActionReadinessGaps(item: MeetingPilotActionItem): string[] {
+  const gaps: string[] = [];
+  if (isMissingActionOwner(item.owner)) {
+    gaps.push('补负责人');
+  }
+  if (!item.deadline?.trim()) {
+    gaps.push('补截止');
+  }
+  if (!item.evidence?.trim()) {
+    gaps.push('缺依据');
+  }
+  return gaps;
+}
+
+function getFollowUpReadinessClass(
+  activeActionCount: number,
+  suggestedCount: number,
+  gapCount: number,
+): string {
+  if (!activeActionCount) return 'empty';
+  if (suggestedCount > 0 || gapCount > 0) return 'needs-review';
+  return 'ready';
+}
+
+function getFollowUpReadinessText(
+  activeActionCount: number,
+  suggestedCount: number,
+  gapCount: number,
+): string {
+  if (!activeActionCount) return '暂无需要跟进的行动项。';
+  if (suggestedCount > 0 || gapCount > 0) {
+    return '先处理待复核和缺信息项，再外发给团队。';
+  }
+  return '行动项已具备负责人、截止和依据，可以直接外发。';
+}
+
+function buildFollowUpChecklist(
+  session: MeetingPilotSessionSnapshot,
+  activeActionItems: MeetingPilotActionItem[],
+): string {
+  const lines = [
+    `# ${session.title || 'Meeting Pilot'} 会后跟进`,
+    '',
+    `会议: ${formatSessionDate(session.detectedAt)} ${formatSessionTimeRange(
+      session,
+    )}`,
+    '',
+  ];
+
+  if (!activeActionItems.length) {
+    lines.push('暂无需要跟进的行动项。');
+    return lines.join('\n');
+  }
+
+  activeActionItems.forEach((item) => {
+    const owner = isMissingActionOwner(item.owner) ? '待补负责人' : item.owner;
+    const deadline = item.deadline?.trim() || '待补截止';
+    const status = getActionStatusLabel(item);
+    const gaps = getActionReadinessGaps(item);
+    lines.push(
+      `- [${item.status === 'done' ? 'x' : ' '}] ${
+        item.title
+      }（${status}；负责人：${owner}；截止：${deadline}${
+        gaps.length ? `；需补：${gaps.join('、')}` : ''
+      }）`,
+    );
+    if (item.evidence?.trim()) {
+      lines.push(`  - 依据：${item.evidence.trim()}`);
+    }
+  });
+
+  return lines.join('\n');
+}
+
+async function writeClipboardText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to the textarea path for browsers that expose clipboard
+      // but reject extension-page writes in automated or restricted contexts.
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('clipboard_copy_failed');
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 function getStanceBadgeClass(stance: MeetingPilotParticipantStance['stance']) {
   if (stance === '主导') return 'lead';
   if (stance === '支持') return 'support';
@@ -824,6 +965,7 @@ function PanoramaPage() {
     string | null
   >(null);
   const [renameDraft, setRenameDraft] = useState<string>('');
+  const [followUpCopyState, setFollowUpCopyState] = useState('');
   const archivedSession = useMemo(() => getArchivedSessionFromQuery(), []);
   const isArchivedHistoryMode = Boolean(archivedSession);
   const session =
@@ -929,10 +1071,35 @@ function PanoramaPage() {
   const activeActionItems = session.actionItems.filter(
     (item) => getActionReviewState(item) !== 'dismissed',
   );
-  const pendingActions = activeActionItems.filter(
-    (item) => item.status === 'pending',
+  const suggestedActions = activeActionItems.filter(
+    (item) => getActionReviewState(item) === 'suggested',
   );
-  const completedActions = activeActionItems.length - pendingActions.length;
+  const confirmedOpenActions = activeActionItems.filter(
+    (item) =>
+      getActionReviewState(item) === 'confirmed' && item.status !== 'done',
+  );
+  const completedActions = activeActionItems.filter(
+    (item) => item.status === 'done',
+  );
+  const actionsWithReadinessGaps = activeActionItems.filter(
+    (item) => getActionReadinessGaps(item).length > 0,
+  );
+  const readyFollowUpActions = activeActionItems.filter(
+    (item) =>
+      getActionReviewState(item) === 'confirmed' &&
+      item.status !== 'done' &&
+      getActionReadinessGaps(item).length === 0,
+  );
+  const followUpReadinessClass = getFollowUpReadinessClass(
+    activeActionItems.length,
+    suggestedActions.length,
+    actionsWithReadinessGaps.length,
+  );
+  const followUpReadinessText = getFollowUpReadinessText(
+    activeActionItems.length,
+    suggestedActions.length,
+    actionsWithReadinessGaps.length,
+  );
   const pdfUrl = session.digest.resultUrl;
   const minutesConfigured = serviceConfig.minutesConfigured;
   const whisperConfigured = serviceConfig.whisperConfigured;
@@ -1009,6 +1176,17 @@ function PanoramaPage() {
       url,
       active: true,
     });
+  };
+
+  const copyFollowUpChecklist = async () => {
+    if (!activeActionItems.length) return;
+    const checklist = buildFollowUpChecklist(session, activeActionItems);
+    try {
+      await writeClipboardText(checklist);
+      setFollowUpCopyState('已复制');
+    } catch {
+      setFollowUpCopyState('复制失败');
+    }
   };
 
   useEffect(() => {
@@ -1185,7 +1363,8 @@ function PanoramaPage() {
           <div className="stat-label">行动项</div>
           <div className="stat-value">{activeActionItems.length}</div>
           <div className="stat-sub">
-            {pendingActions.length} 待处理 · {completedActions} 已确认
+            {suggestedActions.length} 待复核 · {confirmedOpenActions.length}{' '}
+            已确认 · {completedActions.length} 已完成
           </div>
         </div>
         <div className="stat-card">
@@ -1530,33 +1709,114 @@ function PanoramaPage() {
 
           <div className="sidebar-section">
             <div className="sidebar-header">
+              <span>✅</span> 会后跟进状态
+            </div>
+            <div
+              className={`followup-readiness ${followUpReadinessClass}`}
+              data-followup-state={followUpReadinessClass}
+            >
+              <div className="followup-head">
+                <span className="followup-icon">↗</span>
+                <div>
+                  <div className="followup-title">跟进清单可交付度</div>
+                  <div className="followup-subtitle">
+                    {followUpReadinessText}
+                  </div>
+                </div>
+              </div>
+              <div className="followup-grid">
+                <div className="followup-metric">
+                  <strong>{readyFollowUpActions.length}</strong>
+                  <span>可直接跟进</span>
+                </div>
+                <div className="followup-metric">
+                  <strong>{suggestedActions.length}</strong>
+                  <span>待复核</span>
+                </div>
+                <div className="followup-metric">
+                  <strong>{actionsWithReadinessGaps.length}</strong>
+                  <span>需补信息</span>
+                </div>
+                <div className="followup-metric">
+                  <strong>{completedActions.length}</strong>
+                  <span>已完成</span>
+                </div>
+              </div>
+              {actionsWithReadinessGaps.length ? (
+                <div className="followup-blockers">
+                  {actionsWithReadinessGaps.slice(0, 3).map((item) => (
+                    <div className="followup-blocker" key={item.id}>
+                      <strong>{item.title}</strong> ·{' '}
+                      {getActionReadinessGaps(item).join('、')}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="followup-actions">
+                <button
+                  className="followup-copy"
+                  disabled={!activeActionItems.length}
+                  onClick={() => void copyFollowUpChecklist()}
+                >
+                  复制跟进清单
+                </button>
+                <span className="followup-copy-state" aria-live="polite">
+                  {followUpCopyState}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="sidebar-section">
+            <div className="sidebar-header">
               <span>📋</span> 行动项总览
             </div>
             <div className="action-list">
-              {session.actionItems.map((item) => (
-                <div
-                  className={`action-item ${getActionReviewState(item)}`}
-                  key={item.id}
-                >
-                  <div className="action-title">
-                    <span>📌</span>
-                    {item.title}
+              {session.actionItems.map((item) => {
+                const readinessGaps =
+                  getActionReviewState(item) === 'dismissed'
+                    ? []
+                    : getActionReadinessGaps(item);
+                return (
+                  <div
+                    className={`action-item ${getActionReviewState(item)}`}
+                    key={item.id}
+                  >
+                    <div className="action-title">
+                      <span>📌</span>
+                      {item.title}
+                    </div>
+                    <div className="action-meta">
+                      <span>👤 {item.owner}</span>
+                      {item.deadline ? <span>📅 {item.deadline}</span> : null}
+                      {item.timestamp ? (
+                        <span>🕒 {item.timestamp}</span>
+                      ) : null}
+                      <span
+                        className={`action-status ${getActionStatusClass(
+                          item,
+                        )}`}
+                      >
+                        {getActionStatusLabel(item)}
+                      </span>
+                    </div>
+                    {readinessGaps.length ? (
+                      <div className="action-gap-tags">
+                        {readinessGaps.map((gap) => (
+                          <span className="action-gap-tag" key={gap}>
+                            {gap}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {item.evidence ? (
+                      <div className="action-evidence">
+                        依据：{item.evidence}
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="action-meta">
-                    <span>👤 {item.owner}</span>
-                    {item.deadline ? <span>📅 {item.deadline}</span> : null}
-                    {item.timestamp ? <span>🕒 {item.timestamp}</span> : null}
-                    <span
-                      className={`action-status ${getActionStatusClass(item)}`}
-                    >
-                      {getActionStatusLabel(item)}
-                    </span>
-                  </div>
-                  {item.evidence ? (
-                    <div className="action-evidence">依据：{item.evidence}</div>
-                  ) : null}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 

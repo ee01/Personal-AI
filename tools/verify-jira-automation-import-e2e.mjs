@@ -67,6 +67,15 @@ const exportedRule = {
         connectionId: 'prod-webhook-connection',
         authorizationHeader: '*****',
         apiToken: 'prod-api-token-123',
+        headers: [
+          {
+            name: 'Authorization',
+            value: {
+              secret: true,
+              keyOrValue: 'https://hooks.example.com/SRC/hiddenSecretPath1234567890ABCD?token=hidden-secret-token&owner=secret-owner@example.com {{webhookData.hiddenSecret}} project = SRC',
+            },
+          },
+        ],
         body: '{{issue.assignee.accountId}}',
       },
     },
@@ -198,11 +207,21 @@ try {
   assert.match(previewText, /Sensitive values/);
   assert.doesNotMatch(previewText, /prod-api-token-123/);
   assert.doesNotMatch(previewText, /releaseSecretPath1234567890ABCD/);
+  assert.doesNotMatch(previewText, /hiddenSecretPath1234567890ABCD/);
+  assert.doesNotMatch(previewText, /hidden-secret-token/);
+  assert.doesNotMatch(previewText, /secret-owner@example.com/);
+  assert.doesNotMatch(previewText, /webhookData\.hiddenSecret/);
   assert.match(previewText, /\/SRC\/release\/REDACTED\?apiToken=REDACTED/);
   assert.match(previewText, /Smart values/);
+  assert.match(previewText, /I reviewed the high-risk bindings before creating this disabled copy/);
 
-  await frame.getByRole('button', { name: 'Import disabled copy' }).focus();
-  await frame.getByRole('button', { name: 'Import disabled copy' }).press('Tab');
+  const importDisabledCopyButton = frame.getByRole('button', { name: 'Import disabled copy' });
+  assert.equal(await importDisabledCopyButton.isDisabled(), true);
+  await frame.getByLabel(/I reviewed the high-risk bindings/).check();
+  assert.equal(await importDisabledCopyButton.isDisabled(), false);
+
+  await importDisabledCopyButton.focus();
+  await importDisabledCopyButton.press('Tab');
   const focusedAfterTab = await frame.locator(':focus').evaluate(element => ({
     tagName: element.tagName,
     type: element.getAttribute('type'),
@@ -210,7 +229,7 @@ try {
   }));
   assert.deepEqual(focusedAfterTab, { tagName: 'INPUT', type: 'checkbox', inDialog: true });
 
-  await frame.getByRole('button', { name: 'Import disabled copy' }).click();
+  await importDisabledCopyButton.click();
   await page.waitForTimeout(1000);
 
   if (!createPayload) {
@@ -234,11 +253,15 @@ try {
   assert.match(createPayload.description, /Imported as a disabled copy into TGT \(22222\)\./);
   assert.match(createPayload.description, /Detected bindings: .*custom field.*connection\/credential/);
   assert.match(createPayload.description, /Top detected bindings: .*JQL \/ filters \(1\): project = SRC/);
-  assert.match(createPayload.description, /Secrets \(1\): release-webhook-token/);
+  assert.match(createPayload.description, /Secrets \(2\): release-webhook-token \| hidden secret value/);
   assert.match(createPayload.description, /Connections \(1\): connectionId: prod-webhook-connection/);
-  assert.match(createPayload.description, /Sensitive \/ hidden values \(4\): URL query apiToken: sensitive value present \| URL path segment: sensitive value present, 2 more/);
+  assert.match(createPayload.description, /Sensitive \/ hidden values \(5\): URL query apiToken: sensitive value present \| URL path segment: sensitive value present, 3 more/);
   assert.doesNotMatch(createPayload.description, /prod-api-token-123/);
   assert.doesNotMatch(createPayload.description, /releaseSecretPath1234567890ABCD/);
+  assert.doesNotMatch(createPayload.description, /hiddenSecretPath1234567890ABCD/);
+  assert.doesNotMatch(createPayload.description, /hidden-secret-token/);
+  assert.doesNotMatch(createPayload.description, /secret-owner@example.com/);
+  assert.doesNotMatch(createPayload.description, /webhookData\.hiddenSecret/);
   assert.match(createPayload.description, /\/SRC\/release\/REDACTED\?apiToken=REDACTED/);
   assert.match(createPayload.description, /Detected bindings: .*smart value/);
   assert.match(createPayload.description, /Rule chaining: blocked in imported copy\./);

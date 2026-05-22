@@ -22,16 +22,82 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
   private static readonly MULTI_TABLE_CONFIDENCE_THRESHOLD = 0.5;
 
   // 识别项目状态的常见列名
-  private static readonly STATUS_COLUMNS = ['status', 'state', 'stage', '状态', '阶段'];
+  private static readonly STATUS_COLUMNS = [
+    'status',
+    'state',
+    'stage',
+    'health',
+    'rag',
+    'traffic light',
+    'traffic-light',
+    '状态',
+    '阶段',
+    '健康度',
+    '红黄绿',
+  ];
   
   // 识别项目描述的常见列名
-  private static readonly DESCRIPTION_COLUMNS = ['project', 'description', 'summary', 'name', 'title', '项目', '描述', '名称', '标题'];
+  private static readonly DESCRIPTION_COLUMNS = [
+    'project',
+    'initiative',
+    'epic',
+    'feature',
+    'description',
+    'summary',
+    'name',
+    'title',
+    'jira',
+    'issue key',
+    '项目',
+    '事项',
+    '描述',
+    '名称',
+    '标题',
+  ];
   
   // 识别项目负责人的常见列名
-  private static readonly OWNER_COLUMNS = ['owner', 'assignee', 'responsible', 'person', 'lead', 'reporter', '负责人', '责任人', '所有者', '执行者'];
+  private static readonly OWNER_COLUMNS = [
+    'owner',
+    'assignee',
+    'responsible',
+    'person',
+    'lead',
+    'dri',
+    'pm',
+    'poc',
+    'point of contact',
+    'program owner',
+    'product owner',
+    'engineering owner',
+    'tech lead',
+    'reporter',
+    '负责人',
+    '责任人',
+    '所有者',
+    '执行者',
+  ];
   
   // 识别赛道/团队的常见列名
-  private static readonly TRACK_COLUMNS = ['track', 'team', 'group', 'department', 'area', '赛道', '团队', '组别', '部门', '分类'];
+  private static readonly TRACK_COLUMNS = [
+    'track',
+    'team',
+    'group',
+    'department',
+    'area',
+    'workstream',
+    'stream',
+    'pillar',
+    'squad',
+    'domain',
+    'portfolio',
+    'product area',
+    '赛道',
+    '团队',
+    '组别',
+    '部门',
+    '分类',
+    '领域',
+  ];
   
   // 识别备注/注释的常见列名
   private static readonly COMMENTS_COLUMNS = [
@@ -48,12 +114,29 @@ export class TableContentAnalyzerImpl extends BaseSlideAnalyzer implements Table
     'highlights',
     'next step',
     'next steps',
+    'blocker',
+    'blockers',
+    'risk',
+    'risks',
+    'dependency',
+    'dependencies',
+    'decision',
+    'decisions',
+    'open item',
+    'open items',
+    'follow up',
+    'follow-up',
     '备注',
     '注释',
     '行动项',
     '待办',
     '亮点',
-    '下一步'
+    '下一步',
+    '风险',
+    '阻塞',
+    '依赖',
+    '决策',
+    '跟进',
   ];
 
   /**

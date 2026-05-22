@@ -226,16 +226,41 @@ export interface MeetingPilotTimelineEvent {
 
 export interface MeetingPilotMemoryRef {
   id: string;
+  type?: 'message' | 'chunk' | 'entity';
   title: string;
+  cueTitle?: string;
+  cueBody?: string;
   snippet: string;
+  evidenceSnippet?: string;
   fullSnippet?: string;
   score: number;
   sourceLabel: string;
+  sourceTitle?: string;
   sourceUrl?: string;
+  timestamp?: number;
+  matchedAt?: number;
+  links?: Array<{ label: string; url: string }>;
   /** Stable link into memory-exploring (Vue UI). */
   exploreLink?: string;
   /** Why this memory was matched (channel hits / context). */
   whyMatched?: string;
+  whyRelevant?: string[];
+  matchedAnchors?: {
+    people?: string[];
+    topics?: string[];
+    projects?: string[];
+    source?: string[];
+  };
+  suppressionReason?: string;
+  reasonType?: string;
+  relationLabel?: string;
+  evidenceRole?: string;
+  evidenceRoleLabel?: string;
+  displayPriority?: 'p1' | 'p2' | 'hidden';
+  metadata?: Record<string, unknown>;
+  mergedCount?: number;
+  mergedIds?: string[];
+  sourceClusterKey?: string;
 }
 
 export type MeetingPilotSpeechSuggestionIntent =

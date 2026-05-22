@@ -23,6 +23,12 @@ interface NotificationActionBody {
 const DEFAULT_NOTIFICATION_SNOOZE_SECONDS = 24 * 3600;
 const MIN_NOTIFICATION_SNOOZE_SECONDS = 5 * 60;
 const MAX_NOTIFICATION_SNOOZE_SECONDS = 7 * 24 * 3600;
+const VALID_NOTIFICATION_STATES = new Set([
+  'pending',
+  'scheduled',
+  'clicked',
+  'dismissed',
+]);
 
 const notificationActionBodySchema = {
   type: 'object' as const,
@@ -71,8 +77,23 @@ export async function notificationRoutes(
   }>('/notifications', async (request, reply) => {
     const { db } = request.userContext;
     const repo = new NotificationRepository(db);
+    if (
+      request.query.state &&
+      !VALID_NOTIFICATION_STATES.has(request.query.state)
+    ) {
+      return reply.status(400).send({
+        error: 'invalid_notification_state',
+        message: `Unsupported notification state: ${request.query.state}`,
+      });
+    }
     const notifications = repo.list({
-      state: (request.query.state as 'pending' | 'clicked' | 'dismissed' | undefined) ?? 'pending',
+      state:
+        (request.query.state as
+          | 'pending'
+          | 'scheduled'
+          | 'clicked'
+          | 'dismissed'
+          | undefined) ?? 'pending',
       type: request.query.type,
       limit: parseInt(request.query.limit || '20', 10),
       offset: parseInt(request.query.offset || '0', 10),
@@ -112,6 +133,13 @@ export async function notificationRoutes(
           return reply.status(200).send(repo.dismiss(id, detail));
         }
         case 'snooze': {
+          if (existing.clickedAt || existing.dismissedAt) {
+            return reply.status(409).send({
+              error: 'notification_already_handled',
+              message:
+                'This notification was already acknowledged, dismissed, or snoozed.',
+            });
+          }
           const delaySeconds = normalizeNotificationSnoozeDelaySeconds(
             request.body.delaySeconds,
           );

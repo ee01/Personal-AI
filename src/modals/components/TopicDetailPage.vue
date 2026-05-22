@@ -119,7 +119,7 @@
                   :href="getSafeExternalUrl(resource.url)"
                   class="item-link"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   @click.stop
                   >查看资源</a
                 >
@@ -268,7 +268,9 @@
                   class="conversation-source-link"
                   :href="getConversationSourceUrl(conv)"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
+                  :title="getConversationSourceTitle(conv)"
+                  :aria-label="getConversationSourceTitle(conv)"
                   @click.stop
                 >
                   来源
@@ -388,7 +390,7 @@
                   class="webpage-open-link"
                   :href="getSafeExternalUrl(webpage.url)"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   @click.stop
                 >
                   打开来源
@@ -419,7 +421,6 @@ import { useRoute, useRouter } from 'vue-router';
 import { useMemoryStore } from '../memory-store';
 import {
   findTopicConversationByMessageId,
-  filterTopicConversationsByReadState,
   getTopicConversationUnreadMessageCount,
   getTopicConversationUnreadCount,
   getTopicConversationPrimaryId,
@@ -433,7 +434,10 @@ import {
   type TopicConversationReadFilter,
 } from '../topic-detail-data';
 import { renderHighlightedText } from '../topic-detail-rendering';
-import { getSafeExternalUrl } from '../topic-link-safety';
+import {
+  getFirstSafeExternalUrl,
+  getSafeExternalUrl,
+} from '../topic-link-safety';
 import { formatTopicRelativeTime } from '../topic-time';
 
 const route = useRoute();
@@ -476,6 +480,7 @@ const convFilter = ref('all');
 const webSearchQuery = ref('');
 const webTypeFilter = ref('all');
 const expandedConversations = ref<Set<string>>(new Set());
+const stickyUnreadConversationIds = ref<Set<string>>(new Set());
 const highlightedConversationId = ref<string | null>(null);
 const messageFocusNotice = ref<{
   type: 'info' | 'warning';
@@ -500,12 +505,35 @@ const conversationEmptyText = computed(() => {
   return '没有匹配的聊天记录';
 });
 
+const getConversationRenderId = (conversation: any, index = 0): string => {
+  return getTopicConversationPrimaryId(conversation) || `conversation-${index}`;
+};
+
+const shouldKeepConversationForReadFilter = (
+  conversation: any,
+  sortedIndex = 0,
+): boolean => {
+  if (convReadFilter.value === 'unread') {
+    return (
+      isTopicConversationUnread(conversation) ||
+      stickyUnreadConversationIds.value.has(
+        getConversationRenderId(conversation, sortedIndex),
+      )
+    );
+  }
+
+  if (convReadFilter.value === 'read') {
+    return !isTopicConversationUnread(conversation);
+  }
+
+  return true;
+};
+
 const filteredConversations = computed(() => {
   let filtered = sortTopicConversationsForTriage(topicConversations.value);
 
-  filtered = filterTopicConversationsByReadState(
-    filtered,
-    convReadFilter.value,
+  filtered = filtered.filter((conv, index) =>
+    shouldKeepConversationForReadFilter(conv, index),
   );
 
   if (convSearchQuery.value.trim()) {
@@ -568,8 +596,23 @@ const goBack = () => {
   router.push('/entity/Topic');
 };
 
-const getConversationRenderId = (conversation: any, index = 0): string => {
-  return getTopicConversationPrimaryId(conversation) || `conversation-${index}`;
+const rememberStickyUnreadConversation = (conversationId: string) => {
+  stickyUnreadConversationIds.value = new Set([
+    ...stickyUnreadConversationIds.value,
+    conversationId,
+  ]);
+};
+
+const forgetStickyUnreadConversation = (conversationId: string) => {
+  if (!stickyUnreadConversationIds.value.has(conversationId)) return;
+  const next = new Set(stickyUnreadConversationIds.value);
+  next.delete(conversationId);
+  stickyUnreadConversationIds.value = next;
+};
+
+const clearStickyUnreadConversations = () => {
+  if (stickyUnreadConversationIds.value.size === 0) return;
+  stickyUnreadConversationIds.value = new Set();
 };
 
 const isConversationExpanded = (conversation: any, index = 0): boolean => {
@@ -581,11 +624,16 @@ const toggleConversationExpand = (conversation: any, index = 0) => {
   const newExpanded = new Set(expandedConversations.value);
   if (newExpanded.has(conversationId)) {
     newExpanded.delete(conversationId);
+    forgetStickyUnreadConversation(conversationId);
   } else {
+    const wasUnread = isConversationUnread(conversation);
     newExpanded.clear();
     newExpanded.add(conversationId);
     const messageId = getTopicConversationPrimaryId(conversation);
-    if (messageId && isConversationUnread(conversation)) {
+    if (convReadFilter.value === 'unread' && wasUnread) {
+      rememberStickyUnreadConversation(conversationId);
+    }
+    if (messageId && wasUnread) {
       void store.markConversationAsRead(topicId.value, messageId);
     }
   }
@@ -595,6 +643,7 @@ const toggleConversationExpand = (conversation: any, index = 0) => {
 const handleMarkAllAsRead = async () => {
   if (topicId.value) {
     await store.markTopicAsRead(topicId.value);
+    clearStickyUnreadConversations();
   }
 };
 
@@ -715,12 +764,34 @@ const highlightText = (text: string, searchQuery: string) => {
 };
 
 const getConversationSourceUrl = (conversation: any): string => {
-  return getSafeExternalUrl(
-    conversation?.teamUrl ||
-      conversation?.sourceUrl ||
-      conversation?.permalink ||
-      conversation?.url,
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages
+    : [];
+
+  return getFirstSafeExternalUrl(
+    conversation?.teamUrl,
+    conversation?.sourceUrl,
+    conversation?.permalink,
+    conversation?.url,
+    ...contextMessages.flatMap((contextMessage: any) => [
+      contextMessage?.teamUrl,
+      contextMessage?.sourceUrl,
+      contextMessage?.permalink,
+      contextMessage?.url,
+    ]),
   );
+};
+
+const getConversationSourceTitle = (conversation: any): string => {
+  const sourceUrl = getConversationSourceUrl(conversation);
+  if (!sourceUrl) return '没有可信来源链接';
+
+  try {
+    const parsedUrl = new URL(sourceUrl);
+    return `打开原始来源：${parsedUrl.hostname}`;
+  } catch {
+    return '打开原始来源';
+  }
 };
 
 const getWebpageIcon = (type: string) => {
@@ -762,6 +833,7 @@ watch(
   topicId,
   async (newId) => {
     if (newId) {
+      clearStickyUnreadConversations();
       await store.loadTopicDetail(newId);
       await focusConversationFromQuery(route.query.messageId);
     }
@@ -783,6 +855,12 @@ watch(
     convReadFilter.value = normalizeReadFilterValue(readFilter);
   },
 );
+
+watch(convReadFilter, (readFilter) => {
+  if (readFilter !== 'unread') {
+    clearStickyUnreadConversations();
+  }
+});
 </script>
 
 <style scoped>

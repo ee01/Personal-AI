@@ -273,7 +273,7 @@ export class ProactivityPolicy {
       const workHoursRow = this.db
         .prepare(
           `SELECT item_value FROM user_profile_items
-           WHERE status = 'active' AND item_key = 'work_hours'
+           WHERE status = 'active' AND user_confirmed = 1 AND item_key = 'work_hours'
            LIMIT 1`,
         )
         .get() as { item_value: string } | undefined;
@@ -298,7 +298,7 @@ export class ProactivityPolicy {
       const interestRows = this.db
         .prepare(
           `SELECT item_value FROM user_profile_items
-           WHERE status = 'active' AND item_type = 'interest'
+           WHERE status = 'active' AND user_confirmed = 1 AND item_type = 'interest'
            ORDER BY salience_score DESC
            LIMIT 20`,
         )

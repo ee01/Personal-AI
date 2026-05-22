@@ -28,7 +28,7 @@ interface AgentVisualizerProps {
 
 type ApprovalCopyStatus = {
   key: string;
-  target: 'key' | 'payload';
+  target: 'key' | 'payload' | 'retry';
   state: 'copied' | 'failed';
   message: string;
 } | null;
@@ -104,7 +104,7 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
   const handleCopyApprovalText = async (
     approvalKey: string,
     text: string,
-    target: 'key' | 'payload',
+    target: 'key' | 'payload' | 'retry',
     successMessage: string,
   ) => {
     if (!approvalKey || !text) return;
@@ -135,7 +135,9 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
         message:
           target === 'key'
             ? '复制失败，请手动选择 key'
-            : '复制失败，请手动选择审核包',
+            : target === 'payload'
+              ? '复制失败，请手动选择审核包'
+              : '复制失败，请手动选择重跑配置',
       });
       console.warn('复制批准 key 失败:', error);
     }
@@ -153,6 +155,17 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       reviewPayload,
       'payload',
       '已复制审核包',
+    );
+
+  const handleCopyApprovalRetryConfig = (
+    approvalKey: string,
+    retryConfigPatch: string,
+  ) =>
+    handleCopyApprovalText(
+      approvalKey,
+      retryConfigPatch,
+      'retry',
+      '已复制重跑配置',
     );
   
   // 格式化时间戳
@@ -309,7 +322,29 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                             ? '已复制'
                             : '复制审核包'}
                         </button>
+                        <button
+                          type="button"
+                          className="agent-approval-copy"
+                          onClick={() =>
+                            handleCopyApprovalRetryConfig(
+                              approval.approvalKey,
+                              approval.retryConfigPatch,
+                            )
+                          }
+                          aria-label={`复制 ${approval.toolId} 的重跑配置`}
+                          disabled={!approval.approvalKey || !approval.retryConfigPatch}
+                        >
+                          {approvalCopyStatus?.key === approval.approvalKey &&
+                          approvalCopyStatus.target === 'retry' &&
+                          approvalCopyStatus.state === 'copied'
+                            ? '已复制'
+                            : '复制重跑配置'}
+                        </button>
                       </div>
+                    </div>
+                    <div className="agent-approval-retry-config">
+                      <span>重跑配置</span>
+                      <code>{approval.retryConfigPatch}</code>
                     </div>
                     {approvalCopyStatus?.key === approval.approvalKey && (
                       <div
@@ -469,6 +504,9 @@ const AgentFlowVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess })
                       </span>
                     )}
                   </div>
+                  {step.detail && (
+                    <div className="node-detail">{step.detail}</div>
+                  )}
                   <div className="node-time">{step.time}</div>
                 </div>
               </div>
@@ -494,9 +532,30 @@ interface AgentResultSummaryProps {
     summary: string;
     reasonsToStore?: string[];
   };
+  thoughtProcess?: ThoughtStep[];
 }
 
-const AgentResultSummary: React.FC<AgentResultSummaryProps> = ({ result }) => {
+const AgentResultSummary: React.FC<AgentResultSummaryProps> = ({
+  result,
+  thoughtProcess = [],
+}) => {
+  const pendingApprovalActions = buildPendingApprovalActions(thoughtProcess);
+  const pendingNotifyActions = pendingApprovalActions.filter((approval) =>
+    approval.effect === 'notify' ||
+    /notify|notification/i.test(approval.toolId),
+  );
+  const hasPendingNotify = pendingNotifyActions.length > 0;
+  const notifyBadgeClass = result.shouldNotify
+    ? 'notify'
+    : hasPendingNotify
+      ? 'pending-notify'
+      : 'no-notify';
+  const notifyBadgeLabel = result.shouldNotify
+    ? '已通知'
+    : hasPendingNotify
+      ? '待确认通知'
+      : '未通知';
+
   return (
     <div className="agent-result-summary">
       <h3>处理结果</h3>
@@ -512,6 +571,26 @@ const AgentResultSummary: React.FC<AgentResultSummaryProps> = ({ result }) => {
         </div>
         
         <div className="result-body">
+          {pendingApprovalActions.length > 0 && (
+            <div className="result-pending-approval" role="status">
+              <h4>待确认动作未执行</h4>
+              <p>
+                还有 {pendingApprovalActions.length} 个工具动作等待人工确认；最终结果没有把这些动作当作已完成。
+              </p>
+              <ul>
+                {pendingApprovalActions.map((approval, index) => (
+                  <li key={`${approval.toolId}-${approval.approvalKey || index}`}>
+                    <strong>{approval.toolId}</strong>
+                    <span>
+                      {formatApprovalEffect(approval.effect)} /{' '}
+                      {formatApprovalRisk(approval.riskLevel)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="summary-section">
             <h4>消息总结</h4>
             <p>{result.summary}</p>
@@ -526,8 +605,8 @@ const AgentResultSummary: React.FC<AgentResultSummaryProps> = ({ result }) => {
               {result.shouldStore ? '已存储' : '未存储'}
             </div>
             
-            <div className={`decision-badge ${result.shouldNotify ? 'notify' : 'no-notify'}`}>
-              {result.shouldNotify ? '已通知' : '未通知'}
+            <div className={`decision-badge ${notifyBadgeClass}`}>
+              {notifyBadgeLabel}
             </div>
           </div>
           

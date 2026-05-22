@@ -72,24 +72,64 @@ try {
       const payload = request.postDataJSON();
       const scope = payload.scope || 'work';
       askRequests.push(payload);
+      const evidence =
+        scope === 'all'
+          ? [
+              {
+                id: 'all-work-memory',
+                type: 'message',
+                content: 'Work memory evidence for all',
+                displayTitle: 'Scoped memory result all',
+                displayText: 'The all search includes a work memory.',
+                score: 0.91,
+                source: 'manual',
+                timestamp: nowSeconds,
+                scope: 'work',
+                metadata: { channels: ['fts'] },
+              },
+              {
+                id: 'all-personal-memory',
+                type: 'message',
+                content: 'Personal memory evidence for all',
+                displayTitle: 'Scoped personal memory result all',
+                displayText: 'The all search includes a personal memory.',
+                score: 0.89,
+                source: 'manual',
+                timestamp: nowSeconds - 60,
+                scope: 'personal',
+                metadata: { channels: ['fts'] },
+              },
+            ]
+          : [
+              {
+                id: `${scope}-memory`,
+                type: 'message',
+                content: `Memory evidence for ${scope}`,
+                displayTitle: `Scoped memory result ${scope}`,
+                displayText: `The search scope is ${scope}.`,
+                score: 0.91,
+                source: 'manual',
+                timestamp: nowSeconds,
+                scope: scope === 'personal' ? 'personal' : 'work',
+                metadata: { channels: ['fts'] },
+              },
+            ];
       await route.fulfill(
         jsonResponse({
           answer: `Answer for ${scope}`,
-          evidence: [
-            {
-              id: `${scope}-memory`,
-              type: 'message',
-              content: `Memory evidence for ${scope}`,
-              displayTitle: `Scoped memory result ${scope}`,
-              displayText: `The search scope is ${scope}.`,
-              score: 0.91,
-              source: 'manual',
-              timestamp: nowSeconds,
-              scope: scope === 'personal' ? 'personal' : 'work',
-              metadata: { channels: ['fts'] },
-            },
-          ],
+          evidence,
           queryTimeMs: 8,
+          channelDiagnostics: [
+            {
+              channel: 'vector',
+              status: 'skipped',
+              candidateCount: 0,
+              reason: 'embedding_unavailable',
+            },
+            { channel: 'fts', status: 'hit', candidateCount: evidence.length },
+            { channel: 'graph', status: 'empty', candidateCount: 0 },
+            { channel: 'time', status: 'empty', candidateCount: 0 },
+          ],
           blocks: [],
         }),
       );
@@ -115,6 +155,10 @@ try {
   await page.getByText('Scoped memory result work').waitFor({ timeout: 10000 });
   assert.equal(askRequests.at(-1)?.scope, 'work');
   await page.getByText('范围: 工作记忆').waitFor({ timeout: 10000 });
+  await page.getByText('命中范围: 工作 1').waitFor({ timeout: 10000 });
+  await page.getByText('语义 未运行').waitFor({ timeout: 10000 });
+  await page.getByText('关键词 命中 1').waitFor({ timeout: 10000 });
+  await page.getByText('图谱 无命中').waitFor({ timeout: 10000 });
 
   const scopeControls = page.locator('.search-header .scope-segmented');
   await scopeControls.getByRole('button', { name: '个人' }).click();
@@ -124,12 +168,14 @@ try {
   assert.equal(askRequests.at(-1)?.scope, 'personal');
   assert.ok(page.url().includes('scope=personal'));
   await page.getByText('范围: 个人记忆').waitFor({ timeout: 10000 });
+  await page.getByText('命中范围: 个人 1').waitFor({ timeout: 10000 });
 
   await scopeControls.getByRole('button', { name: '全部' }).click();
   await page.getByText('Scoped memory result all').waitFor({ timeout: 10000 });
   assert.equal(askRequests.at(-1)?.scope, 'all');
   assert.ok(page.url().includes('scope=all'));
   await page.getByText('范围: 全部记忆').waitFor({ timeout: 10000 });
+  await page.getByText('命中范围: 工作 1 · 个人 1').waitFor({ timeout: 10000 });
 
   assert.deepEqual(
     askRequests.map((request) => request.scope),

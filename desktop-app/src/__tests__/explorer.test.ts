@@ -173,7 +173,14 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
           const result = await service.openLogin();
           return { url: result.url, opened: true, implemented: true };
         },
-        runNow: async () => ({ insertedCount: 2, implemented: true }),
+        runNow: async () => ({
+          insertedCount: 2,
+          extractedConversationCount: 1,
+          extractedMessageCount: 2,
+          artifactCount: 1,
+          skippedConversationCount: 0,
+          implemented: true,
+        }),
       },
     },
   });
@@ -247,10 +254,18 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
       finishedAt: string;
       implemented: boolean;
       insertedCount: number;
+      extractedConversationCount: number;
+      extractedMessageCount: number;
+      artifactCount: number;
+      skippedConversationCount: number;
     };
     assert.equal(runNowBody.source, 'doubao');
     assert.equal(runNowBody.implemented, true);
     assert.equal(runNowBody.insertedCount, 2);
+    assert.equal(runNowBody.extractedConversationCount, 1);
+    assert.equal(runNowBody.extractedMessageCount, 2);
+    assert.equal(runNowBody.artifactCount, 1);
+    assert.equal(runNowBody.skippedConversationCount, 0);
     assert.ok(runNowBody.startedAt);
     assert.ok(runNowBody.finishedAt);
 

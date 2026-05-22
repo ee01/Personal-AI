@@ -21,13 +21,27 @@ test('parseRingCentralVideoJoinTarget converts RingCentral web join links to nat
   });
 });
 
-test('parseRingCentralVideoJoinTarget uses direct browser join for launcher links', () => {
+test('parseRingCentralVideoJoinTarget uses direct browser join for join links', () => {
   const target = parseRingCentralVideoJoinTarget(
     'https://v.ringcentral.com/join/123456?foo=bar#speaker',
   );
 
   assert.deepEqual(target, {
     originalUrl: 'https://v.ringcentral.com/join/123456?foo=bar#speaker',
+    nativeUrl: 'rcvdt://join/123456?foo=bar#speaker',
+    browserUrl: 'https://v.ringcentral.com/conf/on/123456?foo=bar#speaker',
+    meetingId: '123456',
+  });
+});
+
+test('parseRingCentralVideoJoinTarget uses direct browser join for launcher links', () => {
+  const target = parseRingCentralVideoJoinTarget(
+    'https://v.ringcentral.com/launcher/123456?foo=bar#speaker',
+  );
+
+  assert.deepEqual(target, {
+    originalUrl:
+      'https://v.ringcentral.com/launcher/123456?foo=bar#speaker',
     nativeUrl: 'rcvdt://join/123456?foo=bar#speaker',
     browserUrl: 'https://v.ringcentral.com/conf/on/123456?foo=bar#speaker',
     meetingId: '123456',
@@ -94,10 +108,35 @@ test('parseRingCentralVideoJoinTarget accepts safe alphanumeric meeting ids', ()
   });
 });
 
+test('parseRingCentralVideoJoinTarget accepts vanity meeting aliases with dots', () => {
+  const target = parseRingCentralVideoJoinTarget(
+    'https://v.ringcentral.com/join/fnoz.lu?pw=secret',
+  );
+
+  assert.deepEqual(target, {
+    originalUrl: 'https://v.ringcentral.com/join/fnoz.lu?pw=secret',
+    nativeUrl: 'rcvdt://join/fnoz.lu?pw=secret',
+    browserUrl: 'https://v.ringcentral.com/conf/on/fnoz.lu?pw=secret',
+    meetingId: 'fnoz.lu',
+  });
+});
+
 test('parseRingCentralVideoJoinTarget rejects unsafe encoded meeting ids', () => {
   assert.equal(
     parseRingCentralVideoJoinTarget(
       'https://v.ringcentral.com/join/%2F123456?pw=secret',
+    ),
+    null,
+  );
+  assert.equal(
+    parseRingCentralVideoJoinTarget(
+      'https://v.ringcentral.com/join/fnoz..lu?pw=secret',
+    ),
+    null,
+  );
+  assert.equal(
+    parseRingCentralVideoJoinTarget(
+      'https://v.ringcentral.com/join/.fnoz?pw=secret',
     ),
     null,
   );
@@ -131,6 +170,29 @@ test('extractRingCentralVideoJoinUrl strips common markup punctuation', () => {
       '(https://v.ringcentral.com/conf/on/987654?passcode=abc&amp;source=glip)',
     ),
     'https://v.ringcentral.com/conf/on/987654?passcode=abc&source=glip',
+  );
+
+  assert.equal(
+    extractRingCentralVideoJoinUrl(
+      '<a href="https://v.ringcentral.com/launcher/246810?passcode=abc">Join</a>',
+    ),
+    'https://v.ringcentral.com/launcher/246810?passcode=abc',
+  );
+});
+
+test('extractRingCentralVideoJoinUrl handles escaped JSON slash forms', () => {
+  assert.equal(
+    extractRingCentralVideoJoinUrl(
+      '{"joinUrl":"https:\\/\\/v.ringcentral.com\\/join\\/123456?passcode=abc"}',
+    ),
+    'https://v.ringcentral.com/join/123456?passcode=abc',
+  );
+
+  assert.equal(
+    extractRingCentralVideoJoinUrl(
+      '{"joinUrl":"https:\\u002f\\u002fv.ringcentral.com\\u002fconf\\u002fon\\u002f987654"}',
+    ),
+    'https://v.ringcentral.com/conf/on/987654',
   );
 });
 
@@ -167,12 +229,12 @@ test('shouldPreserveDefaultNativeJoinClick keeps modified and fallback-link clic
   }).Element;
   class TestElement {
     closest(selector: string) {
-      return selector.includes(
-        '[data-pai-ringcentral-native-join-fallback-link]',
-      )
+      return selector.includes(this.matchingSelector)
         ? {}
         : null;
     }
+
+    constructor(private readonly matchingSelector: string) {}
   }
   (globalThis as typeof globalThis & { Element?: unknown }).Element =
     TestElement;
@@ -180,9 +242,17 @@ test('shouldPreserveDefaultNativeJoinClick keeps modified and fallback-link clic
   try {
     const fallbackClick = {
       ...regularClick,
-      target: new TestElement(),
+      target: new TestElement(
+        '[data-pai-ringcentral-native-join-fallback-link]',
+      ),
     } as MouseEvent;
     assert.equal(shouldPreserveDefaultNativeJoinClick(fallbackClick), true);
+
+    const closeClick = {
+      ...regularClick,
+      target: new TestElement('[data-pai-ringcentral-native-join-close]'),
+    } as MouseEvent;
+    assert.equal(shouldPreserveDefaultNativeJoinClick(closeClick), true);
   } finally {
     if (originalElement === undefined) {
       delete (globalThis as typeof globalThis & { Element?: unknown }).Element;
@@ -193,7 +263,7 @@ test('shouldPreserveDefaultNativeJoinClick keeps modified and fallback-link clic
   }
 });
 
-test('openRingCentralVideoNativeJoin keeps browser fallback available until dismissed', () => {
+test('openRingCentralVideoNativeJoin auto-dismisses the app handoff panel', () => {
   const originalDocument = (globalThis as typeof globalThis & {
     document?: unknown;
   }).document;
@@ -215,7 +285,10 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
     public parent: FakeElement | null = null;
     public children: FakeElement[] = [];
     public attributes = new Map<string, string>();
-    public listeners = new Map<string, Array<() => void>>();
+    public listeners = new Map<
+      string,
+      Array<(event: FakeEvent) => void>
+    >();
     public style = { cssText: '', display: '' };
 
     constructor(public readonly tagName: string) {}
@@ -244,15 +317,20 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
       this.attributes.set(name, value);
     }
 
-    addEventListener(type: string, listener: () => void) {
+    addEventListener(type: string, listener: (event: FakeEvent) => void) {
       const listeners = this.listeners.get(type) || [];
       listeners.push(listener);
       this.listeners.set(type, listeners);
     }
 
     dispatchTestEvent(type: string) {
+      const event = {
+        preventDefault: () => undefined,
+        stopPropagation: () => undefined,
+        stopImmediatePropagation: () => undefined,
+      };
       for (const listener of this.listeners.get(type) || []) {
-        listener();
+        listener(event);
       }
     }
 
@@ -265,6 +343,12 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
     click() {
       return undefined;
     }
+  }
+
+  interface FakeEvent {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+    stopImmediatePropagation: () => void;
   }
 
   function findElementByAttribute(
@@ -323,7 +407,7 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
     openRingCentralVideoNativeJoin({
       originalUrl: 'https://v.ringcentral.com/join/123456',
       nativeUrl: 'rcvdt://join/123456',
-      browserUrl: 'https://v.ringcentral.com/join/123456',
+      browserUrl: 'https://v.ringcentral.com/conf/on/123456',
       meetingId: '123456',
     });
 
@@ -333,7 +417,7 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
     );
     assert.deepEqual(
       scheduledTimeouts.map((item) => item.delay),
-      [6000, 10000],
+      [5000, 6000, 10000],
     );
     assert.equal(
       elementsById.get('pai-ringcentral-native-join-launch-link')?.href,
@@ -346,38 +430,66 @@ test('openRingCentralVideoNativeJoin keeps browser fallback available until dism
       'data-pai-ringcentral-native-join-status',
     );
     assert.equal(status?.textContent, 'Meeting 123456');
-    scheduledTimeouts[0].callback();
-    assert.match(
-      status?.textContent || '',
-      /may not have opened/,
-      'fallback panel should escalate to a clear recovery prompt when the app handoff stalls',
+    const visibleLink = findElementByAttribute(
+      elementsById.get('pai-ringcentral-native-join-fallback')!,
+      'data-pai-ringcentral-native-join-visible-link',
+    );
+    assert.equal(
+      visibleLink?.textContent,
+      'https://v.ringcentral.com/conf/on/123456',
+      'fallback panel should show a direct browser meeting link for manual recovery',
     );
 
-    scheduledTimeouts[1].callback();
+    const closeButton = findElementByAttribute(
+      elementsById.get('pai-ringcentral-native-join-fallback')!,
+      'data-pai-ringcentral-native-join-close',
+    );
+    assert.equal(
+      closeButton?.textContent,
+      'x',
+      'fallback panel should expose a top-right close control',
+    );
+    assert.equal(
+      findElementByText(
+        elementsById.get('pai-ringcentral-native-join-fallback')!,
+        'Dismiss',
+      ),
+      null,
+      'fallback panel should not render a bottom Dismiss button',
+    );
+
+    scheduledTimeouts[0].callback();
     assert.ok(
-      elementsById.get('pai-ringcentral-native-join-fallback'),
-      'native launch link cleanup should not dismiss the browser fallback panel',
+      !elementsById.get('pai-ringcentral-native-join-fallback'),
+      'native app handoff panel should auto-dismiss after five seconds',
     );
     assert.equal(
       elementsById.get('pai-ringcentral-native-join-launch-link'),
       undefined,
-      'native launch link should be removed after its cleanup timer',
-    );
-
-    const dismissButton = findElementByText(
-      elementsById.get('pai-ringcentral-native-join-fallback')!,
-      'Dismiss',
-    );
-    dismissButton?.dispatchTestEvent('click');
-    assert.equal(
-      elementsById.get('pai-ringcentral-native-join-fallback'),
-      undefined,
-      'fallback panel should close only after an explicit dismiss action',
+      'auto-dismiss should remove the temporary native launch link',
     );
     assert.deepEqual(
       clearedTimeouts,
-      [1],
-      'explicit dismiss should clear the pending handoff status timer',
+      [1, 2],
+      'auto-dismiss should clear pending handoff timers',
+    );
+
+    openRingCentralVideoNativeJoin({
+      originalUrl: 'https://v.ringcentral.com/join/123456',
+      nativeUrl: 'rcvdt://join/123456',
+      browserUrl: 'https://v.ringcentral.com/conf/on/123456',
+      meetingId: '123456',
+    });
+
+    const reopenedCloseButton = findElementByAttribute(
+      elementsById.get('pai-ringcentral-native-join-fallback')!,
+      'data-pai-ringcentral-native-join-close',
+    );
+    reopenedCloseButton?.dispatchTestEvent('click');
+    assert.equal(
+      elementsById.get('pai-ringcentral-native-join-fallback'),
+      undefined,
+      'top-right close control should remove the native handoff panel',
     );
   } finally {
     if (originalDocument === undefined) {

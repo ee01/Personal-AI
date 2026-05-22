@@ -223,6 +223,14 @@ export interface ContextRecallMatch {
   sourceTitle?: string;
   exploreLink?: string;
   whyMatched?: string;
+  whyRelevant?: string[];
+  matchedAnchors?: {
+    people?: string[];
+    topics?: string[];
+    projects?: string[];
+    source?: string[];
+  };
+  suppressionReason?: string;
   links?: Array<{ url: string; label?: string }>;
 }
 
@@ -230,6 +238,12 @@ export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch?: ContextRecallMatch | null;
   queryTimeMs: number;
+  debug?: {
+    normalizedQuery: string;
+    channelsHit: string[];
+    rejectedReason?: string;
+    suppressionReasons?: string[];
+  };
 }
 
 export interface ConfirmRequestListResponse {

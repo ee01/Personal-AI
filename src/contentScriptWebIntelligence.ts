@@ -9,17 +9,22 @@ import {
     CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
     CONTEXT_SITE_BLOCK_STORAGE_KEY,
     CONTEXT_SITE_MUTE_STORAGE_KEY,
-    formatRecallTimestamp,
+    buildContextRecallCompactMetaItems,
+    buildContextRecallPeekFooterItems,
+    formatContextRecallDisplayPriorityLabel,
+    formatContextRecallSourceLabel,
     isContextSiteMuteActive,
     isContextHostCoveredBySiteRecord,
     isContextPageUrlBlockedByPrefix,
     hasSensitiveUrlSignal,
     isDisplayableContextRecallMatch,
+    isContextSelectionTextEligible,
     isLowValueContextHost,
     isSensitiveControlDescriptor,
     normalizeContextPageBlockPrefix,
     normalizeContextSiteMuteHost,
     normalizeContextPageUrl,
+    normalizeContextSelectionText,
     pruneContextPageBlockRecord,
     pruneContextSiteAllowRecord,
     pruneContextSiteBlockRecord,
@@ -61,13 +66,31 @@ interface SimpleAnalysisResult {
 interface ContextMatchPayload {
     contextKey: string;
     stabilityKey: string;
-    surface: 'web_passive' | 'meeting_passive';
-    contextType: 'webpage' | 'message_thread' | 'jira_issue' | 'document';
+    surface: 'web_passive' | 'meeting_passive' | 'follow_thread';
+    contextType: 'webpage' | 'message_thread' | 'jira_issue' | 'document' | 'selected_text';
     title: string;
     url: string;
     keywords?: string[];
     snippet?: string;
     entityHints?: Array<{ kind: string; value: string }>;
+    sourceContext?: {
+        contextType?: string;
+        sourceType?: string;
+        host?: string;
+        url?: string;
+        title?: string;
+        participants?: string[];
+        groupId?: string;
+        conversationId?: string;
+        messageId?: string;
+        issueKey?: string;
+    };
+    exclude?: {
+        ids?: string[];
+        urls?: string[];
+        groupIds?: string[];
+        conversationIds?: string[];
+    };
     sourceTypes?: string[];
     ownerAuthoredLearningPayloads?: OwnerAuthoredLearningPayload[];
 }
@@ -77,6 +100,7 @@ interface ContextRecallMatch {
     type: 'message' | 'chunk' | 'entity';
     score: number;
     title?: string;
+    uiSummary?: string;
     snippet: string;
     sourceLabel?: string;
     sourceUrl?: string;
@@ -84,6 +108,22 @@ interface ContextRecallMatch {
     exploreLink?: string;
     links: Array<{ label: string; url: string }>;
     whyMatched?: string;
+    whyRelevant?: string[];
+    matchedAnchors?: {
+        people?: string[];
+        topics?: string[];
+        projects?: string[];
+        source?: string[];
+    };
+    suppressionReason?: string;
+    reasonType?: string;
+    evidenceRole?: string;
+    displayPriority?: 'p1' | 'p2' | 'hidden';
+    metadata?: Record<string, unknown>;
+    mergedCount?: number;
+    mergedIds?: string[];
+    sourceClusterKey?: string;
+    sourceContext?: string;
     timestamp?: number;
 }
 
@@ -91,6 +131,19 @@ interface ContextToastAction {
     label: string;
     ariaLabel?: string;
     onClick: () => void;
+}
+
+type ContextBubbleMode = 'lens' | 'selectionSearch';
+
+interface ContextBubbleOptions {
+    mode?: ContextBubbleMode;
+    selectedText?: string;
+}
+
+interface ContextMatchCacheEntry {
+    match: ContextRecallMatch | null;
+    matches: ContextRecallMatch[];
+    ts: number;
 }
 
 function escapeHtml(text: string): string {
@@ -122,23 +175,279 @@ function normalizeText(text?: string | null): string {
     return (text || '').replace(/\s+/g, ' ').trim();
 }
 
-function formatContextMatchType(type?: ContextRecallMatch['type']): string {
-    switch (type) {
-        case 'message':
-            return '消息记忆';
-        case 'chunk':
-            return '片段记忆';
-        case 'entity':
-            return '实体记忆';
+function formatContextMatchStrength(match: ContextRecallMatch): string {
+    return formatContextRecallDisplayPriorityLabel(match.displayPriority) || '可能相关';
+}
+
+function getContextMatchDisplayPriorityRank(match: ContextRecallMatch): number {
+    switch (match.displayPriority) {
+        case 'p1':
+            return 2;
+        case 'p2':
+            return 1;
+        case 'hidden':
+            return -1;
         default:
-            return '记忆';
+            return 0;
     }
 }
 
-function formatContextMatchScore(score: number): string {
-    const numericScore = Number.isFinite(score) ? score : 0;
-    const scorePercent = Math.max(0, Math.min(100, Math.round(numericScore * 100)));
-    return `${scorePercent}%`;
+function selectContextRecallMatches(
+    response: { matches?: ContextRecallMatch[]; topMatch?: ContextRecallMatch | null } | null | undefined,
+    options: { requireStrong?: boolean } = {},
+): ContextRecallMatch[] {
+    const matches = Array.isArray(response?.matches) && response?.matches?.length
+        ? response.matches
+        : response?.topMatch
+            ? [response.topMatch]
+            : [];
+    const displayableMatches = matches
+        .filter(isDisplayableContextRecallMatch)
+        .filter((match) => {
+            if (!options.requireStrong) return true;
+            return match.displayPriority === 'p1' && hasContextWhyRelevant(match);
+        });
+    if (!displayableMatches.length) return [];
+
+    return displayableMatches.sort((left, right) => {
+        const priorityDiff =
+            getContextMatchDisplayPriorityRank(right) -
+            getContextMatchDisplayPriorityRank(left);
+        if (priorityDiff !== 0) return priorityDiff;
+
+        const leftScore = Number.isFinite(left.score) ? left.score : 0;
+        const rightScore = Number.isFinite(right.score) ? right.score : 0;
+        return rightScore - leftScore;
+    });
+}
+
+function hasContextWhyRelevant(match: ContextRecallMatch): boolean {
+    return Array.isArray(match.whyRelevant) && match.whyRelevant.some((item) => normalizeText(item));
+}
+
+function getContextStrengthClass(match: ContextRecallMatch): string {
+    if (match.displayPriority === 'p1') return 'strong';
+    if (match.displayPriority === 'p2') return 'maybe';
+    return 'weak';
+}
+
+function stripContextReasonNoise(value: string): string {
+    return normalizeText(value)
+        .replace(/\s*命中\s*(?:当前|网页|会议)?上下文\s*/g, '')
+        .replace(/^向量$/, '语义相关')
+        .replace(/^关键词$/, '关键词匹配')
+        .trim();
+}
+
+function buildContextWhyChips(match: ContextRecallMatch): string[] {
+    const chips: string[] = [];
+    const add = (value?: string | null): void => {
+        const normalized = stripContextReasonNoise(value || '');
+        if (!normalized || chips.includes(normalized)) return;
+        chips.push(normalized);
+    };
+
+    for (const item of match.whyRelevant || []) {
+        add(item);
+    }
+    add(match.whyMatched);
+    for (const item of buildContextRecallPeekFooterItems(match)) {
+        add(item);
+    }
+    add(match.sourceTitle);
+    return chips.slice(0, 3);
+}
+
+const SELECTION_SEARCH_STOPWORDS = new Set([
+    'and',
+    'the',
+    'for',
+    'with',
+    'from',
+    'that',
+    'this',
+    'you',
+    'your',
+    'about',
+    'into',
+    'owner',
+    'handoff',
+    'ready',
+    'readiness',
+    'launch',
+    'using',
+    'have',
+    'will',
+    'should',
+    'codex',
+    'ai',
+    'rc',
+    'team',
+    'message',
+    'meeting',
+    '听说',
+    '以后',
+    '这样',
+    '是这样',
+    '是不是',
+]);
+
+const SELECTION_SEARCH_BROAD_TERMS = new Set([
+    'codex',
+    'ai',
+    'rc',
+    'ringcentral',
+    'team',
+    'message',
+    'meeting',
+]);
+
+function extractSelectionSearchTerms(selectedText?: string | null): string[] {
+    const normalized = normalizeText(selectedText).toLowerCase();
+    if (!normalized) return [];
+
+    const terms = new Set<string>();
+    const addTerm = (raw: string): void => {
+        const value = normalizeText(raw).toLowerCase().replace(/^[-_]+|[-_]+$/g, '');
+        if (value.length >= 2 && !SELECTION_SEARCH_STOPWORDS.has(value)) {
+            terms.add(value);
+        }
+    };
+
+    for (const match of normalized.matchAll(/[a-z][a-z0-9_-]{2,}/g)) {
+        addTerm(match[0]);
+    }
+    for (const match of normalized.matchAll(/[\p{Script=Han}]{2,}/gu)) {
+        const value = match[0];
+        addTerm(value);
+        const stripped = value.replace(/(?:好了|了|吗|呢|啊|吧|么|的)$/u, '');
+        if (stripped !== value) {
+            addTerm(stripped);
+        }
+    }
+    for (const match of selectedText?.matchAll(/[A-Z]+-\d+/gi) || []) {
+        addTerm(match[0]);
+    }
+    for (const match of normalized.matchAll(/\d+(?:\.\d+)?\s*(?:万|k|m|tokens?|刀)?/gi)) {
+        addTerm(match[0]);
+    }
+
+    return Array.from(terms).slice(0, 12);
+}
+
+function isSpecificSelectionSearchTerm(term: string): boolean {
+    const normalized = normalizeText(term).toLowerCase();
+    if (!normalized || SELECTION_SEARCH_BROAD_TERMS.has(normalized)) return false;
+    if (/[a-z]+-\d+/i.test(normalized)) return true;
+    if (/\d/.test(normalized)) return true;
+    if (/[\p{Script=Han}]/u.test(normalized)) return normalized.length >= 2;
+    return normalized.length >= 6;
+}
+
+function collectContextMatchAnchorText(match: ContextRecallMatch): string {
+    const anchors = match.matchedAnchors;
+    return [
+        match.title,
+        match.uiSummary,
+        match.snippet,
+        match.sourceTitle,
+        match.whyMatched,
+        ...(match.whyRelevant || []),
+        ...(anchors?.people || []),
+        ...(anchors?.topics || []),
+        ...(anchors?.projects || []),
+        ...(anchors?.source || []),
+    ]
+        .map((item) => normalizeText(item))
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+}
+
+function getSelectionSearchMatchedTerms(
+    match: ContextRecallMatch,
+    selectedText?: string | null,
+): string[] {
+    const selected = normalizeText(selectedText).toLowerCase();
+    if (!selected) return [];
+
+    const candidateText = collectContextMatchAnchorText(match);
+    const terms = extractSelectionSearchTerms(selectedText);
+    const matchedTerms = terms.filter((term) => candidateText.includes(term));
+
+    const anchorValues = [
+        ...(match.matchedAnchors?.people || []),
+        ...(match.matchedAnchors?.topics || []),
+        ...(match.matchedAnchors?.projects || []),
+    ]
+        .map((item) => normalizeText(item))
+        .filter(Boolean);
+    for (const anchor of anchorValues) {
+        const lower = anchor.toLowerCase();
+        if (lower.length >= 2 && selected.includes(lower)) {
+            matchedTerms.push(anchor);
+        }
+    }
+
+    return Array.from(new Set(matchedTerms.map((term) => normalizeText(term)).filter(Boolean)));
+}
+
+function getSelectionSearchMatchedTerm(
+    match: ContextRecallMatch,
+    selectedText?: string | null,
+): string {
+    const matchedTerms = getSelectionSearchMatchedTerms(match, selectedText);
+    return matchedTerms.find(isSpecificSelectionSearchTerm) || matchedTerms[0] || '';
+}
+
+function hasSelectionSearchConcreteMatch(
+    match: ContextRecallMatch,
+    selectedText?: string | null,
+): boolean {
+    const matchedTerms = getSelectionSearchMatchedTerms(match, selectedText);
+    const specificMatches = matchedTerms.filter(isSpecificSelectionSearchTerm);
+    return (
+        match.displayPriority === 'p1' &&
+        hasContextWhyRelevant(match) &&
+        (specificMatches.length > 0 || matchedTerms.length >= 2)
+    );
+}
+
+function isSelectionSearchWhyChipNoise(chip: string): boolean {
+    return (
+        /网页上下文|同页面|当前页面|页面背景|RingCentral 消息|语义相关|关键词匹配/.test(chip) ||
+        chip === 'Web memory' ||
+        chip === '记忆来源'
+    );
+}
+
+function buildSelectionSearchWhyChips(
+    match: ContextRecallMatch,
+    selectedText?: string | null,
+): string[] {
+    const chips: string[] = [];
+    const matchedTerm = getSelectionSearchMatchedTerm(match, selectedText);
+    if (matchedTerm) {
+        chips.push(`选中文本命中：${matchedTerm}`);
+    }
+
+    for (const chip of buildContextWhyChips(match)) {
+        if (chips.length >= 3) break;
+        if (!chip || chips.includes(chip) || isSelectionSearchWhyChipNoise(chip)) continue;
+        chips.push(chip);
+    }
+
+    return chips.slice(0, 3);
+}
+
+function formatContextMatchDate(timestamp?: number): string {
+    if (!timestamp || !Number.isFinite(timestamp)) return '';
+    const date = new Date(timestamp > 10_000_000_000 ? timestamp : timestamp * 1000);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+    });
 }
 
 function isMeetingPilotPage(): boolean {
@@ -148,13 +457,19 @@ function isMeetingPilotPage(): boolean {
     );
 }
 
-const contextMatchCache = new Map<string, { match: ContextRecallMatch | null; ts: number }>();
+const contextMatchCache = new Map<string, ContextMatchCacheEntry>();
 const CONTEXT_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const CONTEXT_MATCH_CACHE_MAX_ENTRIES = 80;
 const DISMISSED_CONTEXT_TTL_MS = 30 * 60 * 1000;
 const URL_WATCH_INTERVAL_MS = 500;
 const GENERIC_CONTEXT_STABLE_MS = 250;
 const RINGCENTRAL_CONTEXT_STABLE_MS = 700;
+const CONTEXT_PEEK_SHOW_DELAY_MS = 200;
+const CONTEXT_PEEK_HIDE_DELAY_MS = 160;
+const SELECTED_TEXT_TRIGGER_DELAY_MS = 120;
+const COMPOSER_GUARD_ROOT_SELECTOR = '#pai-composer-guard-root';
+const COMPOSER_GUARD_ICON_SELECTOR =
+    '#pai-composer-guard-root .pai-composer-guard-icon-button';
 const CONTEXT_UI_EXCLUDE_SELECTOR = [
     'script',
     'style',
@@ -167,6 +482,8 @@ const CONTEXT_UI_EXCLUDE_SELECTOR = [
     '.ads',
     '.pai-context-bubble',
     '.pai-context-card',
+    '.pai-context-peek',
+    '.pai-context-selection-trigger',
     '.pai-context-toast',
     '#pai-context-bubble-styles',
 ].join(', ');
@@ -205,6 +522,13 @@ class WebIntelligenceContentScript {
     private activeBubbleContextKey: string | null = null;
     private bubbleElement: HTMLDivElement | null = null;
     private cardElement: HTMLDivElement | null = null;
+    private peekElement: HTMLDivElement | null = null;
+    private peekShowTimer: number | null = null;
+    private peekHideTimer: number | null = null;
+    private selectionTriggerElement: HTMLButtonElement | null = null;
+    private selectionTriggerTimer: number | null = null;
+    private selectedTextPendingContextKey: string | null = null;
+    private selectedTextRequestId = 0;
     private toastElement: HTMLDivElement | null = null;
     private toastTimer: number | null = null;
     private outsideClickListener: ((event: MouseEvent) => void) | null = null;
@@ -282,6 +606,14 @@ class WebIntelligenceContentScript {
                     this.handleSensitiveContextMutation();
                 }
 
+                if (this.mutationMayAffectComposerAssistAffordance(mutations)) {
+                    if (this.shouldSuppressContextBubbleForComposerAssist()) {
+                        this.invalidatePendingContextRequest();
+                        this.clearContextBubble();
+                    }
+                    this.scheduleContextMatch(0);
+                }
+
                 const hasSignificantChanges = this.hasSignificantAnalysisChanges(mutations);
                 if (hasSignificantChanges) {
                     this.scheduleAnalysis(1000);
@@ -323,6 +655,26 @@ class WebIntelligenceContentScript {
 
         window.addEventListener('popstate', () => {
             this.handleUrlMaybeChanged();
+        });
+
+        document.addEventListener('selectionchange', () => {
+            this.handleSelectedTextSelectionChanged(SELECTED_TEXT_TRIGGER_DELAY_MS);
+        });
+        document.addEventListener('mouseup', () => {
+            this.handleSelectedTextSelectionChanged(80);
+        });
+        document.addEventListener('keyup', (event) => {
+            if (event.key === 'Escape') {
+                this.clearSelectedTextTrigger();
+                return;
+            }
+            this.handleSelectedTextSelectionChanged(80);
+        });
+        window.addEventListener('scroll', () => {
+            this.clearSelectedTextTrigger();
+        }, true);
+        window.addEventListener('resize', () => {
+            this.clearSelectedTextTrigger();
         });
 
         this.startUrlWatcher();
@@ -367,7 +719,9 @@ class WebIntelligenceContentScript {
 
         if (hasChanged) {
             this.resetContextStability();
+            this.invalidateSelectedTextRequest();
             this.clearContextBubble();
+            this.clearSelectedTextTrigger();
         }
 
         this.scheduleAnalysis(1000);
@@ -441,9 +795,11 @@ class WebIntelligenceContentScript {
         return (
             node.classList.contains('pai-context-bubble') ||
             node.classList.contains('pai-context-card') ||
+            node.classList.contains('pai-context-peek') ||
+            node.classList.contains('pai-context-selection-trigger') ||
             node.classList.contains('pai-context-toast') ||
             node.id === 'pai-context-bubble-styles' ||
-            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-toast')
+            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-context-toast')
         );
     }
 
@@ -480,6 +836,11 @@ class WebIntelligenceContentScript {
         this.pendingContextKey = null;
     }
 
+    private invalidateSelectedTextRequest(): void {
+        this.selectedTextRequestId++;
+        this.selectedTextPendingContextKey = null;
+    }
+
     private mutationMayAffectSensitiveContext(mutations: MutationRecord[]): boolean {
         return mutations.some((mutation) => {
             if (mutation.type === 'attributes') {
@@ -500,6 +861,44 @@ class WebIntelligenceContentScript {
         });
     }
 
+    private mutationMayAffectComposerAssistAffordance(mutations: MutationRecord[]): boolean {
+        if (!this.isRingCentralMessagePage()) {
+            return false;
+        }
+
+        return mutations.some((mutation) => {
+            const target = mutation.target instanceof HTMLElement ? mutation.target : null;
+            if (target && this.isComposerAssistAffordanceNode(target)) {
+                return true;
+            }
+
+            if (mutation.type !== 'childList') {
+                return false;
+            }
+
+            return [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)]
+                .some((node) => node instanceof HTMLElement && this.isComposerAssistAffordanceNode(node));
+        });
+    }
+
+    private isComposerAssistAffordanceNode(element: HTMLElement): boolean {
+        return (
+            element.matches?.(
+                `${COMPOSER_GUARD_ROOT_SELECTOR}, .pai-composer-guard, .pai-composer-guard-icon-button`,
+            ) ||
+            Boolean(
+                element.closest?.(
+                    `${COMPOSER_GUARD_ROOT_SELECTOR}, .pai-composer-guard, .pai-composer-guard-icon-button`,
+                ),
+            ) ||
+            Boolean(
+                element.querySelector?.(
+                    `${COMPOSER_GUARD_ROOT_SELECTOR}, .pai-composer-guard, .pai-composer-guard-icon-button`,
+                ),
+            )
+        );
+    }
+
     private elementMayAffectSensitiveContext(element: HTMLElement): boolean {
         return (
             element.matches('input, textarea, [contenteditable="true"], [contenteditable]') ||
@@ -510,8 +909,10 @@ class WebIntelligenceContentScript {
     private handleSensitiveContextMutation(): void {
         if (this.isSensitiveContextPage()) {
             this.invalidatePendingContextRequest();
+            this.invalidateSelectedTextRequest();
             this.resetContextStability();
             this.clearContextBubble();
+            this.clearSelectedTextTrigger();
             return;
         }
 
@@ -832,6 +1233,16 @@ class WebIntelligenceContentScript {
             return;
         }
 
+        if (this.shouldSuppressContextBubbleForComposerAssist(payload)) {
+            this.invalidatePendingContextRequest();
+            this.clearContextBubble();
+            return;
+        }
+
+        if (this.shouldPreserveOpenSelectedTextBubble(payload)) {
+            return;
+        }
+
         const now = Date.now();
         pruneContextMatchCache(now);
         if (payload.stabilityKey !== this.observedContextStabilityKey) {
@@ -858,7 +1269,11 @@ class WebIntelligenceContentScript {
 
         if (cached && now - cached.ts < CONTEXT_MATCH_CACHE_TTL_MS) {
             if (cached.match) {
-                this.showContextBubble(cached.match, payload.contextKey, this.activeBubbleContextKey !== payload.contextKey);
+                this.showContextBubble(
+                    cached.matches.length ? cached.matches : [cached.match],
+                    payload.contextKey,
+                    this.activeBubbleContextKey !== payload.contextKey,
+                );
             } else {
                 this.clearContextBubble();
             }
@@ -883,11 +1298,13 @@ class WebIntelligenceContentScript {
                 contextType: payload.contextType,
                 title: payload.title,
                 url: payload.url,
+                sourceContext: payload.sourceContext,
+                exclude: payload.exclude,
                 primaryText: payload.snippet,
                 secondaryTexts: payload.keywords,
                 entityHints: payload.entityHints,
                 sourceTypes: payload.sourceTypes,
-                limit: 1,
+                limit: 3,
             },
         }, (response) => {
             if (requestId !== this.pendingContextRequestId) {
@@ -906,6 +1323,15 @@ class WebIntelligenceContentScript {
                 return;
             }
 
+            if (this.shouldPreserveOpenSelectedTextBubble(payload)) {
+                return;
+            }
+
+            if (this.shouldSuppressContextBubbleForComposerAssist(currentPayload)) {
+                this.clearContextBubble();
+                return;
+            }
+
             if (
                 this.isSensitiveContextPage() ||
                 this.isCurrentSiteMuted() ||
@@ -918,17 +1344,32 @@ class WebIntelligenceContentScript {
                 return;
             }
 
-            const rawMatch = (response?.topMatch ?? null) as ContextRecallMatch | null;
-            const match = isDisplayableContextRecallMatch(rawMatch) ? rawMatch : null;
-            contextMatchCache.set(payload.contextKey, { match, ts: Date.now() });
+            const matches = selectContextRecallMatches(response, { requireStrong: true });
+            const match = matches[0] || null;
+            contextMatchCache.set(payload.contextKey, { match, matches, ts: Date.now() });
             pruneContextMatchCache();
 
             if (match) {
-                this.showContextBubble(match, payload.contextKey, true);
+                this.showContextBubble(matches, payload.contextKey, true);
             } else {
                 this.clearContextBubble();
             }
         });
+    }
+
+    private shouldPreserveOpenSelectedTextBubble(
+        payload: Pick<ContextMatchPayload, 'contextKey' | 'contextType'>,
+    ): boolean {
+        return (
+            payload.contextType !== 'selected_text' &&
+            this.isSelectedTextContextKey(this.activeBubbleContextKey) &&
+            this.activeBubbleContextKey !== payload.contextKey &&
+            this.cardElement?.getAttribute('aria-hidden') === 'false'
+        );
+    }
+
+    private isSelectedTextContextKey(contextKey: string | null | undefined): boolean {
+        return Boolean(contextKey?.startsWith('selection:'));
     }
 
     private buildContextMatchPayload(): ContextMatchPayload | null {
@@ -944,12 +1385,43 @@ class WebIntelligenceContentScript {
                 keywords: snapshot.keywords,
                 snippet: snapshot.primaryText,
                 entityHints: this.toPassiveRecallEntityHints(snapshot),
+                sourceContext: this.toPassiveRecallSourceContext(snapshot),
+                exclude: this.toPassiveRecallExclude(snapshot),
                 sourceTypes: snapshot.sourceTypes,
                 ownerAuthoredLearningPayloads: buildJiraOwnerCommentLearningPayloads(snapshot),
             };
         }
 
         return null;
+    }
+
+    private shouldSuppressContextBubbleForComposerAssist(payload?: Pick<ContextMatchPayload, 'contextType'>): boolean {
+        if (!this.isRingCentralMessagePage()) {
+            return false;
+        }
+
+        if (payload && payload.contextType !== 'message_thread') {
+            return false;
+        }
+
+        return this.hasVisibleComposerAssistAffordance();
+    }
+
+    private hasVisibleComposerAssistAffordance(): boolean {
+        const icon = document.querySelector<HTMLElement>(COMPOSER_GUARD_ICON_SELECTOR);
+        return Boolean(icon && this.isElementVisible(icon));
+    }
+
+    private isElementVisible(element: HTMLElement): boolean {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            style.opacity !== '0'
+        );
     }
 
     private sendOwnerAuthoredLearningSignals(payload: ContextMatchPayload): void {
@@ -988,9 +1460,9 @@ class WebIntelligenceContentScript {
 
     private toPassiveRecallSurface(
         snapshot: SiteContextSnapshot,
-    ): 'web_passive' | 'meeting_passive' {
+    ): 'web_passive' | 'meeting_passive' | 'follow_thread' {
         return snapshot.contextType === 'message_thread'
-            ? 'meeting_passive'
+            ? 'follow_thread'
             : 'web_passive';
     }
 
@@ -1027,6 +1499,353 @@ class WebIntelligenceContentScript {
             hints.push({ kind: 'web_agent_provider', value: identifiers.provider });
         }
         return hints.length > 0 ? hints : undefined;
+    }
+
+    private toPassiveRecallSourceContext(
+        snapshot: SiteContextSnapshot,
+    ): ContextMatchPayload['sourceContext'] {
+        const identifiers = snapshot.identifiers || {};
+        const participants = snapshot.audience?.people?.slice(0, 8);
+        return this.compactContextRecallObject({
+            contextType: snapshot.contextType,
+            sourceType: snapshot.surface,
+            host: window.location.hostname,
+            url: snapshot.url,
+            title: snapshot.title,
+            participants,
+            groupId: identifiers.groupId,
+            conversationId: identifiers.conversationId,
+            messageId: identifiers.threadRootPostId,
+            issueKey: identifiers.issueKey,
+        });
+    }
+
+    private toPassiveRecallExclude(
+        snapshot: SiteContextSnapshot,
+    ): ContextMatchPayload['exclude'] {
+        const identifiers = snapshot.identifiers || {};
+        return this.compactContextRecallObject({
+            urls: snapshot.url ? [snapshot.url] : undefined,
+            groupIds: identifiers.groupId ? [identifiers.groupId] : undefined,
+            conversationIds: identifiers.conversationId ? [identifiers.conversationId] : undefined,
+        });
+    }
+
+    private compactContextRecallObject<T extends Record<string, unknown>>(value: T): T | undefined {
+        const entries = Object.entries(value).filter(([, entry]) => {
+            if (entry == null) return false;
+            if (typeof entry === 'string') return entry.length > 0;
+            if (Array.isArray(entry)) return entry.length > 0;
+            return true;
+        });
+        return entries.length ? Object.fromEntries(entries) as T : undefined;
+    }
+
+    private scheduleSelectedTextTrigger(delayMs = SELECTED_TEXT_TRIGGER_DELAY_MS): void {
+        if (this.selectionTriggerTimer !== null) {
+            window.clearTimeout(this.selectionTriggerTimer);
+        }
+
+        this.selectionTriggerTimer = window.setTimeout(() => {
+            this.selectionTriggerTimer = null;
+            this.refreshSelectedTextTrigger();
+        }, delayMs);
+    }
+
+    private handleSelectedTextSelectionChanged(delayMs = SELECTED_TEXT_TRIGGER_DELAY_MS): void {
+        const payload = this.buildSelectedTextPayload();
+        const nextContextKey = payload?.contextKey || null;
+        const visibleContextKey = this.selectionTriggerElement?.dataset.contextKey || null;
+
+        if (!nextContextKey) {
+            this.clearSelectedTextTrigger();
+            return;
+        }
+
+        if (visibleContextKey && visibleContextKey !== nextContextKey) {
+            this.clearSelectedTextTrigger();
+        }
+
+        if (
+            this.selectedTextPendingContextKey &&
+            this.selectedTextPendingContextKey !== nextContextKey
+        ) {
+            this.invalidateSelectedTextRequest();
+        }
+
+        if (
+            this.isSelectedTextContextKey(this.activeBubbleContextKey) &&
+            this.activeBubbleContextKey !== nextContextKey
+        ) {
+            this.clearContextBubble();
+        }
+
+        this.scheduleSelectedTextTrigger(delayMs);
+    }
+
+    private refreshSelectedTextTrigger(): void {
+        const payload = this.buildSelectedTextPayload();
+        if (!payload) {
+            this.clearSelectedTextTrigger();
+            return;
+        }
+
+        const existingKey = this.selectionTriggerElement?.dataset.contextKey;
+        if (existingKey === payload.contextKey) {
+            this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
+            return;
+        }
+
+        if (this.selectedTextPendingContextKey === payload.contextKey) {
+            return;
+        }
+
+        this.clearSelectedTextTrigger();
+        this.requestSelectedTextTrigger(payload);
+    }
+
+    private buildSelectedTextPayload(): (ContextMatchPayload & { rect: DOMRect }) | null {
+        if (this.isSensitiveContextPage()) {
+            return null;
+        }
+
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+            return null;
+        }
+        if (this.selectionTouchesEditable(selection)) {
+            return null;
+        }
+        if (this.selectionTouchesContextUi(selection)) {
+            return null;
+        }
+
+        const selectedText = normalizeContextSelectionText(selection.toString());
+        if (!isContextSelectionTextEligible(selectedText)) {
+            return null;
+        }
+
+        const range = selection.getRangeAt(0);
+        const rect = this.getSelectionRect(range);
+        if (!rect) {
+            return null;
+        }
+
+        const snapshot = buildPassiveContextSnapshot(document, window.location);
+        const contextUrl = normalizeContextPageUrl(snapshot?.url || window.location.href);
+        if (!contextUrl) {
+            return null;
+        }
+
+        const nearbyText = this.getSelectionNearbyText(range);
+        const title = normalizeText(snapshot?.title) || normalizeText(document.title) || '选中文本';
+        const identifiers = snapshot?.identifiers || {};
+        const participants = snapshot?.audience?.people?.slice(0, 8);
+        const contextKey = [
+            'selection',
+            contextUrl,
+            this.createContextSignature(`${title}:${selectedText}`),
+        ].join(':');
+
+        return {
+            contextKey,
+            stabilityKey: contextKey,
+            surface: 'web_passive',
+            contextType: 'selected_text',
+            title,
+            url: contextUrl,
+            keywords: [title, nearbyText].filter(Boolean),
+            snippet: selectedText.slice(0, 500),
+            entityHints: snapshot ? this.toPassiveRecallEntityHints(snapshot) : undefined,
+            sourceTypes: snapshot?.sourceTypes,
+            sourceContext: this.compactContextRecallObject({
+                contextType: 'selected_text',
+                sourceType: 'selection',
+                host: window.location.hostname,
+                url: contextUrl,
+                title,
+                participants,
+                groupId: identifiers.groupId,
+                conversationId: identifiers.conversationId,
+                messageId: identifiers.threadRootPostId,
+                issueKey: identifiers.issueKey,
+            }),
+            exclude: this.compactContextRecallObject({
+                urls: [contextUrl],
+            }),
+            rect,
+        };
+    }
+
+    private selectionTouchesEditable(selection: Selection): boolean {
+        const nodes = [selection.anchorNode, selection.focusNode].filter(Boolean);
+        return nodes.some((node) => {
+            const element = node instanceof Element ? node : node?.parentElement;
+            return !!element?.closest('input, textarea, [contenteditable="true"], [contenteditable]');
+        });
+    }
+
+    private selectionTouchesContextUi(selection: Selection): boolean {
+        const nodes = [selection.anchorNode, selection.focusNode].filter(Boolean);
+        return nodes.some((node) => {
+            const element = node instanceof Element ? node : node?.parentElement;
+            return !!element?.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-context-toast');
+        });
+    }
+
+    private getSelectionRect(range: Range): DOMRect | null {
+        const rects = Array.from(range.getClientRects()).filter(
+            (rect) => rect.width > 0 && rect.height > 0,
+        );
+        const rect = rects[0] || range.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) {
+            return null;
+        }
+        return rect;
+    }
+
+    private getSelectionNearbyText(range: Range): string {
+        const container = range.commonAncestorContainer instanceof Element
+            ? range.commonAncestorContainer
+            : range.commonAncestorContainer.parentElement;
+        const scoped = container?.closest('p, li, article, section, main, [role="main"]') || container;
+        return normalizeText(scoped?.textContent || '').slice(0, 500);
+    }
+
+    private clearSelectedTextTrigger(): void {
+        this.invalidateSelectedTextRequest();
+        if (this.selectionTriggerTimer !== null) {
+            window.clearTimeout(this.selectionTriggerTimer);
+            this.selectionTriggerTimer = null;
+        }
+        this.selectionTriggerElement?.remove();
+        this.selectionTriggerElement = null;
+    }
+
+    private showSelectedTextTrigger(
+        payload: ContextMatchPayload & { rect: DOMRect },
+        matches: ContextRecallMatch[],
+    ): void {
+        this.ensureContextBubbleStyles();
+        if (!document.body) {
+            return;
+        }
+
+        const existingKey = this.selectionTriggerElement?.dataset.contextKey;
+        if (existingKey === payload.contextKey) {
+            this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
+            return;
+        }
+
+        this.clearSelectedTextTrigger();
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'pai-context-selection-trigger';
+        trigger.dataset.contextKey = payload.contextKey;
+        trigger.setAttribute('aria-label', '用 Personal AI 查找关联记忆');
+        trigger.title = '用 Personal AI 查找关联记忆';
+
+        const iconImg = document.createElement('img');
+        iconImg.src = chrome.runtime.getURL('icons/icon48.png');
+        iconImg.alt = '';
+        iconImg.setAttribute('aria-hidden', 'true');
+        trigger.appendChild(iconImg);
+
+        trigger.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        trigger.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.clearSelectedTextTrigger();
+            if (
+                normalizeContextPageUrl(window.location.href) !== payload.url ||
+                this.isSensitiveContextPage() ||
+                this.isContextDismissed(payload.contextKey)
+            ) {
+                return;
+            }
+            this.showContextBubble(matches, payload.contextKey, true, true, {
+                mode: 'selectionSearch',
+                selectedText: payload.snippet,
+            });
+        });
+
+        document.body.appendChild(trigger);
+        this.selectionTriggerElement = trigger;
+        this.placeSelectedTextTrigger(trigger, payload.rect);
+    }
+
+    private placeSelectedTextTrigger(trigger: HTMLElement, rect: DOMRect): void {
+        const size = 28;
+        const gap = 6;
+        const left = Math.max(
+            8,
+            Math.min(window.innerWidth - size - 8, rect.right + gap),
+        );
+        const top = Math.max(
+            8,
+            Math.min(window.innerHeight - size - 8, rect.top - 2),
+        );
+        trigger.style.left = `${Math.round(left)}px`;
+        trigger.style.top = `${Math.round(top)}px`;
+    }
+
+    private requestSelectedTextTrigger(payload: ContextMatchPayload & { rect: DOMRect }): void {
+        const requestId = ++this.selectedTextRequestId;
+        this.selectedTextPendingContextKey = payload.contextKey;
+        chrome.runtime.sendMessage({
+            type: 'CONTEXT_RECALL_REQUEST',
+            request: {
+                surface: payload.surface,
+                contextType: payload.contextType,
+                title: payload.title,
+                url: payload.url,
+                sourceContext: payload.sourceContext,
+                exclude: payload.exclude,
+                primaryText: payload.snippet,
+                secondaryTexts: payload.keywords,
+                entityHints: payload.entityHints,
+                sourceTypes: payload.sourceTypes,
+                limit: 3,
+            },
+        }, (response) => {
+            if (requestId !== this.selectedTextRequestId) {
+                return;
+            }
+            this.selectedTextPendingContextKey = null;
+            if (chrome.runtime.lastError) {
+                console.warn('Selected text context recall failed:', chrome.runtime.lastError.message);
+                return;
+            }
+
+            const currentUrl = normalizeContextPageUrl(window.location.href);
+            if (
+                currentUrl !== payload.url ||
+                this.isSensitiveContextPage() ||
+                this.isContextDismissed(payload.contextKey)
+            ) {
+                this.clearContextBubble();
+                this.clearSelectedTextTrigger();
+                return;
+            }
+
+            const currentPayload = this.buildSelectedTextPayload();
+            if (!currentPayload || currentPayload.contextKey !== payload.contextKey) {
+                this.clearSelectedTextTrigger();
+                return;
+            }
+
+            const matches = selectContextRecallMatches(response, { requireStrong: true })
+                .filter((candidate) => hasSelectionSearchConcreteMatch(candidate, payload.snippet));
+            const match = matches[0] || null;
+            if (!match) {
+                this.clearSelectedTextTrigger();
+                return;
+            }
+            this.showSelectedTextTrigger(currentPayload, matches);
+        });
     }
 
     private buildGenericContextPayload(): ContextMatchPayload | null {
@@ -1066,7 +1885,7 @@ class WebIntelligenceContentScript {
     private isRingCentralMessagePage(): boolean {
         return (
             window.location.hostname === 'app.ringcentral.com' &&
-            /^\/messages\/[^/?#]+/.test(window.location.pathname)
+            /^\/(?:l\/)?messages\/[^/?#]+/.test(window.location.pathname)
         );
     }
 
@@ -1102,12 +1921,27 @@ class WebIntelligenceContentScript {
         return {
             contextKey,
             stabilityKey,
-            surface: 'meeting_passive',
+            surface: 'follow_thread',
             contextType: 'message_thread',
             title,
             url: contextUrl,
             keywords: this.collectKeywords([title, selectedTabText, snippet]),
-            snippet
+            snippet,
+            sourceContext: {
+                contextType: 'message_thread',
+                sourceType: 'ringcentral_message',
+                host: window.location.hostname,
+                url: contextUrl,
+                title,
+                groupId: conversationId,
+                conversationId,
+            },
+            exclude: {
+                urls: [contextUrl],
+                groupIds: [conversationId],
+                conversationIds: [conversationId],
+            },
+            sourceTypes: ['glip', 'manual', 'markdown', 'web', 'jira', 'system'],
         };
     }
 
@@ -1660,7 +2494,7 @@ class WebIntelligenceContentScript {
 
         this.dismissedContextKeys.set(contextKey, Date.now());
         this.pruneDismissedContextKeys();
-        contextMatchCache.set(contextKey, { match: null, ts: Date.now() });
+        contextMatchCache.set(contextKey, { match: null, matches: [], ts: Date.now() });
         pruneContextMatchCache();
         this.clearContextBubble();
         this.showContextToast('已隐藏此条记忆提示 30 分钟', {
@@ -1686,7 +2520,7 @@ class WebIntelligenceContentScript {
     private markContextMatchIrrelevant(match: ContextRecallMatch, contextKey: string): void {
         this.dismissedContextKeys.set(contextKey, Date.now());
         this.pruneDismissedContextKeys();
-        contextMatchCache.set(contextKey, { match: null, ts: Date.now() });
+        contextMatchCache.set(contextKey, { match: null, matches: [], ts: Date.now() });
         pruneContextMatchCache();
         this.clearContextBubble();
         this.showContextToast('已记录为不相关，后续会减少类似提示');
@@ -1753,34 +2587,63 @@ class WebIntelligenceContentScript {
                 width: 44px;
                 height: 44px;
                 border-radius: 999px;
-                background: rgba(255, 255, 255, 0.96);
+                border: 1px solid rgba(234, 88, 12, 0.16);
+                background:
+                    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.96) 0 30%, rgba(250, 245, 235, 0.96) 68%),
+                    #fff7ed;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
                 z-index: 2147483646;
-                box-shadow: 0 6px 18px rgba(15, 23, 42, 0.22);
-                transition: transform 0.18s ease, box-shadow 0.18s ease;
+                box-shadow:
+                    0 10px 28px rgba(48, 24, 13, 0.18),
+                    0 0 0 4px rgba(248, 113, 113, 0.08);
+                transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
                 user-select: none;
                 backdrop-filter: blur(10px);
                 animation: pai-context-bubble-enter 0.28s ease-out;
             }
 
+            .pai-context-bubble img {
+                width: 30px;
+                height: 30px;
+                object-fit: contain;
+                pointer-events: none;
+            }
+
             .pai-context-bubble:hover {
                 transform: translateY(-1px) scale(1.06);
-                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.28);
+                border-color: rgba(234, 88, 12, 0.32);
+                box-shadow:
+                    0 14px 34px rgba(48, 24, 13, 0.24),
+                    0 0 0 5px rgba(248, 113, 113, 0.12);
             }
 
             .pai-context-bubble::after {
                 content: '';
                 position: absolute;
-                inset: -6px;
-                border-radius: inherit;
-                border: 2px solid rgba(102, 126, 234, 0);
+                top: 2px;
+                right: 2px;
+                width: 8px;
+                height: 8px;
+                border-radius: 999px;
+                background: #ef4444;
+                border: 2px solid #fffaf0;
+                box-shadow: 0 1px 4px rgba(239, 68, 68, 0.42);
                 pointer-events: none;
             }
 
-            .pai-context-bubble--fresh::after {
+            .pai-context-bubble::before {
+                content: '';
+                position: absolute;
+                inset: -6px;
+                border-radius: inherit;
+                border: 2px solid rgba(239, 68, 68, 0);
+                pointer-events: none;
+            }
+
+            .pai-context-bubble--fresh::before {
                 animation: pai-context-bubble-ring 1s ease-out 2;
             }
 
@@ -1788,25 +2651,222 @@ class WebIntelligenceContentScript {
                 animation: pai-context-bubble-pulse 0.9s ease-in-out 2;
             }
 
+            .pai-sr-only {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                padding: 0;
+                margin: -1px;
+                overflow: hidden;
+                clip: rect(0, 0, 0, 0);
+                white-space: nowrap;
+                border: 0;
+            }
+
+            .pai-context-peek {
+                position: fixed;
+                bottom: calc(max(16px, env(safe-area-inset-bottom)) + 52px);
+                right: max(16px, env(safe-area-inset-right));
+                width: min(328px, calc(100vw - 32px));
+                box-sizing: border-box;
+                background: rgba(255, 252, 246, 0.98);
+                border: 1px solid rgba(222, 204, 178, 0.92);
+                border-radius: 14px;
+                box-shadow: 0 18px 44px rgba(52, 32, 19, 0.22);
+                padding: 12px 14px 13px;
+                z-index: 2147483646;
+                opacity: 0;
+                transform: translateY(4px);
+                transition: opacity 0.16s ease, transform 0.16s ease;
+                pointer-events: none;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                color: #0f172a;
+                line-height: 1.35;
+                backdrop-filter: blur(12px);
+            }
+
+            .pai-context-peek::after {
+                content: '';
+                position: absolute;
+                right: 16px;
+                bottom: -7px;
+                width: 14px;
+                height: 14px;
+                background: rgba(255, 252, 246, 0.98);
+                border-right: 1px solid rgba(222, 204, 178, 0.92);
+                border-bottom: 1px solid rgba(222, 204, 178, 0.92);
+                transform: rotate(45deg);
+            }
+
+            .pai-context-peek--visible {
+                opacity: 1;
+                transform: translateY(0);
+            }
+
+            .pai-context-peek-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+                font-size: 11px;
+                font-weight: 700;
+                color: #69503d;
+                margin-bottom: 7px;
+            }
+
+            .pai-context-relevance {
+                border-radius: 999px;
+                padding: 2px 7px;
+                font-size: 11px;
+                font-weight: 700;
+                white-space: nowrap;
+            }
+
+            .pai-context-relevance--strong {
+                color: #0f766e;
+                background: rgba(20, 184, 166, 0.12);
+            }
+
+            .pai-context-relevance--maybe {
+                color: #4f46e5;
+                background: rgba(99, 102, 241, 0.12);
+            }
+
+            .pai-context-relevance--weak {
+                color: #8a4b2a;
+                background: rgba(234, 179, 8, 0.14);
+            }
+
+            .pai-context-why-row {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                min-width: 0;
+                flex-wrap: wrap;
+                margin-bottom: 8px;
+            }
+
+            .pai-context-why-label {
+                color: #8a6b52;
+                font-size: 11px;
+                font-weight: 700;
+            }
+
+            .pai-context-chip {
+                min-width: 0;
+                max-width: 100%;
+                border-radius: 999px;
+                background: rgba(45, 112, 100, 0.1);
+                color: #255f55;
+                border: 1px solid rgba(45, 112, 100, 0.16);
+                padding: 2px 7px;
+                font-size: 11px;
+                line-height: 1.35;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .pai-context-peek-title {
+                font-size: 14px;
+                font-weight: 720;
+                color: #172033;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .pai-context-peek-summary {
+                margin-top: 5px;
+                font-size: 12px;
+                color: #4b5b72;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-peek-footer {
+                margin-top: 7px;
+                font-size: 11px;
+                color: #7a6654;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
             .pai-context-card {
                 position: fixed;
                 bottom: calc(max(16px, env(safe-area-inset-bottom)) + 52px);
                 right: max(16px, env(safe-area-inset-right));
-                width: min(320px, calc(100vw - 32px));
-                max-height: 280px;
+                width: min(382px, calc(100vw - 32px));
+                max-height: min(520px, calc(100vh - 104px));
                 box-sizing: border-box;
-                background: rgba(255, 255, 255, 0.98);
-                border-radius: 8px;
-                box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
-                padding: 16px;
+                background: rgba(255, 252, 246, 0.99);
+                border: 1px solid rgba(222, 204, 178, 0.95);
+                border-radius: 16px;
+                box-shadow: 0 22px 56px rgba(52, 32, 19, 0.24);
+                padding: 14px;
                 z-index: 2147483646;
                 display: none;
+                flex-direction: column;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 font-size: 13px;
-                color: #333;
-                overflow-y: auto;
+                color: #172033;
+                overflow: visible;
                 line-height: 1.5;
                 backdrop-filter: blur(12px);
+            }
+
+            .pai-context-card::after {
+                content: '';
+                position: absolute;
+                right: 17px;
+                bottom: -8px;
+                width: 16px;
+                height: 16px;
+                background: rgba(255, 252, 246, 0.99);
+                border-right: 1px solid rgba(222, 204, 178, 0.95);
+                border-bottom: 1px solid rgba(222, 204, 178, 0.95);
+                transform: rotate(45deg);
+            }
+
+            .pai-context-card-scroll {
+                flex: 1 1 auto;
+                min-height: 0;
+                overflow-y: auto;
+                padding-right: 2px;
+            }
+
+            .pai-context-selection-trigger {
+                position: fixed;
+                width: 28px;
+                height: 28px;
+                border-radius: 999px;
+                border: 1px solid rgba(203, 213, 225, 0.9);
+                background: rgba(255, 255, 255, 0.98);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                cursor: pointer;
+                z-index: 2147483646;
+                box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
+                backdrop-filter: blur(10px);
+            }
+
+            .pai-context-selection-trigger img {
+                width: 20px;
+                height: 20px;
+                object-fit: contain;
+                pointer-events: none;
+            }
+
+            .pai-context-selection-trigger:hover,
+            .pai-context-selection-trigger:focus-visible {
+                transform: translateY(-1px) scale(1.04);
+                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.26);
             }
 
             .pai-context-card a,
@@ -1816,32 +2876,286 @@ class WebIntelligenceContentScript {
 
             .pai-context-card a:focus-visible,
             .pai-context-card button:focus-visible,
+            .pai-context-selection-trigger:focus-visible,
             .pai-context-bubble:focus-visible {
                 outline: 2px solid #2563eb;
                 outline-offset: 2px;
             }
 
-            .pai-context-action-button {
-                border: 1px solid #cbd5e1;
+            .pai-context-head {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 12px;
+                margin-bottom: 10px;
+            }
+
+            .pai-context-brand {
+                display: flex;
+                align-items: center;
+                gap: 7px;
+                color: #69503d;
+                font-size: 12px;
+                font-weight: 760;
+                letter-spacing: 0;
+            }
+
+            .pai-context-mark {
+                width: 18px;
+                height: 18px;
+                border-radius: 999px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
                 background: #fff;
-                color: #334155;
-                border-radius: 6px;
+                box-shadow: inset 0 0 0 1px rgba(234, 88, 12, 0.18);
+            }
+
+            .pai-context-mark img {
+                width: 14px;
+                height: 14px;
+                object-fit: contain;
+            }
+
+            .pai-context-head-actions {
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                gap: 6px;
+            }
+
+            .pai-context-icon-button,
+            .pai-context-action-button {
+                width: 28px;
+                height: 28px;
+                border: 1px solid rgba(177, 153, 125, 0.72);
+                background: rgba(255, 255, 255, 0.64);
+                color: #5f4a38;
+                border-radius: 8px;
                 cursor: pointer;
-                font-size: 11px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 15px;
                 line-height: 1;
-                padding: 6px 8px;
+                padding: 0;
+                text-decoration: none;
             }
 
+            .pai-context-icon-button:hover,
             .pai-context-action-button:hover {
-                background: #f8fafc;
-                border-color: #94a3b8;
+                background: #fff;
+                border-color: rgba(138, 75, 42, 0.5);
             }
 
+            .pai-context-icon-button[aria-expanded='true'],
+            .pai-context-action-button[aria-expanded='true'] {
+                background: rgba(45, 112, 100, 0.1);
+                border-color: rgba(45, 112, 100, 0.34);
+                color: #255f55;
+            }
+
+            .pai-context-icon-button:disabled,
             .pai-context-action-button:disabled {
-                background: #f1f5f9;
-                border-color: #cbd5e1;
-                color: #64748b;
+                background: rgba(233, 224, 211, 0.42);
+                border-color: rgba(177, 153, 125, 0.36);
+                color: #8c7a66;
                 cursor: default;
+            }
+
+            .pai-context-section-label {
+                margin: 11px 0 5px;
+                font-size: 11px;
+                color: #8a6b52;
+                font-weight: 760;
+            }
+
+            .pai-context-title {
+                margin: 0;
+                color: #152033;
+                font-size: 16px;
+                font-weight: 760;
+                line-height: 1.32;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-summary {
+                margin-top: 6px;
+                color: #3d4d63;
+                font-size: 13px;
+                line-height: 1.55;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-selected-text {
+                border: 1px solid rgba(177, 153, 125, 0.24);
+                background: rgba(255, 248, 237, 0.72);
+                border-radius: 8px;
+                padding: 7px 9px;
+                color: #3d4d63;
+                font-size: 12px;
+                line-height: 1.45;
+                overflow-wrap: anywhere;
+                display: -webkit-box;
+                -webkit-line-clamp: 3;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+
+            .pai-context-evidence-block {
+                margin-top: 8px;
+                border: 1px solid rgba(45, 112, 100, 0.16);
+                border-left: 2px solid rgba(45, 112, 100, 0.5);
+                background: rgba(235, 248, 244, 0.68);
+                border-radius: 8px;
+                padding: 7px 9px;
+                color: #324a5f;
+                font-size: 12px;
+                line-height: 1.42;
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-evidence-label {
+                display: block;
+                margin-bottom: 2px;
+                color: #255f55;
+                font-size: 11px;
+                font-weight: 760;
+            }
+
+            .pai-context-evidence-text {
+                display: -webkit-box;
+                -webkit-line-clamp: 3;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+
+            .pai-context-meta-row {
+                margin-top: 9px;
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 5px 7px;
+                font-size: 11px;
+                color: #7a6654;
+            }
+
+            .pai-context-meta-item {
+                min-width: 0;
+                overflow-wrap: anywhere;
+                border-radius: 999px;
+                background: rgba(243, 236, 224, 0.78);
+                color: #69503d;
+                padding: 2px 7px;
+                line-height: 1.45;
+            }
+
+            .pai-context-source-link {
+                color: #4f46e5;
+                text-decoration: none;
+                font-weight: 650;
+            }
+
+            .pai-context-source-link:hover {
+                text-decoration: underline;
+            }
+
+            .pai-context-footer-wrap {
+                flex: 0 0 auto;
+                margin-top: 10px;
+                padding-top: 8px;
+                border-top: 1px solid rgba(222, 204, 178, 0.74);
+                background: rgba(255, 252, 246, 0.99);
+            }
+
+            .pai-context-section-label--footer {
+                margin-top: 0;
+            }
+
+            .pai-context-footer {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+            }
+
+            .pai-context-feedback {
+                display: flex;
+                align-items: center;
+                gap: 7px;
+            }
+
+            .pai-context-pager {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                color: #7a6654;
+                font-size: 11px;
+            }
+
+            .pai-context-pager-button {
+                width: 24px;
+                height: 24px;
+                border-radius: 7px;
+                border: 1px solid rgba(177, 153, 125, 0.72);
+                background: rgba(255, 255, 255, 0.64);
+                color: #5f4a38;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                line-height: 1;
+            }
+
+            .pai-context-pager-button:disabled {
+                opacity: 0.45;
+                cursor: default;
+            }
+
+            .pai-context-more-wrap {
+                position: relative;
+            }
+
+            .pai-context-more-menu {
+                position: absolute;
+                right: 0;
+                top: 34px;
+                width: 208px;
+                padding: 6px;
+                border-radius: 12px;
+                border: 1px solid rgba(222, 204, 178, 0.95);
+                background: rgba(255, 252, 246, 0.99);
+                box-shadow: 0 16px 38px rgba(52, 32, 19, 0.22);
+                z-index: 1;
+            }
+
+            .pai-context-menu-item {
+                width: 100%;
+                border: 0;
+                background: transparent;
+                color: #49392d;
+                border-radius: 8px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+                gap: 8px;
+                padding: 8px 9px;
+                font-size: 12px;
+                line-height: 1.25;
+                text-align: left;
+            }
+
+            .pai-context-menu-item:hover,
+            .pai-context-menu-item:focus-visible {
+                background: rgba(45, 112, 100, 0.09);
+            }
+
+            .pai-context-menu-item--danger {
+                color: #b45309;
             }
 
             .pai-context-toast {
@@ -1909,12 +3223,12 @@ class WebIntelligenceContentScript {
                 0% {
                     opacity: 0.65;
                     transform: scale(0.92);
-                    border-color: rgba(102, 126, 234, 0.48);
+                    border-color: rgba(239, 68, 68, 0.42);
                 }
                 100% {
                     opacity: 0;
                     transform: scale(1.22);
-                    border-color: rgba(102, 126, 234, 0);
+                    border-color: rgba(239, 68, 68, 0);
                 }
             }
 
@@ -1932,8 +3246,11 @@ class WebIntelligenceContentScript {
             @media (prefers-reduced-motion: reduce) {
                 .pai-context-bubble,
                 .pai-context-bubble::after,
-                .pai-context-bubble--fresh::after,
+                .pai-context-bubble::before,
+                .pai-context-bubble--fresh::before,
                 .pai-context-bubble--fresh img,
+                .pai-context-peek,
+                .pai-context-selection-trigger,
                 .pai-context-toast {
                     animation: none !important;
                     transition: none !important;
@@ -2003,16 +3320,46 @@ class WebIntelligenceContentScript {
             document.removeEventListener('click', this.outsideClickListener, true);
             this.outsideClickListener = null;
         }
+        if (this.peekShowTimer !== null) {
+            window.clearTimeout(this.peekShowTimer);
+            this.peekShowTimer = null;
+        }
+        if (this.peekHideTimer !== null) {
+            window.clearTimeout(this.peekHideTimer);
+            this.peekHideTimer = null;
+        }
 
         this.cardElement?.remove();
+        this.peekElement?.remove();
         this.bubbleElement?.remove();
         this.cardElement = null;
+        this.peekElement = null;
         this.bubbleElement = null;
         this.activeBubbleContextKey = null;
     }
 
-    private showContextBubble(match: ContextRecallMatch, contextKey: string, animate: boolean): void {
-        if (this.activeBubbleContextKey === contextKey && this.bubbleElement && this.cardElement) {
+    private showContextBubble(
+        matchesOrMatch: ContextRecallMatch | ContextRecallMatch[],
+        contextKey: string,
+        animate: boolean,
+        openOnShow = false,
+        options: ContextBubbleOptions = {},
+    ): void {
+        const mode = options.mode || 'lens';
+        const isSelectionSearch = mode === 'selectionSearch';
+        const selectedText = normalizeText(options.selectedText);
+        if (
+            this.activeBubbleContextKey === contextKey &&
+            this.cardElement &&
+            (isSelectionSearch || this.bubbleElement)
+        ) {
+            return;
+        }
+
+        const matches = (Array.isArray(matchesOrMatch) ? matchesOrMatch : [matchesOrMatch])
+            .filter(isDisplayableContextRecallMatch);
+        if (!matches.length) {
+            this.clearContextBubble();
             return;
         }
 
@@ -2023,79 +3370,252 @@ class WebIntelligenceContentScript {
             return;
         }
 
+        const brandLabel = isSelectionSearch ? '划词记忆检索' : 'Memory Lens';
+        const cardAriaLabel = isSelectionSearch
+            ? 'Selection Memory Search 划词记忆检索结果'
+            : 'Memory Lens 相关记忆详情';
+        const whySectionLabel = isSelectionSearch ? '为什么匹配' : '为什么相关';
+        const whyRowLabel = isSelectionSearch ? '匹配到' : '因为';
+        const contentSectionLabel = isSelectionSearch ? '找到的相关记忆' : '它说了什么';
+        const footerSectionLabel = isSelectionSearch ? '操作' : '我应该做什么';
+        const positiveAriaLabel = isSelectionSearch ? '标记这条检索结果有用' : '标记这条记忆提示有用';
+        const negativeAriaLabel = isSelectionSearch ? '标记这条检索结果不相关' : '标记这条记忆提示不相关';
+
         const bubble = document.createElement('div');
         bubble.className = 'pai-context-bubble';
         if (animate) {
             bubble.classList.add('pai-context-bubble--fresh');
         }
-        bubble.title = '发现相关记忆';
+        bubble.title = brandLabel;
 
         const iconImg = document.createElement('img');
         iconImg.src = chrome.runtime.getURL('icons/icon48.png');
         iconImg.alt = '相关记忆';
-        iconImg.style.cssText = 'width: 28px; height: 28px; object-fit: contain;';
         bubble.appendChild(iconImg);
 
         const card = document.createElement('div');
         card.className = 'pai-context-card';
         card.id = `pai-context-card-${Math.random().toString(36).slice(2)}`;
         card.setAttribute('role', 'dialog');
-        card.setAttribute('aria-label', '相关记忆详情');
+        card.setAttribute('aria-label', cardAriaLabel);
         card.setAttribute('aria-hidden', 'true');
+        card.tabIndex = -1;
 
-        const sourceLabel = match.sourceLabel || match.sourceTitle || '记忆来源';
-        const titleText = match.title || sourceLabel;
-        const typeLabel = formatContextMatchType(match.type);
-        const scoreLabel = formatContextMatchScore(match.score);
-        const safeExploreRoute = sanitizeExploreRoute(match.exploreLink);
-        const exploreUrl = safeExploreRoute
-            ? chrome.runtime.getURL(`memory-exploring.html${safeExploreRoute}`)
-            : '';
-        const sourceMeta = [
-            typeLabel,
-            sourceLabel,
-            formatRecallTimestamp(match.timestamp),
-            match.whyMatched
-        ].filter(Boolean).join(' · ');
+        const peek = document.createElement('div');
+        peek.className = 'pai-context-peek';
+        peek.setAttribute('role', 'status');
+        peek.setAttribute('aria-hidden', 'true');
 
-        const linksHtml = (match.links || [])
-            .map((link) => ({
-                label: link.label,
-                url: sanitizeContextExternalUrl(link.url, window.location.href),
-            }))
-            .filter((link): link is { label: string; url: string } => !!link.url)
-            .map((link) => `<a href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;font-size:11px;margin-right:8px;">${escapeHtml(link.label)}</a>`)
-            .join('');
+        const lensIconUrl = chrome.runtime.getURL('icons/icon48.png');
+        let currentIndex = 0;
+        let moreMenuOpen = false;
+        let positiveLockedMatchId: string | null = null;
 
-        card.innerHTML = `
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
-                <div style="min-width:0;">
-                    <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:2px;">相关记忆</div>
-                    <div style="font-weight:600;color:#0f172a;overflow-wrap:anywhere;">${escapeHtml(titleText)}</div>
+        const buildMatchView = (match: ContextRecallMatch) => {
+            const sourceLabel =
+                formatContextRecallSourceLabel(match.sourceLabel) ||
+                normalizeText(match.sourceTitle) ||
+                '记忆来源';
+            const titleText = normalizeText(match.title) || normalizeText(match.sourceTitle) || sourceLabel;
+            const summaryText = normalizeText(match.uiSummary) || normalizeText(match.snippet) || titleText;
+            const evidenceText = normalizeText(match.snippet);
+            const shouldShowEvidence = Boolean(
+                evidenceText &&
+                normalizeText(summaryText) !== evidenceText
+            );
+            const strengthLabel = formatContextMatchStrength(match);
+            const strengthClass = getContextStrengthClass(match);
+            const whyChips = isSelectionSearch
+                ? buildSelectionSearchWhyChips(match, selectedText)
+                : buildContextWhyChips(match);
+            const peekFooter = [
+                sourceLabel,
+                formatContextMatchDate(match.timestamp),
+                normalizeText(match.sourceTitle),
+            ].filter(Boolean).join(' · ');
+            const safeExploreRoute = sanitizeExploreRoute(match.exploreLink);
+            const exploreUrl = safeExploreRoute
+                ? chrome.runtime.getURL(`memory-exploring.html${safeExploreRoute}`)
+                : '';
+            const compactMetaItems = buildContextRecallCompactMetaItems(match)
+                .filter((item) => !/^记忆类型：/.test(item));
+            const sourceLinks = (match.links || [])
+                .map((link) => ({
+                    label: normalizeText(link.label) || '来源',
+                    url: sanitizeContextExternalUrl(link.url, window.location.href),
+                }))
+                .filter((link): link is { label: string; url: string } => !!link.url);
+
+            return {
+                sourceLabel,
+                titleText,
+                summaryText,
+                evidenceText,
+                shouldShowEvidence,
+                strengthLabel,
+                strengthClass,
+                whyChips,
+                peekFooter,
+                exploreUrl,
+                compactMetaItems,
+                sourceLinks,
+            };
+        };
+
+        const renderWhyChips = (match: ContextRecallMatch): string => {
+            const chips = isSelectionSearch
+                ? buildSelectionSearchWhyChips(match, selectedText)
+                : buildContextWhyChips(match);
+            if (!chips.length) return '';
+
+            return `
+                <div class="pai-context-why-row" aria-label="${escapeHtmlAttribute(whySectionLabel)}">
+                    <span class="pai-context-why-label">${escapeHtml(whyRowLabel)}</span>
+                    ${chips.map((chip) => `<span class="pai-context-chip">${escapeHtml(chip)}</span>`).join('')}
                 </div>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="font-size:11px;color:#64748b;white-space:nowrap;">${scoreLabel}</span>
-                    <button type="button" class="pai-context-dismiss" aria-label="隐藏此记忆提示" title="隐藏此记忆提示" style="border:0;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0;width:20px;height:20px;">×</button>
+            `;
+        };
+
+        const renderPeek = (): void => {
+            const match = matches[currentIndex];
+            const view = buildMatchView(match);
+            peek.innerHTML = `
+                <div class="pai-context-peek-header">
+                    <span>${escapeHtml(brandLabel)}</span>
+                    <span class="pai-context-relevance pai-context-relevance--${escapeHtmlAttribute(view.strengthClass)}">${escapeHtml(view.strengthLabel)}</span>
                 </div>
-            </div>
-            <div style="line-height:1.5;color:#334155;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHtml(match.snippet)}</div>
-            <div style="margin-top:8px;font-size:11px;color:#64748b;">${escapeHtml(sourceMeta)}</div>
-            <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                ${exploreUrl ? `<a href="${escapeHtmlAttribute(exploreUrl)}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none;font-size:11px;font-weight:600;">在记忆中查看</a>` : ''}
-                ${linksHtml}
-                <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="标记这条记忆提示有用">这条有用</button>
-                <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="标记这条记忆提示不相关">这条不相关</button>
-                <button type="button" class="pai-context-action-button pai-context-site-allow" aria-label="允许此网站并开启网页记忆提示白名单">允许此站点</button>
-                <button type="button" class="pai-context-action-button pai-context-site-mute" aria-label="此网站今天不再显示记忆提示">此网站今天不提示</button>
-                <button type="button" class="pai-context-action-button pai-context-page-block" aria-label="永久关闭此页面路径记忆提示">此页面永久不提示</button>
-                <button type="button" class="pai-context-action-button pai-context-site-block" aria-label="永久关闭此网站记忆提示">永久不提示此站点</button>
-            </div>
-        `;
+                ${renderWhyChips(match)}
+                <div class="pai-context-peek-title">${escapeHtml(view.titleText)}</div>
+                <div class="pai-context-peek-summary">${escapeHtml(view.summaryText)}</div>
+                ${view.peekFooter ? `<div class="pai-context-peek-footer">${escapeHtml(view.peekFooter)}</div>` : ''}
+            `;
+        };
+
+        const renderCard = (): void => {
+            const match = matches[currentIndex];
+            const view = buildMatchView(match);
+            const isPositiveLocked = positiveLockedMatchId === match.id;
+            const metaHtml = view.compactMetaItems
+                .map((item) => `<span class="pai-context-meta-item">${escapeHtml(item)}</span>`)
+                .join('');
+            const sourceLinksHtml = view.sourceLinks
+                .map((link) => `<a class="pai-context-source-link" href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener">${escapeHtml(link.label)}</a>`)
+                .join('');
+            const pagerHtml = matches.length > 1
+                ? `
+                    <div class="pai-context-pager" aria-label="相关记忆候选分页">
+                        <button type="button" class="pai-context-pager-button pai-context-prev" aria-label="上一条相关记忆" ${currentIndex === 0 ? 'disabled' : ''}>‹</button>
+                        <span>${currentIndex + 1} / ${matches.length}</span>
+                        <button type="button" class="pai-context-pager-button pai-context-next" aria-label="下一条相关记忆" ${currentIndex >= matches.length - 1 ? 'disabled' : ''}>›</button>
+                    </div>
+                `
+                : '';
+            const selectedTextHtml = isSelectionSearch && selectedText
+                ? `
+                    <div class="pai-context-section-label">选中的内容</div>
+                    <div class="pai-context-selected-text">${escapeHtml(selectedText)}</div>
+                `
+                : '';
+
+            card.innerHTML = `
+                <div class="pai-context-card-scroll">
+                    <div class="pai-context-head">
+                        <div class="pai-context-brand">
+                            <span class="pai-context-mark"><img src="${escapeHtmlAttribute(lensIconUrl)}" alt=""></span>
+                            <span>${escapeHtml(brandLabel)}</span>
+                        </div>
+                        <div class="pai-context-head-actions">
+                            <span class="pai-context-relevance pai-context-relevance--${escapeHtmlAttribute(view.strengthClass)}">${escapeHtml(view.strengthLabel)}</span>
+                            ${view.exploreUrl ? `<a class="pai-context-icon-button pai-context-open-memory" href="${escapeHtmlAttribute(view.exploreUrl)}" target="_blank" rel="noopener" aria-label="在记忆中查看" title="在记忆中查看">↗<span class="pai-sr-only">在记忆中查看</span></a>` : ''}
+                            <div class="pai-context-more-wrap">
+                                <button type="button" class="pai-context-icon-button pai-context-more" aria-label="更多控制" title="更多控制" aria-haspopup="menu" aria-expanded="${String(moreMenuOpen)}">⋯</button>
+                                <div class="pai-context-more-menu" role="menu" ${moreMenuOpen ? '' : 'hidden'}>
+                                    <button type="button" class="pai-context-menu-item pai-context-dismiss" role="menuitem">隐藏此条记忆 30 分钟</button>
+                                    <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem">允许此站点</button>
+                                    <button type="button" class="pai-context-menu-item pai-context-site-mute" role="menuitem">此网站今天不提示</button>
+                                    <button type="button" class="pai-context-menu-item pai-context-page-block" role="menuitem">此页面永久不提示</button>
+                                    <button type="button" class="pai-context-menu-item pai-context-menu-item--danger pai-context-site-block" role="menuitem">永久不提示此站点</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    ${selectedTextHtml}
+                    <div class="pai-context-section-label">${escapeHtml(whySectionLabel)}</div>
+                    ${renderWhyChips(match)}
+
+                    <div class="pai-context-section-label">${escapeHtml(contentSectionLabel)}</div>
+                    <h3 class="pai-context-title">${escapeHtml(view.titleText)}</h3>
+                    <div class="pai-context-summary">${escapeHtml(view.summaryText)}</div>
+                    ${view.shouldShowEvidence ? `
+                        <div class="pai-context-evidence-block">
+                            <span class="pai-context-evidence-label">证据</span>
+                            <span class="pai-context-evidence-text">${escapeHtml(view.evidenceText)}</span>
+                        </div>
+                    ` : ''}
+
+                    <div class="pai-context-meta-row" aria-label="记忆来源摘要">
+                        ${metaHtml}
+                        ${sourceLinksHtml}
+                    </div>
+                </div>
+                <div class="pai-context-footer-wrap">
+                    <div class="pai-context-section-label pai-context-section-label--footer">${escapeHtml(footerSectionLabel)}</div>
+                    <div class="pai-context-footer">
+                        <div class="pai-context-feedback" aria-label="反馈">
+                            <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="${isPositiveLocked ? '已标记有用' : escapeHtmlAttribute(positiveAriaLabel)}" title="${isPositiveLocked ? '已标记有用' : '这条有用'}" ${isPositiveLocked ? 'disabled' : ''}>✓<span class="pai-sr-only">这条有用</span></button>
+                            <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="${escapeHtmlAttribute(negativeAriaLabel)}" title="这条不相关" ${isPositiveLocked ? 'disabled' : ''}>×<span class="pai-sr-only">这条不相关</span></button>
+                        </div>
+                        ${pagerHtml}
+                    </div>
+                </div>
+            `;
+        };
+
+        renderPeek();
+        renderCard();
 
         let expanded = false;
+        const setPeekVisible = (visible: boolean): void => {
+            if (expanded) {
+                visible = false;
+            }
+            peek.classList.toggle('pai-context-peek--visible', visible);
+            peek.setAttribute('aria-hidden', String(!visible));
+        };
+        const schedulePeekVisible = (visible: boolean, delayMs: number): void => {
+            if (this.peekShowTimer !== null) {
+                window.clearTimeout(this.peekShowTimer);
+                this.peekShowTimer = null;
+            }
+            if (this.peekHideTimer !== null) {
+                window.clearTimeout(this.peekHideTimer);
+                this.peekHideTimer = null;
+            }
+            const timer = window.setTimeout(() => {
+                if (visible) {
+                    this.peekShowTimer = null;
+                } else {
+                    this.peekHideTimer = null;
+                }
+                setPeekVisible(visible);
+            }, delayMs);
+            if (visible) {
+                this.peekShowTimer = timer;
+            } else {
+                this.peekHideTimer = timer;
+            }
+        };
         const setExpanded = (nextExpanded: boolean): void => {
+            if (isSelectionSearch && !nextExpanded) {
+                this.clearContextBubble();
+                return;
+            }
             expanded = nextExpanded;
-            card.style.display = expanded ? 'block' : 'none';
+            moreMenuOpen = false;
+            renderCard();
+            setPeekVisible(false);
+            card.style.display = expanded ? 'flex' : 'none';
             card.setAttribute('aria-hidden', String(!expanded));
             bubble.setAttribute('aria-expanded', String(expanded));
         };
@@ -2124,60 +3644,113 @@ class WebIntelligenceContentScript {
             event.preventDefault();
             bubble.click();
         });
+        bubble.addEventListener('pointerenter', () => {
+            if (!expanded) schedulePeekVisible(true, CONTEXT_PEEK_SHOW_DELAY_MS);
+        });
+        bubble.addEventListener('pointerleave', () => {
+            schedulePeekVisible(false, CONTEXT_PEEK_HIDE_DELAY_MS);
+        });
+        bubble.addEventListener('focus', () => {
+            if (!expanded) schedulePeekVisible(true, CONTEXT_PEEK_SHOW_DELAY_MS);
+        });
+        bubble.addEventListener('blur', () => {
+            schedulePeekVisible(false, CONTEXT_PEEK_HIDE_DELAY_MS);
+        });
 
         card.addEventListener('click', (event) => {
             event.stopPropagation();
+
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target) return;
+
+            if (target.closest('.pai-context-more')) {
+                event.preventDefault();
+                moreMenuOpen = !moreMenuOpen;
+                renderCard();
+                card.querySelector<HTMLButtonElement>('.pai-context-more')?.focus();
+                return;
+            }
+
+            if (target.closest('.pai-context-prev')) {
+                event.preventDefault();
+                if (currentIndex > 0) {
+                    currentIndex -= 1;
+                    moreMenuOpen = false;
+                    renderPeek();
+                    renderCard();
+                    card.querySelector<HTMLButtonElement>('.pai-context-prev')?.focus();
+                }
+                return;
+            }
+
+            if (target.closest('.pai-context-next')) {
+                event.preventDefault();
+                if (currentIndex < matches.length - 1) {
+                    currentIndex += 1;
+                    moreMenuOpen = false;
+                    renderPeek();
+                    renderCard();
+                    card.querySelector<HTMLButtonElement>('.pai-context-next')?.focus();
+                }
+                return;
+            }
+
+            if (target.closest('.pai-context-dismiss')) {
+                event.preventDefault();
+                this.dismissContext(contextKey);
+                return;
+            }
+
+            if (target.closest('.pai-context-recall-positive')) {
+                event.preventDefault();
+                const currentMatch = matches[currentIndex];
+                positiveLockedMatchId = currentMatch.id;
+                moreMenuOpen = false;
+                renderCard();
+                this.markContextMatchRelevant(currentMatch);
+                return;
+            }
+
+            if (target.closest('.pai-context-recall-negative')) {
+                event.preventDefault();
+                this.markContextMatchIrrelevant(matches[currentIndex], contextKey);
+                return;
+            }
+
+            if (target.closest('.pai-context-site-allow')) {
+                event.preventDefault();
+                this.allowCurrentSiteAndEnableAllowlist();
+                return;
+            }
+
+            if (target.closest('.pai-context-site-mute')) {
+                event.preventDefault();
+                this.muteCurrentSite();
+                return;
+            }
+
+            if (target.closest('.pai-context-page-block')) {
+                event.preventDefault();
+                this.blockCurrentPage();
+                return;
+            }
+
+            if (target.closest('.pai-context-site-block')) {
+                event.preventDefault();
+                this.blockCurrentSite();
+            }
         });
         card.addEventListener('keydown', (event) => {
             if (event.key !== 'Escape') {
                 return;
             }
             event.preventDefault();
-            setExpanded(false);
-            bubble.focus();
-        });
-
-        card.querySelector<HTMLButtonElement>('.pai-context-dismiss')?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this.dismissContext(contextKey);
-        });
-
-        const positiveFeedbackButton = card.querySelector<HTMLButtonElement>('.pai-context-recall-positive');
-        const negativeFeedbackButton = card.querySelector<HTMLButtonElement>('.pai-context-recall-negative');
-
-        positiveFeedbackButton?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            positiveFeedbackButton.disabled = true;
-            positiveFeedbackButton.textContent = '已标记有用';
-            if (negativeFeedbackButton) {
-                negativeFeedbackButton.disabled = true;
+            if (isSelectionSearch) {
+                this.clearContextBubble();
+            } else {
+                setExpanded(false);
+                bubble.focus();
             }
-            this.markContextMatchRelevant(match);
-        });
-
-        negativeFeedbackButton?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this.markContextMatchIrrelevant(match, contextKey);
-        });
-
-        card.querySelector<HTMLButtonElement>('.pai-context-site-allow')?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this.allowCurrentSiteAndEnableAllowlist();
-        });
-
-        card.querySelector<HTMLButtonElement>('.pai-context-site-mute')?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this.muteCurrentSite();
-        });
-
-        card.querySelector<HTMLButtonElement>('.pai-context-page-block')?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this.blockCurrentPage();
-        });
-
-        card.querySelector<HTMLButtonElement>('.pai-context-site-block')?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this.blockCurrentSite();
         });
 
         this.outsideClickListener = (event: MouseEvent) => {
@@ -2185,25 +3758,39 @@ class WebIntelligenceContentScript {
             if (!target) return;
             if (
                 bubble.contains(target) ||
+                peek.contains(target) ||
                 card.contains(target) ||
                 this.toastElement?.contains(target)
             ) {
                 return;
             }
 
-            setExpanded(false);
+            if (isSelectionSearch) {
+                this.clearContextBubble();
+            } else {
+                setExpanded(false);
+            }
         };
 
         document.addEventListener('click', this.outsideClickListener, true);
 
-        document.body.appendChild(bubble);
+        if (!isSelectionSearch) {
+            document.body.appendChild(bubble);
+            document.body.appendChild(peek);
+        }
         document.body.appendChild(card);
 
-        this.bubbleElement = bubble;
+        this.bubbleElement = isSelectionSearch ? null : bubble;
+        this.peekElement = isSelectionSearch ? null : peek;
         this.cardElement = card;
         this.activeBubbleContextKey = contextKey;
 
-        if (animate) {
+        if (openOnShow) {
+            setExpanded(true);
+            window.setTimeout(() => card.focus(), 0);
+        }
+
+        if (animate && !isSelectionSearch) {
             window.setTimeout(() => {
                 bubble.classList.remove('pai-context-bubble--fresh');
             }, 2200);

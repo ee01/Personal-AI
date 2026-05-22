@@ -25,8 +25,11 @@ const fixtureHtml = `<!doctype html>
         Please inspect
         <a href="https://www.figma.com/design/abc123/Spec?node-id=1-2" title="Checkout mobile handoff">the design</a>
         and the pasted URL https://www.figma.com/design/abc123/Spec?node-id=1-2).
+        The encoded Jira duplicate is https://www.figma.com/design/abc123/Renamed?node-id=1%3A2&t=share.
         The workshop board is https://miro.com/app/board/uXjVdemo.
+        The Zeplin handoff is https://app.zeplin.io/project/abc/screen/def.
         Ignore https://notfigma.com/design/abc.
+        Ignore the plugin page https://www.figma.com/community/plugin/123-demo.
       </div>
       <section data-testid="issue-designs-panel" aria-label="Designs">
         <h2>Designs</h2>
@@ -93,6 +96,7 @@ try {
                 title: 'ready_for_development',
               },
             },
+            updatedDate: '2026-05-18T10:20:00.000+0000',
           },
         },
         {
@@ -104,6 +108,7 @@ try {
                 title: 'not_ready_for_dev',
               },
             },
+            updatedDate: '2026-05-17T09:15:00.000+0000',
           },
         },
         {
@@ -130,6 +135,7 @@ try {
                 title: 'ready_for_development',
               },
             },
+            updatedDate: '2026-05-18T10:20:00.000+0000',
           },
         },
       ]);
@@ -205,10 +211,11 @@ try {
 
   const itemTexts = await page.locator('.design-link-item').allTextContents();
   assert.equal(await page.locator('.design-links-header').count(), 0, 'design panel should not render a summary header');
-  assert.equal(itemTexts.length, 7, 'description, native Jira Designs, remote, and missing UX design rows should render once each');
+  assert.equal(itemTexts.length, 8, 'description, native Jira Designs, remote, and missing UX design rows should render once each');
   assert.match(itemTexts[0], /Ready checkout prototype/);
   assert.match(itemTexts[0], /UX-100/);
   assert.match(itemTexts[0], /Ready for development/);
+  assert.match(itemTexts[0], /Updated 2026-05-18/);
   assert.match(itemTexts[0], /Cancelled/);
   assert.match(itemTexts[0], /Linked issue/);
   assert.match(itemTexts[0], /Remote link/);
@@ -238,9 +245,12 @@ try {
   );
   assert.match(itemTexts[4], /Draft onboarding walkthrough/);
   assert.match(itemTexts[4], /Not ready for dev/);
+  assert.match(itemTexts[4], /Updated 2026-05-17/);
   assert.match(itemTexts[5], /Checkout mobile handoff/);
   assert.match(itemTexts[5], /Description/);
   assert.match(itemTexts[6], /Miro board/);
+  assert.match(itemTexts[7], /Zeplin screen/);
+  assert.match(itemTexts[7], /Description/);
   assert.equal(
     await page.locator('.design-readiness, .design-readiness-action, .design-status-summary-chip').count(),
     0,
@@ -254,6 +264,20 @@ try {
 
   const statusClass = await page.locator('.design-status-tag').first().getAttribute('class');
   assert.match(statusClass, /design-status-tag--ready/);
+  assert.equal(await page.locator('.design-link-item[data-design-attention="ready"]').count(), 1);
+  assert.equal(await page.locator('.design-link-item[data-design-attention="updated"]').count(), 1);
+  assert.equal(await page.locator('.design-link-item[data-design-attention="missing"]').count(), 2);
+  assert.equal(await page.locator('.design-link-item[data-design-attention="not-ready"]').count(), 1);
+  assert.equal(await page.locator('.design-link-item[data-design-attention="neutral"]').count(), 3);
+  const readyItemStyles = await page.locator('.design-link-item[data-design-attention="ready"]').evaluate(element => {
+    const styles = getComputedStyle(element);
+    return {
+      borderLeftColor: styles.borderLeftColor,
+      backgroundColor: styles.backgroundColor,
+    };
+  });
+  assert.notEqual(readyItemStyles.borderLeftColor, 'rgba(0, 0, 0, 0)');
+  assert.notEqual(readyItemStyles.backgroundColor, 'rgba(0, 0, 0, 0)');
   const missingStatusTags = page.locator('.design-status-tag', { hasText: 'Missing link' });
   assert.equal(await missingStatusTags.count(), 2, 'both missing UX rows should show a missing status');
   const missingStatusClass = await missingStatusTags.first().getAttribute('class');
@@ -265,6 +289,7 @@ try {
 
   const containerHtml = await page.locator('.design-links-container').innerHTML();
   assert.equal(containerHtml.includes('notfigma.com'), false);
+  assert.equal(containerHtml.includes('community/plugin'), false);
 
   const transformBeforeHoverY = await page.locator('.design-links-container').evaluate(element => {
     const styles = getComputedStyle(element);

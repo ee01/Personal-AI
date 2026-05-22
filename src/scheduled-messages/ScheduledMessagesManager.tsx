@@ -25,10 +25,8 @@ import {
   TIMELINE_PROJECT_OPTIONS,
   getTimelineProjectOption,
   getTimelineSyncDryRunHelp,
-  getTimelineSyncPayloadHelp,
   type TimelineSyncDryRunHelp,
   resolveTimelineProjectForSave,
-  type TimelineSyncPayloadHelp,
 } from './timelineProjects';
 import {
   BotConfigDialogMode,
@@ -59,7 +57,6 @@ import {
   isTimelineMilestoneMissingFromCache,
 } from './timelineMilestones';
 import {
-  buildTimelineCacheDiagnosticText,
   formatTimelineCacheAge,
   formatTimelineCacheLastAttempt,
   formatTimelineSyncDryRunResult,
@@ -162,6 +159,7 @@ interface OutreachRuntimeState {
 
 const OUTREACH_OPTIONS_HASH = 'outreach-config';
 const DEFAULT_QUEUE_SLOT_DISPLAY_LIMIT = 3;
+const DEFAULT_SCHEDULE_HEALTH_ISSUE_DISPLAY_LIMIT = 4;
 
 type AddDialogMode = 'default' | 'reminder' | 'outreach';
 
@@ -382,6 +380,17 @@ function buildWebAppActionUrl(webAppUrl: string, action: string): string {
   return `${webAppUrl}${separator}action=${encodeURIComponent(action)}`;
 }
 
+function formatAppsScriptHttpError(prefix: string, status: number, responseText: string): string {
+  const compact = responseText.replace(/\s+/g, ' ').trim();
+  const isHtmlError = /^<!doctype html/i.test(compact) || /^<html/i.test(compact);
+  if (isHtmlError) {
+    return `${prefix}: HTTP ${status} - Google 返回了 HTML 错误页；通常是 Web App URL、权限或多账号登录态问题。`;
+  }
+
+  const snippet = compact.slice(0, 120);
+  return `${prefix}: HTTP ${status}${snippet ? ` - ${snippet}` : ''}`;
+}
+
 async function fetchTimelineCacheStatus(webAppUrl?: string): Promise<TimelineCacheStatus | null> {
   if (!webAppUrl) {
     return null;
@@ -389,6 +398,7 @@ async function fetchTimelineCacheStatus(webAppUrl?: string): Promise<TimelineCac
 
   const response = await fetch(buildWebAppActionUrl(webAppUrl, 'getTimelineCacheStatus'), {
     method: 'GET',
+    credentials: 'omit',
     headers: {
       'Cache-Control': 'no-cache',
     },
@@ -397,8 +407,7 @@ async function fetchTimelineCacheStatus(webAppUrl?: string): Promise<TimelineCac
   const responseText = await response.text();
 
   if (!response.ok) {
-    const snippet = responseText.replace(/\s+/g, ' ').trim().slice(0, 120);
-    throw new Error(`Timeline 缓存状态读取失败: HTTP ${response.status}${snippet ? ` - ${snippet}` : ''}`);
+    throw new Error(formatAppsScriptHttpError('Timeline 缓存状态读取失败', response.status, responseText));
   }
 
   return parseTimelineCacheStatusResponseText(responseText);
@@ -410,6 +419,7 @@ async function runTimelineSyncDryRun(dryRunHelp: TimelineSyncDryRunHelp): Promis
   };
   const init: RequestInit = {
     method: dryRunHelp.method,
+    credentials: 'omit',
     headers: {
       ...headers,
     },
@@ -428,8 +438,7 @@ async function runTimelineSyncDryRun(dryRunHelp: TimelineSyncDryRunHelp): Promis
   const responseText = await response.text();
 
   if (!response.ok) {
-    const snippet = responseText.replace(/\s+/g, ' ').trim().slice(0, 120);
-    throw new Error(`Apps Script dry-run 失败: HTTP ${response.status}${snippet ? ` - ${snippet}` : ''}`);
+    throw new Error(formatAppsScriptHttpError('Apps Script dry-run 失败', response.status, responseText));
   }
 
   return parseTimelineSyncDryRunResponseText(responseText);
@@ -482,6 +491,12 @@ function formatQueueSlotDelayLabel(slot: ScheduleQueueSlotSummary): string {
 function formatQueueSlotActionLabel(slot: ScheduleQueueSlotSummary): string {
   return slot.actionTopic
     ? `建议处理：${slot.actionTopic}（第 ${slot.actionPosition}/${slot.slotSize} 个）`
+    : '';
+}
+
+function formatQueueSlotBlockingLabel(slot: ScheduleQueueSlotSummary): string {
+  return slot.blockingCount > 0
+    ? `前面 ${slot.blockingCount} 条会先执行`
     : '';
 }
 
@@ -792,6 +807,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [outreachRuntimeLoaded, setOutreachRuntimeLoaded] = useState(false);
   const [queueSummaryNow, setQueueSummaryNow] = useState(() => new Date());
   const [showAllQueueSlots, setShowAllQueueSlots] = useState(false);
+  const [showAllScheduleHealthIssues, setShowAllScheduleHealthIssues] = useState(false);
   const timelineSyncRuleUrl = useMemo(
     () => getJiraAutomationRuleUrl(getTimelineSyncRule(config)),
     [config],
@@ -2581,6 +2597,14 @@ const ScheduledMessagesManager: React.FC = () => {
     () => getScheduleHealthIssues(messages, queueSummaryNow),
     [messages, queueSummaryNow],
   );
+  const visibleScheduleHealthIssues = showAllScheduleHealthIssues
+    ? scheduleHealthIssues
+    : scheduleHealthIssues.slice(0, DEFAULT_SCHEDULE_HEALTH_ISSUE_DISPLAY_LIMIT);
+  const canToggleScheduleHealthIssues = scheduleHealthIssues.length > DEFAULT_SCHEDULE_HEALTH_ISSUE_DISPLAY_LIMIT;
+  const hiddenScheduleHealthIssueCount = Math.max(
+    0,
+    scheduleHealthIssues.length - visibleScheduleHealthIssues.length,
+  );
   const focusMessageById = (messageId: string) => {
     setTargetMessageId(messageId);
 
@@ -2676,7 +2700,7 @@ const ScheduledMessagesManager: React.FC = () => {
     ? '主动询问引擎尚未开启'
     : 'RingCentral 配置尚未完成';
   const outreachConfigWarningDescription = !outreachRuntime.enabled
-    ? '“帮我问”和主动询问模板依赖主动询问引擎。请先到 Options 开启，再继续使用。'
+    ? '“帮我问”和主动询问计划依赖主动询问引擎。请先到 Options 开启，再继续使用。'
     : '“帮我问”需要 RingCentral Server URL、Client ID、Client Secret 和 JWT。补齐后才能创建和派发主动询问。';
   
   if (isLoading) {
@@ -2757,7 +2781,7 @@ const ScheduledMessagesManager: React.FC = () => {
             }}
             onClick={handleAddOutreach}
             title={outreachRuntime.enabled && outreachRuntime.ringCentralReady
-              ? '创建主动询问模板'
+              ? '创建主动询问计划'
               : '请先在 Options 中启用主动询问并完成 RingCentral 配置'}
             disabled={!outreachRuntime.enabled || !outreachRuntime.ringCentralReady}
           >
@@ -2943,7 +2967,7 @@ const ScheduledMessagesManager: React.FC = () => {
                 {formatScheduleHealthSummary(scheduleHealthIssues)}
               </p>
               <div style={styles.queueSlotList}>
-                {scheduleHealthIssues.slice(0, 4).map(issue => {
+                {visibleScheduleHealthIssues.map(issue => {
                   const message = messages.find(candidate => candidate.ID === issue.messageId);
                   const recoverySuggestion = message
                     ? getScheduleHealthRecoverySuggestion(message, queueSummaryNow)
@@ -2997,6 +3021,24 @@ const ScheduledMessagesManager: React.FC = () => {
                   );
                 })}
               </div>
+              {canToggleScheduleHealthIssues && (
+                <div style={styles.queueMoreRow}>
+                  <button
+                    type="button"
+                    style={styles.queueIssueButton}
+                    onClick={() => setShowAllScheduleHealthIssues(value => !value)}
+                  >
+                    {showAllScheduleHealthIssues
+                      ? '收起需处理消息'
+                      : `显示全部 ${scheduleHealthIssues.length} 条需处理消息`}
+                  </button>
+                  {!showAllScheduleHealthIssues && hiddenScheduleHealthIssueCount > 0 && (
+                    <span style={styles.queueMoreText}>
+                      还有 {hiddenScheduleHealthIssueCount} 条需处理消息未显示
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -3043,6 +3085,20 @@ const ScheduledMessagesManager: React.FC = () => {
                           {formatQueueSlotActionLabel(slot)}
                         </div>
                       )}
+                      {slot.blockingCount > 0 && (
+                        <div style={styles.queueSlotBlockingText}>
+                          <span>{formatQueueSlotBlockingLabel(slot)}</span>
+                          {slot.blockingTopics.length > 0 && (
+                            <span style={styles.queueSlotInlineList}>
+                              {slot.blockingTopics.map((topic, index) => (
+                                <span key={`${topic}:${index}`} style={styles.queueSlotBlockingTopic}>
+                                  {topic}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {slot.suggestion && (
                         <div style={styles.queueSlotSuggestionText}>
                           {formatQueueSlotSuggestionLabel(slot)}
@@ -3051,8 +3107,8 @@ const ScheduledMessagesManager: React.FC = () => {
                       {slot.sampleTopics.length > 0 && (
                         <div style={styles.queueSlotSampleList}>
                           <span style={styles.queueSlotSampleLabel}>示例</span>
-                          {slot.sampleTopics.map(topic => (
-                            <span key={topic} style={styles.queueSlotSampleTopic}>
+                          {slot.sampleTopics.map((topic, index) => (
+                            <span key={`${topic}:${index}`} style={styles.queueSlotSampleTopic}>
                               {topic}
                             </span>
                           ))}
@@ -3440,9 +3496,10 @@ const ScheduledMessagesManager: React.FC = () => {
                                 type="button"
                                 style={styles.statusActionButton}
                                 onClick={() => handleToggleStatus(message)}
+                                aria-label={statusToggleAction.buttonLabel}
                                 title={statusToggleAction.title}
                               >
-                                {statusToggleAction.buttonLabel}
+                                {statusToggleAction.buttonIcon}
                               </button>
                             )}
                             {/* 如果只有 Automation_Link 而没有 Schedule_Date，不显示编辑按钮 */}
@@ -4004,71 +4061,6 @@ interface AIHeader {
   value: string;
 }
 
-async function copyTextToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.setAttribute('readonly', 'true');
-    textarea.style.position = 'fixed';
-    textarea.style.left = '-9999px';
-    document.body.appendChild(textarea);
-    textarea.select();
-    const copied = document.execCommand('copy');
-    document.body.removeChild(textarea);
-    return copied;
-  } catch (error) {
-    console.warn('复制 Timeline 缓存诊断失败:', error);
-    return false;
-  }
-}
-
-function formatTimelineSyncPayloadTemplateForClipboard(payloadHelp: TimelineSyncPayloadHelp): string {
-  const lines = [
-    'Jira Automation Send web request',
-    `Method: ${payloadHelp.method}`,
-    `URL: ${payloadHelp.url}`,
-  ];
-
-  if (payloadHelp.method === 'GET') {
-    lines.push('Body: (empty)');
-    lines.push('Note: Apps Script callback must stay GET; POST can fail on the Google 302 redirect.');
-  } else {
-    lines.push(`Header: Content-Type=${payloadHelp.contentType}`);
-    lines.push('Custom data:');
-    lines.push(payloadHelp.customBody);
-  }
-
-  return lines.join('\n');
-}
-
-function formatTimelineSyncDryRunForClipboard(dryRunHelp: TimelineSyncDryRunHelp): string {
-  const lines = [
-    'Apps Script cacheReleaseInfo dry-run (sample payload, no cache write)',
-    `Method: ${dryRunHelp.method}`,
-    `URL: ${dryRunHelp.url}`,
-    `Sample milestone: ${dryRunHelp.sampleMilestone}`,
-  ];
-
-  if (dryRunHelp.method === 'GET') {
-    lines.push('Body: (empty)');
-    lines.push('Note: Apps Script callback must stay GET; POST can fail on the Google 302 redirect.');
-  } else {
-    lines.push(`Header: Content-Type=${dryRunHelp.contentType}`);
-    lines.push('Body:');
-    lines.push(dryRunHelp.customBody);
-  }
-
-  lines.push('curl:');
-  lines.push(dryRunHelp.curlCommand);
-
-  return lines.join('\n');
-}
-
 const TimelineCacheStatusPanel: React.FC<{
   status: TimelineCacheStatus | null;
   selectedProject?: string;
@@ -4106,11 +4098,6 @@ const TimelineCacheStatusPanel: React.FC<{
     ? '打开并修复 Rule'
     : '打开并手动同步';
   const shouldShowRefreshAfterRuleHint = shouldShowSyncRuleAction && !isLoading && !isReady;
-  const shouldShowDiagnosticAction = Boolean(error || selectedStatus || selectedProjectMissingFromStatus || hasStatus);
-  const payloadHelp = React.useMemo(
-    () => getTimelineSyncPayloadHelp(selectedProject),
-    [selectedProject],
-  );
   const dryRunHelp = React.useMemo(
     () => getTimelineSyncDryRunHelp({
       project: selectedProject,
@@ -4119,63 +4106,12 @@ const TimelineCacheStatusPanel: React.FC<{
     }),
     [selectedMilestone, selectedProject, webAppUrl],
   );
-  const shouldShowPayloadTemplateAction = Boolean(
-    payloadHelp && (!isReady || error || selectedMilestoneMissing || selectedProjectMissingFromStatus || hasSyncWarning),
-  );
   const shouldShowDryRunAction = Boolean(
     dryRunHelp && (!isReady || error || selectedMilestoneMissing || selectedProjectMissingFromStatus || hasSyncWarning),
   );
-  const [diagnosticCopied, setDiagnosticCopied] = React.useState(false);
-  const [payloadTemplateCopied, setPayloadTemplateCopied] = React.useState(false);
-  const [dryRunCopied, setDryRunCopied] = React.useState(false);
   const [dryRunTesting, setDryRunTesting] = React.useState(false);
   const [dryRunResultText, setDryRunResultText] = React.useState('');
   const [dryRunResultSuccess, setDryRunResultSuccess] = React.useState<boolean | null>(null);
-  const diagnosticText = React.useMemo(() => buildTimelineCacheDiagnosticText({
-    status,
-    error,
-    selectedProject,
-    selectedMilestone,
-    webAppUrl,
-    timelineSyncRuleUrl,
-  }), [error, selectedMilestone, selectedProject, status, timelineSyncRuleUrl, webAppUrl]);
-  const handleCopyDiagnostics = React.useCallback(async () => {
-    const copied = await copyTextToClipboard(diagnosticText);
-    if (copied) {
-      setDiagnosticCopied(true);
-      window.setTimeout(() => setDiagnosticCopied(false), 1800);
-    } else {
-      window.prompt('复制 Timeline 缓存诊断', diagnosticText);
-    }
-  }, [diagnosticText]);
-  const handleCopyPayloadTemplate = React.useCallback(async () => {
-    if (!payloadHelp) {
-      return;
-    }
-
-    const payloadTemplate = formatTimelineSyncPayloadTemplateForClipboard(payloadHelp);
-    const copied = await copyTextToClipboard(payloadTemplate);
-    if (copied) {
-      setPayloadTemplateCopied(true);
-      window.setTimeout(() => setPayloadTemplateCopied(false), 1800);
-    } else {
-      window.prompt('复制 Jira Send web request 模板', payloadTemplate);
-    }
-  }, [payloadHelp]);
-  const handleCopyDryRun = React.useCallback(async () => {
-    if (!dryRunHelp) {
-      return;
-    }
-
-    const dryRunText = formatTimelineSyncDryRunForClipboard(dryRunHelp);
-    const copied = await copyTextToClipboard(dryRunText);
-    if (copied) {
-      setDryRunCopied(true);
-      window.setTimeout(() => setDryRunCopied(false), 1800);
-    } else {
-      window.prompt('复制 Apps Script dry-run curl', dryRunText);
-    }
-  }, [dryRunHelp]);
   const handleRunDryRun = React.useCallback(async () => {
     if (!dryRunHelp || dryRunTesting) {
       return;
@@ -4279,44 +4215,6 @@ const TimelineCacheStatusPanel: React.FC<{
           )}
         </div>
         <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end'}}>
-          {shouldShowDiagnosticAction && (
-            <button
-              type="button"
-              onClick={handleCopyDiagnostics}
-              title="复制 Timeline 缓存诊断"
-              style={{
-                padding: '6px 10px',
-                backgroundColor: '#fff',
-                color: '#495057',
-                border: '1px solid #ced4da',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {diagnosticCopied ? '已复制' : '复制诊断'}
-            </button>
-          )}
-          {shouldShowPayloadTemplateAction && (
-            <button
-              type="button"
-              onClick={handleCopyPayloadTemplate}
-              title="复制 Jira Send web request 修复模板"
-              style={{
-                padding: '6px 10px',
-                backgroundColor: '#fff',
-                color: '#495057',
-                border: '1px solid #ced4da',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {payloadTemplateCopied ? '已复制模板' : '复制 Rule 模板'}
-            </button>
-          )}
           {shouldShowDryRunAction && (
             <button
               type="button"
@@ -4335,25 +4233,6 @@ const TimelineCacheStatusPanel: React.FC<{
               }}
             >
               {dryRunTesting ? '测试中...' : '样例测试'}
-            </button>
-          )}
-          {shouldShowDryRunAction && (
-            <button
-              type="button"
-              onClick={handleCopyDryRun}
-              title="复制不会写入缓存的 Apps Script dry-run 样例 curl"
-              style={{
-                padding: '6px 10px',
-                backgroundColor: '#fff',
-                color: '#495057',
-                border: '1px solid #ced4da',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {dryRunCopied ? '已复制测试' : '复制样例 curl'}
             </button>
           )}
           {shouldShowSyncRuleAction && (
@@ -5336,12 +5215,12 @@ ${content}
     // 验证推送目标
     if (formData.Push_Method === 'Outreach') {
       if (!outreachEnabled) {
-        alert('主动询问引擎尚未开启，请先到 Options 页面启用后再创建 Outreach 模板。');
+        alert('主动询问引擎尚未开启，请先到 Options 页面启用后再创建主动询问计划。');
         return;
       }
 
       if (!outreachConfigured) {
-        alert('主动询问依赖的 RingCentral 配置尚未完成，请先到 Options 页面补齐后再创建 Outreach 模板。');
+        alert('主动询问依赖的 RingCentral 配置尚未完成，请先到 Options 页面补齐后再创建主动询问计划。');
         return;
       }
 
@@ -5380,7 +5259,7 @@ ${content}
       }
 
       if (!formData.Outreach_Context || !formData.Outreach_Context.trim()) {
-        alert('请填写主动询问的目的与上下文');
+        alert('请填写主动询问要拿到的信息目标');
         return;
       }
 
@@ -5851,7 +5730,7 @@ ${content}
         <div style={dialogStyles.header}>
           <h2 style={dialogStyles.title}>
             {isEditMode
-              ? (isOutreachMode ? '✏️ 编辑主动询问模板' : '✏️ 编辑定时消息')
+              ? (isOutreachMode ? '✏️ 编辑主动询问计划' : '✏️ 编辑定时消息')
               : isReminderMode
                 ? '⏰ 新增个人提醒'
                 : isOutreachMode
@@ -5889,9 +5768,9 @@ ${content}
               border: '1px solid #cfe2ff',
             }}>
               <div style={{ fontSize: '14px', color: '#1f4e79', lineHeight: '1.6' }}>
-                <strong>💬 主动询问模板</strong>
+                <strong>💬 主动询问计划</strong>
                 <p style={{ margin: '4px 0 0 0', fontSize: '13px' }}>
-                  这里填写“要问谁、问什么、背景是什么”。Sheet 里只保留原始提问和基础目标信息；上下文、追问策略和结果摘要都以下游 memory-service 为准。
+                  这里填写“要问谁、问什么、希望拿到什么信息”。Sheet 里只保留原始提问和基础目标信息；信息目标、追问策略和结果摘要都以下游 memory-service 为准。
                 </p>
               </div>
             </div>
@@ -5992,16 +5871,16 @@ ${content}
               </div>
 
               <div style={dialogStyles.formGroup}>
-                <label style={dialogStyles.label}>主动询问的目的与上下文 *</label>
+                <label style={dialogStyles.label}>主动询问的信息目标 *</label>
                 <textarea
                   style={dialogStyles.textarea}
                   value={formData.Outreach_Context || ''}
                   onChange={(e) => handleChange('Outreach_Context', e.target.value)}
-                  placeholder="补充为什么要问、背景是什么、希望拿到什么信息"
+                  placeholder="写清楚这次询问达到什么条件才算完成"
                   rows={4}
                 />
                 <small style={dialogStyles.hint}>
-                  这部分会帮助后续生成更稳定的问题，也方便运行态展示摘要
+                  这部分会作为后续回复是否满足目标的判断标准
                 </small>
               </div>
             </div>
@@ -7874,14 +7753,14 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   statusActionButton: {
     padding: '4px 8px',
-    backgroundColor: '#fff',
+    backgroundColor: 'transparent',
     color: '#0d6efd',
-    border: '1px solid #b6d4fe',
+    border: '1px solid #0d6efd',
     borderRadius: '4px',
     cursor: 'pointer',
-    fontSize: '12px',
-    fontWeight: 600,
-    lineHeight: 1.2,
+    fontSize: '14px',
+    lineHeight: 1,
+    transition: 'all 0.2s',
   },
   warningBanner: {
     backgroundColor: '#fff3cd',
@@ -8111,6 +7990,28 @@ const styles: { [key: string]: React.CSSProperties } = {
   queueSlotActionText: {
     color: '#7c2d12',
     fontWeight: 700,
+  },
+  queueSlotBlockingText: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '4px',
+    color: '#475569',
+    fontWeight: 600,
+  },
+  queueSlotInlineList: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '4px',
+  },
+  queueSlotBlockingTopic: {
+    padding: '1px 5px',
+    borderRadius: '4px',
+    backgroundColor: '#eef2ff',
+    border: '1px solid #c7d2fe',
+    color: '#3730a3',
+    fontWeight: 600,
   },
   queueSlotSuggestionText: {
     color: '#0f5132',

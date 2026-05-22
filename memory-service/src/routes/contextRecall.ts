@@ -39,10 +39,59 @@ const contextRecallBodySchema = {
         'message_thread',
         'jira_issue',
         'document',
+        'selected_text',
       ],
     },
     title: { type: 'string' as const },
     url: { type: 'string' as const },
+    sourceContext: {
+      type: 'object' as const,
+      properties: {
+        contextType: { type: 'string' as const },
+        sourceType: { type: 'string' as const },
+        host: { type: 'string' as const },
+        url: { type: 'string' as const },
+        title: { type: 'string' as const },
+        participants: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+        topic: { type: 'string' as const },
+        meetingId: { type: 'string' as const },
+        groupId: { type: 'string' as const },
+        conversationId: { type: 'string' as const },
+        messageId: { type: 'string' as const },
+        issueKey: { type: 'string' as const },
+        calendarEventId: { type: 'string' as const },
+      },
+      additionalProperties: false,
+    },
+    exclude: {
+      type: 'object' as const,
+      properties: {
+        ids: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+        urls: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+        meetingIds: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+        groupIds: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+        conversationIds: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+      },
+      additionalProperties: false,
+    },
     primaryText: { type: 'string' as const },
     secondaryTexts: {
       type: 'array' as const,

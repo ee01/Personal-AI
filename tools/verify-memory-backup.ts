@@ -49,6 +49,45 @@ interface ImportResult {
   warnings: string[];
 }
 
+interface ImportPreviewResult {
+  mode: 'merge' | 'replace';
+  dryRun: true;
+  inspectedAt: string;
+  restoredLayers: Array<'A' | 'B'>;
+  backup: {
+    userId: string;
+    exportedAt: string;
+    formatVersion: number;
+    includeCount: number;
+    layers: {
+      A: number;
+      B: number;
+      C: {
+        generated: number;
+        failed: number;
+        skipped: number;
+      };
+    };
+  };
+  database: {
+    action: 'would_merge' | 'would_replace';
+    importedRows: number;
+    tableRows: Record<string, number>;
+    skippedTables: string[];
+  };
+  files: {
+    written: number;
+    overwritten: number;
+    preserved: number;
+    deleted: number;
+    writtenPaths: string[];
+    overwrittenPaths: string[];
+    preservedPaths: string[];
+    deletedPaths: string[];
+  };
+  warnings: string[];
+}
+
 const EXPECTED_DERIVED_PATHS = [
   'derived/messages/messages-overview.md',
   'derived/profile/profile-overview.md',
@@ -275,6 +314,9 @@ async function main(): Promise<void> {
       'reports/local-only.md',
       '# Local Only\n\nKeep this file on merge.\n',
     );
+    await fs.rm(path.join(userDir, 'entities', 'people', 'john-doe.md'), {
+      force: true,
+    });
     initialContext.db
       .prepare(
         `INSERT OR REPLACE INTO entities (id, type, name, description, created_at, updated_at)
@@ -288,6 +330,81 @@ async function main(): Promise<void> {
         now + 1,
         now + 1,
       );
+
+    const dryRunMergeForm = new FormData();
+    dryRunMergeForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    dryRunMergeForm.append('mode', 'merge');
+    dryRunMergeForm.append('dryRun', 'true');
+
+    const dryRunMergeResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: dryRunMergeForm,
+    });
+
+    await ensureOkResponse(dryRunMergeResponse, 'Merge import dry-run failed');
+    const dryRunMergeResult = (await dryRunMergeResponse.json()) as ImportPreviewResult;
+
+    assert(dryRunMergeResult.dryRun === true, 'Merge dry-run response should be marked dryRun');
+    assert(dryRunMergeResult.mode === 'merge', 'Merge dry-run mode mismatch');
+    assert(dryRunMergeResult.database.action === 'would_merge', 'Merge dry-run database action mismatch');
+    assert(dryRunMergeResult.backup.userId === userId, 'Merge dry-run should report backup user');
+    assert(dryRunMergeResult.backup.includeCount === manifest.includes.length, 'Merge dry-run include count mismatch');
+    assert(
+      dryRunMergeResult.files.overwrittenPaths.includes('projects/project-alpha.md'),
+      'Merge dry-run should report overwritten project file',
+    );
+    assert(
+      dryRunMergeResult.files.preservedPaths.includes('reports/local-only.md'),
+      'Merge dry-run should report preserved local-only file',
+    );
+    assert(
+      (dryRunMergeResult.database.tableRows.entities ?? 0) >= 1,
+      'Merge dry-run should report imported entity rows',
+    );
+    assert(
+      initialContext.userDataManager
+        .readFile('projects/project-alpha.md')
+        ?.includes('only exists locally before merge'),
+      'Merge dry-run must not overwrite local project file',
+    );
+    assert(
+      initialContext.userDataManager.readFile('entities/people/john-doe.md') === null,
+      'Merge dry-run must not restore backup-only markdown files',
+    );
+    assert(
+      Boolean(
+        initialContext.db
+          .prepare('SELECT id FROM entities WHERE id = ?')
+          .get('local-only-entity'),
+      ),
+      'Merge dry-run must not remove local-only database rows',
+    );
+
+    const invalidModeForm = new FormData();
+    invalidModeForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    invalidModeForm.append('mode', 'overwrite');
+
+    const invalidModeResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: invalidModeForm,
+    });
+    const invalidModeBody = await invalidModeResponse.text();
+
+    assert(invalidModeResponse.status === 400, 'Invalid import mode should be rejected');
+    assert(
+      invalidModeBody.includes('Import mode must be merge or replace'),
+      'Invalid import mode response should explain the accepted modes',
+    );
 
     const mergeForm = new FormData();
     mergeForm.append(
@@ -369,6 +486,49 @@ async function main(): Promise<void> {
         now + 2,
       );
 
+    const dryRunReplaceForm = new FormData();
+    dryRunReplaceForm.append(
+      'file',
+      new Blob([exportBuffer], { type: 'application/zip' }),
+      exportFileName,
+    );
+    dryRunReplaceForm.append('mode', 'replace');
+    dryRunReplaceForm.append('dryRun', 'true');
+
+    const dryRunReplaceResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: dryRunReplaceForm,
+    });
+
+    await ensureOkResponse(dryRunReplaceResponse, 'Replace import dry-run failed');
+    const dryRunReplaceResult = (await dryRunReplaceResponse.json()) as ImportPreviewResult;
+
+    assert(dryRunReplaceResult.mode === 'replace', 'Replace dry-run mode mismatch');
+    assert(dryRunReplaceResult.database.action === 'would_replace', 'Replace dry-run database action mismatch');
+    assert(
+      dryRunReplaceResult.files.deletedPaths.includes('reports/local-only.md'),
+      'Replace dry-run should report local-only file deletion',
+    );
+    assert(
+      dryRunReplaceResult.files.deletedPaths.includes('reports/replace-delete-me.md'),
+      'Replace dry-run should report newly-created file deletion',
+    );
+    assert(
+      mergeContext.userDataManager
+        .readFile('reports/replace-delete-me.md')
+        ?.includes('must disappear after replace'),
+      'Replace dry-run must not delete local files',
+    );
+    assert(
+      Boolean(
+        mergeContext.db
+          .prepare('SELECT id FROM entities WHERE id = ?')
+          .get('replace-only-entity'),
+      ),
+      'Replace dry-run must not delete local-only database rows',
+    );
+
     const replaceForm = new FormData();
     replaceForm.append(
       'file',
@@ -446,10 +606,19 @@ async function main(): Promise<void> {
         derivedGenerated: manifest.layers.C.generated.length,
         derivedFailed: manifest.layers.C.failed.length,
       },
+      dryRunMerge: {
+        overwrittenFiles: dryRunMergeResult.files.overwritten,
+        preservedFiles: dryRunMergeResult.files.preserved,
+        importedRows: dryRunMergeResult.database.importedRows,
+      },
       merge: {
         preservedFiles: mergeResult.files.preserved,
         overwrittenFiles: mergeResult.files.overwritten,
         databaseChangedRows: mergeResult.database.changedRows ?? 0,
+      },
+      dryRunReplace: {
+        deletedFiles: dryRunReplaceResult.files.deleted,
+        importedRows: dryRunReplaceResult.database.importedRows,
       },
       replace: {
         deletedFiles: replaceResult.files.deleted,

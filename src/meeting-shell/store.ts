@@ -13,6 +13,8 @@ type StoragePayload = {
   sessions: MeetingPilotSessionSnapshot[];
 };
 
+const MEETING_PILOT_PERSIST_THROTTLE_MS = 2500;
+
 interface SessionSummaryFields {
   summary: string;
   shareSummary?: string;
@@ -60,6 +62,9 @@ export class MeetingPilotRegistry {
   private activeMeetingId?: string;
   private hydrated = false;
   private hydratePromise: Promise<void> | null = null;
+  private lastPersistedJson = '';
+  private persistTimer?: ReturnType<typeof setTimeout>;
+  private persistInFlight: Promise<void> | null = null;
 
   async hydrate(): Promise<void> {
     if (this.hydrated) return;
@@ -79,25 +84,81 @@ export class MeetingPilotRegistry {
             this.activeMeetingId = session.meetingId;
           }
         });
+        this.lastPersistedJson = JSON.stringify(this.createStoragePayload());
         this.hydrated = true;
       })();
     }
     await this.hydratePromise;
   }
 
-  private async persist(): Promise<void> {
-    const sessions = Array.from(this.sessions.values()).sort(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
-    await chrome.storage.local.set({
-      [MEETING_PILOT_STORAGE_KEY]: { sessions },
-    });
-  }
-
-  listSessions(): MeetingPilotSessionSnapshot[] {
+  private listSessionsSorted(): MeetingPilotSessionSnapshot[] {
     return Array.from(this.sessions.values()).sort(
       (a, b) => b.updatedAt - a.updatedAt,
     );
+  }
+
+  private createStoragePayload(): StoragePayload {
+    return { sessions: this.listSessionsSorted() };
+  }
+
+  private queuePersistWrite(
+    payload: StoragePayload,
+    serialized: string,
+  ): Promise<void> {
+    const next = (this.persistInFlight || Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        if (serialized === this.lastPersistedJson) return;
+        await chrome.storage.local.set({
+          [MEETING_PILOT_STORAGE_KEY]: payload,
+        });
+        this.lastPersistedJson = serialized;
+      });
+    const queued = next.finally(() => {
+      if (this.persistInFlight === queued) {
+        this.persistInFlight = null;
+      }
+    });
+    this.persistInFlight = queued;
+    return queued;
+  }
+
+  private flushPersist(): Promise<void> {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = undefined;
+    }
+    const payload = this.createStoragePayload();
+    const serialized = JSON.stringify(payload);
+    return this.queuePersistWrite(payload, serialized);
+  }
+
+  private persist(options: { immediate?: boolean } = {}): Promise<void> {
+    if (options.immediate) {
+      return this.flushPersist();
+    }
+    if (!this.persistTimer) {
+      this.persistTimer = setTimeout(() => {
+        void this.flushPersist();
+      }, MEETING_PILOT_PERSIST_THROTTLE_MS);
+    }
+    return Promise.resolve();
+  }
+
+  private shouldPersistImmediately(
+    previous: MeetingPilotSessionSnapshot,
+    next: MeetingPilotSessionSnapshot,
+  ): boolean {
+    return (
+      previous.capture.kind !== next.capture.kind ||
+      previous.status !== next.status ||
+      previous.inMeeting !== next.inMeeting ||
+      Boolean(next.endedAt && next.endedAt !== previous.endedAt)
+    );
+  }
+
+  listSessions(): MeetingPilotSessionSnapshot[] {
+    return this.listSessionsSorted();
   }
 
   getActiveMeetingId(): string | undefined {
@@ -150,7 +211,7 @@ export class MeetingPilotRegistry {
     if (this.activeMeetingId === session.meetingId) {
       this.activeMeetingId = undefined;
     }
-    await this.persist();
+    await this.persist({ immediate: true });
     return ended;
   }
 
@@ -253,7 +314,9 @@ export class MeetingPilotRegistry {
     if (next.inMeeting) {
       this.activeMeetingId = next.meetingId;
     }
-    await this.persist();
+    await this.persist({
+      immediate: this.shouldPersistImmediately(current, next),
+    });
     return next;
   }
 

@@ -72,7 +72,7 @@ UI设计包括Popup页面中的新按钮、项目分析结果弹窗和项目分�
 ```
 docs/
   ├── features/
-  │   ├── google_slides_analyzer.mdc
+  │   ├── google_slides_analyzer.md
   │   └── google_slides_analyzer_prompt.mdc
   ├── README.md
   └── CONTRIBUTING.md
@@ -113,4 +113,4 @@ API方法主要包括：
 3. 解析表格数据提取项目信息
 4. 通过batchUpdate API一次提交多个更新
 
-这种方法比DOM解析更可靠，也能确保正确处理复杂的幻灯片结构。同时修改了contentScriptGoogleSlide.tsx，替换原来的DOM解析逻辑，转为调用slide.ts中的API函数。 
+这种方法比DOM解析更可靠，也能确保正确处理复杂的幻灯片结构。同时修改了contentScriptGoogleSlide.tsx，替换原来的DOM解析逻辑，转为调用slide.ts中的API函数。

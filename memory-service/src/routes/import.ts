@@ -15,12 +15,38 @@ import type { FastifyInstance } from 'fastify';
 import {
   importMemoryBackupZip,
   MemoryBackupValidationError,
+  previewMemoryBackupImportZip,
 } from '../core/MemoryBackupService.js';
 
 type ImportMode = 'merge' | 'replace';
 
 function normalizeImportMode(value: unknown): ImportMode {
-  return value === 'replace' ? 'replace' : 'merge';
+  if (value === undefined || value === null || value === '') {
+    return 'merge';
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'merge' || normalized === 'replace') {
+    return normalized;
+  }
+
+  throw new MemoryBackupValidationError('Import mode must be merge or replace');
+}
+
+function normalizeDryRun(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') {
+    return false;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'n'].includes(normalized)) {
+    return false;
+  }
+
+  throw new MemoryBackupValidationError('dryRun must be true or false');
 }
 
 export async function importRoutes(app: FastifyInstance): Promise<void> {
@@ -32,6 +58,7 @@ export async function importRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       let mode: ImportMode = 'merge';
+      let dryRun = false;
       let uploadedFileName = '';
       let fileSaved = false;
 
@@ -57,11 +84,26 @@ export async function importRoutes(app: FastifyInstance): Promise<void> {
 
         if (part.fieldname === 'mode') {
           mode = normalizeImportMode(part.value);
+          continue;
+        }
+
+        if (part.fieldname === 'dryRun') {
+          dryRun = normalizeDryRun(part.value);
         }
       }
 
       if (!fileSaved) {
         return reply.status(400).send({ error: 'Missing multipart file upload' });
+      }
+
+      if (dryRun) {
+        const result = await previewMemoryBackupImportZip(
+          request.userContext,
+          uploadPath,
+          mode,
+        );
+
+        return reply.status(200).send(result);
       }
 
       const result = await importMemoryBackupZip(

@@ -38,6 +38,8 @@ export interface IndependentUserConfigSummary {
   riskHintCount: number;
   preferenceInjectionEnabled: boolean;
   customPromptsInjectionEnabled: boolean;
+  messagePromptInjectionEnabled: boolean;
+  projectPromptInjectionEnabled: boolean;
   userContextInjectionEnabled: boolean;
   hasInjectablePreferences: boolean;
 }
@@ -49,9 +51,23 @@ export interface IndependentUserConfigFootprint {
   contextSignalCount: number;
 }
 
+export type UserContextPreferenceScope = 'all' | 'message' | 'project';
+
+export interface IndependentUserConfigPreviewOptions {
+  userContextScope?: UserContextPreferenceScope;
+}
+
 const PROMPT_SCOPE_LABELS: Record<'message' | 'project', string> = {
   message: '消息分析',
   project: '项目分析',
+};
+
+const PROMPT_SCOPE_INJECTION_KEYS: Record<
+  'message' | 'project',
+  'messagePromptEnabled' | 'projectPromptEnabled'
+> = {
+  message: 'messagePromptEnabled',
+  project: 'projectPromptEnabled',
 };
 
 const CONFIG_CHANGE_SECTIONS: Array<{
@@ -200,6 +216,11 @@ const pushListIfPresent = (lines: string[], label: string, value: any) => {
   if (items.length > 0) lines.push(`${label}: ${items.join(', ')}`);
 };
 
+const shouldIncludeUserContextScope = (
+  requestedScope: UserContextPreferenceScope,
+  candidateScope: 'message' | 'project',
+): boolean => requestedScope === 'all' || requestedScope === candidateScope;
+
 const formatPerson = (person: any): string => {
   if (typeof person === 'string') return cleanString(person);
   return [
@@ -224,6 +245,18 @@ export function isCustomPromptsInjectionEnabled(config: any): boolean {
   return settings.enabled !== false && settings.customPromptsEnabled !== false;
 }
 
+export function isCustomPromptScopeInjectionEnabled(
+  config: any,
+  scope: 'message' | 'project',
+): boolean {
+  const settings = sanitizeIndependentUserConfig(config).preferenceInjection || {};
+  return (
+    settings.enabled !== false &&
+    settings.customPromptsEnabled !== false &&
+    settings[PROMPT_SCOPE_INJECTION_KEYS[scope]] !== false
+  );
+}
+
 export function isUserContextInjectionEnabled(config: any): boolean {
   const settings = sanitizeIndependentUserConfig(config).preferenceInjection || {};
   return settings.enabled !== false && settings.userContextEnabled !== false;
@@ -231,8 +264,10 @@ export function isUserContextInjectionEnabled(config: any): boolean {
 
 export function buildUserContextPreferenceSection(
   userContextConfig: JsonRecord,
+  options: { scope?: UserContextPreferenceScope } = {},
 ): string {
   const context = userContextConfig || {};
+  const scope = options.scope || 'all';
   const personalInfo = context.personalInfo || {};
   const stakeholders = context.stakeholders || {};
   const teamInfo = context.teamInfo || {};
@@ -313,14 +348,18 @@ export function buildUserContextPreferenceSection(
   pushIfPresent(lines, '汇报格式', communicationContext.reportingFormat, {
     skipDefault: true,
   });
-  pushListIfPresent(lines, '消息分析关注', messageAnalysis.focusAreas);
-  pushListIfPresent(lines, '忽略话题', messageAnalysis.ignoredTopics);
-  pushListIfPresent(lines, '紧急关键词', messageAnalysis.urgencyKeywords);
-  pushListIfPresent(lines, '项目风险因素', projectAnalysis.riskFactors);
-  pushListIfPresent(lines, '项目成功标准', projectAnalysis.successCriteria);
-  pushIfPresent(lines, '项目审查周期', projectAnalysis.reviewCycle, {
-    skipDefault: true,
-  });
+  if (shouldIncludeUserContextScope(scope, 'message')) {
+    pushListIfPresent(lines, '消息分析关注', messageAnalysis.focusAreas);
+    pushListIfPresent(lines, '忽略话题', messageAnalysis.ignoredTopics);
+    pushListIfPresent(lines, '紧急关键词', messageAnalysis.urgencyKeywords);
+  }
+  if (shouldIncludeUserContextScope(scope, 'project')) {
+    pushListIfPresent(lines, '项目风险因素', projectAnalysis.riskFactors);
+    pushListIfPresent(lines, '项目成功标准', projectAnalysis.successCriteria);
+    pushIfPresent(lines, '项目审查周期', projectAnalysis.reviewCycle, {
+      skipDefault: true,
+    });
+  }
 
   return lines.length > 0 ? `# 用户上下文信息\n${lines.join('\n')}` : '';
 }
@@ -339,24 +378,30 @@ ${escapePreferenceTag(cleanString(prompt.content))}
 </user_preference_data>`;
 }
 
-export function buildIndependentUserConfigPreview(config: any): string {
+export function buildIndependentUserConfigPreview(
+  config: any,
+  options: IndependentUserConfigPreviewOptions = {},
+): string {
   const sanitized = sanitizeIndependentUserConfig(config);
   if (!isPreferenceInjectionEnabled(sanitized)) {
     return '偏好注入已暂停，当前分析不会读取自定义提示词或用户上下文。';
   }
 
   const customPrompts = sanitized.customPrompts || {};
+  const userContextScope = options.userContextScope || 'all';
   const sections = [
     isUserContextInjectionEnabled(sanitized)
-      ? buildUserContextPreferenceSection(sanitized.userContextConfig || {})
+      ? buildUserContextPreferenceSection(sanitized.userContextConfig || {}, {
+          scope: userContextScope,
+        })
       : '',
-    isCustomPromptsInjectionEnabled(sanitized)
+    isCustomPromptScopeInjectionEnabled(sanitized, 'message')
       ? buildCustomPromptPreferenceSection(
           customPrompts.message,
           PROMPT_SCOPE_LABELS.message,
         )
       : '',
-    isCustomPromptsInjectionEnabled(sanitized)
+    isCustomPromptScopeInjectionEnabled(sanitized, 'project')
       ? buildCustomPromptPreferenceSection(
           customPrompts.project,
           PROMPT_SCOPE_LABELS.project,
@@ -369,14 +414,18 @@ export function buildIndependentUserConfigPreview(config: any): string {
     : '当前没有可注入的自定义偏好。';
 }
 
-function countContextSignals(userContextConfig: JsonRecord): number {
-  const preview = buildUserContextPreferenceSection(userContextConfig);
+function countContextSignals(
+  userContextConfig: JsonRecord,
+  scope: UserContextPreferenceScope = 'all',
+): number {
+  const preview = buildUserContextPreferenceSection(userContextConfig, { scope });
   if (!preview) return 0;
   return preview.split('\n').filter((line) => line && !line.startsWith('#')).length;
 }
 
 export function buildIndependentUserConfigFootprint(
   config: any,
+  options: IndependentUserConfigPreviewOptions = {},
 ): IndependentUserConfigFootprint {
   const sanitized = sanitizeIndependentUserConfig(config);
   if (!isPreferenceInjectionEnabled(sanitized)) {
@@ -389,17 +438,20 @@ export function buildIndependentUserConfigFootprint(
   }
 
   const customPrompts = sanitized.customPrompts || {};
+  const userContextScope = options.userContextScope || 'all';
   const sections = [
     isUserContextInjectionEnabled(sanitized)
-      ? buildUserContextPreferenceSection(sanitized.userContextConfig || {})
+      ? buildUserContextPreferenceSection(sanitized.userContextConfig || {}, {
+          scope: userContextScope,
+        })
       : '',
-    isCustomPromptsInjectionEnabled(sanitized)
+    isCustomPromptScopeInjectionEnabled(sanitized, 'message')
       ? buildCustomPromptPreferenceSection(
           customPrompts.message,
           PROMPT_SCOPE_LABELS.message,
         )
       : '',
-    isCustomPromptsInjectionEnabled(sanitized)
+    isCustomPromptScopeInjectionEnabled(sanitized, 'project')
       ? buildCustomPromptPreferenceSection(
           customPrompts.project,
           PROMPT_SCOPE_LABELS.project,
@@ -411,7 +463,7 @@ export function buildIndependentUserConfigFootprint(
     Object.keys(PROMPT_SCOPE_LABELS) as Array<'message' | 'project'>
   ).reduce((total, scope) => {
     const prompt = customPrompts[scope];
-    return isCustomPromptsInjectionEnabled(sanitized) && prompt?.enabled
+    return isCustomPromptScopeInjectionEnabled(sanitized, scope) && prompt?.enabled
       ? total + cleanString(prompt.content).length
       : total;
   }, 0);
@@ -421,7 +473,7 @@ export function buildIndependentUserConfigFootprint(
     estimatedTokenCount: estimatePreferenceTokenCount(previewText),
     customPromptCharCount,
     contextSignalCount: isUserContextInjectionEnabled(sanitized)
-      ? countContextSignals(sanitized.userContextConfig || {})
+      ? countContextSignals(sanitized.userContextConfig || {}, userContextScope)
       : 0,
   };
 }
@@ -435,7 +487,7 @@ export function summarizeIndependentUserConfig(config: any): string {
     'message' | 'project'
   >).filter(
     (scope) =>
-      customPromptsInjectionEnabled &&
+      isCustomPromptScopeInjectionEnabled(sanitized, scope) &&
       prompts[scope]?.enabled &&
       cleanString(prompts[scope].content),
   );
@@ -456,6 +508,15 @@ export function summarizeIndependentUserConfig(config: any): string {
     parts.unshift('偏好注入已暂停');
   } else {
     if (!customPromptsInjectionEnabled) parts.push('提示词注入已暂停');
+    if (customPromptsInjectionEnabled) {
+      (Object.keys(PROMPT_SCOPE_LABELS) as Array<'message' | 'project'>).forEach(
+        (scope) => {
+          if (!isCustomPromptScopeInjectionEnabled(sanitized, scope)) {
+            parts.push(`${PROMPT_SCOPE_LABELS[scope]}提示词已暂停`);
+          }
+        },
+      );
+    }
     if (!userContextInjectionEnabled) parts.push('上下文注入已暂停');
   }
 
@@ -738,13 +799,17 @@ export function buildIndependentUserConfigSummary(
   const customPrompts = sanitized.customPrompts || {};
   const preferenceInjectionEnabled = isPreferenceInjectionEnabled(sanitized);
   const customPromptsInjectionEnabled = isCustomPromptsInjectionEnabled(sanitized);
+  const messagePromptInjectionEnabled =
+    isCustomPromptScopeInjectionEnabled(sanitized, 'message');
+  const projectPromptInjectionEnabled =
+    isCustomPromptScopeInjectionEnabled(sanitized, 'project');
   const userContextInjectionEnabled = isUserContextInjectionEnabled(sanitized);
   const enabledPromptLabels = (Object.keys(PROMPT_SCOPE_LABELS) as Array<
     'message' | 'project'
   >)
     .filter(
       (scope) =>
-        customPromptsInjectionEnabled &&
+        isCustomPromptScopeInjectionEnabled(sanitized, scope) &&
         customPrompts[scope]?.enabled && cleanString(customPrompts[scope].content),
     )
     .map((scope) => PROMPT_SCOPE_LABELS[scope]);
@@ -752,7 +817,9 @@ export function buildIndependentUserConfigSummary(
     ? countContextSignals(sanitized.userContextConfig || {})
     : 0;
   const riskHintCount = customPromptsInjectionEnabled
-    ? detectPromptRiskHints(sanitized).length
+    ? detectPromptRiskHints(sanitized).filter((hint) =>
+        isCustomPromptScopeInjectionEnabled(sanitized, hint.scope),
+      ).length
     : 0;
 
   return {
@@ -761,6 +828,8 @@ export function buildIndependentUserConfigSummary(
     riskHintCount,
     preferenceInjectionEnabled,
     customPromptsInjectionEnabled,
+    messagePromptInjectionEnabled,
+    projectPromptInjectionEnabled,
     userContextInjectionEnabled,
     hasInjectablePreferences:
       preferenceInjectionEnabled &&

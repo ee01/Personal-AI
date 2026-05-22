@@ -36,7 +36,7 @@ describe('Relationships API', () => {
       `INSERT INTO entities (
          id, type, name, aliases_json, description, importance, first_seen,
          last_seen, mention_count, tags_json, status, created_at
-       ) VALUES (?, 'Person', 'Alice Radar', '["Alice"]', ?, 0.9, ?, ?, 12, '["product"]', 'active', ?)`,
+       ) VALUES (?, 'Person', 'Alice Radar', '["Alice","alice@example.com"]', ?, 0.9, ?, ?, 12, '["product"]', 'active', ?)`,
     ).run(
       personId,
       'Product partner for relationship radar testing',
@@ -86,6 +86,42 @@ describe('Relationships API', () => {
         ts,
       );
     }
+
+    insertMessage.run(
+      'relationship-test-message-sensitive',
+      'Alice Radar needs follow up via alice.private@example.com before the next demo.',
+      'Alice Radar private email follow-up',
+      'Alice Radar',
+      nowEpoch - 30,
+      JSON.stringify([{ type: 'Person', id: personId, name: 'Alice Radar' }]),
+      nowEpoch - 30,
+    );
+
+    const insertProperty = db.prepare(
+      `INSERT INTO entity_properties (
+         entity_id, property_key, property_value, value_type, source_author,
+         source_authority, source_context, tx_start, confidence, is_final,
+         status, action_type
+       ) VALUES (?, ?, ?, 'string', 'relationship-test', 'team_lead', ?, ?, ?, ?, 'active', 'set')`,
+    );
+    insertProperty.run(
+      personId,
+      'collaboration_style',
+      'Prefers owner updates before demos.',
+      'Public work context',
+      nowEpoch - 1800,
+      0.92,
+      1,
+    );
+    insertProperty.run(
+      personId,
+      'private_email',
+      'alice.private@example.com',
+      'Private contact detail',
+      nowEpoch - 1200,
+      0.96,
+      1,
+    );
 
     db.prepare(
       `INSERT INTO calendar_events (
@@ -163,6 +199,14 @@ describe('Relationships API', () => {
     const body = res.json();
     expect(body.person.id).toBe(personId);
     expect(body.contextMd).toContain('Alice Radar');
+    expect(JSON.stringify(body)).not.toContain('alice.private@example.com');
+    expect(body.person.aliases).not.toContain('alice@example.com');
+    expect(body.privacySummary.sensitiveIncluded).toBe(false);
+    expect(body.privacySummary.redactedAliases).toBeGreaterThan(0);
+    expect(body.privacySummary.redactedFacts).toBeGreaterThan(0);
+    expect(body.privacySummary.redactedEvidenceRefs).toBeGreaterThan(0);
+    expect(body.privacySummary.redactedOpenLoops).toBeGreaterThan(0);
+    expect(body.privacySummary.redactionNote).toContain('默认未纳入');
     expect(body.retrievalHints.entityIds).toContain(personId);
     expect(body.evidenceRefs.length).toBeGreaterThan(0);
     expect(
@@ -172,6 +216,22 @@ describe('Relationships API', () => {
         ),
       ),
     ).toBe(true);
+
+    const sensitiveRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/context-card',
+      payload: {
+        personId,
+        surface: 'memory_exploring',
+        tokenBudget: 600,
+        includeSensitive: true,
+      },
+    });
+    expect(sensitiveRes.statusCode).toBe(200);
+    const sensitiveBody = sensitiveRes.json();
+    expect(sensitiveBody.privacySummary.sensitiveIncluded).toBe(true);
+    expect(sensitiveBody.person.aliases).toContain('alice@example.com');
+    expect(JSON.stringify(sensitiveBody)).toContain('alice.private@example.com');
   });
 
   it('consolidates relationship radar projections in the background', async () => {
@@ -232,6 +292,33 @@ describe('Relationships API', () => {
     expect(graph.edges.length).toBeGreaterThan(0);
   });
 
+  it('explains meeting brief attendee match coverage and email-only gaps', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/meeting-brief',
+      payload: {
+        title: 'Email-only prep',
+        attendees: [
+          { email: 'alice@example.com' },
+          { name: 'External Reviewer', email: 'external@example.com' },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const brief = res.json();
+    expect(brief.coverage.totalAttendees).toBe(2);
+    expect(brief.coverage.matchedAttendees).toBe(1);
+    expect(brief.coverage.unmatchedAttendees).toBe(1);
+    expect(brief.coverage.attendeesWithEvidence).toBe(1);
+    expect(brief.attendees[0].personId).toBe(personId);
+    expect(brief.attendees[0].matchedBy).toBe('email');
+    expect(brief.attendees[0].coverageState).toBe('ready');
+    expect(brief.attendees[1].matchedBy).toBe('none');
+    expect(brief.attendees[1].coverageState).toBe('missing');
+    expect(brief.matrix[1].matchStatus).toBe('未匹配');
+  });
+
   it('returns timeline and open loop evidence', async () => {
     const timeline = await app.inject({
       method: 'GET',
@@ -258,6 +345,43 @@ describe('Relationships API', () => {
     expect(reviewBody.items.length).toBeGreaterThan(0);
 
     const item = reviewBody.items[0];
+    const snoozeRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/relationships/review-items/${encodeURIComponent(item.id)}/snooze`,
+      payload: {
+        userNote: 'Review after the next relationship sync',
+      },
+    });
+    expect(snoozeRes.statusCode).toBe(200);
+    expect(snoozeRes.json().status).toBe('snoozed');
+
+    const peopleWhileSnoozedRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/relationships/people?limit=10',
+    });
+    expect(peopleWhileSnoozedRes.statusCode).toBe(200);
+    const snoozedAlice = peopleWhileSnoozedRes
+      .json()
+      .items.find((candidate: { id: string }) => candidate.id === personId);
+    expect(snoozedAlice?.reviewPendingCount).toBe(0);
+
+    db.prepare(
+      `UPDATE relationship_review_items
+       SET snooze_until = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(nowEpoch - 60, nowEpoch - 60, item.id);
+
+    const dueReviewRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/relationships/review-items?status=pending&personId=${personId}`,
+    });
+    expect(dueReviewRes.statusCode).toBe(200);
+    const dueItem = dueReviewRes
+      .json()
+      .items.find((candidate: { id: string }) => candidate.id === item.id);
+    expect(dueItem?.status).toBe('pending');
+    expect(dueItem?.snoozeUntil).toBeUndefined();
+
     const confirmRes = await app.inject({
       method: 'POST',
       url: `/api/v1/relationships/review-items/${encodeURIComponent(item.id)}/confirm`,

@@ -1219,6 +1219,7 @@ export async function processNewMessage(
           status: ingestResult.status,
           entitiesExtracted: ingestResult.entitiesExtracted,
           matchedProjects: ingestResult.matchedProjects,
+          decision: ingestResult.decision,
         },
       );
     } catch (error) {

@@ -29,6 +29,7 @@ const storage: Record<string, any> = {
   taskSchedulerStates: {
     message_analysis: { enabled: true },
   },
+  digestQueues: {},
   concernedItems: [
     {
       id: 'leave-rule',
@@ -480,6 +481,63 @@ async function main() {
     0,
     'low-confidence agentWorkflow matches should pause rule automation planning',
   );
+
+  storage.concernedItems = [
+    {
+      id: 'agent-workflow-digest-only',
+      text: 'Leave Chat 群有人发起请假消息，并且包含我的名字',
+      expiredAt: 0,
+      notifyMethod: '',
+      filterGroup: 'Leave Chat',
+      digestConfig: {
+        enabled: true,
+        frequency: 'daily',
+        preferredHour: 8,
+      },
+    },
+  ];
+  storage.digestQueues = {};
+  ingests.length = 0;
+  plannedAutomations.length = 0;
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Leave Chat',
+        groupId: 'leave-chat',
+        standalone: [
+          {
+            creator: 'Alice',
+            time: '2099-04-16T12:00:00.000Z',
+            id: 'post-agent-workflow-digest-only',
+            text: 'Current User will be on leave 2099-04-18~2099-04-20.',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  const queuedDigestItems =
+    storage.digestQueues?.concerned_items_daily?.items || [];
+  assert.equal(
+    ingests.length,
+    1,
+    'digest-only agentWorkflow matches should still be audited in memory',
+  );
+  assert.equal(
+    plannedAutomations.length,
+    0,
+    'digest-only agentWorkflow matches should not plan unrelated automation',
+  );
+  assert.equal(
+    queuedDigestItems.length,
+    1,
+    'digest-only agentWorkflow matches should be queued for scheduled summary',
+  );
+  assert.equal(queuedDigestItems[0].data.ruleId, 'agent-workflow-digest-only');
   console.log('verify-memory-entry-automation-flow: ok');
 }
 

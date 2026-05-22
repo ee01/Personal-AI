@@ -889,13 +889,14 @@ function setIncludeSensitiveContext(event: Event, card: MissionCard) {
 }
 
 async function loadContextPack(card: MissionCard, force = false) {
-  if (!card.missionId) return;
+  if (!card.missionId) return false;
   const key = contextPackKey(card);
-  if (!force && contextPackCache.value[key]) return;
+  if (!force && contextPackCache.value[key]) return true;
 
   const loading = new Set(contextPackLoadingIds.value);
   loading.add(card.id);
   contextPackLoadingIds.value = loading;
+  let loaded = false;
   try {
     const pack = await client.renderTodayPilotContextPack(card.missionId, {
       tokenBudget: 1600,
@@ -906,6 +907,7 @@ async function loadContextPack(card: MissionCard, force = false) {
       ...contextPackCache.value,
       [key]: pack,
     };
+    loaded = true;
   } catch (error) {
     console.error('生成 Day Pilot context pack 失败:', error);
     showToast('上下文包生成失败，请稍后重试。');
@@ -914,6 +916,7 @@ async function loadContextPack(card: MissionCard, force = false) {
     next.delete(card.id);
     contextPackLoadingIds.value = next;
   }
+  return loaded;
 }
 
 async function sendCardSignal(card: MissionCard, action: 'useful' | 'wrong') {
@@ -971,9 +974,13 @@ async function copyContextPack(card: MissionCard) {
       showToast('当前环境不支持直接复制，请展开上下文包手动复制。');
       return;
     }
-    await loadContextPack(card);
+    const loaded = await loadContextPack(card);
     const pack = currentContextPack(card);
-    await navigator.clipboard.writeText(pack ? pack.bodyMd : card.pack);
+    if (!loaded || !pack) {
+      showToast('上下文包生成失败，未复制。请展开卡片重试。');
+      return;
+    }
+    await navigator.clipboard.writeText(pack.bodyMd);
     showToast('已复制上下文包。');
   } catch (error) {
     console.error('复制上下文包失败:', error);
@@ -1198,7 +1205,7 @@ function _buildOutreachSessionMission(session: OutreachSession): MissionCard {
     evidence: compactEvidence([
       { source: '问题', text: session.renderedQuestion },
       session.renderedContext
-        ? { source: '上下文', text: session.renderedContext }
+        ? { source: '信息目标', text: session.renderedContext }
         : null,
       session.replyRawText
         ? { source: '最近回复', text: session.replyRawText }
@@ -1214,7 +1221,9 @@ function _buildOutreachSessionMission(session: OutreachSession): MissionCard {
     pack: buildPack([
       'Mission: Review one outreach session',
       `Question: ${session.renderedQuestion}`,
-      session.renderedContext ? `Context: ${session.renderedContext}` : '',
+      session.renderedContext
+        ? `Information goal: ${session.renderedContext}`
+        : '',
       `Status: ${statusLabel}`,
       session.targetResolvedLabel
         ? `Target: ${session.targetResolvedLabel}`
@@ -1242,15 +1251,15 @@ function _buildOutreachTemplateMission(
       limitText(
         item.template.contextTemplate || item.template.questionTemplate || '',
         180,
-      ) || '这是一条即将触发的主动询问模板，需要确认是否仍适合今天发出。',
+      ) || '这是一条即将触发的主动询问计划，需要确认是否仍适合今天发出。',
     tags: compactTags([
-      missionTag('主动询问模板', 'source'),
+      missionTag('主动询问计划', 'source'),
       missionTag(item.template.approvalPolicy || 'auto', 'project'),
       missionTag(item.template.targetRef, 'person'),
     ]),
     evidence: compactEvidence([
       {
-        source: '模板问题',
+        source: '计划问题',
         text: item.template.questionTemplate || item.template.title,
       },
       nextDispatchAt
@@ -1262,8 +1271,8 @@ function _buildOutreachTemplateMission(
     ]),
     actions: [
       {
-        title: '检查模板是否发出',
-        desc: '进入主动询问页确认目标、上下文和审批策略。',
+        title: '检查计划是否发出',
+        desc: '进入主动询问页确认目标、信息目标和审批策略。',
       },
     ],
     questions:
@@ -1271,13 +1280,13 @@ function _buildOutreachTemplateMission(
         ? ['这条询问今天是否允许发出？']
         : [],
     pack: buildPack([
-      'Mission: Review one pending outreach template',
-      `Template: ${item.template.title}`,
+      'Mission: Review one pending outreach plan',
+      `Plan: ${item.template.title}`,
       item.template.questionTemplate
         ? `Question: ${item.template.questionTemplate}`
         : '',
       item.template.contextTemplate
-        ? `Context: ${item.template.contextTemplate}`
+        ? `Information goal: ${item.template.contextTemplate}`
         : '',
     ]),
     route: `/outreach?templateId=${encodeURIComponent(item.template.id)}`,

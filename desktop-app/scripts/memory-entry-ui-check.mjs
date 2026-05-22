@@ -43,6 +43,60 @@ async function main() {
   const { context, extensionId } = await launchExtensionContext();
 
   try {
+    await context.route('**/outreach/templates/runtime-status**', async (route) => {
+      await route.fulfill(
+        jsonResponse({
+          items: [
+            {
+              template: {
+                id: 'template-before-dispatch',
+                title: 'Release risk check',
+                questionTemplate: 'release 风险现在已经有答案了吗？',
+                contextTemplate: '如果已有结论就不要重复打扰。',
+                targetType: 'group',
+                targetRef: 'ops-room',
+                enabled: true,
+                syncState: 'synced',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+              latestSession: null,
+            },
+            {
+              template: {
+                id: 'template-waiting-reply',
+                title: 'Migration guide check',
+                questionTemplate: 'migration guide 发布了吗？',
+                targetType: 'group',
+                targetRef: 'sdk-updates',
+                enabled: true,
+                syncState: 'synced',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+              latestSession: {
+                id: 'session-waiting-reply',
+                targetType: 'group',
+                targetRef: 'sdk-updates',
+                targetResolvedLabel: 'SDK Updates',
+                targetResolvedChatId: 'sdk-updates',
+                renderedQuestion: 'migration guide 发布了吗？',
+                renderedContext: '如果有的话请给链接。',
+                status: 'waiting_reply',
+                requiresApproval: false,
+                followupCount: 0,
+                maxFollowup: 2,
+                sentChatId: 'sdk-updates',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+            },
+          ],
+          total: 2,
+        }),
+      );
+    });
+
     const popupPage = await context.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, {
       waitUntil: 'load',
@@ -80,9 +134,17 @@ async function main() {
       () => document.body.innerText.includes('记忆入口规则'),
       { timeout: 15000 },
     );
+    await topicPage.waitForFunction(
+      () => document.body.innerText.includes('2 条内部观察正在运行'),
+      { timeout: 15000 },
+    );
     const topicText = await topicPage.locator('body').innerText();
     assert.match(topicText, /记忆入口规则/);
     assert.match(topicText, /只显示你定义的记忆入口规则/);
+    assert.match(topicText, /2 条内部观察正在运行/);
+    assert.match(topicText, /等待回复 1/);
+    assert.match(topicText, /待发观察 1/);
+    assert.match(topicText, /migration guide 发布了吗？/);
     assert.match(topicText, /我的规则/);
     assert.match(topicText, /内部观察规则/);
 
@@ -150,6 +212,20 @@ async function main() {
     const topicReloadedText = await topicPage.locator('body').innerText();
     assert.match(topicReloadedText, /待激活|OpenClaw/);
     assert.doesNotMatch(topicReloadedText, /legacy internal rule/);
+    const automationRuleCard = topicPage.locator('.topic-item', {
+      hasText: 'Leave Chat 中出现与我相关的请假消息',
+    });
+    const automationRuleText = await automationRuleCard.innerText();
+    assert.match(
+      automationRuleText,
+      /每日 9:00 摘要（不即时推送）/,
+      'digest-enabled rules should explain that digest replaces immediate push',
+    );
+    assert.doesNotMatch(
+      automationRuleText,
+      /Glip 推送|Chrome 通知/,
+      'digest-enabled rule cards must not promise suppressed immediate notifications',
+    );
 
     await topicPage.getByRole('button', { name: '＋ 添加规则' }).click();
     await topicPage.waitForFunction(

@@ -4,6 +4,18 @@
 
 该功能允许在 Jira 自动化管理页面导入之前导出的自动化规则。Personal AI 会在项目自动化页面注入 `Import rule` 按钮，对 Jira Automation JSON 做预检、项目映射、风险摘要和禁用态导入，降低误导入后立即触发的风险。
 
+## 大白话运行逻辑
+
+这个功能不是“直接把规则导进去并启用”，而是先把导出的 Jira Automation JSON 拆开检查，告诉用户里面有什么触发器、外部请求、secret、JQL、schedule 和跨项目绑定，再创建一个默认禁用的副本。
+
+结果主要受这些因素影响：
+
+1. 导出 JSON 是否标准：格式、大小、规则数量和字段完整性决定能否进入预览。
+2. 目标项目映射：project key、custom field、filter、connection、account 等环境绑定越多，迁移风险越高。
+3. 高风险动作：Web request、secret、外部 URL、schedule、链式触发会要求更明确的复核。
+4. 重名规则处理：目标项目已有同名副本时会自动生成编号名称，避免覆盖或混淆。
+5. 禁用态导入：导入成功只是创建待检查规则，真正启用仍由用户在 Jira 中完成。
+
 ## 使用方法
 
 1. **访问 Jira 自动化页面**
@@ -18,6 +30,7 @@
    - 确认目标项目、触发器、组件数量、Web request / external action / secret / sensitive or hidden value / JQL / URL / custom field / filter / connection / account / smart value / schedule 摘要、迁移复核清单和导入警告后再执行导入
    - 预览会显示最终导入规则名；如果目标项目里已经有同名导入副本，会自动生成编号名称，避免重复导入后难以区分
    - 预览会汇总启用前检查数量，并把精简复核备注和关键环境绑定样例写入导入副本的描述，方便跳转到 Jira 规则详情后继续检查
+   - 如果预检发现高风险项，需要先勾选高风险复核确认，才能创建这个禁用态副本
    - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留
 
 3. **导入完成**
@@ -61,6 +74,7 @@
    - 生成 `(Imported by Personal AI) ...` 导入名，并在目标项目已有同名规则时追加编号
    - 保留原规则描述，并追加 Personal AI 导入复核备注，记录目标项目、环境绑定摘要和链式触发状态
    - 复核备注会保留关键 JQL/filter、URL、secret、敏感或隐藏值、custom field、saved filter、connection、账号/收件人、smart value 和源项目引用样例；复核备注中的敏感值只记录脱敏标签，URL 中的 token/API key/password 等参数和常见 webhook path token 会写成 `REDACTED`
+   - 对没有安全显示名的 `secret=true` 字段只记录通用 secret 标签，不把 `keyOrValue` 里的原始值写进预览或描述，也不再把隐藏值二次识别成 URL、JQL、smart value 或 source project 样例
    - 导入 UI 默认关闭链式触发开关，避免启用后被其它规则意外触发
    - 转换层默认不保留链式触发能力，只有用户在预览中明确保留时才会写入
    - 对超长规则名做截断，降低 Jira API 因名称长度拒绝创建的概率
@@ -81,6 +95,7 @@
    - 预览顶部显示导入结果摘要，明确新规则会作为 disabled copy 创建
    - 预览中按类别展示检测到的环境绑定，和导入后写入描述的复核样例保持一致
    - 预览中显示高 / 中 / 低风险检查数量，并说明复核备注会随规则一起导入
+   - 检测到高风险项时，导入按钮会先保持禁用，直到用户确认已经阅读高风险复核项
    - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要中
    - 显示成功/错误消息
 
@@ -98,6 +113,7 @@
 - 缺少项目 ID / projectKey 时阻止导入
 - 缺少目标 projectId 时阻止转换
 - 对环境绑定值做导入前预检，但不会自动改写 JQL、URL、custom field、saved filter、connection、账号、敏感/隐藏值或 smart value；预览和复核备注会脱敏 URL query / fragment 和常见 webhook path 里的凭据样本
+- `secret=true` 容器会被视为不可展开的 secret 引用，只展示安全标签或 `hidden secret value`，避免隐藏 payload 通过其它扫描类别被回显
 - API 调用错误处理
 - 用户友好的错误消息提示
 

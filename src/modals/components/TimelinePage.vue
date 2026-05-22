@@ -13,7 +13,10 @@
           <button
             v-for="option in rangeOptions"
             :key="option.key"
-            :class="['control-tab', { active: selectedRangeKey === option.key }]"
+            :class="[
+              'control-tab',
+              { active: selectedRangeKey === option.key },
+            ]"
             :aria-pressed="selectedRangeKey === option.key"
             type="button"
             @click="selectRange(option.key)"
@@ -53,92 +56,110 @@
     </div>
 
     <div v-else-if="timelineEvents.length > 0" class="timeline-container">
-      <article
-        v-for="event in timelineEvents"
-        :key="event.resultKey"
-        :class="['timeline-item', { focused: isFocusedEvent(event) }]"
-        @click="handleEventClick(event)"
+      <section
+        v-for="group in timelineDayGroups"
+        :key="group.key"
+        class="timeline-day-group"
+        :aria-label="`${group.label} 时间轴`"
       >
-        <div class="timeline-dot">{{ getTimelineIcon(event.type) }}</div>
-        <div class="timeline-content">
-          <div class="timeline-meta">
-            <span v-if="isFocusedEvent(event)" class="focus-pill">定位目标</span>
-            <span>{{ formatTimelineTime(event.timestamp) }}</span>
-            <span v-if="event.scope">{{ getScopeLabel(event.scope) }}</span>
-            <span v-if="event.sourceTitle || event.source">
-              {{ event.sourceTitle || event.source }}
-            </span>
-          </div>
-          <div class="timeline-card">
-            <h3>{{ event.title }}</h3>
-            <p>{{ event.content }}</p>
-            <div
-              v-if="event.channels.length"
-              class="timeline-channels"
-              aria-label="命中通道"
-            >
-              <span v-for="channel in event.channels" :key="channel">
-                {{ getRecallChannelLabel(channel) }}
-              </span>
-            </div>
-            <div class="event-actions">
-              <span
-                v-if="getFeedbackLabel(event)"
-                class="feedback-status"
-              >
-                {{ getFeedbackLabel(event) }}
-              </span>
-              <button
-                type="button"
-                :class="[
-                  'feedback-btn',
-                  { active: isFeedbackActive(event, 'positive') },
-                ]"
-                :aria-pressed="isFeedbackActive(event, 'positive')"
-                :disabled="isFeedbackPending(event)"
-                @click.stop="submitEventFeedback(event, 'positive')"
-              >
-                有用
-              </button>
-              <button
-                type="button"
-                :class="[
-                  'feedback-btn',
-                  { active: isFeedbackActive(event, 'negative') },
-                ]"
-                :aria-pressed="isFeedbackActive(event, 'negative')"
-                :disabled="isFeedbackPending(event)"
-                @click.stop="submitEventFeedback(event, 'negative')"
-              >
-                不相关
-              </button>
-              <button
-                v-if="canClearFeedback(event)"
-                type="button"
-                class="feedback-btn clear-feedback-btn"
-                :disabled="isFeedbackPending(event)"
-                @click.stop="submitEventFeedback(event, 'clear')"
-              >
-                撤销反馈
-              </button>
-              <button
-                v-if="event.exploreLink"
-                type="button"
-                @click.stop="openExploreLink(event.exploreLink)"
-              >
-                在记忆中查看
-              </button>
-              <button
-                v-if="getSafeSourceUrl(event.sourceUrl)"
-                type="button"
-                @click.stop="openSourceUrl(event.sourceUrl)"
-              >
-                打开来源
-              </button>
-            </div>
-          </div>
+        <div class="timeline-day-header">
+          <h3>{{ group.label }}</h3>
+          <span>{{ group.summary }}</span>
         </div>
-      </article>
+        <article
+          v-for="event in group.events"
+          :key="event.resultKey"
+          :class="['timeline-item', { focused: isFocusedEvent(event) }]"
+          @click="handleEventClick(event)"
+        >
+          <div class="timeline-dot">{{ getTimelineIcon(event.type) }}</div>
+          <div class="timeline-content">
+            <div class="timeline-meta">
+              <span v-if="isFocusedEvent(event)" class="focus-pill"
+                >定位目标</span
+              >
+              <time
+                v-if="getTimelineDateTimeValue(event.timestamp)"
+                :datetime="getTimelineDateTimeValue(event.timestamp)"
+                :title="formatTimelineExactTime(event.timestamp)"
+              >
+                {{ formatTimelineTime(event.timestamp) }} ·
+                {{ formatTimelineClockTime(event.timestamp) }}
+              </time>
+              <span v-else>时间未知</span>
+              <span v-if="event.scope">{{ getScopeLabel(event.scope) }}</span>
+              <span v-if="event.sourceTitle || event.source">
+                {{ event.sourceTitle || event.source }}
+              </span>
+            </div>
+            <div class="timeline-card">
+              <h3>{{ event.title }}</h3>
+              <p>{{ event.content }}</p>
+              <div
+                v-if="event.channels.length"
+                class="timeline-channels"
+                aria-label="命中通道"
+              >
+                <span v-for="channel in event.channels" :key="channel">
+                  {{ getRecallChannelLabel(channel) }}
+                </span>
+              </div>
+              <div class="event-actions">
+                <span v-if="getFeedbackLabel(event)" class="feedback-status">
+                  {{ getFeedbackLabel(event) }}
+                </span>
+                <button
+                  type="button"
+                  :class="[
+                    'feedback-btn',
+                    { active: isFeedbackActive(event, 'positive') },
+                  ]"
+                  :aria-pressed="isFeedbackActive(event, 'positive')"
+                  :disabled="isFeedbackPending(event)"
+                  @click.stop="submitEventFeedback(event, 'positive')"
+                >
+                  有用
+                </button>
+                <button
+                  type="button"
+                  :class="[
+                    'feedback-btn',
+                    { active: isFeedbackActive(event, 'negative') },
+                  ]"
+                  :aria-pressed="isFeedbackActive(event, 'negative')"
+                  :disabled="isFeedbackPending(event)"
+                  @click.stop="submitEventFeedback(event, 'negative')"
+                >
+                  不相关
+                </button>
+                <button
+                  v-if="canClearFeedback(event)"
+                  type="button"
+                  class="feedback-btn clear-feedback-btn"
+                  :disabled="isFeedbackPending(event)"
+                  @click.stop="submitEventFeedback(event, 'clear')"
+                >
+                  撤销反馈
+                </button>
+                <button
+                  v-if="event.exploreLink"
+                  type="button"
+                  @click.stop="openExploreLink(event.exploreLink)"
+                >
+                  在记忆中查看
+                </button>
+                <button
+                  v-if="getSafeSourceUrl(event.sourceUrl)"
+                  type="button"
+                  @click.stop="openSourceUrl(event.sourceUrl)"
+                >
+                  打开来源
+                </button>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
     </div>
 
     <div v-else class="empty-state">
@@ -178,8 +199,12 @@ import type {
   TimelineFocusType,
 } from '../timelinePresentation';
 import {
+  formatTimelineClockTime,
+  formatTimelineExactTime,
   formatTimelineTime,
+  getTimelineDateTimeValue,
   getTimelineIcon,
+  groupTimelineEventsByDay,
   parseTimelineFocus,
 } from '../timelinePresentation';
 import {
@@ -261,6 +286,9 @@ const selectedRangeOption = computed(
   () =>
     rangeOptions.find((option) => option.key === selectedRangeKey.value) ||
     rangeOptions[0],
+);
+const timelineDayGroups = computed(() =>
+  groupTimelineEventsByDay(timelineEvents.value),
 );
 const timelineContextLabel = computed(
   () =>
@@ -532,8 +560,7 @@ async function submitEventFeedback(
         ? previousState
         : undefined,
     );
-    errorMessage.value =
-      error?.message || '反馈暂时无法提交，请稍后再试。';
+    errorMessage.value = error?.message || '反馈暂时无法提交，请稍后再试。';
   }
 }
 
@@ -676,7 +703,36 @@ onMounted(() => {
 .timeline-container {
   display: flex;
   flex-direction: column;
+  gap: 1.25rem;
+}
+
+.timeline-day-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.timeline-day-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   gap: 1rem;
+  padding: 0 0 0.2rem 2.9rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.timeline-day-header h3 {
+  margin: 0;
+  color: #e0f2fe;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.timeline-day-header span {
+  min-width: 0;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .timeline-item {
@@ -716,7 +772,8 @@ onMounted(() => {
   font-size: 0.78rem;
 }
 
-.timeline-meta span {
+.timeline-meta span,
+.timeline-meta time {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
@@ -868,6 +925,12 @@ onMounted(() => {
   .timeline-item {
     grid-template-columns: 1.75rem 1fr;
     gap: 0.65rem;
+  }
+
+  .timeline-day-header {
+    flex-direction: column;
+    gap: 0.25rem;
+    padding-left: 2.4rem;
   }
 }
 </style>

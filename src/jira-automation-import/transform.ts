@@ -626,6 +626,10 @@ function collectReviewSignals(
     return;
   }
 
+  if (value.secret === true) {
+    return;
+  }
+
   Object.entries(value).forEach(([nestedKey, nestedValue]) => {
     collectReviewSignals(
       nestedValue,
@@ -667,8 +671,8 @@ function addSecretReferences(value: unknown, references: Set<string>): void {
   }
 
   if (value.secret === true) {
-    const label = value.key || value.id || value.name || value.headerName || value.keyOrValue;
-    references.add(String(label || `secret-${references.size + 1}`));
+    const label = value.key || value.id || value.name || value.headerName || value.secretKey;
+    references.add(String(label || 'hidden secret value'));
   }
 
   Object.entries(value).forEach(([key, nestedValue]) => {

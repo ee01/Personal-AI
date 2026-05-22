@@ -20,6 +20,8 @@ import type Database from 'better-sqlite3';
 import type {
   IngestPayload,
   IngestResult,
+  IngestDedupeReason,
+  IngestDecision,
   EntityType,
   ProfileCandidate,
 } from '../types/index.js';
@@ -127,11 +129,13 @@ export class IngestionPipeline {
     // ---- 1. Dedup check ----
     const postId =
       payload.metadata?.postId != null ? String(payload.metadata.postId) : null;
-    let existing: { id: string } | undefined;
+    let existing:
+      | { id: string; dedupeReason: IngestDedupeReason }
+      | undefined;
 
     if (postId) {
       // Glip 等有 post_id 的消息：直接用 post_id 去重
-      existing = this.db
+      const row = this.db
         .prepare(
           `SELECT id FROM messages_raw
            WHERE source_type = ?
@@ -143,10 +147,13 @@ export class IngestionPipeline {
         .get(payload.sourceType, scope, source, postId) as
         | { id: string }
         | undefined;
+      if (row) {
+        existing = { id: row.id, dedupeReason: 'post_id' };
+      }
     } else {
       // 无 post_id 时回退到 content + source_type + sender
       const contentNormalized = normalizeContentForDedup(payload.content);
-      existing = this.db
+      const row = this.db
         .prepare(
           `SELECT id FROM messages_raw
            WHERE content = ?
@@ -163,10 +170,29 @@ export class IngestionPipeline {
           scope,
           source,
         ) as { id: string } | undefined;
+      if (row) {
+        existing = {
+          id: row.id,
+          dedupeReason: 'content_source_sender',
+        };
+      }
     }
 
     if (existing) {
-      return { id: existing.id, status: 'duplicate' };
+      return {
+        id: existing.id,
+        status: 'duplicate',
+        decision: {
+          storage: 'duplicate',
+          reason:
+            existing.dedupeReason === 'post_id'
+              ? 'duplicate_post_id'
+              : 'duplicate_content_source_sender',
+          duplicateOf: existing.id,
+          dedupeReason: existing.dedupeReason,
+          indexed: false,
+        },
+      };
     }
 
     const contentNormalized = postId
@@ -201,8 +227,9 @@ export class IngestionPipeline {
     const entitiesList = extraction ? this.flattenEntities(extraction) : [];
 
     // ---- 3. Compute salience score ----
-    let salienceScore = 0.5;
+    let salienceScore: number | undefined;
     if (!skip) {
+      salienceScore = 0.5;
       try {
         const salienceResult = await this.scorer.scoreMessage(
           contentNormalized,
@@ -218,6 +245,8 @@ export class IngestionPipeline {
         );
       }
     }
+    const shouldIndex =
+      salienceScore !== undefined && salienceScore >= STORAGE_THRESHOLD;
 
     // ---- 4. Store in messages_raw ----
     try {
@@ -252,7 +281,17 @@ export class IngestionPipeline {
         );
     } catch (err) {
       console.error('[IngestionPipeline] Failed to insert message:', err);
-      return { id, status: 'error' };
+      return {
+        id,
+        status: 'error',
+        decision: {
+          storage: 'error',
+          reason: 'insert_failed',
+          salienceScore,
+          shouldIndex,
+          indexed: false,
+        },
+      };
     }
 
     // ---- 5. Generate embedding & store in messages_vec ----
@@ -273,7 +312,8 @@ export class IngestionPipeline {
     }
 
     // ---- 6. High-salience processing: entities, relationships, chunks ----
-    if (salienceScore >= STORAGE_THRESHOLD && extraction) {
+    let indexed = false;
+    if (shouldIndex && extraction) {
       try {
         this.processEntities(extraction, id, ts);
       } catch (err) {
@@ -300,7 +340,8 @@ export class IngestionPipeline {
       }
 
       try {
-        this.scorer.ensureMetadata('message', id, salienceScore);
+        this.scorer.ensureMetadata('message', id, salienceScore ?? 0);
+        indexed = true;
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Metadata update failed:',
@@ -380,15 +421,70 @@ export class IngestionPipeline {
     }
 
     // ---- 9. Return result ----
+    const decision = this.buildDecision({
+      skip,
+      extraction,
+      salienceScore,
+      shouldIndex,
+      indexed,
+    });
+
     return {
       id,
       status: 'created',
       entitiesExtracted: entitiesList.length,
       matchedProjects,
+      decision,
     };
   }
 
   // ---- Private helpers ----------------------------------------------------
+
+  private buildDecision(args: {
+    skip: boolean;
+    extraction: LLMExtraction | null;
+    salienceScore: number | undefined;
+    shouldIndex: boolean;
+    indexed: boolean;
+  }): IngestDecision {
+    if (args.indexed) {
+      return {
+        storage: 'indexed',
+        reason: 'salience_indexed',
+        salienceScore: args.salienceScore,
+        shouldIndex: args.shouldIndex,
+        indexed: true,
+      };
+    }
+
+    if (args.skip) {
+      return {
+        storage: 'stored_unindexed',
+        reason: 'extraction_skipped',
+        salienceScore: args.salienceScore,
+        shouldIndex: args.shouldIndex,
+        indexed: false,
+      };
+    }
+
+    if (!args.extraction) {
+      return {
+        storage: 'stored_unindexed',
+        reason: 'extraction_unavailable',
+        salienceScore: args.salienceScore,
+        shouldIndex: args.shouldIndex,
+        indexed: false,
+      };
+    }
+
+    return {
+      storage: 'stored_unindexed',
+      reason: 'salience_below_threshold',
+      salienceScore: args.salienceScore,
+      shouldIndex: args.shouldIndex,
+      indexed: false,
+    };
+  }
 
   /**
    * Call the LLM to extract structured entity information from the payload.

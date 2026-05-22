@@ -270,6 +270,8 @@ function getContextTextContent(root?: Element | null): string {
         'iframe',
         '.pai-context-bubble',
         '.pai-context-card',
+        '.pai-context-peek',
+        '.pai-context-selection-trigger',
         '.pai-context-toast',
         '.pai-composer-guard',
         '#pai-context-bubble-styles',
@@ -796,7 +798,7 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
             : collectPeopleFromMessages(visibleMessages)),
       },
       contextItems,
-      sourceTypes: ['glip', 'meeting', 'jira', 'web', 'manual', 'system'],
+      sourceTypes: ['glip', 'manual', 'markdown', 'web', 'jira', 'system'],
     };
   },
   findComposer: findRingCentralComposer,

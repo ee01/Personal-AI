@@ -34,6 +34,7 @@ export type OutreachEventType =
   | 'reply_classified'
   | 'deferred_by_reply'
   | 'followup_sent'
+  | 'reply_resolution_pending'
   | 'resolved_without_dispatch'
   | 'followup_skipped_by_answer'
   | 'result_notified'
@@ -104,6 +105,9 @@ export interface OutreachSessionRecord {
   errorMessage?: string;
   terminalSyncedAt?: number;
   actionResultId?: string;
+  scheduledFor?: number;
+  occurrenceKey?: string;
+  occurrenceStartAt?: number;
   createdAt: number;
   updatedAt: number;
   resolvedAt?: number;
@@ -177,6 +181,9 @@ interface OutreachSessionRow {
   error_message: string | null;
   terminal_synced_at: number | null;
   action_result_id: string | null;
+  scheduled_for: number | null;
+  occurrence_key: string | null;
+  occurrence_start_at: number | null;
   created_at: number;
   updated_at: number;
   resolved_at: number | null;
@@ -265,6 +272,9 @@ export interface CreateOutreachSessionInput {
   errorMessage?: string | null;
   terminalSyncedAt?: number | null;
   actionResultId?: string | null;
+  scheduledFor?: number | null;
+  occurrenceKey?: string | null;
+  occurrenceStartAt?: number | null;
   createdAt?: number;
   resolvedAt?: number | null;
 }
@@ -390,6 +400,9 @@ export class OutreachRepository {
       errorMessage: row.error_message ?? undefined,
       terminalSyncedAt: row.terminal_synced_at ?? undefined,
       actionResultId: row.action_result_id ?? undefined,
+      scheduledFor: row.scheduled_for ?? undefined,
+      occurrenceKey: row.occurrence_key ?? undefined,
+      occurrenceStartAt: row.occurrence_start_at ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       resolvedAt: row.resolved_at ?? undefined,
@@ -641,8 +654,8 @@ export class OutreachRepository {
            followup_interval_seconds, wait_until, next_check_at, sent_chat_id, sent_post_id, last_poll_at,
            reply_post_id, reply_sender, reply_raw_text, reply_classification, reply_confidence,
            outcome_json, error_code, error_message, terminal_synced_at, action_result_id,
-           created_at, updated_at, resolved_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           scheduled_for, occurrence_key, occurrence_start_at, created_at, updated_at, resolved_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -682,6 +695,9 @@ export class OutreachRepository {
         input.errorMessage ?? null,
         input.terminalSyncedAt ?? null,
         input.actionResultId ?? null,
+        input.scheduledFor ?? null,
+        input.occurrenceKey ?? null,
+        input.occurrenceStartAt ?? null,
         currentTime,
         currentTime,
         input.resolvedAt ?? null,
@@ -701,6 +717,44 @@ export class OutreachRepository {
     const row = this.db
       .prepare('SELECT * FROM outreach_sessions WHERE action_id = ? ORDER BY created_at DESC LIMIT 1')
       .get(actionId) as OutreachSessionRow | undefined;
+    return row ? this.rowToSession(row) : null;
+  }
+
+  getSessionByTemplateOccurrence(
+    templateId: string,
+    occurrenceKey: string,
+  ): OutreachSessionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT *
+         FROM outreach_sessions
+         WHERE template_id = ?
+           AND occurrence_key = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(templateId, occurrenceKey) as OutreachSessionRow | undefined;
+    return row ? this.rowToSession(row) : null;
+  }
+
+  getLatestSessionBeforeTemplateOccurrence(
+    templateId: string,
+    scheduledFor: number,
+  ): OutreachSessionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT *
+         FROM outreach_sessions
+         WHERE template_id = ?
+           AND origin_kind = 'scheduled_template'
+           AND (
+             scheduled_for IS NULL
+             OR scheduled_for < ?
+           )
+         ORDER BY COALESCE(scheduled_for, created_at) DESC, created_at DESC
+         LIMIT 1`,
+      )
+      .get(templateId, scheduledFor) as OutreachSessionRow | undefined;
     return row ? this.rowToSession(row) : null;
   }
 

@@ -247,7 +247,7 @@ class RingCentralVideoHomePrep {
   };
 
   private async syncRingCentralCalendar(
-    options: { forceRingCentral?: boolean } = {},
+    options: { forceRingCentral?: boolean; loadPrepAfterSync?: boolean } = {},
   ): Promise<void> {
     if (
       !options.forceRingCentral &&
@@ -282,7 +282,7 @@ class RingCentralVideoHomePrep {
       }
       this.state.error = '';
       this.refreshSelectedMeeting();
-      if (this.state.enabled) {
+      if (this.state.enabled && options.loadPrepAfterSync !== false) {
         void this.loadMeetingPrep();
       }
     } catch (error) {
@@ -583,10 +583,48 @@ class RingCentralVideoHomePrep {
     this.state.assist = null;
     this.state.prep = null;
     this.lastPrepEventKey = null;
+    this.state.loading = true;
+    this.state.error = '';
+    this.render();
     await this.syncRingCentralCalendar({
       forceRingCentral: this.nativeJoinEnabled,
+      loadPrepAfterSync: false,
     });
+    if (!this.state.selectedEvent) {
+      this.state.loading = false;
+      this.render();
+      return;
+    }
+    let prepareError = '';
+    try {
+      await this.prepareMeetingPrepBackfill();
+    } catch (error) {
+      prepareError =
+        error instanceof Error ? error.message : 'today_pilot_prepare_failed';
+      console.warn('[TodayPilot] meeting prep backfill failed:', error);
+    }
     await this.loadMeetingPrep();
+    if (prepareError && !this.state.assist) {
+      this.state.error = prepareError;
+      this.render();
+    }
+  }
+
+  private async prepareMeetingPrepBackfill(): Promise<void> {
+    if (!this.state.selectedEvent) {
+      return;
+    }
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    await sendRuntimeMessage({
+      type: 'TODAY_PILOT_PREPARE_MEETINGS_REQUEST',
+      request: {
+        date: formatLocalDate(this.state.selectedEvent.startTime, timezone),
+        timezone,
+        horizonHours: 36,
+        maxMeetings: 5,
+        mode: 'nightly_llm',
+      },
+    });
   }
 }
 
@@ -926,7 +964,7 @@ function findRingCentralVideoJoinUrlNearElement(
   }
 
   const anchor = element.querySelector<HTMLAnchorElement>(
-    'a[href*="v.ringcentral.com/join/"], a[href*="v.ringcentral.com/conf/on/"]',
+    'a[href*="v.ringcentral.com/join/"], a[href*="v.ringcentral.com/launcher/"], a[href*="v.ringcentral.com/conf/on/"]',
   );
   if (anchor?.href) {
     return anchor.href;
@@ -1138,12 +1176,25 @@ function formatMeetingTimeRange(event: CalendarEventSyncItem): string {
 
 function formatMeetingDateTime(value?: number): string {
   if (!value) return '';
-  return new Date(value).toLocaleString(undefined, {
+  return toCalendarDate(value).toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function formatLocalDate(value: number, timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(toCalendarDate(value));
+}
+
+function toCalendarDate(value: number): Date {
+  return new Date(value > 10_000_000_000 ? value : value * 1000);
 }
 
 function renderMeetingMeta(event: CalendarEventSyncItem): string {

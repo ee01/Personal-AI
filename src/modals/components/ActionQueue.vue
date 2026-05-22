@@ -7,7 +7,7 @@
       </div>
 
       <div class="filters">
-        <select v-model="queueStatus" class="filter-select" @change="loadActions">
+        <select v-model="queueStatus" class="filter-select" @change="loadActions()">
           <option value="all">全部状态</option>
           <option value="queued">queued</option>
           <option value="running">running</option>
@@ -16,13 +16,35 @@
           <option value="cancelled">cancelled</option>
           <option value="dead_letter">dead_letter</option>
         </select>
-        <select v-model="executionMode" class="filter-select" @change="loadActions">
+        <select v-model="executionMode" class="filter-select" @change="loadActions()">
           <option value="">全部模式</option>
           <option value="manual">manual</option>
           <option value="auto">auto</option>
         </select>
-        <button class="refresh-btn" @click="loadActions">刷新</button>
+        <button class="refresh-btn" @click="loadActions()">刷新</button>
       </div>
+    </div>
+
+    <div v-if="!loading" class="queue-overview" aria-label="动作队列健康摘要">
+      <div
+        v-for="card in queueSummaryCards"
+        :key="card.key"
+        class="queue-stat"
+        :class="card.tone"
+      >
+        <span class="stat-label">{{ card.label }}</span>
+        <strong>{{ card.value }}</strong>
+        <span class="stat-desc">{{ card.description }}</span>
+      </div>
+    </div>
+
+    <div v-if="!loading && queueGuidance" class="queue-guidance" :class="queueGuidance.tone">
+      <strong>{{ queueGuidance.title }}</strong>
+      <span>{{ queueGuidance.body }}</span>
+    </div>
+
+    <div v-if="!loading && loadError" class="error-box queue-load-error">
+      {{ loadError }}
     </div>
 
     <div v-if="loading" class="loading-container">
@@ -31,7 +53,13 @@
     </div>
 
     <div v-else-if="actions.length === 0" class="empty-state">
-      <p>没有动作记录。</p>
+      <p>{{ emptyStateTitle }}</p>
+      <p class="empty-detail">{{ emptyStateDetail }}</p>
+      <button
+        v-if="hasUiFilters"
+        class="tiny-btn"
+        @click="resetFilters"
+      >清除状态/模式筛选</button>
     </div>
 
     <div v-else class="action-list">
@@ -95,26 +123,41 @@
           transcript: {{ actionResultTranscriptPath(action) }}
         </div>
 
+        <div v-if="isActionRunning(action)" class="running-box">
+          <span class="running-dot" aria-hidden="true"></span>
+          <span>{{ runningStatusLabel(action) }}</span>
+        </div>
+
+        <div v-if="actionOperationError(action.id)" class="error-box">
+          {{ actionOperationError(action.id) }}
+        </div>
+
         <div v-if="action.lastError" class="error-box">
           {{ action.lastError }}
         </div>
 
         <div class="button-row">
           <button
-            v-if="action.queueStatus === 'queued' || action.queueStatus === 'failed'"
+            v-if="action.queueStatus === 'queued' || action.queueStatus === 'failed' || isActionOperation(action.id, 'execute')"
             class="tiny-btn"
+            :class="{ loading: isActionOperation(action.id, 'execute') }"
+            :disabled="isActionBusy(action.id)"
             @click="executeAction(action.id)"
-          >执行</button>
+          >{{ actionButtonLabel(action.id, 'execute', '执行') }}</button>
           <button
             v-if="action.queueStatus === 'failed'"
             class="tiny-btn"
+            :class="{ loading: isActionOperation(action.id, 'retry') }"
+            :disabled="isActionBusy(action.id)"
             @click="retryAction(action.id)"
-          >重试入队</button>
+          >{{ actionButtonLabel(action.id, 'retry', '重试入队') }}</button>
           <button
             v-if="action.queueStatus === 'queued'"
             class="tiny-btn danger"
+            :class="{ loading: isActionOperation(action.id, 'cancel') }"
+            :disabled="isActionBusy(action.id)"
             @click="cancelAction(action.id)"
-          >取消</button>
+          >{{ actionButtonLabel(action.id, 'cancel', '取消') }}</button>
         </div>
       </div>
     </div>
@@ -122,7 +165,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   getMemoryServiceClient,
@@ -133,10 +176,32 @@ import {
 const client = getMemoryServiceClient();
 const route = useRoute();
 const loading = ref(true);
+const loadError = ref('');
 const actions = ref<RuntimeAction[]>([]);
 const outreachByActionId = ref<Record<string, OutreachSession>>({});
+const totalActions = ref(0);
 const queueStatus = ref<'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead_letter' | 'all'>('all');
 const executionMode = ref<'manual' | 'auto' | ''>('');
+type ActionOperation = 'execute' | 'retry' | 'cancel';
+type QueueGuidanceTone = 'success' | 'info' | 'warning' | 'danger';
+interface QueueSummaryCard {
+  key: string;
+  label: string;
+  value: string;
+  description: string;
+  tone: QueueGuidanceTone;
+}
+interface QueueGuidance {
+  title: string;
+  body: string;
+  tone: QueueGuidanceTone;
+}
+const actionOperations = ref<Record<string, ActionOperation>>({});
+const actionOperationErrors = ref<Record<string, string>>({});
+let queuePollTimer: number | undefined;
+const routeActionIdFilter = computed(() =>
+  typeof route.query.actionId === 'string' ? route.query.actionId : '',
+);
 const sourceRefIdFilter = computed(() =>
   typeof route.query.sourceRefId === 'string' ? route.query.sourceRefId : '',
 );
@@ -155,9 +220,148 @@ const pageDescription = computed(() => {
   }
   return '查看自我反思、主动询问与记忆规则产出的执行动作。';
 });
+const hasRunningActions = computed(() => actions.value.some((action) => action.queueStatus === 'running'));
+const hasPendingActionOperation = computed(() => Object.keys(actionOperations.value).length > 0);
+const hasUiFilters = computed(() => queueStatus.value !== 'all' || executionMode.value !== '');
+const hasRouteFilters = computed(() =>
+  Boolean(routeActionIdFilter.value || sourceRefIdFilter.value || sourceKindFilter.value),
+);
+const failedActionCount = computed(() =>
+  actions.value.filter((action) => action.queueStatus === 'failed' || action.queueStatus === 'dead_letter').length,
+);
+const runningActionCount = computed(() =>
+  actions.value.filter((action) => action.queueStatus === 'running').length,
+);
+const staleRunningActionCount = computed(() =>
+  actions.value.filter((action) => isStaleRunningAction(action)).length,
+);
+const dueActionCount = computed(() => actions.value.filter((action) => isScheduledDue(action)).length);
+const approvalActionCount = computed(() =>
+  actions.value.filter((action) => action.queueStatus === 'queued' && action.requiresApproval).length,
+);
+const highRiskActionCount = computed(() =>
+  actions.value.filter((action) => action.queueStatus === 'queued' && action.riskLevel === 'high').length,
+);
+const attentionActionCount = computed(() =>
+  actions.value.filter((action) => isAttentionAction(action)).length,
+);
+const visibleCountLabel = computed(() => {
+  if (totalActions.value > 0 && totalActions.value !== actions.value.length) {
+    return `${actions.value.length}/${totalActions.value}`;
+  }
+  return String(actions.value.length);
+});
+const queueSummaryCards = computed<QueueSummaryCard[]>(() => [
+  {
+    key: 'visible',
+    label: '当前结果',
+    value: visibleCountLabel.value,
+    description: hasRouteFilters.value || hasUiFilters.value
+      ? '已按当前来源、状态或模式筛选'
+      : '队列中可查看的动作记录',
+    tone: actions.value.length > 0 ? 'info' : 'success',
+  },
+  {
+    key: 'attention',
+    label: '需要处理',
+    value: String(attentionActionCount.value),
+    description: '失败、到期、需审批或高风险动作',
+    tone: attentionActionCount.value > 0 ? 'warning' : 'success',
+  },
+  {
+    key: 'running',
+    label: '执行中',
+    value: String(runningActionCount.value),
+    description: staleRunningActionCount.value > 0
+      ? `${staleRunningActionCount.value} 条运行超过 30 分钟`
+      : '页面会静默刷新运行结果',
+    tone: staleRunningActionCount.value > 0 ? 'warning' : 'info',
+  },
+  {
+    key: 'failed',
+    label: '失败/死信',
+    value: String(failedActionCount.value),
+    description: '可从卡片查看错误并重试或取消',
+    tone: failedActionCount.value > 0 ? 'danger' : 'success',
+  },
+]);
+const queueGuidance = computed<QueueGuidance | null>(() => {
+  if (actions.value.length === 0) {
+    return {
+      title: hasRouteFilters.value || hasUiFilters.value ? '当前筛选没有动作' : '动作队列暂时清空',
+      body: hasRouteFilters.value || hasUiFilters.value
+        ? '这通常表示来源、状态或模式筛选没有命中；可以清除筛选，或回到来源页面确认是否已经生成 RuntimeAction。'
+        : '当前没有等待执行、审批或复查的后台动作。',
+      tone: 'info',
+    };
+  }
+  if (staleRunningActionCount.value > 0) {
+    return {
+      title: '有动作运行时间过长',
+      body: '先检查对应卡片的 started 时间、错误提示和关联线程；刷新页面后 running 状态仍会保留，不会误报为已完成。',
+      tone: 'warning',
+    };
+  }
+  if (failedActionCount.value > 0) {
+    return {
+      title: '优先处理失败动作',
+      body: '失败或 dead_letter 动作会保留 lastError；确认原因后再重试入队，避免重复触发外部写操作。',
+      tone: 'danger',
+    };
+  }
+  if (dueActionCount.value > 0) {
+    return {
+      title: '有自动动作已到期',
+      body: '这些动作会等待下一次后台调度扫描；如果很急，可以在卡片上手动执行。',
+      tone: 'warning',
+    };
+  }
+  if (approvalActionCount.value > 0 || highRiskActionCount.value > 0) {
+    return {
+      title: '有动作需要人工确认',
+      body: '先查看参数、来源和关联线程，再决定是否执行；高风险动作不会在未确认前静默推进。',
+      tone: 'warning',
+    };
+  }
+  if (runningActionCount.value > 0) {
+    return {
+      title: '动作正在执行',
+      body: '页面会每 5 秒静默刷新运行中动作；你可以离开页面，刷新后仍能看到最新队列状态。',
+      tone: 'info',
+    };
+  }
+  return {
+    title: '队列状态正常',
+    body: '当前可见动作没有失败、到期或待审批阻塞；需要追溯来源时可进入关联线程或询问会话。',
+    tone: 'success',
+  };
+});
+const emptyStateTitle = computed(() =>
+  loadError.value ? '动作队列暂时无法读取' : '没有动作记录',
+);
+const emptyStateDetail = computed(() => {
+  if (loadError.value) {
+    return '请确认 Memory Service 可用后重试；页面不会把读取失败误当成队列已清空。';
+  }
+  if (hasRouteFilters.value || hasUiFilters.value) {
+    return '当前来源、动作 ID、状态或执行模式没有命中。清除筛选后可以确认队列里是否还有其他动作。';
+  }
+  return '自我反思、主动询问或记忆规则生成动作后，会在这里展示执行状态、风险和结果。';
+});
 
 onMounted(() => {
   void loadActions();
+  queuePollTimer = window.setInterval(() => {
+    if (hasRunningActions.value && !hasPendingActionOperation.value) {
+      void loadActions({ silent: true });
+    }
+  }, 5000);
+});
+
+onUnmounted(() => {
+  if (queuePollTimer) {
+    window.clearInterval(queuePollTimer);
+  }
 });
 
 watch(
@@ -167,10 +371,12 @@ watch(
   },
 );
 
-async function loadActions() {
-  loading.value = true;
+async function loadActions(options: { silent?: boolean } = {}) {
+  const shouldShowLoading = options.silent !== true;
+  if (shouldShowLoading) {
+    loading.value = true;
+  }
   try {
-    const actionId = typeof route.query.actionId === 'string' ? route.query.actionId : '';
     const response = await client.getActions({
       queueStatus: queueStatus.value,
       executionMode: executionMode.value || undefined,
@@ -179,7 +385,7 @@ async function loadActions() {
       limit: 50,
     });
     const filteredItems = response.items.filter((item) => {
-      if (actionId && item.id !== actionId) return false;
+      if (routeActionIdFilter.value && item.id !== routeActionIdFilter.value) return false;
       if (
         sourceRefIdFilter.value &&
         item.sourceRefId !== sourceRefIdFilter.value &&
@@ -198,14 +404,30 @@ async function loadActions() {
       return true;
     });
     actions.value = filteredItems;
+    totalActions.value = routeActionIdFilter.value
+      ? filteredItems.length
+      : response.total ?? filteredItems.length;
+    loadError.value = '';
     await hydrateOutreachSessions(filteredItems);
   } catch (error) {
     console.error('Failed to load actions:', error);
-    actions.value = [];
-    outreachByActionId.value = {};
+    loadError.value = `读取动作队列失败：${formatActionError(error)}`;
+    if (shouldShowLoading) {
+      actions.value = [];
+      outreachByActionId.value = {};
+      totalActions.value = 0;
+    }
   } finally {
-    loading.value = false;
+    if (shouldShowLoading) {
+      loading.value = false;
+    }
   }
+}
+
+function resetFilters() {
+  queueStatus.value = 'all';
+  executionMode.value = '';
+  void loadActions();
 }
 
 async function hydrateOutreachSessions(items: RuntimeAction[]) {
@@ -257,18 +479,117 @@ async function hydrateOutreachSessions(items: RuntimeAction[]) {
 }
 
 async function executeAction(id: string) {
-  await client.executeAction(id);
-  await loadActions();
+  setActionOperation(id, 'execute');
+  markActionRunning(id);
+  try {
+    await client.executeAction(id);
+    await loadActions({ silent: true });
+  } catch (error) {
+    setActionOperationError(id, `执行请求失败：${formatActionError(error)}`);
+    await loadActions({ silent: true });
+  } finally {
+    clearActionOperation(id);
+  }
 }
 
 async function retryAction(id: string) {
-  await client.retryAction(id);
-  await loadActions();
+  setActionOperation(id, 'retry');
+  try {
+    await client.retryAction(id);
+    await loadActions({ silent: true });
+  } catch (error) {
+    setActionOperationError(id, `重试入队失败：${formatActionError(error)}`);
+  } finally {
+    clearActionOperation(id);
+  }
 }
 
 async function cancelAction(id: string) {
-  await client.cancelAction(id, 'Cancelled from action queue UI');
-  await loadActions();
+  setActionOperation(id, 'cancel');
+  try {
+    await client.cancelAction(id, 'Cancelled from action queue UI');
+    await loadActions({ silent: true });
+  } catch (error) {
+    setActionOperationError(id, `取消失败：${formatActionError(error)}`);
+  } finally {
+    clearActionOperation(id);
+  }
+}
+
+function setActionOperation(id: string, operation: ActionOperation) {
+  actionOperations.value = {
+    ...actionOperations.value,
+    [id]: operation,
+  };
+  actionOperationErrors.value = omitActionEntry(actionOperationErrors.value, id);
+}
+
+function clearActionOperation(id: string) {
+  actionOperations.value = omitActionEntry(actionOperations.value, id);
+}
+
+function setActionOperationError(id: string, message: string) {
+  actionOperationErrors.value = {
+    ...actionOperationErrors.value,
+    [id]: message,
+  };
+}
+
+function actionOperationError(id: string): string {
+  return actionOperationErrors.value[id] || '';
+}
+
+function isActionOperation(id: string, operation: ActionOperation): boolean {
+  return actionOperations.value[id] === operation;
+}
+
+function isActionBusy(id: string): boolean {
+  return Boolean(actionOperations.value[id]);
+}
+
+function actionButtonLabel(id: string, operation: ActionOperation, fallback: string): string {
+  if (!isActionOperation(id, operation)) return fallback;
+  if (operation === 'execute') return '执行中...';
+  if (operation === 'retry') return '入队中...';
+  return '取消中...';
+}
+
+function markActionRunning(id: string) {
+  const currentTime = Date.now();
+  actions.value = actions.value.map((action) =>
+    action.id === id
+      ? {
+          ...action,
+          queueStatus: 'running',
+          startedAt: action.startedAt || currentTime,
+          lastError: undefined,
+        }
+      : action,
+  );
+}
+
+function isActionRunning(action: RuntimeAction): boolean {
+  return action.queueStatus === 'running' || isActionOperation(action.id, 'execute');
+}
+
+function runningStatusLabel(action: RuntimeAction): string {
+  if (isStaleRunningAction(action)) {
+    return `动作已运行超过 30 分钟，开始于 ${formatActionTime(action.startedAt)}；请检查服务日志或关联线程，避免重复执行同一外部操作。`;
+  }
+  if (action.actionType === 'delegate_openclaw') {
+    return 'OpenClaw 正在执行，页面会静默刷新结果；刷新页面后也会继续显示 running 状态。';
+  }
+  return '动作正在执行，页面会静默刷新结果；刷新页面后也会继续显示 running 状态。';
+}
+
+function formatActionError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function omitActionEntry<T>(map: Record<string, T>, id: string): Record<string, T> {
+  const next = { ...map };
+  delete next[id];
+  return next;
 }
 
 function delegationModeLabel(action: RuntimeAction) {
@@ -374,6 +695,22 @@ function isScheduledDue(action: RuntimeAction): boolean {
   return Boolean(isAutoExecutable(action) && scheduledMs && scheduledMs <= Date.now());
 }
 
+function isStaleRunningAction(action: RuntimeAction): boolean {
+  if (action.queueStatus !== 'running') return false;
+  const startedMs = normalizeEpochMs(action.startedAt);
+  if (!startedMs) return false;
+  return Date.now() - startedMs > 30 * 60 * 1000;
+}
+
+function isAttentionAction(action: RuntimeAction): boolean {
+  return (
+    action.queueStatus === 'failed' ||
+    action.queueStatus === 'dead_letter' ||
+    isScheduledDue(action) ||
+    (action.queueStatus === 'queued' && (action.requiresApproval || action.riskLevel === 'high'))
+  );
+}
+
 function scheduledExecutionLabel(action: RuntimeAction): string {
   if (action.scheduledAt) {
     const base = formatActionTime(action.scheduledAt);
@@ -459,6 +796,96 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   align-items: center;
 }
 
+.queue-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.queue-stat {
+  min-width: 0;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.queue-stat strong {
+  display: block;
+  margin: 0.2rem 0;
+  color: #f8fafc;
+  font-size: 1.45rem;
+  line-height: 1.1;
+}
+
+.queue-stat.info {
+  border-color: rgba(56, 189, 248, 0.22);
+}
+
+.queue-stat.success {
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.queue-stat.warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(120, 53, 15, 0.14);
+}
+
+.queue-stat.danger {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(127, 29, 29, 0.14);
+}
+
+.stat-label,
+.stat-desc {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.stat-desc {
+  color: #cbd5e1;
+}
+
+.queue-guidance {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+  padding: 0.8rem 0.95rem;
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: #dbeafe;
+  line-height: 1.5;
+}
+
+.queue-guidance strong {
+  flex: 0 0 auto;
+  color: #f8fafc;
+}
+
+.queue-guidance.success {
+  border-color: rgba(34, 197, 94, 0.22);
+  color: #dcfce7;
+}
+
+.queue-guidance.warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fde68a;
+}
+
+.queue-guidance.danger {
+  border-color: rgba(248, 113, 113, 0.32);
+  color: #fecaca;
+}
+
+.queue-load-error {
+  margin-bottom: 1rem;
+}
+
 .filter-select,
 .refresh-btn,
 .tiny-btn {
@@ -478,6 +905,17 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   cursor: pointer;
   background: rgba(30, 41, 59, 0.84);
   color: #f8fafc;
+}
+
+.tiny-btn:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.tiny-btn.loading {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .tiny-btn.danger {
@@ -518,7 +956,14 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
 .button-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem;
+  gap: 0.45rem;
+}
+
+.head-badges {
+  align-self: flex-start;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 60%;
 }
 
 .card-meta {
@@ -528,46 +973,61 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
 }
 
 .badge {
-  padding: 0.18rem 0.58rem;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 0.22rem 0.65rem;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
   background: rgba(59, 130, 246, 0.16);
   color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.24);
 }
 
 .badge.muted {
-  background: rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.14);
   color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.22);
 }
 
 .badge.queued {
   background: rgba(14, 165, 233, 0.16);
   color: #7dd3fc;
+  border-color: rgba(14, 165, 233, 0.28);
 }
 
 .badge.failed {
   background: rgba(239, 68, 68, 0.16);
   color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.28);
 }
 
 .badge.running {
   background: rgba(245, 158, 11, 0.16);
   color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.28);
 }
 
 .badge.scheduled {
   background: rgba(99, 102, 241, 0.18);
   color: #c4b5fd;
+  border-color: rgba(129, 140, 248, 0.3);
 }
 
 .badge.due {
   background: rgba(245, 158, 11, 0.2);
   color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.36);
 }
 
 .badge.succeeded {
   background: rgba(34, 197, 94, 0.16);
   color: #86efac;
+  border-color: rgba(34, 197, 94, 0.28);
 }
 
 .schedule-panel {
@@ -648,6 +1108,29 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   word-break: break-all;
 }
 
+.running-box {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.8rem;
+  background: rgba(120, 53, 15, 0.18);
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  color: #fde68a;
+  line-height: 1.5;
+}
+
+.running-dot {
+  width: 0.52rem;
+  height: 0.52rem;
+  border-radius: 999px;
+  background: #f59e0b;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+  animation: pulse 1.4s ease-out infinite;
+  flex: 0 0 auto;
+}
+
 .button-row {
   margin-top: 0.9rem;
 }
@@ -657,6 +1140,13 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   text-align: center;
   padding: 3rem 1rem;
   color: #94a3b8;
+}
+
+.empty-detail {
+  max-width: 34rem;
+  margin: 0.45rem auto 1rem;
+  color: #cbd5e1;
+  line-height: 1.6;
 }
 
 .loading-spinner {
@@ -669,14 +1159,47 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   margin: 0 auto 1rem;
 }
 
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+  }
+
+  70% {
+    box-shadow: 0 0 0 0.55rem rgba(245, 158, 11, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
 @media (max-width: 900px) {
   .page-header,
   .card-head {
     flex-direction: column;
   }
 
+  .queue-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .queue-guidance {
+    flex-direction: column;
+  }
+
   .filters {
     flex-wrap: wrap;
+  }
+
+  .head-badges {
+    justify-content: flex-start;
+    max-width: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .queue-overview {
+    grid-template-columns: 1fr;
   }
 }
 </style>

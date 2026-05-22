@@ -385,6 +385,51 @@ test('collectJiraAutomationImportReviewSignals redacts sensitive and masked valu
   assert.ok(!note.includes('prod-api-token-123'));
 });
 
+test('collectJiraAutomationImportReviewSignals does not expose secret keyOrValue payloads', () => {
+  const rule = {
+    ...baseRule,
+    projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          headers: [
+            {
+              name: 'Authorization',
+              value: {
+                keyOrValue: 'https://hooks.example.com/SRC/hiddenSecretPath1234567890ABCD?token=prod-token-should-not-leak&owner=secret-owner@example.com {{issue.assignee.accountId}} project = SRC',
+                secret: true,
+              },
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const summary = summarizeJiraAutomationImportRule(rule);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+
+  assert.equal(summary.secretReferenceCount, 1);
+  assert.equal(summary.hardcodedUrlCount, 0);
+  assert.equal(summary.sourceProjectReferenceCount, 0);
+  assert.equal(summary.smartValueReferenceCount, 0);
+  assert.deepEqual(reviewSignals.secretReferences, ['hidden secret value']);
+  assert.deepEqual(reviewSignals.hardcodedUrls, []);
+  assert.deepEqual(reviewSignals.sourceProjectReferences, []);
+  assert.deepEqual(reviewSignals.smartValueReferences, []);
+  assert.ok(note.includes('Secrets (1): hidden secret value'));
+  assert.ok(!note.includes('prod-token-should-not-leak'));
+  assert.ok(!note.includes('hiddenSecretPath1234567890ABCD'));
+  assert.ok(!note.includes('secret-owner@example.com'));
+  assert.ok(!note.includes('{{issue.assignee.accountId}}'));
+});
+
 test('collectJiraAutomationImportReviewSignals redacts sensitive URL credentials and parameters', () => {
   const rule = {
     ...baseRule,

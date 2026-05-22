@@ -96,6 +96,12 @@ interface TaskSchedulerRunRecord {
   error?: string;
 }
 
+type MeetingPilotNotice = {
+  tone: 'info' | 'warning' | 'error';
+  message: string;
+  action?: 'options';
+};
+
 const TASK_CATEGORY_LABELS: Record<string, string> = {
   message_analysis: '消息',
   data_sync: '同步',
@@ -184,6 +190,61 @@ function formatTaskRunTrigger(
   if (trigger === 'manual') return '手动';
   if (trigger === 'startup') return '启动';
   return '排程';
+}
+
+function formatTaskRunDuration(durationMs?: number): string {
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
+    return '耗时未知';
+  }
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+  if (durationMs < 10_000) {
+    return `${(durationMs / 1000).toFixed(1)}s`;
+  }
+  return `${Math.round(durationMs / 1000)}s`;
+}
+
+function getTaskLatestRunSummary(task: TaskSchedulerTask):
+  | {
+      text: string;
+      className: 'success' | 'failed' | 'skipped';
+    }
+  | null {
+  const latestRun = Array.isArray(task.runHistory) ? task.runHistory[0] : null;
+  if (!latestRun) {
+    return null;
+  }
+
+  const className = latestRun.skipped
+    ? 'skipped'
+    : latestRun.success
+    ? 'success'
+    : 'failed';
+  const resultLabel = latestRun.skipped
+    ? '跳过'
+    : latestRun.success
+    ? '成功'
+    : '失败';
+  const detail = latestRun.skipped
+    ? latestRun.error || '已有执行中任务'
+    : latestRun.success
+    ? ''
+    : latestRun.error || '未知错误';
+  const parts = [
+    '最近一次',
+    `${formatTaskRunTrigger(latestRun.trigger)}${resultLabel}`,
+    formatTaskRunDuration(latestRun.durationMs),
+  ];
+
+  if (detail) {
+    parts.push(detail);
+  }
+
+  return {
+    text: parts.join(' · '),
+    className,
+  };
 }
 
 function formatTaskRunHistorySummary(task: TaskSchedulerTask): string {
@@ -386,6 +447,75 @@ function isMeetingPilotTranscriptPilotActive(
   );
 }
 
+function formatMeetingPilotCaptureError(error?: string): string {
+  const value = String(error || '').trim();
+  if (!value) return 'Capture 没有成功开始';
+  if (value === 'tabCapture_stream_unavailable') {
+    return 'Chrome 没有返回标签页录制授权';
+  }
+  if (/already recording meeting/i.test(value)) {
+    return '已有另一场会议正在录制';
+  }
+  if (/offscreen/i.test(value)) {
+    return '录制后台没有成功启动';
+  }
+  return value;
+}
+
+function buildMeetingPilotStartNotice(
+  response:
+    | {
+        success?: boolean;
+        session?: MeetingPilotSessionSnapshot;
+        activeRecording?: MeetingPilotSessionSnapshot;
+        panelError?: string;
+      }
+    | undefined,
+): MeetingPilotNotice {
+  if (response?.activeRecording) {
+    return {
+      tone: 'warning',
+      message: `已有会议正在录制：${
+        response.activeRecording.title || response.activeRecording.meetingId
+      }。请先停止那场会议，或切换到正在录制的 tab。`,
+    };
+  }
+
+  const session = response?.session;
+  if (session?.readiness && !session.readiness.canStartCapture) {
+    const blocker = session.readiness.blockers.find(Boolean);
+    const detail = blocker ? ` 阻断项：${blocker}` : '';
+    return {
+      tone: 'error',
+      message: `${
+        session.readiness.summary || 'Meeting Pilot 当前配置阻止开始 Capture'
+      }。${detail} 请打开 Meeting Pilot 配置页修复后重试。`,
+      action: 'options',
+    };
+  }
+
+  if (session?.capture?.kind === 'error') {
+    return {
+      tone: 'error',
+      message: `${formatMeetingPilotCaptureError(
+        session.capture.lastError,
+      )}。请确认原会议 tab 仍打开，再点击“开启会议全貌”重新授权。`,
+    };
+  }
+
+  if (response?.panelError) {
+    return {
+      tone: 'warning',
+      message: `Capture 已尝试启动，但会议面板没有打开：${response.panelError}。请从会议页右下角入口或 popup 再打开面板。`,
+    };
+  }
+
+  return {
+    tone: 'warning',
+    message: 'Capture 没有成功开始。请确认当前 tab 是 RingCentral 会议页，再重试。',
+  };
+}
+
 function formatTodayPilotDue(card: DayPilotCard): string {
   if (!card.dueAt) {
     if (card.state === 'now') return '现在';
@@ -453,6 +583,8 @@ const Popup = () => {
   const [meetingPilotSession, setMeetingPilotSession] =
     useState<MeetingPilotSessionSnapshot | null>(null);
   const [isMeetingPilotBusy, setIsMeetingPilotBusy] = useState(false);
+  const [meetingPilotNotice, setMeetingPilotNotice] =
+    useState<MeetingPilotNotice | null>(null);
   const [isExpandingEpic, setIsExpandingEpic] = useState(false);
   const [isAnalyzingSlides, setIsAnalyzingSlides] = useState(false);
   const [isScheduleUpdating, setIsScheduleUpdating] = useState(false);
@@ -583,6 +715,7 @@ const Popup = () => {
   useEffect(() => {
     if (!activeRingCentralTab?.id) {
       setMeetingPilotSession(null);
+      setMeetingPilotNotice(null);
       return;
     }
 
@@ -815,6 +948,10 @@ const Popup = () => {
       console.info(
         '[Meeting Pilot][popup] no meeting tab resolved, falling back to active tab message',
       );
+      setMeetingPilotNotice({
+        tone: 'warning',
+        message: '没有找到当前 RingCentral 会议 tab。请切回会议页后再开启会议全貌。',
+      });
       sendMessageToActiveTab(
         { type: 'RADAR-POC-OPEN-PANEL' },
         'RADAR-POC-OPEN-PANEL',
@@ -827,6 +964,7 @@ const Popup = () => {
     }
 
     setIsMeetingPilotBusy(true);
+    setMeetingPilotNotice(null);
     try {
       if (isMeetingPilotCaptureActive(meetingPilotSession)) {
         await pushMeetingPilotSnapshotToTab(meetingPilotSession);
@@ -843,6 +981,11 @@ const Popup = () => {
         console.warn('[Meeting Pilot][popup] meeting id not found', {
           tabId: activeRingCentralTab.id,
           url: activeRingCentralTab.url,
+        });
+        setMeetingPilotNotice({
+          tone: 'warning',
+          message:
+            '当前 tab 还不是 RingCentral 会议房间页。请进入 /conf/on/ 会议页后再开启会议全貌。',
         });
         return;
       }
@@ -875,6 +1018,7 @@ const Popup = () => {
       }
 
       if (response?.success) {
+        setMeetingPilotNotice(null);
         window.close();
       } else {
         if (response?.activeRecording) {
@@ -898,6 +1042,7 @@ const Popup = () => {
             }
           }
         }
+        setMeetingPilotNotice(buildMeetingPilotStartNotice(response));
         console.warn('[Meeting Pilot][popup] start capture did not succeed', {
           response,
           capture: response?.session?.capture,
@@ -906,9 +1051,22 @@ const Popup = () => {
       }
     } catch (error) {
       console.error('[Meeting Pilot][popup] failed to open panorama', error);
+      setMeetingPilotNotice({
+        tone: 'error',
+        message: `开启会议全貌失败：${String(
+          (error as Error)?.message || error,
+        )}。请确认会议页仍打开后重试。`,
+      });
     } finally {
       setIsMeetingPilotBusy(false);
     }
+  };
+
+  const openMeetingPilotOptions = () => {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('options.html#meeting-pilot-config'),
+      active: true,
+    });
   };
 
   const openTopicWindow = () => {
@@ -1495,6 +1653,7 @@ const Popup = () => {
                 ? '启用'
                 : '停用';
             const runHistorySummary = formatTaskRunHistorySummary(task);
+            const latestRunSummary = getTaskLatestRunSummary(task);
             const actionHint = formatTaskActionHint(task);
             return (
               <div className="task-row" key={task.id} title={task.description}>
@@ -1536,6 +1695,14 @@ const Popup = () => {
                   >
                     {formatTaskResult(task)}
                   </div>
+                  {latestRunSummary && (
+                    <div
+                      className={`task-latest-run ${latestRunSummary.className}`}
+                      title={latestRunSummary.text}
+                    >
+                      {latestRunSummary.text}
+                    </div>
+                  )}
                   {runHistorySummary && (
                     <div
                       className="task-history"
@@ -1669,19 +1836,34 @@ const Popup = () => {
       </button>
 
       {isRingCentralMeeting && (
-        <button
-          onClick={handleOpenRadar}
-          className="radar-button"
-          disabled={isMeetingPilotBusy}
-        >
-          {isMeetingPilotBusy
-            ? '处理中...'
-            : isMeetingPilotCaptureActive(meetingPilotSession)
-            ? '打开会议全貌'
-            : isMeetingPilotTranscriptPilotActive(meetingPilotSession)
-            ? '启用画面理解与纪要'
-            : '开启会议全貌'}
-        </button>
+        <>
+          <button
+            onClick={handleOpenRadar}
+            className="radar-button"
+            disabled={isMeetingPilotBusy}
+          >
+            {isMeetingPilotBusy
+              ? '处理中...'
+              : isMeetingPilotCaptureActive(meetingPilotSession)
+              ? '打开会议全貌'
+              : isMeetingPilotTranscriptPilotActive(meetingPilotSession)
+              ? '启用画面理解与纪要'
+              : '开启会议全貌'}
+          </button>
+          {meetingPilotNotice ? (
+            <div
+              className={`meeting-pilot-notice ${meetingPilotNotice.tone}`}
+              role={meetingPilotNotice.tone === 'error' ? 'alert' : 'status'}
+            >
+              <span>{meetingPilotNotice.message}</span>
+              {meetingPilotNotice.action === 'options' ? (
+                <button type="button" onClick={openMeetingPilotOptions}>
+                  打开配置
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </>
       )}
 
       <section className="today-pilot-panel">
@@ -2335,6 +2517,28 @@ const Popup = () => {
                     color: #475569;
                 }
 
+                .task-latest-run {
+                    margin-top: 2px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    color: #475569;
+                    font-size: 10px;
+                    font-weight: 600;
+                }
+
+                .task-latest-run.success {
+                    color: #166534;
+                }
+
+                .task-latest-run.failed {
+                    color: #b91c1c;
+                }
+
+                .task-latest-run.skipped {
+                    color: #475569;
+                }
+
                 .task-history {
                     margin-top: 2px;
                     overflow: hidden;
@@ -2652,15 +2856,67 @@ const Popup = () => {
                     transition: all 0.3s ease;
                  }
                  
-                 .scheduled-button:hover {
-                    transform: translateY(-1px);
-                    box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
-                 }
-                 
-                 .slides-button.main-button {
-                    background-color: #4285F4; /* Google blue */
-                    color: white;
-                 }
+	                 .scheduled-button:hover {
+	                    transform: translateY(-1px);
+	                    box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
+	                 }
+
+	                 .meeting-pilot-notice {
+	                    width: calc(100% - 16px);
+	                    margin: 6px 8px 0;
+	                    padding: 8px 10px;
+	                    box-sizing: border-box;
+	                    border-radius: 6px;
+	                    border: 1px solid #d4d4d8;
+	                    background: #fafafa;
+	                    color: #3f3f46;
+	                    font-size: 11px;
+	                    line-height: 1.45;
+	                    display: flex;
+	                    align-items: flex-start;
+	                    gap: 8px;
+	                }
+
+	                .meeting-pilot-notice.error {
+	                    border-color: #fecaca;
+	                    background: #fff1f2;
+	                    color: #991b1b;
+	                }
+
+	                .meeting-pilot-notice.warning {
+	                    border-color: #fde68a;
+	                    background: #fffbeb;
+	                    color: #92400e;
+	                }
+
+	                .meeting-pilot-notice.info {
+	                    border-color: #bfdbfe;
+	                    background: #eff6ff;
+	                    color: #1e3a8a;
+	                }
+
+	                .meeting-pilot-notice span {
+	                    min-width: 0;
+	                    flex: 1;
+	                }
+
+	                .meeting-pilot-notice button {
+	                    width: auto;
+	                    min-width: 58px;
+	                    margin: 0;
+	                    padding: 4px 7px;
+	                    border-radius: 4px;
+	                    border: 1px solid currentColor;
+	                    background: rgba(255, 255, 255, 0.64);
+	                    color: inherit;
+	                    font-size: 11px;
+	                    white-space: nowrap;
+	                }
+
+		                 .slides-button.main-button {
+	                    background-color: #4285F4; /* Google blue */
+	                    color: white;
+	                 }
                  
                  .slides-button.main-button:hover {
                     background-color: #2a75f3;

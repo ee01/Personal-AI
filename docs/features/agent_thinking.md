@@ -1,6 +1,6 @@
 # Agent Thinking 功能概览
 
-最后更新: 2026-05-18
+最后更新: 2026-05-21
 
 ## 功能定位
 
@@ -11,6 +11,18 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - 消息批量分析: `messageDealing.ts` 会把群消息转成 message group 后调用 `IntelligentAgent.analyze(...)`。
 - 项目/网页分析: background、Google Slides、网页智能等路径会复用同一个分析入口。
 - Options 演示页: `src/options.tsx` + `src/agent-visualizer.tsx` 展示工具目录、思考步骤和结果摘要。
+
+## 大白话运行逻辑
+
+Agent Thinking 像一个“先看材料、再决定要不要查工具、最后给结论”的分析员。它不是每次都随意调用工具，而是先根据输入内容判断缺什么证据，再从已注册的只读工具里补上下文。
+
+结果受这些因素影响，按重要性大致是：
+
+1. 输入本身是否清楚：消息、网页或项目描述越完整，初始判断越稳。
+2. 工具目录是否真实可用：当前只有 `historySearch` 和 `jiraQuery` 是实际注册工具，未注册工具会被阻断。
+3. `maxActions` 预算：预算越小，越可能只做少量补证后结束；达到上限会明确记录 `max_actions_reached`。
+4. 工具返回证据质量：空证据、失败、重复调用、缺参数都会进入 trace，而不是伪装成成功。
+5. 安全元数据：需要人工确认或中高风险的工具不会直接执行。
 
 ## 当前实现
 
@@ -103,6 +115,19 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - 复制反馈区会区分“批准 key”和“审核包”的复制结果，降低多按钮共用状态造成的操作歧义。
 - Options 演示的流程图不再在运行中提前显示“最终决策”；只有出现 `finish`、`max_actions_reached` 或 `stopped` 这类终止步骤后才显示终止节点，避免审批用户误以为仍在运行的 trace 已完成。
 
+2026-05-20 状态:
+
+- 被阻断、待确认、失败或跳过的工具调用不再触发存储/通知类最终决策更新；只有真实完成的 `messageStore`/`storeMessage` 或 `notifier`/`messageNotification` 工具结果才会把 `shouldStore` / `shouldNotify` 置为 true，避免未注册或未批准动作污染结论。
+- 待确认动作队列新增“重跑配置”展示和“复制重跑配置”入口，直接给出最小 `approvedToolActionKeys` patch；审核包也会携带同一份 `retryConfigPatch`，让用户批准后更容易把精确 key 带回下一次运行。
+- Options 演示页覆盖复制 key、复制审核包和复制重跑配置三种反馈状态，避免审批路径只停留在说明文本。
+- 本轮外部复查确认，LangGraph、OpenAI Agents SDK 等 HITL 方案都把审批中断建模为可恢复状态，而不是单纯的按钮或 token；因此当前重跑配置只是轻量过渡，后续仍应落到持久 checkpoint / run state。
+- 处理结果卡片会同步读取待确认动作：当通知工具仍在等待人工确认时，结果区会显示“待确认动作未执行”，通知决策 badge 显示“待确认通知”，避免把未执行动作误读成最终无需通知。
+
+2026-05-21 状态:
+
+- Options 演示页的流程图节点新增摘要行；工具节点用状态 badge 展示成功/跳过/阻断/待确认等结果，同时把 `publicSummary` 中的调用意图放到节点详情里，用户不必展开时间线也能看到“为什么进入这个工具动作”。
+- 终止节点会展示 finish / stopped / max actions 的用户可见摘要，和运行检查里的状态建议互补，减少 trace 图只呈现结构、不呈现决策原因的问题。
+
 ## 处理流程
 
 1. 检测输入类型和消息格式。
@@ -117,6 +142,7 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - `meeting` 和 `document` 分支仍是占位实现，只返回基础示例结果。
 - 工具调用缺少持久 checkpoint，浏览器刷新或 service worker 中断后不能恢复同一次思考循环。
 - 高风险副作用动作已有执行前阻断、批准 key 和运行级审核队列；还没有真正可恢复的 approve/edit/reject 审批流。
+- 当前已能复制批准后的最小重跑配置，但尚未持久化被暂停的 run state；刷新页面或 service worker 中断后仍需要调用方重新发起分析并带上批准 key。
 - 思考过程已有摘要化主路径；待确认批准 key 会完整展示，工具返回仍在本地 UI 可展开，后续需要按权限/环境进一步分层。
 - 当前工具 guardrail 已覆盖注册表、必填参数和基础人审阻断；完整的可恢复审批队列、权限分组和敏感数据脱敏仍需后续分层。
 
@@ -136,6 +162,9 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - 参考 OpenTelemetry GenAI agent spans，后续如果输出结构化 trace，应把工具执行 span、证据数量、失败状态和用户可见诊断作为可计算字段，而不是只依赖中文展示文案。
 - 参考 LangGraph/OpenAI human-in-the-loop 的风险分级策略，后续可以把 `requiresHumanApproval` 升级为可恢复审批流，例如高风险工具允许 approve/edit/reject，中风险工具只允许 approve/reject，只读工具不打断。
 - 参考 OpenAI Agents SDK 和 LangChain HITL middleware 的 interrupt payload 设计，审批 UI 应持续展示完整 action request 与允许的 decision types，而不是只暴露一个批准 token。
+- 参考 OpenAI Agents SDK 的长审批状态序列化和 LangGraph 的 `thread_id`/checkpoint 恢复模型，后续应把当前审核包升级为真正的暂停运行对象，包含 run id、版本、待审工具参数、恢复入口和拒绝/编辑后的分支处理。
+- 参考 OpenTelemetry GenAI agent spans 和 Langfuse 的 OTel trace 结构，后续 trace 字段应保留 agent/version/conversation、工具执行状态、证据质量和审批状态，方便从 UI 诊断继续走向自动评估。
+- 参考 AutoGen Studio、LangSmith / AgentOps 这类调试体验，流程图应持续保留状态转移原因，而不只是展示“调用了哪个工具”；本轮已先把用户可见摘要放入节点详情，后续可升级为结构化 transition reason。
 
 ## 外部参考
 
@@ -153,6 +182,7 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 - [AgentTrace](https://arxiv.org/abs/2602.10133): 讨论 agent observability 应覆盖运行、认知和上下文三类结构化 telemetry。
 - [AgentOps](https://arxiv.org/abs/2411.05285): 从 AgentOps 生命周期角度整理 observability 应追踪的工件和数据。
 - [AgentTrace Causal Graph](https://arxiv.org/abs/2603.14688): 用执行日志重建因果图来定位多 Agent 失败根因，提示 trace 应保留可计算的故障信号。
+- [AutoGen Studio](https://arxiv.org/abs/2408.15247): 多 Agent 工作流 UI 强调交互式评估和调试，说明 trace 视图需要能快速定位状态转移与失败原因。
 - [Cloudflare Agents Human-in-the-Loop](https://developers.cloudflare.com/agents/concepts/human-in-the-loop/): 把高风险工具调用显式建模为审批或等待状态，适合作为后续人审层参考。
 
 ## Reminders 反馈
@@ -160,6 +190,10 @@ Agent Thinking 是 Personal AI 的通用分析编排层，核心实现位于 `sr
 2026-05-17 本轮通过 Reminders AppleScript 查询本机可见列表时未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 审批体验的开放提醒，也没有项目需要标记完成。
 
 2026-05-18 本轮再次通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入本轮 Agent Thinking 改进的开放提醒，也没有 Reminder 项目需要标记完成。
+
+2026-05-20 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 的开放提醒，也没有 Reminder 项目需要标记完成。
+
+2026-05-21 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 流程图体验的开放提醒，也没有 Reminder 项目需要标记完成。
 
 ## 验证
 
@@ -236,3 +270,17 @@ node tools/verify-agent-thinking-options-e2e.mjs
 - `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking 可视化、Options 和静态样式能进入 `dist/`。
 - `node tools/verify-agent-thinking-options-e2e.mjs` 通过，确认 Options 演示页显示“复制审核包”，并能点击复制审核包后看到成功或手动复制兜底反馈。
 - 2026-05-18 本轮追加覆盖: 流程图在待确认动作出现但最终结果尚未生成时不会显示“最终决策”，等待 `处理结果` 出现后才显示 1 个最终决策节点，且运行检查不再显示“正在运行”。
+
+2026-05-20 验证覆盖:
+
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖未注册 `messageNotification` 被阻断后不会把 `shouldNotify` 误置为 true，且不会写入 `usedTools`。
+- 同一脚本覆盖待确认动作生成 `retryConfigPatch`，审核包携带最小 `approvedToolActionKeys` 重跑配置。
+- `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 通过，确认 Options 演示页显示“复制重跑配置”和 `approvedToolActionKeys`，并能点击后看到成功或手动复制兜底反馈。
+- 2026-05-20 本轮追加覆盖: 结果摘要会把未执行的待确认通知显示为“待确认通知”，并明确提示“待确认动作未执行”，避免审批用户只看到“未通知”。
+
+2026-05-21 验证覆盖:
+
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖流程图节点 `detail` 会优先展示工具调用意图，并保留终止节点摘要。
+- `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 通过，确认 Options 演示页流程图工具节点展示调用意图摘要，且既有审批、阻断、证据不足和结果摘要路径没有回归。

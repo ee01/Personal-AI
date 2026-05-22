@@ -169,6 +169,10 @@ describe('OutreachEngine', () => {
     );
   }
 
+  function shanghaiTimestamp(localDateTime: string): number {
+    return Math.floor(new Date(`${localDateTime}+08:00`).getTime() / 1000);
+  }
+
   it('bridges ask_external_user action execution into an outreach session', async () => {
     const thread = threadRepo.upsertThread({
       topicKey: 'project:outreach',
@@ -318,7 +322,7 @@ describe('OutreachEngine', () => {
     expect(actionResults[0].summary).toContain('18:00');
   });
 
-  it('combines reply bursts, keeps the known answer, and queues external delegation for missing details', async () => {
+  it('combines reply bursts, keeps the goal open, and queues external delegation for missing details', async () => {
     const currentTs = Math.floor(Date.now() / 1000);
     const session = outreachRepo.createSession({
       originKind: 'scheduled_template',
@@ -372,7 +376,7 @@ describe('OutreachEngine', () => {
     await engine.runSchedulerCycle();
 
     const updatedSession = outreachRepo.getSessionById(session.id);
-    expect(updatedSession?.status).toBe('resolved');
+    expect(updatedSession?.status).toBe('waiting_reply');
     expect(updatedSession?.replyPostId).toBe('reply-4');
     expect(updatedSession?.replySender).toBe('Sophia (Jinmei) Lin');
     expect(updatedSession?.replyRawText).toBe(
@@ -586,7 +590,7 @@ describe('OutreachEngine', () => {
     ]);
   });
 
-  it('queues delegation when a reply only provides an external artifact without a direct answer', async () => {
+  it('queues delegation without resolving when a reply only provides an external artifact without a direct answer', async () => {
     const currentTs = Math.floor(Date.now() / 1000);
     const session = outreachRepo.createSession({
       originKind: 'manual_action',
@@ -619,7 +623,7 @@ describe('OutreachEngine', () => {
     await engine.runSchedulerCycle();
 
     const updatedSession = outreachRepo.getSessionById(session.id);
-    expect(updatedSession?.status).toBe('resolved');
+    expect(updatedSession?.status).toBe('waiting_reply');
     expect(updatedSession?.outcome?.resolutionState).toBe('insufficient');
     expect(updatedSession?.outcome?.recommendedAction).toBe(
       'delegate_openclaw',
@@ -675,6 +679,200 @@ describe('OutreachEngine', () => {
     expect(Number(template?.scheduleSpec.nextDispatchAt)).toBeGreaterThan(
       Math.floor(Date.now() / 1000),
     );
+  });
+
+  it('keeps weekly scheduled outreach occurrences on the configured local time', async () => {
+    vi.useFakeTimers();
+    const dueAt = shanghaiTimestamp('2026-05-19T10:36:00');
+    const previousDueAt = shanghaiTimestamp('2026-05-12T10:36:00');
+    vi.setSystemTime(new Date((dueAt + 60) * 1000));
+
+    try {
+      outreachRepo.upsertTemplate({
+        id: 'template-weekly-local',
+        sourceKind: 'scheduled_message',
+        sourceRefId: 'template-weekly-local',
+        sheetMessageId: 'template-weekly-local',
+        title: '每周外联',
+        questionTemplate: 'RCV AI 页面本周需要更新吗？',
+        contextTemplate: '如果需要，请说明更新点。',
+        targetType: 'group',
+        targetRef: 'chat-weekly-local',
+        scheduleSpec: {
+          scheduleDate: '2026-05-12',
+          scheduleTime: '10:36',
+          repeatEvery: 1,
+          repeatUnit: 'Week',
+          timezone: 'Asia/Shanghai',
+          nextDispatchAt: dueAt,
+        },
+        enabled: true,
+        maxFollowup: 1,
+        followupIntervalSeconds: 3600,
+        syncState: 'synced',
+      });
+
+      mockRingCentralSend('chat-weekly-local', 'post-weekly-local');
+
+      const engine = new OutreachEngine(db, userDataManager, 'test-user');
+      await engine.runSchedulerCycle();
+
+      const sessions = outreachRepo.listSessions({
+        templateId: 'template-weekly-local',
+        limit: 10,
+      }).items;
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].scheduledFor).toBe(dueAt);
+      expect(sessions[0].occurrenceKey).toBe(
+        '2026-05-19T10:36@Asia/Shanghai',
+      );
+      expect(sessions[0].occurrenceStartAt).toBe(previousDueAt);
+
+      const template = outreachRepo.getTemplateById('template-weekly-local');
+      expect(template?.scheduleSpec.nextDispatchAt).toBe(
+        shanghaiTimestamp('2026-05-26T10:36:00'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts a recurring occurrence after the previous occurrence terminal boundary', async () => {
+    vi.useFakeTimers();
+    const firstDueAt = shanghaiTimestamp('2026-05-12T10:36:00');
+    const firstResolvedAt = shanghaiTimestamp('2026-05-12T11:05:00');
+    const secondDueAt = shanghaiTimestamp('2026-05-19T10:36:00');
+    vi.setSystemTime(new Date((secondDueAt + 60) * 1000));
+
+    try {
+      outreachRepo.upsertTemplate({
+        id: 'template-weekly-boundary',
+        sourceKind: 'scheduled_message',
+        sourceRefId: 'template-weekly-boundary',
+        sheetMessageId: 'template-weekly-boundary',
+        title: '每周 RCV AI 外联',
+        questionTemplate: 'RCV AI 页面本周需要更新吗？',
+        contextTemplate: '只判断本周是否需要更新。',
+        targetType: 'group',
+        targetRef: 'chat-weekly-boundary',
+        scheduleSpec: {
+          scheduleDate: '2026-05-12',
+          scheduleTime: '10:36',
+          repeatEvery: 1,
+          repeatUnit: 'Week',
+          timezone: 'Asia/Shanghai',
+          nextDispatchAt: secondDueAt,
+        },
+        enabled: true,
+        maxFollowup: 1,
+        followupIntervalSeconds: 3600,
+        syncState: 'synced',
+      });
+
+      outreachRepo.createSession({
+        templateId: 'template-weekly-boundary',
+        originKind: 'scheduled_template',
+        targetType: 'group',
+        targetRef: 'chat-weekly-boundary',
+        targetResolutionStatus: 'resolved',
+        targetResolvedType: 'chat',
+        targetResolvedId: 'chat-weekly-boundary',
+        targetResolvedLabel: 'RCV AI',
+        targetResolvedChatId: 'chat-weekly-boundary',
+        renderedQuestion: 'RCV AI 页面上周需要更新吗？',
+        renderedContext: '上周的主动询问。',
+        status: 'resolved',
+        requiresApproval: false,
+        maxFollowup: 1,
+        followupIntervalSeconds: 3600,
+        scheduledFor: firstDueAt,
+        occurrenceKey: '2026-05-12T10:36@Asia/Shanghai',
+        occurrenceStartAt: shanghaiTimestamp('2026-05-05T10:36:00'),
+        createdAt: firstDueAt,
+        resolvedAt: firstResolvedAt,
+      });
+
+      let sendCalled = false;
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/restapi/oauth/token')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+          };
+        }
+        if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                id: 'self-ext-1',
+                name: 'Esone Qiu',
+                contact: {
+                  firstName: 'Esone',
+                  lastName: 'Qiu',
+                  email: 'test-user@ringcentral.com',
+                },
+              }),
+          };
+        }
+        if (
+          url.includes(
+            `/team-messaging/v1/chats/${encodeURIComponent('chat-weekly-boundary')}/posts?`,
+          )
+        ) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                records: [
+                  {
+                    id: 'first-week-answer',
+                    text: '上周不用更新 RCV AI 页面。',
+                    creator: { id: 'user-42', name: 'RCV Owner' },
+                    creationTime: new Date(
+                      shanghaiTimestamp('2026-05-12T10:55:00') * 1000,
+                    ).toISOString(),
+                  },
+                ],
+              }),
+          };
+        }
+        if (
+          url.includes(
+            `/team-messaging/v1/chats/${encodeURIComponent('chat-weekly-boundary')}/posts`,
+          )
+        ) {
+          sendCalled = true;
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ id: 'post-second-week' }),
+          };
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      });
+
+      const engine = new OutreachEngine(db, userDataManager, 'test-user');
+      await engine.runSchedulerCycle();
+
+      const sessions = outreachRepo.listSessions({
+        templateId: 'template-weekly-boundary',
+        limit: 10,
+      }).items;
+      const current = sessions.find(
+        (item) => item.occurrenceKey === '2026-05-19T10:36@Asia/Shanghai',
+      );
+      expect(current?.occurrenceStartAt).toBe(firstResolvedAt);
+      expect(sendCalled).toBe(true);
+      expect(current?.status).toBe('waiting_reply');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('advances scheduled templates across selected weekdays and stops at the end date', async () => {
@@ -887,6 +1085,99 @@ describe('OutreachEngine', () => {
       .listEventsBySession(session.id, 20)
       .map((event) => event.eventType);
     expect(eventTypes).toContain('resolved_without_dispatch');
+  });
+
+  it('does not resolve before dispatch when the precheck only has a partial lead with open questions', async () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'group',
+      targetRef: 'chat-partial-precheck',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedId: 'chat-partial-precheck',
+      targetResolvedLabel: 'RCV AI Team',
+      targetResolvedChatId: 'chat-partial-precheck',
+      renderedQuestion: 'RCV AI 页面是否需要更新？',
+      renderedContext: '需要对方明确回答本次是否要更新页面。',
+      status: 'scheduled',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      createdAt: currentTs - 600,
+      nextCheckAt: currentTs - 5,
+    });
+
+    let sendCalled = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/restapi/oauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
+        };
+      }
+      if (url.endsWith('/restapi/v1.0/account/~/extension/~')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'self-ext-1',
+              name: 'Esone Qiu',
+              contact: {
+                firstName: 'Esone',
+                lastName: 'Qiu',
+                email: 'test-user@ringcentral.com',
+              },
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-partial-precheck')}/posts?`,
+        )
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              records: [
+                {
+                  id: 'partial-lead',
+                  text: '可以先看 https://example.com/rcv-ai，但对方未直接回答是否需要更新 RCV AI 页面，暂无明确结论。',
+                  creator: { id: 'user-42', name: 'RCV Owner' },
+                  creationTime: new Date((currentTs - 120) * 1000).toISOString(),
+                },
+              ],
+            }),
+        };
+      }
+      if (
+        url.includes(
+          `/team-messaging/v1/chats/${encodeURIComponent('chat-partial-precheck')}/posts`,
+        )
+      ) {
+        sendCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'post-partial-precheck' }),
+        };
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.runSchedulerCycle();
+
+    const updated = outreachRepo.getSessionById(session.id);
+    expect(sendCalled).toBe(true);
+    expect(updated?.status).toBe('waiting_reply');
+    expect(updated?.outcome?.answerResolutionPhase).toBeUndefined();
   });
 
   it('suppresses dispatch when the same chat already contains a recent Q&A before template creation', async () => {
@@ -1892,6 +2183,7 @@ describe('OutreachEngine', () => {
       groupName: 'Release room',
       followupIntervalSeconds: 86400,
       maxFollowup: 1,
+      context: '确认 release owner 是否已经定下来。',
     });
 
     expect(session.originKind).toBe('message_reaction');
@@ -1914,14 +2206,16 @@ describe('OutreachEngine', () => {
       followupCount: 1,
     });
 
-    const markerTypes = engine
-      .listGlipMessageMarkers()
-      .items.map((marker) => ({
+    const markers = engine.listGlipMessageMarkers().items;
+    const markerTypes = markers.map((marker) => ({
         type: marker.type,
         label: marker.label,
         chatId: marker.chatId,
         postId: marker.postId,
       }));
+    const initialMarker = markers.find(
+      (marker) => marker.type === 'outreach_initial_ask',
+    );
 
     expect(markerTypes).toContainEqual({
       type: 'outreach_initial_ask',
@@ -1929,6 +2223,7 @@ describe('OutreachEngine', () => {
       chatId: 'chat-1',
       postId: 'post-1',
     });
+    expect(initialMarker?.tooltip).toBe('确认 release owner 是否已经定下来。');
     expect(markerTypes).toContainEqual({
       type: 'outreach_followup',
       label: 'AI追问',

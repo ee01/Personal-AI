@@ -33,6 +33,7 @@ import type {
   BridgeAssistantAskRequest,
   BridgeBlockingReason,
   BridgeMemoryGrowthSummary,
+  BridgeServiceStatus,
   BridgeRememberRequest,
   BridgeStatus,
   BridgeSyncReadiness,
@@ -104,6 +105,34 @@ function uniqueReasons(
   );
 }
 
+function extractDoubaoThreadId(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\/(?:chat|thread)\/([^/?#]+)/);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function hasUsableDoubaoThreadUrl(url?: string): boolean {
+  return Boolean(extractDoubaoThreadId(url));
+}
+
+function bindingHasUsableThreadUrl(
+  status: BridgeServiceStatus,
+  bindingType: BindingType,
+): boolean {
+  const binding = status.bindings[bindingType];
+  if (!binding?.threadId) return false;
+  const record = status.threads.find((thread) => thread.id === binding.threadId);
+  return (
+    hasUsableDoubaoThreadUrl(binding.threadUrl) ||
+    hasUsableDoubaoThreadUrl(record?.url)
+  );
+}
+
 function buildBlockingReasons(
   settings: BridgeSettingsPayload['effective'],
   status: Awaited<ReturnType<DoubaoBridgeService['getStatus']>>,
@@ -144,18 +173,18 @@ function buildBlockingReasons(
     });
   }
 
-  if (!status.bindings.memory_sync) {
+  if (!bindingHasUsableThreadUrl(status, 'memory_sync')) {
     reasons.push({
       code: 'memory_sync_not_bound',
-      message: '长期记忆线程尚未绑定',
+      message: '长期记忆线程尚未绑定，或绑定缺少可打开的豆包会话链接',
       syncKinds: ['stableMemory'],
     });
   }
 
-  if (!status.bindings.mobile_context) {
+  if (!bindingHasUsableThreadUrl(status, 'mobile_context')) {
     reasons.push({
       code: 'mobile_context_not_bound',
-      message: '手机对话尚未绑定',
+      message: '手机对话尚未绑定，或绑定缺少可打开的豆包会话链接',
       syncKinds: ['mobileBriefing', 'reminderSync'],
     });
   }
@@ -264,8 +293,11 @@ async function buildStatus(
       ),
       autoSyncEnabled: settingsPayload.effective.autoSync,
       doubaoConnected: baseStatus.authStatus === 'connected',
-      memorySyncBound: Boolean(baseStatus.bindings.memory_sync),
-      mobileContextBound: Boolean(baseStatus.bindings.mobile_context),
+      memorySyncBound: bindingHasUsableThreadUrl(baseStatus, 'memory_sync'),
+      mobileContextBound: bindingHasUsableThreadUrl(
+        baseStatus,
+        'mobile_context',
+      ),
     },
   };
 }

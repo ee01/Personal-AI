@@ -154,7 +154,29 @@
     
     <div v-else-if="entities.length > 0" class="search-results">
       <div class="results-summary">
-        <span class="results-count">找到 {{ entities.length }} 个相关结果</span>
+        <div class="results-overview">
+          <span class="results-count">找到 {{ entities.length }} 个相关结果</span>
+          <span v-if="scopeBreakdownLabel" class="results-scope-breakdown">
+            命中范围: {{ scopeBreakdownLabel }}
+          </span>
+          <div
+            v-if="recallChannelDiagnostics.length"
+            class="channel-diagnostics"
+            aria-label="召回通道状态"
+          >
+            <span
+              v-for="diagnostic in recallChannelDiagnostics"
+              :key="diagnostic.channel"
+              :class="[
+                'channel-diagnostic',
+                `channel-diagnostic-${diagnostic.tone}`,
+              ]"
+              :title="diagnostic.title"
+            >
+              {{ diagnostic.label }}
+            </span>
+          </div>
+        </div>
         <div class="results-filters">
           <button 
             v-for="type in availableTypes" 
@@ -332,6 +354,8 @@ import type {
 } from '../../services/MemoryServiceClient';
 import {
   MEMORY_RESULT_TYPE_CONFIG,
+  formatScopeBreakdownLabel,
+  formatRecallChannelDiagnostics,
   getRecallChannelLabel,
   getResultChannels,
   getResultMeta,
@@ -407,6 +431,16 @@ const currentScopeValue = computed(() =>
 
 const currentScopeLabel = computed(() =>
   getScopeLabel(currentScopeValue.value),
+);
+
+const scopeBreakdownLabel = computed(() =>
+  formatScopeBreakdownLabel(entities.value),
+);
+
+const recallChannelDiagnostics = computed(() =>
+  formatRecallChannelDiagnostics(
+    searchContext.value.askResult?.channelDiagnostics,
+  ),
 );
 
 const canBroadenSearchScope = computed(
@@ -1074,9 +1108,68 @@ const handleResultClick = (entity: any) => {
   gap: 1rem;
 }
 
+.results-overview {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .results-count {
   color: #94a3b8;
   font-size: 0.875rem;
+}
+
+.results-scope-breakdown {
+  color: #cbd5e1;
+  font-size: 0.875rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.channel-diagnostics {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.channel-diagnostic {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  padding: 0.28rem 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.42);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.channel-diagnostic-ok {
+  border-color: rgba(34, 197, 94, 0.34);
+  color: #bbf7d0;
+  background: rgba(22, 163, 74, 0.14);
+}
+
+.channel-diagnostic-warning {
+  border-color: rgba(245, 158, 11, 0.38);
+  color: #fde68a;
+  background: rgba(146, 64, 14, 0.2);
+}
+
+.channel-diagnostic-danger {
+  border-color: rgba(248, 113, 113, 0.42);
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.22);
+}
+
+.channel-diagnostic-muted {
+  color: #94a3b8;
 }
 
 .results-filters {

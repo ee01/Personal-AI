@@ -25,6 +25,7 @@ import {
   compareProjectsByDashboardPriority,
   filterProjectsByDashboardView,
   getProjectDashboardViewFilter,
+  mergeWatchedProjectsIntoDashboard,
   parseProjectDashboardLaunchContext,
   projectMatchesDashboardLaunchContext,
   rankProjectSuggestionNames,
@@ -35,19 +36,28 @@ const storageState: Record<string, any> = {};
 (globalThis as any).chrome = {
   storage: {
     local: {
-      async get(keys?: string | string[] | Record<string, any>) {
-        if (!keys) return { ...storageState };
-        if (typeof keys === 'string') return { [keys]: storageState[keys] };
-        if (Array.isArray(keys)) {
-          return keys.reduce<Record<string, any>>((acc, key) => {
+      async get(keys?: string | string[] | Record<string, any>, callback?: (result: Record<string, any>) => void) {
+        let result: Record<string, any>;
+        if (!keys) {
+          result = { ...storageState };
+        } else if (typeof keys === 'string') {
+          result = { [keys]: storageState[keys] };
+        } else if (Array.isArray(keys)) {
+          result = keys.reduce<Record<string, any>>((acc, key) => {
             acc[key] = storageState[key];
             return acc;
           }, {});
+        } else {
+          result = Object.keys(keys).reduce<Record<string, any>>((acc, key) => {
+            acc[key] = storageState[key] ?? keys[key];
+            return acc;
+          }, {});
         }
-        return Object.keys(keys).reduce<Record<string, any>>((acc, key) => {
-          acc[key] = storageState[key] ?? keys[key];
-          return acc;
-        }, {});
+        if (callback) {
+          callback(result);
+          return undefined;
+        }
+        return result;
       },
       async set(items: Record<string, any>) {
         Object.assign(storageState, items);
@@ -561,6 +571,19 @@ function verifyProjectTaskRiskSummary() {
   assert.deepEqual(sourceSummary.jiraKeys, ['SDK-42']);
   assert.deepEqual(sourceSummary.platformSourceLabels, ['QA blocked · Dana', 'SDK Jira SDK-42']);
   assert.deepEqual(sourceSummary.sourceLabels, ['QA blocked · Dana', 'SDK Jira SDK-42']);
+
+  const emptyPlatformSourceSummary = buildProjectTaskSourceSummary({
+    id: 'empty-platform-source',
+    type: 'task',
+    title: 'Empty platform source',
+    status: 'progress',
+    platforms: {
+      qa: { status: '', assignee: ' ', jira: ' ' },
+    },
+  } as any);
+
+  assert.equal(emptyPlatformSourceSummary.hasSource, false);
+  assert.deepEqual(emptyPlatformSourceSummary.sourceLabels, []);
 }
 
 function verifyProjectDataQualitySummary() {
@@ -977,20 +1000,168 @@ async function verifyBlankProjectNameIsRejected() {
 }
 
 async function verifySyncReadinessIsExplicitAboutLocalData() {
-  const manager = new DashboardDataManager();
-  const result = await manager.syncProjectData('all');
+  storageState.projectDashboardFishboneProjects = {
+    version: 1,
+    savedAt: Date.now(),
+    projects: [
+      {
+        id: 'existing-local',
+        name: 'Existing Local',
+        description: 'Already tracked locally',
+        milestones: [],
+        tasks: [],
+      },
+    ],
+  };
 
-  assert.equal(result.success, true);
-  assert.match(result.summary, /真实数据源尚未接入/);
-  assert.equal(Number.isNaN(Date.parse(result.checkedAt)), false);
-  assert.deepEqual(
-    result.sources.map((source) => `${source.label}:${source.status}:${source.configured}`),
-    ['Jira:not_configured:false', 'GitHub:not_configured:false', 'Confluence:not_configured:false'],
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    assert.match(String(url), /\/projects\/watched$/);
+    return new Response(JSON.stringify([
+      {
+        id: 'existing-local',
+        name: 'Existing Local',
+        description: 'Already tracked in Memory Service',
+        isActive: true,
+        priority: 5,
+        createdAt: 1,
+      },
+      {
+        id: 'memory-service-project',
+        name: 'Memory Service Project',
+        description: 'Imported from watched projects',
+        isActive: true,
+        priority: 9,
+        createdAt: 2,
+      },
+      {
+        id: 'inactive-project',
+        name: 'Inactive Project',
+        isActive: false,
+        priority: 1,
+        createdAt: 3,
+      },
+    ]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  const manager = new DashboardDataManager();
+
+  try {
+    const result = await manager.syncProjectData('all');
+
+    assert.equal(result.success, true);
+    assert.match(result.summary, /新增 1 个本地工作台/);
+    assert.equal(Number.isNaN(Date.parse(result.checkedAt)), false);
+    assert.deepEqual(
+      result.sources.map((source) => `${source.label}:${source.status}:${source.configured}`),
+      [
+        'Memory Service:ready:true',
+        'Jira:not_configured:false',
+        'GitHub:not_configured:false',
+        'Confluence:not_configured:false',
+      ],
+    );
+    assert.deepEqual(
+      result.sources.map((source) => Boolean(source.detail && source.nextStep)),
+      [true, true, true, true],
+    );
+    assert.deepEqual(
+      result.sources.map((source) => source.badge),
+      ['可读取', '未接入', '未接入', '未接入'],
+    );
+    assert.deepEqual(result.sources[0].highlights, [
+      '新增：Memory Service Project',
+      '已匹配：Existing Local',
+    ]);
+    assert.match(result.sources[0].boundaries?.join('\n') || '', /不反写 Memory Service/);
+    assert.match(result.sources[1].boundaries?.join('\n') || '', /不会读取 Jira/);
+    assert.match(result.sources[0].detail, /新增：Memory Service Project/);
+    assert.match(result.sources[0].detail, /已匹配：Existing Local/);
+
+    const saved = storageState.projectDashboardFishboneProjects;
+    assert.equal(saved.projects.length, 2);
+    assert.equal(saved.projects.some((project: any) => project.name === 'Memory Service Project'), true);
+    assert.match(
+      saved.projects.find((project: any) => project.name === 'Memory Service Project')?.description,
+      /来自 Memory Service 关注项目/,
+    );
+    assert.equal(saved.projects.some((project: any) => project.name === 'Inactive Project'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function verifySyncReadinessReportsMemoryFailure() {
+  storageState.projectDashboardFishboneProjects = {
+    version: 1,
+    savedAt: Date.now(),
+    projects: [],
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error('memory offline');
+  }) as typeof fetch;
+
+  const manager = new DashboardDataManager();
+
+  try {
+    const result = await manager.syncProjectData('all');
+    const memorySource = result.sources[0];
+
+    assert.equal(result.success, true);
+    assert.match(result.summary, /Memory Service 关注项目暂不可用/);
+    assert.equal(memorySource.source, 'memory');
+    assert.equal(memorySource.configured, true);
+    assert.equal(memorySource.status, 'unavailable');
+    assert.equal(memorySource.badge, '暂不可用');
+    assert.match(memorySource.detail, /memory offline/);
+    assert.match(memorySource.boundaries?.join('\n') || '', /不会清空或覆盖项目/);
+    assert.equal(memorySource.highlights, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+function verifyWatchedProjectMergeKeepsExistingProjects() {
+  const reviewedAt = new Date('2026-05-19T08:00:00+08:00');
+  const result = mergeWatchedProjectsIntoDashboard(
+    [
+      {
+        id: 'launch-alpha',
+        name: 'Launch Alpha',
+        milestones: [],
+        tasks: [],
+      },
+    ] as any,
+    [
+      {
+        id: 'memory-alpha',
+        name: 'Alpha Memory',
+        aliases: ['Launch Alpha'],
+        isActive: true,
+      },
+      {
+        id: 'memory-beta',
+        name: 'Memory Beta',
+        description: 'Needs local planning',
+        isActive: true,
+      },
+    ],
+    { reviewedAt },
   );
-  assert.deepEqual(
-    result.sources.map((source) => Boolean(source.detail && source.nextStep)),
-    [true, true, true],
-  );
+
+  assert.equal(result.watchedProjectCount, 2);
+  assert.equal(result.matchedProjectCount, 1);
+  assert.equal(result.createdProjectCount, 1);
+  assert.deepEqual(result.createdProjectNames, ['Memory Beta']);
+  assert.equal(result.projects.length, 2);
+  assert.equal(result.projects[1].id, 'memory-beta');
+  assert.equal(result.projects[1].description, 'Needs local planning（来自 Memory Service 关注项目）');
+  assert.equal(result.projects[1].lastStatusReviewAt, reviewedAt.toISOString());
 }
 
 function verifyProjectSuggestionsRespectPrompt() {
@@ -1074,6 +1245,8 @@ async function main() {
   verifyMilestoneDisplayFallbacks();
   await verifyBlankProjectNameIsRejected();
   await verifySyncReadinessIsExplicitAboutLocalData();
+  await verifySyncReadinessReportsMemoryFailure();
+  verifyWatchedProjectMergeKeepsExistingProjects();
   verifyProjectSuggestionsRespectPrompt();
   verifyProjectDashboardLaunchContext();
 

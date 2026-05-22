@@ -1,0 +1,1115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory Lens · 浮窗信息层级重设计</title>
+  <style>
+    :root {
+      --bg:        #f5f1ea;
+      --bg2:       #ece6da;
+      --surface:   #ffffff;
+      --ink:       #1c1a16;
+      --ink2:      #3a3530;
+      --muted:     #786f63;
+      --muted2:    #9b9286;
+      --line:      #d9cfc1;
+      --line2:     #ebe3d6;
+      --teal:      #0f766e;
+      --teal-s:    #d4ecea;
+      --teal-b:    rgba(15,118,110,.22);
+      --clay:      #b04e2d;
+      --clay-s:    #f4dccf;
+      --indigo:    #3949ab;
+      --indigo-s:  #e2e6ff;
+      --amber:     #8a5b00;
+      --amber-s:   #f6e2ba;
+      --green:     #2f7d32;
+      --green-s:   #dcefd9;
+      --red:       #b3261e;
+      --red-s:     #f9dcd8;
+      --grey-s:    #f1ece4;
+      --sh-card:   0 8px 24px rgba(48,36,22,.09);
+      --sh-lens:   0 16px 40px rgba(15,118,110,.18), 0 4px 12px rgba(48,36,22,.10);
+      --r:  10px;
+      --r2: 7px;
+      --r3: 14px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+              "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+      font-family: var(--font); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+    body { padding: 36px 24px 80px; }
+    .page { max-width: 1260px; margin: 0 auto; }
+
+    /* ── intro ── */
+    .intro {
+      display: flex; gap: 18px; align-items: flex-start;
+      padding: 26px 28px; margin-bottom: 36px;
+      background: linear-gradient(135deg,#fff 0%,#faf5ec 100%);
+      border: 1px solid var(--line); border-radius: var(--r3);
+      box-shadow: var(--sh-card);
+    }
+    .intro-mark {
+      flex: none; width: 52px; height: 52px; border-radius: 13px;
+      background: conic-gradient(from 220deg, var(--teal), var(--indigo), var(--clay), var(--teal));
+      display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 22px;
+      box-shadow: 0 8px 20px rgba(15,118,110,.28);
+    }
+    .intro h1 { margin: 0 0 7px; font-size: 24px; }
+    .intro p  { margin: 0 0 5px; color: var(--ink2); font-size: 13.5px; max-width: 900px; }
+    .intro .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+    /* ── section ── */
+    section { margin-bottom: 44px; }
+    .sec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .sec-head h2 { margin: 0; font-size: 18px; }
+    .sec-num {
+      width: 26px; height: 26px; border-radius: 8px;
+      background: var(--ink); color: #fff;
+      display: grid; place-items: center;
+      font-family: var(--mono); font-size: 12px; font-weight: 700;
+    }
+    .sec-tag {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      background: var(--bg2); color: var(--muted); border: 1px solid var(--line);
+    }
+    .lead { margin: -4px 0 16px; color: var(--muted); font-size: 13px; max-width: 880px; }
+
+    /* ── compare grid ── */
+    .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .cmp > div {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: var(--r); padding: 16px 18px;
+    }
+    .cmp h4 { margin: 0 0 10px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+    .cmp ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--ink2); }
+    .cmp li { margin-bottom: 5px; }
+    .cmp li code { font-family: var(--mono); font-size: 11.5px; }
+
+    /* ── badge ── */
+    .badge {
+      font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;
+      white-space: nowrap;
+    }
+    .badge.bad  { background: var(--red-s);   color: var(--red); }
+    .badge.good { background: var(--teal-s);  color: var(--teal); }
+    .badge.live { background: var(--green-s); color: var(--green); }
+    .badge.warn { background: var(--amber-s); color: var(--amber); }
+
+    /* ── relevance pill ── */
+    .rel {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; padding: 2px 7px; border-radius: 999px;
+      font-weight: 600; white-space: nowrap; flex: none;
+    }
+    .rel.strong { background: var(--teal-s);  color: var(--teal); }
+    .rel.maybe  { background: var(--amber-s); color: var(--amber); }
+    .rel.weak   { background: var(--grey-s);  color: var(--muted); }
+
+    /* ── chip ── */
+    .chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; padding: 2px 7px; border-radius: 999px;
+      background: var(--bg2); color: var(--ink2); border: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    .chip.m  { background: var(--teal-s);  color: var(--teal);  border-color: var(--teal-b); }
+    .chip.w  { background: var(--amber-s); color: var(--amber); border-color: rgba(138,91,0,.25); }
+
+    /* ── lens icon ── */
+    .lens-icon {
+      width: 44px; height: 44px; border-radius: 50%; flex: none;
+      background: conic-gradient(from 220deg, var(--teal), var(--indigo), var(--clay), var(--teal));
+      display: grid; place-items: center;
+      box-shadow: var(--sh-lens); position: relative; cursor: pointer;
+    }
+    .lens-icon .inner {
+      width: 18px; height: 18px; border-radius: 50%; background: #fff;
+      box-shadow: inset 0 0 0 4px var(--teal);
+    }
+    .lens-icon .dot {
+      position: absolute; top: -2px; right: -2px;
+      width: 13px; height: 13px; border-radius: 50%;
+      background: var(--clay); border: 2px solid #fff;
+    }
+
+    /* ── lens pop ── */
+    .lens-pop {
+      width: 100%; max-width: 360px;
+      background: var(--surface); border-radius: 13px;
+      border: 1px solid var(--line); box-shadow: var(--sh-lens);
+      overflow: hidden; font-size: 13px;
+    }
+    .lp-head {
+      display: flex; align-items: center; gap: 6px;
+      padding: 9px 10px 8px 12px;
+      background: linear-gradient(180deg,#fdfaf3 0%,#fff 100%);
+      border-bottom: 1px solid var(--line2); min-width: 0;
+    }
+    .lp-brand {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 10.5px; color: var(--muted); font-weight: 700;
+      letter-spacing: .05em; text-transform: uppercase;
+      white-space: nowrap; overflow: hidden; min-width: 0;
+    }
+    .lp-brand .mark {
+      width: 11px; height: 11px; border-radius: 50%; flex: none;
+      background: conic-gradient(from 220deg, var(--teal), var(--indigo), var(--clay), var(--teal));
+    }
+    .lp-actions { margin-left: auto; display: flex; gap: 1px; flex: none; }
+    .ib {
+      width: 26px; height: 26px; border-radius: 6px; border: 0;
+      background: transparent; color: var(--muted);
+      display: grid; place-items: center; cursor: pointer;
+      transition: 100ms ease; flex: none;
+    }
+    .ib:hover { background: var(--bg2); color: var(--ink); }
+    .ib svg { width: 13px; height: 13px; }
+    .ib svg.flip { transform: scaleY(-1); }
+
+    .why-row {
+      padding: 7px 12px 0;
+      display: flex; flex-wrap: wrap; gap: 4px 5px; align-items: center;
+    }
+    .why-lbl { font-size: 11px; color: var(--muted); }
+
+    .lp-body { padding: 7px 12px 10px; }
+    .lp-title {
+      font-size: 13.5px; font-weight: 600; color: var(--ink);
+      line-height: 1.35; margin: 4px 0 4px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .lp-summary {
+      font-size: 12.5px; color: var(--ink2); line-height: 1.5; margin: 0 0 7px;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .ev-block {
+      padding: 7px 9px; border-radius: 7px;
+      background: var(--bg2); border: 1px solid var(--line2); margin-top: 6px;
+    }
+    .ev-lbl {
+      font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+      color: var(--muted); display: flex; align-items: center; gap: 4px; margin-bottom: 3px;
+    }
+    .ev-lbl svg { width: 11px; height: 11px; }
+    .ev-body { font-size: 12px; color: var(--ink2); line-height: 1.4; }
+    .ev-who {
+      display: inline-block; font-size: 10.5px; padding: 0 5px; border-radius: 4px;
+      background: var(--surface); color: var(--indigo); border: 1px solid var(--indigo-s);
+      margin-right: 3px;
+    }
+    .ev-due {
+      display: inline-block; font-size: 10.5px; padding: 0 5px; border-radius: 4px;
+      background: var(--amber-s); color: var(--amber); margin-left: 3px;
+    }
+    .meta-row {
+      margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--line2);
+      display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+      font-size: 11px; color: var(--muted);
+    }
+    .meta-row .sep { color: var(--muted2); }
+    .meta-row a { color: var(--ink2); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; }
+    .meta-row a svg { width: 10px; height: 10px; }
+
+    .lp-foot {
+      display: flex; align-items: center; gap: 4px;
+      padding: 6px 8px 6px 10px;
+      border-top: 1px solid var(--line2); background: #fbfaf6;
+    }
+    .fb { display: flex; gap: 0; }
+    .fb .ib { width: 24px; height: 24px; }
+    .pager {
+      margin-left: auto; display: flex; align-items: center; gap: 3px;
+      font-size: 11px; color: var(--muted);
+    }
+    .pager button {
+      width: 22px; height: 22px; border: 0; background: transparent; color: var(--muted);
+      cursor: pointer; display: grid; place-items: center; border-radius: 4px;
+    }
+    .pager button:hover { background: var(--bg2); color: var(--ink); }
+    .pager svg { width: 10px; height: 10px; }
+
+    /* ── block-options popover ── */
+    .blk-pop {
+      width: 230px; background: var(--surface); border-radius: 10px;
+      border: 1px solid var(--line); box-shadow: var(--sh-card); padding: 5px;
+    }
+    .blk-pop h4 {
+      margin: 0; padding: 5px 9px;
+      font-size: 10.5px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: .05em; font-weight: 700;
+    }
+    .blk-pop ul { margin: 0; padding: 0; list-style: none; }
+    .blk-pop li {
+      padding: 6px 9px; border-radius: 6px;
+      font-size: 12px; color: var(--ink2);
+      display: flex; align-items: center; gap: 7px; cursor: pointer;
+    }
+    .blk-pop li:hover { background: var(--bg2); }
+    .blk-pop li svg { width: 12px; height: 12px; color: var(--muted); flex: none; }
+    .blk-pop .hr { height: 1px; background: var(--line2); margin: 3px 0; }
+    .blk-pop li.danger { color: var(--red); }
+    .blk-pop li.danger svg { color: var(--red); }
+
+    /* ── anatomy ── */
+    .anatomy {
+      display: grid; grid-template-columns: 390px 1fr; gap: 28px; align-items: start;
+      padding: 22px; background: var(--surface);
+      border: 1px solid var(--line); border-radius: var(--r3); box-shadow: var(--sh-card);
+    }
+    .layers { list-style: none; padding: 0; margin: 0; display: grid; gap: 9px; }
+    .layers li {
+      display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start;
+      padding: 10px 12px; background: var(--bg2); border-radius: 8px;
+      border-left: 4px solid var(--line);
+    }
+    .layers li:nth-child(1) { border-left-color: var(--teal); }
+    .layers li:nth-child(2) { border-left-color: var(--indigo); }
+    .layers li:nth-child(3) { border-left-color: var(--clay); }
+    .layers li:nth-child(4) { border-left-color: var(--amber); }
+    .layers li:nth-child(5) { border-left-color: var(--muted); }
+    .lnum {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--surface); border: 1px solid var(--line);
+      display: grid; place-items: center;
+      font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink);
+    }
+    .layers strong { font-size: 12.5px; display: block; margin-bottom: 2px; }
+    .layers p { margin: 0; font-size: 11.5px; color: var(--muted); }
+
+    /* ── state cards ── */
+    .states { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; }
+    @media (min-width: 1160px) { .states { grid-template-columns: repeat(4,1fr); } }
+    .state-card {
+      background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+      padding: 16px 14px 14px;
+      display: grid; grid-template-rows: auto 1fr auto; gap: 12px; min-height: 340px;
+    }
+    .state-card h3 { margin: 0; font-size: 13.5px; display: flex; align-items: center; gap: 6px; }
+    .state-card h3 .n {
+      width: 20px; height: 20px; border-radius: 6px; background: var(--ink); color: #fff;
+      display: grid; place-items: center; font-family: var(--mono); font-size: 11px;
+    }
+    .sc-body {
+      display: grid; place-items: center; padding: 12px;
+      background: var(--bg); border-radius: 8px; border: 1px dashed var(--line);
+      min-height: 180px; overflow: hidden;
+    }
+    .sc-body > * { width: 100%; }
+    .sc-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+    /* anchor frame for rest icon */
+    .anchor-frame {
+      width: 190px; height: 90px;
+      background: linear-gradient(180deg,#fbf8f1,#f0e9dc);
+      border-radius: 8px; border: 1px dashed var(--line);
+      position: relative;
+    }
+    .anchor-frame span { position: absolute; top: 6px; left: 8px; font-size: 10px; color: var(--muted); }
+    .anchor-frame .lens-icon { position: absolute; right: 8px; bottom: 8px; }
+
+    /* ── scenario ── */
+    .scenario {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: var(--r3); box-shadow: var(--sh-card); overflow: hidden;
+      margin-bottom: 28px;
+    }
+    .sc-head {
+      padding: 16px 22px;
+      background: linear-gradient(135deg,#fdfaf3,#fff);
+      border-bottom: 1px solid var(--line);
+      display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end;
+    }
+    .sc-head h3 {
+      margin: 0; font-size: 16px; display: flex; align-items: center; gap: 9px;
+    }
+    .sc-head .gid {
+      font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+      padding: 2px 7px; border-radius: 4px; background: var(--bg2);
+      border: 1px solid var(--line); font-weight: 400;
+    }
+    .sc-head p { margin: 5px 0 0; font-size: 12px; color: var(--muted); }
+    .sc-anchors { display: flex; flex-wrap: wrap; gap: 4px; max-width: 340px; justify-content: flex-end; }
+
+    .sc-cols {
+      display: grid;
+      grid-template-columns: minmax(260px,1.1fr) minmax(240px,1fr) minmax(240px,1fr);
+    }
+    @media (max-width:1050px) { .sc-cols { grid-template-columns: 1fr; } }
+    .pane {
+      padding: 16px; border-right: 1px solid var(--line);
+      min-height: 460px; display: flex; flex-direction: column; min-width: 0;
+    }
+    .pane:last-child { border-right: 0; }
+    .pane h4 {
+      margin: 0 0 10px; font-size: 11px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .04em;
+      display: flex; align-items: center; gap: 6px;
+    }
+
+    /* thread */
+    .thread {
+      background: var(--bg); border: 1px solid var(--line2);
+      border-radius: 8px; padding: 10px; flex: 1;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .msg { display: grid; grid-template-columns: 22px 1fr; gap: 7px; align-items: start; }
+    .av {
+      width: 22px; height: 22px; border-radius: 50%;
+      display: grid; place-items: center; font-size: 9.5px; font-weight: 700; flex: none;
+    }
+    .av.me  { background: var(--teal-s);  color: var(--teal); }
+    .av.a1  { background: #fde6d4; color: #b35a00; }
+    .av.a2  { background: #e7e4ff; color: #4946a8; }
+    .av.a3  { background: var(--teal-s); color: var(--teal); }
+    .av.a4  { background: var(--clay-s); color: var(--clay); }
+    .bbl {
+      background: var(--surface); border: 1px solid var(--line2);
+      padding: 5px 8px; border-radius: 7px;
+      font-size: 12px; color: var(--ink2); line-height: 1.4;
+    }
+    .bbl .who { font-size: 10.5px; font-weight: 600; color: var(--ink); margin-right: 5px; }
+    .bbl .whn { font-size: 10px; color: var(--muted2); }
+
+    /* raw cards */
+    .raw-list { display: grid; gap: 8px; }
+    .raw-card {
+      background: #fffaf6; border: 1px solid var(--clay-s);
+      border-radius: 8px; padding: 9px 11px; font-size: 12px; color: var(--ink2);
+    }
+    .raw-card.ok { background: #f6f9f3; border-color: var(--green-s); }
+    .raw-card .rt { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
+    .raw-card .src { font-size: 10.5px; color: var(--muted); font-family: var(--mono); margin-top: 2px; }
+    .raw-card .why { margin-top: 4px; font-size: 10.5px; display: flex; align-items: center; gap: 4px; }
+    .raw-card .why.bad  { color: var(--clay); }
+    .raw-card .why.ok   { color: var(--green); }
+    .raw-card .why.mayb { color: var(--amber); }
+
+    /* good card stack */
+    .good-stack { display: grid; gap: 10px; }
+    .note {
+      padding: 12px 14px; border-radius: 8px; font-size: 12px;
+      line-height: 1.5; color: var(--ink2);
+    }
+    .note.ok  { background: #f6f9f3; border: 1px solid var(--green-s); }
+    .note.inf { background: var(--bg2); border: 1px solid var(--line); }
+    .note strong { display: block; margin-bottom: 4px; font-size: 12.5px; }
+    .note ul { margin: 4px 0; padding-left: 16px; }
+    .note li + li { margin-top: 3px; }
+    .note code { font-family: var(--mono); font-size: 11px; }
+
+    .empty-note {
+      background: var(--bg2); border: 1px dashed var(--line);
+      border-radius: 8px; padding: 20px 16px;
+      text-align: center; font-size: 12.5px; color: var(--muted);
+    }
+    .empty-note strong { display: block; color: var(--ink2); margin-bottom: 5px; }
+    .empty-note a { color: var(--teal); text-decoration: none; font-weight: 600; }
+
+    /* footer tech note */
+    .tech {
+      padding: 16px 20px; background: var(--bg2);
+      border: 1px solid var(--line); border-radius: var(--r); font-size: 12.5px; color: var(--ink2);
+    }
+    .tech h3 { margin: 0 0 8px; font-size: 13px; }
+    .tech code { font-family: var(--mono); font-size: 11px; padding: 1px 4px; border-radius: 3px; background: var(--surface); border: 1px solid var(--line); }
+    .tech ul { margin: 5px 0; padding-left: 16px; }
+    .tech li + li { margin-top: 4px; }
+
+    /* svg icons helpers */
+    svg { display: block; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+<!-- ═══════════════════ INTRO ═══════════════════ -->
+<header class="intro">
+  <div class="intro-mark">L</div>
+  <div>
+    <h1>Memory Lens · 浮窗信息层级重设计</h1>
+    <p>当前右下角浮窗只把「标题 + footer 一行」摆出来，缺乏层次；7 个操作按钮平铺占了卡片大半面积。本稿基于真实从 <code style="font-family:var(--mono);font-size:11px;background:var(--bg2);padding:1px 5px;border-radius:3px;">10.32.56.212</code> 召回的三组 RC 对话，重新按「为什么相关 → 它说了什么 → 我能做什么」三层组织信息，控制操作折叠为 2 个 icon。</p>
+    <p>所有 mock 来自一次真实 <code style="font-family:var(--mono);font-size:11px;">POST /api/v1/context-recall</code>，三组对话各 5 条命中，全部 <code style="font-family:var(--mono);font-size:11px;">displayPriority=p1</code>——这本身就是当前 gating 过松的直接证据。</p>
+    <div class="meta">demo · memory-service@10.32.56.212 · user esone.qiu · 2026-05-21</div>
+  </div>
+</header>
+
+<!-- ═══════════════════ §1 设计目标 ═══════════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="sec-num">1</span>
+    <h2>浮窗要回答哪三个问题？</h2>
+    <span class="sec-tag">设计目标</span>
+  </div>
+  <p class="lead">用户瞄一眼就能回答下面三个问题，回答不了任何一个就不打扰。</p>
+  <div class="cmp">
+    <div>
+      <h4>当前浮窗实际呈现 <span class="badge bad">问题</span></h4>
+      <ul>
+        <li>标题常常是 <code>"时间"</code> 或 <code>"@Esone Qiu wrote:"</code>，没有信息量</li>
+        <li>「为什么相关」只写「向量 命中 网页上下文」，不可解释</li>
+        <li><code>metadata.summary</code>（LLM 摘要）、<code>actions[]</code>、<code>replyAdvice</code> 全部藏着没有露出</li>
+        <li>7 个操作按钮平铺：在记忆中查看 / 有用 / 不相关 / 允许此站点 / 今天不提示 / 永久不提示此页 / 永久不提示此站点</li>
+        <li>所有候选 <code>displayPriority=p1</code>，看不出强弱</li>
+      </ul>
+    </div>
+    <div>
+      <h4>重新设计回答三个问题 <span class="badge good">目标</span></h4>
+      <ul>
+        <li><strong>为什么相关？</strong> → Why-row chips：<code>同群 · Sophia · hackathon</code>，无具体重合不显示</li>
+        <li><strong>它说了什么？</strong> → 用 <code>metadata.summary</code>（LLM 描述），2 行抓住要点</li>
+        <li><strong>我能做什么？</strong> → 结构化行动项 <code>actions[]</code>（assignee · deadline）+ <code>replyAdvice</code></li>
+        <li>控制操作收进 2 个 icon：右上角 <code>↗</code>（跳转原文）+ <code>⋯</code>（屏蔽/静默），thumb 反馈留在底部</li>
+        <li>多候选时 <code>1 / N</code> 翻页，避免单条不准时无路可走</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ §2 四态序列 ═══════════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="sec-num">2</span>
+    <h2>四态序列：Rest → Hover Peek → Expanded → ⋯ 折叠面板</h2>
+    <span class="sec-tag">交互节奏</span>
+  </div>
+  <p class="lead">7 个按钮折叠到 2 个 icon + 1 个 popover，保留全部能力，但不在主卡片占位。</p>
+
+  <div class="states">
+    <!-- State 1: Rest -->
+    <div class="state-card">
+      <h3><span class="n">1</span> Rest 静默态</h3>
+      <div class="sc-body">
+        <div style="display:grid;place-items:center;">
+          <div class="anchor-frame">
+            <span>网页右下角</span>
+            <div class="lens-icon">
+              <div class="inner"></div>
+              <div class="dot"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="sc-desc">只在 <code>overlapAudit=strong</code> 时显示红点。<code>possible</code> 时 icon 出现但无红点；<code>hidden</code> 完全不显示。</p>
+    </div>
+
+    <!-- State 2: Hover Peek -->
+    <div class="state-card">
+      <h3><span class="n">2</span> Hover Peek 预览</h3>
+      <div class="sc-body">
+        <div class="lens-pop">
+          <div class="lp-head">
+            <div class="lp-brand"><span class="mark"></span>Memory Lens</div>
+            <span class="rel strong">● 强相关</span>
+          </div>
+          <div class="why-row">
+            <span class="chip m">同群</span>
+            <span class="chip m">Sophia</span>
+            <span class="chip m">Yearly summary</span>
+          </div>
+          <div class="lp-body" style="padding-top:6px;">
+            <div class="lp-title">Sophia 在本群对接过 Yearly summary 模板</div>
+            <p class="lp-summary">讨论 Yearly summary 管理任务，Sophia Lin 确认模板内容，需整理 Apps 及 RCV 多个团队内容。</p>
+          </div>
+        </div>
+      </div>
+      <p class="sc-desc">不可交互，只解释「为什么」。chips 最多 3 个；标题用 <code>metadata.summary</code>，不用 raw snippet。</p>
+    </div>
+
+    <!-- State 3: Expanded -->
+    <div class="state-card">
+      <h3><span class="n">3</span> Expanded 完整卡片</h3>
+      <div class="sc-body">
+        <div class="lens-pop">
+          <div class="lp-head">
+            <div class="lp-brand"><span class="mark"></span>Memory Lens</div>
+            <span class="rel strong">● 强相关</span>
+            <div class="lp-actions">
+              <button class="ib" title="在记忆中查看">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 3h7v7"/><path d="M21 3l-9 9"/>
+                  <path d="M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5"/>
+                </svg>
+              </button>
+              <button class="ib" title="更多">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="why-row">
+            <span class="why-lbl">因为：</span>
+            <span class="chip m">同群</span>
+            <span class="chip m">Sophia</span>
+            <span class="chip m">Yearly summary</span>
+          </div>
+          <div class="lp-body">
+            <div class="lp-title">Sophia 在本群对接过 Yearly summary 模板</div>
+            <p class="lp-summary">讨论 Yearly summary 管理任务，Sophia Lin 确认模板内容，需整理 Apps 及 RCV 多个团队内容。</p>
+            <div class="meta-row">
+              <a href="#">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+                  <circle cx="9" cy="7" r="4"/>
+                </svg>
+                敏捷教练-RC China
+              </a>
+              <span class="sep">·</span><span>Sophia · ~3 周前</span>
+            </div>
+          </div>
+          <div class="lp-foot">
+            <div class="fb">
+              <button class="ib" title="有用">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/>
+                  <path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>
+                </svg>
+              </button>
+              <button class="ib" title="不相关">
+                <svg class="flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/>
+                  <path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>
+                </svg>
+              </button>
+            </div>
+            <div class="pager">
+              <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg></button>
+              <span>1 / 2</span>
+              <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="sc-desc">点击 icon 展开。右上角 <code>↗</code> 跳转记忆原文，<code>⋯</code> 收起所有破坏性操作。</p>
+    </div>
+
+    <!-- State 4: block popover -->
+    <div class="state-card">
+      <h3><span class="n">4</span> ⋯ 折叠的破坏性操作</h3>
+      <div class="sc-body">
+        <div style="display:grid;place-items:center;width:100%;">
+          <div class="blk-pop">
+            <h4>反馈与屏蔽</h4>
+            <ul>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="5" y1="5" x2="19" y2="19"/></svg>
+                这条记忆不再出现
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                此页面今天不提示
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+                此页面永久不提示
+              </li>
+              <li class="danger">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                永久不提示此站点
+              </li>
+              <div class="hr"></div>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                允许此站点（白名单模式）
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <p class="sc-desc">破坏性 / 站点级操作全部藏这里，避免主卡片误触「永久屏蔽」。Thumb up/down 在 expanded 已直接可点。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ §3 信息层级 ═══════════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="sec-num">3</span>
+    <h2>Expanded Card 的 5 层信息结构</h2>
+    <span class="sec-tag">内容架构</span>
+  </div>
+  <p class="lead">每层 1-2 行，整卡 ≤ 240 px，数据缺失时自动折叠。</p>
+  <div class="anatomy">
+    <!-- live card demo -->
+    <div>
+      <div class="lens-pop">
+        <div class="lp-head">
+          <div class="lp-brand"><span class="mark"></span>Memory Lens</div>
+          <span class="rel strong">● 强相关</span>
+          <div class="lp-actions">
+            <button class="ib" title="在记忆中查看">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 3h7v7"/><path d="M21 3l-9 9"/>
+                <path d="M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5"/>
+              </svg>
+            </button>
+            <button class="ib" title="更多">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="why-row">
+          <span class="why-lbl">因为：</span>
+          <span class="chip m">Nova 项目</span>
+          <span class="chip m">Wayne Jiang</span>
+          <span class="chip m">Q1 时间线</span>
+        </div>
+        <div class="lp-body">
+          <div class="lp-title">Nova 周会：Wayne 推 RingEX SMS 提案 · Rebecca 定义 SMS shared inbox</div>
+          <p class="lp-summary">Sophia 同步 Nova 项目进展，含 Configurable Lead Capture、法务需求、SMS shared inbox FFS、COGS Analytics 拆分，共 5 个 action items。</p>
+          <div class="ev-block">
+            <div class="ev-lbl">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 11l3 3 8-8"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+              </svg>
+              待办 · Wayne 的项
+            </div>
+            <div class="ev-body">
+              <span class="ev-who">@Wayne</span>分享 RingEX SMS notification in WF 提案，评估能否纳入 4/15 时间线
+              <span class="ev-due">3/13</span>
+            </div>
+          </div>
+          <div class="meta-row">
+            <a href="#">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
+              </svg>
+              Nova Product &amp; Engineering Leads
+            </a>
+            <span class="sep">·</span><span>Sophia · 3 月 12 日</span>
+          </div>
+        </div>
+        <div class="lp-foot">
+          <div class="fb">
+            <button class="ib">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/>
+                <path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>
+              </svg>
+            </button>
+            <button class="ib">
+              <svg class="flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/>
+                <path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>
+              </svg>
+            </button>
+          </div>
+          <div class="pager">
+            <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <span>1 / 2</span>
+            <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- annotation -->
+    <ul class="layers">
+      <li>
+        <span class="lnum">1</span>
+        <div>
+          <strong>Header · 关系强度 + 操作 icon</strong>
+          <p>左：品牌 + 强相关/可能相关。右：<code>↗</code> 跳转记忆原文（对应 <code>exploreLink</code>）、<code>⋯</code> 折叠破坏性操作。不再平铺 7 个按钮。</p>
+        </div>
+      </li>
+      <li>
+        <span class="lnum">2</span>
+        <div>
+          <strong>Why-row · 因为：chip chip chip</strong>
+          <p>从 <code>overlapAudit</code> 结果取：同群 / 命中人名 / 命中主题，最多 3 个。无 chips 就不渲染整张卡（降为 <code>hidden</code>）。</p>
+        </div>
+      </li>
+      <li>
+        <span class="lnum">3</span>
+        <div>
+          <strong>Title + Summary · 优先用 LLM 摘要</strong>
+          <p>标题取 <code>metadata.summary</code> 第一句语义描述；摘要取完整 <code>metadata.summary</code>。<strong>不用</strong> <code>"@Esone Qiu wrote:"</code> / <code>"3. 行动指南"</code> 这类 raw snippet 当标题。</p>
+        </div>
+      </li>
+      <li>
+        <span class="lnum">4</span>
+        <div>
+          <strong>Evidence · 行动项 / 回复建议</strong>
+          <p>取 <code>metadata.actions[0]</code>，显示 <code>assignee · description · deadline</code>。多条显示「待办 N」可展开。无 actions 时用 <code>metadata.replyAdvice</code> 替代。</p>
+        </div>
+      </li>
+      <li>
+        <span class="lnum">5</span>
+        <div>
+          <strong>Meta + Foot · 来源 + 反馈 + 翻页</strong>
+          <p>群名可点链接、发件人、时间；底部 thumb up/down icon + <code>1/N</code> 翻页器。始终仅占 1 行。</p>
+        </div>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════ §4 场景对照 ═══════════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="sec-num">4</span>
+    <h2>三组真实对话 · 召回质量与浮窗呈现对照</h2>
+    <span class="sec-tag">真实 API · /context-recall</span>
+  </div>
+  <p class="lead">三栏对照：左 = 当前可见消息，中 = memory-service 实际返回的 top-5（未过滤），右 = 客户端 overlapAudit 过滤 + 重排后浮窗应该显示的内容。</p>
+
+  <!-- ── Scenario 1: 敏捷教练 ── -->
+  <div class="scenario">
+    <div class="sc-head">
+      <div>
+        <h3>① 敏捷教练-RC China <span class="gid">35165069318</span></h3>
+        <p>黑客松组队、wiki 上传、需要 facilitator</p>
+      </div>
+      <div class="sc-anchors">
+        <span class="chip">Sophia Lin</span>
+        <span class="chip">Fred Gu</span>
+        <span class="chip">Ryan Chen</span>
+        <span class="chip">Patricia Li</span>
+        <span class="chip">hackathon</span>
+        <span class="chip">wiki</span>
+      </div>
+    </div>
+    <div class="sc-cols">
+      <!-- col A -->
+      <div class="pane">
+        <h4>当前可见消息 <span class="badge live">实时</span></h4>
+        <div class="thread">
+          <div class="msg"><div class="av a1">FG</div><div class="bbl"><span class="who">Fred Gu</span><span class="whn">昨天 13:45</span><br>额，没怼脸 @team，就算是收着了</div></div>
+          <div class="msg"><div class="av a1">FG</div><div class="bbl"><span class="who">Fred Gu</span><span class="whn">昨天 16:00</span><br>分享会议链接：v.ringcentral.com/join/fred.gu，Sharing 可以来了</div></div>
+          <div class="msg"><div class="av a2">SL</div><div class="bbl"><span class="who">Sophia (Jinmei) Lin</span><span class="whn">昨天 17:19</span><br>Team 黑客松有谁有组队参与的么</div></div>
+          <div class="msg"><div class="av a3">RC</div><div class="bbl"><span class="who">Ryan Chen</span><span class="whn">今天 08:38</span><br>Fred Gu 记得上传一下 wiki</div></div>
+          <div class="msg"><div class="av a1">FG</div><div class="bbl"><span class="who">Fred Gu</span><span class="whn">今天 09:47</span><br>Done</div></div>
+          <div class="msg"><div class="av a4">HQ</div><div class="bbl"><span class="who">Helen Qin</span><span class="whn">今天 10:34</span><br>组委会需要人 facilitate 某些小环节的，我可以去帮忙</div></div>
+          <div class="msg"><div class="av a2">PL</div><div class="bbl"><span class="who">Patricia Li</span><span class="whn">今天 14:20</span><br>回复 Sophia：还有我</div></div>
+        </div>
+      </div>
+      <!-- col B -->
+      <div class="pane">
+        <h4>实际返回 top-5 <span class="badge bad">未过滤</span></h4>
+        <div class="raw-list">
+          <div class="raw-card">
+            <div class="rt">[1] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「有任何疑问，也可以随时咨询 HR China，谢谢！」
+            <div class="src">铃盛之家 · HR China · 4-24</div>
+            <div class="why bad">⚠ 跨群 · 主题 HR Open Day，与黑客松/wiki 完全无关</div>
+          </div>
+          <div class="raw-card">
+            <div class="rt">[2] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「@Esone Qiu wrote:」（Jira Epic 创建）
+            <div class="src">🍸 Nova CA · Rebecca Cao · 4-28</div>
+            <div class="why bad">⚠ 跨群 · 无人物/主题重叠</div>
+          </div>
+          <div class="raw-card ok">
+            <div class="rt">[3] <span class="rel maybe" style="font-size:10.5px;">score 0.61</span></div>
+            「Sophia Lin in 敏捷教练-RC China：讨论 Yearly summary 模板…」
+            <div class="src">chunk #384 · 同群</div>
+            <div class="why ok">✓ 同群 + 命中 Sophia · 应被前置</div>
+          </div>
+          <div class="raw-card">
+            <div class="rt">[4] <span class="rel maybe" style="font-size:10.5px;">score 0.59</span></div>
+            「Action Item: Review Venky's India solution.」
+            <div class="src">chunk #65549 · 无 group / sender</div>
+            <div class="why bad">⚠ 无来源 · 无人物重叠</div>
+          </div>
+          <div class="raw-card" style="border-color:var(--amber-s);">
+            <div class="rt">[5] <span class="rel maybe" style="font-size:10.5px;">score 0.59</span></div>
+            「Monthly Meeting led by Jen Jiang with Ada Han, Fred Gu, Esone Qiu, Patricia Li.」
+            <div class="src">chunk #65970 · 命中 Fred Gu + Patricia Li</div>
+            <div class="why mayb">~ 人物重叠 ≥2，可作为「可能相关」</div>
+          </div>
+        </div>
+      </div>
+      <!-- col C -->
+      <div class="pane">
+        <h4>过滤 + 重排后 <span class="badge good">浮窗展示</span></h4>
+        <div class="good-stack">
+          <div class="lens-pop">
+            <div class="lp-head">
+              <div class="lp-brand"><span class="mark"></span>Memory Lens</div>
+              <span class="rel strong">● 强相关</span>
+              <div class="lp-actions">
+                <button class="ib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7"/><path d="M21 3l-9 9"/><path d="M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5"/></svg></button>
+                <button class="ib"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+              </div>
+            </div>
+            <div class="why-row"><span class="why-lbl">因为：</span><span class="chip m">同群</span><span class="chip m">Sophia</span><span class="chip m">敏捷教练群</span></div>
+            <div class="lp-body">
+              <div class="lp-title">Sophia 在本群讨论过 Yearly summary 模板</div>
+              <p class="lp-summary">讨论 Yearly summary 管理任务，Sophia Lin 确认模板内容，需整理 Apps 及 RCV 多个团队内容。</p>
+              <div class="meta-row"><a href="#">敏捷教练-RC China</a><span class="sep">·</span><span>Sophia · ~3 周前 · chunk #384</span></div>
+            </div>
+            <div class="lp-foot">
+              <div class="fb">
+                <button class="ib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/><path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg></button>
+                <button class="ib"><svg class="flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/><path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg></button>
+              </div>
+              <div class="pager"><button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg></button><span>1 / 2</span><button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg></button></div>
+            </div>
+          </div>
+          <div class="note ok"><strong style="color:var(--green);">已过滤 3 条 cross-group p1 噪声</strong>HR China Open Day、Nova Jira Epic、Venky action item 无任何重叠，降为 <code>hidden</code>；chunk #65970（Fred+Patricia）保留为第 2 条「可能相关」。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Scenario 2: Nova CA ── -->
+  <div class="scenario">
+    <div class="sc-head">
+      <div>
+        <h3>② 🍸 Nova CA - Brandy <span class="gid">160443817990</span></h3>
+        <p>weekly demo 准备，LLM 渲染 vs widget 匹配模式，Q2 评估，Admin control</p>
+      </div>
+      <div class="sc-anchors">
+        <span class="chip">Wayne Jiang</span>
+        <span class="chip">Zora Zheng</span>
+        <span class="chip">Barry Li</span>
+        <span class="chip">Nova</span>
+        <span class="chip">LLM 渲染</span>
+        <span class="chip">widget</span>
+        <span class="chip">Q2</span>
+      </div>
+    </div>
+    <div class="sc-cols">
+      <div class="pane">
+        <h4>当前可见消息 <span class="badge live">实时</span></h4>
+        <div class="thread">
+          <div class="msg"><div class="av a4">WJ</div><div class="bbl"><span class="who">Wayne Jiang</span><span class="whn">13:30</span><br>大佬要的是先放开，让 LLM 和 AI 来判断；以后有需要再提供 template 来收紧，给 Admin 一些控制权</div></div>
+          <div class="msg"><div class="av me">我</div><div class="bbl"><span class="who">Esone Qiu</span><span class="whn">13:32</span><br>确实，渲染逻辑完全不一样。我们明天 weekly 有 demo，会先 show 下现在的 widget 匹配模式</div></div>
+          <div class="msg"><div class="av me">我</div><div class="bbl"><span class="who">Esone Qiu</span><span class="whn">13:35</span><br>按照 LLM 渲染方向看看 Q2 来得及么，来得及就直接开干了</div></div>
+          <div class="msg"><div class="av a2">ZZ</div><div class="bbl"><span class="who">Zora (Haimei) Zheng</span><span class="whn">15:31</span><br>Team 开会啦</div></div>
+        </div>
+      </div>
+      <div class="pane">
+        <h4>实际返回 top-5 <span class="badge bad">未过滤</span></h4>
+        <div class="raw-list">
+          <div class="raw-card">
+            <div class="rt">[1] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「📅 时间：2026 年 4 月 27 日（周一）14:00-15:00」
+            <div class="src">AI Insight Hub · Everyone AI Campaign · 4-21</div>
+            <div class="why bad">⚠ uiSummary 就是「时间：…」，零信息量；与 Nova LLM/widget 无关</div>
+          </div>
+          <div class="raw-card">
+            <div class="rt">[2] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「Paul、Echo 及 Tech Leader 提前排查并列出各自的技术任务 (DDL: 下周)」
+            <div class="src">RingCentral Video · meeting-pilot</div>
+            <div class="why bad">⚠ 与 Nova LLM/widget 无主题重叠</div>
+          </div>
+          <div class="raw-card">
+            <div class="rt">[3] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「Hi @Team. 本月的 HR Open Day 即将开始…」
+            <div class="src">铃盛之家 · HR China · 4-24</div>
+            <div class="why bad">⚠ HR 广播通告，跨群无关</div>
+          </div>
+          <div class="raw-card" style="border-color:var(--amber-s);">
+            <div class="rt">[4] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「参会者: Zora (Haimei) Zheng, Stephen Li, Barry Li, Rebecca Cao…（WhatsApp AI Agent）」
+            <div class="src">RingCentral Video · chunk #65158</div>
+            <div class="why mayb">~ 命中 Zora · Barry，但主题 WhatsApp ≠ Nova widget</div>
+          </div>
+          <div class="raw-card ok">
+            <div class="rt">[5] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「Legal Requirements for Nova - 2026-Q1: @Rahul Tibrewal to finalize requirement…」
+            <div class="src">Nova Product &amp; Engineering Leads · Sophia · 3-12</div>
+            <div class="why ok">✓ Nova 项目线 · 命中 Wayne · 多个 action items · 应被前置</div>
+          </div>
+        </div>
+      </div>
+      <div class="pane">
+        <h4>过滤 + 重排后 <span class="badge good">浮窗展示</span></h4>
+        <div class="good-stack">
+          <div class="lens-pop">
+            <div class="lp-head">
+              <div class="lp-brand"><span class="mark"></span>Memory Lens</div>
+              <span class="rel strong">● 强相关</span>
+              <div class="lp-actions">
+                <button class="ib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7"/><path d="M21 3l-9 9"/><path d="M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5"/></svg></button>
+                <button class="ib"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+              </div>
+            </div>
+            <div class="why-row"><span class="why-lbl">因为：</span><span class="chip m">Nova 项目</span><span class="chip m">Wayne Jiang</span><span class="chip m">Q1 时间线</span></div>
+            <div class="lp-body">
+              <div class="lp-title">Nova 周会要点：Wayne 推 RingEX SMS 提案 · Rebecca 定义 SMS shared inbox</div>
+              <p class="lp-summary">Sophia 同步 Nova 项目进展，含 Configurable Lead Capture、法务需求、SMS shared inbox FFS、COGS Analytics 拆分，共 5 个 action items。</p>
+              <div class="ev-block">
+                <div class="ev-lbl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>待办 · Wayne 的项</div>
+                <div class="ev-body"><span class="ev-who">@Wayne</span>分享 RingEX SMS notification in WF 提案，评估能否纳入 4/15 时间线<span class="ev-due">3/13</span></div>
+              </div>
+              <div class="meta-row"><a href="#">Nova Product &amp; Engineering Leads</a><span class="sep">·</span><span>Sophia · 3 月 12 日</span></div>
+            </div>
+            <div class="lp-foot">
+              <div class="fb">
+                <button class="ib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/><path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg></button>
+                <button class="ib"><svg class="flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/><path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg></button>
+              </div>
+              <div class="pager"><button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg></button><span>1 / 2</span><button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg></button></div>
+            </div>
+          </div>
+          <div class="note ok"><strong style="color:var(--green);">已过滤 3 条噪声 · Nova 记录从第 5 置顶</strong>「时间：4/27」、HR Open Day、meeting-pilot 任务 0 重叠降为 <code>hidden</code>；Nova Leads 记录命中 <code>项目=Nova + 人=Wayne</code>，客户端重排后置顶。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Scenario 3: Colin/Michael ── -->
+  <div class="scenario">
+    <div class="sc-head">
+      <div>
+        <h3>③ Colin, Michael <span class="gid">1140194402306</span></h3>
+        <p>Cursor 2.5 / Codex plan / 组织禁用 / RingClaw 合规 / 手机操控</p>
+      </div>
+      <div class="sc-anchors">
+        <span class="chip">Colin Liu</span>
+        <span class="chip">Michael Lin</span>
+        <span class="chip">cursor composer 2.5</span>
+        <span class="chip">codex</span>
+        <span class="chip">RingClaw</span>
+        <span class="chip">组织禁用</span>
+      </div>
+    </div>
+    <div class="sc-cols">
+      <div class="pane">
+        <h4>当前可见消息 <span class="badge live">实时</span></h4>
+        <div class="thread">
+          <div class="msg"><div class="av a2">ML</div><div class="bbl"><span class="who">Michael Lin</span><span class="whn">10:44</span><br>也就是 /fast 要关，然后 /goal 也不能用 😭</div></div>
+          <div class="msg"><div class="av me">我</div><div class="bbl"><span class="who">Esone Qiu</span><span class="whn">10:50</span><br>5.5 都还得酌情选择了</div></div>
+          <div class="msg"><div class="av a3">CL</div><div class="bbl"><span class="who">Colin Liu</span><span class="whn">10:50</span><br>cursor composer 2.5 用起来 😂</div></div>
+          <div class="msg"><div class="av me">我</div><div class="bbl"><span class="who">Esone Qiu</span><span class="whn">12:25</span><br>codex 有个手机操控的官方功能，你们可以用？</div></div>
+          <div class="msg"><div class="av a3">CL</div><div class="bbl"><span class="who">Colin Liu</span><span class="whn">12:27</span><br>应该是我们组织禁用了；codex 根本没法在手机 app 上登录 ChatGPT</div></div>
+          <div class="msg"><div class="av me">我</div><div class="bbl"><span class="who">Esone Qiu</span><span class="whn">13:27</span><br>哈哈 RingClaw 似乎也不合规了；执行细节和过程输出和 codex 原生体验不能比</div></div>
+        </div>
+      </div>
+      <div class="pane">
+        <h4>实际返回 top-5 <span class="badge bad">未过滤</span></h4>
+        <div class="raw-list">
+          <div class="raw-card" style="border-color:var(--amber-s);">
+            <div class="rt">[1] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「RingClaw 主题分享会公告（多智能体、AI 驱动工作流）」
+            <div class="src">AI Insight Hub · Everyone AI Campaign · 4-21</div>
+            <div class="why mayb">~ 与 RingClaw 话题沾边，但只是历史邀请通告，不是当下合规讨论</div>
+          </div>
+          <div class="raw-card">
+            <div class="rt">[2] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「@Esone Qiu wrote:」（Jira Epic 创建）
+            <div class="src">🍸 Nova CA · Rebecca Cao · 4-28</div>
+            <div class="why bad">⚠ 命中 Esone 但主题完全不同（Jira sample）</div>
+          </div>
+          <div class="raw-card">
+            <div class="rt">[3] <span class="rel strong" style="font-size:10.5px;">score 1.00 · p1</span></div>
+            「3. 行动指南 (Action Plan)」（WhatsApp 集成）
+            <div class="src">esone.qiu+sync.service · AI Service · 4-27</div>
+            <div class="why bad">⚠ 标题就是「3. 行动指南」，完全无法识别内容</div>
+          </div>
+          <div class="raw-card" style="border-color:var(--amber-s);">
+            <div class="rt">[4] <span class="rel maybe" style="font-size:10.5px;">score 0.90</span></div>
+            「Decision: Security review and approval received for Factory.ai free trial.」
+            <div class="src">chunk #65450 · 无 group</div>
+            <div class="why mayb">~ AI 工具合规 · 弱主题相关</div>
+          </div>
+          <div class="raw-card">
+            <div class="rt">[5] <span class="rel maybe" style="font-size:10.5px;">score 0.72</span></div>
+            「👉 欢迎前往我们的 Everyone AI Campaign Knowledge Base 知识库…」
+            <div class="src">AI Insight Hub · 4-28</div>
+            <div class="why bad">⚠ 一行欢迎语，无信息量</div>
+          </div>
+        </div>
+      </div>
+      <div class="pane">
+        <h4>过滤 + 重排后 <span class="badge good">浮窗展示</span></h4>
+        <div class="good-stack">
+          <div class="empty-note">
+            <strong>无「强相关」· Rest icon 不显红点</strong>
+            Colin Liu / Michael Lin 不在任何候选 <code>entities.people</code> 中；cursor composer / 组织禁用 / 手机操控 也没有主题命中。全部候选 <code>overlapAudit = hidden</code>，不自动弹 Hover Peek。
+            <div style="margin-top:10px;"><a href="#">点击 icon 查看 1 条「可能相关」→</a></div>
+          </div>
+          <div class="lens-pop">
+            <div class="lp-head">
+              <div class="lp-brand"><span class="mark"></span>Memory Lens</div>
+              <span class="rel maybe">● 可能相关</span>
+              <div class="lp-actions">
+                <button class="ib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7"/><path d="M21 3l-9 9"/><path d="M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5"/></svg></button>
+                <button class="ib"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+              </div>
+            </div>
+            <div class="why-row"><span class="why-lbl">因为：</span><span class="chip m">RingClaw</span><span class="chip w">非同群</span></div>
+            <div class="lp-body">
+              <div class="lp-title">公司之前有一次 RingClaw 主题分享会公告</div>
+              <p class="lp-summary">Everyone AI Campaign 推送 RingClaw 工具分享：多智能体协作、AI 驱动工作流。可作为「RingClaw 合规」讨论时的历史背景参考。</p>
+              <div class="meta-row"><a href="#">AI Insight Hub</a><span class="sep">·</span><span>4 月 21 日</span></div>
+            </div>
+            <div class="lp-foot">
+              <div class="fb">
+                <button class="ib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/><path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg></button>
+                <button class="ib"><svg class="flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3z"/><path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg></button>
+              </div>
+              <div class="pager"><button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg></button><span>1 / 1</span><button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg></button></div>
+            </div>
+          </div>
+          <div class="note inf">
+            <strong>说明 · 「无强相关」是正确的产品行为</strong>
+            <ul>
+              <li>这组对话核心议题（<strong>组织禁用 codex/Cursor/RingClaw</strong> 的合规与 plan 限制）是<em>全新讨论</em>，记忆库里尚无 Colin / Michael 的相关 entities。</li>
+              <li>正确行为：Rest icon 不显红点，Hover Peek 不弹；只在用户主动点击 icon 后展示「可能相关」，并标注 <span class="chip w" style="display:inline-flex;">非同群</span>。</li>
+              <li>随着 Colin / Michael 在更多消息中沉淀，<code>同群 + 同人</code> 命中后才升为「强相关」。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ §5 落地建议 ═══════════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="sec-num">5</span>
+    <h2>实现要点</h2>
+    <span class="sec-tag">落地建议</span>
+  </div>
+  <div class="cmp">
+    <div>
+      <h4>前端先做（不动 API） <span class="badge good">P0</span></h4>
+      <ul>
+        <li>在 <code>selectPrimaryContextRecallMatch()</code> 之后增加 <code>overlapAudit(scene, match)</code>：抽取 <code>metadata.entities.people / topics / groupId</code> 与 scene 求交集；<strong>无任何交集降为 hidden</strong>。</li>
+        <li>标题优先用 <code>metadata.summary</code>（LLM 描述），过滤 <code>"@xxx wrote:"</code> / <code>"3. 行动指南"</code> 等结构性前缀；摘要同样用 <code>metadata.summary</code>。</li>
+        <li>行动项取 <code>metadata.actions[0]</code>，格式 <code>@assignee · description · deadline</code>；无 actions 时用 <code>replyAdvice</code>。</li>
+        <li>7 个按钮折叠：thumb up/down 保留在 foot，屏蔽/静默/允许站点放进 <code>⋯</code> popover。</li>
+        <li>候选 ≥ 2 时显示 <code>1/N</code> 翻页器。</li>
+        <li>跳转原文改为右上角 <code>↗</code> icon，对应 <code>exploreLink</code>。</li>
+      </ul>
+    </div>
+    <div>
+      <h4>后端配合（schema 扩展） <span class="badge warn">P1</span></h4>
+      <ul>
+        <li>在 <code>ContextRecallMatch</code> 显式返回 <code>relevanceTier: 'strong' | 'possible' | 'weak'</code>，前端不再靠 score 数字反推。</li>
+        <li>返回 <code>overlapSignals: {kind, value}[]</code>，前端直接渲染 chips，无需再做实体抽取。</li>
+        <li><code>displayPriority=p1</code> 必须要求：同源 <code>groupId/conversationId</code> 命中，或 <code>person + concrete topic</code> 双重命中；纯语义高分最多 <code>p2</code>。</li>
+        <li>负反馈 <code>recall_quality: negative</code> 时一并写入 <code>{scene_anchor_signature, match_source_cluster}</code>，让「Hackathon/Codex 场景不再拉 Gary trip」这种降权可学习。</li>
+        <li>广播/公告类消息（HR Open Day / Everyone AI Campaign）增加 <code>broadcastFlag</code>，无锚点重叠时自动排除出 <code>auto_peek</code>。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- footer -->
+<section>
+  <div class="tech">
+    <h3>关联文档与代码</h3>
+    <ul>
+      <li>📄 <code>docs/features/memory_lens.md</code> · 产品边界、5 层卡片结构、overlapAudit 逻辑、真实召回质量观察</li>
+      <li>🧩 <code>src/contentScriptWebIntelligence.ts</code> · Rest / Hover Peek / Expanded Card / 反馈链路</li>
+      <li>🧩 <code>memory-service/src/routes/contextRecall.ts</code> + <code>ContextRecallService.ts</code> · 召回 + audit</li>
+      <li>🧪 本页所有「未过滤」内容来自真实 <code>POST /api/v1/context-recall</code>（user: esone.qiu · 2026-05-21），三组各 5 条候选全部 <code>displayPriority=p1</code>，是当前 gating 过松的直接证据。</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

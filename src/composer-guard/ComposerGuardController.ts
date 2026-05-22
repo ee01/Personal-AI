@@ -11,12 +11,9 @@ import {
 import {
   DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
   getComposerAssistPreviewText,
-  getComposerAssistSourceSummary,
-  getComposerGuardPrimaryAction,
   getNextComposerAssistThreshold,
   normalizeComposerAssistThreshold,
   sanitizeComposerAssistInsertText,
-  shouldPreviewComposerAssistBeforeInsert,
 } from './assistPreviewPolicy';
 import {
   CONFIDENCE_THRESHOLD_CONFIG_KEY,
@@ -43,11 +40,9 @@ const POPOVER_GAP = 6;
 const VIEWPORT_MARGIN = 8;
 const MIN_POPOVER_HEIGHT = 140;
 const DEFAULT_POPOVER_HEIGHT = 260;
-const FULL_PREVIEW_POPOVER_HEIGHT = 460;
 
 type GuardState = 'ready';
 type AssistFeedbackKind = 'accepted' | 'rejected';
-type PreviewCopyStatus = 'idle' | 'copied' | 'failed';
 
 interface ActiveComposerSession {
   target: ComposerTarget;
@@ -103,48 +98,6 @@ function isSensitiveEditableElement(element: HTMLElement): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
-}
-
-async function copyTextToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // Fall back to execCommand below for pages without Clipboard API access.
-  }
-
-  try {
-    const activeElement =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    const selection = document.getSelection();
-    const ranges = selection
-      ? Array.from({ length: selection.rangeCount }, (_, index) =>
-          selection.getRangeAt(index).cloneRange(),
-        )
-      : [];
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.setAttribute('readonly', 'true');
-    textarea.style.position = 'fixed';
-    textarea.style.left = '-9999px';
-    textarea.style.top = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    const copied = document.execCommand('copy');
-    textarea.remove();
-    if (selection) {
-      selection.removeAllRanges();
-      ranges.forEach((range) => selection.addRange(range));
-    }
-    activeElement?.focus({ preventScroll: true });
-    return copied;
-  } catch {
-    return false;
-  }
 }
 
 function getChromeLocal<T extends Record<string, unknown>>(
@@ -214,8 +167,6 @@ export class ComposerGuardController {
   private requestSeq = 0;
   private dismissedContexts = new Map<string, number>();
   private assistConfidenceThreshold = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD;
-  private previewLockedOpen = false;
-  private previewCopyStatus: PreviewCopyStatus = 'idle';
   private configLoaded = false;
   private composeAssistEnabled = false;
 
@@ -284,8 +235,6 @@ export class ComposerGuardController {
     }
     if (this.refreshActiveDraft()) {
       this.latestAssist = null;
-      this.previewLockedOpen = false;
-      this.previewCopyStatus = 'idle';
       this.removeAffordance();
       this.scheduleAssistRequest();
     }
@@ -364,8 +313,6 @@ export class ComposerGuardController {
 
     if (contextChanged) {
       this.latestAssist = null;
-      this.previewLockedOpen = false;
-      this.previewCopyStatus = 'idle';
       this.removeAffordance();
     } else {
       this.renderIfUseful();
@@ -454,14 +401,11 @@ export class ComposerGuardController {
       }
 
       this.latestAssist = response;
-      this.previewLockedOpen = false;
-      this.previewCopyStatus = 'idle';
       this.renderIfUseful();
     } catch (error) {
       console.warn('[ComposerGuard] assist request failed:', error);
       if (requestSeq === this.requestSeq) {
         this.latestAssist = null;
-        this.previewCopyStatus = 'idle';
         this.removeAffordance();
       }
     }
@@ -532,40 +476,15 @@ export class ComposerGuardController {
     root.dataset.state = state;
     const assist = this.latestAssist;
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
-    const primaryAction = getComposerGuardPrimaryAction(assist);
-    const previewRequired = primaryAction === 'preview';
-    const showFullPreview = previewRequired && this.previewLockedOpen;
-    const preview = this.buildSuggestionPreview(assist, showFullPreview);
-    const sourceSummary = getComposerAssistSourceSummary(assist);
-    const copyStatusText =
-      this.previewCopyStatus === 'copied'
-        ? '已复制'
-        : this.previewCopyStatus === 'failed'
-        ? '复制失败'
-        : '';
+    const preview = this.buildSuggestionPreview(assist);
 
-    root.classList.toggle(
-      'pai-composer-guard--preview-open',
-      this.previewLockedOpen,
-    );
-    root.classList.toggle('pai-composer-guard--full-preview', showFullPreview);
     root.innerHTML = `
-      <button class="pai-composer-guard-icon-button" data-action="primary" type="button" title="${
-        previewRequired ? '预览建议内容' : '插入建议内容'
-      }">
+      <button class="pai-composer-guard-icon-button" data-action="insert" type="button" title="插入建议内容">
         <img src="${iconUrl}" alt="Personal AI" />
       </button>
-      <div class="pai-composer-guard-popover" aria-hidden="${
-        this.previewLockedOpen ? 'false' : 'true'
-      }">
+      <div class="pai-composer-guard-popover" aria-hidden="true">
         <div class="pai-composer-guard-header">
-          <div class="pai-composer-guard-label">${
-            showFullPreview
-              ? '完整预览'
-              : previewRequired
-              ? '先预览'
-              : '建议内容'
-          }</div>
+          <div class="pai-composer-guard-label">建议内容</div>
           <button class="pai-composer-guard-feedback-button" data-action="reject" type="button" title="减少这类建议" aria-label="减少这类建议">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M10 15.5v3.1c0 .8.7 1.4 1.5 1.4.5 0 .9-.2 1.2-.6l4.2-5.4c.4-.5.6-1.1.6-1.8V5.6c0-1-.8-1.8-1.8-1.8H7.1c-.7 0-1.4.4-1.7 1L2.7 11c-.5 1.2.4 2.5 1.7 2.5H10Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
@@ -573,36 +492,21 @@ export class ComposerGuardController {
             </svg>
           </button>
         </div>
-        <div class="pai-composer-guard-meta">${escapeHtml(sourceSummary)}</div>
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
-        ${
-          previewRequired
-            ? `<div class="pai-composer-guard-actions">
-                <span class="pai-composer-guard-copy-status" data-copy-status="${
-                  this.previewCopyStatus
-                }" role="status" aria-live="polite">${escapeHtml(
-                copyStatusText,
-              )}</span>
-                <button class="pai-composer-guard-copy-button" data-action="copy" type="button">复制</button>
-                <button class="pai-composer-guard-secondary-button" data-action="dismiss" type="button">取消</button>
-                <button class="pai-composer-guard-insert-button" data-action="confirm-insert" type="button">插入</button>
-              </div>`
-            : ''
-        }
       </div>
     `;
 
-    const primaryButton = root.querySelector('[data-action="primary"]');
-    primaryButton?.addEventListener('pointerdown', (event) => {
+    const insertButton = root.querySelector('[data-action="insert"]');
+    insertButton?.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.handlePrimaryAction();
+      this.insertLatestAssist();
     });
-    primaryButton?.addEventListener('click', (event) => {
+    insertButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       if ((event as MouseEvent).detail === 0) {
-        this.handlePrimaryAction();
+        this.insertLatestAssist();
       }
     });
     const rejectButton = root.querySelector('[data-action="reject"]');
@@ -620,68 +524,12 @@ export class ComposerGuardController {
         this.dismissCurrentContext();
       }
     });
-    const confirmInsertButton = root.querySelector(
-      '[data-action="confirm-insert"]',
-    );
-    const copyButton = root.querySelector('[data-action="copy"]');
-    copyButton?.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.copyLatestAssist();
-    });
-    copyButton?.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if ((event as MouseEvent).detail === 0) {
-        void this.copyLatestAssist();
-      }
-    });
-    confirmInsertButton?.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.insertLatestAssist();
-    });
-    confirmInsertButton?.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if ((event as MouseEvent).detail === 0) {
-        this.insertLatestAssist();
-      }
-    });
-    const dismissButton = root.querySelector('[data-action="dismiss"]');
-    dismissButton?.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.dismissCurrentContext();
-    });
-    dismissButton?.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if ((event as MouseEvent).detail === 0) {
-        this.dismissCurrentContext();
-      }
-    });
-
     this.positionRoot();
   }
 
-  private handlePrimaryAction(): void {
-    if (shouldPreviewComposerAssistBeforeInsert(this.latestAssist)) {
-      this.previewLockedOpen = true;
-      this.previewCopyStatus = 'idle';
-      this.renderIfUseful();
-      return;
-    }
-
-    this.insertLatestAssist();
-  }
-
-  private buildSuggestionPreview(
-    assist: ComposerAssistResponse,
-    forceFull = false,
-  ): string {
+  private buildSuggestionPreview(assist: ComposerAssistResponse): string {
     return getComposerAssistPreviewText(assist.insertText, {
-      forceFull,
+      forceFull: false,
     });
   }
 
@@ -694,19 +542,6 @@ export class ComposerGuardController {
     void this.recordAssistFeedback('accepted');
     insertTextIntoComposer(this.activeSession.target, insertText);
     this.clear();
-  }
-
-  private async copyLatestAssist(): Promise<void> {
-    if (!this.activeSession || !this.latestAssist?.insertText) return;
-    const copyText = sanitizeComposerAssistInsertText(
-      this.latestAssist.insertText,
-    );
-    if (!copyText) return;
-
-    const copied = await copyTextToClipboard(copyText);
-    if (!this.activeSession || !this.latestAssist?.insertText) return;
-    this.previewCopyStatus = copied ? 'copied' : 'failed';
-    this.renderIfUseful();
   }
 
   private async loadComposerGuardConfig(): Promise<void> {
@@ -782,8 +617,6 @@ export class ComposerGuardController {
     if (this.activeSession) {
       this.dismissedContexts.set(this.activeSession.contextKey, Date.now());
     }
-    this.previewLockedOpen = false;
-    this.previewCopyStatus = 'idle';
     this.clear();
   }
 
@@ -805,16 +638,12 @@ export class ComposerGuardController {
     this.setTargetGlow(false);
     this.activeSession = null;
     this.latestAssist = null;
-    this.previewLockedOpen = false;
-    this.previewCopyStatus = 'idle';
     this.root?.remove();
     this.root = null;
   }
 
   private removeAffordance(): void {
     this.setTargetGlow(false);
-    this.previewLockedOpen = false;
-    this.previewCopyStatus = 'idle';
     this.root?.remove();
     this.root = null;
   }
@@ -868,9 +697,7 @@ export class ComposerGuardController {
     const availablePopoverHeight = clamp(
       opensAbove ? availableAbove : availableBelow,
       MIN_POPOVER_HEIGHT,
-      this.previewLockedOpen
-        ? FULL_PREVIEW_POPOVER_HEIGHT
-        : DEFAULT_POPOVER_HEIGHT,
+      DEFAULT_POPOVER_HEIGHT,
     );
 
     this.root.classList.toggle('pai-composer-guard--near-left', left < 360);
@@ -988,8 +815,7 @@ export class ComposerGuardController {
         pointer-events: none;
         transition: opacity 130ms ease, transform 130ms ease;
       }
-      .pai-composer-guard:hover .pai-composer-guard-popover,
-      .pai-composer-guard--preview-open .pai-composer-guard-popover {
+      .pai-composer-guard:hover .pai-composer-guard-popover {
         opacity: 1;
         transform: translateX(0) scale(1);
         pointer-events: auto;
@@ -1000,8 +826,7 @@ export class ComposerGuardController {
         transform: translateX(-8px) scale(0.98);
         transform-origin: left top;
       }
-      .pai-composer-guard--near-left:hover .pai-composer-guard-popover,
-      .pai-composer-guard--near-left.pai-composer-guard--preview-open .pai-composer-guard-popover {
+      .pai-composer-guard--near-left:hover .pai-composer-guard-popover {
         transform: translateX(0) scale(1);
       }
       .pai-composer-guard--above .pai-composer-guard-popover {
@@ -1011,10 +836,6 @@ export class ComposerGuardController {
       }
       .pai-composer-guard--near-left.pai-composer-guard--above .pai-composer-guard-popover {
         transform-origin: left bottom;
-      }
-      #${ROOT_ID}.pai-composer-guard--full-preview .pai-composer-guard-popover {
-        width: min(420px, calc(100vw - 70px));
-        max-height: min(${FULL_PREVIEW_POPOVER_HEIGHT}px, var(--pai-composer-popover-max-height), calc(100vh - 32px));
       }
       .pai-composer-guard-header {
         display: flex;
@@ -1026,12 +847,6 @@ export class ComposerGuardController {
       .pai-composer-guard-label {
         color: #c62828;
         font-weight: 700;
-      }
-      .pai-composer-guard-meta {
-        margin: -2px 0 8px;
-        color: #6b7280;
-        font-size: 11px;
-        line-height: 1.35;
       }
       .pai-composer-guard-feedback-button {
         display: inline-flex;
@@ -1062,54 +877,6 @@ export class ComposerGuardController {
         white-space: pre-wrap;
         word-break: break-word;
         font-size: 12px;
-      }
-      .pai-composer-guard-actions {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 8px;
-        margin-top: 10px;
-        padding-top: 8px;
-        border-top: 1px solid rgba(17, 24, 39, 0.08);
-      }
-      .pai-composer-guard-copy-status {
-        flex: 1 1 auto;
-        min-width: 48px;
-        color: #047857;
-        font-size: 11px;
-      }
-      .pai-composer-guard-copy-status[data-copy-status="failed"] {
-        color: #b91c1c;
-      }
-      .pai-composer-guard-copy-button,
-      .pai-composer-guard-secondary-button,
-      .pai-composer-guard-insert-button {
-        min-width: 48px;
-        height: 26px;
-        margin: 0;
-        border-radius: 6px;
-        padding: 0 10px;
-        font-size: 12px;
-        font-weight: 600;
-        cursor: pointer;
-      }
-      .pai-composer-guard-copy-button,
-      .pai-composer-guard-secondary-button {
-        border: 1px solid rgba(17, 24, 39, 0.14);
-        color: #4b5563;
-        background: #ffffff;
-      }
-      .pai-composer-guard-copy-button:hover,
-      .pai-composer-guard-secondary-button:hover {
-        background: #f9fafb;
-      }
-      .pai-composer-guard-insert-button {
-        border: 1px solid rgba(198, 40, 40, 0.82);
-        color: #ffffff;
-        background: #c62828;
-      }
-      .pai-composer-guard-insert-button:hover {
-        background: #b71c1c;
       }
       .pai-composer-guard-target-glow {
         outline: 1px solid rgba(218, 48, 48, 0.54) !important;

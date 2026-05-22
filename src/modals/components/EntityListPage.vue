@@ -251,7 +251,9 @@
           </div>
 
           <div v-if="getTopicMutedState(entity.id)" class="topic-muted-note">
-            🔕 已静音{{
+            🔕 已静音：{{
+              formatMutedReason(getTopicMutedState(entity.id)?.reason)
+            }}{{
               formatMutedUntil(getTopicMutedState(entity.id)?.until)
             }}
           </div>
@@ -452,13 +454,38 @@
                   class="topic-defer-options topic-mute-options"
                   role="menu"
                 >
+                  <div class="topic-mute-reasons" role="none">
+                    <div class="topic-menu-label">静音原因</div>
+                    <div
+                      class="topic-mute-reason-grid"
+                      role="group"
+                      :aria-label="`${entity.name} 静音原因`"
+                    >
+                      <button
+                        v-for="reason in topicMuteReasons"
+                        :key="reason.key"
+                        type="button"
+                        :class="[
+                          'topic-mute-reason-option',
+                          { active: selectedMuteReason === reason.key },
+                        ]"
+                        :aria-pressed="selectedMuteReason === reason.key"
+                        @click.stop="selectedMuteReason = reason.key"
+                      >
+                        <span>{{ reason.label }}</span>
+                        <small>{{ reason.description }}</small>
+                      </button>
+                    </div>
+                  </div>
                   <button
                     v-for="option in topicMuteOptions"
                     :key="option.key"
                     type="button"
                     class="topic-defer-option topic-mute-option"
                     role="menuitem"
-                    @click.stop="handleMuteTopic(entity.id, option.until)"
+                    @click.stop="
+                      handleMuteTopic(entity.id, option.until, selectedMuteReason)
+                    "
                   >
                     <span>{{ option.label }}</span>
                     <small>{{ formatMutedUntil(option.until) }}</small>
@@ -786,6 +813,9 @@ import {
   chromeAPI,
   getTopicDeferPresetOptions,
   getTopicMutePresetOptions,
+  getTopicMuteReasonLabel,
+  getTopicMuteReasonOptions,
+  type TopicMuteReasonKey,
 } from '../memory-store';
 import { getSafeExternalUrl } from '../topic-link-safety';
 import {
@@ -825,6 +855,8 @@ const activeDeferTopicId = ref<string | null>(null);
 const activeMuteTopicId = ref<string | null>(null);
 const topicDeferOptions = ref(getTopicDeferPresetOptions());
 const topicMuteOptions = ref(getTopicMutePresetOptions());
+const topicMuteReasons = ref(getTopicMuteReasonOptions());
+const selectedMuteReason = ref<TopicMuteReasonKey>('not-now');
 const formatDateTimeLocal = (timestamp = Date.now() + 60 * 60 * 1000) => {
   const date = new Date(timestamp);
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -1119,6 +1151,10 @@ const formatMutedUntil = (timestamp?: number | null) => {
   return `到 ${formatDeferredUntil(timestamp)}`;
 };
 
+const formatMutedReason = (reason?: string) => {
+  return getTopicMuteReasonLabel(reason);
+};
+
 const handleMarkAsHighlightProject = async (entity: any) => {
   try {
     // 通过Chrome API获取现有的重点项目列表
@@ -1248,6 +1284,8 @@ const toggleTopicMuteMenu = (topicId: string) => {
 
   activeDeferTopicId.value = null;
   topicMuteOptions.value = getTopicMutePresetOptions();
+  topicMuteReasons.value = getTopicMuteReasonOptions();
+  selectedMuteReason.value = 'not-now';
   activeMuteTopicId.value = topicId;
 };
 
@@ -1265,7 +1303,11 @@ const handleDeferTopicForLater = async (topicId: string, until?: number) => {
   await store.deferTopicForLater(topicId, until);
 };
 
-const handleMuteTopic = async (topicId: string, until?: number | null) => {
+const handleMuteTopic = async (
+  topicId: string,
+  until?: number | null,
+  reason: TopicMuteReasonKey = selectedMuteReason.value,
+) => {
   activeMuteTopicId.value = null;
   const cardElement = document.querySelector(
     `[data-topic-id="${topicId}"]`,
@@ -1276,7 +1318,7 @@ const handleMuteTopic = async (topicId: string, until?: number | null) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
-  await store.muteTopic(topicId, until);
+  await store.muteTopic(topicId, until, reason);
 };
 
 const handleCustomDefer = async (topicId: string) => {
@@ -1797,6 +1839,60 @@ watch(
   outline: none;
   background: rgba(245, 158, 11, 0.12);
   color: #ffffff;
+}
+
+.topic-menu-label {
+  margin: 0.15rem 0.65rem 0.35rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.topic-mute-reasons {
+  padding: 0.2rem 0 0.4rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.topic-mute-reason-grid {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.topic-mute-reason-option {
+  display: grid;
+  gap: 0.12rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.topic-mute-reason-option span {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.topic-mute-reason-option small {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.topic-mute-reason-option:hover,
+.topic-mute-reason-option:focus-visible {
+  outline: none;
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(100, 116, 139, 0.12);
+}
+
+.topic-mute-reason-option.active {
+  border-color: rgba(96, 165, 250, 0.36);
+  background: rgba(37, 99, 235, 0.16);
+  color: #bfdbfe;
 }
 
 .topic-custom-defer {

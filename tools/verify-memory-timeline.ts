@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 
 import {
+  formatTimelineClockTime,
+  formatTimelineExactTime,
   formatTimelineTime,
   getTimelineRangeSeconds,
+  getTimelineDateTimeValue,
+  groupTimelineEventsByDay,
   mapRecallItemsToTimelineEvents,
   normalizeTimelineScope,
   parseTimelineFocus,
@@ -95,11 +99,63 @@ assert.equal(events[0].sourceUrl, 'https://example.com/source');
 assert.deepEqual(events[0].channels, ['time', 'fts']);
 assert.equal(events[1].id, 'older');
 
-assert.equal(formatTimelineTime(Math.floor(fixedNoon / 1000), fixedNoon), '刚刚');
+assert.equal(
+  formatTimelineTime(Math.floor(fixedNoon / 1000), fixedNoon),
+  '刚刚',
+);
 assert.equal(
   formatTimelineTime(Math.floor((fixedNoon - 3 * 60_000) / 1000), fixedNoon),
   '3分钟前',
 );
 assert.equal(formatTimelineTime(undefined, fixedNoon), '时间未知');
+assert.equal(
+  getTimelineDateTimeValue(Math.floor(fixedNoon / 1000)),
+  new Date(fixedNoon).toISOString(),
+);
+assert.match(formatTimelineExactTime(Math.floor(fixedNoon / 1000)), /2026/);
+assert.match(formatTimelineClockTime(Math.floor(fixedNoon / 1000)), /12:34/);
+
+const grouped = groupTimelineEventsByDay(
+  [
+    {
+      id: 'today-1',
+      resultKey: 'message:today-1',
+      type: 'message',
+      title: 'Today memory',
+      content: 'Today content',
+      timestamp: Math.floor(fixedNoon / 1000),
+      sourceTitle: 'Meeting notes',
+      channels: ['time'],
+    },
+    {
+      id: 'today-2',
+      resultKey: 'chunk:today-2',
+      type: 'chunk',
+      title: 'Second memory',
+      content: 'Second content',
+      timestamp: Math.floor((fixedNoon - 60_000) / 1000),
+      source: 'manual',
+      channels: ['time'],
+    },
+    {
+      id: 'yesterday-1',
+      resultKey: 'message:yesterday-1',
+      type: 'message',
+      title: 'Yesterday memory',
+      content: 'Yesterday content',
+      timestamp: Math.floor((fixedNoon - 24 * 60 * 60_000) / 1000),
+      source: 'manual',
+      channels: ['time'],
+    },
+  ],
+  fixedNoon,
+);
+
+assert.equal(grouped.length, 2);
+assert.ok(grouped[0].label.startsWith('今天 · '));
+assert.equal(grouped[0].summary, '2 条记忆 · Meeting notes、manual');
+assert.equal(grouped[0].events.length, 2);
+assert.ok(grouped[1].label.startsWith('昨天 · '));
+assert.equal(grouped[1].summary, '1 条记忆 · manual');
 
 console.log('verify-memory-timeline: ok');

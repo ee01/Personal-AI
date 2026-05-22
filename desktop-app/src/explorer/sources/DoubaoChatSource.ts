@@ -13,6 +13,7 @@ import { ExplorerExtractor } from '../extractor.js';
 import type {
   ExplorationCursor,
   ExplorerTransportStatus,
+  ExplorerRunSummary,
   RawMessageRecord,
 } from '../types.js';
 import { filterDoubaoSyncMessages } from './doubaoSyncFilter.js';
@@ -270,7 +271,7 @@ export class DoubaoChatSource {
     return { url, opened: true, implemented: true };
   }
 
-  async runNow(): Promise<{ insertedCount?: number; implemented?: boolean }> {
+  async runNow(): Promise<Partial<ExplorerRunSummary> & { implemented?: boolean }> {
     const settings = this.settingsStore.getSettings().explorer;
     const authStatus = await this.client.probeAuthStatus();
     if (authStatus !== 'connected') {
@@ -338,7 +339,7 @@ export class DoubaoChatSource {
       }
     }
 
-    await this.extractor.extractPendingMessages({
+    const extraction = await this.extractor.extractPendingMessages({
       source: 'doubao',
       defaultScope: settings.doubao.defaultScope,
       autoClassify: settings.autoClassify,
@@ -348,7 +349,14 @@ export class DoubaoChatSource {
       await this.cursorStore.upsert(cursor);
     }
 
-    return { insertedCount, implemented: true };
+    return {
+      insertedCount,
+      extractedConversationCount: extraction.conversationCount,
+      extractedMessageCount: extraction.messageCount,
+      artifactCount: extraction.artifactCount,
+      skippedConversationCount: extraction.skippedConversationCount,
+      implemented: true,
+    };
   }
 
   getTransportStatus(): ExplorerTransportStatus | undefined {

@@ -7,17 +7,21 @@ import {
   escapeHtml,
   extractDesignLinks,
   formatDesignStatusLabel,
+  formatDesignUpdatedDate,
+  getDesignAttentionLevel,
   getDesignDisplayLabel,
   getDesignDisplayPriority,
   getDesignDisplayStatusTone,
   getDesignStatusTone,
   getDesignSourceLabel,
+  getDesignUrlDedupeKey,
   getFigmaDisplayLabel,
   getUXEpicStatusTone,
   matchesDesignDomain,
   matchesProjectPattern,
   normalizeDesignUrl,
   normalizeFigmaUrl,
+  parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
   sortDesignDisplayItems,
 } from '../src/jiraDesignLinks.ts';
@@ -37,13 +41,35 @@ function verifyUrlNormalization() {
     'https://www.figma.com/design/abc/Spec',
   );
   assert.equal(normalizeFigmaUrl('https://notfigma.com/design/abc'), null);
+  assert.equal(normalizeFigmaUrl('https://www.figma.com/community/plugin/123-demo'), null);
   assert.equal(normalizeFigmaUrl('javascript:alert(1)'), null);
+  assert.equal(
+    getDesignUrlDedupeKey('https://www.figma.com/design/abc123/Spec?node-id=89%3A6&t=share'),
+    getDesignUrlDedupeKey('https://www.figma.com/design/abc123/Renamed?node-id=89-6'),
+  );
+  assert.notEqual(
+    getDesignUrlDedupeKey('https://www.figma.com/design/abc123/Spec?node-id=89%3A6'),
+    getDesignUrlDedupeKey('https://www.figma.com/design/abc123/Spec?node-id=89-7'),
+  );
   assert.equal(normalizeDesignUrl('https://example.com/design'), 'https://example.com/design');
   assert.equal(normalizeDesignUrl('/browse/UX-123'), null);
   assert.equal(classifyDesignUrl('https://miro.com/app/board/uXjVdemo')?.label, 'Miro board');
   assert.equal(classifyDesignUrl('https://docs.google.com/presentation/d/abc/edit')?.label, 'Google Slides');
+  assert.equal(classifyDesignUrl('https://www.figma.com/slides/abc/demo')?.label, 'Figma Slides');
+  assert.equal(classifyDesignUrl('https://app.zeplin.io/project/abc/screen/def')?.label, 'Zeplin screen');
+  assert.equal(classifyDesignUrl('https://app.zeplin.io/project/abc/section/def')?.label, 'Zeplin section');
+  assert.equal(classifyDesignUrl('https://app.zeplin.io/project/abc/flow/def')?.label, 'Zeplin flow');
+  assert.equal(classifyDesignUrl('https://app.zeplin.io/project/abc/components?coid=123')?.label, 'Zeplin component');
+  assert.equal(classifyDesignUrl('https://app.zeplin.io/project/abc')?.label, 'Zeplin project');
+  assert.equal(classifyDesignUrl('https://zpl.io/abc123')?.label, 'Zeplin design');
+  assert.equal(classifyDesignUrl('https://app.zeplin.io/profile'), null);
+  assert.equal(classifyDesignUrl('https://zeplin.io/integrations/jira'), null);
   assert.equal(classifyDesignUrl('https://example.com/design'), null);
   assert.equal(classifyDesignUrl('https://example.com/design', true)?.label, 'Design link');
+  assert.equal(classifyDesignUrl('https://www.figma.com/community/plugin/123-demo', true)?.label, 'Design link');
+  assert.equal(parseJiraIssueKeyFromUrl('https://jira.example.com/browse/ux-123/?focusedCommentId=1'), 'UX-123');
+  assert.equal(parseJiraIssueKeyFromUrl('/browse/UXDES-300/'), 'UXDES-300');
+  assert.equal(parseJiraIssueKeyFromUrl('Issue UX-456 mentioned in text'), 'UX-456');
   assert.deepEqual(
     parseDesignDomainPatterns('https://prototype.internal/path, *.design.local; .handoff.example.com'),
     ['prototype.internal', '*.design.local', 'handoff.example.com'],
@@ -70,6 +96,12 @@ function verifyUrlNormalization() {
     extractDesignLinks('See https://www.loom.com/share/abc, then https://www.loom.com/share/abc.').map(item => item.label),
     ['Loom walkthrough'],
   );
+  assert.deepEqual(
+    extractDesignLinks(
+      'See https://www.figma.com/design/abc123/Spec?node-id=89%3A6&t=share and https://www.figma.com/design/abc123/Renamed?node-id=89-6.',
+    ).map(item => item.label),
+    ['Figma Design'],
+  );
 }
 
 function verifyEscaping() {
@@ -77,6 +109,12 @@ function verifyEscaping() {
     escapeHtml('<img src=x onerror=alert(1)> "quote"'),
     '&lt;img src=x onerror=alert(1)&gt; &quot;quote&quot;',
   );
+}
+
+function verifyDesignUpdatedDates() {
+  assert.equal(formatDesignUpdatedDate('2026-05-18T10:20:00.000+0000'), '2026-05-18');
+  assert.equal(formatDesignUpdatedDate('Mon, 18 May 2026 10:20:00 GMT'), '2026-05-18');
+  assert.equal(formatDesignUpdatedDate('not a date'), undefined);
 }
 
 function verifySourceLabels() {
@@ -89,6 +127,7 @@ function verifySourceLabels() {
 function verifyFigmaLabels() {
   assert.equal(getFigmaDisplayLabel('https://www.figma.com/proto/abc/demo'), 'Figma Prototype');
   assert.equal(getFigmaDisplayLabel('https://www.figma.com/board/abc/demo'), 'FigJam Board');
+  assert.equal(getFigmaDisplayLabel('https://www.figma.com/slides/abc/demo'), 'Figma Slides');
   assert.equal(getFigmaDisplayLabel('https://www.figma.com/design/abc/demo'), 'Figma Design');
   assert.equal(
     getDesignDisplayLabel({
@@ -129,6 +168,7 @@ function verifyDedupe() {
       url: 'https://www.figma.com/design/abc/demo',
       title: 'Ready checkout prototype',
       status: 'Ready for dev',
+      updatedAt: '2026-05-18T10:20:00.000+0000',
       source: 'remote_link',
     },
     {
@@ -186,7 +226,33 @@ function verifyDedupe() {
   assert.equal((deduped[1] as any).designStatus, 'Ready for dev');
   assert.equal((deduped[1] as any).designLabel, 'Ready checkout prototype');
   assert.equal((deduped[1] as any).summary, 'Ready checkout prototype');
+  assert.equal((deduped[1] as any).designUpdatedAt, '2026-05-18T10:20:00.000+0000');
   assert.equal((deduped[2] as any).uxTicketKey, 'UX-124');
+
+  const encodedFigmaItems: DesignDisplayItem[] = [
+    {
+      type: 'figma',
+      url: 'https://www.figma.com/design/abc123/Checkout?node-id=1%3A2&t=share',
+      source: 'description',
+      title: 'Checkout handoff',
+    },
+    {
+      type: 'figma',
+      url: 'https://www.figma.com/design/abc123/Renamed?node-id=1-2',
+      source: 'remote_link',
+      title: 'Ready checkout handoff',
+      status: 'ready_for_development',
+      updatedAt: '2026-05-18T10:20:00.000+0000',
+    },
+  ];
+
+  const encodedDeduped = dedupeDesignData(encodedFigmaItems);
+  assert.equal(encodedDeduped.length, 1);
+  assert.equal(encodedDeduped[0].type, 'figma');
+  assert.equal((encodedDeduped[0] as any).source, 'description, remote_link');
+  assert.equal((encodedDeduped[0] as any).title, 'Ready checkout handoff');
+  assert.equal((encodedDeduped[0] as any).status, 'ready_for_development');
+  assert.equal((encodedDeduped[0] as any).updatedAt, '2026-05-18T10:20:00.000+0000');
 }
 
 function verifyStatusTones() {
@@ -252,18 +318,23 @@ function verifyDisplayOrdering() {
   const sorted = sortDesignDisplayItems(items);
   assert.equal(getDesignDisplayPriority(sorted[0]), 0);
   assert.equal(getDesignDisplayStatusTone(sorted[0]), 'ready');
+  assert.equal(getDesignAttentionLevel(sorted[0]), 'ready');
   assert.equal((sorted[0] as any).uxTicketKey, 'UX-123');
   assert.equal((sorted[1] as any).status, 'Design updated');
   assert.equal(getDesignDisplayStatusTone(sorted[1]), 'updated');
+  assert.equal(getDesignAttentionLevel(sorted[1]), 'updated');
   assert.equal((sorted[2] as any).linkProvided, false);
   assert.equal(getDesignDisplayStatusTone(sorted[2]), 'missing');
+  assert.equal(getDesignAttentionLevel(sorted[2]), 'missing');
   assert.equal(sorted[3].type, 'figma');
   assert.equal(getDesignDisplayStatusTone(sorted[3]), 'neutral');
+  assert.equal(getDesignAttentionLevel(sorted[3]), 'neutral');
 }
 
 verifyProjectPatternMatching();
 verifyUrlNormalization();
 verifyEscaping();
+verifyDesignUpdatedDates();
 verifySourceLabels();
 verifyFigmaLabels();
 verifyDedupe();

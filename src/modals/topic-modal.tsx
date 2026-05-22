@@ -22,8 +22,10 @@ import {
 import { generateAutoReply } from '../llm';
 import { getTaskEnabled } from '../services/taskSchedulerDefinitions';
 import {
+  buildOutreachWatchRulesFromRuntimeStatus,
   mergeManualConcernedItemsPreservingSystem,
   partitionConcernedItems,
+  type OutreachWatchRule,
 } from '../watchRules';
 import {
   buildLinkedActionDraftPrefill,
@@ -33,7 +35,10 @@ import {
   isPendingLinkedActionConfigFresh,
   shouldAutoRequestLinkedActionSuggestion,
 } from './linkedActionHelpers';
-import { getRuleSafetySummary } from './topic-rule-safety';
+import {
+  getRuleActionSummaryItems,
+  getRuleSafetySummary,
+} from './topic-rule-safety';
 
 // 自动答复配置接口
 interface AutoReplyConfig {
@@ -158,57 +163,6 @@ const getScopeSummaryText = (params: {
   return `${group} / ${sender}`;
 };
 
-const hasNotifyMethod = (notifyMethod: string, method: string): boolean =>
-  notifyMethod
-    .split(',')
-    .map((value) => value.trim())
-    .includes(method);
-
-const buildActionSummaryItems = (params: {
-  notifyMethod: string;
-  mentionMe: boolean;
-  digestEnabled: boolean;
-  digestFrequency: 'daily' | 'weekly';
-  autoReply: boolean;
-  autoReplyMode: AutoReplyConfig['reviewMode'];
-  followThread: boolean;
-  automationPrompt?: string;
-  automationRequiresApproval: boolean;
-}): string[] => {
-  const items = ['写入记忆'];
-
-  if (hasNotifyMethod(params.notifyMethod, 'bot')) {
-    items.push(params.digestEnabled ? `${params.digestFrequency === 'weekly' ? '每周' : '每日'}摘要` : 'Glip 推送');
-  }
-  if (hasNotifyMethod(params.notifyMethod, 'chrome')) {
-    items.push('Chrome 通知');
-  }
-  if (params.mentionMe && hasNotifyMethod(params.notifyMethod, 'bot')) {
-    items.push('@我');
-  }
-  if (params.autoReply) {
-    const modeLabel =
-      params.autoReplyMode === 'manual'
-        ? '手动审核'
-        : params.autoReplyMode === 'delayed'
-          ? '延迟可拦截'
-          : '直接发送';
-    items.push(`自动答复：${modeLabel}`);
-  }
-  if (params.followThread) {
-    items.push('关注后续');
-  }
-  if (normalizeOptionalRuleText(params.automationPrompt)) {
-    items.push(
-      params.automationRequiresApproval
-        ? '联动操作：需批准'
-        : '联动操作：自动执行',
-    );
-  }
-
-  return items;
-};
-
 interface TabResponse {
   success: boolean;
   error?: string;
@@ -296,6 +250,24 @@ interface AutomationPreviewState {
   error?: string;
 }
 
+interface SystemObservationSnapshot {
+  status: 'idle' | 'loading' | 'ready' | 'unavailable' | 'failed';
+  total: number;
+  templates: number;
+  sessions: number;
+  waitingReply: number;
+  scheduled: number;
+  pendingApproval: number;
+  deferred: number;
+  samples: Array<{
+    ruleRef: string;
+    title: string;
+    subtitle: string;
+    statusLabel: string;
+  }>;
+  error?: string;
+}
+
 interface PendingMessageRuleImprovement {
   schema: 'message_rule_improvement.v1';
   requestId?: string;
@@ -362,6 +334,18 @@ const TopicModal = () => {
   const [dragOverItem, setDragOverItem] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [envConfig, setEnvConfig] = useState<EnvConfigType | null>(null);
+  const [systemObservationSnapshot, setSystemObservationSnapshot] =
+    useState<SystemObservationSnapshot>({
+      status: 'idle',
+      total: 0,
+      templates: 0,
+      sessions: 0,
+      waitingReply: 0,
+      scheduled: 0,
+      pendingApproval: 0,
+      deferred: 0,
+      samples: [],
+    });
   const [analysisProgress, setAnalysisProgress] = useState<{
     total: number;
     lastAnalyzedIndex: number;
@@ -1362,6 +1346,135 @@ const TopicModal = () => {
     Boolean(topic.automationPrompt?.trim()),
   );
 
+  const getSystemObservationStatusLabel = (rule: OutreachWatchRule) => {
+    if (rule.runtimeScope === 'template') {
+      return '发送前观察';
+    }
+    switch (rule.sessionStatus) {
+      case 'pending_approval':
+        return '待批准发送';
+      case 'scheduled':
+        return '已排程待发';
+      case 'waiting_reply':
+        return '等待回复';
+      case 'deferred':
+        return '延后观察';
+      default:
+        return '运行中';
+    }
+  };
+
+  const getSystemObservationTitle = (rule: OutreachWatchRule) => {
+    const target = rule.targetLabel || rule.targetRef || '未知目标';
+    return `${target} · ${getSystemObservationStatusLabel(rule)}`;
+  };
+
+  const getSystemObservationSubtitle = (rule: OutreachWatchRule) => {
+    const question = rule.renderedQuestion?.trim() || rule.text;
+    return question.length > 72 ? `${question.slice(0, 72)}...` : question;
+  };
+
+  const summarizeSystemObservationRules = (
+    rules: OutreachWatchRule[],
+  ): SystemObservationSnapshot => {
+    const snapshot: SystemObservationSnapshot = {
+      status: 'ready',
+      total: rules.length,
+      templates: 0,
+      sessions: 0,
+      waitingReply: 0,
+      scheduled: 0,
+      pendingApproval: 0,
+      deferred: 0,
+      samples: [],
+    };
+
+    rules.forEach((rule) => {
+      if (rule.runtimeScope === 'template') {
+        snapshot.templates += 1;
+      } else {
+        snapshot.sessions += 1;
+      }
+
+      switch (rule.sessionStatus) {
+        case 'pending_approval':
+          snapshot.pendingApproval += 1;
+          break;
+        case 'scheduled':
+          snapshot.scheduled += 1;
+          break;
+        case 'waiting_reply':
+          snapshot.waitingReply += 1;
+          break;
+        case 'deferred':
+          snapshot.deferred += 1;
+          break;
+        default:
+          break;
+      }
+    });
+
+    snapshot.samples = rules.slice(0, 3).map((rule) => ({
+      ruleRef: rule.ruleRef,
+      title: getSystemObservationTitle(rule),
+      subtitle: getSystemObservationSubtitle(rule),
+      statusLabel: getSystemObservationStatusLabel(rule),
+    }));
+
+    return snapshot;
+  };
+
+  const loadSystemObservationSnapshot = async () => {
+    if (!memoryServiceConfigured) {
+      setSystemObservationSnapshot({
+        status: 'unavailable',
+        total: 0,
+        templates: 0,
+        sessions: 0,
+        waitingReply: 0,
+        scheduled: 0,
+        pendingApproval: 0,
+        deferred: 0,
+        samples: [],
+      });
+      return;
+    }
+
+    setSystemObservationSnapshot((current) => ({
+      ...current,
+      status: 'loading',
+      error: undefined,
+    }));
+    try {
+      const response = await getMemoryServiceClient().getOutreachTemplateRuntimeStatus(
+        undefined,
+        200,
+      );
+      const rules = buildOutreachWatchRulesFromRuntimeStatus(
+        response.items || [],
+      );
+      setSystemObservationSnapshot(summarizeSystemObservationRules(rules));
+    } catch (error: any) {
+      console.warn('Failed to load system observation watch rules:', error);
+      setSystemObservationSnapshot({
+        status: 'failed',
+        total: 0,
+        templates: 0,
+        sessions: 0,
+        waitingReply: 0,
+        scheduled: 0,
+        pendingApproval: 0,
+        deferred: 0,
+        samples: [],
+        error: error?.message || '系统观察摘要暂时不可用。',
+      });
+    }
+  };
+
+  useEffect(() => {
+    void loadSystemObservationSnapshot();
+  }, [memoryServiceConfigured]);
+
   useEffect(() => {
     if (
       shouldAutoRequestLinkedActionSuggestion({
@@ -1563,11 +1676,28 @@ const TopicModal = () => {
       automationRequiresApproval: topic.automationRequiresApproval,
     });
 
-  const formatDigestScheduleChip = (digestConfig: DigestConfigType) => {
+  const getTopicActionSummaryItems = (topic: TopicItem) =>
+    getRuleActionSummaryItems({
+      notifyMethod: topic.notifyMethod || '',
+      mentionMe: Boolean(topic.mentionMe),
+      digestEnabled: Boolean(topic.digestConfig?.enabled) && !topic.followThread,
+      digestFrequency: topic.digestConfig?.frequency || 'daily',
+      autoReply: Boolean(topic.autoReply),
+      autoReplyMode: topic.autoReplyConfig?.reviewMode || 'delayed',
+      followThread: Boolean(topic.followThread),
+      automationPrompt: topic.automationPrompt,
+      automationRequiresApproval: topic.automationRequiresApproval === true,
+    });
+
+  const formatDigestScheduleChip = (
+    digestConfig: DigestConfigType,
+    options?: { suppressImmediate?: boolean },
+  ) => {
     const hour = normalizeConcernedItemsDigestHour(
       digestConfig.preferredHour,
       8,
     );
+    const suffix = options?.suppressImmediate ? '（不即时推送）' : '';
     if (digestConfig.frequency === 'weekly') {
       const weekday = getDigestWeekdayLabel(
         normalizeConcernedItemsDigestDayOfWeek(
@@ -1575,21 +1705,26 @@ const TopicModal = () => {
           1,
         ),
       );
-      return `✓ 每${weekday} ${hour}:00 摘要`;
+      return `✓ 每${weekday} ${hour}:00 摘要${suffix}`;
     }
-    return `✓ 每日 ${hour}:00 摘要`;
+    return `✓ 每日 ${hour}:00 摘要${suffix}`;
   };
 
   const getCapabilityChips = (topic: TopicItem) => {
     const chips = ['✓ 写入记忆'];
-    if ((topic.notifyMethod || '').includes('bot')) {
-      chips.push(topic.mentionMe ? '✓ Glip 推送 + @提醒' : '✓ Glip 推送');
-    }
-    if ((topic.notifyMethod || '').includes('chrome')) {
-      chips.push('✓ Chrome 通知');
-    }
     if (topic.digestConfig?.enabled) {
-      chips.push(formatDigestScheduleChip(topic.digestConfig));
+      chips.push(
+        formatDigestScheduleChip(topic.digestConfig, {
+          suppressImmediate: true,
+        }),
+      );
+    } else {
+      if ((topic.notifyMethod || '').includes('bot')) {
+        chips.push(topic.mentionMe ? '✓ Glip 推送 + @提醒' : '✓ Glip 推送');
+      }
+      if ((topic.notifyMethod || '').includes('chrome')) {
+        chips.push('✓ Chrome 通知');
+      }
     }
     if (topic.autoReply) {
       chips.push('✓ 自动答复');
@@ -1854,6 +1989,78 @@ const TopicModal = () => {
     );
   };
 
+  const renderSystemObservationSnapshot = () => {
+    const snapshot = systemObservationSnapshot;
+    const statusText =
+      snapshot.status === 'loading'
+        ? '正在读取系统观察'
+        : snapshot.status === 'failed'
+          ? '系统观察摘要不可用'
+          : snapshot.status === 'unavailable'
+            ? 'Memory Service 未配置'
+            : snapshot.total > 0
+              ? `${snapshot.total} 条内部观察正在运行`
+              : '当前没有运行中的内部观察';
+
+    return (
+      <div
+        className={`info-banner manual-banner system-observation-banner ${snapshot.status}`}
+      >
+        <div className="system-observation-head">
+          <div>
+            <strong>只显示你定义的记忆入口规则。</strong>
+            <span>
+              帮我问 /
+              自我反思等系统功能可能会临时挂内部观察规则，用于证据采集与入库；这些内部规则不会写入
+              concernedItems，也不会出现在这里。
+            </span>
+          </div>
+          <span
+            className={`system-observation-status ${
+              snapshot.status === 'ready' && snapshot.total > 0 ? 'active' : ''
+            }`}
+          >
+            {statusText}
+          </span>
+        </div>
+
+        {snapshot.status === 'ready' && snapshot.total > 0 && (
+          <>
+            <div className="system-observation-metrics">
+              <span>待发观察 {snapshot.templates + snapshot.scheduled}</span>
+              <span>等待回复 {snapshot.waitingReply}</span>
+              <span>待批准 {snapshot.pendingApproval}</span>
+              <span>延后 {snapshot.deferred}</span>
+            </div>
+            <div className="system-observation-list">
+              {snapshot.samples.map((item) => (
+                <div className="system-observation-item" key={item.ruleRef}>
+                  <span className="system-observation-item-status">
+                    {item.statusLabel}
+                  </span>
+                  <div>
+                    <div className="system-observation-item-title">
+                      {item.title}
+                    </div>
+                    <div className="system-observation-item-subtitle">
+                      {item.subtitle}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {snapshot.status === 'failed' && (
+          <span className="system-observation-error">
+            {snapshot.error || '请稍后刷新，手动规则仍可继续管理。'}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   const getFollowThreadSummary = (topic: TopicItem) => {
     if (!topic.followThread || !topic.followConfig) return '';
     const relatedMessages = topic.followConfig.relatedMessages;
@@ -1864,7 +2071,7 @@ const TopicModal = () => {
     return `已捕获 ${relatedMessages.length} 条关联消息`;
   };
 
-  const newRuleActionItems = buildActionSummaryItems({
+  const newRuleActionItems = getRuleActionSummaryItems({
     notifyMethod: newNotifyMethod || '',
     mentionMe: newMentionMe,
     digestEnabled: newDigestEnabled && !newFollowThread,
@@ -1929,14 +2136,7 @@ const TopicModal = () => {
         <span className="status-pill muted">{formatAnalysisStatus()}</span>
       </div>
 
-      <div className="info-banner manual-banner">
-        <strong>只显示你定义的记忆入口规则。</strong>
-        <span>
-          帮我问 /
-          自我反思等系统功能可能会临时挂内部观察规则，用于证据采集与入库；这些内部规则不会写入
-          concernedItems，也不会出现在这里。
-        </span>
-      </div>
+      {renderSystemObservationSnapshot()}
 
       {hasAutomationRules && !openClawConfigured && (
         <div className="warning-banner automation-banner">
@@ -2479,9 +2679,8 @@ const TopicModal = () => {
                   </div>
                 </div>
 
-                {/* 编辑时的每日摘要配置区域 */}
-                {(editingTopic.notifyMethod || '').includes('bot') &&
-                  !editingTopic.followThread && (
+                {/* 编辑时的摘要配置区域 */}
+                {!editingTopic.followThread && (
                     <div className="digest-config">
                       <div className="config-section">
                         <div className="checkbox-container">
@@ -2853,6 +3052,44 @@ const TopicModal = () => {
                   </div>
                 )}
 
+                <div
+                  className="rule-path-preview edit-preview"
+                  aria-label="编辑规则触发与动作预览"
+                >
+                  <div className="rule-path-step">
+                    <span className="rule-path-label">当</span>
+                    <strong>{editingTopic.text.trim() || '未填写消息模式'}</strong>
+                    <p>
+                      {getScopeSummaryText({
+                        filterSender: editingTopic.filterSender,
+                        filterGroup: editingTopic.filterGroup,
+                      })}
+                    </p>
+                  </div>
+                  <div className="rule-path-step then">
+                    <span className="rule-path-label">则</span>
+                    <div className="rule-action-chip-row">
+                      {getTopicActionSummaryItems(editingTopic).map((item) => (
+                        <span className="rule-badge muted" key={item}>
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div
+                    className={`rule-safety-strip ${getTopicSafetySummary(editingTopic).tone}`}
+                  >
+                    <span
+                      className={`rule-badge safety-${getTopicSafetySummary(editingTopic).tone}`}
+                    >
+                      {getTopicSafetySummary(editingTopic).label}
+                    </span>
+                    <span>
+                      {getTopicSafetySummary(editingTopic).reasons.join(' / ')}
+                    </span>
+                  </div>
+                </div>
+
                 <div className="form-buttons">
                   <button onClick={handleSaveEdit}>保存</button>
                   <button
@@ -3176,8 +3413,8 @@ const TopicModal = () => {
             </div>
           </div>
 
-	          {/* 每日摘要配置区域（仅在启用 Glip 推送且非关注后续模式时显示） */}
-          {(newNotifyMethod || '').includes('bot') && !newFollowThread && (
+		          {/* 摘要配置区域（非关注后续模式时显示） */}
+          {!newFollowThread && (
             <div className="digest-config">
               <div className="config-section">
                 <div className="checkbox-container">
@@ -4404,6 +4641,91 @@ const TopicModal = () => {
                     color: #f8fbff;
                 }
 
+                .system-observation-banner {
+                    gap: 12px;
+                }
+
+                .system-observation-head {
+                    display: flex;
+                    align-items: flex-start;
+                    justify-content: space-between;
+                    gap: 14px;
+                }
+
+                .system-observation-head > div {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+
+                .system-observation-status {
+                    flex: 0 0 auto;
+                    display: inline-flex;
+                    align-items: center;
+                    min-height: 28px;
+                    padding: 5px 10px;
+                    border-radius: 999px;
+                    background: rgba(15, 23, 42, 0.48);
+                    color: #bfdbfe;
+                    font-size: 12px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .system-observation-status.active {
+                    background: rgba(34, 197, 94, 0.16);
+                    color: #bbf7d0;
+                }
+
+                .system-observation-metrics {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }
+
+                .system-observation-metrics span,
+                .system-observation-item-status {
+                    display: inline-flex;
+                    align-items: center;
+                    min-height: 24px;
+                    padding: 4px 8px;
+                    border-radius: 999px;
+                    background: rgba(15, 23, 42, 0.38);
+                    color: #dbeafe;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+
+                .system-observation-list {
+                    display: grid;
+                    gap: 8px;
+                }
+
+                .system-observation-item {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 10px;
+                    align-items: flex-start;
+                    padding: 10px 12px;
+                    border: 1px solid rgba(147, 197, 253, 0.2);
+                    border-radius: 10px;
+                    background: rgba(15, 23, 42, 0.22);
+                }
+
+                .system-observation-item-title {
+                    color: #eff6ff;
+                    font-size: 13px;
+                    font-weight: 700;
+                    line-height: 1.35;
+                }
+
+                .system-observation-item-subtitle,
+                .system-observation-error {
+                    color: #bfdbfe;
+                    font-size: 12px;
+                    line-height: 1.45;
+                }
+
                 .warning-banner {
                     background: rgba(245, 158, 11, 0.14);
                     border: 1px solid rgba(245, 158, 11, 0.32);
@@ -4956,10 +5278,19 @@ const TopicModal = () => {
 
 	                    .warning-content,
 	                    .section-head,
+	                    .system-observation-head,
 	                    .rule-card-top,
 	                    .rule-block {
 	                        flex-direction: column;
 	                        align-items: flex-start;
+	                    }
+
+	                    .system-observation-status {
+	                        white-space: normal;
+	                    }
+
+	                    .system-observation-item {
+	                        grid-template-columns: 1fr;
 	                    }
 
 	                    .rule-path-preview {

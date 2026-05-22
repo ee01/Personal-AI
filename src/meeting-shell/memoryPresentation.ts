@@ -5,6 +5,30 @@ import type {
 } from '../services/MemoryServiceClient';
 import type { MeetingPilotMemoryRef } from './protocol';
 
+type ContextRecallMatchV2 = ContextRecallMatch & {
+  uiSummary?: string;
+  whyRelevant?: string[];
+  matchedAnchors?: {
+    people?: string[];
+    topics?: string[];
+    projects?: string[];
+    source?: string[];
+  };
+  suppressionReason?: string;
+  reasonType?: string;
+  evidenceRole?: string;
+  displayPriority?: 'p1' | 'p2' | 'hidden';
+  metadata?: Record<string, unknown>;
+  mergedCount?: number;
+  mergedIds?: string[];
+  sourceClusterKey?: string;
+};
+
+type MeetingPilotContextRecallRequestV2 = ContextRecallRequest & {
+  sourceContext?: Record<string, unknown>;
+  exclude?: Record<string, unknown>;
+};
+
 const GENERIC_SOURCE_LABELS = new Set([
   'meeting',
   'manual',
@@ -13,6 +37,10 @@ const GENERIC_SOURCE_LABELS = new Set([
   'jira',
   'memory-service',
   'memory service',
+  'ringcentral 消息',
+  'ringcentral message',
+  '时间',
+  '消息',
 ]);
 
 function stripMarkup(value: string): string {
@@ -68,6 +96,12 @@ function cleanTitle(value?: string): string | undefined {
     .replace(/\s+(?:—|-)\s+Meeting$/i, '')
     .trim();
   if (!cleaned) return undefined;
+  if (
+    GENERIC_SOURCE_LABELS.has(cleaned.toLowerCase()) ||
+    /^(ringcentral\s+消息|消息|时间|相关记忆|@?[\p{Letter}\p{Mark}\s.'()_-]{1,64}\s+wrote\s*[:：]?)$/iu.test(cleaned)
+  ) {
+    return undefined;
+  }
   const firstPart = cleaned
     .split(/\s+(?:—|-|｜|\|)\s+/)
     .map((part) => part.trim())
@@ -99,11 +133,15 @@ function resolveTitle(item: RecallItem, snippet: string): string {
 export interface BuildMeetingPilotContextRecallArgs {
   /** Current meeting id to exclude from recall (self-echo protection). */
   excludeMeetingId?: string;
+  meetingUrl?: string;
   meetingTitle: string;
+  participants?: string[];
   currentTopic?: string;
   summary?: string;
   transcriptSummary?: string;
   screenObservation?: string;
+  actionSummary?: string;
+  decisionSummary?: string;
   meetingMetadata?: string;
 }
 
@@ -132,6 +170,71 @@ function dropBoilerplateLines(text: string): string {
     .trim();
 }
 
+function hasMeaningfulMeetingRecallSignal(value?: string): boolean {
+  const cleaned = dropBoilerplateLines(sanitizeMemoryText(value ?? ''));
+  if (cleaned.length < 12) return false;
+  if (/^(ringcentral video|live discussion|waiting for context)$/i.test(cleaned)) {
+    return false;
+  }
+  return /[A-Za-z0-9\u3400-\u9fff]{4,}/.test(cleaned);
+}
+
+const REASON_LABELS: Record<string, string> = {
+  same_project: '同一项目',
+  same_people: '相关参会人',
+  open_action: '未关闭行动项',
+  prior_decision: '历史决策',
+  linked_artifact: '相关资料',
+  meeting_series: '同系列会议',
+  weak_related: '相关背景',
+  semantic: '语义相关',
+  keyword: '关键词匹配',
+  source: '来源相关',
+  recent: '近期上下文',
+  entity: '实体关联',
+};
+
+const EVIDENCE_ROLE_LABELS: Record<string, string> = {
+  decision: '历史决策',
+  action: '行动项',
+  action_item: '行动项',
+  risk: '风险',
+  context: '背景',
+  artifact: '资料',
+  issue: '问题线索',
+};
+
+function getRelationLabel(match: ContextRecallMatchV2): string | undefined {
+  if (match.reasonType && REASON_LABELS[match.reasonType]) {
+    return REASON_LABELS[match.reasonType];
+  }
+  return match.whyMatched;
+}
+
+function getEvidenceRoleLabel(match: ContextRecallMatchV2): string | undefined {
+  if (match.evidenceRole && EVIDENCE_ROLE_LABELS[match.evidenceRole]) {
+    return EVIDENCE_ROLE_LABELS[match.evidenceRole];
+  }
+  return undefined;
+}
+
+export function isContextRecallMatchVisibleForMeetingPilot(
+  match: ContextRecallMatch,
+): boolean {
+  const v2 = match as ContextRecallMatchV2;
+  if (v2.displayPriority === 'hidden') return false;
+  if (Array.isArray(v2.whyRelevant) && v2.whyRelevant.some((item) => item.trim())) {
+    return true;
+  }
+  return (
+    v2.evidenceRole === 'action_item' ||
+    v2.evidenceRole === 'action' ||
+    v2.evidenceRole === 'decision' ||
+    v2.evidenceRole === 'issue' ||
+    v2.evidenceRole === 'risk'
+  );
+}
+
 /**
  * Build a ContextRecallRequest body for Meeting Pilot's passive memory hint
  * surface. The body avoids self-echo by trimming meeting boilerplate before
@@ -139,7 +242,7 @@ function dropBoilerplateLines(text: string): string {
  */
 export function buildMeetingPilotContextRecallRequest(
   args: BuildMeetingPilotContextRecallArgs,
-): ContextRecallRequest {
+): ContextRecallRequest | null {
   const cleanedPrimary = dropBoilerplateLines(
     sanitizeMemoryText(args.transcriptSummary ?? ''),
   );
@@ -151,6 +254,8 @@ export function buildMeetingPilotContextRecallRequest(
     cleanedScreenObservation
       ? `[共享画面 / OCR]\n${cleanedScreenObservation}`
       : '',
+    args.actionSummary ? `[行动项]\n${dropBoilerplateLines(sanitizeMemoryText(args.actionSummary))}` : '',
+    args.decisionSummary ? `[决策]\n${dropBoilerplateLines(sanitizeMemoryText(args.decisionSummary))}` : '',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -162,38 +267,99 @@ export function buildMeetingPilotContextRecallRequest(
     .map((part) => (part ? dropBoilerplateLines(sanitizeMemoryText(part)) : ''))
     .filter(Boolean) as string[];
 
-  return {
+  const hasRealSignal =
+    hasMeaningfulMeetingRecallSignal(primaryText) ||
+    hasMeaningfulMeetingRecallSignal(args.currentTopic) ||
+    hasMeaningfulMeetingRecallSignal(args.summary);
+
+  if (!hasRealSignal) {
+    return null;
+  }
+
+  const request: MeetingPilotContextRecallRequestV2 = {
     surface: 'meeting_passive',
     contextType: 'meeting',
     title: args.meetingTitle,
-    primaryText: primaryText || args.meetingTitle,
+    url: args.meetingUrl,
+    primaryText,
     secondaryTexts: secondary,
-    sourceTypes: ['meeting', 'manual', 'web', 'glip'],
+    entityHints: [
+      args.excludeMeetingId
+        ? { kind: 'meeting_id', value: args.excludeMeetingId }
+        : null,
+      ...(args.participants || [])
+        .map((participant) => participant.trim())
+        .filter(Boolean)
+        .slice(0, 8)
+        .map((participant) => ({ kind: 'person', value: participant })),
+    ].filter(Boolean) as Array<{ kind: string; value: string }>,
+    scope: 'work',
+    sourceTypes: ['meeting', 'manual', 'web', 'glip', 'jira', 'calendar', 'markdown'],
     limit: 3,
+    sourceContext: {
+      contextType: 'meeting',
+      sourceType: 'meeting',
+      url: args.meetingUrl,
+      meetingId: args.excludeMeetingId,
+      title: args.meetingTitle,
+      participants: args.participants || [],
+      topic: args.currentTopic,
+    },
+    exclude: {
+      meetingIds: args.excludeMeetingId ? [args.excludeMeetingId] : [],
+      urls: args.meetingUrl ? [args.meetingUrl] : [],
+    },
   };
+
+  return request;
 }
 
 export function contextMatchToMeetingPilotMemoryRef(
   match: ContextRecallMatch,
 ): MeetingPilotMemoryRef {
+  const v2 = match as ContextRecallMatchV2;
+  const summary = dropBoilerplateLines(sanitizeMemoryText(v2.uiSummary ?? ''));
   const fullSnippet = dropBoilerplateLines(sanitizeMemoryText(match.snippet));
   const previewClean = isBoilerplate(match.snippet) ? '' : match.snippet;
   const snippet = previewClean || fallbackPreview(fullSnippet);
   const title =
     cleanTitle(match.title) ||
+    cleanTitle(summary) ||
     cleanTitle(match.sourceTitle) ||
     (match.sourceLabel || 'memory-service');
+  const relationLabel = getRelationLabel(v2);
+  const evidenceRoleLabel = getEvidenceRoleLabel(v2);
 
   return {
     id: match.id,
+    type: match.type,
     title,
+    cueTitle: title,
+    cueBody: summary || fullSnippet || snippet,
     snippet: isBoilerplate(snippet) ? '' : snippet,
+    evidenceSnippet: fullSnippet || snippet,
     fullSnippet,
     score: match.score,
     sourceLabel: match.sourceLabel || 'memory-service',
+    sourceTitle: match.sourceTitle,
     sourceUrl: match.sourceUrl,
+    timestamp: match.timestamp,
+    matchedAt: Date.now(),
+    links: match.links,
     exploreLink: match.exploreLink,
     whyMatched: match.whyMatched,
+    whyRelevant: v2.whyRelevant,
+    matchedAnchors: v2.matchedAnchors,
+    suppressionReason: v2.suppressionReason,
+    reasonType: v2.reasonType,
+    relationLabel,
+    evidenceRole: v2.evidenceRole,
+    evidenceRoleLabel,
+    displayPriority: v2.displayPriority,
+    metadata: v2.metadata,
+    mergedCount: v2.mergedCount,
+    mergedIds: v2.mergedIds,
+    sourceClusterKey: v2.sourceClusterKey,
   };
 }
 

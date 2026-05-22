@@ -849,6 +849,9 @@ function showImportPreviewDialog(
     let selectedRuleIndex = 0;
     let select: HTMLSelectElement | null = null;
     let preventChainedTrigger = Boolean(exportedData.rules[0]?.canOtherRuleTrigger);
+    let highRiskReviewAcknowledged = false;
+    let highRiskAcknowledgementRequired = false;
+    let confirmButton: HTMLButtonElement | null = null;
 
     if (exportedData.rules.length > 1) {
       const selectLabel = doc.createElement('label');
@@ -934,6 +937,38 @@ function showImportPreviewDialog(
     safeguardBox.appendChild(chainedTriggerLabel);
     dialog.appendChild(safeguardBox);
 
+    const highRiskAcknowledgementBox = doc.createElement('div');
+    highRiskAcknowledgementBox.style.cssText = `
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #FFD2CC;
+      border-radius: 6px;
+      background: #FFEBE6;
+    `;
+
+    const highRiskAcknowledgementLabel = doc.createElement('label');
+    highRiskAcknowledgementLabel.style.cssText = 'display: flex; align-items: flex-start; gap: 8px; color: #172B4D; font-size: 13px; line-height: 1.45;';
+
+    const highRiskAcknowledgementCheckbox = doc.createElement('input');
+    highRiskAcknowledgementCheckbox.type = 'checkbox';
+    highRiskAcknowledgementCheckbox.style.cssText = 'margin-top: 2px;';
+
+    const highRiskAcknowledgementContent = doc.createElement('span');
+    const highRiskAcknowledgementTitle = doc.createElement('span');
+    highRiskAcknowledgementTitle.textContent = 'I reviewed the high-risk bindings before creating this disabled copy.';
+    highRiskAcknowledgementTitle.style.cssText = 'display: block; font-weight: 700; color: #AE2E24;';
+
+    const highRiskAcknowledgementText = doc.createElement('span');
+    highRiskAcknowledgementText.style.cssText = 'display: block; margin-top: 2px; color: #44546F;';
+
+    highRiskAcknowledgementContent.appendChild(highRiskAcknowledgementTitle);
+    highRiskAcknowledgementContent.appendChild(highRiskAcknowledgementText);
+    highRiskAcknowledgementLabel.appendChild(highRiskAcknowledgementCheckbox);
+    highRiskAcknowledgementLabel.appendChild(highRiskAcknowledgementContent);
+    highRiskAcknowledgementBox.appendChild(highRiskAcknowledgementLabel);
+    dialog.appendChild(highRiskAcknowledgementBox);
+
     const warningBox = doc.createElement('div');
     warningBox.style.cssText = `
       margin-bottom: 18px;
@@ -944,12 +979,28 @@ function showImportPreviewDialog(
     `;
     dialog.appendChild(warningBox);
 
+    const syncConfirmButtonState = () => {
+      if (!confirmButton) {
+        return;
+      }
+
+      const disabled = highRiskAcknowledgementRequired && !highRiskReviewAcknowledged;
+      confirmButton.disabled = disabled;
+      confirmButton.setAttribute('aria-disabled', String(disabled));
+      confirmButton.title = disabled
+        ? 'Review and acknowledge high-risk bindings before importing.'
+        : '';
+      confirmButton.style.opacity = disabled ? '0.55' : '1';
+      confirmButton.style.cursor = disabled ? 'not-allowed' : 'pointer';
+    };
+
     const renderRuleDetails = () => {
       const rule = exportedData.rules[selectedRuleIndex];
       const summary = summarizeJiraAutomationImportRule(rule);
       const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
       const reviewChecklist = buildJiraAutomationImportReviewChecklist(rule);
       const reviewFindings = buildJiraAutomationImportReviewFindings(rule);
+      const highRiskCount = reviewChecklist.filter((item) => item.severity === 'high').length;
       const defaultImportedRuleName = buildJiraAutomationImportedRuleName(rule.name);
       const importedRuleName = buildJiraAutomationUniqueImportedRuleName(rule.name, existingRuleNames);
       const importNameWasNumbered = importedRuleName !== defaultImportedRuleName;
@@ -964,6 +1015,13 @@ function showImportPreviewDialog(
       chainedTriggerText.textContent = sourceAllowsChainedTrigger
         ? 'Prevent other automation rules from triggering this imported copy until it has been reviewed.'
         : 'The source rule does not allow other automation rules to trigger it.';
+      highRiskAcknowledgementRequired = highRiskCount > 0;
+      highRiskAcknowledgementBox.style.display = highRiskAcknowledgementRequired ? 'block' : 'none';
+      highRiskAcknowledgementCheckbox.checked = highRiskReviewAcknowledged;
+      highRiskAcknowledgementText.textContent = highRiskAcknowledgementRequired
+        ? `${highRiskCount} high-risk item(s) were found. This gate keeps the import flow aligned with the disabled-copy review checklist.`
+        : '';
+      syncConfirmButtonState();
       renderImportOutcomeSummary(
         doc,
         outcomeBox,
@@ -1032,6 +1090,7 @@ function showImportPreviewDialog(
     select?.addEventListener('change', () => {
       selectedRuleIndex = Number(select?.value || '0');
       preventChainedTrigger = Boolean(exportedData.rules[selectedRuleIndex]?.canOtherRuleTrigger);
+      highRiskReviewAcknowledged = false;
       renderRuleDetails();
     });
 
@@ -1039,7 +1098,11 @@ function showImportPreviewDialog(
       preventChainedTrigger = chainedTriggerCheckbox.checked;
       renderRuleDetails();
     });
-    renderRuleDetails();
+
+    highRiskAcknowledgementCheckbox.addEventListener('change', () => {
+      highRiskReviewAcknowledged = highRiskAcknowledgementCheckbox.checked;
+      syncConfirmButtonState();
+    });
 
     const footer = doc.createElement('div');
     footer.style.cssText = `
@@ -1056,7 +1119,7 @@ function showImportPreviewDialog(
     `;
 
     const cancelButton = createDialogButton(doc, 'Cancel', 'secondary');
-    const confirmButton = createDialogButton(doc, 'Import disabled copy', 'primary');
+    confirmButton = createDialogButton(doc, 'Import disabled copy', 'primary');
     footer.appendChild(cancelButton);
     footer.appendChild(confirmButton);
     dialog.appendChild(footer);
@@ -1085,6 +1148,10 @@ function showImportPreviewDialog(
     doc.addEventListener('keydown', onKeyDown);
     cancelButton.addEventListener('click', () => close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false }));
     confirmButton.addEventListener('click', () => {
+      if (confirmButton?.disabled) {
+        return;
+      }
+
       const selectedRule = exportedData.rules[selectedRuleIndex];
       close({
         confirmed: true,
@@ -1100,6 +1167,7 @@ function showImportPreviewDialog(
 
     overlay.appendChild(dialog);
     doc.body.appendChild(overlay);
+    renderRuleDetails();
     (select || cancelButton).focus();
   });
 }

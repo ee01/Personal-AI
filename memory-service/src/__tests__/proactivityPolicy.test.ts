@@ -17,6 +17,7 @@ beforeAll(() => {
 beforeEach(() => {
   // Clean notification_records to reset spam/throttle state
   db.exec('DELETE FROM notification_records');
+  db.exec('DELETE FROM user_profile_items');
 });
 
 afterAll(() => {
@@ -173,6 +174,47 @@ describe('ProactivityPolicy.evaluate()', () => {
     const noSpam = await policy.evaluate(candidateNoTopic);
 
     expect(withSpam.utility).toBeLessThan(noSpam.utility);
+  });
+
+  it('uses only confirmed profile items for preference alignment', async () => {
+    const ts = now();
+    const candidate: NotificationCandidate = {
+      type: 'project_update',
+      title: 'Personal AI profile calibration',
+      body: 'Personal AI needs attention before the next rollout.',
+      importance: 0.6,
+      urgency: 0.4,
+      confidence: 0.8,
+      actionability: 0.6,
+    };
+    const policy = createPolicy({
+      costs: { busy: 0, quietHours: 0, spamPenalty: 0, userPrefCost: 0.5 },
+    });
+
+    const baseline = await policy.evaluate(candidate);
+
+    db.prepare(`
+      INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, source_kind, confidence, user_confirmed, status,
+         salience_score, mention_count, last_seen, created_at, updated_at, fingerprint)
+      VALUES (?, 'interest', 'focus_project', 'Personal AI', 'inferred', 0.95, 0, 'active',
+              0.95, 1, ?, ?, ?, ?)
+    `).run('unconfirmed-personal-ai', ts, ts, ts, 'fp-unconfirmed-personal-ai');
+
+    const withUnconfirmed = await policy.evaluate(candidate);
+
+    db.prepare(`
+      INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, source_kind, confidence, user_confirmed, status,
+         salience_score, mention_count, last_seen, created_at, updated_at, fingerprint)
+      VALUES (?, 'interest', 'focus_project', 'Personal AI', 'explicit', 0.95, 1, 'active',
+              0.95, 1, ?, ?, ?, ?)
+    `).run('confirmed-personal-ai', ts, ts, ts, 'fp-confirmed-personal-ai');
+
+    const withConfirmed = await policy.evaluate(candidate);
+
+    expect(withUnconfirmed.utility).toBeCloseTo(baseline.utility, 6);
+    expect(withConfirmed.utility).toBeGreaterThan(withUnconfirmed.utility);
   });
 });
 

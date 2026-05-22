@@ -24,6 +24,10 @@ import {
 } from './actionItemReview';
 import { getDemoMeetingSessionSnapshot } from './demo';
 import {
+  buildMeetingPilotLiveFeedItems,
+  getVisibleMeetingMemoryCueRefs,
+} from './liveFeedPresentation';
+import {
   MeetingPilotActionItem,
   MeetingPilotAlert,
   MeetingPilotCaptureLogEntry,
@@ -735,6 +739,54 @@ function getMeetingPrepEvidenceLinks(
     sanitizeContextExternalUrl(item.sourceUrl, window.location.href),
   );
   return links.slice(0, 2);
+}
+
+function getMeetingMemoryLinks(
+  item: MeetingPilotSessionSnapshot['memoryRefs'][number],
+): Array<{ label: string; url: string }> {
+  const links: Array<{ label: string; url: string }> = [];
+  const seen = new Set<string>();
+  const addLink = (label: string, url: string | null | undefined): void => {
+    if (!url || seen.has(url)) {
+      return;
+    }
+    seen.add(url);
+    links.push({ label, url });
+  };
+
+  const exploreRoute = sanitizeExploreRoute(item.exploreLink);
+  if (exploreRoute) {
+    addLink(
+      '在记忆库中查看',
+      chrome.runtime.getURL(`memory-exploring.html${exploreRoute}`),
+    );
+  }
+
+  for (const link of item.links ?? []) {
+    addLink(
+      link.label || '打开来源',
+      sanitizeContextExternalUrl(link.url, window.location.href),
+    );
+  }
+
+  addLink(
+    '打开原始文档',
+    sanitizeContextExternalUrl(item.sourceUrl, window.location.href),
+  );
+
+  return links.slice(0, 2);
+}
+
+function formatMeetingMemoryTime(
+  item: MeetingPilotSessionSnapshot['memoryRefs'][number],
+): string {
+  const raw = item.timestamp || item.matchedAt;
+  if (!raw) return '';
+  const ms = raw < 10_000_000_000 ? raw * 1000 : raw;
+  return new Date(ms).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function isMeetingPrepCueActionable(card: ContextAssistCueCard): boolean {
@@ -1523,6 +1575,47 @@ const shellStyle = `
   .content a { color: var(--accent-light); text-decoration: underline; text-underline-offset: 2px; }
   .memory-why-matched { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-style: italic; }
   .memory-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+
+  .meeting-memory-cues {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 0 12px;
+  }
+
+  .meeting-memory-cue {
+    padding: 11px 12px;
+    border-radius: 10px;
+    background: rgba(108,92,231,0.09);
+    border: 1px solid rgba(108,92,231,0.26);
+    border-left: 3px solid var(--accent-light);
+  }
+
+  .meeting-memory-cue-head {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    margin-bottom: 5px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .meeting-memory-cue-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 10px;
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+
+  .meeting-memory-cue-body {
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
 
   .mini-timeline { display: flex; flex-direction: column; gap: 6px; padding-left: 16px; position: relative; }
   .mini-timeline::before {
@@ -2510,20 +2603,13 @@ function MeetingSidePanel() {
   );
   const mentionAlerts = getMentionAlerts(session);
   const unresolvedAlerts = session.alerts.filter((alert) => !alert.resolved);
-  const liveFeedItems = [
-    ...session.memoryRefs.map((ref) => ({
-      kind: 'memory' as const,
-      id: ref.id,
-      createdAt: 0,
-      memory: ref,
-    })),
-    ...unresolvedAlerts.map((alert) => ({
-      kind: 'alert' as const,
-      id: alert.id,
-      createdAt: alert.createdAt,
-      alert,
-    })),
-  ].sort((left, right) => right.createdAt - left.createdAt);
+  const meetingMemoryCueRefs = getVisibleMeetingMemoryCueRefs(
+    session.memoryRefs,
+  );
+  const liveFeedItems = buildMeetingPilotLiveFeedItems(
+    session,
+    meetingMemoryCueRefs,
+  );
   const pendingActions = session.actionItems.filter(
     (item) =>
       item.status === 'pending' && getActionReviewState(item) !== 'dismissed',
@@ -3747,6 +3833,66 @@ function MeetingSidePanel() {
               </section>
             ) : null}
 
+            {meetingMemoryCueRefs.length ? (
+              <section
+                className="meeting-memory-cues"
+                aria-label="会中关联记忆"
+              >
+                {meetingMemoryCueRefs.map((memory) => {
+                  const memoryLinks = getMeetingMemoryLinks(memory);
+                  const timeLabel = formatMeetingMemoryTime(memory);
+                  return (
+                    <article
+                      className="meeting-memory-cue"
+                      key={`memory-cue-${memory.id}`}
+                    >
+                      <div className="meeting-memory-cue-head">
+                        <span className="priority-tag memory-tag">
+                          {memory.evidenceRoleLabel || '记忆'}
+                        </span>
+                        <strong>
+                          {memory.cueTitle || memory.title || '相关记忆'}
+                        </strong>
+                      </div>
+                      <div className="meeting-memory-cue-meta">
+                        {memory.relationLabel ? (
+                          <span>{memory.relationLabel}</span>
+                        ) : null}
+                        <span>{Math.round(memory.score * 100)}%</span>
+                        {memory.sourceLabel ? (
+                          <span>{memory.sourceLabel}</span>
+                        ) : null}
+                        {timeLabel ? <span>{timeLabel}</span> : null}
+                        {memory.mergedCount && memory.mergedCount > 1 ? (
+                          <span>合并 {memory.mergedCount} 条</span>
+                        ) : null}
+                      </div>
+                      <div className="meeting-memory-cue-body">
+                        {memory.cueBody ||
+                          memory.evidenceSnippet ||
+                          memory.fullSnippet ||
+                          memory.snippet}
+                      </div>
+                      {memoryLinks.length ? (
+                        <div className="memory-links">
+                          {memoryLinks.map((link) => (
+                            <a
+                              href={link.url}
+                              key={link.url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {link.label}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </section>
+            ) : null}
+
             <button className="catchup-btn" onClick={openCatchup}>
               ⚡ 刚错过了什么？
               <span className="shortcut">C</span>
@@ -3833,7 +3979,9 @@ function MeetingSidePanel() {
                   item.kind === 'memory' ? (
                     <div className="alert-card" key={`memory-${item.id}`}>
                       <div className="card-header">
-                        <span className="priority-tag memory-tag">记忆</span>
+                        <span className="priority-tag memory-tag">
+                          {item.memory.evidenceRoleLabel || '记忆'}
+                        </span>
                         <span className="time">
                           {Math.round(item.memory.score * 100)}%
                         </span>
@@ -3843,32 +3991,26 @@ function MeetingSidePanel() {
                           <strong>{item.memory.title}</strong>
                         ) : null}
                         <div>
-                          {item.memory.fullSnippet || item.memory.snippet}
+                          {item.memory.cueBody ||
+                            item.memory.fullSnippet ||
+                            item.memory.snippet}
                         </div>
-                        {item.memory.whyMatched ? (
+                        {item.memory.relationLabel || item.memory.whyMatched ? (
                           <div className="memory-why-matched">
-                            {item.memory.whyMatched}
+                            {item.memory.relationLabel || item.memory.whyMatched}
                           </div>
                         ) : null}
                         <div className="memory-links">
-                          {item.memory.exploreLink ? (
+                          {getMeetingMemoryLinks(item.memory).map((link) => (
                             <a
-                              href={item.memory.exploreLink}
+                              href={link.url}
+                              key={link.url}
                               target="_blank"
                               rel="noreferrer"
                             >
-                              在记忆库中查看
+                              {link.label}
                             </a>
-                          ) : null}
-                          {item.memory.sourceUrl ? (
-                            <a
-                              href={item.memory.sourceUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              打开原始文档
-                            </a>
-                          ) : null}
+                          ))}
                         </div>
                       </div>
                     </div>
@@ -3901,8 +4043,9 @@ function MeetingSidePanel() {
                 )
               ) : (
                 <div className="empty-state">
-                  当前没有新的会中提醒。开启录制后，P0/P1/P2
-                  提醒会进入这里，同时页内悬浮入口会显示轻量状态。
+                  {meetingMemoryCueRefs.length
+                    ? '上方已显示本轮关联记忆；当前没有新的 P0/P1/P2 会中提醒。'
+                    : '当前没有新的会中提醒。开启录制后，P0/P1/P2 提醒会进入这里，同时页内悬浮入口会显示轻量状态。'}
                 </div>
               )}
             </div>

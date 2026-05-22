@@ -18,6 +18,8 @@ import {
   escapeHtml,
   extractDesignLinks,
   formatDesignStatusLabel,
+  formatDesignUpdatedDate,
+  getDesignAttentionLevel,
   getDesignDisplayLabel,
   getDesignDisplayStatusTone,
   getDesignStatusTone,
@@ -27,6 +29,8 @@ import {
   mergeDesignSources,
   matchesProjectPattern,
   normalizeDesignUrl,
+  parseJiraIssueKeyFromText,
+  parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
   sortDesignDisplayItems,
 } from './jiraDesignLinks';
@@ -241,8 +245,7 @@ function getTicketIdFromUrl(): string {
 }
 
 function parseJiraIssueKeyFromPath(pathname: string): string | null {
-  const match = pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i);
-  return match?.[1]?.toUpperCase() || null;
+  return parseJiraIssueKeyFromUrl(pathname);
 }
 
 // 从DOM中查找Parent Link
@@ -252,8 +255,13 @@ function getParentLinkFromDOM(): { key: string; url: string } | null {
   if (parentLinkElement) {
     const linkElement = parentLinkElement.querySelector('a');
     if (linkElement) {
+      const key = parseJiraIssueKeyFromUrl(linkElement.href)
+        || parseJiraIssueKeyFromText(linkElement.textContent)
+        || linkElement.textContent.trim();
+      if (!key) return null;
+
       return {
-        key: linkElement.textContent.trim(),
+        key,
         url: linkElement.href
       };
     }
@@ -268,9 +276,14 @@ function getParentEpicFromDOM(): { key: string; url: string, name: string } | nu
   if (epicLinkElement) {
     const linkElement = epicLinkElement.querySelector('a');
     if (linkElement) {
+      const key = parseJiraIssueKeyFromUrl(linkElement.href)
+        || parseJiraIssueKeyFromText(linkElement.textContent)
+        || '';
+      if (!key) return null;
+
       return {
         name: linkElement.textContent.trim(),
-        key: linkElement.href.split('/').pop() || '',
+        key,
         url: linkElement.href
       };
     }
@@ -286,7 +299,8 @@ function createDirectDesignItem(candidate: DesignLinkCandidate, source: string):
       source,
       title: candidate.title,
       label: candidate.label,
-      status: candidate.status
+      status: candidate.status,
+      updatedAt: candidate.updatedAt
     };
   }
 
@@ -297,7 +311,8 @@ function createDirectDesignItem(candidate: DesignLinkCandidate, source: string):
     tool: candidate.tool,
     label: candidate.label,
     title: candidate.title,
-    status: candidate.status
+    status: candidate.status,
+    updatedAt: candidate.updatedAt
   };
 }
 
@@ -515,8 +530,8 @@ function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url
   issueLinkSections.forEach(section => {
     const links = section.querySelectorAll('.issue-link-key');
     links.forEach(linkElement => {
-      const key = linkElement.textContent?.trim();
       const href = (linkElement as HTMLAnchorElement).href;
+      const key = parseJiraIssueKeyFromUrl(href) || parseJiraIssueKeyFromText(linkElement.textContent);
       
       if (key && matchesProjectPattern(key, projectPrefix) && href) {
         // 尝试获取summary
@@ -682,11 +697,13 @@ async function fetchRemoteDesignLinks(
         if (!candidate || seenUrls.has(candidate.url)) continue;
 
         const statusTitle = getRemoteDesignStatus(remoteLink);
+        const updatedAt = getRemoteDesignUpdatedAt(remoteLink);
         seenUrls.add(candidate.url);
         designLinks.push({
           ...candidate,
           title: object.title || object.summary || candidate.title,
           status: statusTitle,
+          updatedAt,
           source: 'remote_link'
         });
       }
@@ -718,6 +735,27 @@ function getRemoteDesignStatus(remoteLink: any): string | undefined {
   for (const statusCandidate of statusCandidates) {
     const formattedStatus = formatDesignStatusLabel(statusCandidate);
     if (formattedStatus) return formattedStatus;
+  }
+
+  return undefined;
+}
+
+function getRemoteDesignUpdatedAt(remoteLink: any): string | undefined {
+  const object = remoteLink?.object || {};
+  const status = object?.status;
+  const candidates = [
+    object.updatedDate,
+    object.updatedAt,
+    object.lastUpdated,
+    status?.updatedDate,
+    status?.updatedAt,
+    remoteLink?.updatedDate,
+    remoteLink?.updatedAt,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    if (formatDesignUpdatedDate(candidate)) return candidate.trim();
   }
 
   return undefined;
@@ -861,7 +899,8 @@ async function appendUXDesignItems(
         uxEpicKey: designContext.uxEpicKey,
         uxEpicStatus: designContext.uxEpicStatus,
         uxEta: designContext.uxEta,
-        uxEtaSource: designContext.uxEtaSource
+        uxEtaSource: designContext.uxEtaSource,
+        designUpdatedAt: candidate.updatedAt
       });
     }
   }
@@ -940,6 +979,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   let linksHtml = '';
   designData.forEach((design, _index) => {
     const designStatusTone = getDesignDisplayStatusTone(design);
+    const designAttentionLevel = getDesignAttentionLevel(design);
     if (design.type === 'figma' || design.type === 'design_link') {
       const linkLabel = getDesignDisplayLabel(design);
       const safeUrl = escapeAttribute(design.url);
@@ -947,14 +987,19 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       const statusTag = designStatusLabel
         ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(design.status)}">${escapeHtml(designStatusLabel)}</span>`
         : '';
+      const updatedDateLabel = formatDesignUpdatedDate(design.updatedAt);
+      const updatedTag = updatedDateLabel
+        ? `<span class="design-updated-tag" title="${escapeAttribute(design.updatedAt)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
+        : '';
       linksHtml += `
-        <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" tabindex="-1">
+        <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" data-design-attention="${escapeAttribute(designAttentionLevel)}" tabindex="-1">
           <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
           <span class="design-link-label">Design</span>
           <a href="${safeUrl}" title="${safeUrl}" target="_blank" rel="noopener noreferrer" class="design-link">
             ${escapeHtml(linkLabel)} <span class="external-link-icon">↗</span>
           </a>
           ${statusTag}
+          ${updatedTag}
           <span class="source-tag" title="${escapeAttribute(design.source)}">${escapeHtml(getDesignSourceLabel(design.source))}</span>
         </div>
       `;
@@ -997,13 +1042,18 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       const etaTag = design.uxEta
         ? `<span class="ux-eta-tag" title="${design.uxEtaSource === 'duedate' ? 'Due date' : 'Fix Version'}">ETA: ${escapeHtml(design.uxEta)}</span>`
         : '';
+      const updatedDateLabel = formatDesignUpdatedDate(design.designUpdatedAt);
+      const updatedTag = updatedDateLabel
+        ? `<span class="design-updated-tag" title="${escapeAttribute(design.designUpdatedAt)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
+        : '';
 
       linksHtml += `
-        <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" tabindex="-1">
+        <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" data-design-attention="${escapeAttribute(designAttentionLevel)}" tabindex="-1">
           <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
           <span class="design-link-label">Design</span>
           ${designContent}
           ${designStatusTag}
+          ${updatedTag}
           ${statusTag}
           ${etaTag}
           ${sourceTag}
@@ -1070,10 +1120,31 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       align-items: center;
       gap: 4px;
       margin-bottom: 4px;
+      padding: 2px 6px 2px 8px;
+      border-left: 3px solid transparent;
+      border-radius: 3px;
       position: relative;
       flex-wrap: wrap;
       min-width: 0;
       max-width: 100%;
+    }
+    .design-link-item[data-design-attention="ready"] {
+      border-left-color: #00875a;
+      background-color: #f2fffa;
+    }
+    .design-link-item[data-design-attention="updated"] {
+      border-left-color: #0c66e4;
+      background-color: #f4f8ff;
+    }
+    .design-link-item[data-design-attention="missing"],
+    .design-link-item[data-design-attention="not-ready"],
+    .design-link-item[data-design-attention="blocked"] {
+      border-left-color: #f5a524;
+      background-color: #fffaf0;
+    }
+    .design-link-item[data-design-attention="review"] {
+      border-left-color: #6554c0;
+      background-color: #f7f5ff;
     }
     .design-link-item:last-child {
       margin-bottom: 0;
@@ -1232,6 +1303,18 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       background-color: #e9f2ff;
       white-space: nowrap;
       margin-left: 4px;
+    }
+    .design-updated-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.5;
+      color: #253858;
+      background-color: #f1f2f4;
+      white-space: nowrap;
     }
     .design-status-tag {
       display: inline-flex;

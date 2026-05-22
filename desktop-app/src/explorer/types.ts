@@ -55,6 +55,14 @@ export interface ExplorerTransportStatus {
   fallbackCooldownUntil?: string;
 }
 
+export interface ExplorerRunSummary {
+  insertedCount: number;
+  extractedConversationCount: number;
+  extractedMessageCount: number;
+  artifactCount: number;
+  skippedConversationCount: number;
+}
+
 export interface ExplorerSourceStatus {
   source: SourceId;
   enabled: boolean;
@@ -64,6 +72,7 @@ export interface ExplorerSourceStatus {
   lastRunAt?: string;
   lastRunOutcome: 'idle' | 'success' | 'error' | 'stub';
   lastError?: string;
+  lastRunSummary?: ExplorerRunSummary;
   cache: RawMessageStoreStats;
   transport?: ExplorerTransportStatus;
 }

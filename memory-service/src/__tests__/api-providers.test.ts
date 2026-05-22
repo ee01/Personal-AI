@@ -172,6 +172,88 @@ describe('Provider API', () => {
     expect(jobsBody.items[0].scenario).toBe('stable_memory');
   });
 
+  it('keeps unconfirmed active profile items out of provider context packages', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, source_kind, confidence, user_confirmed, status,
+         salience_score, mention_count, last_seen, created_at, updated_at, fingerprint)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'profile-unconfirmed-voice',
+      'preference',
+      'response_length',
+      'always write long speculative updates before the user confirms this',
+      'inferred',
+      0.99,
+      0,
+      'active',
+      0.99,
+      4,
+      now,
+      now,
+      now,
+      'fp-unconfirmed-voice',
+    );
+
+    db.prepare(
+      `INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, source_kind, confidence, user_confirmed, status,
+         salience_score, mention_count, last_seen, created_at, updated_at, fingerprint)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'profile-unconfirmed-focus',
+      'interest',
+      'focus_project',
+      'Unconfirmed stealth launch plan',
+      'inferred',
+      0.99,
+      0,
+      'active',
+      0.99,
+      4,
+      now,
+      now,
+      now,
+      'fp-unconfirmed-focus',
+    );
+
+    const stableRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'stable_memory',
+        includeKinds: ['voice_mode'],
+      },
+    });
+
+    expect(stableRes.statusCode).toBe(200);
+    const stableBody = stableRes.json();
+    expect(stableBody.packages).toHaveLength(1);
+    expect(stableBody.packages[0].bodyMd).toContain('concise but not terse');
+    expect(stableBody.packages[0].bodyMd).not.toContain('long speculative updates');
+    expect(stableBody.packages[0].sourceRefs).toContain('profile_item:response_length');
+
+    const briefingRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/context-packages/render',
+      payload: {
+        provider: 'doubao',
+        scenario: 'mobile_briefing',
+        includeKinds: ['active_focus_digest'],
+      },
+    });
+
+    expect(briefingRes.statusCode).toBe(200);
+    const briefingBody = briefingRes.json();
+    expect(briefingBody.packages).toHaveLength(1);
+    expect(briefingBody.packages[0].bodyMd).toContain('response_length');
+    expect(briefingBody.packages[0].bodyMd).not.toContain('Unconfirmed stealth launch plan');
+    expect(briefingBody.packages[0].sourceRefs).not.toContain('profile_item:focus_project');
+  });
+
   it('reports provider sync job status after rendering a query answer card', async () => {
     const renderRes = await app.inject({
       method: 'POST',

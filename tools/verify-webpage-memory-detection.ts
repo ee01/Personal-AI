@@ -6,9 +6,18 @@ import {
   CONTEXT_PAGE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_BLOCK_STORAGE_KEY,
   CONTEXT_SITE_MUTE_TTL_MS,
+  buildContextRecallCompactMetaItems,
+  buildContextRecallMetaItems,
+  buildContextRecallPeekFooterItems,
+  formatContextRecallDisplayPriorityLabel,
+  formatContextRecallEvidenceRole,
+  formatContextRecallMemoryType,
+  formatContextRecallReasonType,
+  formatContextRecallSourceLabel,
   formatContextSiteMuteRemaining,
   getContextSiteMuteExpiresAt,
   hasSensitiveUrlSignal,
+  isContextSelectionTextEligible,
   isContextHostCoveredBySiteRecord,
   isContextPageUrlBlockedByPrefix,
   isDisplayableContextRecallMatch,
@@ -18,6 +27,7 @@ import {
   normalizeContextPageBlockPrefix,
   normalizeContextSiteMuteHost,
   normalizeContextPageUrl,
+  normalizeContextSelectionText,
   pruneContextPageBlockRecord,
   pruneContextSiteAllowRecord,
   pruneContextSiteBlockRecord,
@@ -57,12 +67,141 @@ assert.equal(
 );
 assert.equal(
   isDisplayableContextRecallMatch({
+    title: '内容',
+    snippet: '发送位置：当前这个 RingCentral 群',
+    sourceLabel: 'glip',
+    sourceTitle: 'AI Service',
+  }),
+  false,
+);
+assert.equal(
+  isDisplayableContextRecallMatch({
     title: 'RingCentral Video',
     snippet: 'MTR-144449 Refine In-Meeting Video Tile Layout and UX dependency review.',
     sourceLabel: 'meeting',
     sourceTitle: 'RingCentral Video',
   }),
   true,
+);
+assert.equal(formatContextRecallMemoryType('message'), '消息记忆');
+assert.equal(formatContextRecallMemoryType('chunk'), '片段记忆');
+assert.equal(formatContextRecallMemoryType('entity'), '实体记忆');
+assert.equal(formatContextRecallMemoryType('custom'), 'custom记忆');
+assert.equal(formatContextRecallSourceLabel('glip'), 'RingCentral 消息');
+assert.equal(formatContextRecallSourceLabel('ai_chat'), 'AI 对话');
+assert.equal(formatContextRecallSourceLabel('Web memory'), 'Web memory');
+assert.equal(formatContextRecallReasonType('keyword_overlap'), '关键词匹配');
+assert.equal(formatContextRecallReasonType('semantic_match'), '语义相关');
+assert.equal(formatContextRecallEvidenceRole('supporting'), '支持证据');
+assert.equal(formatContextRecallEvidenceRole('direct_evidence'), '直接证据');
+assert.equal(formatContextRecallDisplayPriorityLabel('p1'), '强相关');
+assert.equal(formatContextRecallDisplayPriorityLabel('p2'), '可能相关');
+assert.equal(formatContextRecallDisplayPriorityLabel('hidden'), null);
+const metaItems = buildContextRecallMetaItems({
+  type: 'message',
+  sourceLabel: 'jira',
+  sourceTitle: 'PAI-123 launch readiness',
+  timestamp: 1_700_000_000,
+  whyMatched: '关键词命中网页上下文',
+  whyRelevant: ['项目：Falcon', '主题：owner handoff'],
+  reasonType: 'keyword_overlap',
+  evidenceRole: 'supporting',
+  sourceContext: 'Falcon readiness context cluster',
+});
+assert.deepEqual(metaItems.slice(0, 3), [
+  '记忆类型：消息记忆',
+  '来源：Jira',
+  '来源标题：PAI-123 launch readiness',
+]);
+assert.ok(
+  metaItems.some((item) => item.startsWith('记录时间：')),
+  '元信息应显式包含记录时间',
+);
+assert.ok(
+  metaItems.includes('匹配原因：关键词命中网页上下文'),
+  '元信息应显式包含匹配原因',
+);
+assert.ok(
+  metaItems.includes('关联锚点：项目：Falcon / 主题：owner handoff'),
+  '元信息应显式包含 whyRelevant 关联锚点',
+);
+assert.ok(
+  metaItems.includes('匹配类型：关键词匹配'),
+  '元信息应把 reasonType 映射成中文标签',
+);
+assert.ok(
+  metaItems.includes('证据角色：支持证据'),
+  '元信息应把 evidenceRole 映射成中文标签',
+);
+assert.ok(
+  metaItems.includes('来源上下文：Falcon readiness context cluster'),
+  '元信息应支持 sourceContext',
+);
+const compactMetaItems = buildContextRecallCompactMetaItems({
+  type: 'message',
+  sourceLabel: 'jira',
+  sourceTitle: 'PAI-123 launch readiness',
+  timestamp: 1_700_000_000,
+  whyMatched: '关键词命中网页上下文',
+  reasonType: 'keyword_overlap',
+  evidenceRole: 'supporting',
+  sourceContext: 'Falcon readiness context cluster',
+});
+assert.ok(
+  compactMetaItems.includes('PAI-123 launch readiness'),
+  '紧凑元信息应优先显示可读来源标题',
+);
+assert.ok(
+  compactMetaItems.includes('关键词匹配'),
+  '紧凑元信息应显示用户能理解的匹配类型',
+);
+assert.equal(
+  compactMetaItems.some((item) => item.startsWith('记忆类型：')),
+  false,
+  '紧凑元信息不应占用空间展示技术型记忆类型',
+);
+assert.equal(
+  isDisplayableContextRecallMatch({
+    title: 'Falcon launch readiness',
+    uiSummary: 'Falcon launch has an owner handoff dependency.',
+    displayPriority: 'hidden',
+  }),
+  false,
+);
+assert.equal(
+  isDisplayableContextRecallMatch({
+    title: 'Falcon launch readiness',
+    uiSummary: 'Falcon launch has an owner handoff dependency.',
+  }),
+  true,
+);
+assert.deepEqual(
+  buildContextRecallPeekFooterItems({
+    sourceLabel: 'glip',
+    reasonType: 'open_action',
+    evidenceRole: 'action_item',
+  }),
+  ['RingCentral 消息', '未关闭行动项', '行动项'],
+);
+assert.equal(normalizeContextSelectionText('  Codex\nsetup\twith MCP skills  '), 'Codex setup with MCP skills');
+assert.equal(isContextSelectionTextEligible('ok'), false);
+assert.equal(isContextSelectionTextEligible('Codex setup with MCP skills'), true);
+assert.equal(isContextSelectionTextEligible('额度申请流程'), true);
+assert.equal(
+  isContextSelectionTextEligible('Cursor token budget exceeded the monthly quota'),
+  true,
+);
+assert.equal(
+  isContextSelectionTextEligible('api_key = sk-proj-1234567890abcdefghijklmnop'),
+  false,
+);
+assert.equal(
+  isContextSelectionTextEligible('client_secret=abcdef1234567890'),
+  false,
+);
+assert.equal(
+  isContextSelectionTextEligible('4111 1111 1111 1111'),
+  false,
 );
 
 assert.equal(isLowValueContextHost('www.google.com'), true);

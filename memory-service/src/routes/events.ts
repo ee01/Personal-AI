@@ -13,6 +13,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { isValidUserId } from '../middleware/auth.js';
 
 // ---------------------------------------------------------------------------
 // EventBus singleton
@@ -87,6 +88,39 @@ export function getEventBus(): EventBus {
 /** Keep-alive interval in milliseconds (30 seconds). */
 const KEEPALIVE_INTERVAL_MS = 30_000;
 
+export interface EventStreamUserResolution {
+  userId?: string;
+  error?: string;
+}
+
+export function resolveEventStreamUserId(options: {
+  requestUserId?: string;
+  queryUserId?: string | string[];
+}): EventStreamUserResolution {
+  const queryUserId = options.queryUserId;
+
+  if (queryUserId != null) {
+    if (Array.isArray(queryUserId)) {
+      return {
+        error:
+          'Invalid userId query parameter format. Provide exactly one userId.',
+      };
+    }
+
+    const trimmed = queryUserId.trim();
+    if (!trimmed || !isValidUserId(trimmed)) {
+      return {
+        error:
+          'Invalid userId query parameter format. Only a-z, 0-9, dots, hyphens, underscores allowed.',
+      };
+    }
+
+    return { userId: trimmed };
+  }
+
+  return { userId: options.requestUserId };
+}
+
 export async function eventsRoutes(
   app: FastifyInstance,
 ): Promise<void> {
@@ -106,7 +140,16 @@ export async function eventsRoutes(
     async (request: FastifyRequest<{ Querystring: { userId?: string } }>, reply: FastifyReply) => {
       // For SSE/EventSource compatibility: browsers cannot send custom headers,
       // so userId can alternatively be passed as a query parameter.
-      const sseUserId = request.userId ?? request.query.userId;
+      const resolvedUserId = resolveEventStreamUserId({
+        requestUserId: request.userId,
+        queryUserId: request.query.userId,
+      });
+
+      if (resolvedUserId.error) {
+        return reply.code(400).send({ error: resolvedUserId.error });
+      }
+
+      const sseUserId = resolvedUserId.userId;
 
       // --- SSE headers ---
       reply.raw.writeHead(200, {
@@ -142,7 +185,7 @@ export async function eventsRoutes(
 
       // --- Send an initial "connected" event ---
       reply.raw.write(
-        `event: connected\ndata: ${JSON.stringify({ message: 'SSE stream connected', timestamp: Date.now() })}\n\n`,
+        `event: connected\ndata: ${JSON.stringify({ message: 'SSE stream connected', timestamp: Date.now(), userId: sseUserId })}\n\n`,
       );
 
       // --- Clean up on disconnect ---

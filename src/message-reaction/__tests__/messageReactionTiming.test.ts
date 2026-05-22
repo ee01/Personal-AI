@@ -7,9 +7,8 @@ import {
 } from '../messageReactionTiming.js';
 
 test('message reaction toolbar appears after a deliberate hover intent delay', () => {
-  assert.equal(MESSAGE_REACTION_SHOW_DELAY_MS, 1200);
-  assert.ok(MESSAGE_REACTION_SHOW_DELAY_MS >= 800);
-  assert.ok(MESSAGE_REACTION_SHOW_DELAY_MS <= 1600);
+  assert.equal(MESSAGE_REACTION_SHOW_DELAY_MS, 4000);
+  assert.ok(MESSAGE_REACTION_SHOW_DELAY_MS >= 4000);
 });
 
 test('settings affordance remains a deliberate long-hover action', () => {

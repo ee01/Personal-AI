@@ -117,6 +117,7 @@ export interface ComposerAssistEvidence {
   sourceUrl?: string;
   sourceTitle?: string;
   exploreLink?: string;
+  links?: Array<{ label: string; url: string }>;
   whyMatched?: string;
   timestamp?: number;
   score?: number;

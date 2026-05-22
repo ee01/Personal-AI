@@ -165,10 +165,9 @@ function collectPageErrors(page) {
   };
 }
 
-function installFixedClock(page) {
-  return page.addInitScript(() => {
+function installFixedClock(page, fixedNowMs = new Date(2026, 4, 4, 8, 0, 0, 0).getTime()) {
+  return page.addInitScript((fixedNow) => {
     const OriginalDate = Date;
-    const fixedNow = new OriginalDate(2026, 4, 4, 8, 0, 0, 0).getTime();
 
     class FixedDate extends OriginalDate {
       constructor(...args) {
@@ -193,6 +192,15 @@ function installFixedClock(page) {
     }
 
     globalThis.Date = FixedDate;
+  }, fixedNowMs);
+}
+
+function installAuthStub(page) {
+  return page.addInitScript(() => {
+    if (globalThis.chrome?.identity) {
+      chrome.identity.getAuthToken = (_details, callback) => callback('fake-token');
+      chrome.identity.removeCachedAuthToken = (_details, callback) => callback();
+    }
   });
 }
 
@@ -279,13 +287,7 @@ try {
   const assertNoPageErrors = collectPageErrors(page);
   await installFixedClock(page);
   await installRoutes(page);
-
-  await page.addInitScript(() => {
-    if (globalThis.chrome?.identity) {
-      chrome.identity.getAuthToken = (_details, callback) => callback('fake-token');
-      chrome.identity.removeCachedAuthToken = (_details, callback) => callback();
-    }
-  });
+  await installAuthStub(page);
 
   await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
     waitUntil: 'load',
@@ -301,13 +303,19 @@ try {
   await page.locator('text=建议处理：Risk 32（第 32/32 个）').waitFor({
     timeout: 15000,
   });
+  await page.locator('text=前面 31 条会先执行').waitFor({
+    timeout: 15000,
+  });
+  await page.getByText('Risk 1', { exact: true }).first().waitFor({
+    timeout: 15000,
+  });
   await page.locator('text=建议改到 2026-05-04 10:01').waitFor({
     timeout: 15000,
   });
   await page.getByRole('button', {
     name: '显示全部 4 个时间槽',
   }).click();
-  await page.locator('[aria-label*="2026-05-04 11:00"]').getByText('Safe 11:00 A', { exact: true }).waitFor({
+  await page.locator('[aria-label*="2026-05-04 11:00"]').getByText('Safe 11:00 A', { exact: true }).first().waitFor({
     timeout: 15000,
   });
   await page.getByRole('button', {
@@ -330,6 +338,68 @@ try {
   await page.waitForURL(/messageId=msg-32/, { timeout: 15000 });
 
   assertNoPageErrors();
+  await page.close();
+
+  messageRows = Array.from({ length: 10 }, (_, index) => [
+    `late-${index + 1}`,
+    `Late ${index + 1}`,
+    'content',
+    '2026-05-04',
+    '',
+    'Bot',
+    'group',
+    'Active',
+    '0',
+    '待执行',
+    '',
+    '2026-05-04 08:00',
+  ]);
+  appliedUpdate = null;
+
+  const noTimePage = await context.newPage();
+  const assertNoTimePageErrors = collectPageErrors(noTimePage);
+  await installFixedClock(noTimePage, new Date(2026, 4, 4, 23, 50, 30, 0).getTime());
+  await installRoutes(noTimePage);
+  await installAuthStub(noTimePage);
+
+  await noTimePage.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+
+  await noTimePage.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.locator('text=执行器队列可能延迟').waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.locator('text=建议处理：Late 10（第 10/10 个）').waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.locator('text=前面 9 条会先执行').waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.locator('text=建议改到 2026-05-05 08:00 后队列').waitFor({
+    timeout: 15000,
+  });
+
+  const noTimeDialogPromise = noTimePage.waitForEvent('dialog', { timeout: 15000 });
+  await noTimePage.getByRole('button', {
+    name: '将Late 10改到建议时间2026-05-05 08:00 后队列',
+  }).click();
+  const noTimeDialog = await noTimeDialogPromise;
+  assert.match(noTimeDialog.message(), /已将「Late 10」改到 2026-05-05 08:00 后队列/);
+  await noTimeDialog.accept();
+
+  assert.deepEqual(appliedUpdate, {
+    id: 'late-10',
+    date: '2026-05-05',
+    time: '',
+  });
+  await noTimePage.waitForURL(/messageId=late-10/, { timeout: 15000 });
+
+  assertNoTimePageErrors();
+  await noTimePage.close();
   console.log('Scheduled messages queue suggestion E2E passed');
 } finally {
   if (launched) {

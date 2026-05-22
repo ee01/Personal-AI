@@ -15,6 +15,8 @@ export type MessageReactionActionKey =
 export interface MessageReactionActionDefinition {
   key: MessageReactionActionKey;
   label: string;
+  compactLabel: string;
+  compactAlign?: 'start' | 'end';
   className: string;
   usesClockIcon?: boolean;
   runtimeMessageType?: string;
@@ -26,30 +28,35 @@ const ALL_ACTIONS: MessageReactionActionDefinition[] = [
   {
     key: 'snooze',
     label: '稍后处理',
+    compactLabel: '稍后',
     className: 'message-reaction-action-btn snooze-icon-btn',
-    usesClockIcon: true,
   },
   {
     key: 'followThread',
     label: '关注后续',
+    compactLabel: '关注',
     className: 'message-reaction-action-btn follow-thread-btn',
     runtimeMessageType: 'OPEN_FOLLOW_THREAD_CONFIG',
   },
   {
     key: 'autoReply',
     label: '自动答复',
+    compactLabel: '答复',
+    compactAlign: 'end',
     className: 'message-reaction-action-btn auto-reply-btn',
     runtimeMessageType: 'OPEN_AUTO_REPLY_CONFIG',
   },
   {
     key: 'followupAsk',
     label: '跟进追问',
+    compactLabel: '跟进',
     className: 'message-reaction-action-btn followup-ask-btn',
     runtimeMessageType: 'CREATE_OUTREACH_FROM_MESSAGE',
   },
   {
     key: 'linkedAction',
     label: '联动操作',
+    compactLabel: '联动',
     className: 'message-reaction-action-btn linked-action-btn',
     runtimeMessageType: LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
   },

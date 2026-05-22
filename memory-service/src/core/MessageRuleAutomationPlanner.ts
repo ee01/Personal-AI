@@ -913,6 +913,7 @@ export class MessageRuleAutomationPlanner {
           restoreActionAt,
           task: [
             `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
+            `The user-defined linked action instruction is: ${input.automationPrompt}`,
             `The matched message content is: ${input.message.content}`,
             `Before making any status write, use the available RingCentral token/API access to read the current Glip/RingCentral presence and status text for the target user, then persist a durable snapshot using key ${commonMetadata.presenceSnapshotKey}.`,
             `At or after ${new Date(startActionAt).toISOString()}, update the Glip status to: PTO on ${parsedLeaveWindow.label}`,
@@ -950,6 +951,7 @@ export class MessageRuleAutomationPlanner {
           restoreActionAt,
           task: [
             `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
+            `The user-defined linked action instruction is: ${input.automationPrompt}`,
             `The matched message content is: ${input.message.content}`,
             `At or after ${new Date(restoreActionAt).toISOString()}, load the previously stored presence snapshot using key ${commonMetadata.presenceSnapshotKey} and restore that exact Glip/RingCentral presence and status text.`,
             'Do not default to Available unless the stored snapshot explicitly says the original status was Available.',

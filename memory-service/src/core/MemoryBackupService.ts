@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -9,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { UserContext } from './UserContextManager.js';
 
+const require = createRequire(import.meta.url);
 const BACKUP_FORMAT = 'personal-ai-memory-backup';
 const BACKUP_FORMAT_VERSION = 1;
 const SQLITE_FILE_NAME = 'memory.db';
@@ -121,9 +123,55 @@ export interface MemoryImportResult {
   warnings: string[];
 }
 
+export interface MemoryImportPreviewResult {
+  mode: 'merge' | 'replace';
+  dryRun: true;
+  inspectedAt: string;
+  restoredLayers: Array<'A' | 'B'>;
+  backup: {
+    userId: string;
+    exportedAt: string;
+    formatVersion: number;
+    includeCount: number;
+    layers: {
+      A: number;
+      B: number;
+      C: {
+        generated: number;
+        failed: number;
+        skipped: number;
+      };
+    };
+  };
+  database: {
+    action: 'would_merge' | 'would_replace';
+    importedRows: number;
+    tableRows: Record<string, number>;
+    skippedTables: string[];
+  };
+  files: {
+    written: number;
+    overwritten: number;
+    preserved: number;
+    deleted: number;
+    writtenPaths: string[];
+    overwrittenPaths: string[];
+    preservedPaths: string[];
+    deletedPaths: string[];
+  };
+  warnings: string[];
+}
+
 interface DatabaseMergeSummary {
   changedRows: number;
   tableChanges: Record<string, number>;
+  skippedTables: string[];
+}
+
+interface DatabaseImportPreview {
+  action: 'would_merge' | 'would_replace';
+  importedRows: number;
+  tableRows: Record<string, number>;
   skippedTables: string[];
 }
 
@@ -131,6 +179,17 @@ interface ExtractedBackupBundle {
   extractDir: string;
   manifest: MemoryBackupManifest;
   userDir: string;
+}
+
+interface MemoryBackupImportInspection {
+  extracted: ExtractedBackupBundle;
+  currentUserDir: string;
+  importedUserDir: string;
+  importedPaths: string[];
+  overwrittenPaths: string[];
+  preservedPaths: string[];
+  deletedPaths: string[];
+  databasePreview: DatabaseImportPreview;
 }
 
 const TABLES_TO_MERGE = [
@@ -305,22 +364,17 @@ export async function importMemoryBackupZip(
   const warnings: string[] = [];
 
   try {
-    const extracted = await extractAndValidateBackup(zipFilePath, tempRoot);
-    const currentUserDir = userContext.userDataManager.rootDir;
-    const importedUserDir = extracted.userDir;
-    const existingPaths = await listUserRuntimeFiles(currentUserDir);
-    const importedPaths = await listUserRuntimeFiles(importedUserDir);
-    const importedPathSet = new Set(importedPaths);
-
-    const overwrittenPaths = existingPaths.filter((relativePath) => importedPathSet.has(relativePath));
-    const preservedPaths =
-      mode === 'merge'
-        ? existingPaths.filter((relativePath) => !importedPathSet.has(relativePath))
-        : [];
-    const deletedPaths =
-      mode === 'replace'
-        ? existingPaths.filter((relativePath) => !importedPathSet.has(relativePath))
-        : [];
+    const inspection = await inspectMemoryBackupImport(
+      userContext,
+      zipFilePath,
+      tempRoot,
+      mode,
+      warnings,
+    );
+    const {
+      currentUserDir,
+      importedUserDir,
+    } = inspection;
 
     const stageUserDir = path.join(tempRoot, mode === 'merge' ? 'stage-merge-user' : 'stage-replace-user');
 
@@ -328,10 +382,14 @@ export async function importMemoryBackupZip(
 
     if (mode === 'merge') {
       if (await pathExists(currentUserDir)) {
-        await copyDirectoryRecursive(currentUserDir, stageUserDir);
+        await copyDirectoryRecursive(currentUserDir, stageUserDir, {
+          excludeNames: SQLITE_EPHEMERAL_FILES,
+        });
       } else {
         await fs.mkdir(stageUserDir, { recursive: true });
       }
+
+      await userContext.db.backup(path.join(stageUserDir, SQLITE_FILE_NAME));
 
       await copyDirectoryRecursive(importedUserDir, stageUserDir, {
         excludeNames: new Set([SQLITE_FILE_NAME]),
@@ -377,20 +435,122 @@ export async function importMemoryBackupZip(
               action: 'replaced',
             },
       files: {
-        written: importedPaths.length,
-        overwritten: overwrittenPaths.length,
-        preserved: preservedPaths.length,
-        deleted: deletedPaths.length,
-        writtenPaths: importedPaths,
-        overwrittenPaths,
-        preservedPaths,
-        deletedPaths,
+        written: inspection.importedPaths.length,
+        overwritten: inspection.overwrittenPaths.length,
+        preserved: inspection.preservedPaths.length,
+        deleted: inspection.deletedPaths.length,
+        writtenPaths: inspection.importedPaths,
+        overwrittenPaths: inspection.overwrittenPaths,
+        preservedPaths: inspection.preservedPaths,
+        deletedPaths: inspection.deletedPaths,
       },
       warnings,
     };
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+export async function previewMemoryBackupImportZip(
+  userContext: UserContext,
+  zipFilePath: string,
+  mode: 'merge' | 'replace',
+): Promise<MemoryImportPreviewResult> {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'personal-ai-memory-import-preview-'));
+  const warnings: string[] = [];
+
+  try {
+    const inspection = await inspectMemoryBackupImport(
+      userContext,
+      zipFilePath,
+      tempRoot,
+      mode,
+      warnings,
+    );
+    const manifest = inspection.extracted.manifest;
+
+    return {
+      mode,
+      dryRun: true,
+      inspectedAt: new Date().toISOString(),
+      restoredLayers: ['A', 'B'],
+      backup: {
+        userId: manifest.userId,
+        exportedAt: manifest.exportedAt,
+        formatVersion: manifest.formatVersion,
+        includeCount: manifest.includes.length,
+        layers: {
+          A: manifest.layers.A.paths.length,
+          B: manifest.layers.B.paths.length,
+          C: {
+            generated: manifest.layers.C.generated.length,
+            failed: manifest.layers.C.failed.length,
+            skipped: manifest.layers.C.skipped.length,
+          },
+        },
+      },
+      database: inspection.databasePreview,
+      files: {
+        written: inspection.importedPaths.length,
+        overwritten: inspection.overwrittenPaths.length,
+        preserved: inspection.preservedPaths.length,
+        deleted: inspection.deletedPaths.length,
+        writtenPaths: inspection.importedPaths,
+        overwrittenPaths: inspection.overwrittenPaths,
+        preservedPaths: inspection.preservedPaths,
+        deletedPaths: inspection.deletedPaths,
+      },
+      warnings,
+    };
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function inspectMemoryBackupImport(
+  userContext: UserContext,
+  zipFilePath: string,
+  tempRoot: string,
+  mode: 'merge' | 'replace',
+  warnings: string[],
+): Promise<MemoryBackupImportInspection> {
+  const extracted = await extractAndValidateBackup(zipFilePath, tempRoot);
+  const currentUserDir = userContext.userDataManager.rootDir;
+  const importedUserDir = extracted.userDir;
+  const existingPaths = await listUserRuntimeFiles(currentUserDir);
+  const importedPaths = await listUserRuntimeFiles(importedUserDir);
+  const importedPathSet = new Set(importedPaths);
+
+  if (extracted.manifest.userId !== userContext.userId) {
+    warnings.push(
+      `Backup was exported for user ${extracted.manifest.userId}; import target is ${userContext.userId}.`,
+    );
+  }
+
+  const overwrittenPaths = existingPaths.filter((relativePath) => importedPathSet.has(relativePath));
+  const preservedPaths =
+    mode === 'merge'
+      ? existingPaths.filter((relativePath) => !importedPathSet.has(relativePath))
+      : [];
+  const deletedPaths =
+    mode === 'replace'
+      ? existingPaths.filter((relativePath) => !importedPathSet.has(relativePath))
+      : [];
+  const databasePreview = buildDatabaseImportPreview(
+    path.join(importedUserDir, SQLITE_FILE_NAME),
+    mode,
+  );
+
+  return {
+    extracted,
+    currentUserDir,
+    importedUserDir,
+    importedPaths,
+    overwrittenPaths,
+    preservedPaths,
+    deletedPaths,
+    databasePreview,
+  };
 }
 
 async function buildManifest(
@@ -583,6 +743,67 @@ function validateManifest(manifest: MemoryBackupManifest): void {
   }
 }
 
+function buildDatabaseImportPreview(
+  importedDbPath: string,
+  mode: 'merge' | 'replace',
+): DatabaseImportPreview {
+  let importedDb: BetterSqlite3.Database;
+
+  try {
+    importedDb = new BetterSqlite3(importedDbPath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    loadSqliteVecExtension(importedDb);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new MemoryBackupValidationError(
+      `Backup database cannot be inspected: ${message}`,
+    );
+  }
+
+  try {
+    const tableRows: Record<string, number> = {};
+    const skippedTables: string[] = [];
+    let importedRows = 0;
+
+    for (const tableName of [...TABLES_TO_MERGE, ...VECTOR_TABLES.map((table) => table.name)]) {
+      if (!tableExists(importedDb, 'main', tableName)) {
+        skippedTables.push(tableName);
+        continue;
+      }
+
+      try {
+        const row = importedDb
+          .prepare(`SELECT COUNT(*) AS cnt FROM ${quoteIdentifier(tableName)}`)
+          .get() as { cnt: number };
+        tableRows[tableName] = row.cnt;
+        importedRows += row.cnt;
+      } catch {
+        skippedTables.push(tableName);
+      }
+    }
+
+    return {
+      action: mode === 'merge' ? 'would_merge' : 'would_replace',
+      importedRows,
+      tableRows,
+      skippedTables,
+    };
+  } finally {
+    importedDb.close();
+  }
+}
+
+function loadSqliteVecExtension(db: BetterSqlite3.Database): void {
+  try {
+    const sqliteVec = require('sqlite-vec');
+    db.loadExtension(sqliteVec.getLoadablePath());
+  } catch {
+    // Vector tables are optional; callers record skipped vector tables if needed.
+  }
+}
+
 function mergeDatabaseFiles(
   targetDbPath: string,
   importedDbPath: string,
@@ -591,6 +812,7 @@ function mergeDatabaseFiles(
   const targetDb = new BetterSqlite3(targetDbPath);
 
   try {
+    loadSqliteVecExtension(targetDb);
     targetDb.pragma('journal_mode = WAL');
     targetDb.pragma('foreign_keys = ON');
     return mergeDatabaseBackup(targetDb, importedDbPath, warnings);

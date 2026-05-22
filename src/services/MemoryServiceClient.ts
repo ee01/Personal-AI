@@ -34,7 +34,11 @@ export interface IngestPayload {
     | 'manual'
     | 'system'
     | 'meeting'
-    | 'calendar';
+    | 'calendar'
+    | 'ai_chat'
+    | 'doubao';
+  scope?: 'work' | 'personal';
+  source?: string;
   sender?: string;
   groupId?: string;
   groupName?: string;
@@ -42,6 +46,24 @@ export interface IngestPayload {
   sourceTitle?: string;
   timestamp?: number;
   metadata?: Record<string, any>;
+  skipExtraction?: boolean;
+}
+
+export interface IngestDecision {
+  storage: 'indexed' | 'stored_unindexed' | 'duplicate' | 'error';
+  reason:
+    | 'salience_indexed'
+    | 'salience_below_threshold'
+    | 'extraction_skipped'
+    | 'extraction_unavailable'
+    | 'duplicate_post_id'
+    | 'duplicate_content_source_sender'
+    | 'insert_failed';
+  salienceScore?: number;
+  shouldIndex?: boolean;
+  indexed?: boolean;
+  duplicateOf?: string;
+  dedupeReason?: 'post_id' | 'content_source_sender';
 }
 
 export interface IngestResult {
@@ -49,6 +71,7 @@ export interface IngestResult {
   status: 'created' | 'duplicate' | 'error';
   entitiesExtracted?: number;
   matchedProjects?: string[];
+  decision?: IngestDecision;
 }
 
 export interface BatchIngestResult {
@@ -77,10 +100,19 @@ export type RecallPresentationHint =
   | 'research'
   | 'dashboard';
 export type RecallScope = 'work' | 'personal' | 'both' | 'all';
+export type RecallChannelName = 'vector' | 'fts' | 'graph' | 'time';
+export type RecallChannelStatus = 'hit' | 'empty' | 'skipped' | 'failed';
+
+export interface RecallChannelDiagnostic {
+  channel: RecallChannelName;
+  status: RecallChannelStatus;
+  candidateCount: number;
+  reason?: string;
+}
 
 export interface RecallOptions {
   topK?: number;
-  channels?: ('vector' | 'fts' | 'graph' | 'time')[];
+  channels?: RecallChannelName[];
   timeRange?: { start?: number; end?: number };
   entityTypes?: string[];
   projectFilter?: string;
@@ -108,6 +140,7 @@ export interface RecallResult {
   totalFound: number;
   queryTimeMs: number;
   channels: string[];
+  channelDiagnostics?: RecallChannelDiagnostic[];
   blocks?: RecallBlock[];
   analysis?: RecallAnalysis;
 }
@@ -312,7 +345,8 @@ export type ContextRecallContextType =
   | 'meeting'
   | 'message_thread'
   | 'jira_issue'
-  | 'document';
+  | 'document'
+  | 'selected_text';
 
 export interface ContextRecallEntityHint {
   kind: string;
@@ -320,11 +354,37 @@ export interface ContextRecallEntityHint {
   entityId?: string;
 }
 
+export interface ContextRecallSourceContext {
+  contextType?: string;
+  sourceType?: string;
+  host?: string;
+  url?: string;
+  title?: string;
+  participants?: string[];
+  topic?: string;
+  meetingId?: string;
+  groupId?: string;
+  conversationId?: string;
+  messageId?: string;
+  issueKey?: string;
+  calendarEventId?: string;
+}
+
+export interface ContextRecallExclude {
+  ids?: string[];
+  urls?: string[];
+  meetingIds?: string[];
+  groupIds?: string[];
+  conversationIds?: string[];
+}
+
 export interface ContextRecallRequest {
   surface: ContextRecallSurface;
   contextType: ContextRecallContextType;
   title?: string;
   url?: string;
+  sourceContext?: ContextRecallSourceContext;
+  exclude?: ContextRecallExclude;
   primaryText?: string;
   secondaryTexts?: string[];
   entityHints?: ContextRecallEntityHint[];
@@ -339,6 +399,7 @@ export interface ContextRecallMatch {
   type: 'message' | 'chunk' | 'entity';
   score: number;
   title?: string;
+  uiSummary?: string;
   snippet: string;
   sourceLabel?: string;
   sourceUrl?: string;
@@ -346,6 +407,22 @@ export interface ContextRecallMatch {
   exploreLink?: string;
   links: Array<{ label: string; url: string }>;
   whyMatched?: string;
+  whyRelevant?: string[];
+  matchedAnchors?: {
+    people?: string[];
+    topics?: string[];
+    projects?: string[];
+    source?: string[];
+  };
+  suppressionReason?: string;
+  reasonType?: string;
+  evidenceRole?: string;
+  displayPriority?: 'p1' | 'p2' | 'hidden';
+  metadata?: Record<string, unknown>;
+  mergedCount?: number;
+  mergedIds?: string[];
+  sourceClusterKey?: string;
+  sourceContext?: string;
   timestamp?: number;
 }
 
@@ -357,6 +434,7 @@ export interface ContextRecallResponse {
     normalizedQuery: string;
     channelsHit: string[];
     rejectedReason?: string;
+    suppressionReasons?: string[];
   };
 }
 
@@ -655,6 +733,7 @@ export interface AskResponse {
   answer: string;
   evidence?: RecallItem[];
   queryTimeMs: number;
+  channelDiagnostics?: RecallChannelDiagnostic[];
   resolutionState?: 'complete' | 'partial' | 'insufficient' | 'deferred';
   missingInfo?: string[];
   followUpActions?: RuntimeAction[];
@@ -909,6 +988,16 @@ export interface RelationshipContextCard {
     boostTerms: string[];
     sourceTypes: string[];
   };
+  privacySummary: {
+    sensitiveIncluded: boolean;
+    redactedAliases: number;
+    redactedFacts: number;
+    redactedRelationshipHints: number;
+    redactedEvidenceRefs: number;
+    redactedOpenLoops: number;
+    redactedRetrievalHints: number;
+    redactionNote?: string;
+  };
   generatedAt: number;
 }
 
@@ -954,12 +1043,26 @@ export interface RelationshipMeetingBrief {
   generatedAt: number;
   title: string;
   startAt?: number;
+  coverage: {
+    totalAttendees: number;
+    matchedAttendees: number;
+    unmatchedAttendees: number;
+    attendeesWithEvidence: number;
+    attendeesWithOpenLoops: number;
+    evidenceRefs: number;
+    coverageNote: string;
+  };
   attendees: Array<{
     displayName: string;
+    email?: string;
     personId?: string;
     personName?: string;
     radarState?: RelationshipRadarState;
     dataQuality?: RelationshipDataQuality;
+    matchedBy: 'name' | 'alias' | 'email' | 'email_local_part' | 'none';
+    matchConfidence: number;
+    matchReason: string;
+    coverageState: 'ready' | 'thin' | 'missing';
     summary: string;
     openLoops: RelationshipContextCard['openLoops'];
     suggestedQuestions: string[];
@@ -971,6 +1074,8 @@ export interface RelationshipMeetingBrief {
     openLoop: string;
     suggestedAsk: string;
     evidenceCount: number;
+    matchStatus: string;
+    coverageState: 'ready' | 'thin' | 'missing';
   }>;
 }
 
@@ -1401,6 +1506,7 @@ export interface CreateOutreachSessionFromMessageRequest {
   followupIntervalSeconds?: number;
   maxFollowup?: number;
   context?: string;
+  informationGoal?: string;
 }
 
 export interface OutreachTargetCandidate {
@@ -1467,6 +1573,9 @@ export interface OutreachSession {
   outcome?: Record<string, any>;
   errorCode?: string;
   errorMessage?: string;
+  scheduledFor?: number;
+  occurrenceKey?: string;
+  occurrenceStartAt?: number;
   createdAt: number;
   updatedAt: number;
   resolvedAt?: number;
@@ -3107,7 +3216,7 @@ export class MemoryServiceClient {
    * List notifications with optional filters.
    */
   async getNotifications(
-    state?: string,
+    state?: 'pending' | 'scheduled' | 'clicked' | 'dismissed',
     type?: string,
     limit?: number,
     offset?: number,
@@ -3217,6 +3326,7 @@ export class MemoryServiceClient {
     pending: number;
     clicked: number;
     dismissed: number;
+    scheduled: number;
     dailyCounts: Array<{ date: string; count: number }>;
   }> {
     return this.request('GET', '/notifications/stats');
@@ -3570,6 +3680,7 @@ export class MemoryServiceClient {
     title: string;
     questionTemplate: string;
     contextTemplate?: string;
+    informationGoalTemplate?: string;
     targetType: string;
     targetRef: string;
     scheduleSpec?: Record<string, any>;
@@ -4338,11 +4449,6 @@ export class MemoryServiceClient {
     onEvent: (event: string, data: any) => void,
     onError?: (error: Event) => void,
   ): () => void {
-    const url = `${this.baseUrl}/events?userId=${encodeURIComponent(
-      this.userId,
-    )}`;
-    const eventSource = new EventSource(url);
-
     const eventTypes = [
       'connected',
       'notification',
@@ -4355,26 +4461,59 @@ export class MemoryServiceClient {
       'provider_sync_job_updated',
     ];
 
-    for (const eventType of eventTypes) {
-      eventSource.addEventListener(eventType, (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          onEvent(eventType, data);
-        } catch {
-          onEvent(eventType, event.data);
-        }
-      });
-    }
+    let closed = false;
+    let eventSource: EventSource | null = null;
 
-    eventSource.onerror = (event: Event) => {
-      if (onError) {
-        onError(event);
+    const openEventStream = async (): Promise<void> => {
+      await this.ensureConfigLoaded();
+      await this.ensureUserIdResolved();
+
+      if (closed) {
+        return;
       }
+
+      const url = `${this.baseUrl}/events?userId=${encodeURIComponent(
+        this.userId,
+      )}`;
+      const source = new EventSource(url);
+
+      if (closed) {
+        source.close();
+        return;
+      }
+
+      eventSource = source;
+
+      for (const eventType of eventTypes) {
+        source.addEventListener(eventType, (event: MessageEvent) => {
+          try {
+            const data = JSON.parse(event.data);
+            onEvent(eventType, data);
+          } catch {
+            onEvent(eventType, event.data);
+          }
+        });
+      }
+
+      source.onerror = (event: Event) => {
+        if (onError) {
+          onError(event);
+        }
+      };
     };
+
+    openEventStream().catch((error) => {
+      if (!closed && onError) {
+        onError(error as Event);
+      }
+    });
 
     // Return unsubscribe function
     return () => {
-      eventSource.close();
+      closed = true;
+      if (eventSource) {
+        eventSource.close();
+      }
     };
   }
 

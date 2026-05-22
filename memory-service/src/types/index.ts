@@ -466,11 +466,39 @@ export interface IngestPayload {
   skipExtraction?: boolean;
 }
 
+export type IngestStorageDecision =
+  | 'indexed'
+  | 'stored_unindexed'
+  | 'duplicate'
+  | 'error';
+
+export type IngestDecisionReason =
+  | 'salience_indexed'
+  | 'salience_below_threshold'
+  | 'extraction_skipped'
+  | 'extraction_unavailable'
+  | 'duplicate_post_id'
+  | 'duplicate_content_source_sender'
+  | 'insert_failed';
+
+export type IngestDedupeReason = 'post_id' | 'content_source_sender';
+
+export interface IngestDecision {
+  storage: IngestStorageDecision;
+  reason: IngestDecisionReason;
+  salienceScore?: number;
+  shouldIndex?: boolean;
+  indexed?: boolean;
+  duplicateOf?: string;
+  dedupeReason?: IngestDedupeReason;
+}
+
 export interface IngestResult {
   id: string;
   status: 'created' | 'duplicate' | 'error';
   entitiesExtracted?: number;
   matchedProjects?: string[];
+  decision?: IngestDecision;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,11 +553,27 @@ export interface RecallQuery {
   blockTypes?: RecallBlockType[];
 }
 
+export type RecallChannelName = 'vector' | 'fts' | 'graph' | 'time';
+export type RecallChannelStatus = 'hit' | 'empty' | 'skipped' | 'failed';
+
+export interface RecallChannelDiagnostic {
+  channel: RecallChannelName;
+  status: RecallChannelStatus;
+  candidateCount: number;
+  reason?: string;
+}
+
+export interface RecallOptions {
+  /** Whether returned items should reinforce access_count/salience. Default true. */
+  reinforceAccess?: boolean;
+}
+
 export interface RecallResult {
   items: RecallItem[];
   totalFound: number;
   queryTimeMs: number;
   channels: string[];
+  channelDiagnostics?: RecallChannelDiagnostic[];
   /** Block-style render schema (only present when `blockTypes` was provided). */
   blocks?: RecallBlock[];
   /** Higher-level analysis (only present when `blockTypes` includes `summary`). */
@@ -678,7 +722,8 @@ export type ContextRecallContextType =
   | 'meeting'
   | 'message_thread'
   | 'jira_issue'
-  | 'document';
+  | 'document'
+  | 'selected_text';
 
 export type ContextRecallScope = RecallScope;
 
@@ -690,11 +735,62 @@ export interface ContextRecallEntityHint {
   entityId?: string;
 }
 
+export interface ContextRecallSourceContext {
+  contextType?: string;
+  sourceType?: string;
+  host?: string;
+  url?: string;
+  title?: string;
+  participants?: string[];
+  topic?: string;
+  meetingId?: string;
+  groupId?: string;
+  conversationId?: string;
+  messageId?: string;
+  issueKey?: string;
+  calendarEventId?: string;
+}
+
+export interface ContextRecallExclude {
+  ids?: string[];
+  urls?: string[];
+  meetingIds?: string[];
+  groupIds?: string[];
+  conversationIds?: string[];
+}
+
+export type ContextRecallReasonType =
+  | 'same_project'
+  | 'same_people'
+  | 'open_action'
+  | 'prior_decision'
+  | 'linked_artifact'
+  | 'meeting_series'
+  | 'weak_related'
+  | 'semantic'
+  | 'keyword'
+  | 'source'
+  | 'recent'
+  | 'entity';
+
+export type ContextRecallEvidenceRole =
+  | 'decision'
+  | 'action_item'
+  | 'action'
+  | 'risk'
+  | 'context'
+  | 'artifact'
+  | 'issue';
+
+export type ContextRecallDisplayPriority = 'p1' | 'p2' | 'hidden';
+
 export interface ContextRecallRequest {
   surface: ContextRecallSurface;
   contextType: ContextRecallContextType;
   title?: string;
   url?: string;
+  sourceContext?: ContextRecallSourceContext;
+  exclude?: ContextRecallExclude;
   /**
    * The single most representative chunk of context. The server rejects
    * payloads that look like raw DOM dumps (very long / very low-signal).
@@ -727,6 +823,26 @@ export interface ContextRecallMatch {
   links: Array<{ label: string; url: string }>;
   /** Short human-readable explanation: which channel hit / why this matches. */
   whyMatched?: string;
+  /**
+   * User-facing reasons explaining the concrete anchors that made this memory
+   * relevant to the current scene. Intended for Memory Lens / Meeting Pilot UI.
+   */
+  whyRelevant?: string[];
+  matchedAnchors?: {
+    people?: string[];
+    topics?: string[];
+    projects?: string[];
+    source?: string[];
+  };
+  suppressionReason?: string;
+  uiSummary?: string;
+  reasonType?: ContextRecallReasonType;
+  evidenceRole?: ContextRecallEvidenceRole;
+  displayPriority?: ContextRecallDisplayPriority;
+  metadata?: Record<string, any>;
+  mergedCount?: number;
+  mergedIds?: string[];
+  sourceClusterKey?: string;
   timestamp?: number;
 }
 
@@ -734,6 +850,7 @@ export interface ContextRecallDebug {
   normalizedQuery: string;
   channelsHit: string[];
   rejectedReason?: string;
+  suppressionReasons?: string[];
 }
 
 export interface ContextRecallResponse {

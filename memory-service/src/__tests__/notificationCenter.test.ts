@@ -465,6 +465,49 @@ describe('NotificationCenterService', () => {
       .prepare('SELECT sent_at FROM notification_records WHERE id = ?')
       .get(snoozeBody.newNotificationId) as { sent_at: number } | undefined;
     expect(created?.sent_at).toBe(snoozeBody.scheduledAt);
+
+    const scheduledRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notifications?state=scheduled',
+    });
+
+    expect(scheduledRes.statusCode).toBe(200);
+    expect(scheduledRes.json().map((item: { id: string }) => item.id)).toEqual([
+      snoozeBody.newNotificationId,
+    ]);
+
+    const statsRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notifications/stats',
+    });
+
+    expect(statsRes.statusCode).toBe(200);
+    expect(statsRes.json().scheduled).toBe(1);
+
+    const duplicateSnoozeRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/notifications/notif-deadline-snooze/action',
+      payload: {
+        action: 'snooze',
+        delaySeconds: 45 * 60,
+      },
+    });
+
+    expect(duplicateSnoozeRes.statusCode).toBe(409);
+    expect(duplicateSnoozeRes.json().error).toBe(
+      'notification_already_handled',
+    );
+
+    const scheduledCount = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+           FROM notification_records
+          WHERE clicked_at IS NULL
+            AND dismissed_at IS NULL
+            AND sent_at > ?`,
+      )
+      .get(now) as { count: number };
+    expect(scheduledCount.count).toBe(1);
   });
 
   it('rejects invalid feed query parameters', async () => {
@@ -480,5 +523,14 @@ describe('NotificationCenterService', () => {
     });
     expect(invalidLane.statusCode).toBe(400);
     expect(invalidLane.json().error).toBe('invalid_lanes');
+
+    const invalidNotificationState = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notifications?state=quiet_hours',
+    });
+    expect(invalidNotificationState.statusCode).toBe(400);
+    expect(invalidNotificationState.json().error).toBe(
+      'invalid_notification_state',
+    );
   });
 });

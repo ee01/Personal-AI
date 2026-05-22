@@ -7,6 +7,8 @@ import {
   chromeAPI,
   getTopicDeferPresetOptions,
   getTopicMutePresetOptions,
+  getTopicMuteReasonLabel,
+  getTopicMuteReasonOptions,
   useMemoryStore,
 } from '../src/modals/memory-store.ts';
 import {
@@ -24,7 +26,10 @@ import {
   topicConversationMatchesQuery,
 } from '../src/modals/topic-detail-data.ts';
 import { renderHighlightedText } from '../src/modals/topic-detail-rendering.ts';
-import { getSafeExternalUrl } from '../src/modals/topic-link-safety.ts';
+import {
+  getFirstSafeExternalUrl,
+  getSafeExternalUrl,
+} from '../src/modals/topic-link-safety.ts';
 import {
   getTopicTriagePriority,
   sortTopicsForTriage,
@@ -506,12 +511,20 @@ async function verifyMutedTopicLeavesUnreadQueueWithoutReading() {
 
   store.entities = [topic] as any;
 
-  await store.muteTopic('topic-muted', Date.now() + 3600000);
+  await store.muteTopic(
+    'topic-muted',
+    Date.now() + 3600000,
+    'duplicate-discussion',
+  );
 
   assert.equal(topic.readStatus.unreadCount, 2);
   assert.equal(topic.readStatus.isRead, false);
   assert.equal(store.getUnreadTopics().length, 0);
   assert.equal(store.getMutedTopics()[0].id, 'topic-muted');
+  assert.equal(
+    (store.getTopicMutedState('topic-muted') as any)?.reason,
+    'duplicate-discussion',
+  );
   assert.equal(
     store.entityTypes.find((item) => item.type === 'Topic')?.count,
     0,
@@ -525,6 +538,78 @@ async function verifyMutedTopicLeavesUnreadQueueWithoutReading() {
     store.entityTypes.find((item) => item.type === 'Topic')?.count,
     1,
   );
+}
+
+async function verifyMutedTopicReasonSurvivesLocalStorageRestore() {
+  const originalLocalStorage = (globalThis as any).localStorage;
+  const storage = new Map<string, string>();
+  const now = Date.now();
+
+  (globalThis as any).localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, String(value));
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+    clear() {
+      storage.clear();
+    },
+  };
+
+  storage.set(
+    'personal-ai-muted-topics-v1',
+    JSON.stringify({
+      'topic-muted-restore': {
+        until: now + 3600000,
+        createdAt: now - 1000,
+        reason: 'low-relevance',
+      },
+      'topic-muted-legacy': {
+        until: now + 3600000,
+        createdAt: now - 1000,
+      },
+    }),
+  );
+
+  try {
+    const store = createStore();
+    await store.initialize();
+    store.entities = [
+      createTopic('topic-muted-restore'),
+      createTopic('topic-muted-legacy'),
+    ] as any;
+
+    assert.equal(
+      (store.getTopicMutedState('topic-muted-restore') as any)?.reason,
+      'low-relevance',
+    );
+    assert.equal(
+      getTopicMuteReasonLabel(
+        (store.getTopicMutedState('topic-muted-restore') as any)?.reason,
+      ),
+      '低相关度',
+    );
+    assert.equal(
+      (store.getTopicMutedState('topic-muted-legacy') as any)?.reason,
+      undefined,
+    );
+    assert.equal(
+      getTopicMuteReasonLabel(
+        (store.getTopicMutedState('topic-muted-legacy') as any)?.reason,
+      ),
+      '手动静音',
+    );
+  } finally {
+    if (originalLocalStorage === undefined) {
+      delete (globalThis as any).localStorage;
+    } else {
+      (globalThis as any).localStorage = originalLocalStorage;
+    }
+  }
 }
 
 function verifyExpiredMutedTopicReturnsToUnreadQueue() {
@@ -851,6 +936,21 @@ function verifyTopicMutePresetOptions() {
   assert.equal(optionByKey.get('indefinite')?.until, null);
 }
 
+function verifyTopicMuteReasonOptions() {
+  const options = getTopicMuteReasonOptions();
+  const optionByKey = new Map(options.map((option) => [option.key, option]));
+
+  assert.equal(optionByKey.get('not-now')?.label, '暂不关注');
+  assert.equal(optionByKey.get('low-relevance')?.label, '低相关度');
+  assert.equal(
+    optionByKey.get('duplicate-discussion')?.label,
+    '重复讨论',
+  );
+  assert.equal(getTopicMuteReasonLabel('low-relevance'), '低相关度');
+  assert.equal(getTopicMuteReasonLabel(undefined), '手动静音');
+  assert.equal(getTopicMuteReasonLabel('unknown'), '手动静音');
+}
+
 function verifyTopicDetailHasNoDeadMutationControls() {
   const source = readFileSync(
     new URL('../src/modals/components/TopicDetailPage.vue', import.meta.url),
@@ -872,9 +972,10 @@ function verifyTopicDetailUsesSafeTraceableLinks() {
   );
 
   assert.match(source, /getSafeExternalUrl/);
+  assert.match(source, /getFirstSafeExternalUrl/);
   assert.match(source, /class="webpage-open-link"/);
   assert.match(source, /target="_blank"/);
-  assert.match(source, /rel="noreferrer"/);
+  assert.match(source, /rel="noopener noreferrer"/);
 }
 
 function verifyTopicListResourcePreviewUsesSafeLinks() {
@@ -894,6 +995,18 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
   assert.equal(getSafeExternalUrl('javascript:alert(1)'), '');
   assert.equal(getSafeExternalUrl('file:///tmp/secret'), '');
   assert.equal(getSafeExternalUrl('#'), '');
+  assert.equal(
+    getFirstSafeExternalUrl(
+      '#',
+      'javascript:alert(1)',
+      'https://example.com/source',
+    ),
+    'https://example.com/source',
+  );
+  assert.equal(
+    getFirstSafeExternalUrl('', 'file:///tmp/secret', undefined),
+    '',
+  );
   assert.match(source, /handleResourcePreviewClick/);
   assert.match(source, /handleUnreadDiscussionClick/);
   assert.match(source, /navigateToTopicDiscussion/);
@@ -1087,6 +1200,10 @@ function verifyTopicMuteUiIsReachable() {
     new URL('../src/modals/components/EntityListPage.vue', import.meta.url),
     'utf8',
   );
+  const storeSource = readFileSync(
+    new URL('../src/modals/memory-store.ts', import.meta.url),
+    'utf8',
+  );
 
   assert.doesNotMatch(overviewSource, /handleMuteTopic/);
   assert.doesNotMatch(overviewSource, /topic-action-btn/);
@@ -1096,6 +1213,10 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(listSource, /handleMuteTopic/);
   assert.match(listSource, /🔕 静音/);
   assert.match(listSource, /取消静音/);
+  assert.match(listSource, /topic-mute-reasons/);
+  assert.match(listSource, /selectedMuteReason/);
+  assert.match(listSource, /getTopicMuteReasonLabel/);
+  assert.match(storeSource, /低相关度/);
 }
 
 function verifyTopicDetailUnreadTriageUiIsReachable() {
@@ -1149,6 +1270,7 @@ async function main() {
   await verifySingleConversationReadWithoutReadStatusUsesInferredCount();
   await verifyDeferredTopicLeavesUnreadQueueWithoutReading();
   await verifyMutedTopicLeavesUnreadQueueWithoutReading();
+  await verifyMutedTopicReasonSurvivesLocalStorageRestore();
   verifyExpiredMutedTopicReturnsToUnreadQueue();
   await verifyTopLevelConversationReadState();
   verifyTopicDetailLegacyDataFallback();
@@ -1159,6 +1281,7 @@ async function main() {
   await verifyUnknownConversationReadStateStaysNeutral();
   verifyTopicDeferPresetOptions();
   verifyTopicMutePresetOptions();
+  verifyTopicMuteReasonOptions();
   verifyTopicDetailHasNoDeadMutationControls();
   verifyTopicDetailUsesSafeTraceableLinks();
   verifyTopicListResourcePreviewUsesSafeLinks();

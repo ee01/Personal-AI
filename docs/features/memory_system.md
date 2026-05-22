@@ -1,10 +1,22 @@
 # Memory Service — 类人记忆系统架构
 
-*最后更新: 2026-05-19 (补充时间轴证据链接兼容)*
+*最后更新: 2026-05-22 (补充动作队列健康摘要与运行恢复提示)*
 
 ## 系统概述
 
 Memory Service 是一套独立部署的**类人记忆后端服务**，取代了原有的 Chrome Extension 内嵌记忆系统（memory.ts + ChromaDB + Chrome Storage）。它模拟人脑的记忆机制 —— 自动摄入、显著性评估、多通道召回、遗忘衰减、离线巩固、自我反思与生成式重放（梦境重放），并提供双人格模型（用户画像 + AI 自我认知）。
+
+## 大白话运行逻辑
+
+Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议、Jira、手动记录先被摄入成可检索的片段和实体；之后不同功能按场景去召回、提问、生成提醒或沉淀画像。
+
+结果主要受这些因素影响：
+
+1. 摄入质量：原始内容、来源、时间、scope、实体和 metadata 越完整，后续召回越可靠。
+2. 召回通道：vector 负责语义相似，FTS 负责关键词，graph 负责实体关系，time 负责时间窗口；不同入口会选择不同通道组合。
+3. 显著性和反馈：salience、access_count、用户正负反馈会影响排序和后续强化。
+4. 用户边界：`X-User-Id`、scope、已确认画像和权限边界决定哪些记忆能被读取或注入。
+5. 离线巩固：自我反思和梦境重放会把分散片段整理成更稳定的主题、行动项或洞察，但不应替代原始证据。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -96,6 +108,8 @@ Memory Service 是一套独立部署的**类人记忆后端服务**，取代了�
 | **HeartbeatLoop** | 微巩固、通知检查、梦境报表检查、自我反思 planner、动作执行 |
 | **ProfileManager** | 双人格：用户画像 + AI 自我认知 (Identity/Soul/Policy) |
 
+摄入接口会返回轻量 `decision`，说明本次内容是进入结构化索引、仅保存为原始消息、还是被判定为重复；其中包含 duplicate 原因、显著性分数、是否达到索引阈值和未索引原因。这样客户端日志和运维排查可以直接解释“为什么记住了但搜不到”或“为什么跳过重复”，不需要临时查 SQLite。
+
 ---
 
 ## 4 通道召回 (RecallEngine)
@@ -134,13 +148,15 @@ Memory Service 是一套独立部署的**类人记忆后端服务**，取代了�
 
 被动上下文召回（例如网页、会议或 popup 的“你之前见过这个”提示）默认使用 `all`，因为它的目标是发现关联线索，而不是替用户做工作/个人范围判断。主动研究型召回仍默认 `work`，需要用户或调用方显式切到 `personal` / `both` / `all`。
 
-记忆查询 UI 已提供“工作 / 个人 / 全部”范围选择，并在搜索结果里显示当前检索范围、命中结果范围标签、来源、时间和命中通道。搜索结果页切换范围会立即重新执行当前搜索并同步 URL，避免按钮状态和实际结果范围脱节。召回结果会保留标题、摘要、来源、时间、原始来源链接和 `exploreLink`，卡片点击优先跳到记忆定位页，避免把 message/chunk 误当实体详情打开。`/recall`、`/ask` 和来源记忆清理接口都接受 `scope=all`，避免客户端使用统一范围语义时被后端拒绝。默认范围搜不到结果时，搜索页会提供“搜索全部记忆”的直接入口，减少用户被默认工作范围卡住的情况。
+记忆查询 UI 已提供“工作 / 个人 / 全部”范围选择，并在搜索结果里显示当前检索范围、命中结果范围标签、范围分布、来源、时间和命中通道。搜索结果页切换范围会立即重新执行当前搜索并同步 URL，避免按钮状态和实际结果范围脱节；在 `全部` 范围下，结果汇总会直接显示工作/个人命中数量，让用户先看见本次证据是否跨越生活域，再决定是否继续打开来源或引用结果。召回结果会保留标题、摘要、来源、时间、原始来源链接和 `exploreLink`，卡片点击优先跳到记忆定位页，避免把 message/chunk 误当实体详情打开。`/recall`、`/ask` 和来源记忆清理接口都接受 `scope=all`，避免客户端使用统一范围语义时被后端拒绝。默认范围搜不到结果时，搜索页会提供“搜索全部记忆”的直接入口，减少用户被默认工作范围卡住的情况。
 
 搜索结果卡片提供与时间轴一致的轻量反馈入口。用户可以把某条证据标记为“有用”或“不相关”，也可以撤销反馈；已有反馈会在搜索结果重新打开时恢复高亮。反馈提交时会携带 `message` / `chunk` / `entity` 目标类型，避免同 ID 的不同记忆类型串项。
 
+召回结果现在会返回 `channelDiagnostics`，稳定列出本次请求中 `vector` / `fts` / `graph` / `time` 各通道的命中、空结果、跳过或失败状态。搜索结果页会在摘要里展示这些通道状态和命中数；如果本地语义 embedding 不可用，用户会直接看到“语义未运行”，而不是把关键词、图谱或时间通道的结果误解为完整四通道结果。
+
 搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。结果跳转只接受服务端生成的 `#/...` 内部路由，来源链接只允许 `http/https`，避免记忆内容里的异常 URL 变成可点击入口。
 
-`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口和命中通道，避免全局范围按钮与实际请求范围脱节；空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天或全部范围的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞。
+`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口和命中通道，避免全局范围按钮与实际请求范围脱节；列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天或全部范围的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞。
 
 召回排序继续使用 MMR，但不再用 query embedding 当候选向量占位。没有候选 embedding 时，会用候选文本相似度作为多样性惩罚，避免时间窗口或图谱召回被近重复内容挤占；候选去重、排序和搜索结果卡片都使用 `type:id` 作为稳定身份，避免 `message`、`chunk`、`entity` 碰巧同 ID 时被误合并或前端复用错卡片；召回后的访问强化也按真实结果类型写入 `message` / `chunk` / `entity` 元数据。
 
@@ -285,6 +301,8 @@ ReflectionResearcher      ReflectionWorker
 - `failed`
 - `dead_letter`
 
+`memory-exploring` 的动作队列页会把当前筛选结果汇总成健康摘要：当前命中数量、需要处理的失败/到期/待审批/高风险动作、执行中动作、失败或 dead letter 数量。筛选为空时会说明是队列真正为空还是来源/状态/模式筛选没有命中；运行超过 30 分钟的动作会保留 running 状态并提示用户先检查服务日志、关联线程或外部系统，避免误以为页面刷新就是执行完成。
+
 ### 用户侧三条主要呈现链路
 
 反思线程、真值维护和其他后台引擎在需要“继续推进”时，面向用户大致会分成三条链路：
@@ -348,7 +366,9 @@ ReflectionResearcher      ReflectionWorker
 
 - 数据表：`confirm_requests`
 - UI：`memory-exploring` 的“决策中心”
-- 当前 UI 行为只有**回答**，没有 snooze 入口
+- 主队列只展示 `routing=decision` 且 `state=pending` 的确认项；`routing=watch` 的观察项独立折叠展示，不计入主标题数字
+- 决策卡会展示优先级、原因、来源、上下文、可选项和 `evidenceRefs` 摘要，并提供“复制审核包”用于把问题、上下文、可选项和原始证据引用带到外部复核
+- 当前决策项的主要动作仍是**回答**；观察项支持“立即查证 / 继续观察 / 结束追踪”，但决策项本身还没有 snooze 入口
 
 #### 3. 通知提醒（Notifications / 免打扰路径）
 
@@ -368,7 +388,8 @@ ReflectionResearcher      ReflectionWorker
 
 - 数据表：`notification_records`
 - 能力：`acknowledge` / `dismiss` / `snooze`
-- `snooze` 当前默认是顺延 24 小时
+- `snooze` 默认顺延 24 小时，也接受调用方提供 5 分钟到 7 天的延迟；已处理或已 snooze 的原通知不会再次复制，避免重复提醒
+- `GET /notifications?state=scheduled` 可以查看尚未到点的稍后提醒，`/notifications/stats` 会返回 `scheduled` 数量
 - 当前没有独立“通知中心”页面，主要呈现方式是：
   - Chrome Extension 通知
   - Bot 推送
@@ -594,6 +615,8 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 - `risks`
 - 低置信度的新关系（来源标记为 dream / generative replay）
 
+前端的“梦境重放”页会把最近的 `dreams/*.md` 汇总成可扫读卡片，优先展示洞察数、待复核风险数和新关系数。单个梦境文件读取失败时，页面会保留可用结果并显示部分失败提示，避免把服务或文件错误误报成“暂无内容”。展开梦境时会提示这是生成式低置信度联想，用户应先进入自我反思或原始记忆复核，再把关系、风险或行动项当作确定事实使用。
+
 ### 与自我反思的关系
 
 梦境重放不是独立悬空的文档生成器，而是会把结果继续喂回自我反思系统：
@@ -644,6 +667,7 @@ data/
 - UserContextManager 按需加载、30 分钟空闲回收
 - 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略等运行时配置
 - 自我反思是**按用户开关**的；梦境重放是**全用户持续运行**的，只有报表推送是按用户控制的
+- 实时事件流 `/events` 兼容浏览器 `EventSource`：客户端会在本地配置和 `userinfo.username` 解析完成后再用 `?userId=` 建立连接，服务端优先校验这个 query userId 并按用户过滤事件；非法 userId 会直接拒绝，避免事件流误连到 `default` 用户。
 
 ---
 
@@ -652,6 +676,8 @@ data/
 业内产品和论文对长期记忆系统的共同要求是：用户可控、按需取回、来源可追溯，并且要避免把全部历史无差别塞进上下文。
 
 - ChatGPT Memory 与 Claude Memory 都把“用户能查看、关闭、删除或控制记忆”作为核心产品语义
+- Notion Enterprise Search 这类跨应用搜索把查询时权限检查、用户映射和工作区隔离作为核心约束；这说明长期记忆不只要分库，还要保证实时事件、召回和导出等所有读路径都带着同一份用户身份。
+- OpenAI Agents SDK / LangGraph 的 human-in-the-loop 都强调暂停、持久化、恢复和逐项审批；Zapier Agents 的 activity 页面强调按运行状态、使用的 app、时间和详细步骤审计。动作队列 UI 因此应把“等待什么、是否能恢复、失败原因在哪里”放在列表入口，而不只展示 raw status。
 - MemGPT 的分层记忆思路说明长期记忆需要明确的热/冷层和取回策略，不能只靠更大的上下文窗口
 - Generative Agents 的观察、反思、计划闭环与当前自我反思线程方向一致，但前端必须把证据、来源和下一步动作讲清楚
 - GraphRAG 的实践强调实体/关系图和证据溯源；当前系统已有图谱与 evidence block，应继续避免无来源的“泛化结论”
@@ -688,31 +714,40 @@ Memory Service 可以给豆包等外部入口渲染不同类型的 context packa
 
 | 操作 | 端点 | 说明 |
 |---|---|---|
-| 摄入 | `POST /ingest` | 单条消息存储 |
-| 批量摄入 | `POST /ingest/batch` | 批量写入 |
+| 摄入 | `POST /ingest` | 单条消息存储，返回 `decision` 解释重复/索引/仅保存原因 |
+| 批量摄入 | `POST /ingest/batch` | 批量写入，单条结果与 `/ingest` 保持一致 |
 | 召回 | `POST /recall` | 多通道记忆检索 |
 | 反馈 | `POST /feedback` | 记录召回质量、通知或实体修正反馈 |
 | 问答 | `POST /ask` | RAG 风格自然语言问答 |
 | 配置 | `GET /config` / `PUT /config` | 按用户读取/写入运行时配置 |
 | 实体 | `GET /entities` | 知识图谱查询 |
 | 用户画像 | `GET /profile/core` | 核心画像 |
-| 通知 | `GET /notifications` | 主动通知列表 |
+| 通知 | `GET /notifications` | 主动通知列表，支持 `pending` / `scheduled` / `clicked` / `dismissed` 状态 |
 | 自我反思 | `GET /reflection-threads` | 查看自我反思线程列表 |
 | 自我反思 | `GET /reflection-threads/:id` | 查看单个线程详情、runs、actions、action results |
 | 自我反思 | `POST /reflection-threads/:id/revisit` | 手动触发某个线程重新反思 |
 | 动作 | `GET /actions` | 查看动作队列 |
 | 动作 | `POST /actions/:id/execute` | 手动执行某个动作 |
 | 动作 | `POST /actions/:id/retry` | 重试失败动作 |
-| 决策中心 | `GET /confirm-requests` | 查看待确认项 |
+| 决策中心 | `GET /confirm-requests` | 查看待确认项，支持 `queue=decision/watch/all` 与 `state` 过滤 |
 | 决策中心 | `POST /confirm-requests/:id/answer` | 回答待确认项 |
+| 决策中心 | `POST /confirm-requests/:id/state` | 观察项在 `pending` / `snoozed` / `expired` 之间流转 |
 | 主动询问 | `GET /outreach/sessions` | 查看主动询问会话 |
 | 主动询问 | `GET /outreach/sessions/:id` | 查看单个主动询问详情 |
 | 主动询问 | `POST /outreach/sessions/:id/approve` | 批准待发送询问 |
 | 主动询问 | `GET /outreach/targets/search` | 检索 RingCentral 用户/群组候选 |
 | 梦境报表 | `POST /dream-digest/push-now` | 手动立即推送一次梦境报表 |
 | 巩固 | `POST /consolidate` | 手动触发巩固 |
-| 导出 | `POST /export` | Markdown 格式导出 |
+| 导出 | `POST /export` | 生成可恢复的 backup ZIP，包含 `manifest.json`、用户 SQLite/config/Markdown 与只读 derived snapshots |
+| 导入 | `POST /import` | Multipart 上传 backup ZIP；支持 `mode=merge/replace` 与 `dryRun=true` 预检 |
 | 健康 | `GET /health` | 服务状态 |
+
+### 记忆导入 / 导出 / 备份
+
+- `/export` 默认返回 `backup_zip`，manifest 会列出 A 层 SQLite/config、B 层用户 Markdown 文件、C 层 derived 快照，并记录 size / sha256 用于导入校验。
+- `/import` 的默认模式是 `merge`，会合并数据库行并覆盖备份内同名文件，保留备份外的本地文件；`mode=replace` 会用备份目录替换当前用户目录。
+- 导入前可以先用同一个 multipart 请求加 `dryRun=true`，服务只校验 ZIP、manifest 和数据库可读性，并返回将写入、覆盖、保留、删除的路径及数据库表行数预览，不会修改当前用户数据。
+- 导入结果和 dry-run 都会返回 warnings；例如备份来源用户与当前 `X-User-Id` 不一致时会显式提示，避免把迁移场景误当成同账号恢复。
 
 完整 API 文档：`http://localhost:3210/docs` (Swagger UI)
 

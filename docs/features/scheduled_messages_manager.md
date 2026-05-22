@@ -1,10 +1,22 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-05-19*
+*最后更新: 2026-05-22*
 
 ## 功能概述
 
 定时消息统一管理功能提供了一个集中化的平台，用于管理和执行各种类型的定时消息推送。系统整合了 Google Sheet、AppScript、Jira Automation 和 memory-service runtime，既能做普通消息推送，也能做“帮我问 / 主动询问（Outreach）”这类带运行时状态和追问逻辑的任务。
+
+## 大白话运行逻辑
+
+这个功能把“什么时候发什么消息”拆成三层：Google Sheet 是用户可编辑的计划表，执行引擎负责按时间发出，memory-service runtime 负责 Outreach 这类需要等回复、追问和记录状态的任务。
+
+结果主要受这些因素影响：
+
+1. 表格行是否有效：状态、日期、时间、重复规则、推送方式和内容是调度的根。
+2. 本地时区解释：日期/时间按本机本地时间保存和预览，避免 UTC 转换造成跨天误发。
+3. 执行引擎选择：AsMe 走 App Script，Bot/AI 走 Jira Automation，Outreach 走 memory-service runtime，浏览器只做备用。
+4. 幂等和补偿：`Next_Exec`、Logs、occurrence/session 共同决定是否已执行、是否要补偿、是否应避免重复。
+5. 队列健康：pending/running/succeeded/failed/recovered 等状态会影响管理页提示，不应把历史成功误当当前阻塞。
 
 ## 核心特性
 
@@ -63,10 +75,56 @@
 - 只有带有效 `AI_Endpoint` 的 JiraAutomation 消息会进入统一执行器队列；空白 endpoint 的外部规则不会被误判为 Bot / AI 队列
 - 当同一时间槽可能超过 30 分钟补偿窗口时，顶部会显示风险提示，并列出受影响的时间槽和示例消息
 - 明确时间的同槽排队会给出“改到建议”操作；即使尚未超出补偿窗口，也能把最晚受影响的消息改到下一个清晰分钟
+- 队列卡片会说明建议处理项前面还有多少条待执行，并展示前序消息示例，帮助用户判断是改最晚项、编辑前序项，还是接受当前延后
 - 新增 / 编辑表单会实时提示当前消息在同槽队列中的位置；高风险时间会阻止保存，避免创建后才发现不会按预期发送
-- 新增 / 编辑表单在明确时间已经拥挤时会直接给出“使用建议时间”；无时间队列如果快排到执行日结束后，也会建议一个明确时间，减少手工试错
+- 新增 / 编辑表单在明确时间已经拥挤时会直接给出“使用建议时间”；无时间队列如果快排到执行日结束后，会优先建议下一天默认队列日期，并清空执行时间保留“08:00 后队列”语义，减少手工试错
 - 已有 Active 消息如果因为手工改 Sheet 或长期未打开而错过可执行窗口，管理页会在顶部和行内提示需要改期；用户可以编辑为未来明确时间，或对执行器消息清空时间进入 08:00 后队列
 - 错过执行窗口或执行时间格式异常时，顶部健康告警会给出“一键改期”：明确时间改到下一分钟，未设时间的执行器消息改回今天的 08:00 后队列，减少手工编辑阻塞
+- 需要改期的消息超过 4 条时，顶部健康告警可展开显示全部，保证每条阻塞项都有定位、编辑和一键改期入口
+
+### 8. 执行匹配、补偿与幂等
+- 当前实现不使用独立 `Priority` 字段；同一执行槽命中多条 Bot / AI / 带 `AI_Endpoint` 的 JiraAutomation 消息时，按 Messages 表格行顺序每分钟执行第一条
+- 执行器按三段顺序匹配：当前分钟显式时间消息、过去 30 分钟补偿窗口、执行日 08:00 后未填写时间的队列消息
+- 显式时间只允许准点或最多迟到 1 分钟的触发器抖动容差，不会提前发送；补偿窗口支持跨午夜恢复
+- `Last_Exec`、`Exec_Log` 和 `Execution_Key` 共同提供轻量幂等：当天成功或失败的消息都会跳过，避免失败项阻塞后续队列或 Jira 重试造成重复发送
+- `markBotMessageExecuted` 会携带 `messageId` / `rowIndex` / `executionKey` 写回，Sheet 行移动、缺失 rowIndex 或 Jira 重试时仍能定位并去重
+- 当未填写时间的执行器队列排到当天结束后，建议改期会继续保持 `Schedule_Time` 为空，而不是改成明确 `08:00`；这样用户看到的“08:00 后队列”不会被一键恢复误改成准点优先执行
+- `AI_Body` 支持 `{Topic}`、`{Content}`、`{TeamID}` 和 Timeline 变量；变量替换会做 JSON 字符串转义，避免正文里的引号、反斜杠或换行破坏外部 API body
+
+### 9. Config 同步与跨设备恢复
+- `Config` 工作表是跨设备恢复来源，`chrome.storage.local` 只是本机运行缓存；同步时先写 Sheet，再写本地，避免出现“本机成功但另一台设备无法恢复”的半同步状态
+- Config 写入使用 Google Sheets `RAW` value input option，保留 rule id、URL、ISO 时间戳、JWT 状态等精确字符串
+- 写回时只替换系统管理键，保留用户或后续功能添加的自定义 Config 键；重复的系统管理键会收敛成单行，重复 `last_sync_time` 会按真实时间取最新值
+- 写回前会比较远端 `last_sync_time`：远端更新时暂停写入并要求重新读取；同表但本机较新、时间相同或时间缺失且关键字段不同，会展示字段级差异让用户选择保留本机或使用 Sheet
+- 手动绑定支持 Google Sheets / Drive URL、`/spreadsheets/u/0/d/...` 路径和完整 Sheet ID；非 Google URL 不会因为普通 `id` 参数被误识别为维护表
+- 切换到另一张维护表前会进入确认流程；Webhook、JWT、client secret 等敏感值只显示配置状态，不展示原文
+- App Script 版本元数据也走 Sheet-first 完整同步；升级成功并确认当前 Web App URL 已返回目标版本后，才把 Sheet / Storage 标记为最新
+
+### 10. Timeline 缓存与 Jira Groovy Map 兼容
+- Timeline Sync Rule 每天 05:00 按项目读取内网 release info，并把每个项目缓存到 Apps Script Script Properties；Executor Rule 每分钟只读取缓存，不再在执行请求里携带完整 releaseInfo
+- 当前生成的 Timeline Sync Rule 对 App Script `WEB_APP_URL` 回调必须保持 `GET`，URL 包含 `action=cacheReleaseInfo`、`project` 和 URL 编码后的 `releaseInfo`；不要改成 POST，Jira Automation 对 Apps Script `ContentService` 的 POST 302 重定向兼容性仍有风险
+- Apps Script 仍保留 POST JSON、旧 inline 参数和 Groovy/Java Map fallback parser，主要用于旧 Rule、手工诊断或兼容输入；当前可维护路径以生成的 GET Rule 为准
+- `cacheReleaseInfo` 会校验项目、schema、嵌套深度、字符长度、Script Properties 单值约 9KB 限制，以及至少一个 `MM/DD/YYYY` milestone 日期；非法日期、空日期或非字符串 milestone 不会出现在 UI 可选项里
+- Timeline 缓存状态面板会展示最近同步摘要、错误码、`requestId` 和下一步排障建议；扩展里的 dry-run 也走 GET + `dryRun=true`，不会写入缓存或覆盖真实 Jira 同步诊断
+- 如果看到 `INVALID_POST_JSON`，通常说明手工规则仍在用 POST 或 body 不是合法 JSON；当前修复方向是把 Apps Script 写缓存请求改回生成规则的 GET URL
+
+### 11. App Script 自动更新
+- App Script 自动更新使用 Google Apps Script API 的 `deployments.update` 更新现有 Web App deployment，保持 Web App URL 不变，避免用户重新配置 Jira Automation
+- 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
+
+  ```javascript
+  var APP_SCRIPT_VERSION = '2.8.4';
+  var APP_SCRIPT_LAST_UPDATED = '2026-05-19';
+  ```
+
+- 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权
+- 升级前会验证模板版本是合法 SemVer、匿名读取当前 Web App `getVersion`、匹配正式 deployment 的 Web App URL、通过 `projects.getContent` 确认远端项目属于 Personal AI 调度脚本，并预检 Project History 200 个版本上限
+- 版本探测会使用不携带 Chrome profile cookie 的匿名请求，避免 Google 多账号登录态重定向到错误的 `/u/N/` 账号上下文；版本探测临时失败或非 JSON 响应不会被当成旧版脚本，非 JSON 响应也不会按旧版脚本继续升级
+- 若线上 Web App 已是最新或更高版本时直接跳过脚本写入和版本创建，只同步配置状态
+- 写入前会预检是否存在可更新的正式 Web App deployment、确认 Web App URL 匹配、读取远端项目代码确认 Personal AI 调度脚本标记，并检查 Project History 版本额度
+- 只有写入代码、创建版本、`deployments.update` 成功，并且当前 Web App URL 的 `getVersion` 已确认返回目标版本后，才同步 Sheet / Storage 里的版本字段
+- 部署生效确认未确认返回目标版本时，不会把配置标记为最新
+- 如果 deployment 已提交但版本端点无法确认目标版本，系统会尝试把 deployment 回退到升级前的 versionNumber，并在 UI 中保留可恢复的错误说明
 
 ## 使用方法
 
@@ -111,7 +169,7 @@
    - **Content**: 实际要问的问题
    - **Glip_User_Name**: 目标是某个人时填写
    - **Glip_Team_ID**: 目标是某个群时填写
-   - 上下文、目标解析、追问策略和运行态结果下沉到 memory-service；新表不再把这些运行态字段作为 Sheet 主 schema 保存
+   - 信息目标/完成标准、目标解析、追问策略和运行态结果下沉到 memory-service；新表不再把这些运行态字段作为 Sheet 主 schema 保存
 
 #### 方式二：通过管理界面创建
 
@@ -122,7 +180,7 @@
    - **AsMe**：按接收人添加人名标签
    - **Bot**：选择私聊或群组，并填写 Glip 用户名或群组 ID
    - **AI Report**：选择模板（AI report / PEP report / Multiple Jira Query / 自定义），系统会为每个模板分别记住 Endpoint / Headers / Body
-   - **帮我问**：选择问某个人还是某个群，填写问题、可选背景和追问策略
+   - **帮我问**：选择问某个人还是某个群，填写问题、信息目标和追问策略
 5. AI Report 模式下默认选中 **AI report** 模板，切换到 **自定义** 时可以手动填写并保存专属配置
 6. 执行日期 / 时间支持快捷选择：1 分钟后、下个整点、下次默认时间（AsMe 09:00，Bot / AI / JiraAutomation 08:00）或清空时间
 7. 表单会显示预计下次执行时间和本机时区；一次性任务若已经错过可执行窗口，会提示改成未来时间
@@ -144,10 +202,12 @@
 - 顶部队列提示只在存在同槽排队时出现；没有排队风险时不会占用界面
 - 普通排队提示用于说明最大同槽数量和预计延后时间
 - 明确时间槽出现排队时可以直接定位、编辑或把最晚受影响消息改到建议时间
+- 每个拥挤槽位会标出“建议处理”的最晚消息，同时显示前面会先执行的数量和前序样例，避免用户只看到改期建议却不知道阻塞来源
 - 风险提示表示至少一个时间槽可能超过 30 分钟补偿窗口，建议改成未来明确时间，或清空执行时间进入 08:00 后队列
-- 创建或编辑消息时，如果系统已经能算出可避开拥挤队列的空闲分钟，预计执行区域会提供“使用建议时间”
+- 创建或编辑消息时，如果系统已经能算出可避开拥挤队列的空闲分钟，预计执行区域会提供“使用建议时间”；未设时间的队列排满当天时会优先建议下一天 08:00 后队列，并保持执行时间为空
 - 如果顶部提示“有定时消息需要改期”，表示有 Active 一次性消息已经错过实际执行窗口或时间格式异常；这些消息不会只靠等待自动恢复，需要从列表行进入编辑并改成未来时间
 - 健康提示里的“一键改期”会直接把目标消息恢复到可执行窗口：明确时间改到下一分钟，未设时间的执行器消息改到今天的默认队列，AsMe 默认时间已过时会移到下一个默认发送日
+- 当需要处理的健康告警超过 4 条时，先显示前 4 条和隐藏数量；点击“显示全部”后可逐条处理其余消息
 - 表单打开时会自动刷新时间判断，长时间停留后仍能正确阻止已错过的执行时间
 
 ### 消息类型说明
@@ -203,24 +263,28 @@
 - 自定义模板支持完全自由填写 Endpoint / Headers / Body，切换模板时系统会记住各自的输入
 
 #### Outreach（帮我问 / 主动询问）
-- 这不是一次性消息推送，而是一个 **主动询问模板**
-- Sheet 中保留的是模板入口；真正的运行时状态在 memory-service 的 `outreach_templates / outreach_sessions / outreach_events`
+- 这不是普通消息推送，而是一个 **主动询问计划**
+- Sheet 中保留的是计划入口；真正的运行时状态在 memory-service 的 `outreach_templates / outreach_sessions / outreach_events`（表名沿用内部 template 命名）
 - 发送前会先做 **目标解析**，确认应该问谁
 - 真正触发时会先做 **答案预检**
-  - 第一层：检查目标群 / 目标私聊从模板创建到当前触发点的最近会话消息
+  - 第一层：检查目标群 / 目标私聊在本次计划窗口内的最近会话消息
   - 第二层：检查全局记忆中是否已经存在其他群里的相关答复
 - 如果在发送前已经命中答案，则 **不发出消息**
 - 如果在等待回复期间仍未收到直接回复，每次追问前也会再次做同一套预检；若已命中答案，则 **不再追问**
-- 用户在定时消息列表中看到的是模板状态和最近结果；更完整的证据、命中阶段、来源与相关消息会在“主动询问 / Outreach Sessions”页面中查看
+- `Outreach_Context` 在兼容层仍沿用旧列名，但产品语义是 **信息目标 / 完成标准**：答案预检、直接回复判断和外部查证都必须判断证据是否满足这个目标；只拿到部分线索时保持等待或继续追问，不把 `partial` 当成 `resolved`
+- 用户在定时消息列表中看到的是计划状态和最近结果；更完整的证据、命中阶段、来源与相关消息会在“主动询问 / Outreach Sessions”页面中查看
 - 系统会为 Outreach 动态挂载内部观察规则用于证据采集，但这些规则不会显示在“记忆入口规则”或 “Follow Threads” 列表中
-- 周期性 Outreach 模板复用定时消息的本地日历语义：Day 排除周末，Week 支持多星期，End_Date 包含当天，Repeat_Count 达到后不再生成下一次发问
+- 周期性 Outreach 计划复用定时消息的本地日历语义：Day 排除周末，Week 支持多星期，End_Date 包含当天，Repeat_Count 达到后不再生成下一次发问
+- 循环计划本身会留在“待触发计划”里；每个周期会独立创建一个 `outreach_sessions` occurrence，已发出 / 已完成的 occurrence 进入历史记录
+- 每个 occurrence 会记录 `scheduled_for`、`occurrence_key` 和 `occurrence_start_at`；循环计划的 `occurrence_start_at` 优先取上一条 occurrence 的终态时间，发送前答案预检只把本次窗口内的证据当成本周期答案，避免用上一周的结论误判本周已经完成
+- `scheduleSpec.timezone` 记录创建计划时的本地时区，服务端会按该时区解释 `Schedule_Date` / `Schedule_Time`，避免本地 10:36 被服务端时区漂移成 18:36
 
 #### Outreach 典型状态
 - `pending_approval`：目标未解析完成，或需要人工批准后才能发出
 - `scheduled`：已排程，等待发送
 - `waiting_reply`：已经发出，正在等答复
 - `deferred`：对方表示稍后回复，系统等待新的时间点
-- `resolved`：已获得可用结果，可能来自直接回复，也可能来自发送前 / 追问前的答案预检
+- `resolved`：已获得满足信息目标的可用结果，可能来自直接回复，也可能来自发送前 / 追问前的答案预检
 - `no_reply`：达到等待和追问上限，仍然没有有效答复
 - `escalated`：需要人工介入处理
 - `failed`：发送、轮询或配置异常
@@ -366,14 +430,14 @@ memory-service runtime（Outreach）
 - **优势**：失败消息不阻塞队列，全天分散推送未指定时间的消息
 
 #### 5. Outreach Runtime
-- 将 `Push_Method = Outreach` 的定时消息同步成主动询问模板
+- 将 `Push_Method = Outreach` 的定时消息同步成主动询问计划
 - 运行时状态通过 overlay 回写到定时消息列表，例如：
   - `Outreach_Sync_State`
   - `Outreach_Runtime_Status`
   - `Outreach_Last_Session_ID`
   - `Outreach_Result`
   - `Outreach_Last_Updated`
-- 对重复模板，只结束单次 session，不会因为一次 `resolved` 就把整个模板永久视为 Done
+- 对循环计划，只结束本次 occurrence/session，不会因为一次 `resolved` 就把整个计划永久视为 Done
 - 真正的会话详情和证据查看入口在 `memory-exploring.html#/outreach`
 
 ## 配置说明
@@ -437,6 +501,9 @@ memory-service runtime（Outreach）
 | minute_trigger_id | 分钟触发器 ID |
 | daily_trigger_id | 每日触发器 ID |
 | web_app_url | Web App 地址 |
+| deployment_id | Web App deployment ID，用于 `deployments.update` 保持 URL 不变 |
+| app_script_version | 当前线上 App Script 版本 |
+| app_script_last_updated | 当前线上 App Script 模板更新时间 |
 | jira_executor_rule_id | Jira 执行器规则 ID |
 | bot_automation_executor_rule_id | Bot/AI/AsMe RingCentral sender 执行规则 ID |
 | bot_automation_timeline_sync_rule_id | Timeline Sync 规则 ID |
@@ -530,9 +597,9 @@ Bot 消息采用**单条消息推送策略**，每分钟执行一条：
 ### Q: 帮我问为什么到了触发时间却没有真的发出去？
 A:
 这通常不是失败，而是 **发送前答案判定已经命中**：
-1. 系统先检查目标群 / 私聊在模板创建到当前触发点之间的最近消息
+1. 系统一次性计划会检查计划创建以来的最近消息；循环计划会检查本次周期窗口内的最近消息
 2. 如果没有，再检查全局记忆里是否已经在其他群拿到答案
-3. 如果两层检测已经能确认答案，session 会直接标记为 `resolved`，不会再重复追问
+3. 如果两层检测已经能确认证据满足信息目标，session 会直接标记为 `resolved`，不会再重复追问；如果只是部分相关或仍缺目标信息，会继续等待/追问
 
 ### Q: 帮我问的系统观察规则在哪里看？
 A:
@@ -541,6 +608,13 @@ A:
 2. “主动询问 / Outreach Sessions” 页面里的证据状态、命中阶段、命中来源和相关消息
 
 系统内部观察规则是运行时能力，不是用户手动维护的规则列表。
+
+## 最近更新
+
+- 2026-05-20：把配置同步、执行匹配 / 补偿 / 幂等、Timeline 缓存排障和 App Script 自动更新规则归并到本文，移除对应子文档。
+- 2026-05-20：核对当前 Timeline Sync Rule 仍以 GET 写缓存为准，POST JSON 仅作为旧链路和诊断兼容能力保留。
+- 2026-05-22：队列建议会保留未填写时间的执行器队列语义；无时间队列溢出时一键建议清空 `Schedule_Time` 并改到下一可执行日期的 08:00 后队列。
+- 2026-05-22：队列可视化补充“前面会先执行”的数量和前序样例，让改期建议的阻塞来源可见。
 
 ## 未来规划
 
@@ -566,15 +640,15 @@ A:
 - [Google Apps Script 文档](https://developers.google.com/apps-script)
 - [Apps Script API 文档](https://developers.google.com/apps-script/api)
 - [Jira Automation 文档](https://support.atlassian.com/cloud-automation/docs/jira-automation/)
+- [Google Apps Script installable triggers](https://developers.google.com/apps-script/guides/triggers/installable)：time-driven trigger 允许分钟级/周期执行，但实际触发时间可能有抖动，产品侧需要补偿窗口和可恢复改期
+- [Jira Automation scheduled triggers](https://support.atlassian.com/cloud-automation/docs/jira-automation-triggers/)：Scheduled trigger 可按固定频率或 cron 运行，连续失败会自动禁用，适合在管理页暴露健康和恢复路径
 - [Slack scheduled messages API](https://docs.slack.dev/messaging/sending-and-scheduling-messages/)：已排程消息需要可列出、删除，更新时可用删除后重建策略
+- [Slack send and read messages](https://slack.com/help/articles/201457107-Send-and-read-messages-in-Slack)：Drafts/Scheduled 集中入口支持编辑、改期、发送、取消或删除
 - [Slack recurring messages workflow](https://slack.com/help/articles/23814859584659-Automations--Schedule-recurring-messages-in-a-channel)：周期消息应把开始时间、频率、发送目标和正文配置放在同一个可编辑 workflow 中
 - [Microsoft Teams schedule chat messages](https://support.microsoft.com/en-gb/office/schedule-chat-messages-in-microsoft-teams-2fc5ea77-7bb4-4511-8f59-e62bac1c0f6a)：已排程消息支持编辑、改期和删除
 - [Google Chat schedule messages](https://support.google.com/chat/answer/16059642?co=GENIE.Platform%3DDesktop&hl=en)：Drafts 入口集中管理待发送消息，并显示发送人与接收人时区
 - [Analyzing and Predicting Task Reminders](https://www.microsoft.com/en-us/research/publication/analyzing-predicting-task-reminder/)：提醒时间会受创建时间和文本内容影响，调度系统要让用户能明确控制实际触发日历
+- [Intelligent Notification Systems survey](https://arxiv.org/abs/1711.10171)：通知系统应结合时间、上下文和偏好提高接收时机的可接受度
+- [Snooze! Investigating the User-Defined Deferral of Mobile Notifications](https://doi.org/10.1145/3229434.3229436)：用户常把人和事件相关通知推迟到当天稍后或次日早上，说明“默认队列”和清晰改期入口比隐藏失败更符合实际使用
 - [Iqbal & Bailey CHI 2007 interruption timing](https://www.interruptions.net/literature/Iqbal-CHI07.pdf)：不合适的通知时机会增加恢复成本，调度工具应让发送时间和上下文更可预期
-- [Intelligent Notification Systems survey](https://arxiv.org/abs/1711.10171)：通知系统需要结合时间、上下文和用户偏好降低打扰
 - [Adaptive notification scheduling study](https://www.sciencedirect.com/science/article/abs/pii/S1574119217304388)：真实生产环境中延迟到更合适时机发送通知能改善响应体验
-
-**实现细节文档**：
-- `BOT_SINGLE_MESSAGE_IMPLEMENTATION.md` - Bot 单条消息推送完整实现
-- `JIRA_GROOVY_FIX.md` - Jira Automation 架构演进

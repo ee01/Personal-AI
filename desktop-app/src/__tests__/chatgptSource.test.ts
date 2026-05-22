@@ -208,7 +208,14 @@ test('ChatGPTSource collects current-node messages, stores raw cache, and extrac
     assert.equal(openLoginResult.opened, true);
 
     const result = await source.runNow();
-    assert.deepEqual(result, { insertedCount: 3, implemented: true });
+    assert.deepEqual(result, {
+      insertedCount: 3,
+      extractedConversationCount: 1,
+      extractedMessageCount: 3,
+      artifactCount: 1,
+      skippedConversationCount: 0,
+      implemented: true,
+    });
     assert.deepEqual(chatgptClient.requestedPages, [
       { offset: 0, limit: 100 },
       { offset: 100, limit: 100 },
@@ -311,7 +318,14 @@ test('ChatGPTSource collects current-node messages, stores raw cache, and extrac
     });
 
     const secondResult = await source.runNow();
-    assert.deepEqual(secondResult, { insertedCount: 0, implemented: true });
+    assert.deepEqual(secondResult, {
+      insertedCount: 0,
+      extractedConversationCount: 0,
+      extractedMessageCount: 0,
+      artifactCount: 0,
+      skippedConversationCount: 0,
+      implemented: true,
+    });
     assert.deepEqual(chatgptClient.requestedConversationIds, ['conv-1']);
     assert.equal(fetchCalls.length, 1);
   } finally {
@@ -417,6 +431,10 @@ test('ChatGPTSource uses processed message ids to avoid reprocessing unchanged s
 
     assert.deepEqual(await source.runNow(), {
       insertedCount: 2,
+      extractedConversationCount: 1,
+      extractedMessageCount: 2,
+      artifactCount: 0,
+      skippedConversationCount: 0,
       implemented: true,
     });
     assert.equal(fetchCalls, 1);
@@ -429,6 +447,10 @@ test('ChatGPTSource uses processed message ids to avoid reprocessing unchanged s
 
     assert.deepEqual(await source.runNow(), {
       insertedCount: 0,
+      extractedConversationCount: 0,
+      extractedMessageCount: 0,
+      artifactCount: 0,
+      skippedConversationCount: 0,
       implemented: true,
     });
     assert.equal(fetchCalls, 1);
@@ -525,6 +547,10 @@ test('ChatGPTSource skips conversations that still end with the user turn', asyn
 
     assert.deepEqual(await source.runNow(), {
       insertedCount: 0,
+      extractedConversationCount: 0,
+      extractedMessageCount: 0,
+      artifactCount: 0,
+      skippedConversationCount: 0,
       implemented: true,
     });
     assert.equal(fetchCalls, 0);
@@ -727,7 +753,14 @@ test('ChatGPTSource treats cookie-authenticated ChatGPT as connected without acc
 
     assert.equal(await source.getAuthStatus(), 'connected');
     const result = await source.runNow();
-    assert.deepEqual(result, { insertedCount: 2, implemented: true });
+    assert.deepEqual(result, {
+      insertedCount: 2,
+      extractedConversationCount: 1,
+      extractedMessageCount: 2,
+      artifactCount: 0,
+      skippedConversationCount: 0,
+      implemented: true,
+    });
   } finally {
     globalThis.fetch = originalFetch;
     rawStore.close();

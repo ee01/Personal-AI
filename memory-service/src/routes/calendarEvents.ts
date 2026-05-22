@@ -9,12 +9,16 @@ import type {
   CalendarEventSyncParticipant,
 } from '../types/index.js';
 
+const nullableStringSchema = { type: ['string', 'null'] as const };
+const nullableNumberSchema = { type: ['number', 'null'] as const };
+const nullableBooleanSchema = { type: ['boolean', 'null'] as const };
+
 const participantSchema = {
-  type: 'object' as const,
+  type: ['object', 'null'] as const,
   properties: {
-    name: { type: 'string' as const },
-    email: { type: 'string' as const },
-    responseStatus: { type: 'string' as const },
+    name: nullableStringSchema,
+    email: nullableStringSchema,
+    responseStatus: nullableStringSchema,
   },
   additionalProperties: false,
 };
@@ -24,23 +28,26 @@ const calendarEventSchema = {
   required: ['externalId', 'title', 'startTime'],
   properties: {
     externalId: { type: 'string' as const, minLength: 1 },
-    seriesKey: { type: 'string' as const },
+    seriesKey: nullableStringSchema,
     title: { type: 'string' as const, minLength: 1 },
-    descriptionPreview: { type: 'string' as const },
+    descriptionPreview: nullableStringSchema,
     startTime: { type: 'number' as const },
-    endTime: { type: 'number' as const },
+    endTime: nullableNumberSchema,
     organizer: participantSchema,
     attendees: {
-      type: 'array' as const,
+      type: ['array', 'null'] as const,
       items: participantSchema,
       maxItems: 120,
     },
-    location: { type: 'string' as const },
-    joinUrl: { type: 'string' as const },
-    sourceUrl: { type: 'string' as const },
-    cancelled: { type: 'boolean' as const },
-    lastModifiedTime: { type: 'number' as const },
-    metadata: { type: 'object' as const, additionalProperties: true },
+    location: nullableStringSchema,
+    joinUrl: nullableStringSchema,
+    sourceUrl: nullableStringSchema,
+    cancelled: nullableBooleanSchema,
+    lastModifiedTime: nullableNumberSchema,
+    metadata: {
+      type: ['object', 'null'] as const,
+      additionalProperties: true,
+    },
   },
   additionalProperties: false,
 };

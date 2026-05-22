@@ -51,6 +51,7 @@ test('ExplorerExtractor marks no-meaningful-segment conversations as extracted',
     assert.deepEqual(result, {
       conversationCount: 1,
       messageCount: 1,
+      artifactCount: 0,
       skippedConversationCount: 1,
     });
     assert.equal(rawStore.getStats('chatgpt').pendingExtractCount, 0);

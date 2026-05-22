@@ -544,6 +544,45 @@ const highlightsTable = await tableAnalyzer.analyzeTable({
 assert.equal(highlightsTable.columnMapping.comments, 3);
 assert.equal(highlightsTable.projectRows[0].comments, 'Need rollout plan');
 
+const pmStatusTable = await tableAnalyzer.analyzeTable({
+  objectId: 'table-pm-status',
+  table: {
+    tableRows: [
+      {
+        tableCells: [
+          makeCell('Initiative'),
+          makeCell('RAG / Health'),
+          makeCell('DRI'),
+          makeCell('Workstream'),
+          makeCell('Updates / Blockers'),
+        ],
+      },
+      {
+        tableCells: [
+          makeCell('AIT2-11063: PM weekly status'),
+          makeCell('Amber'),
+          makeCell('Cara'),
+          makeCell('Growth'),
+          makeCell('Blocked on launch copy; decision needed Friday'),
+        ],
+      },
+    ],
+  },
+} as any);
+
+assert.deepEqual(pmStatusTable.columnMapping, {
+  status: 1,
+  description: 0,
+  owner: 2,
+  track: 3,
+  comments: 4,
+});
+assert.equal(pmStatusTable.projectRows[0].id, 'AIT2-11063');
+assert.equal(pmStatusTable.projectRows[0].status, 'Amber');
+assert.equal(pmStatusTable.projectRows[0].owner, 'Cara');
+assert.equal(pmStatusTable.projectRows[0].track, 'Growth');
+assert.equal(pmStatusTable.projectRows[0].comments, 'Blocked on launch copy; decision needed Friday');
+
 const multiTableSlide = await tableAnalyzer.analyze({
   objectId: 'slide-multi-table',
   pageElements: [

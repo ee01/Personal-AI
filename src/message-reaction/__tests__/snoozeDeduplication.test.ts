@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import type { ScheduledMessage } from '../../scheduled-messages/types.js';
 import {
+  doesSnoozeReminderMatchSchedule,
   findOpenSnoozeReminderForMessage,
   getSnoozeReminderSourceKey,
   isOpenSnoozeReminder,
@@ -106,5 +107,63 @@ test('builds a stable source key from message link or RingCentral ids', () => {
       messageLink: '',
     }),
     '123:456',
+  );
+});
+
+test('matches Snooze undo only against the schedule it was created for', () => {
+  assert.equal(
+    doesSnoozeReminderMatchSchedule(
+      makeMessage({
+        Schedule_Date: '2026-05-20',
+        Schedule_Time: '09:05:00',
+      }),
+      {
+        scheduleDate: '2026-05-20',
+        scheduleTime: '9:05',
+      },
+    ),
+    true,
+  );
+
+  assert.equal(
+    doesSnoozeReminderMatchSchedule(
+      makeMessage({
+        Schedule_Date: '2026-05-20',
+        Schedule_Time: '09:30',
+      }),
+      {
+        scheduleDate: '2026-05-20',
+        scheduleTime: '09:05',
+      },
+    ),
+    false,
+  );
+
+  assert.equal(
+    doesSnoozeReminderMatchSchedule(
+      makeMessage({
+        Schedule_Date: '2026-05-21',
+        Schedule_Time: '09:05',
+      }),
+      {
+        scheduleDate: '2026-05-20',
+        scheduleTime: '09:05',
+      },
+    ),
+    false,
+  );
+
+  assert.equal(
+    doesSnoozeReminderMatchSchedule(
+      makeMessage({
+        Schedule_Date: '2026-05-20',
+        Schedule_Time: '09:05',
+      }),
+      {
+        scheduleDate: '2026-05-20',
+        scheduleTime: 'not-a-time',
+      },
+    ),
+    false,
   );
 });

@@ -14,15 +14,21 @@ const RINGCENTRAL_NATIVE_JOIN_FALLBACK_URL_ATTR =
   'data-pai-ringcentral-native-join-browser-url';
 const RINGCENTRAL_NATIVE_JOIN_COPY_LINK_ATTR =
   'data-pai-ringcentral-native-join-copy-link';
+const RINGCENTRAL_NATIVE_JOIN_VISIBLE_LINK_ATTR =
+  'data-pai-ringcentral-native-join-visible-link';
 const RINGCENTRAL_NATIVE_JOIN_PREFER_BROWSER_ATTR =
   'data-pai-ringcentral-native-join-prefer-browser';
+const RINGCENTRAL_NATIVE_JOIN_CLOSE_ATTR =
+  'data-pai-ringcentral-native-join-close';
 const RINGCENTRAL_NATIVE_JOIN_LAUNCH_LINK_ID =
   'pai-ringcentral-native-join-launch-link';
+const RINGCENTRAL_NATIVE_JOIN_FALLBACK_AUTO_DISMISS_MS = 5000;
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_ESCALATE_MS = 6000;
 const RINGCENTRAL_NATIVE_JOIN_LAUNCH_LINK_TTL_MS = 10000;
 const RINGCENTRAL_VIDEO_JOIN_URL_PATTERN =
-  /(?:https?:\/\/)?v\.ringcentral\.com\/(?:join|conf\/on)\/[^\s"'<>]+/gi;
-const RINGCENTRAL_VIDEO_MEETING_ID_PATTERN = /^[A-Za-z0-9_-]{3,128}$/;
+  /(?:https?:\/\/)?v\.ringcentral\.com\/(?:join|launcher|conf\/on)\/[^\s"'<>]+/gi;
+const RINGCENTRAL_VIDEO_MEETING_ID_PATTERN =
+  /^(?=.{3,128}$)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 
 export interface RingCentralVideoJoinTarget {
   originalUrl: string;
@@ -64,7 +70,9 @@ export function parseRingCentralVideoJoinTarget(
     }
 
     const normalizedPath = parsed.pathname.replace(/\/+$/, '');
-    const match = normalizedPath.match(/^\/(?:join|conf\/on)\/([^/]+)$/);
+    const match = normalizedPath.match(
+      /^\/(?:join|launcher|conf\/on)\/([^/]+)$/,
+    );
     const meetingId = normalizeRingCentralVideoMeetingId(match?.[1]);
     if (!meetingId) {
       return null;
@@ -94,7 +102,9 @@ export function extractRingCentralVideoJoinUrl(value: unknown): string | null {
   const text = String(value || '')
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/\\\//g, '/')
+    .replace(/\\u002f/gi, '/');
   if (!text) return null;
 
   RINGCENTRAL_VIDEO_JOIN_URL_PATTERN.lastIndex = 0;
@@ -146,7 +156,12 @@ export function shouldPreserveDefaultNativeJoinClick(event: MouseEvent): boolean
       target instanceof Element &&
       Boolean(
         target.closest(
-          `[${RINGCENTRAL_NATIVE_JOIN_FALLBACK_LINK_ATTR}], [${RINGCENTRAL_NATIVE_JOIN_COPY_LINK_ATTR}]`,
+          [
+            `[${RINGCENTRAL_NATIVE_JOIN_FALLBACK_LINK_ATTR}]`,
+            `[${RINGCENTRAL_NATIVE_JOIN_COPY_LINK_ATTR}]`,
+            `[${RINGCENTRAL_NATIVE_JOIN_PREFER_BROWSER_ATTR}]`,
+            `[${RINGCENTRAL_NATIVE_JOIN_CLOSE_ATTR}]`,
+          ].join(', '),
         ),
       ))
   );
@@ -253,6 +268,7 @@ function showRingCentralNativeJoinFallback(
   const previous = document.getElementById(RINGCENTRAL_NATIVE_JOIN_FALLBACK_ID);
   previous?.remove();
   const browserUrl = getRingCentralBrowserFallbackUrl(target);
+  let autoDismissTimer: number | null = null;
   let handoffConcernTimer: number | null = null;
   let statusMode: 'handoff' | 'manual' = 'handoff';
 
@@ -268,7 +284,7 @@ function showRingCentralNativeJoinFallback(
     'z-index:2147483647',
     'box-sizing:border-box',
     'width:min(360px,calc(100vw - 36px))',
-    'padding:14px',
+    'padding:14px 42px 14px 14px',
     'border:1px solid rgba(15,23,42,0.14)',
     'border-radius:8px',
     'background:#ffffff',
@@ -276,6 +292,31 @@ function showRingCentralNativeJoinFallback(
     'color:#111827',
     'font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
   ].join(';');
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.textContent = 'x';
+  closeButton.setAttribute('aria-label', 'Close RingCentral app handoff popup');
+  closeButton.setAttribute(RINGCENTRAL_NATIVE_JOIN_CLOSE_ATTR, 'true');
+  closeButton.style.cssText = [
+    'position:absolute',
+    'top:8px',
+    'right:8px',
+    'width:26px',
+    'height:26px',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'padding:0',
+    'border:0',
+    'border-radius:6px',
+    'background:transparent',
+    'color:#64748b',
+    'font:16px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    'font-weight:700',
+    'cursor:pointer',
+  ].join(';');
+  host.appendChild(closeButton);
 
   const title = document.createElement('div');
   title.textContent = 'Opening RingCentral app...';
@@ -294,6 +335,28 @@ function showRingCentralNativeJoinFallback(
   status.style.cssText = 'color:#64748b;margin-bottom:10px;font-size:12px';
   host.appendChild(status);
 
+  const browserUrlBlock = document.createElement('div');
+  browserUrlBlock.style.cssText = [
+    'margin-bottom:10px',
+    'padding:8px',
+    'border:1px solid #e2e8f0',
+    'border-radius:6px',
+    'background:#f8fafc',
+    'color:#475569',
+    'font-size:12px',
+    'word-break:break-all',
+  ].join(';');
+  const browserUrlLabel = document.createElement('div');
+  browserUrlLabel.textContent = 'Browser link';
+  browserUrlLabel.style.cssText =
+    'margin-bottom:3px;color:#64748b;font-weight:600';
+  browserUrlBlock.appendChild(browserUrlLabel);
+  const browserUrlText = document.createElement('span');
+  browserUrlText.textContent = browserUrl;
+  browserUrlText.setAttribute(RINGCENTRAL_NATIVE_JOIN_VISIBLE_LINK_ATTR, 'true');
+  browserUrlBlock.appendChild(browserUrlText);
+  host.appendChild(browserUrlBlock);
+
   const clearHandoffConcern = (): void => {
     if (
       handoffConcernTimer != null &&
@@ -304,6 +367,16 @@ function showRingCentralNativeJoinFallback(
     handoffConcernTimer = null;
   };
 
+  const clearAutoDismiss = (): void => {
+    if (
+      autoDismissTimer != null &&
+      typeof window.clearTimeout === 'function'
+    ) {
+      window.clearTimeout(autoDismissTimer);
+    }
+    autoDismissTimer = null;
+  };
+
   const setFallbackStatus = (
     text: string,
     mode: 'handoff' | 'manual' = 'manual',
@@ -311,15 +384,24 @@ function showRingCentralNativeJoinFallback(
     statusMode = mode;
     if (mode === 'manual') {
       clearHandoffConcern();
+      clearAutoDismiss();
     }
     status.textContent = text;
   };
 
   const removeHost = (): void => {
+    clearAutoDismiss();
     clearHandoffConcern();
     removeRingCentralNativeLaunchLink();
     host.remove();
   };
+
+  closeButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    removeHost();
+  });
 
   const scheduleHandoffConcern = (): void => {
     if (typeof window.setTimeout !== 'function') {
@@ -333,6 +415,19 @@ function showRingCentralNativeJoinFallback(
       status.textContent =
         'Still on this page? RingCentral app may not have opened. Use Join in browser or Copy link.';
     }, RINGCENTRAL_NATIVE_JOIN_FALLBACK_ESCALATE_MS);
+  };
+
+  const scheduleAutoDismiss = (): void => {
+    if (typeof window.setTimeout !== 'function') {
+      return;
+    }
+    clearAutoDismiss();
+    autoDismissTimer = window.setTimeout(() => {
+      if (statusMode !== 'handoff') {
+        return;
+      }
+      removeHost();
+    }, RINGCENTRAL_NATIVE_JOIN_FALLBACK_AUTO_DISMISS_MS);
   };
 
   const actions = document.createElement('div');
@@ -368,7 +463,7 @@ function showRingCentralNativeJoinFallback(
         error,
       );
       setFallbackStatus(
-        'Browser join could not open. Try the button again or paste the meeting link in a new tab.',
+        'Browser join could not open. Try the button again or paste the browser link in a new tab.',
       );
       return;
     }
@@ -406,7 +501,7 @@ function showRingCentralNativeJoinFallback(
         error,
       );
       setFallbackStatus(
-        'Could not copy the link automatically. Use Join in browser or copy the original meeting link.',
+        'Could not copy the link automatically. Use Join in browser or select the browser link.',
       );
     } finally {
       copyButton.disabled = false;
@@ -425,24 +520,6 @@ function showRingCentralNativeJoinFallback(
   ].join(';');
   actions.appendChild(copyButton);
 
-  const dismissButton = document.createElement('button');
-  dismissButton.type = 'button';
-  dismissButton.textContent = 'Dismiss';
-  dismissButton.style.cssText = [
-    'min-height:30px',
-    'padding:0 10px',
-    'border:1px solid #cbd5e1',
-    'border-radius:6px',
-    'background:#ffffff',
-    'color:#334155',
-    'font:inherit',
-    'font-weight:600',
-    'cursor:pointer',
-  ].join(';');
-  dismissButton.addEventListener('click', removeHost, {
-    once: true,
-  });
-  actions.appendChild(dismissButton);
   host.appendChild(actions);
 
   const defaultBrowserHint = document.createElement('div');
@@ -496,6 +573,7 @@ function showRingCentralNativeJoinFallback(
   host.appendChild(defaultBrowserHint);
 
   document.body?.appendChild(host);
+  scheduleAutoDismiss();
   scheduleHandoffConcern();
 }
 

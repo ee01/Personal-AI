@@ -1,7 +1,13 @@
 import type { ScheduledMessage } from '../scheduled-messages/types';
+import { normalizeLocalScheduleTime } from '../scheduled-messages/scheduleDateTime.js';
 import type { MessageInfo } from './SnoozeManager';
 
 const CLOSED_SNOOZE_STATUSES = new Set(['Completed', 'Done']);
+
+export interface SnoozeReminderScheduleExpectation {
+  scheduleDate?: string;
+  scheduleTime?: string;
+}
 
 export function getScheduledMessageCategories(category?: string): string[] {
   return (category || '')
@@ -65,4 +71,26 @@ export function findOpenSnoozeReminderForMessage(
       isOpenSnoozeReminderForMessage(message, messageInfo),
     ) || null
   );
+}
+
+export function doesSnoozeReminderMatchSchedule(
+  message: Pick<ScheduledMessage, 'Schedule_Date' | 'Schedule_Time'>,
+  expectation: SnoozeReminderScheduleExpectation = {},
+): boolean {
+  const expectedDate = expectation.scheduleDate?.trim();
+  if (expectedDate && message.Schedule_Date?.trim() !== expectedDate) {
+    return false;
+  }
+
+  const rawExpectedTime = expectation.scheduleTime?.trim();
+  const expectedTime = normalizeLocalScheduleTime(rawExpectedTime);
+  if (rawExpectedTime && !expectedTime) {
+    return false;
+  }
+
+  if (!expectedTime) {
+    return true;
+  }
+
+  return normalizeLocalScheduleTime(message.Schedule_Time) === expectedTime;
 }

@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-05-16_
+_最后更新: 2026-05-22_
 
 ## 是什么
 
@@ -11,6 +11,18 @@ _最后更新: 2026-05-16_
 它的目标是把用户在不同 agent、真实操作和记忆系统中沉淀出的“做事方法”统一保存为可追踪、可版本化、可安装到其他 agent 平台的个人 skill。
 
 这个模块里，**Memory Service 是真源**。所有技能最终都会进入 Memory Service 的 `active` 技能库，再通过平台级同步机制分发到 OpenClaw、Codex CLI、Claude Code、Cursor 等平台。
+
+## 大白话运行逻辑
+
+Personal Skill Foundry 先收集“这可能是一个可复用技能”的建议，等用户决定后才把它提升为正式 skill。正式 skill 会版本化保存，再按平台能力同步到不同 agent 工具里。
+
+结果主要受这些因素影响：
+
+1. 来源证据：Flight Recorder、OpenClaw、本地 agent 导入等来源越具体，建议越容易被用户判断。
+2. 用户决策：只有 `active` 技能是真源；`suggestion` 不会默认分发到其他平台。
+3. 技能包完整性：`SKILL.md`、资源文件、workflow、证据和 sha256 决定能否可靠安装/同步。
+4. 平台绑定能力：OpenClaw、Desktop、本地手动平台支持程度不同，不能假设所有平台都能自动安装。
+5. 分享 token：Public Skill URL 是只读拉取入口，撤销和 token 校验决定外部访问边界。
 
 ## 核心概念
 
@@ -69,6 +81,11 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 
 - Inbox Bar 会返回完整审核原因，包括版本里的 evidence / files / workflow 工具信息；需要审核的卡片先进入证据页，再允许确认使用，避免用户先点“使用”才被后端拦住。
 - 外部平台或本机 agent skill 目录里的新版本不会再静默覆盖 Personal AI 的 active 真源技能；同步会生成“外部变更建议”，用户确认后才应用到原 active skill。
+
+2026-05-21 状态：
+
+- 需要审核的 suggestion 卡片会直接展示审核摘要：原因数量、前两条关键原因、来源/覆盖目标、版本和风险等级。
+- 点击 `查看风险` / `查看变更` 后，详情区的审核 gate 会显示 `证据已查看，可以确认`，并列出来源、版本、风险、证据数、工作流步骤和资源文件数量；用户能在同一屏判断是否继续 `确认使用` / `确认覆盖`。
 
 ### 2. 管理在用技能
 
@@ -192,6 +209,11 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 
 安装指引中使用的是带 token 的可访问 skill URL。
 
+2026-05-22 状态：
+
+- 绑定 tab 里 manual-only 平台显示 `手动安装`，不再显示成可探测的 `未安装` 状态。
+- 平台级同步弹窗里 manual-only 平台显示 `仅手动` / `不参与自动同步`，避免用户把 Web 平台不可写误解成同步故障。
+
 ## API
 
 技能管理 API 挂在 `/api/v1/skills` 下。
@@ -248,17 +270,25 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - Claude 官方文档也提醒第三方 skill 可能带来工具滥用和数据外泄风险；这支持了本轮把外部 active 更新改成审核建议，而不是自动覆盖。
 - OpenAI Agents SDK 的 guardrails / tracing 说明生产 agent 需要围绕工具调用和运行轨迹做可审计边界；Foundry 后续应把“确认覆盖”记录成版本证据，而不只做一次 UI 弹窗。
 - SkillX、SkillFoundry、SkillGen 等 2026 年论文都把执行反馈、来源证据、验证测试和技能库自演进作为核心方向；Foundry 目前不需要重 eval 面板，但需要保留轻量 run receipt / 失败反馈入口。
+- LangChain / Deep Agents 把 skills 放在 procedural memory 位置，适合和语义记忆分层管理；Foundry 应继续把“何时用、别何时用、需要哪些资源”作为建议审核摘要的一等信息。
+- SkillSmith、SkillGen 等近期工作都强调 skill 的边界、验证和回归风险；因此 Inbox 里不能只展示标题和摘要，至少要在使用前暴露风险原因、版本和证据覆盖情况。
+- 近期 skill registry / skill file attack 研究说明第三方 skill 供应链会成为攻击面；Foundry 对外部导入应保持审核默认开启，并把资源文件、工具调用、来源平台放在用户确认前。
+- 2026-05-22 再核对 Claude Code Skills、LangChain Deep Agents memory/skills 和 SKILL-INJECT 后，平台同步 UI 需要持续区分三类能力：可 API 同步、需 Desktop App 文件同步、仅复制安装指引；manual-only 平台不应显示伪安装状态。
 
 ## Reminders 反馈
 
-2026-05-16 自动化核对：本机 Reminders 未发现名为 `Personal AI` 的列表；跨列表关键词检索在当前 Reminders 数据量下触发 AppleEvent 超时。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
+2026-05-21 自动化核对：本机 Reminders 未发现名为 `Personal AI` 的列表。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
 
 外部参考：
 
-- [Claude Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
-- [LangChain long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory)
+- [Claude Skills](https://claude.com/docs/skills/overview)
+- [Claude Code Skills](https://code.claude.com/docs/en/skills)
+- [LangChain Deep Agents long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory)
+- [Agent Skills open standard](https://agentskills.io/)
 - [OpenAI Agents SDK Guardrails](https://openai.github.io/openai-agents-js/guides/guardrails/)
 - [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/)
+- [SkillSmith](https://arxiv.org/abs/2605.15215)
+- [Skill-Inject](https://arxiv.org/abs/2602.20156)
 - [Skill-Pro: Learning Reusable Skills from Experience](https://arxiv.org/abs/2602.01869)
 - [SkillX: Automatically Constructing Skill Knowledge Bases for Agents](https://arxiv.org/abs/2604.04804)
 - [SKILLFOUNDRY: Building Self-Evolving Agent Skill Libraries from Heterogeneous Scientific Resources](https://arxiv.org/abs/2604.03964)

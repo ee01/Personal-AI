@@ -87,6 +87,17 @@ try {
           lastCompletedAt: now - 20_000,
           lastSkippedAt: now - 1_000,
           lastSkipReason: '任务 记忆系统同步 正在执行，跳过重复触发',
+          runHistory: [
+            {
+              startedAt: now - 1_000,
+              completedAt: now - 1_000,
+              durationMs: 0,
+              success: false,
+              skipped: true,
+              trigger: 'manual',
+              error: '任务 记忆系统同步 正在执行，跳过重复触发',
+            },
+          ],
         },
         system_monitoring: {
           enabled: true,
@@ -210,6 +221,12 @@ try {
   await page.locator('.task-row', { hasText: 'memory service unavailable' }).waitFor({
     timeout: 15000,
   });
+  await page
+    .locator('.task-row', { hasText: '系统健康监控' })
+    .locator('.task-latest-run', {
+      hasText: '最近一次 · 手动失败 · 500ms · memory service unavailable',
+    })
+    .waitFor({ timeout: 15000 });
   await page.locator('.task-row', { hasText: '连续失败 3 次' }).waitFor({
     timeout: 15000,
   });
@@ -219,6 +236,12 @@ try {
 
   await page.locator('.task-health-chip', { hasText: '跳过 1' }).click();
   assert.deepEqual(await visibleTaskNames(page), ['记忆系统同步']);
+  await page
+    .locator('.task-row', { hasText: '记忆系统同步' })
+    .locator('.task-latest-run', {
+      hasText: '最近一次 · 手动跳过 · 0ms · 任务 记忆系统同步 正在执行，跳过重复触发',
+    })
+    .waitFor({ timeout: 15000 });
 
   await page.locator('.task-health-chip', { hasText: '停用 1' }).click();
   assert.deepEqual(await visibleTaskNames(page), ['静默消息分析']);

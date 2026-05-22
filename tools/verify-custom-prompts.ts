@@ -23,6 +23,7 @@ import {
   detectPromptImprovementHints,
   detectPromptRiskHints,
   getIndependentUserConfigChangedLabels,
+  isCustomPromptScopeInjectionEnabled,
   isCustomPromptsInjectionEnabled,
   isPreferenceInjectionEnabled,
   isUserContextInjectionEnabled,
@@ -40,6 +41,8 @@ const storage: Record<string, any> = {
   preferenceInjection: {
     enabled: true,
     customPromptsEnabled: true,
+    messagePromptEnabled: true,
+    projectPromptEnabled: true,
     userContextEnabled: true,
   },
   customPrompts: {
@@ -189,7 +192,44 @@ async function verifyPromptInjection() {
   assert.match(messagePrompt, /文化背景/);
   assert.match(messagePrompt, /忽略话题: 闲聊/);
   assert.match(messagePrompt, /紧急关键词: blocked/);
+  assert.doesNotMatch(messagePrompt, /项目风险因素: 依赖/);
+  assert.doesNotMatch(messagePrompt, /项目成功标准: 里程碑可信/);
   assert.doesNotMatch(messagePrompt, /\[object Object\]/);
+
+  const projectPrompt = await (agent as any).buildProjectAnalysisPrompt(
+    {
+      project: {
+        id: 'project-1',
+        name: 'Launch Readiness',
+        content: 'Release plan depends on partner API readiness.',
+      },
+    },
+    {
+      type: 'project',
+      analysisDepth: 'normal',
+      maxActions: 1,
+    },
+    { currentUser: 'Eason' },
+  );
+  assert.match(projectPrompt, /项目风险因素: 依赖/);
+  assert.match(projectPrompt, /项目成功标准: 里程碑可信/);
+  assert.doesNotMatch(projectPrompt, /忽略话题: 闲聊/);
+  assert.doesNotMatch(projectPrompt, /紧急关键词: blocked/);
+
+  const meetingPrompt = await (agent as any).buildMeetingAnalysisPrompt(
+    {
+      title: 'Weekly Planning',
+      transcript: 'Partner API is still blocked and release milestones are at risk.',
+    },
+    {
+      type: 'meeting',
+      analysisDepth: 'normal',
+      maxActions: 1,
+    },
+    { currentUser: 'Eason' },
+  );
+  assert.match(meetingPrompt, /项目成功标准: 里程碑可信\n\n分析以下会议内容/);
+  assert.doesNotMatch(meetingPrompt, /里程碑可信分析以下会议内容/);
 
   const genericPrompt = await (agent as any).buildGenericAnalysisPrompt(
     {
@@ -205,6 +245,8 @@ async function verifyPromptInjection() {
 
   assert.match(genericPrompt, /重点关注客户升级/);
   assert.match(genericPrompt, /跨团队依赖/);
+  assert.match(genericPrompt, /项目风险因素: 依赖/);
+  assert.doesNotMatch(genericPrompt, /紧急关键词: blocked/);
   assert.doesNotMatch(genericPrompt, /\[object Object\]/);
 
   storage.preferenceInjection = {
@@ -231,6 +273,72 @@ async function verifyPromptInjection() {
   );
   assert.doesNotMatch(contextOnlyPrompt, /重点关注客户升级/);
   assert.match(contextOnlyPrompt, /直接汇报经理: Ada Chen/);
+
+  storage.preferenceInjection = {
+    enabled: true,
+    customPromptsEnabled: true,
+    messagePromptEnabled: false,
+    projectPromptEnabled: true,
+    userContextEnabled: true,
+  };
+  const messageScopePausedAgent = new IntelligentAgent();
+  const messageScopePausedPrompt = await (messageScopePausedAgent as any)
+    .buildMessageAnalysisPrompt(
+      [
+        {
+          messageContent: 'The launch is blocked by an unresolved customer escalation.',
+          sender: 'Sam',
+          datetime: '2026-05-02T10:00:00.000Z',
+          postId: 'post-message-scope-paused',
+        },
+      ],
+      {
+        type: 'message',
+        analysisDepth: 'normal',
+        maxActions: 1,
+      },
+      { currentUser: 'Eason' },
+    );
+  assert.doesNotMatch(messageScopePausedPrompt, /重点关注客户升级/);
+  assert.match(messageScopePausedPrompt, /直接汇报经理: Ada Chen/);
+
+  const projectScopeOnlyPrompt = await (messageScopePausedAgent as any)
+    .buildGenericAnalysisPrompt(
+      {
+        title: 'Generic work note',
+        content: 'A generic note that should receive project preferences only.',
+      },
+      {
+        type: 'generic',
+        analysisDepth: 'normal',
+        maxActions: 1,
+      },
+    );
+  assert.doesNotMatch(projectScopeOnlyPrompt, /重点关注客户升级/);
+  assert.match(projectScopeOnlyPrompt, /跨团队依赖/);
+
+  storage.preferenceInjection = {
+    enabled: true,
+    customPromptsEnabled: true,
+    messagePromptEnabled: true,
+    projectPromptEnabled: false,
+    userContextEnabled: true,
+  };
+  const projectScopePausedAgent = new IntelligentAgent();
+  const projectScopePausedPrompt = await (projectScopePausedAgent as any)
+    .buildGenericAnalysisPrompt(
+      {
+        title: 'Generic work note',
+        content: 'A generic note that should receive message preferences only.',
+      },
+      {
+        type: 'generic',
+        analysisDepth: 'normal',
+        maxActions: 1,
+      },
+    );
+  assert.match(projectScopePausedPrompt, /重点关注客户升级/);
+  assert.doesNotMatch(projectScopePausedPrompt, /跨团队依赖/);
 
   storage.preferenceInjection = {
     enabled: true,
@@ -417,12 +525,27 @@ function verifyConfigSanitizer() {
   const sourcePaused = sanitizeIndependentUserConfig({
     preferenceInjection: {
       customPromptsEnabled: false,
+      messagePromptEnabled: false,
+      projectPromptEnabled: true,
       userContextEnabled: false,
     },
   });
   assert.equal(sourcePaused.preferenceInjection.enabled, true);
   assert.equal(isCustomPromptsInjectionEnabled(sourcePaused), false);
+  assert.equal(isCustomPromptScopeInjectionEnabled(sourcePaused, 'message'), false);
+  assert.equal(isCustomPromptScopeInjectionEnabled(sourcePaused, 'project'), false);
   assert.equal(isUserContextInjectionEnabled(sourcePaused), false);
+
+  const projectScopePaused = sanitizeIndependentUserConfig({
+    preferenceInjection: {
+      enabled: true,
+      customPromptsEnabled: true,
+      messagePromptEnabled: true,
+      projectPromptEnabled: false,
+    },
+  });
+  assert.equal(isCustomPromptScopeInjectionEnabled(projectScopePaused, 'message'), true);
+  assert.equal(isCustomPromptScopeInjectionEnabled(projectScopePaused, 'project'), false);
 }
 
 function verifyPreviewAndHistoryHelpers() {
@@ -467,6 +590,26 @@ function verifyPreviewAndHistoryHelpers() {
     ),
   );
   assert.equal(isPreferenceInjectionEnabled(config), true);
+
+  const messageScopedPreview = buildIndependentUserConfigPreview(storage, {
+    userContextScope: 'message',
+  });
+  assert.match(messageScopedPreview, /紧急关键词: blocked/);
+  assert.doesNotMatch(messageScopedPreview, /项目风险因素: 依赖/);
+  const projectScopedPreview = buildIndependentUserConfigPreview(storage, {
+    userContextScope: 'project',
+  });
+  assert.match(projectScopedPreview, /项目风险因素: 依赖/);
+  assert.match(projectScopedPreview, /项目成功标准: 里程碑可信/);
+  assert.doesNotMatch(projectScopedPreview, /紧急关键词: blocked/);
+  const messageScopedFootprint = buildIndependentUserConfigFootprint(storage, {
+    userContextScope: 'message',
+  });
+  const projectScopedFootprint = buildIndependentUserConfigFootprint(storage, {
+    userContextScope: 'project',
+  });
+  assert.ok(messageScopedFootprint.contextSignalCount > 0);
+  assert.ok(projectScopedFootprint.contextSignalCount > 0);
 
   const riskHints = detectPromptRiskHints(config);
   assert.equal(riskHints.length, 1);
@@ -620,6 +763,60 @@ function verifyPreviewAndHistoryHelpers() {
   assert.ok(promptsOnlyFootprint.customPromptCharCount > 0);
   assert.equal(promptsOnlyFootprint.contextSignalCount, 0);
 
+  const messageScopePausedPreview = buildIndependentUserConfigPreview({
+    ...config,
+    preferenceInjection: {
+      enabled: true,
+      customPromptsEnabled: true,
+      messagePromptEnabled: false,
+      projectPromptEnabled: true,
+      userContextEnabled: true,
+    },
+  });
+  assert.doesNotMatch(messageScopePausedPreview, /scope="消息分析"/);
+  assert.match(messageScopePausedPreview, /scope="项目分析"/);
+  const messageScopePausedSummary = buildIndependentUserConfigSummary({
+    ...config,
+    preferenceInjection: {
+      enabled: true,
+      customPromptsEnabled: true,
+      messagePromptEnabled: false,
+      projectPromptEnabled: true,
+      userContextEnabled: true,
+    },
+  });
+  assert.deepEqual(messageScopePausedSummary.enabledPromptLabels, ['项目分析']);
+  assert.equal(messageScopePausedSummary.riskHintCount, 0);
+  assert.equal(messageScopePausedSummary.messagePromptInjectionEnabled, false);
+  assert.equal(messageScopePausedSummary.projectPromptInjectionEnabled, true);
+  const messageScopePausedFootprint = buildIndependentUserConfigFootprint({
+    ...config,
+    preferenceInjection: {
+      enabled: true,
+      customPromptsEnabled: true,
+      messagePromptEnabled: false,
+      projectPromptEnabled: true,
+      userContextEnabled: true,
+    },
+  });
+  assert.equal(
+    messageScopePausedFootprint.customPromptCharCount,
+    config.customPrompts.project.content.length,
+  );
+
+  const projectScopePausedPreview = buildIndependentUserConfigPreview({
+    ...config,
+    preferenceInjection: {
+      enabled: true,
+      customPromptsEnabled: true,
+      messagePromptEnabled: true,
+      projectPromptEnabled: false,
+      userContextEnabled: true,
+    },
+  });
+  assert.match(projectScopePausedPreview, /scope="消息分析"/);
+  assert.doesNotMatch(projectScopePausedPreview, /scope="项目分析"/);
+
   const emptySummary = buildIndependentUserConfigSummary({});
   assert.equal(emptySummary.contextSignalCount, 0);
   assert.equal(emptySummary.hasInjectablePreferences, false);
@@ -645,6 +842,8 @@ function verifyPreviewAndHistoryHelpers() {
   });
   assert.equal(pausedSummary.preferenceInjectionEnabled, false);
   assert.equal(pausedSummary.customPromptsInjectionEnabled, false);
+  assert.equal(pausedSummary.messagePromptInjectionEnabled, false);
+  assert.equal(pausedSummary.projectPromptInjectionEnabled, false);
   assert.equal(pausedSummary.userContextInjectionEnabled, false);
   assert.equal(pausedSummary.hasInjectablePreferences, false);
   assert.deepEqual(buildIndependentUserConfigFootprint({
@@ -868,12 +1067,18 @@ function verifyPromptConfigSurface() {
   assert.match(source, /preferenceInjection/);
   assert.match(source, /参与分析注入/);
   assert.match(source, /customPromptsEnabled/);
+  assert.match(source, /messagePromptEnabled/);
+  assert.match(source, /projectPromptEnabled/);
   assert.match(source, /userContextEnabled/);
   assert.match(source, /自定义提示词/);
+  assert.match(source, /消息提示词/);
+  assert.match(source, /项目提示词/);
   assert.match(source, /用户上下文/);
   assert.match(source, /source-toggle/);
+  assert.match(source, /scope-toggle/);
   assert.match(source, /injection-control-row/);
   assert.match(previewSource, /isCustomPromptsInjectionEnabled/);
+  assert.match(previewSource, /isCustomPromptScopeInjectionEnabled/);
   assert.match(previewSource, /isUserContextInjectionEnabled/);
   assert.match(previewSource, /buildUserContextPreferenceSection/);
   assert.match(previewSource, /buildCustomPromptPreferenceSection/);
@@ -898,6 +1103,9 @@ function verifyPromptConfigSurface() {
   assert.match(source, /USER_CONFIG_HISTORY_KEY/);
   assert.match(source, /版本历史/);
   assert.match(source, /生效预览/);
+  assert.match(source, /PREVIEW_SCOPE_OPTIONS/);
+  assert.match(source, /preview-scope-switch/);
+  assert.match(source, /userContextScope: previewScope/);
   assert.match(source, /preferenceFootprint\.estimatedTokenCount/);
   assert.match(source, /恢复历史版本/);
   assert.match(source, /mergeIdentityFallback/);
@@ -911,7 +1119,11 @@ function verifyPromptConfigSurface() {
   assert.match(source, /hasUnsavedChanges[\s\S]+persistConfiguration\(\)/);
   assert.match(previewSource, new RegExp(USER_CONFIG_HISTORY_KEY));
   assert.match(previewSource, /estimatePreferenceTokenCount/);
+  assert.match(previewSource, /UserContextPreferenceScope/);
+  assert.match(previewSource, /shouldIncludeUserContextScope/);
   assert.match(previewSource, /混淆拼写/);
+  assert.match(agentThinkingSource, /resolveGenericUserContextScope/);
+  assert.match(agentThinkingSource, /buildUserContextPromptBlock/);
 }
 
 async function main() {

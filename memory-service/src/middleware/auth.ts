@@ -6,7 +6,11 @@ import type { UserContextManager } from '../core/UserContextManager.js';
  * in a user ID. This prevents path-traversal attacks and keeps directory
  * names filesystem-safe.
  */
-const USER_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+export const USER_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
+export function isValidUserId(userId: string): boolean {
+  return USER_ID_PATTERN.test(userId);
+}
 
 /**
  * Create a Fastify `onRequest` hook that resolves the caller's identity
@@ -37,7 +41,7 @@ export function createAuthMiddleware(ucm: UserContextManager) {
       // Backward compatibility: no header = default user
       userId = 'default';
     } else {
-      if (!USER_ID_PATTERN.test(rawUserId)) {
+      if (!isValidUserId(rawUserId)) {
         return reply.code(400).send({
           error:
             'Invalid X-User-Id format. Only a-z, 0-9, dots, hyphens, underscores allowed.',

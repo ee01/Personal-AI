@@ -245,6 +245,20 @@ const PROVIDER_PROFILES: Record<TargetProvider, DayPilotProviderProfile> = {
 const RECENT_NOTIFICATION_WINDOW_SECONDS = 7 * 86400;
 const HEARTBEAT_FACT_NOTIFICATION_PATTERN =
   /was revisited by heartbeat|事实跟进:|recent evidence item\(s\)|newest signal pointing to|事实变化/i;
+const GENERIC_TRUTH_CONFLICT_TITLE_PATTERN =
+  /pending truth conflict needs attention|truth conflict needs attention|待处理.{0,8}(事实|记忆).{0,8}冲突/i;
+const LOW_VALUE_NOTIFICATION_TITLE_PATTERN =
+  /weekly dream digest|\d+\s+dream\(s\) generated|heartbeat digest/i;
+const OPENCLAW_MISSING_CAPABILITY_PATTERN =
+  /openclaw.{0,24}(缺少能力|无可用|无法执行|配置完成后.{0,12}重试)|缺少能力.{0,24}openclaw/i;
+const LOW_VALUE_FACT_FOLLOWUP_PATTERN =
+  /事实跟进:|fact follow[-\s]?up|was revisited by heartbeat|no evidence of (planned |further )?change|remains (at|current)|still current/i;
+const LOW_VALUE_JIRA_FIELD_CHANGE_PATTERN =
+  /\bfix\s*version\b|fixVersion|sprint (?:was )?(?:set|updated)|updated from [^.;]+ to/i;
+const JIRA_FIELD_CHANGE_ACTIONABLE_EXCEPTION_PATTERN =
+  /\b(owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|confirm|investigate|retry|failing?)\b|待确认|确认|阻塞|风险|负责人|下一步|审批|排查|重试/i;
+const STRONG_ACTIONABLE_PATTERN =
+  /follow[-\s]?up|action item|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|pending|unanswered|reply|\brespond\b|confirm|investigate|retry|failing?|跟进|待回复|未回复|回复|承诺|待确认|确认|阻塞|风险|负责人|下一步|审批|排查|重试/i;
 const ACTIONABLE_RELATIONSHIP_PATTERN =
   /follow[-\s]?up|open loop|reply|respond|unanswered|pending|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|commitment|promise|owed|going cold|touch base|check in|跟进|待回复|未回复|回复|承诺|答应|欠|未关闭|待确认|确认.{0,12}(owner|负责人|时间|下一步)|阻塞|风险|变冷|冷却|久未|重新联系|会前|准备/i;
 const ACTIONABLE_FOLLOWUP_PATTERN =
@@ -264,6 +278,7 @@ const ACTIONABLE_NOTIFICATION_TYPES = new Set([
   'approval_required',
   'decision_required',
 ]);
+const NON_ACTIONABLE_CALENDAR_TERMS = new Set(['jira', 'nova']);
 const DEFAULT_LATER_SNOOZE_SECONDS = 6 * 3600;
 
 function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
@@ -448,9 +463,65 @@ function hasOpenLoopSignal(text: string): boolean {
   ].some((needle) => lower.includes(needle));
 }
 
-function isRecurringNoise(title: string, seriesKey?: string | null): boolean {
-  if (!seriesKey) return false;
-  return /daily|weekly|sync|standup|例会|周会/i.test(title);
+function recurringMeetingNoise(
+  title: string,
+  seriesKey?: string | null,
+): number {
+  const text = `${title} ${seriesKey || ''}`;
+  if (/daily|standup|scrum|例会|晨会|日报/i.test(text)) return 1;
+  if (/weekly|sync|all[-\s]?hands|周会|同步会|全员会/i.test(text)) return 0.75;
+  return 0;
+}
+
+function splitCalendarTitleAndDescription(rawTitle: string): {
+  title: string;
+  inlineDescription: string;
+} {
+  const withoutPrefix = rawTitle.replace(/^calendar event:\s*/i, '').trim();
+  const parts = withoutPrefix.split(/\s+description:\s*/i);
+  return {
+    title: parts[0]?.trim() || withoutPrefix,
+    inlineDescription: parts.slice(1).join(' Description: ').trim(),
+  };
+}
+
+function cleanCalendarTitle(rawTitle: string): string {
+  const { title } = splitCalendarTitleAndDescription(rawTitle);
+  return (
+    compactText(
+      title
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/\b(meeting link|dashboard|jira board|board):\s*$/i, '')
+        .replace(/\s*[-|]\s*$/g, '')
+        .trim(),
+      88,
+    ) || '日历会议'
+  );
+}
+
+function cleanCalendarSnippet(
+  rawTitle: string,
+  rawDescription?: string | null,
+): string {
+  const { inlineDescription } = splitCalendarTitleAndDescription(rawTitle);
+  const source = [rawDescription, inlineDescription]
+    .filter((item): item is string => Boolean(item && item.trim()))
+    .join(' ');
+  return compactText(
+    source
+      .replace(/https?:\/\/\S+/g, '[link]')
+      .replace(
+        /\b[\w .'-]+ has invited you to a RingCentral Video meeting\.?/gi,
+        '',
+      )
+      .replace(/[^。]{0,80}已邀请您加入 RingCentral Video 会议。?/g, '')
+      .replace(/请使用以下链接加入[:：]?/g, '')
+      .replace(/please (use the following link to )?join[:：]?/gi, '')
+      .replace(/\b(meeting link|dashboard|jira board|board):\s*\[link\]/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    260,
+  );
 }
 
 function isOpaqueId(value: string | null | undefined): boolean {
@@ -690,10 +761,10 @@ export class DayPilotService {
     currentTime: number,
   ): { candidates: Candidate[]; sourceStats: DayPilotSourceStats } {
     const candidates: Candidate[] = [];
-    const messages = this.scanMessages(horizonStart);
+    const messages = this.scanMessages(horizonStart, horizonEnd, currentTime);
     const calendar = this.scanCalendar(currentTime, horizonEnd);
     const notifications = this.scanNotifications(currentTime);
-    const actions = this.scanActions();
+    const actions = this.scanActions(currentTime);
     const reflections = this.scanReflections(currentTime);
     const skills = this.scanSkills();
     const relationships = this.scanRelationships(currentTime);
@@ -743,7 +814,11 @@ export class DayPilotService {
     };
   }
 
-  private scanMessages(horizonStart: number): {
+  private scanMessages(
+    horizonStart: number,
+    horizonEnd: number,
+    currentTime: number,
+  ): {
     candidates: Candidate[];
     total: number;
   } {
@@ -752,9 +827,13 @@ export class DayPilotService {
         .prepare(
           `SELECT COUNT(*) AS count
            FROM messages_raw
-           WHERE timestamp >= ?`,
+           WHERE timestamp >= ?
+             AND (
+               (source_type = 'calendar' AND timestamp <= ?)
+               OR (COALESCE(source_type, '') != 'calendar' AND timestamp <= ?)
+             )`,
         )
-        .get(horizonStart) as CountRow
+        .get(horizonStart, horizonEnd, currentTime) as CountRow
     ).count;
     const rows = this.db
       .prepare(
@@ -763,24 +842,48 @@ export class DayPilotService {
                 importance, metadata_json
          FROM messages_raw
          WHERE timestamp >= ?
+           AND (
+             (source_type = 'calendar' AND timestamp <= ?)
+             OR (COALESCE(source_type, '') != 'calendar' AND timestamp <= ?)
+           )
          ORDER BY importance DESC, timestamp DESC
          LIMIT 160`,
       )
-      .all(horizonStart) as MessageCandidateRow[];
+      .all(horizonStart, horizonEnd, currentTime) as MessageCandidateRow[];
 
     const candidates = rows
       .filter((row) => {
         const text = `${row.summary || ''} ${row.content}`;
+        if (row.source_type === 'calendar') return true;
+        if (this.isLowValueJiraFieldChange(row, text)) return false;
         return (row.importance ?? 0.5) >= 0.55 || hasOpenLoopSignal(text);
       })
-      .map((row) => this.messageCandidate(row))
+      .map((row) => this.messageCandidate(row, currentTime))
       .filter((item): item is Candidate => Boolean(item))
       .slice(0, 60);
 
     return { candidates, total };
   }
 
-  private messageCandidate(row: MessageCandidateRow): Candidate | null {
+  private isLowValueJiraFieldChange(
+    row: MessageCandidateRow,
+    text: string,
+  ): boolean {
+    return (
+      row.source_type === 'jira' &&
+      LOW_VALUE_JIRA_FIELD_CHANGE_PATTERN.test(text) &&
+      !JIRA_FIELD_CHANGE_ACTIONABLE_EXCEPTION_PATTERN.test(text)
+    );
+  }
+
+  private messageCandidate(
+    row: MessageCandidateRow,
+    currentTime: number,
+  ): Candidate | null {
+    if (row.source_type === 'calendar') {
+      return this.calendarMemoryCandidate(row, currentTime);
+    }
+
     const text = `${row.summary || ''} ${row.content}`;
     const terms = topicTerms(text);
     const clusterKey = terms.length
@@ -851,6 +954,94 @@ export class DayPilotService {
     };
   }
 
+  private calendarMemoryCandidate(
+    row: MessageCandidateRow,
+    currentTime: number,
+  ): Candidate | null {
+    const rawTitle = row.source_title || row.summary || row.content;
+    const title = cleanCalendarTitle(rawTitle);
+    const snippet =
+      cleanCalendarSnippet(rawTitle, row.summary || row.content) || title;
+    const text = `${title} ${snippet}`;
+    const recurringNoise = recurringMeetingNoise(title, row.group_id);
+    const terms = topicTerms(text);
+    const actionable = this.hasActionableCalendarSignal(
+      text,
+      terms,
+      recurringNoise,
+    );
+    if (!actionable) {
+      return null;
+    }
+
+    const hoursUntil = (row.timestamp - currentTime) / 3600;
+    const baseUrgency =
+      hoursUntil <= 2 && hoursUntil >= -1
+        ? 0.78
+        : hoursUntil <= 36 && hoursUntil >= -1
+        ? 0.5
+        : 0.26;
+    const urgency =
+      recurringNoise > 0 ? Math.min(baseUrgency, 0.46) : baseUrgency;
+    const sourceImportance =
+      terms.some((term) => !NON_ACTIONABLE_CALENDAR_TERMS.has(term)) ||
+      ACTIONABLE_FOLLOWUP_PATTERN.test(text)
+        ? 0.64
+        : 0.38;
+    const privacyRisk = this.privacyRisk(text);
+    const score = this.computeScore({
+      urgency,
+      openLoopPressure: ACTIONABLE_FOLLOWUP_PATTERN.test(text) ? 0.56 : 0.32,
+      userRoleRelevance: 0.62,
+      sourceImportance,
+      sourceDiversity: 0.32,
+      evidenceConfidence: 0.68,
+      novelty: recurringNoise > 0 ? 0.18 : terms.length > 0 ? 0.56 : 0.3,
+      recurringNoise,
+      feedbackFatigue: 0,
+      privacyRisk,
+    });
+
+    return {
+      sourceKind: 'calendar',
+      sourceId: row.id,
+      clusterKey: `calendar:${row.group_id || normalizeKey(title)}`,
+      title: this.titleForTerms(terms, title),
+      snippet,
+      timestamp: row.timestamp,
+      dueAt: row.timestamp >= currentTime - 3600 ? row.timestamp : undefined,
+      score,
+      urgency,
+      openLoopPressure: ACTIONABLE_FOLLOWUP_PATTERN.test(text) ? 0.56 : 0.32,
+      sourceImportance,
+      evidenceConfidence: 0.68,
+      privacyRisk,
+      recurringNoise,
+      cardType: 'meeting_prepare',
+      state: hoursUntil <= 2 && hoursUntil >= -1 ? 'now' : 'prepare',
+      people: uniqByName([
+        ...(row.sender ? [{ name: row.sender, type: 'Person' }] : []),
+        ...extractNamesFromJson(row.entities_json).filter(
+          (entity) => entity.type === 'Person',
+        ),
+      ]),
+      projects: terms.map((term) => ({
+        name: this.prettyTerm(term),
+        type: 'Topic',
+      })),
+      evidence: {
+        sourceKind: 'calendar',
+        sourceId: row.id,
+        title,
+        snippet,
+        timestamp: row.timestamp,
+        sourceUrl: row.source_url ?? undefined,
+      },
+      openQuestions: this.openQuestionsForCalendar(text, recurringNoise),
+      sourceUrl: row.source_url ?? undefined,
+    };
+  }
+
   private scanCalendar(
     currentTime: number,
     horizonEnd: number,
@@ -886,30 +1077,38 @@ export class DayPilotService {
     row: CalendarCandidateRow,
     currentTime: number,
   ): Candidate | null {
-    const text = `${row.title} ${row.description_preview || ''}`;
-    const recurringNoise = isRecurringNoise(row.title, row.series_key)
-      ? 0.8
-      : 0;
+    const title = cleanCalendarTitle(row.title);
+    const snippet = cleanCalendarSnippet(row.title, row.description_preview);
+    const text = `${title} ${snippet}`;
+    const recurringNoise = recurringMeetingNoise(title, row.series_key);
     const terms = topicTerms(text);
-    if (
-      recurringNoise > 0 &&
-      terms.length === 0 &&
-      row.start_at - currentTime > 6 * 3600
-    ) {
+    const actionable = this.hasActionableCalendarSignal(
+      text,
+      terms,
+      recurringNoise,
+    );
+    if (!actionable) {
       return null;
     }
     const hoursUntil = (row.start_at - currentTime) / 3600;
-    const urgency = hoursUntil <= 2 ? 0.85 : hoursUntil <= 36 ? 0.55 : 0.28;
-    const sourceImportance = terms.length > 0 ? 0.72 : 0.48;
+    const baseUrgency =
+      hoursUntil <= 2 ? 0.82 : hoursUntil <= 36 ? 0.52 : 0.28;
+    const urgency =
+      recurringNoise > 0 ? Math.min(baseUrgency, 0.48) : baseUrgency;
+    const sourceImportance =
+      terms.some((term) => !NON_ACTIONABLE_CALENDAR_TERMS.has(term)) ||
+      ACTIONABLE_FOLLOWUP_PATTERN.test(text)
+        ? 0.68
+        : 0.42;
     const privacyRisk = this.privacyRisk(text);
     const score = this.computeScore({
       urgency,
-      openLoopPressure: terms.length > 0 ? 0.55 : 0.25,
+      openLoopPressure: ACTIONABLE_FOLLOWUP_PATTERN.test(text) ? 0.58 : 0.34,
       userRoleRelevance: 0.64,
       sourceImportance,
       sourceDiversity: 0.35,
       evidenceConfidence: 0.75,
-      novelty: terms.length > 0 ? 0.7 : 0.3,
+      novelty: recurringNoise > 0 ? 0.22 : terms.length > 0 ? 0.64 : 0.38,
       recurringNoise,
       feedbackFatigue: 0,
       privacyRisk,
@@ -919,13 +1118,13 @@ export class DayPilotService {
       sourceKind: 'calendar',
       sourceId: row.id,
       clusterKey: `calendar:${row.series_key || row.id}`,
-      title: this.titleForTerms(terms, row.title),
-      snippet: compactText(row.description_preview || row.title, 260),
+      title: this.titleForTerms(terms, title),
+      snippet: snippet || title,
       timestamp: row.start_at,
       dueAt: row.start_at,
       score,
       urgency,
-      openLoopPressure: terms.length > 0 ? 0.55 : 0.25,
+      openLoopPressure: ACTIONABLE_FOLLOWUP_PATTERN.test(text) ? 0.58 : 0.34,
       sourceImportance,
       evidenceConfidence: 0.75,
       privacyRisk,
@@ -943,15 +1142,38 @@ export class DayPilotService {
       evidence: {
         sourceKind: 'calendar',
         sourceId: row.id,
-        title: row.title,
-        snippet: compactText(row.description_preview || row.title, 260),
+        title,
+        snippet: snippet || title,
         timestamp: row.start_at,
         sourceUrl: row.source_url || row.join_url || undefined,
       },
-      openQuestions: ['这场会前需要准备哪些上下文？'],
+      openQuestions: this.openQuestionsForCalendar(text, recurringNoise),
       sourceUrl: row.source_url || row.join_url || undefined,
       meetingExternalId: row.external_id,
     };
+  }
+
+  private hasActionableCalendarSignal(
+    text: string,
+    terms: string[],
+    recurringNoise: number,
+  ): boolean {
+    if (ACTIONABLE_FOLLOWUP_PATTERN.test(text)) return true;
+    if (recurringNoise > 0) return false;
+    return terms.some((term) => !NON_ACTIONABLE_CALENDAR_TERMS.has(term));
+  }
+
+  private openQuestionsForCalendar(
+    text: string,
+    recurringNoise: number,
+  ): string[] {
+    if (recurringNoise > 0) {
+      return ['这场重复会议今天是否有明确 owner、风险、决策或阻塞要带进去？'];
+    }
+    if (/分享|presentation|deck|材料|cop|sharing/i.test(text)) {
+      return ['会前材料里还缺哪个真实案例或结论？'];
+    }
+    return ['这场会前需要准备哪些上下文？'];
   }
 
   private scanNotifications(currentTime: number): {
@@ -1033,14 +1255,12 @@ export class DayPilotService {
       feedbackFatigue: 0,
       privacyRisk,
     });
-    const title = this.cleanNotificationTitle(row.title);
     const topicName = this.notificationTopicName(row);
+    const title = this.cleanNotificationTitle(row);
     return {
       sourceKind: 'notification',
       sourceId: row.id,
-      clusterKey: `notification:${
-        row.topic_id || row.related_entity_id || row.type || row.id
-      }`,
+      clusterKey: this.notificationClusterKey(row, title, topicName),
       title,
       snippet: compactText(row.body || row.title, 260),
       timestamp: row.created_at,
@@ -1083,6 +1303,17 @@ export class DayPilotService {
     ) {
       return true;
     }
+    if (LOW_VALUE_NOTIFICATION_TITLE_PATTERN.test(text)) {
+      return true;
+    }
+    if (
+      !ACTIONABLE_NOTIFICATION_TYPES.has(row.type || '') &&
+      !STRONG_ACTIONABLE_PATTERN.test(text) &&
+      !OPENCLAW_MISSING_CAPABILITY_PATTERN.test(text) &&
+      !hasOpenLoopSignal(text)
+    ) {
+      return true;
+    }
 
     const ageSeconds = Math.max(0, currentTime - row.created_at);
     if (
@@ -1095,8 +1326,42 @@ export class DayPilotService {
     return false;
   }
 
-  private cleanNotificationTitle(title: string): string {
-    return compactText(title.replace(/^自我反思:\s*/, ''), 88);
+  private cleanNotificationTitle(row: NotificationCandidateRow): string {
+    const cleaned = row.title.replace(/^自我反思:\s*/, '');
+    const combined = `${cleaned} ${row.body || ''}`;
+    if (OPENCLAW_MISSING_CAPABILITY_PATTERN.test(combined)) {
+      return 'OpenClaw 缺少能力重试确认';
+    }
+    if (
+      row.type === 'truth_conflict' &&
+      GENERIC_TRUTH_CONFLICT_TITLE_PATTERN.test(cleaned)
+    ) {
+      return '待核对的记忆事实冲突';
+    }
+    return compactText(cleaned, 88);
+  }
+
+  private notificationClusterKey(
+    row: NotificationCandidateRow,
+    title: string,
+    topicName?: string,
+  ): string {
+    if (
+      row.type === 'truth_conflict' &&
+      (GENERIC_TRUTH_CONFLICT_TITLE_PATTERN.test(row.title) ||
+        title === '待核对的记忆事实冲突')
+    ) {
+      return 'notification:truth_conflict:generic';
+    }
+    if (/新的认知冲突需要决策|new cognitive conflict needs decision/i.test(title)) {
+      return `notification:title:${normalizeKey(title)}`;
+    }
+    if (title === 'OpenClaw 缺少能力重试确认') {
+      return 'notification:openclaw:missing-capability';
+    }
+    return `notification:${
+      row.topic_id || row.related_entity_id || topicName || row.type || row.id
+    }`;
   }
 
   private notificationTopicName(
@@ -1118,7 +1383,19 @@ export class DayPilotService {
     return undefined;
   }
 
-  private scanActions(): { candidates: Candidate[]; total: number } {
+  private isStaleLowValueFactFollowup(
+    text: string,
+    timestamp: number | null | undefined,
+    currentTime: number,
+  ): boolean {
+    if (!timestamp || currentTime - timestamp <= 14 * 86400) return false;
+    return LOW_VALUE_FACT_FOLLOWUP_PATTERN.test(text);
+  }
+
+  private scanActions(currentTime: number): {
+    candidates: Candidate[];
+    total: number;
+  } {
     const total = (
       this.db
         .prepare(
@@ -1140,13 +1417,38 @@ export class DayPilotService {
          LIMIT 40`,
       )
       .all() as ActionCandidateRow[];
-    return { total, candidates: rows.map((row) => this.actionCandidate(row)) };
+    return {
+      total,
+      candidates: rows
+        .map((row) => this.actionCandidate(row, currentTime))
+        .filter((item): item is Candidate => Boolean(item)),
+    };
   }
 
-  private actionCandidate(row: ActionCandidateRow): Candidate {
+  private actionCandidate(
+    row: ActionCandidateRow,
+    currentTime: number,
+  ): Candidate | null {
     const text = `${row.title} ${row.description || ''} ${
       row.last_error || ''
     }`;
+    if (
+      this.isStaleLowValueFactFollowup(
+        text,
+        row.created_at,
+        currentTime,
+      )
+    ) {
+      return null;
+    }
+    const actionTime = row.scheduled_at || row.created_at;
+    if (
+      !row.requires_approval &&
+      actionTime &&
+      currentTime - actionTime > 14 * 86400
+    ) {
+      return null;
+    }
     const riskUrgency =
       row.requires_approval || row.risk_level === 'high' ? 0.86 : 0.55;
     const urgency = clamp01(row.urgency_score ?? riskUrgency);
@@ -1232,17 +1534,22 @@ export class DayPilotService {
       .all(currentTime) as ReflectionCandidateRow[];
     return {
       total,
-      candidates: rows.map((row) => this.reflectionCandidate(row, currentTime)),
+      candidates: rows
+        .map((row) => this.reflectionCandidate(row, currentTime))
+        .filter((item): item is Candidate => Boolean(item)),
     };
   }
 
   private reflectionCandidate(
     row: ReflectionCandidateRow,
     currentTime: number,
-  ): Candidate {
+  ): Candidate | null {
     const text = `${row.title} ${row.current_hypothesis || ''} ${
       row.latest_summary || ''
     }`;
+    if (this.isStaleLowValueFactFollowup(text, row.updated_at, currentTime)) {
+      return null;
+    }
     const due =
       !row.next_reflection_at || row.next_reflection_at <= currentTime;
     const privacyRisk = this.privacyRisk(text);
@@ -1601,7 +1908,7 @@ export class DayPilotService {
         (item) => item.privacyRisk >= 0.7,
       ).length,
     };
-    const priority = priorityFromScore(score, privacyRisk);
+    const priority = this.priorityForCluster(score, privacyRisk, cluster);
     const card: DayPilotCard = {
       id: cardId,
       briefId: '',
@@ -2047,9 +2354,35 @@ export class DayPilotService {
       cluster.candidates.map((item) => item.sourceKind),
     ).size;
     const topScore = cluster.candidates[0]?.score ?? 0;
-    const support = Math.min(0.16, (cluster.candidates.length - 1) * 0.04);
+    const recurringNoise = Math.max(
+      ...cluster.candidates.map((item) => item.recurringNoise),
+    );
+    const supportStep = cluster.key === 'notification:truth_conflict:generic'
+      ? 0.005
+      : recurringNoise > 0
+      ? 0.015
+      : 0.04;
+    const support = Math.min(
+      cluster.key === 'notification:truth_conflict:generic' ? 0.06 : 0.16,
+      (cluster.candidates.length - 1) * supportStep,
+    );
     const diversity = Math.min(0.1, (sourceDiversity - 1) * 0.04);
-    return clamp01(topScore + support + diversity);
+    return clamp01(topScore + support + diversity - recurringNoise * 0.14);
+  }
+
+  private priorityForCluster(
+    score: number,
+    privacyRisk: number,
+    cluster: Cluster,
+  ): DayPilotPriority {
+    const priority = priorityFromScore(score, privacyRisk);
+    const recurringNoise = Math.max(
+      ...cluster.candidates.map((item) => item.recurringNoise),
+    );
+    if (recurringNoise <= 0) return priority;
+    if (priority === 'critical') return 'high';
+    if (priority === 'high' && recurringNoise >= 0.75) return 'medium';
+    return priority;
   }
 
   private clusterStalenessPenalty(
@@ -2107,6 +2440,12 @@ export class DayPilotService {
   }
 
   private clusterTitle(cluster: Cluster): string {
+    if (
+      cluster.key === 'notification:truth_conflict:generic' ||
+      cluster.candidates[0]?.title === '待核对的记忆事实冲突'
+    ) {
+      return '待核对的记忆事实冲突';
+    }
     const combined = cluster.candidates
       .map((item) => `${item.title} ${item.snippet}`)
       .join(' ');
@@ -2141,7 +2480,7 @@ export class DayPilotService {
       return `Personal AI 发现一条可沉淀的重复做法，今天可以决定是否纳入个人技能库。`;
     }
     if (top.cardType === 'memory_quality') {
-      return `有一条记忆质量或事实冲突提醒仍未处理，可能影响今天交给 AI 的上下文。`;
+      return `有 ${evidenceCount} 条记忆质量或事实冲突提醒仍未处理，可能影响今天交给 AI 的上下文。`;
     }
     if (top.cardType === 'relationship_ping') {
       return `关系雷达发现 ${evidenceCount} 条带 follow-up、承诺或变冷风险的证据，今天适合确认是否需要主动同步。`;
@@ -2160,8 +2499,6 @@ export class DayPilotService {
     candidates: Candidate[],
   ): string {
     const text = `${title} ${candidates.map((item) => item.snippet).join(' ')}`;
-    if (cardType === 'meeting_prepare')
-      return '准备这场会的上下文包和要问的问题';
     if (cardType === 'decision_check')
       return '进入对应处理页确认是否执行或如何拍板';
     if (cardType === 'skill_opportunity')
@@ -2197,6 +2534,18 @@ export class DayPilotService {
       return '整理一版可复用的配置说明并回复相关人';
     if (/capacity|poster|上传/i.test(text))
       return '确认 owner 是否已经上传，必要时保留 follow-up';
+    if (OPENCLAW_MISSING_CAPABILITY_PATTERN.test(text)) {
+      return '先补齐 OpenClaw 所缺的外部能力，再决定这些失败动作是否需要重试';
+    }
+    if (cardType === 'meeting_prepare') {
+      if (/daily|sync|standup|例会|周会/i.test(text)) {
+        return '会前只确认今天新增的 owner、风险或阻塞，不把例会本身当待办';
+      }
+      if (/分享|presentation|deck|材料|cop|sharing/i.test(text)) {
+        return '整理会前材料里的关键结论、真实案例和需要现场确认的问题';
+      }
+      return '准备这场会的上下文包和要问的问题';
+    }
     if (cardType === 'ai_tool_shift') {
       return '整理这条 AI 工具变化的影响，确认是否需要沉淀为团队说明或个人 skill';
     }

@@ -55,6 +55,7 @@ const overlayState: OverlayState = {
 };
 
 let debounceTimer: number | undefined;
+let transcriptDebounceTimer: number | undefined;
 let transcriptPollTimer: number | undefined;
 let mounted = false;
 let observersInstalled = false;
@@ -69,6 +70,11 @@ let danmakuSpeedKey: 'fast' | 'medium' | 'slow' = 'medium';
 const contentScriptStartedAt = Date.now();
 let lastRingCentralTranscriptSignature = '';
 let lastRingCentralTranscriptStatusAt = 0;
+let lastRingCentralTranscriptProbeAt = 0;
+let lastRingCentralTranscriptServiceAvailable = false;
+let lastRingCentralTranscriptServiceEndpoint = '';
+let lastRingCentralTranscriptProbeError = '';
+let ringCentralTranscriptWsBridgeInstalled = false;
 let runtimeConfig: MeetingPilotRuntimeConfig = {
   enabled: true,
   floatingIconVisible: true,
@@ -1226,12 +1232,15 @@ function syncAlertLayers(
     item.className = 'danmaku-item p2 memory-danmaku';
     item.style.top = `${getDanmakuTop(unresolved.length + index)}px`;
     item.style.setProperty('--duration', `${getDanmakuDuration('P2') + 3}s`);
-    const title = ref.title || `记忆关联 ${Math.round(ref.score * 100)}%`;
+    const title =
+      ref.relationLabel ||
+      ref.evidenceRoleLabel ||
+      `记忆关联 ${Math.round(ref.score * 100)}%`;
     appendDanmakuContent(item, {
       icon: '🧠',
       title,
-      previewText: ref.snippet,
-      detailText: ref.fullSnippet || ref.snippet,
+      previewText: ref.cueTitle || ref.title || ref.snippet,
+      detailText: ref.cueBody || ref.fullSnippet || ref.snippet,
       linkUrl: ref.sourceUrl,
       linkLabel: '查看原文',
     });
@@ -1511,6 +1520,21 @@ interface RingCentralTranscriptDomItem {
   timeText: string;
 }
 
+interface RingCentralTranscriptDomProbe {
+  items: RingCentralTranscriptDomItem[];
+  rootCount: number;
+  timeLineCount: number;
+  textLineCount: number;
+}
+
+interface RingCentralTranscriptWsEvent {
+  text: string;
+  speaker?: string;
+  ts?: number;
+  final?: boolean;
+  url?: string;
+}
+
 function isRingCentralTranscriptNoiseLine(value?: string | null): boolean {
   const text = normalizeText(value);
   if (!text) return true;
@@ -1580,6 +1604,15 @@ function normalizeTranscriptComparable(value: string): string {
     .replace(/[^a-z0-9\u4e00-\u9fa5\s]+/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function shouldKeepRingCentralTranscriptText(value?: string | null): boolean {
+  const text = normalizeText(value);
+  if (!text) return false;
+  if (text.length < 2) return false;
+  if (isRingCentralTranscriptNoiseLine(text)) return false;
+  if (looksLikeTranscriptTimeLine(text)) return false;
+  return /[a-zA-Z\u4e00-\u9fa5]/.test(text);
 }
 
 function getTranscriptComparableWords(value: string): string[] {
@@ -1682,27 +1715,101 @@ function splitRingCentralTranscriptLines(root: Element): string[] {
     .filter(Boolean);
 }
 
+function getReadableDocuments(): Document[] {
+  const docs: Document[] = [document];
+  document.querySelectorAll('iframe').forEach((frame) => {
+    try {
+      const childDocument = (frame as HTMLIFrameElement).contentDocument;
+      if (childDocument) docs.push(childDocument);
+    } catch {
+      // Cross-origin RingCentral iframes are expected; transcript DOM remains
+      // available only when the browser allows same-origin access.
+    }
+  });
+  return docs;
+}
+
+function isElementVisible(element: Element): boolean {
+  const html = element as HTMLElement;
+  if (html.hidden || html.getAttribute('aria-hidden') === 'true') return false;
+  const rect = html.getBoundingClientRect?.();
+  if (rect && rect.width <= 1 && rect.height <= 1) return false;
+  const style = element.ownerDocument.defaultView?.getComputedStyle?.(html);
+  if (!style) return true;
+  return style.display !== 'none' && style.visibility !== 'hidden';
+}
+
 function getRingCentralTranscriptRoots(): Element[] {
   const selectors = [
     '#transcript-tabpanel',
     '[id*="transcript" i][role="tabpanel"]',
     '[id*="transcript-tabpanel" i]',
     '[aria-label*="Transcript" i]',
+    '[aria-label*="Closed Caption" i]',
+    '[aria-label*="caption" i]',
+    '[data-at*="transcript" i]',
+    '[data-at*="caption" i]',
+    '[class*="Transcript"]',
+    '[class*="transcript"]',
+    '[class*="Transcription"]',
+    '[class*="transcription"]',
+    '[class*="ClosedCaption"]',
+    '[class*="closed-caption"]',
+    '[class*="caption"]',
+    '[role="dialog"]',
     '[role="tabpanel"]',
+    '[role="complementary"]',
   ];
   const roots = new Set<Element>();
-  selectors.forEach((selector) => {
-    document.querySelectorAll(selector).forEach((node) => roots.add(node));
+  getReadableDocuments().forEach((doc) => {
+    selectors.forEach((selector) => {
+      doc.querySelectorAll(selector).forEach((node) => {
+        if (isElementVisible(node)) roots.add(node);
+      });
+    });
   });
   return Array.from(roots)
     .map((node) => ({
       node,
-      timeCount: splitRingCentralTranscriptLines(node).filter(
-        looksLikeTranscriptTimeLine,
-      ).length,
+      lines: splitRingCentralTranscriptLines(node),
     }))
-    .filter((item) => item.timeCount > 0)
-    .sort((left, right) => right.timeCount - left.timeCount)
+    .map((item) => {
+      const text = item.lines.join(' ');
+      const hasTranscriptHint =
+        /transcript|caption|closed caption|notes/i.test(text) ||
+        /transcript|caption/i.test(
+          [
+            item.node.id,
+            item.node.getAttribute('class'),
+            item.node.getAttribute('aria-label'),
+            item.node.getAttribute('data-at'),
+          ]
+            .filter(Boolean)
+            .join(' '),
+        );
+      return {
+        ...item,
+        hasTranscriptHint,
+        timeCount: item.lines.filter(looksLikeTranscriptTimeLine).length,
+        textLineCount: item.lines.filter(
+          (line) =>
+            !looksLikeTranscriptTimeLine(line) &&
+            !isRingCentralTranscriptNoiseLine(line),
+        ).length,
+      };
+    })
+    .filter(
+      (item) =>
+        item.timeCount > 0 &&
+        item.textLineCount > 0 &&
+        (item.hasTranscriptHint || item.timeCount >= 2),
+    )
+    .sort((left, right) => {
+      if (left.hasTranscriptHint !== right.hasTranscriptHint) {
+        return left.hasTranscriptHint ? -1 : 1;
+      }
+      return right.timeCount - left.timeCount;
+    })
     .map((item) => item.node);
 }
 
@@ -1760,12 +1867,24 @@ function trimNextSpeakerMetadata(
   return trimmed;
 }
 
-function collectRingCentralTranscriptDomItems(
+function collectRingCentralTranscriptDomProbe(
   meetingId: string,
-): RingCentralTranscriptDomItem[] {
-  if (!runtimeConfig.ringCentralTranscriptEnabled) return [];
-  const root = getRingCentralTranscriptRoots()[0];
-  if (!root) return [];
+): RingCentralTranscriptDomProbe {
+  if (!runtimeConfig.ringCentralTranscriptEnabled) {
+    return { items: [], rootCount: 0, timeLineCount: 0, textLineCount: 0 };
+  }
+  const roots = getRingCentralTranscriptRoots();
+  const aggregateLines = roots.flatMap((node) => splitRingCentralTranscriptLines(node));
+  const timeLineCount = aggregateLines.filter(looksLikeTranscriptTimeLine).length;
+  const textLineCount = aggregateLines.filter(
+    (line) =>
+      !looksLikeTranscriptTimeLine(line) &&
+      !isRingCentralTranscriptNoiseLine(line),
+  ).length;
+  const root = roots[0];
+  if (!root) {
+    return { items: [], rootCount: 0, timeLineCount, textLineCount };
+  }
   const lines = splitRingCentralTranscriptLines(root);
   const timeIndexes = lines
     .map((line, index) => ({ line, index }))
@@ -1799,16 +1918,129 @@ function collectRingCentralTranscriptDomItems(
       timeText: timeItem.line,
     });
   });
-  return items;
+  return { items, rootCount: roots.length, timeLineCount, textLineCount };
+}
+
+function parseJsonStorage(key: string): Record<string, any> | undefined {
+  try {
+    const value = window.localStorage?.getItem(key);
+    if (!value) return undefined;
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getRingCentralAccessToken(): string {
+  const platform = parseJsonStorage('rc-platform');
+  return typeof platform?.access_token === 'string' ? platform.access_token : '';
+}
+
+function getRingCentralParticipantIdFromRuntimeSources(): string {
+  const urls = performance
+    .getEntriesByType('resource')
+    .map((entry) => entry.name)
+    .join('\n');
+  const participantParam = urls.match(/[?&]participantId=([^&]+)/);
+  if (participantParam?.[1]) {
+    try {
+      return decodeURIComponent(participantParam[1]);
+    } catch {
+      return participantParam[1];
+    }
+  }
+  const participantChannel = urls.match(/vcp%3A%3Av1\.participant\.[^%]+%3A%3A([^,&/]+)/i);
+  if (participantChannel?.[1]) {
+    try {
+      return decodeURIComponent(participantChannel[1]);
+    } catch {
+      return participantChannel[1];
+    }
+  }
+  return '';
+}
+
+function getStoredRingCentralTranscriptEndpoint(): string {
+  const inMeetingTranscript = parseJsonStorage('inMeetingTranscript');
+  const closedCaptions = parseJsonStorage('closedCaptions_');
+  return String(
+    inMeetingTranscript?.url ||
+      closedCaptions?.channel ||
+      closedCaptions?.webSocketUrl ||
+      '',
+  ).trim();
+}
+
+async function probeRingCentralTranscriptService(
+  meetingId: string,
+): Promise<void> {
+  const now = Date.now();
+  if (now - lastRingCentralTranscriptProbeAt < 30_000) return;
+  lastRingCentralTranscriptProbeAt = now;
+  lastRingCentralTranscriptProbeError = '';
+
+  const storedEndpoint = getStoredRingCentralTranscriptEndpoint();
+  const inMeetingTranscript = parseJsonStorage('inMeetingTranscript');
+  if (
+    storedEndpoint &&
+    inMeetingTranscript?.transcriptionState?.started === true &&
+    inMeetingTranscript?.transcriptionState?.paused !== true
+  ) {
+    lastRingCentralTranscriptServiceAvailable = true;
+    lastRingCentralTranscriptServiceEndpoint = storedEndpoint;
+  }
+
+  const participantId = getRingCentralParticipantIdFromRuntimeSources();
+  const accessToken = getRingCentralAccessToken();
+  if (!meetingId || !participantId || !accessToken) {
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `https://api-meet.ringcentral.com/ai/v1/entrypoints/meetings/${encodeURIComponent(
+        meetingId,
+      )}?participantId=${encodeURIComponent(participantId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        credentials: 'include',
+      },
+    );
+    if (!response.ok) {
+      lastRingCentralTranscriptProbeError = `entrypoint_http_${response.status}`;
+      return;
+    }
+    const payload = await response.json();
+    const endpoint = String(
+      payload?.liveTranscriptInfo?.webSocketUrl ||
+        payload?.liveTranscriptUrl ||
+        payload?.closedCaptionInfo?.webSocketUrl ||
+        '',
+    ).trim();
+    lastRingCentralTranscriptServiceAvailable = Boolean(endpoint);
+    lastRingCentralTranscriptServiceEndpoint = endpoint;
+  } catch (error) {
+    lastRingCentralTranscriptProbeError = String(
+      (error as Error)?.message || error || 'entrypoint_probe_failed',
+    );
+  }
 }
 
 async function emitRingCentralTranscriptFromDom(
   context: ReturnType<typeof getMeetingPageContext>,
 ): Promise<void> {
   if (!context || !runtimeConfig.ringCentralTranscriptEnabled) return;
-  const items = collectRingCentralTranscriptDomItems(context.meetingId);
+  void probeRingCentralTranscriptService(context.meetingId);
+  const probe = collectRingCentralTranscriptDomProbe(context.meetingId);
+  const items = probe.items;
   const latest = items[items.length - 1];
-  const signature = `${context.meetingId}:${items.length}:${latest?.id || ''}`;
+  const serviceSignature = lastRingCentralTranscriptServiceAvailable
+    ? `svc:${lastRingCentralTranscriptServiceEndpoint || 'available'}`
+    : 'svc:none';
+  const signature = `${context.meetingId}:${items.length}:${latest?.id || ''}:${probe.rootCount}:${probe.timeLineCount}:${serviceSignature}`;
   const now = Date.now();
   const shouldSendStatus =
     signature !== lastRingCentralTranscriptSignature ||
@@ -1822,10 +2054,17 @@ async function emitRingCentralTranscriptFromDom(
         tabId: 0,
         meetingId: context.meetingId,
         enabled: true,
-        available: items.length > 0,
+        available:
+          items.length > 0 ||
+          probe.rootCount > 0 ||
+          lastRingCentralTranscriptServiceAvailable,
         active: items.length > 0,
         lastSeenAt: latest ? now : undefined,
         latestChunkId: latest?.id,
+        lastError:
+          !items.length && lastRingCentralTranscriptProbeError
+            ? lastRingCentralTranscriptProbeError
+            : undefined,
       })
       .catch(() => undefined);
   }
@@ -1857,6 +2096,168 @@ async function emitRingCentralTranscriptFromDom(
       .slice(0, seenRingCentralTranscriptChunks.size - 160)
       .forEach((id) => seenRingCentralTranscriptChunks.delete(id));
   }
+}
+
+function buildRingCentralTranscriptWsBridgeScript(): string {
+  return String.raw`(() => {
+    const globalKey = '__meetingPilotRingCentralTranscriptWsBridge';
+    if (window[globalKey]?.installed) return;
+    const state = { installed: true, seq: 0 };
+    window[globalKey] = state;
+    const NativeWebSocket = window.WebSocket;
+    const shouldWatch = (url) => /mn-api\/ws|cc\.srs\.ringcentral\.com|live.?transcript|closed.?caption|caption/i.test(String(url || ''));
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const textKeys = new Set(['text', 'transcript', 'caption', 'sentence', 'utterance', 'content', 'displayText']);
+    const speakerKeys = ['speakerName', 'speaker', 'participantName', 'userName', 'name'];
+    const finalKeys = ['final', 'isFinal', 'stable', 'completed'];
+    const findSpeaker = (obj) => {
+      if (!obj || typeof obj !== 'object') return '';
+      for (const key of speakerKeys) {
+        const value = obj[key];
+        if (typeof value === 'string' && normalize(value)) return normalize(value);
+      }
+      for (const value of Object.values(obj)) {
+        if (value && typeof value === 'object') {
+          const nested = findSpeaker(value);
+          if (nested) return nested;
+        }
+      }
+      return '';
+    };
+    const findFinal = (obj) => {
+      if (!obj || typeof obj !== 'object') return undefined;
+      for (const key of finalKeys) {
+        if (typeof obj[key] === 'boolean') return obj[key];
+      }
+      return undefined;
+    };
+    const extractEvents = (value, inherited = {}, depth = 0, out = []) => {
+      if (!value || depth > 8) return out;
+      if (Array.isArray(value)) {
+        value.forEach((item) => extractEvents(item, inherited, depth + 1, out));
+        return out;
+      }
+      if (typeof value !== 'object') return out;
+      const speaker = findSpeaker(value) || inherited.speaker || '';
+      const final = findFinal(value);
+      for (const [key, raw] of Object.entries(value)) {
+        if (typeof raw === 'string' && textKeys.has(key)) {
+          const text = normalize(raw);
+          if (text) {
+            out.push({
+              text,
+              speaker,
+              final: typeof final === 'boolean' ? final : inherited.final,
+              ts: Number(value.ts || value.timestamp || value.startTime || Date.now()),
+            });
+          }
+        } else if (raw && typeof raw === 'object') {
+          extractEvents(raw, { speaker, final: typeof final === 'boolean' ? final : inherited.final }, depth + 1, out);
+        }
+      }
+      return out;
+    };
+    const parsePayload = async (data) => {
+      if (typeof data === 'string') return data;
+      if (data instanceof Blob) return data.text();
+      if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+      if (ArrayBuffer.isView(data)) return new TextDecoder().decode(data.buffer);
+      return '';
+    };
+    const post = (detail) => {
+      window.postMessage({ source: 'meeting-pilot-ringcentral-ws', ...detail }, window.location.origin);
+    };
+    function MeetingPilotWebSocket(url, protocols) {
+      const socket = protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
+      if (shouldWatch(url)) {
+        post({ kind: 'socket', url: String(url || '') });
+        socket.addEventListener('message', (event) => {
+          void parsePayload(event.data).then((raw) => {
+            if (!raw) return;
+            let parsed;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {
+              return;
+            }
+            const events = extractEvents(parsed).slice(0, 12);
+            events.forEach((item) => {
+              state.seq += 1;
+              post({
+                kind: 'transcript',
+                url: String(url || ''),
+                seq: state.seq,
+                event: item,
+              });
+            });
+          });
+        });
+      }
+      return socket;
+    }
+    MeetingPilotWebSocket.prototype = NativeWebSocket.prototype;
+    Object.setPrototypeOf(MeetingPilotWebSocket, NativeWebSocket);
+    Object.defineProperty(window, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: MeetingPilotWebSocket,
+    });
+  })();`;
+}
+
+function installRingCentralTranscriptWsBridge(): void {
+  if (ringCentralTranscriptWsBridgeInstalled) return;
+  if (!isMeetingPilotUrl(location.href)) return;
+  ringCentralTranscriptWsBridgeInstalled = true;
+  const script = document.createElement('script');
+  script.textContent = buildRingCentralTranscriptWsBridgeScript();
+  (document.documentElement || document.head || document.body).appendChild(script);
+  script.remove();
+}
+
+async function emitRingCentralTranscriptFromWsEvent(
+  event: RingCentralTranscriptWsEvent,
+): Promise<void> {
+  if (!runtimeConfig.ringCentralTranscriptEnabled) return;
+  const context = getMeetingPageContext();
+  if (!context) return;
+  const text = normalizeText(event.text);
+  if (!shouldKeepRingCentralTranscriptText(text)) return;
+  const ts = Number.isFinite(event.ts) ? Number(event.ts) : Date.now();
+  const speaker = normalizeTranscriptSpeaker(event.speaker || '');
+  const id = `rc-transcript-ws-${context.meetingId}-${ts}-${simpleTranscriptHash(
+    `${speaker}:${text}`,
+  )}`;
+  const textSignature = simpleTranscriptHash(text);
+  if (seenRingCentralTranscriptChunks.get(id) === textSignature) return;
+  seenRingCentralTranscriptChunks.set(id, textSignature);
+  lastRingCentralTranscriptServiceAvailable = true;
+  await chrome.runtime
+    .sendMessage({
+      type: 'MEETING_PILOT_RINGCENTRAL_TRANSCRIPT_STATUS',
+      tabId: 0,
+      meetingId: context.meetingId,
+      enabled: true,
+      available: true,
+      active: true,
+      lastSeenAt: Date.now(),
+      latestChunkId: id,
+    })
+    .catch(() => undefined);
+  await chrome.runtime
+    .sendMessage({
+      type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+      tabId: 0,
+      transcriptChunk: {
+        id,
+        speaker,
+        text,
+        ts,
+        source: 'ringcentral_transcript',
+        lowConfidence: event.final === false,
+      },
+    })
+    .catch(() => undefined);
 }
 
 function hideMeetingPilotFloatingIconTemporarily(): void {
@@ -3583,23 +3984,41 @@ function scheduleSync(reason: string): void {
   }, DEBOUNCE_MS);
 }
 
+function scheduleTranscriptSync(_reason: string): void {
+  if (!runtimeConfig.enabled || !runtimeConfig.ringCentralTranscriptEnabled) {
+    return;
+  }
+  if (!isMeetingPilotUrl(location.href)) return;
+  window.clearTimeout(transcriptDebounceTimer);
+  transcriptDebounceTimer = window.setTimeout(() => {
+    const context = getMeetingPageContext();
+    if (context) {
+      void emitRingCentralTranscriptFromDom(context);
+    }
+  }, Math.min(DEBOUNCE_MS, 500));
+}
+
 function installObservers(): void {
   if (!runtimeConfig.enabled) return;
   if (!isMeetingPilotUrl(location.href)) return;
+  installRingCentralTranscriptWsBridge();
   if (!mounted) {
     createOverlay();
   }
   if (!runtimeConfig.autoDetect && runtimeConfig.entryMode === 'manual') {
     renderOverlay(overlayState.snapshot, getMeetingPageContext());
-    return;
   }
   if (observersInstalled) {
     scheduleSync('reinstall');
+    scheduleTranscriptSync('reinstall');
     return;
   }
   observersInstalled = true;
 
-  const observer = new MutationObserver(() => scheduleSync('mutation'));
+  const observer = new MutationObserver(() => {
+    scheduleSync('mutation');
+    scheduleTranscriptSync('mutation');
+  });
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
@@ -3609,15 +4028,44 @@ function installObservers(): void {
 
   window.addEventListener('hashchange', () => scheduleSync('hashchange'));
   window.addEventListener('popstate', () => scheduleSync('popstate'));
-  window.addEventListener('focus', () => scheduleSync('focus'));
+  window.addEventListener('focus', () => {
+    scheduleSync('focus');
+    scheduleTranscriptSync('focus');
+  });
   window.clearInterval(transcriptPollTimer);
   transcriptPollTimer = window.setInterval(
-    () => scheduleSync('transcript-poll'),
+    () => scheduleTranscriptSync('transcript-poll'),
     5000,
   );
 
   scheduleSync('initial');
+  scheduleTranscriptSync('initial');
 }
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
+  const data = event.data as
+    | {
+        source?: string;
+        kind?: string;
+        url?: string;
+        event?: RingCentralTranscriptWsEvent;
+      }
+    | undefined;
+  if (data?.source !== 'meeting-pilot-ringcentral-ws') return;
+  if (data.kind === 'socket') {
+    lastRingCentralTranscriptServiceAvailable = true;
+    lastRingCentralTranscriptServiceEndpoint = String(data.url || '');
+    scheduleTranscriptSync('ws-socket');
+    return;
+  }
+  if (data.kind === 'transcript' && data.event) {
+    void emitRingCentralTranscriptFromWsEvent({
+      ...data.event,
+      url: data.url,
+    });
+  }
+});
 
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.type === 'MEETING_PILOT_SESSION_SNAPSHOT') {

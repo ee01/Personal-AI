@@ -78,8 +78,10 @@ Use `.env.development` first, then `.env`, then fall back to the literal id abov
 
 - Extension origin: `chrome-extension://$HARNESS_EXTENSION_ID`
 - Common pages: `popup.html`, `options.html`, `meeting-sidepanel.html`, `meeting-panorama.html`
+- Treat webpage-mcp as a real-browser control surface, not a simulated or read-only browser. It operates the user's actual Chrome/Canary profile and tabs, so prefer inspecting an already-open relevant tab before opening or navigating pages.
 - If webpage-mcp can inspect Chrome extension pages in the current environment, open or select the page by id
 - If Chrome internal / extension URLs are redacted or unsupported by the active webpage-mcp tool, use a Playwright persistent context loaded from `dist/`, or ask the user to open the exact extension page and continue from the available tab
+- If webpage-mcp is unavailable or cannot inspect the needed active Chrome/Canary page, and the task still needs the user's real browser/profile state, fall back to narrow AppleScript probes first. Prefer read-only tab URL inspection and small `execute javascript` checks in the target browser (`Google Chrome Canary` or `Google Chrome`). Do not use AppleScript as a replacement for reproducible E2E verification; use Playwright for rebuilt-extension validation.
 - If validating the user's already-installed dev extension, do not stop at "please reload the extension" when browser control is available:
   - Open or ask the user to open `chrome://extensions/?id=$HARNESS_EXTENSION_ID`
   - Reload the unpacked extension from the extension details page
@@ -234,11 +236,20 @@ When modifying `src/scheduled-messages/app-script-template.gs`:
 - **Bug fixes**: Increment patch version (e.g., 2.0.0 → 2.0.1)
 - **New features**: Increment minor version (e.g., 2.0.1 → 2.1.0)
 - **Breaking changes**: Increment major version (e.g., 2.1.0 → 3.0.0)
+- Mirror the current `APP_SCRIPT_VERSION` and `APP_SCRIPT_LAST_UPDATED` into `docs/features/scheduled_messages_manager.md`, and keep `tools/verify-appscript-auto-update.ts` passing.
 
 ### Documentation
 - When making a large feature change, user-visible behavior change, or meaningful logic/ranking/data-contract change, check the relevant file under `docs/features/` and update it in the same task when the feature behavior or boundary changed
-- When discussing features in `docs/`, check if updates should be reflected in `.mdc` files
-- For `google_slides_analyzer` changes, update `docs/features/google_slides_analyzer.mdc`
+- Keep `docs/features/` for current product feature docs. Do not add rule-only `.mdc`, compatibility-pointer, quick-guide, or implementation-summary docs there; merge durable agent rules into `AGENT.md` and merge valid user-visible behavior into the primary feature `.md`.
+- When a feature described in `docs/progressing/` is implemented, summarize the completed behavior as key feature points in the appropriate `docs/features/` document, then delete the related `docs/progressing/` planning notes. If the feature has an associated HTML demo, move that demo into `docs/demo/`.
+- Feature docs under `docs/features/` should explain not only what the feature does, but how it decides what to show or do. For each product feature doc, include near the top a plain-language `大白话运行逻辑` / equivalent section that answers:
+  - what the feature is trying to decide for the user
+  - what inputs or data sources influence the result
+  - which factors matter most, in rough priority order
+  - what gets filtered, gated, delayed, or requires user confirmation
+- If a feature uses scoring, ranking, recall, rules, thresholds, routing, or multiple data sources, include a necessary implementation-logic section after the plain-language summary. Keep formulas/tables only where they help maintainers, and put the user-readable summary before technical details. If there is no fixed source weight, say so explicitly and describe the actual allowlist, gate, priority, or fallback mechanism instead.
+- Avoid feature docs that are only bullet lists of capabilities. Each current feature doc should include: product boundary, primary user flow, important data sources, decision/gating logic, safety/privacy defaults, key source-of-truth files or APIs, and minimal validation guidance.
+- For `google_slides_analyzer` changes, keep `docs/features/google_slides_analyzer.md` concise and current. Verify invalid row/column indexes are not sent, cell replacement uses `deleteText.textRange.type = ALL` plus `insertText.insertionIndex = 0`, review windows use constrained `postMessage` origins, default selections are field-level, review and blocked queues show before/after plus rationale, partial-success results keep skipped reasons visible, writeback selection is locked while pending, and risk detection does not treat negated phrases, open statuses, closed high-priority issues, or `medium` risk as normal.
 
 ## Language Preference
 

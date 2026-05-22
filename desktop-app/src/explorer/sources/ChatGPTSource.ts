@@ -14,6 +14,7 @@ import { ExplorerExtractor } from '../extractor.js';
 import type {
   ExplorationCursor,
   ExplorerTransportStatus,
+  ExplorerRunSummary,
   RawMessageRecord,
 } from '../types.js';
 
@@ -445,7 +446,7 @@ export class ChatGPTSource {
     return { url, opened: true, implemented: true };
   }
 
-  async runNow(): Promise<{ insertedCount?: number; implemented?: boolean }> {
+  async runNow(): Promise<Partial<ExplorerRunSummary> & { implemented?: boolean }> {
     const settings = this.settingsStore.getSettings().explorer;
     const accessToken = await this.client.getAccessToken();
     let conversations: ChatGPTConversationSummary[];
@@ -491,7 +492,7 @@ export class ChatGPTSource {
       );
     }
 
-    await this.extractor.extractPendingMessages({
+    const extraction = await this.extractor.extractPendingMessages({
       source: 'chatgpt',
       defaultScope: settings.chatgpt.defaultScope,
       autoClassify: settings.autoClassify,
@@ -501,7 +502,14 @@ export class ChatGPTSource {
       await this.cursorStore.upsert(cursor);
     }
 
-    return { insertedCount, implemented: true };
+    return {
+      insertedCount,
+      extractedConversationCount: extraction.conversationCount,
+      extractedMessageCount: extraction.messageCount,
+      artifactCount: extraction.artifactCount,
+      skippedConversationCount: extraction.skippedConversationCount,
+      implemented: true,
+    };
   }
 
   async close(): Promise<void> {

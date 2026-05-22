@@ -5,7 +5,7 @@ import {
   buildMeetingPilotContextRecallRequest,
   contextMatchToMeetingPilotMemoryRef,
   recallItemToMeetingPilotMemoryRef,
-} from '../memoryPresentation';
+} from '../memoryPresentation.ts';
 import type {
   ContextRecallMatch,
   RecallItem,
@@ -36,23 +36,49 @@ function contextMatch(partial: Partial<ContextRecallMatch>): ContextRecallMatch 
 test('buildMeetingPilotContextRecallRequest: builds passive request with cleaned text', () => {
   const req = buildMeetingPilotContextRecallRequest({
     excludeMeetingId: 'm-current',
+    meetingUrl: 'https://v.ringcentral.com/conf/on/m-current',
     meetingTitle: 'Project Sync',
+    participants: ['Alice', 'Bob'],
     currentTopic: 'Launch',
     summary: 'Discussing rollout',
     transcriptSummary:
       'Alice: ship Friday.\nMeeting Pilot is recording this meeting.\nBob: agreed.',
+    actionSummary: 'Ship Friday · owner: Alice',
+    decisionSummary: 'Decision: ship Friday.',
     meetingMetadata: 'Meeting: Project Sync',
   });
+  assert.ok(req);
   assert.equal(req.surface, 'meeting_passive');
   assert.equal(req.contextType, 'meeting');
   assert.equal(req.title, 'Project Sync');
   assert.match(req.primaryText || '', /Alice: ship Friday/);
+  assert.match(req.primaryText || '', /Decision: ship Friday/);
   assert.doesNotMatch(req.primaryText || '', /Meeting Pilot is recording/i);
   assert.equal(req.limit, 3);
-  assert.deepEqual(req.sourceTypes, ['meeting', 'manual', 'web', 'glip']);
+  assert.deepEqual(req.sourceTypes, [
+    'meeting',
+    'manual',
+    'web',
+    'glip',
+    'jira',
+    'calendar',
+    'markdown',
+  ]);
+  assert.equal((req as any).sourceContext.meetingId, 'm-current');
+  assert.deepEqual((req as any).exclude.meetingIds, ['m-current']);
 });
 
-test('contextMatchToMeetingPilotMemoryRef: forwards exploreLink and whyMatched', () => {
+test('buildMeetingPilotContextRecallRequest: returns null without real meeting signal', () => {
+  const req = buildMeetingPilotContextRecallRequest({
+    excludeMeetingId: 'm-current',
+    meetingTitle: 'RingCentral Video',
+    currentTopic: 'Live discussion',
+    transcriptSummary: 'Meeting Pilot is recording this meeting.',
+  });
+  assert.equal(req, null);
+});
+
+test('contextMatchToMeetingPilotMemoryRef: forwards v2 presentation fields', () => {
   const ref = contextMatchToMeetingPilotMemoryRef(
     contextMatch({
       id: 'mem-1',
@@ -61,13 +87,36 @@ test('contextMatchToMeetingPilotMemoryRef: forwards exploreLink and whyMatched',
       sourceUrl: 'https://example.com/x',
       exploreLink: '#/thread/abc?focus=mem-1',
       whyMatched: 'matched topic launch',
+      whyRelevant: ['项目：Falcon', '主题：ship Friday'],
+      matchedAnchors: { projects: ['Falcon'], topics: ['ship Friday'] },
+      uiSummary: '历史决策提醒：之前决定周五发布。',
+      reasonType: 'prior_decision',
+      evidenceRole: 'decision',
+      displayPriority: 'p1',
+      timestamp: 1_700_000_000,
+      links: [{ label: '打开来源', url: 'https://example.com/x' }],
+      metadata: { meetingId: 'm-old' },
+      mergedCount: 2,
+      mergedIds: ['mem-1', 'mem-2'],
+      sourceClusterKey: 'meeting:m-old',
     }),
   );
   assert.equal(ref.id, 'mem-1');
+  assert.equal(ref.cueTitle, 'Decision: ship Friday.');
+  assert.equal(ref.cueBody, '历史决策提醒：之前决定周五发布。');
+  assert.equal(ref.relationLabel, '历史决策');
+  assert.equal(ref.evidenceRoleLabel, '历史决策');
+  assert.equal(ref.displayPriority, 'p1');
+  assert.equal(ref.timestamp, 1_700_000_000);
+  assert.equal(ref.mergedCount, 2);
   assert.equal(ref.snippet, 'Decision: ship Friday.');
   assert.equal(ref.exploreLink, '#/thread/abc?focus=mem-1');
   assert.equal(ref.whyMatched, 'matched topic launch');
+  assert.deepEqual(ref.whyRelevant, ['项目：Falcon', '主题：ship Friday']);
+  assert.deepEqual(ref.matchedAnchors, { projects: ['Falcon'], topics: ['ship Friday'] });
   assert.equal(ref.sourceUrl, 'https://example.com/x');
+  assert.deepEqual(ref.links, [{ label: '打开来源', url: 'https://example.com/x' }]);
+  assert.deepEqual(ref.metadata, { meetingId: 'm-old' });
 });
 
 test('contextMatchToMeetingPilotMemoryRef: blacklists pure boilerplate snippet', () => {

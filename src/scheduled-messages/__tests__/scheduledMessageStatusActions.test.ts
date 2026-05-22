@@ -11,6 +11,7 @@ test('scheduled message status action pauses active messages', () => {
     canToggle: true,
     nextStatus: 'Paused',
     buttonLabel: '暂停',
+    buttonIcon: '⏸️',
     title: '暂停后执行器会跳过此消息',
   });
 });
@@ -20,6 +21,7 @@ test('scheduled message status action resumes paused messages', () => {
     canToggle: true,
     nextStatus: 'Active',
     buttonLabel: '恢复',
+    buttonIcon: '▶️',
     title: '恢复后消息会按当前排程继续执行',
   });
 });

@@ -71,6 +71,7 @@ export class ExplorerExtractor {
   }): Promise<{
     conversationCount: number;
     messageCount: number;
+    artifactCount: number;
     skippedConversationCount: number;
   }> {
     const pendingMessages = this.rawStore.listPendingMessages({
@@ -80,6 +81,7 @@ export class ExplorerExtractor {
       return {
         conversationCount: 0,
         messageCount: 0,
+        artifactCount: 0,
         skippedConversationCount: 0,
       };
     }
@@ -94,6 +96,7 @@ export class ExplorerExtractor {
 
     let conversationCount = 0;
     let messageCount = 0;
+    let artifactCount = 0;
     let skippedConversationCount = 0;
 
     for (const messages of messagesByConversation.values()) {
@@ -110,7 +113,7 @@ export class ExplorerExtractor {
             text: message.content,
           })),
         });
-        this.persistConversationArtifacts(
+        artifactCount += this.persistConversationArtifacts(
           options.source,
           messages[0]!.conversationId,
           response,
@@ -134,7 +137,12 @@ export class ExplorerExtractor {
       messageCount += messages.length;
     }
 
-    return { conversationCount, messageCount, skippedConversationCount };
+    return {
+      conversationCount,
+      messageCount,
+      artifactCount,
+      skippedConversationCount,
+    };
   }
 
   private persistConversationArtifacts(
@@ -142,8 +150,8 @@ export class ExplorerExtractor {
     conversationId: string,
     response: ExtractFromChatResponse,
     extractedAt: string,
-  ): void {
-    this.rawStore.replaceConversationArtifacts({
+  ): number {
+    return this.rawStore.replaceConversationArtifacts({
       source,
       conversationId,
       extractedAt,

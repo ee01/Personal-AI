@@ -261,6 +261,31 @@
               <div class="quote-body">{{ contextCard.bullets[0] || selectedPerson.reason }}</div>
             </div>
 
+            <div :class="['privacy-strip', contextCard.privacySummary.sensitiveIncluded ? 'warn' : '']">
+              <div>
+                <strong>{{ contextPrivacyTitle }}</strong>
+                <p>{{ contextPrivacySummaryText }}</p>
+              </div>
+              <button
+                v-if="!contextCard.privacySummary.sensitiveIncluded && contextHiddenSensitiveCount > 0"
+                class="tiny-btn"
+                type="button"
+                :disabled="isContextLoading"
+                @click="setContextSensitiveIncluded(true)"
+              >
+                临时包含敏感上下文
+              </button>
+              <button
+                v-else-if="contextCard.privacySummary.sensitiveIncluded"
+                class="tiny-btn"
+                type="button"
+                :disabled="isContextLoading"
+                @click="setContextSensitiveIncluded(false)"
+              >
+                恢复默认隐藏
+              </button>
+            </div>
+
             <div class="panel-grid">
               <section class="panel">
                 <div class="panel-head">
@@ -394,22 +419,113 @@
             <div v-if="meetingBrief" class="panel full">
               <div class="panel-head">
                 <h4><span class="panel-icon">M</span>{{ meetingBrief.title }}</h4>
-                <span>{{ meetingBrief.matrix.length }} 人</span>
+                <button class="tiny-btn primary" type="button" @click="copyMeetingBrief">
+                  复制简报
+                </button>
               </div>
-              <div class="matrix">
-                <div class="matrix-head">
-                  <span>人物</span>
-                  <span>上下文</span>
-                  <span>Open loop</span>
-                  <span>建议问法</span>
-                </div>
-                <div v-for="row in meetingBrief.matrix" :key="row.person" class="matrix-row">
-                  <strong>{{ row.person }}</strong>
-                  <p>{{ row.recentContext }}</p>
-                  <p>{{ row.openLoop }}</p>
-                  <p>{{ row.suggestedAsk }}</p>
-                </div>
+
+              <div class="brief-coverage">
+                <article class="coverage-card">
+                  <span>匹配参会人</span>
+                  <strong>
+                    {{ meetingBrief.coverage.matchedAttendees }}/{{ meetingBrief.coverage.totalAttendees }}
+                  </strong>
+                </article>
+                <article class="coverage-card">
+                  <span>可引用证据</span>
+                  <strong>{{ meetingBrief.coverage.evidenceRefs }}</strong>
+                </article>
+                <article class="coverage-card warn">
+                  <span>需会中确认</span>
+                  <strong>{{ meetingBrief.coverage.unmatchedAttendees }}</strong>
+                </article>
+                <p class="coverage-note">{{ meetingBrief.coverage.coverageNote }}</p>
               </div>
+
+              <div class="attendee-brief-grid">
+                <article
+                  v-for="attendee in meetingBrief.attendees"
+                  :key="`${attendee.displayName}:${attendee.email || ''}`"
+                  :class="['attendee-brief-card', attendee.coverageState]"
+                >
+                  <div class="attendee-brief-head">
+                    <div>
+                      <strong>{{ attendee.personName || attendee.displayName }}</strong>
+                      <span v-if="attendee.email">{{ attendee.email }}</span>
+                    </div>
+                    <span :class="['chip', meetingCoverageTone(attendee.coverageState)]">
+                      {{ meetingCoverageLabel(attendee.coverageState) }}
+                    </span>
+                  </div>
+
+                  <div class="match-row">
+                    <span :class="['chip', matchTone(attendee.matchedBy)]">
+                      {{ matchLabel(attendee.matchedBy) }}
+                    </span>
+                    <span>{{ attendee.matchReason }}</span>
+                    <span v-if="attendee.matchedBy !== 'none'">
+                      {{ Math.round(attendee.matchConfidence * 100) }}%
+                    </span>
+                  </div>
+
+                  <p>{{ attendee.summary }}</p>
+
+                  <div v-if="attendee.openLoops.length > 0" class="brief-subsection">
+                    <strong>Open loop</strong>
+                    <button
+                      v-for="loop in attendee.openLoops.slice(0, 2)"
+                      :key="loop.id"
+                      type="button"
+                      class="brief-evidence"
+                      @click="openEvidence(loop.evidenceRef)"
+                    >
+                      <span>{{ formatDate(loop.timestamp) }}</span>
+                      <p>{{ loop.snippet }}</p>
+                    </button>
+                  </div>
+
+                  <div class="brief-subsection">
+                    <strong>建议问法</strong>
+                    <p
+                      v-for="question in attendee.suggestedQuestions"
+                      :key="question"
+                      class="question-line"
+                    >
+                      {{ question }}
+                    </p>
+                  </div>
+
+                  <div v-if="attendee.evidenceRefs.length > 0" class="evidence-actions">
+                    <button
+                      v-for="evidence in attendee.evidenceRefs.slice(0, 3)"
+                      :key="`${evidence.sourceKind}:${evidence.sourceId}`"
+                      class="tiny-btn"
+                      type="button"
+                      @click="openEvidence(evidence)"
+                    >
+                      证据 {{ evidence.sourceKind }}
+                    </button>
+                  </div>
+                </article>
+              </div>
+
+              <details class="matrix-details">
+                <summary>查看矩阵</summary>
+                <div class="matrix">
+                  <div class="matrix-head">
+                    <span>人物</span>
+                    <span>匹配</span>
+                    <span>上下文</span>
+                    <span>建议问法</span>
+                  </div>
+                  <div v-for="row in meetingBrief.matrix" :key="row.person" class="matrix-row">
+                    <strong>{{ row.person }}</strong>
+                    <p>{{ row.matchStatus }}</p>
+                    <p>{{ row.recentContext }}</p>
+                    <p>{{ row.suggestedAsk }}</p>
+                  </div>
+                </div>
+              </details>
             </div>
           </template>
 
@@ -504,6 +620,14 @@
                 {{ option.label }}
               </button>
             </div>
+            <div class="review-summary">
+              <span>{{ reviewTotal }} 条当前筛选</span>
+              <span>{{ pendingReviewCount }} 条待确认</span>
+              <span>确认后写入人物画像，稍后项到期会重新回到待确认。</span>
+            </div>
+            <div v-if="reviewItems.length === 0" class="empty-state compact">
+              当前筛选下没有关系事实需要处理。
+            </div>
             <div class="review-grid">
               <article
                 v-for="item in reviewItems"
@@ -511,22 +635,55 @@
                 class="review-card"
               >
                 <div class="item-row">
-                  <strong>{{ item.title }}</strong>
+                  <div class="review-title">
+                    <strong>{{ item.title }}</strong>
+                    <span>{{ item.personName }} · {{ item.proposedKey }}</span>
+                  </div>
                   <span :class="['chip', reviewTone(item.status)]">
                     {{ reviewStatusLabel(item.status) }}
                   </span>
                 </div>
                 <p>{{ item.reason }}</p>
-                <textarea
-                  v-model="reviewDrafts[item.id]"
-                  :disabled="item.status !== 'pending' && item.status !== 'snoozed'"
-                  rows="3"
-                ></textarea>
+                <div class="review-meta">
+                  <span :class="['chip', priorityTone(item.priority)]">
+                    {{ priorityLabel(item.priority) }}
+                  </span>
+                  <span>{{ formatConfidence(item.confidence) }}</span>
+                  <span v-if="formatReviewDue(item)">{{ formatReviewDue(item) }}</span>
+                </div>
+                <label class="review-field">
+                  建议写入内容
+                  <textarea
+                    v-model="reviewDrafts[item.id]"
+                    :disabled="!canActOnReviewItem(item)"
+                    rows="3"
+                  ></textarea>
+                </label>
+                <label class="review-field">
+                  复核备注
+                  <textarea
+                    v-model="reviewNoteDrafts[item.id]"
+                    :disabled="!canActOnReviewItem(item)"
+                    rows="2"
+                    placeholder="可记录确认来源、驳回原因或稍后原因"
+                  ></textarea>
+                </label>
+                <div v-if="item.evidenceRefs.length > 0" class="review-evidence">
+                  <button
+                    v-for="evidence in item.evidenceRefs.slice(0, 3)"
+                    :key="`${item.id}:${evidence.sourceKind}:${evidence.sourceId}`"
+                    type="button"
+                    class="tiny-btn"
+                    @click="openEvidence(evidence)"
+                  >
+                    {{ evidenceLabel(evidence) }}
+                  </button>
+                </div>
                 <div class="review-actions">
                   <button
                     class="tiny-btn primary"
                     type="button"
-                    :disabled="isReviewActionLoading(item.id)"
+                    :disabled="!canActOnReviewItem(item) || isReviewActionLoading(item.id)"
                     @click="applyReviewAction(item, 'confirm')"
                   >
                     确认
@@ -534,15 +691,15 @@
                   <button
                     class="tiny-btn"
                     type="button"
-                    :disabled="isReviewActionLoading(item.id)"
+                    :disabled="!canActOnReviewItem(item) || isReviewActionLoading(item.id)"
                     @click="applyReviewAction(item, 'snooze')"
                   >
-                    稍后
+                    稍后 7 天
                   </button>
                   <button
                     class="tiny-btn danger"
                     type="button"
-                    :disabled="isReviewActionLoading(item.id)"
+                    :disabled="!canActOnReviewItem(item) || isReviewActionLoading(item.id)"
                     @click="applyReviewAction(item, 'reject')"
                   >
                     驳回
@@ -558,24 +715,38 @@
         <section class="side-panel">
           <div class="side-head">
             <h4>确认队列</h4>
-            <button type="button" @click="activeTab = 'review'">查看全部</button>
+            <button type="button" @click="openPendingReviewTab">查看全部</button>
           </div>
-          <div v-if="reviewItems.length === 0" class="muted-line">
+          <div v-if="pendingReviewItems.length === 0" class="muted-line">
             当前没有需要确认的关系事实。
           </div>
           <article
-            v-for="item in reviewItems.slice(0, 3)"
+            v-for="item in pendingReviewItems.slice(0, 3)"
             :key="item.id"
             class="side-review"
           >
             <strong>{{ item.personName }}</strong>
             <p>{{ item.proposedValue }}</p>
+            <div class="review-meta compact">
+              <span>{{ formatConfidence(item.confidence) }}</span>
+              <span>{{ item.evidenceRefs.length }} 条证据</span>
+            </div>
             <div class="review-actions">
-              <button class="tiny-btn primary" type="button" @click="applyReviewAction(item, 'confirm')">
+              <button
+                class="tiny-btn primary"
+                type="button"
+                :disabled="isReviewActionLoading(item.id)"
+                @click="applyReviewAction(item, 'confirm')"
+              >
                 确认
               </button>
-              <button class="tiny-btn" type="button" @click="applyReviewAction(item, 'snooze')">
-                稍后
+              <button
+                class="tiny-btn"
+                type="button"
+                :disabled="isReviewActionLoading(item.id)"
+                @click="applyReviewAction(item, 'snooze')"
+              >
+                稍后 7 天
               </button>
             </div>
           </article>
@@ -664,10 +835,15 @@ const peopleResponse = ref<RelationshipPeopleResponse | null>(null);
 const selectedPersonId = ref('');
 const activeTab = ref<DetailTab>('context');
 const contextCard = ref<RelationshipContextCard | null>(null);
+const contextIncludeSensitive = ref(false);
 const graph = ref<RelationshipGraph | null>(null);
 const reviewStatus = ref<ReviewStatusFilter>('pending');
 const reviewItems = ref<RelationshipReviewItem[]>([]);
+const pendingReviewItems = ref<RelationshipReviewItem[]>([]);
+const reviewTotal = ref(0);
+const pendingReviewTotal = ref(0);
 const reviewDrafts = ref<Record<string, string>>({});
+const reviewNoteDrafts = ref<Record<string, string>>({});
 const reviewActionLoadingId = ref('');
 const copyMessage = ref('');
 const consolidationResult = ref<RelationshipConsolidationResult | null>(null);
@@ -698,9 +874,35 @@ const people = computed(() => peopleResponse.value?.items || []);
 const selectedPerson = computed(() =>
   people.value.find((person) => person.id === selectedPersonId.value),
 );
-const pendingReviewCount = computed(
-  () => reviewItems.value.filter((item) => item.status === 'pending').length,
+const pendingReviewCount = computed(() =>
+  Math.max(pendingReviewTotal.value, pendingReviewItems.value.length),
 );
+const contextHiddenSensitiveCount = computed(() => {
+  const summary = contextCard.value?.privacySummary;
+  if (!summary) return 0;
+  return (
+    summary.redactedAliases +
+    summary.redactedFacts +
+    summary.redactedRelationshipHints +
+    summary.redactedEvidenceRefs +
+    summary.redactedOpenLoops +
+    summary.redactedRetrievalHints
+  );
+});
+const contextPrivacyTitle = computed(() => {
+  const summary = contextCard.value?.privacySummary;
+  if (summary?.sensitiveIncluded) return '已临时包含敏感上下文';
+  if (contextHiddenSensitiveCount.value > 0) return '已隐藏敏感上下文';
+  return '默认不含敏感上下文';
+});
+const contextPrivacySummaryText = computed(() => {
+  const summary = contextCard.value?.privacySummary;
+  if (summary?.sensitiveIncluded) {
+    return '这张卡包含敏感事实或证据，复制给外部 AI 前需要人工复核。';
+  }
+  if (summary?.redactionNote) return summary.redactionNote;
+  return '这张卡没有检测到需要默认隐藏的人物上下文。';
+});
 const generatedPeopleCount = computed(
   () => people.value.filter((person) => person.projectionSource !== 'lazy').length,
 );
@@ -727,7 +929,7 @@ onMounted(() => {
 });
 
 async function refreshAll() {
-  await Promise.all([loadPeople(), loadReviewItems(), loadGraph()]);
+  await Promise.all([loadPeople(), loadReviewItems(), loadPendingReviewItems(), loadGraph()]);
 }
 
 async function loadPeople() {
@@ -750,6 +952,7 @@ async function loadPeople() {
     if (selectedPersonId.value) {
       const person = response.items.find((item) => item.id === selectedPersonId.value);
       syncDefaultInputs(person);
+      contextIncludeSensitive.value = false;
       await loadContextCard(selectedPersonId.value);
     } else {
       contextCard.value = null;
@@ -768,6 +971,7 @@ async function loadContextCard(personId: string) {
       personId,
       surface: 'memory_exploring_person_tab',
       tokenBudget: 1200,
+      includeSensitive: contextIncludeSensitive.value,
     });
   } catch (error: any) {
     errorMessage.value = error?.message || '生成上下文卡失败';
@@ -792,13 +996,35 @@ async function loadReviewItems() {
       limit: 24,
     });
     reviewItems.value = response.items;
-    for (const item of response.items) {
-      if (!reviewDrafts.value[item.id]) {
-        reviewDrafts.value[item.id] = item.proposedValue;
-      }
-    }
+    reviewTotal.value = response.total;
+    syncReviewDrafts(response.items);
   } catch (error: any) {
     errorMessage.value = error?.message || '加载审核项失败';
+  }
+}
+
+async function loadPendingReviewItems() {
+  try {
+    const response = await client.getRelationshipReviewItems({
+      status: 'pending',
+      limit: 6,
+    });
+    pendingReviewItems.value = response.items;
+    pendingReviewTotal.value = response.total;
+    syncReviewDrafts(response.items);
+  } catch (error: any) {
+    errorMessage.value = error?.message || '加载待确认项失败';
+  }
+}
+
+function syncReviewDrafts(items: RelationshipReviewItem[]) {
+  for (const item of items) {
+    if (!reviewDrafts.value[item.id]) {
+      reviewDrafts.value[item.id] = item.proposedValue;
+    }
+    if (!reviewNoteDrafts.value[item.id]) {
+      reviewNoteDrafts.value[item.id] = item.userNote || '';
+    }
   }
 }
 
@@ -834,10 +1060,19 @@ function setReviewStatus(next: ReviewStatusFilter) {
   void loadReviewItems();
 }
 
+function openPendingReviewTab() {
+  activeTab.value = 'review';
+  if (reviewStatus.value !== 'pending') {
+    reviewStatus.value = 'pending';
+    void loadReviewItems();
+  }
+}
+
 function selectPerson(person: RelationshipPersonSummary) {
   selectedPersonId.value = person.id;
   syncDefaultInputs(person);
   activeTab.value = 'context';
+  contextIncludeSensitive.value = false;
   void loadContextCard(person.id);
 }
 
@@ -853,6 +1088,13 @@ function syncDefaultInputs(person?: RelationshipPersonSummary) {
   }
   if (!meetingTitle.value.trim()) {
     meetingTitle.value = `与 ${person.name} 同步`;
+  }
+}
+
+function setContextSensitiveIncluded(next: boolean) {
+  contextIncludeSensitive.value = next;
+  if (selectedPersonId.value) {
+    void loadContextCard(selectedPersonId.value);
   }
 }
 
@@ -900,9 +1142,15 @@ async function applyReviewAction(
         : undefined;
     await client.updateRelationshipReviewItem(item.id, action, {
       editedValue: reviewDrafts.value[item.id] || item.proposedValue,
+      userNote: reviewNoteDrafts.value[item.id] || undefined,
       snoozeUntil,
     });
-    await Promise.all([loadReviewItems(), loadPeople(), loadGraph()]);
+    await Promise.all([
+      loadReviewItems(),
+      loadPendingReviewItems(),
+      loadPeople(),
+      loadGraph(),
+    ]);
   } catch (error: any) {
     errorMessage.value = error?.message || '更新审核项失败';
   } finally {
@@ -914,6 +1162,10 @@ function isReviewActionLoading(id: string) {
   return reviewActionLoadingId.value === id;
 }
 
+function canActOnReviewItem(item: RelationshipReviewItem) {
+  return item.status === 'pending' || item.status === 'snoozed';
+}
+
 async function copyContextPackage() {
   if (!contextCard.value) return;
   await copyText(contextCard.value.contextMd, '已复制上下文包');
@@ -922,6 +1174,37 @@ async function copyContextPackage() {
 async function copyAssistantDraft() {
   if (!assistantDraft.value) return;
   await copyText(assistantDraft.value.draftText, '已复制回复草稿');
+}
+
+async function copyMeetingBrief() {
+  if (!meetingBrief.value) return;
+  const brief = meetingBrief.value;
+  const lines = [
+    `# ${brief.title}`,
+    '',
+    brief.coverage.coverageNote,
+    '',
+    `匹配: ${brief.coverage.matchedAttendees}/${brief.coverage.totalAttendees}；证据: ${brief.coverage.evidenceRefs}；需确认: ${brief.coverage.unmatchedAttendees}`,
+    '',
+  ];
+
+  for (const attendee of brief.attendees) {
+    lines.push(
+      `## ${attendee.personName || attendee.displayName}`,
+      `- 匹配: ${attendee.matchReason} (${Math.round(attendee.matchConfidence * 100)}%)`,
+      `- 状态: ${meetingCoverageLabel(attendee.coverageState)}`,
+      `- 上下文: ${attendee.summary}`,
+    );
+    if (attendee.openLoops[0]) {
+      lines.push(`- Open loop: ${attendee.openLoops[0].snippet}`);
+    }
+    if (attendee.suggestedQuestions[0]) {
+      lines.push(`- 建议问法: ${attendee.suggestedQuestions[0]}`);
+    }
+    lines.push('');
+  }
+
+  await copyText(lines.join('\n'), '已复制会议简报');
 }
 
 async function copyText(text: string, successMessage: string) {
@@ -1038,6 +1321,95 @@ function reviewTone(status: RelationshipReviewStatus) {
     snoozed: 'blue',
   };
   return tones[status];
+}
+
+function priorityLabel(priority: string) {
+  if (priority === 'high') return '高优先级';
+  if (priority === 'low') return '低优先级';
+  return '普通优先级';
+}
+
+function priorityTone(priority: string) {
+  if (priority === 'high') return 'warn';
+  if (priority === 'low') return 'muted';
+  return 'blue';
+}
+
+function formatConfidence(value: number | undefined) {
+  return `置信度 ${Math.round((value ?? 0) * 100)}%`;
+}
+
+function formatReviewDue(item: RelationshipReviewItem) {
+  if (item.status === 'snoozed' && item.snoozeUntil) {
+    return `稍后至 ${formatDateTime(item.snoozeUntil)}`;
+  }
+  if (item.confirmedAt) return `确认于 ${formatDateTime(item.confirmedAt)}`;
+  if (item.rejectedAt) return `驳回于 ${formatDateTime(item.rejectedAt)}`;
+  return '';
+}
+
+function formatDateTime(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function evidenceLabel(evidence: RelationshipEvidenceRef) {
+  const labels: Record<RelationshipEvidenceRef['sourceKind'], string> = {
+    message: '消息证据',
+    entity_property: '人物事实',
+    relationship: '关系边',
+  };
+  return labels[evidence.sourceKind] || '证据';
+}
+
+function meetingCoverageLabel(
+  state: RelationshipMeetingBrief['attendees'][number]['coverageState'],
+) {
+  const labels: Record<
+    RelationshipMeetingBrief['attendees'][number]['coverageState'],
+    string
+  > = {
+    ready: '证据就绪',
+    thin: '上下文较薄',
+    missing: '未匹配',
+  };
+  return labels[state];
+}
+
+function meetingCoverageTone(
+  state: RelationshipMeetingBrief['attendees'][number]['coverageState'],
+) {
+  const tones: Record<
+    RelationshipMeetingBrief['attendees'][number]['coverageState'],
+    string
+  > = {
+    ready: 'ok',
+    thin: 'warn',
+    missing: 'danger',
+  };
+  return tones[state];
+}
+
+function matchLabel(matchedBy: RelationshipMeetingBrief['attendees'][number]['matchedBy']) {
+  const labels: Record<RelationshipMeetingBrief['attendees'][number]['matchedBy'], string> = {
+    name: '显示名',
+    alias: '别名',
+    email: '邮箱',
+    email_local_part: '邮箱前缀',
+    none: '未匹配',
+  };
+  return labels[matchedBy];
+}
+
+function matchTone(matchedBy: RelationshipMeetingBrief['attendees'][number]['matchedBy']) {
+  if (matchedBy === 'none') return 'danger';
+  if (matchedBy === 'email_local_part') return 'warn';
+  if (matchedBy === 'email') return 'ok';
+  return 'blue';
 }
 
 function graphNodeStyle(index: number, total: number) {
@@ -1811,6 +2183,34 @@ button {
   font-family: Georgia, serif;
 }
 
+.privacy-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin: 0 0 0.9rem;
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  border-radius: 0.8rem;
+  background: rgba(34, 197, 94, 0.08);
+  padding: 0.75rem 0.85rem;
+}
+
+.privacy-strip.warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.privacy-strip strong {
+  color: #f8fafc;
+}
+
+.privacy-strip p {
+  margin: 0.18rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1968,6 +2368,156 @@ button {
   line-height: 1.55;
 }
 
+.brief-coverage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  padding: 0.85rem 0.85rem 0;
+}
+
+.coverage-card {
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 0.72rem;
+  background: rgba(96, 165, 250, 0.08);
+  padding: 0.75rem;
+}
+
+.coverage-card.warn {
+  border-color: rgba(245, 158, 11, 0.24);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.coverage-card span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.coverage-card strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: #f8fafc;
+  font-size: 1.3rem;
+}
+
+.coverage-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.72rem;
+  background: rgba(8, 14, 32, 0.36);
+  color: #cbd5e1;
+  padding: 0.75rem;
+  line-height: 1.55;
+}
+
+.attendee-brief-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 0.75rem;
+  padding: 0.85rem;
+}
+
+.attendee-brief-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.82rem;
+  background: rgba(8, 14, 32, 0.42);
+  padding: 0.85rem;
+}
+
+.attendee-brief-card.ready {
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.attendee-brief-card.thin {
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.attendee-brief-card.missing {
+  border-color: rgba(239, 68, 68, 0.24);
+}
+
+.attendee-brief-head,
+.match-row,
+.evidence-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.attendee-brief-head {
+  justify-content: space-between;
+}
+
+.attendee-brief-head strong,
+.brief-subsection strong {
+  display: block;
+  color: #f8fafc;
+}
+
+.attendee-brief-head span,
+.match-row,
+.brief-subsection {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.attendee-brief-card > p {
+  color: #cbd5e1;
+  line-height: 1.55;
+}
+
+.match-row {
+  align-items: center;
+}
+
+.brief-subsection {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.brief-evidence {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.46);
+  color: inherit;
+  cursor: pointer;
+  padding: 0.6rem;
+  text-align: left;
+}
+
+.brief-evidence span {
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
+.brief-evidence p,
+.question-line {
+  margin: 0.25rem 0 0;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.evidence-actions {
+  margin-top: auto;
+}
+
+.matrix-details {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.matrix-details summary {
+  cursor: pointer;
+  padding: 0.85rem;
+  color: #bfdbfe;
+  font-weight: 800;
+}
+
 .matrix {
   padding: 0.85rem;
 }
@@ -1975,7 +2525,7 @@ button {
 .matrix-head,
 .matrix-row {
   display: grid;
-  grid-template-columns: 0.75fr 1.2fr 1.2fr 1.2fr;
+  grid-template-columns: 0.75fr 1fr 1.2fr 1.2fr;
   gap: 0.75rem;
   align-items: start;
 }
@@ -2111,18 +2661,64 @@ button {
 }
 
 .review-filter {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
   margin-bottom: 0.85rem;
+}
+
+.review-summary,
+.review-meta,
+.review-evidence {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.review-summary {
+  margin: -0.2rem 0 0.85rem;
+  color: #94a3b8;
+  font-size: 0.78rem;
 }
 
 .review-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
   gap: 0.85rem;
 }
 
 .review-card {
   display: grid;
   gap: 0.65rem;
+}
+
+.review-title {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.review-title span,
+.review-meta {
+  color: #94a3b8;
+  font-size: 0.74rem;
+}
+
+.review-meta.compact {
+  margin-top: 0.45rem;
+}
+
+.review-field {
+  display: grid;
+  gap: 0.35rem;
+  color: #cbd5e1;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.review-evidence {
+  align-items: flex-start;
 }
 
 .review-actions {
@@ -2269,10 +2865,16 @@ button {
   }
 
   .hero,
+  .brief-coverage,
   .panel-grid,
   .detail-metrics,
   .stat-strip {
     grid-template-columns: 1fr;
+  }
+
+  .privacy-strip {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .matrix-head {

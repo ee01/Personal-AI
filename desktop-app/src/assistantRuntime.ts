@@ -254,6 +254,25 @@ function summarizeOutreach(
     firstWaiting?.renderedQuestion ||
     firstPendingApproval?.renderedQuestion ||
     `有 ${total} 条外部询问相关状态需要关注。`;
+  const title =
+    waitingReplyCount > 0 && pendingApprovalCount === 0 && escalatedCount === 0
+      ? STATUS_LABELS.waiting_reply
+      : waitingReplyCount === 0 && pendingApprovalCount > 0 && escalatedCount === 0
+        ? '外部询问待批准发送'
+        : waitingReplyCount === 0 && pendingApprovalCount === 0 && escalatedCount > 0
+          ? '外部询问需升级处理'
+          : '外部询问状态';
+  const detailLines = uniqueNonEmpty([
+    waitingReplyCount > 0 ? `待对方回复：${waitingReplyCount}` : undefined,
+    pendingApprovalCount > 0 ? `待你确认发送：${pendingApprovalCount}` : undefined,
+    escalatedCount > 0 ? `已升级：${escalatedCount}` : undefined,
+  ]);
+  const actionHint =
+    waitingReplyCount === 0 && pendingApprovalCount > 0 && escalatedCount === 0
+      ? '查看待发内容'
+      : waitingReplyCount === 0 && pendingApprovalCount === 0 && escalatedCount > 0
+        ? '处理升级项'
+        : '查看外部询问状态';
 
   const badgeParts: string[] = [];
   if (waitingReplyCount > 0) badgeParts.push(`待回 ${waitingReplyCount}`);
@@ -262,11 +281,12 @@ function summarizeOutreach(
 
   return {
     kind: 'waiting_reply',
-    title: STATUS_LABELS.waiting_reply,
+    title,
     summary,
+    detailLines,
     count: total,
     badgeLabel: badgeParts.join(' / '),
-    actionHint: '继续追问这条状态',
+    actionHint,
     priority: STATUS_PRIORITIES.waiting_reply,
   };
 }
@@ -285,7 +305,7 @@ export function buildAssistantRuntimeSummary(input: AssistantRuntimeBuildInput):
   const topStatus = items[0]
     ? {
         kind: items[0].kind,
-        label: STATUS_LABELS[items[0].kind],
+        label: items[0].title || STATUS_LABELS[items[0].kind],
         count: items[0].count || 1,
         priority: items[0].priority,
       }

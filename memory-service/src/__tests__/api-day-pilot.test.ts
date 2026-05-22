@@ -369,6 +369,476 @@ describe('Day Pilot API', () => {
     expect(body.brief.summary).toContain('暂未发现');
   });
 
+  it('filters low-action calendar noise and cleans dirty calendar titles', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+    const calendarRows = [
+      [
+        'cal-daily-sync-noise',
+        'event-daily-sync-noise',
+        'daily-sync-noise-series',
+        'Calendar event: RCVSDK Daily Sync Description: 我们每天过一下手头task的状态~ Dashboard: https://jira.ringcentral.example/board',
+        'Meeting Link: https://v.ringcentral.example/join/daily Dashboard: https://jira.ringcentral.example/board',
+        current + 900,
+      ],
+      [
+        'cal-nova-daily-noise',
+        'event-nova-daily-noise',
+        'nova-daily-noise-series',
+        'Calendar event: Nova Brandy Daily Description: Barry Li 已邀请您加入 RingCentral Video 会议。 请使用以下链接加入： https://v.ringcentral.example/join/nova',
+        'Barry Li 已邀请您加入 RingCentral Video 会议。 请使用以下链接加入：https://v.ringcentral.example/join/nova',
+        current + 1500,
+      ],
+      [
+        'cal-all-hands-noise',
+        'event-all-hands-noise',
+        null,
+        'Calendar event: China All Hands Description: Dear colleagues, please join the company update at https://v.ringcentral.example/join/allhands',
+        'Dear colleagues, please join the company update.',
+        current + 1800,
+      ],
+      [
+        'cal-team-bot-review',
+        'event-team-bot-review',
+        'team-bot-review-series',
+        'Calendar event: Team Messaging Bot action blocks review Description: Confirm owner, risk, and next step before launch. Dashboard: https://jira.ringcentral.example/team-bot',
+        'Confirm owner, risk, and next step before launch. Dashboard: https://jira.ringcentral.example/team-bot',
+        current + 2100,
+      ],
+    ] as const;
+
+    for (const [
+      id,
+      externalId,
+      seriesKey,
+      title,
+      description,
+      startAt,
+    ] of calendarRows) {
+      db.prepare(
+        `INSERT INTO calendar_events
+          (id, source_system, external_id, series_key, title, description_preview,
+           start_at, end_at, organizer_json, attendees_json, cancelled, content_hash,
+           metadata_json, synced_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        'ringcentral_indexeddb',
+        externalId,
+        seriesKey,
+        title,
+        description,
+        startAt,
+        startAt + 1800,
+        JSON.stringify({ name: 'Organizer' }),
+        JSON.stringify([{ name: 'Esone' }]),
+        `hash-${id}`,
+        '{}',
+        current,
+        current,
+        current,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.calendar.upcoming).toBe(4);
+    expect(body.brief.sourceStats.calendar.scanned).toBe(1);
+    const titles = body.brief.cards.map((card: any) => card.title).join('\n');
+    expect(titles).toContain('Team Messaging bot 操作规则沉淀');
+    expect(titles).not.toMatch(/Calendar event|Description:|https?:\/\//i);
+    expect(titles).not.toContain('RCVSDK Daily Sync');
+    expect(titles).not.toContain('Nova Brandy Daily');
+    expect(titles).not.toContain('China All Hands');
+    expect(body.brief.cards[0].nextBestAction).toContain('Team Messaging bot');
+  });
+
+  it('applies calendar noise filtering to raw calendar memories', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+    const rawCalendarRows = [
+      [
+        'msg-calendar-daily',
+        'Calendar event: RCVSDK Daily Sync Description: 我们每天过一下手头task的状态~ Dashboard: https://jira.ringcentral.example/board',
+        'Calendar event: RCVSDK Daily Sync Description: 我们每天过一下手头task的状态~ Dashboard: https://jira.ringcentral.example/board',
+        'RCVSDK Daily Sync',
+        'daily-sync-series',
+        current + 900,
+      ],
+      [
+        'msg-calendar-weekly',
+        'Calendar event: RCVSDK Weekly Description: Meeting Link: https://v.ringcentral.example/join/weekly Dashboard: https://jira.ringcentral.example/board',
+        'Calendar event: RCVSDK Weekly Description: Meeting Link: https://v.ringcentral.example/join/weekly Dashboard: https://jira.ringcentral.example/board',
+        'RCVSDK Weekly',
+        'weekly-sync-series',
+        current + 1800,
+      ],
+      [
+        'msg-calendar-actionable',
+        'Calendar event: Team Messaging Bot launch review Description: Confirm owner, risk, and next step for action blocks before release.',
+        'Calendar event: Team Messaging Bot launch review Description: Confirm owner, risk, and next step for action blocks before release.',
+        'Team Messaging Bot launch review',
+        'team-bot-review-series',
+        current + 2400,
+      ],
+    ] as const;
+
+    for (const [
+      id,
+      content,
+      summary,
+      sourceTitle,
+      groupId,
+      timestamp,
+    ] of rawCalendarRows) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, summary, source_type, source_title, sender, group_id,
+           group_name, timestamp, entities_json, matched_projects_json,
+           importance, created_at)
+         VALUES (?, ?, ?, 'calendar', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        content,
+        summary,
+        sourceTitle,
+        'Calendar',
+        groupId,
+        sourceTitle,
+        timestamp,
+        JSON.stringify([]),
+        JSON.stringify([]),
+        0.9,
+        current,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.messages.totalRecent).toBe(3);
+    expect(body.brief.sourceStats.messages.scanned).toBe(1);
+    const titles = body.brief.cards.map((card: any) => card.title).join('\n');
+    expect(titles).toContain('Team Messaging bot 操作规则沉淀');
+    expect(titles).not.toMatch(/Calendar event|Description:|https?:\/\//i);
+    expect(titles).not.toContain('RCVSDK Daily Sync');
+    expect(titles).not.toContain('RCVSDK Weekly');
+  });
+
+  it('keeps raw calendar memories inside the Today Pilot horizon', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+    const farFuture = current + 60 * 86400;
+
+    for (const [id, content, sourceTitle, timestamp] of [
+      [
+        'msg-calendar-far-future',
+        'Calendar event: Team Messaging Bot launch review Description: Confirm owner, risk, and next step before the future release.',
+        'Team Messaging Bot launch review',
+        farFuture,
+      ],
+      [
+        'msg-current-followup',
+        'Maya asked to confirm owner and risk before release today.',
+        'Release thread',
+        current - 300,
+      ],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, summary, source_type, source_title, sender, group_id,
+           group_name, timestamp, entities_json, matched_projects_json,
+           importance, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        content,
+        content,
+        id.includes('calendar') ? 'calendar' : 'glip',
+        sourceTitle,
+        id.includes('calendar') ? 'Calendar' : 'Maya',
+        id,
+        sourceTitle,
+        timestamp,
+        JSON.stringify([]),
+        JSON.stringify([]),
+        0.94,
+        current,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.messages.totalRecent).toBe(1);
+    expect(body.brief.sourceStats.messages.scanned).toBe(1);
+    const titles = body.brief.cards.map((card: any) => card.title).join('\n');
+    expect(titles).toContain('Maya asked to confirm owner and risk');
+    expect(titles).not.toContain('Team Messaging bot 操作规则沉淀');
+  });
+
+  it('merges generic truth-conflict notifications into one memory quality mission', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+
+    for (const [id, topicId, body] of [
+      [
+        'notif-truth-generic-1',
+        'topic-conflict-owner',
+        'Project owner memory differs across two recent records.',
+      ],
+      [
+        'notif-truth-generic-2',
+        'topic-conflict-deadline',
+        'Deadline memory differs across old and new records.',
+      ],
+      [
+        'notif-truth-generic-3',
+        'topic-conflict-status',
+        'Status memory differs across old and new records.',
+      ],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO notification_records
+          (id, channel, type, title, body, topic_id, utility_score, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        'chrome_notification',
+        'truth_conflict',
+        'Pending truth conflict needs attention',
+        body,
+        topicId,
+        0.9,
+        current,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.notifications.scanned).toBe(3);
+    expect(body.brief.cards).toHaveLength(1);
+    expect(body.brief.cards[0].title).toBe('待核对的记忆事实冲突');
+    expect(body.brief.cards[0].evidenceRefs).toHaveLength(3);
+    expect(body.brief.cards[0].whyNow).toContain('3 条记忆质量');
+  });
+
+  it('filters ordinary notifications without a concrete action signal', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+
+    for (const [id, title, body] of [
+      [
+        'notif-sync-complete',
+        'Memory sync completed successfully',
+        'Explorer source finished a background sync with no user action required.',
+      ],
+      [
+        'notif-action-needed',
+        'Release owner confirmation needed',
+        'Maya needs you to confirm owner, risk, and next step before release.',
+      ],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO notification_records
+          (id, channel, type, title, body, topic_id, utility_score, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        'chrome_notification',
+        'notify_user',
+        title,
+        body,
+        id,
+        0.92,
+        current,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.notifications.pending).toBe(2);
+    expect(body.brief.sourceStats.notifications.scanned).toBe(1);
+    const titles = body.brief.cards.map((card: any) => card.title).join('\n');
+    expect(titles).toContain('Release owner confirmation needed');
+    expect(titles).not.toContain('Memory sync completed successfully');
+  });
+
+  it('filters stale fact-followups and low-value Jira field changes', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+    const old = current - 28 * 86400;
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, risk_level, confidence, evidence_refs_json,
+         requires_approval, state, created_at, action_type, execution_mode,
+         priority, source_kind, source_ref_id, queue_status, utility_score, urgency_score)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'action-old-fact-followup',
+      'delegate_openclaw',
+      '继续外部核实: 事实跟进: New AI Meetings Desktop Client · adoption_growth',
+      'No evidence of further change; remains current and should be monitored.',
+      'medium',
+      0.7,
+      JSON.stringify([]),
+      1,
+      'pending',
+      old,
+      'delegate_openclaw',
+      'manual',
+      8,
+      'reflection',
+      'old-fact-followup',
+      'queued',
+      0.9,
+      0.9,
+    );
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, risk_level, confidence, evidence_refs_json,
+         requires_approval, state, created_at, action_type, execution_mode,
+         priority, scheduled_at, source_kind, source_ref_id, queue_status,
+         utility_score, urgency_score)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'action-old-pto',
+      'delegate_openclaw',
+      '请假开始前 3h 设置 Glip 状态',
+      'Old queued action from a past PTO date.',
+      'low',
+      0.7,
+      JSON.stringify([]),
+      0,
+      'pending',
+      old,
+      'delegate_openclaw',
+      'manual',
+      7,
+      old,
+      'calendar',
+      'pto-old',
+      'queued',
+      0.8,
+      0.8,
+    );
+    db.prepare(
+      `INSERT INTO reflection_threads
+        (id, topic_key, title, status, priority, salience, source_type,
+         current_hypothesis, open_questions_json, latest_summary,
+         next_reflection_at, created_at, updated_at)
+       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'reflection-old-fact-followup',
+      'ringclaw-version',
+      '事实跟进: RingClaw · version',
+      9,
+      0.8,
+      'entity_property',
+      'RingClaw.version remains at v0.1.0, with no evidence of planned updates.',
+      JSON.stringify(['是否还会继续变化？']),
+      'Still current.',
+      current - 60,
+      old,
+      old,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, summary, source_type, source_title, sender, group_id,
+         group_name, timestamp, entities_json, matched_projects_json,
+         importance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-jira-field-change',
+      'Fix version for RCW updated from RCW_26.2.10 to RCW_26.2.20.',
+      'Fix version for RCW updated from RCW_26.2.10 to RCW_26.2.20.',
+      'jira',
+      'RCW-39313',
+      'Jira',
+      'jira-project',
+      'Jira',
+      current - 600,
+      JSON.stringify([]),
+      JSON.stringify([]),
+      0.95,
+      current - 600,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, summary, source_type, source_title, sender, group_id,
+         group_name, timestamp, entities_json, matched_projects_json,
+         importance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-real-followup',
+      'Maya asked to confirm owner and risk before release; this needs a concrete follow-up today.',
+      'Confirm owner and risk before release.',
+      'glip',
+      'Release thread',
+      'Maya',
+      'release-thread',
+      'Release',
+      current - 300,
+      JSON.stringify([{ type: 'Person', name: 'Maya' }]),
+      JSON.stringify([{ name: 'Release' }]),
+      0.86,
+      current - 300,
+    );
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, topic_id, utility_score, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'notif-weekly-dream-digest',
+      'chrome_notification',
+      'notify_user',
+      'Weekly Dream Digest',
+      '9 dream(s) generated this period',
+      'dream-digest',
+      0.95,
+      current,
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const titles = body.brief.cards.map((card: any) => card.title).join('\n');
+    expect(titles).toContain('Confirm owner and risk before release.');
+    expect(titles).not.toContain('New AI Meetings Desktop Client');
+    expect(titles).not.toContain('RingClaw');
+    expect(titles).not.toContain('Fix version for RCW');
+    expect(titles).not.toContain('请假开始前 3h 设置 Glip 状态');
+    expect(titles).not.toContain('Weekly Dream Digest');
+  });
+
   it('does not promote generic relationship radar context without a follow-up signal', async () => {
     const current = Math.floor(Date.now() / 1000);
     const localDate = new Date(current * 1000).toISOString().slice(0, 10);

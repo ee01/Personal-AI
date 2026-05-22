@@ -148,6 +148,45 @@ try {
   await page.locator('h1', { hasText: '项目进度仪表盘' }).waitFor({
     timeout: 15000,
   });
+  await page.locator('.data-source-action', {
+    hasText: '同步/检查数据源',
+  }).waitFor({ timeout: 15000 });
+  await serviceWorker.evaluate(() => {
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input?.url || String(input);
+      if (url.includes('/projects/watched')) {
+        throw new Error('e2e memory offline');
+      }
+      return originalFetch(input, init);
+    };
+  });
+  await page.locator('.data-source-action', {
+    hasText: '同步/检查数据源',
+  }).click();
+  await page.locator('.data-source-panel', {
+    hasText: 'Memory Service 关注项目暂不可用',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.unavailable', {
+    hasText: 'Memory Service',
+  }).locator('.data-source-card-top span', {
+    hasText: '暂不可用',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.unavailable', {
+    hasText: '不会清空或覆盖项目',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.not_configured', {
+    hasText: 'Jira',
+  }).locator('.data-source-card-top span', {
+    hasText: '未接入',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.not_configured', {
+    hasText: '不会读取 Jira 任务、状态、负责人或评论',
+  }).waitFor({ timeout: 15000 });
 
   await page.locator('.decision-brief.critical', {
     hasText: '先处理阻塞',
@@ -188,6 +227,19 @@ try {
   }).locator('.review-queue-action', {
     hasText: '预览草稿',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.review-queue-item.overdue', {
+    hasText: 'Stale Demo Project',
+  }).locator('.review-queue-action.primary', {
+    hasText: '复核草稿',
+  }).click();
+  await page.locator('.status-review-gate.active', {
+    hasText: '确认前先检查证据',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.status-draft-actions button', {
+    hasText: '确认已复核',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.status-draft-modal').waitFor({ state: 'detached', timeout: 15000 });
   await page.locator('.evidence-gap-queue', {
     hasText: '2 个活动任务缺少 ETA 或来源',
   }).waitFor({ timeout: 15000 });
@@ -229,10 +281,18 @@ try {
   }).locator('.evidence-repair-card-action', {
     hasText: '补来源',
   }).click();
-  await page.waitForFunction(() => Boolean(document.activeElement?.closest('[data-evidence-field="platform-source"]')));
-  await page.locator('.platform-item', {
+  await page.waitForFunction(() => document.activeElement?.matches('[data-evidence-control="platform-status"]'));
+  const qaPlatform = page.locator('.platform-item', {
     hasText: 'QA',
-  }).locator('select[aria-label="QA 平台状态"]').selectOption('blocked');
+  });
+  await qaPlatform.locator('.platform-source-state.missing', {
+    hasText: '未填写来源',
+  }).waitFor({ timeout: 15000 });
+  assert.equal(await qaPlatform.locator('select[aria-label="QA 平台状态"]').inputValue(), '');
+  await qaPlatform.locator('select[aria-label="QA 平台状态"]').selectOption('blocked');
+  await qaPlatform.locator('.platform-source-state.complete', {
+    hasText: '来源已记录',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.evidence-repair-section').locator('.evidence-repair-card.complete', {
     hasText: '来源',
   }).waitFor({ timeout: 15000 });
@@ -309,6 +369,9 @@ try {
   await staleCard.locator('button', { hasText: '预览状态草稿' }).click();
   await page.locator('.status-draft-modal', {
     hasText: '数据新鲜度：计划陈旧',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.status-review-gate', {
+    hasText: '复核记录会写入本地工作台',
   }).waitFor({ timeout: 15000 });
   await page.locator('.status-evidence-label.freshness', {
     hasText: '计划陈旧',

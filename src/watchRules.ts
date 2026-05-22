@@ -201,6 +201,10 @@ function getContextSenderValues(context?: WatchRuleMessageContext): unknown[] {
   return [context?.sender, context?.creator];
 }
 
+function hasScopeValues(values: unknown[]): boolean {
+  return values.some((value) => normalizeScopeValue(value).length > 0);
+}
+
 export function isWatchRuleEligibleForMessage(
   rule: WatchRule,
   context?: WatchRuleMessageContext,
@@ -208,16 +212,20 @@ export function isWatchRuleEligibleForMessage(
   if (!context) return true;
 
   if (rule.source === 'manual') {
+    const senderValues = getContextSenderValues(context);
     if (
       rule.filterSender &&
-      !valuesMatchScope(rule.filterSender, getContextSenderValues(context))
+      hasScopeValues(senderValues) &&
+      !valuesMatchScope(rule.filterSender, senderValues)
     ) {
       return false;
     }
 
+    const groupValues = getContextGroupValues(context);
     if (
       rule.filterGroup &&
-      !valuesMatchScope(rule.filterGroup, getContextGroupValues(context))
+      hasScopeValues(groupValues) &&
+      !valuesMatchScope(rule.filterGroup, groupValues)
     ) {
       return false;
     }

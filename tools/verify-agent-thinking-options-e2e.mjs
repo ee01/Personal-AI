@@ -111,6 +111,9 @@ try {
     0,
     '流程运行中不应提前显示最终决策节点',
   );
+  await page.locator('.flow-node.tool .node-detail', {
+    hasText: /准备调用.+判断这条项目消息是否属于近期关注上下文/,
+  }).waitFor({ timeout: 12000 });
   await page.locator('.agent-run-review.warning', {
     hasText: '工具被阻断',
   }).waitFor({ timeout: 12000 });
@@ -132,6 +135,12 @@ try {
   await page.locator('.agent-approval-copy', {
     hasText: '复制审核包',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-copy', {
+    hasText: '复制重跑配置',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-retry-config', {
+    hasText: 'approvedToolActionKeys',
+  }).waitFor({ timeout: 12000 });
   await page.locator('.agent-approval-review-hint', {
     hasText: '确认通知内容、接收渠道和触发原因后再批准。',
   }).waitFor({ timeout: 12000 });
@@ -146,6 +155,12 @@ try {
   }).click();
   await page.locator('.agent-approval-copy-status', {
     hasText: /已复制审核包|复制失败，请手动选择审核包/,
+  }).waitFor({ timeout: 3000 });
+  await page.locator('.agent-approval-copy', {
+    hasText: '复制重跑配置',
+  }).click();
+  await page.locator('.agent-approval-copy-status', {
+    hasText: /已复制重跑配置|复制失败，请手动选择重跑配置/,
   }).waitFor({ timeout: 3000 });
   await page.locator('.agent-run-review-item.info', {
     hasText: '重复调用已跳过',
@@ -218,6 +233,25 @@ try {
   await page.locator('.agent-result-summary', { hasText: '处理结果' }).waitFor({
     timeout: 12000,
   });
+  await page.locator('.result-pending-approval', {
+    hasText: '待确认动作未执行',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.result-pending-approval', {
+    hasText: 'messageNotification',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.result-pending-approval', {
+    hasText: '最终结果没有把这些动作当作已完成',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.decision-badge.pending-notify', {
+    hasText: '待确认通知',
+  }).waitFor({ timeout: 12000 });
+  assert.equal(
+    await page
+      .locator('.decision-badge.no-notify', { hasText: '未通知' })
+      .count(),
+    0,
+    '存在待确认通知动作时，结果区不应只显示未通知',
+  );
   assert.equal(
     await page.locator('.flow-node.decision', { hasText: '最终决策' }).count(),
     1,

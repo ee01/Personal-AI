@@ -48,6 +48,15 @@ function sendJson(res, body) {
   res.end(JSON.stringify(body));
 }
 
+function sendError(res, status, body) {
+  res.writeHead(status, {
+    'content-type': 'application/json',
+    'access-control-allow-origin': '*',
+    'access-control-allow-headers': 'content-type,x-user-id,authorization',
+  });
+  res.end(JSON.stringify(body));
+}
+
 async function readJsonBody(req) {
   const chunks = [];
   for await (const chunk of req) {
@@ -108,9 +117,28 @@ async function startMemoryFixtureServer() {
       return;
     }
 
-    const deleteMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)$/);
-    if (deleteMatch && req.method === 'DELETE') {
-      const id = decodeURIComponent(deleteMatch[1]);
+    const profileItemMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)$/);
+    if (profileItemMatch && req.method === 'PUT') {
+      const id = decodeURIComponent(profileItemMatch[1]);
+      const item = profileItems.find((candidate) => candidate.id === id);
+      if (!item) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Profile item not found' }));
+        return;
+      }
+      const body = await readJsonBody(req);
+      Object.assign(item, {
+        confidence: body.confidence ?? item.confidence,
+        salienceScore: body.salienceScore ?? item.salienceScore,
+        status: body.status ?? item.status,
+      });
+      profileMutations.push({ type: 'update', id, body });
+      sendJson(res, item);
+      return;
+    }
+
+    if (profileItemMatch && req.method === 'DELETE') {
+      const id = decodeURIComponent(profileItemMatch[1]);
       const item = profileItems.find((candidate) => candidate.id === id);
       if (!item) {
         res.writeHead(404, { 'content-type': 'application/json' });
@@ -120,6 +148,22 @@ async function startMemoryFixtureServer() {
       item.status = 'retracted';
       profileMutations.push({ type: 'delete', id });
       sendJson(res, { id, deleted: true });
+      return;
+    }
+
+    const confirmMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)\/confirm$/);
+    if (confirmMatch && req.method === 'POST') {
+      const id = decodeURIComponent(confirmMatch[1]);
+      const item = profileItems.find((candidate) => candidate.id === id);
+      if (!item) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Profile item not found' }));
+        return;
+      }
+      item.userConfirmed = true;
+      item.status = 'active';
+      profileMutations.push({ type: 'confirm', id });
+      sendJson(res, item);
       return;
     }
 
@@ -149,6 +193,10 @@ async function startMemoryFixtureServer() {
     }
 
     if (url.pathname === '/api/v1/health') {
+      if (phase === 'export-partial-diagnostics') {
+        sendError(res, 503, { error: 'fixture health unavailable' });
+        return;
+      }
       sendJson(res, {
         status: 'ok',
         database: {
@@ -162,6 +210,10 @@ async function startMemoryFixtureServer() {
     }
 
     if (url.pathname === '/api/v1/stats') {
+      if (phase === 'export-partial-diagnostics') {
+        sendError(res, 503, { error: 'fixture stats unavailable' });
+        return;
+      }
       sendJson(res, {
         messages: { total: 12, today: 2, thisWeek: 6 },
         entities: { total: 3, byType: { Project: 3 } },
@@ -363,8 +415,21 @@ try {
   );
   assert.equal(exportJson.exportInfo.pagination.totalProfileItems, profileItems.length);
   assert.equal(exportJson.exportInfo.pagination.truncated, false);
+  assert.deepEqual(exportJson.exportInfo.warnings, []);
+  assert.equal(exportJson.exportInfo.optionalSections.systemHealth.available, true);
+  assert.equal(exportJson.exportInfo.optionalSections.entityStatistics.available, true);
+  assert.equal(exportJson.exportInfo.profileAudit.confirmedItems, 625);
+  assert.equal(exportJson.exportInfo.profileAudit.pendingConfirmationItems, 625);
+  assert.equal(exportJson.exportInfo.profileAudit.usableProfileItems, 625);
+  assert.equal(exportJson.exportInfo.profileAudit.heldForConfirmationItems, 625);
+  assert.equal(exportJson.exportInfo.profileAudit.withoutEvidenceItems, 0);
+  assert.equal(
+    exportJson.exportInfo.profileAudit.personalizationBoundary.rule,
+    'Only active profile items with userConfirmed=true are eligible for personalization and provider context.',
+  );
   assert.equal(exportJson.exportSummary.profileCompleteness, '完整');
   assert.equal(exportJson.exportSummary.exportedProfileItems, profileItems.length);
+  assert.equal(exportJson.exportSummary.usableProfileItems, 625);
 
   const initialRequests = profileItemRequests.filter(
     (request) => request.phase === 'initial-load',
@@ -392,6 +457,29 @@ try {
 
   await page.locator('.status-message.success', {
     hasText: '画像已导出',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.status-message.success', {
+    hasText: '1250/1250 条',
+  }).waitFor({ timeout: 10000 });
+
+  phase = 'export-partial-diagnostics';
+  const [partialDownload] = await Promise.all([
+    page.waitForEvent('download', { timeout: 15000 }),
+    page.locator('button.export-btn').click(),
+  ]);
+  const partialExportPath = await partialDownload.path();
+  assert.ok(partialExportPath, 'partial export download should resolve to a local path');
+  const partialExportJson = JSON.parse(await fs.readFile(partialExportPath, 'utf8'));
+  assert.equal(partialExportJson.userProfile.items.length, profileItems.length);
+  assert.equal(partialExportJson.exportInfo.pagination.truncated, false);
+  assert.equal(partialExportJson.exportInfo.warnings.length, 2);
+  assert.equal(partialExportJson.exportInfo.optionalSections.systemHealth.available, false);
+  assert.equal(partialExportJson.exportInfo.optionalSections.entityStatistics.available, false);
+  assert.equal(partialExportJson.systemStatus.healthAvailable, false);
+  assert.equal(partialExportJson.entityStatistics.statsAvailable, false);
+  assert.equal(partialExportJson.exportSummary.dataQuality, '部分诊断缺失');
+  await page.locator('.status-message.info', {
+    hasText: '2 个诊断项未同步',
   }).waitFor({ timeout: 10000 });
 
   await page.locator('.owner-profile-form select').nth(1).selectOption('__custom__');
@@ -423,6 +511,24 @@ try {
     hasText: 'Export Project 999',
   });
   await undoTargetRow.waitFor({ timeout: 10000 });
+  await undoTargetRow.locator('button.influence-action-btn', { hasText: '降低影响' }).click();
+  await page.locator('.status-message.success', {
+    hasText: '已降低画像影响',
+  }).waitFor({ timeout: 10000 });
+  assert.deepEqual(profileMutations.at(-2), {
+    type: 'update',
+    id: 'profile-export-999',
+    body: {
+      confidence: 0.25,
+      salienceScore: 0.25,
+      status: 'active',
+    },
+  });
+  assert.deepEqual(profileMutations.at(-1), {
+    type: 'confirm',
+    id: 'profile-export-999',
+  });
+
   await undoTargetRow.locator('button.danger-action-btn').click();
   await page.locator('.status-message.success', {
     hasText: '已排除“Export Project 999”',

@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 
 import {
   AGENT_WORKFLOW_TEST_SCENARIOS,
+  buildAgentWorkflowResultExpectation,
+  buildAgentWorkflowSavedScenario,
   buildAgentWorkflowScenarioInput,
   buildAgentWorkflowReplayMessage,
   buildAgentWorkflowReplayMessages,
   formatAgentWorkflowDatetimeInputValue,
   formatAgentWorkflowReplayLabel,
+  formatAgentWorkflowSavedScenarioLabel,
+  normalizeAgentWorkflowSavedScenarios,
   normalizeAgentWorkflowInputDatetime,
 } from '../src/agentWorkflowReplay.ts';
 
@@ -176,5 +180,76 @@ assert.equal(
   '2026-05-03T14:00:00.000Z',
 );
 assert.match(scenarioInput.content, /blocker thread/);
+
+const savedScenario = buildAgentWorkflowSavedScenario(
+  {
+    sender: 'Morgan Chen',
+    teamName: 'Architecture',
+    teamId: 'architecture',
+    datetime: '2026-05-03T15:00:00.000Z',
+    content: 'API split blocker should stay on the radar.',
+  },
+  {
+    shouldStore: true,
+    shouldNotify: true,
+    confidence: '88%',
+    matchedRuleRefs: ['manual:manual-1'],
+    matchedRuleIds: [],
+    summary: 'manual blocker watch rule matched',
+    storageReview: {
+      traceStatus: 'partial',
+      matchedRuleRefs: ['manual:manual-1'],
+    },
+  },
+  new Date('2026-05-03T15:01:00.000Z'),
+);
+
+assert.equal(savedScenario.id, 'workflow-saved-1777820460000');
+assert.equal(
+  normalizeAgentWorkflowInputDatetime(savedScenario.input.datetime),
+  '2026-05-03T15:00:00.000Z',
+);
+assert.equal(savedScenario.expectedResult?.confidence, 0.88);
+assert.equal(savedScenario.expectedResult?.shouldNotify, true);
+assert.equal(savedScenario.expectedResult?.traceStatus, 'partial');
+assert.deepEqual(savedScenario.expectedResult?.matchedRuleRefs, [
+  'manual:manual-1',
+]);
+assert.match(
+  formatAgentWorkflowSavedScenarioLabel(savedScenario),
+  /有基线 \| Morgan Chen @ Architecture/,
+);
+
+const expectationFromTrace = buildAgentWorkflowResultExpectation({
+  shouldStore: false,
+  shouldNotify: false,
+  agentWorkflowTrace: [
+    {
+      status: 'success',
+      tools: [{ status: 'success' }],
+    },
+  ],
+});
+assert.equal(expectationFromTrace?.traceStatus, 'complete');
+
+const normalizedSavedScenarios = normalizeAgentWorkflowSavedScenarios(
+  [
+    savedScenario,
+    {
+      ...savedScenario,
+      id: 'duplicate-by-input',
+    },
+    {
+      id: 'invalid',
+      input: {
+        content: '   ',
+      },
+    },
+  ],
+  4,
+);
+assert.equal(normalizedSavedScenarios.length, 1);
+assert.equal(normalizedSavedScenarios[0].id, savedScenario.id);
+assert.equal(normalizedSavedScenarios[0].expectedResult?.confidence, 0.88);
 
 console.log('verify-agent-workflow-replay: ok');

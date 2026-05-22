@@ -30,6 +30,8 @@ interface FieldReviewQueueItem {
     field: UpdateField;
     kind: FieldReviewQueueKind;
     reason: string;
+    previewText: string;
+    evidenceText: string;
 }
 
 interface SelectedFieldPreviewItem {
@@ -38,8 +40,23 @@ interface SelectedFieldPreviewItem {
     projectLabel: string;
     fieldLabel: string;
     previewText: string;
+    evidenceText: string;
     reviewKind: 'ready' | 'review';
     reviewLabel: string;
+}
+
+interface BlockedFieldDetailItem {
+    field: UpdateField;
+    fieldLabel: string;
+    previewText: string;
+    evidenceText: string;
+}
+
+interface ApplyResultReceipt {
+    updatedCount: number;
+    skippedCount: number;
+    errors: string[];
+    submittedItems: SelectedFieldPreviewItem[];
 }
 
 const GOOGLE_SLIDES_ORIGIN = 'https://docs.google.com';
@@ -47,7 +64,9 @@ const HIGH_CONFIDENCE_THRESHOLD = 0.75;
 const APPLY_TIMEOUT_MS = 45000;
 const INITIAL_DATA_TIMEOUT_MS = 12000;
 const SELECTED_FIELD_PREVIEW_LIMIT = 5;
+const APPLY_RESULT_RECEIPT_LIMIT = 6;
 const SELECTED_FIELD_PREVIEW_TEXT_LIMIT = 140;
+const SELECTED_FIELD_EVIDENCE_TEXT_LIMIT = 180;
 const UPDATE_FIELD_LABELS: Record<UpdateField, string> = {
     status: '状态列',
     owner: '负责人列',
@@ -304,7 +323,12 @@ const buildSelectedFieldPreviewItem = (
     const reviewKind = shouldDefaultSelectField(suggestion, field) ? 'ready' : 'review';
     const currentValue = compactPreviewText(getFieldCurrentValue(suggestion, field));
     const suggestedValue = compactPreviewText(getFieldSuggestedValue(suggestion, field));
+    const fieldEvidence = getFieldEvidenceItems(suggestion, field).join('；');
+    const fieldHint = getFieldReviewHint(suggestion, field);
     const isComments = field === 'comments';
+    const rawEvidenceText = reviewKind === 'ready'
+        ? fieldHint
+        : (fieldEvidence ? `${fieldHint} ${fieldEvidence}` : fieldHint);
 
     return {
         projectIndex,
@@ -314,10 +338,37 @@ const buildSelectedFieldPreviewItem = (
         previewText: isComments
             ? `${suggestion.currentComments ? '追加备注' : '设置备注'}: ${suggestedValue}`
             : `${currentValue} -> ${suggestedValue}`,
+        evidenceText: compactPreviewText(rawEvidenceText, SELECTED_FIELD_EVIDENCE_TEXT_LIMIT),
         reviewKind,
         reviewLabel: reviewKind === 'ready' ? '来源充分' : '需人工复核',
     };
 };
+
+const buildBlockedFieldDetailItem = (
+    suggestion: ProjectUpdateSuggestion,
+    field: UpdateField,
+): BlockedFieldDetailItem => {
+    const currentValue = compactPreviewText(getFieldCurrentValue(suggestion, field));
+    const suggestedValue = compactPreviewText(getFieldSuggestedValue(suggestion, field));
+    const fieldEvidence = getFieldEvidenceItems(suggestion, field).join('；');
+    const fieldHint = getFieldReviewHint(suggestion, field);
+    const evidenceText = fieldEvidence && !fieldHint.includes(fieldEvidence)
+        ? `${fieldHint} ${fieldEvidence}`
+        : fieldHint;
+
+    return {
+        field,
+        fieldLabel: UPDATE_FIELD_SHORT_LABELS[field],
+        previewText: field === 'comments'
+            ? `${suggestion.currentComments ? '追加备注' : '设置备注'}: ${suggestedValue}`
+            : `${currentValue} -> ${suggestedValue}`,
+        evidenceText: compactPreviewText(evidenceText, SELECTED_FIELD_EVIDENCE_TEXT_LIMIT),
+    };
+};
+
+const getBlockedFieldDetailItems = (suggestion: ProjectUpdateSuggestion): BlockedFieldDetailItem[] => (
+    getUnavailableUpdateFieldTypes(suggestion).map((field) => buildBlockedFieldDetailItem(suggestion, field))
+);
 
 const getProjectReviewNote = (suggestion: ProjectUpdateSuggestion): string => {
     const confidence = suggestion.confidence || 0;
@@ -448,8 +499,9 @@ const SlidesAnalysis: React.FC = () => {
     const [isApplying, setIsApplying] = useState(false);
     const [selectedFields, setSelectedFields] = useState<Record<string, boolean>>({});
     const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all');
-    const [lastApplyResult, setLastApplyResult] = useState<{ updatedCount: number; skippedCount: number } | null>(null);
+    const [lastApplyResult, setLastApplyResult] = useState<ApplyResultReceipt | null>(null);
     const [loadError, setLoadError] = useState<string>('');
+    const pendingApplyPreviewItemsRef = useRef<SelectedFieldPreviewItem[]>([]);
     const applyTimeoutRef = useRef<number | null>(null);
     const initialDataTimeoutRef = useRef<number | null>(null);
 
@@ -563,12 +615,23 @@ const SlidesAnalysis: React.FC = () => {
                 debugLog('收到更新成功消息: ' + JSON.stringify(event.data));
                 clearApplyTimeout();
                 const updatedCount = Number(event.data.updatedCount) || 0;
-                const skippedCount = Array.isArray(event.data.errors) ? event.data.errors.length : 0;
+                const skippedErrors = Array.isArray(event.data.errors)
+                    ? event.data.errors
+                        .filter((error): error is string => typeof error === 'string' && error.trim().length > 0)
+                        .map((error) => error.trim())
+                    : [];
+                const skippedCount = skippedErrors.length;
                 const skippedSummary = skippedCount > 0 ? `，跳过 ${skippedCount} 项` : '';
                 showToast(`更新成功: 已写回 ${updatedCount} 个字段${skippedSummary}`, skippedCount > 0 ? 'warning' : 'success');
                 setIsApplying(false);
                 setSelectedFields({});
-                setLastApplyResult({ updatedCount, skippedCount });
+                setLastApplyResult({
+                    updatedCount,
+                    skippedCount,
+                    errors: skippedErrors,
+                    submittedItems: pendingApplyPreviewItemsRef.current,
+                });
+                pendingApplyPreviewItemsRef.current = [];
             } else if (event.data.type === 'UPDATE_ERROR') {
                 clearApplyTimeout();
                 showToast('更新失败: ' + (event.data.errorMessage || '未知错误'), 'error');
@@ -757,22 +820,28 @@ const SlidesAnalysis: React.FC = () => {
             const items: FieldReviewQueueItem[] = [];
 
             getReviewRequiredFields(suggestion).forEach((field) => {
+                const previewItem = buildSelectedFieldPreviewItem(suggestion, projectIndex, field);
                 items.push({
                     suggestion,
                     projectIndex,
                     field,
                     kind: 'review',
-                    reason: getFieldReviewHint(suggestion, field)
+                    reason: getFieldReviewHint(suggestion, field),
+                    previewText: previewItem.previewText,
+                    evidenceText: previewItem.evidenceText,
                 });
             });
 
             getUnavailableUpdateFieldTypes(suggestion).forEach((field) => {
+                const blockedItem = buildBlockedFieldDetailItem(suggestion, field);
                 items.push({
                     suggestion,
                     projectIndex,
                     field,
                     kind: 'blocked',
-                    reason: `${UPDATE_FIELD_COLUMN_LABELS[field]} 未识别到可写表格列`
+                    reason: `${UPDATE_FIELD_COLUMN_LABELS[field]} 未识别到可写表格列`,
+                    previewText: blockedItem.previewText,
+                    evidenceText: blockedItem.evidenceText,
                 });
             });
 
@@ -828,6 +897,7 @@ const SlidesAnalysis: React.FC = () => {
             
             debugLog('选择了 ' + selectedUpdateCount + ' 个更新项');
             setLastApplyResult(null);
+            pendingApplyPreviewItemsRef.current = selectedFieldPreviewItems;
 
             const selectedUpdates = analysisResult.updateSuggestions
                 .map((originalSuggestion, projectIndex) => {
@@ -887,17 +957,20 @@ const SlidesAnalysis: React.FC = () => {
                 setIsApplying(true);
                 applyTimeoutRef.current = window.setTimeout(() => {
                     applyTimeoutRef.current = null;
+                    pendingApplyPreviewItemsRef.current = [];
                     setIsApplying(false);
                     setLastApplyResult(null);
                     showToast('写回请求超时，请回到 Slides 页面确认是否已更新后再重试', 'warning');
                     debugLog('写回请求超时，未收到父窗口结果消息');
                 }, APPLY_TIMEOUT_MS);
             } else {
+                pendingApplyPreviewItemsRef.current = [];
                 showToast('无法与父窗口通信，请重新打开分析窗口', 'error');
                 debugLog('父窗口引用不存在');
             }
         } catch (err) {
             clearApplyTimeout();
+            pendingApplyPreviewItemsRef.current = [];
             setIsApplying(false);
             showToast('更新操作失败: ' + (err as Error).message, 'error');
             debugLog('错误: ' + (err as Error).message);
@@ -1003,6 +1076,53 @@ const SlidesAnalysis: React.FC = () => {
                         已写回 {lastApplyResult.updatedCount} 个字段
                         {lastApplyResult.skippedCount > 0 ? `，跳过 ${lastApplyResult.skippedCount} 项` : ''}。
                     </p>
+                    {lastApplyResult.submittedItems.length > 0 && (
+                        <div
+                            className="applied-field-receipt"
+                            aria-label="本次提交字段回执"
+                        >
+                            <div className="applied-field-receipt-title">本次提交字段</div>
+                            <ul className="applied-field-receipt-list">
+                                {lastApplyResult.submittedItems.slice(0, APPLY_RESULT_RECEIPT_LIMIT).map((item) => (
+                                    <li
+                                        key={`${item.projectIndex}-${item.field}`}
+                                        className="applied-field-receipt-item"
+                                    >
+                                        <span className="applied-field-receipt-main">
+                                            <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                            <span>{item.previewText}</span>
+                                            <span className="applied-field-receipt-evidence">
+                                                {item.evidenceText}
+                                            </span>
+                                        </span>
+                                        <span className={`selected-writeback-preview-badge selected-writeback-preview-badge-${item.reviewKind}`}>
+                                            {item.reviewLabel}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                            {lastApplyResult.submittedItems.length > APPLY_RESULT_RECEIPT_LIMIT && (
+                                <div className="applied-field-receipt-more">
+                                    还有 {lastApplyResult.submittedItems.length - APPLY_RESULT_RECEIPT_LIMIT} 个提交字段未展示。
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {lastApplyResult.errors.length > 0 && (
+                        <div className="apply-skipped-details">
+                            <div className="apply-skipped-title">跳过原因</div>
+                            <ul>
+                                {lastApplyResult.errors.slice(0, 5).map((error, index) => (
+                                    <li key={index}>{error}</li>
+                                ))}
+                            </ul>
+                            {lastApplyResult.errors.length > 5 && (
+                                <div className="apply-skipped-more">
+                                    还有 {lastApplyResult.errors.length - 5} 项未展示。
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -1106,7 +1226,7 @@ const SlidesAnalysis: React.FC = () => {
                         </div>
                     </div>
                     <div className="field-review-queue-list">
-                        {fieldReviewQueuePreview.map(({ suggestion, projectIndex, field, kind, reason }) => {
+                        {fieldReviewQueuePreview.map(({ suggestion, projectIndex, field, kind, reason, previewText, evidenceText }) => {
                             const inputId = `review-queue-toggle-${projectIndex}-${field}`;
 
                             return (
@@ -1135,6 +1255,8 @@ const SlidesAnalysis: React.FC = () => {
                                             {suggestion.projectId} · {suggestion.projectName} · {UPDATE_FIELD_SHORT_LABELS[field]}
                                         </label>
                                         <div className="field-review-queue-reason">{reason}</div>
+                                        <div className="field-review-queue-preview">{previewText}</div>
+                                        <div className="field-review-queue-evidence">{evidenceText}</div>
                                     </div>
                                 </div>
                             );
@@ -1220,6 +1342,7 @@ const SlidesAnalysis: React.FC = () => {
                             const hasCommentsColumn = hasWritableColumnIndex(suggestion.columnIndices?.comments);
                             const availableFields = getAvailableUpdateFields(suggestion);
                             const unavailableFields = getUnavailableUpdateFields(suggestion);
+                            const blockedFieldDetailItems = getBlockedFieldDetailItems(suggestion);
                             const evidenceItems = getSuggestionEvidenceItems(suggestion);
                             const riskItems = getRiskEvidenceItems(suggestion);
                             const needsReview = isSuggestionReviewRequired(suggestion);
@@ -1268,6 +1391,28 @@ const SlidesAnalysis: React.FC = () => {
                                         {unavailableFields.length > 0 && (
                                             <div className="project-blocked-note">
                                                 无法写回 {unavailableFields.join('、')}：未识别到可写表格列，请先在 Slides 表格中补齐对应列或手动更新。
+                                            </div>
+                                        )}
+                                        {blockedFieldDetailItems.length > 0 && (
+                                            <div
+                                                className="project-blocked-field-details"
+                                                aria-label={`${suggestion.projectId} 无法写回字段建议值`}
+                                            >
+                                                <div className="project-blocked-field-details-title">无法写回字段建议值</div>
+                                                <ul className="project-blocked-field-details-list">
+                                                    {blockedFieldDetailItems.map((item) => (
+                                                        <li
+                                                            key={item.field}
+                                                            className="project-blocked-field-detail"
+                                                        >
+                                                            <strong>{item.fieldLabel}</strong>
+                                                            <span>{item.previewText}</span>
+                                                            <span className="project-blocked-field-evidence">
+                                                                {item.evidenceText}
+                                                            </span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
                                             </div>
                                         )}
                                         {isRiskInsightOnly && (
@@ -1422,6 +1567,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-status-${index}`} 
                                                 className="update-item-checkbox"
+                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.status} 写回选择`}
                                                 checked={isFieldSelected(index, 'status')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'status', e.target.checked)}
@@ -1456,6 +1602,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-comments-${index}`} 
                                                 className="update-item-checkbox"
+                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.comments} 写回选择`}
                                                 checked={isFieldSelected(index, 'comments')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'comments', e.target.checked)}
@@ -1496,6 +1643,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-owner-${index}`} 
                                                 className="update-item-checkbox"
+                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.owner} 写回选择`}
                                                 checked={isFieldSelected(index, 'owner')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'owner', e.target.checked)}
@@ -1530,6 +1678,7 @@ const SlidesAnalysis: React.FC = () => {
                                                 type="checkbox" 
                                                 id={`update-track-${index}`} 
                                                 className="update-item-checkbox"
+                                                aria-label={`${suggestion.projectId} ${UPDATE_FIELD_SHORT_LABELS.track} 写回选择`}
                                                 checked={isFieldSelected(index, 'track')}
                                                 disabled={isApplying}
                                                 onChange={(e) => handleFieldSelection(index, 'track', e.target.checked)}
@@ -1600,6 +1749,9 @@ const SlidesAnalysis: React.FC = () => {
                                                 <span className="selected-writeback-preview-main">
                                                     <strong>{item.projectLabel} · {item.fieldLabel}</strong>
                                                     <span>{item.previewText}</span>
+                                                    <span className="selected-writeback-preview-evidence">
+                                                        {item.evidenceText}
+                                                    </span>
                                                 </span>
                                                 <span className={`selected-writeback-preview-badge selected-writeback-preview-badge-${item.reviewKind}`}>
                                                     {item.reviewLabel}
@@ -1720,6 +1872,86 @@ const styles = `
         background: #fff3cd;
         border-color: #ffeeba;
         color: #856404;
+    }
+
+    .apply-skipped-details {
+        background: rgba(255, 255, 255, 0.65);
+        border: 1px solid rgba(133, 100, 4, 0.25);
+        border-radius: 6px;
+        font-size: 13px;
+        line-height: 1.45;
+        margin-top: 10px;
+        padding: 9px 12px;
+    }
+
+    .apply-skipped-title {
+        font-weight: 700;
+        margin-bottom: 4px;
+    }
+
+    .apply-skipped-details ul {
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .apply-skipped-more {
+        color: #6b5a11;
+        font-size: 12px;
+        margin-top: 4px;
+    }
+
+    .applied-field-receipt {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(21, 87, 36, 0.22);
+        border-radius: 6px;
+        color: inherit;
+        font-size: 13px;
+        line-height: 1.45;
+        margin-top: 10px;
+        padding: 10px 12px;
+    }
+
+    .success-message-warning .applied-field-receipt {
+        border-color: rgba(133, 100, 4, 0.25);
+    }
+
+    .applied-field-receipt-title {
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+
+    .applied-field-receipt-list {
+        display: grid;
+        gap: 6px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .applied-field-receipt-item {
+        align-items: flex-start;
+        display: grid;
+        gap: 8px;
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .applied-field-receipt-main {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .applied-field-receipt-evidence {
+        color: #5e6c84;
+        font-size: 11px;
+        line-height: 1.35;
+    }
+
+    .applied-field-receipt-more {
+        color: #6b778c;
+        font-size: 12px;
+        margin-top: 6px;
     }
 
     .summary-section, .field-review-queue-section, .statistics-section, .findings-section, .suggestions-section {
@@ -1994,6 +2226,23 @@ const styles = `
         overflow-wrap: anywhere;
     }
 
+    .field-review-queue-preview {
+        color: #172b4d;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.45;
+        margin-top: 5px;
+        overflow-wrap: anywhere;
+    }
+
+    .field-review-queue-evidence {
+        color: #5e6c84;
+        font-size: 11px;
+        line-height: 1.4;
+        margin-top: 3px;
+        overflow-wrap: anywhere;
+    }
+
     .field-review-queue-more {
         color: #6b778c;
         font-size: 12px;
@@ -2090,6 +2339,41 @@ const styles = `
         line-height: 1.5;
         margin-top: 8px;
         padding: 6px 8px;
+    }
+
+    .project-blocked-field-details {
+        background: #fff7f5;
+        border: 1px solid #ffbdad;
+        border-radius: 6px;
+        color: #5f2400;
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: 8px;
+        padding: 9px 10px;
+    }
+
+    .project-blocked-field-details-title {
+        font-weight: 700;
+        margin-bottom: 5px;
+    }
+
+    .project-blocked-field-details-list {
+        display: grid;
+        gap: 6px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .project-blocked-field-detail {
+        display: grid;
+        gap: 2px;
+        overflow-wrap: anywhere;
+    }
+
+    .project-blocked-field-evidence {
+        color: #6b778c;
+        font-size: 11px;
     }
 
     .project-insight-note {
@@ -2298,6 +2582,12 @@ const styles = `
         gap: 2px;
         min-width: 0;
         overflow-wrap: anywhere;
+    }
+
+    .selected-writeback-preview-evidence {
+        color: #5e6c84;
+        font-size: 11px;
+        line-height: 1.35;
     }
 
     .selected-writeback-preview-badge {

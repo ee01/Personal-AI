@@ -137,7 +137,8 @@ function createExplorerStatus() {
         enabled: true,
         authStatus: 'needs_login',
         running: false,
-        lastRunOutcome: undefined,
+        lastRunOutcome: 'error',
+        lastError: 'Doubao login required before running explorer collection.',
         cache: {
           messageCount: 12,
           conversationCount: 3,
@@ -300,6 +301,10 @@ async function main() {
           return {
             implemented: true,
             insertedCount: 0,
+            extractedConversationCount: 1,
+            extractedMessageCount: 2,
+            artifactCount: 1,
+            skippedConversationCount: 0,
           };
         },
         revokeIngestedMemory: async (source, scope) => {
@@ -377,6 +382,22 @@ async function main() {
     const statusText = await page.locator('#doubao-source-toggle-status').textContent();
     assert.match(statusText || '', /已开启/);
     assert.match(statusText || '', /Memory Service/);
+    await expectText(page, '#doubao-source-run-state', /最近失败/);
+    await expectText(
+      page,
+      '#doubao-source-status-message',
+      /最近一次自动读取失败：Doubao login required before running explorer collection/,
+    );
+    await expectText(
+      page,
+      '#doubao-source-status-message',
+      /请点击“登录来源”重新登录，然后再立即抓取/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-status-message',
+      /ChatGPT 自动读取已开启，但还没有可用登录态/,
+    );
 
     assert.equal(await page.evaluate(() => window.__paiInjected), false);
     assert.equal(await page.locator('#blocking-reasons img').count(), 0);
@@ -460,6 +481,11 @@ async function main() {
       'webpage_mcp',
     );
     assert.deepEqual(manualRunState.runNow, { source: 'doubao' });
+    await expectText(
+      page,
+      '#doubao-source-message',
+      /豆包对话抓取完成：新增 0 条缓存消息，提炼 2 条消息 \/ 1 个对话，写入 1 条记忆/,
+    );
 
     await page.evaluate(() => {
       const fallbackCooldownUntil = new Date(

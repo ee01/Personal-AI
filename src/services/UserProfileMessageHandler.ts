@@ -54,6 +54,125 @@ export async function getProfileItemsForView(
     };
 }
 
+type OptionalExportSection<T> = {
+    value: T;
+    warning?: string;
+};
+
+type ProfileExportAudit = {
+    exportedProfileItems: number;
+    confirmedItems: number;
+    pendingConfirmationItems: number;
+    usableProfileItems: number;
+    heldForConfirmationItems: number;
+    withoutEvidenceItems: number;
+    confirmationRate: number;
+    evidenceCoverageRate: number;
+    byStatus: Record<string, number>;
+    byItemType: Record<string, number>;
+    bySourceKind: Record<string, number>;
+    personalizationBoundary: {
+        rule: string;
+        usableProfileItems: number;
+        heldForConfirmationItems: number;
+    };
+};
+
+function getExportErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === 'string' && error.trim()) return error.trim();
+    return 'unknown error';
+}
+
+async function getOptionalExportSection<T>(
+    promise: Promise<T>,
+    fallback: T,
+    sectionName: string,
+): Promise<OptionalExportSection<T>> {
+    try {
+        return { value: await promise };
+    } catch (error) {
+        return {
+            value: fallback,
+            warning: `${sectionName} 暂不可用：${getExportErrorMessage(error)}`,
+        };
+    }
+}
+
+function incrementCount(target: Record<string, number>, rawKey: unknown, fallback: string): void {
+    const key = String(rawKey ?? '').trim() || fallback;
+    target[key] = (target[key] ?? 0) + 1;
+}
+
+function getProfileItemEvidenceCount(item: any): number {
+    if (Array.isArray(item?.evidenceRefs)) return item.evidenceRefs.length;
+    if (typeof item?.evidenceRefs === 'string') {
+        try {
+            const parsed = JSON.parse(item.evidenceRefs);
+            return Array.isArray(parsed) ? parsed.length : 0;
+        } catch {
+            return 0;
+        }
+    }
+    if (Array.isArray(item?.evidence_refs)) return item.evidence_refs.length;
+    if (typeof item?.evidence_refs === 'string') {
+        try {
+            const parsed = JSON.parse(item.evidence_refs);
+            return Array.isArray(parsed) ? parsed.length : 0;
+        } catch {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+function buildProfileExportAudit(items: any[]): ProfileExportAudit {
+    const byStatus: Record<string, number> = {};
+    const byItemType: Record<string, number> = {};
+    const bySourceKind: Record<string, number> = {};
+
+    let confirmedItems = 0;
+    let pendingConfirmationItems = 0;
+    let usableProfileItems = 0;
+    let withoutEvidenceItems = 0;
+
+    for (const item of items) {
+        const status = String(item?.status ?? item?.item_status ?? '').trim() || 'unknown';
+        const userConfirmed = Boolean(item?.userConfirmed ?? item?.user_confirmed);
+
+        incrementCount(byStatus, status, 'unknown');
+        incrementCount(byItemType, item?.itemType ?? item?.item_type, 'unknown');
+        incrementCount(bySourceKind, item?.sourceKind ?? item?.source_kind, 'unknown');
+
+        if (userConfirmed) confirmedItems += 1;
+        if (!userConfirmed || status === 'pending_confirm') pendingConfirmationItems += 1;
+        if (userConfirmed && status === 'active') usableProfileItems += 1;
+        if (getProfileItemEvidenceCount(item) === 0) withoutEvidenceItems += 1;
+    }
+
+    const exportedProfileItems = items.length;
+    const evidenceBackedItems = exportedProfileItems - withoutEvidenceItems;
+
+    return {
+        exportedProfileItems,
+        confirmedItems,
+        pendingConfirmationItems,
+        usableProfileItems,
+        heldForConfirmationItems: exportedProfileItems - usableProfileItems,
+        withoutEvidenceItems,
+        confirmationRate: exportedProfileItems > 0 ? confirmedItems / exportedProfileItems : 0,
+        evidenceCoverageRate: exportedProfileItems > 0 ? evidenceBackedItems / exportedProfileItems : 0,
+        byStatus,
+        byItemType,
+        bySourceKind,
+        personalizationBoundary: {
+            rule: 'Only active profile items with userConfirmed=true are eligible for personalization and provider context.',
+            usableProfileItems,
+            heldForConfirmationItems: exportedProfileItems - usableProfileItems,
+        },
+    };
+}
+
 /**
  * 用户画像相关消息处理器
  * 处理所有与用户画像、权重配置、数据融合等相关的消息
@@ -309,98 +428,156 @@ export class UserProfileMessageHandler {
         if (request.type === 'EXPORT_USER_PROFILE') {
             console.log('处理用户画像导出请求');
 
-            const client = getMemoryServiceClient();
-            Promise.all([
-                client.getUserCore(),
-                getProfileItemsForView(client, Number.POSITIVE_INFINITY),
-                client.getHealth(),
-                client.getStats()
-            ])
-            .then(([coreResult, profileItems, healthStatus, stats]) => {
-                console.log('用户画像导出数据准备完成');
+            (async () => {
+                try {
+                    const client = getMemoryServiceClient();
+                    const [
+                        coreSection,
+                        profileItems,
+                        healthSection,
+                        statsSection,
+                    ] = await Promise.all([
+                        getOptionalExportSection(
+                            client.getUserCore(),
+                            { content: '' },
+                            '核心画像摘要',
+                        ),
+                        getProfileItemsForView(client, Number.POSITIVE_INFINITY),
+                        getOptionalExportSection<any>(
+                            client.getHealth(),
+                            null,
+                            '系统健康诊断',
+                        ),
+                        getOptionalExportSection<any>(
+                            client.getStats(),
+                            null,
+                            '实体统计诊断',
+                        ),
+                    ]);
 
-                const viewModel = buildUserProfileViewModel({
-                    core: coreResult.content,
-                    items: profileItems.items,
-                    totalItems: profileItems.total,
-                    truncated: profileItems.truncated,
-                    viewLimit: profileItems.viewLimit,
-                });
+                    console.log('用户画像导出数据准备完成');
 
-                // 构建导出数据结构
-                const exportData = {
-                    // 基本信息
-                    exportInfo: {
-                        exportTime: new Date().toISOString(),
-                        exportTimestamp: Date.now(),
-                        version: '2.0',
-                        exportType: 'complete_user_profile',
-                        pagination: {
-                            exportedProfileItems: profileItems.items.length,
-                            totalProfileItems: profileItems.total,
-                            truncated: profileItems.truncated,
-                        },
-                    },
+                    const coreResult = coreSection.value;
+                    const healthStatus = healthSection.value;
+                    const stats = statsSection.value;
+                    const profileAudit = buildProfileExportAudit(profileItems.items);
+                    const exportWarnings = [
+                        coreSection.warning,
+                        healthSection.warning,
+                        statsSection.warning,
+                        profileItems.truncated
+                            ? `画像条目导出被截断：已导出 ${profileItems.items.length}/${profileItems.total} 条`
+                            : undefined,
+                    ].filter(Boolean) as string[];
 
-                    // 用户画像核心数据
-                    userProfile: {
+                    const viewModel = buildUserProfileViewModel({
                         core: coreResult.content,
                         items: profileItems.items,
                         totalItems: profileItems.total,
-                        viewModel: viewModel.profile,
-                    },
+                        truncated: profileItems.truncated,
+                        viewLimit: profileItems.viewLimit,
+                    });
 
-                    // 系统状态信息
-                    systemStatus: {
-                        isInitialized: healthStatus.status === 'ok',
-                        cloudConnected: healthStatus.database.connected,
-                        databaseStats: {
-                            messageCount: healthStatus.database.messageCount,
-                            entityCount: healthStatus.database.entityCount,
-                            chunkCount: healthStatus.database.chunkCount
+                    // 构建导出数据结构
+                    const exportData = {
+                        // 基本信息
+                        exportInfo: {
+                            exportTime: new Date().toISOString(),
+                            exportTimestamp: Date.now(),
+                            version: '2.0',
+                            exportType: 'complete_user_profile',
+                            pagination: {
+                                exportedProfileItems: profileItems.items.length,
+                                totalProfileItems: profileItems.total,
+                                truncated: profileItems.truncated,
+                            },
+                            warnings: exportWarnings,
+                            optionalSections: {
+                                userCore: {
+                                    available: !coreSection.warning,
+                                },
+                                systemHealth: {
+                                    available: !healthSection.warning,
+                                },
+                                entityStatistics: {
+                                    available: !statsSection.warning,
+                                },
+                            },
+                            profileAudit,
+                        },
+
+                        // 用户画像核心数据
+                        userProfile: {
+                            core: coreResult.content,
+                            items: profileItems.items,
+                            totalItems: profileItems.total,
+                            viewModel: viewModel.profile,
+                        },
+
+                        // 系统状态信息
+                        systemStatus: {
+                            healthAvailable: Boolean(healthStatus),
+                            isInitialized: healthStatus?.status === 'ok',
+                            cloudConnected: Boolean(healthStatus?.database?.connected),
+                            databaseStats: {
+                                messageCount: healthStatus?.database?.messageCount ?? 0,
+                                entityCount: healthStatus?.database?.entityCount ?? 0,
+                                chunkCount: healthStatus?.database?.chunkCount ?? 0
+                            },
+                            warning: healthSection.warning,
+                        },
+
+                        // 实体统计信息
+                        entityStatistics: {
+                            statsAvailable: Boolean(stats),
+                            entityCounts: stats?.entities?.byType ?? {},
+                            totalEntities: stats?.entities?.total ?? 0,
+                            totalRelationships: stats?.relationships?.total ?? 0,
+                            messagesTotal: stats?.messages?.total ?? 0,
+                            messagesToday: stats?.messages?.today ?? 0,
+                            messagesThisWeek: stats?.messages?.thisWeek ?? 0,
+                            warning: statsSection.warning,
+                        },
+
+                        // 生成用户友好的总结
+                        exportSummary: {
+                            profileCompleteness: profileItems.truncated
+                                ? '已截断'
+                                : profileItems.total > 0
+                                    ? '完整'
+                                    : '部分',
+                            totalInteractions: viewModel.profile.statistics.totalInteractions,
+                            averageDailyActivity: viewModel.profile.statistics.averageDailyActivity,
+                            totalProfileItems: profileItems.total,
+                            exportedProfileItems: profileItems.items.length,
+                            confirmedProfileItems: profileAudit.confirmedItems,
+                            pendingConfirmationItems: profileAudit.pendingConfirmationItems,
+                            usableProfileItems: profileAudit.usableProfileItems,
+                            heldForConfirmationItems: profileAudit.heldForConfirmationItems,
+                            withoutEvidenceItems: profileAudit.withoutEvidenceItems,
+                            totalEntities: stats?.entities?.total ?? 0,
+                            dataQuality: healthStatus?.database?.connected
+                                ? '良好'
+                                : exportWarnings.length > 0
+                                    ? '部分诊断缺失'
+                                    : '离线模式'
                         }
-                    },
+                    };
 
-                    // 实体统计信息
-                    entityStatistics: {
-                        entityCounts: stats.entities.byType,
-                        totalEntities: stats.entities.total,
-                        totalRelationships: stats.relationships.total,
-                        messagesTotal: stats.messages.total,
-                        messagesToday: stats.messages.today,
-                        messagesThisWeek: stats.messages.thisWeek,
-                    },
-
-                    // 生成用户友好的总结
-                    exportSummary: {
-                        profileCompleteness: profileItems.truncated
-                            ? '已截断'
-                            : profileItems.total > 0
-                                ? '完整'
-                                : '部分',
-                        totalInteractions: viewModel.profile.statistics.totalInteractions,
-                        averageDailyActivity: viewModel.profile.statistics.averageDailyActivity,
-                        totalProfileItems: profileItems.total,
-                        exportedProfileItems: profileItems.items.length,
-                        totalEntities: stats.entities.total,
-                        dataQuality: healthStatus.database.connected ? '良好' : '离线模式'
-                    }
-                };
-
-                sendResponse({
-                    success: true,
-                    data: exportData,
-                    message: '用户画像导出数据准备成功'
-                });
-            })
-            .catch(error => {
-                console.error('用户画像导出失败:', error);
-                sendResponse({
-                    success: false,
-                    error: error.message,
-                    message: '用户画像导出失败'
-                });
-            });
+                    sendResponse({
+                        success: true,
+                        data: exportData,
+                        message: '用户画像导出数据准备成功'
+                    });
+                } catch (error) {
+                    console.error('用户画像导出失败:', error);
+                    sendResponse({
+                        success: false,
+                        error: getExportErrorMessage(error),
+                        message: '用户画像导出失败'
+                    });
+                }
+            })();
             return true;
         }
 

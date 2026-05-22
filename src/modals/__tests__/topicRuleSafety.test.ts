@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getRuleSafetySummary } from '../topic-rule-safety.js';
+import {
+  getRuleActionSummaryItems,
+  getRuleSafetySummary,
+} from '../topic-rule-safety.js';
 
 test('rule safety flags global auto-executed linked actions as highest risk', () => {
   const summary = getRuleSafetySummary({
@@ -60,4 +63,36 @@ test('rule safety does not warn on common two-character CJK scopes', () => {
   assert.equal(summary.tone, 'ok');
   assert.equal(summary.label, '基础安全');
   assert.deepEqual(summary.reasons, ['范围明确']);
+});
+
+test('rule action summary exposes trigger outcomes before saving edits', () => {
+  const items = getRuleActionSummaryItems({
+    notifyMethod: 'bot,chrome',
+    mentionMe: true,
+    digestEnabled: true,
+    digestFrequency: 'weekly',
+    autoReply: true,
+    autoReplyMode: 'manual',
+    followThread: true,
+    automationPrompt: '创建一个待审批的 OpenClaw 动作',
+    automationRequiresApproval: true,
+  });
+
+  assert.deepEqual(items, [
+    '写入记忆',
+    '每周摘要（不即时推送）',
+    '自动答复：手动审核',
+    '关注后续',
+    '联动操作：需批准',
+  ]);
+});
+
+test('rule action summary treats digest as the low-interruption delivery path', () => {
+  const items = getRuleActionSummaryItems({
+    notifyMethod: '',
+    digestEnabled: true,
+    digestFrequency: 'daily',
+  });
+
+  assert.deepEqual(items, ['写入记忆', '每日摘要（不即时推送）']);
 });

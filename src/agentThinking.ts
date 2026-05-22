@@ -12,9 +12,11 @@ import {
 import {
   buildCustomPromptPreferenceSection,
   buildUserContextPreferenceSection,
+  isCustomPromptScopeInjectionEnabled,
   isCustomPromptsInjectionEnabled,
   isPreferenceInjectionEnabled,
   isUserContextInjectionEnabled,
+  type UserContextPreferenceScope,
 } from './services/userConfigPreview';
 import { getEnvConfig } from './utils';
 import { jiraFetch, getJiraBaseUrl, getJiraToken } from './jira';
@@ -451,6 +453,8 @@ export class IntelligentAgent {
       preferenceInjection: {
         enabled: true,
         customPromptsEnabled: true,
+        messagePromptEnabled: true,
+        projectPromptEnabled: true,
         userContextEnabled: true,
       },
       userContextConfig: {
@@ -607,13 +611,27 @@ export class IntelligentAgent {
     const preferenceInjectionEnabled = isPreferenceInjectionEnabled(mergedConfig);
     const customPromptsInjectionEnabled =
       isCustomPromptsInjectionEnabled(mergedConfig);
+    const messagePromptInjectionEnabled =
+      isCustomPromptScopeInjectionEnabled(mergedConfig, 'message');
+    const projectPromptInjectionEnabled =
+      isCustomPromptScopeInjectionEnabled(mergedConfig, 'project');
     const userContextInjectionEnabled = isUserContextInjectionEnabled(mergedConfig);
+    const injectableCustomPrompts =
+      preferenceInjectionEnabled && customPromptsInjectionEnabled
+        ? {
+            ...mergedConfig.customPrompts,
+            message: messagePromptInjectionEnabled
+              ? mergedConfig.customPrompts.message
+              : defaultConfig.customPrompts.message,
+            project: projectPromptInjectionEnabled
+              ? mergedConfig.customPrompts.project
+              : defaultConfig.customPrompts.project,
+          }
+        : defaultConfig.customPrompts;
 
     return {
       preferenceInjection: mergedConfig.preferenceInjection,
-      customPrompts: preferenceInjectionEnabled && customPromptsInjectionEnabled
-        ? mergedConfig.customPrompts
-        : defaultConfig.customPrompts,
+      customPrompts: injectableCustomPrompts,
       userContextConfig: preferenceInjectionEnabled && userContextInjectionEnabled
         ? mergedConfig.userContextConfig
         : defaultConfig.userContextConfig,
@@ -625,8 +643,27 @@ export class IntelligentAgent {
   /**
    * 构建用户上下文信息字符串
    */
-  private buildUserContextInfo(userContextConfig: any): string {
-    return buildUserContextPreferenceSection(userContextConfig);
+  private buildUserContextInfo(
+    userContextConfig: any,
+    scope: UserContextPreferenceScope = 'all',
+  ): string {
+    return buildUserContextPreferenceSection(userContextConfig, { scope });
+  }
+
+  private buildUserContextPromptBlock(
+    userContextConfig: any,
+    scope: UserContextPreferenceScope = 'all',
+  ): string {
+    const section = this.buildUserContextInfo(userContextConfig, scope);
+    return section ? `${section}\n\n` : '';
+  }
+
+  private resolveGenericUserContextScope(
+    inputType: string,
+  ): UserContextPreferenceScope {
+    if (inputType === 'message') return 'message';
+    if (['project', 'meeting', 'document'].includes(inputType)) return 'project';
+    return 'all';
   }
 
   private buildCustomPromptSection(
@@ -1727,7 +1764,7 @@ export class IntelligentAgent {
 
       // 执行工具
       if (thoughtResult.tools && thoughtResult.tools.length > 0) {
-        await this.executeTools(
+        const toolExecutionResults = await this.executeTools(
           thoughtResult.tools,
           currentState,
           thoughtStep,
@@ -1736,6 +1773,15 @@ export class IntelligentAgent {
 
         // 特殊处理某些工具的结果
         thoughtResult.tools.forEach((tool) => {
+          const toolCompleted = this.hasCompletedToolExecution(
+            toolExecutionResults,
+            tool.id,
+          );
+
+          if (!toolCompleted) {
+            return;
+          }
+
           // 如果是存储或通知工具，更新最终结果
           if (tool.id === 'messageStore' || tool.id === 'storeMessage') {
             result.shouldStore = true;
@@ -2571,7 +2617,7 @@ ${context}
               toolCall.params || {},
               { result, config, context },
             );
-            console.log(`🔧 工具 ${toolCall.id} 执行结果:`, toolResult.message);
+            // console.log(`🔧 工具 ${toolCall.id} 执行结果:`, toolResult.message);
             this.appendToolResult(toolResults, toolCall.id, toolResult);
 
             // 根据工具结果更新分析结果
@@ -2871,6 +2917,40 @@ ${this.getToolSafetyPromptGuidance()}
     }
 
     resultMap[toolId] = result;
+  }
+
+  private flattenToolExecutionResultValues(value: any): any[] {
+    if (Array.isArray(value)) {
+      return value.flatMap((item) =>
+        this.flattenToolExecutionResultValues(item),
+      );
+    }
+    return [value];
+  }
+
+  private isCompletedToolExecutionResult(value: any): boolean {
+    if (!value || typeof value !== 'object') return false;
+    return !(
+      value.error ||
+      value.blocked ||
+      value.skipped ||
+      value.approvalRequired ||
+      value.success === false ||
+      value.result?.success === false
+    );
+  }
+
+  private hasCompletedToolExecution(
+    resultMap: Record<string, any>,
+    toolId: string,
+  ): boolean {
+    if (!Object.prototype.hasOwnProperty.call(resultMap, toolId)) {
+      return false;
+    }
+
+    return this.flattenToolExecutionResultValues(resultMap[toolId]).some(
+      (value) => this.isCompletedToolExecutionResult(value),
+    );
   }
 
   /**
@@ -3295,6 +3375,7 @@ ${this.getToolSafetyPromptGuidance()}
     // 构建用户上下文信息
     const userContextInfo = this.buildUserContextInfo(
       userConfig.userContextConfig,
+      'message',
     );
 
     // 构建关注规则：RULE_REF 是主协议，RULE_ID 仅保留手动规则兼容层
@@ -3711,6 +3792,7 @@ ${messages.length > 1 && !analyzeByGroup ? `所在群组: ${msg.groupName || '�
     // 构建用户上下文信息
     const userContextInfo = this.buildUserContextInfo(
       userConfig.userContextConfig,
+      'project',
     );
 
     // 构建Jira数据信息
@@ -3906,8 +3988,9 @@ ${customPromptSection}
       .join('\n');
 
     // 构建用户上下文信息
-    const userContextInfo = this.buildUserContextInfo(
+    const userContextInfo = this.buildUserContextPromptBlock(
       userConfig.userContextConfig,
+      'project',
     );
 
     // 构建会议内容描述
@@ -4059,8 +4142,9 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
       .join('\n');
 
     // 构建用户上下文信息
-    const userContextInfo = this.buildUserContextInfo(
+    const userContextInfo = this.buildUserContextPromptBlock(
       userConfig.userContextConfig,
+      'project',
     );
 
     // 构建文档内容描述
@@ -4209,8 +4293,9 @@ ${config.preferredTools && config.preferredTools.length > 0 ? `\n推荐优先考
     }
 
     // 构建用户上下文信息
-    const userContextInfo = this.buildUserContextInfo(
+    const userContextInfo = this.buildUserContextPromptBlock(
       userConfig.userContextConfig,
+      this.resolveGenericUserContextScope(inputType),
     );
 
     // 构建上下文信息

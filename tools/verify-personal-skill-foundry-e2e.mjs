@@ -313,10 +313,54 @@ try {
   await page.locator('.workspace-title h2', { hasText: 'Active Skill' }).waitFor({
     timeout: 15000,
   });
+  await page.locator('.tab-btn', { hasText: '绑定' }).click();
+  const chatGptBinding = page.locator('.binding-card', {
+    hasText: 'ChatGPT / GPTs',
+  });
+  await chatGptBinding.locator('.binding-state.manual', { hasText: '手动安装' }).waitFor({
+    timeout: 15000,
+  });
+  await chatGptBinding.locator('.binding-hint', {
+    hasText: '仅提供手动安装指引',
+  }).waitFor({ timeout: 15000 });
+  await chatGptBinding.locator('.binding-hint', {
+    hasText: '暂不能由 Personal AI 自动写入或探测安装状态',
+  }).waitFor({ timeout: 15000 });
+  const claudeWebBinding = page.locator('.binding-card', {
+    hasText: 'Claude.ai Skills',
+  });
+  await claudeWebBinding.locator('.binding-state.manual', { hasText: '手动安装' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.section-head button', { hasText: '平台级自动同步' }).click();
+  const chatGptSyncRow = page.locator('.sync-row', {
+    hasText: 'ChatGPT / GPTs',
+  });
+  await chatGptSyncRow.locator('.scope', { hasText: '不参与自动同步' }).waitFor({
+    timeout: 15000,
+  });
+  await chatGptSyncRow.locator('.switch span', { hasText: '仅手动' }).waitFor({
+    timeout: 15000,
+  });
+  const codexSyncRow = page.locator('.sync-row', { hasText: 'Codex CLI' });
+  await codexSyncRow.locator('.switch span', { hasText: '需 Desktop App' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.secondary-btn', { hasText: '关闭' }).click();
+
   const suggestionCard = page.locator('.suggestion-card', {
     hasText: 'Snooze Candidate',
   });
   await suggestionCard.locator('.review-chip', { hasText: '需审核' }).waitFor({
+    timeout: 15000,
+  });
+  await suggestionCard.locator('.review-preview', { hasText: '待审核摘要' }).waitFor({
+    timeout: 15000,
+  });
+  await suggestionCard.locator('.review-preview', { hasText: '2 项原因' }).waitFor({
+    timeout: 15000,
+  });
+  await suggestionCard.locator('.review-preview', { hasText: '风险 medium' }).waitFor({
     timeout: 15000,
   });
   const externalChangeCard = page.locator('.suggestion-card', {
@@ -325,6 +369,9 @@ try {
   await externalChangeCard.locator('.change-chip', { hasText: '变更' }).waitFor({
     timeout: 15000,
   });
+  await externalChangeCard
+    .locator('.review-preview', { hasText: '覆盖 active-skill' })
+    .waitFor({ timeout: 15000 });
   await externalChangeCard.click();
   await page
     .locator('.workspace-title h2', { hasText: 'Active Skill (openclaw change)' })
@@ -336,6 +383,12 @@ try {
     timeout: 15000,
   });
   await page.locator('.review-gate', { hasText: 'active-skill 的新版本' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.review-audit-summary', { hasText: '证据已查看，可以确认' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.review-audit-summary', { hasText: 'OpenClaw remote -> active-skill' }).waitFor({
     timeout: 15000,
   });
   await page
@@ -352,7 +405,16 @@ try {
   await page.locator('.review-gate', { hasText: '使用前需要审核' }).waitFor({
     timeout: 15000,
   });
+  await page.locator('.review-audit-summary', { hasText: '证据已查看，可以确认' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.review-audit-summary', { hasText: '1 条证据' }).waitFor({
+    timeout: 15000,
+  });
   await page.locator('.tab-btn.active', { hasText: '证据' }).waitFor({
+    timeout: 15000,
+  });
+  await suggestionCard.locator('.review-preview', { hasText: '已查看证据' }).waitFor({
     timeout: 15000,
   });
   await page

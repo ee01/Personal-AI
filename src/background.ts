@@ -52,7 +52,11 @@ import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
-import { formatLocalScheduleDateTime } from './scheduled-messages/scheduleDateTime';
+import {
+  formatLocalScheduleDateTime,
+  normalizeLocalScheduleTime,
+} from './scheduled-messages/scheduleDateTime';
+import { calculateScheduledMessageNextExecution } from './scheduled-messages/scheduleNextExecution';
 import type { PushLog, ScheduledMessage } from './scheduled-messages/types';
 import {
   getCurrentUser,
@@ -73,6 +77,7 @@ import {
 } from './message-reaction/FollowThreadHandler';
 import { buildPendingLinkedActionConfig } from './message-reaction/linkedActionEntry';
 import {
+  doesSnoozeReminderMatchSchedule,
   findOpenSnoozeReminderForMessage,
   getSnoozeReminderSourceKey,
   isOpenSnoozeReminder,
@@ -303,12 +308,54 @@ function parseOutreachEpochSeconds(raw?: string): number | undefined {
   return Math.floor(date.getTime() / 1000);
 }
 
+function getOutreachScheduleTimeZone(): string {
+  return (
+    Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || 'Asia/Shanghai'
+  );
+}
+
+function isRecurringScheduledMessage(message: ScheduledMessage): boolean {
+  return Boolean(message.Repeat_Every && message.Repeat_Unit);
+}
+
+function getExpectedOutreachScheduleTime(message: ScheduledMessage): string {
+  return normalizeLocalScheduleTime(message.Schedule_Time) || '09:00';
+}
+
+function isNextExecAlignedWithScheduleTime(
+  message: ScheduledMessage,
+  nextExecution?: string,
+): boolean {
+  if (!nextExecution?.trim()) return false;
+
+  try {
+    const { timeStr } = formatLocalScheduleDateTime(nextExecution);
+    return timeStr === getExpectedOutreachScheduleTime(message);
+  } catch {
+    return false;
+  }
+}
+
+function resolveOutreachNextExecution(message: ScheduledMessage): string {
+  if (!isRecurringScheduledMessage(message)) {
+    return message.Next_Exec || message.Schedule_Date || '';
+  }
+
+  if (isNextExecAlignedWithScheduleTime(message, message.Next_Exec)) {
+    return message.Next_Exec || '';
+  }
+
+  return calculateScheduledMessageNextExecution(message);
+}
+
 function buildOutreachScheduleSpec(
   message: ScheduledMessage,
 ): Record<string, unknown> {
-  const spec: Record<string, unknown> = {};
+  const spec: Record<string, unknown> = {
+    timezone: getOutreachScheduleTimeZone(),
+  };
   const nextDispatchAt = parseOutreachEpochSeconds(
-    message.Next_Exec || message.Schedule_Date,
+    resolveOutreachNextExecution(message),
   );
   if (nextDispatchAt) {
     spec.nextDispatchAt = nextDispatchAt;
@@ -389,6 +436,7 @@ function buildOutreachTemplatePayload(
     title: message.Topic,
     questionTemplate,
     contextTemplate: overrides.contextTemplate?.trim(),
+    informationGoalTemplate: overrides.contextTemplate?.trim(),
     targetType,
     targetRef,
     scheduleSpec: buildOutreachScheduleSpec(message),
@@ -2461,6 +2509,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           typeof request.data?.messageId === 'string'
             ? request.data.messageId.trim()
             : '';
+        const expectedScheduleDate =
+          typeof request.data?.expectedScheduleDate === 'string'
+            ? request.data.expectedScheduleDate.trim()
+            : '';
+        const expectedScheduleTime =
+          typeof request.data?.expectedScheduleTime === 'string'
+            ? request.data.expectedScheduleTime.trim()
+            : '';
         if (!messageId) {
           sendResponse({ success: false, error: '缺少提醒 ID' });
           return;
@@ -2496,6 +2552,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({
             success: false,
             error: '只能撤销未完成的稍后处理提醒',
+          });
+          return;
+        }
+
+        if (
+          !doesSnoozeReminderMatchSchedule(message, {
+            scheduleDate: expectedScheduleDate,
+            scheduleTime: expectedScheduleTime,
+          })
+        ) {
+          sendResponse({
+            success: false,
+            error: '提醒时间已被更新，请到管理稍后处理中确认或删除',
           });
           return;
         }

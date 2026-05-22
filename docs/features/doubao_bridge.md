@@ -1,6 +1,6 @@
 # Personal AI Desktop App Memory Flow
 
-_最后更新: 2026-05-16_
+_最后更新: 2026-05-22_
 
 ## 概述
 
@@ -19,6 +19,18 @@ Personal AI Desktop App 是一套运行在本机的记忆协调系统，用来�
   - 不再承载主要配置功能
 
 当前架构版本为 `v2`，以 macOS app 形态交付。
+
+## 大白话运行逻辑
+
+这个功能像一个本机桥接器：Desktop App 负责维持本机登录态和同步能力，Memory Service 负责保存和检索记忆，Chrome Extension 负责提供页面入口和状态展示。豆包只是当前接入的 provider 之一，长期设计应保持 provider-neutral。
+
+结果主要受这些因素影响：
+
+1. 本机服务是否在线：Desktop App 和 Memory Service 连接状态是同步能否发生的前提。
+2. provider 登录态：豆包登录过期、页面需要人工验证时，自动同步只能暂停或降级。
+3. 线程绑定关系：只有已识别或已绑定的 provider thread 才能稳定写回对应记忆。
+4. 同步方向：输出侧同步负责把 Personal AI 内容带到豆包，输入侧探索负责把豆包会话沉淀回 Memory Service，两者应分开判断。
+5. 用户显式动作：涉及发送、写回或跨平台注入时，应保留用户确认和可见状态，不把后台同步伪装成已完成。
 
 ---
 
@@ -95,7 +107,7 @@ Desktop App 支持三类定时同步：
 - 自动同步与“现在推一次 persona”走同一条 `stable_memory` 发送链路
 - 自动同步与“现在推一次近期重点”走同一条 `mobile_briefing` 发送链路
 - 自动同步与“现在推一次提醒”走同一条 `reminder_sync` 发送链路
-- 这三条链路现在都会明确要求豆包把内容记录到“随手记”
+- 这三条链路现在都会明确要求豆包把内容记录到“随手记”，并在发送文案里说明内容来自 `Personal AI (私人 AI)`
 - 其中 `stable_memory` / `reminder_sync` 的结构化程度更强，`mobile_briefing` 仍以近期重点列表为主，但记录话术已改为随手记导向
 - 手动触发同步会区分 `succeeded` 与 `skipped`：如果 Memory Service 当前没有真实可推送内容，app 会提示“本次没有可推送内容”，不会把跳过误展示为已推送
 - 自动同步和手动同步都会过滤 Memory Service 返回的空占位包（例如 `itemCount: 0` 的近期重点、待办、通知或稳定记忆包），并把对应 sync job 标记为 `skipped`；不会把“暂无内容”的占位文本写进豆包线程
@@ -121,11 +133,24 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 - 手动触发某个来源抓取前，如果该来源卡片有未保存的抓取范围、默认范围或浏览器传输方式，app 会先保存再执行，避免本次抓取沿用旧设置
 - 使用日常 Chrome 抓取或广播豆包时，必须先存在明确的 `doubao.com` 标签页；不会把当前活动页误当作豆包页面读取或写入。DOM fallback 也会统一处理 `/chat/<id>`、`/thread/<id>` 与绝对链接。
 - 当 `webpage-mcp` 来源读取失败并临时回退到桌面端 Chromium 时，Explorer 状态会保留最近一次回退原因，UI 会在来源卡片内显示，用户可以据此补齐扩展连接、Chrome 标签页或登录态
+- 如果某个 Explorer 来源最近一次自动读取失败，来源卡片会直接显示失败原因和下一步恢复提示，例如重新登录、补齐日常浏览器标签页、测试 Memory Service 或重新抓取
+- 如果某个 Explorer 来源最近一次自动读取成功，来源卡片和手动抓取反馈会显示本轮摘要：新增缓存消息数、提炼消息数、写入记忆数，以及因无可沉淀内容被跳过的对话数。这样 `新增 0 条缓存` 不会被误解成“没有做事”，因为本轮可能只是把已有缓存提炼并写回 Memory Service。
 
 因此当前产品方向已经不是单向“往豆包发”的 bridge，而是：
 
 - 输出侧，把长期记忆、近期重点、提醒、查询答案发进豆包线程
 - 输入侧，把 explorer 抓回来的对话材料整理后沉淀回 `Memory Service`
+
+### 输入链路的产品依据
+
+业内同类能力正在把“记忆来自哪里、能否迁移、能否删除”做成一等路径：
+
+- [ChatGPT Memory Sources](https://help.openai.com/en/articles/8590148-memory-faq) 强调用户可以看到哪些信息影响了个性化回答，并可编辑记忆、删除引用聊天、标记来源是否相关。
+- [Claude memory import/export](https://support.claude.com/en/articles/12123587-import-and-export-your-memory-from-claude) 已支持从其它 AI provider 导入/导出记忆，但也提醒导入仍是实验能力，可能不会完整吸收所有内容。
+- [Gemini AI chat history import](https://gemini.google/bz/import-memory/?hl=en) 把 `.zip` 聊天历史导入、导入批次删除、导入来源标记作为用户可见流程。
+- Memory portability 产品如 [Mollow](https://mollow.ai/) 和 [Lore](https://loreapp.dev/) 都把跨 ChatGPT / Claude / Gemini 的导入、搜索、删除、来源证明或本地加密作为核心卖点。
+
+研究侧也支持当前实现方向：不要把完整聊天原文直接当长期记忆，而应拆成可审计的提炼结果。[Mem0](https://arxiv.org/abs/2504.19413) 讨论了从持续对话中动态提取、整合、检索显著信息，并用结构化持久记忆降低延迟和 token 成本；[LongMemEval](https://arxiv.org/abs/2410.10813) 则把长期记忆能力拆成信息抽取、多会话推理、时间推理、知识更新和拒答能力，提示 Explorer 输入链路需要保留来源、时间、跳过/提炼结果，后续才方便校准质量。
 
 ### 6. 本机状态与后台运行
 
@@ -164,9 +189,9 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 1. `Memory Service Base URL` 已配置
 2. `Memory Service User ID` 已配置
 3. 豆包登录状态为 `connected`
-4. `memory_sync_thread` 已绑定  
+4. `memory_sync_thread` 已绑定到可打开的豆包 `/chat` 或 `/thread` 链接
    影响 `stable_memory`
-5. `mobile_context_thread` 已绑定  
+5. `mobile_context_thread` 已绑定到可打开的豆包 `/chat` 或 `/thread` 链接
    影响 `mobile_briefing` 和 `reminder_sync`
 
 当前 app 中后台同步默认开启，不再要求用户额外勾选一个 `autoSync` 开关。
@@ -175,6 +200,7 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 
 - app 会在状态区显示阻塞原因
 - extension 页也会显示“当前阻塞原因”
+- 如果本机状态里残留旧 binding 但缺少可打开的豆包会话链接，状态页会继续显示为待修复，而不是把它当成已就绪
 
 ---
 
@@ -194,6 +220,38 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
   - 每 `15` 分钟同步一次
 
 这些默认值来源于 `desktop-app/.env` 或代码默认值，但普通用户应在 `Personal AI.app` 中修改，而不是手改 `.env`。
+
+---
+
+## 架构边界与 provider-neutral 背景
+
+当前文档以豆包用户可见行为为主，但底层仍保留 provider-neutral 的服务边界：
+
+- `Memory Service` 是唯一真源，负责记忆、画像、提醒、context package 渲染、provider binding 和 sync job 状态
+- `Personal AI.app` 是本机传输与登录态执行端，负责豆包输出线程、豆包 / ChatGPT explorer 输入链路、本地缓存、预览、回写和撤回
+- Chrome Extension 只负责入口、状态摘要和打开 app，不保存豆包凭据，也不直接控制 provider 页面
+
+服务侧 provider API 的有效边界是：
+
+- `GET /api/v1/providers/:provider/capabilities`：声明 transport、binding type、scenario 和 sync model
+- `GET /api/v1/providers/:provider/bindings`
+- `PUT /api/v1/providers/:provider/bindings/:bindingType`
+- `POST /api/v1/providers/context-packages/render`
+- `GET /api/v1/providers/:provider/sync-jobs`
+- `GET /api/v1/providers/:provider/sync-jobs/:id`
+- `POST /api/v1/providers/:provider/sync-jobs/:id/report`
+
+当前豆包侧的 transport mapping 仍然是：
+
+| Memory product | Provider transport | Target binding |
+| --- | --- | --- |
+| `persona_core` | `native_memory` | `memory_sync_thread` |
+| `voice_mode` | `native_memory` | `memory_sync_thread` |
+| `active_focus_digest` | `session_context` | `mobile_context_thread` |
+| `reminder_digest` | `reminder` or `session_context` fallback | `reminder_channel` / `mobile_context_thread` |
+| `query_answer_card` | `session_context` | `mobile_context_thread` |
+
+这部分是设计背景，不单独维护旧的 integration 文档；用户可见配置、同步、输入抓取和恢复路径以本文前面的当前行为为准。
 
 ---
 
@@ -219,6 +277,7 @@ Desktop App 当前正式发送链路不再使用实验性的 request-mode，而�
   - 消息是否真的以新增正文的形式出现在页面
 - 内置 Chromium 与日常 Chrome 的发送验证都会排除输入框 / 编辑器内容，并比较发送前后的正文匹配次数；旧同步消息或未提交的输入框残留不会被当成本次送达成功
 - 近期重点、待办、通知和查询注入必须先绑定 `mobile_context_thread`；未绑定时不会把内容发到当前豆包页
+- 如果 `mobile_context_thread` 只剩旧 binding 或不是豆包 `/chat` / `/thread` 链接，发送前会直接失败并提示重新绑定，不再启动浏览器尝试写入当前页或错误线程
 - 发送失败、命中安全验证或消息不可见时，手动推送会返回失败，后台同步也不会把失败任务当作已完成冷却
 - 这类失败会在 Desktop App 状态区转成可执行提示，例如完成豆包安全验证、刷新可输入对话页或重新绑定手机版对话
 - todo / notice 投递失败会回写到 Memory Service，避免把未送达的通知误标为已送达
@@ -384,6 +443,8 @@ compact 态只显示一条主状态胶囊，按优先级从高到低选择：
 
 如果后台自动同步遇到 Memory Service 连接失败、豆包发送失败或其他桥接异常，`sync_issue` 会在 Quick Ask 状态卡中直接显示最近一次错误、失败链路、触发方式和失败时间。点击这类状态项会把错误摘要带入输入框，方便用户继续追问排查顺序；不用先去翻本机日志才知道同步曾经失败。
 
+外部询问状态不会把“待批准发送”误写成“等待回复”：如果当前只有 pending approval，胶囊和状态卡会显示 `外部询问待批准发送`，状态卡中保留 `待你确认发送` 数量和示例问题。点击普通状态项时，Quick Ask 会把该状态的标题与摘要一起带入输入框，再附上追问提示，避免用户点击后丢失刚才想处理的具体事项。
+
 ### 显式记忆
 
 Quick Ask 和原来的 exploring `/ask` 有一个关键差异：它更像聊天，因此会自然出现“请帮我记住”这种输入。
@@ -532,7 +593,6 @@ Desktop App 本机默认监听：
 
 ## 相关文件
 
-- 旧的集成方案文档：[docs/features/doubao_bridge_integration.md](/Users/Esone/git/personal-ai/docs/features/doubao_bridge_integration.md)
 - app 入口与打包：
 - [desktop-app/app/main.mjs](/Users/Esone/git/personal-ai/desktop-app/app/main.mjs)
   - [desktop-app/app/renderer.js](/Users/Esone/git/personal-ai/desktop-app/app/renderer.js)

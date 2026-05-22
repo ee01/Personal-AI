@@ -77,6 +77,9 @@ const elements = {
   doubaoSourceTransportBanner: document.getElementById(
     'doubao-source-transport-banner',
   ),
+  doubaoSourceStatusMessage: document.getElementById(
+    'doubao-source-status-message',
+  ),
   doubaoSourceSaveButton: document.getElementById('doubao-source-save-button'),
   doubaoSourceLoginButton: document.getElementById(
     'doubao-source-login-button',
@@ -111,6 +114,9 @@ const elements = {
   chatgptSourceScope: document.getElementById('chatgpt-source-scope'),
   chatgptSourceTransportBanner: document.getElementById(
     'chatgpt-source-transport-banner',
+  ),
+  chatgptSourceStatusMessage: document.getElementById(
+    'chatgpt-source-status-message',
   ),
   chatgptSourceSaveButton: document.getElementById(
     'chatgpt-source-save-button',
@@ -328,7 +334,12 @@ function formatRunOutcome(sourceStatus) {
   if (!sourceStatus) return '待检查';
   if (sourceStatus.running) return '抓取中';
   if (!sourceStatus.enabled) return '已关闭自动抓取';
-  if (sourceStatus.lastRunOutcome === 'success') return '最近成功';
+  if (sourceStatus.lastRunOutcome === 'success') {
+    const summary = formatExplorerRunSummary(sourceStatus.lastRunSummary, {
+      compact: true,
+    });
+    return summary ? `最近成功 · ${summary}` : '最近成功';
+  }
   if (sourceStatus.lastRunOutcome === 'error') return '最近失败';
   if (sourceStatus.lastRunOutcome === 'stub') return '待实现';
   return '未执行';
@@ -455,6 +466,13 @@ function setMessage(element, text, tone = 'muted') {
   }`;
 }
 
+function setVisibleMessage(element, text, tone = 'muted') {
+  if (!element) return;
+  const hasText = Boolean(String(text || '').trim());
+  element.hidden = !hasText;
+  setMessage(element, hasText ? text : '', tone);
+}
+
 function setButtonBusy(button, busy, label) {
   if (!button) return;
   if (busy) {
@@ -533,6 +551,167 @@ function formatBridgeIssueMessage(message) {
   }
 
   return text;
+}
+
+function sourceDisplayName(source) {
+  return source === 'doubao' ? '豆包' : 'ChatGPT';
+}
+
+function sourceHostName(source) {
+  return source === 'doubao' ? 'doubao.com' : 'chatgpt.com';
+}
+
+function normalizeExplorerRunSummary(summary) {
+  if (!summary) return null;
+  return {
+    insertedCount: Number(summary.insertedCount ?? 0),
+    extractedConversationCount: Number(
+      summary.extractedConversationCount ?? 0,
+    ),
+    extractedMessageCount: Number(summary.extractedMessageCount ?? 0),
+    artifactCount: Number(summary.artifactCount ?? 0),
+    skippedConversationCount: Number(summary.skippedConversationCount ?? 0),
+  };
+}
+
+function formatExplorerRunSummary(summary, { compact = false } = {}) {
+  const normalized = normalizeExplorerRunSummary(summary);
+  if (!normalized) return '';
+  const {
+    insertedCount,
+    extractedConversationCount,
+    extractedMessageCount,
+    artifactCount,
+    skippedConversationCount,
+  } = normalized;
+
+  if (compact) {
+    const parts = [`新增 ${insertedCount}`];
+    if (extractedMessageCount > 0 || artifactCount > 0) {
+      parts.push(`提炼 ${extractedMessageCount}`);
+      parts.push(`记忆 ${artifactCount}`);
+    }
+    if (skippedConversationCount > 0) {
+      parts.push(`跳过 ${skippedConversationCount}`);
+    }
+    return parts.join(' / ');
+  }
+
+  const parts = [`新增 ${insertedCount} 条缓存消息`];
+  if (extractedMessageCount > 0 || artifactCount > 0) {
+    parts.push(
+      `提炼 ${extractedMessageCount} 条消息 / ${extractedConversationCount} 个对话`,
+    );
+    parts.push(`写入 ${artifactCount} 条记忆`);
+  }
+  if (skippedConversationCount > 0) {
+    parts.push(`跳过 ${skippedConversationCount} 个无可沉淀对话`);
+  }
+  if (
+    insertedCount === 0 &&
+    extractedMessageCount === 0 &&
+    artifactCount === 0 &&
+    skippedConversationCount === 0
+  ) {
+    parts.push('没有待提炼内容');
+  }
+  return parts.join('，');
+}
+
+function formatExplorerRunCompletionMessage(source, result) {
+  const summary = formatExplorerRunSummary(result);
+  const subject = source === 'doubao' ? '豆包对话' : 'ChatGPT 输入';
+  return `${subject}抓取完成：${summary}。`;
+}
+
+function formatExplorerIssueMessage(source, sourceStatus) {
+  const sourceLabel = sourceDisplayName(source);
+  if (!sourceStatus) {
+    return 'Explorer 状态暂不可用。请先刷新状态；如果仍然没有响应，请查看日志。';
+  }
+
+  const lastError = String(sourceStatus.lastError || '').trim();
+  if (lastError) {
+    const normalized = formatBridgeIssueMessage(lastError);
+    const usesDailyBrowser = sourceUsesDailyBrowser(source, sourceStatus);
+    let recovery = '可点击“登录来源”或“立即抓取”重新验证。';
+
+    if (/login required|needs_login|not logged|unauthorized/i.test(lastError)) {
+      recovery = usesDailyBrowser
+        ? `请确认 Chrome 里已打开 ${sourceHostName(
+            source,
+          )} 并登录，或点击“登录来源”立即重试日常浏览器。`
+        : '请点击“登录来源”重新登录，然后再立即抓取。';
+    } else if (
+      /No existing .*tab|tab.*not found|webpage-mcp|connector|extension/i.test(
+        lastError,
+      )
+    ) {
+      recovery = `请在 Chrome 打开 ${sourceHostName(
+        source,
+      )} 标签页并点“测试连接”，或关闭日常浏览器模式回到内置 Chromium。`;
+    } else if (
+      /Memory Service|X-User-Id|ECONN|fetch|timeout|connection|endpoint/i.test(
+        lastError,
+      )
+    ) {
+      recovery = '请先在上方测试 Memory Service，再重新抓取。';
+    }
+
+    return `最近一次自动读取失败：${normalized} ${recovery}`;
+  }
+
+  if (sourceStatus.lastRunOutcome === 'error') {
+    return '最近一次自动读取失败，但没有返回具体错误。请查看日志，或点击“立即抓取”重新验证。';
+  }
+
+  if (!sourceStatus.enabled) {
+    return '';
+  }
+
+  if (sourceStatus.authStatus === 'unsupported') {
+    return `${sourceLabel} 来源暂不支持自动读取。`;
+  }
+
+  if (sourceStatus.authStatus === 'error') {
+    return `${sourceLabel} 登录态检查异常。请点击“登录来源”重新建立会话，或切换日常浏览器模式后再试。`;
+  }
+
+  if (
+    sourceStatus.authStatus !== 'connected' &&
+    !sourceUsesDailyBrowser(source, sourceStatus)
+  ) {
+    return `${sourceLabel} 自动读取已开启，但还没有可用登录态。请先点击“登录来源”。`;
+  }
+
+  if (
+    sourceStatus.authStatus !== 'connected' &&
+    sourceUsesDailyBrowser(source, sourceStatus)
+  ) {
+    return `${sourceLabel} 自动读取已开启，但还没有确认日常浏览器登录态。请确保 Chrome 里已打开 ${sourceHostName(
+      source,
+    )} 并登录。`;
+  }
+
+  if (sourceStatus.lastRunOutcome === 'success') {
+    const summary =
+      formatExplorerRunSummary(sourceStatus.lastRunSummary) ||
+      '没有新增缓存或待提炼内容';
+    return `最近一次自动读取完成：${summary}。`;
+  }
+
+  return '';
+}
+
+function explorerIssueTone(sourceStatus) {
+  if (!sourceStatus) return 'error';
+  if (sourceStatus.lastError || sourceStatus.authStatus === 'error') {
+    return 'error';
+  }
+  if (sourceStatus.lastRunOutcome === 'success') {
+    return 'success';
+  }
+  return 'warn';
 }
 
 function pushUniqueRecoveryAction(actions, action) {
@@ -1033,8 +1212,8 @@ function renderNextStep(status) {
     ],
     [
       !checklist.memorySyncBound,
-      '创建长期记忆线程',
-      '先把 persona_core 和 voice_mode 绑定到专用线程，保证输出侧仍然稳定工作。',
+      '创建 / 修复长期记忆线程',
+      '先把 persona_core 和 voice_mode 绑定到可打开的专用豆包线程，保证输出侧仍然稳定工作。',
     ],
     [
       !checklist.mobileContextBound,
@@ -1316,6 +1495,9 @@ function renderSourceCard(source, sourceStatus) {
   const revokeScope = isDoubao
     ? elements.doubaoSourceRevokeScope
     : elements.chatgptSourceRevokeScope;
+  const statusMessage = isDoubao
+    ? elements.doubaoSourceStatusMessage
+    : elements.chatgptSourceStatusMessage;
 
   if (!sourceStatus) {
     setStatusPill(authPill, '暂不可用', 'error');
@@ -1326,6 +1508,11 @@ function renderSourceCard(source, sourceStatus) {
     if (revokeScope) {
       revokeScope.textContent = '-';
     }
+    setVisibleMessage(
+      statusMessage,
+      formatExplorerIssueMessage(source, sourceStatus),
+      'error',
+    );
     return;
   }
 
@@ -1345,6 +1532,11 @@ function renderSourceCard(source, sourceStatus) {
       sourceStatus.settings?.defaultScope,
     );
   }
+  setVisibleMessage(
+    statusMessage,
+    formatExplorerIssueMessage(source, sourceStatus),
+    explorerIssueTone(sourceStatus),
+  );
   renderSourceTransportBanner(source, sourceStatus);
 }
 
@@ -2278,7 +2470,7 @@ elements.doubaoSourceRunButton.addEventListener('click', () => {
       const result = await explorerApi.runNow('doubao');
       setMessage(
         elements.doubaoSourceMessage,
-        `豆包对话抓取完成，新增 ${result.insertedCount ?? 0} 条缓存消息。`,
+        formatExplorerRunCompletionMessage('doubao', result),
         'success',
       );
       await refreshStatus();
@@ -2302,7 +2494,7 @@ elements.chatgptSourceRunButton.addEventListener('click', () => {
       }
       setMessage(
         elements.chatgptSourceMessage,
-        `ChatGPT 输入抓取完成，新增 ${result.insertedCount ?? 0} 条缓存消息。`,
+        formatExplorerRunCompletionMessage('chatgpt', result),
         'success',
       );
       await refreshStatus();

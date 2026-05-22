@@ -35,7 +35,7 @@ function safeJsonParse<T>(json: string | null): T | undefined {
 }
 
 export interface NotificationListFilters {
-  state?: 'pending' | 'clicked' | 'dismissed';
+  state?: 'pending' | 'scheduled' | 'clicked' | 'dismissed';
   type?: string;
   limit?: number;
   offset?: number;
@@ -79,6 +79,10 @@ export class NotificationRepository {
         conditions.push('(sent_at IS NULL OR sent_at <= ?)');
         params.push(currentTime);
       }
+    } else if (state === 'scheduled') {
+      conditions.push('clicked_at IS NULL AND dismissed_at IS NULL');
+      conditions.push('sent_at IS NOT NULL AND sent_at > ?');
+      params.push(currentTime);
     } else if (state === 'clicked') {
       conditions.push('clicked_at IS NOT NULL');
     } else if (state === 'dismissed') {
@@ -91,11 +95,15 @@ export class NotificationRepository {
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const orderClause =
+      state === 'scheduled'
+        ? 'ORDER BY sent_at ASC, created_at DESC'
+        : 'ORDER BY created_at DESC';
     const rows = this.db
       .prepare(
         `SELECT * FROM notification_records
          ${whereClause}
-         ORDER BY created_at DESC
+         ${orderClause}
          LIMIT ? OFFSET ?`,
       )
       .all(...params, limit, offset) as NotificationRow[];
@@ -135,6 +143,9 @@ export class NotificationRepository {
 
     if (!existing) {
       throw new Error(`Notification "${id}" not found`);
+    }
+    if (existing.clicked_at !== null || existing.dismissed_at !== null) {
+      throw new Error(`Notification "${id}" is already handled`);
     }
 
     const currentTime = now();
@@ -176,6 +187,7 @@ export class NotificationRepository {
     pending: number;
     clicked: number;
     dismissed: number;
+    scheduled: number;
     dailyCounts: Array<{ date: string; count: number }>;
   } {
     const currentTime = now();
@@ -195,6 +207,13 @@ export class NotificationRepository {
       this.db
         .prepare('SELECT COUNT(*) AS count FROM notification_records WHERE dismissed_at IS NOT NULL')
         .get() as CountRow
+    ).count;
+    const scheduled = (
+      this.db
+        .prepare(
+          'SELECT COUNT(*) AS count FROM notification_records WHERE clicked_at IS NULL AND dismissed_at IS NULL AND sent_at IS NOT NULL AND sent_at > ?',
+        )
+        .get(currentTime) as CountRow
     ).count;
 
     const dailyCounts: Array<{ date: string; count: number }> = [];
@@ -216,6 +235,6 @@ export class NotificationRepository {
       });
     }
 
-    return { pending, clicked, dismissed, dailyCounts };
+    return { pending, clicked, dismissed, scheduled, dailyCounts };
   }
 }

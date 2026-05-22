@@ -137,6 +137,32 @@ async function waitForRequest(requests, label) {
   assert.fail(`Timed out waiting for ${label}`);
 }
 
+async function getVisibleToolbarItemBoxes(page) {
+  return page.$$eval(
+    '.message-reaction-toolbar.visible .message-reaction-action-btn, .message-reaction-toolbar.visible .snooze-icon',
+    (items) =>
+      items.map((item) => ({
+        className: item.className,
+        left: item.getBoundingClientRect().left,
+        right: item.getBoundingClientRect().right,
+        width: item.getBoundingClientRect().width,
+      })),
+  );
+}
+
+function assertToolbarItemsDoNotOverlap(boxes, label) {
+  for (let index = 1; index < boxes.length; index += 1) {
+    const previous = boxes[index - 1];
+    const current = boxes[index];
+    assert.ok(
+      current.left >= previous.right - 0.75,
+      `${label}: toolbar items should push siblings instead of overlapping: ${JSON.stringify(
+        boxes,
+      )}`,
+    );
+  }
+}
+
 async function main() {
   await fs.access(path.join(extensionPath, 'manifest.json'));
   const memoryFixture = await startMemoryServiceFixture();
@@ -222,7 +248,34 @@ async function main() {
 
     await message.hover();
     const toolbar = page.locator('.message-reaction-toolbar.visible');
+    await delay(1800);
+    assert.equal(
+      await message.locator('.message-reaction-toolbar.visible').count(),
+      0,
+      'Toolbar should wait for the deliberate 4s hover intent delay',
+    );
     await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
+    const visibleToolbarA11y = await toolbar.evaluate((toolbarElement) => ({
+      ariaHidden: toolbarElement.getAttribute('aria-hidden'),
+      actionTabIndexes: Array.from(
+        toolbarElement.querySelectorAll('.message-reaction-action-btn'),
+      ).map((button) => button.tabIndex),
+      settingsTabIndex:
+        toolbarElement.querySelector('.reaction-settings-btn')?.tabIndex,
+      settingsAriaHidden: toolbarElement
+        .querySelector('.reaction-settings-btn')
+        ?.getAttribute('aria-hidden'),
+    }));
+    assert.equal(visibleToolbarA11y.ariaHidden, 'false');
+    assert.equal(
+      visibleToolbarA11y.actionTabIndexes.every((tabIndex) => tabIndex === 0),
+      true,
+      `Visible toolbar actions should be keyboard reachable: ${JSON.stringify(
+        visibleToolbarA11y,
+      )}`,
+    );
+    assert.equal(visibleToolbarA11y.settingsTabIndex, -1);
+    assert.equal(visibleToolbarA11y.settingsAriaHidden, 'true');
 
     const actions = await page.$$eval(
       '.message-reaction-toolbar .message-reaction-action-btn',
@@ -230,12 +283,27 @@ async function main() {
         buttons.map((button) => ({
           tagName: button.tagName,
           label: button.getAttribute('aria-label'),
+          compactLabel: button.getAttribute('data-compact-label'),
+          compactAlign: button.getAttribute('data-compact-align') || 'start',
           title: button.getAttribute('title'),
+          text: button.textContent?.trim(),
         })),
     );
 
     assert.deepEqual(
       actions.map((action) => action.label),
+      ['稍后处理', '关注后续', '自动答复', '联动操作'],
+    );
+    assert.deepEqual(
+      actions.map((action) => action.compactLabel),
+      ['稍后', '关注', '答复', '联动'],
+    );
+    assert.deepEqual(
+      actions.map((action) => action.compactAlign),
+      ['start', 'start', 'end', 'start'],
+    );
+    assert.deepEqual(
+      actions.map((action) => action.text),
       ['稍后处理', '关注后续', '自动答复', '联动操作'],
     );
     assert.equal(
@@ -272,6 +340,198 @@ async function main() {
       true,
       'Only the first action should own the segmented toolbar left radius',
     );
+    const compactButtonMetrics = await page.$$eval(
+      '.message-reaction-toolbar .message-reaction-action-btn',
+      (buttons) =>
+        buttons.map((button) => {
+          const label = button.querySelector('.message-reaction-action-label');
+          const labelText = button.querySelector(
+            '.message-reaction-action-label-text',
+          );
+          const buttonRect = button.getBoundingClientRect();
+          const labelRect = label?.getBoundingClientRect();
+          const textRect = labelText?.getBoundingClientRect();
+          return {
+            className: button.className,
+            compactAlign: button.getAttribute('data-compact-align') || 'start',
+            buttonWidth: buttonRect.width,
+            left: buttonRect.left,
+            right: buttonRect.right,
+            labelLeft: labelRect?.left ?? 0,
+            labelRight: labelRect?.right ?? 0,
+            labelWidth: labelRect?.width ?? 0,
+            labelScrollWidth: label?.scrollWidth ?? 0,
+            textLeft: textRect?.left ?? 0,
+            textRight: textRect?.right ?? 0,
+            textWidth: textRect?.width ?? 0,
+            svgCount: button.querySelectorAll('svg').length,
+          };
+        }),
+    );
+    assert.equal(
+      compactButtonMetrics.every(
+        (metric) =>
+          metric.labelScrollWidth > metric.labelWidth &&
+          metric.buttonWidth < 48,
+      ),
+      true,
+      `Toolbar buttons should render full labels clipped to two characters: ${JSON.stringify(
+        compactButtonMetrics,
+      )}`,
+    );
+    assert.equal(
+      compactButtonMetrics[0]?.svgCount,
+      0,
+      'Snooze should be a compact text button instead of an icon button',
+    );
+    const autoReplyCompactTextMetric = compactButtonMetrics[2];
+    assert.equal(autoReplyCompactTextMetric?.compactAlign, 'end');
+    assert.ok(
+      autoReplyCompactTextMetric &&
+        autoReplyCompactTextMetric.textLeft <
+          autoReplyCompactTextMetric.labelLeft - 10 &&
+        Math.abs(
+          autoReplyCompactTextMetric.textRight -
+            autoReplyCompactTextMetric.labelRight,
+        ) <= 1.5,
+      `Auto reply should clip the full label from the right edge so compact text shows 答复: ${JSON.stringify(
+        autoReplyCompactTextMetric,
+      )}`,
+    );
+    const compactIconMetric = await toolbar.locator('.snooze-icon').evaluate(
+      (icon) => {
+        const rect = icon.getBoundingClientRect();
+        return {
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+        };
+      },
+    );
+    const followThreadCompactMetric = compactButtonMetrics[1];
+    assert.ok(followThreadCompactMetric);
+    await toolbar.locator('.follow-thread-btn').hover();
+    await delay(240);
+    const followThreadExpandedMetric = await toolbar
+      .locator('.follow-thread-btn')
+      .evaluate((button) => {
+        const label = button.querySelector('.message-reaction-action-label');
+        const rect = button.getBoundingClientRect();
+        return {
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+          labelWidth: label?.getBoundingClientRect().width ?? 0,
+          labelScrollWidth: label?.scrollWidth ?? 0,
+        };
+      });
+    assert.ok(
+      followThreadExpandedMetric.width >
+        followThreadCompactMetric.buttonWidth + 12,
+      `Hovered button should expand to reveal the full label: ${JSON.stringify(
+        { followThreadCompactMetric, followThreadExpandedMetric },
+      )}`,
+    );
+    assert.ok(
+      Math.abs(
+        followThreadExpandedMetric.right - followThreadCompactMetric.right,
+      ) <= 1 &&
+        followThreadExpandedMetric.left < followThreadCompactMetric.left - 12,
+      `Toolbar-right anchored expansion should keep the hovered button right edge stable and push left siblings: ${JSON.stringify(
+        { followThreadCompactMetric, followThreadExpandedMetric },
+      )}`,
+    );
+    assert.ok(
+      followThreadExpandedMetric.labelWidth >=
+        followThreadExpandedMetric.labelScrollWidth - 1,
+      `Hovered label should reveal its full text: ${JSON.stringify(
+        followThreadExpandedMetric,
+      )}`,
+    );
+    assertToolbarItemsDoNotOverlap(
+      await getVisibleToolbarItemBoxes(page),
+      'Follow-thread hover',
+    );
+    const iconAfterFollowHover = await toolbar.locator('.snooze-icon').evaluate(
+      (icon) => {
+        const rect = icon.getBoundingClientRect();
+        return {
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+        };
+      },
+    );
+    assert.ok(
+      Math.abs(iconAfterFollowHover.right - compactIconMetric.right) <= 1 &&
+        Math.abs(iconAfterFollowHover.left - compactIconMetric.left) <= 1,
+      `Personal AI icon should stay fixed while buttons expand: ${JSON.stringify(
+        { compactIconMetric, iconAfterFollowHover },
+      )}`,
+    );
+    await toolbar.locator('.snooze-icon').hover();
+    await delay(240);
+
+    const autoReplyCompactWidth = compactButtonMetrics[2]?.buttonWidth ?? 0;
+    const autoReplyCompactMetric = compactButtonMetrics[2];
+    assert.ok(autoReplyCompactMetric);
+    await toolbar.locator('.auto-reply-btn').hover();
+    await delay(240);
+    const autoReplyExpandedMetric = await toolbar
+      .locator('.auto-reply-btn')
+      .evaluate((button) => {
+        const label = button.querySelector('.message-reaction-action-label');
+        const rect = button.getBoundingClientRect();
+        return {
+          buttonWidth: button.getBoundingClientRect().width,
+          left: rect.left,
+          right: rect.right,
+          labelWidth: label?.getBoundingClientRect().width ?? 0,
+          labelScrollWidth: label?.scrollWidth ?? 0,
+        };
+      });
+    assert.ok(
+      autoReplyExpandedMetric.buttonWidth > autoReplyCompactWidth + 12,
+      `Hovered button should expand to reveal the full label: ${JSON.stringify(
+        autoReplyExpandedMetric,
+      )}`,
+    );
+    assert.ok(
+      Math.abs(autoReplyExpandedMetric.right - autoReplyCompactMetric.right) <=
+        1 &&
+        autoReplyExpandedMetric.left < autoReplyCompactMetric.left - 12,
+      `Auto reply should keep its right edge stable and push left siblings: ${JSON.stringify(
+        { autoReplyCompactMetric, autoReplyExpandedMetric },
+      )}`,
+    );
+    assert.ok(
+      autoReplyExpandedMetric.labelWidth >=
+        autoReplyExpandedMetric.labelScrollWidth - 1,
+      `Hovered label should reveal its full text: ${JSON.stringify(
+        autoReplyExpandedMetric,
+      )}`,
+    );
+    assertToolbarItemsDoNotOverlap(
+      await getVisibleToolbarItemBoxes(page),
+      'Auto-reply hover',
+    );
+    const iconAfterAutoReplyHover = await toolbar.locator('.snooze-icon').evaluate(
+      (icon) => {
+        const rect = icon.getBoundingClientRect();
+        return {
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+        };
+      },
+    );
+    assert.ok(
+      Math.abs(iconAfterAutoReplyHover.right - compactIconMetric.right) <= 1 &&
+        Math.abs(iconAfterAutoReplyHover.left - compactIconMetric.left) <= 1,
+      `Personal AI icon should stay fixed while auto reply expands: ${JSON.stringify(
+        { compactIconMetric, iconAfterAutoReplyHover },
+      )}`,
+    );
     const hiddenSettingsLayout = await toolbar.evaluate((toolbarElement) => {
       const firstAction = toolbarElement.querySelector(
         '.message-reaction-action-btn',
@@ -289,6 +549,8 @@ async function main() {
         settingsRight: settingsRect.right,
         settingsPointerEvents: window.getComputedStyle(settingsButton)
           .pointerEvents,
+        settingsTabIndex: settingsButton.tabIndex,
+        settingsAriaHidden: settingsButton.getAttribute('aria-hidden'),
       };
     });
     assert.ok(hiddenSettingsLayout);
@@ -302,6 +564,8 @@ async function main() {
       )}`,
     );
     assert.equal(hiddenSettingsLayout.settingsPointerEvents, 'none');
+    assert.equal(hiddenSettingsLayout.settingsTabIndex, -1);
+    assert.equal(hiddenSettingsLayout.settingsAriaHidden, 'true');
     const toolbarItemBoxes = await page.$$eval(
       '.message-reaction-toolbar .message-reaction-action-btn, .message-reaction-toolbar .snooze-icon',
       (items) =>
@@ -327,13 +591,43 @@ async function main() {
       )}`,
     );
 
+    await page.mouse.move(5, 5);
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.message-reaction-toolbar')?.getAttribute(
+          'aria-hidden',
+        ) === 'true' &&
+        !document.querySelector('.message-reaction-toolbar.visible'),
+      null,
+      { timeout: 3_000 },
+    );
+    const hiddenToolbarA11y = await message
+      .locator('.message-reaction-toolbar')
+      .evaluate((toolbarElement) => ({
+        ariaHidden: toolbarElement.getAttribute('aria-hidden'),
+        buttonStates: Array.from(toolbarElement.querySelectorAll('button')).map(
+          (button) => ({
+            className: button.className,
+            tabIndex: button.tabIndex,
+            ariaHidden: button.getAttribute('aria-hidden'),
+          }),
+        ),
+      }));
+    assert.equal(hiddenToolbarA11y.ariaHidden, 'true');
+    assert.equal(
+      hiddenToolbarA11y.buttonStates.every((button) => button.tabIndex === -1),
+      true,
+      `Hidden toolbar controls should leave the tab order: ${JSON.stringify(
+        hiddenToolbarA11y,
+      )}`,
+    );
+
     const ownMessage = page.locator(
       '.conversation-card-wrapper[data-id="msg-own"]',
     );
-    await page.mouse.move(5, 5);
     await ownMessage.hover();
     const ownToolbar = ownMessage.locator('.message-reaction-toolbar.visible');
-    await ownToolbar.waitFor({ state: 'visible', timeout: 5_000 });
+    await ownToolbar.waitFor({ state: 'visible', timeout: 8_000 });
     const ownActions = await ownMessage
       .locator('.message-reaction-toolbar .message-reaction-action-btn')
       .evaluateAll((buttons) =>
@@ -358,7 +652,7 @@ async function main() {
     });
     assert.match(
       (await page.locator('.followup-ask-error').textContent()) || '',
-      /请先填写追问目的/,
+      /请先填写追问要拿到的信息/,
     );
     await page
       .locator('#followup-ask-objective')
@@ -391,11 +685,15 @@ async function main() {
       capturedFollowup.context,
       '确认最终发布日期和是否需要额外资源',
     );
+    assert.equal(
+      capturedFollowup.informationGoal,
+      '确认最终发布日期和是否需要额外资源',
+    );
     assert.equal(capturedFollowup.messageCreatedAt, 1_778_841_000);
 
     await page.mouse.move(5, 5);
     await message.hover();
-    await toolbar.waitFor({ state: 'visible', timeout: 5_000 });
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
 
     await toolbar.hover();
     await page.waitForFunction(
@@ -420,6 +718,8 @@ async function main() {
         settingsRight: settingsRect.right,
         settingsPointerEvents: window.getComputedStyle(settingsButton)
           .pointerEvents,
+        settingsTabIndex: settingsButton.tabIndex,
+        settingsAriaHidden: settingsButton.getAttribute('aria-hidden'),
       };
     });
     assert.ok(visibleSettingsLayout);
@@ -431,6 +731,29 @@ async function main() {
       )}`,
     );
     assert.equal(visibleSettingsLayout.settingsPointerEvents, 'auto');
+    assert.equal(visibleSettingsLayout.settingsTabIndex, 0);
+    assert.equal(visibleSettingsLayout.settingsAriaHidden, 'false');
+
+    await toolbar.locator('.reaction-settings-btn.visible').click();
+    await page.waitForSelector('.reaction-settings-popup', { timeout: 3_000 });
+    const settingsLabels = await page.$$eval(
+      '.reaction-settings-popup .reaction-settings-label',
+      (labels) => labels.map((label) => label.textContent?.trim()),
+    );
+    assert.deepEqual(settingsLabels, [
+      '稍后处理',
+      '关注后续',
+      '自动答复 / 跟进追问',
+      '联动操作',
+    ]);
+    await delay(150);
+    await page.mouse.click(5, 5);
+    await page.waitForSelector('.reaction-settings-popup', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+    await message.hover();
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
 
     const snoozeButton = message.locator('.snooze-icon-btn');
     assert.equal(await snoozeButton.getAttribute('aria-haspopup'), 'menu');
@@ -485,9 +808,22 @@ async function main() {
 
     await page.mouse.move(5, 5);
     await message.hover();
-    await toolbar.waitFor({ state: 'visible', timeout: 5_000 });
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
     await snoozeButton.hover();
     await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    const snoozeMenuBox = await page.locator('.snooze-menu').boundingBox();
+    assert.ok(snoozeMenuBox, 'Expected Snooze menu to be measurable');
+    await page.mouse.move(
+      snoozeMenuBox.x + snoozeMenuBox.width / 2,
+      snoozeMenuBox.y + Math.min(18, snoozeMenuBox.height / 2),
+      { steps: 8 },
+    );
+    await delay(320);
+    assert.equal(
+      await page.locator('.snooze-menu').isVisible(),
+      true,
+      'Snooze menu should stay open while moving from the text button into the menu',
+    );
     const quickLabels = await page.$$eval('.snooze-quick-option-label', (els) =>
       els.map((el) => el.textContent?.trim()),
     );

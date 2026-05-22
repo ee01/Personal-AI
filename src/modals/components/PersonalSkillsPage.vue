@@ -86,6 +86,32 @@
                     {{ suggestionOriginText(suggestion) }}
                   </span>
                 </div>
+                <div
+                  v-if="requiresReview(suggestion)"
+                  class="review-preview"
+                  :class="{ ready: canConfirmSuggestion(suggestion) }"
+                >
+                  <div class="review-preview-head">
+                    <span>{{ canConfirmSuggestion(suggestion) ? '已查看证据' : '待审核摘要' }}</span>
+                    <em>{{ reviewReasonCountLabel(suggestion) }}</em>
+                  </div>
+                  <ul>
+                    <li
+                      v-for="reason in reviewReasonPreview(suggestion)"
+                      :key="`${suggestion.id}:${reason}`"
+                    >
+                      {{ reason }}
+                    </li>
+                  </ul>
+                  <div class="review-preview-pills">
+                    <span
+                      v-for="fact in suggestionReviewFacts(suggestion)"
+                      :key="`${suggestion.id}:${fact}`"
+                    >
+                      {{ fact }}
+                    </span>
+                  </div>
+                </div>
                 <div class="actions">
                   <button
                     class="btn primary"
@@ -247,6 +273,21 @@
             <div class="review-gate-body">
               <strong>{{ reviewGateTitle(selectedSkill) }}</strong>
               <p>{{ reviewGateDescription(selectedSkill) }}</p>
+              <div
+                class="review-audit-summary"
+                :class="{ ready: canConfirmSuggestion(selectedSkill) }"
+                aria-live="polite"
+              >
+                <span class="review-audit-state">
+                  {{ canConfirmSuggestion(selectedSkill) ? '证据已查看，可以确认' : '需先查看证据和风险' }}
+                </span>
+                <span
+                  v-for="fact in reviewAuditFacts(selectedSkill)"
+                  :key="`${selectedSkill.id}:${fact}`"
+                >
+                  {{ fact }}
+                </span>
+              </div>
               <ul>
                 <li v-for="reason in reviewReasons(selectedSkill)" :key="reason">
                   {{ reason }}
@@ -623,7 +664,7 @@
                   :disabled="syncDisabled(setting)"
                   @change="toggleSync(setting, $event)"
                 />
-                <span>{{ setting.enabled ? '已开启' : syncDisabled(setting) ? '不可用' : '未开启' }}</span>
+                <span>{{ syncControlLabel(setting) }}</span>
               </label>
             </div>
           </article>
@@ -673,6 +714,7 @@ const desktopAppInstalled = ref(false);
 const DESKTOP_APP_RELEASE_URL =
   'https://github.com/ee01/personal-ai/releases/latest';
 const localDesktopPlatforms = ['codex', 'claude_code', 'cursor'];
+const manualOnlyPlatforms = ['chatgpt_gpts', 'claude_skills_web'];
 
 const tabs: Array<{ key: SkillTab; label: string }> = [
   { key: 'workflow', label: '工作流' },
@@ -953,6 +995,41 @@ function reviewReasons(skill: Pick<PersonalSkillListItem, 'reviewReasons'>) {
     : ['来源或风险信息需要人工确认'];
 }
 
+function reviewReasonCountLabel(skill: Pick<PersonalSkillListItem, 'reviewReasons'>) {
+  const count = reviewReasons(skill).length;
+  return `${count} 项原因`;
+}
+
+function reviewReasonPreview(skill: Pick<PersonalSkillListItem, 'reviewReasons'>) {
+  return reviewReasons(skill).slice(0, 2);
+}
+
+function suggestionReviewFacts(skill: PersonalSkillListItem) {
+  const facts = [
+    isExternalChangeSuggestion(skill)
+      ? `覆盖 ${externalChangeOriginalSlug(skill)}`
+      : suggestionSourceLabel(skill),
+    skill.currentVersion ? `版本 ${skill.currentVersion}` : '',
+    `风险 ${skill.risk}`,
+  ];
+  return facts.filter(Boolean);
+}
+
+function reviewAuditFacts(skill: PersonalSkillDetail) {
+  const facts = [
+    isExternalChangeSuggestion(skill)
+      ? `${externalChangePlatformLabel(skill)} -> ${externalChangeOriginalSlug(skill)}`
+      : `来源 ${suggestionSourceLabel(skill)}`,
+    skill.currentVersion ? `版本 ${skill.currentVersion}` : '',
+    `风险 ${skill.risk}`,
+    `${skill.evidence.length} 条证据`,
+    `${skill.workflow.length} 个步骤`,
+  ];
+  const fileCount = skill.activeVersion?.files?.length || 0;
+  if (fileCount > 0) facts.push(`${fileCount} 个资源文件`);
+  return facts.filter(Boolean);
+}
+
 function setActiveTab(tab: SkillTab) {
   activeTab.value = tab;
   if (
@@ -1115,7 +1192,14 @@ function isLocalDesktopPlatform(platform: string) {
   return localDesktopPlatforms.includes(platform);
 }
 
+function isManualOnlyPlatform(platform: string) {
+  return manualOnlyPlatforms.includes(platform);
+}
+
 function bindingStatusLabel(binding: SkillPlatformBinding) {
+  if (isManualOnlyPlatform(binding.platform)) {
+    return '手动安装';
+  }
   if (isLocalDesktopPlatform(binding.platform) && !desktopAppInstalled.value) {
     return '状态未知';
   }
@@ -1123,6 +1207,9 @@ function bindingStatusLabel(binding: SkillPlatformBinding) {
 }
 
 function bindingStateClass(binding: SkillPlatformBinding) {
+  if (isManualOnlyPlatform(binding.platform)) {
+    return 'manual';
+  }
   if (isLocalDesktopPlatform(binding.platform) && !desktopAppInstalled.value) {
     return 'unknown';
   }
@@ -1140,8 +1227,17 @@ function bindingHint(binding: SkillPlatformBinding):
       action?: 'sync-settings';
     }
   | null {
-  if (!isLocalDesktopPlatform(binding.platform)) return null;
   const platform = platformLabel(binding.platform);
+  if (isManualOnlyPlatform(binding.platform)) {
+    return {
+      tone: 'info',
+      icon: 'i',
+      title: '仅提供手动安装指引',
+      text: `${platform} 暂不能由 Personal AI 自动写入或探测安装状态；复制带 token 的 Skill URL 到目标平台即可。`,
+      cta: '',
+    };
+  }
+  if (!isLocalDesktopPlatform(binding.platform)) return null;
   const setting = settingFor(binding.platform);
   if (!desktopAppInstalled.value) return null;
   if (setting && !setting.enabled) {
@@ -1254,6 +1350,15 @@ function syncScope(setting: SkillSyncSetting) {
   return setting.enabled
     ? `作用域：所有 active 技能（${activeSkillCount.value} 条）`
     : `开启后将自动推送 ${activeSkillCount.value} 条 active 技能`;
+}
+
+function syncControlLabel(setting: SkillSyncSetting) {
+  if (setting.capability === 'internal') return '始终开启';
+  if (setting.capability === 'manual_only') return '仅手动';
+  if (setting.capability === 'fs_via_desktop_app' && !desktopAppInstalled.value) {
+    return '需 Desktop App';
+  }
+  return setting.enabled ? '已开启' : '未开启';
 }
 
 function openSyncDialog() {
@@ -1772,6 +1877,65 @@ button:disabled {
   text-decoration: none;
 }
 
+.review-preview {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(245, 158, 11, 0.07);
+  color: var(--muted);
+}
+
+.review-preview.ready {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.review-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #fcd34d;
+}
+
+.review-preview.ready .review-preview-head {
+  color: #86efac;
+}
+
+.review-preview-head em {
+  flex: none;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--muted-2);
+}
+
+.review-preview ul {
+  margin: 0;
+  padding-left: 0.9rem;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.review-preview-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.review-preview-pills span {
+  padding: 0.12rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.42);
+  color: var(--ink-2);
+  font-size: 0.64rem;
+  font-weight: 600;
+}
+
 .suggestion-card .actions {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -2274,6 +2438,40 @@ button:disabled {
   color: var(--muted);
 }
 
+.review-audit-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+
+.review-audit-summary span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.12rem 0.48rem;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.36);
+  color: #fcd34d;
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.review-audit-summary.ready span {
+  border-color: rgba(34, 197, 94, 0.26);
+  color: #86efac;
+}
+
+.review-audit-summary .review-audit-state {
+  color: var(--ink);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.review-audit-summary.ready .review-audit-state {
+  background: rgba(34, 197, 94, 0.12);
+}
+
 .review-gate-body ul {
   margin: 0.4rem 0 0;
   padding-left: 1rem;
@@ -2642,6 +2840,12 @@ button:disabled {
   color: var(--amber);
   border-color: rgba(245, 158, 11, 0.4);
   background: rgba(245, 158, 11, 0.1);
+}
+
+.binding-state.manual {
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.36);
+  background: rgba(96, 165, 250, 0.1);
 }
 
 .binding-state.blocked {

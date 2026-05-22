@@ -11,9 +11,10 @@ export type FigmaDesignItem = {
   title?: string;
   label?: string;
   status?: string;
+  updatedAt?: string;
 };
 
-export type DesignTool = 'figma' | 'miro' | 'loom' | 'google_slides' | 'generic';
+export type DesignTool = 'figma' | 'miro' | 'loom' | 'google_slides' | 'zeplin' | 'generic';
 
 export type DesignLinkCandidate = {
   url: string;
@@ -21,6 +22,7 @@ export type DesignLinkCandidate = {
   label: string;
   title?: string;
   status?: string;
+  updatedAt?: string;
   source?: string;
 };
 
@@ -32,6 +34,7 @@ export type ExternalDesignItem = {
   label: string;
   title?: string;
   status?: string;
+  updatedAt?: string;
 };
 
 export type UXDesignItem = {
@@ -47,12 +50,14 @@ export type UXDesignItem = {
   uxEpicStatus?: string;
   uxEta?: string;
   uxEtaSource?: 'duedate' | 'fixVersion';
+  designUpdatedAt?: string;
 };
 
 export type DesignDisplayItem = FigmaDesignItem | ExternalDesignItem | UXDesignItem;
 
 export type UXEpicStatusTone = 'todo' | 'in-progress' | 'done' | 'blocked' | 'cancelled';
 export type DesignStatusTone = 'ready' | 'updated' | 'missing' | 'not-ready' | 'blocked' | 'review' | 'done' | 'neutral';
+export type DesignAttentionLevel = DesignStatusTone;
 
 const genericDesignTitles = new Set([
   'design',
@@ -131,6 +136,46 @@ export function formatDesignStatusLabel(status?: string | null): string | undefi
 
   const sentenceStatus = expandedStatus.toLowerCase();
   return sentenceStatus.charAt(0).toUpperCase() + sentenceStatus.slice(1);
+}
+
+function getDesignTimestampMs(value?: string | null): number | null {
+  const trimmedValue = value?.trim();
+  if (!trimmedValue) return null;
+
+  const normalizedValue = trimmedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  const time = Date.parse(normalizedValue);
+  return Number.isNaN(time) ? null : time;
+}
+
+export function formatDesignUpdatedDate(value?: string | null): string | undefined {
+  const trimmedValue = value?.trim();
+  if (!trimmedValue) return undefined;
+
+  const dateMatch = trimmedValue.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (dateMatch) return dateMatch[1];
+
+  const time = getDesignTimestampMs(trimmedValue);
+  if (time === null) return undefined;
+
+  return new Date(time).toISOString().slice(0, 10);
+}
+
+function chooseDesignUpdatedAt(
+  currentValue: string | undefined,
+  nextValue: string | undefined,
+): string | undefined {
+  const trimmedCurrent = currentValue?.trim();
+  const trimmedNext = nextValue?.trim();
+  if (!trimmedNext) return trimmedCurrent;
+  if (!trimmedCurrent) return trimmedNext;
+
+  const currentTime = getDesignTimestampMs(trimmedCurrent);
+  const nextTime = getDesignTimestampMs(trimmedNext);
+  if (currentTime !== null && nextTime !== null) {
+    return nextTime > currentTime ? trimmedNext : trimmedCurrent;
+  }
+
+  return trimmedCurrent;
 }
 
 export function getDesignStatusTone(status?: string): DesignStatusTone {
@@ -232,6 +277,10 @@ export function getDesignDisplayStatusTone(item: DesignDisplayItem): DesignStatu
   return getDesignStatusTone(status);
 }
 
+export function getDesignAttentionLevel(item: DesignDisplayItem): DesignAttentionLevel {
+  return getDesignDisplayStatusTone(item);
+}
+
 export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDisplayItem[] {
   return items
     .map((item, index) => ({ item, index }))
@@ -265,6 +314,24 @@ export function matchesProjectPattern(ticketKey: string, pattern: string): boole
   }
 
   return projectPart === normalizedPattern;
+}
+
+export function parseJiraIssueKeyFromText(value?: string | null): string | null {
+  const match = value?.match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
+  return match?.[1]?.toUpperCase() || null;
+}
+
+export function parseJiraIssueKeyFromUrl(rawUrl?: string | null): string | null {
+  const trimmedUrl = rawUrl?.trim();
+  if (!trimmedUrl) return null;
+
+  try {
+    const url = new URL(trimmedUrl, 'https://jira.local');
+    const pathMatch = url.pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i);
+    return pathMatch?.[1]?.toUpperCase() || parseJiraIssueKeyFromText(trimmedUrl) || parseJiraIssueKeyFromText(url.pathname);
+  } catch {
+    return parseJiraIssueKeyFromText(trimmedUrl);
+  }
 }
 
 export function escapeHtml(value: unknown): string {
@@ -343,6 +410,52 @@ export function normalizeDesignUrl(rawUrl?: string | null): string | null {
   }
 }
 
+function getFigmaIdentityPath(url: URL): string | null {
+  const [kind, fileKey] = url.pathname.split('/').filter(Boolean);
+  if (!kind || !fileKey) return null;
+
+  const normalizedKind = kind.toLowerCase();
+  if (!['design', 'file', 'proto', 'board', 'figjam', 'slides'].includes(normalizedKind)) {
+    return null;
+  }
+
+  return `/${normalizedKind}/${fileKey}`;
+}
+
+function normalizeFigmaIdentityParam(value: string): string {
+  return value.trim().replace(/-/g, ':');
+}
+
+export function getDesignUrlDedupeKey(rawUrl?: string | null): string {
+  const normalizedUrl = normalizeDesignUrl(rawUrl);
+  if (!normalizedUrl) return String(rawUrl || '').trim();
+
+  try {
+    const url = new URL(normalizedUrl);
+    const hostname = url.hostname.toLowerCase();
+    const identityPath = getFigmaIdentityPath(url);
+
+    if ((hostname === 'figma.com' || hostname.endsWith('.figma.com')) && identityPath) {
+      const canonicalHost = hostname === 'figma.com' ? 'www.figma.com' : hostname;
+      const identityParams = ['node-id', 'page-id', 'starting-point-node-id']
+        .map(param => {
+          const value = url.searchParams.get(param);
+          return value ? `${param}=${normalizeFigmaIdentityParam(value)}` : '';
+        })
+        .filter(Boolean)
+        .join('&');
+
+      return identityParams
+        ? `figma://${canonicalHost}${identityPath}?${identityParams}`
+        : `figma://${canonicalHost}${identityPath}`;
+    }
+
+    return normalizedUrl;
+  } catch {
+    return normalizedUrl;
+  }
+}
+
 function normalizeDesignDomainPattern(rawValue: string): string {
   const value = rawValue.trim().toLowerCase();
   if (!value) return '';
@@ -403,11 +516,14 @@ export function classifyDesignUrl(
   const pathname = url.pathname.toLowerCase();
 
   if (hostname === 'figma.com' || hostname.endsWith('.figma.com')) {
-    return {
-      url: normalizedUrl,
-      tool: 'figma',
-      label: getFigmaDisplayLabel(normalizedUrl)
-    };
+    if (isFigmaHandoffUrl(pathname)) {
+      return {
+        url: normalizedUrl,
+        tool: 'figma',
+        label: getFigmaDisplayLabel(normalizedUrl)
+      };
+    }
+    if (!allowGeneric) return null;
   }
 
   if (hostname === 'miro.com' || hostname.endsWith('.miro.com')) {
@@ -437,6 +553,14 @@ export function classifyDesignUrl(
     };
   }
 
+  if (isZeplinHandoffUrl(hostname, pathname)) {
+    return {
+      url: normalizedUrl,
+      tool: 'zeplin',
+      label: getZeplinDisplayLabel(normalizedUrl)
+    };
+  }
+
   if (matchesDesignDomain(hostname, extraDomainPatterns)) {
     return {
       url: normalizedUrl,
@@ -456,6 +580,41 @@ export function classifyDesignUrl(
   return null;
 }
 
+function isFigmaHandoffUrl(pathname: string): boolean {
+  return /^\/(?:design|file|proto|board|figjam|slides)\//.test(pathname);
+}
+
+function isZeplinHandoffUrl(hostname: string, pathname: string): boolean {
+  if (hostname === 'zpl.io' || hostname.endsWith('.zpl.io')) return true;
+  if (hostname !== 'app.zeplin.io') return false;
+  return /^\/project\//.test(pathname);
+}
+
+function getZeplinDisplayLabel(url: string): string {
+  try {
+    const parsedUrl = new URL(url);
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const pathParts = parsedUrl.pathname.toLowerCase().split('/').filter(Boolean);
+    if (hostname === 'zpl.io' || hostname.endsWith('.zpl.io')) return 'Zeplin design';
+
+    const projectIndex = pathParts.indexOf('project');
+    if (projectIndex === -1) return 'Zeplin design';
+
+    const resourcePart = pathParts.slice(projectIndex + 2).find(part => Boolean(part));
+    if (!resourcePart) return 'Zeplin project';
+
+    if (resourcePart === 'screen' || resourcePart === 'screens') return 'Zeplin screen';
+    if (resourcePart === 'section' || resourcePart === 'sections') return 'Zeplin section';
+    if (resourcePart === 'flow' || resourcePart === 'flows') return 'Zeplin flow';
+    if (resourcePart === 'component' || resourcePart === 'components') return 'Zeplin component';
+    if (resourcePart === 'styleguide' || resourcePart === 'styleguides') return 'Zeplin styleguide';
+  } catch {
+    return 'Zeplin design';
+  }
+
+  return 'Zeplin design';
+}
+
 export function normalizeFigmaUrl(rawUrl?: string | null): string | null {
   const candidate = classifyDesignUrl(rawUrl);
   return candidate?.tool === 'figma' ? candidate.url : null;
@@ -466,6 +625,7 @@ export function getFigmaDisplayLabel(url: string): string {
     const pathname = new URL(url).pathname.toLowerCase();
     if (pathname.includes('/proto/')) return 'Figma Prototype';
     if (pathname.includes('/board/') || pathname.includes('/figjam/')) return 'FigJam Board';
+    if (pathname.includes('/slides/')) return 'Figma Slides';
     if (pathname.includes('/design/') || pathname.includes('/file/')) return 'Figma Design';
   } catch {
     return 'Figma Design';
@@ -488,8 +648,9 @@ export function extractDesignLinks(
 
   for (const value of valuesToCheck) {
     const candidate = classifyDesignUrl(value, allowGeneric, extraDomainPatterns);
-    if (!candidate || seenUrls.has(candidate.url)) continue;
-    seenUrls.add(candidate.url);
+    const dedupeKey = candidate ? getDesignUrlDedupeKey(candidate.url) : '';
+    if (!candidate || seenUrls.has(dedupeKey)) continue;
+    seenUrls.add(dedupeKey);
     designLinks.push(candidate);
   }
 
@@ -544,21 +705,23 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
 
   for (const item of designData) {
     if (item.type === 'figma' || item.type === 'design_link') {
-      const existing = seenDirect.get(item.url);
+      const directKey = getDesignUrlDedupeKey(item.url);
+      const existing = seenDirect.get(directKey);
       if (existing) {
         existing.title = chooseDesignTitle(existing.title, item.title, existing.source, item.source);
         existing.source = mergeDesignSources(existing.source, item.source);
         existing.label = existing.label || item.label;
         existing.status = existing.status || item.status;
+        existing.updatedAt = chooseDesignUpdatedAt(existing.updatedAt, item.updatedAt);
         continue;
       }
 
-      seenDirect.set(item.url, item);
+      seenDirect.set(directKey, item);
       uniqueDesignData.push(item);
       continue;
     }
 
-    const uxKey = `${item.uxTicketKey}:${item.url || '__missing__'}`;
+    const uxKey = `${item.uxTicketKey}:${item.url ? getDesignUrlDedupeKey(item.url) : '__missing__'}`;
     const existing = seenUX.get(uxKey);
     if (existing) {
       const existingSource = existing.source;
@@ -574,6 +737,7 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
       existing.uxEta = existing.uxEta || item.uxEta;
       existing.uxEtaSource = existing.uxEtaSource || item.uxEtaSource;
       existing.designStatus = existing.designStatus || item.designStatus;
+      existing.designUpdatedAt = chooseDesignUpdatedAt(existing.designUpdatedAt, item.designUpdatedAt);
       continue;
     }
 
@@ -583,7 +747,7 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
 
   for (const item of uniqueDesignData) {
     if (item.type !== 'ux_ticket' || !item.url) continue;
-    const matchingDirectItem = seenDirect.get(item.url);
+    const matchingDirectItem = seenDirect.get(getDesignUrlDedupeKey(item.url));
     if (!matchingDirectItem) continue;
 
     const directDisplayTitle = isMeaningfulDesignTitle(matchingDirectItem.title)
@@ -598,11 +762,12 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
       || item.designLabel
       || matchingDirectItem.label;
     item.designStatus = item.designStatus || matchingDirectItem.status;
-    consumedDirectUrls.add(matchingDirectItem.url);
+    item.designUpdatedAt = chooseDesignUpdatedAt(item.designUpdatedAt, matchingDirectItem.updatedAt);
+    consumedDirectUrls.add(getDesignUrlDedupeKey(matchingDirectItem.url));
   }
 
   return uniqueDesignData.filter(item => {
     if (item.type !== 'figma' && item.type !== 'design_link') return true;
-    return !consumedDirectUrls.has(item.url);
+    return !consumedDirectUrls.has(getDesignUrlDedupeKey(item.url));
   });
 }

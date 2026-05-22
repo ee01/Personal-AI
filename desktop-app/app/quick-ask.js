@@ -864,6 +864,17 @@ function setRuntime(runtime) {
       : runtime.topStatus.label;
 }
 
+function buildStatusFollowUpPrompt(kind, title, summary) {
+  const fallback = STATUS_HINTS[kind] || '帮我解释这条状态，并给出下一步。';
+  const cleanTitle = String(title || '').trim();
+  const cleanSummary = String(summary || '').trim();
+  if (!cleanTitle && !cleanSummary) return fallback;
+
+  const subject = cleanTitle || '这条状态';
+  const detail = cleanSummary ? `：${cleanSummary}` : '';
+  return `关于「${subject}」${detail}。${fallback}`;
+}
+
 async function refreshRuntimeSummary() {
   try {
     setRuntime(await quickAsk.getRuntimeSummary());
@@ -1536,7 +1547,13 @@ elements.conversationPanel.addEventListener('click', async (event) => {
       focusComposer();
       return;
     }
-    setDraft(STATUS_HINTS[kind] || '');
+    setDraft(
+      buildStatusFollowUpPrompt(
+        kind,
+        statusItem.dataset.statusTitle,
+        statusItem.dataset.statusSummary,
+      ),
+    );
     focusComposer();
     return;
   }

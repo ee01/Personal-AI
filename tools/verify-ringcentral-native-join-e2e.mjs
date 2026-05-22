@@ -115,7 +115,7 @@ function renderFixtureHtml() {
               <h2>Native join regression</h2>
               <p>Starts soon</p>
               <div id="upcoming-meeting-detail-description-box">
-                Native join should open the RingCentral app and keep browser fallback visible.
+                Native join should open the RingCentral app and show browser recovery controls briefly.
               </div>
               <button data-test-automation-id="join-meeting-button">Join meeting</button>
             </section>
@@ -187,10 +187,10 @@ async function seedCalendarIndexedDb(page) {
             id,
             subject: 'Native join regression',
             description:
-              '<p>Native join should keep browser fallback visible.</p>',
+              '<p>Native join should show browser recovery controls briefly.</p>',
             startTime: start,
             endTime: end,
-            location: 'http://v.ringcentral.com/conf/on/123456?passcode=abc',
+            location: 'http://v.ringcentral.com/launcher/123456?passcode=abc',
             webLink: 'https://app.ringcentral.com/video/home',
             responseStatus: 'accepted',
           });
@@ -315,8 +315,14 @@ async function main() {
       const copyButton = fallback?.querySelector(
         '[data-pai-ringcentral-native-join-copy-link]',
       );
+      const closeButton = fallback?.querySelector(
+        '[data-pai-ringcentral-native-join-close]',
+      );
       const launchLink = document.querySelector(
         '#pai-ringcentral-native-join-launch-link',
+      );
+      const visibleBrowserLink = fallback?.querySelector(
+        '[data-pai-ringcentral-native-join-visible-link]',
       );
       return {
         fallbackText: fallback?.textContent || '',
@@ -324,6 +330,9 @@ async function main() {
         fallbackLabel: fallback?.getAttribute('aria-label') || '',
         browserTag: browserLink?.tagName || '',
         copyTag: copyButton?.tagName || '',
+        closeTag: closeButton?.tagName || '',
+        closeLabel: closeButton?.getAttribute('aria-label') || '',
+        visibleBrowserUrl: visibleBrowserLink?.textContent || '',
         browserUrl:
           browserLink?.getAttribute(
             'data-pai-ringcentral-native-join-browser-url',
@@ -338,8 +347,9 @@ async function main() {
     assert(
       result.fallbackText.includes('Join in browser') &&
         result.fallbackText.includes('Copy link') &&
+        !result.fallbackText.includes('Dismiss') &&
         !result.fallbackText.includes('Open app again'),
-      'Native join fallback should expose browser fallback and copy action without app retry',
+      'Native join fallback should expose browser fallback and copy action without bottom dismiss or app retry',
     );
     assert(
       result.fallbackRole === 'region' &&
@@ -355,9 +365,19 @@ async function main() {
       'Copy fallback action should be a button so it remains an explicit user action',
     );
     assert(
+      result.closeTag === 'BUTTON' &&
+        result.closeLabel === 'Close RingCentral app handoff popup',
+      'Native join fallback should use a top-right close button instead of a bottom Dismiss action',
+    );
+    assert(
       result.browserUrl ===
         'https://v.ringcentral.com/conf/on/123456?passcode=abc',
       'Browser fallback should point at the direct browser meeting route',
+    );
+    assert(
+      result.visibleBrowserUrl ===
+        'https://v.ringcentral.com/conf/on/123456?passcode=abc',
+      'Native join fallback should show the browser meeting link for manual recovery',
     );
     assert(
       result.launchHref === 'rcvdt://join/123456?passcode=abc' &&

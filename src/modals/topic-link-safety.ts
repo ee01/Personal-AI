@@ -13,3 +13,12 @@ export const getSafeExternalUrl = (url: unknown): string => {
     return '';
   }
 };
+
+export const getFirstSafeExternalUrl = (...urls: unknown[]): string => {
+  for (const url of urls) {
+    const safeUrl = getSafeExternalUrl(url);
+    if (safeUrl) return safeUrl;
+  }
+
+  return '';
+};

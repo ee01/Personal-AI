@@ -360,12 +360,15 @@ export interface ProjectEvidenceGapSummary {
 }
 
 export interface ProjectSyncSourceStatus {
-  source: 'jira' | 'github' | 'confluence';
+  source: 'memory' | 'jira' | 'github' | 'confluence';
   label: string;
   configured: boolean;
-  status: 'not_configured' | 'ready';
+  status: 'not_configured' | 'ready' | 'unavailable';
+  badge?: string;
   detail: string;
   nextStep: string;
+  highlights?: string[];
+  boundaries?: string[];
 }
 
 export interface ProjectSyncReadiness {
@@ -380,6 +383,27 @@ export interface ProjectDashboardLaunchContext {
   hasContext: boolean;
   projectId?: string;
   projectName?: string;
+}
+
+export interface MemoryWatchedProjectSummary {
+  id?: string;
+  name: string;
+  description?: string;
+  aliases?: string[];
+  isActive?: boolean;
+  priority?: number;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface ProjectWatchedProjectSyncResult {
+  projects: FishboneProject[];
+  watchedProjectCount: number;
+  matchedProjectCount: number;
+  createdProjectCount: number;
+  skippedProjectCount: number;
+  createdProjectNames: string[];
+  matchedProjectNames: string[];
 }
 
 export type ProjectDashboardViewFilter = 'all' | 'needs-action' | 'watch' | 'empty' | 'on-track';
@@ -431,6 +455,7 @@ const PROJECT_DATA_QUALITY_PRIORITY: Record<ProjectDataQualityState, number> = {
 const PROJECT_STALE_PLAN_THRESHOLD_DAYS = 30;
 const PROJECT_STATUS_REVIEW_CADENCE_DAYS = 7;
 const PROJECT_STATUS_REVIEW_OVERDUE_DAYS = 14;
+const DEFAULT_PROJECT_PLATFORM_CONFIG: PlatformKey[] = ['sdk', 'ios', 'android', 'qa'];
 
 function normalizeLaunchContextValue(value: unknown): string | undefined {
   const normalized = String(value || '').trim();
@@ -548,6 +573,152 @@ export function rankProjectSuggestionNames(
     })
     .slice(0, maxItems)
     .map((item) => item.name);
+}
+
+function slugifyProjectId(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function normalizeProjectMatchToken(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildProjectMatchTokens(project: Pick<FishboneProject, 'id' | 'name'>): string[] {
+  return [
+    project.id,
+    project.name,
+    slugifyProjectId(project.id),
+    slugifyProjectId(project.name),
+  ]
+    .map(normalizeProjectMatchToken)
+    .filter(Boolean);
+}
+
+function buildWatchedProjectMatchTokens(project: MemoryWatchedProjectSummary): string[] {
+  return [
+    project.id,
+    project.name,
+    slugifyProjectId(project.id),
+    slugifyProjectId(project.name),
+    ...(project.aliases || []),
+  ]
+    .map(normalizeProjectMatchToken)
+    .filter(Boolean);
+}
+
+function projectMatchesWatchedProject(
+  project: Pick<FishboneProject, 'id' | 'name'>,
+  watchedProject: MemoryWatchedProjectSummary,
+): boolean {
+  const projectTokens = buildProjectMatchTokens(project);
+  const watchedTokens = buildWatchedProjectMatchTokens(watchedProject);
+
+  return watchedTokens.some((token) => projectTokens.includes(token));
+}
+
+function createUniqueDashboardProjectId(candidate: unknown, existingIds: Set<string>): string {
+  const base = slugifyProjectId(candidate) || `memory-project-${Date.now()}`;
+  if (!existingIds.has(base)) return base;
+
+  let index = 2;
+  while (existingIds.has(`${base}-${index}`)) {
+    index += 1;
+  }
+
+  return `${base}-${index}`;
+}
+
+function formatProjectNamePreview(names: string[], maxItems = 3): string {
+  const uniqueNames = Array.from(new Set(
+    names
+      .map((name) => String(name || '').trim())
+      .filter(Boolean),
+  ));
+  const visibleNames = uniqueNames.slice(0, maxItems);
+  const hiddenCount = Math.max(0, uniqueNames.length - visibleNames.length);
+
+  if (!visibleNames.length) return '';
+
+  return `${visibleNames.join('、')}${hiddenCount ? ` 等 ${uniqueNames.length} 个` : ''}`;
+}
+
+function buildWatchedProjectSyncHighlights(syncResult: ProjectWatchedProjectSyncResult): string[] {
+  const highlights: string[] = [];
+  const createdPreview = formatProjectNamePreview(syncResult.createdProjectNames);
+  const matchedPreview = formatProjectNamePreview(syncResult.matchedProjectNames);
+
+  if (createdPreview) {
+    highlights.push(`新增：${createdPreview}`);
+  }
+  if (matchedPreview) {
+    highlights.push(`已匹配：${matchedPreview}`);
+  }
+  if (!highlights.length && syncResult.watchedProjectCount === 0) {
+    highlights.push('Memory Service 当前没有 active watched projects');
+  }
+
+  return highlights;
+}
+
+export function mergeWatchedProjectsIntoDashboard(
+  currentProjects: FishboneProject[],
+  watchedProjects: MemoryWatchedProjectSummary[],
+  options: { reviewedAt?: Date } = {},
+): ProjectWatchedProjectSyncResult {
+  const reviewedAt = (options.reviewedAt || new Date()).toISOString();
+  const nextProjects = (Array.isArray(currentProjects) ? currentProjects : [])
+    .map(sanitizeFishboneProject);
+  const existingIds = new Set(nextProjects.map((project) => project.id).filter(Boolean));
+  const activeWatchedProjects = (Array.isArray(watchedProjects) ? watchedProjects : [])
+    .filter((project) => project?.isActive !== false && String(project?.name || '').trim());
+  const createdProjectNames: string[] = [];
+  const matchedProjectNames: string[] = [];
+
+  activeWatchedProjects.forEach((watchedProject) => {
+    const matched = nextProjects.find((project) => projectMatchesWatchedProject(project, watchedProject));
+
+    if (matched) {
+      matchedProjectNames.push(matched.name);
+      return;
+    }
+
+    const id = createUniqueDashboardProjectId(watchedProject.id || watchedProject.name, existingIds);
+    existingIds.add(id);
+    const projectName = String(watchedProject.name || '').trim();
+    const description = String(watchedProject.description || '').trim();
+    nextProjects.push({
+      id,
+      name: projectName,
+      description: description
+        ? `${description}（来自 Memory Service 关注项目）`
+        : '来自 Memory Service 关注项目，待补充本地里程碑和任务。',
+      milestones: [],
+      tasks: [],
+      platformConfig: DEFAULT_PROJECT_PLATFORM_CONFIG,
+      lastStatusReviewAt: reviewedAt,
+    });
+    createdProjectNames.push(projectName);
+  });
+
+  return {
+    projects: nextProjects,
+    watchedProjectCount: activeWatchedProjects.length,
+    matchedProjectCount: matchedProjectNames.length,
+    createdProjectCount: createdProjectNames.length,
+    skippedProjectCount: Math.max(0, activeWatchedProjects.length - matchedProjectNames.length - createdProjectNames.length),
+    createdProjectNames,
+    matchedProjectNames,
+  };
 }
 
 function normalizeStatusToken(status: string | undefined): string {
@@ -1453,11 +1624,13 @@ function buildTaskJiraKeys(task: FishboneTask): string[] {
   const keys = new Set<string>();
 
   (task.jira || []).forEach((item) => {
-    if (item?.key) keys.add(item.key);
+    const key = String(item?.key || '').trim();
+    if (key) keys.add(key);
   });
 
   Object.values(task.platforms || {}).forEach((platform) => {
-    if (platform?.jira) keys.add(platform.jira);
+    const key = String(platform?.jira || '').trim();
+    if (key) keys.add(key);
   });
 
   return Array.from(keys);
@@ -2755,37 +2928,109 @@ export class DashboardDataManager {
     try {
       await this.ensureFishboneProjectsLoaded();
 
-      const sources: ProjectSyncSourceStatus[] = [
+      const sources: ProjectSyncSourceStatus[] = [];
+      let summary = '真实 Jira/GitHub/Confluence 数据源尚未接入；当前显示的是本地项目工作台数据。';
+
+      try {
+        const { getMemoryServiceClient } = await import('../services/MemoryServiceClient');
+        const client = getMemoryServiceClient();
+        const watchedProjects = await client.getWatchedProjects(true);
+        const syncResult = mergeWatchedProjectsIntoDashboard(this.fishboneProjects, watchedProjects);
+        this.fishboneProjects = syncResult.projects;
+        const highlights = buildWatchedProjectSyncHighlights(syncResult);
+        const highlightDetail = highlights.length ? ` ${highlights.join('；')}。` : '';
+
+        if (syncResult.createdProjectCount > 0) {
+          await this.persistFishboneProjects();
+        }
+
+        summary = syncResult.createdProjectCount > 0
+          ? `已从 Memory Service 关注项目新增 ${syncResult.createdProjectCount} 个本地工作台，已匹配 ${syncResult.matchedProjectCount} 个。`
+          : `已检查 Memory Service 关注项目：${syncResult.matchedProjectCount}/${syncResult.watchedProjectCount} 个已在本地工作台。`;
+
+        sources.push({
+          source: 'memory',
+          label: 'Memory Service',
+          configured: true,
+          status: 'ready',
+          badge: '可读取',
+          detail: [
+            `读取 ${syncResult.watchedProjectCount} 个 active watched projects`,
+            `新增 ${syncResult.createdProjectCount} 个`,
+            `匹配 ${syncResult.matchedProjectCount} 个。${highlightDetail}`,
+          ].join('；').trim(),
+          nextStep: syncResult.createdProjectCount > 0
+            ? '为新增项目补充里程碑、任务 ETA 和来源证据'
+            : '继续在本地维护里程碑、任务 ETA 和来源证据',
+          highlights,
+          boundaries: [
+            '只补齐本地工作台，不删除本地项目，也不反写 Memory Service',
+            '不包含 Jira/GitHub/Confluence 的真实任务状态',
+          ],
+        });
+      } catch (error: any) {
+        sources.push({
+          source: 'memory',
+          label: 'Memory Service',
+          configured: true,
+          status: 'unavailable',
+          badge: '暂不可用',
+          detail: `Memory Service 已配置，但本次无法读取 watched projects：${error?.message || '服务不可用'}`,
+          nextStep: '确认记忆服务地址、API Key 和本机 memory-service 是否可用',
+          boundaries: [
+            '当前保留本地工作台数据，不会清空或覆盖项目',
+            'Jira/GitHub/Confluence 状态仍不会参与本次检查',
+          ],
+        });
+        summary = 'Memory Service 关注项目暂不可用；当前仍显示本地项目工作台数据。';
+      }
+
+      sources.push(
         {
           source: 'jira',
           label: 'Jira',
           configured: false,
           status: 'not_configured',
+          badge: '未接入',
           detail: '尚未接入真实 Jira 项目同步',
           nextStep: '继续维护本地任务，或通过报告导入 Jira 摘要',
+          boundaries: [
+            '不会读取 Jira 任务、状态、负责人或评论',
+            '当前 Jira 链接只作为手动来源证据',
+          ],
         },
         {
           source: 'github',
           label: 'GitHub',
           configured: false,
           status: 'not_configured',
+          badge: '未接入',
           detail: '尚未接入 GitHub PR / commit 同步',
           nextStep: '后续可按项目仓库映射接入 PR 状态',
+          boundaries: [
+            '不会读取 PR、commit、release 或 issue 状态',
+            '不会用代码活动自动更新项目健康判断',
+          ],
         },
         {
           source: 'confluence',
           label: 'Confluence',
           configured: false,
           status: 'not_configured',
+          badge: '未接入',
           detail: '尚未接入 Confluence 页面同步',
           nextStep: '后续可按项目空间或页面链接同步状态材料',
+          boundaries: [
+            '不会读取页面、决策记录或状态报告',
+            '状态草稿仍只引用本地任务和手动来源',
+          ],
         },
-      ];
+      );
 
       return {
         success: true,
         checkedAt: new Date().toISOString(),
-        summary: '真实数据源尚未接入；当前显示的是本地项目工作台数据。',
+        summary,
         sources,
       };
     } catch (error: any) {
@@ -2906,7 +3151,7 @@ export class DashboardDataManager {
               }))
           : [],
         tasks: [],
-        platformConfig: data.platformConfig?.length ? data.platformConfig : ['sdk', 'ios', 'android', 'qa'],
+        platformConfig: data.platformConfig?.length ? data.platformConfig : DEFAULT_PROJECT_PLATFORM_CONFIG,
         lastStatusReviewAt: new Date().toISOString(),
       };
       this.fishboneProjects.push(project);

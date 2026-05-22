@@ -1,6 +1,6 @@
 # 记忆入口消息观察规则
 
-_最后更新: 2026-05-17_
+_最后更新: 2026-05-22_
 
 > 说明：旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
 
@@ -14,6 +14,18 @@ _最后更新: 2026-05-17_
 因此，这个能力已经从“过滤消息”演进为“消息观察与记忆入口编排”。
 
 用户在界面中看到的是 **记忆入口规则**。系统内部还会动态挂载 **系统观察规则**，用于帮我问、自我反思等功能的证据采集。这两类规则会一起参与消息分析，但只有用户手动配置的规则会出现在规则页中。
+
+## 大白话运行逻辑
+
+消息分析会先问“这条消息值不值得记住”，再问“命中了哪个规则，要不要通知、跟进、自动回复或触发关联操作”。手动规则服务用户通知，系统规则更多服务后台证据采集。
+
+结果主要受这些因素影响：
+
+1. 手动规则匹配：用户配置的关注项是通知、摘要和自动化动作的主要触发来源。
+2. 系统观察规则：帮我问、自我反思等后台功能可以采集证据，但不应冒充用户手动规则发通知。
+3. 群组/发送者范围：规则过滤范围决定消息是否有资格命中。
+4. 匹配置信度和安全级别：低置信或带外部副作用的动作要降级、复核或等待确认。
+5. 写入记忆质量：摘要、实体、matchedRuleRefs、动作 trace 越完整，后续检索和审计越可靠。
 
 ## 核心心智
 
@@ -500,6 +512,74 @@ Popup 中的入口名称已改为：
 - [Zapier：Filter and path rules in Zaps](https://help.zapier.com/hc/en-us/articles/8496180919949-Filter-and-path-rules-in-Zaps)
 - [Trigger-Action Programming in the Wild](https://www.blaseur.com/papers/chi16-ifttt.pdf)
 - [Attention-Sensitive Alerting](https://erichorvitz.com/attend.htm)
+
+## 2026-05-20 更新：编辑路径安全预览
+
+本轮复查发现，新建规则已有“当 / 则 + 安全摘要”预览，但编辑已有规则时，用户调整群组、发送人、即时通知、摘要、自动答复、关注后续或联动操作后，要保存并回到规则卡片才会看到完整风险摘要。
+
+当前规则页已补齐：
+
+- 编辑表单底部会实时展示“当 / 则”预览，和新建规则路径一致。
+- 预览会汇总写入记忆、Glip / Chrome、摘要、自动答复、关注后续、联动操作及审批状态。
+- 安全摘要继续使用同一套判断：全局范围、短范围词、即时通知、免批准联动操作会在保存前提示。
+
+产品依据继续沿用 Slack / Zapier 的显式条件步骤心智；TAP 安全研究也提示规则误解、冲突和意外链路会带来风险，所以范围与动作结果应在编辑提交前可见。
+
+## 2026-05-21 更新：摘要-only 分发路径
+
+本轮复查发现，定时摘要在运行时被绑在即时通知渠道下：规则即使保存了 `digestConfig.enabled=true`，只要没有勾选即时 Glip / Chrome 推送，就可能只写入记忆而不会进入摘要队列。规则卡片又会显示“每日/每周摘要”标记，造成界面承诺与后台分发不一致。
+
+当前实现已收敛为：
+
+- 摘要是一种独立的命中后动作，不再要求规则同时启用即时通知渠道。
+- 普通 filter、Agent Workflow 和 Agent Thinking 三条路径都会先检查摘要配置；启用摘要时仍保留“替代即时通知”的语义，只入队摘要，不立即推送。
+- 新建与编辑规则时，非关注后续规则都可以直接配置定时摘要，避免用户为了获得摘要而被迫打开即时 Glip 推送。
+
+产品依据：
+
+- Slack 关键词 workflow 把 channel、关键词和后续 step 拆成显式条件与动作。
+- Zapier Filter 把条件作为 gatekeeper，只有满足条件才继续执行对应后续步骤。
+- 注意力感知通知研究强调要平衡延后提醒成本和即时打断成本；摘要-only 路径就是把低打扰分发作为一等动作。
+- TAP bug 研究显示，用户难以准确预测有 timing / control-flow 隐含条件的规则行为；因此“摘要”和“即时通知”不应有隐藏依赖。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/intl/en-gb/help/articles/43844341409811-Create-a-Slack-workflow-that-starts-with-a-keyword)
+- [Zapier：Filter by Zapier](https://zapier.com/apps/filter/integrations)
+- [Attention-Sensitive Alerting](https://arxiv.org/abs/1301.6707)
+- [How Users Interpret Bugs in Trigger-Action Programming](https://par.nsf.gov/biblio/10106413-how-users-interpret-bugs-trigger-action-programming)
+
+## 2026-05-21 更新：摘要替代即时通知的界面语义
+
+本轮复查发现，运行时已经把摘要视为低打扰分发路径：启用摘要后，命中规则会进入摘要队列，不再同时发送 Glip / Chrome 即时通知。但规则卡片和部分当/则预览仍可能把即时通知一起展示，造成“会摘要，也会马上推送”的错觉。
+
+当前界面已对齐运行时：
+
+- 新建 / 编辑预览只把摘要显示为“每日/每周摘要（不即时推送）”。
+- 规则卡片中启用摘要的规则不再展示被运行时抑制的 Glip / Chrome 即时通知标签。
+- 安全摘要继续把摘要视为非即时打扰，不因为历史 notifyMethod 字段残留而误报即时通知。
+
+产品依据仍然是触发器 + 条件 + 动作的可解释路径：Slack 关键词 workflow 与 Zapier filter/path 都把触发条件和后续步骤显式拆开；TAP bug 研究也说明，隐藏的控制流会削弱用户对规则结果的预测能力。这里的改动重点是让卡片承诺和运行时真实行为一致。
+
+## 2026-05-22 更新：系统观察运行时摘要
+
+本轮复查发现，规则页虽然说明“系统观察规则不会出现在这里”，但用户无法判断当前是否真的有内部观察在运行，也看不到它们为什么不计入手动规则列表。这会让帮我问 / 自我反思等内部能力看起来像黑盒，尤其是在用户打开规则页排查“为什么系统还在观察消息”时。
+
+当前规则页已补齐：
+
+- 顶部说明区会读取 Outreach runtime status，显示正在运行的内部观察总数。
+- 摘要按 `发送前观察 / 等待回复 / 待批准 / 延后` 展示当前状态，区分“待发送”和“等别人答复”。
+- 只展示前几条观察样例的目标、状态和问题摘要，帮助用户理解来源；这些系统规则仍不会写入 `concernedItems`，也不会进入手动规则的导入、导出、编辑和统计。
+- Memory Service 未配置或读取失败时，规则页会显示不可用状态，但手动规则管理不受阻塞。
+
+产品依据仍然是显式条件与可审计自动化：Slack Workflow Builder 要求先选 channel 和关键词条件，Zapier filter/path 会把条件作为明确 gate；TAP 可理解性研究指出用户需要看到触发条件和动作后果，attention-sensitive alerting 研究也提醒内部观察不应伪装成即时通知。这里的改动重点是给系统观察一个只读运行时窗口，而不是把内部规则暴露成可编辑配置。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811)
+- [Zapier：Filter and path rules in Zaps](https://help.zapier.com/hc/en-us/articles/8496180919949-Filter-and-path-rules-in-Zaps)
+- [Making trigger-action rules more comprehensible](https://www.sciencedirect.com/science/article/pii/S1071581925001703)
+- [Attention-Sensitive Alerting](https://arxiv.org/abs/1301.6707)
 
 ## 适用场景
 

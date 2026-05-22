@@ -6,7 +6,9 @@ import vm from 'node:vm';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const appScriptPath = path.join(repoRoot, 'src/scheduled-messages/app-script-template.gs');
+const managerPath = path.join(repoRoot, 'src/scheduled-messages/ScheduledMessagesManager.tsx');
 const source = readFileSync(appScriptPath, 'utf8');
+const managerSource = readFileSync(managerPath, 'utf8');
 const logs = [];
 
 const context = {
@@ -82,5 +84,27 @@ assert.equal(
 );
 
 assert.equal(context.getTimelineProjectInfo(cachedShape, 'Unknown'), null);
+
+assert.match(
+  managerSource,
+  /fetch\(buildWebAppActionUrl\(webAppUrl, 'getTimelineCacheStatus'\), \{\s*method: 'GET',\s*credentials: 'omit',/s,
+  'Timeline cache status probes should omit Chrome profile credentials'
+);
+assert.match(
+  managerSource,
+  /const init: RequestInit = \{\s*method: dryRunHelp\.method,\s*credentials: 'omit',/s,
+  'Timeline dry-run probes should omit Chrome profile credentials'
+);
+assert.ok(
+  managerSource.includes('Google 返回了 HTML 错误页'),
+  'Timeline cache HTTP errors should summarize HTML error pages instead of dumping raw HTML'
+);
+assert.equal(
+  managerSource.includes('复制 Rule 模板') ||
+    managerSource.includes('复制样例 curl') ||
+    managerSource.includes('复制诊断'),
+  false,
+  'Timeline cache status panel should keep troubleshooting actions compact'
+);
 
 console.log('scheduled messages timeline cache verification passed');

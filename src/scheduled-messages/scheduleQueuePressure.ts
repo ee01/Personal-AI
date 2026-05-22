@@ -4,9 +4,12 @@ import {
   formatLocalScheduleDateTime,
   hasLocalScheduleTime,
   isValidLocalScheduleTime,
+  parseLocalScheduleTime,
 } from './scheduleDateTime.js';
 import {
   calculateScheduledMessageNextExecution,
+  getDefaultScheduleTime,
+  getDefaultScheduleTimeLabel,
   isExecutorDrivenSchedule,
 } from './scheduleNextExecution.js';
 
@@ -30,6 +33,7 @@ export interface ScheduleQueueSuggestion {
   timeStr: string;
   label: string;
   inspectedMinutes: number;
+  clearsScheduleTime?: boolean;
 }
 
 export interface ScheduleQueueSlotSummary {
@@ -47,6 +51,8 @@ export interface ScheduleQueueSlotSummary {
   actionMessageId: string;
   actionTopic: string;
   actionPosition: number;
+  blockingCount: number;
+  blockingTopics: string[];
   suggestion: ScheduleQueueSuggestion | null;
 }
 
@@ -240,6 +246,7 @@ function buildSlotSummary(
   const suggestion = actionMessage && maxDelayMinutes > 0 && (hasExplicitTime || exceedsExecutionWindow)
     ? getScheduleQueueSuggestion(allMessages, actionMessage, now)
     : null;
+  const blockingMessages = actionMessage ? slotMessages.slice(0, -1) : [];
 
   return {
     slotKey,
@@ -261,6 +268,11 @@ function buildSlotSummary(
     actionMessageId: actionMessage?.ID || '',
     actionTopic: actionMessage?.Topic || actionMessage?.ID || '',
     actionPosition: slotMessages.length,
+    blockingCount: blockingMessages.length,
+    blockingTopics: blockingMessages
+      .slice(0, 3)
+      .map(message => message.Topic || message.ID)
+      .filter(Boolean),
     suggestion,
   };
 }
@@ -324,6 +336,149 @@ function getReservedExplicitMinuteKeys(messages: ScheduledMessage[], now: Date):
   }
 
   return reservedMinuteKeys;
+}
+
+function addMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + minutes * 60000);
+}
+
+function getEndOfExecutionDay(slotTime: Date): Date {
+  const executionDayEnd = new Date(slotTime);
+  executionDayEnd.setHours(23, 59, 0, 0);
+  return executionDayEnd;
+}
+
+function getReservedExecutorMinuteKeys(messages: ScheduledMessage[], now: Date): Set<number> {
+  const reservedMinuteKeys = getReservedExplicitMinuteKeys(messages, now);
+  const noTimeSlots = new Map<string, { slotKey: string; messages: ScheduledMessage[] }>();
+  const nextCandidateMinute = getNextCandidateMinute(now);
+
+  for (const message of messages) {
+    if (hasExplicitScheduleTime(message)) {
+      continue;
+    }
+
+    const slotKey = getScheduleSlotKey(message, now);
+    if (!slotKey || isStaleNoTimeExecutorSlot(slotKey, message, now)) {
+      continue;
+    }
+
+    const executionDate = getExecutionDateFromSlotKey(slotKey);
+    if (isTerminalExecutionForDate(message, executionDate)) {
+      continue;
+    }
+
+    const groupKey = getScheduleQueueGroupKey(message, now);
+    if (!groupKey) {
+      continue;
+    }
+
+    const slot = noTimeSlots.get(groupKey) || { slotKey, messages: [] };
+    slot.messages.push(message);
+    noTimeSlots.set(groupKey, slot);
+  }
+
+  const sortedNoTimeSlots = Array.from(noTimeSlots.values()).sort((left, right) => (
+    left.slotKey.localeCompare(right.slotKey)
+  ));
+
+  for (const { slotKey, messages: slotMessages } of sortedNoTimeSlots) {
+    const slotTime = parseScheduleSlotKey(slotKey);
+    if (!slotTime) {
+      continue;
+    }
+
+    let cursor = new Date(Math.max(slotTime.getTime(), nextCandidateMinute.getTime()));
+    const executionDayEnd = getEndOfExecutionDay(slotTime);
+
+    for (let index = 0; index < slotMessages.length; index++) {
+      while (
+        cursor.getTime() <= executionDayEnd.getTime() &&
+        reservedMinuteKeys.has(getMinuteKey(cursor))
+      ) {
+        cursor = addMinutes(cursor, 1);
+      }
+
+      if (cursor.getTime() > executionDayEnd.getTime()) {
+        break;
+      }
+
+      reservedMinuteKeys.add(getMinuteKey(cursor));
+      cursor = addMinutes(cursor, 1);
+    }
+  }
+
+  return reservedMinuteKeys;
+}
+
+function getNoTimeOverflowSearchStart(
+  targetSlotTime: Date,
+  targetMessage: ScheduledMessage,
+  now: Date,
+): Date {
+  const { hours, minutes } = parseLocalScheduleTime(getDefaultScheduleTime(targetMessage));
+  const searchStart = new Date(targetSlotTime);
+  searchStart.setDate(searchStart.getDate() + 1);
+  searchStart.setHours(hours, minutes, 0, 0);
+
+  const nextCandidateMinute = getNextCandidateMinute(now);
+  while (searchStart.getTime() < nextCandidateMinute.getTime()) {
+    searchStart.setDate(searchStart.getDate() + 1);
+  }
+
+  return searchStart;
+}
+
+function formatNoTimeQueueSuggestionLabel(
+  dateStr: string,
+  targetMessage: ScheduledMessage,
+): string {
+  const defaultTimeLabel = getDefaultScheduleTimeLabel(targetMessage);
+  const queueLabel = defaultTimeLabel.endsWith('后')
+    ? `${defaultTimeLabel}队列`
+    : defaultTimeLabel;
+  return `${dateStr} ${queueLabel}`;
+}
+
+function getNoTimeOverflowQueueSuggestion(
+  existingMessages: ScheduledMessage[],
+  targetMessage: ScheduledMessage,
+  targetSlotTime: Date,
+  now: Date,
+  searchMinutes: number,
+): ScheduleQueueSuggestion | null {
+  const searchStart = getNoTimeOverflowSearchStart(targetSlotTime, targetMessage, now);
+  const maxSearchDays = Math.max(0, Math.ceil(searchMinutes / (24 * 60)));
+
+  for (let dayOffset = 0; dayOffset <= maxSearchDays; dayOffset++) {
+    const candidateTime = new Date(searchStart);
+    candidateTime.setDate(searchStart.getDate() + dayOffset);
+    const dateStr = formatLocalScheduleDate(candidateTime);
+    const candidateMessage: ScheduledMessage = {
+      ...targetMessage,
+      Schedule_Date: dateStr,
+      Schedule_Time: '',
+    };
+    const candidateSlotKey = getScheduleSlotKey(candidateMessage, now);
+    if (!candidateSlotKey) {
+      continue;
+    }
+
+    const pressure = getScheduleQueuePressure(existingMessages, candidateMessage, now);
+    if (pressure?.exceedsExecutionWindow) {
+      continue;
+    }
+
+    return {
+      dateStr,
+      timeStr: '',
+      label: formatNoTimeQueueSuggestionLabel(dateStr, targetMessage),
+      inspectedMinutes: dayOffset + 1,
+      clearsScheduleTime: true,
+    };
+  }
+
+  return null;
 }
 
 export function getScheduleQueueSummary(
@@ -523,7 +678,18 @@ export function getScheduleQueueSuggestion(
   }
 
   const existingMessages = messages.filter(message => !isSameMessage(message, targetMessage));
-  const reservedMinuteKeys = getReservedExplicitMinuteKeys(existingMessages, now);
+
+  if (!targetHasExplicitTime && targetPressure.exceedsExecutionWindow) {
+    return getNoTimeOverflowQueueSuggestion(
+      existingMessages,
+      targetMessage,
+      targetSlotTime,
+      now,
+      searchMinutes,
+    );
+  }
+
+  const reservedMinuteKeys = getReservedExecutorMinuteKeys(existingMessages, now);
   const searchStart = new Date(Math.max(targetSlotTime.getTime(), getNextCandidateMinute(now).getTime()));
   const targetExecutionDate = getExecutionDateFromSlotKey(targetSlotKey);
   const targetGroupKey = getScheduleQueueGroupKey(targetMessage, now);
@@ -555,7 +721,7 @@ export function getScheduleQueueSuggestion(
     }
 
     const pressure = getScheduleQueuePressure(existingMessages, candidateMessage, now);
-    if (pressure?.exceedsCompensationWindow) {
+    if (pressure) {
       continue;
     }
 
@@ -590,6 +756,10 @@ export function formatScheduleQueuePressure(pressure: ScheduleQueuePressure): st
 }
 
 export function formatScheduleQueueSuggestion(suggestion: ScheduleQueueSuggestion): string {
+  if (suggestion.clearsScheduleTime) {
+    return `建议改到 ${suggestion.label}，保留未填写执行时间的队列语义。`;
+  }
+
   return `建议改到 ${suggestion.label}，避开当前拥挤时间槽。`;
 }
 
@@ -640,6 +810,9 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
   const actionLabel = slot.actionTopic
     ? `建议处理：${slot.actionTopic}（第 ${slot.actionPosition}/${slot.slotSize} 个）`
     : '';
+  const blockingLabel = slot.blockingCount > 0
+    ? `前面 ${slot.blockingCount} 条待执行${slot.blockingTopics.length > 0 ? `：${slot.blockingTopics.join('、')}` : ''}`
+    : '';
   const suggestionLabel = slot.suggestion
     ? `建议改到 ${slot.suggestion.label}`
     : '';
@@ -650,6 +823,7 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
     riskLabel,
     remainingWindowLabel,
     actionLabel,
+    blockingLabel,
     suggestionLabel,
     sampleLabel,
   ].filter(Boolean).join('，');

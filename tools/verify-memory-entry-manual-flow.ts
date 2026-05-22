@@ -30,6 +30,7 @@ const storage: Record<string, any> = {
   taskSchedulerStates: {
     message_analysis: { enabled: true },
   },
+  digestQueues: {},
   concernedItems: [
     {
       id: 'manual-1',
@@ -155,6 +156,7 @@ function installFetchMock() {
         );
       }
 
+      const activeRule = storage.concernedItems[0];
       return new Response(
         JSON.stringify({
           response: JSON.stringify({
@@ -167,9 +169,8 @@ function installFetchMock() {
                 summary: 'manual blocker rule matched',
                 datetime: '2026-04-15T00:00:00.000Z',
                 post_id: 'post-manual-1',
-                matched_rule:
-                  '[RULE_REF:manual:manual-1] [RULE_ID:0] Only notify me when blocker is mentioned',
-                matched_rule_refs: ['manual:manual-1'],
+                matched_rule: `[RULE_REF:manual:${activeRule.id}] [RULE_ID:0] ${activeRule.text}`,
+                matched_rule_refs: [`manual:${activeRule.id}`],
                 matched_rule_ids: [0],
                 reply_advice: 'Please follow up on the blocker.',
                 user_relation_type: 'general_interest',
@@ -226,6 +227,58 @@ async function main() {
     'manual notify bot flow should still work',
   );
   assert.match(JSON.stringify(botMessages[0]), /blocker/i);
+
+  storage.concernedItems = [
+    {
+      id: 'digest-only',
+      text: 'Only summarize blocker mentions later',
+      expiredAt: 0,
+      notifyMethod: '',
+      digestConfig: {
+        enabled: true,
+        frequency: 'daily',
+        preferredHour: 8,
+      },
+    },
+  ];
+  storage.digestQueues = {};
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Team Standup',
+        groupId: 'team-2',
+        standalone: [
+          {
+            creator: 'Alice',
+            time: '2026-04-15T00:00:00.000Z',
+            id: 'post-manual-1',
+            text: 'There is a blocker in build pipeline',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  const queuedDigestItems =
+    storage.digestQueues?.concerned_items_daily?.items || [];
+  assert.equal(ingests.length, 1, 'digest-only manual match should ingest');
+  assert.equal(
+    botMessages.length,
+    0,
+    'digest-only manual match should not send immediate bot notification',
+  );
+  assert.equal(
+    queuedDigestItems.length,
+    1,
+    'digest-only manual match should be queued for scheduled summary',
+  );
+  assert.equal(queuedDigestItems[0].data.ruleId, 'digest-only');
 
   console.log('verify-memory-entry-manual-flow: ok');
 }

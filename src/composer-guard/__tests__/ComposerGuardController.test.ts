@@ -5,13 +5,9 @@ import {
   DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
   DEFAULT_ASSIST_PREVIEW_LIMIT,
   getComposerAssistPreviewText,
-  getComposerAssistRiskLabel,
-  getComposerAssistSourceSummary,
-  getComposerGuardPrimaryAction,
   getNextComposerAssistThreshold,
   normalizeComposerAssistThreshold,
   sanitizeComposerAssistInsertText,
-  shouldPreviewComposerAssistBeforeInsert,
 } from '../assistPreviewPolicy.ts';
 import { isComposerAssistEnabledFromConfig } from '../assistConfig.ts';
 
@@ -45,44 +41,6 @@ test('getNextComposerAssistThreshold: rejected feedback raises non-linearly', ()
   assert.ok(firstDelta > secondDelta);
 });
 
-test('getComposerGuardPrimaryAction: preview-required assists require explicit preview', () => {
-  assert.equal(
-    shouldPreviewComposerAssistBeforeInsert({
-      previewRequired: false,
-      riskLevel: 'low',
-    }),
-    false,
-  );
-  assert.equal(
-    getComposerGuardPrimaryAction({
-      previewRequired: false,
-      riskLevel: 'low',
-    }),
-    'insert',
-  );
-  assert.equal(
-    shouldPreviewComposerAssistBeforeInsert({
-      previewRequired: true,
-      riskLevel: 'medium',
-    }),
-    true,
-  );
-  assert.equal(
-    getComposerGuardPrimaryAction({
-      previewRequired: true,
-      riskLevel: 'medium',
-    }),
-    'preview',
-  );
-  assert.equal(
-    getComposerGuardPrimaryAction({
-      previewRequired: false,
-      riskLevel: 'high',
-    }),
-    'preview',
-  );
-});
-
 test('getComposerAssistPreviewText: truncates hover previews but preserves locked previews', () => {
   const longSuggestion = 'A'.repeat(DEFAULT_ASSIST_PREVIEW_LIMIT + 24);
 
@@ -102,36 +60,6 @@ test('sanitizeComposerAssistInsertText: strips wrapper copy before preview or in
   );
 
   assert.equal(insertText, '请结合 Orbit blocker 回复。');
-});
-
-test('getComposerAssistSourceSummary: exposes source count and insert risk', () => {
-  const summary = getComposerAssistSourceSummary({
-    riskLevel: 'medium',
-    previewRequired: true,
-    evidence: [
-      {
-        id: 'memory-1',
-        type: 'chunk',
-        snippet: 'Factory AI needs security approval.',
-        sourceTitle: 'AI tools selection',
-      },
-      {
-        id: 'memory-2',
-        type: 'message',
-        snippet: 'Do not auto-send prompts.',
-        sourceLabel: 'doubao',
-      },
-    ],
-  });
-
-  assert.match(summary, /2 条记忆/);
-  assert.match(summary, /中风险 · 确认后插入/);
-  assert.match(summary, /AI tools selection/);
-  assert.match(summary, /doubao/);
-  assert.equal(
-    getComposerAssistRiskLabel({ riskLevel: 'high', previewRequired: false }),
-    '高风险 · 先预览',
-  );
 });
 
 test('isComposerAssistEnabledFromConfig: context and compose toggles both gate the feature', () => {

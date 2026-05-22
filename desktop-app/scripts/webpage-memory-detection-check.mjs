@@ -60,6 +60,13 @@ async function waitForRequestCount(server, expectedCount, timeoutMs = 5000) {
   );
 }
 
+async function openContextMoreMenu(page) {
+  await page.locator('.pai-context-more').click();
+  await page.waitForSelector('.pai-context-more-menu:not([hidden])', {
+    timeout: 5000,
+  });
+}
+
 async function startHarnessServer() {
   const contextRecallRequests = [];
   const feedbackRequests = [];
@@ -70,18 +77,109 @@ async function startHarnessServer() {
         const rawBody = await readRequestBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
         contextRecallRequests.push(body);
+        if (typeof body.url === 'string' && body.url.includes('/empty-meeting')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [],
+              topMatch: null,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/credential-selection')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [],
+              topMatch: null,
+              queryTimeMs: 2,
+            }),
+          );
+          return;
+        }
+        if (
+          body.contextType === 'selected_text' &&
+          typeof body.url === 'string' &&
+          body.url.includes('/selected-no-match')
+        ) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [],
+              topMatch: null,
+              queryTimeMs: 2,
+            }),
+          );
+          return;
+        }
+        if (
+          typeof body.url === 'string' &&
+          body.url.includes('/selection-delayed-sensitive')
+        ) {
+          if (body.contextType !== 'selected_text') {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                matches: [],
+                topMatch: null,
+                queryTimeMs: 2,
+              }),
+            );
+            return;
+          }
+          await delay(900);
+        }
         if (typeof body.url === 'string' && body.url.includes('/dynamic-sensitive')) {
           await delay(900);
         }
         const unsafeRouteCase =
           typeof body.url === 'string' && body.url.includes('/unsafe-route');
-        const match = {
+        const selectedTextCase = body.contextType === 'selected_text';
+        if (selectedTextCase && /codex/i.test(String(body.primaryText || ''))) {
+          const codexNoiseMatch = {
+            id: 'web-memory-codex-noise',
+            type: 'message',
+            score: 0.96,
+            displayPriority: 'p1',
+            title: 'Patricia Li asked whether to skip the period number change',
+            uiSummary: 'This memory is about period numbering and should not match a Codex renewal selection.',
+            snippet: 'Patricia Li replied about skipping period numbering edits.',
+            sourceLabel: 'glip',
+            links: [],
+            whyMatched: '主题命中 Codex',
+            whyRelevant: ['主题：Codex'],
+            matchedAnchors: {
+              topics: ['Codex'],
+            },
+            reasonType: 'keyword_overlap',
+            evidenceRole: 'supporting',
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [codexNoiseMatch],
+              topMatch: codexNoiseMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        const primaryMatch = {
           id: 'web-memory-1',
           type: 'message',
           score: 0.92,
+          displayPriority: 'p1',
           title: unsafeRouteCase
             ? 'Falcon "unsafe" launch <review>'
-            : 'Falcon launch readiness',
+            : selectedTextCase
+              ? 'Selected text Falcon owner handoff'
+              : 'Falcon launch readiness',
+          uiSummary: selectedTextCase
+            ? 'Selected text recall found the Falcon owner handoff checklist.'
+            : 'Falcon launch readiness is linked to the owner handoff checklist.',
           snippet: 'Previously saved notes mention the Falcon launch checklist and owner handoff.',
           sourceLabel: 'Web memory',
           sourceUrl: 'https://source.example.com/falcon',
@@ -97,14 +195,48 @@ async function startHarnessServer() {
             },
             { label: 'Unsafe source', url: 'javascript:alert(1)' },
           ],
-          whyMatched: '关键词命中网页上下文',
+          whyMatched: selectedTextCase
+            ? '选中文本命中 owner handoff'
+            : '关键词命中网页上下文',
+          whyRelevant: ['项目：Falcon', '主题：owner handoff'],
+          matchedAnchors: {
+            projects: ['Falcon'],
+            topics: ['owner handoff'],
+          },
+          reasonType: 'keyword_overlap',
+          evidenceRole: 'supporting',
+          metadata: { fixture: 'webpage-memory-detection' },
+          mergedCount: 2,
+          mergedIds: ['web-memory-1', 'web-memory-2'],
+          sourceClusterKey: 'falcon-launch',
+          sourceContext: 'Falcon launch readiness cluster',
           timestamp: Math.floor(Date.now() / 1000),
+        };
+        const hiddenMatch = {
+          ...primaryMatch,
+          id: 'web-memory-hidden',
+          score: 0.99,
+          displayPriority: 'hidden',
+          title: 'Hidden Falcon match',
+          uiSummary: 'Hidden memory should not be displayed.',
+          snippet: 'Hidden memory should not be displayed.',
+          exploreLink: '#/timeline?focus=web-memory-hidden',
+        };
+        const secondaryMatch = {
+          ...primaryMatch,
+          id: 'web-memory-secondary',
+          score: 0.78,
+          displayPriority: 'p1',
+          title: 'Secondary Falcon match',
+          uiSummary: 'Secondary memory should lose to p1 priority.',
+          snippet: 'Secondary memory should lose to p1 priority.',
+          exploreLink: '#/timeline?focus=web-memory-secondary',
         };
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({
-            matches: [match],
-            topMatch: match,
+            matches: [hiddenMatch, secondaryMatch, primaryMatch],
+            topMatch: hiddenMatch,
             queryTimeMs: 4,
           }),
         );
@@ -137,6 +269,80 @@ async function startHarnessServer() {
                 migration checkpoints, release confidence, dependency status, customer
                 communication, and follow-up review material for the team.
               </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/credential-selection')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Credential selection guard</title></head>
+            <body>
+              <section id="credential-section">
+                api_key = sk-proj-1234567890abcdefghijklmnop
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/selected-no-match')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Selected text empty recall</title></head>
+            <body>
+              <section id="selected-empty-section">
+                Unmatched launch phrase with enough words to be eligible but no related memories.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/selected-codex-noise')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Codex renewal rumor</title></head>
+            <body>
+              <section id="selected-codex-noise-section">
+                听说codex续约好了，以后每人每个月300万，是这样吗？
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/selection-delayed-sensitive')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Delayed selected text recall</title></head>
+            <body>
+              <section id="delayed-selection-section">
+                Falcon launch readiness owner handoff depends on the migration
+                checklist, release confidence, customer communication, and
+                follow-up review material.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/empty-meeting')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>RingCentral Video</title></head>
+            <body>
+              <main>
+                <h1>You're the only one here</h1>
+                <button>Invite others</button>
+                <nav>BRB Unmute Start video Share Invite Participants Chat React Raise hand Notes More Leave</nav>
+              </main>
             </body>
           </html>`);
         return;
@@ -388,6 +594,11 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     'webpage',
     '普通网页应以 webpage contextType 召回',
   );
+  assert.equal(
+    server.contextRecallRequests[startCount].limit,
+    3,
+    '网页 ambient bubble 应请求 3 条候选供前端按优先级选择',
+  );
   assert.ok(
     server.contextRecallRequests[startCount].sourceTypes?.includes('web'),
     '普通网页应透传 sourceTypes 以约束召回来源',
@@ -399,7 +610,28 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   );
 
   const bubble = page.locator('.pai-context-bubble');
+  await bubble.hover();
+  await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const peekText = await page.locator('.pai-context-peek').innerText();
+  assert.match(peekText, /Memory Lens/);
+  assert.match(peekText, /强相关/);
+  assert.match(peekText, /因为/);
+  assert.match(peekText, /Falcon launch readiness/);
+  assert.match(peekText, /Falcon launch readiness is linked to the owner handoff checklist\./);
+  assert.match(peekText, /关键词匹配/);
+  assert.doesNotMatch(peekText, /\b\d{1,3}%\b/);
+  assert.doesNotMatch(peekText, /这条有用/);
+  await page.mouse.move(4, 4);
+  await page.waitForFunction(
+    () => !document.querySelector('.pai-context-peek--visible'),
+    { timeout: 5000 },
+  );
   await bubble.focus();
+  await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
   await page.keyboard.press('Enter');
   await page.waitForSelector('.pai-context-card', {
     state: 'visible',
@@ -440,13 +672,101 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   });
 
   const cardText = await page.locator('.pai-context-card').innerText();
-  assert.match(cardText, /相关记忆/);
-  assert.match(cardText, /消息记忆/);
-  assert.match(cardText, /这条有用/);
-  assert.match(cardText, /允许此站点/);
-  assert.match(cardText, /此网站今天不提示/);
-  assert.match(cardText, /此页面永久不提示/);
+  assert.match(cardText, /Memory Lens/);
+  assert.match(cardText, /为什么相关/);
+  assert.match(cardText, /它说了什么/);
+  assert.match(cardText, /我应该做什么/);
+  assert.match(cardText, /Falcon launch readiness is linked to the owner handoff checklist\./);
+  assert.match(cardText, /证据/);
+  assert.match(cardText, /Previously saved notes mention the Falcon launch checklist and owner handoff\./);
+  assert.doesNotMatch(cardText, /Hidden memory should not be displayed/);
+  assert.doesNotMatch(cardText, /Secondary memory should lose to p1 priority/);
+  assert.match(cardText, /Falcon notes/);
+  assert.match(cardText, /关键词匹配/);
+  assert.doesNotMatch(cardText, /记忆类型：/);
+  assert.doesNotMatch(cardText, /匹配原因：/);
+  assert.doesNotMatch(cardText, /证据角色：/);
+  assert.doesNotMatch(cardText, /来源上下文：/);
+  assert.doesNotMatch(cardText, /keyword_overlap/);
+  assert.doesNotMatch(cardText, /supporting/);
+  assert.doesNotMatch(cardText, /允许此站点/);
+  assert.doesNotMatch(cardText, /此网站今天不提示/);
+  assert.doesNotMatch(cardText, /此页面永久不提示/);
+  assert.doesNotMatch(cardText, /\b\d{1,3}%\b/);
+  assert.equal(
+    await page.evaluate(() => {
+      const scroll = document.querySelector('.pai-context-card-scroll');
+      const footer = document.querySelector('.pai-context-footer');
+      const pager = document.querySelector('.pai-context-pager');
+      return Boolean(scroll && footer && pager && !scroll.contains(footer) && !scroll.contains(pager));
+    }),
+    true,
+    '翻页和反馈 footer 应固定在滚动正文外，避免长文本时需要滚到底部才能翻页',
+  );
+  assert.equal(await page.locator('.pai-context-pager').isVisible(), true);
+  const evidenceMetrics = await page.evaluate(() => {
+    const block = document.querySelector('.pai-context-evidence-block');
+    const label = document.querySelector('.pai-context-evidence-label');
+    const text = document.querySelector('.pai-context-evidence-text');
+    if (!block || !label || !text) return null;
+    const blockRect = block.getBoundingClientRect();
+    const labelRect = label.getBoundingClientRect();
+    const textRect = text.getBoundingClientRect();
+    return {
+      height: blockRect.height,
+      labelToTextGap: textRect.top - labelRect.bottom,
+    };
+  });
+  assert.ok(evidenceMetrics, '证据区域应渲染为紧凑的 block');
+  assert.ok(
+    evidenceMetrics.height < 120,
+    `证据区域不应因为模板空白变成大面板，当前高度 ${evidenceMetrics.height}`,
+  );
+  assert.ok(
+    evidenceMetrics.labelToTextGap < 12,
+    `证据标题和正文之间不应有大块空白，当前间距 ${evidenceMetrics.labelToTextGap}`,
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
+    '标记这条记忆提示有用',
+    '正向反馈应保留为轻量图标按钮并提供可访问名称',
+  );
+  await page.locator('.pai-context-next').click();
+  assert.match(
+    await page.locator('.pai-context-card').innerText(),
+    /Secondary Falcon match/,
+    '固定底部翻页按钮应能切换到下一条记忆',
+  );
+  await page.locator('.pai-context-prev').click();
+  const visibleLinks = await page.$$eval('.pai-context-card a', (anchors) =>
+    anchors.map((anchor) => ({
+      text: anchor.textContent || '',
+      href: anchor.href,
+    })),
+  );
+  const visibleHrefs = visibleLinks.map((link) => link.href);
+  const visibleExploreLink = visibleLinks.find((link) => link.text.includes('在记忆中查看'));
+  assert.ok(visibleExploreLink, `缺少记忆探索跳转: ${JSON.stringify(visibleLinks)}`);
+  assert.ok(
+    visibleExploreLink.href.includes('memory-exploring.html'),
+    `记忆探索跳转应指向扩展内 memory-exploring 页面: ${visibleExploreLink.href}`,
+  );
+  assert.ok(
+    visibleHrefs.includes('https://source.example.com/falcon'),
+    '缺少安全来源链接',
+  );
+  assert.equal(
+    visibleHrefs.some((href) => href.startsWith('javascript:')),
+    false,
+    '不应渲染 javascript: 来源链接',
+  );
 
+  await openContextMoreMenu(page);
+  const menuText = await page.locator('.pai-context-more-menu:not([hidden])').innerText();
+  assert.match(menuText, /允许此站点/);
+  assert.match(menuText, /此网站今天不提示/);
+  assert.match(menuText, /此页面永久不提示/);
+  assert.match(menuText, /永久不提示此站点/);
   await page.locator('.pai-context-site-allow').click();
   await page.waitForSelector('.pai-context-toast', {
     state: 'visible',
@@ -504,6 +824,13 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     '撤销卡片快捷允许站点后应移除当前 host',
   );
   await page.waitForSelector('.pai-context-bubble', { timeout: 5000 });
+  if ((await page.locator('.pai-context-card:visible').count()) === 0) {
+    await page.locator('.pai-context-bubble').click();
+    await page.waitForSelector('.pai-context-card', {
+      state: 'visible',
+      timeout: 5000,
+    });
+  }
 
   await page.locator('.pai-context-recall-positive').click();
   await waitForRequestCount(
@@ -519,7 +846,7 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     detail: 'web_passive_bubble:127.0.0.1',
   });
   assert.equal(
-    await page.locator('.pai-context-recall-positive').innerText(),
+    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
     '已标记有用',
     '标记有用后应立即给出按钮状态反馈',
   );
@@ -543,23 +870,6 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     '锁定后的反向反馈按钮不应再提交第二条反馈',
   );
 
-  const hrefs = await page.$$eval('.pai-context-card a', (anchors) =>
-    anchors.map((anchor) => anchor.href),
-  );
-  assert.ok(
-    hrefs.some((href) => href.includes('memory-exploring.html#/timeline')),
-    '缺少记忆探索跳转',
-  );
-  assert.ok(
-    hrefs.includes('https://source.example.com/falcon'),
-    '缺少安全来源链接',
-  );
-  assert.equal(
-    hrefs.some((href) => href.startsWith('javascript:')),
-    false,
-    '不应渲染 javascript: 来源链接',
-  );
-
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForTimeout(1200);
   assert.equal(
@@ -568,6 +878,7 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     'Personal AI 浮层不应污染 body-only 网页的下一次上下文 key',
   );
 
+  await openContextMoreMenu(page);
   await page.locator('.pai-context-site-mute').click();
   await page.waitForSelector('.pai-context-toast', {
     state: 'visible',
@@ -651,6 +962,11 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   });
   assert.match(
     await unmutedPage.locator('.pai-context-card').innerText(),
+    /我应该做什么/,
+  );
+  await openContextMoreMenu(unmutedPage);
+  assert.match(
+    await unmutedPage.locator('.pai-context-more-menu:not([hidden])').innerText(),
     /永久不提示此站点/,
   );
   await unmutedPage.locator('.pai-context-site-block').click();
@@ -868,6 +1184,7 @@ async function verifyPagePathBlock(server, context, serviceWorker, extensionId) 
     state: 'visible',
     timeout: 5000,
   });
+  await openContextMoreMenu(page);
   await page.locator('.pai-context-page-block').click();
   await page.waitForSelector('.pai-context-toast', {
     state: 'visible',
@@ -914,6 +1231,7 @@ async function verifyPagePathBlock(server, context, serviceWorker, extensionId) 
     state: 'visible',
     timeout: 5000,
   });
+  await openContextMoreMenu(page);
   await page.locator('.pai-context-page-block').click();
   await page.waitForSelector('.pai-context-toast', {
     state: 'visible',
@@ -1137,6 +1455,572 @@ async function verifyJiraIssueContext(server, context) {
       log(entry);
     }
     throw new Error('Jira issue 页面出现脚本异常');
+  }
+  await page.close();
+}
+
+async function verifySelectedTextTrigger(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'selected-text');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/normal?selected-text=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `selected text initial bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    '划词页面初始只应触发一次普通被动召回',
+  );
+
+  await page.evaluate(() => {
+    const section = document.querySelector('section');
+    if (!section?.firstChild) throw new Error('missing selectable section');
+    const text = section.firstChild.textContent || '';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf('Falcon'));
+    range.setEnd(
+      section.firstChild,
+      text.indexOf('owner handoff') + 'owner handoff'.length,
+    );
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  await page.waitForSelector('.pai-context-selection-trigger', {
+    timeout: 5000,
+  });
+  await waitForRequestCount(server, startCount + 2, 5000);
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 2,
+    '划词后应先静默触发 selected_text 召回，命中后才显示轻量 icon',
+  );
+  const selectedRequest = server.contextRecallRequests[startCount + 1];
+  assert.equal(selectedRequest.contextType, 'selected_text');
+  assert.match(selectedRequest.primaryText, /Falcon launch readiness/);
+  assert.match(selectedRequest.primaryText, /owner handoff/);
+  assert.doesNotMatch(
+    selectedRequest.primaryText,
+    /migration checkpoints/,
+    'selected_text primaryText 只应包含用户选中文本，不应混入选区外背景',
+  );
+  assert.ok(
+    Array.isArray(selectedRequest.secondaryTexts),
+    'selected_text 请求应把页面标题和附近段落放入 secondaryTexts',
+  );
+  assert.ok(
+    selectedRequest.secondaryTexts.some((item) => /Falcon readiness notes/.test(String(item))),
+    'selected_text secondaryTexts 应包含页面标题作为 background context',
+  );
+  assert.ok(
+    selectedRequest.secondaryTexts.some((item) => /migration checkpoints/.test(String(item))),
+    'selected_text secondaryTexts 应包含选区附近文本作为 background context',
+  );
+
+  await page.evaluate(() => {
+    const section = document.querySelector('section');
+    if (!section?.firstChild) throw new Error('missing selectable section');
+    const text = section.firstChild.textContent || '';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf('customer'));
+    range.setEnd(
+      section.firstChild,
+      text.indexOf('communication') + 'communication'.length,
+    );
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await page.waitForFunction(
+    () => !document.querySelector('.pai-context-selection-trigger'),
+    { timeout: 1000 },
+  );
+  await waitForRequestCount(server, startCount + 3, 5000);
+  await page.waitForTimeout(240);
+  assert.equal(
+    await page.locator('.pai-context-selection-trigger').count(),
+    0,
+    '选中新文本时应立即清掉上一条划词 icon，并重新请求后只在新选区强命中时显示',
+  );
+
+  await page.evaluate(() => {
+    const section = document.querySelector('section');
+    if (!section?.firstChild) throw new Error('missing selectable section');
+    const text = section.firstChild.textContent || '';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf('Falcon'));
+    range.setEnd(
+      section.firstChild,
+      text.indexOf('owner handoff') + 'owner handoff'.length,
+    );
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await page.waitForSelector('.pai-context-selection-trigger', {
+    timeout: 5000,
+  });
+  await waitForRequestCount(server, startCount + 4, 5000);
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 4,
+    '重新选择同一段文本也应重新发起 selected_text 召回，而不是复用上次划词缓存',
+  );
+
+  await page.locator('.pai-context-selection-trigger').click();
+  await page.waitForTimeout(200);
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 4,
+    '点击划词 icon 应打开已命中的卡片，不应二次召回',
+  );
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.equal(
+    await page.locator('.pai-context-bubble').count(),
+    0,
+    'Selection Memory Search 结果打开后不应再渲染右下角 Rest icon',
+  );
+  assert.equal(
+    await page.locator('.pai-context-peek').count(),
+    0,
+    'Selection Memory Search 不应渲染 Hover Peek',
+  );
+  const selectionCardText = await page.locator('.pai-context-card').innerText();
+  assert.match(selectionCardText, /划词记忆检索/);
+  assert.doesNotMatch(
+    selectionCardText,
+    /Memory Lens/,
+    '划词检索卡片不应继续使用页面级 Memory Lens 文案',
+  );
+  assert.match(selectionCardText, /选中的内容/);
+  assert.match(selectionCardText, /找到的相关记忆/);
+  assert.match(selectionCardText, /为什么匹配/);
+  assert.match(selectionCardText, /匹配到/);
+  assert.match(selectionCardText, /选中文本命中/);
+  assert.match(
+    selectionCardText,
+    /Selected text Falcon owner handoff/,
+    '点击划词入口后应展示 selected_text 命中的卡片',
+  );
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.waitForTimeout(700);
+  assert.match(
+    await page.locator('.pai-context-card').innerText(),
+    /Selected text Falcon owner handoff/,
+    '划词卡片打开后不应被页面 passive recall 立刻替换或清除',
+  );
+  assert.equal(
+    await page.locator('.pai-context-selection-trigger').count(),
+    0,
+    '点击划词入口后轻量 icon 应消失',
+  );
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('划词入口页面出现脚本异常');
+  }
+  await page.close();
+
+  const emptyPage = await context.newPage();
+  const emptyDiagnostics = attachPageDiagnostics(emptyPage, 'selected-text-empty');
+  const emptyStartCount = server.contextRecallRequests.length;
+  await emptyPage.goto(`${server.origin}/selected-no-match`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await emptyPage.waitForTimeout(2600);
+  const emptyAfterInitialCount = server.contextRecallRequests.length;
+  assert.ok(
+    emptyAfterInitialCount <= emptyStartCount + 1,
+    '无命中划词页面最多允许普通被动召回尝试',
+  );
+  await emptyPage.evaluate(() => {
+    const section = document.querySelector('#selected-empty-section');
+    if (!section?.firstChild) throw new Error('missing selected empty section');
+    const range = document.createRange();
+    range.selectNodeContents(section.firstChild);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await waitForRequestCount(server, emptyAfterInitialCount + 1, 5000);
+  assert.equal(
+    server.contextRecallRequests.at(-1)?.contextType,
+    'selected_text',
+    '无命中划词也应先完成 selected_text 匹配',
+  );
+  await emptyPage.waitForTimeout(800);
+  assert.equal(
+    await emptyPage.locator('.pai-context-selection-trigger').count(),
+    0,
+    'selected_text 没有高相关记忆时不应显示划词 icon',
+  );
+  assert.equal(
+    await emptyPage.locator('.pai-context-toast').count(),
+    0,
+    'selected_text 没有高相关记忆时不应弹出空结果提示',
+  );
+  if (emptyDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of emptyDiagnostics) {
+      log(entry);
+    }
+    throw new Error('无命中划词页面出现脚本异常');
+  }
+  await emptyPage.close();
+
+  const codexNoisePage = await context.newPage();
+  const codexNoiseDiagnostics = attachPageDiagnostics(codexNoisePage, 'selected-text-codex-noise');
+  const codexNoiseStartCount = server.contextRecallRequests.length;
+  await codexNoisePage.goto(`${server.origin}/selected-codex-noise`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await codexNoisePage.waitForTimeout(2600);
+  const codexNoiseAfterInitialCount = server.contextRecallRequests.length;
+  assert.ok(
+    codexNoiseAfterInitialCount <= codexNoiseStartCount + 1,
+    'Codex 噪声划词页面最多允许普通被动召回尝试',
+  );
+  await codexNoisePage.evaluate(() => {
+    const section = document.querySelector('#selected-codex-noise-section');
+    if (!section?.firstChild) throw new Error('missing selected codex noise section');
+    const text = section.firstChild.textContent || '';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf('听说codex续约好了'));
+    range.setEnd(
+      section.firstChild,
+      text.indexOf('听说codex续约好了') + '听说codex续约好了'.length,
+    );
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await waitForRequestCount(server, codexNoiseAfterInitialCount + 1, 5000);
+  assert.equal(
+    server.contextRecallRequests.at(-1)?.contextType,
+    'selected_text',
+    'Codex 噪声划词也应先完成 selected_text 匹配',
+  );
+  await codexNoisePage.waitForTimeout(800);
+  assert.equal(
+    await codexNoisePage.locator('.pai-context-selection-trigger').count(),
+    0,
+    '只有 Codex 泛主题命中的 p1 结果不应显示划词 icon',
+  );
+  if (codexNoiseDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of codexNoiseDiagnostics) {
+      log(entry);
+    }
+    throw new Error('Codex 噪声划词页面出现脚本异常');
+  }
+  await codexNoisePage.close();
+}
+
+async function verifySelectedTextPrivacyAndUiBoundaries(server, context) {
+  const cardPage = await context.newPage();
+  const cardDiagnostics = attachPageDiagnostics(cardPage, 'selected-text-card-boundary');
+  const cardStartCount = server.contextRecallRequests.length;
+  await cardPage.goto(`${server.origin}/normal?selected-card-boundary=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await cardPage.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await cardPage.locator('.pai-context-bubble').click();
+  await cardPage.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await cardPage.evaluate(() => {
+    const card = document.querySelector('.pai-context-card');
+    if (!card?.firstChild) throw new Error('missing Memory Lens card text');
+    const range = document.createRange();
+    range.selectNodeContents(card);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await cardPage.waitForTimeout(800);
+  assert.equal(
+    await cardPage.locator('.pai-context-selection-trigger').count(),
+    0,
+    '选中 Memory Lens 自己卡片里的文字不应再显示划词入口',
+  );
+  assert.equal(
+    server.contextRecallRequests.length,
+    cardStartCount + 1,
+    '选中 Memory Lens 自己的 UI 不应额外触发 selected_text 召回',
+  );
+  if (cardDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of cardDiagnostics) {
+      log(entry);
+    }
+    throw new Error('Memory Lens 卡片选区边界页面出现脚本异常');
+  }
+  await cardPage.close();
+
+  const credentialPage = await context.newPage();
+  const credentialDiagnostics = attachPageDiagnostics(credentialPage, 'selected-text-credential');
+  const credentialStartCount = server.contextRecallRequests.length;
+  await credentialPage.goto(`${server.origin}/credential-selection`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await credentialPage.waitForTimeout(2600);
+  const credentialAfterInitialCount = server.contextRecallRequests.length;
+  assert.ok(
+    credentialAfterInitialCount <= credentialStartCount + 1,
+    '凭据选区页面最多允许普通被动召回尝试',
+  );
+  await credentialPage.evaluate(() => {
+    const section = document.querySelector('#credential-section');
+    if (!section?.firstChild) throw new Error('missing credential section');
+    const range = document.createRange();
+    range.selectNodeContents(section.firstChild);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await credentialPage.waitForTimeout(800);
+  assert.equal(
+    await credentialPage.locator('.pai-context-selection-trigger').count(),
+    0,
+    '明显像 API key 的选区不应显示划词入口',
+  );
+  assert.equal(
+    server.contextRecallRequests.length,
+    credentialAfterInitialCount,
+    '明显像 API key 的选区不应触发 selected_text 召回',
+  );
+  if (credentialDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of credentialDiagnostics) {
+      log(entry);
+    }
+    throw new Error('凭据选区页面出现脚本异常');
+  }
+  await credentialPage.close();
+
+  const sensitivePage = await context.newPage();
+  const sensitiveDiagnostics = attachPageDiagnostics(sensitivePage, 'selected-text-sensitive-response');
+  const sensitiveStartCount = server.contextRecallRequests.length;
+  await sensitivePage.goto(`${server.origin}/selection-delayed-sensitive`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await sensitivePage.waitForTimeout(2600);
+  const sensitiveAfterInitialCount = server.contextRecallRequests.length;
+  assert.ok(
+    sensitiveAfterInitialCount <= sensitiveStartCount + 1,
+    '延迟响应页面最多允许普通被动召回尝试',
+  );
+  await sensitivePage.evaluate(() => {
+    const section = document.querySelector('#delayed-selection-section');
+    if (!section?.firstChild) throw new Error('missing delayed selection section');
+    const text = section.firstChild.textContent || '';
+    const range = document.createRange();
+    range.setStart(section.firstChild, text.indexOf('Falcon'));
+    range.setEnd(
+      section.firstChild,
+      text.indexOf('owner handoff') + 'owner handoff'.length,
+    );
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await waitForRequestCount(server, sensitiveAfterInitialCount + 1, 5000);
+  await sensitivePage.evaluate(() => {
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.autocomplete = 'current-password';
+    document.body.appendChild(input);
+  });
+  await sensitivePage.waitForTimeout(1200);
+  assert.equal(
+    server.contextRecallRequests.at(-1)?.contextType,
+    'selected_text',
+    '延迟响应用例应在显示划词 icon 前真实发出 selected_text 请求',
+  );
+  assert.equal(
+    await sensitivePage.locator('.pai-context-selection-trigger').count(),
+    0,
+    'selected_text 响应回来前页面变成敏感表单时不应显示划词 icon',
+  );
+  assert.equal(
+    await sensitivePage.locator('.pai-context-card:visible').count(),
+    0,
+    'selected_text 响应回来前页面变成敏感表单时不应显示记忆卡片',
+  );
+  if (sensitiveDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of sensitiveDiagnostics) {
+      log(entry);
+    }
+    throw new Error('selected_text 敏感响应拦截页面出现脚本异常');
+  }
+  await sensitivePage.close();
+}
+
+async function verifyEmptyMeetingDoesNotShowGenericLens(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'empty-meeting');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/empty-meeting`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await waitForRequestCount(server, startCount + 1, 12000);
+  await page.waitForTimeout(800);
+  assert.equal(
+    await page.locator('.pai-context-bubble').count(),
+    0,
+    '空会议 shell 即使完成召回请求也不应显示泛用 Memory Lens',
+  );
+  assert.equal(
+    await page.locator('.pai-context-peek').count(),
+    0,
+    '空会议 shell 不应显示 hover peek',
+  );
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('空会议页面出现脚本异常');
+  }
+  await page.close();
+}
+
+async function verifyRingCentralLensSuppressedByComposeAssist(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'ringcentral-compose-assist');
+  const startCount = server.contextRecallRequests.length;
+  await page.route(
+    'https://app.ringcentral.com/l/messages/161955921926**',
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html>
+          <html>
+            <head>
+              <title>2026 Hackathon Project</title>
+              <style>
+                body { margin: 0; font-family: sans-serif; }
+                main { padding: 32px; }
+                .conversation-card-wrapper {
+                  display: block;
+                  width: 760px;
+                  margin: 0 0 24px;
+                  padding: 12px;
+                }
+                #message-chat-stream-wrapper { min-height: 420px; }
+                #pai-composer-guard-root {
+                  position: fixed;
+                  right: 96px;
+                  bottom: 34px;
+                  width: 36px;
+                  height: 36px;
+                  z-index: 2147483646;
+                }
+                .pai-composer-guard-icon-button {
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  width: 36px;
+                  height: 36px;
+                  border: 0;
+                  border-radius: 999px;
+                  background: #fff;
+                }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>2026 Hackathon Project</h1>
+                <div id="message-chat-stream-wrapper">
+                  <article class="conversation-card-wrapper" data-id="msg-1" groupid="161955921926">
+                    <strong>Esone Qiu</strong>
+                    <p>Michael Lin 用自己的仿 cc 壳包一层，做个订阅式付费的产品。我们要报这个新的么</p>
+                  </article>
+                  <article class="conversation-card-wrapper" data-id="msg-2" groupid="161955921926">
+                    <strong>Michael Lin</strong>
+                    <p>你说上次做的 auto-code 吗？这个项目需要确认报名时间和后续计划。</p>
+                  </article>
+                  <article class="conversation-card-wrapper" data-id="msg-3" groupid="161955921926">
+                    <strong>Esone Qiu</strong>
+                    <p>我下午找你碰下，确认 hackathon registration 和 subscription product 的方案。</p>
+                  </article>
+                </div>
+                <div class="ql-editor" contenteditable="true" data-placeholder="Message">时间</div>
+              </main>
+              <div id="pai-composer-guard-root" class="pai-composer-guard" role="group" aria-label="Personal AI composer guard">
+                <button class="pai-composer-guard-icon-button" type="button" title="插入建议内容">
+                  <span aria-hidden="true">AI</span>
+                </button>
+              </div>
+            </body>
+          </html>`,
+      });
+    },
+  );
+
+  await page.goto('https://app.ringcentral.com/l/messages/161955921926', {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await page.waitForTimeout(3800);
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount,
+    'RingCentral Glip 中 Compose Assist icon 可见时不应触发 Lens 被动召回',
+  );
+  assert.equal(
+    await page.locator('.pai-context-bubble').count(),
+    0,
+    'RingCentral Glip 中 Compose Assist icon 可见时不应显示 Memory Lens 右下角 icon',
+  );
+
+  await page.evaluate(() => {
+    document.getElementById('pai-composer-guard-root')?.remove();
+  });
+  await waitForRequestCount(server, startCount + 1, 12000);
+  const request = server.contextRecallRequests[startCount];
+  assert.equal(request.surface, 'follow_thread');
+  assert.equal(request.contextType, 'message_thread');
+  assert.equal(request.sourceContext?.groupId, '161955921926');
+  assert.equal(request.exclude?.groupIds?.[0], '161955921926');
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('RingCentral Compose Assist 互斥页面出现脚本异常');
   }
   await page.close();
 }
@@ -1365,7 +2249,11 @@ try {
 
   await verifySensitiveTransitionRace(server, context);
   await verifySensitiveQueryPage(server, context);
+  await verifyEmptyMeetingDoesNotShowGenericLens(server, context);
+  await verifyRingCentralLensSuppressedByComposeAssist(server, context);
   await verifyJiraIssueContext(server, context);
+  await verifySelectedTextTrigger(server, context);
+  await verifySelectedTextPrivacyAndUiBoundaries(server, context);
   await verifyUnsafeExploreRoute(server, context);
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
   await verifyIrrelevantFeedback(server, context);

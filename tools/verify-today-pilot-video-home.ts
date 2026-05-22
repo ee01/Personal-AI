@@ -43,6 +43,16 @@ function verifyVideoHomeUsesTodayPilot() {
     /TODAY_PILOT_MEETING_PREP_REQUEST/,
     'Video Home Today Pilot request message',
   );
+  assertContains(
+    videoHomeSource,
+    /TODAY_PILOT_PREPARE_MEETINGS_REQUEST/,
+    'Video Home refresh backfills Today Pilot meeting prep',
+  );
+  assertContains(
+    videoHomeSource,
+    /loadPrepAfterSync: false/,
+    'Video Home refresh avoids racing cache reads before backfill',
+  );
   assertNotContains(
     videoHomeSource,
     /CONTEXT_ASSIST_REQUEST/,

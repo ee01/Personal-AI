@@ -4,6 +4,7 @@ export interface ScheduledMessageStatusToggleAction {
   canToggle: boolean;
   nextStatus?: Extract<MessageStatus, 'Active' | 'Paused'>;
   buttonLabel?: string;
+  buttonIcon?: string;
   title: string;
 }
 
@@ -16,6 +17,7 @@ export function getScheduledMessageStatusToggleAction(
         canToggle: true,
         nextStatus: 'Paused',
         buttonLabel: '暂停',
+        buttonIcon: '⏸️',
         title: '暂停后执行器会跳过此消息',
       };
     case 'Paused':
@@ -23,6 +25,7 @@ export function getScheduledMessageStatusToggleAction(
         canToggle: true,
         nextStatus: 'Active',
         buttonLabel: '恢复',
+        buttonIcon: '▶️',
         title: '恢复后消息会按当前排程继续执行',
       };
     case 'PendingReview':

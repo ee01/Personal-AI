@@ -142,16 +142,39 @@ try {
     timeout: 15000,
   });
   await page.locator('.config-summary-strip').waitFor({ timeout: 15000 });
+  await page.locator('.preview-scope-switch button.active', {
+    hasText: '全部',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.preview-scope-switch button', { hasText: '消息' }).click();
+  await page.locator('.preview-scope-switch button.active', {
+    hasText: '消息',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.preview-scope-switch button', { hasText: '项目' }).click();
+  await page.locator('.preview-scope-switch button.active', {
+    hasText: '项目',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.preview-scope-switch button', { hasText: '全部' }).click();
+  await page.locator('.preview-scope-switch button.active', {
+    hasText: '全部',
+  }).waitFor({ timeout: 5000 });
   await page.locator('label.injection-toggle', {
     hasText: '参与分析注入',
   }).locator('input').check();
   const promptSourceToggle = page
     .locator('label.source-toggle', { hasText: '自定义提示词' })
     .locator('input');
+  const messagePromptScopeToggle = page
+    .locator('label.scope-toggle', { hasText: '消息提示词' })
+    .locator('input');
+  const projectPromptScopeToggle = page
+    .locator('label.scope-toggle', { hasText: '项目提示词' })
+    .locator('input');
   const contextSourceToggle = page
     .locator('label.source-toggle', { hasText: '用户上下文' })
     .locator('input');
   assert.equal(await promptSourceToggle.isChecked(), true);
+  assert.equal(await messagePromptScopeToggle.isChecked(), true);
+  assert.equal(await projectPromptScopeToggle.isChecked(), true);
   assert.equal(await contextSourceToggle.isChecked(), true);
   await page.locator('.prompt-preview', {
     hasText: '当前没有可注入的自定义偏好。',
@@ -173,12 +196,16 @@ try {
     hasText: '偏好注入已暂停',
   }).waitFor({ timeout: 5000 });
   assert.equal(await promptSourceToggle.isDisabled(), true);
+  assert.equal(await messagePromptScopeToggle.isDisabled(), true);
+  assert.equal(await projectPromptScopeToggle.isDisabled(), true);
   assert.equal(await contextSourceToggle.isDisabled(), true);
   await page.locator('label.injection-toggle').locator('input').check();
   await page.locator('.prompt-preview', {
     hasText: '当前没有可注入的自定义偏好。',
   }).waitFor({ timeout: 5000 });
   assert.equal(await promptSourceToggle.isDisabled(), false);
+  assert.equal(await messagePromptScopeToggle.isDisabled(), false);
+  assert.equal(await projectPromptScopeToggle.isDisabled(), false);
   assert.equal(await contextSourceToggle.isDisabled(), false);
 
   await page
@@ -206,6 +233,25 @@ try {
     (await page.locator('.summary-item').nth(2).locator('strong').textContent())?.trim(),
     '1 条',
   );
+
+  await messagePromptScopeToggle.uncheck();
+  await page.locator('.prompt-preview', {
+    hasText: '当前没有可注入的自定义偏好。',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.prompt-inline-hint.muted', {
+    hasText: '消息分析内容会保留',
+  }).waitFor({ timeout: 5000 });
+  await page.waitForFunction(() => (
+    document.querySelectorAll('.preference-warnings').length === 0
+  ));
+  assert.equal(
+    (await page.locator('.summary-item').nth(2).locator('strong').textContent())?.trim(),
+    '0 条',
+  );
+  await messagePromptScopeToggle.check();
+  await page.locator('.preference-warnings', {
+    hasText: '疑似覆盖上级规则或工具边界',
+  }).waitFor({ timeout: 5000 });
 
   await promptSourceToggle.uncheck();
   await page.locator('.prompt-preview', {

@@ -157,6 +157,42 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('blocked notification side effect regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify([
+              {
+                post_id: 'post-thinking-blocked-notify',
+                summary: '未注册通知工具不应污染最终通知决策',
+                importanceLevel: 'low',
+                needsProcessing: true,
+                isNoiseMessage: false,
+                matchedRuleRefs: [],
+                matchedRuleIds: [],
+                matchedRules: [],
+                thought: '模型尝试调用通知工具，但该工具当前未注册。',
+                nextAction: 'use_tool',
+                tools: [
+                  {
+                    id: 'messageNotification',
+                    params: {
+                      channel: 'project-alerts',
+                      message: 'blocked notification side effect regression',
+                    },
+                  },
+                ],
+                shouldStore: false,
+                shouldNotify: false,
+                confidence: 0.6,
+                user_relation_type: 'general_interest',
+                entities: {},
+              },
+            ]),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       if (
         prompt.includes('duplicate history probe') ||
         ollamaGenerateCount === 3
@@ -428,8 +464,13 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('待确认动作'));
   assert.ok(agentVisualizerSource.includes('复制 key'));
   assert.ok(agentVisualizerSource.includes('复制审核包'));
+  assert.ok(agentVisualizerSource.includes('复制重跑配置'));
+  assert.ok(agentVisualizerSource.includes('待确认动作未执行'));
+  assert.ok(agentVisualizerSource.includes('pending-notify'));
+  assert.ok(agentVisualizerSource.includes('node-detail'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择 key'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择审核包'));
+  assert.ok(agentVisualizerSource.includes('复制失败，请手动选择重跑配置'));
   assert.ok(!agentVisualizerSource.includes('思考过程:'));
   const agentVisualizerPresentationSource = readFileSync(
     'src/agentVisualizerPresentation.ts',
@@ -446,9 +487,12 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('需要人工确认'));
   assert.ok(agentVisualizerPresentationSource.includes('buildPendingApprovalActions'));
   assert.ok(agentVisualizerPresentationSource.includes('buildApprovalReviewHint'));
+  assert.ok(agentVisualizerPresentationSource.includes('retryConfigPatch'));
+  assert.ok(agentVisualizerPresentationSource.includes('detail?: string'));
   const agentVisualizerCss = readFileSync('static/agent-visualizer.css', 'utf8');
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
   assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
+  assert.ok(agentVisualizerCss.includes('.node-detail'));
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.empty'));
   assert.ok(agentVisualizerCss.includes('.node-result.empty'));
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.approval'));
@@ -458,7 +502,10 @@ async function main() {
   assert.ok(agentVisualizerCss.includes('.agent-approval-queue'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-review-hint'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-actions'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-retry-config'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-copy-status'));
+  assert.ok(agentVisualizerCss.includes('.result-pending-approval'));
+  assert.ok(agentVisualizerCss.includes('.decision-badge.pending-notify'));
   const optionsCss = readFileSync('static/options.css', 'utf8');
   assert.ok(optionsCss.includes('.tool-safety-badge'));
 
@@ -610,11 +657,21 @@ async function main() {
     pendingApprovalActions[0].reviewPayload,
     /"edit_params_then_regenerate_key"/,
   );
+  assert.match(
+    pendingApprovalActions[0].reviewPayload,
+    /"retryConfigPatch"/,
+  );
+  assert.deepEqual(JSON.parse(pendingApprovalActions[0].retryConfigPatch), {
+    approvedToolActionKeys: [approvalKey],
+  });
   const pendingApprovalReviewPayload = JSON.parse(
     pendingApprovalActions[0].reviewPayload,
   );
   assert.equal(pendingApprovalReviewPayload.approvalKey, approvalKey);
   assert.deepEqual(pendingApprovalReviewPayload.params, approvalParams);
+  assert.deepEqual(pendingApprovalReviewPayload.retryConfigPatch, {
+    approvedToolActionKeys: [approvalKey],
+  });
   assert.equal(formatApprovalEffect(pendingApprovalActions[0].effect), '写入');
   assert.equal(formatApprovalRisk(pendingApprovalActions[0].riskLevel), '高风险');
   assert.match(
@@ -874,6 +931,29 @@ async function main() {
       .map((step) => step.name),
     ['最终决策'],
   );
+  const flowStepsWithDetails = buildAgentFlowSteps(
+    [
+      {
+        ...emptyEvidenceStep,
+        publicSummary: '准备用更窄关键词查找补充证据。',
+      },
+      {
+        timestamp: timestamp + 5500,
+        thought: '完成',
+        publicSummary: '已有足够信息，结束分析。',
+        action: 'finish',
+      },
+    ],
+    (time) => String(time),
+  );
+  assert.equal(
+    flowStepsWithDetails.find((step) => step.type === 'tool')?.detail,
+    '准备用更窄关键词查找补充证据。',
+  );
+  assert.equal(
+    flowStepsWithDetails.find((step) => step.type === 'decision')?.detail,
+    '已有足够信息，结束分析。',
+  );
 
   const completedGroups: any[][] = [];
   const result = await agent.analyze(
@@ -1004,6 +1084,29 @@ async function main() {
   assert.match(guardToolResult.orgStructure.message, /未注册/);
   assert.equal(guardToolResult.historySearch.blocked, true);
   assert.match(guardToolResult.historySearch.message, /缺少必填参数 content/);
+
+  const blockedNotifyResult = await agent.analyze(
+    {
+      content: 'blocked notification side effect regression',
+      sender: 'Morgan',
+      post_id: 'post-thinking-blocked-notify',
+    },
+    {
+      type: 'message',
+      analysisDepth: 'normal',
+      maxActions: 1,
+    },
+  );
+  assert.ok(!Array.isArray(blockedNotifyResult));
+  assert.equal(blockedNotifyResult.shouldNotify, false);
+  assert.deepEqual(blockedNotifyResult.metaData?.usedTools || [], []);
+  const blockedNotifyToolStep = blockedNotifyResult.thoughtProcess?.find(
+    (step) => step.toolUsed === 'messageNotification',
+  );
+  assert.ok(blockedNotifyToolStep?.toolResult);
+  const blockedNotifyToolResult = JSON.parse(blockedNotifyToolStep.toolResult);
+  assert.equal(blockedNotifyToolResult.messageNotification.blocked, true);
+  assert.equal(blockedNotifyToolResult.messageNotification.reason, 'unknown_tool');
 
   const standaloneCompletedGroups: any[][] = [];
   const standaloneResult = await agent.analyze(

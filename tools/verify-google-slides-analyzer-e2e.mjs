@@ -244,12 +244,14 @@ try {
     <script>
       window.appliedUpdates = null;
       window.pendingUpdateResponse = null;
+      window.pendingUpdateErrors = [];
       window.sendPendingUpdateSuccess = () => {
         if (!window.pendingUpdateResponse) {
           return false;
         }
 
         const { source, origin, selectedUpdates } = window.pendingUpdateResponse;
+        const errors = Array.isArray(window.pendingUpdateErrors) ? window.pendingUpdateErrors : [];
         const updatedCount = selectedUpdates.reduce((count, update) => {
           return count + [
             update.suggestedStatus,
@@ -263,9 +265,10 @@ try {
           type: 'UPDATE_SUCCESS',
           updatedCount,
           updates: selectedUpdates,
-          errors: []
+          errors
         }, origin);
         window.pendingUpdateResponse = null;
+        window.pendingUpdateErrors = [];
         return true;
       };
       window.addEventListener('message', event => {
@@ -361,6 +364,15 @@ try {
   assert.match(pageText, /Risk insight without writeback/);
   assert.match(pageText, /此项目仅作为风险关注展示，目前没有可写回字段/);
   assert.equal(await analysisPage.locator('.field-review-queue-item').count(), 3);
+  const queueText = await analysisPage.locator('.field-review-queue-list').innerText();
+  assert.match(queueText, /MTR-123407 · Quarterly status deck · 备注/);
+  assert.match(queueText, /追加备注: Release notes are ready/);
+  assert.match(queueText, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(queueText, /Ben -> Cara/);
+  assert.match(queueText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara/);
+  assert.match(queueText, /NO-COLUMN-1 · Missing status column · 状态/);
+  assert.match(queueText, /At risk -> On track/);
+  assert.match(queueText, /状态缺少直接来源，不会默认写回/);
   assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 4);
   assert.match(pageText, /来源证据/);
   assert.match(pageText, /Jira: MTR-123407/);
@@ -372,6 +384,7 @@ try {
   assert.match(pageText, /赛道来源: Planning source confirms Growth track/);
   assert.match(pageText, /备注缺少直接来源，不会默认写回/);
   assert.match(pageText, /无法写回 状态列/);
+  assert.match(pageText, /无法写回字段建议值/);
   assert.match(pageText, /备注建议已存在于当前备注/);
   assert.match(pageText, /应用 2 个字段到 Slides/);
   assert.match(pageText, /已选字段: 2 个来源充分，无需额外复核/);
@@ -383,11 +396,15 @@ try {
   assert.match(pageText, /当前视图 6 \/ 6 个建议/);
 
   assert.equal(await analysisPage.locator('#update-status-0').isChecked(), true);
+  assert.equal(await analysisPage.locator('#update-status-0').getAttribute('aria-label'), 'MTR-123407 状态 写回选择');
   assert.equal(await analysisPage.locator('#update-track-0').isChecked(), true);
+  assert.equal(await analysisPage.locator('#update-track-0').getAttribute('aria-label'), 'MTR-123407 赛道 写回选择');
   assert.equal(await analysisPage.locator('#update-comments-0').isChecked(), false);
+  assert.equal(await analysisPage.locator('#update-comments-0').getAttribute('aria-label'), 'MTR-123407 备注 写回选择');
   assert.equal(await analysisPage.locator('#review-queue-toggle-0-comments').isChecked(), false);
   assert.equal(await analysisPage.locator('#review-queue-toggle-1-owner').isChecked(), false);
   assert.equal(await analysisPage.locator('#update-owner-1').isChecked(), false);
+  assert.equal(await analysisPage.locator('#update-owner-1').getAttribute('aria-label'), 'AIT2-11063 负责人 写回选择');
   assert.equal(await analysisPage.locator('#select-all-2').isDisabled(), true);
   assert.equal(await analysisPage.locator('#select-all-3').isDisabled(), true);
   assert.equal(await analysisPage.locator('#update-status-3').count(), 0);
@@ -420,8 +437,13 @@ try {
 
   await analysisPage.locator('#review-filter-blocked').click();
   assert.equal(await analysisPage.locator('.project-item').count(), 1);
-  assert.match(await analysisPage.locator('.slides-analysis').innerText(), /Missing status column/);
-  assert.match(await analysisPage.locator('.slides-analysis').innerText(), /当前筛选隐藏了 2 个已选字段/);
+  const blockedText = await analysisPage.locator('.slides-analysis').innerText();
+  assert.match(blockedText, /Missing status column/);
+  assert.match(blockedText, /无法写回字段建议值/);
+  assert.match(blockedText, /状态/);
+  assert.match(blockedText, /At risk -> On track/);
+  assert.match(blockedText, /状态缺少直接来源，不会默认写回/);
+  assert.match(blockedText, /当前筛选隐藏了 2 个已选字段/);
 
   await analysisPage.locator('#clear-selected-fields').click();
   assert.equal(await analysisPage.locator('#apply-updates-button').isDisabled(), true);
@@ -447,6 +469,9 @@ try {
   const selectedPreviewText = await analysisPage.locator('.selected-writeback-preview').innerText();
   assert.match(selectedPreviewText, /AIT2-11063 · Leadership summary · 负责人/);
   assert.match(selectedPreviewText, /Ben -> Cara/);
+  assert.match(selectedPreviewText, /状态来源: Jira MTR-123407: Resolved/);
+  assert.match(selectedPreviewText, /赛道来源: Planning source confirms Growth track/);
+  assert.match(selectedPreviewText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara/);
   assert.match(selectedPreviewText, /需人工复核/);
 
   await analysisPage.locator('#apply-updates-button').click();
@@ -463,10 +488,23 @@ try {
   assert.equal(appliedUpdates[1].suggestedOwner, 'Cara');
   assert.equal(appliedUpdates[1].suggestedStatus, undefined);
 
-  assert.equal(await opener.evaluate(() => window.sendPendingUpdateSuccess()), true);
+  assert.equal(await opener.evaluate(() => {
+    window.pendingUpdateErrors = [
+      '无法更新备注: AIT2-11063 - Leadership summary 缺少可写表格列',
+    ];
+    return window.sendPendingUpdateSuccess();
+  }), true);
   await analysisPage.waitForSelector('.success-message', { timeout: 15000 });
   const successText = await analysisPage.locator('.success-message').innerText();
-  assert.match(successText, /已写回 3 个字段/);
+  assert.match(successText, /已写回 3 个字段，跳过 1 项/);
+  assert.match(successText, /本次提交字段/);
+  assert.match(successText, /MTR-123407 · Quarterly status deck · 状态/);
+  assert.match(successText, /MTR-123407 · Quarterly status deck · 赛道/);
+  assert.match(successText, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(successText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara/);
+  assert.match(successText, /跳过原因/);
+  assert.match(successText, /无法更新备注: AIT2-11063 - Leadership summary 缺少可写表格列/);
+  assert.equal(await analysisPage.locator('.applied-field-receipt-item').count(), 3);
   assert.equal(await analysisPage.locator('#apply-updates-button').isDisabled(), true);
   assert.match(await analysisPage.locator('#apply-updates-button').innerText(), /应用 0 个字段到 Slides/);
 

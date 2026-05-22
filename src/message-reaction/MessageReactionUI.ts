@@ -17,7 +17,7 @@
 // 工具栏名称: Personal AI Message Toolbar (PAI Toolbar)
 // 主要 CSS 类名:
 //   - .message-reaction-toolbar     : 工具栏容器 (PAI Toolbar Container)
-//   - .snooze-icon-btn              : "稍后处理" 按钮 (Snooze Button)
+//   - .snooze-icon-btn              : "稍后处理" 文本按钮 (Snooze Button)
 //   - .auto-reply-btn               : "自动答复" 按钮 (Auto Reply Button)
 //   - .snooze-icon                  : Personal AI 图标 (PAI Icon)
 //   - .reaction-settings-btn        : 设置按钮 (Settings Button)
@@ -38,6 +38,7 @@ import {
   showSuccessToast,
   showErrorToast,
 } from './SnoozeManager';
+import { formatLocalScheduleDateTime } from '../scheduled-messages/scheduleDateTime.js';
 import {
   LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
   getMessageReactionActionDefinitions,
@@ -155,6 +156,11 @@ function injectStyles() {
   style.textContent = `
     /* ===== Personal AI Message Toolbar (PAI Toolbar) 消息交互工具栏容器 ===== */
     .message-reaction-toolbar {
+      --message-reaction-compact-label-width: 2em;
+      --message-reaction-expanded-label-width: 4em;
+      --message-reaction-action-padding-x: 8px;
+      --message-reaction-compact-width: calc(var(--message-reaction-compact-label-width) + var(--message-reaction-action-padding-x) * 2);
+      --message-reaction-expanded-width: calc(var(--message-reaction-expanded-label-width) + var(--message-reaction-action-padding-x) * 2);
       position: absolute;
       right: 8px;
       bottom: 8px;
@@ -183,20 +189,65 @@ function injectStyles() {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
+      position: relative;
+      flex: 0 0 auto;
+      z-index: 1;
       height: 26px;
       min-height: 26px;
       max-height: 26px;
-      padding: 4px 8px;
+      width: var(--message-reaction-compact-width);
+      min-width: var(--message-reaction-compact-width);
+      margin-left: 0;
+      margin-right: 0;
+      padding: 4px var(--message-reaction-action-padding-x);
       font-size: 11px;
       line-height: 1;
       font-weight: 500;
       border-radius: 0;
       cursor: pointer;
       white-space: nowrap;
-      transition: all 0.15s ease;
+      overflow: hidden;
+      transition: width 0.18s ease, min-width 0.18s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       box-sizing: border-box;
+    }
+
+    .message-reaction-action-btn:hover,
+    .message-reaction-action-btn:focus-visible,
+    .message-reaction-action-btn[aria-expanded="true"] {
+      width: var(--message-reaction-expanded-width);
+      min-width: var(--message-reaction-expanded-width);
+      z-index: 3;
+    }
+
+    .message-reaction-action-label {
+      display: block;
+      width: var(--message-reaction-compact-label-width);
+      overflow: hidden;
+      white-space: nowrap;
+      transition: width 0.18s ease;
+    }
+
+    .message-reaction-action-label-text {
+      display: block;
+      width: var(--message-reaction-expanded-label-width);
+      transition: transform 0.18s ease;
+    }
+
+    .message-reaction-action-btn[data-compact-align="end"] .message-reaction-action-label-text {
+      transform: translateX(calc(var(--message-reaction-compact-label-width) - var(--message-reaction-expanded-label-width)));
+    }
+
+    .message-reaction-action-btn:hover .message-reaction-action-label,
+    .message-reaction-action-btn:focus-visible .message-reaction-action-label,
+    .message-reaction-action-btn[aria-expanded="true"] .message-reaction-action-label {
+      width: var(--message-reaction-expanded-label-width);
+    }
+
+    .message-reaction-action-btn:hover .message-reaction-action-label-text,
+    .message-reaction-action-btn:focus-visible .message-reaction-action-label-text,
+    .message-reaction-action-btn[aria-expanded="true"] .message-reaction-action-label-text {
+      transform: translateX(0);
     }
 
     .message-reaction-action-btn:disabled,
@@ -216,12 +267,8 @@ function injectStyles() {
       flex-shrink: 0;
     }
 
-    /* ===== 稍后处理 Icon 按钮 ===== */
+    /* ===== 稍后处理文本按钮 ===== */
     .snooze-icon-btn {
-      width: 28px;
-      min-width: 28px;
-      height: 26px;
-      padding: 0;
       color: #2196F3;
       background: rgba(33, 150, 243, 0.08);
       border: 1px solid rgba(33, 150, 243, 0.2);
@@ -1243,12 +1290,17 @@ async function openScheduledMessagesManager() {
   }
 }
 
-async function undoSnoozeReminder(messageId: string) {
+async function undoSnoozeReminder(messageId: string, remindAt: Date) {
   try {
+    const { dateStr, timeStr } = formatLocalScheduleDateTime(remindAt);
     await sendToolbarRuntimeAction(
       {
         type: 'CANCEL_SNOOZE_REMINDER',
-        data: { messageId },
+        data: {
+          messageId,
+          expectedScheduleDate: dateStr,
+          expectedScheduleTime: timeStr,
+        },
       },
       '撤销提醒失败，请稍后重试',
     );
@@ -1270,7 +1322,7 @@ function showSnoozeCreatedToast(
       if (action.kind === 'undo' && messageId) {
         return {
           label: action.label,
-          onClick: () => undoSnoozeReminder(messageId),
+          onClick: () => undoSnoozeReminder(messageId, remindAt),
         };
       }
 
@@ -1296,6 +1348,40 @@ function setToolbarButtonPending(button: HTMLElement, pending: boolean) {
   }
   button.style.pointerEvents = pending ? 'none' : '';
   button.style.opacity = pending ? '0.6' : '';
+}
+
+function setSettingsButtonVisible(toolbar: HTMLElement, visible: boolean) {
+  const settingsBtn = toolbar.querySelector<HTMLElement>(
+    '.reaction-settings-btn',
+  );
+  if (!settingsBtn) return;
+
+  const effectiveVisible = visible && toolbar.classList.contains('visible');
+  settingsBtn.classList.toggle('visible', effectiveVisible);
+  settingsBtn.tabIndex = effectiveVisible ? 0 : -1;
+  settingsBtn.setAttribute('aria-hidden', effectiveVisible ? 'false' : 'true');
+}
+
+function setToolbarVisible(toolbar: HTMLElement, visible: boolean) {
+  toolbar.classList.toggle('visible', visible);
+  toolbar.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  toolbar
+    .querySelectorAll<HTMLElement>('.message-reaction-action-btn')
+    .forEach((button) => {
+      button.tabIndex = visible ? 0 : -1;
+    });
+
+  if (!visible) {
+    setSettingsButtonVisible(toolbar, false);
+    return;
+  }
+
+  setSettingsButtonVisible(
+    toolbar,
+    toolbar
+      .querySelector<HTMLElement>('.reaction-settings-btn')
+      ?.classList.contains('visible') === true,
+  );
 }
 
 async function runToolbarButtonAction(
@@ -1352,13 +1438,13 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
           </div>
           <div class="followup-ask-row">
             <label class="followup-ask-label followup-ask-label-primary" for="followup-ask-objective">
-              追问的目的是为了拿到什么信息
+              追问的信息目标 / 完成标准
               <span class="followup-ask-required-mark">*</span>
             </label>
             <textarea
               id="followup-ask-objective"
               class="followup-ask-textarea"
-              name="context"
+              name="informationGoal"
               placeholder="例如：确认项目最终的交付时间，以及是否需要额外资源支持"
               required
               aria-required="true"
@@ -1463,11 +1549,13 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const formData = new FormData(form);
-      const context = String(formData.get('context') || '').trim();
+      const informationGoal = String(
+        formData.get('informationGoal') || '',
+      ).trim();
 
-      if (!context) {
+      if (!informationGoal) {
         objectiveTextarea?.classList.add('input-error');
-        setError('请先填写追问目的。');
+        setError('请先填写追问要拿到的信息。');
         objectiveTextarea?.focus();
         return;
       }
@@ -1509,7 +1597,8 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
               targetResolvedLabel: defaultTarget || messageInfo.groupName,
               followupIntervalSeconds: Math.floor(intervalHours * 3600),
               maxFollowup,
-              context,
+              context: informationGoal,
+              informationGoal,
             },
           },
           '创建跟进追问失败，请稍后重试',
@@ -1655,9 +1744,9 @@ function hideToolbar() {
   if (currentMessageElement) {
     const toolbar = currentMessageElement.querySelector(
       '.message-reaction-toolbar',
-    );
+    ) as HTMLElement | null;
     if (toolbar) {
-      toolbar.classList.remove('visible');
+      setToolbarVisible(toolbar, false);
     }
   }
 }
@@ -1921,7 +2010,7 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
         <input type="checkbox" class="reaction-settings-checkbox" data-feature="autoReply" ${
           config.enableAutoReply ? 'checked' : ''
         }>
-        <span class="reaction-settings-label">自动答复</span>
+        <span class="reaction-settings-label">自动答复 / 跟进追问</span>
       </label>
       <label class="reaction-settings-option">
         <input type="checkbox" class="reaction-settings-checkbox" data-feature="linkedAction" ${
@@ -2307,6 +2396,7 @@ function processMessageElement(messageElement: HTMLElement) {
   const iconUrl = chrome.runtime.getURL('icons/icon16.png');
   const toolbar = document.createElement('div');
   toolbar.className = 'message-reaction-toolbar';
+  toolbar.setAttribute('aria-hidden', 'true');
 
   // 初始化空内容，显示时会动态填充
   toolbar.innerHTML = '';
@@ -2324,7 +2414,7 @@ function processMessageElement(messageElement: HTMLElement) {
       !config.enableAutoReply &&
       !config.enableLinkedAction
     ) {
-      toolbar.classList.remove('visible');
+      setToolbarVisible(toolbar, false);
       return config;
     }
 
@@ -2332,7 +2422,7 @@ function processMessageElement(messageElement: HTMLElement) {
     let buttonsHtml = '';
 
     // 设置按钮在最左边，初始隐藏
-    buttonsHtml += `<button type="button" class="reaction-settings-btn" title="消息交互设置" aria-label="消息交互设置">${getSettingsIconSvg()}</button>`;
+    buttonsHtml += `<button type="button" class="reaction-settings-btn" title="消息交互设置" aria-label="消息交互设置" aria-hidden="true" tabindex="-1">${getSettingsIconSvg()}</button>`;
 
     if (!messageInfo) {
       messageInfo = await extractMessageInfo(targetElement);
@@ -2346,7 +2436,7 @@ function processMessageElement(messageElement: HTMLElement) {
     const buttonCount = enabledButtons.length;
     toolbar.dataset.buttonCount = String(buttonCount);
     if (buttonCount === 0) {
-      toolbar.classList.remove('visible');
+      setToolbarVisible(toolbar, false);
       toolbar.innerHTML = '';
       return config;
     }
@@ -2361,6 +2451,12 @@ function processMessageElement(messageElement: HTMLElement) {
           ? 'border-radius: 4px 0 0 4px;'
           : '';
       const borderLeft = !isFirst ? 'border-left: none;' : '';
+      const menuAttributes =
+        action.key === 'snooze'
+          ? `aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="${SNOOZE_QUICK_MENU_ID}"`
+          : '';
 
       if (action.usesClockIcon) {
         buttonsHtml += `
@@ -2370,9 +2466,8 @@ function processMessageElement(messageElement: HTMLElement) {
             style="${borderRadius}${borderLeft}"
             title="${action.label}"
             aria-label="${action.label}"
-            aria-haspopup="menu"
-            aria-expanded="false"
-            aria-controls="${SNOOZE_QUICK_MENU_ID}"
+            data-compact-label="${action.compactLabel}"
+            ${menuAttributes}
           >
             ${getSnoozeClockIconSvg()}
           </button>
@@ -2387,8 +2482,13 @@ function processMessageElement(messageElement: HTMLElement) {
           style="${borderRadius}${borderLeft}"
           title="${action.label}"
           aria-label="${action.label}"
+          data-compact-label="${action.compactLabel}"
+          data-compact-align="${action.compactAlign || 'start'}"
+          ${menuAttributes}
         >
-          ${action.label}
+          <span class="message-reaction-action-label">
+            <span class="message-reaction-action-label-text">${action.label}</span>
+          </span>
         </button>
       `;
     });
@@ -2403,6 +2503,7 @@ function processMessageElement(messageElement: HTMLElement) {
     `;
 
     toolbar.innerHTML = buttonsHtml;
+    setToolbarVisible(toolbar, toolbar.classList.contains('visible'));
     return config;
   }
 
@@ -2479,7 +2580,7 @@ function processMessageElement(messageElement: HTMLElement) {
       // 调整工具栏位置（PAI Toolbar Position Adjustment）
       adjustToolbarPosition();
 
-      toolbar.classList.add('visible');
+      setToolbarVisible(toolbar, true);
 
       // 绑定按钮事件（每次更新内容后需要重新绑定）
       bindToolbarEvents(
@@ -2514,7 +2615,7 @@ function processMessageElement(messageElement: HTMLElement) {
 
     // 立即隐藏工具栏（除非时间选择器打开）
     if (!isSnoozePickerOpen) {
-      toolbar.classList.remove('visible');
+      setToolbarVisible(toolbar, false);
       hideSnoozeMenu();
     }
   });
@@ -2527,17 +2628,14 @@ function processMessageElement(messageElement: HTMLElement) {
     // 重新调整位置（以防 reply input 动态变化）
     adjustToolbarPosition();
 
-    toolbar.classList.add('visible');
+    setToolbarVisible(toolbar, true);
 
     // 长悬停后显示设置按钮
     if (showSettingsBtnTimeout) {
       clearTimeout(showSettingsBtnTimeout);
     }
     showSettingsBtnTimeout = setTimeout(() => {
-      const settingsBtn = toolbar.querySelector('.reaction-settings-btn');
-      if (settingsBtn) {
-        settingsBtn.classList.add('visible');
-      }
+      setSettingsButtonVisible(toolbar, true);
     }, MESSAGE_REACTION_SETTINGS_DELAY_MS);
   });
 
@@ -2550,12 +2648,32 @@ function processMessageElement(messageElement: HTMLElement) {
       showSettingsBtnTimeout = null;
     }
 
-    // 隐藏设置按钮
-    const settingsBtn = toolbar.querySelector('.reaction-settings-btn');
-    if (settingsBtn) {
-      settingsBtn.classList.remove('visible');
+    setSettingsButtonVisible(toolbar, false);
+
+    scheduleSnoozeHide();
+  });
+
+  toolbar.addEventListener('focusin', () => {
+    isHoveringToolbar = true;
+    cancelSnoozeHide();
+    adjustToolbarPosition();
+    setToolbarVisible(toolbar, true);
+    setSettingsButtonVisible(toolbar, true);
+  });
+
+  toolbar.addEventListener('focusout', (e: FocusEvent) => {
+    const relatedTarget = e.relatedTarget as HTMLElement | null;
+    if (
+      relatedTarget?.closest('.message-reaction-toolbar') ||
+      relatedTarget?.closest('.snooze-menu') ||
+      relatedTarget?.closest('.snooze-picker') ||
+      relatedTarget?.closest('.reaction-settings-popup')
+    ) {
+      return;
     }
 
+    isHoveringToolbar = false;
+    setSettingsButtonVisible(toolbar, false);
     scheduleSnoozeHide();
   });
 
@@ -2593,6 +2711,16 @@ function bindToolbarEvents(
 
   if (textBtn) {
     const openSnoozeMenuFromButton = async (focusFirstOption = false) => {
+      if (currentSnoozeMenu && activeSnoozeMenuAnchor === textBtn) {
+        cancelSnoozeHide();
+        if (focusFirstOption) {
+          currentSnoozeMenu
+            .querySelector<HTMLElement>('button.snooze-quick-option')
+            ?.focus();
+        }
+        return;
+      }
+
       const requestSeq = ++snoozeMenuRequestSeq;
       activeSnoozeMenuAnchor = textBtn;
 
@@ -2646,12 +2774,19 @@ function bindToolbarEvents(
     textBtn.addEventListener('mouseleave', (e: MouseEvent) => {
       const relatedTarget = e.relatedTarget as HTMLElement;
       const isMovingToSnoozeMenu = relatedTarget?.closest('.snooze-menu');
+      const isMovingWithinToolbar = relatedTarget?.closest(
+        '.message-reaction-toolbar',
+      );
 
-      if (!isMovingToSnoozeMenu && activeSnoozeMenuAnchor === textBtn) {
+      if (
+        !isMovingToSnoozeMenu &&
+        !isMovingWithinToolbar &&
+        activeSnoozeMenuAnchor === textBtn
+      ) {
         invalidateSnoozeMenuRequests(textBtn);
       }
 
-      if (!isMovingToSnoozeMenu) {
+      if (!isMovingToSnoozeMenu && !isMovingWithinToolbar) {
         scheduleSnoozeHide();
       }
     });

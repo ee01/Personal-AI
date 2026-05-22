@@ -42,6 +42,8 @@ const MEMORY_SYNC_SEED_MESSAGE = [
   '当前只需要简要回复“长期记忆线程已就绪”。',
 ].join('');
 
+const PERSONAL_AI_SOURCE_LABEL = 'Personal AI (私人 AI)';
+
 function extractThreadId(url?: string): string | undefined {
   if (!url) return undefined;
   try {
@@ -108,7 +110,7 @@ function asThreadRecord(
 
 function renderStableMemory(items: StableMemorySyncRequest['items']): string {
   const lines = [
-    '请把以下长期稳定信息存入随手记，并保留对未来回答有帮助的要点：',
+    `请把以下来自 ${PERSONAL_AI_SOURCE_LABEL} 的长期稳定信息存入随手记，并保留对未来回答有帮助的要点：`,
   ];
   for (const item of items) {
     lines.push(`- ${item.title}: ${item.body}`);
@@ -119,7 +121,12 @@ function renderStableMemory(items: StableMemorySyncRequest['items']): string {
 }
 
 function renderBriefing(payload: MobileBriefingRequest): string {
-  const lines = ['请把以下近期记忆重点记录到随手记：', '', payload.title, ''];
+  const lines = [
+    `请把以下来自 ${PERSONAL_AI_SOURCE_LABEL} 的近期记忆重点记录到随手记：`,
+    '',
+    payload.title,
+    '',
+  ];
   for (const bullet of payload.bullets) {
     lines.push(`- ${bullet}`);
   }
@@ -129,7 +136,10 @@ function renderBriefing(payload: MobileBriefingRequest): string {
 }
 
 function renderQuery(payload: QueryInjectRequest): string {
-  const lines = [`问题：${payload.query}`, `服务端检索结论：${payload.answer}`];
+  const lines = [
+    `问题：${payload.query}`,
+    `${PERSONAL_AI_SOURCE_LABEL} 检索结论：${payload.answer}`,
+  ];
   if (payload.evidence?.length) {
     lines.push('', '证据：');
     for (const item of payload.evidence) {
@@ -138,12 +148,14 @@ function renderQuery(payload: QueryInjectRequest): string {
       );
     }
   }
-  lines.push('', '以上内容仅用于当前会话。');
+  lines.push('', `以上内容来自 ${PERSONAL_AI_SOURCE_LABEL}，仅用于当前会话。`);
   return lines.join('\n');
 }
 
 function renderReminders(payload: ReminderSyncRequest): string {
-  const lines = ['请在随手记中记录以下待办事项：'];
+  const lines = [
+    `请把以下来自 ${PERSONAL_AI_SOURCE_LABEL} 的待办事项记录到随手记：`,
+  ];
   for (const reminder of payload.reminders) {
     const due = reminder.dueAt ? ` [${reminder.dueAt}]` : '';
     const note = reminder.note ? ` - ${reminder.note}` : '';
@@ -155,7 +167,7 @@ function renderReminders(payload: ReminderSyncRequest): string {
 
 function renderNotices(payload: NoticeSyncRequest): string {
   const lines = [
-    '下面是一些通知推送，请不要记录为待办，也不要当作长期记忆。',
+    `下面是一些来自 ${PERSONAL_AI_SOURCE_LABEL} 的通知推送，请不要记录为待办，也不要当作长期记忆。`,
     '请在我下次提问或下一次手机/耳机对话中，按自然口吻提醒我这些信息。',
     '',
   ];
@@ -183,8 +195,8 @@ function normalizeBrowserLifecycleError(message: string): string {
 
 function missingBindingError(targetBindingType: BindingType): string {
   return targetBindingType === 'mobile_context'
-    ? '手机对话尚未绑定。请先在 Personal AI.app 中绑定手机版对话，再推送近期重点、待办、通知或查询结果。'
-    : '目标线程尚未绑定。';
+    ? '手机对话尚未绑定，或绑定缺少可打开的豆包 /chat 或 /thread 链接。请先在 Personal AI.app 中重新绑定手机版对话，再推送近期重点、待办、通知或查询结果。'
+    : '目标线程尚未绑定，或绑定缺少可打开的豆包 /chat 或 /thread 链接。';
 }
 
 export class DoubaoBridgeService {
@@ -558,18 +570,16 @@ export class DoubaoBridgeService {
     dryRun = false,
     sendOptions?: BrowserSendOptions,
   ): Promise<SyncResult> {
-    let binding = this.state.bindings[targetBindingType];
+    let target = this.resolveThreadTarget(targetBindingType, explicitThreadId);
     if (
       targetBindingType === 'memory_sync' &&
-      (!binding?.threadUrl || !looksLikeThreadUrl(binding.threadUrl))
+      !target.threadUrl
     ) {
       await this.createMemorySyncThread();
-      binding = this.state.bindings[targetBindingType];
+      target = this.resolveThreadTarget(targetBindingType, explicitThreadId);
     }
 
-    const threadId = explicitThreadId || binding?.threadId;
-    const existingRecord = this.findThreadRecord(threadId);
-    const threadUrl = binding?.threadUrl || existingRecord?.url;
+    const { binding, threadId, existingRecord, threadUrl } = target;
 
     if (dryRun) {
       return {
@@ -685,6 +695,36 @@ export class DoubaoBridgeService {
   private findThreadRecord(threadId?: string): ThreadRecord | undefined {
     if (!threadId) return undefined;
     return this.state.threads.find((thread) => thread.id === threadId);
+  }
+
+  private resolveThreadTarget(
+    bindingType: BindingType,
+    explicitThreadId?: string,
+  ): {
+    binding?: ThreadBinding;
+    threadId?: string;
+    existingRecord?: ThreadRecord;
+    threadUrl?: string;
+  } {
+    const binding = this.state.bindings[bindingType];
+    const threadId = explicitThreadId || binding?.threadId;
+    const existingRecord = this.findThreadRecord(threadId);
+    const candidates = explicitThreadId
+      ? [
+          existingRecord?.url,
+          binding?.threadId === explicitThreadId
+            ? binding?.threadUrl
+            : undefined,
+        ]
+      : [binding?.threadUrl, existingRecord?.url];
+    const threadUrl = candidates.find((url) => looksLikeThreadUrl(url));
+
+    return {
+      binding,
+      threadId,
+      existingRecord,
+      threadUrl,
+    };
   }
 
   private upsertThreadRecord(record: ThreadRecord): ThreadRecord {

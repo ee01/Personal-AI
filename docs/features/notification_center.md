@@ -16,6 +16,20 @@
 
 ---
 
+## 大白话运行逻辑
+
+通知系统不是一个单一队列，而是两层：memory-service 负责把“应该通知/待处理”的事情标准化并投递到渠道；extension 本地 DigestQueueService 负责把本地规则命中的零散消息延迟汇总，减少打扰。
+
+结果主要受这些因素影响：
+
+1. 输入来源：`notification_records` 和 `proposed_actions` 决定服务端通知；follow thread / concerned items 决定本地摘要。
+2. 通知语义：待办、告知、digest、action 的 lane/priority 不同，路由和处理状态也不同。
+3. 渠道可用性：chrome、doubao、glip 的投递回执只说明渠道送达，不等于用户已处理。
+4. 去重和回执：同一 sourceRef/sourceId 应避免重复推送，并保留每个渠道的独立状态。
+5. 用户处理状态：处理、忽略、稍后等状态应和渠道投递分离，避免“发出去了”被误当“完成了”。
+
+---
+
 ## 1. Notification Center
 
 ### 1.1 目标
