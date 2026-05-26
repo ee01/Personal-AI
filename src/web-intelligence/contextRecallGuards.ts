@@ -121,6 +121,8 @@ const CONTEXT_RECALL_GENERIC_TERMS = new Set([
 ]);
 const CONTEXT_SELECTION_MIN_SIGNAL_CHARS = 12;
 const CONTEXT_SELECTION_MIN_CJK_CHARS = 6;
+const MEMORY_CAPTURE_SELECTION_MIN_SIGNAL_CHARS = 28;
+const MEMORY_CAPTURE_SELECTION_MIN_CJK_CHARS = 10;
 
 const CONTEXT_RECALL_SPECIFIC_SIGNAL_PATTERN =
   /\b(action|android|api|approval|billing|blocked|budget|bug|claude|codex|commit|composer|cost|credit|cursor|customer|decision|decided|dependency|design|dollar|estimate|fast|follow[-\s]?up|freshservice|goal|gpt[-\s]?5(?:\.5)?|handoff|hard\s+limit|incident|ios|issue|jira|launch|layout|limit|migration|model|openai|owner|plan|planning|premium\s+request|price|project|quota|rate\s+limit|release|review|risk|ship|soft\s+limit|task|thread|token|todo|usage|ux)\b/i;
@@ -185,6 +187,7 @@ const CONTEXT_RECALL_SOURCE_LABELS: Record<string, string> = {
   message: '消息',
   rehearsal: '预演提醒',
   reflection: '反思记录',
+  source_memory: '资料记忆',
   system: '系统记忆',
   user_core: '用户画像',
   web: '网页',
@@ -523,6 +526,8 @@ export function formatContextRecallMemoryType(
       return '实体记忆';
     case 'rehearsal':
       return '预演提醒';
+    case 'source_memory':
+      return '资料记忆';
     default: {
       const cleaned = normalizeContextRecallInfo(type);
       return cleaned ? `${cleaned}记忆` : '记忆';
@@ -611,6 +616,30 @@ export function isContextSelectionTextEligible(value?: string | null): boolean {
     hasSpecificContextRecallSignal(text) ||
     countContextRecallMeaningfulTokens(text) >= 3 ||
     cjkChars >= CONTEXT_SELECTION_MIN_CJK_CHARS
+  );
+}
+
+export function isMemoryCaptureSelectionTextEligible(value?: string | null): boolean {
+  const text = normalizeContextSelectionText(value);
+  if (!text) return false;
+  if (hasSensitiveContextSelectionSignal(text)) return false;
+
+  const stripped = stripContextRecallShellLabels(text);
+  if (looksLikeContextRecallShell(stripped)) return false;
+
+  const signalChars = (stripped.match(/[A-Za-z0-9\u3400-\u9fff]/g) || []).length;
+  const cjkChars = (stripped.match(/[\u3400-\u9fff]/g) || []).length;
+  if (
+    signalChars < MEMORY_CAPTURE_SELECTION_MIN_SIGNAL_CHARS &&
+    cjkChars < MEMORY_CAPTURE_SELECTION_MIN_CJK_CHARS
+  ) {
+    return false;
+  }
+
+  return (
+    hasSpecificContextRecallSignal(stripped) ||
+    countContextRecallMeaningfulTokens(stripped) >= 5 ||
+    cjkChars >= MEMORY_CAPTURE_SELECTION_MIN_CJK_CHARS
   );
 }
 

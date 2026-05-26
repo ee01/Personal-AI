@@ -1524,6 +1524,10 @@ ipcMain.handle('bridge-app:open-microphone-settings', async () => {
   return openSystemSettingsPane('Privacy_Microphone');
 });
 
+ipcMain.handle('bridge-app:open-speech-recognition-settings', async () => {
+  return openSystemSettingsPane('Privacy_SpeechRecognition');
+});
+
 ipcMain.handle('bridge-app:refresh-shortcut-helper', async () => {
   await stopShortcutHelper();
   await startShortcutHelper();

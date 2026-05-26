@@ -130,6 +130,22 @@
         </div>
 
         <div class="section">
+          <h4>来源证据</h4>
+          <div v-if="selectedEvidenceRows.length" class="evidence-list">
+            <div
+              v-for="evidence in selectedEvidenceRows"
+              :key="evidence.raw"
+              class="evidence-row"
+              :title="evidence.raw"
+            >
+              <span>{{ evidence.label }}</span>
+              <strong>{{ evidence.value }}</strong>
+            </div>
+          </div>
+          <div v-else class="muted">暂无来源证据记录</div>
+        </div>
+
+        <div class="section">
           <h4>最近触发</h4>
           <div v-if="activations.length === 0" class="muted">暂无触发记录</div>
           <div v-for="activation in activations" :key="activation.id" class="activation-row">
@@ -153,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
@@ -178,6 +194,10 @@ const actionMessage = ref('');
 
 const selected = computed(() =>
   items.value.find((item) => item.id === selectedId.value) || null,
+);
+
+const selectedEvidenceRows = computed(() =>
+  evidenceRows(selected.value?.evidenceRefs ?? []),
 );
 
 const focusNotice = computed(() => {
@@ -227,9 +247,21 @@ const selectedNextStep = computed(() => {
 });
 
 onMounted(async () => {
-  const focusId = typeof route.query.rehearsalId === 'string' ? route.query.rehearsalId : '';
-  await loadRehearsals(focusId);
+  await loadRehearsals(routeRehearsalId());
 });
+
+watch(
+  () => route.query.rehearsalId,
+  async () => {
+    const focusId = routeRehearsalId();
+    if (!focusId || focusId === selectedId.value) return;
+    await loadRehearsals(focusId);
+  },
+);
+
+function routeRehearsalId() {
+  return typeof route.query.rehearsalId === 'string' ? route.query.rehearsalId : '';
+}
 
 async function loadRehearsals(focusId = selectedId.value) {
   loading.value = true;
@@ -426,6 +458,44 @@ function cueRows(cues: RehearsalActivationCues) {
 function activationCueSummary(activation: RehearsalActivation) {
   const rows = cueRows(activation.matchedCues).slice(0, 3);
   return rows.map((row) => `${row.label}: ${row.value}`).join(' · ');
+}
+
+function evidenceRows(refs: string[]) {
+  return refs
+    .map((ref) => parseEvidenceRef(ref))
+    .filter((row): row is { raw: string; label: string; value: string } => Boolean(row));
+}
+
+function parseEvidenceRef(ref: string) {
+  const raw = String(ref || '').trim();
+  if (!raw) return null;
+  const separatorIndex = raw.indexOf(':');
+  if (separatorIndex <= 0) {
+    return { raw, label: '证据', value: raw };
+  }
+  const kind = raw.slice(0, separatorIndex);
+  const value = raw.slice(separatorIndex + 1).trim() || raw;
+  return {
+    raw,
+    label: evidenceKindLabel(kind),
+    value,
+  };
+}
+
+function evidenceKindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    message: '消息',
+    reflection_thread: '反思线程',
+    reflection_run: '反思运行',
+    confirm_request: '确认请求',
+    action: '动作',
+    dream: '梦境',
+    manual: '手动来源',
+    memory: '记忆',
+    meeting: '会议',
+    jira: 'Jira',
+  };
+  return labels[kind] || kind;
 }
 
 function cueValue(values: string[]) {
@@ -659,7 +729,8 @@ function isExpired(rehearsal: Rehearsal) {
 }
 
 .cue-grid,
-.meta-grid {
+.meta-grid,
+.evidence-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.7rem;
@@ -667,6 +738,7 @@ function isExpired(rehearsal: Rehearsal) {
 
 .cue-row,
 .meta-grid > div,
+.evidence-row,
 .activation-row {
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 8px;
@@ -701,7 +773,8 @@ function isExpired(rehearsal: Rehearsal) {
 }
 
 .cue-row span,
-.meta-grid span {
+.meta-grid span,
+.evidence-row span {
   display: block;
   color: #94a3b8;
   font-size: 0.75rem;
@@ -709,9 +782,11 @@ function isExpired(rehearsal: Rehearsal) {
 }
 
 .cue-row strong,
-.meta-grid strong {
+.meta-grid strong,
+.evidence-row strong {
   color: #e2e8f0;
   font-size: 0.9rem;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 900px) {

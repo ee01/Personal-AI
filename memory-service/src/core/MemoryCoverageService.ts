@@ -967,9 +967,37 @@ export class MemoryCoverageService {
   ): MemoryCoveragePlatform {
     const web = messageSource.get('web');
     const manual = messageSource.get('manual');
+    const capsuleCount = this.countWhere(
+      'source_memory_capsules',
+      "status = 'saved'",
+    );
+    const recentCapsuleCount = this.countWhere(
+      'source_memory_capsules',
+      "status = 'saved' AND COALESCE(saved_at, updated_at, created_at) >= ?",
+      [recentAfter()],
+    );
+    const latestCapsule = this.maxColumnWhere(
+      'source_memory_capsules',
+      'updated_at',
+      "status = 'saved'",
+    );
     const contributions: MemoryCoverageContribution[] = [
       this.messageContribution('web', '网页捕获', 'ingest', web, 3, true),
       this.messageContribution('manual', '手动收藏 / 导入片段', 'ingest', manual, 3, true),
+      {
+        id: 'source-memory:capsules',
+        label: '记忆捕捉资料胶囊',
+        direction: 'ingest',
+        state: stateForCount(capsuleCount, latestCapsule, {
+          sparseBelow: 3,
+          unknownWhenEmpty: true,
+        }),
+        count: capsuleCount,
+        recentCount: recentCapsuleCount,
+        latestAt: latestCapsule,
+        detail: `${formatCount(capsuleCount)} 个资料记忆胶囊，近 ${STALE_AFTER_DAYS} 天 ${formatCount(recentCapsuleCount)} 个`,
+        evidence: "source_memory_capsules.status='saved'",
+      },
     ];
     const repairActions: MemoryCoverageRepairAction[] =
       (web?.count ?? 0) === 0

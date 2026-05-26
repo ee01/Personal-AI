@@ -1424,6 +1424,126 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === 'MEMORY_CAPTURE_SCORE_SELECTION') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.scoreSourceMemorySelection(request.request || {});
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] memory-capture selection score failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'MEMORY_CAPTURE_SCORE_PAGE') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.scoreSourceMemoryCandidate({
+          ...(request.request || {}),
+          sourceKind: request.request?.sourceKind || 'webpage',
+        });
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] memory-capture page score failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'MEMORY_CAPTURE_SAVE_SELECTION') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.createSourceMemoryCapsule({
+          ...(request.request || {}),
+          sourceKind: request.request?.sourceKind || 'selection',
+          captureMode: request.request?.captureMode || 'manual',
+          captureReason:
+            request.request?.captureReason || '用户点击右侧半露出 + 入库按钮',
+          interactions: {
+            ...(request.request?.interactions || {}),
+            selectedText: true,
+            manualClick: true,
+          },
+        });
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] memory-capture selection save failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'MEMORY_CAPTURE_SAVE_PAGE') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const captureMode = request.request?.captureMode || 'manual';
+        const result = await client.createSourceMemoryCapsule({
+          ...(request.request || {}),
+          sourceKind: request.request?.sourceKind || 'webpage',
+          captureMode,
+          captureReason:
+            request.request?.captureReason || '用户点击右侧半露出 + 入库当前页面',
+          interactions: {
+            ...(request.request?.interactions || {}),
+            manualClick:
+              captureMode === 'manual' ||
+              Boolean(request.request?.interactions?.manualClick),
+          },
+        });
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] memory-capture page save failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'MEMORY_CAPTURE_DISMISS_CAPSULE') {
+    (async () => {
+      try {
+        const capsuleId = String(request.capsuleId || '').trim();
+        if (!capsuleId) {
+          sendResponse({ success: false, error: 'Missing capsule id' });
+          return;
+        }
+        const client = getMemoryServiceClient();
+        const result = await client.dismissSourceMemoryCapsule(
+          capsuleId,
+          request.reason || '用户撤销入库',
+        );
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] memory-capture dismiss failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
   if (request.type === 'OWNER_AUTHORED_LEARNING_SIGNAL') {
     (async () => {
       try {
@@ -1455,7 +1575,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         } else {
           await client.ingestBatch(safePayloads);
         }
-        sendResponse({ success: true, stored: safePayloads.length });
+        let captured = 0;
+        for (const payload of safePayloads) {
+          try {
+            await client.createSourceMemoryCapsule({
+              sourceKind: 'jira_comment',
+              sourceUrl: payload.sourceUrl,
+              sourceTitle: payload.sourceTitle || payload.metadata?.issueKey,
+              text: payload.content,
+              scope: payload.scope,
+              captureMode: 'auto',
+              captureReason: '用户在 Jira 对外发布的评论',
+              interactions: {
+                ownerAuthored: true,
+              },
+              metadata: {
+                ...(payload.metadata || {}),
+                captureSource: 'owner_authored_learning_signal',
+              },
+            });
+            captured += 1;
+          } catch (captureError) {
+            console.warn(
+              '[background] owner-authored memory capture skipped:',
+              captureError,
+            );
+          }
+        }
+        sendResponse({ success: true, stored: safePayloads.length, captured });
       } catch (err) {
         console.warn(
           '[background] owner-authored learning ingest failed:',
@@ -1503,6 +1650,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({
           success: false,
           error: err?.message || 'composer_assist_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'AMBIENT_CALIBRATION_TRACE') {
+    (async () => {
+      try {
+        const client = getMemoryServiceClient();
+        const result = await client.submitAmbientCalibrationTrace(
+          request.trace || {},
+        );
+        sendResponse({ success: true, result });
+      } catch (err: any) {
+        console.warn('[background] ambient calibration trace failed:', err);
+        sendResponse({
+          success: false,
+          error: err?.message || 'ambient_calibration_trace_failed',
         });
       }
     })();

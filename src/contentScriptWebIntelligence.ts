@@ -19,6 +19,7 @@ import {
     hasSensitiveUrlSignal,
     isDisplayableContextRecallMatch,
     isContextSelectionTextEligible,
+    isMemoryCaptureSelectionTextEligible,
     isLowValueContextHost,
     isSensitiveControlDescriptor,
     normalizeContextPageBlockPrefix,
@@ -95,9 +96,14 @@ interface ContextMatchPayload {
     ownerAuthoredLearningPayloads?: OwnerAuthoredLearningPayload[];
 }
 
+interface SelectedTextContextPayload extends ContextMatchPayload {
+    rect: DOMRect;
+    selectionRecallEligible: boolean;
+}
+
 interface ContextRecallMatch {
     id: string;
-    type: 'message' | 'chunk' | 'entity' | 'rehearsal';
+    type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
     score: number;
     title?: string;
     uiSummary?: string;
@@ -133,11 +139,26 @@ interface ContextToastAction {
     onClick: () => void;
 }
 
+interface ContextToastOptions {
+    durationMs?: number;
+    variant?: 'memory-capture-auto';
+    detailMessage?: string;
+}
+
 type ContextBubbleMode = 'lens' | 'selectionSearch';
 
 interface ContextBubbleOptions {
     mode?: ContextBubbleMode;
     selectedText?: string;
+}
+
+interface MemoryCaptureCandidateResult {
+    eligible: boolean;
+    score: number;
+    suggestedAction: 'auto_save' | 'suggest' | 'ignore' | 'blocked';
+    reasons?: string[];
+    blockedReason?: string;
+    captureMode?: 'auto' | 'suggested' | 'manual';
 }
 
 interface ContextMatchViewCopy {
@@ -649,6 +670,15 @@ const RINGCENTRAL_CONTEXT_STABLE_MS = 700;
 const CONTEXT_PEEK_SHOW_DELAY_MS = 200;
 const CONTEXT_PEEK_HIDE_DELAY_MS = 160;
 const SELECTED_TEXT_TRIGGER_DELAY_MS = 120;
+const PAGE_MEMORY_CAPTURE_MIN_DWELL_MS = 45_000;
+const PAGE_MEMORY_CAPTURE_COPY_DELAY_MS = 300;
+const PAGE_MEMORY_CAPTURE_INTERACTION_DELAY_MS = 1200;
+const PAGE_MEMORY_CAPTURE_MIN_WORDS = 80;
+const PAGE_MEMORY_CAPTURE_AUTO_MIN_WORDS = 260;
+const PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS = 90_000;
+const PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS = 240_000;
+const PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS = 480_000;
+const PAGE_MEMORY_CAPTURE_AUTO_RECHECK_MS = 30_000;
 const COMPOSER_GUARD_ROOT_SELECTOR = '#pai-composer-guard-root';
 const COMPOSER_GUARD_ICON_SELECTOR =
     '#pai-composer-guard-root .pai-composer-guard-icon-button';
@@ -666,6 +696,8 @@ const CONTEXT_UI_EXCLUDE_SELECTOR = [
     '.pai-context-card',
     '.pai-context-peek',
     '.pai-context-selection-trigger',
+    '.pai-memory-capture-selection-dock',
+    '.pai-memory-capture-page-chip',
     '.pai-context-toast',
     '#pai-context-bubble-styles',
 ].join(', ');
@@ -707,10 +739,20 @@ class WebIntelligenceContentScript {
     private peekElement: HTMLDivElement | null = null;
     private peekShowTimer: number | null = null;
     private peekHideTimer: number | null = null;
-    private selectionTriggerElement: HTMLButtonElement | null = null;
+    private selectionTriggerElement: HTMLElement | null = null;
+    private selectionCaptureDockElement: HTMLElement | null = null;
     private selectionTriggerTimer: number | null = null;
     private selectedTextPendingContextKey: string | null = null;
     private selectedTextRequestId = 0;
+    private pageCaptureChipElement: HTMLElement | null = null;
+    private pageCaptureTimer: number | null = null;
+    private pageCaptureRequestId = 0;
+    private pageCapturePendingContextKey: string | null = null;
+    private pageCaptureShownContextKey: string | null = null;
+    private pageCaptureStoredContextKey: string | null = null;
+    private pageCaptureStartedAt = Date.now();
+    private pageCaptureMaxScrollDepth = 0;
+    private pageCaptureCopiedText = false;
     private toastElement: HTMLDivElement | null = null;
     private toastTimer: number | null = null;
     private outsideClickListener: ((event: MouseEvent) => void) | null = null;
@@ -854,11 +896,23 @@ class WebIntelligenceContentScript {
             this.handleSelectedTextSelectionChanged(80);
         });
         window.addEventListener('scroll', () => {
+            this.updatePageMemoryCaptureScrollDepth();
+            if (
+                this.pageCaptureMaxScrollDepth >= 0.6 &&
+                this.getPageMemoryCaptureDwellMs() >= 10_000
+            ) {
+                this.schedulePageMemoryCaptureEvaluation(PAGE_MEMORY_CAPTURE_INTERACTION_DELAY_MS);
+            }
             this.clearSelectedTextTrigger();
         }, true);
         window.addEventListener('resize', () => {
             this.clearSelectedTextTrigger();
         });
+        document.addEventListener('copy', () => {
+            this.pageCaptureCopiedText = true;
+            this.schedulePageMemoryCaptureEvaluation(PAGE_MEMORY_CAPTURE_COPY_DELAY_MS);
+        });
+        this.schedulePageMemoryCaptureEvaluation(PAGE_MEMORY_CAPTURE_MIN_DWELL_MS);
 
         this.startUrlWatcher();
 
@@ -903,12 +957,15 @@ class WebIntelligenceContentScript {
         if (hasChanged) {
             this.resetContextStability();
             this.invalidateSelectedTextRequest();
+            this.resetPageMemoryCaptureState();
             this.clearContextBubble();
             this.clearSelectedTextTrigger();
+            this.clearPageMemoryCaptureChip();
         }
 
         this.scheduleAnalysis(1000);
         this.scheduleContextMatch(this.getContextChangeDelayMs());
+        this.schedulePageMemoryCaptureEvaluation(PAGE_MEMORY_CAPTURE_MIN_DWELL_MS);
     }
 
     private hasSignificantAnalysisChanges(mutations: MutationRecord[]): boolean {
@@ -980,9 +1037,11 @@ class WebIntelligenceContentScript {
             node.classList.contains('pai-context-card') ||
             node.classList.contains('pai-context-peek') ||
             node.classList.contains('pai-context-selection-trigger') ||
+            node.classList.contains('pai-memory-capture-selection-dock') ||
+            node.classList.contains('pai-memory-capture-page-chip') ||
             node.classList.contains('pai-context-toast') ||
             node.id === 'pai-context-bubble-styles' ||
-            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-context-toast')
+            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-page-chip, .pai-context-toast')
         );
     }
 
@@ -1735,7 +1794,10 @@ class WebIntelligenceContentScript {
     private handleSelectedTextSelectionChanged(delayMs = SELECTED_TEXT_TRIGGER_DELAY_MS): void {
         const payload = this.buildSelectedTextPayload();
         const nextContextKey = payload?.contextKey || null;
-        const visibleContextKey = this.selectionTriggerElement?.dataset.contextKey || null;
+        const visibleContextKey =
+            this.selectionTriggerElement?.dataset.contextKey ||
+            this.selectionCaptureDockElement?.dataset.contextKey ||
+            null;
 
         if (!nextContextKey) {
             this.clearSelectedTextTrigger();
@@ -1770,9 +1832,16 @@ class WebIntelligenceContentScript {
             return;
         }
 
-        const existingKey = this.selectionTriggerElement?.dataset.contextKey;
+        const existingKey =
+            this.selectionTriggerElement?.dataset.contextKey ||
+            this.selectionCaptureDockElement?.dataset.contextKey;
         if (existingKey === payload.contextKey) {
-            this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
+            if (this.selectionTriggerElement) {
+                this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
+            }
+            if (this.selectionCaptureDockElement) {
+                this.placeSelectionMemoryCaptureDock(this.selectionCaptureDockElement, payload.rect);
+            }
             return;
         }
 
@@ -1784,7 +1853,7 @@ class WebIntelligenceContentScript {
         this.requestSelectedTextTrigger(payload);
     }
 
-    private buildSelectedTextPayload(): (ContextMatchPayload & { rect: DOMRect }) | null {
+    private buildSelectedTextPayload(): SelectedTextContextPayload | null {
         if (this.isSensitiveContextPage()) {
             return null;
         }
@@ -1801,7 +1870,9 @@ class WebIntelligenceContentScript {
         }
 
         const selectedText = normalizeContextSelectionText(selection.toString());
-        if (!isContextSelectionTextEligible(selectedText)) {
+        const selectionRecallEligible = isContextSelectionTextEligible(selectedText);
+        const memoryCaptureEligible = isMemoryCaptureSelectionTextEligible(selectedText);
+        if (!selectionRecallEligible && !memoryCaptureEligible) {
             return null;
         }
 
@@ -1838,6 +1909,7 @@ class WebIntelligenceContentScript {
             snippet: selectedText.slice(0, 500),
             entityHints: snapshot ? this.toPassiveRecallEntityHints(snapshot) : undefined,
             sourceTypes: snapshot?.sourceTypes,
+            selectionRecallEligible,
             sourceContext: this.compactContextRecallObject({
                 contextType: 'selected_text',
                 sourceType: 'selection',
@@ -1869,7 +1941,7 @@ class WebIntelligenceContentScript {
         const nodes = [selection.anchorNode, selection.focusNode].filter(Boolean);
         return nodes.some((node) => {
             const element = node instanceof Element ? node : node?.parentElement;
-            return !!element?.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-context-toast');
+            return !!element?.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-page-chip, .pai-context-toast');
         });
     }
 
@@ -1900,65 +1972,99 @@ class WebIntelligenceContentScript {
         }
         this.selectionTriggerElement?.remove();
         this.selectionTriggerElement = null;
+        this.clearSelectionMemoryCaptureDock();
+    }
+
+    private clearSelectionMemoryCaptureDock(): void {
+        this.selectionCaptureDockElement?.remove();
+        this.selectionCaptureDockElement = null;
     }
 
     private showSelectedTextTrigger(
-        payload: ContextMatchPayload & { rect: DOMRect },
+        payload: SelectedTextContextPayload,
         matches: ContextRecallMatch[],
+        captureCandidate?: MemoryCaptureCandidateResult | null,
     ): void {
         this.ensureContextBubbleStyles();
         if (!document.body) {
             return;
         }
 
-        const existingKey = this.selectionTriggerElement?.dataset.contextKey;
-        if (existingKey === payload.contextKey) {
-            this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
+        const shouldShowRecall = matches.length > 0;
+        const shouldShowCapture = Boolean(captureCandidate?.eligible);
+        if (!shouldShowRecall && !shouldShowCapture) {
+            this.clearSelectedTextTrigger();
+            return;
+        }
+
+        const existingRecallKey = this.selectionTriggerElement?.dataset.contextKey;
+        const existingCaptureKey = this.selectionCaptureDockElement?.dataset.contextKey;
+        if (
+            (shouldShowRecall ? existingRecallKey === payload.contextKey : !this.selectionTriggerElement) &&
+            (shouldShowCapture ? existingCaptureKey === payload.contextKey : !this.selectionCaptureDockElement)
+        ) {
+            if (this.selectionTriggerElement) {
+                this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
+            }
+            if (this.selectionCaptureDockElement) {
+                this.placeSelectionMemoryCaptureDock(this.selectionCaptureDockElement, payload.rect);
+            }
             return;
         }
 
         this.clearSelectedTextTrigger();
-        const trigger = document.createElement('button');
-        trigger.type = 'button';
-        trigger.className = 'pai-context-selection-trigger';
-        trigger.dataset.contextKey = payload.contextKey;
-        trigger.setAttribute('aria-label', '用 Personal AI 查找关联记忆');
-        trigger.title = '用 Personal AI 查找关联记忆';
 
-        const iconImg = document.createElement('img');
-        iconImg.src = chrome.runtime.getURL('icons/icon48.png');
-        iconImg.alt = '';
-        iconImg.setAttribute('aria-hidden', 'true');
-        trigger.appendChild(iconImg);
-
-        trigger.addEventListener('mousedown', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-        });
-        trigger.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            this.clearSelectedTextTrigger();
-            if (
-                normalizeContextPageUrl(window.location.href) !== payload.url ||
-                this.isSensitiveContextPage() ||
-                this.isContextDismissed(payload.contextKey)
-            ) {
-                return;
-            }
-            this.showContextBubble(matches, payload.contextKey, true, true, {
-                mode: 'selectionSearch',
-                selectedText: payload.snippet,
+        if (shouldShowRecall) {
+            const trigger = document.createElement('div');
+            trigger.className = 'pai-context-selection-trigger';
+            trigger.dataset.contextKey = payload.contextKey;
+            trigger.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
             });
-        });
 
-        document.body.appendChild(trigger);
-        this.selectionTriggerElement = trigger;
-        this.placeSelectedTextTrigger(trigger, payload.rect);
+            const recallButton = document.createElement('button');
+            recallButton.type = 'button';
+            recallButton.className = 'pai-context-selection-action pai-context-selection-recall';
+            recallButton.setAttribute('aria-label', '用 Personal AI 查找关联记忆');
+            recallButton.title = '用 Personal AI 查找关联记忆';
+
+            const iconImg = document.createElement('img');
+            iconImg.src = chrome.runtime.getURL('icons/icon48.png');
+            iconImg.alt = '';
+            iconImg.setAttribute('aria-hidden', 'true');
+            recallButton.appendChild(iconImg);
+
+            recallButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.clearSelectedTextTrigger();
+                if (
+                    normalizeContextPageUrl(window.location.href) !== payload.url ||
+                    this.isSensitiveContextPage() ||
+                    this.isContextDismissed(payload.contextKey)
+                ) {
+                    return;
+                }
+                this.showContextBubble(matches, payload.contextKey, true, true, {
+                    mode: 'selectionSearch',
+                    selectedText: payload.snippet,
+                });
+            });
+            trigger.appendChild(recallButton);
+
+            document.body.appendChild(trigger);
+            this.selectionTriggerElement = trigger;
+            this.placeSelectedTextTrigger(trigger, payload.rect);
+        }
+
+        if (shouldShowCapture && captureCandidate) {
+            this.showSelectionMemoryCaptureDock(payload, captureCandidate);
+        }
     }
 
     private placeSelectedTextTrigger(trigger: HTMLElement, rect: DOMRect): void {
-        const size = 28;
+        const size = Math.max(28, trigger.offsetWidth || 28);
         const gap = 6;
         const left = Math.max(
             8,
@@ -1972,9 +2078,72 @@ class WebIntelligenceContentScript {
         trigger.style.top = `${Math.round(top)}px`;
     }
 
-    private requestSelectedTextTrigger(payload: ContextMatchPayload & { rect: DOMRect }): void {
+    private showSelectionMemoryCaptureDock(
+        payload: SelectedTextContextPayload,
+        candidate: MemoryCaptureCandidateResult,
+    ): void {
+        this.ensureContextBubbleStyles();
+        if (!document.body) {
+            return;
+        }
+
+        this.clearSelectionMemoryCaptureDock();
+
+        const dock = document.createElement('button');
+        dock.type = 'button';
+        dock.className = 'pai-memory-capture-selection-dock';
+        dock.dataset.contextKey = payload.contextKey;
+        dock.setAttribute('aria-label', '入库这段资料');
+        dock.title = `入库这段资料${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
+
+        const plus = document.createElement('span');
+        plus.className = 'pai-memory-capture-selection-dock-plus';
+        plus.textContent = '+';
+        dock.appendChild(plus);
+
+        const label = document.createElement('span');
+        label.className = 'pai-memory-capture-selection-dock-label';
+        label.textContent = '入库';
+        dock.appendChild(label);
+
+        const logo = document.createElement('img');
+        logo.className = 'pai-memory-capture-selection-dock-logo';
+        logo.src = chrome.runtime.getURL('icons/icon48.png');
+        logo.alt = '';
+        logo.setAttribute('aria-hidden', 'true');
+        dock.appendChild(logo);
+
+        dock.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        dock.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.saveSelectedTextCapture(payload);
+        });
+
+        document.body.appendChild(dock);
+        this.selectionCaptureDockElement = dock;
+        this.placeSelectionMemoryCaptureDock(dock, payload.rect);
+    }
+
+    private placeSelectionMemoryCaptureDock(dock: HTMLElement, rect: DOMRect): void {
+        const top = Math.max(
+            24,
+            Math.min(window.innerHeight - 24, rect.top + rect.height / 2),
+        );
+        dock.style.top = `${Math.round(top)}px`;
+    }
+
+    private requestSelectedTextTrigger(payload: SelectedTextContextPayload): void {
         const requestId = ++this.selectedTextRequestId;
         this.selectedTextPendingContextKey = payload.contextKey;
+        if (!payload.selectionRecallEligible) {
+            this.requestMemoryCaptureSelectionCandidate(payload, [], requestId);
+            return;
+        }
+
         chrome.runtime.sendMessage({
             type: 'CONTEXT_RECALL_REQUEST',
             request: {
@@ -1997,6 +2166,10 @@ class WebIntelligenceContentScript {
             this.selectedTextPendingContextKey = null;
             if (chrome.runtime.lastError) {
                 console.warn('Selected text context recall failed:', chrome.runtime.lastError.message);
+                const currentPayload = this.buildSelectedTextPayload();
+                if (currentPayload && currentPayload.contextKey === payload.contextKey) {
+                    this.requestMemoryCaptureSelectionCandidate(currentPayload, [], requestId);
+                }
                 return;
             }
 
@@ -2019,12 +2192,469 @@ class WebIntelligenceContentScript {
 
             const matches = selectContextRecallMatches(response, { requireStrong: true })
                 .filter((candidate) => hasSelectionSearchConcreteMatch(candidate, payload.snippet));
-            const match = matches[0] || null;
-            if (!match) {
+            this.requestMemoryCaptureSelectionCandidate(currentPayload, matches);
+        });
+    }
+
+    private requestMemoryCaptureSelectionCandidate(
+        payload: SelectedTextContextPayload,
+        matches: ContextRecallMatch[],
+        requestId = this.selectedTextRequestId,
+    ): void {
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_SCORE_SELECTION',
+            request: this.buildMemoryCaptureSelectionRequest(payload),
+        }, (response) => {
+            if (requestId !== this.selectedTextRequestId) {
+                return;
+            }
+            this.selectedTextPendingContextKey = null;
+            const currentPayload = this.buildSelectedTextPayload();
+            if (!currentPayload || currentPayload.contextKey !== payload.contextKey) {
                 this.clearSelectedTextTrigger();
                 return;
             }
-            this.showSelectedTextTrigger(currentPayload, matches);
+
+            let captureCandidate: MemoryCaptureCandidateResult | null = null;
+            if (!chrome.runtime.lastError && response?.success) {
+                captureCandidate = response.result || null;
+            }
+
+            if (matches.length === 0 && !captureCandidate?.eligible) {
+                this.clearSelectedTextTrigger();
+                return;
+            }
+
+            this.showSelectedTextTrigger(currentPayload, matches, captureCandidate);
+        });
+    }
+
+    private buildMemoryCaptureSelectionRequest(
+        payload: ContextMatchPayload,
+    ): Record<string, unknown> {
+        const sourceContext = payload.sourceContext || {};
+        return {
+            sourceKind: 'selection',
+            sourceUrl: payload.url,
+            sourceTitle: payload.title,
+            selectedText: payload.snippet,
+            nearbyText: payload.keywords?.slice(1).join('\n'),
+            entityHints: payload.entityHints,
+            scope: 'work',
+            interactions: {
+                selectedText: true,
+            },
+            metadata: {
+                contextType: payload.contextType,
+                host: sourceContext.host || window.location.hostname,
+                groupId: sourceContext.groupId,
+                conversationId: sourceContext.conversationId,
+                messageId: sourceContext.messageId,
+                issueKey: sourceContext.issueKey,
+            },
+        };
+    }
+
+    private saveSelectedTextCapture(payload: SelectedTextContextPayload): void {
+        const note = window.prompt('给这段资料加个备注（可选）', '');
+        if (note === null) {
+            this.showContextToast('已取消保存资料记忆');
+            return;
+        }
+
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_SAVE_SELECTION',
+            request: {
+                ...this.buildMemoryCaptureSelectionRequest(payload),
+                captureMode: 'manual',
+                captureReason: '用户点击右侧半露出 + 入库按钮',
+                note: note.trim(),
+            },
+        }, (response) => {
+            if (chrome.runtime.lastError || !response?.success) {
+                const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
+                this.showContextToast(`资料记忆保存失败：${message}`);
+                return;
+            }
+
+            this.clearSelectedTextTrigger();
+            const duplicate = Boolean(response.result?.capsule?.duplicate);
+            this.showContextToast(duplicate ? '这段资料已在记忆中' : '已保存为资料记忆');
+        });
+    }
+
+    private resetPageMemoryCaptureState(): void {
+        this.pageCaptureStartedAt = Date.now();
+        this.pageCaptureMaxScrollDepth = 0;
+        this.pageCaptureCopiedText = false;
+        this.pageCaptureShownContextKey = null;
+        this.pageCaptureStoredContextKey = null;
+        this.invalidatePageMemoryCaptureRequest();
+    }
+
+    private invalidatePageMemoryCaptureRequest(): void {
+        this.pageCaptureRequestId++;
+        this.pageCapturePendingContextKey = null;
+    }
+
+    private schedulePageMemoryCaptureEvaluation(delayMs: number): void {
+        if (this.pageCaptureTimer !== null) {
+            window.clearTimeout(this.pageCaptureTimer);
+        }
+
+        this.pageCaptureTimer = window.setTimeout(() => {
+            this.pageCaptureTimer = null;
+            this.evaluatePageMemoryCaptureCandidate();
+        }, delayMs);
+    }
+
+    private updatePageMemoryCaptureScrollDepth(): void {
+        const scrollTop = Math.max(window.scrollY, document.documentElement.scrollTop, 0);
+        const viewportHeight = Math.max(window.innerHeight, 1);
+        const scrollHeight = Math.max(
+            document.documentElement.scrollHeight,
+            document.body?.scrollHeight || 0,
+            viewportHeight,
+        );
+        const depth = Math.min(1, (scrollTop + viewportHeight) / Math.max(scrollHeight, 1));
+        this.pageCaptureMaxScrollDepth = Math.max(this.pageCaptureMaxScrollDepth, depth);
+    }
+
+    private getPageMemoryCaptureDwellMs(): number {
+        return Math.max(0, Date.now() - this.pageCaptureStartedAt);
+    }
+
+    private evaluatePageMemoryCaptureCandidate(): void {
+        const payload = this.buildPageMemoryCaptureRequest();
+        if (!payload) {
+            return;
+        }
+        if (this.pageCaptureStoredContextKey === payload.contextKey) {
+            return;
+        }
+        if (this.pageCapturePendingContextKey === payload.contextKey) {
+            return;
+        }
+
+        const requestId = ++this.pageCaptureRequestId;
+        this.pageCapturePendingContextKey = payload.contextKey;
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_SCORE_PAGE',
+            request: payload.request,
+        }, (response) => {
+            if (requestId !== this.pageCaptureRequestId) {
+                return;
+            }
+            this.pageCapturePendingContextKey = null;
+            const currentPayload = this.buildPageMemoryCaptureRequest();
+            if (!currentPayload || currentPayload.contextKey !== payload.contextKey) {
+                this.clearPageMemoryCaptureChip();
+                return;
+            }
+            if (chrome.runtime.lastError || !response?.success || !response.result?.eligible) {
+                this.clearPageMemoryCaptureChip();
+                return;
+            }
+            const autoDecision = this.getPageMemoryCaptureAutoDecision(response.result, currentPayload.request);
+            if (autoDecision.shouldAutoSave) {
+                this.autoSavePageMemoryCapture(currentPayload, autoDecision.reason);
+                return;
+            }
+            this.showPageMemoryCaptureChip(currentPayload, response.result);
+            this.schedulePageMemoryCaptureAutoRecheck(currentPayload.request);
+        });
+    }
+
+    private buildPageMemoryCaptureRequest(): { contextKey: string; request: Record<string, unknown> } | null {
+        if (this.isSensitiveContextPage()) {
+            return null;
+        }
+        if (this.isPassiveContextSuppressedBySiteControls()) {
+            return null;
+        }
+
+        this.updatePageMemoryCaptureScrollDepth();
+        const dwellMs = this.getPageMemoryCaptureDwellMs();
+        const hasIntentSignal =
+            this.pageCaptureCopiedText ||
+            this.pageCaptureMaxScrollDepth >= 0.6 ||
+            dwellMs >= PAGE_MEMORY_CAPTURE_MIN_DWELL_MS;
+        if (!hasIntentSignal) {
+            return null;
+        }
+
+        const pageContent = this.extractPageContent();
+        if (!pageContent || pageContent.wordCount < PAGE_MEMORY_CAPTURE_MIN_WORDS) {
+            return null;
+        }
+
+        const sourceUrl = normalizeContextPageUrl(pageContent.url);
+        if (!sourceUrl) {
+            return null;
+        }
+
+        const snapshot = buildPassiveContextSnapshot(document, window.location);
+        const contextKey = [
+            'page-capture',
+            sourceUrl,
+            this.createContextSignature(`${pageContent.title}:${pageContent.mainContent.slice(0, 600)}`),
+        ].join(':');
+
+        return {
+            contextKey,
+            request: {
+                sourceKind: 'webpage',
+                sourceUrl,
+                sourceTitle: normalizeText(pageContent.title) || sourceUrl,
+                text: pageContent.mainContent,
+                entityHints: snapshot ? this.toPassiveRecallEntityHints(snapshot) : undefined,
+                scope: 'work',
+                interactions: {
+                    dwellMs,
+                    activeMs: dwellMs,
+                    scrollDepth: this.pageCaptureMaxScrollDepth,
+                    copiedText: this.pageCaptureCopiedText,
+                },
+                metadata: {
+                    contextType: 'webpage',
+                    host: window.location.hostname,
+                    wordCount: pageContent.wordCount,
+                },
+            },
+        };
+    }
+
+    private getPageMemoryCaptureAutoDecision(
+        candidate: MemoryCaptureCandidateResult,
+        request: Record<string, unknown>,
+    ): { shouldAutoSave: boolean; reason: string } {
+        const interactions = (request.interactions || {}) as Record<string, unknown>;
+        const metadata = (request.metadata || {}) as Record<string, unknown>;
+        const dwellMs = Number(interactions.dwellMs || 0);
+        const scrollDepth = Number(interactions.scrollDepth || 0);
+        const copiedText = Boolean(interactions.copiedText);
+        const wordCount = Number(metadata.wordCount || 0);
+        const score = Number(candidate.score || 0);
+
+        if (wordCount < PAGE_MEMORY_CAPTURE_AUTO_MIN_WORDS) {
+            return { shouldAutoSave: false, reason: '' };
+        }
+
+        if (
+            copiedText &&
+            dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS &&
+            scrollDepth >= 0.85 &&
+            score >= 0.7
+        ) {
+            return {
+                shouldAutoSave: true,
+                reason: '你复制了页面内容、停留较久并阅读到很深位置',
+            };
+        }
+
+        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS && scrollDepth >= 0.9 && score >= 0.58) {
+            return {
+                shouldAutoSave: true,
+                reason: '浏览时间很久且阅读到页面深处',
+            };
+        }
+
+        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS && scrollDepth >= 0.75 && score >= 0.58) {
+            return {
+                shouldAutoSave: true,
+                reason: '在当前页面停留非常久',
+            };
+        }
+
+        return { shouldAutoSave: false, reason: '' };
+    }
+
+    private schedulePageMemoryCaptureAutoRecheck(request: Record<string, unknown>): void {
+        const interactions = (request.interactions || {}) as Record<string, unknown>;
+        const metadata = (request.metadata || {}) as Record<string, unknown>;
+        const dwellMs = Number(interactions.dwellMs || 0);
+        const wordCount = Number(metadata.wordCount || 0);
+        if (wordCount < PAGE_MEMORY_CAPTURE_AUTO_MIN_WORDS) {
+            return;
+        }
+        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS) {
+            return;
+        }
+        let nextThreshold = PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS;
+        if (dwellMs < PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS) {
+            nextThreshold = PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS;
+        } else if (dwellMs < PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS) {
+            nextThreshold = PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS;
+        }
+        const delayMs = Math.max(
+            5_000,
+            Math.min(nextThreshold - dwellMs + 500, PAGE_MEMORY_CAPTURE_AUTO_RECHECK_MS),
+        );
+        this.schedulePageMemoryCaptureEvaluation(delayMs);
+    }
+
+    private showPageMemoryCaptureChip(
+        payload: { contextKey: string; request: Record<string, unknown> },
+        candidate: MemoryCaptureCandidateResult,
+    ): void {
+        this.ensureContextBubbleStyles();
+        if (!document.body) {
+            return;
+        }
+
+        const existingKey = this.pageCaptureChipElement?.dataset.contextKey;
+        if (existingKey === payload.contextKey) {
+            return;
+        }
+
+        this.clearPageMemoryCaptureChip();
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'pai-memory-capture-page-chip';
+        chip.dataset.contextKey = payload.contextKey;
+        chip.setAttribute('aria-label', '入库当前页面资料');
+        chip.title = `入库当前页面资料${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
+
+        const plus = document.createElement('span');
+        plus.className = 'pai-memory-capture-selection-dock-plus';
+        plus.textContent = '+';
+        chip.appendChild(plus);
+
+        const label = document.createElement('span');
+        label.className = 'pai-memory-capture-selection-dock-label';
+        label.textContent = '入库';
+        chip.appendChild(label);
+
+        const logo = document.createElement('img');
+        logo.className = 'pai-memory-capture-selection-dock-logo';
+        logo.src = chrome.runtime.getURL('icons/icon48.png');
+        logo.alt = '';
+        logo.setAttribute('aria-hidden', 'true');
+        chip.appendChild(logo);
+
+        chip.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        chip.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.savePageMemoryCapture(payload);
+        });
+
+        document.body.appendChild(chip);
+        this.pageCaptureChipElement = chip;
+        this.pageCaptureShownContextKey = payload.contextKey;
+        this.placePageMemoryCaptureDock(chip);
+    }
+
+    private clearPageMemoryCaptureChip(): void {
+        this.pageCaptureChipElement?.remove();
+        this.pageCaptureChipElement = null;
+    }
+
+    private placePageMemoryCaptureDock(dock: HTMLElement): void {
+        const top = Math.max(
+            72,
+            Math.min(window.innerHeight - 24, 112),
+        );
+        dock.style.top = `${Math.round(top)}px`;
+    }
+
+    private autoSavePageMemoryCapture(
+        payload: { contextKey: string; request: Record<string, unknown> },
+        reason: string,
+    ): void {
+        if (this.pageCaptureStoredContextKey === payload.contextKey) {
+            return;
+        }
+
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_SAVE_PAGE',
+            request: {
+                ...payload.request,
+                captureMode: 'auto',
+                captureReason: `自动入库：${reason}`,
+                note: '',
+            },
+        }, (response) => {
+            if (chrome.runtime.lastError || !response?.success) {
+                return;
+            }
+
+            this.pageCaptureStoredContextKey = payload.contextKey;
+            this.clearPageMemoryCaptureChip();
+            const capsuleId = response.result?.capsule?.id;
+            const duplicate = Boolean(response.result?.capsule?.duplicate);
+            if (duplicate) {
+                this.showContextToast('当前页面已在记忆中', undefined, { durationMs: 5000 });
+                return;
+            }
+
+            this.showContextToast(
+                '已存入记忆',
+                capsuleId
+                    ? {
+                        label: '撤销',
+                        ariaLabel: '撤销本次自动入库',
+                        onClick: () => this.dismissAutoPageMemoryCapture(capsuleId, payload.contextKey),
+                    }
+                    : undefined,
+                {
+                    durationMs: 5000,
+                    variant: 'memory-capture-auto',
+                    detailMessage: `因为${reason}，本网页信息已自动存入记忆库`,
+                },
+            );
+        });
+    }
+
+    private dismissAutoPageMemoryCapture(capsuleId: string, contextKey: string): void {
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_DISMISS_CAPSULE',
+            capsuleId,
+            reason: '用户撤销自动入库',
+        }, (response) => {
+            if (chrome.runtime.lastError || !response?.success) {
+                const message = chrome.runtime.lastError?.message || response?.error || '撤销失败';
+                this.showContextToast(`撤销自动入库失败：${message}`);
+                return;
+            }
+
+            if (this.pageCaptureStoredContextKey === contextKey) {
+                this.pageCaptureStoredContextKey = null;
+            }
+            this.clearContextToast();
+            this.showContextToast('已撤销本网页自动入库');
+        });
+    }
+
+    private savePageMemoryCapture(payload: { contextKey: string; request: Record<string, unknown> }): void {
+        const note = window.prompt('给当前页面资料加个备注（可选）', '');
+        if (note === null) {
+            this.showContextToast('已取消保存当前页面资料');
+            return;
+        }
+
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_SAVE_PAGE',
+            request: {
+                ...payload.request,
+                captureMode: 'manual',
+                captureReason: '用户点击右侧半露出 + 入库当前页面',
+                note: note.trim(),
+            },
+        }, (response) => {
+            if (chrome.runtime.lastError || !response?.success) {
+                const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
+                this.showContextToast(`页面资料保存失败：${message}`);
+                return;
+            }
+
+            this.clearPageMemoryCaptureChip();
+            this.pageCaptureStoredContextKey = payload.contextKey;
+            const duplicate = Boolean(response.result?.capsule?.duplicate);
+            this.showContextToast(duplicate ? '当前页面已在记忆中' : '已保存当前页面资料');
         });
     }
 
@@ -3162,7 +3792,7 @@ class WebIntelligenceContentScript {
 
             .pai-context-selection-trigger {
                 position: fixed;
-                width: 28px;
+                min-width: 28px;
                 height: 28px;
                 border-radius: 999px;
                 border: 1px solid rgba(203, 213, 225, 0.9);
@@ -3170,18 +3800,128 @@ class WebIntelligenceContentScript {
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                gap: 2px;
                 padding: 0;
-                cursor: pointer;
                 z-index: 2147483646;
                 box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
                 backdrop-filter: blur(10px);
+                overflow: hidden;
             }
 
-            .pai-context-selection-trigger img {
+            .pai-context-selection-action {
+                width: 28px;
+                height: 28px;
+                border: 0;
+                background: transparent;
+                color: #0f172a;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                cursor: pointer;
+                font: 700 18px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            }
+
+            .pai-context-selection-action + .pai-context-selection-action {
+                border-left: 1px solid rgba(226, 232, 240, 0.95);
+            }
+
+            .pai-context-selection-action img {
                 width: 20px;
                 height: 20px;
                 object-fit: contain;
                 pointer-events: none;
+            }
+
+            .pai-context-selection-capture {
+                color: #2563eb;
+            }
+
+            .pai-memory-capture-selection-dock,
+            .pai-memory-capture-page-chip {
+                position: fixed;
+                right: 0;
+                top: 0;
+                width: 46px;
+                height: 36px;
+                border-radius: 999px;
+                border: 1px solid rgba(37, 99, 235, 0.28);
+                background: rgba(255, 255, 255, 0.98);
+                color: #2563eb;
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+                gap: 6px;
+                padding: 0 8px 0 8px;
+                cursor: pointer;
+                z-index: 2147483645;
+                box-shadow: 0 8px 22px rgba(15, 23, 42, 0.2);
+                font: 800 14px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                letter-spacing: 0;
+                overflow: hidden;
+                box-sizing: border-box;
+                backdrop-filter: blur(10px);
+                transform: translate(50%, -50%);
+                transition: width 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+            }
+
+            .pai-memory-capture-selection-dock:hover,
+            .pai-memory-capture-selection-dock:focus-visible,
+            .pai-memory-capture-page-chip:hover,
+            .pai-memory-capture-page-chip:focus-visible {
+                width: 104px;
+                transform: translate(0, -50%);
+                border-color: rgba(37, 99, 235, 0.48);
+                box-shadow: 0 10px 26px rgba(15, 23, 42, 0.24);
+                background: #eff6ff;
+            }
+
+            .pai-memory-capture-selection-dock-plus {
+                flex: 0 0 14px;
+                width: 14px;
+                text-align: center;
+                font-size: 19px;
+                line-height: 1;
+            }
+
+            .pai-memory-capture-selection-dock-label {
+                flex: 0 0 auto;
+                width: 0;
+                opacity: 0;
+                white-space: nowrap;
+                overflow: hidden;
+                transition: width 0.18s ease, opacity 0.12s ease;
+            }
+
+            .pai-memory-capture-selection-dock:hover .pai-memory-capture-selection-dock-label,
+            .pai-memory-capture-selection-dock:focus-visible .pai-memory-capture-selection-dock-label,
+            .pai-memory-capture-page-chip:hover .pai-memory-capture-selection-dock-label,
+            .pai-memory-capture-page-chip:focus-visible .pai-memory-capture-selection-dock-label {
+                width: 2em;
+                opacity: 1;
+            }
+
+            .pai-memory-capture-selection-dock-logo {
+                flex: 0 0 18px;
+                width: 18px;
+                height: 18px;
+                object-fit: contain;
+                opacity: 0;
+                transform: scale(0.82);
+                transition: opacity 0.12s ease, transform 0.18s ease;
+            }
+
+            .pai-memory-capture-selection-dock:hover .pai-memory-capture-selection-dock-logo,
+            .pai-memory-capture-selection-dock:focus-visible .pai-memory-capture-selection-dock-logo,
+            .pai-memory-capture-page-chip:hover .pai-memory-capture-selection-dock-logo,
+            .pai-memory-capture-page-chip:focus-visible .pai-memory-capture-selection-dock-logo {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            .pai-context-selection-action:hover,
+            .pai-context-selection-action:focus-visible {
+                background: rgba(37, 99, 235, 0.08);
             }
 
             .pai-context-selection-trigger:hover,
@@ -3197,7 +3937,10 @@ class WebIntelligenceContentScript {
 
             .pai-context-card a:focus-visible,
             .pai-context-card button:focus-visible,
+            .pai-context-selection-action:focus-visible,
             .pai-context-selection-trigger:focus-visible,
+            .pai-memory-capture-selection-dock:focus-visible,
+            .pai-memory-capture-page-chip:focus-visible,
             .pai-context-bubble:focus-visible {
                 outline: 2px solid #2563eb;
                 outline-offset: 2px;
@@ -3481,7 +4224,7 @@ class WebIntelligenceContentScript {
 
             .pai-context-toast {
                 position: fixed;
-                bottom: max(16px, env(safe-area-inset-bottom));
+                top: max(16px, env(safe-area-inset-top));
                 right: max(16px, env(safe-area-inset-right));
                 max-width: min(280px, calc(100vw - 32px));
                 box-sizing: border-box;
@@ -3501,9 +4244,57 @@ class WebIntelligenceContentScript {
                 animation: pai-context-toast-enter 0.18s ease-out;
             }
 
+            .pai-context-toast--memory-capture-auto {
+                max-width: min(420px, calc(100vw - 32px));
+                min-height: 30px;
+                border-radius: 999px;
+                padding: 6px 8px;
+                gap: 6px;
+                font-size: 11px;
+                line-height: 1.2;
+                background: rgba(15, 23, 42, 0.92);
+                overflow: hidden;
+                justify-content: flex-start;
+            }
+
+            .pai-context-toast-icon {
+                width: 16px;
+                height: 16px;
+                flex: 0 0 16px;
+                object-fit: contain;
+            }
+
             .pai-context-toast-message {
                 min-width: 0;
                 overflow-wrap: anywhere;
+            }
+
+            .pai-context-toast--memory-capture-auto .pai-context-toast-message {
+                flex: 0 0 auto;
+                white-space: nowrap;
+                font-size: 11px;
+                font-weight: 700;
+            }
+
+            .pai-context-toast-detail {
+                display: none;
+            }
+
+            .pai-context-toast--memory-capture-auto .pai-context-toast-detail {
+                display: inline-block;
+                max-width: 0;
+                opacity: 0;
+                overflow: hidden;
+                white-space: nowrap;
+                color: rgba(255, 255, 255, 0.82);
+                transition: max-width 0.18s ease, opacity 0.14s ease, margin-left 0.18s ease;
+            }
+
+            .pai-context-toast--memory-capture-auto:hover .pai-context-toast-detail,
+            .pai-context-toast--memory-capture-auto:focus-within .pai-context-toast-detail {
+                max-width: 260px;
+                opacity: 1;
+                margin-left: 2px;
             }
 
             .pai-context-toast-button {
@@ -3517,6 +4308,26 @@ class WebIntelligenceContentScript {
                 line-height: 1;
                 padding: 6px 8px;
                 white-space: nowrap;
+            }
+
+            .pai-context-toast--memory-capture-auto .pai-context-toast-button {
+                max-width: 0;
+                opacity: 0;
+                padding: 0;
+                border-width: 0;
+                pointer-events: none;
+                overflow: hidden;
+                font-size: 11px;
+                transition: max-width 0.18s ease, opacity 0.14s ease, padding 0.18s ease, border-width 0.18s ease;
+            }
+
+            .pai-context-toast--memory-capture-auto:hover .pai-context-toast-button,
+            .pai-context-toast--memory-capture-auto:focus-within .pai-context-toast-button {
+                max-width: 52px;
+                opacity: 1;
+                padding: 3px 7px;
+                border-width: 1px;
+                pointer-events: auto;
             }
 
             .pai-context-toast-button:hover,
@@ -3556,7 +4367,7 @@ class WebIntelligenceContentScript {
             @keyframes pai-context-toast-enter {
                 from {
                     opacity: 0;
-                    transform: translateY(6px);
+                    transform: translateY(-6px);
                 }
                 to {
                     opacity: 1;
@@ -3572,6 +4383,10 @@ class WebIntelligenceContentScript {
                 .pai-context-bubble--fresh img,
                 .pai-context-peek,
                 .pai-context-selection-trigger,
+                .pai-memory-capture-selection-dock,
+                .pai-memory-capture-selection-dock-label,
+                .pai-memory-capture-selection-dock-logo,
+                .pai-memory-capture-page-chip,
                 .pai-context-toast {
                     animation: none !important;
                     transition: none !important;
@@ -3596,7 +4411,11 @@ class WebIntelligenceContentScript {
         this.toastElement = null;
     }
 
-    private showContextToast(message: string, action?: ContextToastAction): void {
+    private showContextToast(
+        message: string,
+        action?: ContextToastAction,
+        options: ContextToastOptions = {},
+    ): void {
         this.clearContextToast();
         this.ensureContextBubbleStyles();
 
@@ -3605,13 +4424,32 @@ class WebIntelligenceContentScript {
         }
 
         const toast = document.createElement('div');
-        toast.className = 'pai-context-toast';
+        const isAutoMemoryCapture = options.variant === 'memory-capture-auto';
+        toast.className = isAutoMemoryCapture
+            ? 'pai-context-toast pai-context-toast--memory-capture-auto'
+            : 'pai-context-toast';
         toast.setAttribute('role', 'status');
+
+        if (isAutoMemoryCapture) {
+            const icon = document.createElement('img');
+            icon.className = 'pai-context-toast-icon';
+            icon.src = chrome.runtime.getURL('icons/icon48.png');
+            icon.alt = '';
+            icon.setAttribute('aria-hidden', 'true');
+            toast.appendChild(icon);
+        }
 
         const text = document.createElement('span');
         text.className = 'pai-context-toast-message';
         text.textContent = message;
         toast.appendChild(text);
+
+        if (isAutoMemoryCapture && options.detailMessage) {
+            const detail = document.createElement('span');
+            detail.className = 'pai-context-toast-detail';
+            detail.textContent = options.detailMessage;
+            toast.appendChild(detail);
+        }
 
         if (action) {
             const button = document.createElement('button');
@@ -3631,9 +4469,44 @@ class WebIntelligenceContentScript {
 
         document.body.appendChild(toast);
         this.toastElement = toast;
-        this.toastTimer = window.setTimeout(() => {
-            this.clearContextToast();
-        }, 2400);
+
+        const durationMs = options.durationMs ?? 2400;
+        const clearToastTimer = () => {
+            if (this.toastTimer !== null) {
+                window.clearTimeout(this.toastTimer);
+                this.toastTimer = null;
+            }
+        };
+        const scheduleToastClear = () => {
+            clearToastTimer();
+            this.toastTimer = window.setTimeout(() => {
+                if (this.toastElement !== toast) {
+                    return;
+                }
+                if (toast.matches(':hover') || toast.contains(document.activeElement)) {
+                    scheduleToastClear();
+                    return;
+                }
+                this.clearContextToast();
+            }, durationMs);
+        };
+        const resumeToastClear = () => {
+            window.setTimeout(() => {
+                if (this.toastElement !== toast) {
+                    return;
+                }
+                if (toast.matches(':hover') || toast.contains(document.activeElement)) {
+                    return;
+                }
+                scheduleToastClear();
+            }, 0);
+        };
+
+        toast.addEventListener('mouseenter', clearToastTimer);
+        toast.addEventListener('focusin', clearToastTimer);
+        toast.addEventListener('mouseleave', resumeToastClear);
+        toast.addEventListener('focusout', resumeToastClear);
+        scheduleToastClear();
     }
 
     private clearContextBubble(): void {

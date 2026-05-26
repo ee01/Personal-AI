@@ -193,7 +193,7 @@ function hasDeepPrepSignal(event: ContextAssistMeetingEvent): boolean {
 
 function toEvidence(match: {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   title?: string;
   snippet: string;
   sourceLabel?: string;

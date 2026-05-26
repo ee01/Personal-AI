@@ -1,3 +1,9 @@
+import {
+  normalizeUiLanguage,
+  setDesktopLanguage,
+  t,
+} from './i18n.js';
+
 const bridgeApi = window.bridgeApi;
 const explorerApi = window.explorerApi;
 const appShell = window.appShell;
@@ -19,12 +25,16 @@ const elements = {
   metaLog: document.getElementById('meta-log'),
   metaSupport: document.getElementById('meta-support'),
   metaShortcut: document.getElementById('meta-shortcut'),
+  uiLanguage: document.getElementById('ui-language'),
   voiceLocale: document.getElementById('voice-locale'),
   openInputMonitoringButton: document.getElementById(
     'open-input-monitoring-button',
   ),
   openAccessibilityButton: document.getElementById('open-accessibility-button'),
   openMicrophoneButton: document.getElementById('open-microphone-button'),
+  openSpeechRecognitionButton: document.getElementById(
+    'open-speech-recognition-button',
+  ),
   refreshShortcutButton: document.getElementById('refresh-shortcut-button'),
   settingsForm: document.getElementById('settings-form'),
   memoryBaseUrl: document.getElementById('memory-base-url'),
@@ -1023,6 +1033,10 @@ function syncBroadcastTransportDirtyFromControl() {
 
 function applyRuntimeSettings(settings, { force = false } = {}) {
   if (!settings) return;
+  const uiLanguage = setDesktopLanguage(settings.uiLanguage);
+  if (elements.uiLanguage) {
+    elements.uiLanguage.value = uiLanguage;
+  }
   if (settingsDirty && !force) return;
   elements.memoryBaseUrl.value = settings.memoryServiceBaseUrl || '';
   elements.memoryApiKey.value = settings.memoryServiceApiKey || '';
@@ -2095,11 +2109,45 @@ elements.openMicrophoneButton?.addEventListener('click', () => {
   void appShell.openMicrophoneSettings();
 });
 
+elements.openSpeechRecognitionButton?.addEventListener('click', () => {
+  void appShell.openSpeechRecognitionSettings();
+});
+
 elements.refreshShortcutButton?.addEventListener('click', () => {
   void withAction(elements.refreshShortcutButton, '检查中...', async () => {
     const payload = await appShell.refreshShortcutHelper();
     renderShortcutStatus(payload?.shortcutStatus);
   });
+});
+
+elements.uiLanguage?.addEventListener('change', () => {
+  const select = elements.uiLanguage;
+  const uiLanguage = normalizeUiLanguage(select.value);
+  setDesktopLanguage(uiLanguage);
+  select.value = uiLanguage;
+  select.disabled = true;
+  void bridgeApi
+    .updateSettings({ uiLanguage })
+    .then((payload) => {
+      latestSettingsPayload = payload;
+      const savedLanguage = setDesktopLanguage(payload?.effective?.uiLanguage);
+      select.value = savedLanguage;
+      setMessage(
+        elements.metaShortcut,
+        t('desktop.language.updated'),
+        'success',
+      );
+    })
+    .catch((error) => {
+      setMessage(
+        elements.metaShortcut,
+        error instanceof Error ? error.message : '更新界面语言失败',
+        'error',
+      );
+    })
+    .finally(() => {
+      select.disabled = false;
+    });
 });
 
 elements.voiceLocale?.addEventListener('change', () => {

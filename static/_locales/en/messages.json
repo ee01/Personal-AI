@@ -1,0 +1,11 @@
+{
+  "appName": {
+    "message": "Personal AI"
+  },
+  "appDescription": {
+    "message": "Your personal AI assistant that analyzes messages and provides insights"
+  },
+  "openMemoryInterface": {
+    "message": "Open Memory Explorer"
+  }
+}

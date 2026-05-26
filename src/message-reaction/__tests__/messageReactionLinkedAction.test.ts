@@ -5,7 +5,10 @@ import {
   LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
   getMessageReactionActionDefinitions,
 } from '../messageReactionLayout.js';
+import { translateStaticText } from '../../i18n/staticTranslations.js';
 import { buildPendingLinkedActionConfig } from '../linkedActionEntry.js';
+
+const toEnglish = (text: string): string => translateStaticText(text, 'en-US');
 
 test('toolbar keeps linked action in the fourth functional slot', () => {
   const actions = getMessageReactionActionDefinitions({
@@ -51,6 +54,44 @@ test('toolbar replaces auto-reply with follow-up ask on own messages', () => {
   );
   assert.equal(actions[2]?.label, '跟进追问');
   assert.equal(actions[2]?.compactLabel, '跟进');
+});
+
+test('toolbar exposes English button labels through the shared i18n map', () => {
+  const otherMessageActions = getMessageReactionActionDefinitions(
+    {
+      enableSnooze: true,
+      enableFollowThread: true,
+      enableAutoReply: true,
+      enableLinkedAction: true,
+    },
+    { isOwnMessage: false },
+    toEnglish,
+  );
+
+  assert.deepEqual(
+    otherMessageActions.map((action) => action.label),
+    ['Remind', 'Watch', 'Reply', 'Openclaw'],
+  );
+  assert.deepEqual(
+    otherMessageActions.map((action) => action.compactLabel),
+    ['Remind', 'Watch', 'Reply', 'Openclaw'],
+  );
+
+  const ownMessageActions = getMessageReactionActionDefinitions(
+    {
+      enableSnooze: true,
+      enableFollowThread: true,
+      enableAutoReply: true,
+      enableLinkedAction: true,
+    },
+    { isOwnMessage: true },
+    toEnglish,
+  );
+
+  assert.deepEqual(
+    ownMessageActions.map((action) => action.label),
+    ['Remind', 'Watch', 'Followup', 'Openclaw'],
+  );
 });
 
 test('toolbar respects linked-action toggle filtering', () => {

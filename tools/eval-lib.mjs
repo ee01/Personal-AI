@@ -256,10 +256,45 @@ function escapeRegExp(value) {
 
 export function formatSchedule(schedule) {
   if (!schedule?.cron) return '-';
-  return `${schedule.cron} ${schedule.timezone || ''}`.trim();
+  const action = schedule.action ? ` action=${schedule.action}` : '';
+  const every = schedule.every ? ` every=${schedule.every}` : '';
+  return `${schedule.cron} ${schedule.timezone || ''}${every}${action}`.trim();
 }
 
 export function formatOutcome(status) {
   if (!status) return '-';
   return status;
+}
+
+export function parseDurationMs(value, fallbackMs = 0) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const text = String(value || '').trim();
+  if (!text) return fallbackMs;
+  const match = text.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)$/i);
+  if (!match) return fallbackMs;
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000,
+  };
+  return amount * multipliers[unit];
+}
+
+export async function readJsonFileIfExists(filePath, fallback = null) {
+  try {
+    return JSON.parse(await fs.readFile(resolveRepoPath(filePath), 'utf8'));
+  } catch (err) {
+    if (err?.code === 'ENOENT') return fallback;
+    throw err;
+  }
+}
+
+export async function writeJsonFile(filePath, value) {
+  await ensureDir(path.dirname(resolveRepoPath(filePath)));
+  await fs.writeFile(resolveRepoPath(filePath), `${JSON.stringify(value, null, 2)}\n`);
 }

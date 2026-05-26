@@ -9,6 +9,7 @@ import {
   JiraAuthMode,
   jiraFetch,
 } from './jira';
+import { initContentScriptI18n, uiPhrase as ui } from './i18n/contentScript';
 import {
   DesignDisplayItem,
   DesignLinkCandidate,
@@ -39,6 +40,10 @@ import {
   sortDesignDisplayItems,
 } from './jiraDesignLinks';
 import { getEnvConfig } from './utils';
+
+initContentScriptI18n(() => {
+  setTimeout(main, 0);
+});
 
 type JiraIssueContext = {
   key: string;
@@ -1029,12 +1034,12 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       const updatedDateLabel = formatDesignUpdatedDate(design.updatedAt);
       const updatedDateTooltip = formatDesignUpdatedTooltip(design.updatedAt);
       const updatedTag = updatedDateLabel
-        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.updatedAt || updatedDateLabel)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
+        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.updatedAt || updatedDateLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
         : '';
       linksHtml += `
         <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" data-design-attention="${escapeAttribute(designAttentionLevel)}" tabindex="-1">
           <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
-          <span class="design-link-label">Design</span>
+          <span class="design-link-label">${escapeHtml(ui('设计'))}</span>
           <a href="${safeUrl}" title="${safeUrl}" target="_blank" rel="noopener noreferrer" class="design-link">
             ${escapeHtml(linkLabel)} <span class="external-link-icon">↗</span>
           </a>
@@ -1063,7 +1068,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
             ${escapeHtml(design.uxTicketKey)} <span class="external-link-icon">↗</span>
           </a>
         `;
-      const designStatusText = design.linkProvided ? formatDesignStatusLabel(design.designStatus) : 'Missing link';
+      const designStatusText = design.linkProvided ? formatDesignStatusLabel(design.designStatus) : ui('缺少设计稿链接');
       const designStatusHint = getDesignStatusActionHint(designStatusText);
       const designStatusTag = designStatusText
         ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(designStatusText)}" title="${escapeAttribute(designStatusHint || designStatusText)}">${escapeHtml(designStatusText)}</span>`
@@ -1081,18 +1086,18 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
         `
         : '';
       const etaTag = design.uxEta
-        ? `<span class="ux-eta-tag" title="${design.uxEtaSource === 'duedate' ? 'Due date' : 'Fix Version'}">ETA: ${escapeHtml(design.uxEta)}</span>`
+        ? `<span class="ux-eta-tag" title="${escapeAttribute(design.uxEtaSource === 'duedate' ? ui('截止日期') : ui('修复版本'))}">ETA: ${escapeHtml(design.uxEta)}</span>`
         : '';
       const updatedDateLabel = formatDesignUpdatedDate(design.designUpdatedAt);
       const updatedDateTooltip = formatDesignUpdatedTooltip(design.designUpdatedAt);
       const updatedTag = updatedDateLabel
-        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.designUpdatedAt || updatedDateLabel)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
+        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.designUpdatedAt || updatedDateLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
         : '';
 
       linksHtml += `
         <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" data-design-attention="${escapeAttribute(designAttentionLevel)}" tabindex="-1">
           <img src="${escapeAttribute(iconUrl)}" title="Personal AI" class="design-icon" />
-          <span class="design-link-label">Design</span>
+          <span class="design-link-label">${escapeHtml(ui('设计'))}</span>
           ${designContent}
           ${designStatusTag}
           ${updatedTag}
@@ -1109,7 +1114,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       ${linksHtml}
     </div>
     <div class="design-links-footer">
-      <span class="footer-text" title="${escapeAttribute(sourceSummary)}">Personal AI provided · ${escapeHtml(sourceSummary)}</span>
+      <span class="footer-text" title="${escapeAttribute(sourceSummary)}">${escapeHtml(ui('Personal AI provided'))} · ${escapeHtml(sourceSummary)}</span>
       <span class="author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank" rel="noopener noreferrer">Esone</a></span>
     </div>
   `;

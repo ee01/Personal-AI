@@ -143,6 +143,7 @@ Rehearsal 没有独立的“系统启用”开关。它作为记忆层默认存�
 - 命中后作为“预演提醒” evidence，而不是普通背景记忆。
 - Compose Assist 会保留已经通过人物、群组、会话、issue、URL 等场景线索命中的 `rehearsal_cue`，不会再用普通记忆的文本 overlap 过滤误杀。
 - 输入框 hover 预览会用一行轻量提示说明“预演提醒”和命中的主要线索，帮助用户在插入前判断来源；它不是完整证据卡，也不自动发送。
+- 用户点击 thumb-down 时，Compose Assist 会把相关 Rehearsal activation 记录为 `irrelevant`；用户插入建议且未撤销时记录为 `accepted`。这条反馈只影响具体预演提醒的后续命中，不会自动发送消息。
 - 不自动发送；高风险或私人内容仍必须只进入预览或被前端阈值挡住。
 
 ### Today Pilot / Meeting Pilot
@@ -169,13 +170,17 @@ Rehearsal 没有独立的“系统启用”开关。它作为记忆层默认存�
 - 操作：暂停、恢复、归档、标记已使用、标记不相关。
 - 详情页会按状态给出下一步处理建议：active 可暂停或标记不相关，candidate 可激活，stale 可重新激活，dismissed 可恢复观察，used / archived 更偏审计。
 - 从 Today Pilot、Memory Lens 或 cue card 深链进入时，如果目标 Rehearsal 不在当前筛选/搜索结果中，管理页会直接拉取详情并临时置顶，避免用户落到无关的第一条结果。
+- 如果用户已经停留在 Rehearsal 管理页，再从其他入口打开新的 `?rehearsalId=` 深链，页面会重新加载并聚焦目标条目，不需要刷新整个 Memory Exploring。
+- 详情页会展示 `evidenceRefs` 来源证据列表；如果来源为空，会明确显示“暂无来源证据记录”，避免用户误以为来源被隐藏或加载失败。
 - 激活历史需要显示 outcome、分数、surface/context 和本次命中的线索摘要，方便判断这条预演是该恢复、更新、标记已使用还是降权。
 
 ## 业内参考与启发
 
-- Microsoft Research 的数字提醒研究指出，很多“要记得做”的事情无法只靠时间/地点提醒覆盖，尤其是社交互动中要带入的信息；Rehearsal 因此优先按人、会话、会议、issue 和 URL 等场景线索触发。
-- ChatGPT Memory 的最新控制面强调 memory sources、相关/不相关反馈和用户可管理性；Rehearsal 的现场卡片也必须能解释来源线索、反馈命中质量，并能跳回管理页复核。
+- [Microsoft Research 的数字提醒研究](https://www.microsoft.com/en-us/research/wp-content/uploads/2017/07/memory_imwut2017.pdf)指出，很多“要记得做”的事情无法只靠时间/地点提醒覆盖，尤其是社交互动中要带入的信息；Rehearsal 因此优先按人、会话、会议、issue 和 URL 等场景线索触发。
+- [ChatGPT Memory FAQ](https://help.openai.com/en/articles/8590148-memory-faq) 的最新控制面强调 memory sources、相关/不相关反馈和用户可管理性；Rehearsal 的现场卡片也必须能解释来源线索、反馈命中质量，并能跳回管理页复核。
 - Prospective memory 研究反复强调 cue 与目标动作的关联强度；因此 Memory Lens 只在有明确人物、项目、工单、会话或主题 cue 时显示预演提醒，弱命中不自动打扰。
+- 2026-05-26 检索到的 ChatGPT Memory FAQ 还强调可查看来源、标记来源相关/不相关、优先或降级记忆、查看历史版本；这进一步支持 Rehearsal 管理页把证据来源和反馈动作放在详情里，而不是只给状态按钮。
+- 近期 [agent memory 论文](https://arxiv.org/abs/2605.12978)也提醒，持续自动整合可能损坏原有有用记忆；Rehearsal 因此保留原始 `evidenceRefs`、activation history 和手动归档/恢复路径，不把管理页做成只展示合并结论的黑盒。
 
 ## 验证
 

@@ -25,6 +25,7 @@ import type {
   ContextRecallScope,
   RecallItem,
   RecallQuery,
+  RecallSourceType,
 } from '../types/index.js';
 import { RecallEngine } from './RecallEngine.js';
 import {
@@ -219,6 +220,21 @@ interface AnchorBuckets {
   source: Set<string>;
 }
 
+interface SourceMemoryContextRow {
+  id: string;
+  source_kind: string;
+  source_url: string | null;
+  source_title: string;
+  capture_mode: string;
+  summary: string | null;
+  content_preview: string | null;
+  message_id: string | null;
+  created_at: number;
+  updated_at: number;
+  anchor_preview: string | null;
+  takeaway_text: string | null;
+}
+
 interface AnchorOverlap {
   people: string[];
   topics: string[];
@@ -308,26 +324,41 @@ export class ContextRecallService {
 
     // Pin to vector + fts. Graph & time would slow us down without much win
     // for purely associative cases.
+    const requestedSourceTypes = expandedRequest.sourceTypes ?? [];
+    const sourceMemoryRequested = requestedSourceTypes.includes('source_memory');
+    const sourceMemoryOnly =
+      requestedSourceTypes.length > 0 &&
+      requestedSourceTypes.every((sourceType) => sourceType === 'source_memory');
     const recallQuery: RecallQuery = {
       query: normalized.query,
       scope: (expandedRequest.scope ?? 'all') as ContextRecallScope,
       topK: limit * CONTEXT_OVER_FETCH_FACTOR,
       channels: ['vector', 'fts'],
-      sourceTypes: expandedRequest.sourceTypes,
+      sourceTypes: expandSourceMemorySourceTypes(requestedSourceTypes),
       includeMetadata: true,
       presentationHint: 'compact',
       previewMaxLength: PREVIEW_MAX,
       // No blockTypes → engine returns evidence-only, fast path.
     };
 
-    const result = await this.engine.recall(recallQuery, {
-      reinforceAccess: false,
-    });
+    const result = sourceMemoryOnly
+      ? {
+          items: [],
+          totalFound: 0,
+          queryTimeMs: 0,
+          channels: ['source_memory'],
+        }
+      : await this.engine.recall(recallQuery, {
+          reinforceAccess: false,
+        });
     if (debug) debug.channelsHit = result.channels;
 
     const sceneAnchors = extractSceneAnchors(expandedRequest, normalized.query);
     let lowInformationMatches = 0;
     const filteredItems = result.items.filter((item) => {
+      if (!shouldIncludeSourceMemoryItem(item, requestedSourceTypes, sourceMemoryRequested)) {
+        return false;
+      }
       if (shouldExcludeBySourceContext(item, expandedRequest)) return false;
       return true;
     });
@@ -359,7 +390,10 @@ export class ContextRecallService {
       expandedRequest,
       limit,
     );
-    const matches = [...rehearsalMatches, ...rankedMatches]
+    const sourceMemoryMatches = sourceMemoryRequested
+      ? getSourceMemoryContextMatches(this.db, expandedRequest, normalized.query, limit)
+      : [];
+    const matches = [...rehearsalMatches, ...sourceMemoryMatches, ...rankedMatches]
       .filter((match) => {
         if (!isDisplayableContextMatch(match)) {
           lowInformationMatches += 1;
@@ -479,6 +513,169 @@ function normalizeContextQuery(req: ContextRecallRequest): NormalizedContextQuer
   return { usable: true, query: compact };
 }
 
+function expandSourceMemorySourceTypes(
+  sourceTypes?: RecallSourceType[],
+): RecallSourceType[] | undefined {
+  if (!sourceTypes?.length) return sourceTypes;
+  const expanded = new Set<RecallSourceType>();
+  for (const sourceType of sourceTypes) {
+    if (sourceType === 'source_memory') {
+      expanded.add('web');
+      continue;
+    }
+    expanded.add(sourceType);
+  }
+  return Array.from(expanded);
+}
+
+function shouldIncludeSourceMemoryItem(
+  item: RecallItem,
+  requestedSourceTypes: RecallSourceType[],
+  sourceMemoryRequested: boolean,
+): boolean {
+  if (!sourceMemoryRequested) return true;
+  if (isSourceMemoryRecallItem(item)) return true;
+
+  const nonSourceMemoryTypes = requestedSourceTypes.filter(
+    (sourceType) => sourceType !== 'source_memory',
+  );
+  if (nonSourceMemoryTypes.length === 0) return false;
+  return Boolean(item.source && nonSourceMemoryTypes.some((sourceType) => sourceType === item.source));
+}
+
+function isSourceMemoryRecallItem(item: RecallItem): boolean {
+  return Boolean(item.metadata?.sourceMemoryCapsuleId);
+}
+
+function getSourceMemoryContextMatches(
+  db: Database.Database,
+  req: ContextRecallRequest,
+  query: string,
+  limit: number,
+): ContextRecallMatch[] {
+  const terms = extractSourceMemorySearchTerms(query);
+  if (terms.length === 0) return [];
+
+  const rows = db
+    .prepare(
+      `SELECT
+         c.id,
+         c.source_kind,
+         c.source_url,
+         c.source_title,
+         c.capture_mode,
+         c.summary,
+         c.content_preview,
+         c.message_id,
+         c.created_at,
+         c.updated_at,
+         (
+           SELECT a.quote_or_preview
+           FROM source_memory_anchors a
+           WHERE a.capsule_id = c.id
+           ORDER BY a.created_at ASC
+           LIMIT 1
+         ) AS anchor_preview,
+         (
+           SELECT GROUP_CONCAT(t.title || ' ' || t.body, ' ')
+           FROM source_memory_takeaways t
+           WHERE t.capsule_id = c.id
+         ) AS takeaway_text
+       FROM source_memory_capsules c
+       WHERE c.status = 'saved'
+       ORDER BY c.updated_at DESC
+       LIMIT 80`,
+    )
+    .all() as SourceMemoryContextRow[];
+
+  const currentUrls = [
+    req.url,
+    req.sourceContext?.url,
+    ...(req.exclude?.urls ?? []),
+  ]
+    .map(normalizeUrlForCompare)
+    .filter(Boolean);
+
+  return rows
+    .map((row) => {
+      const sourceUrl = row.source_url ?? undefined;
+      const normalizedSourceUrl = normalizeUrlForCompare(sourceUrl);
+      if (normalizedSourceUrl && currentUrls.includes(normalizedSourceUrl)) {
+        return null;
+      }
+
+      const haystack = normalizeInformationText(
+        [
+          row.source_title,
+          row.summary,
+          row.content_preview,
+          row.anchor_preview,
+          row.takeaway_text,
+          sourceUrl,
+        ]
+          .filter(Boolean)
+          .join(' '),
+      ).toLowerCase();
+      const matchedTerms = terms.filter((term) => haystack.includes(term.toLowerCase()));
+      if (matchedTerms.length === 0) return null;
+
+      const overlapScore = Math.min(0.22, matchedTerms.length * 0.07);
+      const score = Math.min(0.94, 0.58 + overlapScore);
+      const snippet = clipContextText(
+        row.summary || row.content_preview || row.anchor_preview || row.source_title,
+        PREVIEW_MAX,
+      );
+      if (!snippet) return null;
+
+      const whyRelevant = [
+        matchedTerms.length
+          ? `命中资料关键词：${matchedTerms.slice(0, 3).join(' / ')}`
+          : '',
+        row.source_title ? `来源：${row.source_title}` : '',
+      ].filter(Boolean);
+
+      return {
+        id: `source-memory:${row.id}`,
+        type: 'source_memory',
+        score,
+        title: row.source_title,
+        snippet,
+        sourceLabel: 'source_memory',
+        sourceUrl,
+        sourceTitle: row.source_title,
+        exploreLink: row.message_id ? `#/timeline?focus=${encodeURIComponent(row.message_id)}` : undefined,
+        links: sourceUrl ? [{ label: '打开来源', url: sourceUrl }] : [],
+        whyMatched: '资料记忆与当前上下文有关键词重合',
+        whyRelevant,
+        reasonType: 'keyword',
+        evidenceRole: 'artifact',
+        displayPriority: matchedTerms.length >= 2 ? 'p1' : 'p2',
+        metadata: {
+          sourceMemoryCapsuleId: row.id,
+          sourceKind: row.source_kind,
+          captureMode: row.capture_mode,
+          matchedTerms,
+        },
+        sourceClusterKey: `source-memory:${row.id}`,
+        timestamp: row.updated_at || row.created_at,
+      } as ContextRecallMatch;
+    })
+    .filter((match): match is ContextRecallMatch => match != null)
+    .sort(compareContextMatches)
+    .slice(0, limit);
+}
+
+function extractSourceMemorySearchTerms(query: string): string[] {
+  const normalized = normalizeInformationText(query);
+  const latinTerms = normalized
+    .toLowerCase()
+    .match(/[a-z0-9][a-z0-9_-]{2,}/g) ?? [];
+  const cjkTerms = normalized.match(/[\u3400-\u9fff]{2,}/g) ?? [];
+  return Array.from(new Set([...latinTerms, ...cjkTerms]))
+    .filter((term) => !GENERIC_CONTEXT_TERMS.has(term))
+    .slice(0, 12);
+}
+
 function isLowInformationCurrentMeetingRequest(
   req: ContextRecallRequest,
   compactQuery: string,
@@ -520,6 +717,7 @@ function toContextMatch(
   item: RecallItem,
   req: ContextRecallRequest,
 ): ContextRecallMatch | null {
+  const isSourceMemory = isSourceMemoryRecallItem(item);
   const presentation = buildRecallPresentation({
     content: item.displayText || item.content || '',
     query: req.title || req.primaryText || '',
@@ -555,12 +753,14 @@ function toContextMatch(
   }
 
   return {
-    id: item.id,
-    type: item.type,
+    id: isSourceMemory
+      ? `source-memory:${String(item.metadata?.sourceMemoryCapsuleId)}`
+      : item.id,
+    type: isSourceMemory ? 'source_memory' : item.type,
     score: item.score,
     title,
     snippet,
-    sourceLabel: item.source,
+    sourceLabel: isSourceMemory ? 'source_memory' : item.source,
     sourceUrl: item.sourceUrl,
     sourceTitle: item.sourceTitle,
     exploreLink,

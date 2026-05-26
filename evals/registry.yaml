@@ -3,9 +3,17 @@ defaults:
   agent: codex
   resultRoot: .eval-runs
   repair:
-    mode: auto
+    mode: suggest
     landing: current_worktree
     requireCleanWorktree: true
+
+scheduler:
+  enabled: true
+  pollInterval: 30m
+  stateFile: .eval-runs/scheduler-state.json
+  latestReport: .eval-runs/latest-report.html
+  defaultAction: report
+  timezone: Asia/Shanghai
 
 suites:
   - id: context-recall
@@ -15,8 +23,25 @@ suites:
     cases: evals/cases/context-recall/real-ringcentral-groups.jsonl
     runMode: scheduled
     schedule:
+      enabled: true
       cron: "0 9 * * 1"
+      every: 7d
       timezone: Asia/Shanghai
+      action: report
+      repair: auto
+    caseSchedules:
+      - caseId: rc-coach-codex-token
+        every: 7d
+        action: report
+      - caseId: rc-bug-ai-repair
+        every: 7d
+        action: report
+      - caseId: rc-colin-michael-codex-quality
+        every: 7d
+        action: report
+      - caseId: rc-webinar-cn-xmn-up
+        every: 7d
+        action: report
     endpoint:
       url: http://10.32.56.212:3210/api/v1/context-recall
       userId: esone.qiu
@@ -25,7 +50,7 @@ suites:
       llm: true
       rubric: evals/judges/context-recall-relevance.md
     repair:
-      mode: auto
+      mode: suggest
       agent: codex
       allowedPaths:
         - memory-service/src/core/**

@@ -1,15 +1,13 @@
-'use strict';
+import {
+  formatDateTime,
+  loadDesktopLanguage,
+  t,
+} from './i18n.js';
 
 const PAGE_SIZE = 50;
 const SOURCE_LABEL = {
   doubao: '豆包',
   chatgpt: 'ChatGPT',
-};
-const KIND_LABEL = {
-  fact: '事实',
-  preference: '偏好',
-  event: '事件',
-  plan: '计划',
 };
 
 const state = {
@@ -40,12 +38,7 @@ function debounce(fn, delay) {
 
 function formatTime(iso) {
   if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-    date.getDate(),
-  )} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return formatDateTime(iso) || iso;
 }
 
 function getApi() {
@@ -55,15 +48,14 @@ function getApi() {
 async function fetchPage({ append }) {
   const api = getApi();
   if (!api || typeof api.listMemories !== 'function') {
-    state.summary.textContent =
-      'explorerApi 不可用，请确认桌面端版本是否更新到 4.0 以上。';
+    els.summary.textContent = t('desktop.memoryList.apiUnavailable');
     return;
   }
 
   state.loading = true;
   els.loadMore.disabled = true;
   if (!append) {
-    els.summary.textContent = '加载中…';
+    els.summary.textContent = t('desktop.memoryList.loading');
   }
 
   try {
@@ -79,8 +71,9 @@ async function fetchPage({ append }) {
     render();
   } catch (error) {
     console.error('memory-list fetch failed', error);
-    els.summary.textContent =
-      '拉取失败：' + (error?.message || '未知错误，请稍后再试');
+    els.summary.textContent = t('desktop.memoryList.fetchFailed', {
+      message: error?.message || t('desktop.memoryList.unknownError'),
+    });
     if (!append) {
       state.items = [];
       state.total = 0;
@@ -99,8 +92,8 @@ function render() {
     els.empty.hidden = false;
     els.summary.textContent =
       state.query || state.source !== 'all'
-        ? '当前过滤条件下没有匹配的记忆。'
-        : '暂时没有探索得到的记忆。';
+        ? t('desktop.memoryList.noFiltered')
+        : t('desktop.memoryList.noMemories');
     els.loadMore.hidden = true;
     return;
   }
@@ -111,10 +104,19 @@ function render() {
   }
 
   const sourceLabel =
-    state.source === 'all' ? '全部来源' : SOURCE_LABEL[state.source] || state.source;
-  els.summary.textContent = `共 ${state.total} 条 · 来源：${sourceLabel}${
-    state.query ? ` · 关键字："${state.query}"` : ''
-  }`;
+    state.source === 'all'
+      ? t('desktop.memoryList.sourceAll')
+      : SOURCE_LABEL[state.source] || state.source;
+  els.summary.textContent = state.query
+    ? t('desktop.memoryList.summaryWithQuery', {
+        total: state.total,
+        source: sourceLabel,
+        query: state.query,
+      })
+    : t('desktop.memoryList.summary', {
+        total: state.total,
+        source: sourceLabel,
+      });
 
   els.loadMore.hidden = state.items.length >= state.total;
 }
@@ -133,7 +135,9 @@ function buildCard(item) {
 
   const kindTag = document.createElement('span');
   kindTag.className = `memory-list-tag tag-kind-${item.kind}`;
-  kindTag.textContent = KIND_LABEL[item.kind] || item.kind;
+  const kindLabelKey = `desktop.memoryList.kind.${item.kind}`;
+  const kindLabel = t(kindLabelKey);
+  kindTag.textContent = kindLabel === kindLabelKey ? item.kind : kindLabel;
   head.appendChild(kindTag);
 
   const time = document.createElement('span');
@@ -144,7 +148,7 @@ function buildCard(item) {
 
   const text = document.createElement('p');
   text.className = 'memory-list-card-text';
-  text.textContent = item.text || '(空内容)';
+  text.textContent = item.text || t('desktop.memoryList.emptyText');
   li.appendChild(text);
 
   if (item.sourceQuote && item.sourceQuote.trim()) {
@@ -158,12 +162,16 @@ function buildCard(item) {
   meta.className = 'memory-list-card-meta';
   if (item.conversationRef) {
     const ref = document.createElement('span');
-    ref.textContent = `会话引用：${item.conversationRef}`;
+    ref.textContent = t('desktop.memoryList.conversationRef', {
+      ref: item.conversationRef,
+    });
     meta.appendChild(ref);
   }
   if (item.ingestSource) {
     const ingest = document.createElement('span');
-    ingest.textContent = `入库 source：${item.ingestSource}`;
+    ingest.textContent = t('desktop.memoryList.ingestSource', {
+      source: item.ingestSource,
+    });
     meta.appendChild(ingest);
   }
   if (meta.children.length > 0) {
@@ -205,5 +213,8 @@ for (const button of els.filters) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  void fetchPage({ append: false });
+  void loadDesktopLanguage(window.bridgeApi).then(() => {
+    document.title = t('desktop.memoryList.titleTag');
+    void fetchPage({ append: false });
+  });
 });

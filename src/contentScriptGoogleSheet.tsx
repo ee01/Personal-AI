@@ -1,7 +1,10 @@
 import { fetchJiraTickets } from './jira';
 import { Sheet } from './sheet';
 import { JiraTicket } from './types';
+import { initContentScriptI18n, uiPhrase as ui } from './i18n/contentScript';
 import { getEnvConfig } from './utils';
+
+initContentScriptI18n();
 
 // Main listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -21,14 +24,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (type === 'EXPAND_EPIC_TICKETS') {
         if (!message.url || !message.sheetToken) {
             console.error('EXPAND_EPIC_TICKETS 缺少 url 或 sheetToken');
-            showToast('缺少必要参数', 'error');
+            showToast(ui('缺少必要参数'), 'error');
             sendResponse({ success: false, error: '缺少必要参数' });
         } else {
             handleExpandEpicTickets(message.url, message.sheetToken)
                 .then(() => sendResponse({ success: true }))
                 .catch(error => {
                     console.error('处理 EXPAND_EPIC_TICKETS 时出错:', error);
-                    showToast(`展开 Epic 失败: ${error.message || error}`, 'error');
+                    showToast(`${ui('展开 Epic 失败:')} ${error.message || error}`, 'error');
                     sendResponse({ success: false, error: error.message || String(error) });
                 });
         }
@@ -88,31 +91,31 @@ async function openJqlDialog(url: string, sheetToken: string) {
     dialog.innerHTML = `
         <div style="position: relative;">
             <button id="closeDialog" style="position: absolute; top: -10px; right: -10px; background: transparent; color: grey; border: none; width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 16px; line-height: 1; padding: 0;">&times;</button>
-            <h3 style="margin-top: 0;">输入 JQL 添加 JIRA 数据到表格</h3>
+            <h3 style="margin-top: 0;">${ui('输入 JQL 添加 JIRA 数据到表格')}</h3>
         </div>
         <textarea id="jql" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="filter=xxxx"></textarea>
-        <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">请在 <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">filter 查询页面</a> 配置需要展示的 columns 且设为列表模式。</p>
+        <p style="font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px;">${ui('请在')} <a href="https://jira.ringcentral.com/issues/?jql=" target="_blank">${ui('filter 查询页面')}</a> ${ui('配置需要展示的 columns 且设为列表模式。')}</p>
         <div id="syncContainer" style="margin-bottom: 10px; padding: 10px; background: #fff3cd; border-radius: 4px;">
             <label style="display: flex; align-items: flex-start; cursor: pointer; margin-bottom: 8px;">
                 <input type="checkbox" id="keepDataSameAsJql" style="margin-right: 8px; margin-top: 3px;">
                 <span style="font-size: 13px;">
-                    <strong>保持数据一致</strong><br>
-                    <span style="color: #856404; font-size: 12px;">⚠️ 启用后，表格中不在 JQL 查询结果中的数据行将被移除</span>
+                    <strong>${ui('保持数据一致')}</strong><br>
+                    <span style="color: #856404; font-size: 12px;">${ui('启用后，表格中不在 JQL 查询结果中的数据行将被移除')}</span>
                 </span>
             </label>
             <label id="orderContainer" style="display: none; align-items: flex-start; cursor: pointer; margin-left: 24px;">
                 <input type="checkbox" id="keepOrderSameAsJql" style="margin-right: 8px; margin-top: 3px;">
                 <span style="font-size: 13px;">
-                    <strong>同时使用 JQL 排序</strong><br>
-                    <span style="color: #856404; font-size: 12px;">📋 调整表格行顺序与 JQL 查询结果一致</span>
+                    <strong>${ui('同时使用 JQL 排序')}</strong><br>
+                    <span style="color: #856404; font-size: 12px;">${ui('调整表格行顺序与 JQL 查询结果一致')}</span>
                 </span>
             </label>
         </div>
         <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-            <button id="configMapping" style="background: #6c757d; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">配置表头JIRA映射</button>
+            <button id="configMapping" style="background: #6c757d; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">${ui('配置表头JIRA映射')}</button>
             <div style="display: flex; gap: 10px;">
-                <button id="updateExisting" style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">刷新表数据</button>
-                <button id="submit" style="background: #007bff; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">查询</button>
+                <button id="updateExisting" style="background: #28a745; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">${ui('刷新表数据')}</button>
+                <button id="submit" style="background: #007bff; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">${ui('查询')}</button>
             </div>
         </div>
     `;
@@ -210,7 +213,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
             } catch (error) {
                 console.error('查询或处理失败: ', error);
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                showToast('查询或处理失败: ' + errorMessage, 'error');
+                showToast(`${ui('查询或处理失败:')} ${errorMessage}`, 'error');
                 
                 // 如果是登录错误，重新打开对话框并带入之前的输入
                 if (errorMessage.includes('需要登录')) {
@@ -220,19 +223,19 @@ async function openJqlDialog(url: string, sheetToken: string) {
                 }
             }
         } else {
-            showToast('请输入 JQL 查询语句', 'warning');
+            showToast(ui('请输入 JQL 查询语句'), 'warning');
         }
     });
 
     // 添加更新现有 tickets 的事件监听器
     document.getElementById('updateExisting')?.addEventListener('click', async () => {
         if (!sheetToken || !url) {
-            showToast('缺少表格 URL 或 token', 'error');
+            showToast(ui('缺少表格 URL 或 token'), 'error');
             return;
         }
 
         try {
-            showToast('正在读取表格数据...');
+            showToast(ui('正在读取表格数据...'));
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
             const sheet = await Sheet.fromUrl(url, sheetToken);
             const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
@@ -246,14 +249,14 @@ async function openJqlDialog(url: string, sheetToken: string) {
             console.log(`使用配置: 表头行=${globalSettings.headerRow}, 数据起始行=${dataStartRowIndex + 1}`);
 
             if (!values || values.length <= dataStartRowIndex) {
-                showToast('表格为空或只有表头', 'warning');
+                showToast(ui('表格为空或只有表头'), 'warning');
                 return;
             }
 
             // 获取所有现有的 Jira keys
             const keyColumnIndex = sheetHeaders.key ? getColumnIndex(sheetHeaders.key) : -1;
             if (keyColumnIndex === -1) {
-                showToast('未找到 Jira Key 列', 'error');
+                showToast(ui('未找到 Jira Key 列'), 'error');
                 return;
             }
 
@@ -272,7 +275,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
             });
 
             if (existingKeys.length === 0) {
-                showToast('未找到有效的 Jira tickets', 'warning');
+                showToast(ui('未找到有效的 Jira tickets'), 'warning');
                 return;
             }
 
@@ -281,7 +284,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
             handleFetchJiraTicketsToSheet(jql, url, sheetToken);
         } catch (error) {
             console.error('更新现有 tickets 失败:', error);
-            showToast('更新失败: ' + (error instanceof Error ? error.message : error), 'error');
+            showToast(`${ui('更新失败:')} ${error instanceof Error ? error.message : error}`, 'error');
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
         }
     });
@@ -289,12 +292,12 @@ async function openJqlDialog(url: string, sheetToken: string) {
     // 添加配置表头JIRA映射的事件监听器
     document.getElementById('configMapping')?.addEventListener('click', async () => {
         if (!sheetToken || !url) {
-            showToast('缺少表格 URL 或 token', 'error');
+            showToast(ui('缺少表格 URL 或 token'), 'error');
             return;
         }
 
         try {
-            showToast('正在检查配置表...');
+            showToast(ui('正在检查配置表...'));
             if (document.body.contains(dialog)) document.body.removeChild(dialog);
             const sheet = await Sheet.fromUrl(url, sheetToken);
             const sheetName = sheet.getSheetName();
@@ -303,7 +306,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
             // 检查配置表是否存在
             const sheetId = Sheet.extractSheetId(url);
             if (!sheetId) {
-                showToast('无法提取 Sheet ID', 'error');
+                showToast(ui('无法提取 Sheet ID'), 'error');
                 return;
             }
             
@@ -315,10 +318,10 @@ async function openJqlDialog(url: string, sheetToken: string) {
                 const configGid = configSheet.properties.sheetId;
                 const newUrl = url.replace(/gid=\d+/, `gid=${configGid}`);
                 window.location.href = newUrl;
-                showToast('正在切换到配置表...', 'success');
+                showToast(ui('正在切换到配置表...'), 'success');
             } else {
                 // 配置表不存在，创建新表
-                showToast('配置表不存在，正在创建...');
+                showToast(ui('配置表不存在，正在创建...'));
                 
                 // 获取当前表的索引，以便在其右边创建配置表
                 const currentGid = Sheet.extractGid(url);
@@ -326,7 +329,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
                 const currentSheetIndex = currentSheet ? currentSheet.properties.index : undefined;
                 
                 const newSheetGid = await createConfigSheet(sheetToken, sheetId, configSheetName, currentSheetIndex);
-                showToast('配置表创建成功，正在切换...', 'success');
+                showToast(ui('配置表创建成功，正在切换...'), 'success');
                 
                 // 切换到新创建的配置表
                 const baseUrl = url.split('#')[0].split('?')[0];
@@ -335,7 +338,7 @@ async function openJqlDialog(url: string, sheetToken: string) {
             }
         } catch (error) {
             console.error('配置表头JIRA映射失败:', error);
-            showToast('操作失败: ' + (error instanceof Error ? error.message : error), 'error');
+            showToast(`${ui('操作失败:')} ${error instanceof Error ? error.message : error}`, 'error');
         }
     });
 }
@@ -779,7 +782,7 @@ async function findValidJiraHeaders(sheet: Sheet): Promise<JiraFieldMetadata> {
         return { columnMapping: validHeaders, fieldTypes, globalSettings, jiraFieldToSheetHeader };
     } catch (error) {
         console.error('查找有效 Jira 标题时出错:', error);
-        showToast('查找表头映射时出错: ' + (error instanceof Error ? error.message : error), 'error')
+        showToast(`${ui('查找表头映射时出错:')} ${error instanceof Error ? error.message : error}`, 'error')
         throw error;
     }
 }
@@ -861,10 +864,10 @@ function getOperationColor(type: 'update' | 'append' | 'remove'): string {
 // 获取操作类型对应的文本
 function getOperationText(type: 'update' | 'append' | 'remove'): string {
     switch (type) {
-        case 'update': return '更新';
-        case 'append': return '新增';
-        case 'remove': return '移除';
-        default: return '未知';
+        case 'update': return ui('更新');
+        case 'append': return ui('新增');
+        case 'remove': return ui('移除');
+        default: return ui('未知');
     }
 }
 
@@ -986,7 +989,7 @@ async function showConfirmationDialog(
                     <span style="font-size: 18px;">⚠️</span>
                     <div>
                         <div style="font-weight: bold; color: #856404; margin-bottom: 6px;">
-                            以下字段在 Jira 查询结果中缺失，数据无法同步：
+                            ${ui('以下字段在 Jira 查询结果中缺失，数据无法同步：')}
                         </div>
                         <div style="color: #856404; margin-bottom: 8px;">
                             ${missingFields.map(field => {
@@ -996,9 +999,9 @@ async function showConfirmationDialog(
                             }).join('')}
                         </div>
                         <div style="font-size: 12px; color: #856404;">
-                            请前往 Jira 的 
-                            <a href="${jqlUrl}" target="_blank" style="color: #0056b3; text-decoration: underline;">filter 查询页面</a>，
-                            点击 <strong>Columns</strong> 按钮配置显示对应的列，然后重新查询。
+                            ${ui('请前往 Jira 的')}
+                            <a href="${jqlUrl}" target="_blank" style="color: #0056b3; text-decoration: underline;">${ui('filter 查询页面')}</a>，
+                            ${ui('点击 Columns 按钮配置显示对应的列，然后重新查询。')}
                         </div>
                     </div>
                 </div>
@@ -1006,31 +1009,31 @@ async function showConfirmationDialog(
         ` : '';
 
         dialog.innerHTML = `
-            <h3 style="margin-top: 0; flex-shrink: 0;">确认数据操作</h3>
+            <h3 style="margin-top: 0; flex-shrink: 0;">${ui('确认数据操作')}</h3>
             ${missingFieldsWarningHtml}
             <div style="margin-bottom: 15px; flex-shrink: 0;">
                 <div style="margin-bottom: 10px;">
-                    <strong>将要操作的列：</strong> 
+                    <strong>${ui('将要操作的列：')}</strong>
                     <span style="color: #666;">${columnsToUpdateDisplay.join(', ')}</span>
                 </div>
                 <div style="color: #666;">
-                    <div>更新现有数据：<span style="color: #f0ad4e; font-weight: bold;">${updateCount}</span> 条</div>
-                    <div>新增数据：<span style="color: #5cb85c; font-weight: bold;">${appendCount}</span> 条</div>
-                    ${removeCount > 0 ? `<div>移除数据：<span style="color: #dc3545; font-weight: bold;">${removeCount}</span> 条 <span style="color: #dc3545; font-size: 12px;">⚠️ 这些行将从表格中删除</span></div>` : ''}
+                    <div>${ui('更新现有数据：')}<span style="color: #f0ad4e; font-weight: bold;">${updateCount}</span> ${ui('条')}</div>
+                    <div>${ui('新增数据：')}<span style="color: #5cb85c; font-weight: bold;">${appendCount}</span> ${ui('条')}</div>
+                    ${removeCount > 0 ? `<div>${ui('移除数据：')}<span style="color: #dc3545; font-weight: bold;">${removeCount}</span> ${ui('条')} <span style="color: #dc3545; font-size: 12px;">${ui('这些行将从表格中删除')}</span></div>` : ''}
                 </div>
             </div>
             <div style="margin-bottom: 10px; flex-shrink: 0;">
                 <label style="display: flex; align-items: center;">
                     <input type="checkbox" id="selectAllTickets" checked style="margin-right: 5px;">
-                    全选/取消全选
+                    ${ui('全选/取消全选')}
                 </label>
             </div>
              <div style="flex-grow: 1; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px;">
                 <table style="width: 100%; border-collapse: collapse;">
                     <thead style="position: sticky; top: 0; background: #f5f5f5; z-index: 1;">
                         <tr>
-                            <th style="padding: 8px; text-align: left; width: 50px;">选择</th>
-                            <th style="padding: 8px; text-align: left; width: 80px;">操作</th>
+                            <th style="padding: 8px; text-align: left; width: 50px;">${ui('选择')}</th>
+                            <th style="padding: 8px; text-align: left; width: 80px;">${ui('操作')}</th>
                             ${columnsToUpdateDisplay.map(header => `<th style="padding: 8px; text-align: left;">${header}</th>`).join('')}
                         </tr>
                     </thead>
@@ -1056,8 +1059,8 @@ async function showConfirmationDialog(
                 </table>
             </div>
             <div style="display: flex; justify-content: flex-end; gap: 10px; flex-shrink: 0;">
-                <button id="cancelOperation" style="padding: 6px 12px; background: #eee; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">取消</button>
-                <button id="confirmOperation" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">确认 (${operations.length})</button> 
+                <button id="cancelOperation" style="padding: 6px 12px; background: #eee; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">${ui('取消')}</button>
+                <button id="confirmOperation" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">${ui('确认')} (${operations.length})</button>
             </div>
         `;
 
@@ -1069,7 +1072,7 @@ async function showConfirmationDialog(
 
         const updateConfirmButtonCount = () => {
             const selectedCount = Array.from(ticketCheckboxes).filter(cb => cb.checked).length;
-            confirmButton.textContent = `确认 (${selectedCount})`;
+            confirmButton.textContent = `${ui('确认')} (${selectedCount})`;
             confirmButton.disabled = selectedCount === 0;
         };
 
@@ -1100,7 +1103,7 @@ async function showConfirmationDialog(
             // 不在这里关闭对话框，由调用者在操作成功后关闭
             // 禁用按钮防止重复点击
             confirmButton.disabled = true;
-            confirmButton.textContent = '处理中...';
+            confirmButton.textContent = ui('处理中...');
             const cancelButton = document.getElementById('cancelOperation') as HTMLButtonElement;
             if (cancelButton) cancelButton.disabled = true;
             
@@ -1152,12 +1155,12 @@ function showToast(message: string, type = 'info') {
 
 // 从 Jira 查询 tickets 并更新到 Google Sheet
 async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, sheetToken: string, keepDataSameAsJql = false, keepOrderSameAsJql = false) {
-    showToast('正在查询 Jira...');
+    showToast(ui('正在查询 Jira...'));
     const envConfig = await getEnvConfig();
     const tickets = await fetchJiraTickets(jql);
     console.log('tickets', tickets);
     if (!tickets.length && !keepDataSameAsJql) {
-        showToast('没有找到数据', 'warning');
+        showToast(ui('没有找到数据'), 'warning');
         return;
     }
     if (!sheetToken) {
@@ -1169,7 +1172,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             })).map(ticket => headers.map(field => ticket[field as keyof JiraTicket] || '').join('\t'))].join('\n');
         await navigator.clipboard.writeText(formattedData);
         console.log('formattedData', formattedData);
-        showToast('Jira 数据已复制到剪贴板', 'success');
+        showToast(ui('Jira 数据已复制到剪贴板'), 'success');
     } else {
         // 接口模式
         if (!sheetUrl) {
@@ -1295,7 +1298,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             const dialogElement = confirmResult.dialogElement;
             
             if (confirmedOperations.length === 0) {
-                showToast('操作已取消');
+                showToast(ui('操作已取消'));
                 return; // 用户取消，对话框已关闭
             }
             
@@ -1444,7 +1447,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     removedCount = rowsToDelete.length;
                 } catch (error) {
                     console.error('删除行失败:', error);
-                    showToast('删除行失败: ' + (error instanceof Error ? error.message : error), 'error');
+                    showToast(`${ui('删除行失败:')} ${error instanceof Error ? error.message : error}`, 'error');
                 }
             }
 
@@ -1452,7 +1455,7 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
             let reorderedCount = 0;
             if (keepOrderSameAsJql && tickets.length > 0) {
                 try {
-                    showToast('正在调整行顺序...');
+                    showToast(ui('正在调整行顺序...'));
                     
                     // 重新读取表格数据（因为前面的操作可能已经改变了数据）
                     const currentValues = await sheet.readSheet('FORMULA');
@@ -1539,16 +1542,16 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     }
                 } catch (error) {
                     console.error('排序失败:', error);
-                    showToast('排序失败: ' + (error instanceof Error ? error.message : error), 'error');
+                    showToast(`${ui('排序失败:')} ${error instanceof Error ? error.message : error}`, 'error');
                 }
             }
 
             let toastMessage = '';
-            if (updatedCount > 0) toastMessage += `已更新 ${updatedCount} 条数据。`;
-            if (appendedCount > 0) toastMessage += `已追加 ${appendedCount} 条新数据。`;
-            if (removedCount > 0) toastMessage += `已移除 ${removedCount} 条数据。`;
-            if (reorderedCount > 0) toastMessage += `已按 JQL 顺序排列 ${reorderedCount} 行。`;
-            if (toastMessage === '') toastMessage = '没有需要更新、追加或移除的数据。';
+            if (updatedCount > 0) toastMessage += `${ui('已更新')} ${updatedCount} ${ui('条数据。')}`;
+            if (appendedCount > 0) toastMessage += `${ui('已追加')} ${appendedCount} ${ui('条新数据。')}`;
+            if (removedCount > 0) toastMessage += `${ui('已移除')} ${removedCount} ${ui('条数据。')}`;
+            if (reorderedCount > 0) toastMessage += `${ui('已按 JQL 顺序排列')} ${reorderedCount} ${ui('行。')}`;
+            if (toastMessage === '') toastMessage = ui('没有需要更新、追加或移除的数据。');
             
             // 操作成功，关闭对话框
             closeDialog();
@@ -1565,27 +1568,27 @@ async function handleFetchJiraTicketsToSheet(jql: string, sheetUrl: string, shee
                     confirmBtn.disabled = false;
                     const ticketCheckboxes = dialogEl.getElementsByClassName('ticket-checkbox') as HTMLCollectionOf<HTMLInputElement>;
                     const selectedCount = Array.from(ticketCheckboxes).filter(cb => cb.checked).length;
-                    confirmBtn.textContent = `确认 (${selectedCount})`;
+                    confirmBtn.textContent = `${ui('确认')} (${selectedCount})`;
                 }
                 if (cancelBtn) {
                     cancelBtn.disabled = false;
                 }
             }
-            showToast('Google Sheets 操作失败: ' + (error instanceof Error ? error.message : error), 'error');
+            showToast(`${ui('Google Sheets 操作失败:')} ${error instanceof Error ? error.message : error}`, 'error');
         }
     }
 }
 
 // 新增：处理展开 Epic Tickets 的函数
 async function handleExpandEpicTickets(sheetUrl: string, token: string) {
-    showToast('开始查找 Epic 并获取子任务...');
+    showToast(ui('开始查找 Epic 并获取子任务...'));
     const envConfig = await getEnvConfig();
     const sheet = await Sheet.fromUrl(sheetUrl, token);
     
     try {
         const values = await sheet.readSheet('FORMULA'); // 使用公式格式读取，保持超链接
         if (!values || values.length === 0) {
-            showToast('表格为空或无法读取', 'error');
+            showToast(ui('表格为空或无法读取'), 'error');
             return;
         }
         const metadata = await findValidJiraHeaders(sheet);
@@ -1647,7 +1650,7 @@ async function handleExpandEpicTickets(sheetUrl: string, token: string) {
                 } catch (fetchError: Error | any) { // Specify type for fetchError
                     console.error(`查询 Epic ${epicKey} 的子任务失败:`, fetchError);
                     // 选择性地通知用户或继续处理下一个
-                    showToast(`查询 ${epicKey} 子任务失败: ${fetchError.message || fetchError}`, 'error'); // Show error message
+                    showToast(`${ui('查询')} ${epicKey} ${ui('子任务失败:')} ${fetchError.message || fetchError}`, 'error'); // Show error message
                 }
             } else {
                 // console.log(`行 ${i + 1} 未找到有效的 Key`);
@@ -1655,11 +1658,11 @@ async function handleExpandEpicTickets(sheetUrl: string, token: string) {
         }
 
         if (epicsToExpand.length === 0) {
-            showToast('未找到任何包含子任务的 Epic', 'info');
+            showToast(ui('未找到任何包含子任务的 Epic'), 'info');
             return;
         }
 
-        showToast(`找到 ${epicsToExpand.length} 个 Epic 包含子任务，准备确认操作...`);
+        showToast(`${ui('找到')} ${epicsToExpand.length} ${ui('个 Epic 包含子任务，准备确认操作...')}`);
 
         // --- 下一步: 修改确认对话框并处理插入/分组 ---
         console.log('准备确认的 Epics:', epicsToExpand);
@@ -1668,18 +1671,18 @@ async function handleExpandEpicTickets(sheetUrl: string, token: string) {
         
         if (confirmedEpics && confirmedEpics.length > 0) {
             await insertSubTickets(sheet, confirmedEpics, sheetHeaders, envConfig.JIRA_BASE_URL);
-            showToast(`已成功展开 ${confirmedEpics.length} 个 Epic 的子任务`, 'success');
+            showToast(`${ui('已成功展开')} ${confirmedEpics.length} ${ui('个 Epic 的子任务')}`, 'success');
         } else {
-            showToast('操作已取消', 'info');
+            showToast(ui('操作已取消'), 'info');
         }
         
         // 临时占位符，表示流程进行到这里
-        showToast('子任务查找完成，确认、插入和分组功能待实现', 'warning');
+        showToast(ui('子任务查找完成，确认、插入和分组功能待实现'), 'warning');
 
 
     } catch (error: Error | any) { // Specify type for error
         console.error('处理 Epic 展开时出错:', error);
-        showToast('处理 Epic 展开时出错: ' + (error.message || error), 'error'); // Use error.message if available
+        showToast(`${ui('处理 Epic 展开时出错:')} ${error.message || error}`, 'error'); // Use error.message if available
         throw error; // Re-throw error to be caught by the caller
     }
 }
@@ -1708,25 +1711,25 @@ async function showEpicConfirmationDialog(
         `;
 
         dialog.innerHTML = `
-            <h3 style="margin-top: 0; flex-shrink: 0;">确认展开 Epic</h3>
+            <h3 style="margin-top: 0; flex-shrink: 0;">${ui('确认展开 Epic')}</h3>
             <div style="margin-bottom: 15px; flex-shrink: 0;">
                 <div style="color: #666;">
-                    找到 ${epics.length} 个包含子任务的 Epic
+                    ${ui('找到')} ${epics.length} ${ui('个包含子任务的 Epic')}
                 </div>
             </div>
             <div style="margin-bottom: 10px; flex-shrink: 0;">
                 <label style="display: flex; align-items: center;">
                     <input type="checkbox" id="selectAllEpics" checked style="margin-right: 5px;">
-                    全选/取消全选
+                    ${ui('全选/取消全选')}
                 </label>
             </div>
             <div style="flex-grow: 1; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; margin-bottom: 15px;">
                 <table style="width: 100%; border-collapse: collapse;">
                     <thead style="position: sticky; top: 0; background: #f5f5f5; z-index: 1;">
                         <tr>
-                            <th style="padding: 8px; text-align: left; width: 50px;">选择</th>
+                            <th style="padding: 8px; text-align: left; width: 50px;">${ui('选择')}</th>
                             <th style="padding: 8px; text-align: left;">Epic</th>
-                            <th style="padding: 8px; text-align: left;">子任务数量</th>
+                            <th style="padding: 8px; text-align: left;">${ui('子任务数量')}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1739,7 +1742,7 @@ async function showEpicConfirmationDialog(
                                     ${epic.epicKey} - ${epic.epicSummary}
                                 </td>
                                 <td style="padding: 8px;">
-                                    ${epic.subTickets.length} 个子任务
+                                    ${epic.subTickets.length} ${ui('个子任务')}
                                 </td>
                             </tr>
                         `).join('')}
@@ -1747,8 +1750,8 @@ async function showEpicConfirmationDialog(
                 </table>
             </div>
             <div style="display: flex; justify-content: flex-end; gap: 10px; flex-shrink: 0;">
-                <button id="cancelOperation" style="padding: 6px 12px; background: #eee; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">取消</button>
-                <button id="confirmOperation" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">确认</button>
+                <button id="cancelOperation" style="padding: 6px 12px; background: #eee; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">${ui('取消')}</button>
+                <button id="confirmOperation" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">${ui('确认')}</button>
             </div>
         `;
 
@@ -1811,7 +1814,7 @@ async function insertSubTickets(
                 console.log(`已在行 ${insertRowIndex} 插入 ${rowsToInsert} 个空行`);
             } catch (error) {
                 console.error('插入空行失败:', error);
-                showToast(`插入空行失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
+                showToast(`${ui('插入空行失败:')} ${error instanceof Error ? error.message : String(error)}`, 'error');
                 continue;
             }
         }

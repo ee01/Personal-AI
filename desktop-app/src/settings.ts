@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { BridgeConfig } from './config.js';
 
 export type BridgeAskScope = 'work' | 'personal' | 'both';
+export type UiLanguage = 'zh-CN' | 'en-US';
 
 export interface ExplorerDoubaoSettings {
   enabled: boolean;
@@ -49,6 +50,7 @@ export interface BridgeSettingsPayload {
 }
 
 export interface BridgeUserSettings {
+  uiLanguage?: UiLanguage;
   memoryServiceBaseUrl?: string;
   memoryServiceApiKey?: string;
   memoryServiceUserId?: string;
@@ -83,6 +85,19 @@ function nonNegativeOrFallback(
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value
     : fallback;
+}
+
+function normalizeUiLanguage(value: unknown, fallback: UiLanguage): UiLanguage {
+  if (value === 'en-US' || value === 'en') return 'en-US';
+  if (value === 'zh-CN' || value === 'zh_CN' || value === 'zh') {
+    return 'zh-CN';
+  }
+  if (typeof value === 'string') {
+    const normalized = value.toLowerCase();
+    if (normalized.startsWith('en')) return 'en-US';
+    if (normalized.startsWith('zh')) return 'zh-CN';
+  }
+  return fallback;
 }
 
 function normalizeExplorerSettings(
@@ -165,6 +180,10 @@ function normalizeSettings(
   defaults: BridgeUserSettings,
 ): BridgeUserSettings {
   return {
+    uiLanguage: normalizeUiLanguage(
+      input.uiLanguage,
+      defaults.uiLanguage || 'zh-CN',
+    ),
     memoryServiceBaseUrl: Object.hasOwn(input, 'memoryServiceBaseUrl')
       ? (cleanOptional(input.memoryServiceBaseUrl) ??
         defaults.memoryServiceBaseUrl)
@@ -201,6 +220,7 @@ export function createDefaultBridgeUserSettings(
   config: BridgeConfig,
 ): BridgeUserSettings {
   return {
+    uiLanguage: 'zh-CN',
     memoryServiceBaseUrl: config.memoryServiceBaseUrl,
     memoryServiceApiKey: config.memoryServiceApiKey,
     memoryServiceUserId: config.memoryServiceUserId,

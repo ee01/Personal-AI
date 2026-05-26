@@ -62,6 +62,7 @@ function installChromeStub(page) {
     };
     const storageListeners = [];
     window.__paiComposeAssistRequests = [];
+    window.__paiContextRecallFeedbacks = [];
     function normalizeKeys(keys) {
       if (Array.isArray(keys)) return keys;
       if (typeof keys === 'string') return [keys];
@@ -120,6 +121,12 @@ function installChromeStub(page) {
                     evidenceRole: 'rehearsal_cue',
                     reasonType: 'prospective_cue',
                     displayPriority: 'p1',
+                    metadata: {
+                      rehearsal: {
+                        id: 'rehearsal-1',
+                        activationId: 'activation-1',
+                      },
+                    },
                     links: [
                       {
                         label: '打开来源',
@@ -139,6 +146,10 @@ function installChromeStub(page) {
                 queryTimeMs: 1,
               },
             });
+          }
+          if (message?.type === 'CONTEXT_RECALL_FEEDBACK') {
+            window.__paiContextRecallFeedbacks.push(message.feedback);
+            return respond(callback, { success: true });
           }
 
           return respond(callback, { success: true });
@@ -234,6 +245,10 @@ async function main() {
       cueText: '预演提醒 · 线索：Factory AI / 同会话',
       provenanceBlocks: 0,
     });
+    assert.equal(
+      await page.evaluate(() => window.__paiContextRecallFeedbacks.length),
+      0,
+    );
 
     await page.locator('.pai-composer-guard-icon-button').click();
     const composerText = await page.locator('#prompt-textarea').innerText();
@@ -321,6 +336,19 @@ async function main() {
     await page.locator('.pai-composer-guard-feedback-button').click();
     await page.waitForFunction(
       () => !document.querySelector('#pai-composer-guard-root'),
+      null,
+      { timeout: 3000 },
+    );
+    await page.waitForFunction(
+      () =>
+        window.__paiContextRecallFeedbacks?.some(
+          (feedback) =>
+            feedback.targetId === 'rehearsal-1' &&
+            feedback.targetType === 'rehearsal' &&
+            feedback.action === 'negative' &&
+            feedback.rehearsalActivationId === 'activation-1' &&
+            feedback.detail?.includes('web_agent_prompt'),
+        ),
       null,
       { timeout: 3000 },
     );

@@ -60,6 +60,19 @@ async function waitForRequestCount(server, expectedCount, timeoutMs = 5000) {
   );
 }
 
+async function waitForCapturedSourceMemoryCount(server, expectedCount, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (server.sourceMemoryCreateRequests.length >= expectedCount) {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error(
+    `Timed out waiting for ${expectedCount} source-memory create request(s); got ${server.sourceMemoryCreateRequests.length}`,
+  );
+}
+
 async function openContextMoreMenu(page) {
   await page.locator('.pai-context-more').click();
   await page.waitForSelector('.pai-context-more-menu:not([hidden])', {
@@ -71,6 +84,8 @@ async function startHarnessServer() {
   const contextRecallRequests = [];
   const feedbackRequests = [];
   const rehearsalFeedbackRequests = [];
+  const sourceMemoryCandidateRequests = [];
+  const sourceMemoryCreateRequests = [];
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -377,6 +392,77 @@ async function startHarnessServer() {
         return;
       }
 
+      if (
+        req.method === 'POST' &&
+        (req.url === '/api/v1/source-memory/candidates/selection' ||
+          req.url === '/api/v1/source-memory/candidates/score')
+      ) {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        sourceMemoryCandidateRequests.push({ endpoint: req.url, body });
+        const text = String(body.selectedText || body.text || '');
+        const eligible =
+          text.length >= 28 &&
+          !/api[_\s-]?key|secret|password|token/i.test(text);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            eligible,
+            score: eligible ? 0.64 : 0,
+            suggestedAction: eligible ? 'suggest' : 'ignore',
+            reasons: eligible ? ['用户选中了文本', '文本片段足够完整'] : ['文本信息量不足'],
+            captureMode: 'suggested',
+          }),
+        );
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/api/v1/source-memory/capsules') {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        sourceMemoryCreateRequests.push(body);
+        const id = `source-memory-capsule-${sourceMemoryCreateRequests.length}`;
+        const sourceKind = body.sourceKind || (body.selectedText ? 'selection' : 'webpage');
+        const preview = String(body.selectedText || body.text || '').slice(0, 240);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            capsule: {
+              id,
+              sourceKind,
+              sourceUrl: body.sourceUrl,
+              sourceTitle: body.sourceTitle || 'Source memory',
+              sourceHost: '127.0.0.1',
+              captureMode: body.captureMode || 'manual',
+              captureReason: body.captureReason || '用户点击选区旁的 + 记住',
+              status: 'saved',
+              scope: body.scope || 'work',
+              privacyLevel: body.privacyLevel || 'work',
+              summary: body.note || preview,
+              contentPreview: preview,
+              messageId: `source-memory-message-${sourceMemoryCreateRequests.length}`,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              savedAt: Date.now(),
+              duplicate: false,
+              anchors: [
+                {
+                  id: `${id}-anchor`,
+                  anchorKind: sourceKind === 'selection' ? 'text_selection' : 'page_excerpt',
+                  locator: body.sourceUrl,
+                  quoteOrPreview: preview,
+                  sensitivity: 'normal',
+                  confidence: 0.78,
+                },
+              ],
+              takeaways: [],
+              triggers: [],
+            },
+          }),
+        );
+        return;
+      }
+
       if (req.method === 'GET' && req.url?.startsWith('/rehearsal-lens')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(`<!doctype html>
@@ -623,6 +709,8 @@ async function startHarnessServer() {
     contextRecallRequests,
     feedbackRequests,
     rehearsalFeedbackRequests,
+    sourceMemoryCandidateRequests,
+    sourceMemoryCreateRequests,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -1187,9 +1275,13 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     waitUntil: 'load',
     timeout: 15000,
   });
-  await optionsPage.waitForSelector('text=网页记忆提示控制', {
-    timeout: 5000,
-  });
+  await optionsPage.waitForFunction(
+    () => {
+      const text = document.body?.innerText || '';
+      return text.includes('网页记忆提示控制') || text.includes('管理被动网页记忆提示');
+    },
+    { timeout: 5000 },
+  );
   await optionsPage.waitForSelector('text=127.0.0.1', { timeout: 5000 });
   await optionsPage.getByRole('button', { name: '恢复', exact: true }).click();
   await optionsPage.waitForSelector('text=当前没有被临时静默的网站', {
@@ -2033,7 +2125,7 @@ async function verifySelectedTextTrigger(server, context) {
     '重新选择同一段文本也应重新发起 selected_text 召回，而不是复用上次划词缓存',
   );
 
-  await page.locator('.pai-context-selection-trigger').click();
+  await page.locator('.pai-context-selection-recall').click();
   await page.waitForTimeout(200);
   assert.equal(
     server.contextRecallRequests.length,
@@ -2122,16 +2214,65 @@ async function verifySelectedTextTrigger(server, context) {
     'selected_text',
     '无命中划词也应先完成 selected_text 匹配',
   );
-  await emptyPage.waitForTimeout(800);
+  await emptyPage.waitForSelector('.pai-context-selection-trigger', {
+    timeout: 5000,
+  });
+  assert.equal(
+    await emptyPage.locator('.pai-context-selection-recall').count(),
+    0,
+    'selected_text 没有高相关记忆时不应显示查记忆按钮',
+  );
+  assert.equal(
+    await emptyPage.locator('.pai-context-selection-capture').count(),
+    1,
+    'selected_text 没有高相关记忆但有保存候选时应显示只保存的 + 入口',
+  );
+  const createStartCount = server.sourceMemoryCreateRequests.length;
+  emptyPage.once('dialog', async (dialog) => {
+    assert.match(dialog.message(), /备注/);
+    await dialog.dismiss();
+  });
+  await emptyPage.locator('.pai-context-selection-capture').click();
+  await emptyPage.waitForSelector('.pai-context-toast', { timeout: 5000 });
+  assert.match(
+    await emptyPage.locator('.pai-context-toast').innerText(),
+    /已取消保存资料记忆/,
+  );
+  assert.equal(
+    server.sourceMemoryCreateRequests.length,
+    createStartCount,
+    '用户取消备注框时不应保存 source memory capsule',
+  );
+  assert.equal(
+    await emptyPage.locator('.pai-context-selection-capture').count(),
+    1,
+    '取消保存后应保留 + 入口，方便用户再次确认',
+  );
+
+  emptyPage.once('dialog', async (dialog) => {
+    assert.match(dialog.message(), /备注/);
+    await dialog.accept('用于后续整理');
+  });
+  await emptyPage.locator('.pai-context-selection-capture').click();
+  await waitForCapturedSourceMemoryCount(server, createStartCount + 1, 5000);
+  const savedSourceMemory = server.sourceMemoryCreateRequests.at(-1);
+  assert.equal(savedSourceMemory.sourceKind, 'selection');
+  assert.equal(savedSourceMemory.note, '用于后续整理');
+  assert.match(savedSourceMemory.selectedText, /Unmatched launch phrase/);
+  assert.equal(savedSourceMemory.interactions?.manualClick, true);
   assert.equal(
     await emptyPage.locator('.pai-context-selection-trigger').count(),
     0,
-    'selected_text 没有高相关记忆时不应显示划词 icon',
+    '确认保存后应清掉划词 + 入口',
   );
-  assert.equal(
-    await emptyPage.locator('.pai-context-toast').count(),
-    0,
-    'selected_text 没有高相关记忆时不应弹出空结果提示',
+  await emptyPage.waitForFunction(
+    () => /已保存为资料记忆/.test(document.querySelector('.pai-context-toast')?.textContent || ''),
+    { timeout: 5000 },
+  );
+  assert.match(
+    await emptyPage.locator('.pai-context-toast').innerText(),
+    /已保存为资料记忆/,
+    '确认保存后应给出保存成功回执',
   );
   if (emptyDiagnostics.some((entry) => entry.includes('pageerror'))) {
     for (const entry of emptyDiagnostics) {

@@ -67,6 +67,8 @@ import {
   pruneContextSiteBlockRecord,
   pruneContextSiteMuteRecord,
 } from './web-intelligence/contextRecallGuards';
+import { useExtensionUiLanguage, useStaticDomI18n } from './i18n/react';
+import type { UiLanguage } from './i18n';
 
 type PushTargetField =
   | 'MESSAGE_ANALYSIS_PUSH_TARGET'
@@ -1715,6 +1717,9 @@ function ContextSiteMuteSettings() {
 }
 
 const Options = () => {
+  const { language: uiLanguage, setLanguage: setUiLanguage, t } =
+    useExtensionUiLanguage();
+  useStaticDomI18n(uiLanguage);
   const outreachConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const meetingPilotConfigSectionRef = useRef<HTMLDivElement | null>(null);
   const openClawConfigSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1957,6 +1962,8 @@ const Options = () => {
     const headers: Record<string, string> = {
       Accept: options?.accept || 'application/json',
       'X-User-Id': userId,
+      'X-Personal-AI-Language': uiLanguage,
+      'Accept-Language': uiLanguage,
     };
     if (options?.contentType !== null) {
       headers['Content-Type'] = options?.contentType || 'application/json';
@@ -2814,7 +2821,29 @@ const Options = () => {
   return (
     <div>
       <div className="form-section">
-        <h2>功能 Demo</h2>
+        <h2>{t('options.sections.language')}</h2>
+        <div className="form-group">
+          <label htmlFor="ui-language">{t('language.label')}</label>
+          <select
+            id="ui-language"
+            value={uiLanguage}
+            onChange={(event) => {
+              void setUiLanguage(event.target.value as UiLanguage);
+            }}
+          >
+            <option value="zh-CN">{t('language.zhCN')}</option>
+            <option value="en-US">{t('language.enUS')}</option>
+          </select>
+          <small
+            style={{ color: '#666', display: 'block', marginTop: '5px' }}
+          >
+            {t('options.language.description')}
+          </small>
+        </div>
+      </div>
+
+      <div className="form-section">
+        <h2>{t('options.sections.demo')}</h2>
         <div
           className="quick-access-buttons"
           style={{
@@ -2868,7 +2897,7 @@ const Options = () => {
       </div>
 
       <div className="form-section">
-        <h2>消息分析推送</h2>
+        <h2>{t('options.sections.messageAnalysis')}</h2>
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
@@ -3053,7 +3082,7 @@ const Options = () => {
       </div>
 
       <div className="form-section">
-        <h2>消息交互功能</h2>
+        <h2>{t('options.sections.messageInteraction')}</h2>
         <p style={{ color: '#666', fontSize: '13px', marginBottom: '15px' }}>
           在 RingCentral
           消息页面，悬停在消息上时会显示交互工具栏。可以选择启用/禁用以下功能：
@@ -3100,7 +3129,7 @@ const Options = () => {
       </div>
 
       <div className="form-section">
-        <h2>记忆系统 (Memory Service)</h2>
+        <h2>{t('options.sections.memoryService')}</h2>
         <div className="form-group">
           <label htmlFor="MEMORY_SERVICE_BASE_URL">记忆服务 API 地址</label>
           <input
@@ -3255,7 +3284,7 @@ const Options = () => {
               }
         }
       >
-        <h2>会议全貌</h2>
+        <h2>{t('options.sections.meetingPilot')}</h2>
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
@@ -3310,7 +3339,9 @@ const Options = () => {
             background: '#fbfdff',
           }}
         >
-          <h3 style={{ margin: '0 0 10px' }}>Context Assist / 会前准备</h3>
+          <h3 style={{ margin: '0 0 10px' }}>
+            {t('options.sections.contextAssist')}
+          </h3>
           <small style={{ color: '#666', display: 'block', marginBottom: 12 }}>
             在 RingCentral Video Home 的会议详情右侧显示 Personal AI
             会前准备；Outlook 未授权时会使用 RingCentral 本地 Calendar IndexedDB
@@ -3616,7 +3647,7 @@ const Options = () => {
       </div>
 
       <div className="form-section">
-        <h2>网页记忆提示控制</h2>
+        <h2>{t('options.sections.memoryLens')}</h2>
         <ContextSiteMuteSettings />
       </div>
 
@@ -3639,7 +3670,7 @@ const Options = () => {
               }
         }
       >
-        <h2>OpenClaw 对接</h2>
+        <h2>{t('options.sections.openClaw')}</h2>
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
@@ -3749,7 +3780,7 @@ const Options = () => {
               }
         }
       >
-        <h2>主动询问</h2>
+        <h2>{t('options.sections.outreach')}</h2>
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
@@ -3958,7 +3989,7 @@ const Options = () => {
       </div>
 
       <div className="form-section">
-        <h2>自动周报 (Weekly Report)</h2>
+        <h2>{t('options.sections.weeklyReport')}</h2>
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
@@ -4046,7 +4077,7 @@ const Options = () => {
       </div>
 
       <div className="form-section">
-        <h2>LLM 设置</h2>
+        <h2>{t('options.sections.llm')}</h2>
         <div className="form-group">
           <label htmlFor="LLM_TYPE">LLM 类型</label>
           <select
@@ -4065,7 +4096,7 @@ const Options = () => {
 
       {config.LLM_TYPE === 'local' && (
         <div className="form-section">
-          <h2>Ollama 设置</h2>
+          <h2>{t('options.sections.ollama')}</h2>
           <div className="form-group">
             <label htmlFor="OLLAMA_BASE_URL">Ollama 基础 URL</label>
             <input
@@ -4111,7 +4142,7 @@ const Options = () => {
 
       {config.LLM_TYPE === 'dify' && (
         <div className="form-section">
-          <h2>Dify 设置</h2>
+          <h2>{t('options.sections.dify')}</h2>
           <div className="form-group">
             <label htmlFor="DIFY_API_KEY">Dify API Key</label>
             <input
@@ -4147,7 +4178,7 @@ const Options = () => {
 
       {config.LLM_TYPE === 'openai' && (
         <div className="form-section">
-          <h2>OpenAI 设置</h2>
+          <h2>{t('options.sections.openai')}</h2>
           <div className="form-group">
             <label htmlFor="OPENAI_API_KEY">OpenAI API Key</label>
             <input
@@ -4193,7 +4224,7 @@ const Options = () => {
 
       {config.LLM_TYPE === 'groq' && (
         <div className="form-section">
-          <h2>Groq 设置</h2>
+          <h2>{t('options.sections.groq')}</h2>
           <div className="form-group">
             <label htmlFor="GROQ_API_KEY">Groq API Key</label>
             <input
@@ -4228,7 +4259,7 @@ const Options = () => {
       )}
 
       <div className="form-section">
-        <h2>Jira 设置</h2>
+        <h2>{t('options.sections.jira')}</h2>
         <div className="form-group">
           <label htmlFor="JIRA_BASE_URL">Jira Base URL</label>
           <input
@@ -4327,20 +4358,20 @@ const Options = () => {
 
       {config.ANALYSIS_TYPE === 'agentThinking' && (
         <div className="form-section">
-          <h2>智能Agent系统设置</h2>
+          <h2>{t('options.sections.intelligentAgent')}</h2>
           <IntelligentAgentSettings />
         </div>
       )}
 
       {config.ANALYSIS_TYPE === 'agentWorkflow' && (
         <div className="form-section">
-          <h2>标准Agent系统设置</h2>
+          <h2>{t('options.sections.standardAgent')}</h2>
           <AgentSettings />
         </div>
       )}
 
       <div className="form-section">
-        <h2>配置导入/导出</h2>
+        <h2>{t('options.sections.importExport')}</h2>
         <div className="form-group">
           <label htmlFor="import-config">导入配置</label>
           <input

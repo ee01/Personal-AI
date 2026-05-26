@@ -487,8 +487,12 @@ Quick Ask 和原来的 exploring `/ask` 有一个关键差异：它更像聊天�
 - macOS 上通过本机 `Speech` + `AVFoundation` helper 做系统语音识别
 - helper 会按需编译/启动，并把 transcript、音量、权限错误回传给 quick ask
 - transcript 先进入语音草稿，用户仍可确认后再发送
+- 如果麦克风或系统 Speech Recognition 权限被拒绝，voice sheet 会保留当前草稿，显示明确原因，并直接提供“打开麦克风设置 / 打开语音识别设置”的恢复入口；主配置页也保留这两个系统权限入口
+- 如果本机 helper 启动失败或重启失败，Quick Ask 会停在可恢复的 voice-ready 状态并显示失败原因，不把界面继续伪装成正在监听
 
 当前不做离线识别；如果后续需要完全离线能力，再考虑接入本地模型。
+
+语音路径的产品参照是把“开始说话、看到实时反馈、修正/取消、修复权限”放在同一个短路径里：[Raycast Dictation](https://manual.raycast.com/ai/dictation) 把首次授权、输入设备、快捷键、push-to-talk、波形和本机历史/设置作为 dictation 的核心流程；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把 voice input 放在轻量 launcher 内。实现侧要遵循 Apple Speech 的授权模型：[SFSpeechRecognizer.requestAuthorization](https://developer.apple.com/documentation/speech/sfspeechrecognizer/1649892-requestauthorization) 会异步返回授权状态，用户之后也可能在系统设置中改掉权限，所以 UI 必须提供回到系统设置的恢复路径。研究侧同样提示不要只追求 transcript：Google 的 [Mondegreen](https://arxiv.org/abs/2105.09930) 把 ASR 错误视为会直接伤害查询结果的问题；[Typist Experiment](https://arxiv.org/abs/2403.05785) 指出 dictation 需要覆盖 composition、review、editing；Microsoft Research 的 [Voice Typing](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/chi2012_VoiceTyping.pdf) 也强调实时可见和即时修正能降低用户纠错负担。因此当前 Quick Ask 先让 transcript 落在可编辑草稿，并把权限/启动失败做成可点击恢复，而不是自动发送或只报错。
 
 ### Demo
 

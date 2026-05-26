@@ -1,8 +1,22 @@
 # Feature Index
 
-*最后更新: 2026-05-22*
+*最后更新: 2026-05-26*
 
 这份索引只负责导航和规划。各功能的真实行为仍以对应功能文档为准。
+
+## 第一批中英术语
+
+| English | 中文 |
+|---|---|
+| Today Pilot | 今天 |
+| Compose Assist | 回复助手 |
+| Native Join | NC 加会 |
+| Project Dashboard | 项目面板 |
+| Memory Lens | 记忆提示 |
+| Relationship Radar | 人脉关系 |
+| Jira Design Links | JIRA 设计稿 |
+| Doubao Bridge | 豆包互联 |
+| Skill Foundry | 技能库 |
 
 ## 索引规则
 
@@ -29,6 +43,11 @@
 | 外部 AI 历史基础录入 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | 用户主动上传 ChatGPT / Claude `conversations.json` zip |
 | Coverage 质量分 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | 平台状态、新鲜度和健康贡献项计算 `qualityScore` |
 | 备份下载与恢复入口 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | Coverage 页面直接下载 zip，抽屉内识别备份 zip 并 merge/replace |
+| 记忆捕捉 | Memory Capture | [memory_capture.md](./memory_capture.md) | 选区/网页/外部输入的低打扰入库层 |
+| 选中文字保存为资料记忆 | Memory Capture | [memory_capture.md](./memory_capture.md) | 右侧半露出 `+ 入库`，保存 `source_memory_capsule` 和 `web` 记忆信号 |
+| 整页资料保存 | Memory Capture | [memory_capture.md](./memory_capture.md) | 复制、深度滚动或停留信号后显示右侧半露出 `+ 入库`；高置信时自动保存并可撤销 |
+| Source Memory 召回卡片 | Memory Capture / Memory Lens | [memory_capture.md](./memory_capture.md) | `/context-recall` 支持 `sourceTypes:['source_memory']`，返回资料记忆卡 |
+| Memory Capture API | Memory Capture | [memory_capture.md](./memory_capture.md) | `/source-memory/candidates/*` 与 `/source-memory/capsules` |
 | 记忆导入/导出/备份 | Memory Service | [memory_system.md](./memory_system.md) | `/import`、`/export`、backup 验证脚本 |
 | 多用户隔离 | Memory Service | [memory_system.md](./memory_system.md) | per-user SQLite DB |
 | 用户画像条目 | User Profile | [user_profile_system.md](./user_profile_system.md) | Profile item 管理与展示 |
@@ -56,13 +75,13 @@
 | 系统观察规则 | Message Analysis | [message_analysis.md](./message_analysis.md) | 自我反思、主动询问等证据采集 |
 | 规则范围校验 | Message Analysis | [message_analysis.md](./message_analysis.md) | 发送人、群组、上下文范围 |
 | 消息入库与通知分发 | Message Analysis | [message_analysis.md](./message_analysis.md) | 普通 filter / Agent Thinking / Agent Workflow 共用 |
-| 联动操作 | Message Reaction | [message_reaction.md](./message_reaction.md) | 预填记忆入口规则和后续动作 |
-| 稍后处理 | Message Reaction | [message_reaction.md](./message_reaction.md) | RingCentral 消息 Snooze |
+| 联动操作 / Openclaw | Message Reaction | [message_reaction.md](./message_reaction.md) | 预填记忆入口规则和后续动作 |
+| 稍后处理 / Remind | Message Reaction | [message_reaction.md](./message_reaction.md) | RingCentral 消息提醒 |
 | Snooze 快速时间菜单 | Message Reaction | [message_reaction.md](./message_reaction.md) | 15/30 分钟、1/2/3 小时、工作日等 |
 | Snooze 去重与撤销 | Message Reaction | [message_reaction.md](./message_reaction.md) | 同源 pending 保护、toast actions |
-| 关注后续 | Message Reaction | [message_reaction.md](./message_reaction.md) | Follow Thread |
-| 跟进追问 | Message Reaction | [message_reaction.md](./message_reaction.md) | 自己发出的消息创建一次性 Outreach session |
-| 自动答复 | Message Reaction | [message_reaction.md](./message_reaction.md) | Auto Reply 规则和审核模式 |
+| 关注后续 / Watch | Message Reaction | [message_reaction.md](./message_reaction.md) | 持续追踪后续讨论 |
+| 跟进追问 / Followup | Message Reaction | [message_reaction.md](./message_reaction.md) | 自己发出的消息创建一次性 Outreach session |
+| 自动答复 / Reply | Message Reaction | [message_reaction.md](./message_reaction.md) | 回复规则和审核模式 |
 | Glip AI 标注 | Message Reaction | [message_reaction.md](./message_reaction.md) | follow / snooze / outreach / scheduled markers |
 | 消息交互工具栏 | Message Reaction | [message_reaction.md](./message_reaction.md) | RingCentral 消息 hover 工具栏 |
 | 主题式未读阅读 | Topic Messages | [topic_based_messages.md](./topic_based_messages.md) | 首页、主题列表、主题详情 |
@@ -87,30 +106,31 @@
 | Agent Workflow 多 Agent 编排 | Agent Workflow | [agent_workflow.md](./agent_workflow.md) | 标准消息入口 workflow |
 | Agent Workflow 关注项测试 | Agent Workflow | [agent_workflow.md](./agent_workflow.md) | 内置样例、最近消息、本地保存样例 |
 | Agent Workflow 运行诊断 | Agent Workflow | [agent_workflow.md](./agent_workflow.md) | trace / storageReview / readiness |
-| Today Pilot 今日 Mission | Today Pilot | [today_pilot.md](./today_pilot.md) | 首页 mission card |
-| Day Pilot 排序与噪声控制 | Today Pilot | [today_pilot.md](./today_pilot.md) | `DayPilotService` |
+| 今天 Mission | Today Pilot | [today_pilot.md](./today_pilot.md) | 首页 mission card |
+| 今天排序与噪声控制 | Today Pilot | [today_pilot.md](./today_pilot.md) | `DayPilotService` |
 | 今日预演提示 | Today Pilot | [rehearsal.md](./rehearsal.md) | active/stale Rehearsal 进入今日和会前 cue |
 | 会前准备 | Today Pilot | [today_pilot.md](./today_pilot.md) | calendar events / meeting prep |
 | Meeting Pilot handoff | Today Pilot | [today_pilot.md](./today_pilot.md) | 从今日简报进入会议能力 |
 | Popup Top 3 | Today Pilot | [today_pilot.md](./today_pilot.md) | Chrome popup 今日摘要 |
 | Context Pack | Today Pilot | [today_pilot.md](./today_pilot.md) | 可复制的上下文包 |
-| Compose Assist 草稿辅助 | Compose Assist | [compose_assist.md](./compose_assist.md) | 输入框旁 AI 辅助 |
-| Compose Assist 来源适配 | Compose Assist | [compose_assist.md](./compose_assist.md) | RingCentral / Jira / Web AI |
-| Compose Assist 预演提醒 | Compose Assist | [rehearsal.md](./rehearsal.md) | `sourceTypes` 包含 `rehearsal` 时作为高优先级预演 evidence |
-| Compose Assist 直接插入 | Compose Assist | [compose_assist.md](./compose_assist.md) | hover 只预览正文，点击 icon 直接插入 |
-| Compose Assist 阈值与反馈 | Compose Assist | [compose_assist.md](./compose_assist.md) | 自适应展示 |
-| Memory Lens 右下角关联记忆 | Memory Lens | [memory_lens.md](./memory_lens.md) | 当前网页/消息/Jira/会议上下文被动召回 |
-| Memory Lens Hover Peek | Memory Lens | [memory_lens.md](./memory_lens.md) | hover/focus 轻预览 |
-| Memory Lens Expanded Card | Memory Lens | [memory_lens.md](./memory_lens.md) | 完整卡片、反馈、来源 |
-| Memory Lens 预演提醒 | Memory Lens | [rehearsal.md](./rehearsal.md) | 当前网页/会话/issue 命中 Rehearsal 时低打扰展示 |
+| 回复助手草稿辅助 | Compose Assist | [compose_assist.md](./compose_assist.md) | 输入框旁 AI 辅助 |
+| 回复助手来源适配 | Compose Assist | [compose_assist.md](./compose_assist.md) | RingCentral / Jira / Web AI |
+| 回复助手预演提醒 | Compose Assist | [rehearsal.md](./rehearsal.md) | `sourceTypes` 包含 `rehearsal` 时作为高优先级预演 evidence |
+| 回复助手直接插入 | Compose Assist | [compose_assist.md](./compose_assist.md) | hover 只预览正文，点击 icon 直接插入 |
+| 回复助手阈值与反馈 | Compose Assist | [compose_assist.md](./compose_assist.md) | 自适应展示 |
+| 回复助手无感校准 | Memory System / Compose Assist | [memory_system.md](./memory_system.md) / [compose_assist.md](./compose_assist.md) | 插入、改写、发送、hover 未用和 thumb-down 生成 redacted trace |
+| 记忆提示右下角关联记忆 | Memory Lens | [memory_lens.md](./memory_lens.md) | 当前网页/消息/Jira/会议上下文被动召回 |
+| 记忆提示 Hover Peek | Memory Lens | [memory_lens.md](./memory_lens.md) | hover/focus 轻预览 |
+| 记忆提示 Expanded Card | Memory Lens | [memory_lens.md](./memory_lens.md) | 完整卡片、反馈、来源 |
+| 记忆提示预演提醒 | Memory Lens | [rehearsal.md](./rehearsal.md) | 当前网页/会话/issue 命中 Rehearsal 时低打扰展示 |
 | 划词查找关联记忆 | Memory Lens | [memory_lens.md](./memory_lens.md) | selected_text context recall |
 | 站点静默/屏蔽/白名单 | Memory Lens | [memory_lens.md](./memory_lens.md) | 本地 storage 控制 |
-| Relationship Radar 人物雷达 | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | 本次补齐的主功能文档 |
-| Relationship Context Card | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | `/relationships/context-card` |
-| Relationship Meeting Brief | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | `/relationships/meeting-brief` |
-| Relationship Assistant Draft | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | `/relationships/assistant/draft` |
-| Relationship Review Queue | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | confirm / reject / snooze |
-| Project Dashboard 工作台 | Project Dashboard | [project_dashboard_usage_guide.md](./project_dashboard_usage_guide.md) | 项目概览、任务、里程碑 |
+| 人脉关系人物雷达 | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | 本次补齐的主功能文档 |
+| 人脉关系 Context Card | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | `/relationships/context-card` |
+| 人脉关系 Meeting Brief | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | `/relationships/meeting-brief` |
+| 人脉关系 Assistant Draft | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | `/relationships/assistant/draft` |
+| 人脉关系 Review Queue | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | confirm / reject / snooze |
+| 项目面板 | Project Dashboard | [project_dashboard_usage_guide.md](./project_dashboard_usage_guide.md) | 项目概览、任务、里程碑 |
 | 项目数据源检查 | Project Dashboard | [brain_like_project_analysis_system.md](./brain_like_project_analysis_system.md) | Jira/GitHub/Confluence 状态与缺口 |
 | Memory Service watched projects 补齐 | Project Dashboard | [brain_like_project_analysis_system.md](./brain_like_project_analysis_system.md) | 只补齐本地，不反写 Memory Service |
 | 项目证据修复路径 | Project Dashboard | [brain_like_project_analysis_system.md](./brain_like_project_analysis_system.md) | ETA、Jira、平台状态缺口 |
@@ -123,19 +143,19 @@
 | 会议历史归档 | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | `MeetingHistoryPage.vue` |
 | 分层 ASR | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | Web Speech / cloud / desktop local |
 | Desktop Local Whisper | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | desktop app / whisper server |
-| RingCentral Native Join | Native Join | [meeting_native_join.md](./meeting_native_join.md) | Web meeting 链接转 native app |
-| Native Join 浏览器回退 | Native Join | [meeting_native_join.md](./meeting_native_join.md) | 默认浏览器、复制链接、fallback UI |
+| NC 加会 | Native Join | [meeting_native_join.md](./meeting_native_join.md) | Web meeting 链接转 native app |
+| NC 加会浏览器回退 | Native Join | [meeting_native_join.md](./meeting_native_join.md) | 默认浏览器、复制链接、fallback UI |
 | Google Slides 项目分析器 | Google Slides Analyzer | [google_slides_analyzer.md](./google_slides_analyzer.md) | Slides 分析与建议 |
 | Slides 写回预览 | Google Slides Analyzer | [google_slides_analyzer.md](./google_slides_analyzer.md) | 字段证据和风险提示 |
 | Slides partial success skipped reasons | Google Slides Analyzer | [google_slides_analyzer.md](./google_slides_analyzer.md) | 跳过原因保留 |
-| Jira 设计链接检测 | Jira Design Links | [jira_design_links.md](./jira_design_links.md) | Description / Remote Links / Designs |
+| JIRA 设计稿检测 | Jira Design Links | [jira_design_links.md](./jira_design_links.md) | Description / Remote Links / Designs |
 | Figma/Zeplin 保守分类 | Jira Design Links | [jira_design_links.md](./jira_design_links.md) | 排除 marketing/community 假阳性 |
 | 设计链接更新时间展示 | Jira Design Links | [jira_design_links.md](./jira_design_links.md) | newest updated date |
 | Jira issue key 解析 | Jira Design Links | [jira_design_links.md](./jira_design_links.md) | raw text fallback |
 | Jira 自动化规则导入 | Jira Automation Import | [jira_automation_import.md](./jira_automation_import.md) | 导入预览与创建 |
 | 高风险导入确认 | Jira Automation Import | [jira_automation_import.md](./jira_automation_import.md) | 未确认前禁用导入 |
 | secret value 脱敏 | Jira Automation Import | [jira_automation_import.md](./jira_automation_import.md) | `secret=true` 不展示 raw value |
-| Doubao Desktop Bridge | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | 本机 Desktop App 双向记忆流 |
+| 豆包互联 | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | 本机 Desktop App 双向记忆流 |
 | Memory Sync Thread | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | 长期稳定记忆线程 |
 | Mobile Context Thread | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | 近期重点、提醒、查询答案线程 |
 | Persona / 近期重点 / 提醒推送 | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | 随手记导向格式 |
@@ -144,7 +164,7 @@
 | Quick Ask 小窗 | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | menubar 默认入口 |
 | Quick Ask 语音输入 | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | native speech helper |
 | Quick Ask 状态卡 | Doubao Bridge | [doubao_bridge.md](./doubao_bridge.md) | sync issue / pending outreach 等状态 |
-| Personal Skill Foundry 技能建议 | Skill Foundry | [personal_skill_foundry.md](./personal_skill_foundry.md) | suggestion inbox |
+| 技能库技能建议 | Skill Foundry | [personal_skill_foundry.md](./personal_skill_foundry.md) | suggestion inbox |
 | 技能使用/丢弃/稍后审 | Skill Foundry | [personal_skill_foundry.md](./personal_skill_foundry.md) | suggestion 状态机 |
 | Public Skill URL | Skill Foundry | [personal_skill_foundry.md](./personal_skill_foundry.md) | tokenized read-only share |
 | 平台同步 | Skill Foundry | [personal_skill_foundry.md](./personal_skill_foundry.md) | OpenClaw / Desktop App / manual-only |

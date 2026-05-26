@@ -1,10 +1,21 @@
+import type { UiLanguage } from '../i18n/index.js';
+
 export interface QuickOption {
   label: string;
   icon: string;
   getTime: () => Date;
 }
 
-const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const WEEKDAY_LABELS_ZH = [
+  '周日',
+  '周一',
+  '周二',
+  '周三',
+  '周四',
+  '周五',
+  '周六',
+];
+const WEEKDAY_LABELS_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function cloneDate(date: Date): Date {
   return new Date(date.getTime());
@@ -69,15 +80,42 @@ export function formatWorkdayQuickLabel(
   target: Date,
   now: Date,
   suffix: string,
+  language: UiLanguage = 'zh-CN',
 ): string {
   const dayDiff = getCalendarDayDiff(now, target);
+  if (language === 'en-US') {
+    const timeLabel = suffix.includes('下班前') ? 'by EOD' : '9 AM';
+    if (dayDiff === 0) return `Today ${timeLabel}`;
+    if (dayDiff === 1) return `Tomorrow ${timeLabel}`;
+    return `${WEEKDAY_LABELS_EN[target.getDay()]} ${timeLabel}`;
+  }
   if (dayDiff === 0) return `今天${suffix}`;
   if (dayDiff === 1) return `明天${suffix}`;
-  return `${WEEKDAY_LABELS[target.getDay()]} ${suffix.trim()}`;
+  return `${WEEKDAY_LABELS_ZH[target.getDay()]} ${suffix.trim()}`;
+}
+
+function formatRelativeQuickLabel(
+  amount: number,
+  unit: 'minute' | 'hour',
+  language: UiLanguage,
+): string {
+  if (language === 'en-US') {
+    const unitLabel =
+      unit === 'minute'
+        ? amount === 1
+          ? 'minute'
+          : 'minutes'
+        : amount === 1
+        ? 'hour'
+        : 'hours';
+    return `In ${amount} ${unitLabel}`;
+  }
+  return unit === 'minute' ? `${amount} 分钟后` : `${amount} 小时后`;
 }
 
 export function getQuickOptions(
   clock: () => Date = () => new Date(),
+  language: UiLanguage = 'zh-CN',
 ): QuickOption[] {
   const now = clock();
   const workdayEndTime = getNextWorkdayTime(now, 18, 0, true);
@@ -95,7 +133,7 @@ export function getQuickOptions(
 
   addOption(
     {
-      label: '15 分钟后',
+      label: formatRelativeQuickLabel(15, 'minute', language),
       icon: '⏱️',
       getTime: () => addMinutes(clock(), 15),
     },
@@ -103,7 +141,7 @@ export function getQuickOptions(
   );
   addOption(
     {
-      label: '30 分钟后',
+      label: formatRelativeQuickLabel(30, 'minute', language),
       icon: '🕧',
       getTime: () => addMinutes(clock(), 30),
     },
@@ -111,7 +149,7 @@ export function getQuickOptions(
   );
   addOption(
     {
-      label: '1 小时后',
+      label: formatRelativeQuickLabel(1, 'hour', language),
       icon: '⏰',
       getTime: () => {
         const d = cloneDate(clock());
@@ -123,7 +161,7 @@ export function getQuickOptions(
   );
   addOption(
     {
-      label: '2 小时后',
+      label: formatRelativeQuickLabel(2, 'hour', language),
       icon: '⏳',
       getTime: () => {
         const d = cloneDate(clock());
@@ -135,7 +173,7 @@ export function getQuickOptions(
   );
   addOption(
     {
-      label: '3 小时后',
+      label: formatRelativeQuickLabel(3, 'hour', language),
       icon: '🕐',
       getTime: () => {
         const d = cloneDate(clock());
@@ -147,7 +185,7 @@ export function getQuickOptions(
   );
   addOption(
     {
-      label: formatWorkdayQuickLabel(workdayEndTime, now, '下班前'),
+      label: formatWorkdayQuickLabel(workdayEndTime, now, '下班前', language),
       icon: '🌆',
       getTime: () => getNextWorkdayTime(clock(), 18, 0, true),
     },
@@ -155,7 +193,7 @@ export function getQuickOptions(
   );
   addOption(
     {
-      label: formatWorkdayQuickLabel(nextWorkdayMorning, now, ' 9 点'),
+      label: formatWorkdayQuickLabel(nextWorkdayMorning, now, ' 9 点', language),
       icon: '☀️',
       getTime: () => getNextWorkdayTime(clock(), 9, 0, false),
     },
@@ -165,7 +203,7 @@ export function getQuickOptions(
   if (nextMondayMorning.getTime() !== nextWorkdayMorning.getTime()) {
     addOption(
       {
-        label: '下周一 9 点',
+        label: language === 'en-US' ? 'Next Mon 9 AM' : '下周一 9 点',
         icon: '📅',
         getTime: () => getNextMondayMorning(clock()),
       },

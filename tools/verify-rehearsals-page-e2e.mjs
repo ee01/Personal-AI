@@ -225,6 +225,9 @@ try {
   });
   await detailPanel.getByText('降权原因').waitFor({ timeout: 10000 });
   await detailPanel.getByText('validity_expired').waitFor({ timeout: 10000 });
+  await detailPanel.getByText('来源证据').waitFor({ timeout: 10000 });
+  await detailPanel.getByText('消息').waitFor({ timeout: 10000 });
+  await detailPanel.getByText('colin', { exact: true }).waitFor({ timeout: 10000 });
   await detailPanel
     .getByText('当前因有效期过期而降权；重新激活会清除过期时间并重新参与匹配。')
     .waitFor({ timeout: 10000 });
@@ -269,6 +272,26 @@ try {
     { status: 'active', staleReason: null, validUntil: null },
     'reactivation should clear stale reason and expired validity',
   );
+
+  const activeDetailRequestCount = detailRequests.filter(
+    (id) => id === activeRehearsal.id,
+  ).length;
+  await page.evaluate((id) => {
+    window.location.hash = `#/rehearsals?rehearsalId=${encodeURIComponent(id)}`;
+  }, activeRehearsal.id);
+  await detailPanel
+    .getByRole('heading', { name: 'Active launch prep' })
+    .waitFor({ timeout: 10000 });
+  await detailPanel.getByText('Ask the launch team whether owner handoff is ready.').waitFor({
+    timeout: 10000,
+  });
+  await detailPanel.getByText('active', { exact: true }).waitFor({ timeout: 10000 });
+  assert.equal(
+    detailRequests.filter((id) => id === activeRehearsal.id).length,
+    activeDetailRequestCount + 1,
+    'same-page rehearsalId route changes should refetch and focus the requested rehearsal',
+  );
+  assert.deepEqual(listStatuses.slice(0, 3), ['active', 'all', 'all']);
 
   console.log('verify-rehearsals-page-e2e: ok');
 } finally {

@@ -2076,6 +2076,8 @@ async function emitRingCentralTranscriptFromDom(
   const probe = collectRingCentralTranscriptDomProbe(context.meetingId);
   const items = probe.items;
   const latest = items[items.length - 1];
+  const hasTranscriptDomText =
+    probe.rootCount > 0 && probe.timeLineCount > 0 && probe.textLineCount > 0;
   const serviceSignature = lastRingCentralTranscriptServiceAvailable
     ? `svc:${lastRingCentralTranscriptServiceEndpoint || 'available'}`
     : 'svc:none';
@@ -2095,9 +2097,9 @@ async function emitRingCentralTranscriptFromDom(
         enabled: true,
         available:
           items.length > 0 ||
-          probe.rootCount > 0 ||
+          hasTranscriptDomText ||
           lastRingCentralTranscriptServiceAvailable,
-        active: items.length > 0,
+        active: items.length > 0 || hasTranscriptDomText,
         lastSeenAt: latest ? now : undefined,
         latestChunkId: latest?.id,
         lastError:

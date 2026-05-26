@@ -22,6 +22,7 @@ import {
   isContextPageUrlBlockedByPrefix,
   isDisplayableContextRecallMatch,
   isLowValueContextHost,
+  isMemoryCaptureSelectionTextEligible,
   isSensitiveControlDescriptor,
   isContextSiteMuteActive,
   normalizeContextPageBlockPrefix,
@@ -201,6 +202,23 @@ assert.equal(
 );
 assert.equal(
   isContextSelectionTextEligible('4111 1111 1111 1111'),
+  false,
+);
+assert.equal(isMemoryCaptureSelectionTextEligible('ok'), false);
+assert.equal(
+  isMemoryCaptureSelectionTextEligible('Personal AI should capture this source paragraph as useful browser evidence.'),
+  true,
+);
+assert.equal(
+  isMemoryCaptureSelectionTextEligible('这段网页资料解释了记忆捕捉的自动入库策略和用户确认入口'),
+  true,
+);
+assert.equal(
+  isMemoryCaptureSelectionTextEligible('RingCentral Video'),
+  false,
+);
+assert.equal(
+  isMemoryCaptureSelectionTextEligible('api_key = sk-proj-1234567890abcdefghijklmnop'),
   false,
 );
 

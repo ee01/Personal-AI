@@ -202,6 +202,47 @@ async function main() {
       () => window.__lastAskPayload?.context || '',
     );
     assert.equal(secondAskContext.includes('第一件事是什么'), false);
+
+    const voicePage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      topStatus: undefined,
+      items: [],
+    });
+    await voicePage.locator('#voice-button').click();
+    await voicePage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-listening',
+    );
+    await voicePage.evaluate(() => {
+      window.__quickAskHandlers.voice?.({
+        type: 'error',
+        code: 'speech_denied',
+        message: 'Speech Recognition permission is required',
+        speechStatus: 'denied',
+      });
+    });
+    await assertText(
+      voicePage.locator('#voice-transcript'),
+      '请先在系统设置中允许语音识别权限。',
+    );
+    await assertText(voicePage.locator('#voice-recovery'), '打开语音识别设置');
+    await voicePage.locator('#voice-recovery').click();
+    await voicePage.waitForFunction(() => window.__openedSpeechSettings === 1);
+
+    await voicePage.evaluate(() => {
+      window.__voiceStartError = 'Speech helper is not running';
+    });
+    await voicePage.locator('#voice-orb').click();
+    await voicePage.waitForFunction(
+      () =>
+        document.querySelector('#quick-ask-shell')?.dataset.state ===
+        'voice-ready',
+    );
+    await assertText(
+      voicePage.locator('#voice-transcript'),
+      'Speech helper is not running',
+    );
   } finally {
     await browser.close();
     await new Promise((resolveClose) => server.close(resolveClose));
@@ -217,6 +258,9 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
       typeof testOptions.now === 'number' ? testOptions.now : realDateNow();
     Date.now = () => window.__quickAskNow;
     window.__openedSettings = 0;
+    window.__openedMicrophoneSettings = 0;
+    window.__openedSpeechSettings = 0;
+    window.__voiceStartError = testOptions.voiceStartError || '';
     window.__lastAskPayload = null;
     window.__lastInjectPayload = null;
     window.__quickAskHandlers = {};
@@ -246,6 +290,12 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
       openExternal: async (url) => {
         window.__lastExternalUrl = url;
       },
+      openMicrophoneSettings: async () => {
+        window.__openedMicrophoneSettings += 1;
+      },
+      openSpeechRecognitionSettings: async () => {
+        window.__openedSpeechSettings += 1;
+      },
     };
     window.quickAsk = {
       askStream: async (payload, onEvent) => {
@@ -268,7 +318,11 @@ async function setupQuickAskPage(browser, url, summary, options = {}) {
       openFullBridge: async () => undefined,
       newSession: async () => undefined,
       getPreferences: async () => ({ voiceLocale: 'zh-CN' }),
-      startNativeVoice: async () => undefined,
+      startNativeVoice: async () => {
+        if (window.__voiceStartError) {
+          throw new Error(window.__voiceStartError);
+        }
+      },
       stopNativeVoice: async () => undefined,
       cancelNativeVoice: async () => undefined,
       resolveShortcutGesture: async () => undefined,

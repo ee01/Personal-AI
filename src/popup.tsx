@@ -27,6 +27,7 @@ import {
   extractMeetingIdFromUrl,
   MeetingPilotSessionSnapshot,
 } from './meeting-shell/protocol';
+import { useExtensionUiLanguage, useStaticDomI18n } from './i18n/react';
 
 const WIKI_URL =
   'https://wiki.ringcentral.com/spaces/XTO/pages/911054301/Personal+AI+-+Tools';
@@ -639,6 +640,8 @@ async function focusMeetingPilotRecordingTab(
 }
 
 const Popup = () => {
+  const { language: uiLanguage, t } = useExtensionUiLanguage();
+  useStaticDomI18n(uiLanguage);
   const [isScheduleActive, setIsScheduleActive] = useState(false);
   const [envConfig, setEnvConfig] = useState<any>(null);
   const [isGoogleSheets, setIsGoogleSheets] = useState(false);
@@ -1937,7 +1940,7 @@ const Popup = () => {
       )}
 
       <button onClick={openMemoryInterface} className="memory-button">
-        🧠 实体记忆查询
+        🧠 {t('popup.memoryExplorer')}
       </button>
 
       {/* <button onClick={openProjectDashboard} className="dashboard-button">
@@ -1948,11 +1951,11 @@ const Popup = () => {
         onClick={openScheduledMessagesManager}
         className="scheduled-button"
       >
-        ⏰ 定时消息管理
+        ⏰ {t('popup.scheduledMessages')}
       </button>
 
       <button onClick={openTopicWindow} className="message-button">
-        📋 管理记忆入口
+        📋 {t('popup.manageMemoryEntries')}
       </button>
 
       {isRingCentralMeeting && (
@@ -1963,12 +1966,12 @@ const Popup = () => {
             disabled={isMeetingPilotBusy}
           >
             {isMeetingPilotBusy
-              ? '处理中...'
+              ? t('popup.meetingPilot.processing')
               : isMeetingPilotCaptureActive(meetingPilotSession)
-              ? '打开会议全貌'
+              ? t('popup.meetingPilot.open')
               : isMeetingPilotTranscriptPilotActive(meetingPilotSession)
-              ? '启用画面理解与纪要'
-              : '开启会议全貌'}
+              ? t('popup.meetingPilot.enableVision')
+              : t('popup.meetingPilot.start')}
           </button>
           {meetingPilotNotice ? (
             <div
@@ -1978,7 +1981,7 @@ const Popup = () => {
               <span>{meetingPilotNotice.message}</span>
               {meetingPilotNotice.action === 'options' ? (
                 <button type="button" onClick={openMeetingPilotOptions}>
-                  打开配置
+                  {t('popup.meetingPilot.openOptions')}
                 </button>
               ) : null}
             </div>
@@ -1991,27 +1994,29 @@ const Popup = () => {
           <button
             className="today-pilot-title"
             onClick={openTodayPilotHome}
-            title="打开 Today Pilot 首页"
+            title={t('popup.today.openTitle')}
           >
-            今日领航
+            {t('terms.todayPilot')}
           </button>
           <button
             className="today-pilot-refresh"
             onClick={() => void loadTodayPilotCards()}
             disabled={todayPilotLoading}
-            title="刷新今日领航"
-            aria-label="刷新今日领航"
+            title={t('popup.today.refreshTitle')}
+            aria-label={t('popup.today.refreshTitle')}
           >
             ↻
           </button>
         </div>
         <div className="today-pilot-list">
           {todayPilotLoading && todayPilotCards.length === 0 ? (
-            <div className="today-pilot-empty">正在读取今日 mission</div>
+            <div className="today-pilot-empty">{t('popup.today.loading')}</div>
           ) : todayPilotError && todayPilotCards.length === 0 ? (
-            <div className="today-pilot-empty">Today Pilot 暂不可用</div>
+            <div className="today-pilot-empty">
+              {t('popup.today.unavailable')}
+            </div>
           ) : todayPilotCards.length === 0 ? (
-            <div className="today-pilot-empty">暂时没有需要处理的事项</div>
+            <div className="today-pilot-empty">{t('popup.today.empty')}</div>
           ) : (
             todayPilotCards.map((card) => {
               const isMeeting = isTodayPilotMeetingCard(card);
@@ -2033,11 +2038,11 @@ const Popup = () => {
                         {card.title}
                       </span>
                       <span className="today-pilot-card-sub">
-                        <strong>做</strong>
+                        <strong>{t('popup.today.action')}</strong>
                         <span>{card.nextBestAction}</span>
                       </span>
                       <span className="today-pilot-card-why">
-                        <strong>因</strong>
+                        <strong>{t('popup.today.reason')}</strong>
                         <span>{card.whyNow}</span>
                       </span>
                       <span className="today-pilot-card-meta">
@@ -2059,28 +2064,30 @@ const Popup = () => {
                         void sendTodayPilotPopupFeedback(card, 'done')
                       }
                       disabled={todayPilotFeedbackingCardId === doneKey}
-                      title="今天不再显示这张 mission"
+                      title={t('popup.today.doneTitle')}
                     >
                       {todayPilotFeedbackingCardId === doneKey
-                        ? '处理中'
-                        : '完成'}
+                        ? t('popup.today.handling')
+                        : t('popup.today.done')}
                     </button>
                     <button
                       onClick={() =>
                         void sendTodayPilotPopupFeedback(card, 'later')
                       }
                       disabled={todayPilotFeedbackingCardId === laterKey}
-                      title="6 小时内不再显示"
+                      title={t('popup.today.laterTitle')}
                     >
                       {todayPilotFeedbackingCardId === laterKey
-                        ? '处理中'
-                        : '稍后'}
+                        ? t('popup.today.handling')
+                        : t('popup.today.later')}
                     </button>
                     <button
                       onClick={() => void copyTodayPilotContextPack(card)}
                       disabled={copying}
                     >
-                      {copying ? '复制中' : '复制'}
+                      {copying
+                        ? t('popup.today.copying')
+                        : t('popup.today.copy')}
                     </button>
                   </div>
                 </article>

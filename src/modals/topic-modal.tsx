@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
+import { useExtensionUiLanguage, useStaticDomI18n } from '../i18n/react';
 import { analyzeMessages } from '../messageDealing';
 import {
   getMemoryServiceClient,
@@ -375,6 +376,8 @@ const PlayIcon = () => (
 );
 
 const TopicModal = () => {
+  const { language: uiLanguage } = useExtensionUiLanguage();
+  useStaticDomI18n(uiLanguage);
   const addFormRef = useRef<HTMLDivElement | null>(null);
   const operationToastTimerRef = useRef<number | null>(null);
   const [topics, setTopics] = useState<TopicItem[]>([]);

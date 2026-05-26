@@ -17,15 +17,26 @@
         ></section>
 
         <section id="voice-sheet" class="voice-sheet">
-          <div id="voice-transcript" class="voice-transcript">
+          <div
+            id="voice-transcript"
+            class="voice-transcript"
+            data-i18n="desktop.quickAsk.voicePrompt"
+          >
             按住 Option+A 或点击麦克风开始说话
           </div>
+          <button
+            id="voice-recovery"
+            class="voice-recovery"
+            type="button"
+            hidden
+          ></button>
           <div class="voice-strip">
             <button
               id="voice-cancel"
               class="voice-action voice-cancel"
               type="button"
               aria-label="返回文本输入"
+              data-i18n-aria-label="desktop.quickAsk.cancelVoice"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
@@ -45,6 +56,7 @@
                 class="voice-orb"
                 type="button"
                 aria-label="开始或停止语音输入"
+                data-i18n-aria-label="desktop.quickAsk.toggleVoice"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path
@@ -62,6 +74,7 @@
               class="voice-action voice-send"
               type="button"
               aria-label="发送语音内容"
+              data-i18n-aria-label="desktop.quickAsk.sendVoice"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 12h12"></path>
@@ -72,7 +85,14 @@
         </section>
 
         <section id="composer-panel" class="composer-panel">
-          <div id="pending-hint" class="pending-hint" hidden>正在整理答案…</div>
+          <div
+            id="pending-hint"
+            class="pending-hint"
+            data-i18n="desktop.quickAsk.pending"
+            hidden
+          >
+            正在整理答案…
+          </div>
 
           <div class="composer-input-wrap">
             <textarea
@@ -80,20 +100,32 @@
               rows="1"
               maxlength="6000"
               placeholder="问我任何你此刻需要的事…"
+              data-i18n-placeholder="desktop.quickAsk.placeholder"
               autocomplete="off"
             ></textarea>
           </div>
 
-          <div class="scope-toolbar" aria-label="Quick Ask 范围选择">
-            <span class="scope-label">范围</span>
-            <div class="scope-selector" role="group" aria-label="选择记忆范围">
+          <div
+            class="scope-toolbar"
+            aria-label="Quick Ask 范围选择"
+            data-i18n-aria-label="desktop.quickAsk.toolbarAria"
+          >
+            <span class="scope-label" data-i18n="desktop.quickAsk.scope"
+              >范围</span
+            >
+            <div
+              class="scope-selector"
+              role="group"
+              aria-label="选择记忆范围"
+              data-i18n-aria-label="desktop.quickAsk.scopeAria"
+            >
               <button
                 id="scope-work-button"
                 class="scope-button"
                 type="button"
                 data-scope="work"
               >
-                工作
+                <span data-i18n="common.work">工作</span>
               </button>
               <button
                 id="scope-personal-button"
@@ -101,7 +133,7 @@
                 type="button"
                 data-scope="personal"
               >
-                个人
+                <span data-i18n="common.personal">个人</span>
               </button>
               <button
                 id="scope-both-button"
@@ -109,7 +141,7 @@
                 type="button"
                 data-scope="both"
               >
-                两者
+                <span data-i18n="common.both">两者</span>
               </button>
             </div>
           </div>
@@ -121,6 +153,7 @@
                 class="circle-button utility-button"
                 type="button"
                 aria-label="打开设置"
+                data-i18n-aria-label="desktop.quickAsk.openSettings"
               >
                 <span>+</span>
               </button>
@@ -137,6 +170,7 @@
                 class="icon-button voice-button"
                 type="button"
                 aria-label="语音输入"
+                data-i18n-aria-label="desktop.quickAsk.voiceInput"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="3" y="9" width="2" height="6" rx="1"></rect>

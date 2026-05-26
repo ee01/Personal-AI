@@ -1,3 +1,5 @@
+import { uiPhrase as ui } from '../i18n/contentScript.js';
+
 export interface MessageReactionToolbarConfig {
   enableSnooze: boolean;
   enableFollowThread: boolean;
@@ -24,47 +26,70 @@ export interface MessageReactionActionDefinition {
 
 export const LINKED_ACTION_RUNTIME_MESSAGE_TYPE = 'OPEN_LINKED_ACTION_CONFIG';
 
-const ALL_ACTIONS: MessageReactionActionDefinition[] = [
+type MessageReactionActionTemplate = Omit<
+  MessageReactionActionDefinition,
+  'label' | 'compactLabel'
+> & {
+  labelKey: string;
+  compactLabelKey: string;
+};
+
+export type MessageReactionLabelTranslator = (text: string) => string;
+
+const ALL_ACTIONS: MessageReactionActionTemplate[] = [
   {
     key: 'snooze',
-    label: '稍后处理',
-    compactLabel: '稍后',
+    labelKey: '稍后处理',
+    compactLabelKey: '稍后',
     className: 'message-reaction-action-btn snooze-icon-btn',
   },
   {
     key: 'followThread',
-    label: '关注后续',
-    compactLabel: '关注',
+    labelKey: '关注后续',
+    compactLabelKey: '关注',
     className: 'message-reaction-action-btn follow-thread-btn',
     runtimeMessageType: 'OPEN_FOLLOW_THREAD_CONFIG',
   },
   {
     key: 'autoReply',
-    label: '自动答复',
-    compactLabel: '答复',
+    labelKey: '自动答复',
+    compactLabelKey: '答复',
     compactAlign: 'end',
     className: 'message-reaction-action-btn auto-reply-btn',
     runtimeMessageType: 'OPEN_AUTO_REPLY_CONFIG',
   },
   {
     key: 'followupAsk',
-    label: '跟进追问',
-    compactLabel: '跟进',
+    labelKey: '跟进追问',
+    compactLabelKey: '跟进',
     className: 'message-reaction-action-btn followup-ask-btn',
     runtimeMessageType: 'CREATE_OUTREACH_FROM_MESSAGE',
   },
   {
     key: 'linkedAction',
-    label: '联动操作',
-    compactLabel: '联动',
+    labelKey: '联动操作',
+    compactLabelKey: '联动',
     className: 'message-reaction-action-btn linked-action-btn',
     runtimeMessageType: LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
   },
 ];
 
+function localizeAction(
+  action: MessageReactionActionTemplate,
+  translate: MessageReactionLabelTranslator,
+): MessageReactionActionDefinition {
+  const { labelKey, compactLabelKey, ...definition } = action;
+  return {
+    ...definition,
+    label: translate(labelKey),
+    compactLabel: translate(compactLabelKey),
+  };
+}
+
 export function getMessageReactionActionDefinitions(
   config: MessageReactionToolbarConfig,
   context: { isOwnMessage?: boolean } = {},
+  translate: MessageReactionLabelTranslator = ui,
 ): MessageReactionActionDefinition[] {
   return ALL_ACTIONS.filter((action) => {
     switch (action.key) {
@@ -79,5 +104,5 @@ export function getMessageReactionActionDefinitions(
       case 'linkedAction':
         return config.enableLinkedAction;
     }
-  });
+  }).map((action) => localizeAction(action, translate));
 }

@@ -1,3 +1,5 @@
+import { setDesktopLanguage, t } from './i18n.js';
+
 const bridgeApi = window.bridgeApi;
 const explorerApi = window.explorerApi;
 const quickAsk = window.quickAsk;
@@ -28,6 +30,7 @@ const elements = {
   shortcutBanner: document.getElementById('shortcut-banner'),
   voiceSheet: document.getElementById('voice-sheet'),
   voiceTranscript: document.getElementById('voice-transcript'),
+  voiceRecovery: document.getElementById('voice-recovery'),
   voiceOrb: document.getElementById('voice-orb'),
   voiceCancel: document.getElementById('voice-cancel'),
   voiceSend: document.getElementById('voice-send'),
@@ -1122,28 +1125,64 @@ class VoiceController {
     this.seedDraft = '';
     this.stopResolvers = [];
     this.lastErrorMessage = '';
+    this.lastErrorAction = null;
   }
 
   describeError(code, payload = null) {
     if (code === 'microphone_denied') {
-      return '请先在系统设置中允许麦克风权限。';
+      return t('desktop.quickAsk.voiceError.microphoneDenied');
     }
     if (code === 'speech_denied') {
-      return '请先在系统设置中允许语音识别权限。';
+      return t('desktop.quickAsk.voiceError.speechDenied');
     }
     if (code === 'audio-capture') {
-      return '当前无法访问麦克风。';
+      return t('desktop.quickAsk.voiceError.audioCapture');
     }
     if (code === 'speech_start_failed') {
-      return payload?.message || '当前无法启动系统语音识别。';
+      return payload?.message || t('desktop.quickAsk.voiceError.startFailed');
     }
     if (code && String(code).startsWith('speech_error_')) {
-      return payload?.message || '系统语音识别暂时不可用。';
+      return payload?.message || t('desktop.quickAsk.voiceError.unavailable');
     }
     return (
       payload?.message ||
-      (code ? `语音输入暂时不可用：${code}` : '语音输入暂时不可用。')
+      (code
+        ? t('desktop.quickAsk.voiceError.unavailableWithCode', { code })
+        : t('desktop.quickAsk.voiceError.unavailable'))
     );
+  }
+
+  resolveErrorAction(code) {
+    if (code === 'microphone_denied' || code === 'audio-capture') {
+      return {
+        type: 'microphone',
+        label: t('desktop.quickAsk.voiceRecovery.microphone'),
+      };
+    }
+    if (code === 'speech_denied') {
+      return {
+        type: 'speech',
+        label: t('desktop.quickAsk.voiceRecovery.speech'),
+      };
+    }
+    return null;
+  }
+
+  setError(code, payload = null) {
+    this.lastErrorMessage = this.describeError(code, payload);
+    this.lastErrorAction = this.resolveErrorAction(code);
+  }
+
+  handleStartFailure(error) {
+    this.listening = false;
+    this.lastErrorMessage =
+      error instanceof Error ? error.message : String(error);
+    this.lastErrorAction = null;
+    elements.voiceSheet.style.setProperty('--voice-amp', '0.14');
+    showNotice(this.lastErrorMessage);
+    state.voicePhase = 'ready';
+    setUiState('voice-ready');
+    renderVoiceSheet();
   }
 
   composeDraft(recognizedText = this.recognizedTranscript) {
@@ -1154,6 +1193,7 @@ class VoiceController {
     this.seedDraft = seedDraft.trim();
     this.recognizedTranscript = '';
     this.lastErrorMessage = '';
+    this.lastErrorAction = null;
     state.voiceDraft = this.seedDraft;
     state.voicePhase = 'listening';
     setUiState('voice-listening');
@@ -1164,14 +1204,7 @@ class VoiceController {
         locale: resolveVoiceLocale(),
       });
     } catch (error) {
-      this.listening = false;
-      this.lastErrorMessage =
-        error instanceof Error ? error.message : String(error);
-      elements.voiceSheet.style.setProperty('--voice-amp', '0.14');
-      showNotice(this.lastErrorMessage);
-      state.voicePhase = 'ready';
-      setUiState('voice-ready');
-      renderVoiceSheet();
+      this.handleStartFailure(error);
     }
   }
 
@@ -1180,13 +1213,18 @@ class VoiceController {
     this.seedDraft = state.voiceDraft.trim();
     this.recognizedTranscript = '';
     this.lastErrorMessage = '';
+    this.lastErrorAction = null;
     state.voiceDraft = this.seedDraft;
     state.voicePhase = 'listening';
     setUiState('voice-listening');
     renderVoiceSheet();
-    await quickAsk.startNativeVoice({
-      locale: resolveVoiceLocale(),
-    });
+    try {
+      await quickAsk.startNativeVoice({
+        locale: resolveVoiceLocale(),
+      });
+    } catch (error) {
+      this.handleStartFailure(error);
+    }
   }
 
   waitForStop(timeoutMs = 1500) {
@@ -1221,6 +1259,7 @@ class VoiceController {
     await this.cancelNativeVoice(true);
     this.seedDraft = '';
     this.lastErrorMessage = '';
+    this.lastErrorAction = null;
     const draft = state.voiceDraft.trim();
     setDraft(draft);
     state.voiceDraft = draft;
@@ -1240,6 +1279,7 @@ class VoiceController {
     this.seedDraft = '';
     this.recognizedTranscript = '';
     this.lastErrorMessage = '';
+    this.lastErrorAction = null;
     state.voicePhase = 'idle';
     renderVoiceSheet();
     await submitQuery(transcript, { fromVoice: true });
@@ -1251,6 +1291,7 @@ class VoiceController {
     if (payload.type === 'started') {
       this.listening = true;
       this.lastErrorMessage = '';
+      this.lastErrorAction = null;
       state.voicePhase = 'listening';
       setUiState('voice-listening');
       renderVoiceSheet();
@@ -1268,6 +1309,8 @@ class VoiceController {
     if (payload.type === 'transcript') {
       this.recognizedTranscript =
         typeof payload.text === 'string' ? payload.text.trim() : '';
+      this.lastErrorMessage = '';
+      this.lastErrorAction = null;
       state.voiceDraft = this.composeDraft();
       state.voicePhase = payload.isFinal ? 'ready' : 'listening';
       if (isVoiceState()) {
@@ -1283,6 +1326,8 @@ class VoiceController {
         typeof payload.text === 'string'
           ? payload.text.trim()
           : this.recognizedTranscript;
+      this.lastErrorMessage = '';
+      this.lastErrorAction = null;
       state.voiceDraft = this.composeDraft(this.recognizedTranscript);
       state.voicePhase = 'ready';
       if (isVoiceState()) {
@@ -1296,7 +1341,7 @@ class VoiceController {
 
     if (payload.type === 'error') {
       this.listening = false;
-      this.lastErrorMessage = this.describeError(payload.code, payload);
+      this.setError(payload.code, payload);
       elements.voiceSheet.style.setProperty('--voice-amp', '0.14');
       showNotice(this.lastErrorMessage);
       state.voicePhase = 'ready';
@@ -1322,6 +1367,7 @@ class VoiceController {
     state.voiceDraft = '';
     state.voicePhase = 'idle';
     this.lastErrorMessage = '';
+    this.lastErrorAction = null;
     elements.voiceSheet.style.setProperty('--voice-amp', '0.14');
     this.stopResolvers = [];
     void quickAsk.cancelNativeVoice().catch(() => undefined);
@@ -1332,8 +1378,17 @@ const voiceController = new VoiceController();
 
 function renderVoiceSheet() {
   const transcriptText =
-    state.voiceDraft || voiceController.lastErrorMessage || '';
+    state.voiceDraft ||
+    voiceController.lastErrorMessage ||
+    t('desktop.quickAsk.voicePrompt');
   elements.voiceTranscript.textContent = transcriptText;
+  if (voiceController.lastErrorAction) {
+    elements.voiceRecovery.hidden = false;
+    elements.voiceRecovery.textContent = voiceController.lastErrorAction.label;
+  } else {
+    elements.voiceRecovery.hidden = true;
+    elements.voiceRecovery.textContent = '';
+  }
   elements.voiceOrb.classList.toggle(
     'listening',
     state.voicePhase === 'listening',
@@ -1686,6 +1741,32 @@ elements.voiceSend.addEventListener('click', async () => {
   await voiceController.sendVoiceDraft();
 });
 
+elements.voiceRecovery.addEventListener('click', async () => {
+  const action = voiceController.lastErrorAction;
+  if (!action) return;
+  try {
+    if (action.type === 'microphone') {
+      if (typeof appShell.openMicrophoneSettings === 'function') {
+        await appShell.openMicrophoneSettings();
+        return;
+      }
+    }
+    if (action.type === 'speech') {
+      if (typeof appShell.openSpeechRecognitionSettings === 'function') {
+        await appShell.openSpeechRecognitionSettings();
+        return;
+      }
+    }
+    await quickAsk.openSettings();
+  } catch (error) {
+    showNotice(
+      error instanceof Error
+        ? error.message
+        : t('desktop.quickAsk.voiceError.unavailable'),
+    );
+  }
+});
+
 elements.conversationPanel.addEventListener('click', async (event) => {
   const mobileSyncButton = event.target.closest('.quick-ask-sync-mobile');
   if (mobileSyncButton) {
@@ -1784,14 +1865,20 @@ quickAsk.onFocusInput(() => {
 
 async function loadPreferences() {
   try {
-    const payload = await quickAsk.getPreferences();
+    const [payload, settings] = await Promise.all([
+      quickAsk.getPreferences(),
+      bridgeApi.getSettings().catch(() => null),
+    ]);
+    setDesktopLanguage(settings?.effective?.uiLanguage);
     state.voiceLocale =
       typeof payload?.voiceLocale === 'string' && payload.voiceLocale.trim()
         ? payload.voiceLocale.trim()
         : 'zh-CN';
   } catch {
+    setDesktopLanguage('zh-CN');
     state.voiceLocale = 'zh-CN';
   }
+  renderVoiceSheet();
 }
 
 const initialDraft = (() => {

@@ -66,6 +66,8 @@ import { dayPilotRoutes } from './routes/dayPilot.js';
 import { coverageRoutes } from './routes/coverage.js';
 import { rehearsalRoutes } from './routes/rehearsals.js';
 import { storylineRoutes } from './routes/storylines.js';
+import { sourceMemoryRoutes } from './routes/sourceMemory.js';
+import { ambientCalibrationRoutes } from './routes/ambientCalibration.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -209,6 +211,8 @@ export async function buildApp(
       await instance.register(coverageRoutes);
       await instance.register(rehearsalRoutes);
       await instance.register(storylineRoutes);
+      await instance.register(sourceMemoryRoutes);
+      await instance.register(ambientCalibrationRoutes);
     },
     { prefix: '/api/v1' },
   );

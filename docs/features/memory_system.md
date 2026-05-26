@@ -1,6 +1,6 @@
 # Memory Service — 类人记忆系统架构
 
-_最后更新: 2026-05-25 (补充备份导入 manifest 完整性校验与主动询问重试审计)_
+_最后更新: 2026-05-26 (补充无感记忆校准层与 Memory Lens / Capture / Compose Assist 边界)_
 
 ## 系统概述
 
@@ -18,6 +18,80 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 4. 用户边界：`X-User-Id`、scope、已确认画像和权限边界决定哪些记忆能被读取或注入。
 5. 离线巩固：自我反思和梦境重放会把分散片段整理成更稳定的主题、行动项或洞察，但不应替代原始证据。
 6. 未来场景预演：Rehearsal 保存“未来遇到某场景该想起/说/做什么”，通过 `/context-recall` 在 Compose Assist、Today Pilot、Meeting Pilot、Memory Lens 等现场触发；它不是事实层。
+
+## 记忆功能地图
+
+Memory Service 是底层记忆后端；用户真正感知到的是一组围绕“入库、整理、召回、提示、生成、复盘”的功能。详细交互规则仍以各功能文档为准，本节只做总览导航。
+
+| 功能 | 角色 | 一句话说明 |
+| ---- | ---- | ---------- |
+| Memory Ingestion | 入库基础层 | 消息、会议、Jira、AI 对话、手动记录等进入 `messages_raw`、`chunks`、实体和关系；显著性决定是否索引。 |
+| [Memory Capture](./memory_capture.md) / 记忆捕捉 | 资料入库层 | 写入新资料，决定“这段 / 这页 / 这次用户对外输入要不要记住”，并保存 source capsule、证据锚点和未来触发线索。 |
+| [Memory Lens](./memory_lens.md) | 场景提示层 | 读已有记忆，提示“当前页面、消息、Jira、会议或划词内容和你以前什么相关”，不写入、不生成回复。 |
+| [Compose Assist](./compose_assist.md) | 输入框生成层 | 用记忆生成可插入内容，帮助用户判断“我现在怎么回复 / 怎么问 AI”，只插入草稿，不自动发送。 |
+| `/recall` / `/ask` | 主动查询层 | 用户主动搜索或提问时，走 vector、FTS、graph、time 多通道召回，并带回证据和来源。 |
+| Memory Exploring | 记忆浏览层 | 展示搜索结果、时间轴、反思线程、决策中心、Rehearsal、动作队列等用户可检查的记忆视图。 |
+| [Memory Coverage Map](./memory_coverage_map.md) | 覆盖与导入层 | 告诉用户哪些来源已经接入、哪些记忆覆盖不足，并承接外部 AI 历史、备份 zip 等导入入口。 |
+| [User Profile](./user_profile_system.md) | 稳定画像层 | 保存已确认的用户事实、偏好、约束和写作风格；未经确认的资料或阅读行为不能直接变成画像事实。 |
+| [Rehearsal](./rehearsal.md) | 未来场景预演层 | 保存“未来遇到某人/项目/会议/issue 时该想起什么”，通过 `/context-recall` 被 Lens、Compose Assist、Today Pilot 等消费。 |
+| Reflection / Dream Replay | 离线整理层 | 把分散记忆复盘成主题、开放问题、动作和梦境重放洞察；整理结果必须保留原始证据链。 |
+| Confirm Requests / Notifications / Outreach | 主动推进层 | 当记忆系统缺用户判断、需要提醒或需要问外部人时，分别进入决策中心、通知链路或主动询问。 |
+| [Relationship Radar](./relationship_radar.md) | 人物关系层 | 从记忆中整理人物、关系、会议上下文和助手草稿证据，供会议、回复和人脉判断使用。 |
+| [Today Pilot](./today_pilot.md) | 今日场景层 | 把今天的会议、任务、Rehearsal、项目风险和记忆线索组织成可行动的 mission。 |
+| Meeting Pilot | 会议记忆层 | 捕捉和整理会议现场、转写、摘要、行动项，并把相关历史记忆和 Rehearsal 带入会议场景。 |
+| [Project Dashboard](./project_dashboard_usage_guide.md) | 项目记忆层 | 把项目相关记忆、Jira、会议、风险和里程碑组织成项目视图，便于复盘和跟进。 |
+| Ambient Calibration / 无感记忆校准层 | 横切反馈层 | 不做独立校准平台；从用户真实动作中记录 redacted trace，用于后续调权、诊断和学习。 |
+
+### 三个现场能力的边界
+
+这三个能力都使用当前页面或输入框上下文，但职责不同，不能合并成一个产品动作：
+
+| 能力 | 大白话 | 读/写方向 | 典型场景 | 不负责 |
+| ---- | ------ | --------- | -------- | ------ |
+| [Memory Lens](./memory_lens.md) | 读已有记忆，提示“这和你以前什么相关”。 | 读记忆 | 浏览网页、Jira、消息会话、会议上下文，或划词查旧记忆。 | 不写入网页，不生成回复，不插入输入框。 |
+| [Memory Capture](./memory_capture.md) | 写入新资料，决定“这段 / 这页 / 这次输入要不要记住”。 | 写记忆 | 选中文本点右侧半露出 `+ 入库`、复制/深读网页点页面 `+ 入库` 或高置信自动入库、Jira owner comment 自动捕捉。 | 不展示旧记忆，不把普通浏览史全量保存，不直接写 confirmed profile。 |
+| [Compose Assist](./compose_assist.md) | 用记忆生成可插入内容，帮助“我现在怎么回复 / 怎么问 AI”。 | 读记忆后生成草稿 | RingCentral 回复、Jira comment、ChatGPT/豆包/Claude/Gemini 输入框。 | 不自动发送，不做后台入库判断，不展开 Memory Lens 式来源卡片。 |
+
+推荐文档结构是：`memory_system.md` 做总览，Lens / Capture / Compose Assist 保持独立子文档。原因是它们共享上下文和召回基础设施，但用户心智分别是“提示旧记忆 / 捕捉新资料 / 生成可插入内容”，权限边界和失败模式也不同。
+
+### 无感记忆校准层
+
+记忆校准不是一个让用户逐条核对的独立产品入口。用户没有时间维护“待校准列表”，因此 Personal AI 的默认策略是：在用户完成真实任务的一刻，把自然行为转成校准 trace。
+
+第一版落地在 Compose Assist：
+
+- 用户点击 icon 插入建议，先记录原有的 `accepted` 阈值反馈；撤销窗口结束后，再写入 `action=inserted` 的中等强度正向 trace。
+- 用户插入建议后，在发送前改写措辞，点击原网页 Send / Submit / Reply 时，前端只生成 redacted diff summary，写入 `edited_before_send`、`sent_after_insert` 或 `deleted_before_send`。
+- 用户 hover 过建议但没有插入，随后自己发送回复，写入 `sent_without_insert`，用来区分“记忆匹配大致对但措辞不合适”和“这条记忆不该出现”。
+- 用户点 thumb-down，写入 `wrong`，用于明确降低相似场景下的召回权重。
+
+后端入口：
+
+```http
+POST /api/v1/ambient-calibration/traces
+```
+
+表结构：
+
+- `ambient_calibration_traces`: 保存 surface、scene key、行为类型、强度、正负/修正极性、证据 id、redacted diff、隐私等级和创建时间。
+
+隐私默认值：
+
+- 不保存完整发送文本、完整建议文本或完整输入框内容。
+- Compose Assist 只上传 hash、长度、相似度、编辑距离分段、语义关系和 evidence id。
+- trace 默认 `privacyClass='sensitive_redacted'`；如果未来某 surface 只能本地学习，可用 `local_only`。
+
+其他 surface 的校准入口应复用同一张 trace 表，而不是新增校准平台：
+
+| Surface | 用户自然动作 | 校准含义 |
+| ------- | ------------ | -------- |
+| Memory Lens | hover、展开、打开来源、mute、wrong | 召回是否一眼相关、来源是否值得信任、站点/主题是否要降噪 |
+| Today Pilot | done、later、mute、wrong、copy context pack | 今日 mission 排序、任务粒度、提醒时机是否正确 |
+| Meeting Pilot | 确认、编辑、忽略、人工新增行动项 | 会议抽取、owner / deadline 解析、历史记忆提示是否准确 |
+| Memory Capture | save、ignore、open source、reference later | 哪类资料值得入库、source capsule 的触发线索是否稳定 |
+| Ask / Search | 打开结果、复制、继续追问、改写 query | 召回排序、拒答边界和 query expansion 是否需要修正 |
+
+这层机制不会直接把 trace 变成 confirmed profile，也不会覆盖原始记忆。它先作为排序、诊断和候选学习信号；只有经过明确确认或稳定证据支持的内容，才会进入画像、关系或长期事实层。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

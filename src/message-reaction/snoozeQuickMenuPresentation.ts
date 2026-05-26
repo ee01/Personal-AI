@@ -1,4 +1,5 @@
 import type { QuickOption } from './snoozeQuickOptions';
+import type { UiLanguage } from '../i18n/index.js';
 
 export const SNOOZE_CUSTOM_OPTION_LABEL = '自定义时间';
 export const SNOOZE_MANAGE_OPTION_LABEL = '管理稍后处理';
@@ -33,15 +34,17 @@ export function escapeSnoozeMenuText(value: string): string {
 export function buildSnoozeQuickMenuOptions(
   quickOptions: QuickOption[],
   formatTime: (date: Date) => string,
+  language: UiLanguage = 'zh-CN',
 ): SnoozeQuickMenuOptionView[] {
   return quickOptions.map((option, index) => {
     const timeLabel = formatTime(option.getTime());
+    const separator = language === 'en-US' ? ', ' : '，';
     return {
       index,
       label: option.label,
       icon: option.icon,
       timeLabel,
-      ariaLabel: `${option.label}，${timeLabel}`,
+      ariaLabel: `${option.label}${separator}${timeLabel}`,
     };
   });
 }

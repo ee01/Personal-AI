@@ -1055,6 +1055,193 @@ async function main() {
     );
     assert.equal(await page.locator('.snooze-btn-confirm').isDisabled(), true);
 
+    await serviceWorker.evaluate(async () => {
+      await chrome.storage.local.set({
+        personalAiUiPreferences: {
+          language: 'en-US',
+          updatedAt: Date.now(),
+        },
+      });
+    });
+    const englishPage = await context.newPage();
+    await englishPage.goto('https://app.ringcentral.com/messages/12345', {
+      waitUntil: 'domcontentloaded',
+    });
+    const englishMessage = englishPage.locator(
+      '.conversation-card-wrapper[data-id="msg-1"]',
+    );
+    await englishMessage.waitFor({ state: 'visible', timeout: 10_000 });
+    await englishMessage
+      .locator('.message-reaction-toolbar')
+      .waitFor({ state: 'attached', timeout: 12_000 });
+    await englishPage.mouse.move(5, 5);
+    await englishMessage.hover();
+    const englishToolbar = englishMessage.locator(
+      '.message-reaction-toolbar.visible',
+    );
+    await englishToolbar.waitFor({ state: 'visible', timeout: 8_000 });
+    const englishActions = await englishMessage
+      .locator('.message-reaction-toolbar .message-reaction-action-btn')
+      .evaluateAll((buttons) =>
+        buttons.map((button) => ({
+          label: button.getAttribute('aria-label'),
+          compactLabel: button.getAttribute('data-compact-label'),
+          title: button.getAttribute('title'),
+          text: button.textContent?.trim(),
+          labelWidth:
+            button
+              .querySelector('.message-reaction-action-label')
+              ?.getBoundingClientRect().width ?? 0,
+          labelScrollWidth:
+            button.querySelector('.message-reaction-action-label')?.scrollWidth ??
+            0,
+        })),
+      );
+    assert.deepEqual(
+      englishActions.map((action) => action.label),
+      ['Remind', 'Watch', 'Reply', 'Openclaw'],
+    );
+    assert.deepEqual(
+      englishActions.map((action) => action.compactLabel),
+      ['Remind', 'Watch', 'Reply', 'Openclaw'],
+    );
+    assert.deepEqual(
+      englishActions.map((action) => action.text),
+      ['Remind', 'Watch', 'Reply', 'Openclaw'],
+    );
+    assert.equal(
+      englishActions.every(
+        (action) =>
+          action.title === action.label &&
+          action.labelWidth >= action.labelScrollWidth - 1,
+      ),
+      true,
+      `English toolbar labels should be visible without clipping: ${JSON.stringify(
+        englishActions,
+      )}`,
+    );
+
+    await englishToolbar.locator('.snooze-icon-btn').click();
+    await englishPage.waitForSelector('.snooze-menu', { timeout: 3_000 });
+    assert.equal(
+      await englishPage.locator('.snooze-menu').getAttribute('aria-label'),
+      'Remind quick options',
+    );
+    const englishQuickLabels = await englishPage.$$eval(
+      '.snooze-quick-option-label',
+      (els) => els.map((el) => el.textContent?.trim()),
+    );
+    assert.deepEqual(englishQuickLabels.slice(0, 5), [
+      'In 15 minutes',
+      'In 30 minutes',
+      'In 1 hour',
+      'In 2 hours',
+      'In 3 hours',
+    ]);
+    assert.equal(
+      englishQuickLabels
+        .slice(5)
+        .every(
+          (label) =>
+            /^(Today|Tomorrow|Mon|Tue|Wed|Thu|Fri) (by EOD|9 AM)$/.test(
+              label || '',
+            ) || label === 'Next Mon 9 AM',
+        ),
+      true,
+      `English routine Remind labels should be localized: ${englishQuickLabels.join(
+        ', ',
+      )}`,
+    );
+    const englishQuickTimes = await englishPage.$$eval(
+      '.snooze-quick-option-time',
+      (els) => els.map((el) => el.textContent?.trim()),
+    );
+    assert.equal(
+      englishQuickTimes.every(
+        (label) => Boolean(label) && !/[分钟后小时周明天今天点]/.test(label || ''),
+      ),
+      true,
+      `English Remind preview times should not contain Chinese labels: ${englishQuickTimes.join(
+        ', ',
+      )}`,
+    );
+    assert.equal(
+      ((await englishPage.locator('.snooze-custom-option').textContent()) || '')
+        .replace(/\s+/g, '')
+        .trim(),
+      '📅Custom...',
+    );
+    assert.equal(
+      ((await englishPage.locator('.snooze-manage-option').textContent()) || '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+      '↗ Manage Remind',
+    );
+
+    await englishPage.locator('.snooze-custom-option').click();
+    await englishPage.waitForSelector('.snooze-picker', { timeout: 3_000 });
+    assert.equal(
+      await englishPage.locator('.snooze-picker-title').textContent(),
+      'Custom time',
+    );
+    assert.equal(
+      ((await englishPage.locator('.snooze-picker-back').textContent()) || '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+      '← Back',
+    );
+    assert.equal(
+      await englishPage
+        .locator('label[for="personal-ai-snooze-datetime"]')
+        .textContent(),
+      'Choose date and time',
+    );
+    assert.equal(
+      await englishPage.locator('.snooze-preview-label').textContent(),
+      'Reminder time:',
+    );
+    assert.equal(
+      await englishPage.locator('.snooze-btn-cancel').textContent(),
+      'Cancel',
+    );
+    assert.equal(
+      await englishPage.locator('.snooze-btn-confirm').textContent(),
+      'Confirm',
+    );
+    await englishPage.locator('.snooze-datetime-input').fill('2000-01-01T09:00');
+    await englishPage.waitForSelector('.snooze-preview-time.invalid', {
+      timeout: 3_000,
+    });
+    assert.equal(
+      await englishPage.locator('.snooze-preview-time.invalid').textContent(),
+      'Choose a future time',
+    );
+    await englishPage.locator('.snooze-btn-cancel').click();
+
+    await englishPage.mouse.move(5, 5);
+    const englishOwnMessage = englishPage.locator(
+      '.conversation-card-wrapper[data-id="msg-own"]',
+    );
+    await englishOwnMessage
+      .locator('.message-reaction-toolbar')
+      .waitFor({ state: 'attached', timeout: 12_000 });
+    await englishOwnMessage.hover();
+    await englishOwnMessage
+      .locator('.message-reaction-toolbar.visible')
+      .waitFor({ state: 'visible', timeout: 8_000 });
+    const englishOwnActions = await englishOwnMessage
+      .locator('.message-reaction-toolbar .message-reaction-action-btn')
+      .evaluateAll((buttons) =>
+        buttons.map((button) => button.getAttribute('aria-label')),
+      );
+    assert.deepEqual(englishOwnActions, [
+      'Remind',
+      'Watch',
+      'Followup',
+      'Openclaw',
+    ]);
+    await englishPage.close();
+
     console.log('message reaction toolbar e2e passed');
   } finally {
     await context.close();

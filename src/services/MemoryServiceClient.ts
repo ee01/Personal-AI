@@ -6,6 +6,11 @@
  * using the standard fetch API and chrome.storage.local for configuration.
  */
 
+import {
+  DEFAULT_UI_LANGUAGE,
+  readExtensionUiPreferences,
+} from '../i18n';
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -654,6 +659,78 @@ export interface ComposerAssistResponse {
   confidence: number;
   queryTimeMs: number;
   debug?: Record<string, unknown>;
+}
+
+export type AmbientCalibrationSurface =
+  | 'compose_assist'
+  | 'memory_lens'
+  | 'today_pilot'
+  | 'meeting_pilot'
+  | 'ask'
+  | 'search'
+  | 'relationship_radar'
+  | 'user_profile'
+  | 'memory_capture';
+
+export type AmbientCalibrationAction =
+  | 'shown'
+  | 'hovered'
+  | 'expanded'
+  | 'inserted'
+  | 'sent_after_insert'
+  | 'sent_without_insert'
+  | 'edited_before_send'
+  | 'deleted_before_send'
+  | 'opened_source'
+  | 'copied_context'
+  | 'done'
+  | 'later'
+  | 'mute'
+  | 'wrong'
+  | 'confirmed'
+  | 'edited'
+  | 'ignored'
+  | 'manual_added';
+
+export type AmbientCalibrationStrength = 'weak' | 'medium' | 'strong';
+export type AmbientCalibrationPolarity =
+  | 'positive'
+  | 'negative'
+  | 'correction'
+  | 'neutral';
+export type AmbientCalibrationPrivacyClass =
+  | 'normal'
+  | 'sensitive_redacted'
+  | 'local_only';
+
+export interface AmbientCalibrationEvidenceRef {
+  id: string;
+  type?: string;
+  title?: string;
+  sourceLabel?: string;
+  role?: string;
+  score?: number;
+}
+
+export interface AmbientCalibrationTrace {
+  id?: string;
+  surface: AmbientCalibrationSurface;
+  sceneKey: string;
+  sourceRequestId?: string;
+  action: AmbientCalibrationAction;
+  strength: AmbientCalibrationStrength;
+  polarity: AmbientCalibrationPolarity;
+  evidenceRefs?: AmbientCalibrationEvidenceRef[];
+  redactedDiff?: Record<string, unknown>;
+  privacyClass?: AmbientCalibrationPrivacyClass;
+  metadata?: Record<string, unknown>;
+  createdAt?: number;
+}
+
+export interface AmbientCalibrationTraceResponse {
+  status: 'ok';
+  traceId: string;
+  stored: boolean;
 }
 
 export type StorylineType =
@@ -2256,6 +2333,115 @@ export interface MemoryCoverageMapResponse {
   timeline: MemoryCoverageTimelineEvent[];
 }
 
+export type SourceMemorySourceKind =
+  | 'webpage'
+  | 'selection'
+  | 'jira_comment'
+  | 'message_reply'
+  | 'web_ai_prompt'
+  | 'manual';
+export type SourceMemoryCaptureMode = 'auto' | 'suggested' | 'manual';
+export type SourceMemoryPrivacyLevel =
+  | 'private'
+  | 'work'
+  | 'shareable_summary'
+  | 'needs_review';
+
+export interface SourceMemoryInteractionSignals {
+  dwellMs?: number;
+  activeMs?: number;
+  scrollDepth?: number;
+  selectedText?: boolean;
+  copiedText?: boolean;
+  repeatVisit?: boolean;
+  ownerAuthored?: boolean;
+  manualClick?: boolean;
+  openedFromMemory?: boolean;
+}
+
+export interface SourceMemoryCandidateRequest {
+  sourceKind?: SourceMemorySourceKind;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  text?: string;
+  selectedText?: string;
+  nearbyText?: string;
+  entityHints?: Array<{ kind: string; value: string }>;
+  interactions?: SourceMemoryInteractionSignals;
+  scope?: 'work' | 'personal';
+}
+
+export interface SourceMemoryCandidateResponse {
+  eligible: boolean;
+  score: number;
+  suggestedAction: 'auto_save' | 'suggest' | 'ignore' | 'blocked';
+  reasons: string[];
+  blockedReason?: string;
+  captureMode: SourceMemoryCaptureMode;
+}
+
+export interface SourceMemoryCreateRequest extends SourceMemoryCandidateRequest {
+  captureMode?: SourceMemoryCaptureMode;
+  captureReason?: string;
+  note?: string;
+  privacyLevel?: SourceMemoryPrivacyLevel;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SourceMemoryAnchor {
+  id: string;
+  anchorKind: string;
+  locator?: string;
+  quoteOrPreview: string;
+  sensitivity: string;
+  confidence: number;
+}
+
+export interface SourceMemoryTakeaway {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  evidenceAnchorIds: string[];
+  confidence: number;
+  status: string;
+}
+
+export interface SourceMemoryTrigger {
+  id: string;
+  triggerKind: string;
+  description: string;
+  matcher: Record<string, unknown>;
+  defaultBehavior: string;
+}
+
+export interface SourceMemoryCapsule {
+  id: string;
+  sourceKind: string;
+  sourceUrl?: string;
+  sourceTitle: string;
+  sourceHost?: string;
+  captureMode: SourceMemoryCaptureMode;
+  captureReason: string;
+  status: string;
+  scope: 'work' | 'personal';
+  privacyLevel: SourceMemoryPrivacyLevel;
+  summary: string;
+  contentPreview: string;
+  messageId?: string;
+  createdAt: number;
+  updatedAt: number;
+  savedAt?: number;
+  duplicate?: boolean;
+  anchors: SourceMemoryAnchor[];
+  takeaways: SourceMemoryTakeaway[];
+  triggers: SourceMemoryTrigger[];
+}
+
+export interface SourceMemoryCapsuleResponse {
+  capsule: SourceMemoryCapsule;
+}
+
 export type DayPilotPriority = 'critical' | 'high' | 'medium' | 'low';
 export type DayPilotState = 'prepare' | 'now' | 'waiting' | 'done' | 'muted';
 export type DayPilotProviderTarget =
@@ -2936,6 +3122,20 @@ export class MemoryServiceClient {
     return this._userIdResolvePromise;
   }
 
+  private async applyUiLanguageHeaders(
+    headers: Record<string, string>,
+  ): Promise<void> {
+    try {
+      const preferences = await readExtensionUiPreferences();
+      headers['X-Personal-AI-Language'] =
+        preferences.language || DEFAULT_UI_LANGUAGE;
+      headers['Accept-Language'] = preferences.language || DEFAULT_UI_LANGUAGE;
+    } catch {
+      headers['X-Personal-AI-Language'] = DEFAULT_UI_LANGUAGE;
+      headers['Accept-Language'] = DEFAULT_UI_LANGUAGE;
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Core HTTP wrapper
   // --------------------------------------------------------------------------
@@ -2954,6 +3154,7 @@ export class MemoryServiceClient {
       Accept: 'application/json',
       'X-User-Id': this.userId,
     };
+    await this.applyUiLanguageHeaders(headers);
 
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -3039,6 +3240,7 @@ export class MemoryServiceClient {
       Accept: 'application/zip',
       'X-User-Id': this.userId,
     };
+    await this.applyUiLanguageHeaders(headers);
 
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -3116,6 +3318,7 @@ export class MemoryServiceClient {
       Accept: accept,
       'X-User-Id': this.userId,
     };
+    await this.applyUiLanguageHeaders(headers);
 
     if (this.apiKey) {
       headers.Authorization = `Bearer ${this.apiKey}`;
@@ -3269,6 +3472,16 @@ export class MemoryServiceClient {
       'POST',
       '/composer/assist',
       request,
+    );
+  }
+
+  async submitAmbientCalibrationTrace(
+    trace: AmbientCalibrationTrace,
+  ): Promise<AmbientCalibrationTraceResponse> {
+    return this.request<AmbientCalibrationTraceResponse>(
+      'POST',
+      '/ambient-calibration/traces',
+      trace,
     );
   }
 
@@ -4728,6 +4941,56 @@ export class MemoryServiceClient {
 
   async getMemoryCoverageMap(): Promise<MemoryCoverageMapResponse> {
     return this.request<MemoryCoverageMapResponse>('GET', '/coverage/map');
+  }
+
+  async scoreSourceMemoryCandidate(
+    payload: SourceMemoryCandidateRequest,
+  ): Promise<SourceMemoryCandidateResponse> {
+    return this.request<SourceMemoryCandidateResponse>(
+      'POST',
+      '/source-memory/candidates/score',
+      payload,
+    );
+  }
+
+  async scoreSourceMemorySelection(
+    payload: SourceMemoryCandidateRequest,
+  ): Promise<SourceMemoryCandidateResponse> {
+    return this.request<SourceMemoryCandidateResponse>(
+      'POST',
+      '/source-memory/candidates/selection',
+      payload,
+    );
+  }
+
+  async createSourceMemoryCapsule(
+    payload: SourceMemoryCreateRequest,
+  ): Promise<SourceMemoryCapsuleResponse> {
+    return this.request<SourceMemoryCapsuleResponse>(
+      'POST',
+      '/source-memory/capsules',
+      payload,
+    );
+  }
+
+  async getSourceMemoryCapsule(
+    id: string,
+  ): Promise<SourceMemoryCapsuleResponse> {
+    return this.request<SourceMemoryCapsuleResponse>(
+      'GET',
+      `/source-memory/capsules/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async dismissSourceMemoryCapsule(
+    id: string,
+    reason?: string,
+  ): Promise<SourceMemoryCapsuleResponse> {
+    return this.request<SourceMemoryCapsuleResponse>(
+      'POST',
+      `/source-memory/capsules/${encodeURIComponent(id)}/dismiss`,
+      { reason },
+    );
   }
 
   // --------------------------------------------------------------------------

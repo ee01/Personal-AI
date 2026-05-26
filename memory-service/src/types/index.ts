@@ -27,6 +27,7 @@ export type RecallSourceType =
   | 'reflection'
   | 'dream'
   | 'rehearsal'
+  | 'source_memory'
   | 'entity_profile'
   | 'markdown'
   | 'user_core';
@@ -920,7 +921,7 @@ export interface ContextRecallRequest {
 
 export interface ContextRecallMatch {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   score: number;
   title?: string;
   snippet: string;
@@ -1071,7 +1072,7 @@ export interface ComposerAssistRequest {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   title?: string;
   snippet: string;
   sourceLabel?: string;

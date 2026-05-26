@@ -203,6 +203,8 @@ contextBridge.exposeInMainWorld('appShell', {
     ipcRenderer.invoke('bridge-app:open-input-monitoring-settings'),
   openMicrophoneSettings: () =>
     ipcRenderer.invoke('bridge-app:open-microphone-settings'),
+  openSpeechRecognitionSettings: () =>
+    ipcRenderer.invoke('bridge-app:open-speech-recognition-settings'),
   refreshShortcutHelper: () =>
     ipcRenderer.invoke('bridge-app:refresh-shortcut-helper'),
   getVoicePreferences: () =>

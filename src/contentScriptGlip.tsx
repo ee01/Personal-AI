@@ -7,6 +7,12 @@ import { ViewModel } from './viewModel';
 import { fetchUserData } from './metadata';
 import { CONFIG_LOCAL_STORAGE_KEY } from './constants';
 import { getLocalStorageItem, getCurrentUserInfo } from './storage';
+import {
+  formatContentScriptDate,
+  getContentScriptUiLanguage,
+  initContentScriptI18n,
+  uiPhrase as ui,
+} from './i18n/contentScript';
 import { initMessageReaction, MessageReactionConfig } from './message-reaction';
 import {
   GLIP_MESSAGE_MARKERS_KEY,
@@ -28,6 +34,10 @@ import {
   shouldPreserveDefaultNativeJoinClick,
   watchRingCentralNativeJoinEnabled,
 } from './ringcentralNativeJoin';
+
+initContentScriptI18n(() => {
+  void decorateFollowThreadMessages();
+});
 
 // =====================================================
 // Jira Ticket 悬浮卡片功能
@@ -237,8 +247,17 @@ function formatJiraDate(dateString: string): string {
     (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
   );
 
-  if (diffDays === 0) return '今天';
-  if (diffDays === 1) return '昨天';
+  if (getContentScriptUiLanguage() === 'en-US') {
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays}d ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+    return `${Math.floor(diffDays / 365)}y ago`;
+  }
+
+  if (diffDays === 0) return ui('今天');
+  if (diffDays === 1) return ui('昨天');
   if (diffDays < 7) return `${diffDays}天前`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)}周前`;
   if (diffDays < 365) return `${Math.floor(diffDays / 30)}个月前`;
@@ -347,16 +366,16 @@ function setCopyButtonVisualState(
   if (status === 'success') {
     button.classList.add('is-success');
     button.innerHTML = getSuccessIconSvg();
-    button.setAttribute('aria-label', `${defaultLabel} 已复制`);
-    button.title = `${defaultLabel} 已复制`;
+    button.setAttribute('aria-label', `${defaultLabel} ${ui('已复制')}`);
+    button.title = `${defaultLabel} ${ui('已复制')}`;
     return;
   }
 
   if (status === 'error') {
     button.classList.add('is-error');
     button.innerHTML = getErrorIconSvg();
-    button.setAttribute('aria-label', `${defaultLabel} 失败`);
-    button.title = `${defaultLabel} 失败`;
+    button.setAttribute('aria-label', `${defaultLabel} ${ui('失败')}`);
+    button.title = `${defaultLabel} ${ui('失败')}`;
     return;
   }
 
@@ -438,11 +457,11 @@ function createJiraCard(
       <div class="jira-card-key-row">
         <span class="jira-card-type" title="${ticket.issuetype}">${getIssueTypeIcon(ticket.issuetype)}</span>
         <span class="jira-card-key-text">${ticket.key}</span>
-        <button type="button" class="jira-card-copy-icon-btn" data-copy-action="link" aria-label="复制带链接 ID" title="复制带链接 ID">
+        <button type="button" class="jira-card-copy-icon-btn" data-copy-action="link" aria-label="${escapeHtml(ui('复制带链接 ID'))}" title="${escapeHtml(ui('复制带链接 ID'))}">
           ${getCopyIconSvg()}
         </button>
         <span class="jira-card-status" style="background: ${statusColors.bg}; color: ${statusColors.text};">${ticket.status}</span>
-        <a href="${ticket.url}" target="_blank" class="jira-card-open-icon" title="在 JIRA 中打开">
+        <a href="${ticket.url}" target="_blank" class="jira-card-open-icon" title="${escapeHtml(ui('在 JIRA 中打开'))}">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
             <polyline points="15 3 21 3 21 9"></polyline>
@@ -452,7 +471,7 @@ function createJiraCard(
       </div>
       <div class="jira-card-summary-row">
         <div class="jira-card-summary" title="${escapeHtml(ticket.summary)}">${escapeHtml(ticket.summary)}</div>
-        <button type="button" class="jira-card-copy-icon-btn jira-card-copy-icon-btn-summary" data-copy-action="summary" aria-label="复制 Ticket Summary" title="复制 Ticket Summary">
+        <button type="button" class="jira-card-copy-icon-btn jira-card-copy-icon-btn-summary" data-copy-action="summary" aria-label="${escapeHtml(ui('复制 Ticket Summary'))}" title="${escapeHtml(ui('复制 Ticket Summary'))}">
           ${getCopyIconSvg()}
         </button>
       </div>
@@ -461,33 +480,33 @@ function createJiraCard(
     <div class="jira-card-body">
       <div class="jira-card-meta-grid">
         <div class="jira-card-meta-item">
-          <span class="jira-card-meta-label">优先级</span>
-          <span class="jira-card-meta-value" style="color: ${priorityColor};">● ${ticket.priority || '未设置'}</span>
+          <span class="jira-card-meta-label">${escapeHtml(ui('优先级'))}</span>
+          <span class="jira-card-meta-value" style="color: ${priorityColor};">● ${ticket.priority ? escapeHtml(ticket.priority) : escapeHtml(ui('未设置'))}</span>
         </div>
         <div class="jira-card-meta-item">
-          <span class="jira-card-meta-label">经办人</span>
+          <span class="jira-card-meta-label">${escapeHtml(ui('经办人'))}</span>
           <span class="jira-card-meta-value">
             ${ticket.assigneeAvatar ? `<img src="${ticket.assigneeAvatar}" class="jira-card-avatar" alt="" />` : ''}
             ${escapeHtml(ticket.assignee)}
           </span>
         </div>
         <div class="jira-card-meta-item">
-          <span class="jira-card-meta-label">报告人</span>
+          <span class="jira-card-meta-label">${escapeHtml(ui('报告人'))}</span>
           <span class="jira-card-meta-value">
             ${ticket.reporterAvatar ? `<img src="${ticket.reporterAvatar}" class="jira-card-avatar" alt="" />` : ''}
             ${escapeHtml(ticket.reporter)}
           </span>
         </div>
         <div class="jira-card-meta-item">
-          <span class="jira-card-meta-label">更新时间</span>
+          <span class="jira-card-meta-label">${escapeHtml(ui('更新时间'))}</span>
           <span class="jira-card-meta-value">${formatJiraDate(ticket.updated)}</span>
         </div>
         ${
           ticket.duedate
             ? `
         <div class="jira-card-meta-item">
-          <span class="jira-card-meta-label">截止日期</span>
-          <span class="jira-card-meta-value ${isOverdue(ticket.duedate) ? 'overdue' : ''}">${new Date(ticket.duedate).toLocaleDateString('zh-CN')}</span>
+          <span class="jira-card-meta-label">${escapeHtml(ui('截止日期'))}</span>
+          <span class="jira-card-meta-value ${isOverdue(ticket.duedate) ? 'overdue' : ''}">${formatContentScriptDate(ticket.duedate)}</span>
         </div>
         `
             : ''
@@ -525,7 +544,7 @@ function createJiraCard(
         ticket.components.length > 0
           ? `
       <div class="jira-card-components">
-        <span class="jira-card-meta-label">组件:</span>
+        <span class="jira-card-meta-label">${escapeHtml(ui('组件:'))}</span>
         ${ticket.components
           .slice(0, 2)
           .map(
@@ -541,7 +560,7 @@ function createJiraCard(
     </div>
     
     <div class="jira-card-footer">
-      <span class="jira-card-footer-text"><img src="${iconUrl}" title="Personal AI provided" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" /> Personal AI provided</span>
+      <span class="jira-card-footer-text"><img src="${iconUrl}" title="${escapeHtml(ui('Personal AI provided'))}" class="design-icon" style="width:16px;height:16px;vertical-align:middle;" /> ${escapeHtml(ui('Personal AI provided'))}</span>
       <span class="jira-card-author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank">Esone</a></span>
     </div>
   `;
@@ -642,7 +661,7 @@ function createLoadingCard(
         <span class="jira-card-loading-spinner"></span>
         <span class="jira-card-key-text">${ticketKey}</span>
       </div>
-      <div class="jira-card-loading-text">正在获取 Ticket 信息...</div>
+      <div class="jira-card-loading-text">${escapeHtml(ui('正在获取 Ticket 信息...'))}</div>
     </div>
   `;
 
@@ -678,8 +697,8 @@ function createErrorCard(
       <div class="jira-card-key-row">
         <span class="jira-card-key-text">${ticketKey}</span>
       </div>
-      <div class="jira-card-error-text">⚠️ 无法获取 Ticket 信息</div>
-      <div class="jira-card-error-hint">请检查网络连接或登录 JIRA</div>
+      <div class="jira-card-error-text">${escapeHtml(ui('无法获取 Ticket 信息'))}</div>
+      <div class="jira-card-error-hint">${escapeHtml(ui('请检查网络连接或登录 JIRA'))}</div>
     </div>
   `;
 
@@ -1129,7 +1148,7 @@ function processJiraLink(linkElement: HTMLAnchorElement) {
   const icon = document.createElement('img');
   icon.src = iconUrl;
   icon.className = 'jira-link-icon';
-  icon.title = `查看 ${ticketKey} 详情`;
+  icon.title = `${ui('查看')} ${ticketKey} ${ui('详情')}`;
   icon.alt = `JIRA: `;
 
   // 创建一个包装器来统一处理 hover 事件
@@ -1633,7 +1652,7 @@ function parseGlipMessageUrl(rawUrl: string): GlipLinkTarget | null {
     const [, groupId, postId] = match;
     const label =
       parsed.pathname.includes('/l/messages/') || postId
-        ? '查看原消息'
+        ? ui('查看原消息')
         : groupId;
 
     return {
@@ -3170,8 +3189,10 @@ async function decorateFollowThreadMessages() {
       const daysLeft = Number(primaryMarker.metadata?.expiresInDays);
       const timeText =
         Number.isFinite(daysLeft) && daysLeft > 0
-          ? `${daysLeft}天后过期`
-          : '关注后续';
+          ? getContentScriptUiLanguage() === 'en-US'
+            ? `Expires in ${daysLeft}d`
+            : `${daysLeft}天后过期`
+          : ui('关注后续');
 
       // 计算时间元素宽度，动态设置 right 值
       const rightOffset = calculateTimeElementWidth(card);
@@ -3181,7 +3202,7 @@ async function decorateFollowThreadMessages() {
       eyeIcon.className = 'follow-thread-eye-icon';
       eyeIcon.style.right = `${rightOffset}px`;
       eyeIcon.innerHTML = `<span class="eye-emoji">👁</span> ${timeText}`;
-      eyeIcon.title = '正在关注后续';
+      eyeIcon.title = ui('正在关注后续');
       card.appendChild(eyeIcon);
 
       // 创建丰富的浮出层
@@ -3191,15 +3212,15 @@ async function decorateFollowThreadMessages() {
       const relatedCount = Number(primaryMarker.metadata?.relatedCount) || 0;
       tooltip.innerHTML = `
         <div class="tooltip-title">
-          👁 正在关注后续
+          👁 ${escapeHtml(ui('正在关注后续'))}
           <span class="tooltip-status-badge">${timeText}</span>
         </div>
         <div class="tooltip-section">
-          <div class="tooltip-section-label">原消息摘要</div>
+          <div class="tooltip-section-label">${escapeHtml(ui('原消息摘要'))}</div>
           <div class="tooltip-original-content">${escapeHtml(truncateText(primaryMarker.tooltip || '', 100))}</div>
         </div>
         <div class="tooltip-section tooltip-related-list">
-          <div class="tooltip-section-label">关联消息 (${relatedCount})</div>
+          <div class="tooltip-section-label">${escapeHtml(ui('关联消息'))} (${relatedCount})</div>
         </div>
       `;
       card.appendChild(tooltip);
@@ -3222,7 +3243,7 @@ async function decorateFollowThreadMessages() {
       badge.className = 'follow-thread-related-badge';
       badge.style.right = `${rightOffset}px`;
       const relationType = String(primaryMarker.metadata?.relationType || '');
-      badge.textContent = `${getRelationTypeIcon(relationType)} 关联`;
+      badge.textContent = `${getRelationTypeIcon(relationType)} ${ui('关联')}`;
       card.appendChild(badge);
 
       // 添加详细 Tooltip
@@ -3230,14 +3251,14 @@ async function decorateFollowThreadMessages() {
       tooltip.className = 'follow-thread-related-tooltip';
       tooltip.innerHTML = `
         <div class="tooltip-header">
-          ${getRelationTypeIcon(relationType)} 关注后续的关联消息
+          ${getRelationTypeIcon(relationType)} ${escapeHtml(ui('关注后续的关联消息'))}
         </div>
         <div class="tooltip-row">
-          <span class="tooltip-label">原消息发送者:</span>
+          <span class="tooltip-label">${escapeHtml(ui('原消息发送者:'))}</span>
           <span class="tooltip-value">${escapeHtml(String(primaryMarker.metadata?.originalSender || ''))}</span>
         </div>
         <div class="tooltip-original-section">
-          <div class="tooltip-section-label">关联摘要</div>
+          <div class="tooltip-section-label">${escapeHtml(ui('关联摘要'))}</div>
           <div class="tooltip-original-preview">${escapeHtml(truncateText(primaryMarker.tooltip || '', 80))}</div>
         </div>
       `;

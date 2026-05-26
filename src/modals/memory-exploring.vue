@@ -7,11 +7,9 @@
       <!-- 侧边栏 -->
       <div class="sidebar">
         <div class="sidebar-header">
-          <div class="logo">🧠 记忆查询系统</div>
+          <div class="logo">🧠 {{ t('memoryExplorer.title') }}</div>
           <p class="sidebar-note">
-            记忆入口规则只展示你手动创建的规则；帮我问 /
-            自我反思等系统内部观察会在主动询问里展示证据，不计入这里的
-            FollowThreads。
+            {{ t('memoryExplorer.sidebarNote') }}
           </p>
           <div
             v-if="memoryUserIdentity || memoryUserIdentityError"
@@ -26,15 +24,19 @@
           >
             <span class="memory-user-dot" aria-hidden="true"></span>
             <div class="memory-user-copy">
-              <div class="memory-user-label">当前记忆用户</div>
+              <div class="memory-user-label">
+                {{ t('memoryExplorer.currentUser') }}
+              </div>
               <div class="memory-user-value">
-                {{ memoryUserIdentity?.id || '未确认' }}
+                {{
+                  memoryUserIdentity?.id || t('memoryExplorer.unconfirmed')
+                }}
               </div>
               <div
                 v-if="memoryUserIdentity?.fallbackToDefault"
                 class="memory-user-hint"
               >
-                未解析到个人身份，正在使用 default 空间。
+                {{ t('memoryExplorer.defaultSpaceHint') }}
               </div>
               <div v-else-if="memoryUserIdentityError" class="memory-user-hint">
                 {{ memoryUserIdentityError }}
@@ -50,7 +52,7 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">🏠</div>
-            <div class="entity-name">今日领航</div>
+            <div class="entity-name">{{ t('memoryExplorer.nav.today') }}</div>
           </router-link>
 
           <router-link
@@ -59,7 +61,9 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">⏰</div>
-            <div class="entity-name">时间轴</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.timeline') }}
+            </div>
           </router-link>
 
           <router-link
@@ -68,7 +72,9 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">📡</div>
-            <div class="entity-name">会议记录</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.meetings') }}
+            </div>
             <div v-if="meetingCount > 0" class="entity-count">
               {{ meetingCount }}
             </div>
@@ -80,7 +86,9 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">👤</div>
-            <div class="entity-name">用户画像</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.userProfile') }}
+            </div>
           </router-link>
 
           <router-link
@@ -90,8 +98,12 @@
           >
             <div class="entity-icon">👁</div>
             <div class="entity-labels">
-              <div class="entity-name">关注后续</div>
-              <div class="entity-subnote">仅统计手动规则</div>
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.followThreads') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.followThreadsSubnote') }}
+              </div>
             </div>
             <div class="entity-count">{{ followThreadCount }}</div>
           </router-link>
@@ -102,7 +114,9 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">🌙</div>
-            <div class="entity-name">梦境重放</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.dreams') }}
+            </div>
           </router-link>
 
           <router-link
@@ -111,7 +125,9 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">🧠</div>
-            <div class="entity-name">自我反思</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.reflection') }}
+            </div>
             <div v-if="activeReflectionCount > 0" class="entity-count">
               {{ activeReflectionCount }}
             </div>
@@ -124,8 +140,12 @@
           >
             <div class="entity-icon">🎭</div>
             <div class="entity-labels">
-              <div class="entity-name">Rehearsal</div>
-              <div class="entity-subnote">未来场景预演</div>
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.rehearsal') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.rehearsalSubnote') }}
+              </div>
             </div>
           </router-link>
 
@@ -135,7 +155,9 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">⚖️</div>
-            <div class="entity-name">决策中心</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.decisions') }}
+            </div>
             <div v-if="pendingDecisionCount > 0" class="entity-count">
               {{ pendingDecisionCount }}
             </div>
@@ -147,7 +169,9 @@
             active-class="router-link-active"
           >
             <div class="entity-icon">⚙️</div>
-            <div class="entity-name">动作队列</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.actions') }}
+            </div>
             <div v-if="queuedActionCount > 0" class="entity-count">
               {{ queuedActionCount }}
             </div>
@@ -160,8 +184,12 @@
           >
             <div class="entity-icon">📡</div>
             <div class="entity-labels">
-              <div class="entity-name">主动询问</div>
-              <div class="entity-subnote">系统证据在这里看</div>
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.outreach') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.outreachSubnote') }}
+              </div>
             </div>
             <div v-if="outreachSessionCount > 0" class="entity-count">
               {{ outreachSessionCount }}
@@ -177,8 +205,12 @@
           >
             <div class="entity-icon">🧪</div>
             <div class="entity-labels">
-              <div class="entity-name">个人技能</div>
-              <div class="entity-subnote">在用技能与萃取建议</div>
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.skills') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.skillsSubnote') }}
+              </div>
             </div>
             <div v-if="skillCount > 0" class="entity-count">
               {{ skillCount }}
@@ -192,8 +224,12 @@
           >
             <div class="entity-icon">🗺</div>
             <div class="entity-labels">
-              <div class="entity-name">记忆覆盖</div>
-              <div class="entity-subnote">平台覆盖与智能导入</div>
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.coverage') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.coverageSubnote') }}
+              </div>
             </div>
           </router-link>
 
@@ -222,13 +258,17 @@
             <input
               type="text"
               class="search-input"
-              placeholder="搜索任何内容、实体或关键词（按 Enter 搜索）..."
+              :placeholder="t('memoryExplorer.search.placeholder')"
               v-model="searchQuery"
               @input="handleSearchInput"
               @keypress.enter="handleSearch"
             />
           </div>
-          <div class="scope-segmented" role="group" aria-label="记忆范围">
+          <div
+            class="scope-segmented"
+            role="group"
+            :aria-label="t('memoryExplorer.search.scopeAria')"
+          >
             <button
               v-for="option in recallScopeOptions"
               :key="option.value"
@@ -244,8 +284,12 @@
               {{ option.label }}
             </button>
           </div>
-          <button class="filter-btn" @click="handleSearch">📊 搜索</button>
-          <button class="filter-btn" @click="clearSearch">🔄 重置</button>
+          <button class="filter-btn" @click="handleSearch">
+            📊 {{ t('common.search') }}
+          </button>
+          <button class="filter-btn" @click="clearSearch">
+            🔄 {{ t('common.reset') }}
+          </button>
         </div>
 
         <!-- 路由内容 -->
@@ -269,6 +313,7 @@ import {
   type OutreachTemplateRuntimeStatusItem,
   type RecallScope,
 } from '../services/MemoryServiceClient';
+import { initExtensionVueI18n, vueT } from '../i18n/vue';
 
 /* eslint-disable no-undef */
 declare const chrome: any;
@@ -278,6 +323,7 @@ declare const chrome: any;
 const store = useMemoryStore();
 const router = useRouter();
 const route = useRoute();
+const t = vueT;
 const entityTypes = computed(() => store.entityTypes);
 const searchQuery = ref('');
 const selectedRecallScope = ref<RecallScope>('work');
@@ -301,15 +347,34 @@ const TERMINAL_OUTREACH_STATUSES = new Set([
   'cancelled',
   'failed',
 ]);
-const recallScopeOptions: Array<{
+const stopI18n = initExtensionVueI18n();
+onUnmounted(() => {
+  stopI18n();
+});
+
+const recallScopeOptions = computed<
+  Array<{
   value: RecallScope;
   label: string;
   title: string;
-}> = [
-  { value: 'work', label: '工作', title: '只检索工作记忆' },
-  { value: 'personal', label: '个人', title: '只检索个人记忆' },
-  { value: 'all', label: '全部', title: '同时检索工作与个人记忆' },
-];
+  }>
+>(() => [
+  {
+    value: 'work',
+    label: t('common.work'),
+    title: t('memoryExplorer.scope.work.title'),
+  },
+  {
+    value: 'personal',
+    label: t('common.personal'),
+    title: t('memoryExplorer.scope.personal.title'),
+  },
+  {
+    value: 'all',
+    label: t('common.all'),
+    title: t('memoryExplorer.scope.all.title'),
+  },
+]);
 
 function normalizeClientRecallScope(value: unknown): RecallScope | null {
   const rawValue = Array.isArray(value) ? value[0] : value;

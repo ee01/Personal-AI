@@ -46,3 +46,22 @@ test('formatRemindTime rounds short same-day reminders up to avoid stale labels'
     '1 小时 45 分钟后 (10:45)',
   );
 });
+
+test('formatRemindTime localizes English relative and calendar labels', () => {
+  assert.equal(
+    formatRemindTime(
+      new Date('2026-05-04T09:30:00.000+08:00'),
+      new Date('2026-05-04T09:00:00.500+08:00'),
+      'en-US',
+    ),
+    'In 30 minutes (9:30 AM)',
+  );
+  assert.equal(
+    formatRemindTime(
+      new Date('2026-05-05T09:00:00+08:00'),
+      new Date('2026-05-04T17:30:00+08:00'),
+      'en-US',
+    ),
+    'Tomorrow 9:00 AM',
+  );
+});

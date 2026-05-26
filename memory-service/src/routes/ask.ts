@@ -39,6 +39,11 @@ import {
 } from '../core/EvidenceResolutionPlanner.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
+import {
+  getUiLanguageFromHeaders,
+  localizeUiText,
+  t as uiT,
+} from '../i18n.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import type Database from 'better-sqlite3';
@@ -970,6 +975,9 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         scope,
       } = request.body;
       const requestId = randomUUID();
+      const uiLanguage = getUiLanguageFromHeaders(
+        request.headers as Record<string, unknown>,
+      );
 
       try {
         const {
@@ -1049,8 +1057,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
 
         const queryTimeMs = Date.now() - startMs;
         return reply.status(500).send({
-          answer:
-            'Sorry, I was unable to process your question. Please try again later.',
+          answer: uiT('ask.error.answer', uiLanguage),
           queryTimeMs,
           error: (err as Error).message,
         });
@@ -1075,6 +1082,9 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         scope,
       } = request.body;
       const requestId = randomUUID();
+      const uiLanguage = getUiLanguageFromHeaders(
+        request.headers as Record<string, unknown>,
+      );
 
       reply.hijack();
       reply.raw.writeHead?.(200, {
@@ -1104,7 +1114,10 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           userContext,
           includeEvidence,
           scope,
-          (message) => writeSseEvent(reply, 'status', { message }),
+          (message) =>
+            writeSseEvent(reply, 'status', {
+              message: localizeUiText(message, uiLanguage),
+            }),
         );
 
         // Emit recall_done so the UI can render evidence/timeline/media blocks
@@ -1145,7 +1158,9 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           intentContext,
           'Answer the question in markdown only. Do not return JSON.',
         );
-        writeSseEvent(reply, 'status', { message: '正在生成回答...' });
+        writeSseEvent(reply, 'status', {
+          message: uiT('ask.status.generating', uiLanguage),
+        });
 
         let streamedAnswer = '';
         const answerResponse = await llmClient.generateStream(
@@ -1169,7 +1184,9 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
 
         let structuredAnswer: StructuredAskAnswer | undefined;
         try {
-          writeSseEvent(reply, 'status', { message: '正在整理结构化要点...' });
+          writeSseEvent(reply, 'status', {
+            message: uiT('ask.status.structuring', uiLanguage),
+          });
           const enrichmentPrompt = buildPromptEnvelope(
             query,
             combinedMemoryContext,
@@ -1236,7 +1253,8 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         request.log.error(err, 'Ask stream endpoint failed');
         writeSseEvent(reply, 'error', {
-          message: (err as Error).message || 'Unable to process the question.',
+          message:
+            (err as Error).message || uiT('ask.error.stream', uiLanguage),
         });
         reply.raw.end();
       }

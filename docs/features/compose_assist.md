@@ -1,6 +1,6 @@
 # Compose Assist
 
-_最后更新: 2026-05-24_
+_最后更新: 2026-05-26_
 
 ## 定位
 
@@ -68,6 +68,7 @@ UI 行为：
 - 靠近视口底部时会自动向上展开并限制高度，避免预览框被屏幕边缘挡住。
 - 用户在建议生成中或建议出现后继续编辑草稿时，前端会立刻收起旧建议并重新 debounce 请求；旧草稿版本返回的响应会被丢弃，避免插入过期回复。
 - 建议框右上角有小 thumb-down。点击后隐藏当前建议，并降低后续同类低质建议的出现概率。
+- 如果建议包含 Rehearsal 预演提醒，thumb-down 会同时把对应 activation 标记为 `irrelevant`，插入且未撤销会标记为 `accepted`，避免同一条错误预演在相同场景里反复出现。
 - `Escape` 或 thumb-down 会 dismiss 当前 context，一段时间内不再重复展示同一条。
 - Web AI 输入框里的 dismiss 会把当前草稿也纳入 context key；拒绝“第一个 prompt”的建议后，在同一个 ChatGPT / 豆包 / Claude / Gemini 页面改写成另一个 prompt，仍可重新触发来源适配和 context pack。
 
@@ -88,12 +89,49 @@ Compose Assist 的展示阈值是输入框 surface 自己的 UI gating，不影�
 - 用户点击 icon 插入建议，记录 `accepted`，阈值按“距离下界的剩余空间”非线性下降。前几次下降更明显，越接近下界下降越少。
 - 用户点击 thumb-down，记录 `rejected`，阈值按“距离上界的剩余空间”非线性上升。前几次上升更明显，越接近上界上升越少。
 - 反馈事件存储在 `chrome.storage.local.composerGuardFeedbackEvents`，最多保留最近 100 条。
+- 当 evidence 类型是 Rehearsal 时，Compose Assist 会复用 background 的 `CONTEXT_RECALL_FEEDBACK` 通道，把正向反馈写成 `/rehearsals/:id/feedback outcome=accepted`，负向反馈写成 `outcome=irrelevant`，并携带 `activationId`。
+- 插入后如果用户继续改写并发送，Compose Assist 会在原网页 Send / Submit / Reply 动作上生成无感校准 trace。trace 只包含 redacted diff summary、evidence id、场景 key 和行为类型，不保存完整发送文本。
+- hover 预览但没有插入、随后用户自己发送回复时，也会记录 `sent_without_insert` trace，用于校准“记忆可能相关但建议措辞/时机不对”与“召回不该出现”的差异。
+- thumb-down 除了调整前端阈值，也会写入 `wrong` trace，作为强负向校准信号。
 
 设计原则：
 
 - 不默认弹出反馈表单，避免反馈输入膨胀。
 - 当前只收集低负担二元信号：插入代表“这条有用”，thumb-down 代表“这条不该出现”。
+- 更细的校准优先藏在用户自然动作里：插入、改写、发送、hover 后不用、撤销和 thumb-down。
 - 如后续需要诊断质量问题，可以在事件 schema 上扩展可选 reason，例如 `irrelevant_memory`、`wrong_tone`、`too_sensitive`、`already_answered`，但 UI 上应按需二级展开，而不是每次打断用户。
+
+### 无感校准 trace
+
+Compose Assist 是 Ambient Calibration 的首个采样点。它不新增可见 UI，也不要求用户打开校准平台。
+
+采样规则：
+
+| 用户行为 | trace action | 解释 |
+| -------- | ------------ | ---- |
+| 插入建议且撤销窗口结束 | `inserted` | 建议至少值得进入草稿，作为中等强度正向信号 |
+| 插入建议后直接发送或仅轻微追加 | `sent_after_insert` | 记忆匹配和措辞大概率都正确 |
+| 插入建议后发送前改写 | `edited_before_send` | 记忆匹配可能正确，但措辞、范围或细节需要学习 |
+| 插入建议后删除/完全改写再发送 | `deleted_before_send` | 召回或建议可能不适合当前场景 |
+| hover 预览但不插入，随后发送自己的回复 | `sent_without_insert` | 预览被看过但没被采用，结合最终文本相似度判断是措辞问题还是召回问题 |
+| thumb-down | `wrong` | 用户明确认为这类建议不应出现 |
+
+前端只上传这些 redacted 字段：
+
+- `suggestionHash`、`finalHash`
+- 建议/最终文本长度
+- similarity score 与 edit distance band
+- `same_intent`、`partially_rewritten`、`different_intent` 等语义关系摘要
+- evidence id、type、title、role、score
+- scene key、surface、scenario、context type、confidence
+
+正式入口：
+
+```http
+POST /api/v1/ambient-calibration/traces
+```
+
+这条 trace 当前只用于后续召回调权、诊断和 eval 数据沉淀；不会把最终发送文本直接入库，也不会自动写 confirmed user profile。
 
 ## 上下文提取
 
@@ -197,6 +235,7 @@ Recall 返回后，RingCentral/Jira 还会再做一层场景相关性过滤：
 
 - Rehearsal 命中是“预演提醒” evidence，不是普通背景记忆。它必须靠人物、群组、issue、URL、meeting、topic 等 scene cue 命中；即使命中也只影响建议内容，不允许自动发送。
 - 已经由召回层判定为 `rehearsal_cue` 的 Rehearsal 不再被普通文本 overlap 二次过滤误杀，因为这类提醒的相关性来自场景线索，不一定来自当前消息正文复述。
+- Rehearsal 的接受/拒绝反馈会回写到 activation；它不替代本地自适应阈值，而是让具体未来场景脚本能降权或确认有效。
 - 非 Web AI 场景必须有当前上下文 tokens，否则不展示。
 - evidence 与当前场景 token overlap `>= 2` 才直接保留。
 - 如果只 overlap `>= 1`，还必须和 source anchor overlap `>= 1`，例如同 conversation、同 group、同 thread root 或同 issue key。
@@ -252,6 +291,12 @@ POST /api/v1/composer/assist
 
 ```http
 POST /api/v1/composer/assist
+```
+
+无感校准入口：
+
+```http
+POST /api/v1/ambient-calibration/traces
 ```
 
 兼容入口：
@@ -338,6 +383,7 @@ TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-reso
 npm start
 node tools/verify-compose-assist-draft-staleness-e2e.mjs
 node tools/verify-compose-assist-direct-insert-e2e.mjs
+node tools/verify-compose-assist-ambient-calibration-e2e.mjs
 ```
 
 等待首次 webpack dev compile 成功后停止 watch。
@@ -359,3 +405,5 @@ node tools/verify-compose-assist-direct-insert-e2e.mjs
 - contenteditable 中用户选中一段草稿后点击 icon，建议应替换该选区并保留选区前后的原文；插入成功后才记录 accepted 反馈。
 - 插入后点击 `撤销` 应恢复原草稿，并且不记录 accepted 反馈、不立即重弹同一建议。
 - Web AI 场景 thumb-down 只 dismiss 当前草稿对应的建议；用户在同一页面输入不同 prompt 时，应该重新请求 `/composer/assist`。
+- 插入建议、改写后发送时，应产生 `edited_before_send` trace，且 trace 中不能包含完整最终发送文本。
+- hover 建议但不插入，随后自行发送时，应产生 `sent_without_insert` trace。

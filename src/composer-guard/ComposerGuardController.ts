@@ -44,6 +44,8 @@ const POPOVER_GAP = 6;
 const VIEWPORT_MARGIN = 8;
 const MIN_POPOVER_HEIGHT = 140;
 const DEFAULT_POPOVER_HEIGHT = 260;
+const AMBIENT_DRAFT_TTL_MS = 5 * 60 * 1000;
+const AMBIENT_EVIDENCE_LIMIT = 12;
 
 type GuardState = 'ready';
 type AssistFeedbackKind = 'accepted' | 'rejected';
@@ -75,11 +77,45 @@ interface ComposerGuardFeedbackContext {
   snapshot?: SiteContextSnapshot;
 }
 
+interface RehearsalFeedbackTarget {
+  id: string;
+  activationId?: string;
+}
+
 interface PendingInsertionUndo {
   target: ComposerTarget;
   before: ComposerTextSnapshot;
+  beforeText: string;
   contextKey: string;
   feedbackContext: ComposerGuardFeedbackContext;
+  suggestionText: string;
+  insertedAt: number;
+  sendTraceRecorded?: boolean;
+}
+
+interface AmbientAssistDraft {
+  target: ComposerTarget;
+  contextKey: string;
+  feedbackContext: ComposerGuardFeedbackContext;
+  suggestionText: string;
+  beforeText?: string;
+  recordedAt: number;
+  sourceRequestId: string;
+  sendTraceRecorded?: boolean;
+}
+
+interface AmbientDiffSummary {
+  action:
+    | 'sent_after_insert'
+    | 'sent_without_insert'
+    | 'edited_before_send'
+    | 'deleted_before_send'
+    | 'inserted'
+    | 'wrong';
+  polarity: 'positive' | 'negative' | 'correction' | 'neutral';
+  strength: 'weak' | 'medium' | 'strong';
+  redactedDiff: Record<string, unknown>;
+  evidenceRole: 'used' | 'ignored' | 'corrected' | 'deleted';
 }
 
 function escapeHtml(text: string): string {
@@ -148,6 +184,159 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function hashAmbientText(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  let hash = 2166136261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function normalizeAmbientText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeAmbientText(text: string): string[] {
+  const normalized = normalizeAmbientText(text);
+  if (!normalized) return [];
+  const tokens = normalized.match(/[a-z0-9]+|[\u4e00-\u9fff]+/g) || [];
+  if (tokens.length > 1) return tokens;
+  return Array.from(normalized.replace(/\s+/g, '')).filter(Boolean);
+}
+
+function getAmbientSimilarityScore(left: string, right: string): number {
+  const normalizedLeft = normalizeAmbientText(left);
+  const normalizedRight = normalizeAmbientText(right);
+  if (!normalizedLeft || !normalizedRight) return 0;
+  if (normalizedLeft === normalizedRight) return 1;
+  if (
+    normalizedLeft.includes(normalizedRight) ||
+    normalizedRight.includes(normalizedLeft)
+  ) {
+    return (
+      Math.min(normalizedLeft.length, normalizedRight.length) /
+      Math.max(normalizedLeft.length, normalizedRight.length)
+    );
+  }
+
+  const leftTokens = new Set(tokenizeAmbientText(normalizedLeft));
+  const rightTokens = new Set(tokenizeAmbientText(normalizedRight));
+  if (!leftTokens.size || !rightTokens.size) return 0;
+
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union > 0 ? overlap / union : 0;
+}
+
+function getAmbientEditDistanceBand(score: number): string {
+  if (score >= 0.92) return 'none';
+  if (score >= 0.65) return 'light';
+  if (score >= 0.35) return 'material';
+  return 'replacement';
+}
+
+function buildAmbientDiffSummary(
+  suggestionText: string,
+  finalText: string,
+  mode: 'after_insert' | 'without_insert',
+): AmbientDiffSummary {
+  const suggestion = sanitizeComposerAssistInsertText(suggestionText);
+  const final = finalText.trim();
+  const similarity = getAmbientSimilarityScore(suggestion, final);
+  const normalizedSuggestion = normalizeAmbientText(suggestion);
+  const normalizedFinal = normalizeAmbientText(final);
+  const containsSuggestion =
+    Boolean(normalizedSuggestion) &&
+    Boolean(normalizedFinal) &&
+    normalizedFinal.includes(normalizedSuggestion);
+  const lengthRatio =
+    suggestion.length > 0 ? final.length / Math.max(1, suggestion.length) : 0;
+  const redactedDiff = {
+    rawTextStored: false,
+    suggestionHash: hashAmbientText(suggestion),
+    finalHash: hashAmbientText(final),
+    suggestionTextLength: suggestion.length,
+    finalTextLength: final.length,
+    similarityScore: Number(similarity.toFixed(3)),
+    editDistanceBand: getAmbientEditDistanceBand(similarity),
+    lengthChange:
+      lengthRatio < 0.72 ? 'shorter' : lengthRatio > 1.28 ? 'longer' : 'similar',
+    semanticRelation:
+      similarity >= 0.65 || containsSuggestion
+        ? 'same_intent'
+        : similarity >= 0.35
+          ? 'partially_rewritten'
+          : 'different_intent',
+  };
+
+  if (!final) {
+    return {
+      action: 'deleted_before_send',
+      polarity: 'negative',
+      strength: 'strong',
+      redactedDiff,
+      evidenceRole: 'deleted',
+    };
+  }
+
+  if (mode === 'without_insert') {
+    return {
+      action: 'sent_without_insert',
+      polarity: similarity >= 0.35 ? 'correction' : 'negative',
+      strength: similarity >= 0.35 ? 'medium' : 'strong',
+      redactedDiff: {
+        ...redactedDiff,
+        interaction: 'hover_no_insert',
+      },
+      evidenceRole: similarity >= 0.35 ? 'corrected' : 'ignored',
+    };
+  }
+
+  if (similarity >= 0.92 || containsSuggestion) {
+    return {
+      action: 'sent_after_insert',
+      polarity: 'positive',
+      strength: 'strong',
+      redactedDiff,
+      evidenceRole: 'used',
+    };
+  }
+
+  if (similarity >= 0.35) {
+    return {
+      action: 'edited_before_send',
+      polarity: 'correction',
+      strength: 'strong',
+      redactedDiff,
+      evidenceRole: 'corrected',
+    };
+  }
+
+  return {
+    action: 'deleted_before_send',
+    polarity: 'negative',
+    strength: 'strong',
+    redactedDiff,
+    evidenceRole: 'deleted',
+  };
+}
+
+function getAmbientTraceSourceRequestId(
+  contextKey: string,
+  recordedAt: number,
+): string {
+  return `composer:${hashAmbientText(`${contextKey}:${recordedAt}`)}`;
+}
+
 function getChromeLocal<T extends Record<string, unknown>>(
   keys: string | string[],
 ): Promise<T> {
@@ -168,6 +357,68 @@ function setChromeLocal(items: Record<string, unknown>): Promise<void> {
     }
     chrome.storage.local.set(items, () => resolve());
   });
+}
+
+function sendRuntimeMessage(message: unknown): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (typeof chrome === 'undefined' || !chrome?.runtime?.sendMessage) {
+      resolve(undefined);
+      return;
+    }
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function getRehearsalFeedbackTargets(
+  assist: ComposerAssistResponse | null,
+): RehearsalFeedbackTarget[] {
+  if (!assist?.evidence?.length) return [];
+  const targets = new Map<string, RehearsalFeedbackTarget>();
+
+  for (const item of assist.evidence) {
+    if (item.type !== 'rehearsal') continue;
+    const rehearsalMeta = asPlainObject(item.metadata?.rehearsal);
+    const id =
+      typeof rehearsalMeta?.id === 'string' && rehearsalMeta.id.trim()
+        ? rehearsalMeta.id.trim()
+        : item.id.trim();
+    if (!id || targets.has(id)) continue;
+
+    const activationId =
+      typeof rehearsalMeta?.activationId === 'string' &&
+      rehearsalMeta.activationId.trim()
+        ? rehearsalMeta.activationId.trim()
+        : undefined;
+    targets.set(id, { id, activationId });
+  }
+
+  return Array.from(targets.values()).slice(0, 3);
+}
+
+function buildStructuredFeedbackDetail(
+  kind: AssistFeedbackKind,
+  snapshot?: SiteContextSnapshot,
+): string {
+  const action =
+    kind === 'accepted'
+      ? 'Compose Assist suggestion inserted without undo.'
+      : 'Compose Assist suggestion rejected from hover preview.';
+  const surface = snapshot?.surface ? ` surface=${snapshot.surface}` : '';
+  const contextType = snapshot?.contextType
+    ? ` contextType=${snapshot.contextType}`
+    : '';
+  return `${action}${surface}${contextType}`;
 }
 
 function isUsableViewportRect(rect: DOMRect): boolean {
@@ -219,6 +470,8 @@ export class ComposerGuardController {
   private configLoaded = false;
   private composeAssistEnabled = false;
   private pendingInsertionUndo: PendingInsertionUndo | null = null;
+  private acceptedInsertionDraft: AmbientAssistDraft | null = null;
+  private previewedAssistDraft: AmbientAssistDraft | null = null;
   private restoringSnapshot = false;
 
   start(): void {
@@ -229,6 +482,7 @@ export class ComposerGuardController {
     document.addEventListener('focusin', this.handleFocusIn, true);
     document.addEventListener('input', this.handleInput, true);
     document.addEventListener('keydown', this.handleKeyDown, true);
+    document.addEventListener('click', this.handleDocumentClick, true);
     window.addEventListener('scroll', this.schedulePositionRefresh, true);
     window.addEventListener('resize', this.schedulePositionRefresh);
     if (typeof chrome !== 'undefined' && chrome?.storage?.onChanged) {
@@ -295,7 +549,27 @@ export class ComposerGuardController {
   private handleKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape' && this.root) {
       this.dismissCurrentContext();
+      return;
     }
+    if (
+      event.key === 'Enter' &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
+      !event.isComposing
+    ) {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target && isComposerElement(target)) {
+        void this.recordAmbientSendTrace(target, 'keyboard_send');
+      }
+    }
+  };
+
+  private handleDocumentClick = (event: MouseEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || this.root?.contains(target)) return;
+    const sendElement = this.findLikelySendElement(target);
+    if (!sendElement) return;
+    void this.recordAmbientSendTrace(sendElement, 'send_click');
   };
 
   private activateFromElement(
@@ -386,6 +660,66 @@ export class ComposerGuardController {
           activeTarget.contains(target) ||
           target.contains(activeTarget)),
     );
+  }
+
+  private findLikelySendElement(target: Element): HTMLElement | null {
+    const candidate = target.closest(
+      'button,input[type="button"],input[type="submit"],[role="button"],[data-testid],[data-test-id],[data-test-automation-id]',
+    );
+    if (!(candidate instanceof HTMLElement)) return null;
+    if (candidate.closest(`#${ROOT_ID}`)) return null;
+    if (
+      candidate instanceof HTMLButtonElement ||
+      candidate instanceof HTMLInputElement
+    ) {
+      if (candidate.disabled) return null;
+    }
+
+    const hint = [
+      candidate.getAttribute('aria-label'),
+      candidate.getAttribute('title'),
+      candidate.getAttribute('type'),
+      candidate.getAttribute('data-testid'),
+      candidate.getAttribute('data-test-id'),
+      candidate.getAttribute('data-test-automation-id'),
+      candidate.id,
+      candidate.className,
+      candidate.textContent,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    if (!hint) return null;
+    const looksSend =
+      /\b(send|submit|reply|post|comment)\b/.test(hint) ||
+      /发送|提交|回复|评论|发布/.test(hint);
+    return looksSend ? candidate : null;
+  }
+
+  private isElementNearComposerTarget(
+    element: Element,
+    target: ComposerTarget,
+  ): boolean {
+    const targetElement = target.element;
+    if (
+      element === targetElement ||
+      targetElement.contains(element) ||
+      element.contains(targetElement)
+    ) {
+      return true;
+    }
+
+    const form = targetElement.closest('form');
+    if (form?.contains(element)) return true;
+
+    let parent = targetElement.parentElement;
+    for (let depth = 0; parent && depth < 5; depth += 1) {
+      if (parent.contains(element)) return true;
+      parent = parent.parentElement;
+    }
+
+    return false;
   }
 
   private refreshActiveDraft(): boolean {
@@ -570,6 +904,10 @@ export class ComposerGuardController {
       </div>
     `;
 
+    const rememberPreview = () => this.rememberPreviewedAssist();
+    root.addEventListener('pointerenter', rememberPreview, { once: true });
+    root.addEventListener('focusin', rememberPreview, { once: true });
+
     const insertButton = root.querySelector('[data-action="insert"]');
     insertButton?.addEventListener('pointerdown', (event) => {
       event.preventDefault();
@@ -588,6 +926,7 @@ export class ComposerGuardController {
       event.preventDefault();
       event.stopPropagation();
       void this.recordAssistFeedback('rejected');
+      this.recordAmbientWrongTrace();
       this.dismissCurrentContext();
     });
     rejectButton?.addEventListener('click', (event) => {
@@ -595,6 +934,7 @@ export class ComposerGuardController {
       event.stopPropagation();
       if ((event as MouseEvent).detail === 0) {
         void this.recordAssistFeedback('rejected');
+        this.recordAmbientWrongTrace();
         this.dismissCurrentContext();
       }
     });
@@ -610,6 +950,7 @@ export class ComposerGuardController {
   private insertLatestAssist(): void {
     if (!this.activeSession || !this.latestAssist?.insertText) return;
     const target = this.activeSession.target;
+    const beforeText = readComposerText(target);
     const before = captureComposerTextSnapshot(target);
     const contextKey = this.activeSession.contextKey;
     const feedbackContext = this.getCurrentFeedbackContext();
@@ -623,8 +964,11 @@ export class ComposerGuardController {
     this.showInsertionUndo({
       target,
       before,
+      beforeText,
       contextKey,
       feedbackContext,
+      suggestionText: insertText,
+      insertedAt: Date.now(),
     });
   }
 
@@ -650,6 +994,282 @@ export class ComposerGuardController {
       contextKey: this.activeSession?.contextKey,
       snapshot: this.activeSession?.snapshot,
     };
+  }
+
+  private rememberPreviewedAssist(): void {
+    if (!this.activeSession || !this.latestAssist?.insertText) return;
+    const suggestionText = sanitizeComposerAssistInsertText(
+      this.latestAssist.insertText,
+    );
+    if (!suggestionText) return;
+    const recordedAt = Date.now();
+    this.previewedAssistDraft = {
+      target: this.activeSession.target,
+      contextKey: this.activeSession.contextKey,
+      feedbackContext: this.getCurrentFeedbackContext(),
+      suggestionText,
+      recordedAt,
+      sourceRequestId: getAmbientTraceSourceRequestId(
+        this.activeSession.contextKey,
+        recordedAt,
+      ),
+    };
+  }
+
+  private rememberAcceptedInsertion(undo: PendingInsertionUndo): void {
+    this.acceptedInsertionDraft = {
+      target: undo.target,
+      contextKey: undo.contextKey,
+      feedbackContext: undo.feedbackContext,
+      suggestionText: undo.suggestionText,
+      beforeText: undo.beforeText,
+      recordedAt: undo.insertedAt,
+      sourceRequestId: getAmbientTraceSourceRequestId(
+        undo.contextKey,
+        undo.insertedAt,
+      ),
+      sendTraceRecorded: undo.sendTraceRecorded,
+    };
+    if (this.previewedAssistDraft?.contextKey === undo.contextKey) {
+      this.previewedAssistDraft = null;
+    }
+  }
+
+  private buildAmbientEvidenceRefs(
+    feedbackContext: ComposerGuardFeedbackContext,
+    role: AmbientDiffSummary['evidenceRole'],
+  ): Array<Record<string, unknown>> {
+    return (feedbackContext.assist?.evidence || [])
+      .filter((item) => item.id)
+      .slice(0, AMBIENT_EVIDENCE_LIMIT)
+      .map((item) => ({
+        id: item.id,
+        type: item.type,
+        title: item.title || item.sourceTitle,
+        sourceLabel: item.sourceLabel,
+        role,
+        score: typeof item.score === 'number' ? item.score : undefined,
+      }));
+  }
+
+  private submitAmbientCalibrationTrace(
+    payload: Record<string, unknown>,
+  ): void {
+    if (typeof chrome === 'undefined' || !chrome?.runtime?.sendMessage) {
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: 'AMBIENT_CALIBRATION_TRACE',
+          trace: payload,
+        },
+        () => {
+          void chrome.runtime.lastError;
+        },
+      );
+    } catch (error) {
+      console.warn('[ComposerGuard] ambient calibration trace failed:', error);
+    }
+  }
+
+  private buildAmbientTracePayload(
+    draft: AmbientAssistDraft,
+    summary: AmbientDiffSummary,
+    trigger: string,
+  ): Record<string, unknown> {
+    const { assist, snapshot } = draft.feedbackContext;
+    return {
+      surface: 'compose_assist',
+      sceneKey: draft.contextKey,
+      sourceRequestId: draft.sourceRequestId,
+      action: summary.action,
+      strength: summary.strength,
+      polarity: summary.polarity,
+      evidenceRefs: this.buildAmbientEvidenceRefs(
+        draft.feedbackContext,
+        summary.evidenceRole,
+      ),
+      redactedDiff: summary.redactedDiff,
+      privacyClass: 'sensitive_redacted',
+      metadata: {
+        trigger,
+        contextType: snapshot?.contextType,
+        scenario: snapshot?.scenario,
+        nativeSurface: snapshot?.surface,
+        suggestionType: assist?.suggestionType,
+        confidence: assist?.confidence,
+        beforeTextLength: draft.beforeText?.length,
+      },
+      createdAt: Date.now(),
+    };
+  }
+
+  private recordAmbientInsertedTrace(undo: PendingInsertionUndo): void {
+    const draft: AmbientAssistDraft = {
+      target: undo.target,
+      contextKey: undo.contextKey,
+      feedbackContext: undo.feedbackContext,
+      suggestionText: undo.suggestionText,
+      beforeText: undo.beforeText,
+      recordedAt: undo.insertedAt,
+      sourceRequestId: getAmbientTraceSourceRequestId(
+        undo.contextKey,
+        undo.insertedAt,
+      ),
+    };
+    this.submitAmbientCalibrationTrace(
+      this.buildAmbientTracePayload(
+        draft,
+        {
+          action: 'inserted',
+          polarity: 'positive',
+          strength: 'medium',
+          evidenceRole: 'used',
+          redactedDiff: {
+            rawTextStored: false,
+            suggestionHash: hashAmbientText(undo.suggestionText),
+            suggestionTextLength: undo.suggestionText.length,
+            beforeTextLength: undo.beforeText.length,
+            interaction: 'insert_undo_expired',
+          },
+        },
+        'undo_commit',
+      ),
+    );
+  }
+
+  private recordAmbientWrongTrace(): void {
+    if (!this.activeSession) return;
+    const feedbackContext = this.getCurrentFeedbackContext();
+    const suggestionText = sanitizeComposerAssistInsertText(
+      feedbackContext.assist?.insertText,
+    );
+    if (!suggestionText || !feedbackContext.contextKey) return;
+    const recordedAt = Date.now();
+    const draft: AmbientAssistDraft = {
+      target: this.activeSession.target,
+      contextKey: feedbackContext.contextKey,
+      feedbackContext,
+      suggestionText,
+      recordedAt,
+      sourceRequestId: getAmbientTraceSourceRequestId(
+        feedbackContext.contextKey,
+        recordedAt,
+      ),
+    };
+    this.submitAmbientCalibrationTrace(
+      this.buildAmbientTracePayload(
+        draft,
+        {
+          action: 'wrong',
+          polarity: 'negative',
+          strength: 'strong',
+          evidenceRole: 'ignored',
+          redactedDiff: {
+            rawTextStored: false,
+            suggestionHash: hashAmbientText(suggestionText),
+            suggestionTextLength: suggestionText.length,
+            interaction: 'explicit_thumb_down',
+          },
+        },
+        'thumb_down',
+      ),
+    );
+  }
+
+  private getAmbientInsertionDraftForSend(
+    sendElement: Element,
+  ): { draft: AmbientAssistDraft; source: 'pending' | 'accepted' } | null {
+    const undo = this.pendingInsertionUndo;
+    if (
+      undo &&
+      !undo.sendTraceRecorded &&
+      this.isElementNearComposerTarget(sendElement, undo.target)
+    ) {
+      return {
+        source: 'pending',
+        draft: {
+          target: undo.target,
+          contextKey: undo.contextKey,
+          feedbackContext: undo.feedbackContext,
+          suggestionText: undo.suggestionText,
+          beforeText: undo.beforeText,
+          recordedAt: undo.insertedAt,
+          sourceRequestId: getAmbientTraceSourceRequestId(
+            undo.contextKey,
+            undo.insertedAt,
+          ),
+        },
+      };
+    }
+
+    const accepted = this.acceptedInsertionDraft;
+    if (
+      accepted &&
+      !accepted.sendTraceRecorded &&
+      Date.now() - accepted.recordedAt <= AMBIENT_DRAFT_TTL_MS &&
+      this.isElementNearComposerTarget(sendElement, accepted.target)
+    ) {
+      return { source: 'accepted', draft: accepted };
+    }
+
+    return null;
+  }
+
+  private getAmbientPreviewDraftForSend(
+    sendElement: Element,
+  ): AmbientAssistDraft | null {
+    const preview = this.previewedAssistDraft;
+    if (
+      preview &&
+      !preview.sendTraceRecorded &&
+      Date.now() - preview.recordedAt <= AMBIENT_DRAFT_TTL_MS &&
+      this.isElementNearComposerTarget(sendElement, preview.target)
+    ) {
+      return preview;
+    }
+    return null;
+  }
+
+  private async recordAmbientSendTrace(
+    sendElement: Element,
+    trigger: string,
+  ): Promise<void> {
+    const insertion = this.getAmbientInsertionDraftForSend(sendElement);
+    if (insertion) {
+      const finalText = readComposerText(insertion.draft.target);
+      const summary = buildAmbientDiffSummary(
+        insertion.draft.suggestionText,
+        finalText,
+        'after_insert',
+      );
+      this.submitAmbientCalibrationTrace(
+        this.buildAmbientTracePayload(insertion.draft, summary, trigger),
+      );
+      if (insertion.source === 'pending' && this.pendingInsertionUndo) {
+        this.pendingInsertionUndo.sendTraceRecorded = true;
+        this.clearInsertionUndo(true);
+      } else if (this.acceptedInsertionDraft) {
+        this.acceptedInsertionDraft.sendTraceRecorded = true;
+        this.acceptedInsertionDraft = null;
+      }
+      return;
+    }
+
+    const preview = this.getAmbientPreviewDraftForSend(sendElement);
+    if (!preview) return;
+    const finalText = readComposerText(preview.target);
+    const summary = buildAmbientDiffSummary(
+      preview.suggestionText,
+      finalText,
+      'without_insert',
+    );
+    this.submitAmbientCalibrationTrace(
+      this.buildAmbientTracePayload(preview, summary, trigger),
+    );
+    preview.sendTraceRecorded = true;
+    this.previewedAssistDraft = null;
   }
 
   private async recordAssistFeedback(
@@ -695,6 +1315,42 @@ export class ComposerGuardController {
       },
       [FEEDBACK_EVENTS_KEY]: [...events, event].slice(-MAX_FEEDBACK_EVENTS),
     });
+
+    void this.submitStructuredEvidenceFeedback(kind, feedbackContext);
+  }
+
+  private async submitStructuredEvidenceFeedback(
+    kind: AssistFeedbackKind,
+    feedbackContext: ComposerGuardFeedbackContext,
+  ): Promise<void> {
+    const targets = getRehearsalFeedbackTargets(feedbackContext.assist);
+    if (targets.length === 0) return;
+
+    const detail = buildStructuredFeedbackDetail(
+      kind,
+      feedbackContext.snapshot,
+    );
+    await Promise.all(
+      targets.map(async (target) => {
+        try {
+          await sendRuntimeMessage({
+            type: 'CONTEXT_RECALL_FEEDBACK',
+            feedback: {
+              targetId: target.id,
+              targetType: 'rehearsal',
+              action: kind === 'accepted' ? 'positive' : 'negative',
+              rehearsalActivationId: target.activationId,
+              detail,
+            },
+          });
+        } catch (error) {
+          console.warn(
+            '[ComposerGuard] rehearsal feedback failed:',
+            error,
+          );
+        }
+      }),
+    );
   }
 
   private canRunComposerAssist(): boolean {
@@ -814,6 +1470,12 @@ export class ComposerGuardController {
     }
     if (commitAccepted && undo) {
       void this.recordAssistFeedback('accepted', undo.feedbackContext);
+      if (!undo.sendTraceRecorded) {
+        this.rememberAcceptedInsertion(undo);
+        this.recordAmbientInsertedTrace(undo);
+      } else {
+        this.acceptedInsertionDraft = null;
+      }
     }
   }
 

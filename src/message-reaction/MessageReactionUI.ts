@@ -44,6 +44,7 @@ import {
   LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
   getMessageReactionActionDefinitions,
 } from './messageReactionLayout';
+import type { MessageReactionActionDefinition } from './messageReactionLayout';
 import {
   MESSAGE_REACTION_SETTINGS_DELAY_MS,
   MESSAGE_REACTION_SHOW_DELAY_MS,
@@ -51,6 +52,10 @@ import {
 import { computeFloatingPosition } from './floatingPosition';
 import { getSnoozeCreateFailureMessage } from './snoozeCreateResult';
 import { getToolbarRuntimeActionError } from './toolbarActionResult';
+import {
+  getContentScriptUiLanguage,
+  uiPhrase as ui,
+} from '../i18n/contentScript.js';
 import {
   SNOOZE_CUSTOM_OPTION_LABEL,
   SNOOZE_MANAGE_OPTION_LABEL,
@@ -80,6 +85,63 @@ let globalConfig: MessageReactionConfig = {
   enableAutoReply: true,
   enableLinkedAction: true,
 };
+
+const CJK_LABEL_PATTERN = /[\u3400-\u9fff]/u;
+
+function getActionLabelWidth(value: string, fallbackEm: number): string {
+  const length = Array.from(value.trim()).length;
+  if (CJK_LABEL_PATTERN.test(value)) {
+    return `${Math.max(fallbackEm, Math.min(6, length))}em`;
+  }
+  return `${Math.max(5, Math.min(10, length + 1))}ch`;
+}
+
+function getActionLabelWidthStyle(
+  action: MessageReactionActionDefinition,
+): string {
+  const compactWidth = getActionLabelWidth(action.compactLabel, 2);
+  const expandedWidth = getActionLabelWidth(action.label, 4);
+  return `--message-reaction-compact-label-width:${compactWidth};--message-reaction-expanded-label-width:${expandedWidth};`;
+}
+
+function getActionFixedWidthStyle(
+  action: MessageReactionActionDefinition,
+): string {
+  const compactWidth = getActionLabelWidth(action.compactLabel, 2);
+  const expandedWidth = getActionLabelWidth(action.label, 4);
+  if (compactWidth !== expandedWidth) return '';
+  const buttonWidth = `calc(${compactWidth} + var(--message-reaction-action-padding-x) * 2)`;
+  return `width:${buttonWidth};min-width:${buttonWidth};`;
+}
+
+function getActionLabelInlineStyle(
+  action: MessageReactionActionDefinition,
+): string {
+  const compactWidth = getActionLabelWidth(action.compactLabel, 2);
+  const expandedWidth = getActionLabelWidth(action.label, 4);
+  const variableStyle = getActionLabelWidthStyle(action);
+  return compactWidth === expandedWidth
+    ? `${variableStyle}width:${compactWidth};`
+    : variableStyle;
+}
+
+function getActionLabelTextInlineStyle(
+  action: MessageReactionActionDefinition,
+): string {
+  const compactWidth = getActionLabelWidth(action.compactLabel, 2);
+  const expandedWidth = getActionLabelWidth(action.label, 4);
+  return compactWidth === expandedWidth
+    ? 'width:auto;'
+    : `width:${expandedWidth};`;
+}
+
+function formatSnoozeDisplayTime(date: Date, now = new Date()): string {
+  return formatRemindTime(date, now, getContentScriptUiLanguage());
+}
+
+function getLocalizedSeparator(): string {
+  return getContentScriptUiLanguage() === 'en-US' ? ': ' : '：';
+}
 
 /**
  * 实时获取消息交互功能配置
@@ -1364,12 +1426,12 @@ async function undoSnoozeReminder(messageId: string, remindAt: Date) {
           expectedScheduleTime: timeStr,
         },
       },
-      '撤销提醒失败，请稍后重试',
+      ui('撤销提醒失败，请稍后重试'),
     );
-    showSuccessToast('已撤销提醒');
+    showSuccessToast(ui('已撤销提醒'));
   } catch (error) {
     console.error('撤销 Snooze 提醒失败:', error);
-    showErrorToast(getErrorMessage(error, '撤销提醒失败，请稍后重试'));
+    showErrorToast(getErrorMessage(error, ui('撤销提醒失败，请稍后重试')));
   }
 }
 
@@ -1383,18 +1445,23 @@ function showSnoozeCreatedToast(
     (action) => {
       if (action.kind === 'undo' && messageId) {
         return {
-          label: action.label,
+          label: ui(action.label),
           onClick: () => undoSnoozeReminder(messageId, remindAt),
         };
       }
 
       return {
-        label: action.label,
+        label: ui(action.label),
         onClick: openScheduledMessagesManager,
       };
     },
   );
-  showSuccessToast(`${prefix}：${formatRemindTime(remindAt)}`, actions);
+  showSuccessToast(
+    `${ui(prefix)}${getLocalizedSeparator()}${formatSnoozeDisplayTime(
+      remindAt,
+    )}`,
+    actions,
+  );
 }
 
 function getErrorMessage(error: unknown, fallbackMessage: string): string {
@@ -1924,29 +1991,38 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
 
   let selectedDate = getDefaultCustomSnoozeTime(now);
   const minDateValue = formatForInput(now);
+  const backAriaLabel = escapeSnoozeMenuText(ui('返回稍后处理快捷选项'));
+  const backLabel = escapeSnoozeMenuText(ui('← 返回'));
+  const customTimeLabel = escapeSnoozeMenuText(ui('自定义时间'));
+  const dateTimeLabel = escapeSnoozeMenuText(ui('选择日期和时间'));
+  const reminderTimeLabel = escapeSnoozeMenuText(ui('将在以下时间提醒您：'));
+  const cancelLabel = escapeSnoozeMenuText(ui('取消'));
+  const confirmLabel = escapeSnoozeMenuText(ui('确认'));
 
   picker.innerHTML = `
     <div class="snooze-picker-header">
-      <button type="button" class="snooze-picker-back" aria-label="返回稍后处理快捷选项">
-        <span>← 返回</span>
+      <button type="button" class="snooze-picker-back" aria-label="${backAriaLabel}">
+        <span>${backLabel}</span>
       </button>
-      <span class="snooze-picker-title">自定义时间</span>
+      <span class="snooze-picker-title">${customTimeLabel}</span>
     </div>
     <div class="snooze-picker-body">
       <div class="snooze-input-group">
-        <label class="snooze-input-label" for="personal-ai-snooze-datetime">选择日期和时间</label>
+        <label class="snooze-input-label" for="personal-ai-snooze-datetime">${dateTimeLabel}</label>
         <input id="personal-ai-snooze-datetime" type="datetime-local" class="snooze-input snooze-datetime-input" value="${formatForInput(
           selectedDate,
         )}" min="${minDateValue}">
       </div>
       <div class="snooze-preview">
-        <div class="snooze-preview-label">将在以下时间提醒您：</div>
-        <div class="snooze-preview-time">${formatRemindTime(selectedDate)}</div>
+        <div class="snooze-preview-label">${reminderTimeLabel}</div>
+        <div class="snooze-preview-time">${escapeSnoozeMenuText(
+          formatSnoozeDisplayTime(selectedDate, now),
+        )}</div>
       </div>
     </div>
     <div class="snooze-picker-footer">
-      <button class="snooze-btn snooze-btn-cancel">取消</button>
-      <button class="snooze-btn snooze-btn-confirm">确认</button>
+      <button class="snooze-btn snooze-btn-cancel">${cancelLabel}</button>
+      <button class="snooze-btn snooze-btn-confirm">${confirmLabel}</button>
     </div>
   `;
 
@@ -1995,12 +2071,12 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     previewTime.classList.toggle('invalid', !isValidFutureDate);
 
     if (!isValidFutureDate) {
-      previewTime.textContent = '请选择未来时间';
+      previewTime.textContent = ui('请选择未来时间');
       return;
     }
 
     selectedDate = candidate;
-    previewTime.textContent = formatRemindTime(selectedDate);
+    previewTime.textContent = formatSnoozeDisplayTime(selectedDate);
   };
 
   datetimeInput.addEventListener('input', updateSelectedDate);
@@ -2037,12 +2113,12 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
   confirmBtn.addEventListener('click', async () => {
     updateSelectedDate();
     if (confirmBtn.disabled) {
-      showErrorToast('请选择未来时间');
+      showErrorToast(ui('请选择未来时间'));
       return;
     }
 
     confirmBtn.disabled = true;
-    confirmBtn.textContent = '创建中...';
+    confirmBtn.textContent = ui('创建中...');
 
     const result = await createSnoozeReminder({
       messageInfo,
@@ -2061,7 +2137,7 @@ async function showSnoozePicker(messageInfo: MessageInfo, anchorRect: DOMRect) {
     } else {
       // 恢复按钮状态
       confirmBtn.disabled = false;
-      confirmBtn.textContent = '确认';
+      confirmBtn.textContent = ui('确认');
       const failureMessage = getSnoozeCreateFailureMessage(result);
       if (failureMessage) {
         showErrorToast(failureMessage);
@@ -2258,15 +2334,19 @@ async function showSnoozeQuickMenu(
   menu.className = 'snooze-menu';
   menu.id = SNOOZE_QUICK_MENU_ID;
   menu.setAttribute('role', 'menu');
-  menu.setAttribute('aria-label', '稍后处理快捷选项');
+  menu.setAttribute('aria-label', ui('稍后处理快捷选项'));
   menu.setAttribute('aria-busy', 'false');
   anchorElement.setAttribute('aria-expanded', 'true');
 
-  const quickOptions = getQuickOptions();
+  const language = getContentScriptUiLanguage();
+  const quickOptions = getQuickOptions(() => new Date(), language);
   const quickOptionViews = buildSnoozeQuickMenuOptions(
     quickOptions,
-    formatRemindTime,
+    (date) => formatSnoozeDisplayTime(date),
+    language,
   );
+  const customOptionLabel = escapeSnoozeMenuText(ui(SNOOZE_CUSTOM_OPTION_LABEL));
+  const manageOptionLabel = escapeSnoozeMenuText(ui(SNOOZE_MANAGE_OPTION_LABEL));
 
   // 精简的菜单，不包含消息预览
   menu.innerHTML = `
@@ -2292,13 +2372,13 @@ async function showSnoozeQuickMenu(
       })
       .join('')}
     <div class="snooze-divider"></div>
-    <button type="button" class="snooze-custom-option" role="menuitem" tabindex="-1" aria-label="${SNOOZE_CUSTOM_OPTION_LABEL}">
+    <button type="button" class="snooze-custom-option" role="menuitem" tabindex="-1" aria-label="${customOptionLabel}">
       <span class="snooze-quick-option-icon" aria-hidden="true">📅</span>
-      <span>自定义...</span>
+      <span>${escapeSnoozeMenuText(ui('自定义...'))}</span>
     </button>
-    <button type="button" class="snooze-manage-option" role="menuitem" tabindex="-1" aria-label="${SNOOZE_MANAGE_OPTION_LABEL}">
+    <button type="button" class="snooze-manage-option" role="menuitem" tabindex="-1" aria-label="${manageOptionLabel}">
       <span class="snooze-quick-option-icon" aria-hidden="true">↗</span>
-      <span>${SNOOZE_MANAGE_OPTION_LABEL}</span>
+      <span>${manageOptionLabel}</span>
     </button>
   `;
 
@@ -2343,7 +2423,7 @@ async function showSnoozeQuickMenu(
       const optionIndex = Number((opt as HTMLElement).dataset.optionIndex);
       const quickOption = quickOptions[optionIndex];
       if (!quickOption) {
-        showErrorToast('无法识别提醒时间');
+        showErrorToast(ui('无法识别提醒时间'));
         return;
       }
       const remindAt = quickOption.getTime();
@@ -2353,7 +2433,7 @@ async function showSnoozeQuickMenu(
       );
       const previousTimeLabel = labelElement?.textContent || '';
       if (labelElement) {
-        labelElement.textContent = '创建中...';
+        labelElement.textContent = ui('创建中...');
       }
       setMenuBusy(true, optionButton);
 
@@ -2558,6 +2638,12 @@ function processMessageElement(messageElement: HTMLElement) {
     }
 
     enabledButtons.forEach((action, index) => {
+      const actionLabel = escapeSnoozeMenuText(action.label);
+      const actionCompactLabel = escapeSnoozeMenuText(action.compactLabel);
+      const actionStyle = getActionLabelWidthStyle(action);
+      const actionFixedWidthStyle = getActionFixedWidthStyle(action);
+      const actionLabelStyle = getActionLabelInlineStyle(action);
+      const actionLabelTextStyle = getActionLabelTextInlineStyle(action);
       const isFirst = index === 0;
       const isLast = index === buttonCount - 1;
       const borderRadius =
@@ -2579,10 +2665,10 @@ function processMessageElement(messageElement: HTMLElement) {
           <button
             type="button"
             class="${action.className}"
-            style="${borderRadius}${borderLeft}"
-            title="${action.label}"
-            aria-label="${action.label}"
-            data-compact-label="${action.compactLabel}"
+            style="${borderRadius}${borderLeft}${actionStyle}${actionFixedWidthStyle}"
+            title="${actionLabel}"
+            aria-label="${actionLabel}"
+            data-compact-label="${actionCompactLabel}"
             ${menuAttributes}
           >
             ${getSnoozeClockIconSvg()}
@@ -2595,15 +2681,15 @@ function processMessageElement(messageElement: HTMLElement) {
         <button
           type="button"
           class="${action.className}"
-          style="${borderRadius}${borderLeft}"
-          title="${action.label}"
-          aria-label="${action.label}"
-          data-compact-label="${action.compactLabel}"
+          style="${borderRadius}${borderLeft}${actionStyle}${actionFixedWidthStyle}"
+          title="${actionLabel}"
+          aria-label="${actionLabel}"
+          data-compact-label="${actionCompactLabel}"
           data-compact-align="${action.compactAlign || 'start'}"
           ${menuAttributes}
         >
-          <span class="message-reaction-action-label">
-            <span class="message-reaction-action-label-text">${action.label}</span>
+          <span class="message-reaction-action-label" style="${actionLabelStyle}">
+            <span class="message-reaction-action-label-text" style="${actionLabelTextStyle}">${actionLabel}</span>
           </span>
         </button>
       `;

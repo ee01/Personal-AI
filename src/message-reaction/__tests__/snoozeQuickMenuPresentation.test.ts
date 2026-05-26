@@ -37,6 +37,30 @@ test('builds accessible Snooze quick menu labels with concrete times', () => {
   ]);
 });
 
+test('builds English Snooze quick menu labels with English punctuation', () => {
+  const options = buildSnoozeQuickMenuOptions(
+    [
+      {
+        label: 'In 1 hour',
+        icon: '⏰',
+        getTime: () => new Date('2026-05-07T10:30:00+08:00'),
+      },
+    ],
+    () => 'Today 10:30 AM',
+    'en-US',
+  );
+
+  assert.deepEqual(options, [
+    {
+      index: 0,
+      label: 'In 1 hour',
+      icon: '⏰',
+      timeLabel: 'Today 10:30 AM',
+      ariaLabel: 'In 1 hour, Today 10:30 AM',
+    },
+  ]);
+});
+
 test('defines custom and management Snooze menu entries', () => {
   assert.equal(SNOOZE_CUSTOM_OPTION_LABEL, '自定义时间');
   assert.equal(SNOOZE_MANAGE_OPTION_LABEL, '管理稍后处理');
@@ -80,6 +104,25 @@ test('workday Snooze options skip weekends and past workday end', () => {
   assert.equal(
     options[6].getTime().toISOString(),
     new Date('2026-05-11T09:00:00+08:00').toISOString(),
+  );
+});
+
+test('English workday Snooze options use localized relative labels', () => {
+  const thursday = new Date('2026-05-07T10:00:00+08:00');
+  const options = getQuickOptions(() => new Date(thursday), 'en-US');
+
+  assert.deepEqual(
+    options.map((option) => option.label),
+    [
+      'In 15 minutes',
+      'In 30 minutes',
+      'In 1 hour',
+      'In 2 hours',
+      'In 3 hours',
+      'Today by EOD',
+      'Tomorrow 9 AM',
+      'Next Mon 9 AM',
+    ],
   );
 });
 

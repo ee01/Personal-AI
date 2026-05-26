@@ -1,0 +1,11 @@
+{
+  "appName": {
+    "message": "Personal AI"
+  },
+  "appDescription": {
+    "message": "你的个人 AI 助手，可分析消息并提供洞察"
+  },
+  "openMemoryInterface": {
+    "message": "打开记忆查询界面"
+  }
+}

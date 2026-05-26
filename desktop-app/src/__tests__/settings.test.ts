@@ -64,6 +64,39 @@ test('BridgeSettingsStore falls back to config default when autoSync override is
   assert.deepEqual(store.getPayload().user, {});
 });
 
+test('BridgeSettingsStore defaults uiLanguage to zh-CN for old settings files', async () => {
+  const tempDir = await createTempDir('bridge-settings-language-default-');
+  const settingsFile = path.join(tempDir, 'bridge-settings.json');
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+  });
+  await fs.writeFile(settingsFile, JSON.stringify({ autoSync: false }), 'utf8');
+
+  const store = new BridgeSettingsStore(config, settingsFile);
+  await store.init();
+
+  assert.equal(store.get().uiLanguage, 'zh-CN');
+  assert.equal(store.getPayload().effective.uiLanguage, 'zh-CN');
+});
+
+test('BridgeSettingsStore preserves uiLanguage across reloads', async () => {
+  const tempDir = await createTempDir('bridge-settings-language-');
+  const settingsFile = path.join(tempDir, 'bridge-settings.json');
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+  });
+
+  const store = new BridgeSettingsStore(config, settingsFile);
+  await store.init();
+  await store.update({ uiLanguage: 'en-US' });
+
+  const reloaded = new BridgeSettingsStore(config, settingsFile);
+  await reloaded.init();
+
+  assert.equal(reloaded.get().uiLanguage, 'en-US');
+  assert.equal(reloaded.getPayload().user.uiLanguage, 'en-US');
+});
+
 test('BridgeSettingsStore persists explorer settings safely across reloads', async () => {
   const tempDir = await createTempDir('bridge-settings-explorer-');
   const settingsFile = path.join(tempDir, 'bridge-settings.json');

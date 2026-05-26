@@ -11,20 +11,35 @@
       <header class="hero hero-split">
         <div class="hero-copy-block">
           <p class="eyebrow">Personal AI · 4.0</p>
-          <h1>让 AI 记住你</h1>
-          <p class="hero-copy">
+          <h1 data-i18n="desktop.hero.title">让 AI 记住你</h1>
+          <p class="hero-copy" data-i18n="desktop.hero.copy">
             左侧是「记忆广播」——把记忆系统里的长期记忆、近期记忆重点和待办，自动推到豆包等外部入口；右侧是「记忆探索」——从豆包、ChatGPT
             等日常对话里，把值得沉淀的事实和偏好自动写回记忆。
           </p>
         </div>
         <div class="hero-actions">
-          <button id="refresh-button" class="secondary" type="button">
+          <button
+            id="refresh-button"
+            class="secondary"
+            type="button"
+            data-i18n="desktop.actions.refresh"
+          >
             刷新状态
           </button>
-          <button id="open-log-button" class="secondary" type="button">
+          <button
+            id="open-log-button"
+            class="secondary"
+            type="button"
+            data-i18n="desktop.actions.openLog"
+          >
             查看日志
           </button>
-          <button id="open-support-button" class="secondary" type="button">
+          <button
+            id="open-support-button"
+            class="secondary"
+            type="button"
+            data-i18n="desktop.actions.openDataDir"
+          >
             打开数据目录
           </button>
         </div>
@@ -32,10 +47,10 @@
 
       <section class="status-grid">
         <article class="status-card">
-          <h2>当前状态</h2>
+          <h2 data-i18n="desktop.status.title">当前状态</h2>
           <div id="summary-grid" class="summary-grid"></div>
           <div id="next-step-card" class="next-step-card">
-            <label>下一步建议</label>
+            <label data-i18n="desktop.nextStep.label">下一步建议</label>
             <strong id="next-step-title">正在检查当前配置...</strong>
             <p id="next-step-copy">
               Personal AI 会根据当前缺失的前置条件，提示最值得先完成的动作。
@@ -45,24 +60,35 @@
         </article>
 
         <article class="status-card">
-          <h2>版本与路径</h2>
+          <h2 data-i18n="desktop.meta.title">版本与路径</h2>
           <dl class="meta-grid">
             <div>
-              <dt>版本</dt>
+              <dt data-i18n="desktop.meta.version">版本</dt>
               <dd id="meta-version">-</dd>
             </div>
             <div>
-              <dt>日志</dt>
+              <dt data-i18n="desktop.meta.log">日志</dt>
               <dd id="meta-log">-</dd>
             </div>
             <div>
-              <dt>数据目录</dt>
+              <dt data-i18n="desktop.meta.support">数据目录</dt>
               <dd id="meta-support">-</dd>
             </div>
           </dl>
           <p id="meta-shortcut" class="inline-message"></p>
           <div class="voice-pref-row">
-            <label for="voice-locale">语音识别语言</label>
+            <label for="ui-language" data-i18n="desktop.language.label">
+              界面语言
+            </label>
+            <select id="ui-language">
+              <option value="zh-CN" data-i18n="language.zhCN">中文</option>
+              <option value="en-US" data-i18n="language.enUS">English</option>
+            </select>
+          </div>
+          <div class="voice-pref-row">
+            <label for="voice-locale" data-i18n="desktop.voice.locale">
+              语音识别语言
+            </label>
             <select id="voice-locale">
               <option value="zh-CN">中文（简体）</option>
               <option value="en-US">English (US)</option>
@@ -74,6 +100,7 @@
               id="open-input-monitoring-button"
               class="secondary"
               type="button"
+              data-i18n="desktop.system.inputMonitoring"
             >
               打开输入监控设置
             </button>
@@ -81,16 +108,31 @@
               id="open-accessibility-button"
               class="secondary"
               type="button"
+              data-i18n="desktop.system.accessibility"
             >
               打开辅助功能设置
             </button>
-            <button id="open-microphone-button" class="secondary" type="button">
+            <button
+              id="open-microphone-button"
+              class="secondary"
+              type="button"
+              data-i18n="desktop.system.microphone"
+            >
               打开麦克风设置
+            </button>
+            <button
+              id="open-speech-recognition-button"
+              class="secondary"
+              type="button"
+              data-i18n="desktop.system.speechRecognition"
+            >
+              打开语音识别设置
             </button>
             <button
               id="refresh-shortcut-button"
               class="secondary"
               type="button"
+              data-i18n="desktop.system.shortcut"
             >
               重新检查快捷键权限
             </button>
