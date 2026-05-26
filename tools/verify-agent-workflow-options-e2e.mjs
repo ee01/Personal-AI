@@ -370,6 +370,71 @@ try {
   assert.deepEqual(savedScenarioState[0].expectedResult.matchedRuleRefs, [
     'manual:manual-1',
   ]);
+
+  await page.evaluate(async () => {
+    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    const scenarios = result.agentWorkflowSavedScenarios || [];
+    scenarios[0] = {
+      ...scenarios[0],
+      expectedResult: {
+        ...scenarios[0].expectedResult,
+        shouldNotify: false,
+        confidence: 0.2,
+        traceStatus: 'complete',
+      },
+    };
+    await chrome.storage.local.set({ agentWorkflowSavedScenarios: scenarios });
+  });
+
+  await page.reload({ waitUntil: 'load' });
+  await page.locator('#ANALYSIS_TYPE').waitFor({ timeout: 15000 });
+  await page.locator('h3', { hasText: '关注项测试' }).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.agent-workflow-saved-actions button', {
+      hasText: '运行保存样例',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-baseline.changed', {
+      hasText: '保存基线对比',
+    })
+    .waitFor({ timeout: 15000 });
+  const changedBaselineText = await page
+    .locator('.agent-workflow-baseline')
+    .innerText();
+  assert.match(changedBaselineText, /通知/);
+  assert.match(changedBaselineText, /基线 否 \/ 当前 是/);
+  assert.match(changedBaselineText, /Trace/);
+  assert.match(changedBaselineText, /基线 complete \/ 当前 partial/);
+  assert.match(changedBaselineText, /置信度/);
+  assert.match(changedBaselineText, /基线 20% \/ 当前 88%/);
+  await page
+    .locator('.agent-workflow-baseline-header button', {
+      hasText: '接受当前结果为基线',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-saved-status', {
+      hasText: '已接受当前结果为新基线',
+    })
+    .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-baseline.same', {
+      hasText: '保存基线对比',
+    })
+    .waitFor({ timeout: 5000 });
+  const refreshedSavedScenarioState = await page.evaluate(async () => {
+    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    return result.agentWorkflowSavedScenarios;
+  });
+  assert.equal(refreshedSavedScenarioState.length, 1);
+  assert.equal(refreshedSavedScenarioState[0].id, savedScenarioState[0].id);
+  assert.equal(refreshedSavedScenarioState[0].expectedResult.shouldNotify, true);
+  assert.equal(refreshedSavedScenarioState[0].expectedResult.confidence, 0.88);
+  assert.equal(refreshedSavedScenarioState[0].expectedResult.traceStatus, 'partial');
+
   await page
     .locator('.agent-workflow-saved-actions button', {
       hasText: '批量回归',
@@ -392,6 +457,89 @@ try {
   assert.match(regressionText, /通过 1/);
   assert.match(regressionText, /基线一致/);
   assert.match(regressionText, /存储、通知、复核、Trace、规则和置信度都未漂移/);
+
+  await page.evaluate(async (scenario) => {
+    const changedScenario = {
+      ...scenario,
+      expectedResult: {
+        ...scenario.expectedResult,
+        shouldNotify: false,
+        confidence: 0.2,
+        traceStatus: 'complete',
+      },
+    };
+    const noBaselineScenario = {
+      ...scenario,
+      id: 'workflow-saved-no-baseline',
+      label: 'No baseline saved case',
+      createdAt: '2026-05-03T16:00:00.000Z',
+      updatedAt: '2026-05-03T16:00:00.000Z',
+      input: {
+        ...scenario.input,
+        content: `${scenario.input.content} Please also mention the auth blocker.`,
+      },
+    };
+    delete noBaselineScenario.expectedResult;
+    await chrome.storage.local.set({
+      agentWorkflowSavedScenarios: [changedScenario, noBaselineScenario],
+    });
+  }, savedScenarioState[0]);
+
+  await page.reload({ waitUntil: 'load' });
+  await page.locator('#ANALYSIS_TYPE').waitFor({ timeout: 15000 });
+  await page.locator('h3', { hasText: '关注项测试' }).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.agent-workflow-saved-actions button', {
+      hasText: '批量回归',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-saved-status', {
+      hasText: /批量回归完成：通过 0 \/ 变化 1 \/ 无基线 1 \/ 失败 0/,
+    })
+    .waitFor({ timeout: 15000 });
+  const regressionWithAcceptText = await page
+    .locator('.agent-workflow-regression')
+    .innerText();
+  assert.match(regressionWithAcceptText, /接受 2 个结果为基线/);
+  assert.match(regressionWithAcceptText, /变化 1/);
+  assert.match(regressionWithAcceptText, /无基线 1/);
+  await page
+    .locator('.agent-workflow-regression-header button', {
+      hasText: '接受 2 个结果为基线',
+    })
+    .click();
+  await page
+    .locator('.agent-workflow-saved-status', {
+      hasText: '已接受 2 个批量回归结果为新基线',
+    })
+    .waitFor({ timeout: 5000 });
+  await page
+    .locator('.agent-workflow-regression.same', {
+      hasText: '保存样例批量回归',
+    })
+    .waitFor({ timeout: 5000 });
+  const acceptedRegressionText = await page
+    .locator('.agent-workflow-regression')
+    .innerText();
+  assert.match(acceptedRegressionText, /通过 2/);
+  assert.match(acceptedRegressionText, /变化 0/);
+  assert.doesNotMatch(acceptedRegressionText, /接受 2 个结果为基线/);
+  const acceptedScenarioState = await page.evaluate(async () => {
+    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    return result.agentWorkflowSavedScenarios;
+  });
+  assert.equal(acceptedScenarioState.length, 2);
+  assert.equal(
+    acceptedScenarioState.every((scenario) => scenario.expectedResult),
+    true,
+  );
+  assert.equal(acceptedScenarioState[0].expectedResult.shouldNotify, true);
+  assert.equal(acceptedScenarioState[0].expectedResult.confidence, 0.88);
+  assert.equal(acceptedScenarioState[1].expectedResult.shouldNotify, true);
+  assert.equal(acceptedScenarioState[1].expectedResult.traceStatus, 'partial');
 
   await page.locator('#agentId').fill('auditSnapshotAgent');
   await page.locator('#agentName').fill('Audit Snapshot Agent');

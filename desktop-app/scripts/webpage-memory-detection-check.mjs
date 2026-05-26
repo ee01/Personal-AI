@@ -70,6 +70,7 @@ async function openContextMoreMenu(page) {
 async function startHarnessServer() {
   const contextRecallRequests = [];
   const feedbackRequests = [];
+  const rehearsalFeedbackRequests = [];
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -110,6 +111,101 @@ async function startHarnessServer() {
               matches: [],
               topMatch: null,
               queryTimeMs: 2,
+            }),
+          );
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/rehearsal-lens')) {
+          const rehearsalMatch = {
+            id: 'rehearsal-memory-1',
+            type: 'rehearsal',
+            score: 0.87,
+            displayPriority: 'p1',
+            title: 'Next Falcon customer review',
+            uiSummary: 'Before the Falcon customer review, ask Priya to confirm the escalation owner.',
+            snippet: 'Ask Priya to confirm the escalation owner before the customer review.',
+            sourceLabel: 'rehearsal',
+            sourceTitle: 'Rehearsal',
+            exploreLink: '#/rehearsals?rehearsalId=rehearsal-memory-1',
+            links: [],
+            whyMatched: '预演线索命中当前场景',
+            whyRelevant: ['人物：Priya Shah', '项目：Falcon', '线索：customer review'],
+            matchedAnchors: {
+              people: ['Priya Shah'],
+              projects: ['Falcon'],
+              topics: ['customer review'],
+            },
+            reasonType: 'prospective_cue',
+            evidenceRole: 'rehearsal_cue',
+            metadata: {
+              rehearsal: {
+                id: 'rehearsal-memory-1',
+                activationId: 'activation-memory-lens-1',
+                scenarioType: 'customer_review',
+                status: 'active',
+              },
+              matchedCues: {
+                people: ['Priya Shah'],
+                projects: ['Falcon'],
+                keywords: ['customer review'],
+              },
+            },
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [rehearsalMatch],
+              topMatch: rehearsalMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/raw-title-summary')) {
+          const rawTitleMatch = {
+            id: 'web-memory-raw-title',
+            type: 'message',
+            score: 0.94,
+            displayPriority: 'p1',
+            title: '@Esone Qiu wrote:',
+            uiSummary: '@Esone Qiu wrote:',
+            snippet: '3. 行动指南 (Action Plan)',
+            sourceLabel: 'glip',
+            sourceTitle: 'Falcon Launch Room',
+            exploreLink: '#/timeline?focus=web-memory-raw-title',
+            links: [],
+            whyMatched: '关键词命中 Falcon handoff',
+            whyRelevant: ['项目：Falcon', '主题：owner handoff'],
+            matchedAnchors: {
+              projects: ['Falcon'],
+              topics: ['owner handoff'],
+            },
+            reasonType: 'keyword_overlap',
+            evidenceRole: 'action_item',
+            metadata: {
+              summary: 'Sophia confirmed Falcon launch ownership and asked Esone to review the handoff before Friday.',
+              actions: [
+                {
+                  assignee: 'Esone Qiu',
+                  description: 'Review Falcon handoff checklist',
+                  deadline: 'Friday',
+                },
+              ],
+              contextMessages: [
+                {
+                  content: '@Esone Qiu wrote: 3. 行动指南 (Action Plan)',
+                },
+              ],
+            },
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [rawTitleMatch],
+              topMatch: rawTitleMatch,
+              queryTimeMs: 3,
             }),
           );
           return;
@@ -243,6 +339,29 @@ async function startHarnessServer() {
         return;
       }
 
+      if (
+        req.method === 'POST' &&
+        req.url === '/api/v1/rehearsals/rehearsal-memory-1/feedback'
+      ) {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        rehearsalFeedbackRequests.push(body);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            rehearsal: {
+              id: 'rehearsal-memory-1',
+              status: body.outcome === 'irrelevant' ? 'dismissed' : 'active',
+            },
+            activation: {
+              id: body.activationId,
+              outcome: body.outcome,
+            },
+          }),
+        );
+        return;
+      }
+
       if (req.method === 'POST' && req.url === '/api/v1/feedback') {
         const rawBody = await readRequestBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
@@ -258,6 +377,22 @@ async function startHarnessServer() {
         return;
       }
 
+      if (req.method === 'GET' && req.url?.startsWith('/rehearsal-lens')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Falcon customer review with Priya</title></head>
+            <body>
+              <main>
+                Falcon customer review prep with Priya Shah covers escalation
+                ownership, launch risk, support handoff, customer confidence,
+                and the next review checkpoint.
+              </main>
+            </body>
+          </html>`);
+        return;
+      }
+
       if (req.method === 'GET' && req.url?.startsWith('/normal')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(`<!doctype html>
@@ -268,6 +403,21 @@ async function startHarnessServer() {
                 Falcon launch readiness notes cover alpha rollout dates, owner handoff,
                 migration checkpoints, release confidence, dependency status, customer
                 communication, and follow-up review material for the team.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/raw-title-summary')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Falcon handoff follow-up</title></head>
+            <body>
+              <section>
+                Falcon launch owner handoff is ready for review. Sophia asked Esone
+                to confirm the checklist, deadline, and ownership before Friday.
               </section>
             </body>
           </html>`);
@@ -472,6 +622,7 @@ async function startHarnessServer() {
     apiBaseUrl: `http://127.0.0.1:${port}/api/v1`,
     contextRecallRequests,
     feedbackRequests,
+    rehearsalFeedbackRequests,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -552,6 +703,110 @@ async function launchExtensionContext(apiBaseUrl) {
   await configPage.close();
 
   return { context, extensionId, serviceWorker };
+}
+
+async function verifyRehearsalLensPresentation(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'rehearsal-lens');
+  const startCount = server.contextRecallRequests.length;
+  const startFeedbackCount = server.feedbackRequests.length;
+  const startRehearsalFeedbackCount = server.rehearsalFeedbackRequests.length;
+  await page.goto(`${server.origin}/rehearsal-lens`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `rehearsal lens bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    'Rehearsal Lens 页面应触发一次被动召回',
+  );
+  assert.ok(
+    server.contextRecallRequests[startCount].sourceTypes?.includes('rehearsal'),
+    'Memory Lens 请求应允许 rehearsal source type',
+  );
+
+  await page.locator('.pai-context-bubble').hover();
+  await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const peekText = await page.locator('.pai-context-peek').innerText();
+  assert.match(peekText, /Memory Lens/);
+  assert.match(peekText, /预演提醒/);
+  assert.match(peekText, /线索：customer review/);
+  assert.match(peekText, /Next Falcon customer review/);
+
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const cardText = await page.locator('.pai-context-card').innerText();
+  assert.match(cardText, /为什么此刻相关/);
+  assert.match(cardText, /预演内容/);
+  assert.match(cardText, /我能做什么/);
+  assert.match(cardText, /线索/);
+  assert.match(cardText, /Before the Falcon customer review/);
+  assert.doesNotMatch(
+    cardText,
+    /它说了什么/,
+    'Rehearsal 卡片不应继续使用普通事实记忆标题',
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
+    '标记这条预演提醒有用',
+    'Rehearsal 正向反馈应有专门的可访问名称',
+  );
+
+  const exploreHref = await page.locator('.pai-context-open-memory').getAttribute('href');
+  assert.ok(
+    exploreHref?.includes('memory-exploring.html#/rehearsals?rehearsalId=rehearsal-memory-1'),
+    `Rehearsal 记忆跳转应指向 Rehearsal 管理页: ${exploreHref}`,
+  );
+
+  await page.locator('.pai-context-recall-positive').click();
+  const feedbackDeadline = Date.now() + 5000;
+  while (
+    server.rehearsalFeedbackRequests.length < startRehearsalFeedbackCount + 1 &&
+    Date.now() < feedbackDeadline
+  ) {
+    await delay(50);
+  }
+  assert.equal(
+    server.rehearsalFeedbackRequests.length,
+    startRehearsalFeedbackCount + 1,
+    'Rehearsal 正向反馈应调用 /rehearsals/:id/feedback',
+  );
+  assert.deepEqual(server.rehearsalFeedbackRequests.at(-1), {
+    outcome: 'accepted',
+    activationId: 'activation-memory-lens-1',
+    note: 'web_passive_bubble:127.0.0.1',
+  });
+  assert.equal(
+    server.feedbackRequests.length,
+    startFeedbackCount,
+    'Rehearsal 反馈不应误写普通 recall_quality /feedback',
+  );
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('Rehearsal Lens 页面出现脚本异常');
+  }
+  await page.close();
 }
 
 async function verifyNormalPage(server, context, serviceWorker, extensionId) {
@@ -763,7 +1018,7 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
 
   await openContextMoreMenu(page);
   const menuText = await page.locator('.pai-context-more-menu:not([hidden])').innerText();
-  assert.match(menuText, /允许此站点/);
+  assert.match(menuText, /开启白名单并允许此站点/);
   assert.match(menuText, /此网站今天不提示/);
   assert.match(menuText, /此页面永久不提示/);
   assert.match(menuText, /永久不提示此站点/);
@@ -1041,6 +1296,81 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   await page.close();
 }
 
+async function verifyMetadataSummaryPresentation(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'metadata-summary');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/raw-title-summary`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `metadata summary bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    'metadata summary 页面应触发一次被动召回',
+  );
+
+  const bubble = page.locator('.pai-context-bubble');
+  await bubble.hover();
+  await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const peekText = await page.locator('.pai-context-peek').innerText();
+  assert.match(
+    peekText,
+    /Sophia confirmed Falcon launch ownership/,
+    'Hover Peek 标题应优先使用 metadata.summary 的语义化描述',
+  );
+  assert.doesNotMatch(
+    peekText,
+    /@Esone Qiu wrote|3\. 行动指南/,
+    'Hover Peek 不应把 raw message 前缀或结构编号当作首屏内容',
+  );
+
+  await bubble.click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const cardText = await page.locator('.pai-context-card').innerText();
+  assert.match(
+    cardText,
+    /Sophia confirmed Falcon launch ownership and asked Esone to review the handoff before Friday\./,
+    'Expanded Card 应展示 metadata.summary 的完整摘要',
+  );
+  assert.match(
+    cardText,
+    /Esone Qiu · Review Falcon handoff checklist · Friday/,
+    'Expanded Card 应优先把 metadata.actions 渲染为可执行证据',
+  );
+  assert.doesNotMatch(
+    cardText,
+    /@Esone Qiu wrote|3\. 行动指南/,
+    'Expanded Card 标题和证据不应退回 raw snippet',
+  );
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('metadata summary 展示页面出现脚本异常');
+  }
+  await page.close();
+}
+
 async function verifyAllowlistMode(server, context, serviceWorker, extensionId) {
   await serviceWorker.evaluate(
     async ({ allowStorageKey, allowlistModeKey }) => {
@@ -1137,6 +1467,124 @@ async function verifyAllowlistMode(server, context, serviceWorker, extensionId) 
     '允许站点移除后白名单模式应再次阻止被动召回',
   );
   await removedPage.close();
+
+  await serviceWorker.evaluate(
+    async ({ allowStorageKey, allowlistModeKey }) => {
+      await chrome.storage.local.set({
+        [allowStorageKey]: {},
+        [allowlistModeKey]: false,
+      });
+    },
+    {
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+}
+
+async function verifyLiveSiteControlStorageSync(server, context, serviceWorker) {
+  await serviceWorker.evaluate(
+    async ({
+      muteStorageKey,
+      blockStorageKey,
+      pageBlockKey,
+      allowStorageKey,
+      allowlistModeKey,
+    }) => {
+      await chrome.storage.local.set({
+        [muteStorageKey]: {},
+        [blockStorageKey]: {},
+        [pageBlockKey]: {},
+        [allowStorageKey]: {},
+        [allowlistModeKey]: false,
+      });
+    },
+    {
+      muteStorageKey: siteMuteStorageKey,
+      blockStorageKey: siteBlockStorageKey,
+      pageBlockKey: pageBlockStorageKey,
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'live-site-controls');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/normal?live-controls=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await waitForRequestCount(server, startCount + 1, 12000);
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+
+  await serviceWorker.evaluate(
+    async ({ blockStorageKey }) => {
+      await chrome.storage.local.set({
+        [blockStorageKey]: { '127.0.0.1': Date.now() },
+      });
+    },
+    { blockStorageKey: siteBlockStorageKey },
+  );
+  await page.waitForFunction(
+    () =>
+      !document.querySelector('.pai-context-bubble') &&
+      !document.querySelector('.pai-context-card'),
+    { timeout: 5000 },
+  );
+
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(900);
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    '已打开页面收到站点屏蔽 storage 更新后不应继续被动召回',
+  );
+
+  await serviceWorker.evaluate(
+    async ({ blockStorageKey }) => {
+      await chrome.storage.local.set({ [blockStorageKey]: {} });
+    },
+    { blockStorageKey: siteBlockStorageKey },
+  );
+  await page.waitForSelector('.pai-context-bubble', { timeout: 5000 });
+
+  await serviceWorker.evaluate(
+    async ({ allowStorageKey, allowlistModeKey }) => {
+      await chrome.storage.local.set({
+        [allowStorageKey]: {},
+        [allowlistModeKey]: true,
+      });
+    },
+    {
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+  await page.waitForFunction(
+    () =>
+      !document.querySelector('.pai-context-bubble') &&
+      !document.querySelector('.pai-context-card'),
+    { timeout: 5000 },
+  );
+
+  await serviceWorker.evaluate(
+    async ({ allowStorageKey }) => {
+      await chrome.storage.local.set({
+        [allowStorageKey]: { '127.0.0.1': Date.now() },
+      });
+    },
+    { allowStorageKey: siteAllowStorageKey },
+  );
+  await page.waitForSelector('.pai-context-bubble', { timeout: 5000 });
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('实时站点控制同步页面出现脚本异常');
+  }
+  await page.close();
 
   await serviceWorker.evaluate(
     async ({ allowStorageKey, allowlistModeKey }) => {
@@ -2251,6 +2699,7 @@ try {
   await verifySensitiveQueryPage(server, context);
   await verifyEmptyMeetingDoesNotShowGenericLens(server, context);
   await verifyRingCentralLensSuppressedByComposeAssist(server, context);
+  await verifyRehearsalLensPresentation(server, context);
   await verifyJiraIssueContext(server, context);
   await verifySelectedTextTrigger(server, context);
   await verifySelectedTextPrivacyAndUiBoundaries(server, context);
@@ -2258,7 +2707,9 @@ try {
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
   await verifyIrrelevantFeedback(server, context);
   await verifyAllowlistMode(server, context, launch.serviceWorker, launch.extensionId);
+  await verifyLiveSiteControlStorageSync(server, context, launch.serviceWorker);
   await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
+  await verifyMetadataSummaryPresentation(server, context);
   await verifyPagePathBlock(server, context, launch.serviceWorker, launch.extensionId);
   await verifySensitivePage(server, context);
   log('browser checks passed');

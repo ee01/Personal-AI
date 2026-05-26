@@ -14,6 +14,7 @@ type CountRow = {
   message_count?: number;
   pending_extract_count?: number;
   conversation_count?: number;
+  artifact_count?: number;
 };
 
 type RawMessageRow = {
@@ -135,17 +136,23 @@ export class RawMessageStore {
           SELECT
             COUNT(*) AS message_count,
             COUNT(DISTINCT conversation_id) AS conversation_count,
-            SUM(CASE WHEN extracted_at IS NULL THEN 1 ELSE 0 END) AS pending_extract_count
+            SUM(CASE WHEN extracted_at IS NULL THEN 1 ELSE 0 END) AS pending_extract_count,
+            (
+              SELECT COUNT(*)
+              FROM conversation_artifacts AS ca
+              WHERE ca.source = ?
+            ) AS artifact_count
           FROM raw_messages
           WHERE source = ?
         `,
       )
-      .get(source) as CountRow | undefined;
+      .get(source, source) as CountRow | undefined;
 
     return {
       messageCount: Number(row?.message_count ?? 0),
       pendingExtractCount: Number(row?.pending_extract_count ?? 0),
       conversationCount: Number(row?.conversation_count ?? 0),
+      artifactCount: Number(row?.artifact_count ?? 0),
     };
   }
 

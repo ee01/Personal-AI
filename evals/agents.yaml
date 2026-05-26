@@ -1,0 +1,36 @@
+version: 1
+default: codex
+agents:
+  codex:
+    label: Codex CLI
+    command: codex
+    args:
+      - exec
+      - --cd
+      - "{repo}"
+      - --ask-for-approval
+      - never
+      - --sandbox
+      - danger-full-access
+      - "-"
+    input: stdin
+  claude:
+    label: Claude Code
+    command: claude
+    args:
+      - -p
+      - --permission-mode
+      - bypassPermissions
+      - "{prompt}"
+    input: argv
+  cursor-agent:
+    label: Cursor Agent
+    command: cursor-agent
+    args:
+      - --print
+      - --trust
+      - --force
+      - --workspace
+      - "{repo}"
+      - "{prompt}"
+    input: argv

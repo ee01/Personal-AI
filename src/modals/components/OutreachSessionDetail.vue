@@ -409,11 +409,14 @@
         <div v-else class="event-list">
           <div v-for="event in events" :key="event.id" class="event-item">
             <div class="inline-head">
-              <span>{{ eventTypeLabel(event.eventType) }}</span>
+              <span>{{ eventTypeLabel(event) }}</span>
               <span class="muted small">{{
                 relativeTime(event.createdAt)
               }}</span>
             </div>
+            <p v-if="eventSummary(event)" class="summary-text">
+              {{ eventSummary(event) }}
+            </p>
             <pre
               v-if="event.payload && Object.keys(event.payload).length > 0"
               class="json-block"
@@ -1047,7 +1050,12 @@ function replyClassificationLabel(value?: string) {
   return '未分类';
 }
 
-function eventTypeLabel(value?: string) {
+function eventTypeLabel(eventOrType?: OutreachEvent | string) {
+  const value =
+    typeof eventOrType === 'string' ? eventOrType : eventOrType?.eventType;
+  const payload =
+    typeof eventOrType === 'string' ? undefined : eventOrType?.payload;
+  if (value === 'created' && payload?.retried === true) return '已重试';
   if (value === 'created') return '已创建';
   if (value === 'edited') return '已调整发送信息';
   if (value === 'approved') return '已批准发送';
@@ -1060,8 +1068,31 @@ function eventTypeLabel(value?: string) {
   if (value === 'no_reply') return '超时无回复';
   if (value === 'escalated') return '已升级处理';
   if (value === 'cancelled') return '已取消';
+  if (value === 'retried') return '已重试';
   if (value === 'failed') return '执行失败';
   return value || '未知事件';
+}
+
+function eventSummary(event: OutreachEvent): string {
+  const payload = event.payload ?? {};
+  const isRetry =
+    event.eventType === 'retried' ||
+    (event.eventType === 'created' && payload.retried === true);
+  if (!isRetry) return '';
+
+  const previousStatus =
+    typeof payload.previousStatus === 'string'
+      ? statusLabel(payload.previousStatus)
+      : '上一次终态';
+  const nextStatus =
+    typeof payload.nextStatus === 'string'
+      ? statusLabel(payload.nextStatus)
+      : '下一轮待处理状态';
+  const nextCheckAt =
+    typeof payload.nextCheckAt === 'number' && Number.isFinite(payload.nextCheckAt)
+      ? `，下次检查 ${relativeTime(payload.nextCheckAt)}`
+      : '';
+  return `已从「${previousStatus}」重置为「${nextStatus}」${nextCheckAt}。`;
 }
 
 function extractOutcomeSummary(

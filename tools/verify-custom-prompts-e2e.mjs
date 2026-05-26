@@ -179,6 +179,12 @@ try {
   await page.locator('.prompt-preview', {
     hasText: '当前没有可注入的自定义偏好。',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.injection-receipt-item.empty', {
+    hasText: '用户上下文',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.empty', {
+    hasText: '消息提示词',
+  }).waitFor({ timeout: 5000 });
   assert.equal(
     (await page.locator('.summary-item').nth(0).locator('strong').textContent())?.trim(),
     '未启用',
@@ -220,6 +226,53 @@ try {
   await page.locator('.pending-change-summary', {
     hasText: '未保存变更：消息提示词',
   }).waitFor({ timeout: 5000 });
+  await page
+    .locator('label.prompt-toggle', { hasText: '启用项目分析自定义提示词' })
+    .locator('input')
+    .check();
+  await page
+    .locator('.prompt-scope-section')
+    .nth(1)
+    .locator('textarea')
+    .fill('项目分析只关注里程碑可信度和跨团队依赖');
+  await page.locator('.preview-scope-switch button', { hasText: '消息' }).click();
+  await page.locator('.preview-scope-switch button.active', {
+    hasText: '消息',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.prompt-preview', {
+    hasText: '客户升级',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.included', {
+    hasText: '消息提示词',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.excluded', {
+    hasText: '消息预览不会注入项目提示词',
+  }).waitFor({ timeout: 5000 });
+  assert.equal(
+    await page.locator('.prompt-preview', { hasText: '里程碑可信度' }).count(),
+    0,
+  );
+  await page.locator('.preview-scope-switch button', { hasText: '项目' }).click();
+  await page.locator('.preview-scope-switch button.active', {
+    hasText: '项目',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.prompt-preview', {
+    hasText: '里程碑可信度',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.included', {
+    hasText: '项目提示词',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.excluded', {
+    hasText: '项目预览不会注入消息提示词',
+  }).waitFor({ timeout: 5000 });
+  assert.equal(
+    await page.locator('.prompt-preview', { hasText: '客户升级' }).count(),
+    0,
+  );
+  await page.locator('.preview-scope-switch button', { hasText: '全部' }).click();
+  await page.locator('.preview-scope-switch button.active', {
+    hasText: '全部',
+  }).waitFor({ timeout: 5000 });
   await page.locator('.preference-warnings', {
     hasText: '疑似覆盖上级规则或工具边界',
   }).waitFor({ timeout: 5000 });
@@ -236,8 +289,15 @@ try {
 
   await messagePromptScopeToggle.uncheck();
   await page.locator('.prompt-preview', {
-    hasText: '当前没有可注入的自定义偏好。',
+    hasText: '里程碑可信度',
   }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.paused', {
+    hasText: '消息提示词作用域已暂停',
+  }).waitFor({ timeout: 5000 });
+  assert.equal(
+    await page.locator('.prompt-preview', { hasText: '客户升级' }).count(),
+    0,
+  );
   await page.locator('.prompt-inline-hint.muted', {
     hasText: '消息分析内容会保留',
   }).waitFor({ timeout: 5000 });
@@ -256,6 +316,9 @@ try {
   await promptSourceToggle.uncheck();
   await page.locator('.prompt-preview', {
     hasText: '当前没有可注入的自定义偏好。',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.paused', {
+    hasText: '消息提示词自定义提示词来源已暂停',
   }).waitFor({ timeout: 5000 });
   await page.waitForFunction(() => (
     document.querySelectorAll('.preference-warnings').length === 0
@@ -284,9 +347,9 @@ try {
   assert.equal(await page.locator('.pending-change-summary').count(), 0);
   history = await readHistory(page);
   assert.equal(history.length, 1);
-  assert.match(history[0].changeSummary, /首次保存：消息提示词/);
+  assert.match(history[0].changeSummary, /首次保存：消息提示词、项目提示词/);
   await page.locator('.history-change', {
-    hasText: '首次保存：消息提示词',
+    hasText: '首次保存：消息提示词、项目提示词',
   }).waitFor({ timeout: 5000 });
 
   await page

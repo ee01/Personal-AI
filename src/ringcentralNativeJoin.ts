@@ -2,6 +2,12 @@ export const RINGCENTRAL_NATIVE_JOIN_ENABLED_CONFIG_KEY =
   'MEETING_NATIVE_CLIENT_JOIN_ENABLED';
 export const RINGCENTRAL_NATIVE_JOIN_ENABLED_ATTR =
   'data-pai-ringcentral-native-join-enabled';
+export const RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE =
+  'personal-ai-ringcentral-native-join-preference';
+export const RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST =
+  'PAI_RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST';
+export const RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE =
+  'PAI_RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE';
 
 const RINGCENTRAL_VIDEO_HOST = 'v.ringcentral.com';
 const RINGCENTRAL_VIDEO_NATIVE_SCHEME = 'rcvdt';
@@ -25,6 +31,7 @@ const RINGCENTRAL_NATIVE_JOIN_LAUNCH_LINK_ID =
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_AUTO_DISMISS_MS = 5000;
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_ESCALATE_MS = 6000;
 const RINGCENTRAL_NATIVE_JOIN_LAUNCH_LINK_TTL_MS = 10000;
+const RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_TIMEOUT_MS = 3000;
 const RINGCENTRAL_VIDEO_JOIN_URL_PATTERN =
   /(?:https?:\/\/)?v\.ringcentral\.com\/(?:join|launcher|conf\/on)\/[^\s"'<>]+/gi;
 const RINGCENTRAL_VIDEO_MEETING_ID_PATTERN =
@@ -35,6 +42,24 @@ export interface RingCentralVideoJoinTarget {
   nativeUrl: string;
   browserUrl: string;
   meetingId: string;
+}
+
+export interface RingCentralNativeJoinSetEnabledRequestMessage {
+  source: typeof RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE;
+  target: 'content-script';
+  type: typeof RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST;
+  requestId: string;
+  enabled: boolean;
+}
+
+export interface RingCentralNativeJoinSetEnabledResponseMessage {
+  source: typeof RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE;
+  target: 'page';
+  type: typeof RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE;
+  requestId: string;
+  success: boolean;
+  enabled?: boolean;
+  error?: string;
 }
 
 export function parseRingCentralVideoJoinTarget(
@@ -209,6 +234,8 @@ export async function setRingCentralNativeJoinEnabled(
   enabled: boolean,
 ): Promise<void> {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+    await requestRingCentralNativeJoinPreferenceBridge(enabled);
+    setRingCentralNativeJoinEnabledAttribute(enabled);
     return;
   }
 
@@ -219,6 +246,7 @@ export async function setRingCentralNativeJoinEnabled(
       [RINGCENTRAL_NATIVE_JOIN_ENABLED_CONFIG_KEY]: enabled,
     },
   });
+  setRingCentralNativeJoinEnabledAttribute(enabled);
 }
 
 export function watchRingCentralNativeJoinEnabled(
@@ -383,8 +411,8 @@ function showRingCentralNativeJoinFallback(
   ): void => {
     statusMode = mode;
     if (mode === 'manual') {
-      clearHandoffConcern();
       clearAutoDismiss();
+      clearHandoffConcern();
     }
     status.textContent = text;
   };
@@ -409,6 +437,7 @@ function showRingCentralNativeJoinFallback(
     }
     clearHandoffConcern();
     handoffConcernTimer = window.setTimeout(() => {
+      handoffConcernTimer = null;
       if (statusMode !== 'handoff') {
         return;
       }
@@ -423,6 +452,7 @@ function showRingCentralNativeJoinFallback(
     }
     clearAutoDismiss();
     autoDismissTimer = window.setTimeout(() => {
+      autoDismissTimer = null;
       if (statusMode !== 'handoff') {
         return;
       }
@@ -529,15 +559,15 @@ function showRingCentralNativeJoinFallback(
     'font-size:12px',
     'text-align:right',
   ].join(';');
-  defaultBrowserHint.textContent = 'Prefer browser next time? ';
-  const preferBrowserButton = document.createElement('button');
-  preferBrowserButton.type = 'button';
-  preferBrowserButton.textContent = 'Use browser by default';
-  preferBrowserButton.setAttribute(
+  const defaultPreferencePrompt = document.createTextNode('');
+  defaultBrowserHint.appendChild(defaultPreferencePrompt);
+  const defaultPreferenceButton = document.createElement('button');
+  defaultPreferenceButton.type = 'button';
+  defaultPreferenceButton.setAttribute(
     RINGCENTRAL_NATIVE_JOIN_PREFER_BROWSER_ATTR,
     'true',
   );
-  preferBrowserButton.style.cssText = [
+  defaultPreferenceButton.style.cssText = [
     'border:0',
     'padding:0',
     'background:transparent',
@@ -547,29 +577,58 @@ function showRingCentralNativeJoinFallback(
     'text-decoration:underline',
     'cursor:pointer',
   ].join(';');
-  preferBrowserButton.addEventListener('click', async (event) => {
+  let nativeJoinPreferred =
+    document.documentElement.getAttribute(
+      RINGCENTRAL_NATIVE_JOIN_ENABLED_ATTR,
+    ) !== 'false';
+  const updateDefaultPreferenceControl = (): void => {
+    defaultPreferencePrompt.textContent = nativeJoinPreferred
+      ? 'Prefer browser next time? '
+      : 'Prefer app next time? ';
+    defaultPreferenceButton.textContent = nativeJoinPreferred
+      ? 'Use browser by default'
+      : 'Use app by default';
+    defaultPreferenceButton.setAttribute(
+      'aria-label',
+      nativeJoinPreferred
+        ? 'Use browser by default for future RingCentral joins'
+        : 'Use RingCentral app by default for future joins',
+    );
+  };
+  updateDefaultPreferenceControl();
+  defaultPreferenceButton.addEventListener('click', async (event) => {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    preferBrowserButton.disabled = true;
-    setFallbackStatus('Saving browser as the default join path...');
+    const nextNativeJoinPreferred = !nativeJoinPreferred;
+    defaultPreferenceButton.disabled = true;
+    setFallbackStatus(
+      nextNativeJoinPreferred
+        ? 'Saving RingCentral app as the default join path...'
+        : 'Saving browser as the default join path...',
+    );
     try {
-      await setRingCentralNativeJoinEnabled(false);
+      await setRingCentralNativeJoinEnabled(nextNativeJoinPreferred);
+      nativeJoinPreferred = nextNativeJoinPreferred;
+      updateDefaultPreferenceControl();
       setFallbackStatus(
-        'Saved. Future RingCentral joins will use the browser by default.',
+        nextNativeJoinPreferred
+          ? 'Saved. Future RingCentral joins will try the app first.'
+          : 'Saved. Future RingCentral joins will use the browser by default.',
       );
     } catch (error) {
       console.warn(
-        '[Personal AI] Failed to set RingCentral browser join default:',
+        '[Personal AI] Failed to set RingCentral join default:',
         error,
       );
-      preferBrowserButton.disabled = false;
       setFallbackStatus(
-        'Could not save the default. Open Options > Meeting Pilot to turn off Native Client join.',
+        'Could not save the default. Open Options > Meeting Pilot to change Native Client join.',
       );
+    } finally {
+      defaultPreferenceButton.disabled = false;
     }
   });
-  defaultBrowserHint.appendChild(preferBrowserButton);
+  defaultBrowserHint.appendChild(defaultPreferenceButton);
   host.appendChild(defaultBrowserHint);
 
   document.body?.appendChild(host);
@@ -701,6 +760,105 @@ function removeRingCentralNativeLaunchLink(): void {
   }
 
   document.getElementById(RINGCENTRAL_NATIVE_JOIN_LAUNCH_LINK_ID)?.remove();
+}
+
+function requestRingCentralNativeJoinPreferenceBridge(
+  enabled: boolean,
+): Promise<void> {
+  const targetWindow =
+    typeof globalThis !== 'undefined'
+      ? (globalThis as typeof globalThis & { window?: Window }).window
+      : undefined;
+  if (
+    !targetWindow ||
+    typeof targetWindow.postMessage !== 'function' ||
+    typeof targetWindow.addEventListener !== 'function'
+  ) {
+    throw new Error('ringcentral_native_join_preference_unavailable');
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const requestId = createRingCentralNativeJoinPreferenceRequestId();
+    let settled = false;
+    const cleanup = (): void => {
+      settled = true;
+      targetWindow.removeEventListener('message', handleResponse);
+      if (typeof targetWindow.clearTimeout === 'function') {
+        targetWindow.clearTimeout(timeoutId);
+      }
+    };
+    const handleResponse = (event: MessageEvent): void => {
+      const message = event.data as
+        | RingCentralNativeJoinSetEnabledResponseMessage
+        | undefined;
+      if (
+        !message ||
+        message.source !== RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE ||
+        message.target !== 'page' ||
+        message.type !== RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE ||
+        message.requestId !== requestId
+      ) {
+        return;
+      }
+
+      cleanup();
+      if (message.success) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          message.error || 'ringcentral_native_join_preference_bridge_failed',
+        ),
+      );
+    };
+    const timeoutId =
+      typeof targetWindow.setTimeout === 'function'
+        ? targetWindow.setTimeout(() => {
+            if (settled) return;
+            cleanup();
+            reject(
+              new Error(
+                'ringcentral_native_join_preference_bridge_timeout',
+              ),
+            );
+          }, RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_TIMEOUT_MS)
+        : 0;
+
+    targetWindow.addEventListener('message', handleResponse);
+    const request: RingCentralNativeJoinSetEnabledRequestMessage = {
+      source: RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE,
+      target: 'content-script',
+      type: RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST,
+      requestId,
+      enabled,
+    };
+    targetWindow.postMessage(request, getSameWindowPostMessageTargetOrigin());
+  });
+}
+
+function createRingCentralNativeJoinPreferenceRequestId(): string {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
+    return crypto.randomUUID();
+  }
+  return `ringcentral-native-join-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+}
+
+function getSameWindowPostMessageTargetOrigin(): string {
+  const targetWindow =
+    typeof globalThis !== 'undefined'
+      ? (globalThis as typeof globalThis & { window?: Window }).window
+      : undefined;
+  if (!targetWindow) {
+    return '*';
+  }
+  const origin = targetWindow.location?.origin;
+  return origin && origin !== 'null' ? origin : '*';
 }
 
 function stripTrailingJoinUrlPunctuation(url: string): string {

@@ -110,7 +110,7 @@ export interface SiteContextAdapter {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -119,6 +119,17 @@ export interface ComposerAssistEvidence {
   exploreLink?: string;
   links?: Array<{ label: string; url: string }>;
   whyMatched?: string;
+  whyRelevant?: string[];
+  matchedAnchors?: {
+    people?: string[];
+    topics?: string[];
+    projects?: string[];
+    source?: string[];
+  };
+  reasonType?: string;
+  evidenceRole?: string;
+  displayPriority?: string;
+  metadata?: Record<string, unknown>;
   timestamp?: number;
   score?: number;
 }

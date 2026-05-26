@@ -118,6 +118,15 @@
             <div class="review-note">
               这是生成式回放产出的低置信度联想；进入行动前先核对原始记忆或对应反思线程。
             </div>
+            <div class="dream-review-actions">
+              <router-link
+                class="dream-review-topic-link"
+                :to="reflectionReviewRoute(dream)"
+              >
+                复核这个主题
+              </router-link>
+              <span>会带上当前梦境主题，方便定位对应反思线程。</span>
+            </div>
             <div class="dream-markdown" v-html="renderMarkdown(dream.content)"></div>
           </div>
         </article>
@@ -240,6 +249,17 @@ function renderMarkdown(md: string): string {
 
 function toggleExpand(dream: DreamItem) {
   dream.expanded = !dream.expanded;
+}
+
+function reflectionReviewRoute(dream: DreamItem) {
+  return {
+    path: '/reflection-threads',
+    query: {
+      status: 'all',
+      source: 'dream',
+      search: dream.title,
+    },
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -637,6 +657,32 @@ onMounted(loadDreams);
   margin-bottom: 0.85rem;
   font-size: 0.8rem;
   line-height: 1.5;
+}
+
+.dream-review-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-bottom: 0.9rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.dream-review-topic-link {
+  border: 1px solid rgba(45, 212, 191, 0.26);
+  border-radius: 8px;
+  background: rgba(20, 83, 45, 0.16);
+  color: #99f6e4;
+  padding: 0.48rem 0.72rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.dream-review-topic-link:hover {
+  border-color: rgba(45, 212, 191, 0.5);
+  color: #ccfbf1;
 }
 
 .dream-markdown {

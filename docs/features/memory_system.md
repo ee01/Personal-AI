@@ -1,10 +1,10 @@
 # Memory Service — 类人记忆系统架构
 
-*最后更新: 2026-05-22 (补充动作队列健康摘要与运行恢复提示)*
+_最后更新: 2026-05-25 (补充备份导入 manifest 完整性校验与主动询问重试审计)_
 
 ## 系统概述
 
-Memory Service 是一套独立部署的**类人记忆后端服务**，取代了原有的 Chrome Extension 内嵌记忆系统（memory.ts + ChromaDB + Chrome Storage）。它模拟人脑的记忆机制 —— 自动摄入、显著性评估、多通道召回、遗忘衰减、离线巩固、自我反思与生成式重放（梦境重放），并提供双人格模型（用户画像 + AI 自我认知）。
+Memory Service 是一套独立部署的**类人记忆后端服务**，取代了原有的 Chrome Extension 内嵌记忆系统（memory.ts + ChromaDB + Chrome Storage）。它模拟人脑的记忆机制 —— 自动摄入、显著性评估、多通道召回、遗忘衰减、离线巩固、自我反思、未来场景预演（Rehearsal）与生成式重放（梦境重放），并提供双人格模型（用户画像 + AI 自我认知）。
 
 ## 大白话运行逻辑
 
@@ -17,6 +17,7 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 3. 显著性和反馈：salience、access_count、用户正负反馈会影响排序和后续强化。
 4. 用户边界：`X-User-Id`、scope、已确认画像和权限边界决定哪些记忆能被读取或注入。
 5. 离线巩固：自我反思和梦境重放会把分散片段整理成更稳定的主题、行动项或洞察，但不应替代原始证据。
+6. 未来场景预演：Rehearsal 保存“未来遇到某场景该想起/说/做什么”，通过 `/context-recall` 在 Compose Assist、Today Pilot、Meeting Pilot、Memory Lens 等现场触发；它不是事实层。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -39,7 +40,7 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 │  ┌────┴─────────────┴────────────┴────────────────┴──────┐  │
 │  │              Core Engines                              │  │
 │  │  Salience · Forgetting · Truth · Consolidation         │  │
-│  │  Self-Reflection · Dream Replay                        │  │
+│  │  Self-Reflection · Rehearsal · Dream Replay            │  │
 │  └────────────────────────┬──────────────────────────────┘  │
 │                           │                                  │
 │  ┌────────────────────────┴──────────────────────────────┐  │
@@ -53,15 +54,15 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 
 ## 技术选型
 
-| 层 | 方案 | 说明 |
-|---|---|---|
-| 运行时 | Node.js 20 + Fastify 5 | 高性能异步 HTTP |
-| 数据库 | SQLite (better-sqlite3, WAL) | 单文件、零运维、per-user 隔离 |
-| 向量检索 | sqlite-vec (384 维) | 与 DB 同进程，无外部依赖 |
-| 全文检索 | FTS5 (BM25) | SQLite 原生 |
-| Embedding | Xenova/all-MiniLM-L6-v2 (本地) | 无需外部 API |
-| LLM | OpenAI / Groq / Ollama / Dify | 可插拔 |
-| 调度 | node-cron + heartbeat loop | 巩固 / 自我反思 / 梦境重放 / 周报 / 通知 |
+| 层        | 方案                           | 说明                                                       |
+| --------- | ------------------------------ | ---------------------------------------------------------- |
+| 运行时    | Node.js 20 + Fastify 5         | 高性能异步 HTTP                                            |
+| 数据库    | SQLite (better-sqlite3, WAL)   | 单文件、零运维、per-user 隔离                              |
+| 向量检索  | sqlite-vec (384 维)            | 与 DB 同进程，无外部依赖                                   |
+| 全文检索  | FTS5 (BM25)                    | SQLite 原生                                                |
+| Embedding | Xenova/all-MiniLM-L6-v2 (本地) | 无需外部 API                                               |
+| LLM       | OpenAI / Groq / Ollama / Dify  | 可插拔                                                     |
+| 调度      | node-cron + heartbeat loop     | 巩固 / 自我反思 / Rehearsal aging / 梦境重放 / 周报 / 通知 |
 
 ---
 
@@ -94,19 +95,20 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 └──────────────────┘  └──────────────────┘  └──────────────────┘
 ```
 
-| 引擎 | 职责 |
-|---|---|
-| **IngestionPipeline** | 去重 → LLM 抽取实体/摘要 → 显著性 → 嵌入 → 写入 |
-| **RecallEngine** | 4 通道并行召回 + MMR 重排序 |
-| **SalienceScorer** | S = importance + frequency + recency + surprise − redundancy |
-| **ForgettingEngine** | 指数衰减，可配半衰期 |
-| **TruthMaintainer** | 双时态属性 (valid_from/to + tx_start/end)，冲突确认队列 |
-| **ConsolidationEngine** | 每晚 6 阶段：压缩→去噪→结构化→清理→重索引→反思 |
-| **OnlineReflection** | `/ask` 返回后异步运行，补充事实/偏好/改进建议，并可生成自我反思线索 |
-| **ReflectionPlanner / ReflectionThreadService / ReflectionWorker** | 管理自我反思线程、按心跳推进、生成反思 run、产出动作 |
-| **GenerativeReplay** | 每周执行梦境重放，写入 `dreams/*.md`、发现隐含关系并回灌到反思线程 |
-| **HeartbeatLoop** | 微巩固、通知检查、梦境报表检查、自我反思 planner、动作执行 |
-| **ProfileManager** | 双人格：用户画像 + AI 自我认知 (Identity/Soul/Policy) |
+| 引擎                                                               | 职责                                                                |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| **IngestionPipeline**                                              | 去重 → LLM 抽取实体/摘要 → 显著性 → 嵌入 → 写入                     |
+| **RecallEngine**                                                   | 4 通道并行召回 + MMR 重排序                                         |
+| **SalienceScorer**                                                 | S = importance + frequency + recency + surprise − redundancy        |
+| **ForgettingEngine**                                               | 指数衰减，可配半衰期                                                |
+| **TruthMaintainer**                                                | 双时态属性 (valid_from/to + tx_start/end)，冲突确认队列             |
+| **ConsolidationEngine**                                            | 每晚 6 阶段：压缩 → 去噪 → 结构化 → 清理 → 重索引 → 反思            |
+| **OnlineReflection**                                               | `/ask` 返回后异步运行，补充事实/偏好/改进建议，并可生成自我反思线索 |
+| **ReflectionPlanner / ReflectionThreadService / ReflectionWorker** | 管理自我反思线程、按心跳推进、生成反思 run、产出动作                |
+| **RehearsalService / RehearsalActivationService**                  | 保存未来场景预演记忆，按人物/项目/群组/会议/issue/URL 等硬线索触发  |
+| **GenerativeReplay**                                               | 每周执行梦境重放，写入 `dreams/*.md`、发现隐含关系并回灌到反思线程  |
+| **HeartbeatLoop**                                                  | 微巩固、通知检查、梦境报表检查、自我反思 planner、动作执行          |
+| **ProfileManager**                                                 | 双人格：用户画像 + AI 自我认知 (Identity/Soul/Policy)               |
 
 摄入接口会返回轻量 `decision`，说明本次内容是进入结构化索引、仅保存为原始消息、还是被判定为重复；其中包含 duplicate 原因、显著性分数、是否达到索引阈值和未索引原因。这样客户端日志和运维排查可以直接解释“为什么记住了但搜不到”或“为什么跳过重复”，不需要临时查 SQLite。
 
@@ -148,15 +150,15 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 
 被动上下文召回（例如网页、会议或 popup 的“你之前见过这个”提示）默认使用 `all`，因为它的目标是发现关联线索，而不是替用户做工作/个人范围判断。主动研究型召回仍默认 `work`，需要用户或调用方显式切到 `personal` / `both` / `all`。
 
-记忆查询 UI 已提供“工作 / 个人 / 全部”范围选择，并在搜索结果里显示当前检索范围、命中结果范围标签、范围分布、来源、时间和命中通道。搜索结果页切换范围会立即重新执行当前搜索并同步 URL，避免按钮状态和实际结果范围脱节；在 `全部` 范围下，结果汇总会直接显示工作/个人命中数量，让用户先看见本次证据是否跨越生活域，再决定是否继续打开来源或引用结果。召回结果会保留标题、摘要、来源、时间、原始来源链接和 `exploreLink`，卡片点击优先跳到记忆定位页，避免把 message/chunk 误当实体详情打开。`/recall`、`/ask` 和来源记忆清理接口都接受 `scope=all`，避免客户端使用统一范围语义时被后端拒绝。默认范围搜不到结果时，搜索页会提供“搜索全部记忆”的直接入口，减少用户被默认工作范围卡住的情况。
+记忆查询 UI 已提供“工作 / 个人 / 全部”范围选择，并在搜索结果里显示当前检索范围、命中结果范围标签、范围分布、来源、时间和命中通道。搜索结果页切换范围会立即重新执行当前搜索并同步 URL，避免按钮状态和实际结果范围脱节；在 `全部` 范围下，结果汇总会直接显示工作/个人命中数量，让用户先看见本次证据是否跨越生活域，再决定是否继续打开来源或引用结果。召回结果会保留标题、摘要、来源、时间、原始来源链接和 `exploreLink`，卡片点击优先跳到记忆定位页，避免把 message/chunk 误当实体详情打开。搜索结果标题和摘要会安全高亮当前查询词，帮助用户快速判断命中原因；高亮只渲染转义后的文本，不信任记忆内容里的原始 HTML。`/recall`、`/ask` 和来源记忆清理接口都接受 `scope=all`，避免客户端使用统一范围语义时被后端拒绝；旧链接里的 `scope=both` 会在客户端规范化为“全部”，保持按钮状态、请求参数和文案一致。默认范围搜不到结果时，搜索页会提供“搜索全部记忆”的直接入口，减少用户被默认工作范围卡住的情况。
 
 搜索结果卡片提供与时间轴一致的轻量反馈入口。用户可以把某条证据标记为“有用”或“不相关”，也可以撤销反馈；已有反馈会在搜索结果重新打开时恢复高亮。反馈提交时会携带 `message` / `chunk` / `entity` 目标类型，避免同 ID 的不同记忆类型串项。
 
 召回结果现在会返回 `channelDiagnostics`，稳定列出本次请求中 `vector` / `fts` / `graph` / `time` 各通道的命中、空结果、跳过或失败状态。搜索结果页会在摘要里展示这些通道状态和命中数；如果本地语义 embedding 不可用，用户会直接看到“语义未运行”，而不是把关键词、图谱或时间通道的结果误解为完整四通道结果。
 
-搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。结果跳转只接受服务端生成的 `#/...` 内部路由，来源链接只允许 `http/https`，避免记忆内容里的异常 URL 变成可点击入口。
+搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。结果跳转只接受当前记忆浏览器支持的内部路由（如 timeline / topic / person / project / entity），来源链接只允许 `http/https` 且会去掉 URL 里的用户名/密码；可打开的来源按钮会标明目标 host，异常内部路由或非 http(s) 来源会在卡片上显示“已隐藏”的原因，避免静默消失或把异常 URL 变成可点击入口。
 
-`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口和命中通道，避免全局范围按钮与实际请求范围脱节；列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天或全部范围的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞。
+`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口和命中通道，避免全局范围按钮与实际请求范围脱节；列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天或全部范围的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞。时间轴与搜索结果共用同一套跳转安全呈现：合法来源显示目标 host，非法来源或不支持的内部 route 会显示隐藏原因，便于用户判断是没有来源还是被安全策略拦截。
 
 召回排序继续使用 MMR，但不再用 query embedding 当候选向量占位。没有候选 embedding 时，会用候选文本相似度作为多样性惩罚，避免时间窗口或图谱召回被近重复内容挤占；候选去重、排序和搜索结果卡片都使用 `type:id` 作为稳定身份，避免 `message`、`chunk`、`entity` 碰巧同 ID 时被误合并或前端复用错卡片；召回后的访问强化也按真实结果类型写入 `message` / `chunk` / `entity` 元数据。
 
@@ -170,39 +172,41 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 
 ### 核心表
 
-| 表 | 用途 |
-|---|---|
-| `messages_raw` | 原始消息 (content, summary, source, sender, entities_json) |
-| `chunks` / `chunks_fts` / `chunks_vec` | 文本分块 + FTS5 + 384 维向量 |
-| `messages_vec` | 消息级 384 维向量 |
-| `entities` | 知识图谱节点 (Person, Project, Task, Organization, Document, Technology, Topic) |
-| `entity_properties` | 双时态属性 (valid_from/to, tx_start/end, confidence, superseded_by) |
-| `relationships` | 图谱边 (relation_type, strength, co_occurrence_count) |
-| `memory_metadata` | 显著性 & 衰减 & 巩固等级 |
-| `reflection_threads` | 自我反思主题线程 |
-| `reflection_runs` | 每次自我反思运行记录 |
-| `proposed_actions` | 自我反思 / 梦境重放产出的动作队列 |
-| `action_results` | 外部委派或其他动作的结构化结果，供后续反思继续引用 |
-| `dream_runs` | 梦境重放运行记录 |
+| 表                                     | 用途                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------- |
+| `messages_raw`                         | 原始消息 (content, summary, source, sender, entities_json)                      |
+| `chunks` / `chunks_fts` / `chunks_vec` | 文本分块 + FTS5 + 384 维向量                                                    |
+| `messages_vec`                         | 消息级 384 维向量                                                               |
+| `entities`                             | 知识图谱节点 (Person, Project, Task, Organization, Document, Technology, Topic) |
+| `entity_properties`                    | 双时态属性 (valid_from/to, tx_start/end, confidence, superseded_by)             |
+| `relationships`                        | 图谱边 (relation_type, strength, co_occurrence_count)                           |
+| `memory_metadata`                      | 显著性 & 衰减 & 巩固等级                                                        |
+| `reflection_threads`                   | 自我反思主题线程                                                                |
+| `reflection_runs`                      | 每次自我反思运行记录                                                            |
+| `rehearsals`                           | 未来场景预演记忆，保存触发线索、建议内容、状态、置信度和生命周期统计            |
+| `rehearsal_activations`                | 每次 Rehearsal 命中、展示、忽略、使用或反馈的审计记录                           |
+| `proposed_actions`                     | 自我反思 / 梦境重放产出的动作队列                                               |
+| `action_results`                       | 外部委派或其他动作的结构化结果，供后续反思继续引用                              |
+| `dream_runs`                           | 梦境重放运行记录                                                                |
 
 ### 人格表
 
-| 表 | 用途 |
-|---|---|
-| `user_profile_items` | 用户事实/偏好/习惯/兴趣 |
-| `social_edges` | 社交关系 (colleague, manager, friend…) |
-| `opinion_items` | 对人/事的态度 (valence, intensity) |
-| `agent_profile_versions` | AI 人格版本 (identity, soul, policy) |
+| 表                       | 用途                                   |
+| ------------------------ | -------------------------------------- |
+| `user_profile_items`     | 用户事实/偏好/习惯/兴趣                |
+| `social_edges`           | 社交关系 (colleague, manager, friend…) |
+| `opinion_items`          | 对人/事的态度 (valence, intensity)     |
+| `agent_profile_versions` | AI 人格版本 (identity, soul, policy)   |
 
 ---
 
 ## 主动循环
 
-| 循环 | 频率 | 动作 |
-|---|---|---|
+| 循环      | 频率           | 动作                                                           |
+| --------- | -------------- | -------------------------------------------------------------- |
 | Heartbeat | 默认每 15 分钟 | 微巩固、通知检查、关注项目更新、自我反思 planner、自动动作执行 |
-| Daily | 每晚 23:00 | 6 阶段巩固（压缩/去噪/结构化/清理/重索引/反思） |
-| Weekly | 周日 03:00 | 梦境重放（发现隐含关联并生成 `dreams/*.md`） |
+| Daily     | 每晚 23:00     | 6 阶段巩固（压缩/去噪/结构化/清理/重索引/反思）                |
+| Weekly    | 周日 03:00     | 梦境重放（发现隐含关联并生成 `dreams/*.md`）                   |
 
 ---
 
@@ -264,10 +268,13 @@ ReflectionResearcher      ReflectionWorker
 
 - **同步执行**：和本轮自我反思是一个事务性思考过程，不需要等待队列
 - **低副作用**：只是查询本地记忆，不会触发外部写操作
-- **结果直接并入当前证据**：研究命中的消息和记忆片段会作为补充 evidence 进入同一轮 `ReflectionWorker`
+- **结果直接并入当前证据**：研究命中的消息、记忆片段和实体线索会作为补充 evidence 进入同一轮 `ReflectionWorker`；线程详情页会保留这些研究证据，实体线索会展示实体名、类型和少量 active 真值属性，方便刷新后复核“本地已经查到了什么”
+- **过程可复核**：每条本地研究查询会记录目的、查询范围、状态、命中数、证据 refs 和错误摘要。单条查询失败不会中断整轮反思；用户在线程详情页能区分“没有计划查询”“查了但没命中”和“某条查询失败”。
 
 因此，当前系统没有把“查本地消息”实现成 `query_memory action`。  
 这样做的好处是链路更短，模型可以在同一轮里“想到要查 -> 查到 -> 继续想”，不会把大量纯读查询挤进动作队列。
+
+业内产品上，[Slack AI search](https://slack.com/intl/en-us/help/articles/31739993134867-Search-with-Slack-AI) 和 [Notion Enterprise Search](https://www.notion.com/help/enterprise-search) 都强调按用户可访问数据检索，并把来源带回给用户复核；这里的本地研究补查也遵循同一方向，只查 Personal AI 本地可见记忆，并展示查询过程与命中证据。研究上，[Generative Agents](https://arxiv.org/abs/2304.03442) 的 observation / planning / reflection 架构和 [Reflexion](https://arxiv.org/abs/2303.11366) 的 verbal reflection loop 都支持“先把经验和证据整理进可复用记忆，再让下一轮推理读取”的设计，但实际产品需要额外暴露失败和空结果，否则用户只看到结论，无法判断反思是否真的查过本地证据。
 
 ### 典型产出
 
@@ -346,6 +353,7 @@ ReflectionResearcher      ReflectionWorker
   - 如果能解析到唯一 RingCentral 用户/群组，才允许审批或发送
   - 如果目标未解析或有多个候选，会停在 `pending_approval`
   - UI 里需要先确认目标，不能直接批准
+- 会话详情页支持发送前编辑目标/问题/时间、审批、取消和重试；重试会写入独立 `retried` 审计事件，时间线直接显示从哪个终态重置到下一轮处理状态，避免把重试误看成新建会话。
 
 #### 2. 决策中心（Confirm Requests）
 
@@ -389,11 +397,14 @@ ReflectionResearcher      ReflectionWorker
 - 数据表：`notification_records`
 - 能力：`acknowledge` / `dismiss` / `snooze`
 - `snooze` 默认顺延 24 小时，也接受调用方提供 5 分钟到 7 天的延迟；已处理或已 snooze 的原通知不会再次复制，避免重复提醒
+- `snooze` 生成的未来通知会保留原 payload，并写入 `payload.snooze`（来源通知、root 通知、延后时间、到点时间和第几次稍后）；Chrome 通知到点弹回时会在上下文里显示“稍后提醒 / 第 N 次稍后提醒”，避免用户误以为是全新的系统打扰
 - `GET /notifications?state=scheduled` 可以查看尚未到点的稍后提醒，`/notifications/stats` 会返回 `scheduled` 数量
 - 当前没有独立“通知中心”页面，主要呈现方式是：
   - Chrome Extension 通知
   - Bot 推送
   - 点击通知后跳到 `memory-exploring` 对应页面，例如 `/decisions` 或 `/dreams`
+
+产品参考上，[Slack 的 DND / notification schedule](https://slack.com/help/articles/214908388-pause-notifications-with-do-not-disturb) 和 [Teams 的 Activity feed / notification settings](https://support.microsoft.com/en-US/teams/notifications-settings/manage-notifications-in-microsoft-teams) 都把“暂停打扰”和“稍后仍可回看”分开处理；[通知 snooze](https://weberdo.com/publications/2018-Snooze-Investigating-the-User-Defined-Deferral-of-Mobile-Notifications.pdf) 与 [notification deferral](https://www.microsoft.com/en-us/research/publication/balancing-awareness-interruption-investigation-notification-deferral-policies/) 研究也强调，延后提醒要让用户知道这是自己延后的事项，而不是一条没有来历的新通知。因此本功能优先保留延后来源、处理状态和再次提醒语义，不做静默吞掉。
 
 ### 触发逻辑与优先级
 
@@ -484,13 +495,13 @@ flowchart TD
 
 为了避免混淆，可以把它们理解成不同问题类型：
 
-| 链路 | 它回答的问题 |
-|---|---|
-| 本地研究补查 | “我本地是不是已经知道答案了？” |
-| OpenClaw | “外部系统里是不是已经有答案了？” |
-| Outreach | “外部某个人/群组能不能回答这个问题？” |
-| 决策中心 | “现在是不是必须由用户来判断？” |
-| 通知链路 | “这件事要不要现在提醒用户？” |
+| 链路         | 它回答的问题                          |
+| ------------ | ------------------------------------- |
+| 本地研究补查 | “我本地是不是已经知道答案了？”        |
+| OpenClaw     | “外部系统里是不是已经有答案了？”      |
+| Outreach     | “外部某个人/群组能不能回答这个问题？” |
+| 决策中心     | “现在是不是必须由用户来判断？”        |
+| 通知链路     | “这件事要不要现在提醒用户？”          |
 
 ### 立即打扰 vs 免打扰提醒
 
@@ -535,6 +546,8 @@ flowchart TD
 - 让 evidence 更聚焦于“拿到了什么外部事实”而不是“中间聊了什么”
 - 当前版本也还没有启用完整的 multi-turn Responses tool loop
 
+动作队列会直接展示 OpenClaw 最终返回的审计摘要：状态、artifact 数量、来源系统、对象 key、验证方式、观察/变更字段、结构化 payload，以及可展开的 delegation transcript。这样用户不需要先跳到反思线程，也能在失败重试或确认前判断“外部到底查到了什么”。
+
 ### 外部委派的安全边界
 
 - 外部**只读**查询可以自动执行，也可以由反思线程产出为手动动作
@@ -548,6 +561,7 @@ flowchart TD
 - 结果写入 `action_results`
 - 在线程上增加 `source_kind='action_result'` 的 evidence link
 - `ReflectionThreadService` 读取新的 action result 后，会再跑一轮 follow-up reflection
+- 动作队列卡片同步展示最终 artifact 和 transcript，作为用户手动排障、重试和审批前的审计入口
 
 这就形成了一个闭环：
 
@@ -597,6 +611,77 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 
 ---
 
+## Rehearsal / 未来场景预演
+
+Rehearsal 是 Memory Service 的**未来场景预演记忆层**。它保存的不是“已经发生了什么事实”，而是“如果未来遇到某个场景，我应该想起、说或做什么”。
+
+详细功能文档见 [`rehearsal.md`](./rehearsal.md)。
+
+### 运行形态
+
+- 核心服务：`RehearsalService`
+- 场景匹配：`RehearsalActivationService`
+- 数据表：`rehearsals` / `rehearsal_activations`
+- Markdown 输出：`rehearsals/{id}.md`
+- 统一召回入口：`POST /context-recall`
+- 管理入口：`memory-exploring.html#/rehearsals`
+
+### 与自我反思和梦境重放的关系
+
+三者不能合并成一个系统，因为它们处理的信息置信度和现场消费方式不同：
+
+| 系统       | 输入                         | 输出                                            | 是否直接进现场提示                                |
+| ---------- | ---------------------------- | ----------------------------------------------- | ------------------------------------------------- |
+| Reflection | 真实证据、开放问题、动作结果 | 反思结论、动作、确认请求、`rehearsal_candidate` | 部分结果可进 Today Pilot，但通常需要动作/通知包装 |
+| Dream      | 长期记忆的低置信联想         | dream run、弱关系、风险线索                     | 否，只能作为 Reflection 弱线索                    |
+| Rehearsal  | 未来场景脚本和稳定触发线索   | active/candidate/stale 预演提示                 | 是，通过 `/context-recall` 场景触发               |
+
+Reflection 可以生成 `rehearsal_candidate`。当前接入点在 `ReflectionThreadService.runReflection()`：`ReflectionWorker` 从真实证据、开放问题和本地研究结果里识别“未来遇到某场景应该想起/说/做什么”，输出 `rehearsalCandidates`，再由 `RehearsalService` 写入 `rehearsals`。如果候选置信度高、触发线索稳定，例如明确人物、群组、会议或 issue，系统可以自动转为 `active`；否则留在候选，由用户或后续证据修正。同一反思线程下触发线索相同的候选会更新已有 Rehearsal，避免重复创建。
+
+Dream 不能直接生成 active Rehearsal。它只能提供低置信线索，再交给 Reflection 或 Rehearsal 相关流程验证，避免把生成式联想当成未来现场提醒。
+
+### 召回语义
+
+Rehearsal 不只依赖向量召回。`RehearsalActivationService` 会结合：
+
+- 人物、项目、群组、会话、会议、日历事件、issue、URL 等硬线索
+- 当前 surface 类型，例如 composer、meeting prep、memory lens、today pilot
+- 主题、关键词和意图
+- 有效期、原始置信度、陈旧度、负反馈
+
+`/context-recall` 只有在调用方 `sourceTypes` 包含 `rehearsal` 时才返回 Rehearsal match。返回结果使用统一 `ContextRecallMatch`，但类型和解释字段会标明：
+
+- `type='rehearsal'`
+- `sourceType='rehearsal'`
+- `evidenceRole='rehearsal_cue'`
+- `reasonType='prospective_cue'`
+
+这样 Compose Assist、Meeting Pilot、Today Pilot、Memory Lens 可以共用召回层，同时仍各自保留展示文案、风险门控和自动化边界。
+
+### 开关关系
+
+Rehearsal 没有独立的“系统启用”开关。它的产生和消费分别控制：
+
+- `SELF_REFLECTION_ENABLED` 关闭时，Reflection 心跳不再自动产出新的 `rehearsal_candidate`；手动创建和已存在 Rehearsal 不受影响。
+- `CONTEXT_ASSIST_ENABLED`、`COMPOSE_ASSIST_ENABLED`、`MEETING_PREP_ENABLED`、`MEETING_PILOT_ENABLED` 等关闭对应 surface 后，对应前端不会请求或展示 Rehearsal。
+- `SCENE_REHEARSAL_DISPLAY_ENABLED` 是 Options 里 Context Assist 区域的展示总闸。关闭后，扩展会在现场消费入口过滤 `rehearsal` source，但不会删除已有 Rehearsal，也不会关闭 Reflection 的候选生成能力。
+- 即使 surface 开启，调用 `/context-recall` 时 `sourceTypes` 也必须包含 `rehearsal`，否则 `RehearsalActivationService` 会直接跳过。
+
+### 生命周期
+
+Rehearsal 默认不物理删除：
+
+- 高置信 candidate 且有稳定触发线索：可自动 `active`
+- 过期或 30 天未触发：aging 降权
+- 90 天未触发且无强硬线索：进入 `stale`
+- stale 默认不自动弹出，但精确人物/会议/issue 命中仍可弱提示
+- 用户主动归档进入 `archived`
+- 用户标记不相关进入 `dismissed`
+
+这种策略和 Reflection / Dream 的边界一致：旧内容先降权、关闭或只保留审计，只有用户手动删除或未来隐私清理策略才物理删除。
+
+---
+
 ## 梦境重放
 
 梦境重放是每周一次的**生成式长期记忆回放**。系统会从近一段时间内显著性高的实体主题出发，召回相关记忆，生成一段叙事式回放，并尝试发现潜在关系、风险与值得继续观察的线索。
@@ -615,7 +700,9 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 - `risks`
 - 低置信度的新关系（来源标记为 dream / generative replay）
 
-前端的“梦境重放”页会把最近的 `dreams/*.md` 汇总成可扫读卡片，优先展示洞察数、待复核风险数和新关系数。单个梦境文件读取失败时，页面会保留可用结果并显示部分失败提示，避免把服务或文件错误误报成“暂无内容”。展开梦境时会提示这是生成式低置信度联想，用户应先进入自我反思或原始记忆复核，再把关系、风险或行动项当作确定事实使用。
+前端的“梦境重放”页会把最近的 `dreams/*.md` 汇总成可扫读卡片，优先展示洞察数、待复核风险数和新关系数。单个梦境文件读取失败时，页面会保留可用结果并显示部分失败提示，避免把服务或文件错误误报成“暂无内容”。展开梦境时会提示这是生成式低置信度联想，用户应先进入自我反思或原始记忆复核，再把关系、风险或行动项当作确定事实使用；从梦境卡片进入复核时会带上当前主题并在反思线程页自动筛选，避免用户跳过去后丢失要核对的线索。
+
+梦境报表只汇总当前 digest 周期内生成的 dream 文件。周一报表会覆盖上一周的梦境重放结果；旧文件和无法解析生成日期的历史文件仍可在梦境页查看，但不会被反复当成本周期内容推送。
 
 ### 与自我反思的关系
 
@@ -668,6 +755,7 @@ data/
 - 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略等运行时配置
 - 自我反思是**按用户开关**的；梦境重放是**全用户持续运行**的，只有报表推送是按用户控制的
 - 实时事件流 `/events` 兼容浏览器 `EventSource`：客户端会在本地配置和 `userinfo.username` 解析完成后再用 `?userId=` 建立连接，服务端优先校验这个 query userId 并按用户过滤事件；非法 userId 会直接拒绝，避免事件流误连到 `default` 用户。
+- `/stats` 会返回当前请求的 `user` 隔离摘要，包括 `id`、`storageKey`、是否因为缺少 `X-User-Id` 回退到 `default`。Memory Exploring 侧栏会直接展示当前记忆用户；如果正在使用 `default` 空间，会显示轻量警示，避免用户误把 fallback 数据当成自己的账号数据。
 
 ---
 
@@ -697,12 +785,12 @@ data/
 
 Memory Service 可以给豆包等外部入口渲染不同类型的 context package，但每个 package 的语义必须分开：
 
-| 同步包 | 用途 | 数据来源 |
-|---|---|---|
-| `persona_core` / `voice_mode` | 长期稳定画像和回复偏好 | `user_profile_items` 与 AI persona |
-| `active_focus_digest` | 手机对话里的近期记忆重点 | 近期高显著性消息、近期画像信号、自我反思产物 |
-| `todo_digest` / `reminder_digest` | 待处理事项 | 待决策项、待执行动作 |
-| `notice_digest` | 非待办通知 | 通知中心 |
+| 同步包                            | 用途                     | 数据来源                                     |
+| --------------------------------- | ------------------------ | -------------------------------------------- |
+| `persona_core` / `voice_mode`     | 长期稳定画像和回复偏好   | `user_profile_items` 与 AI persona           |
+| `active_focus_digest`             | 手机对话里的近期记忆重点 | 近期高显著性消息、近期画像信号、自我反思产物 |
+| `todo_digest` / `reminder_digest` | 待处理事项               | 待决策项、待执行动作                         |
+| `notice_digest`                   | 非待办通知               | 通知中心                                     |
 
 `concerned_items_state` 是“关注规则 / 后续跟进配置”，不是用户真实记忆重点。它不再进入 `active_focus_digest`，避免豆包同步时把“我关注什么规则”误保存成“近期发生了什么重点”。
 
@@ -712,41 +800,52 @@ Memory Service 可以给豆包等外部入口渲染不同类型的 context packa
 
 ## API 概览
 
-| 操作 | 端点 | 说明 |
-|---|---|---|
-| 摄入 | `POST /ingest` | 单条消息存储，返回 `decision` 解释重复/索引/仅保存原因 |
-| 批量摄入 | `POST /ingest/batch` | 批量写入，单条结果与 `/ingest` 保持一致 |
-| 召回 | `POST /recall` | 多通道记忆检索 |
-| 反馈 | `POST /feedback` | 记录召回质量、通知或实体修正反馈 |
-| 问答 | `POST /ask` | RAG 风格自然语言问答 |
-| 配置 | `GET /config` / `PUT /config` | 按用户读取/写入运行时配置 |
-| 实体 | `GET /entities` | 知识图谱查询 |
-| 用户画像 | `GET /profile/core` | 核心画像 |
-| 通知 | `GET /notifications` | 主动通知列表，支持 `pending` / `scheduled` / `clicked` / `dismissed` 状态 |
-| 自我反思 | `GET /reflection-threads` | 查看自我反思线程列表 |
-| 自我反思 | `GET /reflection-threads/:id` | 查看单个线程详情、runs、actions、action results |
-| 自我反思 | `POST /reflection-threads/:id/revisit` | 手动触发某个线程重新反思 |
-| 动作 | `GET /actions` | 查看动作队列 |
-| 动作 | `POST /actions/:id/execute` | 手动执行某个动作 |
-| 动作 | `POST /actions/:id/retry` | 重试失败动作 |
-| 决策中心 | `GET /confirm-requests` | 查看待确认项，支持 `queue=decision/watch/all` 与 `state` 过滤 |
-| 决策中心 | `POST /confirm-requests/:id/answer` | 回答待确认项 |
-| 决策中心 | `POST /confirm-requests/:id/state` | 观察项在 `pending` / `snoozed` / `expired` 之间流转 |
-| 主动询问 | `GET /outreach/sessions` | 查看主动询问会话 |
-| 主动询问 | `GET /outreach/sessions/:id` | 查看单个主动询问详情 |
-| 主动询问 | `POST /outreach/sessions/:id/approve` | 批准待发送询问 |
-| 主动询问 | `GET /outreach/targets/search` | 检索 RingCentral 用户/群组候选 |
-| 梦境报表 | `POST /dream-digest/push-now` | 手动立即推送一次梦境报表 |
-| 巩固 | `POST /consolidate` | 手动触发巩固 |
-| 导出 | `POST /export` | 生成可恢复的 backup ZIP，包含 `manifest.json`、用户 SQLite/config/Markdown 与只读 derived snapshots |
-| 导入 | `POST /import` | Multipart 上传 backup ZIP；支持 `mode=merge/replace` 与 `dryRun=true` 预检 |
-| 健康 | `GET /health` | 服务状态 |
+| 操作      | 端点                                   | 说明                                                                                                |
+| --------- | -------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 摄入      | `POST /ingest`                         | 单条消息存储，返回 `decision` 解释重复/索引/仅保存原因                                              |
+| 批量摄入  | `POST /ingest/batch`                   | 批量写入，单条结果与 `/ingest` 保持一致                                                             |
+| 召回      | `POST /recall`                         | 多通道记忆检索                                                                                      |
+| 反馈      | `POST /feedback`                       | 记录召回质量、通知或实体修正反馈                                                                    |
+| 问答      | `POST /ask`                            | RAG 风格自然语言问答                                                                                |
+| 配置      | `GET /config` / `PUT /config`          | 按用户读取/写入运行时配置                                                                           |
+| 实体      | `GET /entities`                        | 知识图谱查询                                                                                        |
+| 用户画像  | `GET /profile/core`                    | 核心画像                                                                                            |
+| 通知      | `GET /notifications`                   | 主动通知列表，支持 `pending` / `scheduled` / `clicked` / `dismissed` 状态                           |
+| 自我反思  | `GET /reflection-threads`              | 查看自我反思线程列表                                                                                |
+| 自我反思  | `GET /reflection-threads/:id`          | 查看单个线程详情、runs、actions、action results                                                     |
+| 自我反思  | `POST /reflection-threads/:id/revisit` | 手动触发某个线程重新反思                                                                            |
+| Rehearsal | `GET /rehearsals`                      | 查看未来场景预演记忆，支持状态和关键词过滤                                                          |
+| Rehearsal | `POST /rehearsals`                     | 创建 candidate 或 active 预演记忆                                                                   |
+| Rehearsal | `GET /rehearsals/:id`                  | 查看预演详情和 activation history                                                                   |
+| Rehearsal | `PATCH /rehearsals/:id`                | 更新状态、内容、触发线索、有效期等                                                                  |
+| Rehearsal | `POST /rehearsals/:id/feedback`        | 记录 used、dismissed、irrelevant 等反馈                                                             |
+| 动作      | `GET /actions`                         | 查看动作队列                                                                                        |
+| 动作      | `POST /actions/:id/execute`            | 手动执行某个动作                                                                                    |
+| 动作      | `POST /actions/:id/retry`              | 重试失败动作                                                                                        |
+| 决策中心  | `GET /confirm-requests`                | 查看待确认项，支持 `queue=decision/watch/all` 与 `state` 过滤                                       |
+| 决策中心  | `POST /confirm-requests/:id/answer`    | 回答待确认项                                                                                        |
+| 决策中心  | `POST /confirm-requests/:id/state`     | 观察项在 `pending` / `snoozed` / `expired` 之间流转                                                 |
+| 主动询问  | `GET /outreach/sessions`               | 查看主动询问会话                                                                                    |
+| 主动询问  | `GET /outreach/sessions/:id`           | 查看单个主动询问详情                                                                                |
+| 主动询问  | `POST /outreach/sessions/:id/approve`  | 批准待发送询问                                                                                      |
+| 主动询问  | `POST /outreach/sessions/:id/update-draft` | 发送前调整目标、问题、信息目标和计划时间                                                            |
+| 主动询问  | `POST /outreach/sessions/:id/cancel`   | 取消主动询问会话                                                                                    |
+| 主动询问  | `POST /outreach/sessions/:id/retry`    | 将终态会话重置为待审批或已排程，并写入 `retried` 审计事件                                           |
+| 主动询问  | `GET /outreach/summary`                | 查看待发送、等待回复、待审批和升级数量                                                              |
+| 主动询问  | `GET /outreach/directory/status` / `POST /outreach/directory/sync` | 查看或刷新 RingCentral 目标目录缓存                                              |
+| 主动询问  | `GET /outreach/targets/search`         | 检索 RingCentral 用户/群组候选                                                                      |
+| 梦境报表  | `POST /dream-digest/push-now`          | 手动立即推送一次梦境报表                                                                            |
+| 巩固      | `POST /consolidate`                    | 手动触发巩固                                                                                        |
+| 导出      | `POST /export`                         | 生成可恢复的 backup ZIP，包含 `manifest.json`、用户 SQLite/config/Markdown 与只读 derived snapshots |
+| 导入      | `POST /import`                         | Multipart 上传 backup ZIP；支持 `mode=merge/replace` 与 `dryRun=true` 预检                          |
+| 健康      | `GET /health`                          | 服务状态                                                                                            |
 
 ### 记忆导入 / 导出 / 备份
 
 - `/export` 默认返回 `backup_zip`，manifest 会列出 A 层 SQLite/config、B 层用户 Markdown 文件、C 层 derived 快照，并记录 size / sha256 用于导入校验。
 - `/import` 的默认模式是 `merge`，会合并数据库行并覆盖备份内同名文件，保留备份外的本地文件；`mode=replace` 会用备份目录替换当前用户目录。
 - 导入前可以先用同一个 multipart 请求加 `dryRun=true`，服务只校验 ZIP、manifest 和数据库可读性，并返回将写入、覆盖、保留、删除的路径及数据库表行数预览，不会修改当前用户数据。
+- manifest 是导入的完整可信清单：ZIP 里除 `manifest.json` 外的每个文件都必须列在 manifest 中并通过 size/sha256 校验；额外夹带的未声明文件会在 dry-run 和正式导入前被拒绝。
 - 导入结果和 dry-run 都会返回 warnings；例如备份来源用户与当前 `X-User-Id` 不一致时会显式提示，避免把迁移场景误当成同账号恢复。
 
 完整 API 文档：`http://localhost:3210/docs` (Swagger UI)
@@ -760,9 +859,9 @@ Memory Service 可以给豆包等外部入口渲染不同类型的 context packa
 services:
   memory-service:
     build: ./memory-service
-    ports: ["3210:3210"]
-    volumes: ["./memory-service/data:/app/data"]
-    env_file: ["./memory-service/.env"]
+    ports: ['3210:3210']
+    volumes: ['./memory-service/data:/app/data']
+    env_file: ['./memory-service/.env']
     restart: unless-stopped
 ```
 
@@ -770,23 +869,23 @@ services:
 
 ## 与业界记忆系统对比
 
-| 能力维度 | 本系统 (Memory Service) | OpenClaw (mem0/memory-core) | MemGPT / Letta | Mem0 (SaaS) |
-|---|---|---|---|---|
-| **存储** | SQLite + sqlite-vec + FTS5，单文件零运维 | Markdown 文件 + SQLite | 分层 archival/recall/core | 托管向量数据库 |
-| **检索** | 4 通道并行 (Vector + FTS + Graph + Time) + MMR | 向量 + BM25 混合 | 向量 + 分页 | 向量检索 |
-| **知识图谱** | 内建实体/关系/双时态属性 | ✗ 无 | ✗ 无 | 有限图谱 |
-| **真值维护** | 双时态 + 冲突确认队列 | ✗ 覆盖写入 | ✗ 仅追加 | ✗ 无 |
-| **遗忘机制** | 指数衰减 + 显著性 + 巩固等级 | ✗ 手动删除 | 手动 archival | ✗ 无 |
-| **离线巩固** | 每晚 6 阶段 + 每周做梦 | ✗ 无 | ✗ 无 | ✗ 无 |
-| **主动通知** | Heartbeat 循环 + 关注项目 + 安静时段 | ✗ 无 | ✗ 无 | ✗ 无 |
-| **用户画像** | 双人格（用户 + AI）+ 社交图 + 态度 | USER.md + SOUL.md | 核心记忆摘要 | 用户标签 |
-| **自我反思** | 连续 thread + 动作队列 + 结果回流 | 有外部 agent 记忆但无本地 thread 编排 | 有对话记忆，但非长期 thread 复盘 | 偏记忆提取，不偏持续复盘 |
-| **梦境重放** | 周期性生成式回放 + 回流 thread | 部分系统可手工做总结 | ✗ 无原生梦境回放 | ✗ 无 |
-| **外部委派** | OpenClaw `/v1/responses` + action_result 回流 | 原生偏 agent/gateway | 需额外接工具 | 需额外接工具 |
-| **多用户** | Per-user DB 隔离 + 空闲回收 | 单用户 | 单用户 | 多租户 |
-| **部署** | Docker 自托管 / 无外部依赖 | 进程内 | Docker | SaaS |
-| **隐私** | 数据完全本地，不出用户设备/服务器 | 本地 | 本地 | 云端 |
-| **Embedding** | 本地模型 (MiniLM)，不依赖外部 API | 依赖 API | 依赖 API | 依赖 API |
+| 能力维度      | 本系统 (Memory Service)                        | OpenClaw (mem0/memory-core)           | MemGPT / Letta                   | Mem0 (SaaS)              |
+| ------------- | ---------------------------------------------- | ------------------------------------- | -------------------------------- | ------------------------ |
+| **存储**      | SQLite + sqlite-vec + FTS5，单文件零运维       | Markdown 文件 + SQLite                | 分层 archival/recall/core        | 托管向量数据库           |
+| **检索**      | 4 通道并行 (Vector + FTS + Graph + Time) + MMR | 向量 + BM25 混合                      | 向量 + 分页                      | 向量检索                 |
+| **知识图谱**  | 内建实体/关系/双时态属性                       | ✗ 无                                  | ✗ 无                             | 有限图谱                 |
+| **真值维护**  | 双时态 + 冲突确认队列                          | ✗ 覆盖写入                            | ✗ 仅追加                         | ✗ 无                     |
+| **遗忘机制**  | 指数衰减 + 显著性 + 巩固等级                   | ✗ 手动删除                            | 手动 archival                    | ✗ 无                     |
+| **离线巩固**  | 每晚 6 阶段 + 每周做梦                         | ✗ 无                                  | ✗ 无                             | ✗ 无                     |
+| **主动通知**  | Heartbeat 循环 + 关注项目 + 安静时段           | ✗ 无                                  | ✗ 无                             | ✗ 无                     |
+| **用户画像**  | 双人格（用户 + AI）+ 社交图 + 态度             | USER.md + SOUL.md                     | 核心记忆摘要                     | 用户标签                 |
+| **自我反思**  | 连续 thread + 动作队列 + 结果回流              | 有外部 agent 记忆但无本地 thread 编排 | 有对话记忆，但非长期 thread 复盘 | 偏记忆提取，不偏持续复盘 |
+| **梦境重放**  | 周期性生成式回放 + 回流 thread                 | 部分系统可手工做总结                  | ✗ 无原生梦境回放                 | ✗ 无                     |
+| **外部委派**  | OpenClaw `/v1/responses` + action_result 回流  | 原生偏 agent/gateway                  | 需额外接工具                     | 需额外接工具             |
+| **多用户**    | Per-user DB 隔离 + 空闲回收                    | 单用户                                | 单用户                           | 多租户                   |
+| **部署**      | Docker 自托管 / 无外部依赖                     | 进程内                                | Docker                           | SaaS                     |
+| **隐私**      | 数据完全本地，不出用户设备/服务器              | 本地                                  | 本地                             | 云端                     |
+| **Embedding** | 本地模型 (MiniLM)，不依赖外部 API              | 依赖 API                              | 依赖 API                         | 依赖 API                 |
 
 ### 核心差异化
 

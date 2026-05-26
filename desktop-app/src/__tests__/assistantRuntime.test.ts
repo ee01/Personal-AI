@@ -174,6 +174,22 @@ test('buildAssistantRuntimeSummary surfaces Doubao sync issues before confirmati
   assert.match(summary.items[0]?.summary || '', /fetch failed/);
 });
 
+test('buildAssistantRuntimeSummary separates runtime read failures from setup blockers', () => {
+  const summary = buildAssistantRuntimeSummary({
+    status: createStatus(),
+    runtimeErrorMessage: 'connect ECONNREFUSED 127.0.0.1:3210',
+  });
+
+  const issue = summary.items[0];
+  assert.equal(summary.topStatus?.kind, 'runtime_issue');
+  assert.equal(summary.topStatus?.label, '状态读取异常');
+  assert.equal(issue?.kind, 'runtime_issue');
+  assert.match(issue?.summary || '', /读取 Memory Service 运行态失败/);
+  assert.match(issue?.summary || '', /ECONNREFUSED/);
+  assert.equal(issue?.badgeLabel, '需重试');
+  assert.equal(issue?.actionHint, '测试 Memory Service');
+});
+
 test('buildAssistantRuntimeSummary explains failed Doubao sync lane in status card details', () => {
   const summary = buildAssistantRuntimeSummary({
     status: createStatus({

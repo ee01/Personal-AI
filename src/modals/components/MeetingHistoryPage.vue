@@ -14,6 +14,9 @@
         <div class="meeting-hero-stat">
           <span>已归档</span>
           <strong>{{ meetingTotal || meetings.length }}</strong>
+          <small v-if="meetingTotal > meetings.length">
+            已显示 {{ meetings.length }} 条
+          </small>
         </div>
         <button
           class="meeting-refresh-btn"
@@ -47,94 +50,133 @@
       </p>
     </section>
 
-    <section v-else class="meeting-grid">
-      <article
-        v-for="meeting in sortedMeetings"
-        :key="meeting.meetingId"
-        class="meeting-card"
+    <template v-else>
+      <section class="meeting-list-toolbar">
+        <div>
+          已显示 {{ meetings.length }} / {{ meetingTotal || meetings.length }}
+          条会议
+        </div>
+        <button
+          class="meeting-secondary-action"
+          :disabled="loadingMore || !hasMoreMeetings"
+          @click="loadMoreMeetings"
+        >
+          {{
+            loadingMore
+              ? '加载中…'
+              : hasMoreMeetings
+              ? '加载更早会议'
+              : '已加载全部会议'
+          }}
+        </button>
+      </section>
+
+      <section
+        v-if="pageError"
+        class="meeting-feedback-card is-error is-inline"
       >
-        <div class="meeting-card-head">
-          <div>
-            <div class="meeting-card-date">
-              {{ formatMeetingDate(meeting.date) }}
+        <div class="feedback-title">加载更多失败</div>
+        <p>{{ pageError }}</p>
+      </section>
+
+      <section class="meeting-grid">
+        <article
+          v-for="meeting in sortedMeetings"
+          :key="meeting.meetingId"
+          class="meeting-card"
+        >
+          <div class="meeting-card-head">
+            <div>
+              <div class="meeting-card-date">
+                {{ formatMeetingDate(meeting.date) }}
+              </div>
+              <h3>{{ meeting.title || '未命名会议' }}</h3>
             </div>
-            <h3>{{ meeting.title || '未命名会议' }}</h3>
+            <div class="meeting-card-badges">
+              <span class="status-pill" :class="getDigestStatus(meeting).kind">
+                {{ getDigestStatus(meeting).label }}
+              </span>
+              <span class="status-pill" :class="getPdfStatus(meeting).kind">
+                {{ getPdfStatus(meeting).label }}
+              </span>
+            </div>
           </div>
-          <div class="meeting-card-badges">
-            <span class="status-pill" :class="getDigestStatus(meeting).kind">
-              {{ getDigestStatus(meeting).label }}
-            </span>
-            <span class="status-pill" :class="getPdfStatus(meeting).kind">
-              {{ getPdfStatus(meeting).label }}
-            </span>
-          </div>
-        </div>
 
-        <div class="meeting-card-meta">
-          <span
-            >🕒
-            {{ formatMeetingTime(meeting.lastEventAt || meeting.date) }}</span
-          >
-          <span>🆔 {{ shortMeetingId(meeting.meetingId) }}</span>
-        </div>
-
-        <div class="meeting-card-section">
-          <div class="section-label">参会者</div>
-          <div class="participant-list">
+          <div class="meeting-card-meta">
             <span
-              v-for="participant in displayParticipants(meeting.participants)"
-              :key="`${meeting.meetingId}-${participant}`"
-              class="participant-chip"
+              >🕒
+              {{ formatMeetingTime(meeting.lastEventAt || meeting.date) }}</span
             >
-              {{ participant }}
-            </span>
-            <span
-              v-if="!meeting.participants?.length"
-              class="participant-chip muted"
+            <span>🆔 {{ shortMeetingId(meeting.meetingId) }}</span>
+          </div>
+
+          <div class="meeting-card-section">
+            <div class="section-label">参会者</div>
+            <div class="participant-list">
+              <span
+                v-for="participant in displayParticipants(meeting.participants)"
+                :key="`${meeting.meetingId}-${participant}`"
+                class="participant-chip"
+              >
+                {{ participant }}
+              </span>
+              <span
+                v-if="remainingParticipantCount(meeting.participants) > 0"
+                class="participant-chip muted"
+              >
+                还有 {{ remainingParticipantCount(meeting.participants) }} 人
+              </span>
+              <span
+                v-if="!meeting.participants?.length"
+                class="participant-chip muted"
+              >
+                待补充参会者信息
+              </span>
+            </div>
+          </div>
+
+          <div class="meeting-card-section">
+            <div class="section-label">会后状态</div>
+            <div class="meeting-card-summary">
+              <strong>{{ getDigestSummary(meeting) }}</strong>
+              <span>{{ getPdfSummary(meeting) }}</span>
+            </div>
+          </div>
+
+          <div v-if="meeting.summary" class="meeting-card-section">
+            <div class="section-label">会议摘要</div>
+            <div class="meeting-card-summary is-summary">
+              <span>{{ meeting.summary }}</span>
+            </div>
+          </div>
+
+          <div class="meeting-card-section">
+            <div class="section-label">结构化信息</div>
+            <div class="meeting-card-metrics">
+              <span>话题 {{ meeting.topicCount || 0 }}</span>
+              <span>行动项 {{ meeting.actionItemCount || 0 }}</span>
+              <span>决议 {{ meeting.decisionCount || 0 }}</span>
+            </div>
+          </div>
+
+          <div class="meeting-card-footer">
+            <button
+              class="meeting-primary-action"
+              @click="openPanorama(meeting)"
             >
-              待补充参会者信息
-            </span>
+              打开 Panorama
+            </button>
+            <button
+              class="meeting-secondary-action"
+              :disabled="!getSafePdfUrl(meeting.pdfUrl)"
+              @click="openPdf(meeting.pdfUrl)"
+            >
+              打开 PDF
+            </button>
           </div>
-        </div>
-
-        <div class="meeting-card-section">
-          <div class="section-label">会后状态</div>
-          <div class="meeting-card-summary">
-            <strong>{{ getDigestSummary(meeting) }}</strong>
-            <span>{{ getPdfSummary(meeting) }}</span>
-          </div>
-        </div>
-
-        <div v-if="meeting.summary" class="meeting-card-section">
-          <div class="section-label">会议摘要</div>
-          <div class="meeting-card-summary is-summary">
-            <span>{{ meeting.summary }}</span>
-          </div>
-        </div>
-
-        <div class="meeting-card-section">
-          <div class="section-label">结构化信息</div>
-          <div class="meeting-card-metrics">
-            <span>话题 {{ meeting.topicCount || 0 }}</span>
-            <span>行动项 {{ meeting.actionItemCount || 0 }}</span>
-            <span>决议 {{ meeting.decisionCount || 0 }}</span>
-          </div>
-        </div>
-
-        <div class="meeting-card-footer">
-          <button class="meeting-primary-action" @click="openPanorama(meeting)">
-            打开 Panorama
-          </button>
-          <button
-            class="meeting-secondary-action"
-            :disabled="!meeting.pdfUrl"
-            @click="openPdf(meeting.pdfUrl)"
-          >
-            打开 PDF
-          </button>
-        </div>
-      </article>
-    </section>
+        </article>
+      </section>
+    </template>
   </div>
 </template>
 
@@ -145,6 +187,7 @@ import {
   type MeetingRecord,
   type MeetingRecordListResponse,
 } from '../../services/MemoryServiceClient';
+import { getExternalUrlSafety } from '../topic-link-safety';
 
 /* eslint-disable no-undef */
 declare const chrome: any;
@@ -157,10 +200,14 @@ interface MeetingResponseEnvelope {
   data?: MeetingRecordListResponse;
 }
 
+const MEETING_PAGE_SIZE = 50;
+
 const meetings = ref<MeetingRecord[]>([]);
 const meetingTotal = ref(0);
 const loading = ref(false);
+const loadingMore = ref(false);
 const error = ref('');
+const pageError = ref('');
 
 const sortedMeetings = computed(() =>
   [...meetings.value].sort(
@@ -170,43 +217,23 @@ const sortedMeetings = computed(() =>
   ),
 );
 
+const hasMoreMeetings = computed(
+  () => meetingTotal.value > meetings.value.length,
+);
+
 onMounted(() => {
   void loadMeetings();
 });
 
 async function loadMeetings() {
   loading.value = true;
+  pageError.value = '';
   error.value = '';
 
   try {
-    const response = (await chrome.runtime.sendMessage({
-      type: 'GET_MEETINGS',
-      limit: 50,
-      offset: 0,
-    })) as MeetingResponseEnvelope;
-
-    if (!response?.success) {
-      throw new Error(response?.error || '会议记录接口返回异常');
-    }
-
-    meetings.value = response?.data?.items || [];
-    meetingTotal.value = Number(
-      response?.data?.total || response?.total || meetings.value.length,
-    );
-    loading.value = false;
-    return;
-  } catch (runtimeError) {
-    console.warn(
-      '通过 background 加载会议记录失败，尝试直接请求:',
-      runtimeError,
-    );
-  }
-
-  try {
-    const client = getMemoryServiceClient();
-    const response = await client.getMeetings(50, 0);
-    meetings.value = response.items || [];
-    meetingTotal.value = Number(response.total || meetings.value.length);
+    const response = await requestMeetingsPage(0);
+    meetings.value = response.items;
+    meetingTotal.value = Number(response.total || response.items.length);
   } catch (directError) {
     error.value =
       directError instanceof Error
@@ -219,33 +246,158 @@ async function loadMeetings() {
   }
 }
 
+async function loadMoreMeetings() {
+  if (loadingMore.value || !hasMoreMeetings.value) return;
+  loadingMore.value = true;
+  pageError.value = '';
+
+  try {
+    const response = await requestMeetingsPage(meetings.value.length);
+    meetings.value = mergeMeetingPages(meetings.value, response.items);
+    meetingTotal.value = Number(response.total || meetings.value.length);
+  } catch (loadError) {
+    pageError.value =
+      loadError instanceof Error
+        ? loadError.message
+        : '暂时无法加载更早的会议记录';
+  } finally {
+    loadingMore.value = false;
+  }
+}
+
+async function requestMeetingsPage(offset: number) {
+  try {
+    const response = (await chrome.runtime.sendMessage({
+      type: 'GET_MEETINGS',
+      limit: MEETING_PAGE_SIZE,
+      offset,
+    })) as MeetingResponseEnvelope;
+
+    if (!response?.success) {
+      throw new Error(response?.error || '会议记录接口返回异常');
+    }
+
+    const items = response?.data?.items || [];
+    const total = Number(
+      response?.data?.total || response?.total || items.length,
+    );
+    return { items, total };
+  } catch (runtimeError) {
+    console.warn(
+      '通过 background 加载会议记录失败，尝试直接请求:',
+      runtimeError,
+    );
+  }
+
+  try {
+    const client = getMemoryServiceClient();
+    const response = await client.getMeetings(MEETING_PAGE_SIZE, offset);
+    return {
+      items: response.items || [],
+      total: Number(response.total || response.items?.length || 0),
+    };
+  } catch (directError) {
+    throw directError instanceof Error
+      ? directError
+      : new Error('暂时无法连接会议记录服务');
+  }
+}
+
+function mergeMeetingPages(
+  current: MeetingRecord[],
+  incoming: MeetingRecord[],
+) {
+  const merged = new Map<string, MeetingRecord>();
+  current.forEach((meeting) => merged.set(meeting.meetingId, meeting));
+  incoming.forEach((meeting) => merged.set(meeting.meetingId, meeting));
+  return [...merged.values()];
+}
+
+function getDigestState(meeting: MeetingRecord) {
+  if (meeting.digestStatus) return meeting.digestStatus;
+  if (meeting.pdfUrl) return 'completed';
+  if (meeting.digestId) return 'processing';
+  return 'idle';
+}
+
 function getDigestStatus(meeting: MeetingRecord) {
-  if (meeting.pdfUrl) return { label: 'Digest 完成', kind: 'is-ready' };
-  if (meeting.digestId) return { label: 'Digest 生成中', kind: 'is-progress' };
+  const digestState = getDigestState(meeting);
+  if (digestState === 'failed') {
+    return { label: 'Digest 失败', kind: 'is-error' };
+  }
+  if (digestState === 'completed' || getSafePdfUrl(meeting.pdfUrl)) {
+    return { label: 'Digest 完成', kind: 'is-ready' };
+  }
+  if (digestState === 'uploading') {
+    return { label: 'Digest 上传中', kind: 'is-progress' };
+  }
+  if (digestState === 'processing' || meeting.digestId) {
+    return { label: 'Digest 生成中', kind: 'is-progress' };
+  }
   return { label: '已落库', kind: 'is-archived' };
 }
 
 function getPdfStatus(meeting: MeetingRecord) {
-  if (meeting.pdfUrl) return { label: 'PDF 已就绪', kind: 'is-ready' };
-  if (meeting.digestId) return { label: '等待 PDF', kind: 'is-progress' };
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  const digestState = getDigestState(meeting);
+  if (pdfSafety.safeUrl) return { label: 'PDF 已就绪', kind: 'is-ready' };
+  if (pdfSafety.blocked) return { label: 'PDF 链接不可用', kind: 'is-error' };
+  if (digestState === 'failed') {
+    return { label: 'PDF 生成失败', kind: 'is-error' };
+  }
+  if (digestState === 'completed') {
+    return { label: 'PDF 缺失', kind: 'is-error' };
+  }
+  if (digestState === 'uploading' || digestState === 'processing') {
+    return { label: '等待 PDF', kind: 'is-progress' };
+  }
   return { label: '暂未生成 PDF', kind: 'is-muted' };
 }
 
 function getDigestSummary(meeting: MeetingRecord) {
-  if (meeting.pdfUrl) {
+  const digestState = getDigestState(meeting);
+  if (digestState === 'failed') {
+    const errorCode = meeting.digestErrorCode
+      ? `错误码：${meeting.digestErrorCode}`
+      : '后台没有返回错误码';
+    return `结构化会议记录仍可回看，但 Digest/PDF 生成失败，${errorCode}。`;
+  }
+  if (getSafePdfUrl(meeting.pdfUrl)) {
     return '会后 Digest 与 PDF 纪要都已完成，可以直接进入 Panorama 或打开正式 PDF。';
   }
-  if (meeting.digestId) {
+  if (digestState === 'completed') {
+    return 'Digest 标记为完成，但当前会议没有可打开的安全 PDF 链接。';
+  }
+  if (
+    digestState === 'uploading' ||
+    digestState === 'processing' ||
+    meeting.digestId
+  ) {
     return '结构化会议记录已经归档，Digest 正在继续生成 PDF 纪要。';
   }
   return '会议基础记录已归档，当前还没有关联的 Digest/PDF 产物。';
 }
 
 function getPdfSummary(meeting: MeetingRecord) {
-  if (meeting.pdfUrl) {
+  const pdfSafety = getExternalUrlSafety(meeting.pdfUrl);
+  const digestState = getDigestState(meeting);
+  if (pdfSafety.safeUrl) {
     return 'PDF 可直接预览或下载。';
   }
-  if (meeting.digestId) {
+  if (pdfSafety.blocked) {
+    return 'PDF 链接不符合安全打开规则，历史页已禁用打开动作。';
+  }
+  if (digestState === 'failed') {
+    return '打开 Panorama 可继续查看摘要、行动项和决议；PDF 需要重新生成或排查 Minutes API。';
+  }
+  if (digestState === 'completed') {
+    return 'Digest 完成状态已归档，但 PDF URL 缺失或不可用。';
+  }
+  if (
+    digestState === 'uploading' ||
+    digestState === 'processing' ||
+    meeting.digestId
+  ) {
     return '可先打开 Panorama 回顾会议结构，稍后再回来查看 PDF。';
   }
   return '该会议当前只保留了历史记录入口。';
@@ -253,6 +405,17 @@ function getPdfSummary(meeting: MeetingRecord) {
 
 function displayParticipants(participants: string[] = []) {
   return participants.slice(0, 5);
+}
+
+function remainingParticipantCount(participants: string[] = []) {
+  return Math.max(
+    0,
+    participants.length - displayParticipants(participants).length,
+  );
+}
+
+function getSafePdfUrl(pdfUrl?: string) {
+  return getExternalUrlSafety(pdfUrl).safeUrl;
 }
 
 function normalizeTimestamp(timestamp?: number) {
@@ -301,8 +464,13 @@ function openPanorama(meeting: MeetingRecord) {
     participants: JSON.stringify(meeting.participants || []),
   });
 
-  if (meeting.pdfUrl) params.set('pdfUrl', meeting.pdfUrl);
+  const safePdfUrl = getSafePdfUrl(meeting.pdfUrl);
+  if (safePdfUrl) params.set('pdfUrl', safePdfUrl);
   if (meeting.digestId) params.set('digestId', meeting.digestId);
+  if (meeting.digestStatus) params.set('digestStatus', meeting.digestStatus);
+  if (meeting.digestErrorCode) {
+    params.set('digestErrorCode', meeting.digestErrorCode);
+  }
 
   const url =
     typeof chrome !== 'undefined' && chrome?.runtime?.getURL
@@ -312,8 +480,9 @@ function openPanorama(meeting: MeetingRecord) {
 }
 
 function openPdf(pdfUrl?: string) {
-  if (!pdfUrl) return;
-  window.open(pdfUrl, '_blank', 'noopener');
+  const safePdfUrl = getSafePdfUrl(pdfUrl);
+  if (!safePdfUrl) return;
+  window.open(safePdfUrl, '_blank', 'noopener,noreferrer');
 }
 </script>
 
@@ -325,8 +494,7 @@ function openPdf(pdfUrl?: string) {
 .meeting-hero,
 .meeting-card,
 .meeting-feedback-card {
-  background:
-    radial-gradient(
+  background: radial-gradient(
       circle at top right,
       rgba(108, 92, 231, 0.14),
       transparent 30%
@@ -397,6 +565,13 @@ function openPdf(pdfUrl?: string) {
   line-height: 1;
 }
 
+.meeting-hero-stat small {
+  display: block;
+  margin-top: 0.35rem;
+  color: #aeb9ca;
+  font-size: 0.75rem;
+}
+
 .meeting-refresh-btn,
 .meeting-primary-action,
 .meeting-secondary-action {
@@ -448,6 +623,10 @@ function openPdf(pdfUrl?: string) {
   padding: 1.5rem;
 }
 
+.meeting-feedback-card.is-inline {
+  margin-bottom: 1rem;
+}
+
 .meeting-feedback-card.is-error {
   border-color: rgba(255, 107, 107, 0.28);
 }
@@ -461,6 +640,16 @@ function openPdf(pdfUrl?: string) {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 1rem;
+}
+
+.meeting-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  color: #cbd5e1;
+  font-size: 0.9rem;
 }
 
 .meeting-card {
@@ -514,6 +703,12 @@ function openPdf(pdfUrl?: string) {
   background: rgba(255, 212, 59, 0.1);
   color: #ffd43b;
   border-color: rgba(255, 212, 59, 0.22);
+}
+
+.status-pill.is-error {
+  background: rgba(255, 107, 107, 0.1);
+  color: #ff8787;
+  border-color: rgba(255, 107, 107, 0.28);
 }
 
 .status-pill.is-archived,

@@ -55,6 +55,7 @@ export interface DayPilotContextPackResponse {
   missionId: string;
   generatedAt: number;
   tokenBudget: number;
+  maxChars: number;
   targetProvider: TargetProvider;
   providerProfile: DayPilotProviderProfile;
   bodyMd: string;
@@ -62,6 +63,7 @@ export interface DayPilotContextPackResponse {
   warnings: string[];
   redactionPreview: string[];
   redactionApplied: boolean;
+  truncated: boolean;
 }
 
 interface CountRow {
@@ -148,6 +150,23 @@ interface ReflectionCandidateRow {
   latest_summary: string | null;
   next_reflection_at: number | null;
   updated_at: number;
+}
+
+interface RehearsalCandidateRow {
+  id: string;
+  title: string;
+  scenario_type: string;
+  status: string;
+  summary: string | null;
+  content: string;
+  activation_cues_json: string | null;
+  evidence_refs_json: string | null;
+  confidence: number;
+  priority: number;
+  valid_until: number | null;
+  last_activated_at: number | null;
+  updated_at: number;
+  stale_reason: string | null;
 }
 
 interface SkillCandidateRow {
@@ -262,12 +281,15 @@ const STRONG_ACTIONABLE_PATTERN =
 const ACTIONABLE_RELATIONSHIP_PATTERN =
   /follow[-\s]?up|open loop|reply|respond|unanswered|pending|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|commitment|promise|owed|going cold|touch base|check in|跟进|待回复|未回复|回复|承诺|答应|欠|未关闭|待确认|确认.{0,12}(owner|负责人|时间|下一步)|阻塞|风险|变冷|冷却|久未|重新联系|会前|准备/i;
 const ACTIONABLE_FOLLOWUP_PATTERN =
-  /follow[-\s]?up|todo|action item|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|pending|unanswered|reply|respond|needs? to|should|confirm|investigate|fix|retry|failing?|跟进|待回复|未回复|回复|承诺|待确认|确认|需要|阻塞|风险|负责人|下一步|审批|排查|修复|上传|准备/i;
+  /follow[-\s]?up|todo|action item|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|pending|unanswered|reply|\brespond\b|needs? to\s+(?:confirm|decide|review|reply|respond|investigate|fix|retry|approve|prepare|schedule|update|ship|release|resolve|upload|check|follow)|should\s+(?:confirm|decide|review|reply|respond|investigate|fix|retry|approve|prepare|schedule|update|ship|release|resolve|upload|check|follow)|confirm|investigate|fix|retry|failing?|跟进|待回复|未回复|回复|承诺|待确认|确认|需要|阻塞|风险|负责人|下一步|审批|排查|修复|上传|准备/i;
+const ACTIONABLE_QUESTION_PATTERN =
+  /(?:(?:\?|？).{0,80}(?:owner|eta|deadline|risk|approval|decision|confirm|reply|respond|fix|retry|blocked|investigate|prepare|follow[-\s]?up|跟进|待确认|确认|阻塞|风险|负责人|下一步|审批|排查|修复|准备)|(?:owner|eta|deadline|risk|approval|decision|confirm|reply|respond|fix|retry|blocked|investigate|prepare|follow[-\s]?up|跟进|待确认|确认|阻塞|风险|负责人|下一步|审批|排查|修复|准备).{0,80}(?:\?|？)|(?:怎么|如何|how (?:do|to|should|can|could)).{0,48}(?:配|配置|处理|确认|排查|修复|推进|落地|复用|接入|迁移|更新|安排|准备|回复|审批|configure|debug|fix|resolve|deploy|ship|review|confirm|respond|reply|prepare|schedule|update))/i;
 const STRUCTURED_ACTIONABLE_SOURCE_KINDS = new Set([
   'action',
   'calendar',
   'notification',
   'reflection',
+  'rehearsal',
   'skill',
   'relationship',
 ]);
@@ -444,23 +466,25 @@ function topicTerms(text: string): string[] {
 
 function hasOpenLoopSignal(text: string): boolean {
   const lower = text.toLowerCase();
-  return [
-    'follow up',
-    'todo',
-    'owner',
-    'eta',
-    'block',
-    'fail',
-    'retry',
-    '重复',
-    '失败',
-    '上传',
-    '需要',
-    '怎么',
-    '确认',
-    '?',
-    '？',
-  ].some((needle) => lower.includes(needle));
+  if (
+    [
+      'follow up',
+      'todo',
+      'owner',
+      'eta',
+      'block',
+      'fail',
+      'retry',
+      '重复',
+      '失败',
+      '上传',
+      '需要',
+      '确认',
+    ].some((needle) => lower.includes(needle))
+  ) {
+    return true;
+  }
+  return ACTIONABLE_QUESTION_PATTERN.test(text);
 }
 
 function recurringMeetingNoise(
@@ -660,31 +684,52 @@ export class DayPilotService {
       resolvedEvidence,
       Boolean(options.includeSensitive),
     );
-    const warnings = [
+    const baseWarnings = [
       ...redaction.warnings,
       targetProvider !== 'generic'
         ? `Target provider: ${providerProfile.label}. Verify the copied context stays within that tool's data policy.`
         : 'Generic context pack. Review before pasting into an external AI tool.',
     ].filter(Boolean);
-    const bodyMd = this.renderProviderMarkdown({
+    const initialBodyMd = this.renderProviderMarkdown({
       providerProfile,
       mission,
       card,
       evidenceRefs: redaction.evidenceRefs,
-      warnings,
+      warnings: baseWarnings,
     });
+    let clamped = this.clampMarkdown(initialBodyMd, tokenBudget);
+    const warnings = clamped.truncated
+      ? [
+          ...baseWarnings,
+          `Context pack was truncated to fit the ${tokenBudget} token budget; open Today Pilot for the full evidence trail if needed.`,
+        ]
+      : baseWarnings;
+    if (clamped.truncated) {
+      clamped = this.clampMarkdown(
+        this.renderProviderMarkdown({
+          providerProfile,
+          mission,
+          card,
+          evidenceRefs: redaction.evidenceRefs,
+          warnings,
+        }),
+        tokenBudget,
+      );
+    }
 
     return {
       missionId,
       generatedAt: now(),
       tokenBudget,
+      maxChars: clamped.maxChars,
       targetProvider,
       providerProfile,
-      bodyMd: this.clampMarkdown(bodyMd, tokenBudget),
+      bodyMd: clamped.bodyMd,
       evidenceRefs: redaction.evidenceRefs,
       warnings,
       redactionPreview: redaction.redactionPreview,
       redactionApplied: redaction.redactionApplied,
+      truncated: clamped.truncated,
     };
   }
 
@@ -766,6 +811,7 @@ export class DayPilotService {
     const notifications = this.scanNotifications(currentTime);
     const actions = this.scanActions(currentTime);
     const reflections = this.scanReflections(currentTime);
+    const rehearsals = this.scanRehearsals(currentTime);
     const skills = this.scanSkills();
     const relationships = this.scanRelationships(currentTime);
 
@@ -775,6 +821,7 @@ export class DayPilotService {
       ...notifications.candidates,
       ...actions.candidates,
       ...reflections.candidates,
+      ...rehearsals.candidates,
       ...skills.candidates,
       ...relationships.candidates,
     );
@@ -801,6 +848,10 @@ export class DayPilotService {
         reflections: {
           scanned: reflections.candidates.length,
           active: reflections.total,
+        },
+        rehearsals: {
+          scanned: rehearsals.candidates.length,
+          active: rehearsals.total,
         },
         skills: {
           scanned: skills.candidates.length,
@@ -1091,8 +1142,7 @@ export class DayPilotService {
       return null;
     }
     const hoursUntil = (row.start_at - currentTime) / 3600;
-    const baseUrgency =
-      hoursUntil <= 2 ? 0.82 : hoursUntil <= 36 ? 0.52 : 0.28;
+    const baseUrgency = hoursUntil <= 2 ? 0.82 : hoursUntil <= 36 ? 0.52 : 0.28;
     const urgency =
       recurringNoise > 0 ? Math.min(baseUrgency, 0.48) : baseUrgency;
     const sourceImportance =
@@ -1285,10 +1335,9 @@ export class DayPilotService {
         snippet: compactText(row.body || row.title, 260),
         timestamp: row.created_at,
       },
-      openQuestions:
-        isTruthConflict
-          ? ['哪条记忆应该作为今天使用的可信版本？']
-          : [],
+      openQuestions: isTruthConflict
+        ? ['哪条记忆应该作为今天使用的可信版本？']
+        : [],
     };
   }
 
@@ -1353,7 +1402,9 @@ export class DayPilotService {
     ) {
       return 'notification:truth_conflict:generic';
     }
-    if (/新的认知冲突需要决策|new cognitive conflict needs decision/i.test(title)) {
+    if (
+      /新的认知冲突需要决策|new cognitive conflict needs decision/i.test(title)
+    ) {
       return `notification:title:${normalizeKey(title)}`;
     }
     if (title === 'OpenClaw 缺少能力重试确认') {
@@ -1367,7 +1418,10 @@ export class DayPilotService {
   private notificationTopicName(
     row: NotificationCandidateRow,
   ): string | undefined {
-    const payload = safeJsonParse<Record<string, unknown>>(row.payload_json, {});
+    const payload = safeJsonParse<Record<string, unknown>>(
+      row.payload_json,
+      {},
+    );
     const fromPayload = pickFirstString(payload, [
       'topicName',
       'topicTitle',
@@ -1432,13 +1486,7 @@ export class DayPilotService {
     const text = `${row.title} ${row.description || ''} ${
       row.last_error || ''
     }`;
-    if (
-      this.isStaleLowValueFactFollowup(
-        text,
-        row.created_at,
-        currentTime,
-      )
-    ) {
+    if (this.isStaleLowValueFactFollowup(text, row.created_at, currentTime)) {
       return null;
     }
     const actionTime = row.scheduled_at || row.created_at;
@@ -1607,6 +1655,119 @@ export class DayPilotService {
     };
   }
 
+  private scanRehearsals(currentTime: number): {
+    candidates: Candidate[];
+    total: number;
+  } {
+    const total = (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM rehearsals
+           WHERE status IN ('active', 'candidate', 'stale')`,
+        )
+        .get() as CountRow
+    ).count;
+    const rows = this.db
+      .prepare(
+        `SELECT id, title, scenario_type, status, summary, content,
+                activation_cues_json, evidence_refs_json, confidence, priority,
+                valid_until, last_activated_at, updated_at, stale_reason
+         FROM rehearsals
+         WHERE status IN ('active', 'stale')
+            OR (status = 'candidate' AND confidence >= 0.82)
+         ORDER BY
+           CASE status WHEN 'active' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
+           priority DESC,
+           confidence DESC,
+           updated_at DESC
+         LIMIT 30`,
+      )
+      .all() as RehearsalCandidateRow[];
+    return {
+      total,
+      candidates: rows
+        .map((row) => this.rehearsalCandidate(row, currentTime))
+        .filter((item): item is Candidate => Boolean(item)),
+    };
+  }
+
+  private rehearsalCandidate(
+    row: RehearsalCandidateRow,
+    currentTime: number,
+  ): Candidate | null {
+    const cues = safeJsonParse<Record<string, string[]>>(
+      row.activation_cues_json,
+      {},
+    );
+    const text = `${row.title} ${row.summary || ''} ${row.content}`;
+    const isExpired = Boolean(row.valid_until && row.valid_until < currentTime);
+    const aging =
+      row.last_activated_at && currentTime - row.last_activated_at > 30 * 86400;
+    const urgency = row.valid_until
+      ? row.valid_until < currentTime
+        ? 0.24
+        : row.valid_until - currentTime <= 3 * 86400
+        ? 0.72
+        : 0.46
+      : 0.48;
+    const privacyRisk = this.privacyRisk(text);
+    const score = this.computeScore({
+      urgency,
+      openLoopPressure: row.status === 'stale' || isExpired ? 0.38 : 0.68,
+      userRoleRelevance: 0.7,
+      sourceImportance: clamp01((row.priority || 5) / 10),
+      sourceDiversity: 0.45,
+      evidenceConfidence: row.confidence ?? 0.55,
+      novelty: row.status === 'candidate' ? 0.62 : 0.48,
+      recurringNoise: aging || row.status === 'stale' ? 0.32 : 0,
+      feedbackFatigue: 0,
+      privacyRisk,
+    });
+    if (score < 0.42 && row.status === 'stale') return null;
+
+    const people = (cues.people ?? []).slice(0, 5).map((name) => ({
+      name,
+      type: 'Person',
+    }));
+    const projects = [...(cues.projects ?? []), ...(cues.issueKeys ?? [])]
+      .slice(0, 5)
+      .map((name) => ({ name, type: 'Cue' }));
+    const snippet = compactText(row.summary || row.content || row.title, 260);
+    return {
+      sourceKind: 'rehearsal',
+      sourceId: row.id,
+      clusterKey: `rehearsal:${row.id}`,
+      title: row.title,
+      snippet,
+      timestamp: row.updated_at,
+      dueAt: row.valid_until ?? undefined,
+      score,
+      urgency,
+      openLoopPressure: row.status === 'stale' || isExpired ? 0.38 : 0.68,
+      sourceImportance: clamp01((row.priority || 5) / 10),
+      evidenceConfidence: row.confidence ?? 0.55,
+      privacyRisk,
+      recurringNoise: aging || row.status === 'stale' ? 0.32 : 0,
+      cardType: 'rehearsal_prompt',
+      state: row.status === 'stale' || isExpired ? 'waiting' : 'prepare',
+      people,
+      projects,
+      evidence: {
+        sourceKind: 'rehearsal',
+        sourceId: row.id,
+        title: row.scenario_type,
+        snippet,
+        timestamp: row.updated_at,
+        exploreLink: `/rehearsals?rehearsalId=${encodeURIComponent(row.id)}`,
+      },
+      openQuestions:
+        row.status === 'stale'
+          ? [`这条预演已降权：${row.stale_reason || '长期未触发'}`]
+          : [],
+    };
+  }
+
   private scanSkills(): { candidates: Candidate[]; total: number } {
     const total = (
       this.db
@@ -1680,9 +1841,10 @@ export class DayPilotService {
     };
   }
 
-  private scanRelationships(
-    currentTime: number,
-  ): { candidates: Candidate[]; total: number } {
+  private scanRelationships(currentTime: number): {
+    candidates: Candidate[];
+    total: number;
+  } {
     const total = (
       this.db
         .prepare(
@@ -1742,13 +1904,14 @@ export class DayPilotService {
     const ageSeconds = latestEvidenceAt
       ? Math.max(0, currentTime - latestEvidenceAt)
       : undefined;
-    const urgency = /deadline|block(?:ed|er)?|risk|owner|eta|阻塞|风险|负责人|时间/i.test(
-      signalText,
-    )
-      ? 0.58
-      : ageSeconds !== undefined && ageSeconds <= 3 * 86400
-      ? 0.48
-      : 0.38;
+    const urgency =
+      /deadline|block(?:ed|er)?|risk|owner|eta|阻塞|风险|负责人|时间/i.test(
+        signalText,
+      )
+        ? 0.58
+        : ageSeconds !== undefined && ageSeconds <= 3 * 86400
+        ? 0.48
+        : 0.38;
     const score = this.computeScore({
       urgency,
       openLoopPressure: 0.64,
@@ -1756,8 +1919,7 @@ export class DayPilotService {
       sourceImportance: clamp01(row.score),
       sourceDiversity: 0.45,
       evidenceConfidence: 0.62,
-      novelty:
-        ageSeconds !== undefined && ageSeconds <= 7 * 86400 ? 0.5 : 0.32,
+      novelty: ageSeconds !== undefined && ageSeconds <= 7 * 86400 ? 0.5 : 0.32,
       recurringNoise: 0,
       feedbackFatigue: 0,
       privacyRisk: this.privacyRisk(snippet),
@@ -2245,7 +2407,11 @@ export class DayPilotService {
   }
 
   private defaultProvider(cardType: DayPilotCardType): TargetProvider {
-    if (cardType === 'meeting_prepare' || cardType === 'relationship_ping') {
+    if (
+      cardType === 'meeting_prepare' ||
+      cardType === 'relationship_ping' ||
+      cardType === 'rehearsal_prompt'
+    ) {
       return 'chatgpt';
     }
     if (cardType === 'project_risk' || cardType === 'ai_tool_shift') {
@@ -2357,11 +2523,12 @@ export class DayPilotService {
     const recurringNoise = Math.max(
       ...cluster.candidates.map((item) => item.recurringNoise),
     );
-    const supportStep = cluster.key === 'notification:truth_conflict:generic'
-      ? 0.005
-      : recurringNoise > 0
-      ? 0.015
-      : 0.04;
+    const supportStep =
+      cluster.key === 'notification:truth_conflict:generic'
+        ? 0.005
+        : recurringNoise > 0
+        ? 0.015
+        : 0.04;
     const support = Math.min(
       cluster.key === 'notification:truth_conflict:generic' ? 0.06 : 0.16,
       (cluster.candidates.length - 1) * supportStep,
@@ -2485,12 +2652,12 @@ export class DayPilotService {
     if (top.cardType === 'relationship_ping') {
       return `关系雷达发现 ${evidenceCount} 条带 follow-up、承诺或变冷风险的证据，今天适合确认是否需要主动同步。`;
     }
+    if (top.cardType === 'rehearsal_prompt') {
+      return `有一条未来场景预演记忆与今天的上下文相关，适合提前带入真实对话、会议或写作场景。`;
+    }
     return `${evidenceCount} 条来自 ${sourceKinds.join(
       '、',
-    )} 的${agePrefix}记忆信号指向同一件事：${compactText(
-      top.snippet,
-      120,
-    )}`;
+    )} 的${agePrefix}记忆信号指向同一件事：${compactText(top.snippet, 120)}`;
   }
 
   private nextBestAction(
@@ -2507,6 +2674,8 @@ export class DayPilotService {
       return '核对冲突证据，确认今天应采用哪条记忆';
     if (cardType === 'relationship_ping')
       return '打开人物上下文，确认是否需要今天 follow-up 或补齐下一步问题';
+    if (cardType === 'rehearsal_prompt')
+      return '查看预演提示，决定今天是否要使用、更新、暂停或标记不相关';
     if (/npm registry|nexus|internal nexus|registry migration/i.test(text)) {
       return '确认 NPM Registry 迁移影响范围，并更新需要改配置的项目或 owner';
     }
@@ -2591,6 +2760,7 @@ export class DayPilotService {
       ai_tool_shift: '把近期 AI 工具讨论沉淀成可复用说明或材料。',
       project_risk: '确认风险 owner、证据和下一步排查路径。',
       relationship_ping: '查看人物上下文，决定是否需要主动同步。',
+      rehearsal_prompt: '复核这条场景化记忆提示，确认今天是否适合使用或更新。',
       skill_opportunity: '判断是否值得沉淀成个人 skill。',
       memory_quality: '核对证据，避免把错误记忆交给外部 AI。',
     };
@@ -2643,9 +2813,7 @@ export class DayPilotService {
     }
     if (
       set.has('nova') &&
-      (set.has('dry-run') ||
-        set.has('story-point') ||
-        set.has('google-sheet'))
+      (set.has('dry-run') || set.has('story-point') || set.has('google-sheet'))
     ) {
       return 'Q2 nova epic dry run 评估数据整理';
     }
@@ -2747,6 +2915,7 @@ export class DayPilotService {
         notifications: { scanned: 0, pending: 0 },
         actions: { scanned: 0, queued: 0 },
         reflections: { scanned: 0, active: 0 },
+        rehearsals: { scanned: 0, active: 0 },
         skills: { scanned: 0, suggestions: 0 },
         relationships: { scanned: 0, highFrequencyPeople: 0 },
       },
@@ -2776,11 +2945,20 @@ export class DayPilotService {
     return Math.floor(parsed / 1000);
   }
 
-  private clampMarkdown(markdown: string, tokenBudget: number): string {
+  private clampMarkdown(
+    markdown: string,
+    tokenBudget: number,
+  ): { bodyMd: string; truncated: boolean; maxChars: number } {
     const maxChars = Math.max(800, tokenBudget * 4);
-    if (markdown.length <= maxChars) return markdown;
-    return `${markdown
-      .slice(0, maxChars - 32)
-      .trim()}\n\n> Truncated to fit token budget.`;
+    if (markdown.length <= maxChars) {
+      return { bodyMd: markdown, truncated: false, maxChars };
+    }
+    const note = '> Truncated to fit token budget.';
+    const sliceLength = Math.max(0, maxChars - note.length - 2);
+    return {
+      bodyMd: `${markdown.slice(0, sliceLength).trim()}\n\n${note}`,
+      truncated: true,
+      maxChars,
+    };
   }
 }

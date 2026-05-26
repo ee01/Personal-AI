@@ -369,6 +369,57 @@ describe('Day Pilot API', () => {
     expect(body.brief.summary).toContain('暂未发现');
   });
 
+  it('does not treat casual question marks as Today Pilot open loops', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+
+    for (const [id, content, summary] of [
+      [
+        'msg-casual-question',
+        'How was your weekend? Did everyone see the lunch photos?',
+        'Casual weekend check-in and lunch photos.',
+      ],
+      [
+        'msg-actionable-question',
+        'Could you confirm the owner and risk before launch?',
+        'Could you confirm the owner and risk before launch?',
+      ],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, summary, source_type, sender, group_id, group_name,
+           timestamp, entities_json, matched_projects_json, importance, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        content,
+        summary,
+        'glip',
+        'Maya',
+        'group-launch',
+        'Launch Team',
+        current - 600,
+        JSON.stringify([{ type: 'Person', name: 'Maya' }]),
+        JSON.stringify([{ name: 'Launch' }]),
+        0.96,
+        current - 600,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.messages.scanned).toBe(2);
+    const titles = body.brief.cards.map((card: any) => card.title).join('\n');
+    expect(titles).toContain('Could you confirm the owner and risk');
+    expect(titles).not.toContain('Casual weekend check-in');
+    expect(titles).not.toContain('lunch photos');
+  });
+
   it('filters low-action calendar noise and cleans dirty calendar titles', async () => {
     const current = Math.floor(Date.now() / 1000);
     const localDate = new Date(current * 1000).toISOString().slice(0, 10);
@@ -1114,6 +1165,71 @@ describe('Day Pilot API', () => {
     expect(body.redactionApplied).toBe(true);
     expect(body.redactionPreview.length).toBeGreaterThan(0);
     expect(body.evidenceRefs.every((ref: any) => !ref.sourceUrl)).toBe(true);
+    expect(body.truncated).toBe(false);
+    expect(body.maxChars).toBe(3600);
+  });
+
+  it('reports when context packs are truncated by token budget', async () => {
+    const { localDate, current } = seedDayPilotData();
+    const longSummary = [
+      'Codex context pack follow-up needs owner deadline and implementation detail.',
+      'The handoff should preserve evidence provenance, review boundaries, redaction notes, next action, and open questions before the user pastes it into another AI tool.',
+      'Include enough repeated factual background to force the smallest supported context-pack budget to clip the rendered markdown instead of silently looking complete.',
+    ].join(' ');
+    for (let index = 0; index < 5; index += 1) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, summary, source_type, sender, group_id, group_name,
+           timestamp, entities_json, matched_projects_json, importance, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        `msg-long-pack-${index}`,
+        `${longSummary} Evidence item ${index} requires follow-up and confirmation from the owner before the pack is reused.`,
+        `${longSummary} Evidence item ${index} has a separate owner, deadline, and decision checkpoint.`,
+        'glip',
+        'Context Owner',
+        'group-long-context-pack',
+        'Context Pack Review',
+        current - 600 + index,
+        JSON.stringify([{ type: 'Person', name: 'Context Owner' }]),
+        JSON.stringify([{ name: 'Codex' }, { name: 'MCP' }]),
+        0.99,
+        current - 600 + index,
+      );
+    }
+
+    const first = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+    const card = first
+      .json()
+      .brief.cards.find((item: any) =>
+        item.evidenceRefs.some(
+          (ref: any) => ref.sourceId === 'msg-long-pack-0',
+        ),
+      );
+    expect(card).toBeTruthy();
+
+    const pack = await app.inject({
+      method: 'POST',
+      url: `/api/v1/today-pilot/missions/${card.missionId}/context-pack`,
+      payload: {
+        tokenBudget: 400,
+        targetProvider: 'codex',
+      },
+    });
+
+    expect(pack.statusCode).toBe(200);
+    const body = pack.json();
+    expect(body.truncated).toBe(true);
+    expect(body.maxChars).toBe(1600);
+    expect(body.bodyMd).toContain('Truncated to fit token budget');
+    expect(
+      body.warnings.some((warning: string) =>
+        warning.includes('Context pack was truncated'),
+      ),
+    ).toBe(true);
   });
 
   it('uses feedback signals when regenerating ranked cards', async () => {

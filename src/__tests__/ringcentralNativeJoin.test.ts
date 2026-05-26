@@ -5,6 +5,11 @@ import {
   extractRingCentralVideoJoinUrl,
   openRingCentralVideoNativeJoin,
   parseRingCentralVideoJoinTarget,
+  RINGCENTRAL_NATIVE_JOIN_ENABLED_ATTR,
+  RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE,
+  RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST,
+  RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE,
+  setRingCentralNativeJoinEnabled,
   shouldPreserveDefaultNativeJoinClick,
 } from '../ringcentralNativeJoin.js';
 
@@ -263,7 +268,114 @@ test('shouldPreserveDefaultNativeJoinClick keeps modified and fallback-link clic
   }
 });
 
-test('openRingCentralVideoNativeJoin auto-dismisses the app handoff panel', () => {
+test('setRingCentralNativeJoinEnabled uses a page bridge when chrome storage is unavailable', async () => {
+  const originalChrome = (globalThis as typeof globalThis & {
+    chrome?: unknown;
+  }).chrome;
+  const originalDocument = (globalThis as typeof globalThis & {
+    document?: unknown;
+  }).document;
+  const originalWindow = (globalThis as typeof globalThis & {
+    window?: unknown;
+  }).window;
+  const attributes = new Map<string, string>();
+  const postedMessages: Array<{ message: any; targetOrigin: string }> = [];
+  const messageListeners = new Set<(event: MessageEvent) => void>();
+
+  const fakeWindow = {
+    location: { origin: 'https://app.ringcentral.com' },
+    addEventListener: (type: string, listener: (event: MessageEvent) => void) => {
+      if (type === 'message') {
+        messageListeners.add(listener);
+      }
+    },
+    removeEventListener: (
+      type: string,
+      listener: (event: MessageEvent) => void,
+    ) => {
+      if (type === 'message') {
+        messageListeners.delete(listener);
+      }
+    },
+    postMessage: (message: any, targetOrigin: string) => {
+      postedMessages.push({ message, targetOrigin });
+      if (message?.type !== RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST) {
+        return;
+      }
+      const response = {
+        source: RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE,
+        target: 'page',
+        type: RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE,
+        requestId: message.requestId,
+        success: true,
+        enabled: message.enabled,
+      };
+      const listeners = Array.from(messageListeners);
+      for (const listener of listeners) {
+        listener({
+          source: fakeWindow,
+          data: response,
+        } as MessageEvent);
+      }
+    },
+    setTimeout: (callback: () => void, delay: number) =>
+      setTimeout(callback, delay) as unknown as number,
+    clearTimeout: (timerId: number) =>
+      clearTimeout(timerId as unknown as ReturnType<typeof setTimeout>),
+  };
+
+  (globalThis as typeof globalThis & { chrome?: unknown }).chrome = undefined;
+  (globalThis as typeof globalThis & { document?: unknown }).document = {
+    documentElement: {
+      setAttribute: (name: string, value: string) =>
+        attributes.set(name, value),
+      getAttribute: (name: string) => attributes.get(name) || null,
+    },
+  };
+  (globalThis as typeof globalThis & { window?: unknown }).window = fakeWindow;
+
+  try {
+    await setRingCentralNativeJoinEnabled(false);
+
+    assert.equal(attributes.get(RINGCENTRAL_NATIVE_JOIN_ENABLED_ATTR), 'false');
+    assert.equal(postedMessages.length, 1);
+    assert.equal(
+      postedMessages[0].message.source,
+      RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE,
+    );
+    assert.equal(
+      postedMessages[0].message.type,
+      RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST,
+    );
+    assert.equal(postedMessages[0].message.enabled, false);
+    assert.equal(postedMessages[0].targetOrigin, 'https://app.ringcentral.com');
+    assert.equal(messageListeners.size, 0);
+  } finally {
+    if (originalChrome === undefined) {
+      delete (globalThis as typeof globalThis & { chrome?: unknown }).chrome;
+    } else {
+      (globalThis as typeof globalThis & { chrome?: unknown }).chrome =
+        originalChrome;
+    }
+
+    if (originalDocument === undefined) {
+      delete (globalThis as typeof globalThis & { document?: unknown })
+        .document;
+    } else {
+      (globalThis as typeof globalThis & { document?: unknown }).document =
+        originalDocument;
+    }
+
+    if (originalWindow === undefined) {
+      delete (globalThis as typeof globalThis & { window?: unknown }).window;
+    } else {
+      (globalThis as typeof globalThis & { window?: unknown }).window =
+        originalWindow;
+    }
+  }
+});
+
+test('openRingCentralVideoNativeJoin auto-dismisses app handoff after five seconds', () => {
   const originalDocument = (globalThis as typeof globalThis & {
     document?: unknown;
   }).document;
@@ -315,6 +427,10 @@ test('openRingCentralVideoNativeJoin auto-dismisses the app handoff panel', () =
 
     setAttribute(name: string, value: string) {
       this.attributes.set(name, value);
+    }
+
+    getAttribute(name: string) {
+      return this.attributes.get(name) || null;
     }
 
     addEventListener(type: string, listener: (event: FakeEvent) => void) {
@@ -384,9 +500,16 @@ test('openRingCentralVideoNativeJoin auto-dismisses the app handoff panel', () =
   }
 
   const body = new FakeElement('body');
+  const documentElement = new FakeElement('html');
   (globalThis as typeof globalThis & { document?: unknown }).document = {
     body,
+    documentElement,
     createElement: (tagName: string) => new FakeElement(tagName),
+    createTextNode: (text: string) => {
+      const node = new FakeElement('#text');
+      node.textContent = text;
+      return node;
+    },
     getElementById: (id: string) => elementsById.get(id) || null,
   };
   (globalThis as typeof globalThis & { window?: unknown }).window = {
@@ -468,10 +591,9 @@ test('openRingCentralVideoNativeJoin auto-dismisses the app handoff panel', () =
       undefined,
       'auto-dismiss should remove the temporary native launch link',
     );
-    assert.deepEqual(
-      clearedTimeouts,
-      [1, 2],
-      'auto-dismiss should clear pending handoff timers',
+    assert.ok(
+      clearedTimeouts.includes(2),
+      'auto-dismiss should clear the pending handoff escalation timer',
     );
 
     openRingCentralVideoNativeJoin({

@@ -8,6 +8,7 @@ import {
   createDefaultReadinessState,
   createMeetingPilotSessionSnapshot,
 } from './protocol';
+import { shouldSurfaceMeetingPilotAlert } from './alertPresentation.js';
 
 type StoragePayload = {
   sessions: MeetingPilotSessionSnapshot[];
@@ -345,6 +346,9 @@ export class MeetingPilotRegistry {
     tabId: number,
     alert: MeetingPilotAlert,
   ): Promise<MeetingPilotSessionSnapshot | undefined> {
+    if (!shouldSurfaceMeetingPilotAlert(alert)) {
+      return undefined;
+    }
     return this.updateSession(tabId, (session) => {
       const existing = session.alerts.find(
         (item) =>

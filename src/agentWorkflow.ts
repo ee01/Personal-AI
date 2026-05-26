@@ -226,6 +226,51 @@ function buildAgentInputSummary(context: any): string {
   return `${sender} @ ${group}: ${content}`;
 }
 
+function getAgentConfigKey(agent: AgentConfig): string {
+  return String(agent.id || '').trim();
+}
+
+function getFirstEnabledAgentById(
+  agents: AgentConfig[],
+): Map<string, AgentConfig> {
+  const firstById = new Map<string, AgentConfig>();
+
+  for (const agent of agents) {
+    if (agent.enabled === false) continue;
+    const key = getAgentConfigKey(agent);
+    if (!key || firstById.has(key)) continue;
+    firstById.set(key, agent);
+  }
+
+  return firstById;
+}
+
+function buildDuplicateAgentTraceStep(
+  agent: AgentConfig,
+  message: any,
+): AgentWorkflowTraceStep {
+  const agentId = getAgentConfigKey(agent) || agent.id || 'unknown-agent';
+  const startedAt = new Date().toISOString();
+  return {
+    agentId,
+    agentName: agent.name || agentId,
+    priority: agent.priority,
+    status: 'skipped',
+    startedAt,
+    durationMs: 0,
+    inputSummary: buildAgentInputSummary(message),
+    outputSummary: `duplicate agent id skipped: ${agentId}`,
+    tools: [
+      {
+        name: 'agentConfig',
+        displayName: 'Agent 配置',
+        status: 'skipped',
+        summary: `duplicate agent id skipped: ${agentId}`,
+      },
+    ],
+  };
+}
+
 function summarizeToolResult(toolName: string, result: any): string {
   if (!result || typeof result !== 'object') {
     return truncateForTrace(result || 'empty result');
@@ -961,6 +1006,7 @@ class AgentCoordinator {
   // 执行Agent调度流程
   async processMessage(message: any): Promise<MessageProcessResult> {
     const agents = await this.getAgents();
+    const firstEnabledAgentById = getFirstEnabledAgentById(agents);
     // 按优先级排序
     const sortedAgents = agents
       .filter((agent) => agent.enabled !== false)
@@ -996,6 +1042,21 @@ class AgentCoordinator {
 
     // 逐个运行Agent
     for (const agent of sortedAgents) {
+      const agentId = getAgentConfigKey(agent);
+      const firstAgentWithId = agentId
+        ? firstEnabledAgentById.get(agentId)
+        : undefined;
+      if (agentId && firstAgentWithId && firstAgentWithId !== agent) {
+        console.warn('agentWorkflow跳过重复 Agent ID:', {
+          agentId,
+          agentName: agent.name,
+        });
+        result.agentWorkflowTrace?.push(
+          buildDuplicateAgentTraceStep(agent, message),
+        );
+        continue;
+      }
+
       console.log(`运行Agent: ${agent.name}`);
       const traceStep: AgentWorkflowTraceStep = {
         agentId: agent.id,

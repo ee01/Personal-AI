@@ -178,6 +178,16 @@ function verifyBackendDayPilotApi() {
   );
   assertContains(
     dayPilotServiceSource,
+    /truncated: clamped\.truncated/,
+    'context pack truncation metadata',
+  );
+  assertContains(
+    clientSource,
+    /truncated: boolean/,
+    'client context pack truncation type',
+  );
+  assertContains(
+    dayPilotServiceSource,
     /applyFeedbackSignal/,
     'feedback rank adjustment',
   );
@@ -190,6 +200,11 @@ function verifyBackendDayPilotApi() {
     dayPilotServiceSource,
     /ACTIONABLE_FOLLOWUP_PATTERN/,
     'general mission actionability gate',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /ACTIONABLE_QUESTION_PATTERN/,
+    'question-only noise gate',
   );
   assertContains(
     dayPilotServiceSource,
@@ -298,6 +313,31 @@ function verifyMissionCardsAreConcreteItems() {
     /上下文包生成失败，未复制/,
     'context pack copy failure does not claim success',
   );
+  assertContains(
+    overviewSource,
+    /contextPackCopyReceipt/,
+    'context pack copy receipt',
+  );
+  assertContains(
+    overviewSource,
+    /rankingSummary/,
+    'ranking and noise-control summary',
+  );
+  assertContains(
+    overviewSource,
+    /低行动\/重复信号未进首页/,
+    'visible filtered-signal count',
+  );
+  assertContains(
+    overviewSource,
+    /只有 Now\/高优先级且低隐私风险的 mission 会占用提醒预算/,
+    'visible interruption-budget rationale',
+  );
+  assertContains(
+    overviewSource,
+    /已按当前预算截断/,
+    'context pack truncation note',
+  );
 }
 
 function verifyDemoContentWasRemoved() {
@@ -342,15 +382,16 @@ function verifyPopupTopThree() {
     /renderTodayPilotContextPack/,
     'popup canonical context pack renderer',
   );
-  assertContains(
-    popupSource,
-    /today-pilot-card-why/,
-    'popup why-now line',
-  );
+  assertContains(popupSource, /today-pilot-card-why/, 'popup why-now line');
   assertContains(
     popupSource,
     /formatTodayPilotEvidenceMeta/,
     'popup evidence confidence metadata',
+  );
+  assertContains(
+    popupSource,
+    /formatTodayPilotContextPackReceipt/,
+    'popup context pack receipt',
   );
   assertContains(
     popupSource,

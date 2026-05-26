@@ -26,6 +26,17 @@
         <button class="load-error-retry" @click="loadQueues()">重试</button>
       </div>
 
+      <div
+        v-if="targetNotice"
+        class="target-notice"
+        :class="targetNotice.kind"
+      >
+        <div>
+          <div class="target-notice-title">{{ targetNotice.title }}</div>
+          <p>{{ targetNotice.body }}</p>
+        </div>
+      </div>
+
       <section class="lane-section">
         <div class="lane-header">
           <div>
@@ -47,6 +58,8 @@
             v-for="req in decisionRequests"
             :key="req.id"
             class="decision-card"
+            :class="{ 'deep-link-target': req.id === targetConfirmRequestId }"
+            :data-request-id="req.id"
           >
             <div class="card-top">
               <span
@@ -236,6 +249,8 @@
                   v-for="req in visibleWatchItems(group)"
                   :key="req.id"
                   class="decision-card watch-card"
+                  :class="{ 'deep-link-target': req.id === targetConfirmRequestId }"
+                  :data-request-id="req.id"
                 >
                   <div class="card-top">
                     <span
@@ -307,13 +322,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive, computed } from 'vue';
+import { ref, onMounted, reactive, computed, nextTick, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import {
   getMemoryServiceClient,
   type ConfirmRequest,
 } from '../../services/MemoryServiceClient';
 
 const client = getMemoryServiceClient();
+const route = useRoute();
 
 const loading = ref(true);
 const decisionTotal = ref(0);
@@ -328,6 +345,40 @@ const submitting = reactive<Record<string, boolean>>({});
 const cardErrors = reactive<Record<string, string>>({});
 const copyStatus = reactive<Record<string, string>>({});
 const loadError = ref<string | null>(null);
+const targetStatus = ref<
+  'idle' | 'found-decision' | 'found-watch' | 'missing'
+>('idle');
+
+const targetConfirmRequestId = computed(() =>
+  normalizeRouteQueryId(
+    route.query.confirmRequestId ?? route.query.requestId,
+  ),
+);
+
+const targetNotice = computed(() => {
+  if (!targetConfirmRequestId.value || targetStatus.value === 'idle') {
+    return null;
+  }
+  if (targetStatus.value === 'found-decision') {
+    return {
+      kind: 'found',
+      title: '已定位通知对应确认项',
+      body: '这条通知打开的确认项已置顶并高亮，可以直接复核证据后选择处理方式。',
+    };
+  }
+  if (targetStatus.value === 'found-watch') {
+    return {
+      kind: 'found',
+      title: '通知对应项在待观察池',
+      body: '已展开待观察池并高亮这条确认项，你可以立即查证、继续观察或结束追踪。',
+    };
+  }
+  return {
+    kind: 'missing',
+    title: '通知对应确认项不在当前队列',
+    body: '它可能已经被处理、过期，或暂时不属于当前筛选队列；刷新后仍缺失时可回到通知来源查证。',
+  };
+});
 
 interface MessageRuleImprovementContext {
   schema: 'message_rule_improvement.v1';
@@ -350,6 +401,13 @@ onMounted(async () => {
   await loadQueues();
 });
 
+watch(targetConfirmRequestId, async () => {
+  if (loading.value) return;
+  decisionRequests.value = sortTargetFirst(decisionRequests.value);
+  watchRequests.value = sortTargetFirst(watchRequests.value);
+  await syncTargetDeepLink();
+});
+
 async function loadQueues(showLoading = true) {
   if (showLoading) loading.value = true;
   try {
@@ -361,8 +419,12 @@ async function loadQueues(showLoading = true) {
     ]);
     decisionTotal.value = decisionRes.total;
     watchTotal.value = watchSnoozedRes.total + watchPendingRes.total;
-    decisionRequests.value = decisionRes.items;
-    watchRequests.value = [...watchPendingRes.items, ...watchSnoozedRes.items];
+    decisionRequests.value = sortTargetFirst(decisionRes.items);
+    watchRequests.value = sortTargetFirst([
+      ...watchPendingRes.items,
+      ...watchSnoozedRes.items,
+    ]);
+    await syncTargetDeepLink();
   } catch (e: any) {
     console.error('Failed to load confirm requests', e);
     loadError.value = e?.message || '无法连接 Memory Service，请稍后重试。';
@@ -375,12 +437,66 @@ async function loadQueues(showLoading = true) {
   }
 }
 
+function normalizeRouteQueryId(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function sortTargetFirst<T extends { id: string }>(items: T[]): T[] {
+  const targetId = targetConfirmRequestId.value;
+  if (!targetId) return items;
+  return [...items].sort((left, right) => {
+    if (left.id === targetId && right.id !== targetId) return -1;
+    if (right.id === targetId && left.id !== targetId) return 1;
+    return 0;
+  });
+}
+
+function watchGroupKey(req: ConfirmRequest) {
+  return (
+    req.sourceAnchor ||
+    `${req.gapType || req.reasonCode || 'watch'}:${req.category || 'unknown'}`
+  );
+}
+
+function scrollTargetCardIntoView(id: string) {
+  const target = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-request-id]'),
+  ).find((element) => element.dataset.requestId === id);
+  target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+async function syncTargetDeepLink() {
+  const targetId = targetConfirmRequestId.value;
+  if (!targetId) {
+    targetStatus.value = 'idle';
+    return;
+  }
+
+  if (decisionRequests.value.some((req) => req.id === targetId)) {
+    targetStatus.value = 'found-decision';
+    await nextTick();
+    scrollTargetCardIntoView(targetId);
+    return;
+  }
+
+  const watchTarget = watchRequests.value.find((req) => req.id === targetId);
+  if (watchTarget) {
+    targetStatus.value = 'found-watch';
+    watchCollapsed.value = false;
+    expandedWatchGroups[watchGroupKey(watchTarget)] = true;
+    await nextTick();
+    scrollTargetCardIntoView(targetId);
+    return;
+  }
+
+  targetStatus.value = 'missing';
+}
+
 const watchGroups = computed(() => {
   const groups = new Map<string, ConfirmRequest[]>();
   for (const req of watchRequests.value) {
-    const key =
-      req.sourceAnchor ||
-      `${req.gapType || req.reasonCode || 'watch'}:${req.category || 'unknown'}`;
+    const key = watchGroupKey(req);
     const list = groups.get(key) ?? [];
     list.push(req);
     groups.set(key, list);
@@ -415,6 +531,9 @@ async function submitAnswer(id: string, answer: string) {
     delete detailTexts[id];
     delete showDetail[id];
     delete copyStatus[id];
+    if (id === targetConfirmRequestId.value) {
+      targetStatus.value = 'missing';
+    }
   } catch (e: any) {
     cardErrors[id] = e.message || '提交失败，请重试';
   } finally {
@@ -455,7 +574,7 @@ function messageRuleImprovementSummary(req: ConfirmRequest) {
 
 function messageRuleImprovementReason(req: ConfirmRequest) {
   const improvement = parseMessageRuleImprovement(req);
-  return improvement?.reason || '根据关联操作运行结果建议改进规则文案';
+  return improvement?.reason || '根据联动操作运行结果建议改进规则文案';
 }
 
 function visibleEvidenceRefs(req: ConfirmRequest) {
@@ -720,6 +839,39 @@ function relativeTime(ts: number) {
   cursor: pointer;
 }
 
+.target-notice {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(59, 130, 246, 0.24);
+  border-left: 4px solid #38bdf8;
+  border-radius: 0.75rem;
+  background: rgba(14, 116, 144, 0.14);
+  color: #c7f9ff;
+}
+
+.target-notice.missing {
+  border-color: rgba(251, 191, 36, 0.24);
+  border-left-color: #f59e0b;
+  background: rgba(120, 53, 15, 0.16);
+  color: #fde68a;
+}
+
+.target-notice-title {
+  margin-bottom: 0.25rem;
+  color: #e0f2fe;
+  font-weight: 700;
+}
+
+.target-notice.missing .target-notice-title {
+  color: #fef3c7;
+}
+
+.target-notice p {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
 .lane-section {
   margin-bottom: 1.5rem;
 }
@@ -782,6 +934,14 @@ function relativeTime(ts: number) {
 .decision-card:hover {
   border-color: rgba(59, 130, 246, 0.3);
   box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
+}
+
+.decision-card.deep-link-target {
+  scroll-margin-top: 1.5rem;
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.22),
+    0 14px 36px rgba(14, 165, 233, 0.14);
 }
 
 .watch-card {

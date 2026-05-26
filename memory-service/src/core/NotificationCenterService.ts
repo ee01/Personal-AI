@@ -26,6 +26,18 @@ export interface NotificationEnvelope {
   sentAt?: number;
   type?: string;
   payload?: Record<string, unknown>;
+  deliveryContext?: NotificationDeliveryContext;
+}
+
+export interface NotificationDeliveryContext {
+  channel: DeliveryChannel;
+  reason: 'new' | 'retry_after_cooldown' | 'previous_delivery_failed';
+  lastStatus?: DeliveryStatus;
+  effectiveStatus?: DeliveryStatus;
+  hasSuccessfulDelivery: boolean;
+  lastAttemptAt?: number;
+  lastDeliveredAt?: number;
+  cooldownSeconds?: number;
 }
 
 interface ProposedActionRow {
@@ -127,9 +139,23 @@ function indentMarkdownBlock(raw: string): string {
 function formatNoticeDigestItem(item: NotificationEnvelope): string {
   const when = item.sentAt ? ` @ ${formatDateTime(item.sentAt)}` : '';
   const body = item.body ? ` - ${item.body}` : '';
+  const retryHint = formatDeliveryContextHint(item.deliveryContext);
   const detail = noticePayloadDetail(item);
-  if (!detail) return `- ${item.title}${when}${body}`;
-  return `- ${item.title}${when}${body}\n${indentMarkdownBlock(detail)}`;
+  if (!detail) return `- ${item.title}${when}${body}${retryHint}`;
+  return `- ${item.title}${when}${body}${retryHint}\n${indentMarkdownBlock(detail)}`;
+}
+
+function formatDeliveryContextHint(
+  deliveryContext: NotificationDeliveryContext | undefined,
+): string {
+  if (!deliveryContext) return '';
+  if (deliveryContext.reason === 'retry_after_cooldown') {
+    return ' [retry: unhandled after cooldown]';
+  }
+  if (deliveryContext.reason === 'previous_delivery_failed') {
+    return ' [retry: previous delivery failed]';
+  }
+  return '';
 }
 
 export function classifyNotificationRouting(params: {
@@ -250,8 +276,9 @@ export class NotificationCenterService {
         sourceType: 'notification',
         type: row.type,
       });
+      const sourceRef = `notification:${row.id}`;
       return {
-        sourceRef: `notification:${row.id}`,
+        sourceRef,
         sourceType: 'notification',
         sourceId: row.id,
         lane: routing.lane,
@@ -262,6 +289,12 @@ export class NotificationCenterService {
         sentAt: row.sent_at ?? undefined,
         type: row.type ?? undefined,
         payload: safeJsonParse<Record<string, unknown>>(row.payload_json),
+        deliveryContext: this.buildDeliveryContext({
+          sourceRef,
+          channel: input.channel,
+          lane: routing.lane,
+          deliveredAfter,
+        }),
       };
     });
 
@@ -295,8 +328,9 @@ export class NotificationCenterService {
           const payload = safeJsonParse<Record<string, unknown>>(
             action.params_json,
           );
+          const sourceRef = `proposed_action:${action.id}`;
           return {
-            sourceRef: `proposed_action:${action.id}`,
+            sourceRef,
             sourceType: 'proposed_action',
             sourceId: action.id,
             lane: 'todo',
@@ -307,6 +341,12 @@ export class NotificationCenterService {
             createdAt: action.created_at,
             type: action.action_type ?? action.type,
             payload,
+            deliveryContext: this.buildDeliveryContext({
+              sourceRef,
+              channel: input.channel,
+              lane: 'todo',
+              deliveredAfter,
+            }),
           };
         })
       : [];
@@ -321,6 +361,54 @@ export class NotificationCenterService {
         return rightTs - leftTs;
       })
       .slice(0, limit);
+  }
+
+  private buildDeliveryContext(input: {
+    sourceRef: string;
+    channel: DeliveryChannel;
+    lane: DeliveryLane;
+    deliveredAfter: number;
+  }): NotificationDeliveryContext {
+    const record = this.channelDeliveryRepository.getRecord(
+      input.sourceRef,
+      input.channel,
+      input.lane,
+    );
+    if (!record) {
+      return {
+        channel: input.channel,
+        reason: 'new',
+        hasSuccessfulDelivery: false,
+        cooldownSeconds:
+          input.lane === 'todo'
+            ? TODO_DELIVERY_RETRY_COOLDOWN_SECONDS
+            : undefined,
+      };
+    }
+
+    const lastDeliveredAt = record.lastDeliveredAt ?? record.firstDeliveredAt;
+    const reason: NotificationDeliveryContext['reason'] =
+      record.status === 'failed'
+        ? 'previous_delivery_failed'
+        : input.lane === 'todo' &&
+            lastDeliveredAt !== undefined &&
+            lastDeliveredAt <= input.deliveredAfter
+          ? 'retry_after_cooldown'
+          : 'new';
+
+    return {
+      channel: input.channel,
+      reason,
+      lastStatus: record.status,
+      effectiveStatus: record.effectiveStatus,
+      hasSuccessfulDelivery: record.hasSuccessfulDelivery,
+      lastAttemptAt: record.updatedAt,
+      lastDeliveredAt,
+      cooldownSeconds:
+        input.lane === 'todo'
+          ? TODO_DELIVERY_RETRY_COOLDOWN_SECONDS
+          : undefined,
+    };
   }
 
   recordDelivery(
@@ -408,7 +496,9 @@ export class NotificationCenterService {
           ? ` @ ${formatDateTime(item.dueAt ?? item.sentAt ?? item.createdAt)}`
           : '';
       const body = item.body ? ` - ${item.body}` : '';
-      return `${item.title}${due}${body}`;
+      return `${item.title}${due}${body}${formatDeliveryContextHint(
+        item.deliveryContext,
+      )}`;
     });
 
     const bodyMd = [

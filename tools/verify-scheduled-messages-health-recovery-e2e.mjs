@@ -215,9 +215,12 @@ try {
   await page.locator('text=Missed Bot 1: 2026-05-04 09:30').waitFor({
     timeout: 15000,
   });
+  await page.locator('text=建议改到 2026-05-04 10:02').waitFor({
+    timeout: 15000,
+  });
   assert.equal(
     await page.getByRole('button', {
-      name: '将Missed Bot 5改到2026-05-04 10:02',
+      name: '将Missed Bot 5改到2026-05-04 10:06',
     }).count(),
     0,
     'health banner should collapse issues after the first four by default',
@@ -226,7 +229,7 @@ try {
     name: '显示全部 5 条需处理消息',
   }).click();
   await page.getByRole('button', {
-    name: '将Missed Bot 5改到2026-05-04 10:02',
+    name: '将Missed Bot 5改到2026-05-04 10:06',
   }).waitFor({
     timeout: 15000,
   });

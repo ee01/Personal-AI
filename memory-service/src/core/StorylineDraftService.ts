@@ -1,0 +1,364 @@
+import type Database from 'better-sqlite3';
+
+import { getLLMClient, type LLMClient } from '../llm/LLMClient.js';
+import {
+  TodayPilotMeetingPrepRepository,
+  type TodayPilotMeetingPrepRecord,
+} from '../repositories/TodayPilotMeetingPrepRepository.js';
+import { contentHash } from '../utils/hashing.js';
+import {
+  defaultStorylineButtonLabel,
+  normalizeStorylineArtifactTarget,
+} from '../utils/storyline.js';
+import type {
+  ComposerAssistEvidence,
+  StorylineDraftRequest,
+  StorylineDraftResponse,
+  StorylineDraftSegment,
+  StorylineSuggestedArtifact,
+} from '../types/index.js';
+
+interface StorylineDraftLlmResponse {
+  title?: string;
+  audience?: string;
+  targetArtifact?: StorylineSuggestedArtifact;
+  segments?: Array<Partial<StorylineDraftSegment>>;
+  gaps?: string[];
+  riskNotes?: string[];
+  artifactText?: string;
+  usage?: Record<string, unknown>;
+}
+
+function compactText(value: unknown, maxLength: number): string {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function firstNonEmpty(...values: Array<string | undefined | null>): string {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeStringArray(value: unknown, maxItems: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => compactText(item, 220))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+export class StorylineDraftService {
+  private readonly repo: TodayPilotMeetingPrepRepository;
+  private readonly llmClient: LLMClient;
+
+  constructor(
+    db: Database.Database,
+    private readonly userId: string,
+    llmClient: LLMClient = getLLMClient(),
+  ) {
+    this.repo = new TodayPilotMeetingPrepRepository(db);
+    this.llmClient = llmClient;
+  }
+
+  async createDraft(
+    request: StorylineDraftRequest,
+  ): Promise<StorylineDraftResponse> {
+    if (request.sourceKind !== 'today_meeting_prep') {
+      throw new Error('unsupported_storyline_source');
+    }
+
+    const prep = this.repo.findById(request.prepId);
+    if (!prep || prep.userId !== this.userId) {
+      throw new Error('storyline source prep not found');
+    }
+
+    const targetArtifact =
+      normalizeStorylineArtifactTarget(request.targetArtifact) ||
+      prep.storylineOpportunity?.suggestedArtifact ||
+      'speaker_notes';
+    const audience = firstNonEmpty(
+      request.audienceHint,
+      prep.storylineOpportunity?.audienceHint,
+      '会议参会人',
+    );
+
+    const generated =
+      await this.llmClient.generateJSON<StorylineDraftLlmResponse>(
+        this.buildPrompt(prep, targetArtifact, audience),
+        {
+          temperature: 0.25,
+          maxTokens: 1800,
+          systemPrompt:
+            'You turn personal memory evidence into a concise storyline draft. Use only provided evidence ids and facts. Return JSON only.',
+        },
+      );
+
+    return this.normalizeDraftResponse(
+      prep,
+      generated,
+      targetArtifact,
+      audience,
+    );
+  }
+
+  private buildPrompt(
+    prep: TodayPilotMeetingPrepRecord,
+    targetArtifact: StorylineSuggestedArtifact,
+    audience: string,
+  ): string {
+    const evidenceText = prep.evidenceRefs
+      .slice(0, 8)
+      .map((item, index) => {
+        const label = item.sourceTitle || item.title || item.sourceLabel || item.id;
+        return [
+          `[E${index + 1}] id=${item.id}`,
+          `title=${compactText(label, 120)}`,
+          `source=${compactText(item.sourceLabel || item.type, 80)}`,
+          `snippet=${compactText(item.snippet, 700)}`,
+        ].join('\n');
+      })
+      .join('\n\n');
+    return [
+      'Generate a Memory Storyline draft in JSON.',
+      '',
+      `Source meeting prep: ${prep.eventTitle}`,
+      `Audience: ${audience}`,
+      `Target artifact: ${targetArtifact}`,
+      prep.storylineOpportunity?.oneLineReason
+        ? `Opportunity reason: ${prep.storylineOpportunity.oneLineReason}`
+        : '',
+      '',
+      'Meeting prep summary:',
+      compactText(prep.summaryMd, 1200),
+      '',
+      'Context pack:',
+      compactText(prep.contextPackMd, 1600),
+      '',
+      'Evidence ids allowed:',
+      evidenceText || 'No external evidence ids are available.',
+      '',
+      'Rules:',
+      '- Produce 3 to 6 segments.',
+      '- Every segment must cite one or more allowed evidence ids, using either E1 aliases or the exact id values.',
+      '- Do not invent source ids, people, decisions, dates, or product names.',
+      '- Keep the artifact manually copyable; do not include instructions to auto-send or write back.',
+      '',
+      'JSON schema:',
+      JSON.stringify({
+        title: 'storyline title',
+        audience,
+        targetArtifact,
+        segments: [
+          {
+            title: 'segment title',
+            intent: 'what this segment helps the user say',
+            narrative: 'speaker-ready paragraph grounded in evidence',
+            evidenceIds: ['E1'],
+          },
+        ],
+        gaps: ['missing fact the user should verify'],
+        riskNotes: ['privacy or confidence caveat'],
+        artifactText: 'copyable speaker notes or slides outline',
+      }),
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  private normalizeDraftResponse(
+    prep: TodayPilotMeetingPrepRecord,
+    response: StorylineDraftLlmResponse,
+    requestedTarget: StorylineSuggestedArtifact,
+    requestedAudience: string,
+  ): StorylineDraftResponse {
+    const targetArtifact =
+      normalizeStorylineArtifactTarget(response.targetArtifact) ||
+      requestedTarget;
+    const audience = firstNonEmpty(response.audience, requestedAudience);
+    const evidenceByAlias = new Map<string, string>();
+    const allowedEvidenceIds = new Set<string>();
+    prep.evidenceRefs.slice(0, 8).forEach((item, index) => {
+      allowedEvidenceIds.add(item.id);
+      evidenceByAlias.set(`E${index + 1}`, item.id);
+      evidenceByAlias.set(`e${index + 1}`, item.id);
+    });
+
+    const segments = Array.isArray(response.segments)
+      ? response.segments
+          .map((segment, index) =>
+            this.normalizeSegment(
+              segment,
+              index,
+              allowedEvidenceIds,
+              evidenceByAlias,
+            ),
+          )
+          .filter((segment): segment is StorylineDraftSegment =>
+            Boolean(segment),
+          )
+          .slice(0, 6)
+      : [];
+    const normalizedSegments =
+      segments.length >= 3 ? segments : this.fallbackSegments(prep);
+    const gaps = normalizeStringArray(response.gaps, 6);
+    const riskNotes = normalizeStringArray(response.riskNotes, 6);
+    const artifactText = firstNonEmpty(
+      response.artifactText,
+      this.renderArtifactText(
+        firstNonEmpty(response.title, this.defaultTitle(prep, targetArtifact)),
+        audience,
+        targetArtifact,
+        normalizedSegments,
+        gaps,
+        riskNotes,
+      ),
+    );
+
+    return {
+      id: `storyline-draft-${contentHash(
+        JSON.stringify({
+          sourceId: prep.id,
+          sourceHash: prep.sourceHash,
+          targetArtifact,
+          audience,
+          segmentTitles: normalizedSegments.map((segment) => segment.title),
+        }),
+      ).slice(0, 20)}`,
+      sourceKind: 'today_meeting_prep',
+      sourceId: prep.id,
+      title: firstNonEmpty(
+        response.title,
+        this.defaultTitle(prep, targetArtifact),
+      ),
+      audience,
+      targetArtifact,
+      segments: normalizedSegments,
+      gaps,
+      riskNotes,
+      artifactText,
+    };
+  }
+
+  private normalizeSegment(
+    segment: Partial<StorylineDraftSegment>,
+    index: number,
+    allowedEvidenceIds: Set<string>,
+    evidenceByAlias: Map<string, string>,
+  ): StorylineDraftSegment | null {
+    const title = compactText(segment.title, 90);
+    const narrative = compactText(segment.narrative, 700);
+    if (!title || !narrative) return null;
+    const evidenceIds = Array.isArray(segment.evidenceIds)
+      ? segment.evidenceIds
+          .map((id) => String(id || '').trim())
+          .map((id) => evidenceByAlias.get(id) || id)
+          .filter((id) => allowedEvidenceIds.has(id))
+          .filter((id, itemIndex, all) => all.indexOf(id) === itemIndex)
+          .slice(0, 4)
+      : [];
+    if (evidenceIds.length === 0) return null;
+    return {
+      title,
+      intent:
+        compactText(segment.intent, 160) ||
+        `帮助用户讲清第 ${index + 1} 段重点。`,
+      narrative,
+      evidenceIds,
+    };
+  }
+
+  private fallbackSegments(
+    prep: TodayPilotMeetingPrepRecord,
+  ): StorylineDraftSegment[] {
+    const fallbackEvidence = prep.evidenceRefs.slice(0, 3);
+    const baseSegments = prep.cueCards.slice(0, 3).map((card, index) => ({
+      title: compactText(card.title, 90) || `第 ${index + 1} 段`,
+      intent: compactText(card.body, 160) || '把会前准备转成可讲述材料。',
+      narrative: compactText(card.body, 700) || prep.summaryMd,
+      evidenceIds: this.resolveFallbackEvidenceIds(card.evidenceIds, prep.evidenceRefs),
+    }));
+    while (baseSegments.length < 3) {
+      const evidence = fallbackEvidence[baseSegments.length] || fallbackEvidence[0];
+      baseSegments.push({
+        title: ['背景', '关键证据', '下一步'][baseSegments.length],
+        intent: '补齐故事线的基本结构。',
+        narrative: compactText(evidence?.snippet || prep.summaryMd, 700),
+        evidenceIds: evidence ? [evidence.id] : [],
+      });
+    }
+    return baseSegments
+      .map((segment, index) => ({
+        ...segment,
+        evidenceIds: segment.evidenceIds.length
+          ? segment.evidenceIds
+          : fallbackEvidence[index]
+          ? [fallbackEvidence[index].id]
+          : [],
+      }))
+      .filter((segment) => segment.evidenceIds.length > 0)
+      .slice(0, 6);
+  }
+
+  private resolveFallbackEvidenceIds(
+    evidenceIds: string[] | undefined,
+    evidence: ComposerAssistEvidence[],
+  ): string[] {
+    const allowed = new Set(evidence.map((item) => item.id));
+    const aliases = new Map<string, string>(
+      evidence.map((item, index) => [`E${index + 1}`, item.id] as const),
+    );
+    const normalized = (evidenceIds ?? [])
+      .map((id) => aliases.get(id) || id)
+      .filter((id) => allowed.has(id));
+    if (normalized.length > 0) return normalized.slice(0, 4);
+    return evidence.slice(0, 1).map((item) => item.id);
+  }
+
+  private defaultTitle(
+    prep: TodayPilotMeetingPrepRecord,
+    targetArtifact: StorylineSuggestedArtifact,
+  ): string {
+    const suffix = defaultStorylineButtonLabel(targetArtifact, undefined);
+    return `${prep.eventTitle} · ${suffix}`;
+  }
+
+  private renderArtifactText(
+    title: string,
+    audience: string,
+    targetArtifact: StorylineSuggestedArtifact,
+    segments: StorylineDraftSegment[],
+    gaps: string[],
+    riskNotes: string[],
+  ): string {
+    const heading =
+      targetArtifact === 'slides_outline'
+        ? `# Slides Outline: ${title}`
+        : `# Speaker Notes: ${title}`;
+    return [
+      heading,
+      '',
+      `Audience: ${audience}`,
+      '',
+      ...segments.flatMap((segment, index) => [
+        `## ${index + 1}. ${segment.title}`,
+        `Intent: ${segment.intent}`,
+        segment.narrative,
+        `Evidence: ${segment.evidenceIds.join(', ')}`,
+        '',
+      ]),
+      gaps.length ? '## Gaps to verify' : '',
+      ...gaps.map((gap) => `- ${gap}`),
+      gaps.length ? '' : '',
+      riskNotes.length ? '## Risk notes' : '',
+      ...riskNotes.map((note) => `- ${note}`),
+    ]
+      .filter((line) => line !== '')
+      .join('\n');
+  }
+}

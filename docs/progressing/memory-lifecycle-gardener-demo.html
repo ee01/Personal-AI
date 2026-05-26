@@ -1,0 +1,1228 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Memory Lifecycle Gardener / 记忆生命周期管家 Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --panel-soft: #f9fafb;
+        --ink: #17202a;
+        --muted: #667085;
+        --line: #d8dee8;
+        --line-strong: #b9c3d2;
+        --blue: #2364d2;
+        --blue-soft: #e8f0ff;
+        --teal: #087f7b;
+        --teal-soft: #dff7f5;
+        --amber: #a15c00;
+        --amber-soft: #fff1d6;
+        --rose: #b42318;
+        --rose-soft: #ffe7e4;
+        --green: #157347;
+        --green-soft: #e5f6ee;
+        --shadow: 0 16px 38px rgba(16, 24, 40, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 240px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        background: #111827;
+        color: #eef2f7;
+        padding: 18px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 6px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: #eef2ff;
+        color: #1f3a8a;
+        font-weight: 800;
+        font-size: 14px;
+      }
+
+      .brand-title {
+        font-weight: 720;
+        font-size: 15px;
+        line-height: 1.2;
+      }
+
+      .brand-sub {
+        color: #aeb8c8;
+        font-size: 12px;
+        margin-top: 3px;
+      }
+
+      .nav-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+
+      .nav-item {
+        border: 0;
+        background: transparent;
+        color: #cdd5e1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        text-align: left;
+        padding: 9px 10px;
+        border-radius: 8px;
+        cursor: default;
+      }
+
+      .nav-item.active {
+        background: #263244;
+        color: #fff;
+      }
+
+      .nav-icon {
+        width: 22px;
+        height: 22px;
+        border-radius: 7px;
+        display: grid;
+        place-items: center;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .topbar {
+        min-height: 72px;
+        padding: 16px 24px;
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: center;
+        background: rgba(255, 255, 255, 0.84);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(10px);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+
+      .title-block {
+        min-width: 0;
+      }
+
+      .eyebrow {
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 760;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 4px 0 0;
+        font-size: 24px;
+        line-height: 1.18;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .top-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .btn {
+        border: 1px solid var(--line-strong);
+        background: #fff;
+        color: var(--ink);
+        border-radius: 8px;
+        min-height: 34px;
+        padding: 7px 11px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        cursor: pointer;
+        transition:
+          background 0.16s ease,
+          border-color 0.16s ease,
+          transform 0.16s ease;
+      }
+
+      .btn:hover {
+        background: #f7f9fc;
+        border-color: #98a6ba;
+      }
+
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .btn.primary {
+        border-color: #1e5fc6;
+        background: var(--blue);
+        color: #fff;
+      }
+
+      .btn.primary:hover {
+        background: #1a55b8;
+      }
+
+      .btn.danger {
+        border-color: #e6b4af;
+        color: var(--rose);
+        background: #fffafa;
+      }
+
+      .layout {
+        padding: 20px 24px 28px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 18px;
+        min-width: 0;
+      }
+
+      .summary-strip {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(120px, 1fr));
+        gap: 10px;
+      }
+
+      .metric {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 88px;
+      }
+
+      .metric-label {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .metric-value {
+        margin-top: 8px;
+        font-size: 26px;
+        line-height: 1;
+        font-weight: 760;
+      }
+
+      .metric-note {
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 14px;
+        min-width: 0;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-width: 0;
+      }
+
+      .panel-header {
+        padding: 14px 14px 10px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      .panel-title {
+        font-size: 14px;
+        font-weight: 760;
+      }
+
+      .panel-sub {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+        margin-top: 3px;
+      }
+
+      .lane-list {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .lane {
+        border: 1px solid transparent;
+        background: transparent;
+        padding: 9px 10px;
+        border-radius: 8px;
+        text-align: left;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        cursor: pointer;
+        color: var(--ink);
+      }
+
+      .lane:hover {
+        background: var(--panel-soft);
+      }
+
+      .lane.active {
+        border-color: #9bb9f4;
+        background: var(--blue-soft);
+      }
+
+      .lane-name {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .lane-desc {
+        grid-column: 1 / -1;
+        font-size: 12px;
+        line-height: 1.35;
+        color: var(--muted);
+      }
+
+      .count {
+        border-radius: 999px;
+        padding: 2px 7px;
+        background: #eef1f6;
+        color: #344054;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .candidate-list {
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .candidate {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 13px;
+        background: #fff;
+        cursor: pointer;
+        text-align: left;
+        color: var(--ink);
+        width: 100%;
+      }
+
+      .candidate.active {
+        border-color: #4b7edc;
+        box-shadow: 0 0 0 2px rgba(35, 100, 210, 0.12);
+      }
+
+      .candidate-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .candidate-title {
+        font-weight: 760;
+        font-size: 15px;
+        line-height: 1.35;
+      }
+
+      .candidate-copy {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+
+      .tag {
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: #eef1f6;
+        color: #344054;
+        font-size: 12px;
+        line-height: 1.35;
+        white-space: nowrap;
+      }
+
+      .tag.blue {
+        background: var(--blue-soft);
+        color: #174ea6;
+      }
+
+      .tag.teal {
+        background: var(--teal-soft);
+        color: #05625f;
+      }
+
+      .tag.amber {
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+
+      .tag.rose {
+        background: var(--rose-soft);
+        color: var(--rose);
+      }
+
+      .tag.green {
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .detail {
+        position: sticky;
+        top: 92px;
+        align-self: start;
+        max-height: calc(100vh - 112px);
+        overflow: auto;
+      }
+
+      .detail-body {
+        padding: 14px;
+      }
+
+      .detail-title {
+        font-size: 18px;
+        font-weight: 780;
+        line-height: 1.35;
+      }
+
+      .detail-copy {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+        margin-top: 8px;
+      }
+
+      .section {
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+
+      .section-title {
+        font-size: 13px;
+        font-weight: 760;
+        margin-bottom: 8px;
+      }
+
+      .reason-list,
+      .impact-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .reason,
+      .impact {
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        gap: 8px;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #344054;
+      }
+
+      .dot {
+        width: 22px;
+        height: 22px;
+        border-radius: 7px;
+        display: grid;
+        place-items: center;
+        background: #edf2f7;
+        color: #475467;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .preview {
+        margin-top: 10px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .preview-row {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 9px;
+        background: var(--panel-soft);
+      }
+
+      .preview-label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .preview-text {
+        margin-top: 4px;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .drawer {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        width: min(460px, calc(100vw - 36px));
+        background: #fff;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        display: none;
+        z-index: 20;
+      }
+
+      .drawer.open {
+        display: block;
+      }
+
+      .drawer-header {
+        padding: 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .drawer-title {
+        font-weight: 780;
+      }
+
+      .drawer-body {
+        padding: 14px;
+        color: #344054;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .receipt-code {
+        margin-top: 10px;
+        border-radius: 8px;
+        background: #111827;
+        color: #e5e7eb;
+        padding: 10px;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        overflow: auto;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        transform: translateX(-50%);
+        background: #111827;
+        color: #fff;
+        padding: 10px 13px;
+        border-radius: 8px;
+        font-size: 13px;
+        box-shadow: var(--shadow);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.18s ease;
+        z-index: 25;
+      }
+
+      .toast.show {
+        opacity: 1;
+      }
+
+      @media (max-width: 1120px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: sticky;
+          top: 0;
+          z-index: 14;
+          flex-direction: row;
+          overflow-x: auto;
+          align-items: center;
+          padding: 10px;
+        }
+
+        .brand {
+          border-bottom: 0;
+          padding: 0 10px 0 0;
+          min-width: 180px;
+        }
+
+        .nav-group {
+          flex-direction: row;
+          gap: 6px;
+        }
+
+        .nav-item {
+          min-width: 132px;
+          white-space: nowrap;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .detail {
+          position: static;
+          max-height: none;
+        }
+
+        .summary-strip {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 760px) {
+        .topbar {
+          align-items: stretch;
+          flex-direction: column;
+          padding: 14px;
+        }
+
+        .top-actions {
+          justify-content: flex-start;
+        }
+
+        .layout {
+          padding: 14px;
+        }
+
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .summary-strip {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 21px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar" aria-label="Memory Exploring navigation">
+        <div class="brand">
+          <div class="brand-mark">PA</div>
+          <div>
+            <div class="brand-title">Personal AI</div>
+            <div class="brand-sub">Memory Exploring</div>
+          </div>
+        </div>
+        <div class="nav-group">
+          <button class="nav-item"><span class="nav-icon">今</span>今日领航</button>
+          <button class="nav-item"><span class="nav-icon">搜</span>记忆搜索</button>
+          <button class="nav-item"><span class="nav-icon">源</span>覆盖地图</button>
+          <button class="nav-item active"><span class="nav-icon">管</span>生命周期</button>
+          <button class="nav-item"><span class="nav-icon">决</span>决策中心</button>
+          <button class="nav-item"><span class="nav-icon">技</span>个人技能</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="title-block">
+            <div class="eyebrow">Memory Lifecycle Gardener</div>
+            <h1>记忆生命周期管家</h1>
+            <div class="subtitle">
+              控制记忆的影响力，而不是偷偷删除记忆。重要内容继续提示，重复、过期和系统噪声只保留为可审计证据。
+            </div>
+          </div>
+          <div class="top-actions">
+            <button class="btn" type="button" id="scanBtn">重新扫描</button>
+            <button class="btn primary" type="button" id="batchBtn">应用 7 条低风险建议</button>
+          </div>
+        </header>
+
+        <section class="layout">
+          <div class="summary-strip" aria-label="影响力摘要">
+            <div class="metric">
+              <div class="metric-label">Messages</div>
+              <div class="metric-value">9545</div>
+              <div class="metric-note">来自远端 stats 的当前规模</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Temporary memory</div>
+              <div class="metric-value">1514</div>
+              <div class="metric-note">需要决定是否继续影响提示</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">待合并噪声簇</div>
+              <div class="metric-value">12</div>
+              <div class="metric-note">日程、系统冲突、能力缺口</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">高影响候选</div>
+              <div class="metric-value">4</div>
+              <div class="metric-note">需要进入 profile 或决策确认</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">预计影响入口</div>
+              <div class="metric-value">5</div>
+              <div class="metric-note">Ask、Lens、Compose、Day Pilot、Timeline</div>
+            </div>
+          </div>
+
+          <div class="workspace">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <div class="panel-title">建议 lane</div>
+                  <div class="panel-sub">只展示会影响使用体验的候选。</div>
+                </div>
+              </div>
+              <div class="lane-list" id="laneList"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <div class="panel-title" id="candidatePanelTitle">应降权</div>
+                  <div class="panel-sub" id="candidatePanelSub">重复或低价值记忆不再主动影响提示。</div>
+                </div>
+                <span class="tag blue" id="candidateCount">4 条</span>
+              </div>
+              <div class="candidate-list" id="candidateList"></div>
+            </section>
+          </div>
+
+          <aside class="panel detail" aria-label="影响预览">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">影响预览</div>
+                <div class="panel-sub">先看会变成什么，再应用。</div>
+              </div>
+            </div>
+            <div class="detail-body" id="detailBody"></div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <div class="drawer" id="drawer" role="dialog" aria-modal="false" aria-label="Lifecycle receipt">
+      <div class="drawer-header">
+        <div>
+          <div class="drawer-title">影响力变更 receipt</div>
+          <div class="panel-sub">所有变更可回滚，原始证据仍保留。</div>
+        </div>
+        <button class="btn" type="button" id="closeDrawer">关闭</button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </div>
+
+    <div class="toast" id="toast">已更新</div>
+
+    <script>
+      const lanes = [
+        {
+          id: "demote",
+          title: "应降权",
+          desc: "重复、低行动性或过期记忆。",
+          count: 4
+        },
+        {
+          id: "cluster",
+          title: "重复/噪声簇",
+          desc: "合并成一个代表，保留原始证据。",
+          count: 5
+        },
+        {
+          id: "promote",
+          title: "应提升",
+          desc: "近期有用，适合进入 working 或候选画像。",
+          count: 3
+        },
+        {
+          id: "conflict",
+          title: "冲突待定",
+          desc: "不直接判真伪，交给确认路径。",
+          count: 2
+        },
+        {
+          id: "policy",
+          title: "策略规则",
+          desc: "按来源、范围和入口设置影响力策略。",
+          count: 4
+        }
+      ];
+
+      const candidates = {
+        demote: [
+          {
+            id: "cal-noise",
+            title: "Recurring calendar 占据今日视野",
+            summary:
+              "同一类 daily/weekly meeting 在 14 天窗口内重复出现，很多只有 join link 和固定描述。建议只让下一场进入 Day Pilot，其余作为 raw calendar evidence。",
+            tags: ["Today Pilot", "Timeline", "低风险"],
+            tone: "amber",
+            action: "只保留下一场主动影响",
+            reasons: [
+              "30 天内 calendar 有 210 条，未来日程容易压过真实工作消息。",
+              "重复会议标题包括 RCVSDK Daily Sync、Nova Brandy Daily、Pluto daily。",
+              "这些事件仍可搜索，但不应逐条成为 mission。"
+            ],
+            before:
+              "Today Pilot 可能把多个 recurring meeting 拆成多张准备卡。",
+            after:
+              "Today Pilot 只显示下一场或有新增上下文的会议，其余保留在时间线。",
+            impact: ["Today Pilot mission 排名", "Timeline 默认列表", "Ask time channel"]
+          },
+          {
+            id: "openclaw-missing",
+            title: "OpenClaw capability-missing 不应当项目事实",
+            summary:
+              "多条 Glip 状态恢复和 Jira 外部查证失败，是工具能力缺口，不是项目真实状态。建议归入 Action Queue / provider health。",
+            tags: ["Action Queue", "Ask", "工具健康"],
+            tone: "rose",
+            action: "从普通事实证据中降权",
+            reasons: [
+              "最近 confirm requests 中有多条 OpenClaw 当前缺少能力。",
+              "失败原因有价值，但它描述的是执行能力，不是业务结论。",
+              "继续参与普通召回会让 Ask 看起来像在回答工具故障。"
+            ],
+            before:
+              "问项目状态时，可能召回能力缺失和恢复状态失败。",
+            after:
+              "工具失败只在 Action Queue、Coverage Map 或排障问题里出现。",
+            impact: ["Ask", "Context Recall", "Action Queue"]
+          },
+          {
+            id: "doubao-truth",
+            title: "Doubao truth-conflict 候选重复出现",
+            summary:
+              "多条 Pending truth conflict 来自同一批系统候选。建议合并为一个冲突簇，避免每日重复打扰。",
+            tags: ["Doubao", "Conflict", "低风险"],
+            tone: "amber",
+            action: "合并并降低主动提示频率",
+            reasons: [
+              "近期 system/doubao_chat 出现多条 pending truth conflict。",
+              "冲突本身需要保留，但不应逐条变成 Day Pilot 卡片。",
+              "聚合后仍可展开查看每条 source receipt。"
+            ],
+            before:
+              "Today Pilot 反复出现待核对的记忆事实冲突。",
+            after:
+              "只显示一张聚合冲突卡，默认不影响 Compose Assist。",
+            impact: ["Today Pilot", "Decision Center", "Compose Assist"]
+          },
+          {
+            id: "ai-topic-generic",
+            title: "泛 AI 工具讨论在具体问题中反复过宽召回",
+            summary:
+              "AI 工具、Codex、Cursor、Jira 自动化是高频主题，但在“那个 BE ready 了吗”这类短问题里不应优先出现。",
+            tags: ["Memory Lens", "Compose", "场景降权"],
+            tone: "teal",
+            action: "只在 AI 工具场景保留高权重",
+            reasons: [
+              "用户近期反馈过泛 AI 主题会污染具体 BE/Jira 召回。",
+              "这类记忆仍对 CoP 分享和工具选型有价值。",
+              "应按当前群组、选中文本、source anchor 做 scene gate。"
+            ],
+            before:
+              "具体 BE readiness 问题可能召回泛 AI 工具分享。",
+            after:
+              "只有当前页面/群组含 AI 工具意图时才提升这些记忆。",
+            impact: ["Compose Assist", "Memory Lens", "Ask"]
+          }
+        ],
+        cluster: [
+          {
+            id: "calendar-cluster",
+            title: "Nova / RCV / Pluto 日程合并为 recurring cluster",
+            summary:
+              "保留每场原始日程，但默认只显示最近下一场和有新增描述的一场。",
+            tags: ["Calendar", "Cluster", "Raw only"],
+            tone: "blue",
+            action: "创建 recurring event cluster",
+            reasons: [
+              "标题和 organizer 高度重复。",
+              "大部分内容是 join link、会议 ID、固定模板。",
+              "用户需要的是下一场和变化，而不是全部历史。"
+            ],
+            before: "时间线按每条日程展开。",
+            after: "时间线显示一个可展开 cluster。",
+            impact: ["Timeline", "Day Pilot"]
+          },
+          {
+            id: "truth-cluster",
+            title: "Evidence resolution 合并为一个冲突簇",
+            summary:
+              "同类 owner ETA / approval_required / future_monitoring 不再分散打扰。",
+            tags: ["Confirm", "Decision", "低风险"],
+            tone: "amber",
+            action: "合并显示，保留子项",
+            reasons: [
+              "confirm_requests 有大量 expired evidence_resolution。",
+              "pending 的少数高风险问题仍保留在 Decision Center。",
+              "过期和重复项不应污染 Ask。"
+            ],
+            before: "Ask 和 Today Pilot 都可能看到分散冲突。",
+            after: "只在需要时展开冲突簇。",
+            impact: ["Decision Center", "Ask", "Today Pilot"]
+          }
+        ],
+        promote: [
+          {
+            id: "preference-direct",
+            title: "直接实用、先查真实状态的工作偏好",
+            summary:
+              "用户多次要求具体失败字符串、真实状态、不要空泛总结。建议作为 profile candidate，由用户确认后影响回答风格。",
+            tags: ["Profile", "偏好候选", "需确认"],
+            tone: "green",
+            action: "进入用户画像确认",
+            reasons: [
+              "多轮 Codex 任务中反复要求先检查真实 repo/runtime。",
+              "偏好会影响所有 AI 输出风格，必须确认后才进入 core。",
+              "证据来自用户显式指令，不是模型猜测。"
+            ],
+            before: "不同入口可能输出泛泛建议。",
+            after: "确认后，Ask/Compose/Day Pilot 都优先给证据和下一步。",
+            impact: ["User Profile", "Ask", "Compose Assist"]
+          },
+          {
+            id: "workshop-context",
+            title: "Cursor PRD to PR workshop 上下文进入 working memory",
+            summary:
+              "近期日程和消息都指向 5 月 26 日 Cursor workshop，适合短期提升到 working memory。",
+            tags: ["Working", "Workshop", "短期"],
+            tone: "blue",
+            action: "提升 7 天",
+            reasons: [
+              "日历里有 RingCentral <> Cursor Workshop。",
+              "近期消息有 story point、AI tool、PRD to PR 相关讨论。",
+              "过期后自动回到普通权重。"
+            ],
+            before: "相关证据可能被日程噪声压住。",
+            after: "会议/分享前优先召回 workshop 相关证据。",
+            impact: ["Day Pilot", "Storyline", "Ask"]
+          }
+        ],
+        conflict: [
+          {
+            id: "be-ready",
+            title: "AI VBG BE 完成情况仍需外部确认",
+            summary:
+              "当前本地记忆能说明历史交付线索，但没有正式验收证据。建议保持 pending，不把它提升为 current truth。",
+            tags: ["Pending", "Jira", "外部查证"],
+            tone: "rose",
+            action: "保留待确认，不主动定论",
+            reasons: [
+              "已有 proposed action 提到 BE 部分缺少正式完成确认。",
+              "这类问题应要求 source anchor 或外部查证。",
+              "可用于提醒用户确认，但不写成稳定事实。"
+            ],
+            before: "Ask 可能给出过度确定的完成判断。",
+            after: "Ask 使用“本地证据不足以确认”的措辞。",
+            impact: ["Ask", "Context Recall", "Decision Center"]
+          }
+        ],
+        policy: [
+          {
+            id: "raw-policy",
+            title: "系统消息默认不进入 Compose Assist",
+            summary:
+              "system/doubao_chat 中的候选、冲突和同步状态默认只在 Ask/排障中使用，避免进入发送给人的草稿。",
+            tags: ["Policy", "Compose", "安全默认"],
+            tone: "teal",
+            action: "启用入口策略",
+            reasons: [
+              "system 消息常是中间状态，不适合直接放进人际沟通。",
+              "Compose Assist 应优先当前线程和明确关系证据。",
+              "用户仍可手动展开系统证据。"
+            ],
+            before: "草稿证据里可能混入系统候选文案。",
+            after: "草稿默认只用可发送语境证据。",
+            impact: ["Compose Assist", "Memory Lens"]
+          }
+        ]
+      };
+
+      const state = {
+        lane: "demote",
+        selectedId: "cal-noise"
+      };
+
+      const laneList = document.getElementById("laneList");
+      const candidateList = document.getElementById("candidateList");
+      const candidatePanelTitle = document.getElementById("candidatePanelTitle");
+      const candidatePanelSub = document.getElementById("candidatePanelSub");
+      const candidateCount = document.getElementById("candidateCount");
+      const detailBody = document.getElementById("detailBody");
+      const drawer = document.getElementById("drawer");
+      const drawerBody = document.getElementById("drawerBody");
+      const toast = document.getElementById("toast");
+
+      function toneClass(tone) {
+        if (tone === "rose") return "rose";
+        if (tone === "amber") return "amber";
+        if (tone === "teal") return "teal";
+        if (tone === "green") return "green";
+        return "blue";
+      }
+
+      function showToast(text) {
+        toast.textContent = text;
+        toast.classList.add("show");
+        setTimeout(() => toast.classList.remove("show"), 1500);
+      }
+
+      function currentLane() {
+        return lanes.find((lane) => lane.id === state.lane) || lanes[0];
+      }
+
+      function currentItems() {
+        return candidates[state.lane] || [];
+      }
+
+      function currentCandidate() {
+        return (
+          currentItems().find((item) => item.id === state.selectedId) ||
+          currentItems()[0]
+        );
+      }
+
+      function renderLanes() {
+        laneList.innerHTML = lanes
+          .map(
+            (lane) => `
+              <button class="lane ${lane.id === state.lane ? "active" : ""}" type="button" data-lane="${lane.id}">
+                <span class="lane-name">${lane.title}</span>
+                <span class="count">${lane.count}</span>
+                <span class="lane-desc">${lane.desc}</span>
+              </button>
+            `
+          )
+          .join("");
+
+        laneList.querySelectorAll("[data-lane]").forEach((button) => {
+          button.addEventListener("click", () => {
+            state.lane = button.dataset.lane;
+            state.selectedId = (candidates[state.lane] || [])[0]?.id || "";
+            render();
+          });
+        });
+      }
+
+      function renderCandidates() {
+        const lane = currentLane();
+        const items = currentItems();
+        candidatePanelTitle.textContent = lane.title;
+        candidatePanelSub.textContent = lane.desc;
+        candidateCount.textContent = `${items.length} 条`;
+
+        candidateList.innerHTML = items
+          .map(
+            (item) => `
+              <button class="candidate ${item.id === state.selectedId ? "active" : ""}" type="button" data-id="${item.id}">
+                <div class="candidate-top">
+                  <div class="candidate-title">${item.title}</div>
+                  <span class="tag ${toneClass(item.tone)}">${item.action}</span>
+                </div>
+                <p class="candidate-copy">${item.summary}</p>
+                <div class="tags">
+                  ${item.tags.map((tag) => `<span class="tag">${tag}</span>`).join("")}
+                </div>
+              </button>
+            `
+          )
+          .join("");
+
+        candidateList.querySelectorAll("[data-id]").forEach((button) => {
+          button.addEventListener("click", () => {
+            state.selectedId = button.dataset.id;
+            render();
+          });
+        });
+      }
+
+      function renderDetail() {
+        const item = currentCandidate();
+        if (!item) {
+          detailBody.innerHTML = `
+            <div class="detail-title">当前没有建议</div>
+            <p class="detail-copy">这个 lane 没有需要处理的影响力候选。</p>
+          `;
+          return;
+        }
+
+        detailBody.innerHTML = `
+          <div class="detail-title">${item.title}</div>
+          <p class="detail-copy">${item.summary}</p>
+          <div class="tags">
+            ${item.tags.map((tag) => `<span class="tag ${toneClass(item.tone)}">${tag}</span>`).join("")}
+          </div>
+
+          <div class="section">
+            <div class="section-title">为什么出现</div>
+            <div class="reason-list">
+              ${item.reasons
+                .map(
+                  (reason, index) => `
+                    <div class="reason">
+                      <span class="dot">${index + 1}</span>
+                      <span>${reason}</span>
+                    </div>
+                  `
+                )
+                .join("")}
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">会影响的入口</div>
+            <div class="impact-list">
+              ${item.impact
+                .map(
+                  (impact) => `
+                    <div class="impact">
+                      <span class="dot">→</span>
+                      <span>${impact}</span>
+                    </div>
+                  `
+                )
+                .join("")}
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">调整前后</div>
+            <div class="preview">
+              <div class="preview-row">
+                <div class="preview-label">调整前</div>
+                <div class="preview-text">${item.before}</div>
+              </div>
+              <div class="preview-row">
+                <div class="preview-label">调整后</div>
+                <div class="preview-text">${item.after}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <button class="btn primary" type="button" id="applyOne">应用这条建议</button>
+            <button class="btn" type="button" id="rawOnly">仅保留为原始证据</button>
+          </div>
+        `;
+
+        document.getElementById("applyOne").addEventListener("click", () => {
+          openReceipt(item, false);
+        });
+        document.getElementById("rawOnly").addEventListener("click", () => {
+          openReceipt({ ...item, action: "raw only" }, false);
+        });
+      }
+
+      function openReceipt(item, batch) {
+        const batchId = batch
+          ? "life_batch_20260526_7safe"
+          : `life_${item.id}_20260526`;
+        drawerBody.innerHTML = `
+          <div><strong>${batch ? "低风险批处理" : item.title}</strong></div>
+          <div style="margin-top:8px;">动作：${batch ? "应用 7 条低风险建议" : item.action}</div>
+          <div>影响入口：${(batch ? ["Today Pilot", "Ask", "Timeline", "Compose Assist"] : item.impact).join("、")}</div>
+          <div>回滚窗口：30 天</div>
+          <div class="receipt-code">batch_id: ${batchId}
+mode: reversible
+delete: false
+raw_evidence_preserved: true
+affected_surfaces: ${(batch ? ["today_pilot", "ask", "timeline", "compose_assist"] : item.impact).join(", ")}
+next: refresh context recall influence index</div>
+        `;
+        drawer.classList.add("open");
+        showToast("已生成可回滚 receipt");
+      }
+
+      function render() {
+        renderLanes();
+        renderCandidates();
+        renderDetail();
+      }
+
+      document.getElementById("batchBtn").addEventListener("click", () => {
+        openReceipt(currentCandidate(), true);
+      });
+
+      document.getElementById("scanBtn").addEventListener("click", () => {
+        showToast("已重新扫描影响力候选");
+      });
+
+      document.getElementById("closeDrawer").addEventListener("click", () => {
+        drawer.classList.remove("open");
+      });
+
+      render();
+    </script>
+  </body>
+</html>

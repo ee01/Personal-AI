@@ -97,7 +97,7 @@ interface ContextMatchPayload {
 
 interface ContextRecallMatch {
     id: string;
-    type: 'message' | 'chunk' | 'entity';
+    type: 'message' | 'chunk' | 'entity' | 'rehearsal';
     score: number;
     title?: string;
     uiSummary?: string;
@@ -140,6 +140,16 @@ interface ContextBubbleOptions {
     selectedText?: string;
 }
 
+interface ContextMatchViewCopy {
+    whySectionLabel: string;
+    whyRowLabel: string;
+    contentSectionLabel: string;
+    footerSectionLabel: string;
+    positiveAriaLabel: string;
+    negativeAriaLabel: string;
+    evidenceLabel: string;
+}
+
 interface ContextMatchCacheEntry {
     match: ContextRecallMatch | null;
     matches: ContextRecallMatch[];
@@ -173,6 +183,178 @@ function escapeHtmlAttribute(text: string): string {
 
 function normalizeText(text?: string | null): string {
     return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    return value as Record<string, unknown>;
+}
+
+function isContextRehearsalMatch(match: ContextRecallMatch): boolean {
+    return (
+        match.type === 'rehearsal' ||
+        normalizeText(match.sourceLabel).toLowerCase() === 'rehearsal' ||
+        match.reasonType === 'prospective_cue' ||
+        match.evidenceRole === 'rehearsal_cue'
+    );
+}
+
+function getContextRehearsalActivationId(match: ContextRecallMatch): string | undefined {
+    const metadata = asPlainObject(match.metadata);
+    const rehearsal = asPlainObject(metadata?.rehearsal);
+    const activationId = rehearsal?.activationId;
+    return typeof activationId === 'string' && activationId.trim()
+        ? activationId.trim()
+        : undefined;
+}
+
+function getContextMatchMetadataLayers(match: ContextRecallMatch): Record<string, unknown>[] {
+    const metadata = asPlainObject(match.metadata);
+    if (!metadata) return [];
+
+    const nested = asPlainObject(metadata.metadata);
+    return nested ? [metadata, nested] : [metadata];
+}
+
+function getContextMatchMetadataText(
+    match: ContextRecallMatch,
+    key: string,
+): string {
+    for (const metadata of getContextMatchMetadataLayers(match)) {
+        const value = metadata[key];
+        if (typeof value === 'string') {
+            const normalized = normalizeText(value);
+            if (normalized) return normalized;
+        }
+    }
+    return '';
+}
+
+function getContextMatchMetadataArray(
+    match: ContextRecallMatch,
+    key: string,
+): unknown[] {
+    for (const metadata of getContextMatchMetadataLayers(match)) {
+        const value = metadata[key];
+        if (Array.isArray(value)) return value;
+    }
+    return [];
+}
+
+function cleanContextLensDisplayText(value?: string | null): string {
+    let text = normalizeText(value);
+    if (!text) return '';
+
+    text = text
+        .replace(/^@?[\p{L}\p{N}._\- ]{1,80}\s+wrote\s*[:：]\s*/iu, '')
+        .replace(/^[-–—]?\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:\[[^\]]+\])?\s*/u, '')
+        .replace(/^\d+[.)、]\s*/u, '')
+        .replace(/^[-*•]\s*/u, '')
+        .trim();
+
+    return text;
+}
+
+function clipContextLensTitle(value: string): string {
+    const text = cleanContextLensDisplayText(value);
+    if (!text) return '';
+    if (text.length <= 72) return text;
+    return `${text.slice(0, 72).trim()}...`;
+}
+
+function getContextMatchFirstContextMessage(match: ContextRecallMatch): string {
+    const messages = getContextMatchMetadataArray(match, 'contextMessages');
+    for (const message of messages) {
+        if (typeof message === 'string') {
+            const text = cleanContextLensDisplayText(message);
+            if (text) return text;
+            continue;
+        }
+
+        const record = asPlainObject(message);
+        if (!record) continue;
+        for (const key of ['content', 'text', 'message']) {
+            const value = record[key];
+            if (typeof value !== 'string') continue;
+            const text = cleanContextLensDisplayText(value);
+            if (text) return text;
+        }
+    }
+    return '';
+}
+
+function selectContextLensTitle(match: ContextRecallMatch, sourceLabel: string): string {
+    const candidates = [
+        getContextMatchMetadataText(match, 'summary'),
+        getContextMatchFirstContextMessage(match),
+        match.title,
+        match.sourceTitle,
+        match.uiSummary,
+        match.snippet,
+        sourceLabel,
+    ];
+
+    for (const candidate of candidates) {
+        const title = clipContextLensTitle(candidate || '');
+        if (title) return title;
+    }
+
+    return '相关记忆';
+}
+
+function selectContextLensSummary(match: ContextRecallMatch, titleText: string): string {
+    const candidates = [
+        getContextMatchMetadataText(match, 'summary'),
+        match.uiSummary,
+        match.snippet,
+        titleText,
+    ];
+
+    for (const candidate of candidates) {
+        const summary = cleanContextLensDisplayText(candidate || '');
+        if (summary) return summary;
+    }
+
+    return titleText;
+}
+
+function selectContextLensEvidence(match: ContextRecallMatch, summaryText: string): string {
+    const actions = getContextMatchMetadataArray(match, 'actions');
+    for (const action of actions) {
+        const record = asPlainObject(action);
+        if (!record) continue;
+
+        const description = normalizeText(
+            typeof record.description === 'string'
+                ? record.description
+                : typeof record.title === 'string'
+                    ? record.title
+                    : '',
+        );
+        if (!description) continue;
+
+        const assignee = normalizeText(
+            typeof record.assignee === 'string' ? record.assignee : '',
+        );
+        const deadline = normalizeText(
+            typeof record.deadline === 'string' ? record.deadline : '',
+        );
+        const parts = [assignee, description, deadline].filter(Boolean);
+        const suffix = actions.length > 1 ? `待办 ${actions.length}` : '';
+        return [...parts, suffix].filter(Boolean).join(' · ');
+    }
+
+    const replyAdvice = getContextMatchMetadataText(match, 'replyAdvice');
+    if (replyAdvice) return replyAdvice;
+
+    const snippet = cleanContextLensDisplayText(match.snippet);
+    if (snippet && snippet !== cleanContextLensDisplayText(summaryText)) {
+        return snippet;
+    }
+
+    return '';
 }
 
 function formatContextMatchStrength(match: ContextRecallMatch): string {
@@ -572,6 +754,7 @@ class WebIntelligenceContentScript {
 
         startComposerGuardController();
         this.setupEventListeners();
+        this.setupSiteControlStorageListener();
         void this.loadSiteControls().then(() => this.scheduleContextMatch(200));
 
         this.scheduleAnalysis(2000);
@@ -933,6 +1116,11 @@ class WebIntelligenceContentScript {
             console.log('🔒 当前页面处于敏感场景，跳过网页智能分析');
             return null;
         }
+        await this.loadSiteControls();
+        if (this.isPassiveContextSuppressedBySiteControls()) {
+            console.log('🚫 当前站点已关闭被动网页记忆处理，跳过网页智能分析');
+            return null;
+        }
 
         this.isAnalyzing = true;
         this.lastAnalysisTime = Date.now();
@@ -1217,13 +1405,8 @@ class WebIntelligenceContentScript {
                 this.scheduleContextMatch(0);
             });
             return;
-        } else if (
-            this.isCurrentSiteMuted() ||
-            this.isCurrentSiteBlocked() ||
-            this.isCurrentPageBlocked() ||
-            this.isCurrentSiteOutsideAllowlist()
-        ) {
-            this.clearContextBubble();
+        } else if (this.isPassiveContextSuppressedBySiteControls()) {
+            this.clearPassiveContextBubble();
             return;
         }
 
@@ -1334,13 +1517,10 @@ class WebIntelligenceContentScript {
 
             if (
                 this.isSensitiveContextPage() ||
-                this.isCurrentSiteMuted() ||
-                this.isCurrentSiteBlocked() ||
-                this.isCurrentPageBlocked() ||
-                this.isCurrentSiteOutsideAllowlist() ||
+                this.isPassiveContextSuppressedBySiteControls() ||
                 this.isContextDismissed(payload.contextKey)
             ) {
-                this.clearContextBubble();
+                this.clearPassiveContextBubble();
                 return;
             }
 
@@ -1941,7 +2121,7 @@ class WebIntelligenceContentScript {
                 groupIds: [conversationId],
                 conversationIds: [conversationId],
             },
-            sourceTypes: ['glip', 'manual', 'markdown', 'web', 'jira', 'system'],
+            sourceTypes: ['glip', 'manual', 'markdown', 'web', 'jira', 'system', 'rehearsal'],
         };
     }
 
@@ -2048,6 +2228,113 @@ class WebIntelligenceContentScript {
             this.pageBlocksLoaded &&
             this.siteAllowlistLoaded
         );
+    }
+
+    private setupSiteControlStorageListener(): void {
+        try {
+            if (!chrome.storage?.onChanged?.addListener) {
+                return;
+            }
+            chrome.storage.onChanged.addListener((changes, areaName) => {
+                if (areaName !== 'local') {
+                    return;
+                }
+                this.applySiteControlStorageChanges(
+                    changes as Record<string, chrome.storage.StorageChange>,
+                );
+            });
+        } catch (_error) {
+            // Storage change updates are a convenience; reload still reads controls.
+        }
+    }
+
+    private applySiteControlStorageChanges(
+        changes: Record<string, chrome.storage.StorageChange>,
+    ): void {
+        const watchedKeys = [
+            CONTEXT_SITE_MUTE_STORAGE_KEY,
+            CONTEXT_SITE_BLOCK_STORAGE_KEY,
+            CONTEXT_PAGE_BLOCK_STORAGE_KEY,
+            CONTEXT_SITE_ALLOW_STORAGE_KEY,
+            CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
+        ];
+        if (!watchedKeys.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) {
+            return;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(changes, CONTEXT_SITE_MUTE_STORAGE_KEY)) {
+            const pruned = pruneContextSiteMuteRecord(
+                changes[CONTEXT_SITE_MUTE_STORAGE_KEY]?.newValue,
+            );
+            this.mutedSiteHosts = new Map(Object.entries(pruned.record));
+            this.siteMutesLoaded = true;
+            this.siteMutesLoadPromise = null;
+            if (pruned.changed) {
+                this.saveSiteMutes();
+            }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(changes, CONTEXT_SITE_BLOCK_STORAGE_KEY)) {
+            const pruned = pruneContextSiteBlockRecord(
+                changes[CONTEXT_SITE_BLOCK_STORAGE_KEY]?.newValue,
+            );
+            this.blockedSiteHosts = new Map(Object.entries(pruned.record));
+            this.siteBlocksLoaded = true;
+            this.siteBlocksLoadPromise = null;
+            if (pruned.changed) {
+                this.saveSiteBlocks();
+            }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(changes, CONTEXT_PAGE_BLOCK_STORAGE_KEY)) {
+            const pruned = pruneContextPageBlockRecord(
+                changes[CONTEXT_PAGE_BLOCK_STORAGE_KEY]?.newValue,
+            );
+            this.blockedPagePrefixes = new Map(Object.entries(pruned.record));
+            this.pageBlocksLoaded = true;
+            this.pageBlocksLoadPromise = null;
+            if (pruned.changed) {
+                this.savePageBlocks();
+            }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(changes, CONTEXT_SITE_ALLOW_STORAGE_KEY)) {
+            const pruned = pruneContextSiteAllowRecord(
+                changes[CONTEXT_SITE_ALLOW_STORAGE_KEY]?.newValue,
+            );
+            this.allowedSiteHosts = new Map(Object.entries(pruned.record));
+            this.siteAllowlistLoaded = true;
+            this.siteAllowlistLoadPromise = null;
+            if (pruned.changed) {
+                this.saveSiteAllowlist();
+            }
+        }
+
+        if (
+            Object.prototype.hasOwnProperty.call(
+                changes,
+                CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
+            )
+        ) {
+            this.siteAllowlistMode =
+                changes[CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY]?.newValue === true;
+            this.siteAllowlistLoaded = true;
+            this.siteAllowlistLoadPromise = null;
+        }
+
+        this.handleSiteControlsChanged();
+    }
+
+    private handleSiteControlsChanged(): void {
+        this.invalidatePendingContextRequest();
+        this.resetContextStability();
+
+        if (this.isPassiveContextSuppressedBySiteControls()) {
+            this.clearPassiveContextBubble();
+            return;
+        }
+
+        this.scheduleContextMatch(0);
     }
 
     private loadSiteControls(): Promise<void> {
@@ -2328,6 +2615,31 @@ class WebIntelligenceContentScript {
         return !isContextHostCoveredBySiteRecord(host, payload);
     }
 
+    private isCurrentSiteAllowed(): boolean {
+        const host = this.getCurrentSiteMuteHost();
+        const payload: Record<string, number> = {};
+        for (const [allowedHost, allowedAt] of this.allowedSiteHosts.entries()) {
+            payload[allowedHost] = allowedAt;
+        }
+        return isContextHostCoveredBySiteRecord(host, payload);
+    }
+
+    private isPassiveContextSuppressedBySiteControls(): boolean {
+        return (
+            this.isCurrentSiteMuted() ||
+            this.isCurrentSiteBlocked() ||
+            this.isCurrentPageBlocked() ||
+            this.isCurrentSiteOutsideAllowlist()
+        );
+    }
+
+    private clearPassiveContextBubble(): void {
+        if (this.isSelectedTextContextKey(this.activeBubbleContextKey)) {
+            return;
+        }
+        this.clearContextBubble();
+    }
+
     private muteCurrentSite(): void {
         const host = this.getCurrentSiteMuteHost();
         const previousMutedAt = this.mutedSiteHosts.get(host);
@@ -2523,13 +2835,21 @@ class WebIntelligenceContentScript {
         contextMatchCache.set(contextKey, { match: null, matches: [], ts: Date.now() });
         pruneContextMatchCache();
         this.clearContextBubble();
-        this.showContextToast('已记录为不相关，后续会减少类似提示');
+        this.showContextToast(
+            isContextRehearsalMatch(match)
+                ? '已记录为预演提醒不相关，后续会减少类似提示'
+                : '已记录为不相关，后续会减少类似提示',
+        );
 
         this.submitContextRecallFeedback(match, 'negative');
     }
 
     private markContextMatchRelevant(match: ContextRecallMatch): void {
-        this.showContextToast('已记录为有用，后续会优先保留类似提示');
+        this.showContextToast(
+            isContextRehearsalMatch(match)
+                ? '已记录为预演提醒有用，后续会优先保留类似提示'
+                : '已记录为有用，后续会优先保留类似提示',
+        );
         this.submitContextRecallFeedback(match, 'positive');
     }
 
@@ -2546,6 +2866,7 @@ class WebIntelligenceContentScript {
                     targetType: match.type,
                     action,
                     detail: `web_passive_bubble:${this.getCurrentSiteMuteHost()}`,
+                    rehearsalActivationId: getContextRehearsalActivationId(match),
                 },
             },
             (response) => {
@@ -3374,12 +3695,13 @@ class WebIntelligenceContentScript {
         const cardAriaLabel = isSelectionSearch
             ? 'Selection Memory Search 划词记忆检索结果'
             : 'Memory Lens 相关记忆详情';
-        const whySectionLabel = isSelectionSearch ? '为什么匹配' : '为什么相关';
-        const whyRowLabel = isSelectionSearch ? '匹配到' : '因为';
-        const contentSectionLabel = isSelectionSearch ? '找到的相关记忆' : '它说了什么';
-        const footerSectionLabel = isSelectionSearch ? '操作' : '我应该做什么';
-        const positiveAriaLabel = isSelectionSearch ? '标记这条检索结果有用' : '标记这条记忆提示有用';
-        const negativeAriaLabel = isSelectionSearch ? '标记这条检索结果不相关' : '标记这条记忆提示不相关';
+        const currentSiteAlreadyAllowed = this.siteAllowlistMode && this.isCurrentSiteAllowed();
+        const siteAllowActionLabel = currentSiteAlreadyAllowed
+            ? '此站点已在白名单'
+            : this.siteAllowlistMode
+                ? '允许此站点'
+                : '开启白名单并允许此站点';
+        const siteAllowActionDisabled = currentSiteAlreadyAllowed;
 
         const bubble = document.createElement('div');
         bubble.className = 'pai-context-bubble';
@@ -3411,14 +3733,50 @@ class WebIntelligenceContentScript {
         let moreMenuOpen = false;
         let positiveLockedMatchId: string | null = null;
 
+        const getViewCopy = (match: ContextRecallMatch): ContextMatchViewCopy => {
+            if (isSelectionSearch) {
+                return {
+                    whySectionLabel: '为什么匹配',
+                    whyRowLabel: '匹配到',
+                    contentSectionLabel: '找到的相关记忆',
+                    footerSectionLabel: '操作',
+                    positiveAriaLabel: '标记这条检索结果有用',
+                    negativeAriaLabel: '标记这条检索结果不相关',
+                    evidenceLabel: '证据',
+                };
+            }
+
+            if (isContextRehearsalMatch(match)) {
+                return {
+                    whySectionLabel: '为什么此刻相关',
+                    whyRowLabel: '因为',
+                    contentSectionLabel: '预演内容',
+                    footerSectionLabel: '我能做什么',
+                    positiveAriaLabel: '标记这条预演提醒有用',
+                    negativeAriaLabel: '标记这条预演提醒不相关',
+                    evidenceLabel: '线索',
+                };
+            }
+
+            return {
+                whySectionLabel: '为什么相关',
+                whyRowLabel: '因为',
+                contentSectionLabel: '它说了什么',
+                footerSectionLabel: '我应该做什么',
+                positiveAriaLabel: '标记这条记忆提示有用',
+                negativeAriaLabel: '标记这条记忆提示不相关',
+                evidenceLabel: '证据',
+            };
+        };
+
         const buildMatchView = (match: ContextRecallMatch) => {
             const sourceLabel =
                 formatContextRecallSourceLabel(match.sourceLabel) ||
                 normalizeText(match.sourceTitle) ||
                 '记忆来源';
-            const titleText = normalizeText(match.title) || normalizeText(match.sourceTitle) || sourceLabel;
-            const summaryText = normalizeText(match.uiSummary) || normalizeText(match.snippet) || titleText;
-            const evidenceText = normalizeText(match.snippet);
+            const titleText = selectContextLensTitle(match, sourceLabel);
+            const summaryText = selectContextLensSummary(match, titleText);
+            const evidenceText = selectContextLensEvidence(match, summaryText);
             const shouldShowEvidence = Boolean(
                 evidenceText &&
                 normalizeText(summaryText) !== evidenceText
@@ -3447,6 +3805,7 @@ class WebIntelligenceContentScript {
                 .filter((link): link is { label: string; url: string } => !!link.url);
 
             return {
+                copy: getViewCopy(match),
                 sourceLabel,
                 titleText,
                 summaryText,
@@ -3467,10 +3826,11 @@ class WebIntelligenceContentScript {
                 ? buildSelectionSearchWhyChips(match, selectedText)
                 : buildContextWhyChips(match);
             if (!chips.length) return '';
+            const copy = getViewCopy(match);
 
             return `
-                <div class="pai-context-why-row" aria-label="${escapeHtmlAttribute(whySectionLabel)}">
-                    <span class="pai-context-why-label">${escapeHtml(whyRowLabel)}</span>
+                <div class="pai-context-why-row" aria-label="${escapeHtmlAttribute(copy.whySectionLabel)}">
+                    <span class="pai-context-why-label">${escapeHtml(copy.whyRowLabel)}</span>
                     ${chips.map((chip) => `<span class="pai-context-chip">${escapeHtml(chip)}</span>`).join('')}
                 </div>
             `;
@@ -3531,7 +3891,7 @@ class WebIntelligenceContentScript {
                                 <button type="button" class="pai-context-icon-button pai-context-more" aria-label="更多控制" title="更多控制" aria-haspopup="menu" aria-expanded="${String(moreMenuOpen)}">⋯</button>
                                 <div class="pai-context-more-menu" role="menu" ${moreMenuOpen ? '' : 'hidden'}>
                                     <button type="button" class="pai-context-menu-item pai-context-dismiss" role="menuitem">隐藏此条记忆 30 分钟</button>
-                                    <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem">允许此站点</button>
+                                    <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem" ${siteAllowActionDisabled ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(siteAllowActionLabel)}</button>
                                     <button type="button" class="pai-context-menu-item pai-context-site-mute" role="menuitem">此网站今天不提示</button>
                                     <button type="button" class="pai-context-menu-item pai-context-page-block" role="menuitem">此页面永久不提示</button>
                                     <button type="button" class="pai-context-menu-item pai-context-menu-item--danger pai-context-site-block" role="menuitem">永久不提示此站点</button>
@@ -3541,15 +3901,15 @@ class WebIntelligenceContentScript {
                     </div>
 
                     ${selectedTextHtml}
-                    <div class="pai-context-section-label">${escapeHtml(whySectionLabel)}</div>
+                    <div class="pai-context-section-label">${escapeHtml(view.copy.whySectionLabel)}</div>
                     ${renderWhyChips(match)}
 
-                    <div class="pai-context-section-label">${escapeHtml(contentSectionLabel)}</div>
+                    <div class="pai-context-section-label">${escapeHtml(view.copy.contentSectionLabel)}</div>
                     <h3 class="pai-context-title">${escapeHtml(view.titleText)}</h3>
                     <div class="pai-context-summary">${escapeHtml(view.summaryText)}</div>
                     ${view.shouldShowEvidence ? `
                         <div class="pai-context-evidence-block">
-                            <span class="pai-context-evidence-label">证据</span>
+                            <span class="pai-context-evidence-label">${escapeHtml(view.copy.evidenceLabel)}</span>
                             <span class="pai-context-evidence-text">${escapeHtml(view.evidenceText)}</span>
                         </div>
                     ` : ''}
@@ -3560,11 +3920,11 @@ class WebIntelligenceContentScript {
                     </div>
                 </div>
                 <div class="pai-context-footer-wrap">
-                    <div class="pai-context-section-label pai-context-section-label--footer">${escapeHtml(footerSectionLabel)}</div>
+                    <div class="pai-context-section-label pai-context-section-label--footer">${escapeHtml(view.copy.footerSectionLabel)}</div>
                     <div class="pai-context-footer">
                         <div class="pai-context-feedback" aria-label="反馈">
-                            <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="${isPositiveLocked ? '已标记有用' : escapeHtmlAttribute(positiveAriaLabel)}" title="${isPositiveLocked ? '已标记有用' : '这条有用'}" ${isPositiveLocked ? 'disabled' : ''}>✓<span class="pai-sr-only">这条有用</span></button>
-                            <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="${escapeHtmlAttribute(negativeAriaLabel)}" title="这条不相关" ${isPositiveLocked ? 'disabled' : ''}>×<span class="pai-sr-only">这条不相关</span></button>
+                            <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="${isPositiveLocked ? '已标记有用' : escapeHtmlAttribute(view.copy.positiveAriaLabel)}" title="${isPositiveLocked ? '已标记有用' : '这条有用'}" ${isPositiveLocked ? 'disabled' : ''}>✓<span class="pai-sr-only">这条有用</span></button>
+                            <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="${escapeHtmlAttribute(view.copy.negativeAriaLabel)}" title="这条不相关" ${isPositiveLocked ? 'disabled' : ''}>×<span class="pai-sr-only">这条不相关</span></button>
                         </div>
                         ${pagerHtml}
                     </div>

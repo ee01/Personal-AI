@@ -84,6 +84,7 @@ function createStatus() {
           durationMs: 1200,
           externalThreadId: 'mobile-context-thread-1234567890',
           packageKinds: ['active_focus_digest'],
+          packageItemCount: 2,
           sourceRefCount: 2,
           transportUsed: 'dom',
           transportMode: 'webpage_mcp',
@@ -102,6 +103,7 @@ function createStatus() {
           durationMs: 900,
           errorMessage: 'Doubao challenge detected before send',
           packageKinds: ['todo_digest'],
+          packageItemCount: 1,
           sourceRefCount: 1,
           transportUsed: 'dom',
           transportMode: 'playwright',
@@ -109,6 +111,20 @@ function createStatus() {
           verified: false,
           messageVisible: false,
           challengeDetected: true,
+        },
+        {
+          id: 'attempt-reminder-skipped',
+          kind: 'reminder_sync',
+          trigger: 'manual',
+          status: 'skipped',
+          startedAt: now,
+          completedAt: now,
+          durationMs: 400,
+          errorMessage:
+            'No pending todos to sync / Notice sync is not supported by Memory Service',
+          packageKinds: ['todo_digest'],
+          packageItemCount: 0,
+          sourceRefCount: 0,
         },
       ],
       tasks: {
@@ -142,6 +158,8 @@ function createExplorerStatus() {
         cache: {
           messageCount: 12,
           conversationCount: 3,
+          pendingExtractCount: 4,
+          artifactCount: 8,
         },
         settings: createEffectiveSettings().explorer.doubao,
         transport: {
@@ -156,6 +174,8 @@ function createExplorerStatus() {
         cache: {
           messageCount: 5,
           conversationCount: 2,
+          pendingExtractCount: 1,
+          artifactCount: 3,
         },
         settings: createEffectiveSettings().explorer.chatgpt,
         transport: {
@@ -383,6 +403,10 @@ async function main() {
     assert.match(statusText || '', /已开启/);
     assert.match(statusText || '', /Memory Service/);
     await expectText(page, '#doubao-source-run-state', /最近失败/);
+    await expectText(page, '#doubao-source-pending-count', /^4$/);
+    await expectText(page, '#doubao-source-artifact-count', /^8$/);
+    await expectText(page, '#chatgpt-source-pending-count', /^1$/);
+    await expectText(page, '#chatgpt-source-artifact-count', /^3$/);
     await expectText(
       page,
       '#doubao-source-status-message',
@@ -404,17 +428,22 @@ async function main() {
     assert.equal(await page.locator('#doubao-source-revoke-button').isDisabled(), true);
     await expectText(page, '#sync-audit-list', /近期记忆重点/);
     await expectText(page, '#sync-audit-list', /包：近期重点包/);
+    await expectText(page, '#sync-audit-list', /内容条目：2/);
     await expectText(page, '#sync-audit-list', /来源引用：2/);
     await expectText(page, '#sync-audit-list', /线程：mobile-c...567890/);
     await expectText(page, '#sync-audit-list', /已验证 · 消息可见 · 传输：日常 Chrome/);
     await expectText(page, '#sync-audit-list', /状态回写异常：Sync job report failed/);
     await expectText(page, '#sync-audit-list', /待办 \/ 通知/);
+    await expectText(page, '#sync-audit-list', /内容条目：1/);
     await expectText(page, '#sync-audit-list', /Doubao challenge detected before send/);
     await expectText(page, '#sync-audit-list', /传输：内置 Chromium/);
     await expectText(page, '#sync-audit-list', /回退原因：No existing doubao\.com tab found in Chrome/);
     await expectText(page, '#sync-audit-list', /打开豆包检查/);
     await expectText(page, '#sync-audit-list', /重新绑定手机对话/);
     await expectText(page, '#sync-audit-list', /重试待办 \/ 通知/);
+    await expectText(page, '#sync-audit-list', /内容条目：0/);
+    await expectText(page, '#sync-audit-list', /本次没有可推送的待办/);
+    await expectText(page, '#sync-audit-list', /当前 Memory Service 暂不支持通知同步/);
 
     await page
       .locator('[data-sync-audit-action="open_doubao"]')

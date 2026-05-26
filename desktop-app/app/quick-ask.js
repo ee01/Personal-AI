@@ -35,6 +35,7 @@ const elements = {
 
 const STATUS_HINTS = {
   setup_blocker: '帮我总结现在还缺哪些配置步骤。',
+  runtime_issue: '帮我解释状态读取异常，并告诉我应该先重试还是检查配置。',
   sync_issue: '帮我解释豆包同步异常，并告诉我下一步该查什么。',
   confirm_request: '帮我总结这些待确认项，告诉我应该先处理哪个。',
   running_action: '帮我解释这些执行中的动作，当前卡在什么地方。',
@@ -54,7 +55,7 @@ const HEIGHTS = {
 
 const STREAM_FLUSH_MS = 42;
 const ENRICHMENT_DELAY_MS = 150;
-const SESSION_EXPIRY_MS = 5 * 60 * 60 * 1000;
+const SESSION_EXPIRY_MS = 30 * 60 * 1000;
 const HISTORY_LOAD_BATCH_SIZE = 1;
 const AUTO_SCROLL_THRESHOLD_PX = 36;
 const HISTORY_LOAD_THRESHOLD_PX = 18;
@@ -665,6 +666,50 @@ function renderMemoryBadge(memorySaveResult) {
   return `<div class="memory-badge${extraClass}">${escapeHtml(label)}</div>`;
 }
 
+function canInjectToMobileContext(message) {
+  return (
+    message?.htmlReady &&
+    Boolean(String(message.text || '').trim()) &&
+    Array.isArray(message.evidence) &&
+    message.evidence.length > 0
+  );
+}
+
+function renderMobileContextAction(message) {
+  if (!canInjectToMobileContext(message)) return '';
+
+  const sync = message.mobileContextSync;
+  const status = sync?.status;
+  const label =
+    status === 'pending'
+      ? '正在发送到豆包...'
+      : status === 'succeeded'
+        ? '已发送到豆包手机对话'
+        : status === 'failed'
+          ? sync.message || '发送到豆包失败'
+          : '';
+  const tone =
+    status === 'succeeded' ? 'success' : status === 'failed' ? 'error' : '';
+
+  return `
+    <div class="message-action-row">
+      <button
+        class="message-action-button quick-ask-sync-mobile"
+        type="button"
+        data-message-id="${escapeHtml(message.id)}"
+        ${status === 'pending' || status === 'succeeded' ? 'disabled' : ''}
+      >
+        发到豆包手机对话
+      </button>
+      ${
+        label
+          ? `<span class="message-action-status ${escapeHtml(tone)}">${escapeHtml(label)}</span>`
+          : '<span class="message-action-status">带证据发送，不写长期记忆</span>'
+      }
+    </div>
+  `;
+}
+
 function renderLowMemoryTail(memoryGrowth) {
   if (!memoryGrowth?.belowThreshold) return '';
 
@@ -730,6 +775,7 @@ function renderAssistantMessage(message) {
       ${bodyHtml}
       ${message.htmlReady ? renderStructuredAnswer(message.structuredAnswer) : ''}
       ${message.htmlReady ? renderEvidence(message.evidence) : ''}
+      ${message.htmlReady ? renderMobileContextAction(message) : ''}
       ${message.htmlReady ? renderLowMemoryTail(message.runtime?.memoryGrowth) : ''}
     </div>
   `;
@@ -762,6 +808,8 @@ function renderStatusMessage(message) {
                   data-status-kind="${escapeHtml(item.kind)}"
                   data-status-title="${escapeHtml(item.title)}"
                   data-status-summary="${escapeHtml(item.summary)}"
+                  data-status-details="${escapeHtml(detailLines.join('；'))}"
+                  data-status-action="${escapeHtml(item.actionHint || '')}"
                 >
                   <span class="status-item-main">
                     <span class="status-item-title">${escapeHtml(item.title)}</span>
@@ -864,15 +912,110 @@ function setRuntime(runtime) {
       : runtime.topStatus.label;
 }
 
-function buildStatusFollowUpPrompt(kind, title, summary) {
+function buildStatusFollowUpPrompt(kind, title, summary, details, actionHint) {
   const fallback = STATUS_HINTS[kind] || '帮我解释这条状态，并给出下一步。';
   const cleanTitle = String(title || '').trim();
   const cleanSummary = String(summary || '').trim();
+  const cleanDetails = String(details || '').trim();
+  const cleanActionHint = String(actionHint || '').trim();
   if (!cleanTitle && !cleanSummary) return fallback;
 
   const subject = cleanTitle || '这条状态';
   const detail = cleanSummary ? `：${cleanSummary}` : '';
-  return `关于「${subject}」${detail}。${fallback}`;
+  const detailContext = cleanDetails ? ` 细节：${cleanDetails}。` : '';
+  const actionContext = cleanActionHint ? ` 建议动作：${cleanActionHint}。` : '';
+  return `关于「${subject}」${detail}。${detailContext}${actionContext}${fallback}`;
+}
+
+function buildMobileContextEvidence(evidence) {
+  if (!Array.isArray(evidence)) return [];
+  return evidence.slice(0, 5).map((item, index) => {
+    const metadata =
+      item.metadata &&
+      typeof item.metadata === 'object' &&
+      !Array.isArray(item.metadata)
+        ? item.metadata
+        : null;
+    const sender =
+      typeof metadata?.sender === 'string' && metadata.sender.trim()
+        ? metadata.sender.trim()
+        : '';
+    const groupName =
+      typeof metadata?.groupName === 'string' && metadata.groupName.trim()
+        ? metadata.groupName.trim()
+        : typeof metadata?.group_name === 'string' && metadata.group_name.trim()
+          ? metadata.group_name.trim()
+          : '';
+    const source = item.source || item.type || 'memory';
+    const titleParts = [source, sender, groupName].filter(Boolean);
+    return {
+      title: titleParts.join(' · ') || `evidence ${index + 1}`,
+      source,
+      snippet: String(item.content || '').slice(0, 500),
+    };
+  });
+}
+
+function formatMobileContextSyncError(error) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (
+    /手机对话尚未绑定|mobile_context_not_bound|mobile-context thread not found/i.test(
+      message,
+    )
+  ) {
+    return '手机对话未绑定，请先打开设置重新绑定。';
+  }
+  if (/different thread|不同线程|错误线程/i.test(message)) {
+    return '豆包落到了错误线程，请重新绑定手机版对话。';
+  }
+  if (/challenge|verify you are human|安全验证|验证码/i.test(message)) {
+    return '豆包需要安全验证，处理后再重试。';
+  }
+  return message || '发送到豆包失败。';
+}
+
+async function sendAssistantMessageToMobileContext(messageId) {
+  const message = findMessageById(messageId);
+  if (!message || !canInjectToMobileContext(message)) return;
+
+  updateMessage(messageId, {
+    mobileContextSync: {
+      status: 'pending',
+      message: '正在发送到豆包...',
+    },
+  });
+
+  try {
+    const result = await quickAsk.injectQuery({
+      query: message.queryText || 'Quick Ask',
+      answer: message.text || '',
+      evidence: buildMobileContextEvidence(message.evidence),
+    });
+
+    if (result?.error || result?.accepted === false) {
+      updateMessage(messageId, {
+        mobileContextSync: {
+          status: 'failed',
+          message: formatMobileContextSyncError(result.error),
+        },
+      });
+      return;
+    }
+
+    updateMessage(messageId, {
+      mobileContextSync: {
+        status: 'succeeded',
+        message: '已发送到豆包手机对话',
+      },
+    });
+  } catch (error) {
+    updateMessage(messageId, {
+      mobileContextSync: {
+        status: 'failed',
+        message: formatMobileContextSyncError(error),
+      },
+    });
+  }
 }
 
 async function refreshRuntimeSummary() {
@@ -897,10 +1040,22 @@ function pushMessage(message) {
   renderMessages();
 }
 
-function updateMessage(messageId, patch) {
-  const message = state.currentSessionMessages.find(
+function findMessageById(messageId) {
+  const current = state.currentSessionMessages.find(
     (item) => item.id === messageId,
   );
+  if (current) return current;
+
+  for (const session of state.historySessions) {
+    const archived = session.messages?.find((item) => item.id === messageId);
+    if (archived) return archived;
+  }
+
+  return null;
+}
+
+function updateMessage(messageId, patch) {
+  const message = findMessageById(messageId);
   if (!message) return;
   Object.assign(message, patch);
   touchCurrentSession();
@@ -1362,6 +1517,7 @@ async function submitQuery(rawInput, options = {}) {
             text: event.answer || '',
             pending: false,
             htmlReady: true,
+            queryText: input,
             statusText: '',
           });
           if (state.uiState === 'pending') {
@@ -1383,6 +1539,7 @@ async function submitQuery(rawInput, options = {}) {
             structuredAnswer: event.structuredAnswer,
             evidence: event.evidence,
             runtime: event.runtime,
+            queryText: input,
             memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
             statusText: '',
           });
@@ -1530,6 +1687,15 @@ elements.voiceSend.addEventListener('click', async () => {
 });
 
 elements.conversationPanel.addEventListener('click', async (event) => {
+  const mobileSyncButton = event.target.closest('.quick-ask-sync-mobile');
+  if (mobileSyncButton) {
+    event.preventDefault();
+    await sendAssistantMessageToMobileContext(
+      mobileSyncButton.dataset.messageId,
+    );
+    return;
+  }
+
   const statusItem = event.target.closest('[data-status-kind]');
   if (statusItem) {
     const kind = statusItem.dataset.statusKind;
@@ -1537,21 +1703,13 @@ elements.conversationPanel.addEventListener('click', async (event) => {
       await quickAsk.openSettings();
       return;
     }
-    if (kind === 'sync_issue') {
-      const summary = statusItem.dataset.statusSummary || '';
-      setDraft(
-        summary
-          ? `豆包同步异常：${summary}。请帮我判断可能原因，并给出下一步排查顺序。`
-          : STATUS_HINTS[kind],
-      );
-      focusComposer();
-      return;
-    }
     setDraft(
       buildStatusFollowUpPrompt(
         kind,
         statusItem.dataset.statusTitle,
         statusItem.dataset.statusSummary,
+        statusItem.dataset.statusDetails,
+        statusItem.dataset.statusAction,
       ),
     );
     focusComposer();

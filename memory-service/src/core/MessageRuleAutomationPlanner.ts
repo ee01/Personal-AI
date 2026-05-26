@@ -574,8 +574,8 @@ export class MessageRuleAutomationPlanner {
         actions: [
           {
             actionType: 'notify_user',
-            title: `已创建关联操作: ${genericPlan.title}`,
-            description: `规则 ${input.ruleRef} 命中后，会为 ${genericPlan.targetSystem} 排入 1 个关联操作。`,
+            title: `已创建联动操作: ${genericPlan.title}`,
+            description: `规则 ${input.ruleRef} 命中后，会为 ${genericPlan.targetSystem} 排入 1 个联动操作。`,
             executionMode: 'auto',
             requiresApproval: false,
           },
@@ -775,11 +775,11 @@ export class MessageRuleAutomationPlanner {
       const actions = [
         this.actionRepo.create({
           actionType: 'notify_user',
-          title: `已创建关联操作: ${genericPlan.title}`,
-          description: `规则 ${input.ruleRef} 命中后，已为 ${genericPlan.targetSystem} 排入 1 个关联操作。`,
+          title: `已创建联动操作: ${genericPlan.title}`,
+          description: `规则 ${input.ruleRef} 命中后，已为 ${genericPlan.targetSystem} 排入 1 个联动操作。`,
           params: {
-            title: `记忆规则已创建关联操作: ${genericPlan.title}`,
-            body: `命中规则 ${input.ruleRef}，已将关联操作加入执行队列。`,
+            title: `记忆规则已创建联动操作: ${genericPlan.title}`,
+            body: `命中规则 ${input.ruleRef}，已将联动操作加入执行队列。`,
             payload: commonMetadata,
             hitRef,
           },

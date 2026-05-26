@@ -221,6 +221,7 @@ contextBridge.exposeInMainWorld('quickAsk', {
   ask: (payload) => request('POST', '/assistant/ask', payload),
   askStream: (payload, onEvent) =>
     requestStream('/assistant/ask/stream', payload, onEvent),
+  injectQuery: (payload) => request('POST', '/inject/query', payload),
   getRuntimeSummary: () => request('GET', '/assistant/runtime-summary'),
   remember: (payload) => request('POST', '/assistant/memory/remember', payload),
   hide: () => ipcRenderer.invoke('quick-ask:hide'),

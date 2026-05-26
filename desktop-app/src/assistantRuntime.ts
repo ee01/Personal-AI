@@ -66,15 +66,17 @@ const REMEMBER_INTENT_PATTERNS = [
 
 const STATUS_PRIORITIES: Record<BridgeAssistantStatusKind, number> = {
   setup_blocker: 1,
-  sync_issue: 2,
-  confirm_request: 3,
-  running_action: 4,
-  waiting_reply: 5,
-  queued_action: 6,
+  runtime_issue: 2,
+  sync_issue: 3,
+  confirm_request: 4,
+  running_action: 5,
+  waiting_reply: 6,
+  queued_action: 7,
 };
 
 const STATUS_LABELS: Record<BridgeAssistantStatusKind, string> = {
   setup_blocker: '还没完成设置',
+  runtime_issue: '状态读取异常',
   sync_issue: '豆包同步异常',
   confirm_request: '待你确认',
   running_action: '工具执行中',
@@ -131,17 +133,13 @@ function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   );
 }
 
-function summarizeSetupBlocker(
-  status: BridgeStatus,
-  runtimeErrorMessage?: string,
-): BridgeAssistantStatusItem | undefined {
+function summarizeSetupBlocker(status: BridgeStatus): BridgeAssistantStatusItem | undefined {
   const blockers = status.blockingReasons || [];
-  if (blockers.length === 0 && !runtimeErrorMessage) return undefined;
+  if (blockers.length === 0) return undefined;
 
   const summary =
-    runtimeErrorMessage || blockers[0]?.message || '还有配置未完成。';
+    blockers[0]?.message || '还有配置未完成。';
   const detailLines = uniqueNonEmpty([
-    runtimeErrorMessage ? `运行态读取失败：${runtimeErrorMessage}` : undefined,
     ...blockers.map((blocker) => blocker.message),
   ]).slice(0, 4);
   const count = detailLines.length || 1;
@@ -155,6 +153,37 @@ function summarizeSetupBlocker(
     badgeLabel: `${count} 项`,
     actionHint: '打开设置继续完成',
     priority: STATUS_PRIORITIES.setup_blocker,
+  };
+}
+
+function runtimeIssueActionHint(message: string): string {
+  if (/fetch|network|ECONN|timeout|timed out|连接|超时/i.test(message)) {
+    return '测试 Memory Service';
+  }
+  if (/401|403|unauthorized|forbidden|api key|token|认证|权限/i.test(message)) {
+    return '检查 Memory Service 凭据';
+  }
+  return '继续排查运行态';
+}
+
+function summarizeRuntimeIssue(
+  runtimeErrorMessage?: string,
+): BridgeAssistantStatusItem | undefined {
+  if (!runtimeErrorMessage) return undefined;
+
+  const message = compactErrorMessage(runtimeErrorMessage);
+  return {
+    kind: 'runtime_issue',
+    title: STATUS_LABELS.runtime_issue,
+    summary: `读取 Memory Service 运行态失败：${message}`,
+    detailLines: [
+      'Quick Ask 仍可保留本地会话；状态数据会在服务恢复后刷新。',
+      '这不是同步已完成或用户配置未完成的信号。',
+    ],
+    count: 1,
+    badgeLabel: '需重试',
+    actionHint: runtimeIssueActionHint(runtimeErrorMessage),
+    priority: STATUS_PRIORITIES.runtime_issue,
   };
 }
 
@@ -293,7 +322,8 @@ function summarizeOutreach(
 
 export function buildAssistantRuntimeSummary(input: AssistantRuntimeBuildInput): BridgeAssistantRuntimeSummary {
   const items = [
-    summarizeSetupBlocker(input.status, input.runtimeErrorMessage),
+    summarizeSetupBlocker(input.status),
+    summarizeRuntimeIssue(input.runtimeErrorMessage),
     summarizeSyncIssue(input.status),
     summarizeConfirmRequest(input.confirmRequests),
     summarizeAction('running_action', input.runningActions),

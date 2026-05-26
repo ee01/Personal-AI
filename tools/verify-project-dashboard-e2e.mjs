@@ -259,6 +259,7 @@ try {
   await page.locator('.zoom-title', {
     hasText: 'Clarify launch readiness',
   }).waitFor({ timeout: 15000 });
+  await page.waitForFunction(() => document.activeElement?.getAttribute('data-evidence-field') === 'eta');
   await page.locator('.evidence-repair-section', {
     hasText: '证据修复',
   }).locator('.evidence-repair-card.missing', {
@@ -520,6 +521,75 @@ try {
     hasText: '收起复核队列',
   }).click();
   await page.waitForFunction(() => document.querySelectorAll('.review-queue-item').length === 3);
+
+  await page.evaluate(async () => {
+    const project = {
+      id: 'decision-review-only',
+      name: 'Decision Review Only',
+      description: 'No focus or evidence gaps; decision brief should open review gate',
+      lastStatusReviewAt: '2026-04-01T08:00:00+08:00',
+      milestones: [{ id: 'ga', label: 'GA', date: '2099-09-30' }],
+      tasks: [
+        {
+          id: 'review-ready-task',
+          type: 'task',
+          title: 'Prepare review-ready release note',
+          status: 'progress',
+          eta: '2099-09-01',
+          jira: [{ key: 'REV-42', title: 'Prepare review-ready release note' }],
+        },
+      ],
+      platformConfig: ['sdk', 'qa'],
+    };
+    const response = await chrome.runtime.sendMessage({
+      type: 'IMPORT_PROJECT_REPORT',
+      mode: 'replace',
+      reportContent: JSON.stringify({
+        metadata: {
+          version: '1.0.0',
+          exportType: 'project_dashboard_report',
+          scope: 'single_project',
+          exportedAt: new Date().toISOString(),
+          exportedTimestamp: Date.now(),
+          source: 'dashboard_memory',
+        },
+        summary: {
+          totalProjects: 1,
+          totalMilestones: 1,
+          totalTasks: 1,
+        },
+        projects: [
+          {
+            project,
+            summary: {
+              projectId: project.id,
+              projectName: project.name,
+              description: project.description,
+              totalMilestones: 1,
+              totalTasks: 1,
+              taskStatusCounts: { progress: 1 },
+              taskTypeCounts: { task: 1 },
+              platformStatusCounts: {},
+              jiraIssueCount: 1,
+            },
+          },
+        ],
+      }),
+    });
+    if (!response?.success) {
+      throw new Error(response?.error || 'replace project report failed');
+    }
+  });
+
+  await page.reload({ waitUntil: 'load', timeout: 15000 });
+  await page.locator('.decision-brief', {
+    hasText: '先复核状态',
+  }).locator('.decision-brief-action', {
+    hasText: '复核草稿',
+  }).click();
+  await page.locator('.status-review-gate.active', {
+    hasText: '确认前先检查证据',
+  }).waitFor({ timeout: 15000 });
 
   assertNoPageErrors();
   await context.close();

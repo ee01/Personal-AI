@@ -25,6 +25,7 @@ export type BridgeSyncAttemptStatus = 'succeeded' | 'skipped' | 'failed';
 export type BridgeTransportMode = 'playwright' | 'webpage_mcp' | 'unknown';
 export type BridgeAssistantStatusKind =
   | 'setup_blocker'
+  | 'runtime_issue'
   | 'sync_issue'
   | 'confirm_request'
   | 'running_action'
@@ -155,6 +156,7 @@ export interface BridgeSyncAttemptLogEntry {
   errorMessage?: string;
   externalThreadId?: string;
   packageKinds?: string[];
+  packageItemCount?: number;
   sourceRefCount?: number;
   transportUsed?: 'dom';
   transportMode?: BridgeTransportMode;

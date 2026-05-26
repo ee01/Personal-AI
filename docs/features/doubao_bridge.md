@@ -1,6 +1,6 @@
 # Personal AI Desktop App Memory Flow
 
-_最后更新: 2026-05-22_
+_最后更新: 2026-05-26_
 
 ## 概述
 
@@ -70,6 +70,7 @@ Desktop App 使用双线程模型：
 - `mobile_context_thread`
   - 绑定到用户真实使用的“手机版对话”
   - 承接近期重点、提醒、查询结果等短期上下文
+  - 自动绑定会先查找默认标题；如果找不到，但当前桥接器浏览器已经打开一个可用的豆包 `/chat` 或 `/thread` 页面，会把当前页作为手机版对话绑定
 
 这个设计来自豆包的实际行为边界：
 
@@ -80,6 +81,7 @@ Desktop App 使用双线程模型：
 
 - 长期稳定信息要发到 `memory_sync_thread`
 - 近期重点、提醒、查询结果要发到真实使用的 `mobile_context_thread`
+- 线程链接必须是 `doubao.com` 或其子域名下的 `/chat/...` / `/thread/...`。只有路径长得像线程但 host 不是豆包的链接，会保留为待修复状态，不会被当作已就绪线程，也不会被 app 自动打开。
 
 ### 4. 输出侧同步，写回豆包
 
@@ -94,6 +96,9 @@ Desktop App 支持三类定时同步：
 - `reminder_sync`
   - 同步提醒到 `mobile_context_thread`
   - 默认改为使用豆包“随手记”结构化格式发送，提醒会转成待办形态
+- Quick Ask 的有证据回答
+  - 可以从回答卡片一键发到 `mobile_context_thread`
+  - 只携带本轮问题、答案和证据摘要，不写长期记忆；未绑定、落错线程或安全验证都会在原回答卡片里显示失败原因
 
 同时支持手动触发：
 
@@ -112,7 +117,8 @@ Desktop App 支持三类定时同步：
 - 手动触发同步会区分 `succeeded` 与 `skipped`：如果 Memory Service 当前没有真实可推送内容，app 会提示“本次没有可推送内容”，不会把跳过误展示为已推送
 - 自动同步和手动同步都会过滤 Memory Service 返回的空占位包（例如 `itemCount: 0` 的近期重点、待办、通知或稳定记忆包），并把对应 sync job 标记为 `skipped`；不会把“暂无内容”的占位文本写进豆包线程
 - `mobile_briefing` 还会在发送前二次剔除摘要标题、freshness window、`No recent...` 等元信息 / 空占位行；如果渲染结果没有真实可读条目，会直接 `skipped`，避免把 concerned items 或空摘要误当近期重点推送
-- app 会展示最近几次同步流水，区分手动 / 自动、成功 / 跳过 / 失败，并保留可读原因；流水里也会展示 Memory package 类型、来源引用数量、目标线程和页面可见性验证状态，方便确认内容有没有真正送达、是否来自真实记忆来源、以及为什么被跳过
+- app 会展示最近几次同步流水，区分手动 / 自动、成功 / 跳过 / 失败，并保留可读原因；流水里也会展示 Memory package 类型、内容条目数、来源引用数量、目标线程和页面可见性验证状态，方便确认内容有没有真正送达、是否来自真实记忆来源、以及为什么被跳过
+- 如果一次 `reminder_sync` 同时包含多个跳过原因，例如“没有待办”和“当前 Memory Service 暂不支持通知同步”，流水会把原因拆开显示，不会合并成一个模糊的“没有可推送内容”。
 - 最近同步流水会写入本机 `bridge-state.json`，app 重启后仍可恢复最近记录；这里不保存发送正文，只保存状态、时间、类型、来源计数和投递验证元数据，便于排查但不扩大敏感内容落盘面
 - 豆包发送结果和 Memory Service 状态回写会分开呈现；如果内容已经送达但 delivery / sync job 回写失败，流水会保留“已送达”并追加“状态回写异常”，避免用户误以为需要重发内容。
 - 失败流水会根据失败类型直接给出恢复动作，例如打开豆包处理安全验证、重新绑定手机对话、测试 Memory Service、重试对应同步或查看日志；用户不需要先在页面其它位置重新寻找入口
@@ -133,8 +139,10 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 - 手动触发某个来源抓取前，如果该来源卡片有未保存的抓取范围、默认范围或浏览器传输方式，app 会先保存再执行，避免本次抓取沿用旧设置
 - 使用日常 Chrome 抓取或广播豆包时，必须先存在明确的 `doubao.com` 标签页；不会把当前活动页误当作豆包页面读取或写入。DOM fallback 也会统一处理 `/chat/<id>`、`/thread/<id>` 与绝对链接。
 - 当 `webpage-mcp` 来源读取失败并临时回退到桌面端 Chromium 时，Explorer 状态会保留最近一次回退原因，UI 会在来源卡片内显示，用户可以据此补齐扩展连接、Chrome 标签页或登录态
+- 使用日常 Chrome 读取豆包时，会优先走页面接口；接口不可用时再尝试 DOM fallback。fallback 自身失败会作为可见读取失败或回退原因呈现，不会被吞成“本轮没有新增内容”
 - 如果某个 Explorer 来源最近一次自动读取失败，来源卡片会直接显示失败原因和下一步恢复提示，例如重新登录、补齐日常浏览器标签页、测试 Memory Service 或重新抓取
 - 如果某个 Explorer 来源最近一次自动读取成功，来源卡片和手动抓取反馈会显示本轮摘要：新增缓存消息数、提炼消息数、写入记忆数，以及因无可沉淀内容被跳过的对话数。这样 `新增 0 条缓存` 不会被误解成“没有做事”，因为本轮可能只是把已有缓存提炼并写回 Memory Service。
+- 来源卡片的常驻状态会同时显示缓存消息、对话数、待提炼消息数和已提炼记忆数；用户不用打开日志，也能判断当前是“还没抓到内容”“有缓存等待提炼”，还是“已经形成可审计记忆”。
 
 因此当前产品方向已经不是单向“往豆包发”的 bridge，而是：
 
@@ -174,7 +182,7 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
    - 测试 Memory Service 连通性
    - 打开登录窗口并登录豆包
    - 创建/修复长期记忆线程
-   - 自动绑定“手机版对话”
+   - 自动绑定“手机版对话”；如果没有同名会话，先在豆包里打开真正会继续使用的手机对话，再点击绑定
 5. 视情况调整同步频率
 6. 关闭窗口即可，后台会继续按节奏自动同步
 
@@ -189,9 +197,9 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
 1. `Memory Service Base URL` 已配置
 2. `Memory Service User ID` 已配置
 3. 豆包登录状态为 `connected`
-4. `memory_sync_thread` 已绑定到可打开的豆包 `/chat` 或 `/thread` 链接
+4. `memory_sync_thread` 已绑定到可打开的 `doubao.com` `/chat` 或 `/thread` 链接
    影响 `stable_memory`
-5. `mobile_context_thread` 已绑定到可打开的豆包 `/chat` 或 `/thread` 链接
+5. `mobile_context_thread` 已绑定到可打开的 `doubao.com` `/chat` 或 `/thread` 链接
    影响 `mobile_briefing` 和 `reminder_sync`
 
 当前 app 中后台同步默认开启，不再要求用户额外勾选一个 `autoSync` 开关。
@@ -405,19 +413,23 @@ Quick Ask 的视觉目标是 `Spotlight 式胶囊壳`：
   - compact -> 隐藏窗口
 - 会话上下文
   - 只在窗口存活期间保留
-  - 关闭窗口即清空
-  - 下一次重新唤起不会自动续聊
+  - 短时间隐藏 / 重新唤起会回到上一段对话，方便继续追问
+  - 如果距离上一轮互动超过 30 分钟，会自动开始新对话，避免新问题误带旧上下文
+  - 历史对话只保存在当前 Quick Ask renderer 内存里，app 重启后不恢复
+
+Quick Ask 的产品参照是“低打扰快问 + 必要时继续深入”：[Raycast Quick AI](https://manual.raycast.com/ai/chat) 同时支持一问一答、继续追问、超时自动新对话和升级到完整 AI Chat；[ChatGPT macOS Chat Bar](https://help.openai.com/en/articles/9295241-accessing-the-launcher-chatgpt-macos-app) 也把全局快捷键、菜单栏入口、文件 / 截图入口放在轻量 prompt window 里。研究侧的 [just-in-time information access](https://www.scholars.northwestern.edu/en/publications/user-interactions-with-everyday-applications-as-context-for-just-) 和 [mixed-initiative context](https://arxiv.org/abs/2604.07121) 都指向同一个原则：上下文可以主动利用，但生命周期和用户控制必须清楚，所以当前实现把短期会话保留和 30 分钟自动新对话放在 Quick Ask 本地层处理。
 
 ### 状态胶囊与状态卡
 
 compact 态只显示一条主状态胶囊，按优先级从高到低选择：
 
 1. `setup_blocker`
-2. `sync_issue`
-3. `confirm_request`
-4. `running_action`
-5. `waiting_reply`
-6. `queued_action`
+2. `runtime_issue`
+3. `sync_issue`
+4. `confirm_request`
+5. `running_action`
+6. `waiting_reply`
+7. `queued_action`
 
 如果还有其他活跃状态，胶囊文案会显示成：
 
@@ -442,6 +454,8 @@ compact 态只显示一条主状态胶囊，按优先级从高到低选择：
 当前 v1 中，状态卡只做“显示与引导”，不直接在卡片里完成 approve / retry / openclaw / outreach 操作。
 
 如果后台自动同步遇到 Memory Service 连接失败、豆包发送失败或其他桥接异常，`sync_issue` 会在 Quick Ask 状态卡中直接显示最近一次错误、失败链路、触发方式和失败时间。点击这类状态项会把错误摘要带入输入框，方便用户继续追问排查顺序；不用先去翻本机日志才知道同步曾经失败。
+
+如果 Quick Ask 能打开，但读取 Memory Service 的确认请求、动作队列或外部询问运行态失败，会显示独立的 `runtime_issue`，而不是误展示成 `setup_blocker`。状态卡会说明这是运行态读取异常，不代表同步已完成，也不代表用户配置没有完成；点击后会把错误、细节和建议动作一起带入输入框，方便继续排查或测试 Memory Service。
 
 外部询问状态不会把“待批准发送”误写成“等待回复”：如果当前只有 pending approval，胶囊和状态卡会显示 `外部询问待批准发送`，状态卡中保留 `待你确认发送` 数量和示例问题。点击普通状态项时，Quick Ask 会把该状态的标题与摘要一起带入输入框，再附上追问提示，避免用户点击后丢失刚才想处理的具体事项。
 
@@ -573,6 +587,7 @@ Desktop App 本机默认监听：
 
 - `POST /sync/run-now` 是 app 手动触发同步时走的统一入口
 - `POST /sync/run-now` 会返回本次状态；`skipped` 表示没有可推送内容，不代表发送失败
+- `POST /inject/query` 是 Quick Ask / 本机界面把有证据回答送入 `mobile_context_thread` 的入口；它依赖已绑定手机版对话，不会自动改写长期记忆线程
 - `stable_memory`、`mobile_briefing` 与 `reminder_sync` 都会使用随手记导向的话术
 - `/memo/*` 接口是直接操作随手记格式的本地 API
 - `/explorer/preview` 会返回原始缓存消息、清洗后的预览文本、提炼出的 artifact、以及 cursor 位置

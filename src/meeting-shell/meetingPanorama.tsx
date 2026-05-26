@@ -1,6 +1,7 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { getSafeExternalUrl } from '../modals/topic-link-safety';
 import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import { getEnvConfig } from '../utils';
 import { getDemoMeetingSessionSnapshot } from './demo';
@@ -463,6 +464,25 @@ function parseHistoryParticipants(raw: string | null): string[] {
     .filter(Boolean);
 }
 
+function parseHistoryDigestStatus(
+  raw: string | null,
+  pdfUrl?: string,
+  digestId?: string,
+): MeetingPilotSessionSnapshot['digest']['status'] {
+  if (
+    raw === 'idle' ||
+    raw === 'uploading' ||
+    raw === 'processing' ||
+    raw === 'completed' ||
+    raw === 'failed'
+  ) {
+    return raw;
+  }
+  if (pdfUrl) return 'completed';
+  if (digestId) return 'processing';
+  return 'idle';
+}
+
 function getArchivedSessionFromQuery():
   | MeetingPilotSessionSnapshot
   | undefined {
@@ -479,8 +499,15 @@ function getArchivedSessionFromQuery():
   const date = parseTimestampParam(params.get('date')) || Date.now();
   const lastEventAt = parseTimestampParam(params.get('lastEventAt')) || date;
   const participants = parseHistoryParticipants(params.get('participants'));
-  const pdfUrl = (params.get('pdfUrl') || '').trim() || undefined;
+  const pdfUrl = getSafeExternalUrl(params.get('pdfUrl')) || undefined;
   const digestId = (params.get('digestId') || '').trim() || undefined;
+  const digestStatus = parseHistoryDigestStatus(
+    params.get('digestStatus'),
+    pdfUrl,
+    digestId,
+  );
+  const digestErrorCode =
+    (params.get('digestErrorCode') || '').trim() || undefined;
   const base = createMeetingPilotSessionSnapshot({
     meetingId,
     tabId: parseTimestampParam(params.get('tabId')) || 0,
@@ -506,13 +533,16 @@ function getArchivedSessionFromQuery():
       startedAt: date,
     },
     digest: {
-      status: pdfUrl ? 'completed' : digestId ? 'processing' : 'idle',
+      status: digestStatus,
       taskId: digestId,
       lookupId: digestId,
       resultUrl: pdfUrl,
+      errorCode: digestErrorCode,
       updatedAt: lastEventAt,
       message: pdfUrl
         ? '会议纪要 PDF 已就绪。'
+        : digestStatus === 'failed'
+        ? '会议记录已归档，但 PDF 生成失败。'
         : digestId
         ? '会议记录已归档，PDF 仍在生成中。'
         : '会议记录已归档。',

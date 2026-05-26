@@ -32,6 +32,8 @@ import {
   type MemoryServiceError,
 } from '../services/MemoryServiceClient';
 import {
+  DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+  filterSceneRehearsalSourceTypes,
   getEnvConfig,
   getMeetingTranscriptionMode,
   isMeetingRingCentralTranscriptEnabled,
@@ -1194,6 +1196,7 @@ Requirements:
 - Prefer concrete owners and deadlines when present; otherwise use empty string.
 - For actionItems.evidence, include the shortest supporting transcript quote that proves the task assignment.
 - Keep alerts high precision and useful.
+- Do not create alerts for speaker changes, active-speaker switches, or internal Meeting Pilot context-refresh/status updates.
 
 Meeting title: ${session.title}
 Current topic hint: ${session.currentTopic}
@@ -3456,8 +3459,16 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
   }
 
   try {
+    const envConfig = await getEnvConfig();
     const client = getMemoryServiceClient();
-    const result = await client.contextRecall(requestBody);
+    const result = await client.contextRecall({
+      ...requestBody,
+      sourceTypes: filterSceneRehearsalSourceTypes(
+        requestBody.sourceTypes,
+        envConfig,
+        DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+      ),
+    });
 
     const memoryRefs = result.matches
       .filter(isContextRecallMatchVisibleForMeetingPilot)

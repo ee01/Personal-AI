@@ -142,19 +142,28 @@
                   撤销反馈
                 </button>
                 <button
-                  v-if="event.exploreLink"
+                  v-if="getLinkSafetyState(event).exploreRoute"
                   type="button"
                   @click.stop="openExploreLink(event.exploreLink)"
                 >
                   在记忆中查看
                 </button>
                 <button
-                  v-if="getSafeSourceUrl(event.sourceUrl)"
+                  v-if="getLinkSafetyState(event).sourceUrl"
                   type="button"
+                  :title="getSourceButtonTitle(event)"
+                  :aria-label="getSourceButtonTitle(event)"
                   @click.stop="openSourceUrl(event.sourceUrl)"
                 >
                   打开来源
                 </button>
+                <span
+                  v-for="label in getLinkSafetyState(event).blockedLabels"
+                  :key="label"
+                  class="link-safety-note"
+                >
+                  {{ label }}
+                </span>
               </div>
             </div>
           </div>
@@ -210,7 +219,7 @@ import {
 import {
   getRecallChannelLabel,
   getScopeLabel,
-  normalizeMemorySourceUrl,
+  getMemoryLinkSafetyState,
   sanitizeMemoryExploreRoute,
 } from '../searchResultPresentation';
 
@@ -436,8 +445,15 @@ const selectScope = (scope: RecallScope) => {
   void loadTimeline();
 };
 
-const getSafeSourceUrl = (sourceUrl?: string) => {
-  return normalizeMemorySourceUrl(sourceUrl);
+const getLinkSafetyState = (event: MemoryTimelineEvent) =>
+  getMemoryLinkSafetyState({
+    exploreLink: event.exploreLink,
+    sourceUrl: event.sourceUrl,
+  });
+
+const getSourceButtonTitle = (event: MemoryTimelineEvent) => {
+  const host = getLinkSafetyState(event).sourceHost;
+  return host ? `打开来源：${host}` : '打开来源';
 };
 
 const openExploreLink = (exploreLink?: string) => {
@@ -448,7 +464,7 @@ const openExploreLink = (exploreLink?: string) => {
 };
 
 const openSourceUrl = (sourceUrl?: string) => {
-  const safeSourceUrl = normalizeMemorySourceUrl(sourceUrl);
+  const safeSourceUrl = getMemoryLinkSafetyState({ sourceUrl }).sourceUrl;
   if (!safeSourceUrl) return false;
   window.open(safeSourceUrl, '_blank', 'noopener,noreferrer');
   return true;
@@ -825,6 +841,7 @@ onMounted(() => {
 
 .event-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
   flex-wrap: wrap;
@@ -857,6 +874,18 @@ onMounted(() => {
   color: #bae6fd;
   font-size: 0.78rem;
   font-weight: 600;
+}
+
+.link-safety-note {
+  padding: 0.32rem 0.55rem;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(120, 53, 15, 0.16);
+  color: #fde68a;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .empty-state {

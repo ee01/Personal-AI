@@ -63,6 +63,9 @@ import { extractorRoutes } from './routes/extractor.js';
 import { publicSkillRoutes, skillRoutes } from './routes/skills.js';
 import { relationshipRoutes } from './routes/relationships.js';
 import { dayPilotRoutes } from './routes/dayPilot.js';
+import { coverageRoutes } from './routes/coverage.js';
+import { rehearsalRoutes } from './routes/rehearsals.js';
+import { storylineRoutes } from './routes/storylines.js';
 import { ProactiveScheduler } from './core/ProactiveScheduler.js';
 
 // ---------------------------------------------------------------------------
@@ -109,7 +112,7 @@ export async function buildApp(
     origin: true, // 允许所有跨域来源（反射请求的 Origin）
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
     allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'X-User-Id'],
-    exposedHeaders: [],
+    exposedHeaders: ['Content-Disposition'],
     credentials: false,
   });
 
@@ -203,6 +206,9 @@ export async function buildApp(
       await instance.register(relationshipRoutes);
       await instance.register(skillRoutes);
       await instance.register(dayPilotRoutes);
+      await instance.register(coverageRoutes);
+      await instance.register(rehearsalRoutes);
+      await instance.register(storylineRoutes);
     },
     { prefix: '/api/v1' },
   );

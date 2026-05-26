@@ -119,8 +119,60 @@
         <div v-if="actionResultSummary(action)" class="result-box">
           {{ actionResultSummary(action) }}
         </div>
-        <div v-if="actionResultTranscriptPath(action)" class="result-path">
-          transcript: {{ actionResultTranscriptPath(action) }}
+
+        <div
+          v-if="isOpenClawDelegationAction(action) && hasDelegationResult(action)"
+          class="delegation-result-panel"
+        >
+          <div class="delegation-panel-head">
+            <div>
+              <span class="panel-kicker">外部委派结果</span>
+              <strong>{{ delegationOutcomeLabel(action) }}</strong>
+            </div>
+            <span class="badge muted">{{ delegationArtifactCountLabel(action) }}</span>
+          </div>
+
+          <div v-if="delegationArtifacts(action).length > 0" class="delegation-artifacts">
+            <div
+              v-for="artifact in delegationArtifacts(action)"
+              :key="delegationArtifactKey(artifact)"
+              class="delegation-artifact"
+            >
+              <div class="artifact-head">
+                <span>{{ artifactTitle(artifact) }}</span>
+                <span class="badge muted">{{ artifact.kind }}</span>
+              </div>
+              <p v-if="artifact.content" class="artifact-content">{{ artifact.content }}</p>
+              <div class="artifact-meta">
+                <span v-if="artifactSourceLabel(artifact)">{{ artifactSourceLabel(artifact) }}</span>
+                <span v-if="artifactEntityLabel(artifact)">{{ artifactEntityLabel(artifact) }}</span>
+                <span v-if="artifactVerificationLabel(artifact)">{{ artifactVerificationLabel(artifact) }}</span>
+                <span v-if="artifactFieldLabel(artifact)">{{ artifactFieldLabel(artifact) }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="delegation-empty">
+            没有可展示的 artifact；请展开 transcript 或查看关联线程确认 OpenClaw 返回内容。
+          </div>
+
+          <div v-if="delegationPayloadPreview(action)" class="delegation-payload">
+            <div class="sub-title">结构化 payload</div>
+            <pre>{{ delegationPayloadPreview(action) }}</pre>
+          </div>
+        </div>
+
+        <div v-if="actionResultTranscriptPath(action)" class="transcript-panel">
+          <div class="transcript-head">
+            <span>transcript: {{ actionResultTranscriptPath(action) }}</span>
+            <button
+              class="tiny-btn"
+              @click="toggleActionTranscript(action)"
+            >{{ transcriptVisible[action.id] ? '收起' : '展开' }}</button>
+          </div>
+          <div v-if="transcriptVisible[action.id]" class="transcript-body">
+            <div v-if="transcriptLoading[action.id]" class="muted-line">正在加载 transcript...</div>
+            <pre v-else>{{ transcriptContent[action.id] || '未能读取 transcript 内容。' }}</pre>
+          </div>
         </div>
 
         <div v-if="isActionRunning(action)" class="running-box">
@@ -196,8 +248,17 @@ interface QueueGuidance {
   body: string;
   tone: QueueGuidanceTone;
 }
+interface DelegationArtifactView {
+  kind: string;
+  title?: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+}
 const actionOperations = ref<Record<string, ActionOperation>>({});
 const actionOperationErrors = ref<Record<string, string>>({});
+const transcriptVisible = ref<Record<string, boolean>>({});
+const transcriptLoading = ref<Record<string, boolean>>({});
+const transcriptContent = ref<Record<string, string>>({});
 let queuePollTimer: number | undefined;
 const routeActionIdFilter = computed(() =>
   typeof route.query.actionId === 'string' ? route.query.actionId : '',
@@ -766,6 +827,176 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
     ? action.result.transcriptPath
     : '';
 }
+
+function isOpenClawDelegationAction(action: RuntimeAction): boolean {
+  return action.actionType === 'delegate_openclaw';
+}
+
+function hasDelegationResult(action: RuntimeAction): boolean {
+  return Boolean(action.result && (action.result.status || action.result.artifacts || action.result.payload));
+}
+
+function delegationOutcomeLabel(action: RuntimeAction): string {
+  const status = typeof action.result?.status === 'string' ? action.result.status : '';
+  if (status === 'success') return '成功获取外部事实';
+  if (status === 'capability_missing') return '缺少外部能力';
+  if (status === 'auth_error') return '鉴权或权限失败';
+  if (status === 'need_human_decision') return '等待人工判断';
+  if (status === 'timeout') return '委派超时';
+  if (status === 'error') return '委派失败';
+  return '已返回委派结果';
+}
+
+function coerceDelegationArtifact(item: unknown): DelegationArtifactView | null {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+  const record = item as Record<string, unknown>;
+  return {
+    kind: typeof record.kind === 'string' && record.kind.trim() ? record.kind.trim() : 'note',
+    title: typeof record.title === 'string' && record.title.trim() ? record.title.trim() : undefined,
+    content: typeof record.content === 'string' && record.content.trim() ? record.content.trim() : undefined,
+    metadata:
+      record.metadata && typeof record.metadata === 'object' && !Array.isArray(record.metadata)
+        ? (record.metadata as Record<string, unknown>)
+        : undefined,
+  };
+}
+
+function delegationArtifacts(action: RuntimeAction): DelegationArtifactView[] {
+  const raw = action.result?.artifacts;
+  if (!Array.isArray(raw)) return [];
+  return raw.map(coerceDelegationArtifact).filter((item): item is DelegationArtifactView => Boolean(item)).slice(0, 4);
+}
+
+function delegationArtifactCountLabel(action: RuntimeAction): string {
+  const raw = action.result?.artifacts;
+  const total = Array.isArray(raw) ? raw.length : 0;
+  if (total === 0) return '无 artifact';
+  return `可验证 artifact ${total} 条`;
+}
+
+function delegationArtifactKey(artifact: DelegationArtifactView): string {
+  return [artifact.kind, artifact.title, artifact.content].filter(Boolean).join(':').slice(0, 120);
+}
+
+function artifactTitle(artifact: DelegationArtifactView): string {
+  return artifact.title || artifact.kind || '外部证据';
+}
+
+function metadataString(metadata: Record<string, unknown> | undefined, keys: string[]): string {
+  if (!metadata) return '';
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  }
+  return '';
+}
+
+function metadataStringList(metadata: Record<string, unknown> | undefined, keys: string[]): string[] {
+  if (!metadata) return [];
+  for (const key of keys) {
+    const value = metadata[key];
+    if (Array.isArray(value)) {
+      const items = value
+        .filter((item): item is string | number | boolean =>
+          typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean',
+        )
+        .map((item) => String(item).trim())
+        .filter(Boolean);
+      if (items.length > 0) return items;
+    }
+  }
+  return [];
+}
+
+function artifactSourceLabel(artifact: DelegationArtifactView): string {
+  const source = metadataString(artifact.metadata, ['sourceSystem', 'targetSystem', 'system']);
+  return source ? `来源 ${source}` : '';
+}
+
+function artifactEntityLabel(artifact: DelegationArtifactView): string {
+  const entity = metadataString(artifact.metadata, [
+    'entityId',
+    'entityKey',
+    'recordId',
+    'resourceId',
+    'ticketId',
+    'ticketKey',
+    'issueKey',
+  ]);
+  return entity ? `对象 ${entity}` : '';
+}
+
+function artifactVerificationLabel(artifact: DelegationArtifactView): string {
+  const verification = artifact.metadata?.verified === true
+    ? 'verified'
+    : metadataString(artifact.metadata, ['verification', 'verificationMethod']);
+  return verification ? `验证 ${verification}` : '';
+}
+
+function artifactFieldLabel(artifact: DelegationArtifactView): string {
+  const fields = metadataStringList(artifact.metadata, ['observedFields', 'changedFields']);
+  if (fields.length > 0) return `字段 ${fields.slice(0, 5).join(', ')}`;
+  const operation = metadataString(artifact.metadata, ['operation', 'operationType', 'action']);
+  return operation ? `操作 ${operation}` : '';
+}
+
+function delegationPayloadPreview(action: RuntimeAction): string {
+  const payload = action.result?.payload;
+  if (!payload || typeof payload !== 'object') return '';
+  try {
+    const json = JSON.stringify(payload, null, 2);
+    return json.length > 1200 ? `${json.slice(0, 1200)}\n...` : json;
+  } catch {
+    return '';
+  }
+}
+
+async function toggleActionTranscript(action: RuntimeAction) {
+  const transcriptPath = actionResultTranscriptPath(action);
+  if (!transcriptPath) return;
+  const nextVisible = !transcriptVisible.value[action.id];
+  transcriptVisible.value = {
+    ...transcriptVisible.value,
+    [action.id]: nextVisible,
+  };
+  if (!nextVisible || transcriptContent.value[action.id] !== undefined) {
+    return;
+  }
+
+  const filename = transcriptFilename(transcriptPath);
+  if (!filename) {
+    transcriptContent.value = {
+      ...transcriptContent.value,
+      [action.id]: '暂不支持读取该 transcript 路径。',
+    };
+    return;
+  }
+
+  transcriptLoading.value = {
+    ...transcriptLoading.value,
+    [action.id]: true,
+  };
+  try {
+    const content = await client.readUserFile('delegations', filename);
+    transcriptContent.value = {
+      ...transcriptContent.value,
+      [action.id]: content || '未能读取 transcript 内容。',
+    };
+  } finally {
+    transcriptLoading.value = {
+      ...transcriptLoading.value,
+      [action.id]: false,
+    };
+  }
+}
+
+function transcriptFilename(transcriptPath: string): string | null {
+  if (!transcriptPath.startsWith('delegations/')) {
+    return null;
+  }
+  return transcriptPath.slice('delegations/'.length);
+}
 </script>
 
 <style scoped>
@@ -1101,11 +1332,113 @@ function actionResultTranscriptPath(action: RuntimeAction): string {
   line-height: 1.55;
 }
 
-.result-path {
+.delegation-result-panel {
+  margin-top: 0.75rem;
+  padding: 0.82rem;
+  border-radius: 0.8rem;
+  background: rgba(8, 47, 73, 0.28);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+}
+
+.delegation-panel-head,
+.artifact-head,
+.transcript-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: flex-start;
+}
+
+.panel-kicker,
+.sub-title {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: #93c5fd;
+  font-size: 0.74rem;
+  letter-spacing: 0;
+}
+
+.delegation-panel-head strong {
+  color: #e0f2fe;
+}
+
+.delegation-artifacts {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.delegation-artifact {
+  padding: 0.68rem 0.75rem;
+  border-radius: 0.72rem;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid rgba(125, 211, 252, 0.16);
+}
+
+.artifact-head span:first-child {
+  color: #f8fafc;
+  font-weight: 650;
+}
+
+.artifact-content {
+  margin: 0.45rem 0 0;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.artifact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.artifact-meta span {
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #bae6fd;
+  font-size: 0.74rem;
+}
+
+.delegation-empty {
+  margin-top: 0.65rem;
+  color: #bae6fd;
+  line-height: 1.5;
+}
+
+.delegation-payload {
+  margin-top: 0.75rem;
+}
+
+.delegation-payload pre,
+.transcript-body pre {
+  max-height: 14rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.72rem;
+  border-radius: 0.65rem;
+  background: rgba(2, 6, 23, 0.72);
+  color: #dbeafe;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.transcript-panel {
   margin-top: 0.5rem;
   font-size: 0.8rem;
   color: #7dd3fc;
   word-break: break-all;
+}
+
+.transcript-body {
+  margin-top: 0.55rem;
+}
+
+.muted-line {
+  color: #94a3b8;
 }
 
 .running-box {

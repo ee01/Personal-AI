@@ -259,6 +259,76 @@ function verifyTruncatedPayloadMetadata() {
   assert.equal(viewModel.profile.viewLimit, 1);
 }
 
+function verifyEvidenceSourceUrlSafety() {
+  const viewModel = buildUserProfileViewModel({
+    items: [
+      {
+        id: 'profile-safe-evidence',
+        itemType: 'interest',
+        itemKey: 'focus_project',
+        itemValue: 'Safe source',
+        status: 'active',
+        userConfirmed: true,
+        evidenceRefs: [{
+          sourceType: 'web',
+          sourceUrl: 'https://example.test/profile-evidence',
+          snippet: 'Safe source snippet',
+        }],
+      },
+      {
+        id: 'profile-unsafe-evidence',
+        itemType: 'interest',
+        itemKey: 'focus_project',
+        itemValue: 'Unsafe source',
+        status: 'pending_confirm',
+        userConfirmed: false,
+        evidenceRefs: [{
+          sourceType: 'web',
+          sourceUrl: 'javascript:alert(1)',
+        }],
+      },
+      {
+        id: 'profile-invalid-evidence',
+        itemType: 'interest',
+        itemKey: 'focus_project',
+        itemValue: 'Invalid source',
+        status: 'pending_confirm',
+        userConfirmed: false,
+        evidenceRefs: [{
+          sourceType: 'web',
+          sourceUrl: 'not a url',
+        }],
+      },
+    ],
+  });
+
+  const safePreview = viewModel.profile.allItems
+    .find((item) => item.id === 'profile-safe-evidence')
+    ?.evidencePreview[0];
+  const unsafePreview = viewModel.profile.allItems
+    .find((item) => item.id === 'profile-unsafe-evidence')
+    ?.evidencePreview[0];
+  const invalidPreview = viewModel.profile.allItems
+    .find((item) => item.id === 'profile-invalid-evidence')
+    ?.evidencePreview[0];
+
+  assert.equal(safePreview?.sourceUrl, 'https://example.test/profile-evidence');
+  assert.equal(safePreview?.sourceUrlHiddenReason, undefined);
+  assert.equal(unsafePreview?.sourceUrl, undefined);
+  assert.equal(unsafePreview?.sourceUrlHiddenReason, '来源链接已隐藏：不支持 javascript 协议');
+  assert.equal(unsafePreview?.detail.includes('javascript:'), false);
+  assert.equal(invalidPreview?.sourceUrl, undefined);
+  assert.equal(invalidPreview?.sourceUrlHiddenReason, '来源链接已隐藏：链接格式无效');
+
+  const hiddenLinkMatches = filterAndSortProfileItems(viewModel.profile.allItems, {
+    query: '来源链接已隐藏',
+  });
+  assert.deepEqual(
+    hiddenLinkMatches.map((item) => item.id).sort(),
+    ['profile-invalid-evidence', 'profile-unsafe-evidence'],
+  );
+}
+
 async function verifyProfileClientConfirmedOnlyQuery() {
   let requestedUrl = '';
   const originalFetch = globalThis.fetch;
@@ -407,6 +477,7 @@ async function main() {
   verifyViewModelNormalization();
   verifyEmptyPayloadIsRenderable();
   verifyTruncatedPayloadMetadata();
+  verifyEvidenceSourceUrlSafety();
   await verifyProfileClientConfirmedOnlyQuery();
   await verifyProfileClientInferredItemQuery();
   await verifyProfileClientRestoreItemQuery();

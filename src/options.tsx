@@ -84,29 +84,6 @@ type PushGroupField =
   | 'DECISION_CENTER_PUSH_GROUP_ID'
   | 'OUTREACH_RESULT_PUSH_GROUP_ID';
 
-interface MemoryImportResponse {
-  mode: 'merge' | 'replace';
-  importedAt: string;
-  restoredLayers: Array<'A' | 'B'>;
-  database: {
-    action: 'merged' | 'replaced';
-    changedRows?: number;
-    tableChanges?: Record<string, number>;
-    skippedTables?: string[];
-  };
-  files: {
-    written: number;
-    overwritten: number;
-    preserved: number;
-    deleted: number;
-    writtenPaths: string[];
-    overwrittenPaths: string[];
-    preservedPaths: string[];
-    deletedPaths: string[];
-  };
-  warnings: string[];
-}
-
 interface OutlookCalendarStatusView {
   connected: boolean;
   account?: {
@@ -421,7 +398,7 @@ function ChromeOnDeviceASRPanel({ enabled }: { enabled: boolean }) {
       </small>
       <small style={{ color: '#6b7280', display: 'block', marginBottom: 8 }}>
         由于 Chrome 对 extension offscreen 中的自定义 audio track 支持不稳定，
-        Meeting Pilot 仅在 Local only 模式下尝试使用它；Auto 模式会优先
+        会议全貌仅在 Local only 模式下尝试使用它；Auto 模式会优先
         Local ASR，然后回退 Cloud。
       </small>
       <small
@@ -1266,9 +1243,12 @@ function ContextSiteMuteSettings() {
     }
   };
 
+  const controlSummary = allowlistMode
+    ? `白名单模式 · 允许 ${allowedSites.length} 个站点 · 临时静默 ${mutedSites.length} · 屏蔽 ${blockedSites.length + blockedPages.length}`
+    : `默认模式 · 临时静默 ${mutedSites.length} · 站点屏蔽 ${blockedSites.length} · 路径屏蔽 ${blockedPages.length}`;
+
   return (
     <div className="form-group">
-      <label>网页记忆提示控制</label>
       <div
         style={{
           border: '1px solid #e5e7eb',
@@ -1287,7 +1267,18 @@ function ContextSiteMuteSettings() {
           }}
         >
           <small style={{ color: '#64748b' }}>
-            管理右下角记忆卡片的临时静默、整站屏蔽和页面路径屏蔽。
+            管理被动网页记忆提示的临时静默、整站屏蔽、页面路径屏蔽和白名单。
+          </small>
+          <small
+            aria-live="polite"
+            style={{
+              color: '#334155',
+              display: 'block',
+              fontWeight: 600,
+              marginTop: 4,
+            }}
+          >
+            {controlSummary}
           </small>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
@@ -1304,7 +1295,7 @@ function ContextSiteMuteSettings() {
               disabled={loading || mutedSites.length === 0}
               style={{ fontSize: 12, padding: '4px 10px' }}
             >
-              全部恢复
+              清空临时静默
             </button>
           </div>
         </div>
@@ -1735,12 +1726,8 @@ const Options = () => {
     message: '',
     type: '',
   });
-  const memoryImportInputRef = useRef<HTMLInputElement | null>(null);
   const [isDreamDigestPushing, setIsDreamDigestPushing] = useState(false);
   const [isWeeklyReportPushing, setIsWeeklyReportPushing] = useState(false);
-  const [isMemoryExporting, setIsMemoryExporting] = useState(false);
-  const [isMemoryImporting, setIsMemoryImporting] = useState(false);
-  const [replaceMemoryOnImport, setReplaceMemoryOnImport] = useState(false);
   const [outreachDirectoryStatus, setOutreachDirectoryStatus] = useState<
     OutreachDirectoryStatus[]
   >([]);
@@ -2020,54 +2007,6 @@ const Options = () => {
     anchor.click();
 
     URL.revokeObjectURL(url);
-  };
-
-  const parseContentDispositionFilename = (
-    contentDisposition: string | null,
-  ) => {
-    if (!contentDisposition) {
-      return null;
-    }
-
-    const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-    if (utf8Match?.[1]) {
-      try {
-        return decodeURIComponent(utf8Match[1]);
-      } catch {
-        return utf8Match[1];
-      }
-    }
-
-    const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
-    return filenameMatch?.[1] || null;
-  };
-
-  const readResponseErrorMessage = async (response: Response) => {
-    const rawText = await response.text();
-    try {
-      const payload = JSON.parse(rawText);
-      return (
-        payload?.error || payload?.message || response.statusText || '请求失败'
-      );
-    } catch {
-      return rawText || response.statusText || '请求失败';
-    }
-  };
-
-  const formatExportTimestamp = (iso?: string) => {
-    const source = iso || new Date().toISOString();
-    return source.replace(/\.\d{3}Z$/, 'Z').replace(/[:]/g, '-');
-  };
-
-  const ensureMemoryServiceConfigured = () => {
-    if (!config.MEMORY_SERVICE_BASE_URL) {
-      setStatus({
-        message: '请先配置 Memory Service API 地址',
-        type: 'error',
-      });
-      return false;
-    }
-    return true;
   };
 
   const loadDreamDigestSettingsFromBackend = async (
@@ -2761,6 +2700,7 @@ const Options = () => {
       }
       if (name === 'CONTEXT_ASSIST_ENABLED' && nextValue === false) {
         nextConfig.COMPOSE_ASSIST_ENABLED = false;
+        nextConfig.SCENE_REHEARSAL_DISPLAY_ENABLED = false;
       }
       if (name === 'MEETING_MINUTES_API_URL') {
         nextConfig.MEETING_DIGEST_API_BASE_URL = String(nextValue || '');
@@ -2812,132 +2752,6 @@ const Options = () => {
   // 处理导出配置
   const handleExport = () => {
     downloadJson(config, 'personal-ai-config.json');
-  };
-
-  const handleMemoryExport = async () => {
-    if (!ensureMemoryServiceConfigured()) {
-      return;
-    }
-
-    setIsMemoryExporting(true);
-    try {
-      const headers = await getRequestHeaders(config, {
-        accept: 'application/zip',
-      });
-      const response = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/export`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          format: 'backup_zip',
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(await readResponseErrorMessage(response));
-      }
-
-      const backupBlob = await response.blob();
-      const filename =
-        parseContentDispositionFilename(
-          response.headers.get('content-disposition'),
-        ) || `personal-ai-memory-backup-${formatExportTimestamp()}.zip`;
-      downloadBlob(backupBlob, filename);
-
-      setStatus({
-        message: `记忆导出完成，已下载备份包 ${filename}`,
-        type: 'success',
-      });
-    } catch (error) {
-      console.error('导出记忆失败:', error);
-      setStatus({
-        message:
-          error instanceof Error
-            ? `导出记忆失败: ${error.message}`
-            : '导出记忆失败',
-        type: 'error',
-      });
-    } finally {
-      setIsMemoryExporting(false);
-    }
-  };
-
-  const handleOpenMemoryImport = () => {
-    memoryImportInputRef.current?.click();
-  };
-
-  const handleMemoryImport = async (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-
-    if (!file) {
-      return;
-    }
-    if (!ensureMemoryServiceConfigured()) {
-      return;
-    }
-
-    const memoryImportMode = replaceMemoryOnImport ? 'replace' : 'merge';
-
-    if (memoryImportMode === 'replace') {
-      const confirmed = window.confirm(
-        'replace 会覆盖当前用户的记忆数据库，并删除备份包中不存在的本地文件。确定继续吗？',
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
-
-    setIsMemoryImporting(true);
-    try {
-      const headers = await getRequestHeaders(config, {
-        accept: 'application/json',
-        contentType: null,
-      });
-      const formData = new FormData();
-      formData.append(
-        'file',
-        file,
-        file.name || 'personal-ai-memory-backup.zip',
-      );
-      formData.append('mode', memoryImportMode);
-
-      const response = await fetch(`${config.MEMORY_SERVICE_BASE_URL}/import`, {
-        method: 'POST',
-        headers,
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(await readResponseErrorMessage(response));
-      }
-
-      const result = (await response.json()) as MemoryImportResponse;
-      const warningText =
-        result.warnings.length > 0 ? `，警告 ${result.warnings.length} 项` : '';
-      const dbSummary =
-        result.database.action === 'merged' &&
-        typeof result.database.changedRows === 'number'
-          ? `，数据库变更 ${result.database.changedRows} 行`
-          : '';
-
-      setStatus({
-        message: `记忆导入完成（${result.mode}）：写入 ${result.files.written} 个文件，覆盖 ${result.files.overwritten} 个，保留 ${result.files.preserved} 个，删除 ${result.files.deleted} 个${dbSummary}${warningText}`,
-        type: 'success',
-      });
-    } catch (error) {
-      console.error('导入记忆失败:', error);
-      setStatus({
-        message:
-          error instanceof Error
-            ? `导入记忆失败: ${error.message}`
-            : '导入记忆失败',
-        type: 'error',
-      });
-    } finally {
-      setIsMemoryImporting(false);
-    }
   };
 
   const renderPushTargetFields = (
@@ -3281,7 +3095,7 @@ const Options = () => {
           checked={config.ENABLE_LINKED_ACTION}
           onChange={handleInputChange}
           label="启用「联动操作」功能"
-          description="从消息快速创建带关联操作的记忆入口规则。"
+          description="从消息快速创建带联动操作的记忆入口规则。"
         />
       </div>
 
@@ -3330,7 +3144,6 @@ const Options = () => {
             对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
           </small>
         </div>
-        <ContextSiteMuteSettings />
         <ToggleField
           id="SELF_REFLECTION_ENABLED"
           name="SELF_REFLECTION_ENABLED"
@@ -3422,59 +3235,6 @@ const Options = () => {
             Dream Digest。
           </small>
         </div>
-        <div className="form-group">
-          <label>记忆备份导入/导出</label>
-          <div
-            style={{
-              display: 'flex',
-              gap: '12px',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-            }}
-          >
-            <button
-              type="button"
-              onClick={handleMemoryExport}
-              disabled={isMemoryExporting || isMemoryImporting}
-            >
-              {isMemoryExporting ? '导出中...' : '导出记忆'}
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenMemoryImport}
-              disabled={isMemoryExporting || isMemoryImporting}
-            >
-              {isMemoryImporting ? '导入中...' : '导入记忆'}
-            </button>
-            <label
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                margin: 0,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={replaceMemoryOnImport}
-                onChange={(e) => setReplaceMemoryOnImport(e.target.checked)}
-                disabled={isMemoryImporting}
-              />
-              覆盖替换现有记忆
-            </label>
-          </div>
-          <input
-            ref={memoryImportInputRef}
-            type="file"
-            accept=".zip,application/zip"
-            onChange={handleMemoryImport}
-            style={{ display: 'none' }}
-          />
-          <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            默认不勾选时按 merge 导入 zip 备份，保留本地未冲突内容；勾选后按
-            replace 导入，会替换数据库并删除备份包中不存在的本地记忆文件。
-          </small>
-        </div>
       </div>
 
       <div
@@ -3495,11 +3255,11 @@ const Options = () => {
               }
         }
       >
-        <h2>Meeting Pilot</h2>
+        <h2>会议全貌</h2>
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
-          这里是 Meeting Pilot 的唯一核心配置入口：ASR / 转写 Provider、 Minutes
+          这里是会议全貌的唯一核心配置入口：ASR / 转写 Provider、 Minutes
           API、分析模型与密钥都在这里维护；side panel
           只保留会中体验和个性化设置。建议配置转写能力，用于实时 transcript，
           并提升摘要、行动项和决议提取准确度； Minutes API 可选，主要用于会后
@@ -3535,7 +3295,7 @@ const Options = () => {
           <small
             style={{ color: '#b45309', display: 'block', marginBottom: '15px' }}
           >
-            当前 meeting 页面悬浮入口已设为永不展示。重新打开这个开关后，右下角
+            当前会议页面悬浮入口已设为永不展示。重新打开这个开关后，右下角
             icon 会恢复显示。
           </small>
         ) : null}
@@ -3563,6 +3323,18 @@ const Options = () => {
             onChange={handleInputChange}
             label="启用 Context Assist"
             description="统一启用会前准备和写作护航的场景化记忆提示。"
+          />
+          <ToggleField
+            id="SCENE_REHEARSAL_DISPLAY_ENABLED"
+            name="SCENE_REHEARSAL_DISPLAY_ENABLED"
+            checked={
+              config.CONTEXT_ASSIST_ENABLED !== false &&
+              config.SCENE_REHEARSAL_DISPLAY_ENABLED !== false
+            }
+            onChange={handleInputChange}
+            label="显示场景预演提醒"
+            description="在写作护航、Memory Lens、会议和会前准备中显示 Rehearsal/场景预演提示；关闭后仍保留预演数据和自我反思候选生成。"
+            disabled={config.CONTEXT_ASSIST_ENABLED === false}
           />
           <ToggleField
             id="COMPOSE_ASSIST_ENABLED"
@@ -3799,7 +3571,7 @@ const Options = () => {
             name="MEETING_PROVIDER_API_KEY"
             value={config.MEETING_PROVIDER_API_KEY || ''}
             onChange={handleInputChange}
-            placeholder="输入 Meeting Pilot 转写服务 API Key"
+            placeholder="输入会议全貌转写服务 API Key"
             autoComplete="new-password"
             disabled={config.MEETING_PILOT_ENABLED !== true}
           />
@@ -3843,6 +3615,11 @@ const Options = () => {
         </div>
       </div>
 
+      <div className="form-section">
+        <h2>网页记忆提示控制</h2>
+        <ContextSiteMuteSettings />
+      </div>
+
       <div
         id="openclaw-config"
         ref={openClawConfigSectionRef}
@@ -3866,7 +3643,7 @@ const Options = () => {
         <small
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
-          自我反思与关联操作里的外部执行入口都会走这里的 OpenClaw 配置。
+          自我反思与联动操作里的外部执行入口都会走这里的 OpenClaw 配置。
           可填写服务根地址，也可填写完整的 OpenAI 兼容 endpoint。
         </small>
         <ToggleField
@@ -3875,7 +3652,7 @@ const Options = () => {
           checked={config.OPENCLAW_ENABLED === true}
           onChange={handleInputChange}
           label="启用 OpenClaw 外部委派"
-          description="开启后，自我反思与关联操作都可把外部系统查询/执行委派给 OpenClaw。"
+          description="开启后，自我反思与联动操作都可把外部系统查询/执行委派给 OpenClaw。"
         />
         <div className="form-group">
           <label htmlFor="OPENCLAW_BASE_URL">
@@ -4650,6 +4427,7 @@ interface WorkflowSavedRegressionResult {
   status: WorkflowSavedRegressionStatus;
   summary: string;
   detail?: string;
+  actual?: AgentWorkflowSavedExpectation;
 }
 
 interface WorkflowSavedRegressionSummary {
@@ -5169,6 +4947,65 @@ const AgentSettings = () => {
     );
   };
 
+  const handleUpdateWorkflowSavedBaseline = async () => {
+    const scenario = getSelectedWorkflowSavedScenario();
+    if (!scenario) return;
+
+    if (!workflowTestResult || !workflowTestResultInput) {
+      setWorkflowSavedScenarioError('请先运行这个保存样例，再更新基线');
+      setWorkflowSavedScenarioStatus('');
+      return;
+    }
+
+    if (workflowResultIsStale) {
+      setWorkflowSavedScenarioError('当前结果已过期，请重新运行后再更新基线');
+      setWorkflowSavedScenarioStatus('');
+      return;
+    }
+
+    if (
+      buildWorkflowTestInputComparisonKey(scenario.input) !==
+      buildWorkflowTestInputComparisonKey(workflowTestResultInput)
+    ) {
+      setWorkflowSavedScenarioError(
+        '当前结果不属于所选保存样例，请先运行该保存样例',
+      );
+      setWorkflowSavedScenarioStatus('');
+      return;
+    }
+
+    const nextExpectation = buildAgentWorkflowResultExpectation(
+      workflowTestResult,
+    );
+    if (!nextExpectation) {
+      setWorkflowSavedScenarioError('当前结果不能生成基线，请重新运行后再试');
+      setWorkflowSavedScenarioStatus('');
+      return;
+    }
+
+    const hadBaseline = Boolean(scenario.expectedResult);
+    const updatedAt = new Date().toISOString();
+    const nextScenarios = workflowSavedScenarios.map((item) =>
+      item.id === scenario.id
+        ? {
+            ...item,
+            updatedAt,
+            expectedResult: nextExpectation,
+          }
+        : item,
+    );
+
+    await persistWorkflowSavedScenarios(nextScenarios);
+    setWorkflowSavedScenarioSelectedId(scenario.id);
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedRegressionSummary(null);
+    setWorkflowSavedScenarioStatus(
+      hadBaseline
+        ? '已接受当前结果为新基线'
+        : '已为保存样例建立当前结果基线',
+    );
+  };
+
   const handleLoadWorkflowSavedScenario = () => {
     const scenario = getSelectedWorkflowSavedScenario();
     if (!scenario) return;
@@ -5246,7 +5083,9 @@ const AgentSettings = () => {
             label: scenario.label,
             status: 'no-baseline',
             summary: '没有保存基线',
-            detail: '本次已能运行；单独打开后保存一次可建立后续对比基线。',
+            detail:
+              '本次已能运行；可直接接受本次批量结果，建立后续对比基线。',
+            actual,
           });
           continue;
         }
@@ -5276,6 +5115,7 @@ const AgentSettings = () => {
                   )
                   .join('；')
               : '存储、通知、复核、Trace、规则和置信度都未漂移。',
+          actual,
         });
       }
 
@@ -5287,6 +5127,55 @@ const AgentSettings = () => {
     } finally {
       setWorkflowSavedRegressionRunning(false);
     }
+  };
+
+  const handleAcceptWorkflowRegressionBaselines = async () => {
+    const acceptables = (workflowSavedRegressionSummary?.results || []).filter(
+      (item) =>
+        (item.status === 'changed' || item.status === 'no-baseline') &&
+        item.actual,
+    );
+
+    if (acceptables.length === 0) {
+      setWorkflowSavedScenarioError('没有可接受为基线的批量回归结果');
+      setWorkflowSavedScenarioStatus('');
+      return;
+    }
+
+    const expectationsById = new Map(
+      acceptables.map((item) => [item.id, item.actual!]),
+    );
+    const updatedAt = new Date().toISOString();
+    const nextScenarios = workflowSavedScenarios.map((scenario) =>
+      expectationsById.has(scenario.id)
+        ? {
+            ...scenario,
+            updatedAt,
+            expectedResult: expectationsById.get(scenario.id),
+          }
+        : scenario,
+    );
+
+    await persistWorkflowSavedScenarios(nextScenarios);
+
+    const nextResults = (workflowSavedRegressionSummary?.results || []).map(
+      (item) =>
+        expectationsById.has(item.id)
+          ? {
+              ...item,
+              status: 'same' as WorkflowSavedRegressionStatus,
+              summary: '已接受为新基线',
+              detail: '该保存样例的本次批量回归结果已写入基线。',
+            }
+          : item,
+    );
+    setWorkflowSavedRegressionSummary(
+      buildWorkflowSavedRegressionSummary(nextResults),
+    );
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus(
+      `已接受 ${acceptables.length} 个批量回归结果为新基线`,
+    );
   };
 
   const handleDeleteWorkflowSavedScenario = async () => {
@@ -5532,6 +5421,12 @@ const AgentSettings = () => {
         workflowSavedRegressionSummary.noBaseline > 0 ||
         workflowSavedRegressionSummary.failed > 0),
   );
+  const workflowSavedRegressionAcceptableCount =
+    workflowSavedRegressionSummary?.results.filter(
+      (item) =>
+        (item.status === 'changed' || item.status === 'no-baseline') &&
+        item.actual,
+    ).length || 0;
   const selectedWorkflowSavedScenario = workflowSavedScenarios.find(
     (scenario) => scenario.id === workflowSavedScenarioSelectedId,
   );
@@ -5557,6 +5452,18 @@ const AgentSettings = () => {
   const workflowSavedBaselineHasChanges = workflowSavedBaselineRows.some(
     (row) => row.status === 'changed',
   );
+  const workflowCanUpdateSavedBaseline = Boolean(
+    selectedWorkflowSavedScenario &&
+      workflowCurrentResultExpectation &&
+      workflowResultMatchesSavedScenario &&
+      !workflowResultIsStale,
+  );
+  const workflowSavedBaselineActionLabel =
+    selectedWorkflowSavedScenario?.expectedResult
+      ? workflowSavedBaselineHasChanges
+        ? '接受当前结果为基线'
+        : '刷新当前基线'
+      : '建立当前结果基线';
 
   const formatWorkflowTraceDuration = (durationMs?: number) => {
     if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) {
@@ -5902,7 +5809,27 @@ const AgentSettings = () => {
             className={`agent-workflow-regression ${workflowSavedRegressionHasIssues ? 'changed' : 'same'}`}
             aria-label="Agent Workflow 保存样例批量回归"
           >
-            <div className="agent-test-section-title">保存样例批量回归</div>
+            <div className="agent-workflow-regression-header">
+              <div>
+                <div className="agent-test-section-title">
+                  保存样例批量回归
+                </div>
+                {workflowSavedRegressionAcceptableCount > 0 && (
+                  <small>
+                    可把变化或无基线样例的本次结果一次性写回基线。
+                  </small>
+                )}
+              </div>
+              {workflowSavedRegressionAcceptableCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleAcceptWorkflowRegressionBaselines}
+                  disabled={workflowExecutionBusy}
+                >
+                  接受 {workflowSavedRegressionAcceptableCount} 个结果为基线
+                </button>
+              )}
+            </div>
             <div className="agent-workflow-regression-metrics">
               <span>总数 {workflowSavedRegressionSummary.total}</span>
               <span>通过 {workflowSavedRegressionSummary.same}</span>
@@ -6018,7 +5945,18 @@ const AgentSettings = () => {
                 className={`agent-workflow-baseline ${workflowSavedBaselineHasChanges ? 'changed' : 'same'}`}
                 aria-label="Agent Workflow 保存基线对比"
               >
-                <div className="agent-test-section-title">保存基线对比</div>
+                <div className="agent-workflow-baseline-header">
+                  <div className="agent-test-section-title">保存基线对比</div>
+                  <button
+                    type="button"
+                    onClick={handleUpdateWorkflowSavedBaseline}
+                    disabled={
+                      workflowExecutionBusy || !workflowCanUpdateSavedBaseline
+                    }
+                  >
+                    {workflowSavedBaselineActionLabel}
+                  </button>
+                </div>
                 <div className="agent-workflow-baseline-list">
                   {workflowSavedBaselineRows.map((row) => (
                     <div
@@ -6035,6 +5973,30 @@ const AgentSettings = () => {
                 </div>
               </div>
             )}
+            {selectedWorkflowSavedScenario &&
+              !selectedWorkflowSavedScenario.expectedResult &&
+              workflowCanUpdateSavedBaseline && (
+                <div
+                  className="agent-workflow-baseline no-baseline"
+                  aria-label="Agent Workflow 保存基线待建立"
+                >
+                  <div className="agent-workflow-baseline-header">
+                    <div>
+                      <div className="agent-test-section-title">保存基线待建立</div>
+                      <small>
+                        这个保存样例已经跑出结果，但还没有记录可回归的基线。
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleUpdateWorkflowSavedBaseline}
+                      disabled={workflowExecutionBusy}
+                    >
+                      {workflowSavedBaselineActionLabel}
+                    </button>
+                  </div>
+                </div>
+              )}
             {workflowRunVerdict && (
               <div
                 className={`agent-workflow-verdict ${workflowRunVerdict.status}`}
@@ -6554,6 +6516,8 @@ const IntelligentAgentSettings = () => {
               reason: 'approval_required',
               effect: 'notify',
               riskLevel: 'medium',
+              safetyNote:
+                '示例通知动作：只允许发送给项目告警渠道，不应外发到个人私聊。',
               message:
                 `工具 messageNotification 属于中风险通知动作，需要人工确认，已阻断执行。 批准 key: ${notificationApprovalKey}`,
               approvalKey: notificationApprovalKey,
@@ -6567,7 +6531,7 @@ const IntelligentAgentSettings = () => {
         },
       ]);
 
-      // 模拟最终判断
+      // 模拟预算耗尽后的阶段性判断
       await wait(2000);
       if (!isDemoRunActive()) return;
       setDemoThoughtProcess((prev) => [
@@ -6575,10 +6539,10 @@ const IntelligentAgentSettings = () => {
         {
           timestamp: Date.now(),
           thought:
-            '结合历史上下文和 JIRA 状态，这是一条需要存储的项目进展；当前没有阻塞或高风险变化，因此不需要即时通知。',
+            '行动预算已经用完；本轮已有足够信息给出阶段性判断，但仍有待确认通知、阻断工具和空证据需要用户处理后重跑。',
           publicSummary:
-            '已有足够信息：这条项目进展需要存储，但没有高风险变化，不需要即时通知。',
-          action: 'finish',
+            '已达到最大行动次数；请先处理待确认动作、阻断工具和证据不足后再重跑。',
+          action: 'max_actions_reached',
         },
       ]);
 
@@ -6591,7 +6555,7 @@ const IntelligentAgentSettings = () => {
         shouldNotify: false,
         confidence: 0.85,
         summary:
-          '项目 PROJ-1001 仍在进行中，预计 2026-05-12 完成；本次消息应沉淀为项目进展，但无需打断用户。',
+          '阶段性结论：项目 PROJ-1001 仍在进行中，预计 2026-05-12 完成；本次消息应沉淀为项目进展，但通知动作仍需人工确认。',
         reasonsToStore: [
           `通过 ${historyToolName} 确认为近期关注项目`,
           `通过 ${jiraToolName} 获得任务状态和截止时间`,

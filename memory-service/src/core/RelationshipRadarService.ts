@@ -270,8 +270,10 @@ export interface RelationshipMeetingBrief {
   startAt?: number;
   coverage: {
     totalAttendees: number;
+    processedAttendees: number;
     matchedAttendees: number;
     unmatchedAttendees: number;
+    omittedAttendees: number;
     attendeesWithEvidence: number;
     attendeesWithOpenLoops: number;
     evidenceRefs: number;
@@ -301,6 +303,11 @@ export interface RelationshipMeetingBrief {
     evidenceCount: number;
     matchStatus: string;
     coverageState: AttendeeCoverageState;
+  }>;
+  omittedAttendees: Array<{
+    displayName: string;
+    email?: string;
+    reason: string;
   }>;
 }
 
@@ -360,6 +367,7 @@ const DEFAULT_THRESHOLD: RelationshipPeopleThreshold = {
   minimumKeepCount: 8,
   strategy: 'hybrid_threshold_top_n',
 };
+const MEETING_BRIEF_ATTENDEE_LIMIT = 16;
 
 export class RelationshipRadarService {
   constructor(private readonly db: Database.Database) {}
@@ -681,8 +689,12 @@ export class RelationshipRadarService {
     );
     const title = input.title || event?.title || 'Meeting';
     const startAt = input.startAt ?? event?.start_at ?? undefined;
+    const processedAttendees = attendees.slice(0, MEETING_BRIEF_ATTENDEE_LIMIT);
+    const omittedAttendees = attendees
+      .slice(MEETING_BRIEF_ATTENDEE_LIMIT)
+      .map(formatOmittedMeetingAttendee);
 
-    const attendeeCards = attendees.slice(0, 16).map((attendee) => {
+    const attendeeCards = processedAttendees.map((attendee) => {
       const match = this.findPersonForAttendee(attendee);
       const person = match.person;
       const card = person
@@ -720,7 +732,10 @@ export class RelationshipRadarService {
       };
     });
 
-    const coverage = buildMeetingBriefCoverage(attendeeCards);
+    const coverage = buildMeetingBriefCoverage(attendeeCards, {
+      totalAttendees: attendees.length,
+      omittedAttendees: omittedAttendees.length,
+    });
 
     return {
       generatedAt: now(),
@@ -740,6 +755,7 @@ export class RelationshipRadarService {
             : `${item.matchReason} · ${Math.round(item.matchConfidence * 100)}%`,
         coverageState: item.coverageState,
       })),
+      omittedAttendees,
     };
   }
 
@@ -2435,28 +2451,45 @@ function normalizeEmailToken(value: string): string | null {
 
 function buildMeetingBriefCoverage(
   attendees: RelationshipMeetingBrief['attendees'],
+  options: { totalAttendees?: number; omittedAttendees?: number } = {},
 ): RelationshipMeetingBrief['coverage'] {
-  const totalAttendees = attendees.length;
+  const processedAttendees = attendees.length;
+  const totalAttendees = options.totalAttendees ?? processedAttendees;
+  const omittedAttendees = options.omittedAttendees ?? Math.max(0, totalAttendees - processedAttendees);
   const matchedAttendees = attendees.filter((item) => item.personId).length;
   const attendeesWithEvidence = attendees.filter((item) => item.evidenceRefs.length > 0).length;
   const attendeesWithOpenLoops = attendees.filter((item) => item.openLoops.length > 0).length;
   const evidenceRefs = attendees.reduce((total, item) => total + item.evidenceRefs.length, 0);
-  const unmatchedAttendees = totalAttendees - matchedAttendees;
+  const unmatchedAttendees = processedAttendees - matchedAttendees;
   const coverageNote =
     totalAttendees === 0
       ? '未提供参会人，会议简报只能给出通用准备问题。'
+      : omittedAttendees > 0
+        ? `已分析前 ${processedAttendees}/${totalAttendees} 位参会人，匹配 ${matchedAttendees} 位；另有 ${omittedAttendees} 位未展开，需要手动补充或分批生成。`
       : unmatchedAttendees === 0
         ? `已匹配全部 ${totalAttendees} 位参会人，其中 ${attendeesWithEvidence} 位有可引用证据。`
         : `已匹配 ${matchedAttendees}/${totalAttendees} 位参会人；${unmatchedAttendees} 位需要会中确认角色或补充人物别名。`;
 
   return {
     totalAttendees,
+    processedAttendees,
     matchedAttendees,
     unmatchedAttendees,
+    omittedAttendees,
     attendeesWithEvidence,
     attendeesWithOpenLoops,
     evidenceRefs,
     coverageNote,
+  };
+}
+
+function formatOmittedMeetingAttendee(
+  attendee: MeetingAttendeeIdentity,
+): RelationshipMeetingBrief['omittedAttendees'][number] {
+  return {
+    displayName: attendee.name || attendee.email || 'Unknown attendee',
+    email: attendee.email,
+    reason: `超过前 ${MEETING_BRIEF_ATTENDEE_LIMIT} 位分析上限，暂未展开人物上下文。`,
   };
 }
 

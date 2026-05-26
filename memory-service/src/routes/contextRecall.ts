@@ -66,6 +66,41 @@ const contextRecallBodySchema = {
       },
       additionalProperties: false,
     },
+    currentContext: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string' as const },
+        url: { type: 'string' as const },
+        conversationId: { type: 'string' as const },
+        groupId: { type: 'string' as const },
+        meetingId: { type: 'string' as const },
+        issueKey: { type: 'string' as const },
+        participants: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+        visibleMessages: {
+          type: 'array' as const,
+          items: {
+            type: 'object' as const,
+            required: ['text'],
+            properties: {
+              id: { type: 'string' as const },
+              sender: { type: 'string' as const },
+              text: { type: 'string' as const },
+              timestamp: { type: 'number' as const },
+              timestampLabel: { type: 'string' as const },
+            },
+            additionalProperties: false,
+          },
+        },
+        sourceAnchorHints: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+      },
+      additionalProperties: false,
+    },
     exclude: {
       type: 'object' as const,
       properties: {

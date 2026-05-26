@@ -46,6 +46,7 @@ test('LocalSkillSyncManager scans enabled platform and writes packages returned 
           updated: 0,
           pulled: 0,
           pushed: 1,
+          externalChanges: 2,
           skipped: 0,
           errors: [],
           packagesToInstall: [
@@ -69,6 +70,10 @@ test('LocalSkillSyncManager scans enabled platform and writes packages returned 
     assert.equal(result.status, 'succeeded');
     assert.equal(calls[0].platform, 'codex');
     assert.equal(calls[0].skills[0].slug, 'existing');
+    assert.equal(calls[0].skills[0].root, codexRoot);
+    assert.equal(calls[0].skills[0].directory, path.join(codexRoot, 'existing'));
+    assert.equal(calls[0].skills[0].skillMdPath, path.join(codexRoot, 'existing', 'SKILL.md'));
+    assert.equal(result.platforms[0].externalChanges, 2);
     assert.ok(existsSync(path.join(codexRoot, 'new-skill', 'SKILL.md')));
     assert.equal(
       readFileSync(path.join(codexRoot, 'new-skill', 'scripts', 'run.js'), 'utf8'),

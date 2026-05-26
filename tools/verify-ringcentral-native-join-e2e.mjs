@@ -396,6 +396,25 @@ async function main() {
         result.fallbackText.includes('Use browser by default'),
       'Native join fallback should include a subtle browser-default hint',
     );
+    await page.waitForTimeout(5300);
+    const handoffAutoDismissState = await page.evaluate(() => ({
+      fallbackStillVisible: Boolean(
+        document.querySelector('#pai-ringcentral-native-join-fallback'),
+      ),
+      launchLinkStillPresent: Boolean(
+        document.querySelector('#pai-ringcentral-native-join-launch-link'),
+      ),
+    }));
+    assert(
+      !handoffAutoDismissState.fallbackStillVisible &&
+        !handoffAutoDismissState.launchLinkStillPresent,
+      `Native join fallback should auto-dismiss five seconds after app handoff: ${JSON.stringify(
+        handoffAutoDismissState,
+      )}`,
+    );
+
+    await page.click('[data-test-automation-id="calendar-event-item-join-button"]');
+    await page.waitForSelector('#pai-ringcentral-native-join-fallback');
     await page.click('[data-pai-ringcentral-native-join-copy-link]');
     await page.waitForFunction(
       () =>
@@ -447,6 +466,14 @@ async function main() {
         document.querySelector(
           '[data-pai-ringcentral-native-join-status]',
         )?.textContent || '',
+      defaultButtonText:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-prefer-browser]',
+        )?.textContent || '',
+      defaultPromptText:
+        document
+          .querySelector('#pai-ringcentral-native-join-fallback')
+          ?.textContent || '',
       fallbackStillVisible: Boolean(
         document.querySelector('#pai-ringcentral-native-join-fallback'),
       ),
@@ -466,6 +493,64 @@ async function main() {
     assert(
       browserDefaultState.fallbackStillVisible,
       'Saving the browser default should keep the current fallback controls available',
+    );
+    assert(
+      browserDefaultState.defaultButtonText.includes('Use app by default') &&
+        browserDefaultState.defaultPromptText.includes(
+          'Prefer app next time?',
+        ),
+      `Saving browser default should expose an in-panel app-default undo: ${JSON.stringify(
+        browserDefaultState,
+      )}`,
+    );
+
+    await page.evaluate(() => {
+      const button = document.querySelector(
+        '[data-pai-ringcentral-native-join-prefer-browser]',
+      );
+      button?.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    });
+    await page.waitForFunction(
+      () =>
+        window.__paiStorageEnvConfig?.MEETING_NATIVE_CLIENT_JOIN_ENABLED ===
+        true,
+    );
+    const appDefaultState = await page.evaluate(() => ({
+      nativeJoinEnabled:
+        window.__paiStorageEnvConfig?.MEETING_NATIVE_CLIENT_JOIN_ENABLED,
+      status:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-status]',
+        )?.textContent || '',
+      defaultButtonText:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-prefer-browser]',
+        )?.textContent || '',
+      defaultPromptText:
+        document
+          .querySelector('#pai-ringcentral-native-join-fallback')
+          ?.textContent || '',
+      fallbackStillVisible: Boolean(
+        document.querySelector('#pai-ringcentral-native-join-fallback'),
+      ),
+    }));
+    assert(
+      appDefaultState.nativeJoinEnabled === true,
+      'App-default undo should re-enable native client join in envConfig',
+    );
+    assert(
+      appDefaultState.status.includes('try the app first') &&
+        appDefaultState.defaultButtonText.includes('Use browser by default') &&
+        appDefaultState.defaultPromptText.includes('Prefer browser next time?'),
+      `App-default undo should restore the browser-default action: ${JSON.stringify(
+        appDefaultState,
+      )}`,
     );
 
     await page.evaluate(() => {

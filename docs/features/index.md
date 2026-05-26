@@ -23,6 +23,12 @@
 | 搜索结果有用/不相关反馈 | Memory Exploring | [memory_system.md](./memory_system.md) | `/feedback`，按 target type 记录 |
 | 记忆时间轴 | Memory Exploring | [memory_system.md](./memory_system.md) | `TimelinePage.vue`，基于 recall time 通道 |
 | 时间轴/搜索安全跳转 | Memory Exploring | [memory_system.md](./memory_system.md) | 只接受安全内部路由和 http(s) 来源链接 |
+| 记忆覆盖地图 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | `memory-exploring.html#/coverage`，查看各平台记忆覆盖状态 |
+| 覆盖聚合 API | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | `/coverage/map` 与 P0 切片接口 |
+| 智能资料录入 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | 粘贴/文档/普通 zip dry-run 后写入 shadow memory |
+| 外部 AI 历史基础录入 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | 用户主动上传 ChatGPT / Claude `conversations.json` zip |
+| Coverage 质量分 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | 平台状态、新鲜度和健康贡献项计算 `qualityScore` |
+| 备份下载与恢复入口 | Memory Coverage Map | [memory_coverage_map.md](./memory_coverage_map.md) | Coverage 页面直接下载 zip，抽屉内识别备份 zip 并 merge/replace |
 | 记忆导入/导出/备份 | Memory Service | [memory_system.md](./memory_system.md) | `/import`、`/export`、backup 验证脚本 |
 | 多用户隔离 | Memory Service | [memory_system.md](./memory_system.md) | per-user SQLite DB |
 | 用户画像条目 | User Profile | [user_profile_system.md](./user_profile_system.md) | Profile item 管理与展示 |
@@ -32,6 +38,8 @@
 | 用户上下文注入 | Prompt Config | [custom_prompts.md](./custom_prompts.md) | 用户偏好/上下文预览与开关 |
 | 自我反思线程 | Memory Service | [memory_system.md](./memory_system.md) | `ReflectionThreadService` 与 UI 线程页 |
 | 反思本地研究补查 | Memory Service | [memory_system.md](./memory_system.md) | 反思 run 内查询本地记忆 |
+| 未来场景预演记忆 | Rehearsal | [rehearsal.md](./rehearsal.md) | `rehearsals` / `rehearsal_activations`，通过 `/context-recall` 场景触发 |
+| Rehearsal 管理页 | Memory Exploring | [rehearsal.md](./rehearsal.md) | `memory-exploring.html#/rehearsals`，用于审计和修正 |
 | 动作队列 | Memory Service | [memory_system.md](./memory_system.md) | `ActionQueue.vue` / `proposed_actions` |
 | OpenClaw 外部委派 | Memory Service | [memory_system.md](./memory_system.md) | `delegate_openclaw` action |
 | 决策中心 | Memory Service | [memory_system.md](./memory_system.md) | `DecisionCenter.vue` / `confirm_requests` |
@@ -48,7 +56,7 @@
 | 系统观察规则 | Message Analysis | [message_analysis.md](./message_analysis.md) | 自我反思、主动询问等证据采集 |
 | 规则范围校验 | Message Analysis | [message_analysis.md](./message_analysis.md) | 发送人、群组、上下文范围 |
 | 消息入库与通知分发 | Message Analysis | [message_analysis.md](./message_analysis.md) | 普通 filter / Agent Thinking / Agent Workflow 共用 |
-| 关联操作 | Message Reaction | [message_reaction.md](./message_reaction.md) | 预填记忆入口规则和后续动作 |
+| 联动操作 | Message Reaction | [message_reaction.md](./message_reaction.md) | 预填记忆入口规则和后续动作 |
 | 稍后处理 | Message Reaction | [message_reaction.md](./message_reaction.md) | RingCentral 消息 Snooze |
 | Snooze 快速时间菜单 | Message Reaction | [message_reaction.md](./message_reaction.md) | 15/30 分钟、1/2/3 小时、工作日等 |
 | Snooze 去重与撤销 | Message Reaction | [message_reaction.md](./message_reaction.md) | 同源 pending 保护、toast actions |
@@ -81,17 +89,20 @@
 | Agent Workflow 运行诊断 | Agent Workflow | [agent_workflow.md](./agent_workflow.md) | trace / storageReview / readiness |
 | Today Pilot 今日 Mission | Today Pilot | [today_pilot.md](./today_pilot.md) | 首页 mission card |
 | Day Pilot 排序与噪声控制 | Today Pilot | [today_pilot.md](./today_pilot.md) | `DayPilotService` |
+| 今日预演提示 | Today Pilot | [rehearsal.md](./rehearsal.md) | active/stale Rehearsal 进入今日和会前 cue |
 | 会前准备 | Today Pilot | [today_pilot.md](./today_pilot.md) | calendar events / meeting prep |
 | Meeting Pilot handoff | Today Pilot | [today_pilot.md](./today_pilot.md) | 从今日简报进入会议能力 |
 | Popup Top 3 | Today Pilot | [today_pilot.md](./today_pilot.md) | Chrome popup 今日摘要 |
 | Context Pack | Today Pilot | [today_pilot.md](./today_pilot.md) | 可复制的上下文包 |
 | Compose Assist 草稿辅助 | Compose Assist | [compose_assist.md](./compose_assist.md) | 输入框旁 AI 辅助 |
 | Compose Assist 来源适配 | Compose Assist | [compose_assist.md](./compose_assist.md) | RingCentral / Jira / Web AI |
+| Compose Assist 预演提醒 | Compose Assist | [rehearsal.md](./rehearsal.md) | `sourceTypes` 包含 `rehearsal` 时作为高优先级预演 evidence |
 | Compose Assist 直接插入 | Compose Assist | [compose_assist.md](./compose_assist.md) | hover 只预览正文，点击 icon 直接插入 |
 | Compose Assist 阈值与反馈 | Compose Assist | [compose_assist.md](./compose_assist.md) | 自适应展示 |
 | Memory Lens 右下角关联记忆 | Memory Lens | [memory_lens.md](./memory_lens.md) | 当前网页/消息/Jira/会议上下文被动召回 |
 | Memory Lens Hover Peek | Memory Lens | [memory_lens.md](./memory_lens.md) | hover/focus 轻预览 |
 | Memory Lens Expanded Card | Memory Lens | [memory_lens.md](./memory_lens.md) | 完整卡片、反馈、来源 |
+| Memory Lens 预演提醒 | Memory Lens | [rehearsal.md](./rehearsal.md) | 当前网页/会话/issue 命中 Rehearsal 时低打扰展示 |
 | 划词查找关联记忆 | Memory Lens | [memory_lens.md](./memory_lens.md) | selected_text context recall |
 | 站点静默/屏蔽/白名单 | Memory Lens | [memory_lens.md](./memory_lens.md) | 本地 storage 控制 |
 | Relationship Radar 人物雷达 | Relationship Radar | [relationship_radar.md](./relationship_radar.md) | 本次补齐的主功能文档 |

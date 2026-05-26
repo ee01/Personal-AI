@@ -185,6 +185,7 @@ export interface InitializationResult {
   scriptId: string;
   webAppUrl: string;
   error?: string;
+  setupWarnings?: string[];
   needsAuthorization?: boolean;  // 是否需要用户授权
   authUrl?: string;              // 授权 URL
   needsAppScriptAPI?: boolean;   // 是否需要开启 AppScript API

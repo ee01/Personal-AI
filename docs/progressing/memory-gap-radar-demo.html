@@ -3,161 +3,85 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Context Gap Radar Demo</title>
+  <title>Ask/Recall Context Expansion Demo</title>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f6f7;
+      --bg: #f4f6f8;
       --panel: #ffffff;
-      --panel-2: #f9faf8;
-      --ink: #1e2422;
-      --muted: #65716c;
-      --line: #dfe4df;
-      --line-strong: #c7d2cb;
-      --green: #1f7a5a;
-      --green-soft: #e4f3ec;
-      --amber: #a16207;
-      --amber-soft: #fff2cc;
-      --red: #b42318;
-      --red-soft: #fde8e5;
-      --blue: #245a7a;
-      --blue-soft: #e5f0f5;
-      --shadow: 0 18px 50px rgba(40, 47, 45, 0.14);
+      --ink: #18211f;
+      --muted: #66736f;
+      --line: #dfe5e2;
+      --green: #17734f;
+      --green-soft: #e5f4ed;
+      --blue: #225e88;
+      --blue-soft: #e8f2f8;
+      --amber: #9a5b00;
+      --amber-soft: #fff3d6;
+      --red: #ad2f27;
+      --red-soft: #fde9e7;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); }
+    button { font: inherit; }
 
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--ink);
-    }
-
-    button {
-      font: inherit;
-    }
-
-    .app-shell {
+    .shell {
       min-height: 100vh;
       display: grid;
-      grid-template-columns: 248px minmax(420px, 1fr) 420px;
+      grid-template-columns: minmax(420px, 1fr) 420px;
     }
 
-    .sidebar {
-      background: #202724;
-      color: #f6fbf8;
-      padding: 20px 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-    }
-
-    .brand {
-      font-weight: 750;
-      letter-spacing: 0;
-      font-size: 18px;
-    }
-
-    .nav-group {
+    .chat {
       display: grid;
-      gap: 6px;
-    }
-
-    .nav-item {
-      padding: 10px 12px;
-      border-radius: 8px;
-      color: #d7e2dc;
-      font-size: 14px;
-    }
-
-    .nav-item.active {
-      background: #33413b;
-      color: #ffffff;
-    }
-
-    .main {
-      display: flex;
-      flex-direction: column;
+      grid-template-rows: auto 1fr auto;
       min-width: 0;
       border-right: 1px solid var(--line);
+      background: #fbfcfc;
     }
 
     .topbar {
-      min-height: 64px;
       background: var(--panel);
       border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 22px;
+      padding: 18px 24px;
     }
 
-    .channel-title {
-      min-width: 0;
-    }
-
-    .channel-title h1 {
+    .topbar h1 {
       margin: 0;
       font-size: 18px;
-      line-height: 1.2;
       letter-spacing: 0;
     }
 
-    .channel-title p {
-      margin: 4px 0 0;
+    .topbar p {
+      margin: 5px 0 0;
       color: var(--muted);
       font-size: 13px;
     }
 
-    .top-actions {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .icon-btn {
-      border: 1px solid var(--line);
-      background: #fff;
-      border-radius: 8px;
-      min-width: 36px;
-      height: 36px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      color: var(--ink);
-    }
-
     .thread {
-      flex: 1;
-      overflow: auto;
-      padding: 22px;
+      padding: 24px;
       display: grid;
       align-content: start;
       gap: 14px;
+      overflow: auto;
     }
 
     .message {
       display: grid;
-      grid-template-columns: 38px 1fr;
+      grid-template-columns: 40px minmax(0, 760px);
       gap: 10px;
-      max-width: 900px;
     }
 
     .avatar {
-      width: 38px;
-      height: 38px;
+      width: 40px;
+      height: 40px;
       border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #d9e5de;
-      color: #1f4f3d;
-      font-weight: 700;
+      display: grid;
+      place-items: center;
+      background: #dce8e2;
+      color: #1d5f45;
+      font-weight: 750;
     }
 
     .bubble {
@@ -165,608 +89,285 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 12px 14px;
-      min-width: 0;
     }
 
-    .bubble h2 {
+    .bubble strong {
+      display: block;
       font-size: 14px;
-      margin: 0 0 7px;
-      letter-spacing: 0;
+      margin-bottom: 6px;
     }
 
     .bubble p {
       margin: 0;
-      color: #303a36;
       line-height: 1.55;
       font-size: 14px;
     }
 
-    .meta-line {
-      margin-top: 9px;
+    .bubble .meta {
+      margin-top: 8px;
       color: var(--muted);
       font-size: 12px;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .composer-wrap {
-      background: var(--panel);
-      border-top: 1px solid var(--line);
-      padding: 14px 22px 18px;
     }
 
     .composer {
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      min-height: 104px;
-      display: grid;
-      grid-template-rows: 1fr auto;
-      overflow: hidden;
-      background: #fff;
+      background: var(--panel);
+      border-top: 1px solid var(--line);
+      padding: 14px 24px 18px;
     }
 
-    .draft {
+    .input {
+      min-height: 92px;
+      border: 1px solid #bfcac4;
+      border-radius: 8px;
       padding: 12px 14px;
+      background: #fff;
       font-size: 15px;
       line-height: 1.55;
-      color: #202724;
-    }
-
-    .composer-actions {
-      border-top: 1px solid var(--line);
-      padding: 9px 10px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      background: var(--panel-2);
-    }
-
-    .action-left,
-    .action-right {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .send-btn {
-      border: 0;
-      background: var(--green);
-      color: white;
-      border-radius: 8px;
-      padding: 8px 14px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
-    .radar {
-      background: #fdfefd;
-      display: grid;
-      grid-template-rows: auto auto 1fr auto;
-      min-width: 0;
-    }
-
-    .radar-head {
-      padding: 18px 18px 14px;
-      border-bottom: 1px solid var(--line);
-      background: var(--panel);
-    }
-
-    .eyebrow {
-      color: var(--green);
-      font-size: 12px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-
-    .radar-head h2 {
-      margin: 6px 0 6px;
-      font-size: 19px;
-      letter-spacing: 0;
-    }
-
-    .radar-head p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
-    }
-
-    .score-row {
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--line);
-      background: var(--panel-2);
-      display: grid;
-      gap: 9px;
-    }
-
-    .score-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      font-size: 13px;
-      color: var(--muted);
-    }
-
-    .score-value {
-      font-weight: 800;
-      color: var(--amber);
-    }
-
-    .bar {
-      height: 10px;
-      background: #e6ebe6;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-
-    .bar-fill {
-      width: 62%;
-      height: 100%;
-      background: var(--amber);
-      transition: width 180ms ease, background 180ms ease;
-    }
-
-    .radar-body {
-      padding: 16px 18px 18px;
-      overflow: auto;
       display: grid;
       align-content: start;
-      gap: 14px;
     }
 
-    .section {
-      display: grid;
-      gap: 8px;
-    }
-
-    .section-title {
+    .sendrow {
+      margin-top: 10px;
       display: flex;
-      align-items: center;
       justify-content: space-between;
+      align-items: center;
       gap: 10px;
-      color: #303a36;
-      font-size: 13px;
-      font-weight: 800;
     }
 
     .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 9px;
       border-radius: 999px;
-      padding: 3px 8px;
       font-size: 12px;
       font-weight: 700;
+      background: var(--blue-soft);
+      color: var(--blue);
     }
 
-    .pill.ready {
-      background: var(--green-soft);
-      color: var(--green);
-    }
-
-    .pill.missing {
-      background: var(--amber-soft);
-      color: var(--amber);
-    }
-
-    .pill.blocked {
-      background: var(--red-soft);
-      color: var(--red);
-    }
-
-    .slot-list {
-      display: grid;
-      gap: 7px;
-    }
-
-    .slot {
-      border: 1px solid var(--line);
-      background: #fff;
+    .send {
+      border: 0;
       border-radius: 8px;
-      padding: 10px;
-      display: grid;
-      gap: 5px;
-    }
-
-    .slot-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-
-    .slot-name {
-      font-size: 13px;
+      background: var(--green);
+      color: #fff;
       font-weight: 750;
+      padding: 8px 14px;
     }
 
-    .slot-value {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.45;
-    }
-
-    .question {
-      border: 1px solid #e3c56d;
-      background: #fff9e7;
-      border-radius: 8px;
-      padding: 12px;
-      box-shadow: 0 8px 24px rgba(161, 98, 7, 0.10);
+    .panel {
+      background: var(--panel);
       display: grid;
-      gap: 10px;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
     }
 
-    .question h3 {
+    .panel-head {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-head h2 {
       margin: 0;
-      font-size: 14px;
+      font-size: 17px;
       letter-spacing: 0;
     }
 
-    .choice-grid {
-      display: grid;
-      gap: 8px;
-    }
-
-    .choice {
-      width: 100%;
-      text-align: left;
-      border: 1px solid #e5cf88;
-      border-radius: 8px;
-      background: #fffdf6;
-      padding: 9px 10px;
-      cursor: pointer;
-      display: grid;
-      gap: 3px;
-    }
-
-    .choice strong {
-      font-size: 13px;
-      color: #2f332f;
-    }
-
-    .choice span {
-      font-size: 12px;
+    .panel-head p {
+      margin: 6px 0 0;
       color: var(--muted);
-      line-height: 1.35;
+      font-size: 13px;
+      line-height: 1.45;
     }
 
-    .choice.selected {
-      border-color: var(--green);
-      background: var(--green-soft);
+    .panel-body {
+      padding: 18px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      overflow: auto;
     }
 
-    .brief {
+    .section {
       border: 1px solid var(--line);
-      background: #fff;
       border-radius: 8px;
-      padding: 12px;
+      padding: 13px;
+      background: #fff;
+    }
+
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .resolved {
+      background: var(--green-soft);
+      border-color: #b9dccb;
+    }
+
+    .ambiguous {
+      background: var(--amber-soft);
+      border-color: #eed49a;
+    }
+
+    .evidence {
       display: grid;
       gap: 9px;
     }
 
-    .brief-title {
-      font-size: 13px;
-      font-weight: 800;
-    }
-
-    .brief pre {
-      margin: 0;
-      white-space: pre-wrap;
-      color: #37413d;
-      font-size: 12px;
-      line-height: 1.45;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    }
-
-    .radar-foot {
-      border-top: 1px solid var(--line);
-      background: var(--panel);
-      padding: 12px 18px;
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .secondary-btn,
-    .primary-btn {
+    .card {
+      border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 8px 12px;
-      font-weight: 750;
-      cursor: pointer;
-    }
-
-    .secondary-btn {
-      border: 1px solid var(--line-strong);
-      color: var(--ink);
+      padding: 10px;
       background: #fff;
     }
 
-    .primary-btn {
-      border: 0;
-      background: var(--green);
-      color: #fff;
+    .card strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 5px;
     }
 
-    .primary-btn:disabled {
-      background: #b8c9c0;
-      cursor: default;
+    .card p {
+      margin: 0;
+      color: #34423d;
+      font-size: 13px;
+      line-height: 1.5;
     }
 
-    @media (max-width: 1120px) {
-      .app-shell {
-        grid-template-columns: 78px minmax(360px, 1fr) 390px;
-      }
-
-      .sidebar {
-        padding: 16px 10px;
-      }
-
-      .brand,
-      .nav-item span {
-        display: none;
-      }
-
-      .nav-item {
-        text-align: center;
-      }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
     }
 
-    @media (max-width: 860px) {
-      .app-shell {
-        grid-template-columns: 1fr;
-      }
+    .chip {
+      border: 1px solid #cfd9d4;
+      background: #f9fbfa;
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 12px;
+      color: #33423d;
+    }
 
-      .sidebar {
-        display: none;
-      }
+    .chip.good { background: var(--green-soft); color: var(--green); border-color: #b9dccb; }
+    .chip.warn { background: var(--amber-soft); color: var(--amber); border-color: #eed49a; }
 
-      .main {
-        border-right: 0;
-      }
+    .query {
+      padding: 10px;
+      border-radius: 8px;
+      background: #f6f8f7;
+      border: 1px solid var(--line);
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
 
-      .radar {
-        min-height: 680px;
-        border-top: 1px solid var(--line);
-      }
-
-      .topbar {
-        align-items: flex-start;
-        flex-direction: column;
-        padding: 14px 16px;
-        gap: 10px;
-      }
-
-      .thread,
-      .composer-wrap {
-        padding-left: 16px;
-        padding-right: 16px;
-      }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      .panel { border-top: 1px solid var(--line); }
     }
   </style>
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar" aria-label="Workspace navigation">
-      <div class="brand">RingCentral</div>
-      <div class="nav-group">
-        <div class="nav-item active"># <span>AI Tools for Engineering</span></div>
-        <div class="nav-item"># <span>Nova Core Team</span></div>
-        <div class="nav-item"># <span>AI Relevant Scrum Masters</span></div>
-        <div class="nav-item"># <span>RCVSDK Daily</span></div>
-      </div>
-    </aside>
-
-    <main class="main">
+  <main class="shell">
+    <section class="chat">
       <header class="topbar">
-        <div class="channel-title">
-          <h1>AI Tools for Engineering - Workgroup</h1>
-          <p>外部查证、AI 工具额度、Jira/Sheet 协作</p>
-        </div>
-        <div class="top-actions">
-          <button class="icon-btn" aria-label="Search">⌕</button>
-          <button class="icon-btn" aria-label="Open details">i</button>
-        </div>
+        <h1>RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs</h1>
+        <p>RingCentral group · current visible thread</p>
       </header>
 
-      <section class="thread" aria-label="Message thread">
+      <div class="thread">
         <article class="message">
-          <div class="avatar">L</div>
+          <div class="avatar">IV</div>
           <div class="bubble">
-            <h2>Lucas Liu</h2>
-            <p>OpenAI API quota 又不够了，调用返回 exceeded current quota。是不是需要 Mercury 那边统一看一下组织额度？</p>
-            <div class="meta-line"><span>2026-05-13 10:23</span><span>OpenAI API</span><span>quota</span></div>
+            <strong>Ivan Velencoso</strong>
+            <p>For AI Generated VBG, there is still pending work on the backend identified on this thread. Related items include RCV-148412 and RCV-148411.</p>
+            <div class="meta">Apr 20 · backend pending work · source anchor captured</div>
           </div>
         </article>
 
         <article class="message">
-          <div class="avatar">S</div>
+          <div class="avatar">EQ</div>
           <div class="bubble">
-            <h2>Sophia Lin</h2>
-            <p>Nova planning 这周还要看 story points 和 fixVersion，AI Notes 那几个 ticket 估算也需要回填。</p>
-            <div class="meta-line"><span>2026-05-15 16:48</span><span>Nova</span><span>Jira</span></div>
+            <strong>Esone Qiu</strong>
+            <p>Got it. I will check whether BE can be considered ready before confirming the rollout note.</p>
+            <div class="meta">Apr 20 · project frame updated</div>
           </div>
         </article>
 
         <article class="message">
-          <div class="avatar">E</div>
+          <div class="avatar">JN</div>
           <div class="bubble">
-            <h2>Esone Qiu</h2>
-            <p>SDK 部分我把以前那个 AI 使用情况拷贝过来了。</p>
-            <div class="meta-line"><span>2026-05-15 10:55</span><span>AI 使用情况</span><span>Sheet</span></div>
+            <strong>James Ng</strong>
+            <p>那个 BE ready 了吗？</p>
+            <div class="meta">Now · short deictic question</div>
           </div>
         </article>
-      </section>
-
-      <section class="composer-wrap" aria-label="Message composer">
-        <div class="composer">
-          <div class="draft">查一下 AI VBG 的 BE 部分完成情况如何，原计划我记得是 5 月底交付。让 OpenClaw 帮我核对一下。</div>
-          <div class="composer-actions">
-            <div class="action-left">
-              <button class="icon-btn" aria-label="Attach">＋</button>
-              <button class="icon-btn" aria-label="Mention">@</button>
-              <button class="icon-btn" aria-label="Personal AI">AI</button>
-            </div>
-            <div class="action-right">
-              <button class="send-btn">发送给 AI</button>
-            </div>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <aside class="radar" aria-label="Context Gap Radar">
-      <div class="radar-head">
-        <div class="eyebrow">Context Gap Radar</div>
-        <h2>执行前预检</h2>
-        <p>任务可执行，但缺少正式查证来源。先确认一个锚点即可继续。</p>
       </div>
 
-      <div class="score-row">
-        <div class="score-top">
-          <span>Readiness</span>
-          <span class="score-value" id="scoreText">62%</span>
+      <footer class="composer">
+        <div class="input">AI VBG 的 BE 部分完成情况如何？</div>
+        <div class="sendrow">
+          <span class="pill">Ask will enrich before recall</span>
+          <button class="send">Ask Personal AI</button>
         </div>
-        <div class="bar" aria-hidden="true">
-          <div class="bar-fill" id="barFill"></div>
-        </div>
-      </div>
+      </footer>
+    </section>
 
-      <div class="radar-body">
-        <section class="section">
-          <div class="section-title">
-            <span>已确认</span>
-            <span class="pill ready">4 slots</span>
-          </div>
-          <div class="slot-list">
-            <div class="slot">
-              <div class="slot-row">
-                <span class="slot-name">意图</span>
-                <span class="pill ready">ready</span>
-              </div>
-              <div class="slot-value">外部查证：BE 交付完成情况</div>
-            </div>
-            <div class="slot">
-              <div class="slot-row">
-                <span class="slot-name">时间窗口</span>
-                <span class="pill ready">ready</span>
-              </div>
-              <div class="slot-value">原计划 5 月底交付，优先查最近状态</div>
-            </div>
-            <div class="slot">
-              <div class="slot-row">
-                <span class="slot-name">目标对象</span>
-                <span class="pill ready">ready</span>
-              </div>
-              <div class="slot-value">AI VBG，BE 解释为 Backend，置信度 0.78</div>
-            </div>
-            <div class="slot">
-              <div class="slot-row">
-                <span class="slot-name">输出</span>
-                <span class="pill ready">ready</span>
-              </div>
-              <div class="slot-value">生成一段可贴回群聊的查证摘要</div>
-            </div>
+    <aside class="panel">
+      <header class="panel-head">
+        <h2>Personal AI Context Expansion</h2>
+        <p>Before recall, the short question is resolved against the current group frame and recent evidence anchors.</p>
+      </header>
+
+      <div class="panel-body">
+        <section class="section resolved">
+          <h3>Resolved Context</h3>
+          <div class="chips">
+            <span class="chip good">那个 BE → VBG backend</span>
+            <span class="chip good">role: backend</span>
+            <span class="chip good">confidence: high</span>
           </div>
         </section>
 
         <section class="section">
-          <div class="section-title">
-            <span>缺口</span>
-            <span class="pill missing">blocking</span>
-          </div>
-          <div class="question">
-            <h3>用哪个来源作为正式查证锚点？</h3>
-            <div class="choice-grid">
-              <button class="choice" data-score="88" data-label="Google Sheet: AI 使用情况">
-                <strong>Google Sheet: AI 使用情况</strong>
-                <span>记忆显示 SDK 部分已从旧 AI 使用情况表拷贝，可作为第一查证源。</span>
-              </button>
-              <button class="choice" data-score="82" data-label="Jira / INIT 交付记录">
-                <strong>Jira / INIT 交付记录</strong>
-                <span>更正式，但当前没有 ticket id；需要先按项目名检索。</span>
-              </button>
-              <button class="choice" data-score="73" data-label="只生成待确认回复">
-                <strong>只生成待确认回复</strong>
-                <span>不访问外部系统，先告诉对方需要补正式来源。</span>
-              </button>
+          <h3>Expanded Query</h3>
+          <div class="query">那个 BE ready 了吗 BE backend 后端 RCV Working Team Modernize Existing Backgrounds Add AI-Generated VBGs RCV-148412 RCV-148411</div>
+        </section>
+
+        <section class="section">
+          <h3>Top Evidence</h3>
+          <div class="evidence">
+            <div class="card">
+              <strong>Ivan mentioned backend pending work</strong>
+              <p>AI Generated VBG backend still has pending work on the thread before it can be treated as ready.</p>
+            </div>
+            <div class="card">
+              <strong>Source anchors</strong>
+              <p>RCV-148412 · RCV-148411 · RingCentral message source URL</p>
+            </div>
+            <div class="card">
+              <strong>Lower-ranked related memory</strong>
+              <p>Daily VBG generation limit and Retry-After behavior is related to VBG, but not the BE readiness question.</p>
             </div>
           </div>
         </section>
 
-        <section class="section">
-          <div class="section-title">
-            <span>能力检查</span>
-            <span class="pill blocked">1 warning</span>
+        <section class="section ambiguous">
+          <h3>Ambiguity Fallback</h3>
+          <div class="chips">
+            <span class="chip warn">AI Notes BE</span>
+            <span class="chip warn">VBG BE</span>
           </div>
-          <div class="slot">
-            <div class="slot-row">
-              <span class="slot-name">OpenClaw 外部查证</span>
-              <span class="pill blocked">verify</span>
-            </div>
-            <div class="slot-value">过去同类任务曾因缺少 Jira/网页入口失败；本次 brief 会要求返回 artifact 或明确能力缺失。</div>
-          </div>
+          <p style="margin:10px 0 0;color:#5f4b1d;font-size:13px;line-height:1.5;">If two recent backend frames are equally likely, Ask should show candidates and Context Recall should avoid a confident bubble.</p>
         </section>
-
-        <section class="section">
-          <div class="section-title">
-            <span>Agent brief</span>
-            <span class="pill missing" id="briefState">waiting</span>
-          </div>
-          <div class="brief">
-            <div class="brief-title" id="briefTitle">待补 source_anchor</div>
-            <pre id="briefText">intent: external_check
-target: AI VBG / Backend delivery
-time_window: by end of May
-missing: formal source anchor
-next: ask user to select source</pre>
-          </div>
-        </section>
-      </div>
-
-      <div class="radar-foot">
-        <button class="secondary-btn">保存为默认</button>
-        <button class="primary-btn" id="runBtn" disabled>委派 OpenClaw</button>
       </div>
     </aside>
-  </div>
-
-  <script>
-    const choices = Array.from(document.querySelectorAll('.choice'));
-    const scoreText = document.getElementById('scoreText');
-    const barFill = document.getElementById('barFill');
-    const briefState = document.getElementById('briefState');
-    const briefTitle = document.getElementById('briefTitle');
-    const briefText = document.getElementById('briefText');
-    const runBtn = document.getElementById('runBtn');
-
-    choices.forEach((choice) => {
-      choice.addEventListener('click', () => {
-        choices.forEach((item) => item.classList.remove('selected'));
-        choice.classList.add('selected');
-
-        const score = Number(choice.dataset.score);
-        const label = choice.dataset.label;
-        scoreText.textContent = score + '%';
-        scoreText.style.color = score >= 85 ? 'var(--green)' : 'var(--amber)';
-        barFill.style.width = score + '%';
-        barFill.style.background = score >= 85 ? 'var(--green)' : 'var(--amber)';
-        briefState.textContent = 'ready';
-        briefState.className = 'pill ready';
-        briefTitle.textContent = '已补 source_anchor';
-        briefText.textContent = [
-          'intent: external_check',
-          'target: AI VBG / Backend delivery',
-          'time_window: by end of May',
-          'source_anchor: ' + label,
-          'output: short verified reply for RingCentral',
-          'constraint: return evidence link or capability gap, do not guess'
-        ].join('\n');
-        runBtn.disabled = false;
-      });
-    });
-  </script>
+  </main>
 </body>
 </html>

@@ -177,9 +177,23 @@ try {
   await page.getByText('范围: 全部记忆').waitFor({ timeout: 10000 });
   await page.getByText('命中范围: 工作 1 · 个人 1').waitFor({ timeout: 10000 });
 
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/search?q=legacy%20scope%20query&scope=both`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await page.getByText('Scoped memory result all').waitFor({ timeout: 10000 });
+  assert.equal(askRequests.at(-1)?.scope, 'all');
+  assert.equal(
+    await scopeControls
+      .getByRole('button', { name: '全部' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  await page.getByText('范围: 全部记忆').waitFor({ timeout: 10000 });
+
   assert.deepEqual(
     askRequests.map((request) => request.scope),
-    ['work', 'personal', 'all'],
+    ['work', 'personal', 'all', 'all'],
   );
 
   console.log('verify-memory-search-scope-e2e: ok');

@@ -431,6 +431,15 @@
                     {{ meetingBrief.coverage.matchedAttendees }}/{{ meetingBrief.coverage.totalAttendees }}
                   </strong>
                 </article>
+                <article
+                  v-if="meetingBrief.coverage.omittedAttendees > 0"
+                  class="coverage-card muted"
+                >
+                  <span>已分析</span>
+                  <strong>
+                    {{ meetingBrief.coverage.processedAttendees }}/{{ meetingBrief.coverage.totalAttendees }}
+                  </strong>
+                </article>
                 <article class="coverage-card">
                   <span>可引用证据</span>
                   <strong>{{ meetingBrief.coverage.evidenceRefs }}</strong>
@@ -440,6 +449,16 @@
                   <strong>{{ meetingBrief.coverage.unmatchedAttendees }}</strong>
                 </article>
                 <p class="coverage-note">{{ meetingBrief.coverage.coverageNote }}</p>
+                <div v-if="(meetingBrief.omittedAttendees?.length || 0) > 0" class="coverage-omitted">
+                  <strong>未展开参会人</strong>
+                  <span
+                    v-for="attendee in (meetingBrief.omittedAttendees || []).slice(0, 8)"
+                    :key="`${attendee.displayName}:${attendee.email || ''}`"
+                  >
+                    {{ attendee.displayName }}
+                    <small v-if="attendee.email">{{ attendee.email }}</small>
+                  </span>
+                </div>
               </div>
 
               <div class="attendee-brief-grid">
@@ -812,6 +831,10 @@ import {
   type RelationshipReviewItem,
   type RelationshipReviewStatus,
 } from '../../services/MemoryServiceClient';
+import {
+  sanitizeContextExternalUrl,
+  sanitizeExploreRoute,
+} from '../../web-intelligence/contextRecallGuards';
 import { useMemoryStore } from '../memory-store';
 
 type RadarStateFilter = RelationshipRadarState | 'all';
@@ -849,6 +872,8 @@ const copyMessage = ref('');
 const consolidationResult = ref<RelationshipConsolidationResult | null>(null);
 const meetingTitle = ref('');
 const meetingAttendeesText = ref('');
+const meetingTitleAutoValue = ref('');
+const meetingAttendeesAutoValue = ref('');
 const meetingBrief = ref<RelationshipMeetingBrief | null>(null);
 const assistantGoal = ref('');
 const assistantDraft = ref<RelationshipAssistantDraft | null>(null);
@@ -1083,12 +1108,23 @@ function selectPersonById(personId: string) {
 
 function syncDefaultInputs(person?: RelationshipPersonSummary) {
   if (!person) return;
-  if (!meetingAttendeesText.value.trim()) {
-    meetingAttendeesText.value = person.name;
+
+  const nextAttendees = person.name;
+  const nextTitle = `与 ${person.name} 同步`;
+  if (
+    !meetingAttendeesText.value.trim() ||
+    meetingAttendeesText.value === meetingAttendeesAutoValue.value
+  ) {
+    meetingAttendeesText.value = nextAttendees;
   }
-  if (!meetingTitle.value.trim()) {
-    meetingTitle.value = `与 ${person.name} 同步`;
+  if (
+    !meetingTitle.value.trim() ||
+    meetingTitle.value === meetingTitleAutoValue.value
+  ) {
+    meetingTitle.value = nextTitle;
   }
+  meetingAttendeesAutoValue.value = nextAttendees;
+  meetingTitleAutoValue.value = nextTitle;
 }
 
 function setContextSensitiveIncluded(next: boolean) {
@@ -1179,6 +1215,7 @@ async function copyAssistantDraft() {
 async function copyMeetingBrief() {
   if (!meetingBrief.value) return;
   const brief = meetingBrief.value;
+  const omittedAttendees = brief.omittedAttendees || [];
   const lines = [
     `# ${brief.title}`,
     '',
@@ -1187,6 +1224,17 @@ async function copyMeetingBrief() {
     `匹配: ${brief.coverage.matchedAttendees}/${brief.coverage.totalAttendees}；证据: ${brief.coverage.evidenceRefs}；需确认: ${brief.coverage.unmatchedAttendees}`,
     '',
   ];
+
+  if (brief.coverage.omittedAttendees > 0) {
+    lines.push(
+      `已分析: ${brief.coverage.processedAttendees}/${brief.coverage.totalAttendees}；未分析: ${brief.coverage.omittedAttendees}`,
+      '未展开参会人:',
+      ...omittedAttendees.map((attendee) =>
+        `- ${attendee.displayName}${attendee.email ? ` <${attendee.email}>` : ''}: ${attendee.reason}`,
+      ),
+      '',
+    );
+  }
 
   for (const attendee of brief.attendees) {
     lines.push(
@@ -1210,24 +1258,33 @@ async function copyMeetingBrief() {
 async function copyText(text: string, successMessage: string) {
   try {
     await navigator.clipboard.writeText(text);
-    copyMessage.value = successMessage;
+    showToast(successMessage);
   } catch {
-    copyMessage.value = '当前环境无法写入剪贴板';
-  } finally {
-    window.setTimeout(() => {
-      copyMessage.value = '';
-    }, 2200);
+    showToast('当前环境无法写入剪贴板');
   }
 }
 
 function openEvidence(evidence: RelationshipEvidenceRef) {
-  if (evidence.exploreLink?.startsWith('#')) {
-    void router.push(evidence.exploreLink.slice(1));
+  const exploreRoute = sanitizeExploreRoute(evidence.exploreLink);
+  if (exploreRoute) {
+    void router.push(exploreRoute.slice(1));
     return;
   }
-  if (evidence.sourceUrl) {
-    window.open(evidence.sourceUrl, '_blank', 'noopener,noreferrer');
+  const sourceUrl = sanitizeContextExternalUrl(evidence.sourceUrl);
+  if (sourceUrl) {
+    window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+    return;
   }
+  showToast('证据链接不可打开或已被安全策略拦截');
+}
+
+function showToast(message: string) {
+  copyMessage.value = message;
+  window.setTimeout(() => {
+    if (copyMessage.value === message) {
+      copyMessage.value = '';
+    }
+  }, 2200);
 }
 
 function parseAttendees(text: string): Array<{ name: string; email?: string }> {
@@ -2387,6 +2444,11 @@ button {
   background: rgba(245, 158, 11, 0.08);
 }
 
+.coverage-card.muted {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: rgba(148, 163, 184, 0.08);
+}
+
 .coverage-card span {
   display: block;
   color: #94a3b8;
@@ -2410,6 +2472,43 @@ button {
   color: #cbd5e1;
   padding: 0.75rem;
   line-height: 1.55;
+}
+
+.coverage-omitted {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  border: 1px dashed rgba(148, 163, 184, 0.18);
+  border-radius: 0.72rem;
+  background: rgba(15, 23, 42, 0.34);
+  padding: 0.65rem 0.75rem;
+}
+
+.coverage-omitted strong {
+  color: #e2e8f0;
+  font-size: 0.78rem;
+}
+
+.coverage-omitted span {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  padding: 0.22rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.coverage-omitted small {
+  color: #94a3b8;
+  font-size: inherit;
+  font-weight: 700;
 }
 
 .attendee-brief-grid {

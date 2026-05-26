@@ -106,10 +106,47 @@ const externalChangeListItem = {
   ],
 };
 
+const localAgentListItem = {
+  ...suggestionListItem,
+  id: 'local-agent-import',
+  slug: 'local-agent-import',
+  title: 'Local Agent Import',
+  summary: 'A Codex CLI skill discovered from a local skill directory.',
+  sources: ['codex'],
+  suggestedFrom: 'codex',
+  repetition: 'External platform import',
+  currentVersion: 'v0.2',
+  reviewReasons: [
+    '外部 agent 平台导入的技能需要先确认来源内容',
+    '技能包包含额外脚本或资源文件',
+  ],
+  bindings: [
+    {
+      id: 'local-agent-import:codex',
+      skillId: 'local-agent-import',
+      platform: 'codex',
+      state: 'installed',
+      installedVersion: 'v0.2',
+      installedSha256: 'local-agent-sha',
+      remoteMtime: 1778235000,
+      metadata: {
+        source: 'desktop_app_fs',
+        sourceRoot: '/Users/skill-user/.codex/skills',
+        sourceDirectory: '/Users/skill-user/.codex/skills/local-agent-import',
+        skillMdPath: '/Users/skill-user/.codex/skills/local-agent-import/SKILL.md',
+        fileCount: 2,
+        totalByteSize: 2048,
+      },
+      createdAt: 1778235000,
+      updatedAt: 1778235000,
+    },
+  ],
+};
+
 const syncSettings = [
   { platform: 'personal_ai', enabled: true, capability: 'internal', mode: 'internal', config: {}, updatedAt: 1778230000 },
   { platform: 'openclaw', enabled: false, capability: 'api', mode: 'API direct', config: {}, updatedAt: 1778230000 },
-  { platform: 'codex', enabled: false, capability: 'fs_via_desktop_app', mode: 'Desktop App fs watcher', config: {}, updatedAt: 1778230000 },
+  { platform: 'codex', enabled: true, capability: 'fs_via_desktop_app', mode: 'Desktop App fs watcher', config: {}, updatedAt: 1778230000 },
   { platform: 'claude_code', enabled: false, capability: 'fs_via_desktop_app', mode: 'Desktop App fs watcher', config: {}, updatedAt: 1778230000 },
   { platform: 'cursor', enabled: false, capability: 'fs_via_desktop_app', mode: 'Desktop App fs watcher', config: {}, updatedAt: 1778230000 },
   { platform: 'chatgpt_gpts', enabled: false, capability: 'manual_only', mode: 'Manual install only', config: {}, updatedAt: 1778230000 },
@@ -214,6 +251,7 @@ function collectPageErrors(page) {
 let launched;
 let suggestionVisible = true;
 let snoozePosted = false;
+let desktopSyncPosted = false;
 
 try {
   launched = await launchExtensionContext();
@@ -232,11 +270,14 @@ try {
     }
 
     if (request.method() === 'GET' && endpoint === '/skills/suggestions') {
+      const visibleSuggestions = [
+        externalChangeListItem,
+        localAgentListItem,
+        ...(suggestionVisible ? [suggestionListItem] : []),
+      ];
       return jsonResponse(route, {
-        items: suggestionVisible
-          ? [externalChangeListItem, suggestionListItem]
-          : [externalChangeListItem],
-        total: suggestionVisible ? 2 : 1,
+        items: visibleSuggestions,
+        total: visibleSuggestions.length,
       });
     }
 
@@ -254,6 +295,10 @@ try {
 
     if (request.method() === 'GET' && endpoint === '/skills/external-change') {
       return jsonResponse(route, { skill: detailFor(externalChangeListItem) });
+    }
+
+    if (request.method() === 'GET' && endpoint === '/skills/local-agent-import') {
+      return jsonResponse(route, { skill: detailFor(localAgentListItem) });
     }
 
     if (
@@ -274,7 +319,36 @@ try {
   });
 
   await context.route('http://mock-desktop/**', async (route) => {
-    return jsonResponse(route, { error: 'Desktop App unavailable in E2E' }, 503);
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/health') {
+      return jsonResponse(route, {
+        ok: true,
+        status: 'running',
+        version: 'e2e',
+      });
+    }
+    if (request.method() === 'POST' && url.pathname === '/skills/sync/run') {
+      desktopSyncPosted = true;
+      return jsonResponse(route, {
+        status: 'succeeded',
+        platforms: [
+          {
+            platform: 'codex',
+            root: '/tmp/e2e-codex-skills',
+            status: 'succeeded',
+            scanned: 3,
+            imported: 1,
+            pulled: 0,
+            pushed: 1,
+            externalChanges: 1,
+            skipped: 1,
+            errors: [],
+          },
+        ],
+      });
+    }
+    return jsonResponse(route, { error: `Unexpected desktop ${request.method()} ${url.pathname}` }, 500);
   });
 
   const setupPage = await context.newPage();
@@ -343,9 +417,16 @@ try {
     timeout: 15000,
   });
   const codexSyncRow = page.locator('.sync-row', { hasText: 'Codex CLI' });
-  await codexSyncRow.locator('.switch span', { hasText: '需 Desktop App' }).waitFor({
+  await codexSyncRow.locator('.switch span', { hasText: '已开启' }).waitFor({
     timeout: 15000,
   });
+  await codexSyncRow.locator('button[aria-label="立即同步 Codex CLI"]').click();
+  await page.locator('.sync-dialog .status-box', {
+    hasText: '待审核变更 1 条',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.sync-dialog .status-box', {
+    hasText: '请到顶部 Inbox 审核本机目录变更',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.secondary-btn', { hasText: '关闭' }).click();
 
   const suggestionCard = page.locator('.suggestion-card', {
@@ -395,6 +476,32 @@ try {
     .locator('.workspace-actions button', { hasText: '确认覆盖' })
     .waitFor({ timeout: 15000 });
 
+  const localAgentCard = page.locator('.suggestion-card', {
+    hasText: 'Local Agent Import',
+  });
+  await page.locator('.suggestion-group', { hasText: '本地 agent 导入' }).waitFor({
+    timeout: 15000,
+  });
+  await localAgentCard.locator('.source-link', {
+    hasText: '本机目录 ~/.codex/skills/local-agent-import',
+  }).waitFor({ timeout: 15000 });
+  await localAgentCard.locator('.review-preview', {
+    hasText: '2 个资源文件 · 2 KB',
+  }).waitFor({ timeout: 15000 });
+  await localAgentCard.click();
+  await page.locator('.workspace-title h2', { hasText: 'Local Agent Import' }).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.workspace-actions button', { hasText: '查看风险' })
+    .click();
+  await page.locator('.review-audit-summary', {
+    hasText: '目录 ~/.codex/skills/local-agent-import',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.review-audit-summary', {
+    hasText: '2 个资源文件 · 2 KB',
+  }).waitFor({ timeout: 15000 });
+
   await suggestionCard.click();
   await page.locator('.workspace-title h2', { hasText: 'Snooze Candidate' }).waitFor({
     timeout: 15000,
@@ -438,6 +545,7 @@ try {
     );
 
   assert.equal(snoozePosted, true, 'Expected the snooze API to be called');
+  assert.equal(desktopSyncPosted, true, 'Expected the Desktop App skill sync API to be called');
   await assertNoPageErrors();
 
   console.log('verify-personal-skill-foundry-e2e: ok');

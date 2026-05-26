@@ -44,10 +44,16 @@ const MEMORY_SYNC_SEED_MESSAGE = [
 
 const PERSONAL_AI_SOURCE_LABEL = 'Personal AI (私人 AI)';
 
+function isDoubaoHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === 'doubao.com' || normalized.endsWith('.doubao.com');
+}
+
 function extractThreadId(url?: string): string | undefined {
   if (!url) return undefined;
   try {
     const parsed = new URL(url);
+    if (!isDoubaoHost(parsed.hostname)) return undefined;
     const match = parsed.pathname.match(/\/(?:chat|thread)\/([^/?#]+)/);
     return match?.[1];
   } catch {
@@ -378,7 +384,7 @@ export class DoubaoBridgeService {
     thread: Partial<ThreadRecord> & { threadUrl?: string },
   ): Promise<ThreadBinding> {
     let openedSnapshot: BrowserThreadSnapshot | undefined;
-    if (thread.threadUrl) {
+    if (thread.threadUrl && looksLikeThreadUrl(thread.threadUrl)) {
       openedSnapshot = await this.browser.openThread(thread.threadUrl);
     }
 
@@ -419,8 +425,17 @@ export class DoubaoBridgeService {
   }
 
   async bindMobileContextByTitle(title: string): Promise<ThreadBinding | null> {
+    const currentUrlBeforeSearch = this.browser.status().currentUrl;
     const found = await this.browser.findThreadByTitle(title);
-    if (!found) return null;
+    if (!found) {
+      if (this.canBindCurrentPageAsMobileContext(currentUrlBeforeSearch)) {
+        return this.bindThread('mobile_context', {
+          threadUrl: currentUrlBeforeSearch,
+          title,
+        });
+      }
+      return null;
+    }
 
     return this.bindThread('mobile_context', {
       threadUrl: found.url,
@@ -725,6 +740,17 @@ export class DoubaoBridgeService {
       existingRecord,
       threadUrl,
     };
+  }
+
+  private canBindCurrentPageAsMobileContext(url?: string): boolean {
+    if (!looksLikeThreadUrl(url)) return false;
+
+    const memoryBinding = this.state.bindings.memory_sync;
+    const memoryRecord = this.findThreadRecord(memoryBinding?.threadId);
+    return (
+      !sameThreadUrl(url, memoryBinding?.threadUrl) &&
+      !sameThreadUrl(url, memoryRecord?.url)
+    );
   }
 
   private upsertThreadRecord(record: ThreadRecord): ThreadRecord {

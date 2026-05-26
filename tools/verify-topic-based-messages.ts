@@ -27,8 +27,10 @@ import {
 } from '../src/modals/topic-detail-data.ts';
 import { renderHighlightedText } from '../src/modals/topic-detail-rendering.ts';
 import {
+  getExternalUrlSafety,
   getFirstSafeExternalUrl,
   getSafeExternalUrl,
+  hasBlockedExternalUrlCandidate,
 } from '../src/modals/topic-link-safety.ts';
 import {
   getTopicTriagePriority,
@@ -973,6 +975,12 @@ function verifyTopicDetailUsesSafeTraceableLinks() {
 
   assert.match(source, /getSafeExternalUrl/);
   assert.match(source, /getFirstSafeExternalUrl/);
+  assert.match(source, /getExternalUrlSafety/);
+  assert.match(source, /getConversationSourceLabel/);
+  assert.match(source, /getConversationHiddenSourceLabel/);
+  assert.match(source, /上下文来源/);
+  assert.match(source, /conversation-source-hidden/);
+  assert.match(source, /来源已隐藏/);
   assert.match(source, /class="webpage-open-link"/);
   assert.match(source, /target="_blank"/);
   assert.match(source, /rel="noopener noreferrer"/);
@@ -994,7 +1002,51 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
   );
   assert.equal(getSafeExternalUrl('javascript:alert(1)'), '');
   assert.equal(getSafeExternalUrl('file:///tmp/secret'), '');
+  assert.equal(
+    getSafeExternalUrl('https://user:pass@example.com/source'),
+    '',
+  );
   assert.equal(getSafeExternalUrl('#'), '');
+  assert.deepEqual(
+    {
+      safeUrl: getExternalUrlSafety('https://example.com/source').safeUrl,
+      reason: getExternalUrlSafety('https://example.com/source').reason,
+      hostname: getExternalUrlSafety('https://example.com/source').hostname,
+      blocked: getExternalUrlSafety('https://example.com/source').blocked,
+    },
+    {
+      safeUrl: 'https://example.com/source',
+      reason: 'safe',
+      hostname: 'example.com',
+      blocked: false,
+    },
+  );
+  assert.equal(getExternalUrlSafety('javascript:alert(1)').blocked, true);
+  assert.equal(
+    getExternalUrlSafety('javascript:alert(1)').reason,
+    'unsupported_protocol',
+  );
+  assert.equal(getExternalUrlSafety('nota url').blocked, true);
+  assert.deepEqual(
+    {
+      safeUrl: getExternalUrlSafety('https://user@example.com/source').safeUrl,
+      reason: getExternalUrlSafety('https://user@example.com/source').reason,
+      hostname: getExternalUrlSafety('https://user@example.com/source').hostname,
+      blocked: getExternalUrlSafety('https://user@example.com/source').blocked,
+    },
+    {
+      safeUrl: '',
+      reason: 'credentialed_url',
+      hostname: 'example.com',
+      blocked: true,
+    },
+  );
+  assert.equal(getExternalUrlSafety('#').blocked, false);
+  assert.equal(
+    hasBlockedExternalUrlCandidate('#', undefined, 'file:///tmp/secret'),
+    true,
+  );
+  assert.equal(hasBlockedExternalUrlCandidate('#', undefined, ''), false);
   assert.equal(
     getFirstSafeExternalUrl(
       '#',
@@ -1006,6 +1058,13 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
   assert.equal(
     getFirstSafeExternalUrl('', 'file:///tmp/secret', undefined),
     '',
+  );
+  assert.equal(
+    getFirstSafeExternalUrl(
+      'https://trusted.example.com:secret@evil.example/path',
+      'https://example.com/source',
+    ),
+    'https://example.com/source',
   );
   assert.match(source, /handleResourcePreviewClick/);
   assert.match(source, /handleUnreadDiscussionClick/);
@@ -1211,6 +1270,9 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(overviewSource, /\/entity\/Topic/);
   assert.match(listSource, /topicViewMode === 'muted'/);
   assert.match(listSource, /handleMuteTopic/);
+  assert.match(listSource, /topicMuteUndo/);
+  assert.match(listSource, /topic-mute-undo-toast/);
+  assert.match(listSource, /handleUndoTopicMute/);
   assert.match(listSource, /🔕 静音/);
   assert.match(listSource, /取消静音/);
   assert.match(listSource, /topic-mute-reasons/);
@@ -1234,6 +1296,10 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
   assert.match(source, /getTopicDetailUnreadCount/);
   assert.match(source, /getConversationRenderId/);
   assert.match(source, /getTopicConversationPrimaryId/);
+  assert.match(source, /highlightedMessageId/);
+  assert.match(source, /targeted-message-badge/);
+  assert.match(source, /链接定位/);
+  assert.match(source, /data-topic-message-ids/);
   assert.match(
     source,
     /store\.markConversationAsRead\(topicId\.value, messageId\)/,

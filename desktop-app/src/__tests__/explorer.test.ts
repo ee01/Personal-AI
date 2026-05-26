@@ -212,12 +212,20 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
       sources: {
         doubao: {
           authStatus: string;
-          cache: { messageCount: number };
+          cache: {
+            messageCount: number;
+            pendingExtractCount: number;
+            artifactCount: number;
+          };
           settings: { defaultScope: string };
         };
         chatgpt: {
           authStatus: string;
-          cache: { messageCount: number };
+          cache: {
+            messageCount: number;
+            pendingExtractCount: number;
+            artifactCount: number;
+          };
           settings: { defaultScope: string };
         };
       };
@@ -225,8 +233,12 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
     assert.equal(statusBody.askDefaultScope, 'work');
     assert.equal(statusBody.sources.doubao.authStatus, 'unknown');
     assert.equal(statusBody.sources.doubao.cache.messageCount, 1);
+    assert.equal(statusBody.sources.doubao.cache.pendingExtractCount, 1);
+    assert.equal(statusBody.sources.doubao.cache.artifactCount, 1);
     assert.equal(statusBody.sources.doubao.settings.defaultScope, 'personal');
     assert.equal(statusBody.sources.chatgpt.authStatus, 'unsupported');
+    assert.equal(statusBody.sources.chatgpt.cache.pendingExtractCount, 1);
+    assert.equal(statusBody.sources.chatgpt.cache.artifactCount, 0);
     assert.equal(statusBody.sources.chatgpt.settings.defaultScope, 'work');
 
     const openLoginResponse = await app.inject({
@@ -441,6 +453,7 @@ test('ExplorerManager tick schedules only enabled sources by interval', async ()
         messageCount: 0,
         pendingExtractCount: 0,
         conversationCount: 0,
+        artifactCount: 0,
       }),
       close: () => undefined,
     } as any,
@@ -521,6 +534,7 @@ test('ExplorerManager status does not probe disabled source auth', async () => {
         messageCount: 0,
         pendingExtractCount: 0,
         conversationCount: 0,
+        artifactCount: 0,
       }),
       close: () => undefined,
     } as any,
@@ -595,6 +609,7 @@ test('ExplorerManager status reports Doubao transport fallback', async () => {
         messageCount: 0,
         pendingExtractCount: 0,
         conversationCount: 0,
+        artifactCount: 0,
       }),
       close: () => undefined,
     } as any,

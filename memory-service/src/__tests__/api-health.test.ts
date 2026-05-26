@@ -6,9 +6,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { buildApp } from '../server.js';
 import { getTestDb, cleanupTestDb } from './setup.js';
 import type BetterSqlite3 from 'better-sqlite3';
+import { UserContextManager } from '../core/UserContextManager.js';
 
 describe('Health & Stats API', () => {
   let app: FastifyInstance;
@@ -83,5 +87,60 @@ describe('Health & Stats API', () => {
     expect(body).toHaveProperty('status');
     expect(body).toHaveProperty('database');
     expect(body).toHaveProperty('embedding');
+  });
+});
+
+describe('Stats user isolation metadata', () => {
+  let app: FastifyInstance;
+  let userContextManager: UserContextManager;
+  let dataDir: string;
+
+  beforeAll(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-stats-user-'));
+    userContextManager = new UserContextManager(dataDir);
+    const result = await buildApp({ userContextManager });
+    app = result.app;
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    userContextManager.closeAll();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('GET /api/v1/stats reports the explicit per-user storage boundary', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/stats',
+      headers: { 'X-User-Id': 'owner.alpha' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.user).toEqual({
+      id: 'owner.alpha',
+      isolation: 'per_user_sqlite',
+      storageKey: 'data/users/owner.alpha/memory.db',
+      fallbackToDefault: false,
+    });
+    expect(
+      fs.existsSync(path.join(dataDir, 'users', 'owner.alpha', 'memory.db')),
+    ).toBe(true);
+  });
+
+  it('GET /api/v1/stats marks missing identity as default fallback', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/stats',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user).toEqual({
+      id: 'default',
+      isolation: 'per_user_sqlite',
+      storageKey: 'data/users/default/memory.db',
+      fallbackToDefault: true,
+    });
   });
 });

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { contentHash } from '../utils/hashing.js';
 import { now, formatDateTime } from '../utils/time.js';
 import { toSlug } from '../utils/slug.js';
@@ -6,7 +8,7 @@ import type Database from 'better-sqlite3';
 import type { ReflectionInput, ReflectionOutput } from './OnlineReflection.js';
 import {
   ReflectionWorker,
-  type DraftReflectionAction,
+  type DraftRehearsalCandidate,
   type ReflectionEvidenceItem,
 } from './ReflectionWorker.js';
 import {
@@ -25,14 +27,22 @@ import {
   ReflectionThreadRepository,
   type ReflectionThreadRecord,
   type ReflectionRunRecord,
+  type ReflectionResearchAttemptRecord,
   type TopicMemoryLinkRecord,
   type DreamRunRecord,
 } from '../repositories/ReflectionThreadRepository.js';
 import { MarkdownManager } from './MarkdownManager.js';
+import {
+  RehearsalService,
+  hasStableCue,
+  normalizeCues,
+  type CreateRehearsalInput,
+} from './RehearsalService.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { RecallEngine } from './RecallEngine.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
+import type { Rehearsal, RehearsalActivationCues } from '../types/index.js';
 
 interface MessageSignalRow {
   id: string;
@@ -77,6 +87,12 @@ interface ProfileItemRow {
   updated_at: number;
 }
 
+interface EntityPropertyPreviewRow {
+  property_key: string;
+  property_value: string;
+  confidence: number | null;
+}
+
 type ReflectionWaitingReason =
   | 'waiting_for_delegation'
   | 'waiting_for_confirm_request'
@@ -116,6 +132,7 @@ export class ReflectionThreadService {
   private readonly actionResultRepo: ActionResultRepository;
   private readonly worker: ReflectionWorker;
   private readonly researcher: ReflectionResearcher;
+  private readonly rehearsalService: RehearsalService;
   private readonly markdownManager?: MarkdownManager;
 
   constructor(
@@ -128,6 +145,7 @@ export class ReflectionThreadService {
     this.actionResultRepo = new ActionResultRepository(db);
     this.worker = new ReflectionWorker();
     this.researcher = new ReflectionResearcher(userDataManager);
+    this.rehearsalService = new RehearsalService(db, userDataManager);
     this.markdownManager = userDataManager?.isInitialized
       ? new MarkdownManager(db, userDataManager.rootDir)
       : undefined;
@@ -170,6 +188,7 @@ export class ReflectionThreadService {
     runs: ReflectionRunRecord[];
     actions: QueuedActionRecord[];
     actionResults: ActionResultRecord[];
+    researchAttempts: ReflectionResearchAttemptRecord[];
     links: Array<
       TopicMemoryLinkRecord & {
         preview?: string;
@@ -185,6 +204,7 @@ export class ReflectionThreadService {
     const runs = this.repo.listRuns(threadId, 20);
     const actions = this.actionRepo.list({ threadId, limit: 20 }).items;
     const actionResults = this.actionResultRepo.listByThread(threadId, 20);
+    const researchAttempts = this.repo.listResearchAttempts(threadId, 30);
     const rawLinks = this.repo.listLinks(threadId, 50);
     const links = rawLinks.map((link) => ({
       ...link,
@@ -192,7 +212,15 @@ export class ReflectionThreadService {
     }));
     const dreamRuns = this.repo.listDreamRuns({ threadId, limit: 10 });
 
-    return { thread, runs, actions, actionResults, links, dreamRuns };
+    return {
+      thread,
+      runs,
+      actions,
+      actionResults,
+      researchAttempts,
+      links,
+      dreamRuns,
+    };
   }
 
   private getReflectionHeartbeatSeconds(): number {
@@ -542,6 +570,7 @@ export class ReflectionThreadService {
     thread: ReflectionThreadRecord;
     run: ReflectionRunRecord;
     actions: QueuedActionRecord[];
+    rehearsals: Rehearsal[];
   }> {
     const thread = this.repo.getThreadById(threadId);
     if (!thread) {
@@ -553,6 +582,7 @@ export class ReflectionThreadService {
     }
 
     const triggerType = options.triggerType ?? 'manual';
+    const runId = randomUUID();
     const evidence = this.collectEvidence(thread, 40);
     const recentRuns = this.repo.listRuns(thread.id, 5);
     const researchQueries = await this.researcher.plan(
@@ -563,6 +593,7 @@ export class ReflectionThreadService {
     const researchEvidence = await this.executeResearchQueries(
       thread,
       researchQueries,
+      runId,
     );
     const combinedEvidence = this.mergeEvidence(evidence, researchEvidence);
     const generated = await this.worker.generate(
@@ -575,6 +606,7 @@ export class ReflectionThreadService {
       thread.latestMarkdownPath ?? this.defaultThreadPath(thread);
     const latestRun = this.repo.getLatestRun(thread.id);
     const run = this.repo.createRun({
+      id: runId,
       threadId: thread.id,
       runType: options.runType ?? 'continuous_reflection',
       triggerType,
@@ -667,6 +699,13 @@ export class ReflectionThreadService {
       );
     }
 
+    const createdRehearsals = this.persistRehearsalCandidates(
+      thread,
+      run,
+      generated.rehearsalCandidates ?? [],
+      combinedEvidence,
+    );
+
     const updatedThread = this.repo.updateThreadAfterRun(thread.id, {
       latestSummary: generated.summary,
       latestMarkdownPath: threadPath,
@@ -684,7 +723,142 @@ export class ReflectionThreadService {
       thread: updatedThread ?? this.repo.getThreadById(thread.id)!,
       run,
       actions: createdActions,
+      rehearsals: createdRehearsals,
     };
+  }
+
+  private persistRehearsalCandidates(
+    thread: ReflectionThreadRecord,
+    run: ReflectionRunRecord,
+    candidates: DraftRehearsalCandidate[],
+    evidence: ReflectionEvidenceItem[],
+  ): Rehearsal[] {
+    const persisted: Rehearsal[] = [];
+    for (const candidate of candidates.slice(0, 5)) {
+      const input = this.buildRehearsalInput(thread, run, candidate, evidence);
+      if (!input.sourceRefId) continue;
+
+      const existing = this.rehearsalService.findBySource(
+        input.sourceKind ?? 'reflection',
+        input.sourceRefId,
+      );
+      if (existing?.status === 'archived' || existing?.status === 'dismissed') {
+        continue;
+      }
+
+      const rehearsal = existing
+        ? this.rehearsalService.update(existing.id, {
+            title: input.title,
+            scenarioType: input.scenarioType,
+            summary: input.summary,
+            content: input.content,
+            activationCues: input.activationCues,
+            evidenceRefs: input.evidenceRefs,
+            confidence: input.confidence,
+            priority: input.priority,
+            validUntil: input.validUntil,
+            status:
+              existing.status === 'stale' &&
+              (input.confidence ?? 0) >= 0.82 &&
+              hasStableCue(input.activationCues ?? {})
+                ? 'active'
+                : undefined,
+            staleReason:
+              existing.status === 'stale' &&
+              (input.confidence ?? 0) >= 0.82 &&
+              hasStableCue(input.activationCues ?? {})
+                ? null
+                : undefined,
+          })
+        : this.rehearsalService.create(input);
+
+      if (!rehearsal) continue;
+      persisted.push(rehearsal);
+      this.repo.addLink(
+        thread.id,
+        'rehearsal',
+        rehearsal.id,
+        Math.max(0.55, rehearsal.confidence),
+        'rehearsal_candidate',
+      );
+    }
+    return persisted;
+  }
+
+  private buildRehearsalInput(
+    thread: ReflectionThreadRecord,
+    run: ReflectionRunRecord,
+    candidate: DraftRehearsalCandidate,
+    evidence: ReflectionEvidenceItem[],
+  ): CreateRehearsalInput {
+    const activationCues = normalizeCues(candidate.activationCues);
+    const sourceRefId = this.buildRehearsalSourceRef(
+      thread,
+      candidate,
+      activationCues,
+    );
+    return {
+      title: candidate.title,
+      scenarioType: candidate.scenarioType ?? 'general',
+      summary: candidate.summary,
+      content: candidate.content,
+      activationCues,
+      evidenceRefs: uniqStrings([
+        ...(candidate.evidenceRefs ?? []),
+        `reflection_thread:${thread.id}`,
+        `reflection_run:${run.id}`,
+        ...evidence
+          .slice(0, 8)
+          .map((item) => `${item.sourceKind}:${item.sourceId}`),
+      ]),
+      sourceKind: 'reflection',
+      sourceRefId,
+      confidence: candidate.confidence,
+      priority: candidate.priority,
+      validUntil: candidate.validUntil,
+    };
+  }
+
+  private buildRehearsalSourceRef(
+    thread: ReflectionThreadRecord,
+    candidate: DraftRehearsalCandidate,
+    cues: RehearsalActivationCues,
+  ): string {
+    const cueKey = this.rehearsalCueFingerprint(cues);
+    const scenario = candidate.scenarioType ?? 'general';
+    const sceneKey = candidate.dedupeKey?.trim()
+      ? toSlug(candidate.dedupeKey)
+      : [cueKey, toSlug(candidate.title)].filter(Boolean).join('|');
+    const stableBase = [
+      thread.topicKey,
+      scenario,
+      sceneKey || toSlug(candidate.title),
+    ].join('|');
+    return `thread:${thread.id}:${contentHash(stableBase).slice(0, 16)}`;
+  }
+
+  private rehearsalCueFingerprint(cues: RehearsalActivationCues): string {
+    return [
+      'people',
+      'projects',
+      'groupIds',
+      'conversationIds',
+      'meetingIds',
+      'calendarEventIds',
+      'issueKeys',
+      'urls',
+      'topics',
+      'keywords',
+      'surfaces',
+    ]
+      .map((key) => {
+        const values = cues[key as keyof RehearsalActivationCues] ?? [];
+        return values.length
+          ? `${key}:${values.map((value) => value.toLowerCase()).sort().join(',')}`
+          : '';
+      })
+      .filter(Boolean)
+      .join('|');
   }
 
   hasPendingDelegation(threadId: string): boolean {
@@ -875,6 +1049,7 @@ export class ReflectionThreadService {
   private async executeResearchQueries(
     thread: ReflectionThreadRecord,
     queries: LocalResearchQuery[],
+    runId: string,
   ): Promise<ReflectionEvidenceItem[]> {
     if (queries.length === 0) return [];
     const recallEngine = new RecallEngine(this.db);
@@ -882,45 +1057,87 @@ export class ReflectionThreadService {
     const seen = new Set<string>();
 
     for (const query of queries) {
-      const result = await recallEngine.recall({
-        query: query.query,
-        topK: query.topK,
-        includeMetadata: true,
-        timeRange: query.timeRange,
-        projectFilter: query.projectFilter,
-        senderFilter: query.senderFilter,
-        groupFilter: query.groupFilter,
-        sourceTypes: query.sourceTypes,
-      });
+      try {
+        const result = await recallEngine.recall({
+          query: query.query,
+          topK: query.topK,
+          includeMetadata: true,
+          timeRange: query.timeRange,
+          projectFilter: query.projectFilter,
+          senderFilter: query.senderFilter,
+          groupFilter: query.groupFilter,
+          sourceTypes: query.sourceTypes,
+        });
+        const evidenceRefs: string[] = [];
 
-      for (const item of result.items) {
-        const sourceKind =
-          item.type === 'chunk'
-            ? 'chunk'
-            : item.type === 'entity'
-              ? 'entity'
-              : 'message';
-        const key = `${sourceKind}:${item.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        for (const item of result.items) {
+          const sourceKind =
+            item.type === 'chunk'
+              ? 'chunk'
+              : item.type === 'entity'
+                ? 'entity'
+                : 'message';
+          const key = `${sourceKind}:${item.id}`;
+          evidenceRefs.push(key);
+          if (seen.has(key)) continue;
+          seen.add(key);
 
-        if (sourceKind === 'message' || sourceKind === 'chunk') {
-          this.repo.addLink(
-            thread.id,
+          if (
+            sourceKind === 'message' ||
+            sourceKind === 'chunk' ||
+            sourceKind === 'entity'
+          ) {
+            this.repo.addLink(
+              thread.id,
+              sourceKind,
+              item.id,
+              Math.max(0.55, item.score),
+              'research',
+            );
+          }
+
+          evidenceItems.push({
             sourceKind,
-            item.id,
-            Math.max(0.55, item.score),
-            'research',
-          );
+            sourceId: item.id,
+            title: query.purpose,
+            snippet: item.content.slice(0, 240),
+            createdAt: item.timestamp,
+            role: 'research',
+          });
         }
 
-        evidenceItems.push({
-          sourceKind,
-          sourceId: item.id,
-          title: query.purpose,
-          snippet: item.content.slice(0, 240),
-          createdAt: item.timestamp,
-          role: 'research',
+        this.repo.recordResearchAttempt({
+          threadId: thread.id,
+          runId,
+          query: query.query,
+          purpose: query.purpose,
+          status: result.items.length > 0 ? 'hit' : 'empty',
+          resultCount: result.items.length,
+          sourceTypes: query.sourceTypes,
+          projectFilter: query.projectFilter,
+          senderFilter: query.senderFilter,
+          groupFilter: query.groupFilter,
+          evidenceRefs,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          '[ReflectionThreadService] Local research query failed:',
+          message,
+        );
+        this.repo.recordResearchAttempt({
+          threadId: thread.id,
+          runId,
+          query: query.query,
+          purpose: query.purpose,
+          status: 'failed',
+          resultCount: 0,
+          sourceTypes: query.sourceTypes,
+          projectFilter: query.projectFilter,
+          senderFilter: query.senderFilter,
+          groupFilter: query.groupFilter,
+          errorMessage: message.slice(0, 500),
+          evidenceRefs: [],
         });
       }
     }
@@ -1114,6 +1331,29 @@ export class ReflectionThreadService {
       };
     }
 
+    if (link.sourceKind === 'rehearsal') {
+      const row = this.db
+        .prepare(
+          `SELECT title, summary, content, updated_at
+           FROM rehearsals
+           WHERE id = ?`,
+        )
+        .get(link.sourceId) as
+        | {
+            title: string;
+            summary: string | null;
+            content: string;
+            updated_at: number;
+          }
+        | undefined;
+      if (!row) return {};
+      return {
+        previewTitle: `场景预演: ${row.title}`,
+        preview: (row.summary ?? row.content).slice(0, 240),
+        previewTimestamp: row.updated_at,
+      };
+    }
+
     if (link.sourceKind === 'chunk') {
       const row = this.db
         .prepare('SELECT content, created_at FROM chunks WHERE chunk_id = ?')
@@ -1125,6 +1365,56 @@ export class ReflectionThreadService {
         previewTitle: '记忆片段',
         preview: row.content.slice(0, 240),
         previewTimestamp: row.created_at,
+      };
+    }
+
+    if (link.sourceKind === 'entity') {
+      const row = this.db
+        .prepare(
+          `SELECT id, name, type, description, last_seen, updated_at, created_at
+           FROM entities
+           WHERE id = ?`,
+        )
+        .get(link.sourceId) as
+        | {
+            id: string;
+            name: string;
+            type: string;
+            description: string | null;
+            last_seen: number | null;
+            updated_at: number | null;
+            created_at: number;
+          }
+        | undefined;
+      if (!row) return {};
+
+      const properties = this.db
+        .prepare(
+          `SELECT property_key, property_value, confidence
+           FROM entity_properties
+           WHERE entity_id = ?
+             AND status = 'active'
+             AND tx_end IS NULL
+           ORDER BY confidence DESC, tx_start DESC
+           LIMIT 3`,
+        )
+        .all(link.sourceId) as EntityPropertyPreviewRow[];
+      const propertyPreview =
+        properties.length > 0
+          ? ` | 已知事实: ${properties
+              .map(
+                (property) =>
+                  `${property.property_key}=${property.property_value}`,
+              )
+              .join('; ')}`
+          : '';
+
+      return {
+        previewTitle: `实体线索: ${row.name}`,
+        preview: `${row.type}${
+          row.description ? ` · ${row.description}` : ''
+        }${propertyPreview}`,
+        previewTimestamp: row.last_seen ?? row.updated_at ?? row.created_at,
       };
     }
 
@@ -1161,6 +1451,7 @@ export class ReflectionThreadService {
       limit: 20,
     }).items;
     const actionResults = this.actionResultRepo.listByThread(thread.id, 20);
+    const researchAttempts = this.repo.listResearchAttempts(thread.id, 20);
     const links = this.repo.listLinks(thread.id, 20).map((link) => ({
       ...link,
       ...this.hydrateLink(link),
@@ -1204,6 +1495,33 @@ export class ReflectionThreadService {
         lines.push(
           `- [${link.sourceKind}/${link.role}] ${link.previewTitle ?? link.sourceId}: ${link.preview ?? '(no preview)'}`,
         );
+      }
+    } else {
+      lines.push('- None');
+    }
+    lines.push('');
+
+    lines.push('## Local Research Attempts');
+    if (researchAttempts.length > 0) {
+      for (const attempt of researchAttempts) {
+        const scopeParts = [
+          attempt.sourceTypes.length > 0
+            ? `sources=${attempt.sourceTypes.join(',')}`
+            : '',
+          attempt.projectFilter ? `project=${attempt.projectFilter}` : '',
+          attempt.senderFilter.length > 0
+            ? `senders=${attempt.senderFilter.join(',')}`
+            : '',
+          attempt.groupFilter.length > 0
+            ? `groups=${attempt.groupFilter.join(',')}`
+            : '',
+        ].filter(Boolean);
+        lines.push(
+          `- [${attempt.status}] ${attempt.purpose}: "${attempt.query}" (${attempt.resultCount} result${attempt.resultCount === 1 ? '' : 's'}${scopeParts.length > 0 ? `; ${scopeParts.join('; ')}` : ''})`,
+        );
+        if (attempt.errorMessage) {
+          lines.push(`  - Error: ${attempt.errorMessage}`);
+        }
       }
     } else {
       lines.push('- None');

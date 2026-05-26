@@ -6,6 +6,7 @@ venv
 .env.development
 .vscode/symbols.json
 .claude/
+.eval-runs/
 chroma-data/
 chroma-backup/
 static/manifest.json

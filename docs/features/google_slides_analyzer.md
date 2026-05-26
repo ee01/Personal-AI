@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Google Slides 项目分析器
 
-最后更新: 2026-05-22
+最后更新: 2026-05-24
 
 ## 功能概述
 
@@ -35,6 +35,7 @@ Google Slides 项目分析器用于在 Google Slides 页面中识别项目表格
 ## 当前能力
 
 - 读取当前 Google Slides 演示文稿，并优先分析当前 slide。
+- 解析阶段会把实际分析范围带到结果页，包括已分析 slide 数、目标 slide id、低置信/多表合并/整份 deck fallback 等提醒，避免用户误以为所有内容都被稳定识别。
 - 支持表格型、文本/列表型内容；同一 slide 上多个可信项目表格会合并分析；表格备注列可识别 Comments、Highlights、Actions、Next steps 等常见命名；常见 PM 周报表头如 RAG/Health、DRI、Workstream、Updates/Blockers 也会映射到状态、负责人、赛道和备注；低置信或复杂结构可使用 LLM fallback。
 - 自动提取 Jira key（支持 `AIT2-11063` 这类带数字项目前缀），并查询 Jira 状态、负责人、优先级和截止日期等上下文。
 - 文本/列表型 slide 会合并同一 Jira key 在标题、列表项和段落抽取中的重复结果，避免结果页出现重复项目建议。
@@ -47,6 +48,7 @@ Google Slides 项目分析器用于在 Google Slides 页面中识别项目表格
 - 写回完成后结果页会显示实际写入字段数并清空选择，避免重复提交。
 - 如果写回部分成功但有字段被跳过，完成面板会保留具体跳过原因，方便用户回到 Slides 补列、修定位或手动处理。
 - 写回完成面板会保留本次提交字段、变更摘要和来源/复核状态，作为用户离开结果页前的字段级回执。
+- 部分成功时会把跳过原因和本次提交字段匹配成“人工接管清单”，保留建议值、来源依据、下一步处理方式，并支持复制给后续手动处理。
 - 写回请求如果长时间没有返回结果，结果页会退出“正在更新”状态并提示用户回到 Slides 确认实际写入情况。
 - 结果页初始加载如果无法收到 Google Slides 页面返回的数据，会显示恢复提示并允许重新请求数据。
 - 结果页支持按全部、已选、需复核、风险和无法写回筛选建议，并可一键恢复“高可信且有来源证据”的默认选择或清空选择，方便批量审阅。
@@ -60,6 +62,7 @@ Google Slides 项目分析器用于在 Google Slides 页面中识别项目表格
 - 无法自动写回的字段会在项目卡内展示建议值和来源/复核原因，方便用户补列或手动更新。
 - 项目卡片的复核提示会列出具体需人工确认的字段，避免把“部分字段缺少直接来源”误读成整条建议都没有来源。
 - 结果页会把风险、阻塞、未关闭高优先级和未关闭逾期 Jira 项目汇总到风险焦点区，并在项目卡片内展示风险依据；`No risk`、`Not done` 这类否定/未完成表达和已完成状态不会被误算为风险。
+- 结果页会在写回前展示“分析范围与提醒”，把解析范围和结构识别警告前置到用户审阅路径里。
 - 只有风险但没有字段差异的项目也会作为风险关注卡片展示，但不会计入可写回字段或默认选择。
 - 分析摘要和结果页共用同一套风险识别逻辑，避免同一项目在顶部统计和详情卡片里风险结论不一致。
 - 项目风险等级会归一化处理：`medium` 和旧版 `normal` 计入需要关注，`high` / `critical` 计入严重风险，`low` 才计入正常。
@@ -77,6 +80,7 @@ Google Slides 项目分析器用于在 Google Slides 页面中识别项目表格
 - 写回前必须让用户看到具体字段级变更预览和对应来源/复核原因，而不只展示数量；写回进行中不能继续改勾选状态。
 - 用户手动勾选低可信或缺少直接来源的字段后，写回前仍应看到需复核数量，避免把人工接管后的字段误认为系统默认安全项。
 - 多表项目页会合并展示各个可信项目表格，避免用户以为整页已检查但实际只处理了一个分组。
+- 分析范围、低置信或 fallback 提醒必须直接展示在结果页，而不是只写到 console；用户在批量勾选前应先知道本次分析覆盖了当前 slide 还是整份 deck。
 - 用户可以先查看风险焦点或风险筛选，再在项目卡片内核对风险依据，减少项目周报页里查找阻塞项的成本。
 - 没有字段可写回的风险关注项需要明确标注为“仅关注”，避免用户误以为有隐藏写回动作。
 - 项目统计必须和风险筛选一致，避免中等风险项目被误显示为正常进行。
@@ -88,6 +92,7 @@ Google Slides 项目分析器用于在 Google Slides 页面中识别项目表格
 - 无效或缺少行/列定位信息的写回请求会返回失败或跳过提示，不保持“正在更新”的悬挂状态，也不会把无效 `cellLocation` 发给 Slides API。
 - 部分成功的写回结果必须说明被跳过字段的具体原因，避免用户只看到数量但不知道如何修复。
 - 写回成功后仍要保留本次提交字段回执，方便用户核对哪些字段已进入 Slides API 请求，尤其是包含人工复核字段或部分跳过时。
+- 部分成功后的跳过项要能直接接管：用户应看到是哪一个项目/字段、建议值、来源依据、为什么跳过，以及下一步是补列、修定位、检查权限还是重新分析。
 - Google Slides 页面或结果页通信异常时，结果页会保留当前建议和勾选状态，方便用户确认后重试。
 - 直接打开结果页或父窗口丢失时，页面会说明需要从 Google Slides 重新触发，避免用户停在无限加载状态。
 - 结果页优先展示“哪些项目要更新、为什么更新、来源是什么”，避免要求用户在 Jira、聊天记录和 Slides 间反复切换。
@@ -95,9 +100,12 @@ Google Slides 项目分析器用于在 Google Slides 页面中识别项目表格
 
 ## 业内参考
 
+- [Gemini in Google Slides](https://support.google.com/docs/answer/14207419?hl=en) 支持引用 Drive/Gmail 内容、预览后插入，并显示来源；这说明结果页应把来源、范围和插入/写回动作拆开，而不是把 AI 草稿当成最终事实。
+- [Google Workspace Gemini sources](https://support.google.com/docs/answer/16813283?hl=en) 明确来源可能不完整或出错，需要用户核对；本功能因此把解析警告和字段来源放在写回前。
+- [Copilot in PowerPoint](https://support.microsoft.com/en-us/office/create-a-new-presentation-with-copilot-in-powerpoint-3222ee03-f5a4-4d27-8642-9c387ab4854d) 把生成内容定位为可继续编辑和人工复核的 draft，并通过反馈、来源/凭据等机制处理不确定性；本功能的部分成功回执也应保留人工接管路径。
 - [Asana for Google Slides](https://asana.com/apps/google-slides) 通过 smart chips 把任务、项目、目标和状态更新嵌入 slide，说明项目汇报材料需要保留源系统上下文，而不是只写静态文本。
 - [Asana Apps Script status report guide](https://developers.asana.com/docs/automate-project-status-reports-with-google-apps-scripts) 与 [Jira reports](https://support.atlassian.com/jira-software-cloud/docs/generate-a-report/) 都强调用任务状态、负责人、截止日期和进度指标生成汇报视图；本功能更偏向“在既有 slide 上审阅并写回差异”。
-- [CHI 2022 NB2Slides](https://arxiv.org/abs/2203.11085) 指出，AI 生成 slide 能提高效率，但用户仍希望 human-AI collaboration，而不是全自动覆盖；[DraftMarks](https://arxiv.org/abs/2509.23505) 和 [mixed-initiative visual analytics](https://arxiv.org/abs/2509.19152) 相关讨论也支持把来源、修改痕迹和人工判断入口做在结果页里。
+- [CHI 2022 NB2Slides](https://arxiv.org/abs/2203.11085) 与 [CHI 2023 Slide4N](https://research.ibm.com/publications/slide4n-creating-presentation-slides-from-computational-notebooks-with-human-ai-collaboration) 都强调 slide 生成/整理更适合人机协作而非全自动覆盖；[DraftMarks](https://arxiv.org/abs/2509.23505) 和 [mixed-initiative visual analytics](https://arxiv.org/abs/2509.19152) 相关讨论也支持把来源、修改痕迹和人工判断入口做在结果页里。
 
 ## 主要代码位置
 

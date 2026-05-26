@@ -139,7 +139,22 @@ try {
         vectorized_data_maintenance: { enabled: true },
         user_summary_generation: { enabled: true },
         vector_quality_check: { enabled: true },
-        digest_queue_process: { enabled: true },
+        digest_queue_process: {
+          enabled: true,
+          lastSuccess: true,
+          lastCompletedAt: now - 50_000,
+          lastResultSummary: '无到期摘要',
+          runHistory: [
+            {
+              startedAt: now - 50_100,
+              completedAt: now - 50_000,
+              durationMs: 100,
+              success: true,
+              trigger: 'scheduled',
+              summary: '无到期摘要',
+            },
+          ],
+        },
       },
     });
   }, { now });
@@ -191,6 +206,30 @@ try {
   await page
     .locator('.task-next-step.failed', {
       hasText: '系统健康监控 连续失败 3 次',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-attention-summary', {
+      hasText: '需处理总览',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-attention-summary-title', { hasText: '2 项' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-attention-item.failed', {
+      hasText: '系统健康监控',
+    })
+    .locator('.task-attention-detail', {
+      hasText: '连续失败 3 次',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-attention-item.skipped', {
+      hasText: '记忆系统同步',
+    })
+    .locator('.task-attention-action', {
+      hasText: '当前任务完成后再重试',
     })
     .waitFor({ timeout: 15000 });
 
@@ -248,6 +287,16 @@ try {
 
   await page.locator('.task-health-chip', { hasText: '全部 8' }).click();
   assert.equal((await visibleTaskNames(page)).length, 8);
+  await page
+    .locator('.task-row', { hasText: '汇总推送队列处理' })
+    .locator('.task-result', { hasText: '上次成功 · 无到期摘要' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-row', { hasText: '汇总推送队列处理' })
+    .locator('.task-latest-run', {
+      hasText: '最近一次 · 排程成功 · 100ms · 无到期摘要',
+    })
+    .waitFor({ timeout: 15000 });
 
   assertNoPageErrors();
   await context.close();

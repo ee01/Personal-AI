@@ -7,6 +7,7 @@ import {
   type TodayPilotMeetingPrepRecord,
 } from '../repositories/TodayPilotMeetingPrepRepository.js';
 import { contentHash } from '../utils/hashing.js';
+import { normalizeStorylineOpportunity } from '../utils/storyline.js';
 import { now } from '../utils/time.js';
 import type {
   ComposerAssistEvidence,
@@ -16,6 +17,7 @@ import type {
   ContextAssistResponse,
   ContextRecallRequest,
   RecallSourceType,
+  StorylineOpportunity,
 } from '../types/index.js';
 
 type MeetingPrepMode = 'nightly_llm' | 'on_demand_llm';
@@ -43,6 +45,7 @@ export interface TodayPilotMeetingPrepResolveOptions {
   userGoal?: string;
   autoGenerate?: boolean;
   forceGenerate?: boolean;
+  sourceTypes?: RecallSourceType[];
 }
 
 export interface TodayPilotMeetingPrepResolveResponse {
@@ -77,6 +80,7 @@ interface TodayPilotMeetingPrepLlmResponse {
   risksOrOpenLoops?: string[];
   contextPackMd?: string;
   redactionPreview?: string[];
+  storylineOpportunity?: StorylineOpportunity;
   usage?: Record<string, unknown>;
 }
 
@@ -91,9 +95,21 @@ const MEETING_PREP_SOURCES: RecallSourceType[] = [
   'user_core',
   'markdown',
   'reflection',
+  'rehearsal',
 ];
 
 const MAX_LLM_EVIDENCE = 5;
+
+function normalizeMeetingPrepSourceTypes(
+  sourceTypes?: RecallSourceType[],
+): RecallSourceType[] {
+  const requested = sourceTypes?.length
+    ? sourceTypes.filter((sourceType) =>
+        MEETING_PREP_SOURCES.includes(sourceType),
+      )
+    : MEETING_PREP_SOURCES;
+  return requested.length ? requested : MEETING_PREP_SOURCES;
+}
 
 function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -177,7 +193,7 @@ function hasDeepPrepSignal(event: ContextAssistMeetingEvent): boolean {
 
 function toEvidence(match: {
   id: string;
-  type: 'message' | 'chunk' | 'entity';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -346,6 +362,7 @@ export class TodayPilotMeetingPrepService {
       localDate,
       userGoal: options.userGoal,
       mode: goalHash ? 'on_demand_llm' : 'nightly_llm',
+      sourceTypes: options.sourceTypes,
     });
     return {
       prep,
@@ -442,6 +459,7 @@ export class TodayPilotMeetingPrepService {
       previewRequired: false,
       confidence: prep.status === 'ready' ? 0.82 : 0.58,
       queryTimeMs: 0,
+      storylineOpportunity: prep.storylineOpportunity,
       debug: {
         deprecated: false,
         prepId: prep.id,
@@ -459,12 +477,17 @@ export class TodayPilotMeetingPrepService {
     localDate: string;
     userGoal?: string;
     mode: MeetingPrepMode;
+    sourceTypes?: RecallSourceType[];
   }): Promise<TodayPilotMeetingPrepRecord> {
     const event = this.normalizeEvent(input.event)!;
     const startAt = normalizeTimestamp(event.startTime);
     const eventExternalId = this.eventExternalId(event);
     const goalHash = goalHashFor(input.userGoal);
-    const recall = await this.recallForEvent(event, input.userGoal);
+    const recall = await this.recallForEvent(
+      event,
+      input.userGoal,
+      input.sourceTypes,
+    );
     const evidence = this.buildEvidence(event, recall.matches.map(toEvidence));
     const sourceHash = contentHash(
       JSON.stringify({
@@ -537,6 +560,7 @@ export class TodayPilotMeetingPrepService {
   private async recallForEvent(
     event: ContextAssistMeetingEvent,
     userGoal?: string,
+    sourceTypes?: RecallSourceType[],
   ) {
     const attendeeNames = eventAttendeeNames(event);
     const recallRequest: ContextRecallRequest = {
@@ -574,7 +598,7 @@ export class TodayPilotMeetingPrepService {
         Boolean(item),
       ),
       scope: 'work',
-      sourceTypes: MEETING_PREP_SOURCES,
+      sourceTypes: normalizeMeetingPrepSourceTypes(sourceTypes),
       limit: MAX_LLM_EVIDENCE,
       debug: false,
     };
@@ -671,7 +695,37 @@ export class TodayPilotMeetingPrepService {
         risksOrOpenLoops: ['risk or open loop'],
         contextPackMd: 'markdown context pack for Meeting Pilot',
         redactionPreview: ['sensitive detail to review before sharing'],
+        storylineOpportunity: {
+          available: true,
+          confidence: 0.0,
+          storyType:
+            'sharing | status_report | retro | training | proposal | weekly_update',
+          buttonLabel: 'short button copy; user clicks before generating',
+          oneLineReason:
+            'why there is enough material for a story, one short sentence',
+          audienceHint: 'who this would be for',
+          estimatedLengthMinutes: 8,
+          evidenceClusters: [
+            {
+              label: 'cluster of related evidence',
+              sourceKinds: ['meeting', 'glip'],
+              evidenceCount: 3,
+            },
+          ],
+          blockedReasons: [
+            'why no button should show when available is false',
+          ],
+          suggestedArtifact:
+            'speaker_notes | slides_outline | ringcentral_post | docs_brief',
+        },
       }),
+      '',
+      'Storyline opportunity rules:',
+      '- Set storylineOpportunity.available=true only when the meeting likely requires an outward explanation, sharing, report, training, retro, proposal, or weekly update.',
+      '- Require enough evidence for at least 3 story segments and at least one clear audience.',
+      '- Do not show it for ordinary daily sync, 1:1, or a single isolated todo unless evidence shows explicit sharing/retro/report intent.',
+      '- If private or sensitive evidence dominates, either set available=false with blockedReasons or choose an internal artifact target.',
+      '- This field only controls whether a button appears; do not generate the full storyline here.',
     ]
       .filter(Boolean)
       .join('\n');
@@ -708,6 +762,13 @@ export class TodayPilotMeetingPrepService {
       response.contextPackMd,
       fallback.contextPackMd,
     );
+    const storylineOpportunity = normalizeStorylineOpportunity(
+      response.storylineOpportunity,
+    );
+    const llmUsage: Record<string, unknown> = { ...(response.usage ?? {}) };
+    if (storylineOpportunity) {
+      llmUsage.storylineOpportunity = storylineOpportunity;
+    }
     return {
       summaryMd: firstNonEmpty(response.summaryMd, fallback.summaryMd),
       cueCards: cueCards.length ? cueCards : fallback.cueCards,
@@ -732,7 +793,7 @@ export class TodayPilotMeetingPrepService {
               .slice(0, 8)
           : [],
       },
-      llmUsage: response.usage ?? {},
+      llmUsage,
     };
   }
 

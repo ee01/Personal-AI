@@ -64,7 +64,7 @@ function createTopicDetail() {
     updatedAt: now,
     properties: [],
     statistic: {
-      conversations: 2,
+      conversations: 3,
       projects: 0,
       participants: 2,
       resources: 0,
@@ -115,6 +115,18 @@ function createTopicDetail() {
               datetime: now - 26_000,
             },
           ],
+        },
+        {
+          id: 'conv-unsafe-only',
+          isRead: true,
+          sender: 'Eli',
+          groupName: 'Security Review',
+          datetime: now - 20_000,
+          summary: 'Unsafe source should explain why it is hidden',
+          sourceUrl: 'javascript:alert(1)',
+          permalink: 'file:///tmp/topic-source',
+          url: 'https://trusted.example.com:secret@evil.example/path',
+          contextMessages: [],
         },
       ],
       webpages: [],
@@ -303,12 +315,23 @@ try {
     .getByText('Read parent with archived context')
     .waitFor({ timeout: 10000 });
   await page
+    .getByText('Unsafe source should explain why it is hidden')
+    .waitFor({ timeout: 10000 });
+  await page
     .getByText('Historical note without read state')
     .waitFor({ timeout: 10000 });
 
   const contextItem = page.locator('.context-item', {
     hasText: 'Historical note without read state',
   });
+  await contextItem.locator('.targeted-message-badge', {
+    hasText: '链接定位',
+  }).waitFor({ timeout: 10000 });
+  assert.equal(
+    await contextItem.evaluate((node) => node.classList.contains('targeted')),
+    true,
+    'messageId deep links should highlight the exact context message, not only the parent discussion',
+  );
   assert.equal(
     await contextItem.evaluate((node) => node.classList.contains('unread')),
     false,
@@ -343,6 +366,38 @@ try {
     await contextSourceLink.getAttribute('href'),
     'https://example.com/messages/context-source',
     'context message source should backfill the conversation source link',
+  );
+  assert.equal(
+    ((await contextSourceLink.textContent()) || '').trim(),
+    '上下文来源',
+    'source link label should explain when the click target comes from context',
+  );
+
+  const hiddenSourceBadge = page.locator(
+    '[data-conversation-id="conv-unsafe-only"] .conversation-source-hidden',
+  );
+  await hiddenSourceBadge.waitFor({ timeout: 10000 });
+  assert.equal(
+    ((await hiddenSourceBadge.textContent()) || '').trim(),
+    '来源已隐藏 · 3 个不可信链接',
+    'unsafe-only candidates should render an explicit hidden-source badge with a visible count',
+  );
+  assert.match(
+    (await hiddenSourceBadge.getAttribute('title')) || '',
+    /包含账号信息/,
+    'hidden-source badge should explain credentialed URL blocking',
+  );
+  assert.match(
+    (await hiddenSourceBadge.getAttribute('title')) || '',
+    /3 个不可信来源链接/,
+    'hidden-source badge should expose the blocked candidate count',
+  );
+  assert.equal(
+    await page
+      .locator('[data-conversation-id="conv-unsafe-only"] .conversation-source-link')
+      .count(),
+    0,
+    'unsafe-only candidates should never render a clickable source link',
   );
 
   await page.goto(
@@ -385,6 +440,31 @@ try {
 
   const muteReasonCard = page.locator('[data-topic-id="topic-mute-reason"]');
   await muteReasonCard.getByText('Mute Reason Topic').waitFor({ timeout: 10000 });
+  await muteReasonCard.locator('.topic-action-btn.mute').click({
+    timeout: 10000,
+  });
+  await muteReasonCard.getByRole('button', { name: /低相关度/ }).click({
+    timeout: 10000,
+  });
+  await muteReasonCard.getByRole('menuitem', { name: /静音1天/ }).click({
+    timeout: 10000,
+  });
+  const muteUndoToast = page.locator('.topic-mute-undo-toast');
+  await muteUndoToast.getByText('已将「Mute Reason Topic」静音').waitFor({
+    timeout: 10000,
+  });
+  await muteUndoToast.getByRole('button', { name: /取消静音/ }).click({
+    timeout: 10000,
+  });
+  await muteReasonCard.getByText('Mute Reason Topic').waitFor({
+    timeout: 10000,
+  });
+  assert.equal(
+    await muteReasonCard.locator('.topic-muted-note').count(),
+    0,
+    'mute undo should restore the topic to the unread view without switching to the muted filter',
+  );
+
   await muteReasonCard.locator('.topic-action-btn.mute').click({
     timeout: 10000,
   });

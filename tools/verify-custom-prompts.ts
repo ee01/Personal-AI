@@ -18,6 +18,7 @@ import {
   buildIndependentUserConfigFootprint,
   buildIndependentUserConfigSummary,
   buildIndependentUserConfigPreview,
+  buildPreferenceInjectionReceipt,
   createConfigHistoryEntry,
   describeIndependentUserConfigChange,
   detectPromptImprovementHints,
@@ -596,12 +597,16 @@ function verifyPreviewAndHistoryHelpers() {
   });
   assert.match(messageScopedPreview, /紧急关键词: blocked/);
   assert.doesNotMatch(messageScopedPreview, /项目风险因素: 依赖/);
+  assert.match(messageScopedPreview, /scope="消息分析"/);
+  assert.doesNotMatch(messageScopedPreview, /scope="项目分析"/);
   const projectScopedPreview = buildIndependentUserConfigPreview(storage, {
     userContextScope: 'project',
   });
   assert.match(projectScopedPreview, /项目风险因素: 依赖/);
   assert.match(projectScopedPreview, /项目成功标准: 里程碑可信/);
   assert.doesNotMatch(projectScopedPreview, /紧急关键词: blocked/);
+  assert.match(projectScopedPreview, /scope="项目分析"/);
+  assert.doesNotMatch(projectScopedPreview, /scope="消息分析"/);
   const messageScopedFootprint = buildIndependentUserConfigFootprint(storage, {
     userContextScope: 'message',
   });
@@ -610,6 +615,46 @@ function verifyPreviewAndHistoryHelpers() {
   });
   assert.ok(messageScopedFootprint.contextSignalCount > 0);
   assert.ok(projectScopedFootprint.contextSignalCount > 0);
+  assert.equal(
+    messageScopedFootprint.customPromptCharCount,
+    storage.customPrompts.message.content.length,
+  );
+  assert.equal(
+    projectScopedFootprint.customPromptCharCount,
+    storage.customPrompts.project.content.length,
+  );
+  const messageScopedReceipt = buildPreferenceInjectionReceipt(storage, {
+    userContextScope: 'message',
+  });
+  assert.equal(messageScopedReceipt.scopeLabel, '消息');
+  assert.equal(
+    messageScopedReceipt.items.find((item) => item.id === 'user-context')
+      ?.status,
+    'included',
+  );
+  assert.equal(
+    messageScopedReceipt.items.find((item) => item.id === 'message-prompt')
+      ?.status,
+    'included',
+  );
+  assert.equal(
+    messageScopedReceipt.items.find((item) => item.id === 'project-prompt')
+      ?.status,
+    'excluded',
+  );
+  assert.match(
+    messageScopedReceipt.items.find((item) => item.id === 'project-prompt')
+      ?.detail || '',
+    /消息预览不会注入项目提示词/,
+  );
+  const pausedReceipt = buildPreferenceInjectionReceipt({
+    ...storage,
+    preferenceInjection: {
+      ...storage.preferenceInjection,
+      enabled: false,
+    },
+  });
+  assert.ok(pausedReceipt.items.every((item) => item.status === 'paused'));
 
   const riskHints = detectPromptRiskHints(config);
   assert.equal(riskHints.length, 1);
@@ -1086,6 +1131,8 @@ function verifyPromptConfigSurface() {
   assert.match(source, /buildIndependentUserConfigSummary/);
   assert.match(source, /config-summary-strip/);
   assert.match(source, /上下文信号/);
+  assert.match(source, /buildPreferenceInjectionReceipt/);
+  assert.match(source, /injection-receipt-grid/);
   assert.match(source, /lastPersistedConfig/);
   assert.match(source, /pendingChangeSummary/);
   assert.match(source, /未保存变更/);
@@ -1121,6 +1168,9 @@ function verifyPromptConfigSurface() {
   assert.match(previewSource, /estimatePreferenceTokenCount/);
   assert.match(previewSource, /UserContextPreferenceScope/);
   assert.match(previewSource, /shouldIncludeUserContextScope/);
+  assert.match(previewSource, /shouldIncludePromptScope/);
+  assert.match(previewSource, /PreferenceInjectionReceipt/);
+  assert.match(previewSource, /buildPreferenceInjectionReceipt/);
   assert.match(previewSource, /混淆拼写/);
   assert.match(agentThinkingSource, /resolveGenericUserContextScope/);
   assert.match(agentThinkingSource, /buildUserContextPromptBlock/);

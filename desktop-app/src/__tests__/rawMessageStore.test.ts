@@ -51,6 +51,7 @@ test('RawMessageStore deduplicates messages and tracks pending extract counts', 
       messageCount: 2,
       pendingExtractCount: 1,
       conversationCount: 1,
+      artifactCount: 0,
     });
 
     const preview = store.listMessages({
@@ -130,6 +131,7 @@ test('RawMessageStore reset removes scoped cache entries', async () => {
       messageCount: 1,
       pendingExtractCount: 1,
       conversationCount: 1,
+      artifactCount: 1,
     });
     assert.deepEqual(store.listConversationArtifacts({ source: 'doubao' }), [
       {
@@ -149,6 +151,7 @@ test('RawMessageStore reset removes scoped cache entries', async () => {
       messageCount: 0,
       pendingExtractCount: 0,
       conversationCount: 0,
+      artifactCount: 0,
     });
     assert.deepEqual(store.listConversationArtifacts({ source: 'doubao' }), []);
   } finally {

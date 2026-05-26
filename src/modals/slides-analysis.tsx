@@ -59,12 +59,23 @@ interface ApplyResultReceipt {
     submittedItems: SelectedFieldPreviewItem[];
 }
 
+interface ApplySkippedHandoffItem {
+    reason: string;
+    projectLabel: string;
+    fieldLabel: string;
+    previewText: string;
+    evidenceText: string;
+    nextStep: string;
+    matched: boolean;
+}
+
 const GOOGLE_SLIDES_ORIGIN = 'https://docs.google.com';
 const HIGH_CONFIDENCE_THRESHOLD = 0.75;
 const APPLY_TIMEOUT_MS = 45000;
 const INITIAL_DATA_TIMEOUT_MS = 12000;
 const SELECTED_FIELD_PREVIEW_LIMIT = 5;
 const APPLY_RESULT_RECEIPT_LIMIT = 6;
+const APPLY_SKIPPED_HANDOFF_LIMIT = 6;
 const SELECTED_FIELD_PREVIEW_TEXT_LIMIT = 140;
 const SELECTED_FIELD_EVIDENCE_TEXT_LIMIT = 180;
 const UPDATE_FIELD_LABELS: Record<UpdateField, string> = {
@@ -286,6 +297,77 @@ const compactPreviewText = (value: unknown, maxLength = SELECTED_FIELD_PREVIEW_T
 
     return `${compacted.slice(0, Math.max(0, maxLength - 3))}...`;
 };
+
+const normalizeForSkippedReasonMatch = (value: unknown): string => {
+    if (typeof value !== 'string') {
+        return '';
+    }
+
+    return value
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+};
+
+const applySkippedReasonMatchesField = (error: string, item: SelectedFieldPreviewItem): boolean => {
+    const normalizedError = normalizeForSkippedReasonMatch(error);
+    const projectParts = item.projectLabel.split('·').map((part) => part.trim()).filter(Boolean);
+    const projectId = projectParts[0] || '';
+    const projectName = projectParts.slice(1).join(' · ');
+    const projectMatched = Boolean(
+        (projectId && normalizedError.includes(normalizeForSkippedReasonMatch(projectId))) ||
+        (projectName && normalizedError.includes(normalizeForSkippedReasonMatch(projectName)))
+    );
+    const fieldMatched = [
+        item.fieldLabel,
+        UPDATE_FIELD_LABELS[item.field],
+        item.field,
+    ].some((fieldLabel) => normalizedError.includes(normalizeForSkippedReasonMatch(fieldLabel)));
+
+    return projectMatched && fieldMatched;
+};
+
+const getApplySkippedNextStep = (error: string): string => {
+    if (/缺少可写表格列|missing writable column/i.test(error)) {
+        return '在 Slides 表格补齐对应列，或按建议值手动填入后重新分析。';
+    }
+
+    if (/位置信息|定位|row|column|cell/i.test(error)) {
+        return '回到原 slide 确认项目行仍存在，再重新触发分析。';
+    }
+
+    if (/api|permission|权限|token|auth/i.test(error)) {
+        return '确认 Slides 权限和登录状态后重试；不要重复提交已确认写入的字段。';
+    }
+
+    return '先核对本次提交字段和原因，再回到 Slides 手动处理或重新分析。';
+};
+
+const buildApplySkippedHandoffItems = (result: ApplyResultReceipt): ApplySkippedHandoffItem[] => (
+    result.errors.map((reason) => {
+        const matchedItem = result.submittedItems.find((item) => applySkippedReasonMatchesField(reason, item));
+
+        return {
+            reason,
+            projectLabel: matchedItem?.projectLabel || '未匹配到提交字段',
+            fieldLabel: matchedItem?.fieldLabel || '跳过项',
+            previewText: matchedItem?.previewText || '请根据跳过原因回到 Slides 手动核对。',
+            evidenceText: matchedItem?.evidenceText || '没有匹配到字段级回执；请优先查看原始跳过原因。',
+            nextStep: getApplySkippedNextStep(reason),
+            matched: Boolean(matchedItem),
+        };
+    })
+);
+
+const formatApplySkippedHandoffChecklist = (items: ApplySkippedHandoffItem[]): string => (
+    items.map((item, index) => [
+        `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
+        `   建议: ${item.previewText}`,
+        `   依据: ${item.evidenceText}`,
+        `   跳过原因: ${item.reason}`,
+        `   下一步: ${item.nextStep}`,
+    ].join('\n')).join('\n\n')
+);
 
 const getFieldCurrentValue = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string | undefined => {
     if (field === 'status') {
@@ -784,6 +866,17 @@ const SlidesAnalysis: React.FC = () => {
         : [];
 
     const riskSpotlightCount = riskSpotlightEntries.length;
+    const analysisWarnings = (analysisResult?.summary.analysisWarnings || [])
+        .filter((warning): warning is string => typeof warning === 'string' && warning.trim().length > 0)
+        .map((warning) => warning.trim());
+    const analyzedSlideCount = analysisResult?.summary.analyzedSlideCount;
+    const totalSlideCount = analysisResult?.summary.totalSlideCount;
+    const requestedSlideId = analysisResult?.summary.requestedSlideId;
+    const shouldShowAnalysisScope = analysisWarnings.length > 0 || (
+        typeof analyzedSlideCount === 'number' &&
+        typeof totalSlideCount === 'number' &&
+        totalSlideCount > 1
+    );
 
     const filteredSuggestionEntries = analysisResult
         ? analysisResult.updateSuggestions
@@ -982,6 +1075,30 @@ const SlidesAnalysis: React.FC = () => {
         setToast({ message, type });
     };
 
+    const handleCopyApplySkippedHandoff = async () => {
+        if (!lastApplyResult || lastApplyResult.errors.length === 0) {
+            return;
+        }
+
+        const checklist = formatApplySkippedHandoffChecklist(buildApplySkippedHandoffItems(lastApplyResult));
+        if (!checklist) {
+            return;
+        }
+
+        try {
+            const writeText = window.navigator.clipboard?.writeText?.bind(window.navigator.clipboard);
+            if (!writeText) {
+                throw new Error('Clipboard API unavailable');
+            }
+
+            await writeText(checklist);
+            showToast('已复制跳过字段接管清单', 'success');
+        } catch (error) {
+            console.warn('复制跳过字段接管清单失败:', error);
+            showToast('无法复制清单，请直接查看完成面板中的人工接管项', 'warning');
+        }
+    };
+
     const debugLog = (message: string) => {
         console.log('[分析窗口]', message);
     };
@@ -1067,6 +1184,15 @@ const SlidesAnalysis: React.FC = () => {
         );
     }
 
+    const applySkippedHandoffItems = lastApplyResult
+        ? buildApplySkippedHandoffItems(lastApplyResult)
+        : [];
+    const applySkippedHandoffVisibleItems = applySkippedHandoffItems.slice(0, APPLY_SKIPPED_HANDOFF_LIMIT);
+    const applySkippedHandoffOverflowCount = Math.max(
+        0,
+        applySkippedHandoffItems.length - applySkippedHandoffVisibleItems.length
+    );
+
     return (
         <div className="slides-analysis">
             {lastApplyResult && (
@@ -1119,6 +1245,56 @@ const SlidesAnalysis: React.FC = () => {
                             {lastApplyResult.errors.length > 5 && (
                                 <div className="apply-skipped-more">
                                     还有 {lastApplyResult.errors.length - 5} 项未展示。
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {applySkippedHandoffItems.length > 0 && (
+                        <div
+                            className="apply-skipped-handoff"
+                            aria-label="跳过字段人工接管清单"
+                        >
+                            <div className="apply-skipped-handoff-header">
+                                <div>
+                                    <div className="apply-skipped-handoff-title">人工接管清单</div>
+                                    <div className="apply-skipped-handoff-summary">
+                                        对照建议值和跳过原因，处理完再重新分析或手动更新 Slides。
+                                    </div>
+                                </div>
+                                <button
+                                    id="copy-apply-skipped-handoff"
+                                    type="button"
+                                    className="btn-quiet"
+                                    onClick={handleCopyApplySkippedHandoff}
+                                >
+                                    复制清单
+                                </button>
+                            </div>
+                            <ul className="apply-skipped-handoff-list">
+                                {applySkippedHandoffVisibleItems.map((item, index) => (
+                                    <li
+                                        key={`${item.projectLabel}-${item.fieldLabel}-${index}`}
+                                        className={`apply-skipped-handoff-item ${item.matched ? '' : 'apply-skipped-handoff-item-unmatched'}`}
+                                    >
+                                        <span className="apply-skipped-handoff-main">
+                                            <strong>{item.projectLabel} · {item.fieldLabel}</strong>
+                                            <span>{item.previewText}</span>
+                                            <span className="apply-skipped-handoff-evidence">
+                                                {item.evidenceText}
+                                            </span>
+                                        </span>
+                                        <span className="apply-skipped-handoff-reason">
+                                            原因: {item.reason}
+                                        </span>
+                                        <span className="apply-skipped-handoff-next">
+                                            下一步: {item.nextStep}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                            {applySkippedHandoffOverflowCount > 0 && (
+                                <div className="apply-skipped-more">
+                                    还有 {applySkippedHandoffOverflowCount} 个跳过字段未展示，可复制清单完整处理。
                                 </div>
                             )}
                         </div>
@@ -1192,6 +1368,38 @@ const SlidesAnalysis: React.FC = () => {
                     )}
                 </div>
             </div>
+
+            {shouldShowAnalysisScope && (
+                <div className="analysis-scope-section">
+                    <div className="section-header-row">
+                        <div>
+                            <h3>分析范围与提醒</h3>
+                            <p className="analysis-scope-summary">
+                                {typeof analyzedSlideCount === 'number' && typeof totalSlideCount === 'number'
+                                    ? `已分析 ${analyzedSlideCount} / ${totalSlideCount} 张 slide`
+                                    : '已完成 Slides 内容解析'}
+                                {requestedSlideId ? ` · 当前目标 ${requestedSlideId}` : ''}
+                            </p>
+                        </div>
+                    </div>
+                    {analysisWarnings.length > 0 ? (
+                        <ul className="analysis-warning-list">
+                            {analysisWarnings.slice(0, 4).map((warning, index) => (
+                                <li key={index}>{warning}</li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="analysis-scope-muted">
+                            没有解析警告；写回前仍请按字段来源复核建议。
+                        </p>
+                    )}
+                    {analysisWarnings.length > 4 && (
+                        <div className="analysis-warning-more">
+                            还有 {analysisWarnings.length - 4} 条解析提醒未展示。
+                        </div>
+                    )}
+                </div>
+            )}
 
             {fieldReviewQueueItems.length > 0 && (
                 <div className="field-review-queue-section">
@@ -1859,6 +2067,38 @@ const styles = `
         text-align: left;
     }
 
+    .analysis-scope-section {
+        background: #f4f7ff;
+        border: 1px solid #d6e4ff;
+        border-radius: 8px;
+        color: #172b4d;
+        margin-bottom: 20px;
+        padding: 16px;
+    }
+
+    .analysis-scope-summary {
+        color: #42526e;
+        font-size: 13px;
+        margin: 4px 0 0;
+    }
+
+    .analysis-warning-list {
+        margin: 12px 0 0;
+        padding-left: 20px;
+    }
+
+    .analysis-warning-list li {
+        line-height: 1.5;
+        margin-bottom: 6px;
+    }
+
+    .analysis-scope-muted,
+    .analysis-warning-more {
+        color: #5e6c84;
+        font-size: 13px;
+        margin: 10px 0 0;
+    }
+
     .success-message {
         background: #d4edda;
         border: 1px solid #c3e6cb;
@@ -1898,6 +2138,71 @@ const styles = `
         color: #6b5a11;
         font-size: 12px;
         margin-top: 4px;
+    }
+
+    .apply-skipped-handoff {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(133, 100, 4, 0.25);
+        border-radius: 6px;
+        font-size: 13px;
+        line-height: 1.45;
+        margin-top: 10px;
+        padding: 10px 12px;
+    }
+
+    .apply-skipped-handoff-header {
+        align-items: flex-start;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        margin-bottom: 8px;
+    }
+
+    .apply-skipped-handoff-title {
+        font-weight: 700;
+    }
+
+    .apply-skipped-handoff-summary {
+        color: #6b5a11;
+        font-size: 12px;
+        margin-top: 2px;
+    }
+
+    .apply-skipped-handoff-list {
+        display: grid;
+        gap: 8px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .apply-skipped-handoff-item {
+        background: rgba(255, 248, 220, 0.72);
+        border: 1px solid rgba(133, 100, 4, 0.18);
+        border-radius: 6px;
+        display: grid;
+        gap: 5px;
+        padding: 8px;
+    }
+
+    .apply-skipped-handoff-item-unmatched {
+        background: rgba(255, 255, 255, 0.65);
+    }
+
+    .apply-skipped-handoff-main {
+        display: grid;
+        gap: 3px;
+    }
+
+    .apply-skipped-handoff-evidence,
+    .apply-skipped-handoff-reason,
+    .apply-skipped-handoff-next {
+        color: #6b5a11;
+        font-size: 12px;
+    }
+
+    .apply-skipped-handoff-next {
+        font-weight: 700;
     }
 
     .applied-field-receipt {

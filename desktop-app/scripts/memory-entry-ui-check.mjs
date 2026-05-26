@@ -134,6 +134,18 @@ async function main() {
       () => document.body.innerText.includes('记忆入口规则'),
       { timeout: 15000 },
     );
+    await topicPage.evaluate(async () => {
+      await chrome.storage.local.set({
+        taskSchedulerStates: {
+          message_analysis: { enabled: false },
+        },
+      });
+    });
+    await topicPage.reload({ waitUntil: 'load', timeout: 15000 });
+    await topicPage.waitForFunction(
+      () => document.body.innerText.includes('记忆入口规则'),
+      { timeout: 15000 },
+    );
     await topicPage.waitForFunction(
       () => document.body.innerText.includes('2 条内部观察正在运行'),
       { timeout: 15000 },
@@ -147,6 +159,11 @@ async function main() {
     assert.match(topicText, /migration guide 发布了吗？/);
     assert.match(topicText, /我的规则/);
     assert.match(topicText, /内部观察规则/);
+    assert.match(
+      topicText,
+      /需要开启后台记忆采集后，才会自动捕获新消息并触发写入记忆/,
+      'disabled message analysis warning should cover plain memory-entry rules',
+    );
 
     await topicPage.evaluate(async () => {
       await chrome.storage.local.set({
@@ -184,6 +201,8 @@ async function main() {
             text: 'Leave Chat 中出现与我相关的请假消息',
             expiredAt: 0,
             notifyMethod: 'bot',
+            filterGroup: 'Leave Chat, SDK Updates',
+            filterSender: 'Alice; Morgan Lee',
             digestConfig: {
               enabled: true,
               frequency: 'daily',
@@ -221,6 +240,21 @@ async function main() {
       /每日 9:00 摘要（不即时推送）/,
       'digest-enabled rules should explain that digest replaces immediate push',
     );
+    assert.match(
+      automationRuleText,
+      /Leave Chat 或 SDK Updates/,
+      'multi-group scope should be presented as an OR condition',
+    );
+    assert.match(
+      automationRuleText,
+      /Alice 或 Morgan Lee/,
+      'multi-sender scope should be presented as an OR condition',
+    );
+    assert.match(
+      automationRuleText,
+      /任一候选命中即可触发/,
+      'multi-scope guidance should explain OR matching',
+    );
     assert.doesNotMatch(
       automationRuleText,
       /Glip 推送|Chrome 通知/,
@@ -245,10 +279,24 @@ async function main() {
         document.body.innerText.includes('所有群组 / 所有发送人'),
       { timeout: 15000 },
     );
+    let enablePromptText = '';
+    topicPage.once('dialog', async (dialog) => {
+      enablePromptText = dialog.message();
+      await dialog.accept();
+    });
     await topicPage.getByRole('button', { name: '确认' }).click();
     await topicPage.waitForFunction(
       () =>
         document.body.innerText.includes('QA seeded rule for automation flow'),
+      { timeout: 15000 },
+    );
+    assert.match(
+      enablePromptText,
+      /无法自动捕获新消息、写入记忆/,
+      'saving a plain memory-entry rule should explain why background capture is required',
+    );
+    await topicPage.waitForFunction(
+      () => document.body.innerText.includes('后台记忆采集运行中'),
       { timeout: 15000 },
     );
 
@@ -390,6 +438,17 @@ async function main() {
               relatedMessageId: 'msg-42',
             },
             events: [
+              {
+                id: 'event-retry-1',
+                sessionId: 'session-1',
+                eventType: 'retried',
+                createdAt: Math.floor(Date.now() / 1000),
+                payload: {
+                  previousStatus: 'no_reply',
+                  nextStatus: 'waiting_reply',
+                  nextCheckAt: Math.floor(Date.now() / 1000) + 60,
+                },
+              },
               {
                 id: 'event-1',
                 sessionId: 'session-1',
@@ -573,6 +632,8 @@ async function main() {
     assert.match(outreachDetailText, /命中阶段/);
     assert.match(outreachDetailText, /结构化证据明细/);
     assert.match(outreachDetailText, /msg-42/);
+    assert.match(outreachDetailText, /已重试/);
+    assert.match(outreachDetailText, /从「无回复」重置为「等待回复」/);
     await outreachDetailPage.close();
   } finally {
     await context.close();

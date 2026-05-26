@@ -1,6 +1,6 @@
 <template>
   <div class="search-results-section">
-    <div class="search-header">
+    <div class="search-results-header">
       <h2>🔍 搜索结果</h2>
       <p v-if="searchQuery">关键词: "{{ searchQuery }}"</p>
       <p class="scope-caption">范围: {{ currentScopeLabel }}</p>
@@ -119,12 +119,25 @@
               </span>
               <p>{{ ref.snippet }}</p>
               <button
-                v-if="ref.exploreLink"
+                v-if="getLinkSafetyState(ref).exploreRoute"
                 class="decision-link-btn"
                 @click.stop="openExploreLink(ref.exploreLink)"
               >
                 在记忆中查看
               </button>
+              <div
+                v-if="getLinkSafetyState(ref).blockedLabels.length"
+                class="link-safety-notes"
+                aria-label="隐藏的跳转"
+              >
+                <span
+                  v-for="label in getLinkSafetyState(ref).blockedLabels"
+                  :key="label"
+                  class="link-safety-note"
+                >
+                  {{ label }}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -210,10 +223,15 @@
           </div>
           
           <div class="result-content">
-            <h3 class="result-title">{{ entity.name }}</h3>
-            <p v-if="entity.description" class="result-description">
-              {{ entity.description }}
-            </p>
+            <h3
+              class="result-title"
+              v-html="renderSearchHighlight(entity.name)"
+            ></h3>
+            <p
+              v-if="entity.description"
+              class="result-description"
+              v-html="renderSearchHighlight(entity.description)"
+            ></p>
             <div v-if="getResultMeta(entity).length" class="result-meta">
               <span
                 v-for="meta in getResultMeta(entity)"
@@ -298,25 +316,34 @@
           
           <div class="result-actions">
             <button
-              v-if="entity.exploreLink"
+              v-if="getLinkSafetyState(entity).exploreRoute"
               class="action-btn primary"
               @click.stop="openExploreLink(entity.exploreLink)"
             >
               在记忆中查看
             </button>
             <button
-              v-if="getSafeSourceUrl(entity)"
+              v-if="getLinkSafetyState(entity).sourceUrl"
               class="action-btn secondary"
+              :title="getSourceButtonTitle(entity)"
+              :aria-label="getSourceButtonTitle(entity)"
               @click.stop="openSourceUrl(entity.sourceUrl)"
             >
               打开来源
             </button>
             <button
-              v-if="!entity.exploreLink && !getSafeSourceUrl(entity)"
+              v-if="shouldShowDetailsFallback(entity)"
               class="action-btn primary"
             >
               查看详情
             </button>
+            <span
+              v-for="label in getLinkSafetyState(entity).blockedLabels"
+              :key="label"
+              class="link-safety-note"
+            >
+              {{ label }}
+            </span>
           </div>
         </div>
       </div>
@@ -360,8 +387,9 @@ import {
   getResultChannels,
   getResultMeta,
   getSearchResultKey,
+  getMemoryLinkSafetyState,
   getScopeLabel,
-  normalizeMemorySourceUrl,
+  renderHighlightedSearchText,
   sanitizeMemoryExploreRoute,
   shouldResetTypeFilter,
 } from '../searchResultPresentation';
@@ -419,7 +447,8 @@ const decisionEvidenceRefs = computed(() => {
 
 const normalizeScope = (scope: unknown) => {
   const value = Array.isArray(scope) ? scope[0] : scope;
-  if (value === 'personal' || value === 'both' || value === 'all') {
+  if (value === 'both' || value === 'all') return 'all';
+  if (value === 'personal') {
     return value;
   }
   return 'work';
@@ -674,8 +703,27 @@ const getEntityTypeName = (type: string) => {
   return ENTITY_TYPE_CONFIG[type]?.name || MEMORY_RESULT_TYPE_CONFIG[type]?.name || type;
 };
 
-const getSafeSourceUrl = (entity: any) => {
-  return normalizeMemorySourceUrl(entity?.sourceUrl);
+const renderSearchHighlight = (text: unknown) =>
+  renderHighlightedSearchText(text, searchQuery.value);
+
+const getLinkSafetyState = (target: any) =>
+  getMemoryLinkSafetyState({
+    exploreLink: target?.exploreLink,
+    sourceUrl: target?.sourceUrl,
+  });
+
+const getSourceButtonTitle = (target: any) => {
+  const host = getLinkSafetyState(target).sourceHost;
+  return host ? `打开来源：${host}` : '打开来源';
+};
+
+const shouldShowDetailsFallback = (entity: any) => {
+  const linkState = getLinkSafetyState(entity);
+  return (
+    !linkState.exploreRoute &&
+    !linkState.sourceUrl &&
+    linkState.blockedLabels.length === 0
+  );
 };
 
 const getDecisionStanceLabel = (stance: string) => {
@@ -699,7 +747,7 @@ const openExploreLink = (exploreLink?: string) => {
 };
 
 const openSourceUrl = (sourceUrl?: string) => {
-  const safeSourceUrl = normalizeMemorySourceUrl(sourceUrl);
+  const safeSourceUrl = getMemoryLinkSafetyState({ sourceUrl }).sourceUrl;
   if (!safeSourceUrl) return false;
   window.open(safeSourceUrl, '_blank', 'noopener,noreferrer');
   return true;
@@ -754,7 +802,7 @@ const handleResultClick = (entity: any) => {
   animation: fadeInUp 0.6s ease-out;
 }
 
-.search-header {
+.search-results-header {
   text-align: center;
   margin-bottom: 2rem;
   padding: 2rem;
@@ -1067,6 +1115,13 @@ const handleResultClick = (entity: any) => {
   cursor: pointer;
 }
 
+.link-safety-notes {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
 /* 关联实体数据标题 */
 .entities-section-header {
   margin-bottom: 1.5rem;
@@ -1081,19 +1136,19 @@ const handleResultClick = (entity: any) => {
   border-bottom: 2px solid rgba(59, 130, 246, 0.3);
 }
 
-.search-header h2 {
+.search-results-header h2 {
   font-size: 1.75rem;
   font-weight: 600;
   margin-bottom: 0.75rem;
   color: #ffffff;
 }
 
-.search-header p {
+.search-results-header p {
   color: #cbd5e1;
   font-size: 1rem;
 }
 
-.search-header .scope-caption {
+.search-results-header .scope-caption {
   margin-top: 0.5rem;
   color: #94a3b8;
   font-size: 0.9rem;
@@ -1288,6 +1343,15 @@ const handleResultClick = (entity: any) => {
   overflow: hidden;
 }
 
+.result-title :deep(.search-highlight),
+.result-description :deep(.search-highlight) {
+  padding: 0.08rem 0.18rem;
+  border-radius: 0.24rem;
+  background: rgba(251, 191, 36, 0.28);
+  color: #fde68a;
+  font-weight: 700;
+}
+
 .result-meta {
   display: flex;
   gap: 0.5rem;
@@ -1347,9 +1411,22 @@ const handleResultClick = (entity: any) => {
 
 .result-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.link-safety-note {
+  padding: 0.32rem 0.55rem;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: 0.45rem;
+  background: rgba(120, 53, 15, 0.16);
+  color: #fde68a;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .result-feedback {

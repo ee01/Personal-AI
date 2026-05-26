@@ -25,6 +25,8 @@ import {
   projectMatchesDashboardLaunchContext,
   type ProjectDashboardViewFilter,
   type ProjectDashboardLaunchContext,
+  type ProjectEvidenceGapType,
+  type ProjectEvidenceRepairTarget,
   type ProjectSyncReadiness,
   type ProjectStatusEvidenceItem,
 } from '../../utils/dashboardIntegration';
@@ -93,6 +95,9 @@ const normalizeStatusToken = (status: string | undefined) =>
   String(status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
 
 const buildStatusClassToken = (status: string | undefined) => normalizeStatusToken(status) || 'unknown';
+
+const getEvidenceGapFocusTarget = (gapType: ProjectEvidenceGapType): ProjectEvidenceRepairTarget =>
+  gapType === 'missing-source' ? 'source' : 'eta';
 
 const hasFilledPlatformSource = (platformState?: Partial<PlatformState>) =>
   Boolean(
@@ -231,6 +236,7 @@ const ProjectDashboard: React.FC = () => {
 
   // 详情弹窗
   const [detailTaskRef, setDetailTaskRef] = useState<{ projectId: string; taskId: string } | null>(null);
+  const [pendingEvidenceFocus, setPendingEvidenceFocus] = useState<ProjectEvidenceRepairTarget | null>(null);
   
   // 任务添加功能
   const [showAddTask, setShowAddTask] = useState<AddTaskState | null>(null);
@@ -429,12 +435,12 @@ const ProjectDashboard: React.FC = () => {
 
     switch (action.type) {
       case 'open-task':
-        openDetail(action.projectId, action.taskId);
+        openDetail(action.projectId, action.taskId, action.evidenceFocus);
         return;
       case 'review-project': {
         const project = projects.find(item => item.id === action.projectId);
         if (project) {
-          handleOpenStatusDraftPreview(project);
+          handleOpenReviewGate(project);
         }
         return;
       }
@@ -534,8 +540,29 @@ const ProjectDashboard: React.FC = () => {
     return start + step * index;
   };
 
-  const openDetail = (projectId: string, taskId: string) => setDetailTaskRef({ projectId, taskId });
-  const closeDetail = () => setDetailTaskRef(null);
+  const openDetail = (
+    projectId: string,
+    taskId: string,
+    evidenceFocus?: ProjectEvidenceRepairTarget,
+  ) => {
+    setDetailTaskRef({ projectId, taskId });
+    setPendingEvidenceFocus(evidenceFocus || null);
+  };
+  const closeDetail = () => {
+    setDetailTaskRef(null);
+    setPendingEvidenceFocus(null);
+  };
+
+  useEffect(() => {
+    if (!selectedTask || !pendingEvidenceFocus) return;
+
+    const timer = window.setTimeout(() => {
+      focusEvidenceRepairTarget(pendingEvidenceFocus);
+      setPendingEvidenceFocus(null);
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedTask?.project.id, selectedTask?.task.id, pendingEvidenceFocus]);
 
   const updateTask = async (projectId: string, itemType: 'dep'|'task'|'design', taskId: string, changes: any) => {
     // 乐观更新
@@ -1554,7 +1581,7 @@ const ProjectDashboard: React.FC = () => {
                     key={`${item.projectId}-${item.taskId}-${item.gapType}`}
                     type="button"
                     className={`evidence-gap-item ${item.gapType}`}
-                    onClick={() => openDetail(item.projectId, item.taskId)}
+                    onClick={() => openDetail(item.projectId, item.taskId, getEvidenceGapFocusTarget(item.gapType))}
                     title={`${item.projectName} · ${item.taskTitle}`}
                   >
                     <span className="evidence-gap-label">{item.label}</span>

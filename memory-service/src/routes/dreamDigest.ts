@@ -9,12 +9,19 @@ import { HeartbeatLoop } from '../core/HeartbeatLoop.js';
 
 interface PushNowBody {
   force?: boolean;
+  dreamDigestPushTarget?: 'me' | 'group' | 'none' | 'user' | 'team';
+  dreamDigestPushGroupId?: string;
 }
 
 const pushNowBodySchema = {
   type: 'object' as const,
   properties: {
     force: { type: 'boolean' as const },
+    dreamDigestPushTarget: {
+      type: 'string' as const,
+      enum: ['me', 'group', 'none', 'user', 'team'],
+    },
+    dreamDigestPushGroupId: { type: 'string' as const },
   },
   additionalProperties: false,
 };
@@ -26,8 +33,17 @@ export async function dreamDigestRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { db, userDataManager } = request.userContext;
       const userId = request.userId ?? 'unknown';
+      const body = request.body ?? {};
       const loop = new HeartbeatLoop(db, userDataManager, userId);
-      const result = await loop.triggerDreamDigestNow(userId);
+      const result = await loop.triggerDreamDigestNow(userId, {
+        pushTarget:
+          body.dreamDigestPushTarget === 'user'
+            ? 'me'
+            : body.dreamDigestPushTarget === 'team'
+              ? 'group'
+              : body.dreamDigestPushTarget,
+        pushGroupId: body.dreamDigestPushGroupId,
+      });
       console.log(
         `[dream-digest/push-now] userId=${userId} result=${JSON.stringify(result)}`,
       );

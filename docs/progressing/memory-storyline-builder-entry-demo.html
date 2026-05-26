@@ -1,0 +1,1363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Storyline Opportunity · 注入到现有功能</title>
+  <style>
+    :root {
+      --bg: #f3f5f4;
+      --ink: #111827;
+      --ink-2: #1f2937;
+      --muted: #64748b;
+      --muted-2: #94a3b8;
+      --line: #e2e8f0;
+      --line-strong: #cbd5e1;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --teal: #087d75;
+      --teal-soft: #ddf2ee;
+      --teal-ring: rgba(8, 125, 117, 0.32);
+      --blue: #0b66b2;
+      --blue-soft: #e0edf7;
+      --blue-2: #0b7fc3;
+      --amber: #92400e;
+      --amber-soft: #fbe7c6;
+      --red: #ff385c;
+      --red-soft: #fde0e3;
+      --green: #166534;
+      --green-soft: #d8efd8;
+      --shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    button, textarea, input { font: inherit; color: inherit; }
+    button { border: 0; cursor: pointer; background: transparent; }
+    h1, h2, h3, h4, p { margin: 0; }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    /* ---------- top bar ---------- */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      min-height: 64px;
+      padding: 12px 24px;
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, #087d75 0%, #0b66b2 100%);
+      color: #fff;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    .brand h1 { font-size: 17px; line-height: 1.2; }
+    .brand p { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .surface-picker {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
+    .surface-picker button {
+      min-height: 32px;
+      padding: 6px 11px;
+      border-radius: 7px;
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .surface-picker button .dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: var(--muted-2);
+      vertical-align: middle;
+    }
+    .surface-picker button[data-priority="p0"] .dot { background: var(--teal); }
+    .surface-picker button[data-priority="p1"] .dot { background: var(--blue-2); }
+    .surface-picker button[data-priority="p2"] .dot { background: #a78bfa; }
+    .surface-picker button[data-priority="none"] .dot { background: var(--muted-2); }
+    .surface-picker button.active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    }
+
+    /* ---------- workspace ---------- */
+    .workspace {
+      padding: 22px;
+      display: grid;
+      grid-template-columns: minmax(420px, 1.45fr) minmax(300px, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .host-frame {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .host-tag {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      background: rgba(15, 23, 42, 0.05);
+    }
+    .host-tag.live { color: var(--teal); background: var(--teal-soft); }
+    .host-tag.quiet { color: var(--amber); background: var(--amber-soft); }
+
+    .host-chrome {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .host-chrome .dots {
+      display: inline-flex;
+      gap: 6px;
+    }
+    .host-chrome .dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--line-strong);
+    }
+    .host-chrome .url {
+      flex: 1;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      background: #fff;
+      border: 1px solid var(--line);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .host-chrome .role {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .host-body { padding: 20px; }
+    .host-body[data-mode="meeting"],
+    .host-body[data-mode="quiet"] { padding: 20px 22px; }
+
+    /* ---------- common storyline opportunity widget ---------- */
+    .storyline-opp {
+      border: 1px solid var(--teal-ring);
+      border-radius: 10px;
+      background: linear-gradient(180deg, #f3fffb 0%, #ffffff 100%);
+      padding: 12px 14px;
+      position: relative;
+      overflow: hidden;
+    }
+    .storyline-opp::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      background: linear-gradient(180deg, #087d75, #0b66b2);
+    }
+    .storyline-opp .opp-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+    }
+    .storyline-opp .opp-eyebrow {
+      font-size: 10.5px;
+      font-weight: 800;
+      color: var(--teal);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .storyline-opp h4 {
+      margin-top: 4px;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+    .storyline-opp .opp-reason {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .storyline-opp .opp-score {
+      flex: 0 0 auto;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--teal);
+      background: var(--teal-soft);
+    }
+    .storyline-opp .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .storyline-opp .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 20px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .chip.amber { color: var(--amber); background: var(--amber-soft); }
+    .chip.teal { color: var(--teal); background: var(--teal-soft); }
+    .chip.green { color: var(--green); background: var(--green-soft); }
+    .chip.red { color: var(--red); background: var(--red-soft); }
+    .chip.neutral { color: var(--muted); background: rgba(15, 23, 42, 0.05); }
+
+    .btn {
+      min-height: 30px;
+      padding: 6px 11px;
+      border-radius: 7px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--ink-2);
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+    .btn.primary {
+      color: #fff;
+      background: var(--teal);
+      border-color: var(--teal);
+    }
+    .btn.primary:hover { filter: brightness(0.96); }
+    .btn.ghost {
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+    .btn.ghost:hover { color: var(--ink); }
+
+    /* ---------- 1. Meeting prep (RingCentral injection) ---------- */
+    .pai-card {
+      border: 2px solid var(--red);
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 8px 22px rgba(244, 63, 94, 0.14);
+      padding: 16px;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .pai-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .pai-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15.5px;
+      font-weight: 700;
+    }
+    .pai-logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background: linear-gradient(135deg, var(--red), #c1296e);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .pai-sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pai-meeting {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: #f7fafc;
+    }
+    .pai-meeting-title {
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .pai-meeting-summary {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .pai-cue-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .pai-cue {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+    }
+    .pai-cue strong {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--ink-2);
+    }
+    .pai-cue span {
+      display: block;
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .pai-cue.brief {
+      border-color: #b9d7ea;
+      background: #f2f9fd;
+    }
+    .pai-storyline-slot { margin-top: 12px; }
+    .pai-actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .pai-primary {
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: var(--blue-2);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .pai-secondary {
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      color: #334155;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .quiet-note {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 7px;
+      border: 1px dashed var(--line-strong);
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.55;
+      background: #fafbfc;
+    }
+    .quiet-note strong { color: var(--ink-2); }
+
+    /* ---------- 2. Compose Assist (ChatGPT-like) ---------- */
+    .compose-host {
+      background:
+        radial-gradient(circle at 0 0, #ffffff, #f7f7f8);
+      min-height: 380px;
+    }
+    .compose-host .composer-shell {
+      padding: 22px;
+      display: flex;
+      gap: 18px;
+      flex-direction: column;
+    }
+    .composer-thread {
+      max-width: 720px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .composer-bubble {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: #f4f4f5;
+      color: var(--ink-2);
+      font-size: 13.5px;
+      line-height: 1.55;
+    }
+    .composer-bubble.you {
+      background: var(--blue-2);
+      color: #fff;
+      align-self: flex-end;
+      max-width: 80%;
+      margin-left: auto;
+    }
+    .composer-bubble.ai {
+      background: #fff;
+      border: 1px solid var(--line);
+      max-width: 92%;
+    }
+    .composer-input-wrap {
+      position: relative;
+      max-width: 760px;
+      margin: 14px auto 0;
+      width: 100%;
+    }
+    .composer-input {
+      width: 100%;
+      min-height: 110px;
+      padding: 14px 16px 46px;
+      border-radius: 14px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--ink-2);
+      font-size: 13.5px;
+      line-height: 1.55;
+      resize: vertical;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+    }
+    .composer-input-toolbar {
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .composer-input-toolbar .left { display: flex; gap: 6px; }
+    .composer-input-toolbar .pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #f4f4f5;
+      color: var(--muted);
+      font-size: 11.5px;
+    }
+    .composer-send {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--ink);
+      color: #fff;
+      font-weight: 800;
+    }
+
+    /* PAI compose-assist popover */
+    .compose-popover {
+      position: absolute;
+      right: -270px;
+      top: 6px;
+      width: 280px;
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.98);
+      border: 1px solid rgba(17, 24, 39, 0.12);
+      box-shadow: 0 14px 34px rgba(17, 24, 39, 0.16);
+      color: var(--ink-2);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .compose-popover::before {
+      content: "";
+      position: absolute;
+      left: -7px;
+      top: 18px;
+      width: 12px;
+      height: 12px;
+      transform: rotate(45deg);
+      background: rgba(255, 255, 255, 0.98);
+      border-left: 1px solid rgba(17, 24, 39, 0.12);
+      border-bottom: 1px solid rgba(17, 24, 39, 0.12);
+    }
+    .compose-popover .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .compose-popover .label {
+      color: var(--blue-2);
+      font-weight: 800;
+      font-size: 11.5px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .compose-popover .reject {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(15, 23, 42, 0.06);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .compose-popover .cue {
+      padding: 8px 10px;
+      border-radius: 7px;
+      background: #f7f9fc;
+      color: var(--ink-2);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .compose-popover .normal-action {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .compose-popover .secondary-action {
+      margin-top: 8px;
+      border-radius: 8px;
+      border: 1px solid var(--teal-ring);
+      background: linear-gradient(180deg, #f3fffb, #ffffff);
+      padding: 9px 10px;
+      position: relative;
+    }
+    .compose-popover .secondary-action::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, #087d75, #0b66b2);
+      border-radius: 8px 0 0 8px;
+    }
+    .compose-popover .secondary-action .title {
+      font-weight: 700;
+      font-size: 12px;
+      color: var(--ink-2);
+    }
+    .compose-popover .secondary-action .desc {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+    .compose-popover .secondary-action .btn-row {
+      margin-top: 8px;
+      display: flex;
+      gap: 6px;
+    }
+    .compose-popover .btn { min-height: 26px; padding: 4px 9px; font-size: 11.5px; }
+
+    /* ---------- 3. Slides Analyzer ---------- */
+    .slides-shell {
+      display: grid;
+      grid-template-columns: 188px 1fr;
+      min-height: 420px;
+    }
+    .slides-rail {
+      border-right: 1px solid var(--line);
+      padding: 16px 12px;
+      background: var(--panel-soft);
+    }
+    .slides-rail .eyebrow {
+      font-size: 10.5px;
+      font-weight: 800;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .slide-thumb {
+      width: 100%;
+      aspect-ratio: 16/9;
+      margin-top: 10px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      color: var(--muted);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+    }
+    .slide-thumb.active {
+      border-color: var(--blue-2);
+      box-shadow: 0 2px 8px rgba(11, 127, 195, 0.2);
+    }
+    .slides-detail {
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+    .slides-detail h3 { font-size: 16px; }
+    .slides-detail .row {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+    .slides-detail .row:first-of-type { border-top: 0; padding-top: 4px; }
+    .slides-detail .row .label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .slides-detail .row .value {
+      font-size: 13px;
+      color: var(--ink-2);
+      line-height: 1.6;
+    }
+
+    /* ---------- 4. Memory Lens floating card ---------- */
+    .lens-host {
+      position: relative;
+      min-height: 420px;
+      background:
+        linear-gradient(180deg, #0b66b2 0%, #0b66b2 56px, #f3f5f4 56px);
+    }
+    .lens-host .fake-tab {
+      padding: 14px 18px;
+      color: rgba(255,255,255,0.92);
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .lens-host .fake-tab .crumb { opacity: 0.8; }
+    .lens-host .fake-page {
+      padding: 22px 28px;
+      display: grid;
+      gap: 12px;
+    }
+    .lens-host .fake-page h3 { font-size: 18px; color: var(--ink-2); }
+    .lens-host .fake-page p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+      max-width: 460px;
+    }
+    .lens-card {
+      position: absolute;
+      right: 22px;
+      bottom: 22px;
+      width: 320px;
+      padding: 14px;
+      border-radius: 12px;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+    }
+    .lens-card .lens-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .lens-card .lens-eyebrow {
+      font-size: 10.5px;
+      font-weight: 800;
+      color: var(--blue);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .lens-card .lens-close {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.05);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .lens-card h4 {
+      margin-top: 4px;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+    .lens-card .lens-recall {
+      margin-top: 10px;
+      padding: 9px 10px;
+      border-radius: 8px;
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .lens-card .lens-recall strong { color: var(--ink-2); }
+    .lens-card .lens-divider {
+      margin: 10px 0;
+      height: 1px;
+      background: var(--line);
+    }
+
+    /* ---------- side rationale panel ---------- */
+    .side {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .side .side-head {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .side .side-head .title {
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+    .side .side-head .small { color: var(--muted); font-size: 11.5px; }
+    .side .side-body { padding: 16px; }
+
+    .verdict {
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+    .verdict.ok { border-color: rgba(8, 125, 117, 0.32); background: #f0fbf7; }
+    .verdict.skip { border-color: var(--amber-soft); background: #fff8ec; }
+    .verdict .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      padding: 5px 0;
+    }
+    .verdict .row .k { color: var(--muted); font-weight: 600; }
+    .verdict .row .v { color: var(--ink-2); font-weight: 700; text-align: right; }
+
+    .rules {
+      margin-top: 14px;
+      display: grid;
+      gap: 8px;
+    }
+    .rule {
+      padding: 10px 12px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .rule strong {
+      display: block;
+      font-size: 12.5px;
+      color: var(--ink-2);
+    }
+    .rule p {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .rule.pass strong::before {
+      content: "✓ ";
+      color: var(--teal);
+    }
+    .rule.fail strong::before {
+      content: "× ";
+      color: var(--red);
+    }
+
+    .blocked {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .blocked strong { display: block; margin-bottom: 4px; font-size: 12.5px; }
+
+    /* ---------- toast ---------- */
+    .toast {
+      position: fixed;
+      bottom: 22px;
+      right: 22px;
+      max-width: 360px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: #111827;
+      color: #fff;
+      font-size: 13px;
+      line-height: 1.5;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.24);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      z-index: 30;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1100px) {
+      .workspace { grid-template-columns: 1fr; }
+      .compose-popover { right: 0; top: -136px; }
+      .compose-popover::before { display: none; }
+    }
+    @media (max-width: 720px) {
+      .pai-cue-grid { grid-template-columns: 1fr; }
+      .slides-shell { grid-template-columns: 1fr; }
+      .slides-rail { border-right: 0; border-bottom: 1px solid var(--line); }
+      .lens-card { position: static; width: 100%; margin-top: 14px; }
+      .lens-host { background: var(--panel-soft); }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">PA</div>
+        <div>
+          <h1>Storyline Opportunity · 注入到现有功能</h1>
+          <p>同一个 <code>StorylineOpportunity</code> 字段，5 个 host 表面消费它的方式不同</p>
+        </div>
+      </div>
+      <div class="surface-picker" id="picker">
+        <button class="active" data-surface="meeting" data-priority="p0" type="button"><span class="dot"></span>会前准备 · P0</button>
+        <button data-surface="compose" data-priority="p1" type="button"><span class="dot"></span>Compose Assist · P1</button>
+        <button data-surface="slides" data-priority="p1" type="button"><span class="dot"></span>Slides Analyzer · P1</button>
+        <button data-surface="lens" data-priority="p2" type="button"><span class="dot"></span>Memory Lens · P2</button>
+        <button data-surface="quiet" data-priority="none" type="button"><span class="dot"></span>普通会议（对照）</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- ============ host surface ============ -->
+      <section class="host-frame" id="host">
+        <!-- 1. Meeting prep -->
+        <div class="host-body" data-mode="meeting" data-surface-pane>
+          <span class="host-tag live">Today Pilot · 注入到 RingCentral Video Home</span>
+          <article class="pai-card">
+            <div class="pai-header">
+              <div class="pai-title">
+                <span class="pai-logo">PA</span>
+                <span>Personal AI · 会前准备</span>
+              </div>
+              <div style="display:flex; gap:6px;">
+                <button class="pai-secondary" type="button">刷新</button>
+              </div>
+            </div>
+            <div class="pai-sub">2026-06-04 · CoP - 基于AI的个人发展和工具 · 10 分钟后开始</div>
+
+            <div class="pai-meeting">
+              <div class="pai-meeting-title">CoP - 基于AI的个人发展和工具</div>
+              <div class="pai-meeting-summary">本次会议是 AI CoP 月度分享。结合 Cursor workshop、Codex/Jira 自动化、NotebookLM/Gemini 资料理解和 OpenClaw skill，可以讲一条围绕"工具如何变成工作流"的实践故事。</div>
+            </div>
+
+            <!-- Storyline opportunity injected here -->
+            <div class="pai-storyline-slot">
+              <div class="storyline-opp">
+                <div class="opp-head">
+                  <div>
+                    <div class="opp-eyebrow">Storyline Opportunity</div>
+                    <h4>这场会可能需要一条故事线</h4>
+                    <p class="opp-reason">LLM 判定：4 类素材足以形成 8 分钟分享，证据来自日历、Glip AI 群、资料胶囊和已安装 skill，不只是日历标题。</p>
+                  </div>
+                  <span class="opp-score">0.84</span>
+                </div>
+                <div class="chips">
+                  <span class="chip teal">Cursor workshop</span>
+                  <span class="chip teal">Codex / Jira</span>
+                  <span class="chip teal">NotebookLM / Gemini</span>
+                  <span class="chip teal">OpenClaw skill</span>
+                  <span class="chip amber">建议输出：Slides outline</span>
+                </div>
+                <div class="btn-row">
+                  <button class="btn primary" data-action="generate" type="button">生成 8 分钟分享故事线 →</button>
+                  <button class="btn" data-action="preview" type="button">查看素材</button>
+                  <button class="btn ghost" data-action="dismiss" type="button">不需要</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="pai-cue-grid">
+              <div class="pai-cue brief">
+                <strong>带进会议的问题</strong>
+                <span>哪些 AI 工具经验适合公开讲？哪些只适合内部分享？</span>
+              </div>
+              <div class="pai-cue brief">
+                <strong>受众和时长</strong>
+                <span>AI CoP · 约 8 分钟 · 偏 practical / teaching。</span>
+              </div>
+              <div class="pai-cue">
+                <strong>近期相关行动</strong>
+                <span>已 prep 2 条 NotebookLM 资料胶囊；OpenClaw skill 同步状态正常。</span>
+              </div>
+              <div class="pai-cue">
+                <strong>风险与边界</strong>
+                <span>1:1 私聊和 Jira 内部链接不会进入公开稿；含 meeting URL 的片段需打码。</span>
+              </div>
+            </div>
+
+            <div class="pai-actions">
+              <button class="pai-primary" type="button">加入会议</button>
+              <button class="pai-secondary" type="button">打开 Meeting Pilot</button>
+            </div>
+          </article>
+        </div>
+
+        <!-- 2. Compose Assist -->
+        <div class="host-body compose-host" data-mode="compose" hidden data-surface-pane>
+          <div class="host-chrome">
+            <span class="dots"><span></span><span></span><span></span></span>
+            <span class="url">chatgpt.com / c / 准备 CoP 分享提纲</span>
+            <span class="role">External AI</span>
+          </div>
+          <div class="composer-shell">
+            <div class="composer-thread" style="display:flex; flex-direction:column; gap:10px;">
+              <div class="composer-bubble you">帮我准备一个给 Scrum Master 团队的 AI 工具分享提纲。重点讲 Codex、NotebookLM 和 OpenClaw skill 怎么变成日常工作流。</div>
+              <div class="composer-bubble ai">好的。先确认几点：受众规模、时长、是否要带 demo 或 slides？</div>
+            </div>
+            <div class="composer-input-wrap">
+              <textarea class="composer-input" aria-label="ChatGPT 输入框">受众 8 人，8 分钟，偏 practical。我想从最近自己用 Codex 接 Jira、用 NotebookLM 整理 AI 周报、用 OpenClaw 把流程沉淀成 skill 这三个真实例子讲起，最后给一份可复制 checklist。帮我生成一份提纲。</textarea>
+              <div class="composer-input-toolbar">
+                <div class="left">
+                  <span class="pill">o4 · 1M ctx</span>
+                  <span class="pill">附件 0</span>
+                </div>
+                <button class="composer-send" type="button">↑</button>
+              </div>
+
+              <!-- Compose Assist popover anchored on right -->
+              <div class="compose-popover" role="dialog">
+                <div class="head">
+                  <span class="label">Personal AI · 建议</span>
+                  <button class="reject" type="button" title="减少这类建议">×</button>
+                </div>
+                <div class="cue">
+                  这是一段<strong>长表达准备</strong>，不是普通回复。Personal AI 已识别到 3 类证据：AI 工具讨论、资料胶囊、已安装 skill。
+                </div>
+                <div class="normal-action">
+                  <span>普通：插入当前上下文</span>
+                  <button class="btn ghost" type="button">插入</button>
+                </div>
+                <div class="secondary-action">
+                  <div class="title">Storyline Opportunity</div>
+                  <div class="desc">先生成可审阅的故事线草稿，再交给当前 AI 润色。证据和边界由 Personal AI 保留。</div>
+                  <div class="btn-row">
+                    <button class="btn primary" data-action="generate" type="button">生成故事线草稿</button>
+                    <button class="btn" type="button">仅插入普通上下文</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Slides Analyzer -->
+        <div class="host-body" data-mode="slides" hidden data-surface-pane style="padding:0;">
+          <span class="host-tag live">Google Slides Analyzer · 注入到分析结果页</span>
+          <div class="slides-shell">
+            <aside class="slides-rail">
+              <div class="eyebrow">Deck · CoP draft v2</div>
+              <div class="slide-thumb">cover</div>
+              <div class="slide-thumb active">2 · Why now</div>
+              <div class="slide-thumb">3 · Codex</div>
+              <div class="slide-thumb">4 · NotebookLM</div>
+              <div class="slide-thumb">5 · Skill</div>
+              <div class="slide-thumb">6 · Q&amp;A</div>
+            </aside>
+            <section class="slides-detail">
+              <div>
+                <h3>第 2 页：Why now · 分析建议</h3>
+                <p style="margin-top:4px; color:var(--muted); font-size:12.5px;">已读取 deck 6 页内容、speaker notes 草稿和 8 条 anchor 评论。</p>
+              </div>
+
+              <div class="storyline-opp">
+                <div class="opp-head">
+                  <div>
+                    <div class="opp-eyebrow">Storyline Opportunity</div>
+                    <h4>这份 deck 缺一条由你亲身经历组成的证据故事</h4>
+                    <p class="opp-reason">LLM 判定：deck 第 2-5 页都是泛 AI 趋势，没有个人案例。Personal AI 已有 4 类匹配证据，可补一段"从试用到工作流"的故事段落和 speaker notes。</p>
+                  </div>
+                  <span class="opp-score">0.71</span>
+                </div>
+                <div class="chips">
+                  <span class="chip teal">补 3 个个人案例</span>
+                  <span class="chip">≈ 240 字 speaker notes</span>
+                  <span class="chip amber">不批量覆盖原 deck</span>
+                </div>
+                <div class="btn-row">
+                  <button class="btn primary" data-action="generate" type="button">补一段证据故事</button>
+                  <button class="btn" type="button">仅查看素材</button>
+                  <button class="btn ghost" data-action="dismiss" type="button">这次不需要</button>
+                </div>
+              </div>
+
+              <div class="row">
+                <span class="label">字段建议</span>
+                <span class="value">第 2 页标题偏抽象，建议改为：<strong>"为什么现在讲：从试用 AI 到稳定工作流"</strong></span>
+              </div>
+              <div class="row">
+                <span class="label">Speaker note</span>
+                <span class="value">原稿为占位 lorem；Storyline 生成稿会带 evidence ref 和 sendability 标记。</span>
+              </div>
+              <div class="row">
+                <span class="label">导出</span>
+                <span class="value">点击按钮后，Storyline 草稿会先在 memory-exploring 打开，预览通过再手动写回 Slides。</span>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <!-- 4. Memory Lens -->
+        <div class="host-body" data-mode="lens" hidden data-surface-pane style="padding:0;">
+          <span class="host-tag live">Memory Lens · 当前页面浮卡</span>
+          <div class="lens-host">
+            <div class="fake-tab">
+              <span>📄</span>
+              <span class="crumb">Drive · CoP-AI / 分享准备 / 工具实践笔记.gdoc</span>
+            </div>
+            <div class="fake-page">
+              <h3>AI 工具个人实践笔记</h3>
+              <p>最近一周：Codex 接 Jira 修 bug、NotebookLM 整理 AI 周报、OpenClaw 把"每月 release Key Features 同步到 CapDev"沉淀成 skill。下次 CoP 想讲清楚"工具变工作流"。</p>
+              <p>问题是：哪些细节适合公开讲，哪些要打码？</p>
+            </div>
+
+            <aside class="lens-card">
+              <div class="lens-head">
+                <span class="lens-eyebrow">Memory Lens</span>
+                <button class="lens-close" type="button">×</button>
+              </div>
+              <h4>当前页面强相关：12 条记忆</h4>
+              <div class="lens-recall">
+                <strong>资料胶囊：</strong>AI Refresh 2026-05 · NotebookLM 学习笔记<br>
+                <strong>操作 episode：</strong>"Codex 修 Jira ticket" · 已校验<br>
+                <strong>Skill：</strong>CapDev 每月数据 · 已绑定 OpenClaw
+              </div>
+              <div class="lens-divider"></div>
+              <div class="storyline-opp" style="padding:10px 12px;">
+                <div class="opp-head">
+                  <div>
+                    <div class="opp-eyebrow">Storyline Opportunity</div>
+                    <h4 style="font-size:13px;">把这些记忆加入故事线？</h4>
+                    <p class="opp-reason" style="font-size:11.5px;">LLM 判定：这些证据来自资料、操作和 skill 三类源，足以形成案例段。建议加入正在准备的 CoP 故事线。</p>
+                  </div>
+                  <span class="opp-score">0.66</span>
+                </div>
+                <div class="btn-row">
+                  <button class="btn primary" data-action="generate" type="button">加入 CoP 故事线</button>
+                  <button class="btn ghost" data-action="dismiss" type="button">下次再说</button>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <!-- 5. Quiet / negative case -->
+        <div class="host-body" data-mode="quiet" hidden data-surface-pane>
+          <span class="host-tag quiet">Today Pilot · available = false</span>
+          <article class="pai-card">
+            <div class="pai-header">
+              <div class="pai-title">
+                <span class="pai-logo">PA</span>
+                <span>Personal AI · 会前准备</span>
+              </div>
+              <div style="display:flex; gap:6px;">
+                <button class="pai-secondary" type="button">刷新</button>
+              </div>
+            </div>
+            <div class="pai-sub">明天 09:30 · Nova Brandy Daily · 例会</div>
+
+            <div class="pai-meeting">
+              <div class="pai-meeting-title">Nova Brandy Daily</div>
+              <div class="pai-meeting-summary">日常 standup。Today Pilot 仍提供 cue cards 和风险提醒，但 LLM 没有把它判定为需要"对外讲清楚"的场景。</div>
+            </div>
+
+            <!-- 没有 storyline-opp，只有普通 cue cards -->
+            <div class="pai-cue-grid">
+              <div class="pai-cue brief">
+                <strong>带进会议的问题</strong>
+                <span>是否阻塞？昨天回归测试是否通过？</span>
+              </div>
+              <div class="pai-cue brief">
+                <strong>受众</strong>
+                <span>3 人核心组，例会节奏。</span>
+              </div>
+              <div class="pai-cue">
+                <strong>跟进 Action</strong>
+                <span>2 条 follow-up 还差状态确认（Jira / 个人）。</span>
+              </div>
+              <div class="pai-cue">
+                <strong>风险</strong>
+                <span>没有外发表达需求；不提示 Storyline。</span>
+              </div>
+            </div>
+
+            <div class="quiet-note">
+              <strong>为什么这里看不到 Storyline 按钮？</strong>
+              LLM 在同一次 prep 生成里判定 <code>available=false</code>：表达意图弱（普通 daily sync）、受众不清晰、没有可落到 slides/post 的输出物。一旦未来事件发生变化（如同事打招呼"帮我讲一下进展"），会重新进入候选。
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ============ side: rationale panel ============ -->
+      <aside class="side">
+        <div class="side-head">
+          <div>
+            <div class="title">LLM Verdict · <span id="surfaceName">会前准备</span></div>
+            <div class="small">5 条判定规则全部用同一份 <code>StorylineOpportunity</code>，UI 只消费结构化字段</div>
+          </div>
+        </div>
+        <div class="side-body">
+          <div class="verdict ok" id="verdict">
+            <div class="row"><span class="k">available</span><span class="v" id="vAvailable">true</span></div>
+            <div class="row"><span class="k">confidence</span><span class="v" id="vConfidence">0.84</span></div>
+            <div class="row"><span class="k">storyType</span><span class="v" id="vStoryType">sharing</span></div>
+            <div class="row"><span class="k">audienceHint</span><span class="v" id="vAudience">AI CoP · 8 人</span></div>
+            <div class="row"><span class="k">suggestedArtifact</span><span class="v" id="vArtifact">slides_outline + speaker_notes</span></div>
+            <div class="row"><span class="k">evidenceClusters</span><span class="v" id="vClusters">4 类 / 18 条</span></div>
+          </div>
+
+          <div class="rules" id="rules"></div>
+
+          <div class="blocked" id="blocked" hidden></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">已记录意图。</div>
+
+  <script>
+    const surfaces = {
+      meeting: {
+        label: "会前准备",
+        verdict: "ok",
+        fields: {
+          available: "true",
+          confidence: "0.84",
+          storyType: "sharing",
+          audience: "AI CoP · ~8 人",
+          artifact: "slides_outline + speaker_notes",
+          clusters: "4 类 / 18 条证据"
+        },
+        rules: [
+          ["pass", "表达意图成立", "CoP 月度分享是面向社区的讲述，不是普通 1:1。"],
+          ["pass", "素材规模足够", "Cursor workshop、Codex / Jira、NotebookLM、OpenClaw skill 四类证据均超阈值。"],
+          ["pass", "受众可判断", "标题、参会人、organizer 三处可推出 AI CoP 团队。"],
+          ["pass", "边界可控", "可生成内部版；公开版会去掉私聊原文和 meeting URL。"],
+          ["pass", "输出物明确", "建议 8 分钟分享 + Slides outline + speaker notes。"]
+        ]
+      },
+      compose: {
+        label: "Compose Assist",
+        verdict: "ok",
+        fields: {
+          available: "true",
+          confidence: "0.79",
+          storyType: "sharing",
+          audience: "Scrum Master 团队 · 8 人",
+          artifact: "speaker_notes + slides_outline",
+          clusters: "3 类 / 12 条证据"
+        },
+        rules: [
+          ["pass", "表达意图成立", "用户 draft 明确「准备分享提纲」，不是普通回复。"],
+          ["pass", "素材规模足够", "AI 工具讨论、资料胶囊、已安装 skill 三类证据满足 ≥3 segment。"],
+          ["pass", "受众可判断", "draft 自带受众和时长。"],
+          ["pass", "边界可控", "不会自动发给外部 AI；Storyline draft 仅在 Personal AI 内打开。"],
+          ["pass", "输出物明确", "secondary action 不挤掉普通 Compose 建议，仅在长表达时显示。"]
+        ]
+      },
+      slides: {
+        label: "Slides Analyzer",
+        verdict: "ok",
+        fields: {
+          available: "true",
+          confidence: "0.71",
+          storyType: "sharing",
+          audience: "AI CoP · deck 第 2-5 页读者",
+          artifact: "speaker_notes + evidence_block",
+          clusters: "4 类 / 14 条证据"
+        },
+        rules: [
+          ["pass", "表达意图成立", "已经在做 deck 准备，目标是要讲。"],
+          ["pass", "素材规模足够", "Storyline 可补 3 个个人案例。"],
+          ["pass", "受众可判断", "deck 上下文已声明受众。"],
+          ["pass", "边界可控", "Storyline 不会批量覆盖原 deck，只生成可预览段落。"],
+          ["pass", "输出物明确", "speaker notes + 段落级 evidence ref。"]
+        ]
+      },
+      lens: {
+        label: "Memory Lens",
+        verdict: "ok",
+        fields: {
+          available: "true",
+          confidence: "0.66",
+          storyType: "sharing",
+          audience: "已有 CoP draft 的 storyline",
+          artifact: "merge_into_existing_storyline",
+          clusters: "3 类 / 6 条证据"
+        },
+        rules: [
+          ["pass", "表达意图成立", "用户已有一条进行中的 CoP 故事线（最近活动）。"],
+          ["pass", "素材规模足够", "当前页面有 3 类强相关记忆。"],
+          ["pass", "受众可判断", "复用现有 storyline 的受众标记。"],
+          ["pass", "边界可控", "仅「加入」，不「生成新草稿」，降低噪音。"],
+          ["fail", "输出物明确", "出口是更新现有 storyline，不是新建 artifact —— 仍可提示，但权重 < P0。"]
+        ]
+      },
+      quiet: {
+        label: "普通会议",
+        verdict: "skip",
+        fields: {
+          available: "false",
+          confidence: "0.18",
+          storyType: "—",
+          audience: "—",
+          artifact: "—",
+          clusters: "1 类 / 4 条 (不足)"
+        },
+        rules: [
+          ["fail", "表达意图成立", "日常 standup，没有「对外讲清楚」的目标。"],
+          ["fail", "素材规模足够", "证据集中在前一天 follow-up，无法形成 ≥3 segment。"],
+          ["fail", "受众可判断", "听众已经在 daily context 里，不需要被「讲述」。"],
+          ["pass", "边界可控", "—"],
+          ["fail", "输出物明确", "没有 slides / post / 复盘稿这类落地物。"]
+        ],
+        blocked: "blockedReasons: [\"intent_too_weak\", \"evidence_low_coverage\", \"no_artifact_target\"]"
+      }
+    };
+
+    const picker = document.getElementById("picker");
+    const host = document.getElementById("host");
+    const verdictEl = document.getElementById("verdict");
+    const surfaceNameEl = document.getElementById("surfaceName");
+    const rulesEl = document.getElementById("rules");
+    const blockedEl = document.getElementById("blocked");
+    const toast = document.getElementById("toast");
+
+    function renderSide(key) {
+      const s = surfaces[key];
+      surfaceNameEl.textContent = s.label;
+      verdictEl.classList.toggle("ok", s.verdict === "ok");
+      verdictEl.classList.toggle("skip", s.verdict === "skip");
+      document.getElementById("vAvailable").textContent = s.fields.available;
+      document.getElementById("vConfidence").textContent = s.fields.confidence;
+      document.getElementById("vStoryType").textContent = s.fields.storyType;
+      document.getElementById("vAudience").textContent = s.fields.audience;
+      document.getElementById("vArtifact").textContent = s.fields.artifact;
+      document.getElementById("vClusters").textContent = s.fields.clusters;
+
+      rulesEl.innerHTML = s.rules.map(([state, title, desc]) =>
+        `<div class="rule ${state}"><strong>${title}</strong><p>${desc}</p></div>`
+      ).join("");
+
+      if (s.blocked) {
+        blockedEl.hidden = false;
+        blockedEl.innerHTML = `<strong>UI 不展示提示</strong><code>${s.blocked}</code>`;
+      } else {
+        blockedEl.hidden = true;
+      }
+    }
+
+    function activate(key) {
+      picker.querySelectorAll("[data-surface]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.surface === key);
+      });
+      host.querySelectorAll("[data-surface-pane]").forEach((pane) => {
+        pane.hidden = pane.dataset.mode !== key;
+      });
+      renderSide(key);
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.t);
+      showToast.t = window.setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    document.addEventListener("click", (event) => {
+      const surfaceBtn = event.target.closest("[data-surface]");
+      if (surfaceBtn) { activate(surfaceBtn.dataset.surface); return; }
+
+      const action = event.target.closest("[data-action]");
+      if (!action) return;
+      const a = action.dataset.action;
+      if (a === "generate") {
+        showToast("打开 memory-exploring.html#/storylines/draft —— 当前 surface 只缓存 opportunity；故事线本体在那里编辑。");
+      } else if (a === "dismiss") {
+        showToast("已记录「不需要」。同类 surface / 同类会议的提示权重会下调。");
+      } else if (a === "preview") {
+        showToast("素材：Cursor workshop / Codex / NotebookLM / OpenClaw skill —— 不离开当前页面。");
+      }
+    });
+
+    activate("meeting");
+  </script>
+</body>
+</html>

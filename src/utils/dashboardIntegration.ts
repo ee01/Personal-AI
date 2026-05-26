@@ -288,12 +288,15 @@ export interface ProjectDashboardViewReason {
   severity: ProjectDecisionSignalSeverity;
 }
 
+export type ProjectEvidenceRepairTarget = 'eta' | 'source';
+
 export type ProjectDashboardDecisionBriefAction =
   | {
       type: 'open-task';
       label: string;
       projectId: string;
       taskId: string;
+      evidenceFocus?: ProjectEvidenceRepairTarget;
     }
   | {
       type: 'review-project';
@@ -673,9 +676,8 @@ function buildWatchedProjectSyncHighlights(syncResult: ProjectWatchedProjectSync
 export function mergeWatchedProjectsIntoDashboard(
   currentProjects: FishboneProject[],
   watchedProjects: MemoryWatchedProjectSummary[],
-  options: { reviewedAt?: Date } = {},
+  _options: { reviewedAt?: Date } = {},
 ): ProjectWatchedProjectSyncResult {
-  const reviewedAt = (options.reviewedAt || new Date()).toISOString();
   const nextProjects = (Array.isArray(currentProjects) ? currentProjects : [])
     .map(sanitizeFishboneProject);
   const existingIds = new Set(nextProjects.map((project) => project.id).filter(Boolean));
@@ -705,7 +707,6 @@ export function mergeWatchedProjectsIntoDashboard(
       milestones: [],
       tasks: [],
       platformConfig: DEFAULT_PROJECT_PLATFORM_CONFIG,
-      lastStatusReviewAt: reviewedAt,
     });
     createdProjectNames.push(projectName);
   });
@@ -1405,6 +1406,7 @@ export function buildProjectDashboardDecisionBrief(
         label: '补任务证据',
         projectId: topEvidenceGap.projectId,
         taskId: topEvidenceGap.taskId,
+        evidenceFocus: topEvidenceGap.gapType === 'missing-source' ? 'source' : 'eta',
       },
       supportingSignals: [
         `风险分 ${topEvidenceGap.risk.score}/100`,
@@ -1421,7 +1423,7 @@ export function buildProjectDashboardDecisionBrief(
       detail: reviewItem.nextStep,
       primaryAction: {
         type: 'review-project',
-        label: '预览状态草稿',
+        label: '复核草稿',
         projectId: reviewItem.projectId,
       },
       supportingSignals: support,

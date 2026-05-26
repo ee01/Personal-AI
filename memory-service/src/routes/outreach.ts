@@ -333,8 +333,8 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
     try {
-      const session = await engine.createSessionFromMessage(request.body);
-      return reply.status(200).send({ session });
+      const result = await engine.createSessionFromMessageResult(request.body);
+      return reply.status(200).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return reply.status(400).send({ error: message });

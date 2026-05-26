@@ -13,6 +13,34 @@
             自我反思等系统内部观察会在主动询问里展示证据，不计入这里的
             FollowThreads。
           </p>
+          <div
+            v-if="memoryUserIdentity || memoryUserIdentityError"
+            :class="[
+              'memory-user-status',
+              {
+                warning:
+                  memoryUserIdentity?.fallbackToDefault ||
+                  Boolean(memoryUserIdentityError),
+              },
+            ]"
+          >
+            <span class="memory-user-dot" aria-hidden="true"></span>
+            <div class="memory-user-copy">
+              <div class="memory-user-label">当前记忆用户</div>
+              <div class="memory-user-value">
+                {{ memoryUserIdentity?.id || '未确认' }}
+              </div>
+              <div
+                v-if="memoryUserIdentity?.fallbackToDefault"
+                class="memory-user-hint"
+              >
+                未解析到个人身份，正在使用 default 空间。
+              </div>
+              <div v-else-if="memoryUserIdentityError" class="memory-user-hint">
+                {{ memoryUserIdentityError }}
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="entity-types">
@@ -90,6 +118,18 @@
           </router-link>
 
           <router-link
+            to="/rehearsals"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">🎭</div>
+            <div class="entity-labels">
+              <div class="entity-name">Rehearsal</div>
+              <div class="entity-subnote">未来场景预演</div>
+            </div>
+          </router-link>
+
+          <router-link
             to="/decisions"
             class="entity-type"
             active-class="router-link-active"
@@ -142,6 +182,18 @@
             </div>
             <div v-if="skillCount > 0" class="entity-count">
               {{ skillCount }}
+            </div>
+          </router-link>
+
+          <router-link
+            to="/coverage"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">🗺</div>
+            <div class="entity-labels">
+              <div class="entity-name">记忆覆盖</div>
+              <div class="entity-subnote">平台覆盖与智能导入</div>
             </div>
           </router-link>
 
@@ -236,6 +288,11 @@ const activeReflectionCount = ref(0);
 const queuedActionCount = ref(0);
 const outreachSessionCount = ref(0);
 const skillCount = ref(0);
+const memoryUserIdentity = ref<{
+  id: string;
+  fallbackToDefault: boolean;
+} | null>(null);
+const memoryUserIdentityError = ref('');
 let outreachCountTimer: ReturnType<typeof setInterval> | null = null;
 const TERMINAL_OUTREACH_STATUSES = new Set([
   'resolved',
@@ -254,13 +311,17 @@ const recallScopeOptions: Array<{
   { value: 'all', label: '全部', title: '同时检索工作与个人记忆' },
 ];
 
-function isRecallScope(value: unknown): value is RecallScope {
-  return (
-    value === 'work' ||
-    value === 'personal' ||
-    value === 'both' ||
-    value === 'all'
-  );
+function normalizeClientRecallScope(value: unknown): RecallScope | null {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  if (rawValue === 'both') return 'all';
+  if (
+    rawValue === 'work' ||
+    rawValue === 'personal' ||
+    rawValue === 'all'
+  ) {
+    return rawValue;
+  }
+  return null;
 }
 
 function getRouteSearchQuery() {
@@ -270,7 +331,8 @@ function getRouteSearchQuery() {
 }
 
 function getRouteRecallScope(): RecallScope {
-  if (isRecallScope(route.query.scope)) return route.query.scope;
+  const routeScope = normalizeClientRecallScope(route.query.scope);
+  if (routeScope) return routeScope;
   return route.path === '/timeline' ? 'all' : 'work';
 }
 
@@ -373,6 +435,29 @@ async function loadPendingDecisionCount() {
   }
 }
 
+async function loadMemoryUserIdentity() {
+  try {
+    const client = getMemoryServiceClient();
+    const stats = await client.getStats();
+    const identity = stats.user;
+    const fallbackId = client.getUserId();
+    memoryUserIdentity.value = {
+      id: identity?.id || fallbackId,
+      fallbackToDefault:
+        identity?.fallbackToDefault ?? fallbackId === 'default',
+    };
+    memoryUserIdentityError.value = '';
+  } catch (error) {
+    console.error('加载当前记忆用户失败:', error);
+    const client = getMemoryServiceClient();
+    memoryUserIdentity.value = {
+      id: client.getUserId(),
+      fallbackToDefault: client.getUserId() === 'default',
+    };
+    memoryUserIdentityError.value = '无法确认服务端身份边界。';
+  }
+}
+
 function handleStorageChange(
   changes: { [key: string]: chrome.storage.StorageChange },
   areaName: string,
@@ -380,12 +465,16 @@ function handleStorageChange(
   if (areaName === 'local' && changes.concernedItems) {
     void loadFollowThreadCount();
   }
+  if (areaName === 'local' && changes.userinfo) {
+    void loadMemoryUserIdentity();
+  }
 }
 
 // 加载关注后续数量
 onMounted(async () => {
   await loadFollowThreadCount();
   await loadMeetingCount();
+  await loadMemoryUserIdentity();
   if (hasChromeStorageChangeListener()) {
     chrome.storage.onChanged.addListener(handleStorageChange);
   }
@@ -683,6 +772,63 @@ html,
   color: #cbd5e1;
   font-size: 0.78rem;
   line-height: 1.55;
+}
+
+.memory-user-status {
+  display: grid;
+  grid-template-columns: 0.55rem minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: start;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.memory-user-status.warning {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(69, 48, 12, 0.28);
+}
+
+.memory-user-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.25rem;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+}
+
+.memory-user-status.warning .memory-user-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14);
+}
+
+.memory-user-copy {
+  min-width: 0;
+}
+
+.memory-user-label {
+  color: #94a3b8;
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+.memory-user-value {
+  margin-top: 0.15rem;
+  color: #f8fafc;
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.memory-user-hint {
+  margin-top: 0.35rem;
+  color: #fbbf24;
+  font-size: 0.7rem;
+  line-height: 1.4;
 }
 
 .logo {

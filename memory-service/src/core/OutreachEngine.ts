@@ -71,6 +71,12 @@ interface CreateSessionFromMessageInput {
   informationGoal?: string;
 }
 
+interface CreateSessionFromMessageResult {
+  session: OutreachSessionRecord;
+  created: boolean;
+  reason?: 'existing_message_reaction_session';
+}
+
 export type GlipMessageMarkerType =
   | 'outreach_initial_ask'
   | 'outreach_followup';
@@ -1306,6 +1312,12 @@ export class OutreachEngine {
   async createSessionFromMessage(
     input: CreateSessionFromMessageInput,
   ): Promise<OutreachSessionRecord> {
+    return (await this.createSessionFromMessageResult(input)).session;
+  }
+
+  async createSessionFromMessageResult(
+    input: CreateSessionFromMessageInput,
+  ): Promise<CreateSessionFromMessageResult> {
     const chatId = normalizeString(input.chatId);
     const postId = normalizeString(input.postId);
     const question = normalizeString(input.messageText);
@@ -1319,7 +1331,13 @@ export class OutreachEngine {
     const existing =
       this.repo.getMessageReactionSessionByPost(chatId, postId) ??
       this.findMessageReactionSessionByOriginalPost(chatId, postId);
-    if (existing) return existing;
+    if (existing) {
+      return {
+        session: existing,
+        created: false,
+        reason: 'existing_message_reaction_session',
+      };
+    }
 
     const createdAt =
       normalizeUnixTimestamp(input.messageCreatedAt) ??
@@ -1398,7 +1416,10 @@ export class OutreachEngine {
       createdAt,
     );
 
-    return this.repo.getSessionById(session.id)!;
+    return {
+      session: this.repo.getSessionById(session.id)!,
+      created: true,
+    };
   }
 
   listGlipMessageMarkers(limit = 500): {
@@ -1919,8 +1940,11 @@ export class OutreachEngine {
     const session = this.repo.getSessionById(id);
     if (!session) return null;
     if (!TERMINAL_STATUSES.has(session.status)) return session;
+    const nextStatus: OutreachSessionStatus = session.requiresApproval
+      ? 'pending_approval'
+      : 'scheduled';
     const updated = this.repo.updateSession(id, {
-      status: session.requiresApproval ? 'pending_approval' : 'scheduled',
+      status: nextStatus,
       followupCount: 0,
       waitUntil: null,
       nextCheckAt: now(),
@@ -1936,7 +1960,12 @@ export class OutreachEngine {
       resolvedAt: null,
     });
     if (!updated) return null;
-    this.repo.createEvent(id, 'created', { retried: true });
+    this.repo.createEvent(id, 'retried', {
+      retried: true,
+      previousStatus: session.status,
+      nextStatus: updated.status,
+      nextCheckAt: updated.nextCheckAt ?? null,
+    });
     return updated;
   }
 

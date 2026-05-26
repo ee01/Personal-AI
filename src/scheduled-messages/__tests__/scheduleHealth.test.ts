@@ -8,6 +8,7 @@ import {
   getScheduleHealthIssue,
   getScheduleHealthIssues,
   getScheduleHealthRecoverySuggestion,
+  getScheduleHealthRecoverySuggestions,
 } from '../scheduleHealth.js';
 
 function makeMessage(overrides: Partial<ScheduledMessage> = {}): ScheduledMessage {
@@ -183,6 +184,20 @@ test('suggests the next minute for missed explicit executor messages', () => {
       reason: '把已错过的明确时间改成下一分钟，恢复到可执行窗口内。',
     },
   );
+});
+
+test('allocates batch explicit recovery suggestions without reusing the same minute', () => {
+  const suggestions = getScheduleHealthRecoverySuggestions([
+    makeMessage({ ID: 'missed-1', Topic: 'Missed 1' }),
+    makeMessage({ ID: 'missed-2', Topic: 'Missed 2' }),
+    makeMessage({ ID: 'healthy-future', Schedule_Time: '10:03' }),
+    makeMessage({ ID: 'missed-3', Topic: 'Missed 3' }),
+  ], new Date('2026-05-04T10:01:30'));
+
+  assert.equal(suggestions.get('missed-1')?.label, '2026-05-04 10:02');
+  assert.equal(suggestions.get('missed-2')?.label, '2026-05-04 10:04');
+  assert.equal(suggestions.get('missed-3')?.label, '2026-05-04 10:05');
+  assert.equal(suggestions.has('healthy-future'), false);
 });
 
 test('suggests today executor queue for no-time executor rows whose date passed', () => {

@@ -239,6 +239,7 @@ test('DoubaoChatSource collects cached history and extracts pending chat', async
       messageCount: 3,
       pendingExtractCount: 0,
       conversationCount: 1,
+      artifactCount: 1,
     });
 
     const previewMessages = rawStore

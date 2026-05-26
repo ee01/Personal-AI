@@ -5,7 +5,9 @@ import { now } from '../utils/time.js';
 import type {
   ComposerAssistEvidence,
   ContextAssistCueCard,
+  StorylineOpportunity,
 } from '../types/index.js';
+import { normalizeStorylineOpportunity } from '../utils/storyline.js';
 
 export type TodayPilotMeetingPrepStatus =
   | 'ready'
@@ -39,6 +41,7 @@ export interface TodayPilotMeetingPrepRecord {
   contextPackMd: string;
   redaction: Record<string, unknown>;
   llmUsage: Record<string, unknown>;
+  storylineOpportunity?: StorylineOpportunity;
   sourceHash: string;
   generatedAt: number;
   expiresAt: number;
@@ -333,6 +336,10 @@ export class TodayPilotMeetingPrepRepository {
   }
 
   private toRecord(row: TodayMeetingPrepRow): TodayPilotMeetingPrepRecord {
+    const llmUsage = safeJsonParse<Record<string, unknown>>(
+      row.llm_usage_json,
+      {},
+    );
     return {
       id: row.id,
       userId: row.user_id,
@@ -356,7 +363,10 @@ export class TodayPilotMeetingPrepRepository {
       ),
       contextPackMd: row.context_pack_md,
       redaction: safeJsonParse<Record<string, unknown>>(row.redaction_json, {}),
-      llmUsage: safeJsonParse<Record<string, unknown>>(row.llm_usage_json, {}),
+      llmUsage,
+      storylineOpportunity: normalizeStorylineOpportunity(
+        llmUsage.storylineOpportunity,
+      ),
       sourceHash: row.source_hash,
       generatedAt: row.generated_at,
       expiresAt: row.expires_at,

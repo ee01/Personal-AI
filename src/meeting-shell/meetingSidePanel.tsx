@@ -131,6 +131,7 @@ const TOP_SCROLL_THRESHOLD = 12;
 const BULK_ACTION_COPY_ID = '__bulk_action_copy__';
 const FOLLOW_UP_ACTION_COPY_ID = '__follow_up_action_copy__';
 const MEETING_PREP_HANDOFF_STORAGE_KEY = 'meetingPrepHandoff';
+const MEETING_PREP_HANDOFFS_STORAGE_KEY = 'meetingPrepHandoffs';
 const TIMELINE_FOCUS_DURATION_MS = 2200;
 const UNASSIGNED_ACTION_OWNER = '待分配';
 
@@ -535,14 +536,17 @@ async function loadMeetingPrepHandoffForSession(
 ): Promise<MeetingPrepHandoff | null> {
   const payload = await chrome.storage.local.get([
     MEETING_PREP_HANDOFF_STORAGE_KEY,
+    MEETING_PREP_HANDOFFS_STORAGE_KEY,
   ]);
-  const handoff = normalizeMeetingPrepHandoff(
-    payload?.[MEETING_PREP_HANDOFF_STORAGE_KEY],
+  return selectMeetingPrepHandoffForSession(
+    [
+      normalizeMeetingPrepHandoff(payload?.[MEETING_PREP_HANDOFF_STORAGE_KEY]),
+      ...normalizeMeetingPrepHandoffCollection(
+        payload?.[MEETING_PREP_HANDOFFS_STORAGE_KEY],
+      ),
+    ],
+    session,
   );
-  if (!handoff || !isMeetingPrepHandoffRelevant(handoff, session)) {
-    return null;
-  }
-  return handoff;
 }
 
 function normalizeMeetingPrepHandoff(
@@ -591,6 +595,20 @@ function normalizeMeetingPrepHandoff(
   };
 }
 
+function normalizeMeetingPrepHandoffCollection(
+  value: unknown,
+): MeetingPrepHandoff[] {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+  const candidates = Array.isArray(value)
+    ? value
+    : Object.values(value as Record<string, unknown>);
+  return candidates
+    .map(normalizeMeetingPrepHandoff)
+    .filter((item): item is MeetingPrepHandoff => Boolean(item));
+}
+
 function isMeetingPrepCueCard(value: unknown): value is ContextAssistCueCard {
   if (!value || typeof value !== 'object') {
     return false;
@@ -617,11 +635,33 @@ function isMeetingPrepEvidence(
   return Boolean(item.id && (item.snippet || item.title || item.sourceTitle));
 }
 
-function isMeetingPrepHandoffRelevant(
+function selectMeetingPrepHandoffForSession(
+  candidates: Array<MeetingPrepHandoff | null>,
+  session: MeetingPilotSessionSnapshot,
+): MeetingPrepHandoff | null {
+  const ranked = candidates
+    .filter((handoff): handoff is MeetingPrepHandoff => Boolean(handoff))
+    .map((handoff) => ({
+      handoff,
+      score: getMeetingPrepHandoffMatchScore(handoff, session),
+    }))
+    .filter((item) => item.score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        right.handoff.createdAt - left.handoff.createdAt,
+    );
+  return ranked[0]?.handoff || null;
+}
+
+function getMeetingPrepHandoffMatchScore(
   handoff: MeetingPrepHandoff,
   session: MeetingPilotSessionSnapshot,
-): boolean {
-  const sessionMeetingId = getRingCentralMeetingId(session.url);
+): number {
+  const sessionMeetingIds = [
+    getRingCentralMeetingId(session.url),
+    normalizeRingCentralMeetingId(session.meetingId),
+  ].filter((id): id is string => Boolean(id));
   const eventMeetingIds = [
     handoff.event.joinUrl,
     handoff.event.sourceUrl,
@@ -630,30 +670,84 @@ function isMeetingPrepHandoffRelevant(
   ]
     .map(getRingCentralMeetingId)
     .filter(Boolean);
-  if (
-    sessionMeetingId &&
-    eventMeetingIds.some((meetingId) => meetingId === sessionMeetingId)
-  ) {
-    return true;
+  if (sessionMeetingIds.length > 0) {
+    const exactIdMatch = eventMeetingIds.some((meetingId) =>
+      sessionMeetingIds.includes(meetingId),
+    );
+    if (exactIdMatch) {
+      return 100 + getMeetingPrepHandoffFreshnessScore(handoff);
+    }
   }
 
   const sessionTitle = normalizeMeetingPrepTitle(session.title);
   const eventTitle = normalizeMeetingPrepTitle(handoff.event.title);
   if (!sessionTitle || !eventTitle) {
-    return false;
+    return 0;
   }
-  return (
-    sessionTitle === eventTitle ||
+  if (!isMeetingPrepHandoffTimePlausible(handoff, session)) {
+    return 0;
+  }
+  if (sessionTitle === eventTitle) {
+    return 70 + getMeetingPrepHandoffFreshnessScore(handoff);
+  }
+  if (
     (sessionTitle.length >= 8 && eventTitle.includes(sessionTitle)) ||
-    (eventTitle.length >= 8 && sessionTitle.includes(eventTitle)) ||
-    countMeetingPrepTitleTokenOverlap(sessionTitle, eventTitle) >= 2
-  );
+    (eventTitle.length >= 8 && sessionTitle.includes(eventTitle))
+  ) {
+    return 55 + getMeetingPrepHandoffFreshnessScore(handoff);
+  }
+  const overlap = countMeetingPrepTitleTokenOverlap(sessionTitle, eventTitle);
+  return overlap >= 2
+    ? 40 + overlap + getMeetingPrepHandoffFreshnessScore(handoff)
+    : 0;
 }
 
 function getRingCentralMeetingId(value?: string): string | null {
   const joinUrl = extractRingCentralVideoJoinUrl(value) || value;
   const target = joinUrl ? parseRingCentralVideoJoinTarget(joinUrl) : null;
   return target?.meetingId || null;
+}
+
+function normalizeRingCentralMeetingId(value?: string): string | null {
+  const normalized = String(value || '').replace(/\D/g, '');
+  return normalized.length >= 3 ? normalized : null;
+}
+
+function isMeetingPrepHandoffTimePlausible(
+  handoff: MeetingPrepHandoff,
+  session: MeetingPilotSessionSnapshot,
+): boolean {
+  const sessionTime = normalizeMeetingPrepTimeMs(
+    session.detectedAt || session.capture?.startedAt || Date.now(),
+  );
+  const eventStart = normalizeMeetingPrepTimeMs(handoff.event.startTime);
+  if (!sessionTime || !eventStart) {
+    return false;
+  }
+  const eventEnd =
+    normalizeMeetingPrepTimeMs(handoff.event.endTime) ||
+    eventStart + 2 * 60 * 60 * 1000;
+  const earlyWindowMs = 30 * 60 * 1000;
+  const lateWindowMs = 60 * 60 * 1000;
+  return (
+    sessionTime >= eventStart - earlyWindowMs &&
+    sessionTime <= eventEnd + lateWindowMs
+  );
+}
+
+function normalizeMeetingPrepTimeMs(value?: number): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+  return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+}
+
+function getMeetingPrepHandoffFreshnessScore(
+  handoff: MeetingPrepHandoff,
+): number {
+  const ageMs = Math.max(0, Date.now() - handoff.createdAt);
+  return Math.max(0, 10 - Math.floor(ageMs / (30 * 60 * 1000)));
 }
 
 function normalizeMeetingPrepTitle(value?: string): string {

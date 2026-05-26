@@ -8,11 +8,16 @@ import {
   extractDesignLinks,
   formatDesignStatusLabel,
   formatDesignUpdatedDate,
+  formatDesignUpdatedTooltip,
   getDesignAttentionLevel,
   getDesignDisplayLabel,
   getDesignDisplayPriority,
   getDesignDisplayStatusTone,
+  getDesignDisplayUpdatedTimestamp,
+  getDesignSourceSummary,
+  getDesignSourceTooltip,
   getDesignStatusTone,
+  getDesignStatusActionHint,
   getDesignSourceLabel,
   getDesignUrlDedupeKey,
   getFigmaDisplayLabel,
@@ -21,6 +26,7 @@ import {
   matchesProjectPattern,
   normalizeDesignUrl,
   normalizeFigmaUrl,
+  parseJiraIssueKeyFromText,
   parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
   sortDesignDisplayItems,
@@ -70,6 +76,8 @@ function verifyUrlNormalization() {
   assert.equal(parseJiraIssueKeyFromUrl('https://jira.example.com/browse/ux-123/?focusedCommentId=1'), 'UX-123');
   assert.equal(parseJiraIssueKeyFromUrl('/browse/UXDES-300/'), 'UXDES-300');
   assert.equal(parseJiraIssueKeyFromUrl('Issue UX-456 mentioned in text'), 'UX-456');
+  assert.equal(parseJiraIssueKeyFromText('blocked by uxraw-400'), 'UXRAW-400');
+  assert.equal(parseJiraIssueKeyFromText('No Jira key here'), null);
   assert.deepEqual(
     parseDesignDomainPatterns('https://prototype.internal/path, *.design.local; .handoff.example.com'),
     ['prototype.internal', '*.design.local', 'handoff.example.com'],
@@ -115,13 +123,18 @@ function verifyDesignUpdatedDates() {
   assert.equal(formatDesignUpdatedDate('2026-05-18T10:20:00.000+0000'), '2026-05-18');
   assert.equal(formatDesignUpdatedDate('Mon, 18 May 2026 10:20:00 GMT'), '2026-05-18');
   assert.equal(formatDesignUpdatedDate('not a date'), undefined);
+  assert.equal(
+    formatDesignUpdatedTooltip('2026-05-18T10:20:00.000+0000'),
+    'Design update reported 2026-05-18. Re-check the linked design if implementation started before this update.',
+  );
 }
 
 function verifySourceLabels() {
   assert.equal(getDesignSourceLabel('description'), 'Description');
   assert.equal(getDesignSourceLabel('epic_issue_link, parent_child_issue'), 'Epic link, Parent child');
-  assert.equal(getDesignSourceLabel('linked_issues, remote_link'), 'Linked issue, Remote link');
+  assert.equal(getDesignSourceLabel('linked_issues, remote_link'), 'Remote link, Linked issue');
   assert.equal(getDesignSourceLabel('jira_designs'), 'Jira Designs');
+  assert.equal(getDesignSourceTooltip('linked_issues, remote_link'), 'Source: Remote link, Linked issue');
 }
 
 function verifyFigmaLabels() {
@@ -264,6 +277,7 @@ function verifyStatusTones() {
   assert.equal(getDesignStatusTone('Ready for development'), 'ready');
   assert.equal(getDesignStatusTone('ready_for_development'), 'ready');
   assert.equal(getDesignStatusTone('ready-for-dev'), 'ready');
+  assert.equal(getDesignStatusTone('Ready for dev changed'), 'updated');
   assert.equal(getDesignStatusTone('Ready for review'), 'review');
   assert.equal(getDesignStatusTone('Not ready for dev'), 'not-ready');
   assert.equal(getDesignStatusTone('not_ready_for_dev'), 'not-ready');
@@ -278,7 +292,10 @@ function verifyStatusTones() {
   assert.equal(formatDesignStatusLabel('ready_for_development'), 'Ready for development');
   assert.equal(formatDesignStatusLabel('READY_FOR_DEV'), 'Ready for dev');
   assert.equal(formatDesignStatusLabel('not-ready-for-dev'), 'Not ready for dev');
+  assert.equal(formatDesignStatusLabel('changed'), 'Design updated');
   assert.equal(formatDesignStatusLabel('Needs review'), 'Needs review');
+  assert.match(getDesignStatusActionHint('changed') || '', /Re-check the linked design/);
+  assert.match(getDesignStatusActionHint('Missing link') || '', /no design URL/);
 }
 
 function verifyDisplayOrdering() {
@@ -329,6 +346,50 @@ function verifyDisplayOrdering() {
   assert.equal(sorted[3].type, 'figma');
   assert.equal(getDesignDisplayStatusTone(sorted[3]), 'neutral');
   assert.equal(getDesignAttentionLevel(sorted[3]), 'neutral');
+  assert.equal(
+    getDesignSourceSummary(sorted),
+    '4 entries · Remote link, Linked issue, Parent child, Description',
+  );
+}
+
+function verifyUpdatedDateOrdering() {
+  const items: DesignDisplayItem[] = [
+    {
+      type: 'design_link',
+      url: 'https://www.figma.com/design/old/Checkout',
+      title: 'Older changed design',
+      status: 'Design updated',
+      updatedAt: '2026-05-17T09:15:00.000+0000',
+      tool: 'figma',
+      label: 'Figma Design',
+      source: 'remote_link',
+    },
+    {
+      type: 'design_link',
+      url: 'https://www.figma.com/design/new/Checkout',
+      title: 'Newest changed design',
+      status: 'Design updated',
+      updatedAt: '2026-05-21T16:45:00.000+0000',
+      tool: 'figma',
+      label: 'Figma Design',
+      source: 'remote_link',
+    },
+    {
+      type: 'design_link',
+      url: 'https://www.figma.com/design/no-date/Checkout',
+      title: 'Changed design without timestamp',
+      status: 'Design updated',
+      tool: 'figma',
+      label: 'Figma Design',
+      source: 'remote_link',
+    },
+  ];
+
+  const sorted = sortDesignDisplayItems(items);
+  assert.equal((sorted[0] as any).title, 'Newest changed design');
+  assert.equal((sorted[1] as any).title, 'Older changed design');
+  assert.equal((sorted[2] as any).title, 'Changed design without timestamp');
+  assert.ok((getDesignDisplayUpdatedTimestamp(sorted[0]) || 0) > (getDesignDisplayUpdatedTimestamp(sorted[1]) || 0));
 }
 
 verifyProjectPatternMatching();
@@ -340,5 +401,6 @@ verifyFigmaLabels();
 verifyDedupe();
 verifyStatusTones();
 verifyDisplayOrdering();
+verifyUpdatedDateOrdering();
 
 console.log('Jira design links verification passed');

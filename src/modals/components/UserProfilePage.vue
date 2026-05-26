@@ -367,7 +367,8 @@
               v-if="(prediction.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(prediction.id)"
               class="profile-evidence-panel"
             >
-              <a
+              <component
+                :is="evidence.sourceUrl ? 'a' : 'span'"
                 v-for="(evidence, evidenceIndex) in (prediction.evidencePreview || []).slice(0, 3)"
                 :key="`${prediction.id}-evidence-${evidenceIndex}`"
                 class="profile-evidence-item"
@@ -377,7 +378,13 @@
               >
                 <span class="profile-evidence-label">{{ evidence.label }}</span>
                 <span class="profile-evidence-detail">{{ evidence.detail }}</span>
-              </a>
+                <span
+                  v-if="evidence.sourceUrlHiddenReason"
+                  class="profile-evidence-warning"
+                >
+                  {{ evidence.sourceUrlHiddenReason }}
+                </span>
+              </component>
             </div>
             <div class="prediction-actions">
               <button
@@ -543,7 +550,8 @@
                 v-if="(item.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(item.id)"
                 class="profile-evidence-panel"
               >
-                <a
+                <component
+                  :is="evidence.sourceUrl ? 'a' : 'span'"
                   v-for="(evidence, evidenceIndex) in (item.evidencePreview || []).slice(0, 4)"
                   :key="`${item.id}-evidence-${evidenceIndex}`"
                   class="profile-evidence-item"
@@ -553,7 +561,13 @@
                 >
                   <span class="profile-evidence-label">{{ evidence.label }}</span>
                   <span class="profile-evidence-detail">{{ evidence.detail }}</span>
-                </a>
+                  <span
+                    v-if="evidence.sourceUrlHiddenReason"
+                    class="profile-evidence-warning"
+                  >
+                    {{ evidence.sourceUrlHiddenReason }}
+                  </span>
+                </component>
               </div>
             </div>
             <div class="profile-item-actions">
@@ -2381,7 +2395,7 @@ onMounted(() => {
   text-decoration: none;
 }
 
-.profile-evidence-item:hover .profile-evidence-label {
+a.profile-evidence-item:hover .profile-evidence-label {
   color: #1565c0;
   text-decoration: underline;
 }
@@ -2398,6 +2412,13 @@ onMounted(() => {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.profile-evidence-warning {
+  color: #8a5a00;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .profile-item-actions {

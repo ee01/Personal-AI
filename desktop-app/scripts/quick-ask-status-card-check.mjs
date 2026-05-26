@@ -46,11 +46,183 @@ const runtimeSummary = {
 async function main() {
   const { server, url } = await serveQuickAskApp();
   const browser = await chromium.launch({ channel: 'chromium', headless: true });
+
+  try {
+    const page = await setupQuickAskPage(browser, url, runtimeSummary);
+
+    const statusPill = page.locator('#status-pill');
+    await statusPill.waitFor({ state: 'visible' });
+    await assertText(statusPill, '外部询问待批准发送');
+
+    await statusPill.click();
+    const statusItem = page.locator('.status-item').first();
+    await statusItem.waitFor({ state: 'visible' });
+    await assertText(page.locator('.status-item-title').first(), '外部询问待批准发送');
+    await assertText(page.locator('.status-item-summary').first(), '是否向 Chris 追问发布窗口？');
+    await assertText(page.locator('.status-item-details').first(), '待你确认发送：2');
+    await assertText(page.locator('.status-item-hint').first(), '查看待发内容');
+
+    await statusItem.click();
+    const draft = await page.locator('#composer').inputValue();
+    assert.match(draft, /关于「外部询问待批准发送」/);
+    assert.match(draft, /是否向 Chris 追问发布窗口/);
+    assert.match(draft, /待你确认发送：2/);
+    assert.match(draft, /查看待发内容/);
+    assert.match(draft, /帮我总结这些外部询问状态/);
+
+    const runtimeIssuePage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      pendingApprovalCount: 0,
+      topStatus: {
+        kind: 'runtime_issue',
+        label: '状态读取异常',
+        count: 1,
+        priority: 2,
+      },
+      items: [
+        {
+          kind: 'runtime_issue',
+          title: '状态读取异常',
+          summary:
+            '读取 Memory Service 运行态失败：connect ECONNREFUSED 127.0.0.1:3210',
+          detailLines: [
+            'Quick Ask 仍可保留本地会话；状态数据会在服务恢复后刷新。',
+            '这不是同步已完成或用户配置未完成的信号。',
+          ],
+          count: 1,
+          badgeLabel: '需重试',
+          actionHint: '测试 Memory Service',
+          priority: 2,
+        },
+      ],
+    });
+    await runtimeIssuePage.locator('#status-pill').click();
+    const runtimeStatusItem = runtimeIssuePage.locator('.status-item').first();
+    await runtimeStatusItem.waitFor({ state: 'visible' });
+    await assertText(
+      runtimeIssuePage.locator('.status-item-title').first(),
+      '状态读取异常',
+    );
+    await assertText(
+      runtimeIssuePage.locator('.status-item-hint').first(),
+      '测试 Memory Service',
+    );
+
+    await runtimeStatusItem.click();
+    const runtimeDraft = await runtimeIssuePage.locator('#composer').inputValue();
+    assert.match(runtimeDraft, /关于「状态读取异常」/);
+    assert.match(runtimeDraft, /ECONNREFUSED/);
+    assert.match(runtimeDraft, /不是同步已完成/);
+    assert.match(runtimeDraft, /测试 Memory Service/);
+
+    const sessionStart = Date.parse('2026-05-25T09:00:00.000Z');
+    const sessionPage = await setupQuickAskPage(browser, url, {
+      ...runtimeSummary,
+      topStatus: undefined,
+      items: [],
+    }, {
+      now: sessionStart,
+      askStreamEvents: [
+        {
+          type: 'result',
+          answer: '第一轮答案',
+          evidence: [
+            {
+              type: 'message',
+              source: 'manual',
+              content: '本周发布优先级来自真实记忆证据。',
+              metadata: {
+                sender: 'Esone',
+                groupName: 'planning',
+              },
+            },
+          ],
+          runtime: { items: [] },
+        },
+      ],
+    });
+
+    await sessionPage.locator('#composer').fill('第一件事是什么');
+    await sessionPage.keyboard.press('Enter');
+    await sessionPage.waitForFunction(
+      () => window.__lastAskPayload?.query === '第一件事是什么',
+    );
+    await sessionPage.waitForFunction(() =>
+      document.body.textContent?.includes('第一轮答案'),
+    );
+    await assertText(
+      sessionPage.locator('.role-assistant').last().locator('p').first(),
+      '第一轮答案',
+    );
+    const mobileSyncButton = sessionPage.locator(
+      '.quick-ask-sync-mobile',
+    );
+    await mobileSyncButton.waitFor({ state: 'visible' });
+    await assertText(mobileSyncButton, '发到豆包手机对话');
+    await assertText(
+      sessionPage.locator('.message-action-status').first(),
+      '带证据发送，不写长期记忆',
+    );
+
+    await mobileSyncButton.click();
+    await sessionPage.waitForFunction(
+      () => window.__lastInjectPayload?.answer === '第一轮答案',
+    );
+    const injectPayload = await sessionPage.evaluate(
+      () => window.__lastInjectPayload,
+    );
+    assert.equal(injectPayload.query, '第一件事是什么');
+    assert.equal(injectPayload.evidence.length, 1);
+    assert.equal(injectPayload.evidence[0].source, 'manual');
+    assert.match(injectPayload.evidence[0].title, /Esone/);
+    assert.match(injectPayload.evidence[0].snippet, /真实记忆证据/);
+    await assertText(
+      sessionPage.locator('.message-action-status').first(),
+      '已发送到豆包手机对话',
+    );
+
+    await sessionPage.evaluate(() => {
+      window.__quickAskNow += 31 * 60 * 1000;
+      window.__quickAskHandlers.prepareHide?.();
+      window.__quickAskHandlers.windowShown?.({ focusInput: false });
+    });
+
+    assert.equal(
+      await sessionPage.locator('#quick-ask-shell').getAttribute('data-state'),
+      'idle-compact',
+    );
+    assert.equal(await sessionPage.locator('.message-card').count(), 0);
+
+    await sessionPage.locator('#composer').fill('第二件事是什么');
+    await sessionPage.keyboard.press('Enter');
+    await sessionPage.waitForFunction(
+      () => window.__lastAskPayload?.query === '第二件事是什么',
+    );
+    const secondAskContext = await sessionPage.evaluate(
+      () => window.__lastAskPayload?.context || '',
+    );
+    assert.equal(secondAskContext.includes('第一件事是什么'), false);
+  } finally {
+    await browser.close();
+    await new Promise((resolveClose) => server.close(resolveClose));
+  }
+}
+
+async function setupQuickAskPage(browser, url, summary, options = {}) {
   const page = await browser.newPage({ viewport: { width: 520, height: 820 } });
 
-  await page.addInitScript((summary) => {
+  await page.addInitScript(({ runtime, testOptions }) => {
+    const realDateNow = Date.now.bind(Date);
+    window.__quickAskNow =
+      typeof testOptions.now === 'number' ? testOptions.now : realDateNow();
+    Date.now = () => window.__quickAskNow;
     window.__openedSettings = 0;
+    window.__lastAskPayload = null;
+    window.__lastInjectPayload = null;
     window.__quickAskHandlers = {};
+    const askStreamEvents = Array.isArray(testOptions.askStreamEvents)
+      ? testOptions.askStreamEvents
+      : [];
     window.bridgeApi = {
       getSettings: async () => ({
         effective: {
@@ -76,9 +248,18 @@ async function main() {
       },
     };
     window.quickAsk = {
-      askStream: async () => undefined,
+      askStream: async (payload, onEvent) => {
+        window.__lastAskPayload = payload;
+        for (const event of askStreamEvents) {
+          await onEvent(event);
+        }
+      },
+      injectQuery: async (payload) => {
+        window.__lastInjectPayload = payload;
+        return testOptions.injectResult || { accepted: true };
+      },
       remember: async () => ({ items: [] }),
-      getRuntimeSummary: async () => summary,
+      getRuntimeSummary: async () => runtime,
       setLayout: async () => ({ ok: true }),
       hide: async () => undefined,
       openSettings: async () => {
@@ -114,32 +295,10 @@ async function main() {
         window.__quickAskHandlers.focusInput = callback;
       },
     };
-  }, runtimeSummary);
+  }, { runtime: summary, testOptions: options });
 
-  try {
-    await page.goto(url);
-
-    const statusPill = page.locator('#status-pill');
-    await statusPill.waitFor({ state: 'visible' });
-    await assertText(statusPill, '外部询问待批准发送');
-
-    await statusPill.click();
-    const statusItem = page.locator('.status-item').first();
-    await statusItem.waitFor({ state: 'visible' });
-    await assertText(page.locator('.status-item-title').first(), '外部询问待批准发送');
-    await assertText(page.locator('.status-item-summary').first(), '是否向 Chris 追问发布窗口？');
-    await assertText(page.locator('.status-item-details').first(), '待你确认发送：2');
-    await assertText(page.locator('.status-item-hint').first(), '查看待发内容');
-
-    await statusItem.click();
-    const draft = await page.locator('#composer').inputValue();
-    assert.match(draft, /关于「外部询问待批准发送」/);
-    assert.match(draft, /是否向 Chris 追问发布窗口/);
-    assert.match(draft, /帮我总结这些外部询问状态/);
-  } finally {
-    await browser.close();
-    await new Promise((resolveClose) => server.close(resolveClose));
-  }
+  await page.goto(url);
+  return page;
 }
 
 async function serveQuickAskApp() {

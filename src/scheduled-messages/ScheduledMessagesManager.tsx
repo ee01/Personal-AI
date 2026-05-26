@@ -61,6 +61,7 @@ import {
   formatTimelineCacheLastAttempt,
   formatTimelineSyncDryRunResult,
   getTimelineCacheAttemptQuickFixText,
+  getTimelineCacheExecutionImpactText,
   getTimelineCacheProjectStatus,
   getTimelineCacheStatusActionText,
   getTimelineCacheStatusLabel,
@@ -68,6 +69,7 @@ import {
   parseTimelineCacheStatusResponseText,
   parseTimelineSyncDryRunResponseText,
   shouldAutoRefreshTimelineCacheStatus,
+  type TimelineCacheUsage,
   type TimelineCacheStatus,
   type TimelineSyncDryRunResult,
 } from './timelineCacheStatus';
@@ -111,6 +113,7 @@ import {
   getScheduleHealthIssue,
   getScheduleHealthIssues,
   getScheduleHealthRecoverySuggestion,
+  getScheduleHealthRecoverySuggestions,
 } from './scheduleHealth';
 import {
   filterScheduledMessagesForView,
@@ -125,6 +128,10 @@ import {
 } from './scheduledSheetLinks';
 import { buildRepeatSubmissionFields } from './repeatSubmission';
 import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
+import {
+  formatExecutionRouteSummary,
+  getScheduledMessageExecutionRoute,
+} from './executionRoute';
 
 // react-select 选项类型
 interface SelectOption {
@@ -2597,6 +2604,10 @@ const ScheduledMessagesManager: React.FC = () => {
     () => getScheduleHealthIssues(messages, queueSummaryNow),
     [messages, queueSummaryNow],
   );
+  const scheduleHealthRecoverySuggestions = useMemo(
+    () => getScheduleHealthRecoverySuggestions(messages, queueSummaryNow),
+    [messages, queueSummaryNow],
+  );
   const visibleScheduleHealthIssues = showAllScheduleHealthIssues
     ? scheduleHealthIssues
     : scheduleHealthIssues.slice(0, DEFAULT_SCHEDULE_HEALTH_ISSUE_DISPLAY_LIMIT);
@@ -2650,7 +2661,8 @@ const ScheduledMessagesManager: React.FC = () => {
       return;
     }
 
-    const suggestion = getScheduleHealthRecoverySuggestion(message, queueSummaryNow);
+    const suggestion = scheduleHealthRecoverySuggestions.get(messageId) ||
+      getScheduleHealthRecoverySuggestion(message, queueSummaryNow);
     if (!suggestion) {
       alert('当前消息没有可直接应用的改期建议，请先同步数据后重试。');
       return;
@@ -2970,7 +2982,8 @@ const ScheduledMessagesManager: React.FC = () => {
                 {visibleScheduleHealthIssues.map(issue => {
                   const message = messages.find(candidate => candidate.ID === issue.messageId);
                   const recoverySuggestion = message
-                    ? getScheduleHealthRecoverySuggestion(message, queueSummaryNow)
+                    ? scheduleHealthRecoverySuggestions.get(issue.messageId) ||
+                      getScheduleHealthRecoverySuggestion(message, queueSummaryNow)
                     : null;
 
                   return (
@@ -2981,6 +2994,11 @@ const ScheduledMessagesManager: React.FC = () => {
                     >
                       <span style={styles.queueIssueText}>
                         {issue.topic}: {formatScheduleHealthIssue(issue)}
+                        {recoverySuggestion && (
+                          <small style={styles.queueIssueSuggestionText}>
+                            建议改到 {recoverySuggestion.label}。{recoverySuggestion.reason}
+                          </small>
+                        )}
                       </span>
                       <div style={styles.queueIssueActions}>
                         <button
@@ -3352,6 +3370,13 @@ const ScheduledMessagesManager: React.FC = () => {
                     const frequencyText = formatFrequency(message);
                     const scheduleHealthIssue = getScheduleHealthIssue(message, queueSummaryNow);
                     const dispatchPolicy = formatDispatchPolicy(message);
+                    const executionRoute = getScheduledMessageExecutionRoute(message, {
+                      botConfigured,
+                      ringCentralSenderConfigured: hasRingCentralSenderCredentials(config),
+                      outreachEnabled: outreachRuntime.enabled,
+                      outreachConfigured: outreachRuntime.ringCentralReady,
+                    });
+                    const executionRouteSummary = formatExecutionRouteSummary(executionRoute);
                     const nextExecText = formatNextExec(message);
                     const statusToggleAction = getScheduledMessageStatusToggleAction(message.Status);
                     return (
@@ -3410,6 +3435,12 @@ const ScheduledMessagesManager: React.FC = () => {
                         <td style={{ ...styles.td, ...styles.frequencyCell }}>
                           <div style={styles.frequencyStack}>
                             <span style={styles.frequencyPrimaryText} title={frequencyText}>{frequencyText}</span>
+                            <small
+                              style={executionRoute.state === 'needs_setup' ? styles.schedulePolicyWarningText : styles.schedulePolicyText}
+                              title={executionRouteSummary}
+                            >
+                              {executionRoute.engine}
+                            </small>
                             {dispatchPolicy && (
                               <small
                                 style={scheduleHealthIssue ? styles.schedulePolicyWarningText : styles.schedulePolicyText}
@@ -4062,6 +4093,7 @@ interface AIHeader {
 }
 
 const TimelineCacheStatusPanel: React.FC<{
+  usage: TimelineCacheUsage;
   status: TimelineCacheStatus | null;
   selectedProject?: string;
   selectedMilestone?: string;
@@ -4070,7 +4102,7 @@ const TimelineCacheStatusPanel: React.FC<{
   isLoading: boolean;
   error: string;
   onRefresh: () => void;
-}> = ({ status, selectedProject, selectedMilestone, webAppUrl, timelineSyncRuleUrl, isLoading, error, onRefresh }) => {
+}> = ({ usage, status, selectedProject, selectedMilestone, webAppUrl, timelineSyncRuleUrl, isLoading, error, onRefresh }) => {
   const selectedStatus = selectedProject
     ? status?.projects?.find(project => project.project === selectedProject)
     : undefined;
@@ -4092,6 +4124,15 @@ const TimelineCacheStatusPanel: React.FC<{
     : '';
   const lastAttemptQuickFixText = selectedStatus?.lastAttempt?.success === false
     ? getTimelineCacheAttemptQuickFixText(selectedStatus.lastAttempt)
+    : '';
+  const executionImpactText = !isLoading
+    ? getTimelineCacheExecutionImpactText({
+      usage,
+      status: selectedStatus,
+      selectedMilestone,
+      projectMissingFromStatus: selectedProjectMissingFromStatus,
+      hasReadError: Boolean(error),
+    })
     : '';
   const shouldShowSyncRuleAction = Boolean(timelineSyncRuleUrl) && (!isReady || Boolean(error));
   const syncRuleActionLabel = error || selectedStatus?.status === 'invalid' || selectedStatus?.status === 'error'
@@ -4172,7 +4213,7 @@ const TimelineCacheStatusPanel: React.FC<{
           )}
           {selectedMilestoneMissing && !isLoading && !error && (
             <div style={{marginTop: '4px'}}>
-              当前缓存包含 {formatTimelineMilestoneKeys(selectedMilestoneKeys)}。请刷新缓存或改选已有 Milestone。
+              当前缓存包含 {formatTimelineMilestoneKeys(selectedMilestoneKeys)}。请同步后刷新，或改选已有 Milestone。
             </div>
           )}
           {selectedStatus && selectedStatus.status !== 'ready' && !isLoading && !error && (
@@ -4201,6 +4242,18 @@ const TimelineCacheStatusPanel: React.FC<{
           {selectedProjectMissingFromStatus && !isLoading && !error && (
             <div style={{marginTop: '4px'}}>
               请更新 App Script 并重新配置 Timeline Sync Rule，让项目清单与扩展保持一致。
+            </div>
+          )}
+          {executionImpactText && (
+            <div style={{
+              marginTop: '6px',
+              padding: '6px 8px',
+              backgroundColor: '#fff',
+              border: `1px solid ${statusBorder}`,
+              borderRadius: '4px',
+              color: statusColor,
+            }}>
+              执行影响：{executionImpactText}
             </div>
           )}
           {status && !selectedStatus && !error && (
@@ -5715,6 +5768,27 @@ ${content}
     hasScheduleQueueBlockingRisk(scheduleQueuePressure),
   );
   const isSubmitBlockedBySchedule = Boolean(scheduleTimeError || scheduleBlockReason || scheduleQueueBlockReason);
+  const executionRoute = useMemo(() => getScheduledMessageExecutionRoute({
+    Push_Method: formData.Push_Method,
+    AI_Endpoint: formData.AI_Endpoint,
+    Automation_Link: formData.Automation_Link,
+    Schedule_Date: formData.Schedule_Date,
+  }, {
+    botConfigured,
+    ringCentralSenderConfigured,
+    outreachEnabled,
+    outreachConfigured,
+  }), [
+    botConfigured,
+    formData.AI_Endpoint,
+    formData.Automation_Link,
+    formData.Push_Method,
+    formData.Schedule_Date,
+    outreachConfigured,
+    outreachEnabled,
+    ringCentralSenderConfigured,
+  ]);
+  const executionRouteSummary = formatExecutionRouteSummary(executionRoute);
   
   const handleUserTagsChange = (tags: string[]) => {
     setUserTags(tags);
@@ -6115,6 +6189,16 @@ ${content}
                 </button>
               </div>
               <small style={dialogStyles.hint}>按本机本地时间保存到 Sheet，避免跨日误差。{scheduleTimezoneHint}</small>
+              <div
+                style={executionRoute.state === 'needs_setup'
+                  ? dialogStyles.executionRouteWarning
+                  : dialogStyles.executionRoute}
+                title={executionRouteSummary}
+              >
+                <div style={dialogStyles.executionRouteLabel}>执行引擎</div>
+                <div style={dialogStyles.executionRouteValue}>{executionRoute.engine}</div>
+                <div style={dialogStyles.executionRouteHint}>{executionRoute.detail}</div>
+              </div>
               {schedulePreviewDisplayValue && (
                 <div style={hasScheduleWarning ? dialogStyles.scheduleWarning : dialogStyles.schedulePreview}>
                   <div style={dialogStyles.schedulePreviewLabel}>预计下次执行</div>
@@ -6192,6 +6276,7 @@ ${content}
 
               {botConfigured && timelineBotConfigured && (
                 <TimelineCacheStatusPanel
+                  usage="timeline-trigger"
                   status={timelineCacheStatus}
                   selectedProject={formData.Timeline_Project}
                   selectedMilestone={formData.Timeline_Milestone}
@@ -6202,6 +6287,17 @@ ${content}
                   onRefresh={loadTimelineCacheStatus}
                 />
               )}
+
+              <div
+                style={executionRoute.state === 'needs_setup'
+                  ? dialogStyles.executionRouteWarning
+                  : dialogStyles.executionRoute}
+                title={executionRouteSummary}
+              >
+                <div style={dialogStyles.executionRouteLabel}>执行引擎</div>
+                <div style={dialogStyles.executionRouteValue}>{executionRoute.engine}</div>
+                <div style={dialogStyles.executionRouteHint}>{executionRoute.detail}</div>
+              </div>
               
               <div style={dialogStyles.formRow}>
                 <div style={dialogStyles.formGroup}>
@@ -6231,7 +6327,7 @@ ${content}
                   />
                   {selectedTimelineMilestoneMissing && (
                     <small style={{...dialogStyles.hint, color: '#856404'}}>
-                      当前项目缓存不包含该 Milestone，保存前请刷新同步或选择 {formatTimelineMilestoneKeys(selectedTimelineMilestoneKeys)}。
+                      当前项目缓存不包含该 Milestone；可保存，但执行器会跳过直到同步出现该 Milestone。也可改选 {formatTimelineMilestoneKeys(selectedTimelineMilestoneKeys)}。
                     </small>
                   )}
                 </div>
@@ -6315,6 +6411,7 @@ ${content}
               )}
               {botConfigured && timelineBotConfigured && (
                 <TimelineCacheStatusPanel
+                  usage="project-variables"
                   status={timelineCacheStatus}
                   selectedProject={selectedTimelineProjectValue}
                   webAppUrl={webAppUrl}
@@ -8036,7 +8133,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   queueIssueItem: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: '8px',
     padding: '4px 8px',
     backgroundColor: 'rgba(255, 255, 255, 0.75)',
@@ -8050,8 +8147,13 @@ const styles: { [key: string]: React.CSSProperties } = {
   queueIssueText: {
     minWidth: 0,
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  queueIssueSuggestionText: {
+    color: '#9a3412',
+    fontWeight: 600,
   },
   queueIssueActions: {
     display: 'flex',
@@ -8419,6 +8521,36 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     cursor: 'pointer',
     fontSize: '12px',
     lineHeight: 1.2,
+  },
+  executionRoute: {
+    marginTop: '10px',
+    padding: '10px 12px',
+    backgroundColor: '#f7fafc',
+    border: '1px solid #d9e2ef',
+    borderRadius: '6px',
+  },
+  executionRouteWarning: {
+    marginTop: '10px',
+    padding: '10px 12px',
+    backgroundColor: '#fff8e6',
+    border: '1px solid #f0c36d',
+    borderRadius: '6px',
+  },
+  executionRouteLabel: {
+    fontSize: '12px',
+    color: '#5f6f82',
+    marginBottom: '2px',
+  },
+  executionRouteValue: {
+    fontSize: '14px',
+    color: '#1f2937',
+    fontWeight: 600,
+  },
+  executionRouteHint: {
+    marginTop: '4px',
+    fontSize: '12px',
+    color: '#5f6f82',
+    lineHeight: 1.35,
   },
   schedulePreview: {
     marginTop: '10px',

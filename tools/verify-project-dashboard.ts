@@ -787,8 +787,30 @@ function verifyProjectDashboardDecisionBrief() {
 
   assert.equal(evidenceBrief.label, '先补齐证据');
   assert.equal(evidenceBrief.primaryAction.type, 'open-task');
+  if (evidenceBrief.primaryAction.type === 'open-task') {
+    assert.equal(evidenceBrief.primaryAction.evidenceFocus, 'eta');
+  }
   assert.match(evidenceBrief.detail, /缺 ETA 和来源/);
   assert.equal(evidenceBrief.supportingSignals.some((signal) => signal.includes('1 个缺 ETA+来源')), true);
+
+  const sourceOnlyBrief = buildProjectDashboardDecisionBrief(
+    [
+      {
+        id: 'source-only-gap',
+        name: 'Source Only Gap',
+        lastStatusReviewAt: '2026-04-29T08:00:00+08:00',
+        milestones: [{ id: 'ga', label: 'GA', date: '2026-06-01' }],
+        tasks: [{ id: 'source-task', type: 'task', title: 'Link source', status: 'progress', eta: '2026-06-01' }],
+      },
+    ] as any[],
+    { now },
+  );
+
+  assert.equal(sourceOnlyBrief.label, '先补齐证据');
+  assert.equal(sourceOnlyBrief.primaryAction.type, 'open-task');
+  if (sourceOnlyBrief.primaryAction.type === 'open-task') {
+    assert.equal(sourceOnlyBrief.primaryAction.evidenceFocus, 'source');
+  }
 
   const reviewBrief = buildProjectDashboardDecisionBrief(
     [
@@ -814,6 +836,7 @@ function verifyProjectDashboardDecisionBrief() {
 
   assert.equal(reviewBrief.label, '先复核状态');
   assert.equal(reviewBrief.primaryAction.type, 'review-project');
+  assert.equal(reviewBrief.primaryAction.label, '复核草稿');
   assert.match(reviewBrief.headline, /Review Brief Project/);
 
   const emptyBrief = buildProjectDashboardDecisionBrief([], { now });
@@ -1088,6 +1111,17 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
       saved.projects.find((project: any) => project.name === 'Memory Service Project')?.description,
       /来自 Memory Service 关注项目/,
     );
+    assert.equal(
+      saved.projects.find((project: any) => project.name === 'Memory Service Project')?.lastStatusReviewAt,
+      undefined,
+    );
+    assert.equal(
+      buildProjectReviewSummary(
+        saved.projects.find((project: any) => project.name === 'Memory Service Project'),
+        new Date('2026-05-19T08:00:00+08:00'),
+      ).state,
+      'unreviewed',
+    );
     assert.equal(saved.projects.some((project: any) => project.name === 'Inactive Project'), false);
   } finally {
     globalThis.fetch = originalFetch;
@@ -1161,7 +1195,8 @@ function verifyWatchedProjectMergeKeepsExistingProjects() {
   assert.equal(result.projects.length, 2);
   assert.equal(result.projects[1].id, 'memory-beta');
   assert.equal(result.projects[1].description, 'Needs local planning（来自 Memory Service 关注项目）');
-  assert.equal(result.projects[1].lastStatusReviewAt, reviewedAt.toISOString());
+  assert.equal(result.projects[1].lastStatusReviewAt, undefined);
+  assert.equal(buildProjectReviewSummary(result.projects[1], reviewedAt).state, 'unreviewed');
 }
 
 function verifyProjectSuggestionsRespectPrompt() {

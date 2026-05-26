@@ -119,6 +119,7 @@ export interface EnvConfigType {
   MEETING_PILOT_ENABLED: boolean;
   MEETING_PILOT_FLOATING_ICON_VISIBLE: boolean;
   CONTEXT_ASSIST_ENABLED: boolean;
+  SCENE_REHEARSAL_DISPLAY_ENABLED: boolean;
   COMPOSE_ASSIST_ENABLED: boolean;
   MEETING_PREP_ENABLED: boolean;
   TODAY_PILOT_MEETING_PREP_ENABLED: boolean;
@@ -456,6 +457,9 @@ export function normalizeEnvConfigShape(
     MEETING_PILOT_FLOATING_ICON_VISIBLE:
       normalizedMeetingPilotFloatingIconVisible,
     CONTEXT_ASSIST_ENABLED: config.CONTEXT_ASSIST_ENABLED !== false,
+    SCENE_REHEARSAL_DISPLAY_ENABLED:
+      config.CONTEXT_ASSIST_ENABLED !== false &&
+      config.SCENE_REHEARSAL_DISPLAY_ENABLED !== false,
     COMPOSE_ASSIST_ENABLED:
       config.COMPOSE_ASSIST_ENABLED !== false &&
       config.CONTEXT_ASSIST_ENABLED !== false,
@@ -615,6 +619,9 @@ export const defaultEnvConfig: EnvConfigType = {
   MEETING_PILOT_FLOATING_ICON_VISIBLE:
     process.env.MEETING_PILOT_FLOATING_ICON_VISIBLE !== 'false',
   CONTEXT_ASSIST_ENABLED: process.env.CONTEXT_ASSIST_ENABLED !== 'false',
+  SCENE_REHEARSAL_DISPLAY_ENABLED:
+    process.env.CONTEXT_ASSIST_ENABLED !== 'false' &&
+    process.env.SCENE_REHEARSAL_DISPLAY_ENABLED !== 'false',
   COMPOSE_ASSIST_ENABLED:
     process.env.COMPOSE_ASSIST_ENABLED !== 'false' &&
     process.env.CONTEXT_ASSIST_ENABLED !== 'false',
@@ -769,6 +776,49 @@ export async function getEnvConfig(): Promise<EnvConfigType> {
 
 export function getDefaultEnvConfig(): EnvConfigType {
   return normalizeEnvConfigShape(defaultEnvConfig);
+}
+
+export const DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL = [
+  'glip',
+  'jira',
+  'web',
+  'manual',
+  'system',
+  'meeting',
+  'calendar',
+  'ai_chat',
+  'doubao',
+  'daily_log',
+  'project_summary',
+  'reflection',
+  'dream',
+  'entity_profile',
+  'markdown',
+  'user_core',
+] as const;
+
+export function isSceneRehearsalDisplayEnabledFromConfig(
+  config?: Partial<EnvConfigType> | Record<string, unknown> | null,
+): boolean {
+  return (
+    config?.CONTEXT_ASSIST_ENABLED !== false &&
+    config?.SCENE_REHEARSAL_DISPLAY_ENABLED !== false
+  );
+}
+
+export function filterSceneRehearsalSourceTypes<T extends string>(
+  sourceTypes: T[] | undefined,
+  config?: Partial<EnvConfigType> | Record<string, unknown> | null,
+  fallbackWhenDisabled: readonly T[] = DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL as readonly T[],
+): T[] | undefined {
+  if (isSceneRehearsalDisplayEnabledFromConfig(config)) {
+    return sourceTypes;
+  }
+  const sourceList = sourceTypes?.length
+    ? sourceTypes
+    : Array.from(fallbackWhenDisabled);
+  const filtered = sourceList.filter((sourceType) => sourceType !== 'rehearsal');
+  return filtered.length ? filtered : undefined;
 }
 
 export async function getUserInfo() {

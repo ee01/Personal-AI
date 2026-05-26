@@ -8,6 +8,23 @@
 import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import type { WatchRule } from '../watchRules';
 
+const splitScopeValues = (value?: string): string[] =>
+  (value || '')
+    .split(/[\n,，、;；]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const formatScopeValuesForPrompt = (
+  value: string | undefined,
+  singleFormatter: (value: string) => string,
+  multiFormatter: (values: string) => string,
+): string | undefined => {
+  const values = splitScopeValues(value);
+  if (values.length === 0) return undefined;
+  if (values.length === 1) return singleFormatter(values[0]);
+  return multiFormatter(values.join(' 或 '));
+};
+
 /**
  * 根据 TopicItem 的匹配条件生成完整规则文本
  *
@@ -56,12 +73,18 @@ export function buildRuleText(
   // 🔧 通用前缀构建函数：处理 filterSender 和 filterGroup
   const buildPrefix = (): string => {
     const prefixParts: string[] = [];
-    if (item.filterSender) {
-      prefixParts.push(item.filterSender);
-    }
-    if (item.filterGroup) {
-      prefixParts.push(`在 ${item.filterGroup} 中`);
-    }
+    const senderScope = formatScopeValuesForPrompt(
+      item.filterSender,
+      (value) => value,
+      (values) => `任一发送人（${values}）`,
+    );
+    const groupScope = formatScopeValuesForPrompt(
+      item.filterGroup,
+      (value) => `在 ${value} 中`,
+      (values) => `在任一群组（${values}）中`,
+    );
+    if (senderScope) prefixParts.push(senderScope);
+    if (groupScope) prefixParts.push(groupScope);
     if (item.filterSender) {
       prefixParts.push(`发送的`);
     }

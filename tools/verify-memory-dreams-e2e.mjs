@@ -163,6 +163,33 @@ try {
     'dream replay page should offer a reflection review path',
   );
 
+  const topicReviewLink = projectCard.getByRole('link', {
+    name: '复核这个主题',
+  });
+  const topicReviewHref = await topicReviewLink.getAttribute('href');
+  assert.ok(
+    topicReviewHref?.includes('#/reflection-threads'),
+    'dream replay card should link to reflection threads',
+  );
+  assert.ok(
+    topicReviewHref?.includes('source=dream'),
+    'dream replay card should preserve dream source in review handoff',
+  );
+  assert.ok(
+    topicReviewHref?.includes('search=Project+Orbit') ||
+      topicReviewHref?.includes('search=Project%20Orbit'),
+    'dream replay card should preserve topic search in review handoff',
+  );
+
+  await topicReviewLink.click();
+  await page.getByText('来自梦境重放').waitFor({ timeout: 10000 });
+  await page.getByPlaceholder('搜索标题 / topic key').inputValue().then((value) => {
+    assert.equal(value, 'Project Orbit');
+  });
+  await page
+    .getByText('没有找到与“Project Orbit”对应的自我反思线程')
+    .waitFor({ timeout: 10000 });
+
   console.log('verify-memory-dreams-e2e: ok');
 } finally {
   await context.close();

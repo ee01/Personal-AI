@@ -4,6 +4,7 @@ import {
   getMatchedAutoReplyItem,
   type TopicItemWithAutoReply,
 } from '../src/message-reaction/AutoReplyHandler.ts';
+import { buildRuleText } from '../src/utils/ruleTextBuilder.ts';
 import {
   buildRuntimeWatchRules,
   filterWatchRulesForMessageContext,
@@ -69,6 +70,14 @@ const manualRules: TopicItemWithAutoReply[] = [
       reviewMode: 'manual',
     },
   },
+  {
+    id: 'manual-multi-scope',
+    text: 'Watch release and SDK planning updates',
+    expiredAt: 0,
+    notifyMethod: 'bot',
+    filterGroup: 'Release Chat, SDK Updates',
+    filterSender: 'Morgan Lee; Alice',
+  },
 ];
 
 const outreachSessions: OutreachSession[] = [
@@ -113,6 +122,7 @@ function main() {
     'manual:manual-follow-1',
     'manual:manual-ai-short-scope',
     'manual:manual-auto-reply-scope',
+    'manual:manual-multi-scope',
     'outreach:session-before-dispatch',
     'outreach:session-before-followup',
   ]);
@@ -120,12 +130,34 @@ function main() {
   const releaseRules = filterWatchRulesForMessageContext(runtimeRules, {
     groupName: 'Release Chat',
     groupId: 'release-chat',
-    sender: 'Morgan',
+    sender: 'Morgan Lee',
   });
   assert.deepEqual(releaseRules.map((rule) => rule.ruleRef), [
     'manual:manual-1',
     'manual:manual-follow-1',
+    'manual:manual-multi-scope',
   ]);
+
+  const sdkAliceRules = filterWatchRulesForMessageContext(runtimeRules, {
+    groupName: 'SDK Updates',
+    groupId: 'sdk-updates',
+    sender: 'Alice',
+  });
+  assert.ok(
+    sdkAliceRules.some((rule) => rule.ruleRef === 'manual:manual-multi-scope'),
+    'comma/semicolon separated scopes should match any sender and group candidate',
+  );
+
+  const sdkPriyaRules = filterWatchRulesForMessageContext(runtimeRules, {
+    groupName: 'SDK Updates',
+    groupId: 'sdk-updates',
+    sender: 'Priya',
+  });
+  assert.equal(
+    sdkPriyaRules.some((rule) => rule.ruleRef === 'manual:manual-multi-scope'),
+    false,
+    'multi-scope rule still requires both configured dimensions to match',
+  );
 
   const sdkRules = filterWatchRulesForMessageContext(runtimeRules, {
     groupName: 'sdk-updates',
@@ -244,6 +276,20 @@ function main() {
   assert.equal(
     getFirstManualItemFromMatchedRules(systemOnlyMatch.watchRules),
     undefined,
+  );
+
+  const multiScopePromptText = buildRuleText(manualRules[5], true, 4);
+  assert.ok(
+    multiScopePromptText.includes('在任一群组（Release Chat 或 SDK Updates）中'),
+    'LLM prompt should describe multiple groups as OR candidates',
+  );
+  assert.ok(
+    multiScopePromptText.includes('任一发送人（Morgan Lee 或 Alice）'),
+    'LLM prompt should describe multiple senders as OR candidates',
+  );
+  assert.ok(
+    multiScopePromptText.includes('[RULE_ID:4]'),
+    'LLM prompt should keep stable legacy rule id hints',
   );
 
   console.log('verify-memory-entry-runtime: ok');

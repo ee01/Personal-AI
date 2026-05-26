@@ -245,6 +245,7 @@ type ToolCallValidationResult =
       reason?: 'unknown_tool' | 'missing_params' | 'approval_required';
       effect?: ToolEffectType;
       riskLevel?: ToolRiskLevel;
+      safetyNote?: string;
       approvalKey?: string;
     };
 
@@ -2602,6 +2603,7 @@ ${context}
               actionKey,
               effect: validation.effect,
               riskLevel: validation.riskLevel,
+              safetyNote: validation.safetyNote,
               approvalKey: validation.approvalKey,
             });
             continue;
@@ -2871,6 +2873,7 @@ ${this.getToolSafetyPromptGuidance()}
         reason: 'approval_required',
         effect: safety.effect,
         riskLevel: safety.riskLevel,
+        safetyNote: safety.safetyNote,
         approvalKey: actionKey,
         message:
           `工具 ${toolId} 属于${TOOL_RISK_LABELS[safety.riskLevel]}${TOOL_EFFECT_LABELS[safety.effect]}动作，需要人工确认，已阻断执行。` +
@@ -3028,6 +3031,7 @@ ${this.getToolSafetyPromptGuidance()}
             message: validation.message,
             effect: validation.effect,
             riskLevel: validation.riskLevel,
+            safetyNote: validation.safetyNote,
             approvalKey: validation.approvalKey,
           };
         }
@@ -3084,6 +3088,7 @@ ${this.getToolSafetyPromptGuidance()}
                   actionKey: curr.actionKey,
                   effect: curr.effect,
                   riskLevel: curr.riskLevel,
+                  safetyNote: curr.safetyNote,
                   approvalKey: curr.approvalKey,
                 }
             : curr.skipped

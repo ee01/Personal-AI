@@ -6,11 +6,14 @@ import {
   formatMemoryTimestamp,
   getScopeBreakdown,
   getRecallChannelLabel,
+  getMemoryLinkSafetyState,
   getResultChannels,
   getResultMeta,
   getScopeLabel,
   getSearchResultKey,
+  getSearchHighlightTokens,
   normalizeMemorySourceUrl,
+  renderHighlightedSearchText,
   sanitizeMemoryExploreRoute,
   shouldResetTypeFilter,
 } from '../src/modals/searchResultPresentation.js';
@@ -19,6 +22,23 @@ assert.equal(getScopeLabel('work'), '工作记忆');
 assert.equal(getScopeLabel('personal'), '个人记忆');
 assert.equal(getScopeLabel('all'), '全部记忆');
 assert.equal(getScopeLabel('both'), '全部记忆');
+assert.deepEqual(getSearchHighlightTokens('feedback query'), [
+  'feedback',
+  'query',
+]);
+assert.equal(
+  renderHighlightedSearchText('Search feedback memory', 'feedback query'),
+  'Search <mark class="search-highlight">feedback</mark> memory',
+);
+assert.equal(
+  renderHighlightedSearchText('<script>alert(1)</script> feedback', 'feedback'),
+  '&lt;script&gt;alert(1)&lt;/script&gt; <mark class="search-highlight">feedback</mark>',
+);
+assert.equal(renderHighlightedSearchText('unchanged', 'x'), 'unchanged');
+assert.equal(
+  renderHighlightedSearchText('C++ parser', 'C++'),
+  '<mark class="search-highlight">C++</mark> parser',
+);
 assert.deepEqual(
   getScopeBreakdown([
     { id: 'work-message', scope: 'work' },
@@ -78,8 +98,15 @@ assert.equal(
   '#/timeline?type=message&focus=msg-1',
 );
 assert.equal(sanitizeMemoryExploreRoute('#/timeline?focus=msg-1'), '#/timeline?focus=msg-1');
+assert.equal(
+  sanitizeMemoryExploreRoute('#/entity/Person?focus=person-1'),
+  '#/entity/Person?focus=person-1',
+);
+assert.equal(sanitizeMemoryExploreRoute('#/topic/topic-1'), '#/topic/topic-1');
 assert.equal(sanitizeMemoryExploreRoute('memory-exploring.html#/timeline'), null);
 assert.equal(sanitizeMemoryExploreRoute('javascript:alert(1)'), null);
+assert.equal(sanitizeMemoryExploreRoute('#//evil.example/path'), null);
+assert.equal(sanitizeMemoryExploreRoute('#/settings'), null);
 assert.equal(sanitizeMemoryExploreRoute('#/timeline\n?focus=msg-1'), null);
 assert.equal(sanitizeMemoryExploreRoute('#/timeline?focus=<img>'), null);
 
@@ -93,6 +120,33 @@ assert.equal(
 );
 assert.equal(normalizeMemorySourceUrl('/relative/path'), null);
 assert.equal(normalizeMemorySourceUrl('javascript:alert(1)'), null);
+assert.deepEqual(
+  getMemoryLinkSafetyState({
+    exploreLink: '#/settings',
+    sourceUrl: 'javascript:alert(1)',
+  }),
+  {
+    exploreRoute: null,
+    sourceUrl: null,
+    sourceHost: '',
+    blockedLabels: [
+      '记忆内跳转已隐藏：不支持的目标',
+      '来源链接已隐藏：仅支持 http/https',
+    ],
+  },
+);
+assert.deepEqual(
+  getMemoryLinkSafetyState({
+    exploreLink: '#/timeline?type=message&focus=msg-1',
+    sourceUrl: 'https://user:pass@example.com/path',
+  }),
+  {
+    exploreRoute: '#/timeline?type=message&focus=msg-1',
+    sourceUrl: 'https://example.com/path',
+    sourceHost: 'example.com',
+    blockedLabels: [],
+  },
+);
 
 assert.equal(
   shouldResetTypeFilter('Project', [{ key: 'all' }, { key: 'message' }]),

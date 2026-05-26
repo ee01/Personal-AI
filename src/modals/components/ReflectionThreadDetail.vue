@@ -167,7 +167,53 @@
       </section>
 
       <section class="panel">
-        <div class="panel-title">研究补充证据</div>
+        <div class="panel-title">研究补查过程</div>
+        <div v-if="researchAttempts.length === 0" class="muted">
+          暂无本地研究查询记录；下一次自我反思会在需要时补查本地记忆。
+        </div>
+        <div v-else class="research-trace-list">
+          <div
+            v-for="attempt in researchAttempts"
+            :key="attempt.id"
+            class="research-trace-card"
+            :class="attempt.status"
+          >
+            <div class="inline-head">
+              <span>{{ attempt.purpose || '本地研究查询' }}</span>
+              <span class="research-status" :class="attempt.status">
+                {{ researchStatusLabel(attempt.status) }}
+              </span>
+            </div>
+            <p class="run-summary">{{ attempt.query }}</p>
+            <div class="action-meta">
+              <span>命中 {{ attempt.resultCount }}</span>
+              <span v-if="attempt.sourceTypes.length > 0">
+                {{ attempt.sourceTypes.join(' / ') }}
+              </span>
+              <span v-if="attempt.projectFilter">项目 {{ attempt.projectFilter }}</span>
+              <span v-if="attempt.senderFilter.length > 0">
+                发送人 {{ attempt.senderFilter.join(' / ') }}
+              </span>
+              <span v-if="attempt.groupFilter.length > 0">
+                群组 {{ attempt.groupFilter.join(' / ') }}
+              </span>
+              <span>{{ relativeTime(attempt.createdAt) }}</span>
+            </div>
+            <div v-if="attempt.errorMessage" class="research-error">
+              {{ attempt.errorMessage }}
+            </div>
+            <div v-else-if="attempt.status === 'empty'" class="research-empty">
+              本地没有找到可加入本轮反思的证据。
+            </div>
+            <div v-if="attempt.evidenceRefs.length > 0" class="research-refs">
+              证据 {{ attempt.evidenceRefs.slice(0, 4).join(' · ') }}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">研究命中证据</div>
         <div v-if="researchEvidence.length === 0" class="muted">暂无研究补充证据</div>
         <div v-else class="evidence-list">
           <div v-for="link in researchEvidence" :key="link.id" class="evidence-item">
@@ -241,6 +287,7 @@ const loading = ref(true);
 const busy = ref(false);
 const detail = ref<ReflectionThreadDetailResponse | null>(null);
 const researchEvidence = computed(() => detail.value?.links.filter(link => link.role === 'research') ?? []);
+const researchAttempts = computed(() => detail.value?.researchAttempts ?? []);
 const transcriptVisible = ref<Record<string, boolean>>({});
 const transcriptLoading = ref<Record<string, boolean>>({});
 const transcriptContent = ref<Record<string, string | null>>({});
@@ -434,6 +481,13 @@ function outreachTargetTypeLabel(targetType?: string) {
   return targetType || '未知目标';
 }
 
+function researchStatusLabel(status: string) {
+  if (status === 'hit') return '已命中';
+  if (status === 'empty') return '无结果';
+  if (status === 'failed') return '查询失败';
+  return status || '未知';
+}
+
 function displayThreadTitle(title: string) {
   return title.replace(/^思考反思:/, '自我反思:');
 }
@@ -600,6 +654,69 @@ function normalizeTimestamp(ts: number) {
 .queue-badge.running {
   background: rgba(245, 158, 11, 0.16);
   color: #fcd34d;
+}
+
+.research-trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.research-trace-card {
+  background: rgba(30, 41, 59, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.8rem;
+  padding: 1rem;
+}
+
+.research-trace-card.failed {
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.research-status {
+  flex-shrink: 0;
+  padding: 0.18rem 0.58rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+}
+
+.research-status.hit {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.research-status.empty {
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+
+.research-status.failed {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+}
+
+.research-error,
+.research-empty,
+.research-refs {
+  margin-top: 0.55rem;
+  border-radius: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.research-error {
+  background: rgba(127, 29, 29, 0.26);
+  color: #fecaca;
+}
+
+.research-empty,
+.research-refs {
+  background: rgba(15, 23, 42, 0.55);
+  color: #94a3b8;
 }
 
 .detail-grid {

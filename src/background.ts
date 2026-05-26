@@ -1,6 +1,11 @@
 import { analyzeMessagesInBackground } from './messageDealing';
 // embeddings.ts 已废弃 — 后端 memory-service 处理嵌入生成
-import { getEnvConfig, normalizeConcernedItemsDigestHour } from './utils';
+import {
+  DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+  filterSceneRehearsalSourceTypes,
+  getEnvConfig,
+  normalizeConcernedItemsDigestHour,
+} from './utils';
 import {
   FETCH_JIRA_TICKETS,
   JIRA_COOKIE_AUTH_GUARD_MESSAGE,
@@ -493,7 +498,10 @@ async function getScheduledSheetDataForMarkers(): Promise<{
     ]);
     return { messages, pushLogs };
   } catch (error) {
-    console.warn('⚠️ 同步 Scheduled Message Glip 标注失败，跳过 Sheet marker:', error);
+    console.warn(
+      '⚠️ 同步 Scheduled Message Glip 标注失败，跳过 Sheet marker:',
+      error,
+    );
     return { messages: [], pushLogs: [] };
   }
 }
@@ -510,7 +518,10 @@ async function refreshGlipMessageMarkers(): Promise<unknown> {
         getMemoryServiceClient()
           .getGlipMessageMarkers()
           .catch((error) => {
-            console.warn('⚠️ 同步 Outreach Glip 标注失败，使用本地 marker:', error);
+            console.warn(
+              '⚠️ 同步 Outreach Glip 标注失败，使用本地 marker:',
+              error,
+            );
             return { items: [], generatedAt: 0 };
           }),
         getScheduledSheetDataForMarkers(),
@@ -947,15 +958,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'CREATE_OUTREACH_FROM_MESSAGE') {
     (async () => {
       try {
-        const result = await getMemoryServiceClient().createOutreachSessionFromMessage(
-          request.data,
-        );
+        const result =
+          await getMemoryServiceClient().createOutreachSessionFromMessage(
+            request.data,
+          );
         await refreshGlipMessageMarkers();
-        sendResponse({ success: true, session: result.session });
+        sendResponse({
+          success: true,
+          session: result.session,
+          created: result.created !== false,
+          reason: result.reason,
+        });
       } catch (error: any) {
         sendResponse({
           success: false,
           error: error?.message || 'create_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'OPEN_OUTREACH_SESSION_REVIEW') {
+    (async () => {
+      try {
+        const rawSessionId =
+          typeof request.data?.sessionId === 'string'
+            ? request.data.sessionId.trim()
+            : '';
+        const path = rawSessionId
+          ? `memory-exploring.html#/outreach/${encodeURIComponent(rawSessionId)}`
+          : 'memory-exploring.html#/outreach?originKind=message_reaction';
+        const tab = await chrome.tabs.create({
+          url: chrome.runtime.getURL(path),
+        });
+        sendResponse({ success: true, tabId: tab.id });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'open_failed',
         });
       }
     })();
@@ -1308,8 +1349,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'CONTEXT_RECALL_REQUEST') {
     (async () => {
       try {
+        const envConfig = await getEnvConfig();
         const client = getMemoryServiceClient();
-        const result = await client.contextRecall(request.request);
+        const result = await client.contextRecall({
+          ...(request.request || {}),
+          sourceTypes: filterSceneRehearsalSourceTypes(
+            request.request?.sourceTypes,
+            envConfig,
+            DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+          ),
+        });
         sendResponse({
           success: true,
           topMatch: result.topMatch,
@@ -1331,7 +1380,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const targetId = String(feedback.targetId || '').trim();
         const targetType = feedback.targetType;
         const action = feedback.action === 'positive' ? 'positive' : 'negative';
-        const allowedTargetTypes = new Set(['message', 'chunk', 'entity']);
+        const allowedTargetTypes = new Set(['message', 'chunk', 'entity', 'rehearsal']);
         if (!targetId || !allowedTargetTypes.has(targetType)) {
           sendResponse({ success: false, error: 'invalid_feedback_target' });
           return;
@@ -1342,6 +1391,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             ? feedback.detail.slice(0, 500)
             : undefined;
         const client = getMemoryServiceClient();
+        if (targetType === 'rehearsal') {
+          const activationId =
+            typeof feedback.rehearsalActivationId === 'string'
+              ? feedback.rehearsalActivationId.slice(0, 200)
+              : undefined;
+          const result = await client.submitRehearsalFeedback(targetId, {
+            outcome: action === 'positive' ? 'accepted' : 'irrelevant',
+            activationId,
+            note: detail,
+          });
+          sendResponse({ success: true, result });
+          return;
+        }
+
         const result = await client.submitFeedback({
           type: 'recall_quality',
           targetId,
@@ -1426,7 +1489,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return;
         }
         const client = getMemoryServiceClient();
-        const result = await client.composerAssist(request.request);
+        const result = await client.composerAssist({
+          ...(request.request || {}),
+          sourceTypes: filterSceneRehearsalSourceTypes(
+            request.request?.sourceTypes,
+            envConfig,
+            DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+          ),
+        });
         sendResponse({ success: true, result });
       } catch (err: any) {
         console.warn('[background] composer-assist failed:', err);
@@ -1442,8 +1512,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'CONTEXT_ASSIST_REQUEST') {
     (async () => {
       try {
+        const envConfig = await getEnvConfig();
         const client = getMemoryServiceClient();
-        const result = await client.contextAssist(request.request);
+        const result = await client.contextAssist({
+          ...(request.request || {}),
+          sourceTypes: filterSceneRehearsalSourceTypes(
+            request.request?.sourceTypes,
+            envConfig,
+            DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+          ),
+        });
         sendResponse({ success: true, result });
       } catch (err: any) {
         console.warn('[background] context-assist failed:', err);
@@ -1459,9 +1537,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'TODAY_PILOT_MEETING_PREP_REQUEST') {
     (async () => {
       try {
+        const envConfig = await getEnvConfig();
         const client = getMemoryServiceClient();
         const result = await client.resolveTodayPilotMeetingPrep(
-          request.request || {},
+          {
+            ...(request.request || {}),
+            sourceTypes: filterSceneRehearsalSourceTypes(
+              request.request?.sourceTypes,
+              envConfig,
+              DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+            ),
+          },
         );
         sendResponse({ success: true, result });
       } catch (err: any) {
@@ -3263,6 +3349,7 @@ async function pollBackendNotifications(): Promise<void> {
             item.type,
             item.sourceType,
             item.sourceId,
+            item.payload,
           ),
           notificationId:
             item.sourceType === 'notification' ? item.sourceId : undefined,
@@ -3280,6 +3367,8 @@ async function pollBackendNotifications(): Promise<void> {
             item.lane,
             item.priority,
             item.dueAt,
+            item.deliveryContext,
+            item.payload,
           ),
           priority: item.priority === 'high' ? 2 : 1,
           buttons: buildBackendNotificationButtons(item.lane, item.sourceType),
@@ -3325,7 +3414,12 @@ async function pollBackendNotifications(): Promise<void> {
         sourceRef: `notification:${n.id}`,
         lane: legacyLane,
         type: n.type,
-        targetHash: getBackendTargetHash(n.type, 'notification'),
+        targetHash: getBackendTargetHash(
+          n.type,
+          'notification',
+          undefined,
+          n.payload,
+        ),
         notificationId: n.id,
       });
       await chrome.notifications.create(notifId, {
@@ -3341,6 +3435,8 @@ async function pollBackendNotifications(): Promise<void> {
           legacyLane,
           legacyPriority,
           n.sentAt,
+          undefined,
+          n.payload,
         ),
         priority: legacyPriority === 'high' ? 2 : 1,
         buttons: buildBackendNotificationButtons(legacyLane),

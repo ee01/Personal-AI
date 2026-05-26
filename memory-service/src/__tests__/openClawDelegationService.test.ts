@@ -15,18 +15,34 @@ describe('OpenClawDelegationService', () => {
   });
 
   it('returns capability_missing when user runtime config has no OpenClaw setup', async () => {
-    const service = new OpenClawDelegationService();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: false,
+        openClawBaseUrl: '',
+        openClawApiKey: '',
+      }),
+    );
 
-    const outcome = await service.delegate({
-      actionId: 'action-1',
-      threadId: 'thread-1',
-      sessionKey: 'thread-1',
-      task: '查询外部系统状态',
-      mode: 'read',
-    });
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
 
-    expect(outcome.status).toBe('capability_missing');
-    expect(outcome.summary).toContain('未配置');
+    try {
+      const outcome = await service.delegate({
+        actionId: 'action-1',
+        threadId: 'thread-1',
+        sessionKey: 'thread-1',
+        task: '查询外部系统状态',
+        mode: 'read',
+      });
+
+      expect(outcome.status).toBe('capability_missing');
+      expect(outcome.summary).toContain('未配置');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('posts to the responses endpoint, parses the JSON envelope, and writes a transcript', async () => {

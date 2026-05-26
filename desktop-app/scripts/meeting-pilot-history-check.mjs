@@ -74,6 +74,18 @@ try {
     timeout: 30000,
   });
   await page.evaluate(async () => {
+    const olderMeetings = Array.from({ length: 50 }, (_, index) => ({
+      meetingId: `meeting-archive-older-${String(index + 1).padStart(2, '0')}`,
+      title: `Older Retrospective ${index + 1}`,
+      date: 1712332800000 - index * 3600000,
+      lastEventAt: 1712334600000 - index * 3600000,
+      participants: ['Esone Qiu'],
+      digestStatus: 'completed',
+      summary: `第 ${index + 1} 条更早会议记录。`,
+      topicCount: 1,
+      actionItemCount: 0,
+      decisionCount: 0,
+    }));
     await chrome.runtime.sendMessage({
       type: 'SET_TEST_MEETINGS_FIXTURE',
       fixture: {
@@ -83,16 +95,40 @@ try {
             title: 'Q2 Planning Review',
             date: 1712505600000,
             lastEventAt: 1712509200000,
-            participants: ['Alex Chen', 'Esone Qiu', 'Sarah Wang'],
+            participants: [
+              'Alex Chen',
+              'Esone Qiu',
+              'Sarah Wang',
+              'Morgan Lee',
+              'Priya Nair',
+              'Jordan Kim',
+            ],
             pdfUrl: 'https://memory.example.test/files/q2-planning.pdf',
             digestId: 'digest-q2-planning',
+            digestStatus: 'completed',
             summary: '确认了 Q2 预算、技术评审 owner 与下一步行动。',
             topicCount: 3,
             actionItemCount: 2,
             decisionCount: 2,
           },
+          {
+            meetingId: 'meeting-archive-failed',
+            title: 'Incident Review',
+            date: 1712419200000,
+            lastEventAt: 1712422800000,
+            participants: ['Alex Chen', 'Esone Qiu'],
+            pdfUrl: 'javascript:alert(1)',
+            digestId: 'digest-incident',
+            digestStatus: 'failed',
+            digestErrorCode: 'minutes_api_timeout',
+            summary: '事故复盘结构化记录已保留，但 PDF 生成失败。',
+            topicCount: 2,
+            actionItemCount: 1,
+            decisionCount: 1,
+          },
+          ...olderMeetings,
         ],
-        total: 1,
+        total: 52,
         limit: 50,
         offset: 0,
         detail: {
@@ -177,11 +213,53 @@ try {
   assert.match(cardText || '', /Q2 Planning Review/);
   assert.match(cardText || '', /Digest 完成/);
   assert.match(cardText || '', /PDF 已就绪/);
+  assert.match(cardText || '', /还有 1 人/);
   assert.match(cardText || '', /确认了 Q2 预算/);
   assert.match(cardText || '', /话题 3/);
   assert.match(cardText || '', /行动项 2/);
   assert.match(cardText || '', /决议 2/);
+  assert.match(
+    await page.locator('.meeting-list-toolbar').textContent(),
+    /已显示 50 \/ 52/,
+  );
+  assert.equal(
+    await page
+      .locator('.meeting-card', { hasText: 'Older Retrospective 50' })
+      .count(),
+    0,
+  );
+  const failedCardText = await page
+    .locator('.meeting-card', { hasText: 'Incident Review' })
+    .textContent();
+  assert.match(failedCardText || '', /Digest 失败/);
+  assert.match(failedCardText || '', /PDF 链接不可用/);
+  assert.match(failedCardText || '', /minutes_api_timeout/);
   await saveScreenshot(page, 'history-list.png');
+
+  log('验证加载更早会议');
+  await page.getByRole('button', { name: '加载更早会议' }).click();
+  await page.waitForFunction(
+    () => {
+      return (
+        Array.from(document.querySelectorAll('.meeting-card')).length >= 52
+      );
+    },
+    { timeout: 15000 },
+  );
+  assert.match(
+    await page.locator('.meeting-list-toolbar').textContent(),
+    /已显示 52 \/ 52/,
+  );
+  assert.ok(
+    await page
+      .locator('.meeting-card', { hasText: 'Older Retrospective 50' })
+      .isVisible(),
+    '加载更多后应显示第二页更早会议',
+  );
+  assert.equal(
+    await page.getByRole('button', { name: '已加载全部会议' }).isDisabled(),
+    true,
+  );
 
   await page.evaluate(() => {
     const opened = [];
@@ -193,8 +271,19 @@ try {
   });
 
   log('验证打开 Panorama 与 PDF 动作');
-  await page.locator('.meeting-primary-action').click();
-  await page.locator('.meeting-secondary-action').click();
+  const q2Card = page.locator('.meeting-card', {
+    hasText: 'Q2 Planning Review',
+  });
+  const failedCard = page.locator('.meeting-card', {
+    hasText: 'Incident Review',
+  });
+  await q2Card.locator('.meeting-primary-action').click();
+  await q2Card.locator('.meeting-secondary-action').click();
+  await failedCard.locator('.meeting-primary-action').click();
+  assert.equal(
+    await failedCard.locator('.meeting-secondary-action').isDisabled(),
+    true,
+  );
   const openedUrls = await page.evaluate(
     () => window.__meetingHistoryOpenedUrls || [],
   );
@@ -207,6 +296,20 @@ try {
   assert.ok(
     openedUrls.includes('https://memory.example.test/files/q2-planning.pdf'),
     `打开 PDF 未请求预期 URL: ${JSON.stringify(openedUrls)}`,
+  );
+  assert.ok(
+    openedUrls.some((url) =>
+      /meeting-panorama\.html\?.*meetingId=meeting-archive-failed/.test(url),
+    ),
+    `失败会议未打开 Panorama: ${JSON.stringify(openedUrls)}`,
+  );
+  assert.ok(
+    openedUrls.some((url) => /digestStatus=failed/.test(url)),
+    `失败会议没有保留 digestStatus=failed: ${JSON.stringify(openedUrls)}`,
+  );
+  assert.ok(
+    openedUrls.every((url) => !url.includes('javascript:alert')),
+    `不安全 PDF 链接不应被打开或带入 Panorama: ${JSON.stringify(openedUrls)}`,
   );
 
   log(`会议历史 UI 验证通过，截图目录: ${screenshotDir}`);

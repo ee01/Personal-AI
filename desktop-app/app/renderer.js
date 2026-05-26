@@ -64,6 +64,12 @@ const elements = {
   doubaoSourceConversationCount: document.getElementById(
     'doubao-source-conversation-count',
   ),
+  doubaoSourcePendingCount: document.getElementById(
+    'doubao-source-pending-count',
+  ),
+  doubaoSourceArtifactCount: document.getElementById(
+    'doubao-source-artifact-count',
+  ),
   doubaoSourceLastRun: document.getElementById('doubao-source-last-run'),
   doubaoSourceRunState: document.getElementById('doubao-source-run-state'),
   doubaoSourceEnabled: document.getElementById('doubao-source-enabled'),
@@ -98,6 +104,12 @@ const elements = {
   ),
   chatgptSourceConversationCount: document.getElementById(
     'chatgpt-source-conversation-count',
+  ),
+  chatgptSourcePendingCount: document.getElementById(
+    'chatgpt-source-pending-count',
+  ),
+  chatgptSourceArtifactCount: document.getElementById(
+    'chatgpt-source-artifact-count',
   ),
   chatgptSourceLastRun: document.getElementById('chatgpt-source-last-run'),
   chatgptSourceRunState: document.getElementById('chatgpt-source-run-state'),
@@ -414,6 +426,9 @@ function formatAttemptDetails(attempt) {
   if (packageKinds.length > 0) {
     details.push(`包：${packageKinds.map(formatPackageKind).join(' / ')}`);
   }
+  if (typeof attempt?.packageItemCount === 'number') {
+    details.push(`内容条目：${attempt.packageItemCount}`);
+  }
   if (typeof attempt?.sourceRefCount === 'number') {
     details.push(`来源引用：${attempt.sourceRefCount}`);
   }
@@ -506,6 +521,15 @@ function formatManualRunSkippedMessage(message, fallback) {
   const text = String(message || '').trim();
   if (!text) return fallback;
 
+  if (text.includes(' / ')) {
+    const parts = text
+      .split(/\s+\/\s+/)
+      .map((part) => formatManualRunSkippedMessage(part, part))
+      .filter(Boolean);
+    const uniqueParts = Array.from(new Set(parts));
+    if (uniqueParts.length > 0) return uniqueParts.join('；');
+  }
+
   if (/No stable memory items/i.test(text)) {
     return '本次没有可推送的 persona / 长期记忆。';
   }
@@ -515,8 +539,11 @@ function formatManualRunSkippedMessage(message, fallback) {
   if (/No mobile briefing bullets extracted/i.test(text)) {
     return '近期重点渲染结果只有元信息或空占位，未推送到豆包。';
   }
-  if (/No pending todos/i.test(text) || /No notices/i.test(text)) {
-    return '本次没有可推送的待办或通知。';
+  if (/No pending todos/i.test(text)) {
+    return '本次没有可推送的待办。';
+  }
+  if (/No notices/i.test(text)) {
+    return '本次没有可推送的通知。';
   }
   if (/No todo titles extracted/i.test(text)) {
     return '本次待办内容为空，未推送到豆包。';
@@ -1486,6 +1513,12 @@ function renderSourceCard(source, sourceStatus) {
   const conversationCount = isDoubao
     ? elements.doubaoSourceConversationCount
     : elements.chatgptSourceConversationCount;
+  const pendingCount = isDoubao
+    ? elements.doubaoSourcePendingCount
+    : elements.chatgptSourcePendingCount;
+  const artifactCount = isDoubao
+    ? elements.doubaoSourceArtifactCount
+    : elements.chatgptSourceArtifactCount;
   const lastRun = isDoubao
     ? elements.doubaoSourceLastRun
     : elements.chatgptSourceLastRun;
@@ -1503,6 +1536,8 @@ function renderSourceCard(source, sourceStatus) {
     setStatusPill(authPill, '暂不可用', 'error');
     cacheCount.textContent = '-';
     conversationCount.textContent = '-';
+    if (pendingCount) pendingCount.textContent = '-';
+    if (artifactCount) artifactCount.textContent = '-';
     lastRun.textContent = '-';
     runState.textContent = 'Explorer 未响应';
     if (revokeScope) {
@@ -1525,6 +1560,16 @@ function renderSourceCard(source, sourceStatus) {
   conversationCount.textContent = formatMessageCount(
     sourceStatus.cache?.conversationCount,
   );
+  if (pendingCount) {
+    pendingCount.textContent = formatMessageCount(
+      sourceStatus.cache?.pendingExtractCount,
+    );
+  }
+  if (artifactCount) {
+    artifactCount.textContent = formatMessageCount(
+      sourceStatus.cache?.artifactCount,
+    );
+  }
   lastRun.textContent = formatTime(sourceStatus.lastRunAt);
   runState.textContent = formatRunOutcome(sourceStatus);
   if (revokeScope) {

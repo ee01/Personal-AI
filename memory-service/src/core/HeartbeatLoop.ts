@@ -26,6 +26,7 @@ import { ConfirmRequestRepository } from '../repositories/ConfirmRequestReposito
 import { ReflectionPlanner } from './ReflectionPlanner.js';
 import { ActionExecutor } from './actions/ActionExecutor.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import type { RuntimePushTarget } from '../runtimeConfig.js';
 import { NotificationCenterService } from './NotificationCenterService.js';
 
 // ---------------------------------------------------------------------------
@@ -113,13 +114,26 @@ interface DreamDigestRuntimeConfig {
   enabled: boolean;
   scheduleType: DreamDigestScheduleType;
   intervalDays: number;
+  pushTarget: RuntimePushTarget;
+  pushGroupId: string;
 }
 
 export interface DreamDigestPushResult {
   generated: boolean;
   delivered: boolean;
   botSent: boolean;
+  pushTarget?: RuntimePushTarget;
   reason?: string;
+}
+
+function normalizeDigestPushTarget(
+  value: unknown,
+  fallback: RuntimePushTarget,
+): RuntimePushTarget {
+  if (value === 'group' || value === 'team') return 'group';
+  if (value === 'me' || value === 'user') return 'me';
+  if (value === 'none') return 'none';
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,14 +285,24 @@ export class HeartbeatLoop {
       if (approved.length > 0) {
         const delivered = this.deliverNotifications(approved);
         actions.push(`delivered ${approved.length} notification(s)`);
+        const dreamDigestConfig = this.getDreamDigestRuntimeConfig();
         for (const item of delivered) {
-          if (item.type === 'dream_digest' && item.payload?.digestBody) {
+          if (
+            item.type === 'dream_digest' &&
+            item.payload?.digestBody &&
+            dreamDigestConfig.pushTarget !== 'none'
+          ) {
             await this.notificationCenterService.deliverNoticeToGlip({
               sourceRef: `notification:${item.id}`,
               title: 'Weekly Dream Digest',
               body: String(item.payload.digestBody),
               mention: false,
-              targetUserId: this.userId,
+              targetUserId:
+                dreamDigestConfig.pushTarget === 'me' ? this.userId : undefined,
+              targetGroupId:
+                dreamDigestConfig.pushTarget === 'group'
+                  ? dreamDigestConfig.pushGroupId
+                  : undefined,
             });
           }
         }
@@ -324,7 +348,21 @@ export class HeartbeatLoop {
    * so it is suitable for explicit user-triggered "push now" actions.
    * @param userId - Used to derive target email (e.g. esone.qiu -> esone.qiu@ringcentral.com)
    */
-  async triggerDreamDigestNow(userId?: string): Promise<DreamDigestPushResult> {
+  async triggerDreamDigestNow(
+    userId?: string,
+    options?: {
+      pushTarget?: RuntimePushTarget;
+      pushGroupId?: string;
+    },
+  ): Promise<DreamDigestPushResult> {
+    const runtimeConfig = this.getDreamDigestRuntimeConfig();
+    const pushTarget = normalizeDigestPushTarget(
+      options?.pushTarget,
+      runtimeConfig.pushTarget,
+    );
+    const pushGroupId = (
+      options?.pushGroupId ?? runtimeConfig.pushGroupId
+    ).trim();
     const candidate = this.buildDreamDigestCandidate({
       ignoreScheduleWindow: true,
       ignoreIdempotency: true,
@@ -334,13 +372,23 @@ export class HeartbeatLoop {
 
     if (!candidate) {
       console.log(
-        '[DreamDigest] push-now: no candidate (no dream content or userDataManager)',
+        '[DreamDigest] push-now: no candidate (no current-period dream content or userDataManager)',
       );
       return {
         generated: false,
         delivered: false,
         botSent: false,
-        reason: 'No dream content available for digest.',
+        pushTarget,
+        reason: 'No dream content available for the current digest period.',
+      };
+    }
+
+    if (pushTarget === 'none') {
+      return {
+        generated: true,
+        delivered: false,
+        botSent: false,
+        pushTarget,
       };
     }
 
@@ -355,7 +403,8 @@ export class HeartbeatLoop {
           title: 'Weekly Dream Digest',
           body: String(candidate.payload.digestBody),
           mention: false,
-          targetUserId: userId ?? this.userId,
+          targetUserId: pushTarget === 'me' ? userId ?? this.userId : undefined,
+          targetGroupId: pushTarget === 'group' ? pushGroupId : undefined,
         });
       if (botResult.sent) {
         botSent = true;
@@ -373,6 +422,7 @@ export class HeartbeatLoop {
       generated: true,
       delivered: true,
       botSent,
+      pushTarget,
     };
   }
 
@@ -877,21 +927,31 @@ export class HeartbeatLoop {
 
     if (!this.userDataManager) return null;
 
+    const contentPeriodStart = this.getDreamDigestContentPeriodStart(
+      nowDate,
+      runtimeConfig,
+    );
     const dreamFiles = this.userDataManager.listFiles('dreams/');
     if (!dreamFiles || dreamFiles.length === 0) return null;
 
-    const recentDreams: string[] = [];
+    const recentDreams: Array<{ content: string; generatedAt: number }> = [];
     for (const file of dreamFiles) {
       if (!file.endsWith('.md')) continue;
       const content = this.userDataManager.readFile(`dreams/${file}`);
       if (!content) continue;
-      recentDreams.push(content);
+      const generatedAt = this.parseDreamGeneratedAt(file, content);
+      if (generatedAt === null || generatedAt < contentPeriodStart) {
+        continue;
+      }
+      recentDreams.push({ content, generatedAt });
     }
 
     if (recentDreams.length === 0) return null;
 
+    recentDreams.sort((a, b) => b.generatedAt - a.generatedAt);
+
     const digestBody = recentDreams
-      .map((content) => {
+      .map(({ content }) => {
         const titleMatch =
           content.match(/# Dream: (.+)/) || content.match(/^# (.+)$/m);
         const narrativeMatch = content.match(
@@ -931,6 +991,8 @@ export class HeartbeatLoop {
       enabled: runtimeConfig.dreamDigestEnabled,
       scheduleType: runtimeConfig.dreamDigestScheduleType,
       intervalDays: runtimeConfig.dreamDigestIntervalDays,
+      pushTarget: runtimeConfig.dreamDigestPushTarget,
+      pushGroupId: runtimeConfig.dreamDigestPushGroupId,
     };
   }
 
@@ -983,6 +1045,56 @@ export class HeartbeatLoop {
 
     const thisWeekStart = this.getMondayStart(nowDate);
     return Math.floor(thisWeekStart.getTime() / 1000);
+  }
+
+  private getDreamDigestContentPeriodStart(
+    nowDate: Date,
+    cfg: DreamDigestRuntimeConfig,
+  ): number {
+    if (cfg.scheduleType === 'weekly') {
+      const previousWeekStart = this.getMondayStart(nowDate);
+      previousWeekStart.setDate(previousWeekStart.getDate() - 7);
+      return Math.floor(previousWeekStart.getTime() / 1000);
+    }
+
+    return this.getDreamDigestPeriodStart(nowDate, cfg);
+  }
+
+  private parseDreamGeneratedAt(
+    filename: string,
+    content: string,
+  ): number | null {
+    const generatedMatch = content.match(/^_?Generated:\s*([^_\n]+)_?$/im);
+    const generatedValue = generatedMatch?.[1]?.trim();
+    if (generatedValue) {
+      const parsed = this.parseLocalDateValue(generatedValue);
+      if (parsed !== null) return parsed;
+    }
+
+    const filenameDate = filename.match(/(\d{4}-\d{2}-\d{2})/);
+    if (filenameDate) {
+      return this.parseLocalDateValue(filenameDate[1]);
+    }
+
+    return null;
+  }
+
+  private parseLocalDateValue(value: string): number | null {
+    const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnly) {
+      const date = new Date(
+        Number(dateOnly[1]),
+        Number(dateOnly[2]) - 1,
+        Number(dateOnly[3]),
+        0,
+        0,
+        0,
+        0,
+      );
+      return Math.floor(date.getTime() / 1000);
+    }
+
+    return this.parseDateValue(value);
   }
 
   private isFirstMondayOfMonth(date: Date): boolean {

@@ -8,6 +8,8 @@ interface MeetingListItem {
   participants: string[];
   pdfUrl?: string;
   digestId?: string;
+  digestStatus?: 'idle' | 'uploading' | 'processing' | 'completed' | 'failed';
+  digestErrorCode?: string;
   summary?: string;
   topicCount?: number;
   actionItemCount?: number;
@@ -40,6 +42,27 @@ function safeJsonParse<T>(value: string | null): T | undefined {
   }
 }
 
+function normalizeDigestStatus(
+  value: unknown,
+): MeetingListItem['digestStatus'] {
+  if (
+    value === 'idle' ||
+    value === 'uploading' ||
+    value === 'processing' ||
+    value === 'completed' ||
+    value === 'failed'
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
 function rowToMeeting(row: MeetingRow): MeetingListItem | null {
   const meetingId = row.meeting_id?.trim();
   if (!meetingId) return null;
@@ -51,12 +74,11 @@ function rowToMeeting(row: MeetingRow): MeetingListItem | null {
         (item): item is string => typeof item === 'string',
       )
     : [];
-  const pdfUrl =
-    typeof metadata.pdfUrl === 'string' ? metadata.pdfUrl : undefined;
-  const digestId =
-    typeof metadata.digestId === 'string' ? metadata.digestId : undefined;
-  const summary =
-    typeof metadata.summary === 'string' ? metadata.summary : undefined;
+  const pdfUrl = normalizeOptionalString(metadata.pdfUrl);
+  const digestId = normalizeOptionalString(metadata.digestId);
+  const digestStatus = normalizeDigestStatus(metadata.digestStatus);
+  const digestErrorCode = normalizeOptionalString(metadata.digestErrorCode);
+  const summary = normalizeOptionalString(metadata.summary);
   const topicCount =
     typeof metadata.topicCount === 'number' ? metadata.topicCount : undefined;
   const actionItemCount =
@@ -75,6 +97,8 @@ function rowToMeeting(row: MeetingRow): MeetingListItem | null {
     participants,
     pdfUrl,
     digestId,
+    digestStatus,
+    digestErrorCode,
     summary,
     topicCount,
     actionItemCount,
@@ -146,6 +170,8 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
                     participants: { type: 'array', items: { type: 'string' } },
                     pdfUrl: { type: 'string' },
                     digestId: { type: 'string' },
+                    digestStatus: { type: 'string' },
+                    digestErrorCode: { type: 'string' },
                     summary: { type: 'string' },
                     topicCount: { type: 'number' },
                     actionItemCount: { type: 'number' },
@@ -180,7 +206,7 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
       const rows = db
         .prepare(
           `SELECT m.group_id AS meeting_id,
-                COALESCE(m.group_name, latest.source_title) AS title,
+                COALESCE(latest.group_name, latest.source_title, m.group_id) AS title,
                 MIN(COALESCE(m.timestamp, m.created_at)) AS first_timestamp,
                 MAX(COALESCE(m.timestamp, m.created_at)) AS last_event_at,
                 latest.metadata_json AS metadata_json
@@ -195,7 +221,7 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
              LIMIT 1
            )
          WHERE m.source_type = 'meeting' AND m.group_id IS NOT NULL AND m.group_id != ''
-         GROUP BY m.group_id, COALESCE(m.group_name, latest.source_title), latest.metadata_json
+         GROUP BY m.group_id, latest.group_name, latest.source_title, latest.metadata_json
          ORDER BY last_event_at DESC
          LIMIT ? OFFSET ?`,
         )

@@ -273,8 +273,16 @@
                   :aria-label="getConversationSourceTitle(conv)"
                   @click.stop
                 >
-                  来源
+                  {{ getConversationSourceLabel(conv) }}
                 </a>
+                <span
+                  v-else-if="hasHiddenConversationSourceCandidates(conv)"
+                  class="conversation-source-hidden"
+                  :title="getConversationHiddenSourceTitle(conv)"
+                  :aria-label="getConversationHiddenSourceTitle(conv)"
+                >
+                  {{ getConversationHiddenSourceLabel(conv) }}
+                </span>
                 <div class="conversation-time">
                   {{ formatTimeAgo(conv.datetime) || '未知时间' }}
                 </div>
@@ -313,7 +321,9 @@
                 :class="{
                   'main-message': contextMsg.isMainMessage,
                   unread: isContextMessageUnread(contextMsg),
+                  targeted: isTargetedContextMessage(contextMsg),
                 }"
+                :data-topic-message-ids="getTopicMessageIdentityAttr(contextMsg)"
               >
                 <div class="context-header">
                   <div class="context-sender">
@@ -323,6 +333,12 @@
                       class="unread-indicator"
                       >●</span
                     >
+                    <span
+                      v-if="isTargetedContextMessage(contextMsg)"
+                      class="targeted-message-badge"
+                    >
+                      链接定位
+                    </span>
                   </div>
                   <div class="context-time">
                     {{ formatTimeAgo(contextMsg.datetime) || '未知时间' }}
@@ -435,8 +451,11 @@ import {
 } from '../topic-detail-data';
 import { renderHighlightedText } from '../topic-detail-rendering';
 import {
+  type ExternalUrlSafetyReason,
+  getExternalUrlSafety,
   getFirstSafeExternalUrl,
   getSafeExternalUrl,
+  hasBlockedExternalUrlCandidate,
 } from '../topic-link-safety';
 import { formatTopicRelativeTime } from '../topic-time';
 
@@ -482,6 +501,7 @@ const webTypeFilter = ref('all');
 const expandedConversations = ref<Set<string>>(new Set());
 const stickyUnreadConversationIds = ref<Set<string>>(new Set());
 const highlightedConversationId = ref<string | null>(null);
+const highlightedMessageId = ref<string | null>(null);
 const messageFocusNotice = ref<{
   type: 'info' | 'warning';
   text: string;
@@ -691,9 +711,47 @@ const normalizeQueryValue = (value: unknown): string => {
   return String(value || '').trim();
 };
 
+const getTopicMessageIds = (message: any): string[] => {
+  return [
+    message?.id,
+    message?.messageId,
+    message?.conversationId,
+    message?.sourceMessageId,
+  ]
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+};
+
+const doesTopicMessageMatchId = (message: any, messageId: string): boolean => {
+  const normalizedMessageId = String(messageId || '').trim();
+  if (!normalizedMessageId) return false;
+  return getTopicMessageIds(message).includes(normalizedMessageId);
+};
+
+const getTopicMessageIdentityAttr = (message: any): string =>
+  getTopicMessageIds(message).map(encodeURIComponent).join(' ');
+
+const doesTopicMessageIdentityAttrMatch = (
+  identityAttr: string | undefined,
+  messageId: string,
+): boolean => {
+  const encodedMessageId = encodeURIComponent(String(messageId || '').trim());
+  if (!encodedMessageId) return false;
+  return String(identityAttr || '').split(/\s+/).includes(encodedMessageId);
+};
+
+const isTargetedContextMessage = (message: any): boolean => {
+  const messageId = highlightedMessageId.value;
+  if (!messageId) return false;
+  return doesTopicMessageMatchId(message, messageId);
+};
+
 const focusConversationFromQuery = async (messageIdValue: unknown) => {
   const messageId = normalizeQueryValue(messageIdValue);
   if (!messageId) {
+    highlightedConversationId.value = null;
+    highlightedMessageId.value = null;
     messageFocusNotice.value = null;
     return;
   }
@@ -709,6 +767,8 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     convFilter.value = 'all';
     convReadFilter.value = 'all';
     convSearchQuery.value = '';
+    highlightedConversationId.value = null;
+    highlightedMessageId.value = null;
     messageFocusNotice.value = {
       type: 'warning',
       text: '没有在当前主题详情中找到链接里的消息，已显示全部聊天记录。',
@@ -716,6 +776,10 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     return;
   }
 
+  const isConversationTarget = doesTopicMessageMatchId(
+    targetConversation,
+    messageId,
+  );
   activeTab.value = 'conversations';
   convFilter.value = 'all';
   convReadFilter.value = 'all';
@@ -732,31 +796,47 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
 
   expandedConversations.value = new Set([targetConversationId]);
   highlightedConversationId.value = targetConversationId;
+  highlightedMessageId.value = messageId;
   const didSyncReadState = await store.markConversationAsRead(
     topicId.value,
     messageId,
   );
+  const targetLabel = isConversationTarget ? '聊天记录' : '上下文消息';
   messageFocusNotice.value = {
     type: 'info',
     text: didSyncReadState
-      ? '已定位到链接里的聊天记录，并同步为已读。'
-      : '已定位到链接里的聊天记录；当前没有明确未读状态需要同步。',
+      ? `已定位到链接里的${targetLabel}，并同步为已读。`
+      : `已定位到链接里的${targetLabel}；当前没有明确未读状态需要同步。`,
   };
   await nextTick();
 
   const targetElement = Array.from(
     document.querySelectorAll<HTMLElement>('[data-conversation-id]'),
   ).find((element) => element.dataset.conversationId === targetConversationId);
-  targetElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const targetMessageElement = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-topic-message-ids]'),
+  ).find((element) =>
+    doesTopicMessageIdentityAttrMatch(
+      element.dataset.topicMessageIds,
+      messageId,
+    ),
+  );
+  (targetMessageElement || targetElement)?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+  });
 
   window.setTimeout(() => {
     if (highlightedConversationId.value === targetConversationId) {
       highlightedConversationId.value = null;
     }
+    if (highlightedMessageId.value === messageId) {
+      highlightedMessageId.value = null;
+    }
     if (messageFocusNotice.value?.type === 'info') {
       messageFocusNotice.value = null;
     }
-  }, 2400);
+  }, 6000);
 };
 
 const highlightText = (text: string, searchQuery: string) => {
@@ -782,16 +862,121 @@ const getConversationSourceUrl = (conversation: any): string => {
   );
 };
 
-const getConversationSourceTitle = (conversation: any): string => {
-  const sourceUrl = getConversationSourceUrl(conversation);
-  if (!sourceUrl) return '没有可信来源链接';
+type ConversationSourceOrigin = 'conversation' | 'context';
 
-  try {
-    const parsedUrl = new URL(sourceUrl);
-    return `打开原始来源：${parsedUrl.hostname}`;
-  } catch {
-    return '打开原始来源';
+interface ConversationSourceCandidate {
+  url: unknown;
+  origin: ConversationSourceOrigin;
+}
+
+const getConversationSourceCandidates = (
+  conversation: any,
+): ConversationSourceCandidate[] => {
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages
+    : [];
+
+  return [
+    { url: conversation?.teamUrl, origin: 'conversation' },
+    { url: conversation?.sourceUrl, origin: 'conversation' },
+    { url: conversation?.permalink, origin: 'conversation' },
+    { url: conversation?.url, origin: 'conversation' },
+    ...contextMessages.flatMap((contextMessage: any) => [
+      { url: contextMessage?.teamUrl, origin: 'context' as const },
+      { url: contextMessage?.sourceUrl, origin: 'context' as const },
+      { url: contextMessage?.permalink, origin: 'context' as const },
+      { url: contextMessage?.url, origin: 'context' as const },
+    ]),
+  ];
+};
+
+const getConversationSourceLink = (conversation: any) => {
+  for (const candidate of getConversationSourceCandidates(conversation)) {
+    const safety = getExternalUrlSafety(candidate.url);
+    if (!safety.safeUrl) continue;
+
+    const originLabel =
+      candidate.origin === 'context' ? '上下文来源' : '来源';
+    const sourceLabel =
+      candidate.origin === 'context' ? '上下文来源' : '原始来源';
+
+    return {
+      url: safety.safeUrl,
+      label: originLabel,
+      title: safety.hostname
+        ? `打开${sourceLabel}：${safety.hostname}`
+        : `打开${sourceLabel}`,
+    };
   }
+
+  return null;
+};
+
+const getConversationSourceLabel = (conversation: any): string =>
+  getConversationSourceLink(conversation)?.label || '来源';
+
+const getConversationSourceTitle = (conversation: any): string =>
+  getConversationSourceLink(conversation)?.title || '没有可信来源链接';
+
+const hasHiddenConversationSourceCandidates = (conversation: any): boolean => {
+  return hasBlockedExternalUrlCandidate(
+    ...getConversationSourceCandidates(conversation).map(
+      (candidate) => candidate.url,
+    ),
+  );
+};
+
+const getExternalUrlBlockedReasonLabel = (
+  reason: ExternalUrlSafetyReason,
+): string => {
+  switch (reason) {
+    case 'credentialed_url':
+      return '包含账号信息';
+    case 'invalid':
+      return '格式无效';
+    case 'unsupported_protocol':
+      return '非 http/https';
+    default:
+      return '不符合安全规则';
+  }
+};
+
+const getBlockedConversationSourceResults = (conversation: any) =>
+  getConversationSourceCandidates(conversation)
+    .map((candidate) => getExternalUrlSafety(candidate.url))
+    .filter((safety) => safety.blocked);
+
+const getConversationHiddenSourceLabel = (conversation: any): string => {
+  const blockedResults = getBlockedConversationSourceResults(conversation);
+  if (!blockedResults.length) return '来源已隐藏';
+
+  const reasonLabels = Array.from(
+    new Set(
+      blockedResults.map((safety) =>
+        getExternalUrlBlockedReasonLabel(safety.reason),
+      ),
+    ),
+  );
+  if (blockedResults.length === 1 && reasonLabels.length === 1) {
+    return `来源已隐藏 · ${reasonLabels[0]}`;
+  }
+
+  return `来源已隐藏 · ${blockedResults.length} 个不可信链接`;
+};
+
+const getConversationHiddenSourceTitle = (conversation: any): string => {
+  const blockedResults = getBlockedConversationSourceResults(conversation);
+  const reasonSummary = Array.from(
+    new Set(
+      blockedResults.map((safety) =>
+        getExternalUrlBlockedReasonLabel(safety.reason),
+      ),
+    ),
+  ).join('、');
+
+  return blockedResults.length > 1
+    ? `已隐藏 ${blockedResults.length} 个不可信来源链接：${reasonSummary}`
+    : `来源链接已隐藏：${reasonSummary || '不符合安全规则'}`;
 };
 
 const getWebpageIcon = (type: string) => {
@@ -961,6 +1146,21 @@ watch(convReadFilter, (readFilter) => {
   text-decoration: underline;
 }
 
+.conversation-source-hidden {
+  padding: 0.1rem 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.44);
+  cursor: help;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.1;
+  max-width: min(14rem, 42vw);
+  text-align: right;
+  white-space: normal;
+}
+
 .item-link,
 .webpage-open-link {
   color: #60a5fa;
@@ -1056,6 +1256,13 @@ watch(convReadFilter, (readFilter) => {
   padding-left: 0.75rem;
 }
 
+.context-item.targeted {
+  border-left: 3px solid rgba(96, 165, 250, 0.82);
+  padding-left: 0.75rem;
+  background: rgba(37, 99, 235, 0.12);
+  border-radius: 0.375rem;
+}
+
 .context-match-badge {
   display: inline-flex;
   align-items: center;
@@ -1065,6 +1272,21 @@ watch(convReadFilter, (readFilter) => {
   border-radius: 999px;
   color: #93c5fd;
   background: rgba(37, 99, 235, 0.12);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.3;
+  vertical-align: middle;
+}
+
+.targeted-message-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.45rem;
+  padding: 0.08rem 0.35rem;
+  border: 1px solid rgba(96, 165, 250, 0.32);
+  border-radius: 999px;
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.16);
   font-size: 0.68rem;
   font-weight: 700;
   line-height: 1.3;

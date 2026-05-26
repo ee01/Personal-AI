@@ -27,6 +27,9 @@ class FakeBrowser {
     transcript: string,
     threadUrl?: string,
   ) => Promise<BrowserSendResult>;
+  findThreadByTitleImpl?: (
+    title: string,
+  ) => Promise<BrowserThreadSnapshot | null>;
 
   async ensureStarted(): Promise<void> {
     this.running = true;
@@ -85,6 +88,9 @@ class FakeBrowser {
   async findThreadByTitle(
     title: string,
   ): Promise<BrowserThreadSnapshot | null> {
+    if (this.findThreadByTitleImpl) {
+      return this.findThreadByTitleImpl(title);
+    }
     return {
       title,
       url: `https://www.doubao.com/chat/${encodeURIComponent(title)}`,
@@ -437,6 +443,36 @@ test('createMemorySyncThread creates a real chat-style binding', async () => {
   assert.equal(status.bindings.memory_sync?.threadUrl, thread.url);
 });
 
+test('createMemorySyncThread refuses non-Doubao chat-shaped results', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-spoof-thread-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const browser = new FakeBrowser();
+  browser.sendTranscriptImpl = async () => ({
+    url: 'https://example.com/chat/generated-1',
+    title: 'Spoofed Thread',
+    threadId: 'generated-1',
+    sent: true,
+  });
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+
+  await assert.rejects(
+    () => service.createMemorySyncThread(),
+    /Unable to create a real Doubao memory-sync conversation/,
+  );
+
+  const status = await service.getStatus();
+  assert.equal(status.bindings.memory_sync, undefined);
+});
+
 test('status treats stale memory-sync binding without a chat URL as not ready', async () => {
   const tempDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'doubao-bridge-test-stale-thread-'),
@@ -497,6 +533,82 @@ test('status treats stale memory-sync binding without a chat URL as not ready', 
   assert.equal(
     statusBody.bindings.memory_sync?.threadUrl,
     'https://www.doubao.com/not-a-thread',
+  );
+  assert.equal(statusBody.setupChecklist.memorySyncBound, false);
+  assert.equal(statusBody.syncReadiness.stableMemory.ready, false);
+  assert.match(
+    statusBody.blockingReasons.find(
+      (reason) => reason.code === 'memory_sync_not_bound',
+    )?.message || '',
+    /缺少可打开的豆包会话链接/,
+  );
+
+  syncManager.stop();
+  await app.close();
+});
+
+test('status treats non-Doubao chat-shaped memory-sync binding as not ready', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-non-doubao-thread-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(
+    config,
+    path.join(tempDir, 'bridge-settings.json'),
+  );
+  await settingsStore.init();
+  await settingsStore.update({ memoryServiceUserId: 'tester' });
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+
+  const browser = new FakeBrowser();
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+  await service.openLogin();
+  const currentUrlBeforeBind = browser.currentUrl;
+  await service.bindThread('memory_sync', {
+    threadUrl: 'https://example.com/chat/fake-memory-thread',
+    title: 'Wrong host',
+  });
+  assert.equal(browser.currentUrl, currentUrlBeforeBind);
+
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(
+    config,
+    settingsStore,
+    memoryClient,
+    service,
+  );
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version: '2.0.0-test',
+  });
+  const pair = await app.inject({ method: 'POST', url: '/pair', payload: {} });
+  const token = (pair.json() as { token: string }).token;
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/auth/status',
+    headers: { 'x-bridge-token': token },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const statusBody = response.json() as {
+    setupChecklist: { memorySyncBound: boolean };
+    syncReadiness: { stableMemory: { ready: boolean } };
+    blockingReasons: Array<{ code: string; message: string }>;
+    bindings: { memory_sync?: { threadUrl?: string } };
+  };
+  assert.equal(
+    statusBody.bindings.memory_sync?.threadUrl,
+    'https://example.com/chat/fake-memory-thread',
   );
   assert.equal(statusBody.setupChecklist.memorySyncBound, false);
   assert.equal(statusBody.syncReadiness.stableMemory.ready, false);
@@ -585,6 +697,89 @@ test('mobile sync refuses stale mobile binding without a usable chat URL', async
   assert.match(result.error || '', /缺少可打开的豆包/);
   assert.equal(sendCalls, 0);
   assert.match(status.lastError || '', /缺少可打开的豆包/);
+});
+
+test('mobile auto-bind falls back to the current open Doubao thread when title lookup misses', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-mobile-current-url-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const browser = new FakeBrowser();
+  browser.running = true;
+  browser.currentUrl = 'https://www.doubao.com/thread/current-mobile';
+  browser.findThreadByTitleImpl = async () => null;
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+
+  const binding = await service.bindMobileContextByTitle('手机版对话');
+  const status = await service.getStatus();
+
+  assert.equal(binding?.bindingType, 'mobile_context');
+  assert.equal(
+    status.bindings.mobile_context?.threadUrl,
+    'https://www.doubao.com/thread/current-mobile',
+  );
+  assert.equal(status.bindings.mobile_context?.title, '手机版对话');
+});
+
+test('auto-bind mobile error tells the user how to bind the current target conversation', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-mobile-bind-error-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(
+    config,
+    path.join(tempDir, 'bridge-settings.json'),
+  );
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+  const browser = new FakeBrowser();
+  browser.findThreadByTitleImpl = async () => null;
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(
+    config,
+    settingsStore,
+    memoryClient,
+    service,
+  );
+
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version: '2.0.0-test',
+  });
+  const pair = await app.inject({ method: 'POST', url: '/pair', payload: {} });
+  const token = (pair.json() as { token: string }).token;
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/threads/auto-bind-mobile',
+    headers: { 'x-bridge-token': token },
+    payload: { title: '我的手机豆包' },
+  });
+
+  assert.equal(response.statusCode, 404);
+  const body = response.json() as { error: string };
+  assert.match(body.error, /没有找到名为“我的手机豆包”/);
+  assert.match(body.error, /打开你真正会继续使用的手机对话/);
+
+  syncManager.stop();
+  await app.close();
 });
 
 test('settings endpoint updates effective sync configuration', async () => {

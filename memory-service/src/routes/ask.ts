@@ -17,6 +17,10 @@ import type {
 } from '../types/index.js';
 import { ActiveRecallService } from '../core/ActiveRecallService.js';
 import { QueryIntentParser } from '../core/QueryIntentParser.js';
+import {
+  RecallContextExpansionService,
+  type RecallContextExpansion,
+} from '../core/RecallContextExpansionService.js';
 import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
 import { OnlineReflection } from '../core/OnlineReflection.js';
@@ -253,9 +257,22 @@ function formatRecalledContext(items: RecallItem[]): string {
     .join('\n');
 }
 
-function formatIntentContext(intent: ParsedQueryIntent): string {
+function formatIntentContext(
+  intent: ParsedQueryIntent,
+  expansion?: RecallContextExpansion,
+): string {
   const parts: string[] = [];
 
+  if (expansion?.addedTerms.length) {
+    parts.push(`- expanded context: ${expansion.addedTerms.join(', ')}`);
+  }
+  if (expansion?.ambiguity?.state === 'ambiguous') {
+    parts.push(
+      `- context ambiguity: ${expansion.ambiguity.candidates
+        .map((candidate) => candidate.label)
+        .join(', ')}`,
+    );
+  }
   if (intent.intent !== 'search') {
     parts.push(`- intent: ${intent.intent}`);
   }
@@ -449,9 +466,11 @@ async function recallForAsk(
   memoryContext: string;
   intentContext: string;
 }> {
+  const expansion = new RecallContextExpansionService(db).expand({ query });
+  const expandedQuery = expansion.expandedQuery || query;
   const parser = new QueryIntentParser(db);
-  const parsedIntent = parser.parse(query);
-  const recallQueryText = parsedIntent.cleanedQuery || query;
+  const parsedIntent = parser.parse(expandedQuery);
+  const recallQueryText = parsedIntent.cleanedQuery || expandedQuery;
   // /ask runs its own LLM pass for the prose answer, so we ask
   // ActiveRecallService for deterministic blocks only and skip its analysis
   // pass to avoid double LLM cost.
@@ -485,7 +504,7 @@ async function recallForAsk(
     recallBlocks: recallResult.blocks,
     recallChannelDiagnostics: recallResult.channelDiagnostics,
     memoryContext: formatRecalledContext(recalledItems),
-    intentContext: formatIntentContext(parsedIntent),
+    intentContext: formatIntentContext(parsedIntent, expansion),
   };
 }
 

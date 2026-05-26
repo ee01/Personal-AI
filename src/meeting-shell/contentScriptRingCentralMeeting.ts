@@ -6,11 +6,18 @@ import {
 import {
   MEETING_PILOT_SIDE_PANEL_PATH,
   MeetingPilotDetectionPayload,
+  MeetingPilotMemoryRef,
   MeetingPilotParticipant,
   MeetingPilotSessionSnapshot,
   extractMeetingIdFromUrl,
   isMeetingPilotUrl,
 } from './protocol';
+import { shouldSurfaceMeetingPilotAlert } from './alertPresentation.js';
+import { getVisibleMeetingMemoryCueRefs } from './liveFeedPresentation.js';
+import {
+  sanitizeContextExternalUrl,
+  sanitizeExploreRoute,
+} from '../web-intelligence/contextRecallGuards';
 
 type OverlayState = {
   snapshot?: MeetingPilotSessionSnapshot;
@@ -1032,14 +1039,19 @@ function seedInitialDanmakuIds(
   snapshot: MeetingPilotSessionSnapshot,
 ): void {
   snapshot.alerts
-    .filter((alert) => !alert.resolved && alert.level !== 'P0')
+    .filter(
+      (alert) =>
+        !alert.resolved &&
+        alert.level !== 'P0' &&
+        shouldSurfaceMeetingPilotAlert(alert),
+    )
     .forEach((alert) => {
       if (!alert.createdAt || alert.createdAt <= contentScriptStartedAt) {
         seenDanmakuIds.add(alert.id);
       }
     });
 
-  snapshot.memoryRefs.forEach((ref) => {
+  getVisibleMeetingMemoryCueRefs(snapshot.memoryRefs).forEach((ref) => {
     seenDanmakuIds.add(`memory:${ref.id}`);
   });
 }
@@ -1114,7 +1126,7 @@ function appendDanmakuContent(
     const link = document.createElement('a');
     link.href = args.linkUrl;
     link.target = '_blank';
-    link.rel = 'noreferrer';
+    link.rel = 'noopener noreferrer';
     link.textContent = args.linkLabel || '查看原文';
     detail.appendChild(link);
   }
@@ -1165,6 +1177,39 @@ function createP0AlertElement(
   return root;
 }
 
+function getMeetingMemoryDanmakuLink(
+  ref: MeetingPilotMemoryRef,
+): { label: string; url: string } | undefined {
+  const exploreRoute = sanitizeExploreRoute(ref.exploreLink);
+  if (exploreRoute) {
+    return {
+      label: '在记忆库中查看',
+      url: chrome.runtime.getURL(`memory-exploring.html${exploreRoute}`),
+    };
+  }
+
+  for (const link of ref.links ?? []) {
+    const url = sanitizeContextExternalUrl(link.url, window.location.href);
+    if (url) {
+      return {
+        label: link.label || '查看原文',
+        url,
+      };
+    }
+  }
+
+  const sourceUrl = sanitizeContextExternalUrl(
+    ref.sourceUrl,
+    window.location.href,
+  );
+  return sourceUrl
+    ? {
+        label: '查看原文',
+        url: sourceUrl,
+      }
+    : undefined;
+}
+
 function syncAlertLayers(
   shadow: ShadowRoot,
   snapshot?: MeetingPilotSessionSnapshot,
@@ -1182,7 +1227,9 @@ function syncAlertLayers(
     seedInitialDanmakuIds(snapshot);
   }
 
-  const unresolved = snapshot.alerts.filter((alert) => !alert.resolved);
+  const unresolved = snapshot.alerts.filter(
+    (alert) => !alert.resolved && shouldSurfaceMeetingPilotAlert(alert),
+  );
   const p0Alerts = unresolved.filter(
     (alert) => alert.level === 'P0' && !dismissedP0Ids.has(alert.id),
   );
@@ -1221,7 +1268,7 @@ function syncAlertLayers(
       item.addEventListener('animationend', () => item.remove());
     });
 
-  snapshot.memoryRefs.forEach((ref, index) => {
+  getVisibleMeetingMemoryCueRefs(snapshot.memoryRefs).forEach((ref, index) => {
     const memoryId = `memory:${ref.id}`;
     if (seenDanmakuIds.has(memoryId)) {
       return;
@@ -1236,13 +1283,14 @@ function syncAlertLayers(
       ref.relationLabel ||
       ref.evidenceRoleLabel ||
       `记忆关联 ${Math.round(ref.score * 100)}%`;
+    const link = getMeetingMemoryDanmakuLink(ref);
     appendDanmakuContent(item, {
       icon: '🧠',
       title,
       previewText: ref.cueTitle || ref.title || ref.snippet,
       detailText: ref.cueBody || ref.fullSnippet || ref.snippet,
-      linkUrl: ref.sourceUrl,
-      linkLabel: '查看原文',
+      linkUrl: link?.url,
+      linkLabel: link?.label,
     });
 
     danmakuOverlay.appendChild(item);
@@ -1485,15 +1533,6 @@ function emitHeuristicAlerts(
       source: 'summary',
     });
   }
-  if (context.speakerLabel) {
-    candidates.push({
-      level: 'P2',
-      title: '当前主讲更新',
-      body: `${context.speakerLabel} 正在主讲，当前对话上下文已刷新。`,
-      source: 'summary',
-    });
-  }
-
   candidates.forEach((candidate) => {
     const alertId = `${context.meetingId}:${candidate.level}:${candidate.title}:${candidate.body}`;
     if (emittedHeuristicAlertIds.has(alertId)) {
@@ -2274,6 +2313,11 @@ async function hideMeetingPilotFloatingIconForever(): Promise<void> {
   await updateMeetingPilotConfig({
     MEETING_PILOT_FLOATING_ICON_VISIBLE: false,
   });
+  runtimeConfig = {
+    ...runtimeConfig,
+    floatingIconVisible: false,
+  };
+  renderOverlay(overlayState.snapshot, getMeetingPageContext());
 }
 
 function createOverlay(): void {
@@ -3676,7 +3720,9 @@ function renderOverlay(
   const currentTopicCount = snapshot?.chapters?.length || 0;
   const currentParticipantCount = context?.participantCount || 0;
   const currentAlertCount =
-    snapshot?.alerts.filter((alert) => !alert.resolved).length || 0;
+    snapshot?.alerts.filter(
+      (alert) => !alert.resolved && shouldSurfaceMeetingPilotAlert(alert),
+    ).length || 0;
   const readinessBlocked = Boolean(readiness && !readiness.canStartCapture);
   const readinessLabel = readiness?.status?.toUpperCase() || 'READY';
 

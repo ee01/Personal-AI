@@ -5,6 +5,7 @@ import {
   LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
   getMessageReactionActionDefinitions,
 } from '../messageReactionLayout.js';
+import { buildPendingLinkedActionConfig } from '../linkedActionEntry.js';
 
 test('toolbar keeps linked action in the fourth functional slot', () => {
   const actions = getMessageReactionActionDefinitions({
@@ -64,4 +65,24 @@ test('toolbar respects linked-action toggle filtering', () => {
     actions.map((action) => action.key),
     ['followThread', 'linkedAction'],
   );
+});
+
+test('linked action pending config freshness uses request time, not message time', () => {
+  const messageTimestamp = Date.parse('2026-05-15T09:30:00Z');
+  const requestedAt = Date.parse('2026-05-24T09:30:00Z');
+
+  const pendingConfig = buildPendingLinkedActionConfig(
+    {
+      sender: 'Alicia Chen',
+      groupName: 'Release Room',
+      content: 'Please follow up with the release owner before tomorrow noon.',
+      messageId: 'msg-1',
+      timestamp: messageTimestamp,
+      messageLink: 'https://app.ringcentral.com/messages/12345/msg-1',
+    },
+    requestedAt,
+  );
+
+  assert.equal(pendingConfig.timestamp, requestedAt);
+  assert.equal(pendingConfig.messageTimestamp, messageTimestamp);
 });

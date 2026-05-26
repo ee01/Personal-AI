@@ -67,6 +67,12 @@ const {
 } = await import('../src/services/DigestQueueService.ts');
 
 const { notificationService } = await import('../src/services/NotificationService.ts');
+const { buildBotNotificationMessage } = await import(
+  '../src/services/NotificationService.ts'
+);
+const { summarizeDigestQueueProcessResults } = await import(
+  '../src/services/TaskScheduler.ts'
+);
 
 function makeDigestItem(
   id: string,
@@ -255,6 +261,58 @@ async function verifyNotificationFailureKeepsItems() {
   (notificationService as any).sendNotification = originalSendNotification;
 }
 
+function verifyTaskSchedulerSurfacesDigestFailures() {
+  const successResult = summarizeDigestQueueProcessResults([
+    {
+      taskId: 'follow_thread_merged',
+      success: true,
+      itemsProcessed: 3,
+    },
+    {
+      taskId: 'concerned_items_daily',
+      success: true,
+      itemsProcessed: 2,
+    },
+  ]);
+  assert.equal(successResult.success, true);
+  assert.equal(successResult.summary, '2 个摘要任务成功，推送 5 条');
+
+  const idleResult = summarizeDigestQueueProcessResults([]);
+  assert.equal(idleResult.success, true);
+  assert.equal(idleResult.summary, '无到期摘要');
+
+  const failedResult = summarizeDigestQueueProcessResults([
+    {
+      taskId: 'concerned_items_daily',
+      success: false,
+      itemsProcessed: 0,
+      error: 'network down',
+    },
+  ]);
+  assert.equal(failedResult.success, false);
+  assert.match(failedResult.error || '', /摘要推送失败 1\/1/);
+  assert.match(failedResult.error || '', /network down/);
+  assert.equal(failedResult.summary, '0 个摘要任务成功，1 个失败，队列已保留');
+}
+
+function verifyDigestBotMessageHasNoBrokenSourceLink() {
+  const message = buildBotNotificationMessage({
+    teamId: '',
+    teamName: '',
+    sender: 'Personal AI',
+    messageContent: '📊 **定时消息摘要**\n共 2 条匹配消息',
+    summary: '[ConcernedItems 定时消息摘要] 2 条汇总',
+    datetime: '2026/05/24 08:00:00',
+    matchedRule: 'ConcernedItems 定时消息摘要',
+    mention: false,
+  });
+
+  assert.match(message, /__内容__：📊 \*\*定时消息摘要\*\*/);
+  assert.doesNotMatch(message, /__在群__：/);
+  assert.doesNotMatch(message, /app\.ringcentral\.com\/messages\/?[\)\s]/);
+  assert.doesNotMatch(message, /点击查看原消息/);
+}
+
 async function verifyProcessTaskRemovesOnlyCollectedItems() {
   const taskId = 'verify_digest_process';
   const processor: DigestProcessor = {
@@ -402,6 +460,8 @@ async function main() {
   await verifyDuplicateIdsAreIdempotent();
   verifyPerRuleDigestReleaseSchedule();
   await verifyNotificationFailureKeepsItems();
+  verifyTaskSchedulerSurfacesDigestFailures();
+  verifyDigestBotMessageHasNoBrokenSourceLink();
   await verifyProcessTaskRemovesOnlyCollectedItems();
   verifyConcernedTaskRunsHourlyForPerRuleSchedules();
   await verifyConcernedDigestUsesRuleIdForGrouping();

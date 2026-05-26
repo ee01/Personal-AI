@@ -23,6 +23,18 @@
       </div>
     </div>
 
+    <div v-if="handoffSearch" class="handoff-banner">
+      <div>
+        <strong>{{ handoffSourceLabel }}</strong>
+        <span>
+          已按“{{ handoffSearch }}”筛选反思线程；如果没有结果，可清除筛选后查看全部。
+        </span>
+      </div>
+      <button class="handoff-clear-btn" @click="clearHandoffFilter">
+        清除筛选
+      </button>
+    </div>
+
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <p>加载自我反思线程中...</p>
@@ -30,7 +42,7 @@
 
     <div v-else-if="threads.length === 0" class="empty-state">
       <div class="empty-icon">🧠</div>
-      <p>当前没有符合条件的自我反思线程</p>
+      <p>{{ emptyMessage }}</p>
     </div>
 
     <div v-else class="thread-grid">
@@ -65,21 +77,70 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
   type ReflectionThread,
 } from '../../services/MemoryServiceClient';
 
+const route = useRoute();
+const router = useRouter();
 const client = getMemoryServiceClient();
 const loading = ref(true);
 const threads = ref<ReflectionThread[]>([]);
 const statusFilter = ref<'active' | 'paused' | 'closed' | 'all'>('active');
 const searchText = ref('');
+const handoffSource = ref('');
+
+const handoffSearch = computed(() =>
+  handoffSource.value === 'dream' ? searchText.value.trim() : '',
+);
+const handoffSourceLabel = computed(() =>
+  handoffSource.value === 'dream' ? '来自梦境重放' : '来自外部入口',
+);
+const emptyMessage = computed(() => {
+  const query = searchText.value.trim();
+  if (handoffSource.value === 'dream' && query) {
+    return `没有找到与“${query}”对应的自我反思线程；可清除筛选后查看全部线程。`;
+  }
+  return '当前没有符合条件的自我反思线程';
+});
 
 onMounted(() => {
+  applyRouteQuery();
   void loadThreads();
 });
+
+watch(
+  () => route.query,
+  () => {
+    applyRouteQuery();
+    void loadThreads();
+  },
+);
+
+function applyRouteQuery() {
+  const queryStatus =
+    typeof route.query.status === 'string' ? route.query.status : '';
+  const querySearch =
+    typeof route.query.search === 'string' ? route.query.search : '';
+  const querySource =
+    typeof route.query.source === 'string' ? route.query.source : '';
+
+  if (
+    queryStatus === 'active' ||
+    queryStatus === 'paused' ||
+    queryStatus === 'closed' ||
+    queryStatus === 'all'
+  ) {
+    statusFilter.value = queryStatus;
+  } else {
+    statusFilter.value = 'active';
+  }
+  searchText.value = querySearch;
+  handoffSource.value = querySource;
+}
 
 async function loadThreads() {
   loading.value = true;
@@ -96,6 +157,13 @@ async function loadThreads() {
   } finally {
     loading.value = false;
   }
+}
+
+async function clearHandoffFilter() {
+  statusFilter.value = 'active';
+  searchText.value = '';
+  handoffSource.value = '';
+  await router.replace('/reflection-threads');
 }
 
 function statusLabel(status: string) {
@@ -141,6 +209,47 @@ function relativeTime(ts?: number) {
 .page-header p {
   color: #94a3b8;
   font-size: 0.9rem;
+}
+
+.handoff-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  border-radius: 8px;
+  background: rgba(20, 83, 45, 0.14);
+  color: #cbd5e1;
+  padding: 0.8rem 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.handoff-banner strong {
+  display: block;
+  color: #99f6e4;
+  font-size: 0.82rem;
+  margin-bottom: 0.25rem;
+}
+
+.handoff-banner span {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.handoff-clear-btn {
+  flex-shrink: 0;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.7);
+  color: #e2e8f0;
+  padding: 0.48rem 0.72rem;
+  cursor: pointer;
+}
+
+.handoff-clear-btn:hover {
+  border-color: rgba(45, 212, 191, 0.42);
+  color: #ccfbf1;
 }
 
 .header-controls {
@@ -294,6 +403,11 @@ function relativeTime(ts?: number) {
 
   .header-controls {
     flex-wrap: wrap;
+  }
+
+  .handoff-banner {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .search-input {

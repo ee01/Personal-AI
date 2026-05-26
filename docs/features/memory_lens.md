@@ -1,10 +1,10 @@
 # Memory Lens
 
-*最后更新: 2026-05-22（含浮窗信息层级重设计、划词记忆检索、真实召回质量观察）*
+*最后更新: 2026-05-26（含 Rehearsal 预演提醒反馈、浮窗信息层级重设计、划词记忆检索、真实召回质量观察）*
 
 ## 概述
 
-Memory Lens 是 Personal AI 的注入式关联记忆提示能力。它不新增独立页面，不自动把网页写入长期记忆库，也不生成或插入回复；它在用户当前页面、消息会话、Jira、会议相关 surface 中，用低打扰方式提示“当前场景有哪些真正相关的已有记忆”。选中文本的主动检索归属同一功能文档，但产品语义单独命名为 **划词记忆检索（Selection Memory Search）**。
+Memory Lens 是 Personal AI 的注入式关联记忆提示能力。它不新增独立页面，不自动把网页写入长期记忆库，也不生成或插入回复；它在用户当前页面、消息会话、Jira、会议相关 surface 中，用低打扰方式提示“当前场景有哪些真正相关的已有记忆或 Rehearsal 预演提醒”。选中文本的主动检索归属同一功能文档，但产品语义单独命名为 **划词记忆检索（Selection Memory Search）**。
 
 当前线上主链路是：
 
@@ -36,7 +36,7 @@ Memory Lens 的逻辑是“当前页面像什么，就去记忆库里找你以�
 Memory Lens 负责：
 
 - 根据当前页面、RingCentral 消息会话、Jira issue、会议上下文或划选文本调用 `/context-recall`。
-- 展示少量高相关记忆，按"为什么相关 → 它说了什么 → 我能做什么"三层组织卡片内容。
+- 展示少量高相关记忆或 Rehearsal 预演提醒，按"为什么相关 → 它说了什么 / 预演内容是什么 → 我能做什么"三层组织卡片内容。
 - 提供正/负反馈 icon 和站点/页面级静默控制；控制类操作默认折叠，不占据卡片主体。
 - 在用户选中文本后提供 **划词记忆检索（Selection Memory Search）**：先静默召回，命中强相关才显示轻量 `icon48.png` 入口。
 
@@ -44,7 +44,7 @@ Memory Lens 不负责：
 
 - 不自动保存完整 DOM、网页正文、截图、密码/支付/登录表单或私密输入。
 - 不因为用户打开网页就强化长期记忆的 `access_count`。
-- 不做“插入回复”“生成可发送文本”“改写草稿”；这些属于 [`compose_assist.md`](./compose_assist.md)。
+- 不做“插入回复”“生成可发送文本”“改写草稿”；这些属于 [`compose_assist.md`](./compose_assist.md)。即使命中 Rehearsal，Memory Lens 也只展示“预演提醒”，不生成回复。
 - 不在 `v.ringcentral.com/conf/on/*` 上显示通用右下角 bubble；会议页由 Meeting Pilot 接管。
 - 不和 RingCentral Glip 输入框旁的 Compose Assist icon 同时占位；当 Compose Assist 已显示时，Memory Lens 右下角 Rest / Hover Peek / Expanded Card 自动隐藏。
 
@@ -126,7 +126,9 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 - `RecallEngine.recall(..., { reinforceAccess: false })`，被动提示不强化访问计数。
 - 请求包含 `sourceContext` 和 `exclude`，用于排除当前 URL、当前 conversation/group/meeting、当前消息 self echo。
 - 后端会 over-fetch、过滤、合并同源 cluster、rerank，再返回 `uiSummary`、`reasonType`、`evidenceRole`、`displayPriority`、`exploreLink`。
-- 负反馈会以 `recall_quality` 进入 memory-service，后续同目标或低质量同源结果会被排除或降权。
+- 当 `sourceTypes` 包含 `rehearsal` 时，`/context-recall` 可以返回 `type='rehearsal'`、`evidenceRole='rehearsal_cue'`、`reasonType='prospective_cue'` 的预演提醒。Lens 需要把它显示成“预演提醒”，解释命中的人物、会议、issue、URL 或 topic，而不是当普通事实记忆渲染。
+- Rehearsal 卡片使用“为什么此刻相关 / 预演内容 / 我能做什么”的文案，`↗` 跳到 `memory-exploring.html#/rehearsals?rehearsalId=...`，有用/不相关反馈写回对应 Rehearsal activation。
+- 普通记忆负反馈会以 `recall_quality` 进入 memory-service；Rehearsal 负反馈走 `/rehearsals/:id/feedback` 并记录为 `irrelevant`，后续同目标或低质量同源结果会被排除或降权。
 
 质量门控重点：
 
@@ -148,6 +150,17 @@ Memory Lens 默认把“用户可以看见记忆”和“可以把记忆外发�
 - `pai-context-site-allowlist-mode-v1`
 
 Options 页提供“网页记忆提示控制”管理入口，用于恢复临时静默、永久屏蔽站点、永久屏蔽页面路径和允许站点白名单。
+
+这些控制只约束 **被动网页处理**：右下角 Lens、页面级 `/context-recall` 和旧的网页智能分析都会在临时静默、永久屏蔽、路径屏蔽或白名单未命中时停止；用户主动划词检索仍可使用，但继续受敏感页面、敏感表单和低信息/密钥选区拦截。Options 中的修改会通过 `chrome.storage.onChanged` 实时同步到已打开页面，不需要刷新当前页才生效。
+
+白名单是全局模式，不是单站点的“解除屏蔽”。因此卡片菜单在白名单关闭时显示为“开启白名单并允许此站点”，避免用户误以为只是恢复当前站点。
+
+## 业内参考与启发
+
+- Chrome extension `activeTab` 的官方设计强调“用户手势后临时访问当前 tab”，比长期全站访问更符合最小权限预期；Memory Lens 的站点控制应尽量让用户能形成“这里会不会被动读取页面”的清晰模型。
+- Microsoft Edge 的 Copilot page context policy 把“Copilot 能否访问页面内容”做成可动态刷新的 profile-level 控制；站点控制变更实时作用于已打开页，沿用同样的可预期性。
+- ChatGPT Memory 和 Notion Enterprise Search 都把记忆/连接源控制、权限过滤和删除/断开后的不可用语义作为用户信任基础；Memory Lens 的静默/屏蔽不应只隐藏 UI，而应阻止对应被动处理。
+- SOUPS 2021 对浏览器扩展权限理解的研究指出，用户偏好能建立清晰心智模型的权限描述；Contextual Integrity 相关 AI assistant 论文也强调信息流应符合当前场景预期。因此这里优先做明确文案、实时反馈和被动处理边界，而不是增加复杂配置层级。
 
 ## 卡片标题与摘要取值规则
 
@@ -223,6 +236,7 @@ Why-row chips 直接从 overlap 结果里取：命中同群则加 `同群`，命
 - 右下角 icon hover 出 Hover Peek，mouseleave 后消失，click 后打开 Expanded Card。
 - Hover Peek 和 Expanded Card 都不展示 `100%/87%` 这类百分比分数。
 - Expanded Card 标题使用 `metadata.summary` 语义描述，不使用 `"@xxx wrote:"` / `"3. 行动指南"` 这类 raw snippet。
+- 当返回结果含 `metadata.actions[]` 或 `replyAdvice` 时，卡片证据区优先展示可执行行动/建议，不退回低信息 raw snippet。
 - 划词后先静默发起 `selected_text` 召回；只有命中高相关候选才显示轻量 icon。
 - `selected_text` 没有高相关候选时不显示划词 icon，也不弹空结果 toast。
 - 点击划词 icon 后直接打开 Expanded Card，并保持当前 `selected_text` 结果，不被随后完成的页面 passive recall 立刻替换或清除。
@@ -230,7 +244,9 @@ Why-row chips 直接从 overlap 结果里取：命中同群则加 `同群`，命
 - Hackathon/Codex/MCP/setup 上下文不召回 Gary travel itinerary。
 - 空 RingCentral meeting shell 不召回 Colin/AVA 或其他 glip 记忆。
 - 有具体工单、动作、决策、风险的 RingCentral Video/meeting 记忆仍可召回。
+- 命中 Rehearsal 时展示“预演提醒”与 `prospective_cue` why chips，不插入回复、不自动生成文本。
 - HR Open Day / Everyone AI Campaign 广播通告等跨群无锚点记忆，在 `overlapAudit` 后降为 `hidden`，不进入自动弹出候选。
 - 跨群无重叠的候选即使 score=1.00 也不展示 Rest icon 红点；仅在用户主动点击 icon 后以 `可能相关` 出现。
 - 当所有候选 `overlapAudit` 均为 `hidden` 时，Rest icon 不显示红点，Hover Peek 不弹，Expanded Card 主动打开才展示"暂无强相关"空态。
 - 反馈 thumb down 后，`recall_quality: negative` 事件携带 `scene_anchor_signature` 和 `match.metadata.groupId + sender`，用于后续同场景降权。
+- Options 里新增/移除站点静默、永久屏蔽、路径屏蔽或白名单规则后，已打开页面应立即停止或恢复被动 Lens；被控制站点也不应继续触发旧的网页智能分析。

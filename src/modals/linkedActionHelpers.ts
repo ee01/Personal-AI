@@ -6,6 +6,7 @@ export interface PendingLinkedActionConfig {
   groupName?: string;
   content?: string;
   messageId?: string;
+  messageTimestamp?: string | number;
   timestamp?: string | number;
   messageLink?: string;
 }
@@ -176,7 +177,7 @@ export const getFallbackLinkedActionPrompt = (
   configSignals?: LinkedActionConfigSignals,
 ) =>
   [
-    '参考当前消息整理一条可执行的关联操作；优先提取消息里的对象、时间和目标系统，必要时附上原消息链接。',
+    '参考当前消息整理一条可执行的联动操作；优先提取消息里的对象、时间和目标系统，必要时附上原消息链接。',
     getLinkedActionContextLine(context),
     configSignals ? buildLinkedActionConfigSignalLine(configSignals) : '',
   ]
@@ -206,7 +207,7 @@ export const buildHistoryLinkedActionSuggestion = (
   const existingPrompt = topic.automationPrompt?.trim() || '';
   return [
     existingPrompt,
-    '请把上面的关联操作风格应用到当前触发消息；优先提取消息里的对象、时间和目标系统，再决定是否执行外部写入。',
+    '请把上面的联动操作风格应用到当前触发消息；优先提取消息里的对象、时间和目标系统，再决定是否执行外部写入。',
     getLinkedActionContextLine(context),
     buildLinkedActionConfigSignalLine(configSignals),
   ].join('\n\n');

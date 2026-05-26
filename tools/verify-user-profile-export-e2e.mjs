@@ -34,6 +34,14 @@ const profileItems = Array.from({ length: 1250 }, (_, index) => ({
   lastSeen: Math.floor(Date.now() / 1000) - index,
 }));
 
+for (const item of profileItems) {
+  item.evidenceRefs.push({
+    sourceType: 'web',
+    sourceTitle: 'Unsafe profile evidence',
+    sourceUrl: 'javascript:alert(1)',
+  });
+}
+
 const profileItemRequests = [];
 const profileMutations = [];
 let phase = 'initial-load';
@@ -334,6 +342,18 @@ try {
   }).waitFor({ timeout: 10000 });
   await firstProfileRow.locator('.profile-evidence-item', {
     hasText: 'unit',
+  }).waitFor({ timeout: 10000 });
+  const unsafeEvidenceItem = firstProfileRow.locator('.profile-evidence-item', {
+    hasText: 'Unsafe profile evidence',
+  });
+  await unsafeEvidenceItem.waitFor({ timeout: 10000 });
+  assert.equal(
+    await unsafeEvidenceItem.getAttribute('href'),
+    null,
+    'unsafe profile evidence URLs should not be rendered as clickable hrefs',
+  );
+  await unsafeEvidenceItem.locator('.profile-evidence-warning', {
+    hasText: '不支持 javascript 协议',
   }).waitFor({ timeout: 10000 });
 
   await page.getByPlaceholder('名称、键、来源、状态或证据').fill('Export Project 999');

@@ -118,8 +118,15 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       );
       
       if (result.success) {
+        const completedResult: InitializationResult = {
+          ...result,
+          setupWarnings: [
+            ...(tempResult.setupWarnings || []),
+            ...(result.setupWarnings || []),
+          ],
+        };
         setCurrentStep('初始化成功！');
-        onComplete(result);
+        onComplete(completedResult);
       } else {
         throw new Error(result.error || '完成初始化失败');
       }
@@ -461,6 +468,21 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       </div>
     );
   };
+
+  const renderSetupWarnings = (warnings?: string[]) => {
+    if (!warnings || warnings.length === 0) {
+      return null;
+    }
+
+    return (
+      <div style={styles.setupWarningBox} role="status" aria-live="polite">
+        <div style={styles.setupWarningTitle}>初始化注意事项</div>
+        {warnings.map((warning) => (
+          <div key={warning} style={styles.setupWarningItem}>{warning}</div>
+        ))}
+      </div>
+    );
+  };
   
   return (
     <div style={styles.container}>
@@ -581,13 +603,16 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                 
                 {tempResult && (
                   <div style={styles.infoBox}>
-                    <p style={styles.infoTitle}>📋 系统信息：</p>
+                    <p style={styles.infoTitle}>📋 初始化收据：</p>
+                    <p style={styles.infoItem}>已创建维护表、Apps Script 项目和 Web App。</p>
+                    <p style={styles.infoItem}>授权后将创建分钟触发器、写入测试消息并保存 Config。</p>
                     <p style={styles.infoItem}>Sheet ID: {tempResult.sheetId}</p>
                     <p style={styles.infoItem}>
                       <a href={tempResult.sheetUrl} target="_blank" rel="noopener noreferrer">
                         📊 查看 Sheet
                       </a>
                     </p>
+                    {renderSetupWarnings(tempResult.setupWarnings)}
                   </div>
                 )}
               </div>
@@ -610,10 +635,13 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
               <p style={styles.featureTitle}>点击下方按钮，系统将自动为您：</p>
               <ul style={styles.featureList}>
                 <li>✅ 创建 Google Sheet 维护表</li>
-                <li>✅ 配置自动执行脚本</li>
-                <li>✅ 设置定时触发器</li>
+                <li>✅ 配置自动执行脚本和 Web App</li>
+                <li>✅ 授权后设置定时触发器</li>
                 <li>✅ 添加测试消息（一分钟后推送）</li>
               </ul>
+              <div style={styles.setupSafetyNotice}>
+                维护表默认不会开放为“知道链接的任何人可编辑”；如果组织内共享失败，会保持仅创建者可编辑并提示你手动分享。
+              </div>
             </div>
             
             <button 
@@ -832,6 +860,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     listStyle: 'none',
     padding: 0,
     margin: 0,
+  },
+  setupSafetyNotice: {
+    marginTop: '12px',
+    padding: '10px 12px',
+    fontSize: '12px',
+    color: '#17415f',
+    backgroundColor: '#e7f3ff',
+    border: '1px solid #b3d7ff',
+    borderRadius: '6px',
+    lineHeight: 1.5,
   },
   primaryButton: {
     width: '100%',
@@ -1166,6 +1204,23 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '13px',
     color: '#666',
     marginBottom: '5px',
+  },
+  setupWarningBox: {
+    marginTop: '12px',
+    padding: '10px 12px',
+    backgroundColor: '#fff3cd',
+    border: '1px solid #ffe08a',
+    borderRadius: '6px',
+    color: '#664d03',
+    fontSize: '12px',
+    lineHeight: 1.5,
+  },
+  setupWarningTitle: {
+    fontWeight: 700,
+    marginBottom: '4px',
+  },
+  setupWarningItem: {
+    overflowWrap: 'anywhere',
   },
 };
 

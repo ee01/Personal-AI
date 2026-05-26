@@ -1,6 +1,6 @@
 # Agent Thinking 功能概览
 
-最后更新: 2026-05-21
+最后更新: 2026-05-25
 
 ## 功能定位
 
@@ -128,6 +128,25 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - Options 演示页的流程图节点新增摘要行；工具节点用状态 badge 展示成功/跳过/阻断/待确认等结果，同时把 `publicSummary` 中的调用意图放到节点详情里，用户不必展开时间线也能看到“为什么进入这个工具动作”。
 - 终止节点会展示 finish / stopped / max actions 的用户可见摘要，和运行检查里的状态建议互补，减少 trace 图只呈现结构、不呈现决策原因的问题。
 
+2026-05-23 状态:
+
+- 运行检查在 `max_actions_reached` 时会把预算用完前仍未处理的工具问题直接列出来，包括工具失败、待确认、执行前阻断和证据不足步骤。
+- Options 演示页现在用“预算耗尽”的终止节点展示阶段性结论；如果同一轮里还有待确认通知、阻断工具或空证据，流程图节点详情会直接提示这些未处理问题，而不是只说已经达到 `maxActions`。
+- 待确认动作队列现在直接展示“批准 / 拒绝 / 修改”三类处理方式和恢复说明：批准时复制最小重跑配置，拒绝或修改参数时不复用旧批准 key。审核包 JSON 也带同一组 `decisionOptions` 与 `resumeInstruction`，避免用户只拿到 key 却不知道下一步怎么处理。
+- 这个改进仍不等于持久 checkpoint；真正跨刷新/跨 service worker 生命周期恢复同一 run 的能力仍属于后续较大工程。
+
+2026-05-24 状态:
+
+- 运行检查的失败、待确认、阻断、证据不足、预算耗尽、停止和重复跳过项会直接列出涉及的时间线步骤。
+- 用户可以从运行检查点击步骤编号跳到并展开对应 trace 步骤，不必在长时间线里手动查找问题来源。
+- 这只是当前 UI 的定位能力；跨刷新恢复、审批持久化和完整 span/export 仍属于后续工程。
+
+2026-05-25 状态:
+
+- 工具审批 trace 会把注册工具的 `safetyNote` 一起写入 `approval_required` 结果；待确认动作队列、审核包 JSON 和 Options 演示都会展示“工具安全说明”。
+- 这让 reviewer 在复制批准 key 或重跑配置前能看到工具自己的安全边界，例如通知渠道、写入影响范围或回滚要求，而不是只靠通用风险标签判断。
+- 这仍然不是持久 checkpoint；本轮只补齐审批请求上下文，避免轻量审批 UI 丢失工具策略说明。
+
 ## 处理流程
 
 1. 检测输入类型和消息格式。
@@ -142,7 +161,7 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - `meeting` 和 `document` 分支仍是占位实现，只返回基础示例结果。
 - 工具调用缺少持久 checkpoint，浏览器刷新或 service worker 中断后不能恢复同一次思考循环。
 - 高风险副作用动作已有执行前阻断、批准 key 和运行级审核队列；还没有真正可恢复的 approve/edit/reject 审批流。
-- 当前已能复制批准后的最小重跑配置，但尚未持久化被暂停的 run state；刷新页面或 service worker 中断后仍需要调用方重新发起分析并带上批准 key。
+- 当前已能复制批准后的最小重跑配置，并在 UI 中说明 approve/reject/edit 三类处理；但尚未持久化被暂停的 run state，刷新页面或 service worker 中断后仍需要调用方重新发起分析并带上批准 key。
 - 思考过程已有摘要化主路径；待确认批准 key 会完整展示，工具返回仍在本地 UI 可展开，后续需要按权限/环境进一步分层。
 - 当前工具 guardrail 已覆盖注册表、必填参数和基础人审阻断；完整的可恢复审批队列、权限分组和敏感数据脱敏仍需后续分层。
 
@@ -162,9 +181,11 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - 参考 OpenTelemetry GenAI agent spans，后续如果输出结构化 trace，应把工具执行 span、证据数量、失败状态和用户可见诊断作为可计算字段，而不是只依赖中文展示文案。
 - 参考 LangGraph/OpenAI human-in-the-loop 的风险分级策略，后续可以把 `requiresHumanApproval` 升级为可恢复审批流，例如高风险工具允许 approve/edit/reject，中风险工具只允许 approve/reject，只读工具不打断。
 - 参考 OpenAI Agents SDK 和 LangChain HITL middleware 的 interrupt payload 设计，审批 UI 应持续展示完整 action request 与允许的 decision types，而不是只暴露一个批准 token。
+- 当前轻量实现已把 decision types 前置到待确认动作队列；下一步才是把这些选择接到真正可恢复的 run state，而不是继续堆叠复制按钮。
 - 参考 OpenAI Agents SDK 的长审批状态序列化和 LangGraph 的 `thread_id`/checkpoint 恢复模型，后续应把当前审核包升级为真正的暂停运行对象，包含 run id、版本、待审工具参数、恢复入口和拒绝/编辑后的分支处理。
 - 参考 OpenTelemetry GenAI agent spans 和 Langfuse 的 OTel trace 结构，后续 trace 字段应保留 agent/version/conversation、工具执行状态、证据质量和审批状态，方便从 UI 诊断继续走向自动评估。
 - 参考 AutoGen Studio、LangSmith / AgentOps 这类调试体验，流程图应持续保留状态转移原因，而不只是展示“调用了哪个工具”；本轮已先把用户可见摘要放入节点详情，后续可升级为结构化 transition reason。
+- 参考 AEGIS 这类执行前 firewall / audit layer 论文，审批请求除了 tool id 和参数，还应保留策略上下文、风险说明和审计字段；当前已先把注册工具的 `safetyNote` 纳入待确认动作和审核包。
 
 ## 外部参考
 
@@ -184,6 +205,7 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - [AgentTrace Causal Graph](https://arxiv.org/abs/2603.14688): 用执行日志重建因果图来定位多 Agent 失败根因，提示 trace 应保留可计算的故障信号。
 - [AutoGen Studio](https://arxiv.org/abs/2408.15247): 多 Agent 工作流 UI 强调交互式评估和调试，说明 trace 视图需要能快速定位状态转移与失败原因。
 - [Cloudflare Agents Human-in-the-Loop](https://developers.cloudflare.com/agents/concepts/human-in-the-loop/): 把高风险工具调用显式建模为审批或等待状态，适合作为后续人审层参考。
+- [AEGIS: No Tool Call Left Unchecked](https://arxiv.org/abs/2603.12621): 强调工具执行前拦截、策略校验、人审和审计记录应在副作用发生前完成，适合作为工具审批上下文完整性的参考。
 
 ## Reminders 反馈
 
@@ -194,6 +216,14 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 2026-05-20 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 的开放提醒，也没有 Reminder 项目需要标记完成。
 
 2026-05-21 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 流程图体验的开放提醒，也没有 Reminder 项目需要标记完成。
+
+2026-05-23 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 预算耗尽体验的开放提醒，也没有 Reminder 项目需要标记完成。
+
+2026-05-23 本轮再次通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 工具审批体验的开放提醒，也没有 Reminder 项目需要标记完成。
+
+2026-05-24 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking trace 定位体验的开放提醒，也没有 Reminder 项目需要标记完成。
+
+2026-05-25 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 工具审批体验的开放提醒，也没有 Reminder 项目需要标记完成。
 
 ## 验证
 
@@ -284,3 +314,23 @@ node tools/verify-agent-thinking-options-e2e.mjs
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖流程图节点 `detail` 会优先展示工具调用意图，并保留终止节点摘要。
 - `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
 - `node tools/verify-agent-thinking-options-e2e.mjs` 通过，确认 Options 演示页流程图工具节点展示调用意图摘要，且既有审批、阻断、证据不足和结果摘要路径没有回归。
+
+2026-05-23 验证覆盖:
+
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖 `max_actions_reached` 运行检查会汇总工具失败、待确认、阻断和证据不足步骤。
+- `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 通过，确认 Options 演示页显示“行动次数用完”、预算终止节点和预算用完前仍待处理的问题摘要。
+- 本轮追加覆盖: `buildPendingApprovalActions` 会为每个待确认工具动作生成 approve/reject/edit 处理方式、恢复说明，并把同样信息写进审核包。
+- 本轮追加覆盖: Options E2E 会确认待确认动作队列直接显示“处理方式”、批准带 `approvalKey` 重跑、拒绝反馈给 Agent、修改参数不复用旧 key。
+
+2026-05-24 验证覆盖:
+
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 覆盖运行检查项会记录相关步骤编号。
+- `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 覆盖运行检查中的步骤编号按钮会展开对应 trace 步骤。
+
+2026-05-25 验证覆盖:
+
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖 `approval_required` 工具结果会保留 `safetyNote`，待确认动作和审核包 JSON 会携带工具安全说明。
+- `npm start` 首次 webpack dev 编译成功后已停止本轮 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 通过，确认 Options 演示页的待确认动作会展示“工具安全说明”，审批复制路径和运行检查定位路径没有回归。

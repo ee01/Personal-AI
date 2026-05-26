@@ -9,6 +9,7 @@ import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import type { ReflectionThreadRecord } from '../repositories/ReflectionThreadRepository.js';
+import type { RehearsalActivationCues } from '../types/index.js';
 import { formatDateTime } from '../utils/time.js';
 
 export interface ReflectionEvidenceItem {
@@ -36,12 +37,26 @@ export interface DraftReflectionAction {
   scheduledAt?: number;
 }
 
+export interface DraftRehearsalCandidate {
+  title: string;
+  dedupeKey?: string;
+  scenarioType?: string;
+  summary?: string;
+  content: string;
+  activationCues?: RehearsalActivationCues;
+  confidence?: number;
+  priority?: number;
+  validUntil?: number;
+  evidenceRefs?: string[];
+}
+
 export interface GeneratedReflection {
   summary: string;
   hypothesisAfter?: string;
   discoveries: string[];
   openQuestions: string[];
   actionProposals: DraftReflectionAction[];
+  rehearsalCandidates?: DraftRehearsalCandidate[];
   markdownBody: string;
 }
 
@@ -50,6 +65,7 @@ interface WorkerResponse {
   hypothesisAfter?: string;
   discoveries?: string[];
   openQuestions?: string[];
+  rehearsalCandidates?: DraftRehearsalCandidate[];
 }
 
 function clampScore(value: number | undefined, fallback: number): number {
@@ -166,11 +182,39 @@ Return JSON only:
   "summary": "2-4 sentence summary of what changed and what matters next",
   "hypothesisAfter": "updated hypothesis, if any",
   "discoveries": ["short bullet"],
-  "openQuestions": ["short question"]
+  "openQuestions": ["short question"],
+  "rehearsalCandidates": [
+    {
+      "title": "short future-scene reminder title",
+      "dedupeKey": "stable key for the same future scene",
+      "scenarioType": "chat|meeting|issue|writing|general",
+      "summary": "short optional preview",
+      "content": "what the user should remember, say, or do when the future scene appears",
+      "activationCues": {
+        "people": ["person names"],
+        "projects": ["project names"],
+        "topics": ["topic names"],
+        "keywords": ["keywords"],
+        "groupIds": ["chat group ids"],
+        "conversationIds": ["conversation ids"],
+        "meetingIds": ["meeting ids"],
+        "calendarEventIds": ["calendar event ids"],
+        "issueKeys": ["Jira or issue keys"],
+        "urls": ["canonical urls"],
+        "surfaces": ["compose_assist|meeting_pilot|meeting_prep|today_pilot|memory_lens"]
+      },
+      "confidence": 0.0,
+      "priority": 1
+    }
+  ]
 }
 
 Rules:
-- Focus on what changed, what matters, and which gaps remain.`;
+- Focus on what changed, what matters, and which gaps remain.
+- Add rehearsalCandidates only when the evidence supports a concrete future scene: "when X happens, remember/say/do Y".
+- Do not use rehearsalCandidates for generic facts, completed history, vague preferences, or ordinary todos without a future trigger.
+- Each rehearsal candidate must include at least one activation cue. Prefer stable hard cues such as people, projects, group/conversation ids, meeting/calendar ids, issue keys, or URLs.
+- Keep dream-derived or weak associative ideas as low confidence cues unless confirmed by stronger evidence.`;
 
     const parsed = await llm.generateJSON<WorkerResponse>(prompt, {
       temperature: 0.3,
@@ -184,6 +228,9 @@ Rules:
 
     const discoveries = uniqStrings(parsed.discoveries ?? []);
     const openQuestions = uniqStrings(parsed.openQuestions ?? []);
+    const rehearsalCandidates = normalizeRehearsalCandidates(
+      parsed.rehearsalCandidates,
+    );
     const actionProposals = await this.planActions(
       thread,
       evidence,
@@ -198,11 +245,13 @@ Rules:
       discoveries,
       openQuestions,
       actionProposals,
+      rehearsalCandidates,
       markdownBody: this.renderMarkdown(
         summary,
         discoveries,
         openQuestions,
         actionProposals,
+        rehearsalCandidates,
         evidence,
       ),
     };
@@ -263,11 +312,13 @@ Rules:
       discoveries,
       openQuestions,
       actionProposals,
+      rehearsalCandidates: [],
       markdownBody: this.renderMarkdown(
         summary,
         discoveries,
         openQuestions,
         actionProposals,
+        [],
         evidence,
       ),
     };
@@ -470,6 +521,7 @@ Rules:
     discoveries: string[],
     openQuestions: string[],
     actions: DraftReflectionAction[],
+    rehearsalCandidates: DraftRehearsalCandidate[],
     evidence: ReflectionEvidenceItem[],
   ): string {
     const discoveriesMd =
@@ -486,6 +538,15 @@ Rules:
             .map(
               (action) =>
                 `- [${action.actionType}] ${action.title}${action.description ? `: ${action.description}` : ''}`,
+            )
+            .join('\n')
+        : '- None';
+    const rehearsalsMd =
+      rehearsalCandidates.length > 0
+        ? rehearsalCandidates
+            .map(
+              (candidate) =>
+                `- ${candidate.title}: ${candidate.summary ?? candidate.content}`,
             )
             .join('\n')
         : '- None';
@@ -511,8 +572,82 @@ ${questionsMd}
 ## Proposed Actions
 ${actionsMd}
 
+## Rehearsal Candidates
+${rehearsalsMd}
+
 ## Evidence
 ${evidenceMd}
 `;
   }
+}
+
+function normalizeRehearsalCandidates(
+  candidates: DraftRehearsalCandidate[] | undefined,
+): DraftRehearsalCandidate[] {
+  if (!Array.isArray(candidates)) return [];
+  return candidates
+    .map((candidate): DraftRehearsalCandidate | null => {
+      const title = candidate?.title?.trim();
+      const content = candidate?.content?.trim();
+      if (!title || !content) return null;
+      const activationCues = normalizeActivationCues(
+        candidate.activationCues,
+      );
+      if (!hasCue(activationCues)) return null;
+      return {
+        title,
+        dedupeKey: candidate.dedupeKey?.trim() || undefined,
+        scenarioType: candidate.scenarioType?.trim() || 'general',
+        summary: candidate.summary?.trim() || undefined,
+        content,
+        activationCues,
+        confidence: clampScore(candidate.confidence, 0.6),
+        priority: Math.max(
+          1,
+          Math.min(Math.round(candidate.priority ?? 5), 10),
+        ),
+        validUntil: Number.isFinite(candidate.validUntil)
+          ? candidate.validUntil
+          : undefined,
+        evidenceRefs: uniqStrings(candidate.evidenceRefs ?? []),
+      };
+    })
+    .filter(
+      (candidate): candidate is DraftRehearsalCandidate =>
+        candidate !== null,
+    )
+    .slice(0, 5);
+}
+
+function normalizeActivationCues(
+  cues: RehearsalActivationCues | undefined,
+): RehearsalActivationCues {
+  if (!cues || typeof cues !== 'object') return {};
+  const normalized: RehearsalActivationCues = {};
+  for (const key of [
+    'people',
+    'projects',
+    'topics',
+    'keywords',
+    'groupIds',
+    'conversationIds',
+    'meetingIds',
+    'calendarEventIds',
+    'issueKeys',
+    'urls',
+    'surfaces',
+  ] as const) {
+    const values = Array.isArray(cues[key])
+      ? cues[key]!
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      : [];
+    const unique = Array.from(new Set(values)).slice(0, 12);
+    if (unique.length) normalized[key] = unique;
+  }
+  return normalized;
+}
+
+function hasCue(cues: RehearsalActivationCues): boolean {
+  return Object.values(cues).some((values) => values.length > 0);
 }

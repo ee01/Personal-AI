@@ -13,8 +13,10 @@ import type {
   ContextAssistRequest,
   ContextAssistResponse,
   ContextRecallContextType,
+  ContextRecallCurrentContext,
   ContextRecallMatch,
   ContextRecallRequest,
+  ContextRecallSourceContext,
   ContextRecallSurface,
   RecallSourceType,
 } from '../types/index.js';
@@ -42,6 +44,7 @@ const WEB_AGENT_SOURCES: RecallSourceType[] = [
   'user_core',
   'markdown',
   'reflection',
+  'rehearsal',
 ];
 const WORK_SOURCES: RecallSourceType[] = [
   'glip',
@@ -54,6 +57,7 @@ const WORK_SOURCES: RecallSourceType[] = [
   'user_core',
   'markdown',
   'reflection',
+  'rehearsal',
 ];
 const MEETING_PREP_SOURCES: RecallSourceType[] = [
   'calendar',
@@ -66,6 +70,7 @@ const MEETING_PREP_SOURCES: RecallSourceType[] = [
   'user_core',
   'markdown',
   'reflection',
+  'rehearsal',
 ];
 
 export class ContextAssistService {
@@ -197,7 +202,7 @@ export class ContextAssistService {
       available: true,
       suggestionType,
       title: getComposerAssistTitle(request),
-      summary: getComposerSummary(request, evidence.length, riskLevel),
+      summary: getComposerSummary(request, evidence.length, riskLevel, evidence),
       insertText,
       evidence,
       riskLevel,
@@ -229,7 +234,9 @@ function buildComposerRecallRequest(
     includeAudience: false,
     includeSender: false,
   });
+  const primaryText = buildComposerRecallPrimaryText(request, contextText);
   const secondaryTexts = [
+    ...buildComposerDraftSecondaryTexts(request),
     ...buildComposerSecondaryContextTexts(request),
     ...(request.keywords?.length ? [request.keywords.join(' ')] : []),
   ]
@@ -241,8 +248,10 @@ function buildComposerRecallRequest(
     contextType: mapComposerContextType(request),
     title: request.title,
     url: request.url,
-    primaryText: (contextText || request.primaryText)?.slice(0, 1600),
+    primaryText,
     secondaryTexts,
+    sourceContext: buildComposerRecallSourceContext(request),
+    currentContext: buildComposerRecallCurrentContext(request),
     entityHints: buildComposerEntityHints(request),
     scope: 'work',
     sourceTypes: normalizeComposerSourceTypes(request),
@@ -303,6 +312,114 @@ function buildMeetingPrepRecallRequest(
   };
 }
 
+function buildComposerRecallPrimaryText(
+  request: ComposerAssistRequest,
+  contextText: string,
+): string | undefined {
+  const fallback = contextText || request.primaryText || '';
+  if (request.contextType !== 'web_agent_prompt') {
+    return fallback ? fallback.slice(0, 1600) : undefined;
+  }
+
+  const draft = normalizeComposerDraft(request.draftText);
+  const visibleContext = fallback || '';
+  const parts = [
+    draft ? `Draft prompt: ${draft}` : '',
+    visibleContext ? `Visible AI context: ${visibleContext}` : '',
+  ].filter(Boolean);
+  const value = parts.join('\n').trim();
+  return value ? value.slice(0, 1600) : undefined;
+}
+
+function buildComposerDraftSecondaryTexts(
+  request: ComposerAssistRequest,
+): string[] {
+  if (request.contextType !== 'web_agent_prompt') return [];
+  const draft = normalizeComposerDraft(request.draftText);
+  return draft ? [`Draft prompt: ${draft}`] : [];
+}
+
+function buildComposerRecallSourceContext(
+  request: ComposerAssistRequest,
+): ContextRecallSourceContext | undefined {
+  if (request.contextType !== 'web_agent_prompt') return undefined;
+  return {
+    contextType: 'web_agent_prompt',
+    sourceType: 'web',
+    host: getComposerUrlHost(request.url),
+    url: request.url,
+    title: request.title,
+    topic: normalizeComposerDraft(request.draftText),
+  };
+}
+
+function buildComposerRecallCurrentContext(
+  request: ComposerAssistRequest,
+): ContextRecallCurrentContext | undefined {
+  if (request.contextType !== 'web_agent_prompt') return undefined;
+  const visibleMessages = takeComposerContextItems(
+    normalizeComposerContextItems(request),
+    8,
+  )
+    .map((item) => ({
+      id: item.id,
+      sender: item.sender,
+      text: item.text || item.title || '',
+      timestampLabel: item.timestampLabel,
+    }))
+    .filter((item) => item.text.trim());
+  const sourceAnchorHints = extractComposerSourceAnchorHints([
+    request.draftText,
+    request.url,
+    request.primaryText,
+    ...(request.secondaryTexts ?? []),
+  ]);
+
+  return {
+    title: request.title,
+    url: request.url,
+    participants: request.audience?.people,
+    sourceAnchorHints: sourceAnchorHints.length ? sourceAnchorHints : undefined,
+    visibleMessages: visibleMessages.length ? visibleMessages : undefined,
+  };
+}
+
+function normalizeComposerDraft(value?: string): string {
+  return (value || '').replace(/\s+/g, ' ').trim().slice(0, 520);
+}
+
+function getComposerUrlHost(value?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractComposerIssueKeys(value: string): string[] {
+  const matches = value.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? [];
+  return Array.from(new Set(matches)).slice(0, 4);
+}
+
+function extractComposerSourceAnchorHints(
+  values: Array<string | undefined>,
+): string[] {
+  const anchors = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    for (const issueKey of extractComposerIssueKeys(value)) {
+      anchors.add(issueKey);
+    }
+    for (const match of value.matchAll(/https?:\/\/[^\s)）]+/g)) {
+      anchors.add(match[0]);
+      if (anchors.size >= 8) break;
+    }
+    if (anchors.size >= 8) break;
+  }
+  return Array.from(anchors).slice(0, 8);
+}
+
 function mapComposerSurface(): ContextRecallSurface {
   return 'composer_guard';
 }
@@ -345,6 +462,13 @@ function buildComposerEntityHints(
   if (request.audience?.groupId && request.audience.groupId !== ids?.groupId) {
     hints.push({ kind: 'group', value: request.audience.groupId });
   }
+  if (request.contextType === 'web_agent_prompt') {
+    for (const issueKey of extractComposerIssueKeys(request.draftText || '')) {
+      if (issueKey !== ids?.issueKey) {
+        hints.push({ kind: 'jira_key', value: issueKey });
+      }
+    }
+  }
   return hints.length ? hints : undefined;
 }
 
@@ -386,6 +510,12 @@ function toEvidence(match: ContextRecallMatch): ComposerAssistEvidence {
     exploreLink: match.exploreLink,
     links: match.links,
     whyMatched: match.whyMatched,
+    whyRelevant: match.whyRelevant,
+    matchedAnchors: match.matchedAnchors,
+    reasonType: match.reasonType,
+    evidenceRole: match.evidenceRole,
+    displayPriority: match.displayPriority,
+    metadata: match.metadata,
     timestamp: match.timestamp,
     score: match.score,
   };
@@ -410,6 +540,7 @@ function getComposerSummary(
   request: ComposerAssistRequest,
   evidenceCount: number,
   riskLevel: ComposerAssistResponse['riskLevel'],
+  evidence: ComposerAssistEvidence[] = [],
 ): string {
   const target =
     request.contextType === 'web_agent_prompt'
@@ -418,7 +549,11 @@ function getComposerSummary(
       ? '当前 Jira issue'
       : '当前消息会话';
   const preview = riskLevel === 'high' ? '，插入前需要预览' : '';
-  return `找到 ${evidenceCount} 条与${target}相关的记忆${preview}。`;
+  const rehearsalCount = evidence.filter(isRehearsalEvidence).length;
+  const rehearsal = rehearsalCount
+    ? `，其中 ${rehearsalCount} 条是预演提醒`
+    : '';
+  return `找到 ${evidenceCount} 条与${target}相关的记忆${rehearsal}${preview}。`;
 }
 
 function getComposerRiskLevel(
@@ -426,11 +561,7 @@ function getComposerRiskLevel(
   evidence: ComposerAssistEvidence[],
 ): ComposerAssistResponse['riskLevel'] {
   const sensitiveSource = evidence.some((item) =>
-    /manual|user_core|profile|private|personal/i.test(
-      [item.sourceLabel, item.sourceTitle, item.title]
-        .filter(Boolean)
-        .join(' '),
-    ),
+    hasSensitiveSourceLabel([item.sourceLabel, item.sourceTitle, item.title]),
   );
   if (sensitiveSource) return 'high';
   if (request.contextType === 'web_agent_prompt') return 'medium';
@@ -441,13 +572,17 @@ function getMeetingRiskLevel(
   evidence: ComposerAssistEvidence[],
 ): ContextAssistResponse['riskLevel'] {
   const sensitiveSource = evidence.some((item) =>
-    /manual|user_core|profile|private|personal/i.test(
-      [item.sourceLabel, item.sourceTitle, item.title]
-        .filter(Boolean)
-        .join(' '),
-    ),
+    hasSensitiveSourceLabel([item.sourceLabel, item.sourceTitle, item.title]),
   );
   return sensitiveSource ? 'medium' : 'low';
+}
+
+function hasSensitiveSourceLabel(parts: Array<string | undefined>): boolean {
+  const text = parts
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\bPersonal AI\b/gi, '');
+  return /manual|user_core|profile|private|personal/i.test(text);
 }
 
 function getConfidence(evidence: ComposerAssistEvidence[]): number {
@@ -495,11 +630,15 @@ function renderWebAgentContextPack(
   const intent = summarizeIntent(request);
   const bullets = evidence.map(
     (item, index) =>
-      `${index + 1}. ${formatChatSnippet(item.snippet)} [M${index + 1}]`,
+      `${index + 1}. ${formatComposerEvidenceForPrompt(item)} [M${
+        index + 1
+      }]`,
   );
   const sources = evidence.map((item, index) => {
     const label = item.sourceTitle || item.title || item.sourceLabel || item.id;
-    return `[M${index + 1}] ${label}`;
+    return `[M${index + 1}] ${
+      isRehearsalEvidence(item) ? '预演提醒：' : ''
+    }${label}`;
   });
 
   return [
@@ -509,6 +648,10 @@ function renderWebAgentContextPack(
     '',
     '相关记忆：',
     ...bullets,
+    '',
+    '仍需确认：',
+    '* 如果要对外承诺状态、时间或 owner，请先核对当前 Jira、文档或原始消息。',
+    '* 没有直接证据的推断只能作为待确认线索。',
     '',
     '约束：',
     '* 只在有帮助时使用这些上下文。',
@@ -567,7 +710,10 @@ function buildComposerGenerationPrompt(
   const audience = formatComposerAudience(request);
   const memories = evidence
     .slice(0, 3)
-    .map((item, index) => `[M${index + 1}] ${formatChatSnippet(item.snippet)}`)
+    .map(
+      (item, index) =>
+        `[M${index + 1}] ${formatComposerEvidenceForPrompt(item)}`,
+    )
     .join('\n');
   const ownerConstraints = formatOwnerExpressionConstraints(personalization);
   const ownerReplyState = getOwnerReplyState(request);
@@ -1004,6 +1150,8 @@ function filterComposerEvidence(
   }
 
   return evidence.filter((item) => {
+    if (isSceneCueRehearsalEvidence(item)) return true;
+
     const evidenceTokens = tokenizeComposerRelevance(
       [item.snippet, item.title, item.sourceTitle].filter(Boolean).join(' '),
     );
@@ -1013,6 +1161,31 @@ function filterComposerEvidence(
     const sourceOverlap = countTokenOverlap(sourceTokens, evidenceTokens);
     return overlap >= MIN_COMPOSER_SOURCE_OVERLAP && sourceOverlap >= 1;
   });
+}
+
+function isRehearsalEvidence(item: ComposerAssistEvidence): boolean {
+  return item.type === 'rehearsal';
+}
+
+function isSceneCueRehearsalEvidence(item: ComposerAssistEvidence): boolean {
+  if (!isRehearsalEvidence(item)) return false;
+  if (item.displayPriority === 'hidden') return false;
+  return (
+    item.evidenceRole === 'rehearsal_cue' ||
+    item.reasonType === 'prospective_cue' ||
+    (item.score ?? 0) >= 0.55
+  );
+}
+
+function formatComposerEvidenceForPrompt(
+  item: ComposerAssistEvidence,
+): string {
+  const snippet = formatChatSnippet(item.snippet);
+  if (!isRehearsalEvidence(item)) return snippet;
+  const reasons = item.whyRelevant?.length
+    ? `（${item.whyRelevant.slice(0, 2).join('、')}）`
+    : '';
+  return `预演提醒${reasons}: ${snippet}`;
 }
 
 function buildComposerSceneText(request: ComposerAssistRequest): string {

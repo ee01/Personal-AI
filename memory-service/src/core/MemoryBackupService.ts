@@ -663,6 +663,34 @@ async function extractAndValidateBackup(
   const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8')) as MemoryBackupManifest;
   validateManifest(manifest);
 
+  const manifestPaths = new Set(
+    manifest.includes.map((include) => normalizeRelativePath(include.path)),
+  );
+  const seenZipFilePaths = new Set<string>();
+
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) {
+      continue;
+    }
+
+    const normalizedEntryPath = normalizeRelativePath(entry.entryName);
+    if (seenZipFilePaths.has(normalizedEntryPath)) {
+      throw new MemoryBackupValidationError(
+        `Zip contains duplicate file path: ${normalizedEntryPath}`,
+      );
+    }
+    seenZipFilePaths.add(normalizedEntryPath);
+
+    if (
+      normalizedEntryPath !== 'manifest.json' &&
+      !manifestPaths.has(normalizedEntryPath)
+    ) {
+      throw new MemoryBackupValidationError(
+        `Zip contains file not listed in manifest: ${normalizedEntryPath}`,
+      );
+    }
+  }
+
   const requiredPaths = new Set(['user/memory.db', 'user/config.json']);
   for (const requiredPath of requiredPaths) {
     if (!manifest.includes.find((entry) => entry.path === requiredPath)) {

@@ -108,6 +108,58 @@ export interface NotificationResult {
   reviewReason?: string;
 }
 
+export function buildBotNotificationMessage(data: NotificationData): string {
+  const messageLink = data.teamId
+    ? data.postId
+      ? `https://app.ringcentral.com/messages/${data.teamId}/${data.postId}`
+      : `https://app.ringcentral.com/messages/${data.teamId}`
+    : '';
+
+  let originalMessageSection = '';
+  if (data.originalMessageInfo) {
+    originalMessageSection = `__原消息__（来自 ${data.originalMessageInfo.sender}）：
+> ${data.originalMessageInfo.content.substring(0, 150)}${data.originalMessageInfo.content.length > 150 ? '...' : ''}
+🔗 [查看原消息](${data.originalMessageInfo.messageUrl})
+
+__后续回复__：
+`;
+  }
+
+  let replySection: string;
+  if (data.autoReplyInfo?.hasAutoReply) {
+    const scheduledMessagesUrl = buildScheduledMessagesReviewUrl(
+      data.autoReplyInfo.messageId,
+    );
+    replySection = `__自动答复__：✅ 已配置自动答复，将于 ${data.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl})
+> ${data.autoReplyInfo.replyContent?.substring(0, 100)}${(data.autoReplyInfo.replyContent?.length || 0) > 100 ? '...' : ''}`;
+  } else if (data.replyAdvice) {
+    replySection = `__回复建议__：${data.replyAdvice}`;
+  } else {
+    replySection = '';
+  }
+
+  const groupSection =
+    data.teamId && data.teamName
+      ? `__在群__：<a class='at_mention_compose' rel='{"id":${data.teamId}}'>@${data.teamName}</a>
+`
+      : data.teamName
+      ? `__来源__：${data.teamName}
+`
+      : '';
+  const messageLabel = messageLink ? '__原文__' : '__内容__';
+  const linkSection = messageLink ? `🔗 [点击查看原消息](${messageLink})` : '';
+
+  return `\`${data.summary}\`
+${originalMessageSection}__关注项__：${data.matchedRule || '消息匹配'}
+${groupSection}__发送者__：${data.sender}
+__时间__：${data.datetime}
+${messageLabel}：${data.messageContent}
+${replySection}
+${linkSection}
+*以上是 Personal AI 监测到您可能关注的消息* (AI可能幻觉 仅供参考)
+`;
+}
+
 // ==================== 工具函数 ====================
 
 /**
@@ -308,45 +360,7 @@ export class NotificationService {
    * 发送 Bot (Glip) 通知
    */
   private async sendBotNotification(data: NotificationData): Promise<void> {
-    // 构建消息链接
-    const messageLink = data.postId && data.teamId 
-      ? `https://app.ringcentral.com/messages/${data.teamId}/${data.postId}`
-      : `https://app.ringcentral.com/messages/${data.teamId}`;
-    
-    // 构建关注后续的原消息预览（如果有）
-    let originalMessageSection = '';
-    if (data.originalMessageInfo) {
-      originalMessageSection = `__原消息__（来自 ${data.originalMessageInfo.sender}）：
-> ${data.originalMessageInfo.content.substring(0, 150)}${data.originalMessageInfo.content.length > 150 ? '...' : ''}
-🔗 [查看原消息](${data.originalMessageInfo.messageUrl})
-
-__后续回复__：
-`;
-    }
-    
-    // 构建回复建议或自动答复信息
-    let replySection: string;
-    if (data.autoReplyInfo?.hasAutoReply) {
-      const scheduledMessagesUrl = buildScheduledMessagesReviewUrl(data.autoReplyInfo.messageId);
-      replySection = `__自动答复__：✅ 已配置自动答复，将于 ${data.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl})
-> ${data.autoReplyInfo.replyContent?.substring(0, 100)}${(data.autoReplyInfo.replyContent?.length || 0) > 100 ? '...' : ''}`;
-    } else if (data.replyAdvice) {
-      replySection = `__回复建议__：${data.replyAdvice}`;
-    } else {
-      replySection = '';
-    }
-    
-    const formattedMessage = `\`${data.summary}\`
-${originalMessageSection}__关注项__：${data.matchedRule || '消息匹配'}
-__在群__：<a class='at_mention_compose' rel='{"id":${data.teamId}}'>@${data.teamName}</a>
-__发送者__：${data.sender}
-__时间__：${data.datetime}
-__原文__：${data.messageContent}
-${replySection}
-
-🔗 [点击查看原消息](${messageLink})
-*以上是 Personal AI 监测到您可能关注的消息* (AI可能幻觉 仅供参考)
-`;
+    const formattedMessage = buildBotNotificationMessage(data);
 
     const shouldMention = data.mention !== false;
 

@@ -155,6 +155,7 @@ export interface DesktopAppSkillSyncResult {
     imported: number;
     pulled: number;
     pushed: number;
+    externalChanges: number;
     skipped: number;
     errors: Array<{ slug?: string; error: string }>;
   }>;

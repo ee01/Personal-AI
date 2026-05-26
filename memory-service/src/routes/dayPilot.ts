@@ -3,7 +3,10 @@ import type { FastifyInstance } from 'fastify';
 import { DayPilotService } from '../core/DayPilotService.js';
 import { TodayPilotMeetingPrepService } from '../core/TodayPilotMeetingPrepService.js';
 import type { DayPilotFeedbackAction } from '../repositories/DayPilotRepository.js';
-import type { ContextAssistMeetingEvent } from '../types/index.js';
+import type {
+  ContextAssistMeetingEvent,
+  RecallSourceType,
+} from '../types/index.js';
 
 const feedbackActions = new Set<DayPilotFeedbackAction>([
   'done',
@@ -149,6 +152,7 @@ export async function dayPilotRoutes(app: FastifyInstance): Promise<void> {
       userGoal?: string;
       autoGenerate?: boolean;
       forceGenerate?: boolean;
+      sourceTypes?: RecallSourceType[];
     };
   }>('/today-pilot/meeting-prep/resolve', async (request, reply) => {
     const { db } = request.userContext;
@@ -159,6 +163,7 @@ export async function dayPilotRoutes(app: FastifyInstance): Promise<void> {
       userGoal: request.body?.userGoal,
       autoGenerate: request.body?.autoGenerate,
       forceGenerate: request.body?.forceGenerate,
+      sourceTypes: request.body?.sourceTypes,
     });
     return reply.status(200).send(result);
   });

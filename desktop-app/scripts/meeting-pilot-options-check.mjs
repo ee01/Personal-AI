@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import * as http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,92 @@ const screenshotDir = await fs.mkdtemp(
 
 function log(message) {
   console.log(`[meeting-pilot-options] ${message}`);
+}
+
+function sendJson(response, statusCode, payload) {
+  response.writeHead(statusCode, {
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-User-Id',
+    'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'application/json',
+  });
+  response.end(JSON.stringify(payload));
+}
+
+function readRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('error', reject);
+    request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  });
+}
+
+async function startMemoryServiceStub() {
+  let runtimeConfig = {
+    decisionCenterPushTarget: 'me',
+    dreamDigestEnabled: true,
+    dreamDigestIntervalDays: 1,
+    dreamDigestPushTarget: 'me',
+    dreamDigestScheduleType: 'every_x_days',
+    outreachEnabled: false,
+    outreachIntervalMs: 60000,
+    outreachRequireApprovalForManual: true,
+    outreachRequireApprovalForReflection: true,
+    outreachResultPushTarget: 'me',
+    reflectionEnabled: true,
+    reflectionHeartbeatMinutes: 15,
+    weeklyReportEnabled: true,
+    weeklyReportMinMessages: 20,
+    weeklyReportPushTarget: 'me',
+  };
+
+  const server = http.createServer(async (request, response) => {
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204, {
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-User-Id',
+        'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
+        'Access-Control-Allow-Origin': '*',
+      });
+      response.end();
+      return;
+    }
+
+    const url = new URL(request.url || '/', 'http://127.0.0.1');
+    if (url.pathname === '/api/v1/config' && request.method === 'GET') {
+      sendJson(response, 200, runtimeConfig);
+      return;
+    }
+
+    if (url.pathname === '/api/v1/config' && request.method === 'PUT') {
+      const rawBody = await readRequestBody(request);
+      runtimeConfig = {
+        ...runtimeConfig,
+        ...(rawBody ? JSON.parse(rawBody) : {}),
+      };
+      sendJson(response, 200, runtimeConfig);
+      return;
+    }
+
+    if (
+      url.pathname === '/api/v1/outreach/directory/status' &&
+      request.method === 'GET'
+    ) {
+      sendJson(response, 200, { items: [] });
+      return;
+    }
+
+    sendJson(response, 404, { error: 'not_found' });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object', 'Memory Service stub 未启动');
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/api/v1`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
 }
 
 async function launchExtensionContext() {
@@ -41,6 +128,7 @@ async function launchExtensionContext() {
   return {
     context,
     extensionId: new URL(serviceWorker.url()).host,
+    serviceWorker,
   };
 }
 
@@ -61,10 +149,41 @@ async function saveScreenshot(page, filename) {
 }
 
 let launched;
+let memoryServiceStub;
 
 try {
+  memoryServiceStub = await startMemoryServiceStub();
   launched = await launchExtensionContext();
-  const { context, extensionId } = launched;
+  const { context, extensionId, serviceWorker } = launched;
+  await serviceWorker.evaluate(
+    async (envConfig) => {
+      await chrome.storage.local.set({ envConfig });
+    },
+    {
+      DECISION_CENTER_PUSH_TARGET: 'me',
+      DREAM_DIGEST_INTERVAL_DAYS: 1,
+      DREAM_DIGEST_SCHEDULE_TYPE: 'every_x_days',
+      DREAM_INSIGHT_PUSH_GROUP_ID: '',
+      DREAM_INSIGHT_PUSH_TARGET: 'me',
+      FOLLOW_UP_PUSH_GROUP_ID: '',
+      FOLLOW_UP_PUSH_TARGET: 'me',
+      MEMORY_SERVICE_BASE_URL: memoryServiceStub.baseUrl,
+      MEMORY_SERVICE_TIMEOUT: 3000,
+      MESSAGE_ANALYSIS_INTERVAL: 120,
+      MESSAGE_ANALYSIS_PUSH_GROUP_ID: '',
+      MESSAGE_ANALYSIS_PUSH_TARGET: 'me',
+      MESSAGE_CONTEXT_WINDOW: 125,
+      OPENCLAW_BASE_URL: '',
+      OPENCLAW_ENABLED: false,
+      OPENCLAW_TIMEOUT_MS: 600000,
+      OUTREACH_INTERVAL_MS: 60000,
+      OUTREACH_RESULT_PUSH_GROUP_ID: '',
+      OUTREACH_RESULT_PUSH_TARGET: 'me',
+      SELF_REFLECTION_HEARTBEAT_MINUTES: 15,
+      WEEKLY_REPORT_PUSH_GROUP_ID: '',
+      WEEKLY_REPORT_PUSH_TARGET: 'me',
+    },
+  );
 
   const page = await context.newPage();
   const assertNoPageErrors = buildPageErrorCollector(page);
@@ -84,12 +203,24 @@ try {
   await page.waitForSelector('#MEETING_MINUTES_API_URL', { timeout: 15000 });
 
   const headingText = await page
-    .locator('h2', { hasText: 'Meeting Pilot' })
+    .locator('h2', { hasText: '会议全貌' })
     .textContent();
-  assert.match(headingText || '', /Meeting Pilot/);
+  assert.match(headingText || '', /会议全貌/);
+  const sectionHeadings = await page.locator('h2').allTextContents();
+  const meetingSectionIndex = sectionHeadings.findIndex(
+    (text) => text.trim() === '会议全貌',
+  );
+  const webpageMemorySectionIndex = sectionHeadings.findIndex(
+    (text) => text.trim() === '网页记忆提示控制',
+  );
+  assert.ok(meetingSectionIndex >= 0, '未找到会议全貌板块');
+  assert.ok(
+    webpageMemorySectionIndex > meetingSectionIndex,
+    '网页记忆提示控制板块应位于会议全貌之后',
+  );
   await saveScreenshot(page, 'meeting-pilot-options-section.png');
 
-  log('填写 Meeting Pilot 配置并保存');
+  log('填写会议全貌配置并保存');
   const providerUrl = 'https://whisper.example.test';
   const providerKey = 'meeting-provider-key';
   const transcribeModel = 'whisper-test-model';
@@ -159,5 +290,8 @@ try {
 } finally {
   if (launched?.context) {
     await launched.context.close();
+  }
+  if (memoryServiceStub) {
+    await memoryServiceStub.close();
   }
 }

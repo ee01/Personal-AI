@@ -32,6 +32,12 @@ interface LevelCountRow {
 // ---------------------------------------------------------------------------
 
 interface StatsResponse {
+  user: {
+    id: string;
+    isolation: 'per_user_sqlite';
+    storageKey: string;
+    fallbackToDefault: boolean;
+  };
   messages: {
     total: number;
     today: number;
@@ -82,6 +88,15 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
           200: {
             type: 'object',
             properties: {
+              user: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  isolation: { type: 'string' },
+                  storageKey: { type: 'string' },
+                  fallbackToDefault: { type: 'boolean' },
+                },
+              },
               messages: {
                 type: 'object',
                 properties: {
@@ -150,6 +165,12 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { db } = request.userContext;
+      const userId = request.userId ?? 'default';
+      const rawHeaderUserId = request.headers['x-user-id'];
+      const headerMissingOrBlank =
+        rawHeaderUserId == null ||
+        (typeof rawHeaderUserId === 'string' &&
+          rawHeaderUserId.trim() === '');
       const todayStart = now() - (now() % 86400); // midnight UTC today (epoch seconds)
       const weekStart = daysAgo(7);
       const last90DaysStart = daysAgo(90);
@@ -275,6 +296,12 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
       ).count;
 
       const response: StatsResponse = {
+        user: {
+          id: userId,
+          isolation: 'per_user_sqlite',
+          storageKey: `data/users/${userId}/memory.db`,
+          fallbackToDefault: userId === 'default' && headerMissingOrBlank,
+        },
         messages: {
           total: messagesTotal,
           today: messagesToday,

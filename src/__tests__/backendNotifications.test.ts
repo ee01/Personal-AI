@@ -46,6 +46,18 @@ test('routes backend notification clicks to the right memory surface', () => {
     getBackendTargetHash('notify_user', 'proposed_action', 'action 123'),
     '/actions?actionId=action%20123',
   );
+  assert.equal(
+    getBackendTargetHash('truth_conflict', 'notification', 'notif-1', {
+      confirmRequestId: 'confirm request 123',
+    }),
+    '/decisions?confirmRequestId=confirm%20request%20123',
+  );
+  assert.equal(
+    getBackendTargetHash('truth_conflict', 'notification', 'notif-1', {
+      confirmRequestId: '   ',
+    }),
+    '/decisions',
+  );
 });
 
 test('labels notification actions by lane', () => {
@@ -83,6 +95,64 @@ test('builds concise context labels with todo due time', () => {
     buildBackendNotificationContextMessage('notice', 'normal', 1_778_408_100),
     '通知 · 普通',
   );
+  assert.equal(
+    buildBackendNotificationContextMessage('todo', 'high', undefined, {
+      reason: 'retry_after_cooldown',
+      lastStatus: 'delivered',
+    }),
+    '待处理 · 高优先级 · 再次提醒',
+  );
+  assert.equal(
+    buildBackendNotificationContextMessage('notice', 'normal', undefined, {
+      reason: 'previous_delivery_failed',
+      lastStatus: 'failed',
+    }),
+    '通知 · 普通 · 上次发送失败',
+  );
+});
+
+test('labels snoozed backend notification reminders', () => {
+  assert.equal(
+    buildBackendNotificationContextMessage(
+      'todo',
+      'high',
+      undefined,
+      undefined,
+      {
+        snooze: {
+          sourceNotificationId: 'notif-1',
+          rootNotificationId: 'notif-1',
+          snoozedAt: 1_778_400_000,
+          scheduledAt: 1_778_403_600,
+          delaySeconds: 3_600,
+          count: 1,
+        },
+      },
+    ),
+    '待处理 · 高优先级 · 稍后提醒',
+  );
+  assert.equal(
+    buildBackendNotificationContextMessage(
+      'todo',
+      'high',
+      undefined,
+      {
+        reason: 'retry_after_cooldown',
+        lastStatus: 'delivered',
+      },
+      {
+        snooze: {
+          sourceNotificationId: 'notif-2',
+          rootNotificationId: 'notif-1',
+          snoozedAt: 1_778_410_000,
+          scheduledAt: 1_778_413_600,
+          delaySeconds: 3_600,
+          count: 2,
+        },
+      },
+    ),
+    '待处理 · 高优先级 · 第2次稍后提醒 · 再次提醒',
+  );
 });
 
 test('keeps todo snooze reminders before their due time', () => {
@@ -107,10 +177,7 @@ test('keeps todo snooze reminders before their due time', () => {
     5 * 60,
   );
   assert.equal(
-    getBackendNotificationSnoozeSeconds(
-      { lane: 'todo', dueAt: now - 60 },
-      now,
-    ),
+    getBackendNotificationSnoozeSeconds({ lane: 'todo', dueAt: now - 60 }, now),
     15 * 60,
   );
 });

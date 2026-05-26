@@ -613,6 +613,58 @@ async function main() {
   assert.equal(ingests.length, 1);
   assert.equal(ingests[0].metadata.storageReview.traceStatus, 'partial');
   assert.equal(ingests[0].metadata.storageReview.toolSkippedCount, 1);
+
+  runtimeStatusItems = [];
+  storage.concernedItems = [];
+  storage.customAgents = [
+    {
+      id: 'relevanceJudge',
+      name: 'Duplicate Relevance Judge',
+      description: 'Should not overwrite the built-in relevance result',
+      priority: 75,
+      tools: ['removedWorkflowTool'],
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const duplicateAgentResult = await processNewMessage({
+    sender: 'Morgan Chen',
+    team_id: 'team-5',
+    team_name: 'Architecture',
+    content:
+      'architecture decision should be remembered even when duplicate Agent IDs exist',
+    datetime: '2026-04-15T00:40:00.000Z',
+  });
+  const duplicateAgentStep = duplicateAgentResult.agentWorkflowTrace?.find(
+    (step) =>
+      step.agentId === 'relevanceJudge' &&
+      step.agentName === 'Duplicate Relevance Judge',
+  );
+  assert.equal(duplicateAgentStep?.status, 'skipped');
+  assert.match(
+    duplicateAgentStep?.outputSummary || '',
+    /duplicate agent id skipped/,
+  );
+  assert.equal(
+    duplicateAgentResult.storageReview?.reasonSource,
+    'relevanceJudgment',
+  );
+  assert.equal(
+    duplicateAgentResult.storageReview?.summary,
+    'architecture decision should be preserved',
+  );
+  assert.equal(duplicateAgentResult.storageReview?.traceStatus, 'partial');
+  assert.equal(duplicateAgentResult.storageReview?.toolSkippedCount, 1);
+  assert.equal(ingests.length, 1);
+  assert.equal(
+    ingests[0].metadata.storageReview.reasonSource,
+    'relevanceJudgment',
+  );
+  assert.equal(
+    ingests[0].metadata.summary,
+    'architecture decision should be preserved',
+  );
   delete storage.customAgents;
 
   console.log('verify-memory-entry-agent-workflow: ok');

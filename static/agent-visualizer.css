@@ -163,6 +163,44 @@
   color: #3f4a54;
 }
 
+.agent-run-review-step-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.agent-run-review-step-links span {
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-run-review-step-links button {
+  min-width: 30px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0969da;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-run-review-step-links button:hover {
+  border-color: #0969da;
+  background: #ddf4ff;
+}
+
+.agent-run-review-step-links button:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
 .agent-approval-queue {
   margin: 0 0 16px;
   padding: 12px;
@@ -262,6 +300,83 @@
   margin: 0;
   color: #3f4a54;
   font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-policy-note {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #f6f8fa;
+}
+
+.agent-approval-policy-note span {
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-approval-policy-note p {
+  margin: 0;
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-decision-options {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.agent-approval-decision-options > span,
+.agent-approval-resume-note {
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-approval-decision-options ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-approval-decision-options li {
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid #eaeef2;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.agent-approval-decision-options strong {
+  color: #24292f;
+  font-size: 12px;
+}
+
+.agent-approval-decision-options p {
+  margin: 0;
+  color: #3f4a54;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-approval-resume-note {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  background: #fff8c5;
+  color: #7d4e00;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }

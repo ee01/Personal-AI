@@ -20,7 +20,10 @@ import {
   getManualItemsFromMatchedRules,
   resolveMatchedWatchRules,
 } from '../watchRules';
-import { buildAutoReplyTopic } from './autoReplyPresentation';
+import {
+  buildAutoReplyTopic,
+  normalizeAutoReplyDelayHours,
+} from './autoReplyPresentation';
 
 // 自动答复配置接口（与 topic-modal.tsx 中定义保持一致）
 export interface AutoReplyConfig {
@@ -288,7 +291,8 @@ async function createAutoReplyScheduledMessage(params: {
         break;
       }
       case 'delayed': {
-        const delayMs = (config.delayHours || 1) * 60 * 60 * 1000;
+        const delayMs =
+          normalizeAutoReplyDelayHours(config.delayHours) * 60 * 60 * 1000;
         scheduleTime = new Date(now.getTime() + delayMs);
         status = 'Active';
         break;

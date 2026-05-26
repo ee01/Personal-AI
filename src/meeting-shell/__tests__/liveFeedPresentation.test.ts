@@ -83,6 +83,14 @@ test('buildMeetingPilotLiveFeedItems omits promoted and hidden memories', () => 
         createdAt: 1_779_325_300_000,
         resolved: true,
       },
+      {
+        id: 'alert-context-only',
+        level: 'P2',
+        title: '当前主讲人切换',
+        body: 'Alex 正在主讲，当前对话上下文已刷新。',
+        source: 'summary',
+        createdAt: 1_779_325_400_000,
+      },
     ],
   });
 

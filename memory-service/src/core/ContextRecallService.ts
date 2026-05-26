@@ -27,6 +27,11 @@ import type {
   RecallQuery,
 } from '../types/index.js';
 import { RecallEngine } from './RecallEngine.js';
+import {
+  RecallContextExpansionService,
+  type RecallContextExpansion,
+} from './RecallContextExpansionService.js';
+import { RehearsalActivationService } from './RehearsalActivationService.js';
 import { buildExploreLink } from '../utils/exploreLink.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
 
@@ -230,9 +235,13 @@ type SuppressionReason =
 
 export class ContextRecallService {
   private engine: RecallEngine;
+  private contextExpansion: RecallContextExpansionService;
+  private rehearsalActivation: RehearsalActivationService;
 
   constructor(private db: Database.Database) {
     this.engine = new RecallEngine(db);
+    this.contextExpansion = new RecallContextExpansionService(db);
+    this.rehearsalActivation = new RehearsalActivationService(db);
   }
 
   async recall(request: ContextRecallRequest): Promise<ContextRecallResponse> {
@@ -242,18 +251,54 @@ export class ContextRecallService {
       HARD_LIMIT,
     );
 
-    const normalized = normalizeContextQuery(request);
+    const expansion = this.contextExpansion.expand({
+      query: [request.title, request.primaryText].filter(Boolean).join(' '),
+      surface: request.surface,
+      contextType: request.contextType,
+      title: request.title,
+      sourceContext: request.sourceContext,
+      currentContext: request.currentContext,
+      secondaryTexts: request.secondaryTexts,
+      entityHints: request.entityHints,
+      scope: request.scope,
+      sourceTypes: request.sourceTypes,
+    });
+    const expandedRequest = applyContextExpansion(request, expansion);
+    const normalized = normalizeContextQuery(expandedRequest);
     const debug: ContextRecallDebug | undefined = request.debug
       ? {
           normalizedQuery: normalized.query,
           channelsHit: [] as string[],
+          contextExpansion: {
+            expandedQuery: expansion.expandedQuery,
+            addedTerms: expansion.addedTerms,
+            resolvedProject: expansion.resolvedProject,
+            resolvedRole: expansion.resolvedRole,
+            ambiguity: expansion.ambiguity,
+            sourceAnchors: expansion.sourceAnchors,
+          },
         }
       : undefined;
 
-    if (!normalized.usable) {
+    if (expansion.ambiguity?.state === 'ambiguous') {
       return {
         matches: [],
         topMatch: null,
+        queryTimeMs: Date.now() - startedAt,
+        debug: debug
+          ? { ...debug, rejectedReason: 'ambiguous_context' }
+          : undefined,
+      };
+    }
+
+    if (!normalized.usable) {
+      const rehearsalMatches = this.rehearsalActivation.getMatches(
+        expandedRequest,
+        limit,
+      );
+      return {
+        matches: rehearsalMatches,
+        topMatch: rehearsalMatches[0] ?? null,
         queryTimeMs: Date.now() - startedAt,
         debug: debug
           ? { ...debug, rejectedReason: normalized.rejectedReason }
@@ -265,10 +310,10 @@ export class ContextRecallService {
     // for purely associative cases.
     const recallQuery: RecallQuery = {
       query: normalized.query,
-      scope: (request.scope ?? 'all') as ContextRecallScope,
+      scope: (expandedRequest.scope ?? 'all') as ContextRecallScope,
       topK: limit * CONTEXT_OVER_FETCH_FACTOR,
       channels: ['vector', 'fts'],
-      sourceTypes: request.sourceTypes,
+      sourceTypes: expandedRequest.sourceTypes,
       includeMetadata: true,
       presentationHint: 'compact',
       previewMaxLength: PREVIEW_MAX,
@@ -280,17 +325,17 @@ export class ContextRecallService {
     });
     if (debug) debug.channelsHit = result.channels;
 
-    const sceneAnchors = extractSceneAnchors(request, normalized.query);
+    const sceneAnchors = extractSceneAnchors(expandedRequest, normalized.query);
     let lowInformationMatches = 0;
     const filteredItems = result.items.filter((item) => {
-      if (shouldExcludeBySourceContext(item, request)) return false;
+      if (shouldExcludeBySourceContext(item, expandedRequest)) return false;
       return true;
     });
     const rankedMatches = rankContextMatches(
       mergeContextMatchClusters(
         filteredItems
           .map((item) => {
-            const match = toContextMatch(item, request);
+            const match = toContextMatch(item, expandedRequest);
             if (!match) return null;
             if (!isDisplayableContextMatch(match)) {
               lowInformationMatches += 1;
@@ -310,7 +355,11 @@ export class ContextRecallService {
           .filter((reason): reason is string => Boolean(reason)),
       ),
     );
-    const matches = rankedMatches
+    const rehearsalMatches = this.rehearsalActivation.getMatches(
+      expandedRequest,
+      limit,
+    );
+    const matches = [...rehearsalMatches, ...rankedMatches]
       .filter((match) => {
         if (!isDisplayableContextMatch(match)) {
           lowInformationMatches += 1;
@@ -339,6 +388,47 @@ export class ContextRecallService {
       debug,
     };
   }
+}
+
+function applyContextExpansion(
+  request: ContextRecallRequest,
+  expansion: RecallContextExpansion,
+): ContextRecallRequest {
+  const addedTerms = expansion.addedTerms.filter(Boolean);
+  const expansionText = addedTerms.length
+    ? `Resolved context: ${addedTerms.join(' ')}`
+    : '';
+  const current = request.currentContext;
+  const sourceContext = {
+    ...(request.sourceContext ?? {}),
+    title: request.sourceContext?.title ?? current?.title,
+    url: request.sourceContext?.url ?? current?.url,
+    participants: request.sourceContext?.participants ?? current?.participants,
+    groupId: request.sourceContext?.groupId ?? current?.groupId,
+    conversationId:
+      request.sourceContext?.conversationId ?? current?.conversationId,
+    meetingId: request.sourceContext?.meetingId ?? current?.meetingId,
+    issueKey: request.sourceContext?.issueKey ?? current?.issueKey,
+  };
+  const secondaryTexts = [
+    ...(request.secondaryTexts ?? []),
+    ...(current?.visibleMessages?.slice(-8).map((message) =>
+      [message.sender, message.text].filter(Boolean).join(': '),
+    ) ?? []),
+    ...(current?.sourceAnchorHints ?? []),
+    expansionText,
+  ].filter((text): text is string => Boolean(text && text.trim()));
+  const entityHints = [
+    ...(request.entityHints ?? []),
+    ...expansion.entityHints,
+  ];
+
+  return {
+    ...request,
+    sourceContext,
+    secondaryTexts,
+    entityHints: entityHints.length ? entityHints : undefined,
+  };
 }
 
 interface NormalizedContextQuery {
@@ -762,19 +852,17 @@ function shouldExcludeBySourceContext(
   const sourceIds = getItemSourceIds(item);
   const blockedMeetingIds = new Set([
     req.sourceContext?.meetingId,
-    req.sourceContext?.groupId,
     ...(req.exclude?.meetingIds ?? []),
-    ...(req.exclude?.groupIds ?? []),
   ].filter(Boolean));
+  const blockedGroupIds = new Set([...(req.exclude?.groupIds ?? [])].filter(Boolean));
   if (
     sourceIds.meetingIds.some((id) => blockedMeetingIds.has(id)) ||
-    sourceIds.groupIds.some((id) => blockedMeetingIds.has(id))
+    sourceIds.groupIds.some((id) => blockedGroupIds.has(id))
   ) {
     return true;
   }
 
   const blockedConversationIds = new Set([
-    req.sourceContext?.conversationId,
     ...(req.exclude?.conversationIds ?? []),
   ].filter(Boolean));
   if (
@@ -1396,10 +1484,21 @@ function getDisplayPriority(item: RecallItem): ContextRecallMatch['displayPriori
   if (hasSpecificContextSignal(text) || item.metadata?.recallFeedback === 'positive') {
     return 'p1';
   }
-  if (item.score < 0.35) {
+  if (item.score < 0.35 && !isLowScoreKeywordContextCandidate(item)) {
     return 'hidden';
   }
   return 'p2';
+}
+
+function isLowScoreKeywordContextCandidate(item: RecallItem): boolean {
+  const channels = (item.metadata?.channels as string[] | undefined) || [];
+  if (!channels.includes('fts')) return false;
+  const text = `${item.displayTitle ?? ''} ${item.displayText ?? ''} ${item.content ?? ''}`;
+  return (
+    hasSpecificContextSignal(text) ||
+    countMeaningfulTokens(text) >= 3 ||
+    countCjkSignalChars(text) >= 8
+  );
 }
 
 function isLowQualityMeetingBoilerplate(item: RecallItem): boolean {

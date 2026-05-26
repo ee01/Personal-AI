@@ -593,6 +593,12 @@
                       <div class="binding-meta binding-meta-row">
                         <span>{{ syncTag(binding.platform) }}</span>
                         <span v-if="binding.installedVersion">已安装 {{ binding.installedVersion }}</span>
+                        <span v-if="localSkillSourceSummary(binding)">
+                          来源 {{ localSkillSourceSummary(binding) }}
+                        </span>
+                        <span v-if="localSkillPackageSummary(binding)">
+                          {{ localSkillPackageSummary(binding) }}
+                        </span>
                         <span v-if="binding.lastError">{{ binding.lastError }}</span>
                       </div>
                     </article>
@@ -1009,6 +1015,7 @@ function suggestionReviewFacts(skill: PersonalSkillListItem) {
     isExternalChangeSuggestion(skill)
       ? `覆盖 ${externalChangeOriginalSlug(skill)}`
       : suggestionSourceLabel(skill),
+    ...localSkillSourceFacts(skill),
     skill.currentVersion ? `版本 ${skill.currentVersion}` : '',
     `风险 ${skill.risk}`,
   ];
@@ -1020,6 +1027,7 @@ function reviewAuditFacts(skill: PersonalSkillDetail) {
     isExternalChangeSuggestion(skill)
       ? `${externalChangePlatformLabel(skill)} -> ${externalChangeOriginalSlug(skill)}`
       : `来源 ${suggestionSourceLabel(skill)}`,
+    ...localSkillSourceFacts(skill),
     skill.currentVersion ? `版本 ${skill.currentVersion}` : '',
     `风险 ${skill.risk}`,
     `${skill.evidence.length} 条证据`,
@@ -1132,6 +1140,8 @@ function suggestionSourceLabel(suggestion: PersonalSkillListItem) {
   if (isExternalChangeSuggestion(suggestion)) {
     return `${externalChangePlatformLabel(suggestion)} 变更`;
   }
+  const localBinding = localSkillSourceBinding(suggestion);
+  if (localBinding) return platformLabel(localBinding.platform);
   if (suggestion.suggestedFrom === 'openclaw' || suggestion.sources?.includes('openclaw')) {
     return 'OpenClaw';
   }
@@ -1148,6 +1158,9 @@ function suggestionOriginText(suggestion: PersonalSkillListItem) {
   if (isExternalChangeSuggestion(suggestion)) {
     return `将覆盖 ${externalChangeOriginalSlug(suggestion)}，需先审核`;
   }
+  const localBinding = localSkillSourceBinding(suggestion);
+  const localSource = localBinding ? localSkillSourceSummary(localBinding) : '';
+  if (localSource) return `本机目录 ${localSource}`;
   if (suggestion.suggestedFrom === 'openclaw' || suggestion.sources?.includes('openclaw')) {
     return 'OpenClaw installed skill';
   }
@@ -1190,6 +1203,66 @@ function bindingStateLabel(state: string) {
 
 function isLocalDesktopPlatform(platform: string) {
   return localDesktopPlatforms.includes(platform);
+}
+
+function bindingMetadataString(binding: SkillPlatformBinding, key: string) {
+  const value = binding.metadata?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function bindingMetadataNumber(binding: SkillPlatformBinding, key: string) {
+  const value = binding.metadata?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function localSkillSourceBinding(skill?: Pick<PersonalSkillListItem, 'bindings'> | null) {
+  return (skill?.bindings || []).find(
+    (binding) =>
+      isLocalDesktopPlatform(binding.platform) &&
+      bindingMetadataString(binding, 'source') === 'desktop_app_fs',
+  );
+}
+
+function compactLocalPath(value: string) {
+  const homeCompact = value.replace(/^\/Users\/[^/]+/, '~');
+  if (homeCompact.length <= 58) return homeCompact;
+  return `${homeCompact.slice(0, 26)}...${homeCompact.slice(-26)}`;
+}
+
+function formatByteSize(bytes: number) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+  return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
+}
+
+function localSkillSourceSummary(binding: SkillPlatformBinding) {
+  if (!isLocalDesktopPlatform(binding.platform)) return '';
+  const sourcePath =
+    bindingMetadataString(binding, 'sourceDirectory') ||
+    bindingMetadataString(binding, 'skillMdPath') ||
+    bindingMetadataString(binding, 'sourceRoot');
+  return sourcePath ? compactLocalPath(sourcePath) : '';
+}
+
+function localSkillPackageSummary(binding: SkillPlatformBinding) {
+  if (!isLocalDesktopPlatform(binding.platform)) return '';
+  const fileCount = bindingMetadataNumber(binding, 'fileCount');
+  const totalByteSize = bindingMetadataNumber(binding, 'totalByteSize');
+  const parts = [
+    fileCount > 0 ? `${fileCount} 个资源文件` : '',
+    totalByteSize > 0 ? formatByteSize(totalByteSize) : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function localSkillSourceFacts(skill?: Pick<PersonalSkillListItem, 'bindings'> | null) {
+  const binding = localSkillSourceBinding(skill);
+  if (!binding) return [];
+  return [
+    localSkillSourceSummary(binding) ? `目录 ${localSkillSourceSummary(binding)}` : '',
+    localSkillPackageSummary(binding),
+  ].filter(Boolean);
 }
 
 function isManualOnlyPlatform(platform: string) {
@@ -1434,9 +1507,13 @@ async function runDesktopSkillSync(platform: string) {
         `${platformLabel(platform)} ${item.status}`,
         `扫描 ${item.scanned} 条`,
         `导入 ${item.imported} 条`,
+        `待审核变更 ${item.externalChanges || 0} 条`,
         `回拉 ${item.pulled} 条`,
         `推送 ${item.pushed} 条`,
         item.errors.length ? `失败 ${item.errors.length} 条` : '',
+        item.externalChanges
+          ? '请到顶部 Inbox 审核本机目录变更。'
+          : '',
       ].filter(Boolean).join(' · ');
       await loadData(selectedId.value);
     }

@@ -252,6 +252,28 @@
   background: #fff8c5;
 }
 
+.agent-workflow-regression-header {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.agent-workflow-regression-header small {
+  display: block;
+  margin-top: 2px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-workflow-regression-header button {
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
 .agent-workflow-regression-metrics {
   display: flex;
   flex-wrap: wrap;
@@ -386,9 +408,36 @@
   padding: 10px;
 }
 
+.agent-workflow-baseline.no-baseline {
+  border-color: #80ccff;
+  background: #ddf4ff;
+}
+
 .agent-workflow-baseline.changed {
   border-color: #eac54f;
   background: #fff8c5;
+}
+
+.agent-workflow-baseline-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.agent-workflow-baseline-header small {
+  display: block;
+  margin-top: 2px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-workflow-baseline-header button {
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 5px 10px;
 }
 
 .agent-workflow-baseline-list {

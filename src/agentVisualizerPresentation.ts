@@ -17,6 +17,13 @@ export interface AgentRunReviewItem {
   title: string;
   detail: string;
   action: string;
+  stepIndexes?: number[];
+}
+
+export interface AgentApprovalDecisionOption {
+  type: 'approve' | 'reject' | 'edit';
+  label: string;
+  description: string;
 }
 
 export interface AgentPendingApprovalAction {
@@ -30,6 +37,9 @@ export interface AgentPendingApprovalAction {
   retryConfigPatch: string;
   message: string;
   reviewHint: string;
+  safetyNote?: string;
+  decisionOptions: AgentApprovalDecisionOption[];
+  resumeInstruction: string;
 }
 
 export interface AgentFlowStep {
@@ -205,6 +215,27 @@ const buildApprovalRetryConfigPatch = (approvalKey: string) =>
     approvedToolActionKeys: approvalKey ? [approvalKey] : [],
   });
 
+const APPROVAL_DECISION_OPTIONS: AgentApprovalDecisionOption[] = [
+  {
+    type: 'approve',
+    label: '批准',
+    description: '参数无误时复制重跑配置，带 approvalKey 重新运行。',
+  },
+  {
+    type: 'reject',
+    label: '拒绝',
+    description: '不执行该动作，把拒绝原因反馈给 Agent。',
+  },
+  {
+    type: 'edit',
+    label: '修改',
+    description: '先改参数再重新生成批准 key，不复用旧 key。',
+  },
+];
+
+const APPROVAL_RESUME_INSTRUCTION =
+  '批准后复制重跑配置重新运行；拒绝或修改参数时不要复用旧 key。';
+
 export const formatApprovalEffect = (effect?: string) => {
   const labels: Record<string, string> = {
     read: '只读',
@@ -277,6 +308,10 @@ export function buildPendingApprovalActions(
             approvalValue.effect,
             approvalValue.riskLevel,
           );
+          const safetyNote =
+            typeof approvalValue.safetyNote === 'string'
+              ? approvalValue.safetyNote.trim()
+              : '';
           const retryConfigPatch = buildApprovalRetryConfigPatch(approvalKey);
           const reviewPayload = stringifyApprovalReviewPayload({
             type: 'agent_tool_approval_review',
@@ -289,16 +324,17 @@ export function buildPendingApprovalActions(
             paramsPreview,
             message,
             reviewHint,
+            safetyNote: safetyNote || undefined,
             allowedDecisions: [
               'approve_with_approvalKey',
               'reject',
               'edit_params_then_regenerate_key',
             ],
+            decisionOptions: APPROVAL_DECISION_OPTIONS,
             retryConfigPatch: approvalKey
               ? { approvedToolActionKeys: [approvalKey] }
               : { approvedToolActionKeys: [] },
-            resumeInstruction:
-              '批准时把 approvalKey 放入 approvedToolActionKeys 后重新运行；拒绝或修改参数时不要复用旧 key。',
+            resumeInstruction: APPROVAL_RESUME_INSTRUCTION,
           });
 
           return {
@@ -312,6 +348,9 @@ export function buildPendingApprovalActions(
             retryConfigPatch,
             message,
             reviewHint,
+            safetyNote: safetyNote || undefined,
+            decisionOptions: APPROVAL_DECISION_OPTIONS,
+            resumeInstruction: APPROVAL_RESUME_INSTRUCTION,
           };
         }),
     );
@@ -454,12 +493,36 @@ const countSteps = (
   predicate: (step: ThoughtStep) => boolean,
 ) => thoughtProcess.filter(predicate).length;
 
-export function buildAgentRunReviewItems(
+const collectStepIndexes = (
   thoughtProcess: ThoughtStep[],
-  options: { isProcessing?: boolean } = {},
-): AgentRunReviewItem[] {
-  if (thoughtProcess.length === 0) return [];
+  predicate: (step: ThoughtStep) => boolean,
+) =>
+  thoughtProcess.flatMap((step, index) =>
+    predicate(step) ? [index] : [],
+  );
 
+const uniqueStepIndexes = (...stepIndexGroups: number[][]) =>
+  Array.from(new Set(stepIndexGroups.flat())).sort((a, b) => a - b);
+
+const formatIssueCount = (label: string, count: number) =>
+  count > 0 ? `${label} ${count} 个步骤` : '';
+
+const buildOpenIssueSummary = (counts: {
+  toolErrorCount: number;
+  approvalRequiredCount: number;
+  blockedCount: number;
+  emptyEvidenceCount: number;
+}) =>
+  [
+    formatIssueCount('工具失败', counts.toolErrorCount),
+    formatIssueCount('待确认', counts.approvalRequiredCount),
+    formatIssueCount('被阻断', counts.blockedCount),
+    formatIssueCount('证据不足', counts.emptyEvidenceCount),
+  ]
+    .filter(Boolean)
+    .join('、');
+
+const countOpenToolIssues = (thoughtProcess: ThoughtStep[]) => {
   const toolErrorCount = countSteps(thoughtProcess, stepHasToolError);
   const approvalRequiredCount = countSteps(
     thoughtProcess,
@@ -470,6 +533,60 @@ export function buildAgentRunReviewItems(
     (step) => stepHasToolBlocked(step) && !stepHasToolApprovalRequired(step),
   );
   const emptyEvidenceCount = countSteps(thoughtProcess, stepHasEmptyToolEvidence);
+
+  return {
+    toolErrorCount,
+    approvalRequiredCount,
+    blockedCount,
+    emptyEvidenceCount,
+    summary: buildOpenIssueSummary({
+      toolErrorCount,
+      approvalRequiredCount,
+      blockedCount,
+      emptyEvidenceCount,
+    }),
+  };
+};
+
+export function buildAgentRunReviewItems(
+  thoughtProcess: ThoughtStep[],
+  options: { isProcessing?: boolean } = {},
+): AgentRunReviewItem[] {
+  if (thoughtProcess.length === 0) return [];
+
+  const toolErrorStepIndexes = collectStepIndexes(
+    thoughtProcess,
+    stepHasToolError,
+  );
+  const approvalRequiredStepIndexes = collectStepIndexes(
+    thoughtProcess,
+    stepHasToolApprovalRequired,
+  );
+  const blockedStepIndexes = collectStepIndexes(
+    thoughtProcess,
+    (step) => stepHasToolBlocked(step) && !stepHasToolApprovalRequired(step),
+  );
+  const emptyEvidenceStepIndexes = collectStepIndexes(
+    thoughtProcess,
+    stepHasEmptyToolEvidence,
+  );
+  const skippedStepIndexes = collectStepIndexes(thoughtProcess, stepWasSkipped);
+  const budgetStepIndexes = collectStepIndexes(
+    thoughtProcess,
+    (step) => step.action === 'max_actions_reached',
+  );
+  const stoppedStepIndexes = collectStepIndexes(
+    thoughtProcess,
+    (step) => step.action === 'stopped',
+  );
+
+  const {
+    toolErrorCount,
+    approvalRequiredCount,
+    blockedCount,
+    emptyEvidenceCount,
+    summary: openIssueSummary,
+  } = countOpenToolIssues(thoughtProcess);
   const skippedCount = countSteps(thoughtProcess, stepWasSkipped);
   const budgetCount = countSteps(
     thoughtProcess,
@@ -490,6 +607,7 @@ export function buildAgentRunReviewItems(
       title: '工具调用失败',
       detail: `${toolErrorCount} 个工具步骤失败，最终判断可能缺少证据。`,
       action: '检查工具配置、网络/API 权限或参数后重新运行。',
+      stepIndexes: toolErrorStepIndexes,
     });
   }
 
@@ -499,6 +617,7 @@ export function buildAgentRunReviewItems(
       title: '需要人工确认',
       detail: `${approvalRequiredCount} 个工具步骤涉及高风险或外部副作用动作，已暂停执行。`,
       action: '先让用户确认具体工具和参数，再带对应批准 key 重新运行。',
+      stepIndexes: approvalRequiredStepIndexes,
     });
   }
 
@@ -508,6 +627,7 @@ export function buildAgentRunReviewItems(
       title: '工具被阻断',
       detail: `${blockedCount} 个工具步骤未通过执行前校验。`,
       action: '改用工具目录里的 ID，或补齐必填参数后重试。',
+      stepIndexes: blockedStepIndexes,
     });
   }
 
@@ -517,6 +637,7 @@ export function buildAgentRunReviewItems(
       title: '工具证据不足',
       detail: `${emptyEvidenceCount} 个工具步骤完成但没有返回可用证据。`,
       action: '调整查询参数、补充上下文，或在结论中标记证据不足。',
+      stepIndexes: emptyEvidenceStepIndexes,
     });
   }
 
@@ -524,8 +645,19 @@ export function buildAgentRunReviewItems(
     items.push({
       severity: 'warning',
       title: '行动次数用完',
-      detail: 'Agent 在达到 maxActions 后使用已有信息结束。可能仍有未验证的问题。',
-      action: '提高 maxActions，或缩小本轮问题范围后重新分析。',
+      detail: openIssueSummary
+        ? `Agent 在达到 maxActions 后使用已有信息结束；预算用完时仍有${openIssueSummary}需要处理。`
+        : 'Agent 在达到 maxActions 后使用已有信息结束。可能仍有未验证的问题。',
+      action: openIssueSummary
+        ? '先处理失败、待确认、阻断或缺证问题，再提高 maxActions 或缩小问题范围重新分析。'
+        : '提高 maxActions，或缩小本轮问题范围后重新分析。',
+      stepIndexes: uniqueStepIndexes(
+        toolErrorStepIndexes,
+        approvalRequiredStepIndexes,
+        blockedStepIndexes,
+        emptyEvidenceStepIndexes,
+        budgetStepIndexes,
+      ),
     });
   }
 
@@ -553,6 +685,7 @@ export function buildAgentRunReviewItems(
       title: '用户已停止',
       detail: '本轮分析保留了停止前已经收集的信息。',
       action: '如需完整结论，请重新运行分析。',
+      stepIndexes: stoppedStepIndexes,
     });
   }
 
@@ -562,6 +695,7 @@ export function buildAgentRunReviewItems(
       title: '重复调用已跳过',
       detail: `${skippedCount} 个工具步骤复用了本轮已有结果，避免重复请求。`,
       action: '通常无需处理；如证据不足，可换用更具体参数再运行。',
+      stepIndexes: skippedStepIndexes,
     });
   }
 
@@ -646,6 +780,10 @@ export function buildAgentFlowSteps(
   const terminalStep = thoughtProcess.find((step) =>
     ['finish', 'max_actions_reached', 'stopped'].includes(step.action),
   );
+  const budgetOpenIssueSummary =
+    terminalStep?.action === 'max_actions_reached'
+      ? countOpenToolIssues(thoughtProcess).summary
+      : '';
 
   const flowSteps: AgentFlowStep[] = [
     {
@@ -686,10 +824,14 @@ export function buildAgentFlowSteps(
         : terminalStep.action === 'stopped'
           ? '已停止'
           : '最终决策';
+    const terminalDetail = getStepVisibleSummary(terminalStep);
     flowSteps.push({
       type: 'decision',
       name: terminalName,
-      detail: getStepVisibleSummary(terminalStep),
+      detail:
+        budgetOpenIssueSummary && terminalStep.action === 'max_actions_reached'
+          ? `${terminalDetail} 预算用完时仍有${budgetOpenIssueSummary}需要处理。`
+          : terminalDetail,
       time: formatTime(terminalStep.timestamp),
     });
   }

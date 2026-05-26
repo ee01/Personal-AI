@@ -70,6 +70,23 @@ const person = {
   reviewPendingCount: 1,
 };
 
+const secondPerson = {
+  ...person,
+  id: 'person-bob-radar',
+  name: 'Bob Radar',
+  aliases: ['Bob'],
+  description: 'Research reviewer for Relationship Radar validation',
+  score: 0.64,
+  radarState: 'active',
+  interactionCount: 9,
+  activeDays: 4,
+  mentionCount: 9,
+  reason: '近期活跃关系，9 次交互，4 个活跃日',
+  contextBullets: ['9 次可见交互，覆盖 4 个活跃日'],
+  evidenceCount: 1,
+  reviewPendingCount: 0,
+};
+
 const evidenceRef = {
   sourceKind: 'message',
   sourceId: 'message-alice-follow-up',
@@ -86,6 +103,15 @@ const sensitiveEvidenceRef = {
   snippet: 'Alice private email is alice.private@example.com.',
   timestamp: nowSeconds - 1200,
   exploreLink: '#/timeline?type=message&focus=message-alice-private-email',
+};
+
+const unsafeEvidenceRef = {
+  sourceKind: 'relationship',
+  sourceId: 'relationship-unsafe-link',
+  title: 'Unsafe imported source',
+  snippet: 'This evidence carries an unsafe source URL from imported data.',
+  timestamp: nowSeconds - 900,
+  sourceUrl: 'javascript:alert("relationship-radar")',
 };
 
 const contextCard = {
@@ -142,6 +168,31 @@ const contextCard = {
   generatedAt: nowSeconds,
 };
 
+const secondContextCard = {
+  ...contextCard,
+  person: secondPerson,
+  contextMd: '# Bob Radar 关系上下文\n- Research reviewer needs agenda confirmation',
+  bullets: ['9 次可见交互，覆盖 4 个活跃日'],
+  knownFacts: [],
+  openLoops: [],
+  evidenceRefs: [],
+  retrievalHints: {
+    entityIds: [secondPerson.id],
+    names: ['Bob Radar', 'Bob'],
+    boostTerms: ['Bob Radar', 'Relationship Radar'],
+    sourceTypes: ['glip'],
+  },
+  privacySummary: {
+    sensitiveIncluded: false,
+    redactedAliases: 0,
+    redactedFacts: 0,
+    redactedRelationshipHints: 0,
+    redactedEvidenceRefs: 0,
+    redactedOpenLoops: 0,
+    redactedRetrievalHints: 0,
+  },
+};
+
 const sensitiveContextCard = {
   ...contextCard,
   person,
@@ -196,7 +247,7 @@ let reviewItems = [
       '达到关系雷达阈值，建议确认这个上下文是否应该进入人物画像并反哺检索。',
     confidence: 0.86,
     priority: 'high',
-    evidenceRefs: [evidenceRef],
+    evidenceRefs: [evidenceRef, unsafeEvidenceRef],
     status: 'pending',
     createdAt: nowSeconds - 300,
     updatedAt: nowSeconds - 300,
@@ -253,8 +304,9 @@ try {
               reviewPendingCount: reviewItems.filter((item) => item.status === 'pending')
                 .length,
             },
+            secondPerson,
           ],
-          totalCandidates: 1,
+          totalCandidates: 2,
           threshold: {
             minimumInteractionCount: 6,
             minimumActiveDays: 3,
@@ -273,7 +325,13 @@ try {
       const payload = request.postDataJSON();
       contextCardRequests.push(payload);
       await route.fulfill(
-        jsonResponse(payload.includeSensitive ? sensitiveContextCard : contextCard),
+        jsonResponse(
+          payload.personId === secondPerson.id
+            ? secondContextCard
+            : payload.includeSensitive
+              ? sensitiveContextCard
+              : contextCard,
+        ),
       );
       return;
     }
@@ -324,7 +382,15 @@ try {
       await route.fulfill(
         jsonResponse({
           generatedAt: nowSeconds,
-          nodes: [{ id: person.id, label: person.name, type: 'Person', radarState: 'core' }],
+          nodes: [
+            { id: person.id, label: person.name, type: 'Person', radarState: 'core' },
+            {
+              id: secondPerson.id,
+              label: secondPerson.name,
+              type: 'Person',
+              radarState: 'active',
+            },
+          ],
           edges: [],
           dynamics: [],
         }),
@@ -340,13 +406,15 @@ try {
           generatedAt: nowSeconds,
           title: payload.title || 'Meeting',
           coverage: {
-            totalAttendees: 2,
+            totalAttendees: 3,
+            processedAttendees: 2,
             matchedAttendees: 1,
             unmatchedAttendees: 1,
+            omittedAttendees: 1,
             attendeesWithEvidence: 1,
             attendeesWithOpenLoops: 1,
             evidenceRefs: 1,
-            coverageNote: '已匹配 1/2 位参会人；1 位需要会中确认角色或补充人物别名。',
+            coverageNote: '已分析前 2/3 位参会人，匹配 1 位；另有 1 位未展开，需要手动补充或分批生成。',
           },
           attendees: [
             {
@@ -400,6 +468,13 @@ try {
               coverageState: 'missing',
             },
           ],
+          omittedAttendees: [
+            {
+              displayName: 'Late Observer',
+              email: 'late@example.com',
+              reason: '超过前 16 位分析上限，暂未展开人物上下文。',
+            },
+          ],
         }),
       );
       return;
@@ -419,6 +494,13 @@ try {
   const pageErrors = [];
   page.on('pageerror', (error) => {
     pageErrors.push(error instanceof Error ? error.message : String(error));
+  });
+  await page.addInitScript(() => {
+    window.__relationshipRadarOpenCalls = [];
+    window.open = (url, target, features) => {
+      window.__relationshipRadarOpenCalls.push({ url, target, features });
+      return null;
+    };
   });
 
   await page.goto(`chrome-extension://${extensionId}/memory-exploring.html#/entity/Person`, {
@@ -446,6 +528,15 @@ try {
   await page.getByRole('button', { name: '消息证据' }).waitFor({ timeout: 15000 });
   await page.getByLabel('建议写入内容').fill('Alice Radar owns the review queue polish.');
   await page.getByLabel('复核备注').fill('Evidence checked before snoozing.');
+  await page.locator('.review-card').getByRole('button', { name: '关系边' }).click();
+  await page
+    .getByText('证据链接不可打开或已被安全策略拦截')
+    .waitFor({ timeout: 15000 });
+  assert.deepEqual(
+    await page.evaluate(() => window.__relationshipRadarOpenCalls),
+    [],
+    'unsafe evidence source URLs should not open a new window',
+  );
   await page.locator('.review-card').getByRole('button', { name: '稍后 7 天' }).click();
   await page
     .getByText('当前筛选下没有关系事实需要处理。')
@@ -455,13 +546,32 @@ try {
     .getByLabel('关系雷达详情')
     .getByRole('button', { name: '会议简报' })
     .click();
+  assert.equal(
+    await page.getByLabel('参会人（每行一个）').inputValue(),
+    'Alice Radar',
+    'meeting brief attendees should seed from the selected person',
+  );
+  await page.locator('.person-card').filter({ hasText: 'Bob Radar' }).click();
+  await page
+    .getByLabel('关系雷达详情')
+    .getByRole('button', { name: '会议简报' })
+    .click();
+  assert.equal(
+    await page.getByLabel('参会人（每行一个）').inputValue(),
+    'Bob Radar',
+    'auto-seeded meeting attendees should follow the newly selected person',
+  );
   await page.getByLabel('会议标题').fill('Relationship Radar review');
   await page
     .getByLabel('参会人（每行一个）')
-    .fill('Alice Radar <alice@example.com>\nExternal Reviewer <external@example.com>');
+    .fill(
+      'Alice Radar <alice@example.com>\nExternal Reviewer <external@example.com>\nLate Observer <late@example.com>',
+    );
   await page.getByRole('button', { name: '生成会议人物简报' }).click();
 
-  await page.getByText('已匹配 1/2 位参会人').waitFor({ timeout: 15000 });
+  await page.getByText('已分析前 2/3 位参会人').waitFor({ timeout: 15000 });
+  await page.getByText('未展开参会人').waitFor({ timeout: 15000 });
+  await page.getByText('Late Observer').waitFor({ timeout: 15000 });
   await page.getByText('证据就绪').waitFor({ timeout: 15000 });
   await page.getByText('未匹配').first().waitFor({ timeout: 15000 });
   await page.getByText('按邮箱或邮箱别名匹配', { exact: true }).waitFor({ timeout: 15000 });
@@ -477,6 +587,7 @@ try {
   assert.deepEqual(meetingBriefRequests[0].attendees, [
     { name: 'Alice Radar', email: 'alice@example.com' },
     { name: 'External Reviewer', email: 'external@example.com' },
+    { name: 'Late Observer', email: 'late@example.com' },
   ]);
   assert.equal(reviewActionRequests.length, 1);
   assert.equal(reviewActionRequests[0].action, 'snooze');

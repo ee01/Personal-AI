@@ -34,6 +34,7 @@ export interface UserProfileEvidencePreview {
   label: string;
   detail: string;
   sourceUrl?: string;
+  sourceUrlHiddenReason?: string;
 }
 
 export type UserProfileCalibrationPriority = 'critical' | 'high' | 'medium' | 'low';
@@ -230,13 +231,36 @@ function truncateText(value: string, maxLength = 140): string {
   return `${normalized.slice(0, maxLength - 1)}...`;
 }
 
+function sanitizeEvidenceSourceUrl(rawUrl: string | undefined): {
+  sourceUrl?: string;
+  hiddenReason?: string;
+} {
+  const trimmed = rawUrl?.trim();
+  if (!trimmed) return {};
+
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return { sourceUrl: url.href };
+    }
+    return {
+      hiddenReason: `来源链接已隐藏：不支持 ${url.protocol.replace(':', '')} 协议`,
+    };
+  } catch {
+    return {
+      hiddenReason: '来源链接已隐藏：链接格式无效',
+    };
+  }
+}
+
 function buildEvidencePreview(ref: unknown, index: number): UserProfileEvidencePreview {
   if (ref && typeof ref === 'object') {
     const record = ref as Record<string, unknown>;
     const sourceType = pickEvidenceString(record, ['sourceType', 'source_kind', 'source', 'type', 'kind']);
     const title = pickEvidenceString(record, ['sourceTitle', 'title', 'name', 'label']);
     const sourceId = pickEvidenceString(record, ['sourceId', 'messageId', 'memoryId', 'id']);
-    const sourceUrl = pickEvidenceString(record, ['sourceUrl', 'url', 'href']);
+    const rawSourceUrl = pickEvidenceString(record, ['sourceUrl', 'url', 'href']);
+    const sourceUrlSafety = sanitizeEvidenceSourceUrl(rawSourceUrl);
     const snippet = pickEvidenceString(record, ['snippet', 'text', 'content', 'summary', 'rationale']);
     const timestamp = pickEvidenceString(record, ['timestamp', 'ts', 'capturedAt']);
     const label = [sourceType, title, sourceId]
@@ -244,13 +268,18 @@ function buildEvidencePreview(ref: unknown, index: number): UserProfileEvidenceP
       .slice(0, 3)
       .join(' · ') || `证据 ${index + 1}`;
     const detail = truncateText(
-      snippet || sourceUrl || timestamp || stringifyValue(ref),
+      snippet ||
+        sourceUrlSafety.sourceUrl ||
+        timestamp ||
+        sourceUrlSafety.hiddenReason ||
+        stringifyValue(ref),
     );
 
     return {
       label: truncateText(label, 80),
       detail,
-      sourceUrl,
+      sourceUrl: sourceUrlSafety.sourceUrl,
+      sourceUrlHiddenReason: sourceUrlSafety.hiddenReason,
     };
   }
 
@@ -630,6 +659,7 @@ function buildProfileItemSearchText(item: UserProfileInterestItem): string {
       evidence.label,
       evidence.detail,
       evidence.sourceUrl ?? '',
+      evidence.sourceUrlHiddenReason ?? '',
     ]),
   ]
     .join(' ')

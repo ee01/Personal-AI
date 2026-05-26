@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-05-22_
+_最后更新: 2026-05-25_
 
 ## 是什么
 
@@ -203,6 +203,16 @@ Codex CLI / Claude Code / Cursor 的 skill 目录在本机文件系统里，Chro
 
 同步到本机目录时，Memory Service 会使用和 Desktop App 扫描器一致的文件系统包哈希（`SKILL.md` + files）记录平台绑定。这样刚推送到本机目录的 skill 下一轮扫描不会因为 Personal AI 内部 package 哈希不同而被误判为外部变更。
 
+2026-05-23 状态：
+
+- Desktop App 本机同步结果会把 `externalChanges` 透传回 Foundry 页面；用户手动同步 Codex CLI / Claude Code / Cursor 后，弹窗会直接显示“待审核变更 N 条”并提示去顶部 Inbox 审核。
+- 本机 agent skill 的新内容或新版本仍然不会直接覆盖 Personal AI 真源；只有用户在 suggestion 里确认使用或确认覆盖后，才会进入 active skill。
+
+2026-05-25 状态：
+
+- Desktop App 上报本机 skill 时会把 `root`、skill 目录、`SKILL.md` 路径、资源文件数量和资源字节数写入平台 binding metadata。
+- Foundry Inbox 和审核 gate 会展示本机来源目录与资源包规模；用户在确认使用/覆盖前能看到这条建议来自哪个 Codex CLI / Claude Code / Cursor 本机目录，而不是只看到平台名。
+
 ### Manual-only 平台
 
 ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句安装指引。
@@ -274,10 +284,11 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - SkillSmith、SkillGen 等近期工作都强调 skill 的边界、验证和回归风险；因此 Inbox 里不能只展示标题和摘要，至少要在使用前暴露风险原因、版本和证据覆盖情况。
 - 近期 skill registry / skill file attack 研究说明第三方 skill 供应链会成为攻击面；Foundry 对外部导入应保持审核默认开启，并把资源文件、工具调用、来源平台放在用户确认前。
 - 2026-05-22 再核对 Claude Code Skills、LangChain Deep Agents memory/skills 和 SKILL-INJECT 后，平台同步 UI 需要持续区分三类能力：可 API 同步、需 Desktop App 文件同步、仅复制安装指引；manual-only 平台不应显示伪安装状态。
+- 2026-05-25 再核对 Deep Agents skills、SKILL.md registry supply-chain 和 SkillOps 后，本机导入建议需要把“文件来自哪里、包有多大、是否带资源文件”作为审核事实，而不是只保存到后台 binding；这比一次性弹窗更接近可审计的 skill lifecycle。
 
 ## Reminders 反馈
 
-2026-05-21 自动化核对：本机 Reminders 未发现名为 `Personal AI` 的列表。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
+2026-05-25 自动化核对：本机 Reminders 可访问，但未发现名为 `Personal AI` 的列表。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
 
 外部参考：
 
@@ -292,6 +303,8 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - [Skill-Pro: Learning Reusable Skills from Experience](https://arxiv.org/abs/2602.01869)
 - [SkillX: Automatically Constructing Skill Knowledge Bases for Agents](https://arxiv.org/abs/2604.04804)
 - [SKILLFOUNDRY: Building Self-Evolving Agent Skill Libraries from Heterogeneous Scientific Resources](https://arxiv.org/abs/2604.03964)
+- [Under the Hood of SKILL.md: Semantic Supply-chain Attacks on AI Agent Skill Registry](https://arxiv.org/abs/2605.11418)
+- [SkillOps: Managing LLM Agent Skill Libraries as Self-Maintaining Software Ecosystems](https://arxiv.org/abs/2605.13716)
 - [SkillGen: Verified Inference-Time Agent Skill Synthesis](https://arxiv.org/abs/2605.10999)
 - [Group of Skills: Group-Structured Skill Retrieval for Agent Skill Libraries](https://arxiv.org/abs/2605.06978)
 - [From Skill Text to Skill Structure: SSL Representation for Agent Skills](https://arxiv.org/abs/2604.24026)

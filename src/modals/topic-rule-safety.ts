@@ -31,6 +31,12 @@ export interface RuleActionSummaryInput {
 
 const normalizeOptionalText = (value?: string): string => value?.trim() || '';
 
+const splitScopeValues = (value?: string): string[] =>
+  normalizeOptionalText(value)
+    .split(/[\n,，、;；]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
 const hasNotifyMethod = (
   notifyMethod: string | undefined,
   method: string,
@@ -41,13 +47,17 @@ const hasNotifyMethod = (
     .includes(method);
 
 const isShortScopeValue = (value?: string): boolean => {
-  const normalized = normalizeOptionalText(value);
-  if (!normalized) return false;
-  const compact = normalized.replace(/[\s_-]+/g, '');
-  if (/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(compact)) {
-    return compact.length === 1;
-  }
-  return compact.length > 0 && compact.length <= 2;
+  return splitScopeValues(value).some((scopeValue) => {
+    const compact = scopeValue.replace(/[\s_-]+/g, '');
+    if (
+      /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(
+        compact,
+      )
+    ) {
+      return compact.length === 1;
+    }
+    return compact.length > 0 && compact.length <= 2;
+  });
 };
 
 export function getRuleActionSummaryItems(

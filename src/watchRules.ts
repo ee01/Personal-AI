@@ -134,6 +134,15 @@ function normalizeScopeValue(value: unknown): string {
     .toLowerCase();
 }
 
+function splitScopeValues(value: string | undefined): string[] {
+  const normalizedValue = normalizeScopeValue(value);
+  if (!normalizedValue) return [];
+  return normalizedValue
+    .split(/[\n,，、;；]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 function compactScopeValue(value: string): string {
   return value.replace(/[\s_-]+/g, '');
 }
@@ -172,24 +181,27 @@ function isSafeContainedScopeMatch(expected: string, actual: string): boolean {
 }
 
 function valuesMatchScope(expected: string | undefined, actualValues: unknown[]): boolean {
-  const normalizedExpected = normalizeScopeValue(expected);
-  if (!normalizedExpected) return true;
-  const compactExpected = compactScopeValue(normalizedExpected);
-  const expectedTokens = tokenizeScopeValue(normalizedExpected);
+  const expectedScopes = splitScopeValues(expected);
+  if (expectedScopes.length === 0) return true;
 
   return actualValues.some((value) => {
     const normalizedActual = normalizeScopeValue(value);
     const compactActual = compactScopeValue(normalizedActual);
     const actualTokens = tokenizeScopeValue(normalizedActual);
-    return (
-      normalizedActual.length > 0 &&
-      (normalizedActual === normalizedExpected ||
+    if (normalizedActual.length === 0) return false;
+
+    return expectedScopes.some((normalizedExpected) => {
+      const compactExpected = compactScopeValue(normalizedExpected);
+      const expectedTokens = tokenizeScopeValue(normalizedExpected);
+      return (
+        normalizedActual === normalizedExpected ||
         (compactActual.length > 0 &&
           compactExpected.length > 0 &&
           compactActual === compactExpected) ||
         tokensContainSequence(actualTokens, expectedTokens) ||
-        isSafeContainedScopeMatch(normalizedExpected, normalizedActual))
-    );
+        isSafeContainedScopeMatch(normalizedExpected, normalizedActual)
+      );
+    });
   });
 }
 

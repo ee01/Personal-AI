@@ -115,6 +115,17 @@ export interface JiraAutomationImportReviewFinding {
   severity: JiraAutomationImportReviewSeverity;
 }
 
+export interface JiraAutomationImportEnablementStep {
+  id: string;
+  label: string;
+  detail: string;
+  severity: JiraAutomationImportReviewSeverity;
+}
+
+export interface JiraAutomationImportReviewPacketContext extends ImportRuleContext {
+  importedRuleName?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null;
 }
@@ -352,6 +363,174 @@ function formatReviewFindingsForNote(findings: JiraAutomationImportReviewFinding
   return `${value.slice(0, 897)}...`;
 }
 
+function formatReviewPacketFinding(finding: JiraAutomationImportReviewFinding): string {
+  const samples = finding.samples.length > 0
+    ? finding.samples.join(' | ')
+    : 'Review the rule component that owns this binding.';
+  const hiddenSampleCount = Math.max(0, finding.count - finding.samples.length);
+  const suffix = hiddenSampleCount > 0 ? `, ${hiddenSampleCount} more` : '';
+  return `- [${finding.severity.toUpperCase()}] ${finding.label} (${finding.count}): ${samples}${suffix}`;
+}
+
+function formatReviewPacketChecklistItem(item: JiraAutomationImportReviewChecklistItem): string {
+  return `- [${item.severity.toUpperCase()}] ${item.label}: ${item.detail}`;
+}
+
+function formatReviewPacketEnablementStep(step: JiraAutomationImportEnablementStep): string {
+  return `- [${step.severity.toUpperCase()}] ${step.label}: ${step.detail}`;
+}
+
+function formatEnablementPlanSummary(steps: JiraAutomationImportEnablementStep[]): string {
+  if (steps.length === 0) {
+    return 'keep imported copy disabled until Jira review is complete';
+  }
+
+  const value = steps
+    .slice(0, 5)
+    .map((step) => `${step.label}: ${step.detail}`)
+    .join('; ');
+
+  if (value.length <= 900) {
+    return value;
+  }
+
+  return `${value.slice(0, 897)}...`;
+}
+
+export function buildJiraAutomationImportEnablementPlan(
+  exportedRule: ExportedRule,
+): JiraAutomationImportEnablementStep[] {
+  const summary = summarizeJiraAutomationImportRule(exportedRule);
+  const steps: JiraAutomationImportEnablementStep[] = [
+    {
+      id: 'keep-disabled',
+      label: 'Keep the imported copy disabled',
+      detail: 'Create the rule as a disabled copy and finish the review below before turning it on in Jira.',
+      severity: 'low',
+    },
+  ];
+
+  if (
+    summary.sourceProjectReferenceCount > 0 ||
+    summary.jqlReferenceCount > 0 ||
+    summary.customFieldReferenceCount > 0 ||
+    summary.savedFilterReferenceCount > 0
+  ) {
+    const parts = [
+      summary.sourceProjectReferenceCount > 0 ? `${summary.sourceProjectReferenceCount} source project reference(s)` : '',
+      summary.jqlReferenceCount > 0 ? `${summary.jqlReferenceCount} JQL/filter reference(s)` : '',
+      summary.customFieldReferenceCount > 0 ? `${summary.customFieldReferenceCount} custom field reference(s)` : '',
+      summary.savedFilterReferenceCount > 0 ? `${summary.savedFilterReferenceCount} saved filter reference(s)` : '',
+    ].filter(Boolean);
+    steps.push({
+      id: 'map-target-search',
+      label: 'Map target-project search dependencies',
+      detail: `${parts.join(', ')} need target-project validation because project scope remapping does not rewrite embedded query or field values.`,
+      severity: 'high',
+    });
+  }
+
+  if (
+    summary.webRequestCount > 0 ||
+    summary.externalIntegrationCount > 0 ||
+    summary.hardcodedUrlCount > 0 ||
+    summary.secretReferenceCount > 0 ||
+    summary.connectionReferenceCount > 0 ||
+    summary.sensitiveReferenceCount > 0 ||
+    summary.emailReferenceCount > 0 ||
+    summary.accountReferenceCount > 0
+  ) {
+    const parts = [
+      summary.webRequestCount > 0 ? `${summary.webRequestCount} web request(s)` : '',
+      summary.externalIntegrationCount > 0 ? `${summary.externalIntegrationCount} external action(s)` : '',
+      summary.hardcodedUrlCount > 0 ? `${summary.hardcodedUrlCount} URL(s)` : '',
+      summary.secretReferenceCount > 0 ? `${summary.secretReferenceCount} secret reference(s)` : '',
+      summary.connectionReferenceCount > 0 ? `${summary.connectionReferenceCount} connection/credential reference(s)` : '',
+      summary.sensitiveReferenceCount > 0 ? `${summary.sensitiveReferenceCount} sensitive value reference(s)` : '',
+      summary.emailReferenceCount + summary.accountReferenceCount > 0
+        ? `${summary.emailReferenceCount + summary.accountReferenceCount} account/recipient reference(s)`
+        : '',
+    ].filter(Boolean);
+    steps.push({
+      id: 'reconnect-external-effects',
+      label: 'Reconnect external effects and credentials',
+      detail: `${parts.join(', ')} should be reconnected or re-entered in the target Jira project before enabling.`,
+      severity: 'high',
+    });
+  }
+
+  if (summary.scheduledTrigger || summary.smartValueReferenceCount > 0 || exportedRule.canOtherRuleTrigger) {
+    const parts = [
+      summary.scheduledTrigger ? 'scheduled trigger cadence/timezone' : '',
+      summary.smartValueReferenceCount > 0 ? `${summary.smartValueReferenceCount} smart value reference(s)` : '',
+      exportedRule.canOtherRuleTrigger ? 'rule chaining safeguard' : '',
+    ].filter(Boolean);
+    steps.push({
+      id: 'test-dynamic-behavior',
+      label: 'Test dynamic trigger behavior',
+      detail: `${parts.join(', ')} should be checked with a controlled issue or audit run before enabling.`,
+      severity: 'medium',
+    });
+  }
+
+  steps.push({
+    id: 'confirm-actor-and-audit',
+    label: 'Confirm actor permissions and audit result',
+    detail: 'Verify the current Jira actor can perform every action, then check the first audit log before leaving the rule enabled.',
+    severity: summary.webRequestCount > 0 || summary.externalIntegrationCount > 0 || summary.scheduledTrigger
+      ? 'medium'
+      : 'low',
+  });
+
+  return steps;
+}
+
+export function buildJiraAutomationImportReviewPacket(
+  exportedRule: ExportedRule,
+  context: JiraAutomationImportReviewPacketContext,
+): string {
+  const checklist = buildJiraAutomationImportReviewChecklist(exportedRule);
+  const findings = buildJiraAutomationImportReviewFindings(exportedRule);
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule);
+  const warnings = buildJiraAutomationImportWarnings(exportedRule);
+  const importedRuleName = context.importedRuleName ||
+    buildJiraAutomationUniqueImportedRuleName(exportedRule.name, context.existingRuleNames);
+  const targetProject = context.projectKey
+    ? `${context.projectKey} (${context.projectId})`
+    : context.projectId;
+  const sourceAllowsChainedTrigger = Boolean(exportedRule.canOtherRuleTrigger);
+  const ruleChaining = sourceAllowsChainedTrigger
+    ? (context.allowOtherRuleTrigger === true ? 'preserved from source by user choice' : 'blocked in imported copy')
+    : 'disabled in source';
+
+  return [
+    '# Jira Automation import review',
+    '',
+    `- Source rule: ${exportedRule.name}`,
+    `- Imported name: ${importedRuleName}`,
+    `- Target project: ${targetProject}`,
+    '- Imported state: DISABLED',
+    `- Rule chaining: ${ruleChaining}`,
+    `- Checklist summary: ${formatChecklistSeveritySummary(checklist)}`,
+    '',
+    '## Review before enabling',
+    ...(checklist.length > 0
+      ? checklist.map(formatReviewPacketChecklistItem)
+      : ['- No blocking checks detected.']),
+    '',
+    '## Detected environment bindings',
+    ...(findings.length > 0
+      ? findings.map(formatReviewPacketFinding)
+      : ['- None detected.']),
+    '',
+    '## Activation plan',
+    ...enablementPlan.map(formatReviewPacketEnablementStep),
+    '',
+    '## Import warnings',
+    ...warnings.map((warning) => `- ${warning}`),
+  ].join('\n');
+}
+
 function stripExistingImportReviewNote(description: string): string {
   const marker = `\n\n${JIRA_AUTOMATION_IMPORT_REVIEW_NOTE_HEADING}`;
   const markerIndex = description.indexOf(marker);
@@ -372,6 +551,7 @@ export function buildJiraAutomationImportReviewNote(
 ): string {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
   const checklist = buildJiraAutomationImportReviewChecklist(exportedRule);
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(exportedRule);
   const targetProject = context.projectKey
     ? `${context.projectKey} (${context.projectId})`
     : context.projectId;
@@ -386,6 +566,7 @@ export function buildJiraAutomationImportReviewNote(
     `- Enablement checklist: ${formatChecklistSeveritySummary(checklist)}.`,
     `- Detected bindings: ${formatDetectedReferenceSummary(summary)}.`,
     `- Top detected bindings: ${formatReviewFindingsForNote(buildJiraAutomationImportReviewFindings(exportedRule))}.`,
+    `- Activation plan: ${formatEnablementPlanSummary(enablementPlan)}.`,
     `- Rule chaining: ${ruleChaining}.`,
   ].join('\n');
 }

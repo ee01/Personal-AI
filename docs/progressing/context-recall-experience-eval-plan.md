@@ -210,7 +210,7 @@ LLM judge 只做初筛，不能替代人工 golden labels。
 未来路径建议：
 
 ```text
-evals/context-recall/real-ringcentral-groups.jsonl
+evals/cases/context-recall/real-ringcentral-groups.jsonl
 ```
 
 每行一个 case：
@@ -302,18 +302,20 @@ evals/context-recall/golden-labels.jsonl
 
 ## 后续自动化脚本设计
 
-建议新增脚本：
+当前已落地统一脚本：
 
 ```text
-tools/eval-context-recall-experience.mjs
+tools/eval-run.mjs
+tools/eval-list.mjs
 ```
 
-建议新增 package script：
+当前 package script：
 
 ```json
 {
   "scripts": {
-    "eval:context-recall:experience": "node tools/eval-context-recall-experience.mjs --cases evals/context-recall/real-ringcentral-groups.jsonl"
+    "eval:list": "node tools/eval-list.mjs",
+    "eval:run": "node tools/eval-run.mjs"
   }
 }
 ```
@@ -347,7 +349,7 @@ tools/eval-context-recall-experience.mjs
 ## 下一步建议
 
 1. 先把本文作为真实体验评估协议。
-2. 下一次修 recall 前，把四个 RingCentral case 写成 `evals/context-recall/real-ringcentral-groups.jsonl`。
-3. 实现 `tools/eval-context-recall-experience.mjs`，先只做采集、调用接口、生成报告。
+2. 下一次修 recall 前，先跑 `npm run eval:run -- --suite context-recall`。
+3. 继续扩展 `tools/eval-run.mjs`，让 live webpage 采集和 LLM judge 更稳定。
 4. 再接入 LLM-as-a-judge 和人工 golden labels。
 5. 最后考虑每周本机只读 monitor，并把失败报告写进 `docs/progressing/to-verify.md` 或专门的 eval inbox。

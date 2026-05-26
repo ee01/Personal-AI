@@ -7,6 +7,7 @@ import {
   formatTimelineCacheAge,
   formatTimelineCacheLastAttempt,
   getTimelineCacheAttemptQuickFixText,
+  getTimelineCacheExecutionImpactText,
   getTimelineProjectCacheSaveBlockText,
   getTimelineCacheReadinessBlockText,
   getTimelineCacheSaveBlockText,
@@ -349,6 +350,64 @@ test('Timeline cache quick fix text summarizes the next user action', () => {
       nextAction: '打开 Timeline Sync Rule 后重试。',
     }),
     '打开 Timeline Sync Rule 后重试。',
+  );
+});
+
+test('Timeline cache execution impact distinguishes trigger skips from variable fallback', () => {
+  assert.match(
+    getTimelineCacheExecutionImpactText({
+      usage: 'timeline-trigger',
+      status: readyStatus.projects[0],
+      selectedMilestone: 'Regression',
+    }),
+    /执行器会跳过这条 Timeline.*Regression/,
+  );
+
+  assert.match(
+    getTimelineCacheExecutionImpactText({
+      usage: 'timeline-trigger',
+      status: {
+        project: 'mThor',
+        paramKey: 'mThor',
+        cached: false,
+        valid: false,
+        expired: false,
+        status: 'missing',
+      },
+      selectedMilestone: 'FF',
+    }),
+    /mThor 缓存前，这条 Timeline 不会触发/,
+  );
+
+  assert.match(
+    getTimelineCacheExecutionImpactText({
+      usage: 'project-variables',
+      status: {
+        project: 'mThor',
+        paramKey: 'mThor',
+        cached: true,
+        valid: false,
+        expired: false,
+        status: 'error',
+      },
+    }),
+    /项目变量会保留原样/,
+  );
+
+  assert.match(
+    getTimelineCacheExecutionImpactText({
+      usage: 'project-variables',
+      projectMissingFromStatus: true,
+    }),
+    /项目清单更新/,
+  );
+
+  assert.match(
+    getTimelineCacheExecutionImpactText({
+      usage: 'timeline-trigger',
+      hasReadError: true,
+    }),
+    /无法确认 Timeline 缓存状态/,
   );
 });
 

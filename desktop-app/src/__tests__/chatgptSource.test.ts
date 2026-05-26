@@ -225,6 +225,7 @@ test('ChatGPTSource collects current-node messages, stores raw cache, and extrac
       messageCount: 3,
       pendingExtractCount: 0,
       conversationCount: 1,
+      artifactCount: 1,
     });
 
     const storedMessages = rawStore

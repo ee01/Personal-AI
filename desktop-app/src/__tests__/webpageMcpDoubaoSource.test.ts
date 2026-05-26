@@ -8,7 +8,8 @@ type ToolCall = { name: string; args: Record<string, unknown> };
 
 function makeHost(options: {
   tabId?: number;
-  evalResults?: string[];
+  evalResults?: Array<string | Error>;
+  validateEvalSyntax?: boolean;
 }) {
   const calls: ToolCall[] = [];
   const evalResults = [...(options.evalResults ?? [])];
@@ -19,7 +20,14 @@ function makeHost(options: {
     stop: async () => undefined,
     getStatus: () => ({ running: true, extensionConnected: true }),
     findTabByUrl: async () => currentTabId,
-    evalInTab: async () => evalResults.shift() ?? '',
+    evalInTab: async (_tabId: number | undefined, code: string) => {
+      if (options.validateEvalSyntax) {
+        new Function(`return ${code};`);
+      }
+      const result = evalResults.shift() ?? '';
+      if (result instanceof Error) throw result;
+      return result;
+    },
     callTool: async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
       if (name === 'chrome_navigate') {
@@ -63,6 +71,7 @@ test('webpage-mcp Doubao source does not inspect the active tab when no Doubao t
 test('webpage-mcp Doubao source normalizes absolute DOM conversation URLs', async () => {
   const { host, calls } = makeHost({
     tabId: 789,
+    validateEvalSyntax: true,
     evalResults: [
       JSON.stringify({ ok: false, error: 404 }),
       JSON.stringify({
@@ -113,5 +122,24 @@ test('webpage-mcp Doubao source normalizes absolute DOM conversation URLs', asyn
         },
       },
     ],
+  );
+});
+
+test('webpage-mcp Doubao source surfaces DOM fallback failures', async () => {
+  const { host } = makeHost({
+    tabId: 789,
+    evalResults: [
+      JSON.stringify({ ok: false, error: 404 }),
+      JSON.stringify({
+        conversations: [],
+        error: 'document query failed',
+      }),
+    ],
+  });
+  const source = new WebpageMcpDoubaoSource(host);
+
+  await assert.rejects(
+    () => source.collectConversationSnapshots(),
+    /Doubao DOM fallback failed: document query failed/,
   );
 });

@@ -396,7 +396,7 @@ export interface ContextRecallRequest {
 
 export interface ContextRecallMatch {
   id: string;
-  type: 'message' | 'chunk' | 'entity';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
   score: number;
   title?: string;
   uiSummary?: string;
@@ -436,6 +436,108 @@ export interface ContextRecallResponse {
     rejectedReason?: string;
     suppressionReasons?: string[];
   };
+}
+
+export type RehearsalStatus =
+  | 'candidate'
+  | 'active'
+  | 'paused'
+  | 'used'
+  | 'stale'
+  | 'archived'
+  | 'dismissed';
+
+export type RehearsalActivationOutcome =
+  | 'matched'
+  | 'shown'
+  | 'accepted'
+  | 'used'
+  | 'ignored'
+  | 'dismissed'
+  | 'irrelevant';
+
+export interface RehearsalActivationCues {
+  people?: string[];
+  projects?: string[];
+  topics?: string[];
+  keywords?: string[];
+  groupIds?: string[];
+  conversationIds?: string[];
+  meetingIds?: string[];
+  calendarEventIds?: string[];
+  issueKeys?: string[];
+  urls?: string[];
+  surfaces?: string[];
+}
+
+export interface Rehearsal {
+  id: string;
+  title: string;
+  scenarioType: string;
+  status: RehearsalStatus;
+  summary?: string;
+  content: string;
+  activationCues: RehearsalActivationCues;
+  evidenceRefs: string[];
+  sourceKind: string;
+  sourceRefId?: string;
+  confidence: number;
+  priority: number;
+  validFrom?: number;
+  validUntil?: number;
+  lastActivatedAt?: number;
+  lastUsedAt?: number;
+  activationCount: number;
+  usedCount: number;
+  dismissedCount: number;
+  staleReason?: string;
+  markdownPath?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RehearsalActivation {
+  id: string;
+  rehearsalId: string;
+  surface: string;
+  contextType?: string;
+  sceneKey?: string;
+  score: number;
+  displayPriority: 'p1' | 'p2' | 'hidden';
+  matchedCues: RehearsalActivationCues;
+  outcome: RehearsalActivationOutcome;
+  feedbackNote?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RehearsalListResponse {
+  items: Rehearsal[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface RehearsalDetailResponse {
+  rehearsal: Rehearsal;
+  activations: RehearsalActivation[];
+}
+
+export interface RehearsalMutationPayload {
+  title?: string;
+  scenarioType?: string;
+  status?: RehearsalStatus;
+  summary?: string | null;
+  content?: string;
+  activationCues?: RehearsalActivationCues;
+  evidenceRefs?: string[];
+  sourceKind?: string;
+  sourceRefId?: string | null;
+  confidence?: number;
+  priority?: number;
+  validFrom?: number | null;
+  validUntil?: number | null;
+  staleReason?: string | null;
 }
 
 export type ComposerSurface =
@@ -527,7 +629,7 @@ export interface ComposerAssistRequest {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -552,6 +654,66 @@ export interface ComposerAssistResponse {
   confidence: number;
   queryTimeMs: number;
   debug?: Record<string, unknown>;
+}
+
+export type StorylineType =
+  | 'sharing'
+  | 'status_report'
+  | 'retro'
+  | 'training'
+  | 'proposal'
+  | 'weekly_update';
+
+export type StorylineSuggestedArtifact =
+  | 'speaker_notes'
+  | 'slides_outline'
+  | 'ringcentral_post'
+  | 'docs_brief';
+
+export interface StorylineOpportunity {
+  available: boolean;
+  confidence: number;
+  storyType?: StorylineType;
+  buttonLabel?: string;
+  oneLineReason?: string;
+  audienceHint?: string;
+  estimatedLengthMinutes?: number;
+  evidenceClusters?: Array<{
+    label: string;
+    sourceKinds: string[];
+    evidenceCount: number;
+  }>;
+  blockedReasons?: string[];
+  suggestedArtifact?: StorylineSuggestedArtifact;
+}
+
+export type StorylineSourceKind = 'today_meeting_prep';
+
+export interface StorylineDraftRequest {
+  sourceKind: StorylineSourceKind;
+  prepId: string;
+  targetArtifact?: StorylineSuggestedArtifact;
+  audienceHint?: string;
+}
+
+export interface StorylineDraftSegment {
+  title: string;
+  intent: string;
+  narrative: string;
+  evidenceIds: string[];
+}
+
+export interface StorylineDraftResponse {
+  id: string;
+  sourceKind: StorylineSourceKind;
+  sourceId: string;
+  title: string;
+  audience: string;
+  targetArtifact: StorylineSuggestedArtifact;
+  segments: StorylineDraftSegment[];
+  gaps: string[];
+  riskNotes: string[];
+  artifactText: string;
 }
 
 export type ContextAssistSurface = 'meeting_prep' | 'composer_guard';
@@ -626,6 +788,7 @@ export interface ContextAssistResponse {
   previewRequired: boolean;
   confidence: number;
   queryTimeMs: number;
+  storylineOpportunity?: StorylineOpportunity;
   debug?: Record<string, unknown>;
 }
 
@@ -679,6 +842,12 @@ export interface MeetingRecord {
   participants: string[];
   pdfUrl?: string;
   digestId?: string;
+  digestStatus?: 'idle' | 'uploading' | 'processing' | 'completed' | 'failed';
+  digestErrorCode?: string;
+  summary?: string;
+  topicCount?: number;
+  actionItemCount?: number;
+  decisionCount?: number;
 }
 
 export interface MeetingRecordDetail extends MeetingRecord {
@@ -1045,8 +1214,10 @@ export interface RelationshipMeetingBrief {
   startAt?: number;
   coverage: {
     totalAttendees: number;
+    processedAttendees: number;
     matchedAttendees: number;
     unmatchedAttendees: number;
+    omittedAttendees: number;
     attendeesWithEvidence: number;
     attendeesWithOpenLoops: number;
     evidenceRefs: number;
@@ -1076,6 +1247,11 @@ export interface RelationshipMeetingBrief {
     evidenceCount: number;
     matchStatus: string;
     coverageState: 'ready' | 'thin' | 'missing';
+  }>;
+  omittedAttendees?: Array<{
+    displayName: string;
+    email?: string;
+    reason: string;
   }>;
 }
 
@@ -1175,11 +1351,40 @@ export interface NotificationCenterEnvelope {
   sentAt?: number;
   type?: string;
   payload?: Record<string, unknown>;
+  deliveryContext?: NotificationCenterDeliveryContext;
+}
+
+export interface NotificationCenterDeliveryContext {
+  channel: 'chrome' | 'doubao' | 'glip';
+  reason: 'new' | 'retry_after_cooldown' | 'previous_delivery_failed';
+  lastStatus?: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  effectiveStatus?: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  hasSuccessfulDelivery: boolean;
+  lastAttemptAt?: number;
+  lastDeliveredAt?: number;
+  cooldownSeconds?: number;
 }
 
 export interface NotificationCenterFeedResponse {
   items: NotificationCenterEnvelope[];
   total: number;
+}
+
+export interface NotificationCenterDeliveryRecord {
+  sourceRef: string;
+  channel: 'chrome' | 'doubao' | 'glip';
+  lane: 'todo' | 'notice';
+  status: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  effectiveStatus: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  externalRef?: string;
+  lastError?: string;
+  hasSuccessfulDelivery: boolean;
+  firstDeliveredAt?: number;
+  lastDeliveredAt?: number;
+  seenAt?: number;
+  dismissedAt?: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 // ============================================================================
@@ -1284,6 +1489,23 @@ export interface ReflectionLink {
   preview?: string;
   previewTitle?: string;
   previewTimestamp?: number;
+}
+
+export interface ReflectionResearchAttempt {
+  id: string;
+  threadId: string;
+  runId?: string;
+  query: string;
+  purpose: string;
+  status: 'hit' | 'empty' | 'failed';
+  resultCount: number;
+  sourceTypes: string[];
+  projectFilter?: string;
+  senderFilter: string[];
+  groupFilter: string[];
+  errorMessage?: string;
+  evidenceRefs: string[];
+  createdAt: number;
 }
 
 export interface DreamRun {
@@ -1507,6 +1729,12 @@ export interface CreateOutreachSessionFromMessageRequest {
   maxFollowup?: number;
   context?: string;
   informationGoal?: string;
+}
+
+export interface CreateOutreachSessionFromMessageResponse {
+  session: OutreachSession;
+  created?: boolean;
+  reason?: 'existing_message_reaction_session';
 }
 
 export interface OutreachTargetCandidate {
@@ -1799,6 +2027,7 @@ export interface ReflectionThreadDetailResponse {
   runs: ReflectionRun[];
   actions: RuntimeAction[];
   actionResults?: ActionResultRecord[];
+  researchAttempts?: ReflectionResearchAttempt[];
   links: ReflectionLink[];
   dreamRuns: DreamRun[];
 }
@@ -1902,6 +2131,12 @@ export interface HealthResponse {
 }
 
 export interface StatsResponse {
+  user?: {
+    id: string;
+    isolation: 'per_user_sqlite';
+    storageKey: string;
+    fallbackToDefault: boolean;
+  };
   messages: {
     total: number;
     today: number;
@@ -1924,6 +2159,103 @@ export interface StatsResponse {
   };
 }
 
+export type MemoryCoverageDirection = 'ingest' | 'push' | 'sync' | 'derive';
+export type MemoryCoverageState =
+  | 'healthy'
+  | 'partial'
+  | 'stale'
+  | 'sparse'
+  | 'failing'
+  | 'blocked'
+  | 'pressure'
+  | 'not_configured'
+  | 'unknown';
+export type MemoryCoveragePlatformGroup =
+  | 'active'
+  | 'derived'
+  | 'inactive'
+  | 'system';
+
+export interface MemoryCoverageContribution {
+  id: string;
+  label: string;
+  direction: MemoryCoverageDirection;
+  state: MemoryCoverageState;
+  count: number;
+  recentCount?: number;
+  latestAt?: number | null;
+  detail: string;
+  evidence: string;
+}
+
+export interface MemoryCoverageRepairAction {
+  id: string;
+  platformId: string;
+  title: string;
+  description: string;
+  severity: 'info' | 'warning' | 'critical';
+  source: string;
+}
+
+export interface MemoryCoverageScoreBreakdown {
+  base: number;
+  healthyContributionBonus: number;
+  freshnessBonus: number;
+  failingPenalty: number;
+  recentRatio: number;
+  finalScore: number;
+  reasons: string[];
+}
+
+export interface MemoryCoveragePlatform {
+  id: string;
+  name: string;
+  nameEn?: string;
+  icon: string;
+  group: MemoryCoveragePlatformGroup;
+  state: MemoryCoverageState;
+  directions: MemoryCoverageDirection[];
+  headline: string;
+  description: string;
+  lastSeenAt?: number | null;
+  totalCount: number;
+  recentCount: number;
+  qualityScore?: number;
+  qualityScoreBreakdown?: MemoryCoverageScoreBreakdown;
+  contributions: MemoryCoverageContribution[];
+  repairActions: MemoryCoverageRepairAction[];
+}
+
+export interface MemoryCoverageSummary {
+  activePlatforms: number;
+  healthyPlatforms: number;
+  warningPlatforms: number;
+  pressureItems: number;
+  inactivePlatforms: number;
+  coverageGaps: number;
+  totalMessages: number;
+  totalChunks: number;
+  totalEntities: number;
+}
+
+export interface MemoryCoverageTimelineEvent {
+  id: string;
+  platformId: string;
+  at: number;
+  title: string;
+  state: MemoryCoverageState;
+  source: string;
+}
+
+export interface MemoryCoverageMapResponse {
+  generatedAt: number;
+  staleAfterDays: number;
+  summary: MemoryCoverageSummary;
+  platforms: MemoryCoveragePlatform[];
+  repairActions: MemoryCoverageRepairAction[];
+  timeline: MemoryCoverageTimelineEvent[];
+}
+
 export type DayPilotPriority = 'critical' | 'high' | 'medium' | 'low';
 export type DayPilotState = 'prepare' | 'now' | 'waiting' | 'done' | 'muted';
 export type DayPilotProviderTarget =
@@ -1939,6 +2271,7 @@ export type DayPilotCardType =
   | 'ai_tool_shift'
   | 'project_risk'
   | 'relationship_ping'
+  | 'rehearsal_prompt'
   | 'skill_opportunity'
   | 'memory_quality';
 
@@ -2019,6 +2352,7 @@ export interface DayPilotBrief {
     notifications: { scanned: number; pending: number };
     actions: { scanned: number; queued: number };
     reflections: { scanned: number; active: number };
+    rehearsals: { scanned: number; active: number };
     skills: { scanned: number; suggestions: number };
     relationships: { scanned: number; highFrequencyPeople: number };
   };
@@ -2038,6 +2372,7 @@ export interface DayPilotContextPackResponse {
   missionId: string;
   generatedAt: number;
   tokenBudget: number;
+  maxChars: number;
   targetProvider: DayPilotProviderTarget;
   providerProfile: {
     id: DayPilotProviderTarget;
@@ -2050,6 +2385,7 @@ export interface DayPilotContextPackResponse {
   warnings: string[];
   redactionPreview: string[];
   redactionApplied: boolean;
+  truncated: boolean;
 }
 
 export type DayPilotFeedbackAction =
@@ -2099,6 +2435,7 @@ export interface TodayPilotMeetingPrepRecord {
   contextPackMd: string;
   redaction: Record<string, unknown>;
   llmUsage: Record<string, unknown>;
+  storylineOpportunity?: StorylineOpportunity;
   sourceHash: string;
   generatedAt: number;
   expiresAt: number;
@@ -2149,6 +2486,104 @@ export interface MemoryBackupImportResponse {
     preservedPaths: string[];
     deletedPaths: string[];
   };
+  warnings: string[];
+}
+
+export interface MemoryBackupImportPreviewResponse {
+  mode: 'merge' | 'replace';
+  dryRun: true;
+  inspectedAt: string;
+  restoredLayers: Array<'A' | 'B'>;
+  backup: {
+    userId: string;
+    exportedAt: string;
+    formatVersion: number;
+    includeCount: number;
+    layers: {
+      A: number;
+      B: number;
+      C: {
+        generated: number;
+        failed: number;
+        skipped: number;
+      };
+    };
+  };
+  database: {
+    action: 'would_merge' | 'would_replace';
+    importedRows: number;
+    tableRows: Record<string, number>;
+    skippedTables: string[];
+  };
+  files: {
+    written: number;
+    overwritten: number;
+    preserved: number;
+    deleted: number;
+    writtenPaths: string[];
+    overwrittenPaths: string[];
+    preservedPaths: string[];
+    deletedPaths: string[];
+  };
+  warnings: string[];
+}
+
+export type SmartMemoryImportDetectedKind =
+  | 'text'
+  | 'document'
+  | 'document_zip'
+  | 'external_ai_history'
+  | 'backup_zip'
+  | 'unsupported';
+
+export interface SmartMemoryImportEntry {
+  id: string;
+  path: string;
+  title: string;
+  kind: 'text' | 'markdown' | 'json' | 'pdf' | 'unsupported';
+  status: 'ready' | 'blocked';
+  sizeBytes: number;
+  hash?: string;
+  chunkCount: number;
+  preview: string;
+  blockedReason?: string;
+}
+
+export interface SmartMemoryImportInspectResponse {
+  detectedKind: SmartMemoryImportDetectedKind;
+  inputKind: 'paste' | 'file';
+  fileName?: string;
+  sourceHash: string;
+  status: 'ready' | 'backup' | 'blocked' | 'duplicate';
+  summary: {
+    files: number;
+    readyFiles: number;
+    chunks: number;
+    profileCandidates: number;
+    skillSignals: number;
+    highRisk: number;
+    unsupported: number;
+    backup: boolean;
+    externalAiConversations?: number;
+    promotionCandidates?: number;
+  };
+  entries: SmartMemoryImportEntry[];
+  backup?: {
+    reason: string;
+    suggestedMode: 'merge';
+    replaceRequiresConfirm: true;
+  };
+  existingBatchId?: string;
+  warnings: string[];
+}
+
+export interface SmartMemoryImportCommitResponse {
+  status: 'committed' | 'duplicate';
+  batchId: string;
+  detectedKind: SmartMemoryImportDetectedKind;
+  importedMessages: number;
+  importedChunks: number;
+  skippedEntries: number;
   warnings: string[];
 }
 
@@ -2323,6 +2758,12 @@ function parseContentDispositionFilename(
 
   const match = contentDisposition.match(/filename="?([^";]+)"?/i);
   return match?.[1] ?? null;
+}
+
+function getUploadFileName(file: Blob | File, fallback: string): string {
+  return typeof File !== 'undefined' && file instanceof File
+    ? file.name
+    : fallback;
 }
 
 // ============================================================================
@@ -2590,6 +3031,7 @@ export class MemoryServiceClient {
     path: string,
     body?: any,
   ): Promise<MemoryBackupDownloadResponse> {
+    await this.ensureConfigLoaded();
     await this.ensureUserIdResolved();
 
     const url = `${this.baseUrl}${path}`;
@@ -2666,6 +3108,7 @@ export class MemoryServiceClient {
     formData: FormData,
     accept = 'application/json',
   ): Promise<T> {
+    await this.ensureConfigLoaded();
     await this.ensureUserIdResolved();
 
     const url = `${this.baseUrl}${path}`;
@@ -2826,6 +3269,76 @@ export class MemoryServiceClient {
       'POST',
       '/composer/assist',
       request,
+    );
+  }
+
+  async listRehearsals(filters?: {
+    status?: RehearsalStatus | 'all';
+    limit?: number;
+    offset?: number;
+    search?: string;
+  }): Promise<RehearsalListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.limit !== undefined)
+      params.set('limit', String(filters.limit));
+    if (filters?.offset !== undefined)
+      params.set('offset', String(filters.offset));
+    if (filters?.search) params.set('search', filters.search);
+    const qs = params.toString();
+    return this.request<RehearsalListResponse>(
+      'GET',
+      `/rehearsals${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async createRehearsal(
+    payload: RehearsalMutationPayload & { title: string; content: string },
+  ): Promise<{ rehearsal: Rehearsal }> {
+    return this.request<{ rehearsal: Rehearsal }>(
+      'POST',
+      '/rehearsals',
+      payload,
+    );
+  }
+
+  async getRehearsal(id: string): Promise<RehearsalDetailResponse> {
+    return this.request<RehearsalDetailResponse>(
+      'GET',
+      `/rehearsals/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async updateRehearsal(
+    id: string,
+    payload: RehearsalMutationPayload,
+  ): Promise<{ rehearsal: Rehearsal }> {
+    return this.request<{ rehearsal: Rehearsal }>(
+      'PATCH',
+      `/rehearsals/${encodeURIComponent(id)}`,
+      payload,
+    );
+  }
+
+  async deleteRehearsal(id: string): Promise<{ rehearsal: Rehearsal }> {
+    return this.request<{ rehearsal: Rehearsal }>(
+      'DELETE',
+      `/rehearsals/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async submitRehearsalFeedback(
+    id: string,
+    payload: {
+      outcome: RehearsalActivationOutcome;
+      activationId?: string;
+      note?: string;
+    },
+  ): Promise<{ rehearsal: Rehearsal; activation?: RehearsalActivation }> {
+    return this.request(
+      'POST',
+      `/rehearsals/${encodeURIComponent(id)}/feedback`,
+      payload,
     );
   }
 
@@ -3260,12 +3773,16 @@ export class MemoryServiceClient {
       externalRef?: string;
       error?: string;
     }>,
-  ): Promise<{ ok: boolean; updated: number }> {
-    return this.request<{ ok: boolean; updated: number }>(
-      'POST',
-      '/notification-center/delivery',
-      { events },
-    );
+  ): Promise<{
+    ok: boolean;
+    updated: number;
+    items: NotificationCenterDeliveryRecord[];
+  }> {
+    return this.request<{
+      ok: boolean;
+      updated: number;
+      items: NotificationCenterDeliveryRecord[];
+    }>('POST', '/notification-center/delivery', { events });
   }
 
   /**
@@ -3734,7 +4251,7 @@ export class MemoryServiceClient {
 
   async createOutreachSessionFromMessage(
     body: CreateOutreachSessionFromMessageRequest,
-  ): Promise<{ session: OutreachSession }> {
+  ): Promise<CreateOutreachSessionFromMessageResponse> {
     return this.request(
       'POST',
       '/outreach/sessions/from-message',
@@ -4119,11 +4636,98 @@ export class MemoryServiceClient {
     );
   }
 
+  async previewImportMemory(
+    file: Blob | File,
+    mode: 'merge' | 'replace' = 'merge',
+  ): Promise<MemoryBackupImportPreviewResponse> {
+    const formData = new FormData();
+    const fileName =
+      typeof File !== 'undefined' && file instanceof File
+        ? file.name
+        : 'personal-ai-memory-backup.zip';
+
+    formData.append('file', file, fileName);
+    formData.append('mode', mode);
+    formData.append('dryRun', 'true');
+
+    return this.requestForm<MemoryBackupImportPreviewResponse>(
+      'POST',
+      '/import',
+      formData,
+    );
+  }
+
+  async inspectSmartMemoryImportText(
+    text: string,
+    options?: { scope?: 'work' | 'personal' },
+  ): Promise<SmartMemoryImportInspectResponse> {
+    return this.request<SmartMemoryImportInspectResponse>(
+      'POST',
+      '/import/inspect',
+      {
+        text,
+        scope: options?.scope,
+      },
+    );
+  }
+
+  async inspectSmartMemoryImportFile(
+    file: Blob | File,
+    options?: { scope?: 'work' | 'personal' },
+  ): Promise<SmartMemoryImportInspectResponse> {
+    const formData = new FormData();
+    formData.append('file', file, getUploadFileName(file, 'memory-import-source'));
+    if (options?.scope) {
+      formData.append('scope', options.scope);
+    }
+
+    return this.requestForm<SmartMemoryImportInspectResponse>(
+      'POST',
+      '/import/inspect',
+      formData,
+    );
+  }
+
+  async commitSmartMemoryImportText(
+    text: string,
+    options?: { scope?: 'work' | 'personal' },
+  ): Promise<SmartMemoryImportCommitResponse> {
+    return this.request<SmartMemoryImportCommitResponse>(
+      'POST',
+      '/import/commit',
+      {
+        text,
+        scope: options?.scope,
+      },
+    );
+  }
+
+  async commitSmartMemoryImportFile(
+    file: Blob | File,
+    options?: { scope?: 'work' | 'personal' },
+  ): Promise<SmartMemoryImportCommitResponse> {
+    const formData = new FormData();
+    formData.append('file', file, getUploadFileName(file, 'memory-import-source'));
+    if (options?.scope) {
+      formData.append('scope', options.scope);
+    }
+
+    return this.requestForm<SmartMemoryImportCommitResponse>(
+      'POST',
+      '/import/commit',
+      formData,
+    );
+  }
+
   /**
    * Get aggregate statistics for the memory service.
    */
   async getStats(): Promise<StatsResponse> {
     return this.request<StatsResponse>('GET', '/stats');
+  }
+
+  async getMemoryCoverageMap(): Promise<MemoryCoverageMapResponse> {
+    return this.request<MemoryCoverageMapResponse>('GET', '/coverage/map');
   }
 
   // --------------------------------------------------------------------------
@@ -4254,10 +4858,21 @@ export class MemoryServiceClient {
     userGoal?: string;
     autoGenerate?: boolean;
     forceGenerate?: boolean;
+    sourceTypes?: string[];
   }): Promise<TodayPilotMeetingPrepResolveResponse> {
     return this.request<TodayPilotMeetingPrepResolveResponse>(
       'POST',
       '/today-pilot/meeting-prep/resolve',
+      payload,
+    );
+  }
+
+  async createStorylineDraft(
+    payload: StorylineDraftRequest,
+  ): Promise<StorylineDraftResponse> {
+    return this.request<StorylineDraftResponse>(
+      'POST',
+      '/storylines/draft',
       payload,
     );
   }

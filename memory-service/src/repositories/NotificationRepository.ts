@@ -34,6 +34,24 @@ function safeJsonParse<T>(json: string | null): T | undefined {
   }
 }
 
+function readStringField(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function readPositiveNumberField(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
 export interface NotificationListFilters {
   state?: 'pending' | 'scheduled' | 'clicked' | 'dismissed';
   type?: string;
@@ -94,7 +112,8 @@ export class NotificationRepository {
       params.push(filters.type);
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const orderClause =
       state === 'scheduled'
         ? 'ORDER BY sent_at ASC, created_at DESC'
@@ -120,19 +139,26 @@ export class NotificationRepository {
 
   acknowledge(id: string, detail?: string): NotificationRecord | null {
     this.db
-      .prepare('UPDATE notification_records SET clicked_at = ?, action_taken = ? WHERE id = ?')
+      .prepare(
+        'UPDATE notification_records SET clicked_at = ?, action_taken = ? WHERE id = ?',
+      )
       .run(now(), detail ?? 'acknowledged', id);
     return this.getById(id);
   }
 
   dismiss(id: string, detail?: string): NotificationRecord | null {
     this.db
-      .prepare('UPDATE notification_records SET dismissed_at = ?, action_taken = ? WHERE id = ?')
+      .prepare(
+        'UPDATE notification_records SET dismissed_at = ?, action_taken = ? WHERE id = ?',
+      )
       .run(now(), detail ?? 'dismissed', id);
     return this.getById(id);
   }
 
-  snooze(id: string, delaySeconds = 24 * 3600): {
+  snooze(
+    id: string,
+    delaySeconds = 24 * 3600,
+  ): {
     notification: NotificationRecord | null;
     newNotificationId: string;
     scheduledAt: number;
@@ -151,6 +177,29 @@ export class NotificationRepository {
     const currentTime = now();
     const scheduledAt = currentTime + delaySeconds;
     const newId = randomUUID();
+    const payload =
+      safeJsonParse<Record<string, unknown>>(existing.payload_json) ?? {};
+    const previousSnooze =
+      payload.snooze && typeof payload.snooze === 'object'
+        ? (payload.snooze as Record<string, unknown>)
+        : {};
+    const rootNotificationId =
+      readStringField(previousSnooze, 'rootNotificationId') ??
+      readStringField(previousSnooze, 'sourceNotificationId') ??
+      existing.id;
+    const snoozeCount =
+      (readPositiveNumberField(previousSnooze, 'count') ?? 0) + 1;
+    const snoozedPayload = JSON.stringify({
+      ...payload,
+      snooze: {
+        sourceNotificationId: existing.id,
+        rootNotificationId,
+        snoozedAt: currentTime,
+        delaySeconds,
+        scheduledAt,
+        count: snoozeCount,
+      },
+    });
 
     this.db
       .prepare(
@@ -164,7 +213,7 @@ export class NotificationRepository {
         existing.type,
         existing.title,
         existing.body,
-        existing.payload_json,
+        snoozedPayload,
         existing.topic_id,
         existing.related_entity_id,
         existing.utility_score,
@@ -173,7 +222,9 @@ export class NotificationRepository {
       );
 
     this.db
-      .prepare('UPDATE notification_records SET dismissed_at = ?, action_taken = ? WHERE id = ?')
+      .prepare(
+        'UPDATE notification_records SET dismissed_at = ?, action_taken = ? WHERE id = ?',
+      )
       .run(currentTime, 'snoozed', id);
 
     return {
@@ -200,12 +251,16 @@ export class NotificationRepository {
     ).count;
     const clicked = (
       this.db
-        .prepare('SELECT COUNT(*) AS count FROM notification_records WHERE clicked_at IS NOT NULL')
+        .prepare(
+          'SELECT COUNT(*) AS count FROM notification_records WHERE clicked_at IS NOT NULL',
+        )
         .get() as CountRow
     ).count;
     const dismissed = (
       this.db
-        .prepare('SELECT COUNT(*) AS count FROM notification_records WHERE dismissed_at IS NOT NULL')
+        .prepare(
+          'SELECT COUNT(*) AS count FROM notification_records WHERE dismissed_at IS NOT NULL',
+        )
         .get() as CountRow
     ).count;
     const scheduled = (

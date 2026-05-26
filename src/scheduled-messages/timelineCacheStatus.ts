@@ -67,6 +67,8 @@ export interface TimelineSyncDryRunResult {
   milestoneKeys?: string[];
 }
 
+export type TimelineCacheUsage = 'timeline-trigger' | 'project-variables';
+
 export const TIMELINE_CACHE_AUTO_REFRESH_MIN_INTERVAL_MS = 5000;
 
 const TIMELINE_CACHE_STATUS_CODES: TimelineCacheProjectStatusCode[] = [
@@ -552,6 +554,64 @@ export function getTimelineCacheAttemptQuickFixText(attempt?: TimelineCacheSyncA
       return '复制诊断后查看 Apps Script 执行日志，按请求 ID 对照失败请求。';
     default:
       return attempt.nextAction || '';
+  }
+}
+
+export function getTimelineCacheExecutionImpactText(input: {
+  usage: TimelineCacheUsage;
+  status?: TimelineCacheProjectStatus;
+  selectedMilestone?: string;
+  projectMissingFromStatus?: boolean;
+  hasReadError?: boolean;
+}): string {
+  const status = input.status;
+  const selectedMilestone = input.selectedMilestone?.trim();
+  const isProjectVariables = input.usage === 'project-variables';
+  const unavailableImpact = isProjectVariables
+    ? '执行时如果缓存仍不可用，项目变量会保留原样。'
+    : '执行时如果缓存仍不可用，Timeline 触发会被跳过。';
+
+  if (input.hasReadError) {
+    return `可继续保存，但当前无法确认 Timeline 缓存状态；${unavailableImpact}`;
+  }
+
+  if (input.projectMissingFromStatus) {
+    return isProjectVariables
+      ? '可继续保存，但当前 App Script 未返回该项目；执行时项目变量会保留原样，直到 App Script 和 Sync Rule 项目清单更新。'
+      : '可继续保存，但当前 App Script 未返回该项目；这条 Timeline 不会命中该项目，直到 App Script 和 Sync Rule 项目清单更新。';
+  }
+
+  if (!status) {
+    return '';
+  }
+
+  if (!isProjectVariables && isTimelineMilestoneMissingForDiagnostics(selectedMilestone, status.milestoneKeys)) {
+    return `可继续保存，但执行器会跳过这条 Timeline，直到 ${status.project} 缓存包含 ${selectedMilestone}。`;
+  }
+
+  switch (status.status) {
+    case 'missing':
+      return isProjectVariables
+        ? `可继续保存；Timeline Sync Rule 成功写入 ${status.project} 缓存前，项目变量会保留原样。`
+        : `可继续保存；Timeline Sync Rule 成功写入 ${status.project} 缓存前，这条 Timeline 不会触发。`;
+    case 'expired':
+      return isProjectVariables
+        ? '可继续保存；缓存已过期，执行时项目变量可能保留原样，直到重新同步成功。'
+        : '可继续保存；缓存已过期，执行器会跳过这条 Timeline，直到重新同步成功。';
+    case 'invalid':
+    case 'error':
+      return isProjectVariables
+        ? '可继续保存；当前缓存不可用，执行时项目变量会保留原样，直到修复同步并刷新状态。'
+        : '可继续保存；当前缓存不可用，执行器会跳过这条 Timeline，直到修复同步并刷新状态。';
+    case 'ready':
+      if (status.lastAttempt?.success === false) {
+        return isProjectVariables
+          ? '当前已有缓存仍可替换项目变量；最近同步失败可能让后续发布节奏停留在旧缓存。'
+          : '当前已有缓存仍可触发；最近同步失败可能让后续发布节奏停留在旧缓存。';
+      }
+      return '';
+    default:
+      return '';
   }
 }
 

@@ -16,6 +16,19 @@
       <button type="button" @click="handleUndoTopicRead">撤销</button>
     </div>
 
+    <div
+      v-if="topicMuteUndo"
+      class="topic-undo-toast topic-mute-undo-toast"
+      role="status"
+    >
+      <span>
+        已将「{{ topicMuteUndo.topicName }}」静音：{{
+          formatMutedReason(topicMuteUndo.reason)
+        }}{{ formatMutedUntil(topicMuteUndo.until) }}
+      </span>
+      <button type="button" @click="handleUndoTopicMute">取消静音</button>
+    </div>
+
     <!-- 过滤控件 -->
     <div v-if="!isLoading && entities.length > 0" class="filter-controls">
       <!-- 主题视图切换 -->
@@ -805,7 +818,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, ref, toRaw } from 'vue';
+import { computed, onBeforeUnmount, watch, ref, toRaw } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   useMemoryStore,
@@ -857,6 +870,13 @@ const topicDeferOptions = ref(getTopicDeferPresetOptions());
 const topicMuteOptions = ref(getTopicMutePresetOptions());
 const topicMuteReasons = ref(getTopicMuteReasonOptions());
 const selectedMuteReason = ref<TopicMuteReasonKey>('not-now');
+const topicMuteUndo = ref<{
+  topicId: string;
+  topicName: string;
+  until: number | null;
+  reason?: TopicMuteReasonKey;
+} | null>(null);
+let topicMuteUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
 const formatDateTimeLocal = (timestamp = Date.now() + 60 * 60 * 1000) => {
   const date = new Date(timestamp);
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -1309,6 +1329,7 @@ const handleMuteTopic = async (
   reason: TopicMuteReasonKey = selectedMuteReason.value,
 ) => {
   activeMuteTopicId.value = null;
+  const topic = entities.value.find((entity) => entity.id === topicId);
   const cardElement = document.querySelector(
     `[data-topic-id="${topicId}"]`,
   ) as HTMLElement;
@@ -1319,6 +1340,15 @@ const handleMuteTopic = async (
   }
 
   await store.muteTopic(topicId, until, reason);
+  const mutedState = store.getTopicMutedState(topicId) as
+    | { until: number | null; reason?: TopicMuteReasonKey }
+    | null;
+  showTopicMuteUndo({
+    topicId,
+    topicName: String(topic?.name || topicId),
+    until: mutedState?.until ?? null,
+    reason: mutedState?.reason || reason,
+  });
 };
 
 const handleCustomDefer = async (topicId: string) => {
@@ -1339,6 +1369,33 @@ const handleRestoreMutedTopic = (topicId: string) => {
 const handleUndoTopicRead = async () => {
   await store.undoLastTopicRead();
 };
+
+const clearTopicMuteUndo = () => {
+  topicMuteUndo.value = null;
+  if (topicMuteUndoTimer !== null) {
+    window.clearTimeout(topicMuteUndoTimer);
+    topicMuteUndoTimer = null;
+  }
+};
+
+const showTopicMuteUndo = (undoState: NonNullable<typeof topicMuteUndo.value>) => {
+  clearTopicMuteUndo();
+  topicMuteUndo.value = undoState;
+  topicMuteUndoTimer = window.setTimeout(clearTopicMuteUndo, 10_000);
+};
+
+const handleUndoTopicMute = () => {
+  const undoState = topicMuteUndo.value;
+  if (!undoState) return;
+
+  store.restoreMutedTopic(undoState.topicId);
+  clearTopicMuteUndo();
+  if (entityType.value === 'Topic' && topicViewMode.value === 'muted') {
+    topicViewMode.value = 'unread';
+  }
+};
+
+onBeforeUnmount(clearTopicMuteUndo);
 
 watch(
   entityType,

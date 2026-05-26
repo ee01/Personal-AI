@@ -44,6 +44,25 @@ export interface ReflectionRunRecord {
   createdAt: number;
 }
 
+export type ReflectionResearchAttemptStatus = 'hit' | 'empty' | 'failed';
+
+export interface ReflectionResearchAttemptRecord {
+  id: string;
+  threadId: string;
+  runId?: string;
+  query: string;
+  purpose: string;
+  status: ReflectionResearchAttemptStatus;
+  resultCount: number;
+  sourceTypes: string[];
+  projectFilter?: string;
+  senderFilter: string[];
+  groupFilter: string[];
+  errorMessage?: string;
+  evidenceRefs: string[];
+  createdAt: number;
+}
+
 export interface DreamRunRecord {
   id: string;
   sourceType: string;
@@ -103,6 +122,23 @@ interface ReflectionRunRow {
   open_questions_json: string | null;
   actions_json: string | null;
   markdown_snapshot_path: string | null;
+  created_at: number;
+}
+
+interface ReflectionResearchAttemptRow {
+  id: string;
+  thread_id: string;
+  run_id: string | null;
+  query: string;
+  purpose: string;
+  status: ReflectionResearchAttemptStatus;
+  result_count: number;
+  source_types_json: string | null;
+  project_filter: string | null;
+  sender_filter_json: string | null;
+  group_filter_json: string | null;
+  error_message: string | null;
+  evidence_refs_json: string | null;
   created_at: number;
 }
 
@@ -204,6 +240,23 @@ export interface CreateReflectionRunInput {
   createdAt?: number;
 }
 
+export interface CreateReflectionResearchAttemptInput {
+  id?: string;
+  threadId: string;
+  runId?: string;
+  query: string;
+  purpose: string;
+  status: ReflectionResearchAttemptStatus;
+  resultCount?: number;
+  sourceTypes?: string[];
+  projectFilter?: string;
+  senderFilter?: string[];
+  groupFilter?: string[];
+  errorMessage?: string;
+  evidenceRefs?: string[];
+  createdAt?: number;
+}
+
 export interface CreateDreamRunInput {
   id?: string;
   sourceType: string;
@@ -270,6 +323,27 @@ export class ReflectionThreadRepository {
       openQuestions: safeJsonParse<string[]>(row.open_questions_json, []),
       actions: safeJsonParse<Array<Record<string, unknown>>>(row.actions_json, []),
       markdownSnapshotPath: row.markdown_snapshot_path ?? undefined,
+      createdAt: row.created_at,
+    };
+  }
+
+  private rowToResearchAttempt(
+    row: ReflectionResearchAttemptRow,
+  ): ReflectionResearchAttemptRecord {
+    return {
+      id: row.id,
+      threadId: row.thread_id,
+      runId: row.run_id ?? undefined,
+      query: row.query,
+      purpose: row.purpose,
+      status: row.status,
+      resultCount: row.result_count,
+      sourceTypes: safeJsonParse<string[]>(row.source_types_json, []),
+      projectFilter: row.project_filter ?? undefined,
+      senderFilter: safeJsonParse<string[]>(row.sender_filter_json, []),
+      groupFilter: safeJsonParse<string[]>(row.group_filter_json, []),
+      errorMessage: row.error_message ?? undefined,
+      evidenceRefs: safeJsonParse<string[]>(row.evidence_refs_json, []),
       createdAt: row.created_at,
     };
   }
@@ -604,6 +678,65 @@ export class ReflectionThreadRepository {
       )
       .all(threadId, Math.max(1, Math.min(limit, 100))) as ReflectionRunRow[];
     return rows.map((row) => this.rowToRun(row));
+  }
+
+  recordResearchAttempt(
+    input: CreateReflectionResearchAttemptInput,
+  ): ReflectionResearchAttemptRecord {
+    const id = input.id ?? randomUUID();
+    const createdAt = input.createdAt ?? now();
+    this.db
+      .prepare(
+        `INSERT INTO reflection_research_attempts
+          (id, thread_id, run_id, query, purpose, status, result_count,
+           source_types_json, project_filter, sender_filter_json,
+           group_filter_json, error_message, evidence_refs_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.threadId,
+        input.runId ?? null,
+        input.query,
+        input.purpose,
+        input.status,
+        Math.max(0, Math.floor(input.resultCount ?? 0)),
+        JSON.stringify(uniqStrings(input.sourceTypes ?? [])),
+        input.projectFilter ?? null,
+        JSON.stringify(uniqStrings(input.senderFilter ?? [])),
+        JSON.stringify(uniqStrings(input.groupFilter ?? [])),
+        input.errorMessage ?? null,
+        JSON.stringify(uniqStrings(input.evidenceRefs ?? [])),
+        createdAt,
+      );
+
+    return this.getResearchAttemptById(id)!;
+  }
+
+  getResearchAttemptById(
+    id: string,
+  ): ReflectionResearchAttemptRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM reflection_research_attempts WHERE id = ?')
+      .get(id) as ReflectionResearchAttemptRow | undefined;
+    return row ? this.rowToResearchAttempt(row) : null;
+  }
+
+  listResearchAttempts(
+    threadId: string,
+    limit = 30,
+  ): ReflectionResearchAttemptRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM reflection_research_attempts
+         WHERE thread_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?`,
+      )
+      .all(threadId, Math.max(1, Math.min(limit, 100))) as
+      ReflectionResearchAttemptRow[];
+    return rows.map((row) => this.rowToResearchAttempt(row));
   }
 
   countRuns(threadId: string): number {

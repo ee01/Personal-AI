@@ -42,6 +42,7 @@ export interface RawMessageStoreStats {
   messageCount: number;
   pendingExtractCount: number;
   conversationCount: number;
+  artifactCount: number;
 }
 
 /** Identifies which underlying browser transport a source last used. */

@@ -1,0 +1,1063 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>资料记忆蒸馏台 Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f5ef;
+        --page: #fffdf8;
+        --ink: #202124;
+        --muted: #696c71;
+        --line: #d9d5ca;
+        --teal: #0f766e;
+        --teal-weak: #d9f3ef;
+        --blue: #2d5b9a;
+        --amber: #9a6a12;
+        --rose: #a23d56;
+        --green: #2f7a4f;
+        --panel: #ffffff;
+        --shadow: 0 18px 45px rgba(58, 52, 39, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      .topbar {
+        height: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 20px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 253, 248, 0.92);
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        backdrop-filter: blur(12px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .brand-mark {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        background:
+          linear-gradient(135deg, var(--teal) 0 50%, #f1b64a 50% 100%);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+        flex: 0 0 auto;
+      }
+
+      .brand-title {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .brand-title strong {
+        font-size: 15px;
+        line-height: 18px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .brand-title span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 16px;
+      }
+
+      .nav-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .icon-button {
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--line);
+        background: #fffaf0;
+        color: var(--ink);
+        border-radius: 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+
+      .icon-button:hover {
+        border-color: var(--teal);
+        color: var(--teal);
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 420px;
+        gap: 18px;
+        width: min(1440px, calc(100vw - 32px));
+        margin: 18px auto 32px;
+        align-items: start;
+      }
+
+      .source-frame,
+      .memory-panel {
+        border: 1px solid var(--line);
+        background: var(--page);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .source-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0;
+        border-bottom: 1px solid var(--line);
+        background: #f2eee2;
+        border-radius: 8px 8px 0 0;
+        overflow: hidden;
+      }
+
+      .source-tab {
+        height: 44px;
+        border: 0;
+        border-right: 1px solid var(--line);
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+
+      .source-tab:last-child {
+        border-right: 0;
+      }
+
+      .source-tab.active {
+        background: var(--page);
+        color: var(--ink);
+        font-weight: 700;
+      }
+
+      .source-body {
+        padding: 28px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 260px;
+        gap: 28px;
+      }
+
+      .article-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .tag {
+        min-height: 26px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fffaf0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 16px;
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: 34px;
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+
+      .dek {
+        margin: 0 0 22px;
+        color: #4f5358;
+        font-size: 16px;
+        line-height: 1.7;
+      }
+
+      .article-content {
+        font-size: 15px;
+        line-height: 1.8;
+      }
+
+      .article-content h2 {
+        font-size: 19px;
+        margin: 28px 0 10px;
+      }
+
+      .article-content p {
+        margin: 0 0 16px;
+      }
+
+      .highlight {
+        background: linear-gradient(transparent 48%, #fff0b8 48%);
+        padding: 0 2px;
+        border-radius: 3px;
+      }
+
+      .source-side {
+        position: sticky;
+        top: 74px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .mini-card {
+        border: 1px solid var(--line);
+        background: #fffaf0;
+        border-radius: 8px;
+        padding: 14px;
+      }
+
+      .mini-card h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+
+      .mini-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .signal-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .signal {
+        display: grid;
+        grid-template-columns: 10px 1fr;
+        gap: 8px;
+        align-items: start;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-top: 6px;
+        background: var(--teal);
+      }
+
+      .memory-panel {
+        position: sticky;
+        top: 74px;
+        max-height: calc(100vh - 92px);
+        overflow: auto;
+        background: var(--panel);
+      }
+
+      .panel-head {
+        padding: 18px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .panel-head h2 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.25;
+      }
+
+      .panel-head p {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .state-pill {
+        min-width: 94px;
+        border: 1px solid #b9dcd7;
+        color: var(--teal);
+        background: var(--teal-weak);
+        border-radius: 6px;
+        padding: 5px 8px;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .panel-section {
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .section-title h3 {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      .score {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .intent-box {
+        width: 100%;
+        min-height: 72px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        line-height: 1.55;
+        color: var(--ink);
+        background: #fffdf8;
+      }
+
+      .takeaways {
+        display: grid;
+        gap: 10px;
+      }
+
+      .takeaway {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: #fffdf8;
+      }
+
+      .takeaway-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 6px;
+      }
+
+      .takeaway strong {
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .kind {
+        flex: 0 0 auto;
+        min-width: 52px;
+        text-align: center;
+        border-radius: 6px;
+        padding: 3px 6px;
+        font-size: 12px;
+        background: #eef3ff;
+        color: var(--blue);
+        border: 1px solid #c8d7f1;
+      }
+
+      .takeaway p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .anchor {
+        margin-top: 8px;
+        border-left: 3px solid #e8bd57;
+        padding-left: 9px;
+        color: #5d4a1b;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .trigger-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .trigger {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-height: 84px;
+        padding: 10px;
+        background: #fffdf8;
+      }
+
+      .trigger strong {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+
+      .trigger span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .scope-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .scope-chip {
+        border: 1px solid var(--line);
+        background: #fffaf0;
+        color: var(--ink);
+        border-radius: 6px;
+        min-height: 30px;
+        padding: 5px 8px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .scope-chip.active {
+        background: var(--teal-weak);
+        border-color: #a7d9d1;
+        color: var(--teal);
+        font-weight: 700;
+      }
+
+      .action-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        padding: 16px 18px 18px;
+      }
+
+      .primary,
+      .secondary {
+        min-height: 40px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .primary {
+        background: var(--teal);
+        color: white;
+        border-color: var(--teal);
+      }
+
+      .primary.saved {
+        background: var(--green);
+        border-color: var(--green);
+      }
+
+      .secondary {
+        background: #fffaf0;
+        color: var(--ink);
+      }
+
+      .activity {
+        display: grid;
+        gap: 9px;
+      }
+
+      .activity-item {
+        display: grid;
+        grid-template-columns: 20px 1fr;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .activity-item .mark {
+        width: 20px;
+        height: 20px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--teal);
+        background: #fffdf8;
+      }
+
+      .toast {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        width: min(360px, calc(100vw - 48px));
+        border: 1px solid #b9dcd7;
+        background: #f0fffb;
+        color: #174b45;
+        border-radius: 8px;
+        padding: 12px 14px;
+        box-shadow: var(--shadow);
+        display: none;
+        z-index: 30;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .toast.show {
+        display: block;
+      }
+
+      @media (max-width: 1100px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        .memory-panel,
+        .source-side {
+          position: static;
+          max-height: none;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .topbar {
+          height: auto;
+          min-height: 56px;
+          padding: 10px 12px;
+          align-items: flex-start;
+        }
+
+        .brand-title strong {
+          white-space: normal;
+        }
+
+        .shell {
+          width: min(100vw - 18px, 720px);
+          margin-top: 10px;
+        }
+
+        .source-tabs {
+          grid-template-columns: 1fr;
+        }
+
+        .source-tab {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .source-tab:last-child {
+          border-bottom: 0;
+        }
+
+        .source-body {
+          grid-template-columns: 1fr;
+          padding: 18px;
+        }
+
+        h1 {
+          font-size: 26px;
+        }
+
+        .trigger-grid,
+        .action-row {
+          grid-template-columns: 1fr;
+        }
+
+        .panel-head {
+          flex-direction: column;
+        }
+
+        .state-pill {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="brand-title">
+          <strong>Personal AI 资料记忆蒸馏台</strong>
+          <span>当前网页旁的资料沉淀层</span>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <button class="icon-button" title="打开资料库" aria-label="打开资料库">□</button>
+        <button class="icon-button" title="折叠侧栏" aria-label="折叠侧栏">×</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="source-frame" aria-label="模拟外部网页">
+        <div class="source-tabs" role="tablist">
+          <button class="source-tab active" data-source="weekly" role="tab">AI 周报</button>
+          <button class="source-tab" data-source="notebook" role="tab">NotebookLM 资料</button>
+          <button class="source-tab" data-source="paper" role="tab">论文摘要</button>
+        </div>
+
+        <div class="source-body">
+          <article>
+            <div class="article-meta" id="articleMeta"></div>
+            <h1 id="articleTitle"></h1>
+            <p class="dek" id="articleDek"></p>
+            <div class="article-content" id="articleContent"></div>
+          </article>
+
+          <aside class="source-side">
+            <div class="mini-card">
+              <h3>页面信号</h3>
+              <div class="signal-list" id="signals"></div>
+            </div>
+            <div class="mini-card">
+              <h3>当前关联</h3>
+              <p id="currentRelation"></p>
+            </div>
+            <div class="mini-card">
+              <h3>入库边界</h3>
+              <p>仅保存用户确认的资料记忆；未确认内容保持为本页临时 draft。</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <aside class="memory-panel" aria-label="Personal AI 侧栏">
+        <div class="panel-head">
+          <div>
+            <h2 id="panelTitle">资料记忆候选</h2>
+            <p id="panelSubtitle">从当前资料抽取证据、用途和未来触发场景。</p>
+          </div>
+          <div class="state-pill" id="saveState">待确认</div>
+        </div>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <h3>保存意图</h3>
+            <span class="score" id="intentScore">意图 86</span>
+          </div>
+          <textarea class="intent-box" id="intentBox"></textarea>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <h3>可沉淀内容</h3>
+            <span class="score" id="takeawayScore">4 条</span>
+          </div>
+          <div class="takeaways" id="takeaways"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <h3>未来触发</h3>
+            <span class="score">安静优先</span>
+          </div>
+          <div class="trigger-grid" id="triggers"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <h3>保存到</h3>
+            <span class="score">可修改</span>
+          </div>
+          <div class="scope-row">
+            <button class="scope-chip active">工作资料</button>
+            <button class="scope-chip active">AI 工具</button>
+            <button class="scope-chip">Skill 候选</button>
+            <button class="scope-chip">只本地可见</button>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <h3>活动记录</h3>
+            <span class="score">本页</span>
+          </div>
+          <div class="activity" id="activity"></div>
+        </section>
+
+        <div class="action-row">
+          <button class="primary" id="saveButton">保存资料记忆</button>
+          <button class="secondary" id="packButton">生成上下文包</button>
+        </div>
+      </aside>
+    </main>
+
+    <div class="toast" id="toast" role="status"></div>
+
+    <script>
+      const sources = {
+        weekly: {
+          title: "2026 Week 15 AI Weekly Pulse: 从工具新闻到个人知识资产",
+          dek:
+            "团队 AI 周报包含 Claude Design、NotebookLM、Gemini 桌面共享、MCP 工具接入等信息。Personal AI 识别到这类资料和即将到来的 CoP 分享有关。",
+          meta: ["AI Insight Hub", "内部周报", "2026-05-12", "阅读 4 分钟"],
+          relation:
+            "命中日程：CoP - 基于AI的个人发展和工具；命中兴趣：AI 工具、个人发展、NotebookLM。",
+          intent:
+            "用于准备 6 月 4 日 CoP 分享：把 AI 工具新闻转成可执行的个人工作流建议，重点比较 NotebookLM、MCP 和跨 AI 记忆。",
+          signals: [
+            "页面停留超过 90 秒",
+            "选中 3 段关于 NotebookLM 与 MCP 的内容",
+            "和 2 个未来日程、5 条 AI 工具记忆重合"
+          ],
+          content: [
+            {
+              h: "NotebookLM 从资料摘要走向 source workspace",
+              p:
+                "NotebookLM 支持把 PDF、网站、YouTube、音频和 Google Docs 放进同一个资料空间，并围绕这些来源生成摘要、学习指南和讨论内容。关键价值不是摘要本身，而是所有回答都能回到来源。"
+            },
+            {
+              h: "MCP 让资料走到用户真正工作的 AI 里",
+              p:
+                "Granola MCP、Notion MCP 和其他 connector 正在把会议、文档、项目数据带入 Claude、ChatGPT、Cursor 等工具。资料不再只待在原应用里，而是成为 AI 工作流的上下文。"
+            },
+            {
+              h: "Personal AI 的机会",
+              p:
+                "对个人用户来说，真正难的是把看过的资料和自己的会议、项目、消息、偏好、skill 关联起来。只保存链接不够，必须保存为什么关心、将来在哪些场景出现。"
+            }
+          ],
+          takeaways: [
+            {
+              kind: "概念",
+              title: "资料记忆不是网页收藏",
+              body:
+                "资料需要保存用户意图、来源锚点和未来触发场景，否则后续 AI 只能拿到低信号链接。",
+              anchor: "来源段落：Personal AI 的机会"
+            },
+            {
+              kind: "产品",
+              title: "NotebookLM 强在 source-grounded workspace",
+              body:
+                "适合作为竞品参考，但 Personal AI 要连接用户自己的消息、会议、Jira 和 AI 对话。",
+              anchor: "来源段落：NotebookLM 从资料摘要走向 source workspace"
+            },
+            {
+              kind: "流程",
+              title: "MCP 是资料记忆的下游出口",
+              body:
+                "先把资料沉淀成证据化 capsule，再通过 Context Passport 或 MCP 交给外部 AI。",
+              anchor: "来源段落：MCP 让资料走到用户真正工作的 AI 里"
+            },
+            {
+              kind: "风险",
+              title: "不要把阅读等同于偏好",
+              body:
+                "看过某观点只说明它被关注，不能自动写入用户画像或对外表达为用户立场。",
+              anchor: "Personal AI 保存边界建议"
+            }
+          ],
+          triggers: [
+            ["CoP 日程", "会前 24 小时在 Day Pilot 出现"],
+            ["AI 工具讨论", "Memory Lens 展示 2 条证据"],
+            ["ChatGPT 输入框", "提供最小 context pack"],
+            ["资料变化", "下次引用前检查来源"]
+          ]
+        },
+        notebook: {
+          title: "NotebookLM 资料包：Gemini、Gems 与个人学习工作流",
+          dek:
+            "用户把 NotebookLM 训练材料和内部链接放在一起，准备比较哪些内容适合成为自己的 AI 工作流。",
+          meta: ["NotebookLM", "Google Workspace", "资料包", "12 个 sources"],
+          relation:
+            "命中日程：AI Refresh；命中技能：find-skills；命中主题：AI personal development。",
+          intent:
+            "沉淀 NotebookLM 的可复用用法：哪些资料适合先放进 NotebookLM，哪些应该进入 Personal AI 长期资料记忆。",
+          signals: [
+            "打开同一资料包 2 次",
+            "复制过一段关于 Audio Overview 的说明",
+            "和 AI Refresh 日程标题强相关"
+          ],
+          content: [
+            {
+              h: "NotebookLM 适合围绕一组 sources 做临时研究",
+              p:
+                "它可以把 docs、slides、网站、音视频资料放在一个 notebook 里，让用户围绕这一组来源问答、生成学习材料或分享大纲。"
+            },
+            {
+              h: "Personal AI 适合保存长期跨场景记忆",
+              p:
+                "NotebookLM 的输出如果对用户长期有用，应被转成资料记忆 capsule，连接到项目、日程、AI 对话和未来触发场景。"
+            },
+            {
+              h: "关键边界",
+              p:
+                "不要把 NotebookLM 的所有 source 全量复制进 Personal AI。只保存被用户高亮、引用、复用或明确确认的内容。"
+            }
+          ],
+          takeaways: [
+            {
+              kind: "边界",
+              title: "NotebookLM 是 source workspace，Personal AI 是长期记忆层",
+              body: "二者互补：一个服务当前资料包研究，一个服务跨场景召回。",
+              anchor: "来源段落：Personal AI 适合保存长期跨场景记忆"
+            },
+            {
+              kind: "流程",
+              title: "NotebookLM 输出可以变成资料 capsule",
+              body: "保存摘要、关键问题、引用片段和用户用途，而不是全量复制 sources。",
+              anchor: "来源段落：关键边界"
+            },
+            {
+              kind: "触发",
+              title: "AI Refresh 前提示相关资料",
+              body: "日程前自动聚合最近保存的 NotebookLM/Gemini/Gems 资料。",
+              anchor: "AI Refresh 日程关联"
+            }
+          ],
+          triggers: [
+            ["AI Refresh", "会前准备资料卡"],
+            ["NotebookLM 页面", "显示已保存记忆"],
+            ["CoP 分享", "生成 5 分钟大纲"],
+            ["Skill Foundry", "仅创建候选"]
+          ]
+        },
+        paper: {
+          title: "MemMachine / A-MEM 阅读片段：长期记忆必须保留证据",
+          dek:
+            "论文摘要强调 ground-truth episode、动态链接和检索格式优化。这些内容可以指导 Personal AI 的资料入库设计。",
+          meta: ["arXiv", "Memory Systems", "论文摘要", "已高亮 4 段"],
+          relation:
+            "命中 progressing 主题：context-recall eval、Memory Lens、资料入库；命中用户偏好：直接、分析、实用。",
+          intent:
+            "保存为未来设计 Personal AI 记忆架构时的技术依据：证据锚点优先、摘要只是派生层、记忆需要动态连接。",
+          signals: [
+            "用户高亮论文摘要",
+            "和当前 repo memory-service/chunks/relationships 结构相关",
+            "可作为后续 plan 的引用资料"
+          ],
+          content: [
+            {
+              h: "Ground truth preservation",
+              p:
+                "长期记忆系统如果只保存 LLM 摘要，容易丢失上下文和细节。更稳妥的方式是保留完整 episode 或 source anchor，再在检索时扩展周边上下文。"
+            },
+            {
+              h: "Dynamic memory linking",
+              p:
+                "A-MEM 类方法强调新记忆进入时，应和历史记忆建立链接，并在必要时更新旧记忆的表示。"
+            },
+            {
+              h: "对资料蒸馏的启发",
+              p:
+                "资料记忆应同时保存原始锚点、派生 takeaways、相关实体、未来触发策略和用户反馈，而不是只有 summary。"
+            }
+          ],
+          takeaways: [
+            {
+              kind: "技术",
+              title: "先存 source anchor，再存 LLM takeaways",
+              body: "派生摘要可以重算，证据锚点不能丢。",
+              anchor: "来源段落：Ground truth preservation"
+            },
+            {
+              kind: "架构",
+              title: "新资料要链接旧记忆",
+              body: "source capsule 保存时应连接项目、人、会议、skill 和已有资料。",
+              anchor: "来源段落：Dynamic memory linking"
+            },
+            {
+              kind: "验证",
+              title: "检索质量看引用是否解释得清",
+              body: "返回 source memory 时必须带 whyRelevant 和 evidence preview。",
+              anchor: "来源段落：对资料蒸馏的启发"
+            }
+          ],
+          triggers: [
+            ["架构讨论", "作为技术依据出现"],
+            ["Codex plan", "插入精简引用"],
+            ["Recall eval", "检查 whyRelevant"],
+            ["Freshness", "论文版本变化再看"]
+          ]
+        }
+      };
+
+      const articleMeta = document.querySelector("#articleMeta");
+      const articleTitle = document.querySelector("#articleTitle");
+      const articleDek = document.querySelector("#articleDek");
+      const articleContent = document.querySelector("#articleContent");
+      const signals = document.querySelector("#signals");
+      const currentRelation = document.querySelector("#currentRelation");
+      const intentBox = document.querySelector("#intentBox");
+      const takeaways = document.querySelector("#takeaways");
+      const triggers = document.querySelector("#triggers");
+      const activity = document.querySelector("#activity");
+      const saveState = document.querySelector("#saveState");
+      const saveButton = document.querySelector("#saveButton");
+      const packButton = document.querySelector("#packButton");
+      const toast = document.querySelector("#toast");
+
+      let activeSource = "weekly";
+      let saved = false;
+
+      function renderSource(key) {
+        activeSource = key;
+        saved = false;
+        const source = sources[key];
+
+        document.querySelectorAll(".source-tab").forEach((tab) => {
+          tab.classList.toggle("active", tab.dataset.source === key);
+        });
+
+        articleMeta.innerHTML = source.meta
+          .map((item) => `<span class="tag">${escapeHtml(item)}</span>`)
+          .join("");
+        articleTitle.textContent = source.title;
+        articleDek.textContent = source.dek;
+        articleContent.innerHTML = source.content
+          .map(
+            (block, index) => `
+              <h2>${escapeHtml(block.h)}</h2>
+              <p>${markImportant(block.p, index)}</p>
+            `
+          )
+          .join("");
+        signals.innerHTML = source.signals
+          .map(
+            (item) => `
+              <div class="signal">
+                <span class="dot"></span>
+                <span>${escapeHtml(item)}</span>
+              </div>
+            `
+          )
+          .join("");
+        currentRelation.textContent = source.relation;
+        intentBox.value = source.intent;
+        takeaways.innerHTML = source.takeaways
+          .map(
+            (item) => `
+              <div class="takeaway">
+                <div class="takeaway-head">
+                  <strong>${escapeHtml(item.title)}</strong>
+                  <span class="kind">${escapeHtml(item.kind)}</span>
+                </div>
+                <p>${escapeHtml(item.body)}</p>
+                <div class="anchor">${escapeHtml(item.anchor)}</div>
+              </div>
+            `
+          )
+          .join("");
+        triggers.innerHTML = source.triggers
+          .map(
+            ([title, body]) => `
+              <div class="trigger">
+                <strong>${escapeHtml(title)}</strong>
+                <span>${escapeHtml(body)}</span>
+              </div>
+            `
+          )
+          .join("");
+        activity.innerHTML = `
+          <div class="activity-item">
+            <span class="mark">1</span>
+            <span>生成 draft capsule，等待用户确认。</span>
+          </div>
+          <div class="activity-item">
+            <span class="mark">2</span>
+            <span>保留 ${source.takeaways.length} 条 takeaway 和 ${source.triggers.length} 个触发场景。</span>
+          </div>
+        `;
+        saveState.textContent = "待确认";
+        saveButton.textContent = "保存资料记忆";
+        saveButton.classList.remove("saved");
+      }
+
+      function markImportant(text, index) {
+        const parts = text.split("。");
+        if (parts.length < 2 || index === 0) {
+          return `<span class="highlight">${escapeHtml(text)}</span>`;
+        }
+        return `${escapeHtml(parts[0])}。<span class="highlight">${escapeHtml(
+          parts.slice(1).join("。")
+        )}</span>`;
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("show");
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => {
+          toast.classList.remove("show");
+        }, 2400);
+      }
+
+      document.querySelectorAll(".source-tab").forEach((tab) => {
+        tab.addEventListener("click", () => renderSource(tab.dataset.source));
+      });
+
+      document.querySelectorAll(".scope-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          chip.classList.toggle("active");
+        });
+      });
+
+      saveButton.addEventListener("click", () => {
+        saved = true;
+        saveState.textContent = "已保存";
+        saveButton.textContent = "已保存到资料记忆";
+        saveButton.classList.add("saved");
+        activity.innerHTML =
+          activity.innerHTML +
+          `
+          <div class="activity-item">
+            <span class="mark">✓</span>
+            <span>已写入 source capsule；Context Recall 可在匹配场景中引用。</span>
+          </div>
+        `;
+        showToast("资料记忆已保存：证据锚点、用途和未来触发场景已入库。");
+      });
+
+      packButton.addEventListener("click", () => {
+        const source = sources[activeSource];
+        const prefix = saved ? "已基于已保存资料生成" : "基于当前 draft 生成";
+        showToast(`${prefix}上下文包：${source.takeaways.length} 条 takeaways，含证据边界。`);
+      });
+
+      renderSource(activeSource);
+    </script>
+  </body>
+</html>

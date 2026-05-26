@@ -63,6 +63,7 @@ test('buildMeetingPilotContextRecallRequest: builds passive request with cleaned
     'jira',
     'calendar',
     'markdown',
+    'rehearsal',
   ]);
   assert.equal((req as any).sourceContext.meetingId, 'm-current');
   assert.deepEqual((req as any).exclude.meetingIds, ['m-current']);

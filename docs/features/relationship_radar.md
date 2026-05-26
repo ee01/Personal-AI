@@ -1,6 +1,6 @@
 # Relationship Radar / 关系记忆雷达
 
-*最后更新: 2026-05-22*
+*最后更新: 2026-05-23*
 
 ## 是什么
 
@@ -42,6 +42,7 @@ Relationship Radar 会把“和某个人有关的记忆”整理成人物上下�
 - 稳定关系边和相关人物。
 - 已确认事实、推断事实和待确认 review item。
 - 可跳转回记忆系统的 `exploreLink` 证据。
+- 证据按钮只接受安全的内部 `#/...` 路由和 `http(s)` 外部链接；导入数据里携带的危险 URL 会被拦截并给出提示。
 
 证据需要能追溯到 message、entity property 或 relationship，不把无证据推断直接包装成事实。
 
@@ -67,6 +68,8 @@ Context Card 适合被 Meeting Pilot、Compose Assist、Quick Ask 或外部 AI c
 - 返回 `coverage` 汇总和每个 attendee 的 `matchedBy`、`matchReason`、`matchConfidence`、`coverageState`。
 - 有匹配时展示最近上下文、未闭环事项、建议问法和可引用证据入口。
 - 无匹配时保持低承诺提示，明确标出需要会中确认角色或补充人物别名，不伪造关系信息。
+- 大会议默认只展开前 16 位参会人的人物上下文；如果日历或手动输入超过上限，API、页面和复制简报都会显示已分析/未分析人数，并列出未展开参会人，避免覆盖统计看起来比实际更完整。
+- 页面内手动生成简报时，如果用户还没有改过默认会议标题/参会人，切换人物会自动把默认参会人同步到当前人物；一旦用户手动编辑，就保留用户输入。
 
 ### Assistant Draft
 
@@ -113,6 +116,7 @@ Context Card 适合被 Meeting Pilot、Compose Assist、Quick Ask 或外部 AI c
 - 不把关系打成绝对好坏分数。
 - 不把未确认推断当作事实。
 - 不默认把敏感人物上下文外发给其他 AI。
+- 不打开未经安全检查的证据链接。
 - 不替代 `memory_system.md` 里的自我反思、决策中心、主动询问和通知链路；Relationship Radar 消费这些链路产出的证据。
 
 ## 验证建议

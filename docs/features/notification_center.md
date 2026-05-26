@@ -124,6 +124,14 @@ Notification Center 不会把“已经发给某个渠道”直接视为“用户
 - `clicked`
 - `dismissed`
 
+回执 API 返回里还会带两个诊断字段：
+
+- `status`: 最近一次该 channel/source/lane 收到的回执事件
+- `effectiveStatus`: 对用户和调试更有意义的当前有效状态；如果此前已经送达、点击或忽略，后续一次失败不会把有效状态倒退成“从未送达”
+- `hasSuccessfulDelivery`: 是否曾经有过送达、点击或忽略类成功回执
+
+这避免了一个常见误读：例如 Doubao 或 Chrome 曾经成功展示过通知，但后面一次网络重试写入了 `failed`。此时 `status=failed` 说明最后一次尝试失败，`effectiveStatus=delivered` 才说明这条 source 对该渠道已经有过可用送达。
+
 ### 1.6 API
 
 Notification Center 对外主要暴露两个接口：
@@ -144,6 +152,7 @@ Notification Center 对外主要暴露两个接口：
 - 对 `todo` 来说，`delivered` 只是 6 小时短期冷却；如果用户没有点击或明确忽略，冷却后会重新进入 feed
 - `clicked` / `dismissed` 是终止性的用户处理回执，不会因为冷却时间过去而重新进入 feed
 - feed 会先排除该 channel 已成功投递的 source，再做 `limit` 截断，避免旧的未投递通知被新的已投递记录挡住
+- 每个 feed item 会带 `deliveryContext`，说明它是全新通知、上次投递失败后重试，还是待办冷却结束后的再次提醒；Chrome 通知和 Provider digest 会把这个原因展示出来，避免用户误以为重复出现的待办是全新事件
 
 `delivery` 的语义是：
 
@@ -179,10 +188,13 @@ Notification Center 对外主要暴露两个接口：
 - `todo_digest` 是新的待办输出
 - `notice_digest` 是新的通知输出
 - `reminder_digest` 只是 `todo_digest` 的兼容别名
+- 周报和 `dream_digest` 的推送目标以 memory-service runtime config 为准：`me` 发给当前用户，`group` 发给配置的群组，`none` 不创建通知也不发 Bot；Options 里的“立即推送”会把当前选择带到后端，手动触发不会绕过这个门控
 
 对应实现：
 
 - `memory-service/src/core/ProviderContextService.ts`
+- `memory-service/src/core/WeeklyReporter.ts`
+- `memory-service/src/core/HeartbeatLoop.ts`
 
 ### 2.2 Doubao
 
@@ -196,6 +208,7 @@ Doubao 现在分两条同步路径：
 - `todo` 文案不能带 `✅`
 - `notice` 不应该写成待办
 - `dream_digest` / 周报这类 notice 会把 `payload` 里的摘要详情纳入同步内容，避免只同步“生成了 N 条内容”的空壳提示
+- 周报 / Dream Digest 的 `me`、`group`、`none` 不是前端文案开关，而是后端投递门控；`none` 只允许用户显式生成内容，不进入通知中心或 Bot 渠道
 - Doubao 成功后只写 delivery 回执，不自动全局 `acknowledge`
 
 对应实现：
@@ -218,6 +231,7 @@ Chrome extension 优先从 `notification-center/feed` 拉取消息。
 - 通知弹窗会用 `contextMessage` 标出“待处理/通知”、优先级和待办截止时间，降低用户判断成本
 - `dream_digest` 这类通知的系统弹窗预览会优先用 payload 摘要片段，而不是只展示计数型 body
 - `proposed_action:*` 的“查看待办”会打开动作队列并定位对应 action；`project_update` / `property_change` 这类 notice 会打开时间轴；周报和 dream digest 仍进入梦境重放
+- 带 `payload.confirmRequestId` 的 `truth_conflict` / `notify_user` 等通知会打开决策中心的具体确认项，页面会置顶并高亮该卡片；如果确认项已处理或不在当前队列，会显示明确落空说明
 - Chrome 通知的来源元数据会同时保存在 `chrome.storage.local`，避免 MV3 service worker 被回收后点击 / 忽略操作无法回写通知中心
 - 对 `notification:*` 的待办类系统通知，第二按钮是“稍后提醒”；没有截止时间时默认延后 24 小时，有截止时间时会尽量在截止前再次提醒，避免把待办直接延到过期后。notice 使用“不再提示”，`proposed_action:*` 使用“暂不提醒”且只记录渠道事件
 
@@ -290,6 +304,10 @@ DigestQueueService 的处理流程是：
 6. 通过 `notificationService.sendNotification()` 推送
 7. 成功后从本地队列删除已处理条目
 
+如果任一内置 digest 推送失败，队列条目会保留，`digest_queue_process` 后台任务会被标成失败，并在 popup 的后台任务面板显示失败原因。这样用户不会看到“后台任务成功”但摘要实际没有发出去的假状态。
+
+本地 digest 不是某一条 RingCentral 原消息，所以 Bot 文案不会再生成空群组 mention 或 `app.ringcentral.com/messages/` 这类无效原消息链接；摘要正文会作为可读内容直接展示。
+
 ### 3.5 当前有效内容
 
 旧的 `digest-queue-service.md` 里这些描述仍然有效：
@@ -344,15 +362,45 @@ DigestQueueService 的处理流程是：
 - 通知研究也支持“不要把所有通知都立即打断用户”：Intelligent Notification Systems survey 把核心挑战归纳为根据用户上下文和偏好选择合适时机；Yahoo! JAPAN 的大规模 adaptive scheduling 研究显示，延迟到更可打断的时机能改善响应速度；DOIG 研究提示要记录用户实际响应层级，而不是只看是否触达。
 - 对 Personal AI 来说，待办通知的“稍后提醒/暂不提醒”不能和 notice 的“不再提示”混成同一种操作，也不能固定延后 24 小时。当前实现会保留 notice 的低干扰关闭路径，让带截止时间的待办在截止前回到用户面前；即使只是展示成功、暂不提醒或直接关闭但没有真正处理，`todo` 也会在 6 小时冷却后重新进入 feed。
 
+本轮对“渠道投递回执”补了状态可解释性：
+
+- Twilio 的 status callback 模型把 queued / sent / delivered / failed / read 作为生命周期事件，而不是只保留一个不可解释的布尔值；Personal AI 也应明确区分最后一次尝试和有效送达状态。
+- OneSignal 区分 push provider 接受的 Delivered 与设备侧 Confirmed Delivery，说明“渠道说发出去了”和“用户设备确实收到”不是同一层语义。
+- Firebase Cloud Messaging 的 BigQuery delivery export 支持按 message / instance 追踪 accepted、delivered 和 latency，说明回执数据要能用于事后诊断。
+- Teams read receipts 明确把“在通知/banner 看到”排除在 read receipt 之外，和 Personal AI 里“渠道送达不等于用户已处理”的原则一致。
+- 通知系统研究强调错误时机和过多打断会损害体验，因此回执必须为冷却、重试和处理状态提供可靠信号。当前 feed 已把这些信号整理成 `deliveryContext.reason`，用于给用户显示“再次提醒”或“上次发送失败”。
+
+本轮对通知点击落点补了确认项深链：
+
+- 真实 `chrome` feed 里常出现多条标题相同的 `truth_conflict` 待办，用户从系统通知进入后如果只落到 `/decisions` 总页，需要再人工比对问题正文。现在 notification payload 里的 `confirmRequestId` 会变成 `#/decisions?confirmRequestId=...`，Decision Center 负责置顶、高亮和解释找不到目标的原因。
+- 这和 GitHub Notifications / Teams Activity 这类可处理队列的设计一致：通知不是只提示“有事”，而应该把用户带到可以立即处理的那一项。
+
+本轮对 `DigestQueueService` 本地摘要补了两个小修正：
+
+- Slack Activity 和 Teams Activity feed 都强调把通知放在可筛选、可处理的队列里，而不是只发一次系统提示；Apple 的 Scheduled Summary 也把低紧急通知合并到用户指定时间。因此 Personal AI 的本地摘要继续保持“延迟汇总”定位，但后台任务必须明确说明上次是无到期摘要、已推送 N 条，还是发送失败且队列已保留。
+- 通知 batching 研究支持减少打断，但也提醒 batching 只在符合工作期待时有效。对本地摘要来说，失败不能被吞掉，digest 文案也必须自包含，不能带空群组和无效原消息链接，否则用户无法判断这条摘要到底从哪里来、是否需要补救。
+
+本轮对周报 / Dream Digest 的投递目标做了语义对齐：
+
+- Microsoft Viva Digest 把个人 digest 明确做成可 opt out 的个人洞察入口；Apple Scheduled Summary 也强调由用户选择哪些通知进入摘要和何时展示；Slack Activity 则把通知、提醒和 saved views 放在可过滤队列里。对应到 Personal AI，`不推送`、`推送给 Me`、`自定义群组` 必须是后端真实行为，而不能只改变 Options 页文案。
+- 研究上，email batching / interruption 相关工作支持“低打扰摘要”但也提醒 batching 只有在符合工作响应预期时才有效。因此周报和 Dream Digest 不能在用户选择 `none` 时仍暗中投递，也不能在选择群组时退回个人私聊；目标错投会破坏用户对摘要节奏和可见范围的信任。
+
 参考：
 
 - [Android Notifications](https://developer.android.com/design/ui/mobile/guides/home-screen/notifications)
 - [Microsoft Teams Activity Feed](https://support.microsoft.com/en-us/office/explore-the-activity-feed-in-microsoft-teams-91c635a1-644a-4c60-9c98-233db3e13a56)
-- [Slack Activity view](https://slack.com/help/articles/46751260742035-Introducing-the-new-Activity-view-in-Slack)
+- [Slack Activity view](https://slack.com/help/articles/19693583638803-Get-your-work-done-from-the-Activity-view)
 - [GitHub Notifications Inbox](https://docs.github.com/en/account-and-profile/managing-subscriptions-and-notifications-on-github/viewing-and-triaging-notifications/managing-notifications-from-your-inbox)
 - [Intelligent Notification Systems: A Survey](https://arxiv.org/abs/1711.10171)
 - [Real-world large-scale study on adaptive notification scheduling](https://www.sciencedirect.com/science/article/abs/pii/S1574119217304388)
 - [Reachable but not receptive](https://www.sciencedirect.com/science/article/abs/pii/S1574119217300640)
+- [Twilio Outbound Message Status Callbacks](https://www.twilio.com/docs/messaging/guides/outbound-message-status-in-status-callbacks)
+- [OneSignal Confirmed Delivery](https://documentation.onesignal.com/docs/en/confirmed-delivery)
+- [Firebase Cloud Messaging delivery data](https://firebase.google.com/docs/cloud-messaging/understand-delivery)
+- [Microsoft Teams read receipts](https://support.microsoft.com/en-us/office/use-read-receipts-for-messages-in-microsoft-teams-533f2334-32ef-424b-8d56-ed30e019f856)
+- [A State Transition Model for Mobile Notifications via Survival Analysis](https://arxiv.org/abs/2207.03099)
+- [Apple Scheduled Summary](https://support.apple.com/guide/iphone/change-notification-settings-iph7c3d96bab/ios)
+- [Email message batching study](https://www.sciencedirect.com/science/article/pii/S221478292200001X)
 
 ---
 

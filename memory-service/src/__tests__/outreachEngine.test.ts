@@ -1706,6 +1706,50 @@ describe('OutreachEngine', () => {
     expect(startEvents[1]?.payload?.trigger).toBe('dispatch_retry');
   });
 
+  it('records retry attempts as retry events with previous and next states', () => {
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'manual_action',
+      targetType: 'group',
+      targetRef: 'qa-room',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedChatId: 'qa-room',
+      renderedQuestion: 'release owner 已确认吗？',
+      renderedContext: '如果没有回复，需要用户能看清楚重试状态。',
+      status: 'no_reply',
+      requiresApproval: false,
+      followupCount: 1,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      nextCheckAt: null,
+      errorCode: 'no_reply',
+      errorMessage: 'No reply before retry.',
+      resolvedAt: currentTs - 10,
+      createdAt: currentTs - 3600,
+    });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    const retried = engine.retrySession(session.id);
+
+    expect(retried?.status).toBe('scheduled');
+    expect(retried?.followupCount).toBe(0);
+    expect(retried?.errorCode).toBeUndefined();
+    expect(retried?.resolvedAt).toBeUndefined();
+
+    const events = outreachRepo.listEventsBySession(session.id, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      eventType: 'retried',
+      payload: {
+        retried: true,
+        previousStatus: 'no_reply',
+        nextStatus: 'scheduled',
+        nextCheckAt: retried?.nextCheckAt,
+      },
+    });
+  });
+
   it('skips followup when global memory already contains the answer', async () => {
     const currentTs = Math.floor(Date.now() / 1000);
     insertGlipMessage({
@@ -2199,6 +2243,21 @@ describe('OutreachEngine', () => {
       messageText: '请在明天前确认 release owner。',
     });
     expect(duplicate.id).toBe(session.id);
+
+    const duplicateResult = await engine.createSessionFromMessageResult({
+      chatId: 'chat-1',
+      postId: 'post-1',
+      messageText: '请在明天前确认 release owner。',
+      context: '新的目标不应静默覆盖已经运行的跟进。',
+    });
+    expect(duplicateResult).toMatchObject({
+      created: false,
+      reason: 'existing_message_reaction_session',
+    });
+    expect(duplicateResult.session.id).toBe(session.id);
+    expect(duplicateResult.session.renderedContext).toBe(
+      '确认 release owner 是否已经定下来。',
+    );
 
     outreachRepo.createEvent(session.id, 'followup_sent', {
       chatId: 'chat-1',

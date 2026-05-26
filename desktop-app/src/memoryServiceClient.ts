@@ -324,6 +324,12 @@ export interface OutreachSessionListResponse {
 }
 
 export interface MemoryServiceStatsResponse {
+  user?: {
+    id: string;
+    isolation: 'per_user_sqlite';
+    storageKey: string;
+    fallbackToDefault: boolean;
+  };
   messages: {
     total: number;
     today: number;
@@ -405,6 +411,9 @@ export interface LocalSkillSyncPackage {
   version?: string;
   sha256?: string;
   mtime?: number;
+  root?: string;
+  directory?: string;
+  skillMdPath?: string;
   skillMd: string;
   files?: Array<{
     path: string;
@@ -422,6 +431,7 @@ export interface LocalSkillSyncResponse {
   updated: number;
   pulled: number;
   pushed: number;
+  externalChanges: number;
   skipped: number;
   errors: Array<{ slug?: string; error: string }>;
   packagesToInstall: LocalSkillSyncPackage[];

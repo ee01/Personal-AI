@@ -294,7 +294,16 @@ export function buildMeetingPilotContextRecallRequest(
         .map((participant) => ({ kind: 'person', value: participant })),
     ].filter(Boolean) as Array<{ kind: string; value: string }>,
     scope: 'work',
-    sourceTypes: ['meeting', 'manual', 'web', 'glip', 'jira', 'calendar', 'markdown'],
+    sourceTypes: [
+      'meeting',
+      'manual',
+      'web',
+      'glip',
+      'jira',
+      'calendar',
+      'markdown',
+      'rehearsal',
+    ],
     limit: 3,
     sourceContext: {
       contextType: 'meeting',

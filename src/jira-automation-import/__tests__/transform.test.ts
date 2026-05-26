@@ -4,11 +4,13 @@ import assert from 'node:assert/strict';
 import {
   JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
   JIRA_AUTOMATION_IMPORT_MAX_RULE_NAME_LENGTH,
+  buildJiraAutomationImportEnablementPlan,
   buildJiraAutomationImportedRuleName,
   buildJiraAutomationImportRule,
   buildJiraAutomationImportReviewFindings,
   buildJiraAutomationImportReviewChecklist,
   buildJiraAutomationImportReviewNote,
+  buildJiraAutomationImportReviewPacket,
   buildJiraAutomationImportWarnings,
   buildJiraAutomationUniqueImportedRuleName,
   collectJiraAutomationImportReviewSignals,
@@ -118,6 +120,8 @@ test('buildJiraAutomationImportRule preserves source description and appends rev
   assert.ok(importRule.description?.includes('Imported as a disabled copy into TGT (22222).'));
   assert.ok(importRule.description?.includes('custom field'));
   assert.ok(importRule.description?.includes('Top detected bindings: JQL / filters (1): project = SRC AND customfield_12345 is not EMPTY'));
+  assert.ok(importRule.description?.includes('Activation plan: Keep the imported copy disabled'));
+  assert.ok(importRule.description?.includes('Map target-project search dependencies'));
   assert.ok(importRule.description?.includes('Rule chaining: blocked in imported copy.'));
 });
 
@@ -428,6 +432,118 @@ test('collectJiraAutomationImportReviewSignals does not expose secret keyOrValue
   assert.ok(!note.includes('hiddenSecretPath1234567890ABCD'));
   assert.ok(!note.includes('secret-owner@example.com'));
   assert.ok(!note.includes('{{issue.assignee.accountId}}'));
+});
+
+test('buildJiraAutomationImportReviewPacket creates a sanitized enablement handoff', () => {
+  const packet = buildJiraAutomationImportReviewPacket(
+    {
+      ...baseRule,
+      projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+      trigger: {
+        ...baseRule.trigger,
+        value: {
+          schedule: { method: 'CRON' },
+          jql: 'project = SRC AND customfield_12345 is not EMPTY',
+        },
+      },
+      components: [
+        {
+          component: 'ACTION',
+          type: 'jira.issue.outgoing.webhook',
+          value: {
+            url: 'https://hooks.example.com/SRC/release/releaseSecretPath1234567890ABCD?apiToken=prod-api-token-123',
+            usedSecretsKeys: ['release-webhook-token'],
+            connectionId: 'prod-webhook-connection',
+            headers: [
+              {
+                name: 'Authorization',
+                value: {
+                  secret: true,
+                  keyOrValue: 'hidden-secret-token',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      projectId: '22222',
+      projectKey: 'TGT',
+      projectTypeKey: 'software',
+      existingRuleNames: ['(Imported by Personal AI) Notify release owner'],
+      allowOtherRuleTrigger: false,
+    },
+  );
+
+  assert.ok(packet.includes('# Jira Automation import review'));
+  assert.ok(packet.includes('- Imported name: (Imported by Personal AI) Notify release owner (2)'));
+  assert.ok(packet.includes('- Target project: TGT (22222)'));
+  assert.ok(packet.includes('- Imported state: DISABLED'));
+  assert.ok(packet.includes('- Rule chaining: blocked in imported copy'));
+  assert.ok(packet.includes('## Review before enabling'));
+  assert.ok(packet.includes('[HIGH] JQL and filters'));
+  assert.ok(packet.includes('[HIGH] External effects and credentials'));
+  assert.ok(packet.includes('## Detected environment bindings'));
+  assert.ok(packet.includes('[HIGH] Secrets (2): release-webhook-token | hidden secret value'));
+  assert.ok(packet.includes('/SRC/release/REDACTED?apiToken=REDACTED'));
+  assert.ok(packet.includes('## Activation plan'));
+  assert.ok(packet.includes('[HIGH] Map target-project search dependencies'));
+  assert.ok(packet.includes('[HIGH] Reconnect external effects and credentials'));
+  assert.ok(packet.includes('[MEDIUM] Test dynamic trigger behavior'));
+  assert.ok(packet.includes('## Import warnings'));
+  assert.ok(!packet.includes('prod-api-token-123'));
+  assert.ok(!packet.includes('releaseSecretPath1234567890ABCD'));
+  assert.ok(!packet.includes('hidden-secret-token'));
+});
+
+test('buildJiraAutomationImportEnablementPlan prioritizes post-import activation steps', () => {
+  const steps = buildJiraAutomationImportEnablementPlan({
+    ...baseRule,
+    projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
+    trigger: {
+      ...baseRule.trigger,
+      value: {
+        schedule: { method: 'CRON' },
+        jql: 'project = SRC AND customfield_12345 is not EMPTY AND filter = 98765',
+      },
+    },
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          url: 'https://hooks.example.com/SRC/release?apiToken=prod-api-token-123',
+          usedSecretsKeys: ['release-webhook-token'],
+          recipients: 'release-owner@example.com',
+          connectionId: 'prod-webhook-connection',
+          body: '{{issue.assignee.accountId}}',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    steps.map((step) => step.id),
+    [
+      'keep-disabled',
+      'map-target-search',
+      'reconnect-external-effects',
+      'test-dynamic-behavior',
+      'confirm-actor-and-audit',
+    ],
+  );
+  assert.equal(steps.find((step) => step.id === 'map-target-search')?.severity, 'high');
+  assert.equal(steps.find((step) => step.id === 'reconnect-external-effects')?.severity, 'high');
+  assert.equal(steps.find((step) => step.id === 'test-dynamic-behavior')?.severity, 'medium');
+  assert.match(
+    steps.find((step) => step.id === 'map-target-search')?.detail || '',
+    /JQL\/filter reference/,
+  );
+  assert.match(
+    steps.find((step) => step.id === 'reconnect-external-effects')?.detail || '',
+    /connection\/credential reference/,
+  );
 });
 
 test('collectJiraAutomationImportReviewSignals redacts sensitive URL credentials and parameters', () => {

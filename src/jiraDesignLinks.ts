@@ -126,6 +126,20 @@ export function formatDesignStatusLabel(status?: string | null): string | undefi
     .trim();
   if (!expandedStatus) return undefined;
 
+  const normalizedStatus = normalizeStatusForMatching(expandedStatus);
+  if ([
+    'changed',
+    'design changed',
+    'updated',
+    'new changes',
+    'outdated',
+    'out of sync',
+    'stale',
+    'updated following a change',
+  ].includes(normalizedStatus)) {
+    return 'Design updated';
+  }
+
   const isMachineCase = expandedStatus !== trimmedStatus
     || /^[a-z\s]+$/.test(expandedStatus)
     || /^[A-Z\s]+$/.test(expandedStatus);
@@ -158,6 +172,13 @@ export function formatDesignUpdatedDate(value?: string | null): string | undefin
   if (time === null) return undefined;
 
   return new Date(time).toISOString().slice(0, 10);
+}
+
+export function formatDesignUpdatedTooltip(value?: string | null): string | undefined {
+  const dateLabel = formatDesignUpdatedDate(value);
+  if (!dateLabel) return undefined;
+
+  return `Design update reported ${dateLabel}. Re-check the linked design if implementation started before this update.`;
 }
 
 function chooseDesignUpdatedAt(
@@ -205,14 +226,6 @@ export function getDesignStatusTone(status?: string): DesignStatusTone {
   }
 
   if (matchesPattern([
-    /\bready\s+for\s+(dev|development|implementation|handoff)\b/,
-    /\bready\s+to\s+(build|implement|start)\b/,
-    /^ready$/,
-  ])) {
-    return 'ready';
-  }
-
-  if (matchesPattern([
     /\bupdated\b/,
     /\boutdated\b/,
     /\bchanged\b/,
@@ -221,6 +234,14 @@ export function getDesignStatusTone(status?: string): DesignStatusTone {
     /\bstale\b/,
   ])) {
     return 'updated';
+  }
+
+  if (matchesPattern([
+    /\bready\s+for\s+(dev|development|implementation|handoff)\b/,
+    /\bready\s+to\s+(build|implement|start)\b/,
+    /^ready$/,
+  ])) {
+    return 'ready';
   }
 
   if (matchesAny(['done', 'resolved', 'closed', 'complete', 'completed', 'shipped'])) {
@@ -277,8 +298,37 @@ export function getDesignDisplayStatusTone(item: DesignDisplayItem): DesignStatu
   return getDesignStatusTone(status);
 }
 
+export function getDesignDisplayUpdatedTimestamp(item: DesignDisplayItem): number | null {
+  const updatedAt = item.type === 'ux_ticket' ? item.designUpdatedAt : item.updatedAt;
+  return getDesignTimestampMs(updatedAt);
+}
+
 export function getDesignAttentionLevel(item: DesignDisplayItem): DesignAttentionLevel {
   return getDesignDisplayStatusTone(item);
+}
+
+export function getDesignStatusActionHint(status?: string | null): string | undefined {
+  const label = formatDesignStatusLabel(status);
+  if (!label) return undefined;
+
+  switch (getDesignStatusTone(label)) {
+    case 'ready':
+      return 'Ready for development. Review the linked design before implementing.';
+    case 'updated':
+      return 'Design changed after handoff. Re-check the linked design before implementing.';
+    case 'missing':
+      return 'A related UX ticket was found, but no design URL is available.';
+    case 'not-ready':
+      return 'Design is not ready for development yet.';
+    case 'blocked':
+      return 'Design handoff is blocked or needs access/status resolution.';
+    case 'review':
+      return 'Design is still in review. Confirm before implementation.';
+    case 'done':
+      return 'Design handoff is marked complete.';
+    case 'neutral':
+      return undefined;
+  }
 }
 
 export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDisplayItem[] {
@@ -287,6 +337,14 @@ export function sortDesignDisplayItems(items: DesignDisplayItem[]): DesignDispla
     .sort((a, b) => {
       const priorityDiff = getDesignDisplayPriority(a.item) - getDesignDisplayPriority(b.item);
       if (priorityDiff !== 0) return priorityDiff;
+
+      const aUpdatedAt = getDesignDisplayUpdatedTimestamp(a.item);
+      const bUpdatedAt = getDesignDisplayUpdatedTimestamp(b.item);
+      if (aUpdatedAt !== null && bUpdatedAt !== null && aUpdatedAt !== bUpdatedAt) {
+        return bUpdatedAt - aUpdatedAt;
+      }
+      if (aUpdatedAt !== null && bUpdatedAt === null) return -1;
+      if (aUpdatedAt === null && bUpdatedAt !== null) return 1;
 
       const sourceDiff = getItemSourcePriority(a.item) - getItemSourcePriority(b.item);
       if (sourceDiff !== 0) return sourceDiff;
@@ -693,8 +751,44 @@ export function mergeDesignSources(currentSource: string, nextSource: string): s
 
 export function getDesignSourceLabel(source: string): string {
   return splitSources(source)
-    .map(item => sourceLabels[item] || item.replace(/_/g, ' '))
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const priorityDiff = getSourcePriority(a.item) - getSourcePriority(b.item);
+      return priorityDiff !== 0 ? priorityDiff : a.index - b.index;
+    })
+    .map(({ item }) => sourceLabels[item] || item.replace(/_/g, ' '))
     .join(', ');
+}
+
+export function getDesignSourceTooltip(source: string): string {
+  const label = getDesignSourceLabel(source);
+  return label ? `Source: ${label}` : 'Source unavailable';
+}
+
+export function getDesignSourceSummary(items: DesignDisplayItem[]): string {
+  const seenSources = new Map<string, number>();
+
+  items.forEach(item => {
+    splitSources(item.source || '').forEach(source => {
+      if (!seenSources.has(source)) {
+        seenSources.set(source, seenSources.size);
+      }
+    });
+  });
+
+  const itemCountLabel = `${items.length} ${items.length === 1 ? 'entry' : 'entries'}`;
+  if (seenSources.size === 0) return itemCountLabel;
+
+  const labels = Array.from(seenSources.entries())
+    .sort(([sourceA, indexA], [sourceB, indexB]) => {
+      const priorityDiff = getSourcePriority(sourceA) - getSourcePriority(sourceB);
+      return priorityDiff !== 0 ? priorityDiff : indexA - indexB;
+    })
+    .map(([source]) => getDesignSourceLabel(source));
+  const visibleLabels = labels.slice(0, 4).join(', ');
+  const overflowLabel = labels.length > 4 ? ` + ${labels.length - 4} more` : '';
+
+  return `${itemCountLabel} · ${visibleLabels}${overflowLabel}`;
 }
 
 export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplayItem[] {

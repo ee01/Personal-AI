@@ -7,6 +7,12 @@ import { InitializationResult, SheetConfig } from './types';
 import { AppScriptUpdater } from './AppScriptUpdater';
 import { formatLocalScheduleDate } from './scheduleDateTime';
 
+interface SharingPermissionResult {
+  status: 'domain_writer' | 'owner_only';
+  domain?: string;
+  warning?: string;
+}
+
 /**
  * Messages 表的 Schema 定义
  * 当新增字段时，在 columns 中添加列名，并增加 version
@@ -89,6 +95,8 @@ export class SheetInitializer {
    * 一键创建定时消息系统
    */
   async createScheduledMessagesSheet(): Promise<InitializationResult> {
+    const setupWarnings: string[] = [];
+
     try {
       console.log('开始创建定时消息系统...');
 
@@ -98,7 +106,10 @@ export class SheetInitializer {
 
       // 2. 设置共享权限（组织内所有人可编辑）
       console.log('步骤 2/8: 设置共享权限...');
-      await this.setPermissions(sheet.spreadsheetId);
+      const sharingResult = await this.setPermissions(sheet.spreadsheetId);
+      if (sharingResult.warning) {
+        setupWarnings.push(sharingResult.warning);
+      }
 
       // 3. 设置工作表结构
       console.log('步骤 3/8: 设置工作表结构...');
@@ -123,6 +134,7 @@ export class SheetInitializer {
         sheetUrl: sheet.spreadsheetUrl,
         scriptId,
         webAppUrl,
+        setupWarnings,
         needsAuthorization: true,
         authUrl: `${webAppUrl}?action=authSuccess`, // 用户需要访问这个 URL 来授权
       };
@@ -137,6 +149,7 @@ export class SheetInitializer {
           sheetUrl: '',
           scriptId: '',
           webAppUrl: '',
+          setupWarnings,
           needsAppScriptAPI: true,
           appScriptAPIUrl: 'https://script.google.com/home/usersettings',
           error: 'AppScript API 未开启',
@@ -149,6 +162,7 @@ export class SheetInitializer {
         sheetUrl: '',
         scriptId: '',
         webAppUrl: '',
+        setupWarnings,
         error: error.message || '未知错误',
       };
     }
@@ -226,13 +240,26 @@ export class SheetInitializer {
   }
 
   /**
-   * 设置共享权限：组织内所有人可编辑
+   * 设置共享权限：只尝试组织内编辑共享。
+   *
+   * 维护表可能包含消息目标、内部 endpoint、headers 和正文模板。域共享失败时
+   * 保持 owner-only，并把原因返回给 UI，不自动降级为“知道链接的任何人可编辑”。
    */
-  private async setPermissions(spreadsheetId: string): Promise<void> {
+  private async setPermissions(spreadsheetId: string): Promise<SharingPermissionResult> {
     try {
       // 获取用户的域名信息
       const userInfo = await this.getUserInfo();
-      const domain = userInfo.email.split('@')[1]; // 例如: ringcentral.com
+      const domain = userInfo.email.split('@')[1]?.trim(); // 例如: ringcentral.com
+
+      if (!domain) {
+        return {
+          status: 'owner_only',
+          warning: (
+            '无法从当前 Google 账号识别组织域名，维护表已保持仅创建者可编辑；' +
+            '需要协作时请在 Google Sheet 中手动分享给指定成员、群组或目标受众。'
+          ),
+        };
+      }
 
       // 设置权限：组织内所有人可编辑
       const response = await fetch(
@@ -254,37 +281,25 @@ export class SheetInitializer {
 
       if (!response.ok) {
         const error = await response.text();
-        console.warn('设置域权限失败，尝试设置为任何人可编辑:', error);
-
-        // 如果域权限设置失败，尝试设置为"知道链接的任何人可编辑"
-        const fallbackResponse = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${spreadsheetId}/permissions`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${this.token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              type: 'anyone',
-              role: 'writer',
-            }),
-          },
-        );
-
-        if (!fallbackResponse.ok) {
-          const fallbackError = await fallbackResponse.text();
-          console.warn('设置共享权限失败:', fallbackError);
-          // 不抛出错误，允许继续执行
-        } else {
-          console.log('✅ 已设置为：知道链接的任何人可编辑');
-        }
-      } else {
-        console.log(`✅ 已设置为：${domain} 域内所有人可编辑`);
+        console.warn('设置域权限失败，维护表将保持仅创建者可编辑:', error);
+        return {
+          status: 'owner_only',
+          domain,
+          warning: `未能自动设置 ${domain} 域内编辑权限，维护表已保持仅创建者可编辑；需要协作时请在 Google Sheet 中手动分享给指定成员、群组或目标受众。`,
+        };
       }
+
+      console.log(`✅ 已设置为：${domain} 域内所有人可编辑`);
+      return { status: 'domain_writer', domain };
     } catch (error) {
-      console.warn('设置权限失败:', error);
-      // 不抛出错误，允许继续执行
+      console.warn('设置权限失败，维护表将保持仅创建者可编辑:', error);
+      return {
+        status: 'owner_only',
+        warning: (
+          '未能自动设置组织内编辑权限，维护表已保持仅创建者可编辑；' +
+          '需要协作时请在 Google Sheet 中手动分享给指定成员、群组或目标受众。'
+        ),
+      };
     }
   }
 

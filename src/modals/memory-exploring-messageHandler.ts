@@ -46,9 +46,7 @@ function normalizeRecentDataDetails(entity: any) {
     projects: Array.isArray(details.projects) ? details.projects : [],
     people: Array.isArray(details.people) ? details.people : [],
     topics: Array.isArray(details.topics) ? details.topics : [],
-    jiraTickets: Array.isArray(details.jiraTickets)
-      ? details.jiraTickets
-      : [],
+    jiraTickets: Array.isArray(details.jiraTickets) ? details.jiraTickets : [],
     cooccurringEntities: Array.isArray(details.cooccurringEntities)
       ? details.cooccurringEntities
       : [],
@@ -315,8 +313,8 @@ const messageHandlers: Record<string, MessageHandler> = {
         request.action === 'clear'
           ? 'clear'
           : request.action === 'negative'
-            ? 'negative'
-            : 'positive';
+          ? 'negative'
+          : 'positive';
       const feedbackType: MemoryFeedbackType =
         request.feedbackType === 'notification_useful' ||
         request.feedbackType === 'entity_correction'
@@ -332,8 +330,7 @@ const messageHandlers: Record<string, MessageHandler> = {
         targetId,
         targetType,
         action,
-        detail:
-          typeof request.detail === 'string' ? request.detail : undefined,
+        detail: typeof request.detail === 'string' ? request.detail : undefined,
       });
 
       return { success: true, data: result };
@@ -345,10 +342,22 @@ const messageHandlers: Record<string, MessageHandler> = {
 
   GET_MEETINGS: async (request) => {
     if (testMeetingsFixture) {
+      const limit = Math.min(Math.max(Number(request.limit ?? 50), 1), 200);
+      const offset = Math.max(Number(request.offset ?? 0), 0);
+      const items = Array.isArray(testMeetingsFixture.items)
+        ? testMeetingsFixture.items.slice(offset, offset + limit)
+        : [];
+      const total = Number(testMeetingsFixture.total ?? items.length);
       return {
         success: true,
-        data: testMeetingsFixture,
-        total: testMeetingsFixture.total || 0,
+        data: {
+          ...testMeetingsFixture,
+          items,
+          total,
+          limit,
+          offset,
+        },
+        total,
       };
     }
     try {
@@ -531,8 +540,8 @@ const messageHandlers: Record<string, MessageHandler> = {
             health.status === 'ok'
               ? 100
               : health.status === 'degraded'
-                ? 50
-                : 0,
+              ? 50
+              : 0,
           issues:
             health.status !== 'ok' ? [`Service status: ${health.status}`] : [],
           recommendations:

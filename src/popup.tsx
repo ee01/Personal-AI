@@ -7,6 +7,7 @@ import { getGoogleAuthToken } from './utils/googleAuth';
 import {
   getMemoryServiceClient,
   type DayPilotCard,
+  type DayPilotContextPackResponse,
 } from './services/MemoryServiceClient';
 import { getTaskEnabled } from './services/taskSchedulerDefinitions';
 import {
@@ -74,6 +75,7 @@ interface TaskSchedulerTask {
   lastSuccess?: boolean;
   lastError?: string;
   lastSkipReason?: string;
+  lastResultSummary?: string;
   nextRun?: number;
   scheduleHealth?:
     | 'scheduled'
@@ -94,6 +96,7 @@ interface TaskSchedulerRunRecord {
   skipped?: boolean;
   trigger?: 'scheduled' | 'manual' | 'startup';
   error?: string;
+  summary?: string;
 }
 
 type MeetingPilotNotice = {
@@ -108,6 +111,7 @@ const TASK_CATEGORY_LABELS: Record<string, string> = {
   system_maintenance: '维护',
   user_profile: '画像',
 };
+const TASK_ATTENTION_SUMMARY_LIMIT = 3;
 
 function formatTaskInterval(minutes: number): string {
   if (minutes >= 1440 && minutes % 1440 === 0) {
@@ -181,6 +185,9 @@ function formatTaskResult(task: TaskSchedulerTask): string {
     }
     return `上次失败 · ${task.lastError || '查看后台日志'}`;
   }
+  if (task.lastResultSummary) {
+    return `上次成功 · ${task.lastResultSummary}`;
+  }
   return `上次成功 · ${formatTaskTime(task.lastCompletedAt)}`;
 }
 
@@ -229,7 +236,7 @@ function getTaskLatestRunSummary(task: TaskSchedulerTask):
   const detail = latestRun.skipped
     ? latestRun.error || '已有执行中任务'
     : latestRun.success
-    ? ''
+    ? latestRun.summary || ''
     : latestRun.error || '未知错误';
   const parts = [
     '最近一次',
@@ -277,7 +284,9 @@ function formatTaskRunHistoryTitle(task: TaskSchedulerTask): string {
       const result = run.skipped
         ? `跳过: ${run.error || '已有执行中任务'}`
         : run.success
-        ? '成功'
+        ? run.summary
+          ? `成功: ${run.summary}`
+          : '成功'
         : `失败: ${run.error || '未知错误'}`;
       return `${formatTaskTime(run.completedAt)} · ${formatTaskRunTrigger(
         run.trigger,
@@ -425,6 +434,49 @@ function formatTaskSchedulerNextStep(task?: TaskSchedulerTask): {
   return null;
 }
 
+function formatTaskAttentionStatusLabel(task: TaskSchedulerTask): string {
+  const statusKind = getTaskStatusKind(task);
+  if (statusKind === 'executing') return '执行中';
+  if (statusKind === 'warning') return formatTaskScheduleHealthLabel(task);
+  if (statusKind === 'failed') return '失败';
+  if (statusKind === 'skipped') return '跳过';
+  return '需处理';
+}
+
+function formatTaskAttentionReason(task: TaskSchedulerTask): string {
+  const statusKind = getTaskStatusKind(task);
+  if (statusKind === 'executing') {
+    return `开始 ${formatTaskTime(task.lastRun)}`;
+  }
+  if (statusKind === 'warning') {
+    return task.scheduleWarning || 'Chrome alarm 需要刷新';
+  }
+  if (statusKind === 'failed') {
+    const failureStreak = getTaskFailureStreak(task);
+    const prefix =
+      failureStreak > 1 ? `连续失败 ${failureStreak} 次` : '上次失败';
+    return task.lastError ? `${prefix} · ${task.lastError}` : prefix;
+  }
+  if (statusKind === 'skipped') {
+    return task.lastSkipReason || '任务条件未满足';
+  }
+  return '';
+}
+
+function formatTaskAttentionAction(task: TaskSchedulerTask): string {
+  const actionHint = formatTaskActionHint(task);
+  if (actionHint) {
+    return actionHint;
+  }
+
+  const statusKind = getTaskStatusKind(task);
+  if (statusKind === 'executing') return '等待完成';
+  if (statusKind === 'warning') return '重排 Chrome alarm';
+  if (statusKind === 'failed') return '重试或检查服务';
+  if (statusKind === 'skipped') return '稍后重试';
+  return '查看任务详情';
+}
+
 function isMeetingPilotCaptureActive(
   session: MeetingPilotSessionSnapshot | null,
 ): boolean {
@@ -549,6 +601,23 @@ function formatTodayPilotEvidenceMeta(card: DayPilotCard): string {
       ? Math.round(Math.max(0, Math.min(1, card.trust.confidence)) * 100)
       : 0;
   return `证据 ${evidenceCount} · 信心 ${confidence}%`;
+}
+
+function formatTodayPilotContextPackReceipt(
+  pack: DayPilotContextPackResponse,
+): string {
+  const provider =
+    pack.providerProfile?.id === 'generic'
+      ? '通用'
+      : pack.providerProfile?.label || 'Today Pilot';
+  const details = [`${pack.evidenceRefs.length} 条证据`];
+  if (pack.redactionApplied) {
+    details.push('已脱敏');
+  }
+  if (pack.truncated) {
+    details.push('已按预算截断');
+  }
+  return `已复制${provider}上下文包（${details.join('，')}）`;
 }
 
 function topTodayPilotCards(cards: DayPilotCard[]): DayPilotCard[] {
@@ -1127,7 +1196,7 @@ const Popup = () => {
         );
       await navigator.clipboard.writeText(response.bodyMd);
       setTodayPilotError('');
-      setTodayPilotNotice('已复制上下文包');
+      setTodayPilotNotice(formatTodayPilotContextPackReceipt(response));
     } catch (error: any) {
       setTodayPilotError(error?.message || 'context_pack_copy_failed');
       setTodayPilotNotice('');
@@ -1382,6 +1451,26 @@ const Popup = () => {
     )[0]?.task;
   const taskSchedulerNextStep =
     formatTaskSchedulerNextStep(primaryAttentionTask);
+  const taskAttentionSummaryItems = taskSchedulerTasks
+    .filter(taskNeedsAttention)
+    .map((task, index) => ({ task, index }))
+    .sort(
+      (left, right) =>
+        getTaskPrimaryAttentionRank(left.task) -
+          getTaskPrimaryAttentionRank(right.task) || left.index - right.index,
+    )
+    .slice(0, TASK_ATTENTION_SUMMARY_LIMIT)
+    .map(({ task }) => ({
+      task,
+      statusKind: getTaskStatusKind(task),
+      statusLabel: formatTaskAttentionStatusLabel(task),
+      reason: formatTaskAttentionReason(task),
+      action: formatTaskAttentionAction(task),
+    }));
+  const hiddenAttentionTaskCount = Math.max(
+    0,
+    attentionTaskCount - taskAttentionSummaryItems.length,
+  );
 
   const openJiraQueryDialog = async () => {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1618,6 +1707,37 @@ const Popup = () => {
             role="status"
           >
             {taskSchedulerNextStep.message}
+          </div>
+        )}
+        {taskAttentionSummaryItems.length > 1 && (
+          <div
+            className="task-attention-summary"
+            aria-label="后台任务需处理总览"
+          >
+            <div className="task-attention-summary-title">
+              <span>需处理总览</span>
+              <span>{attentionTaskCount} 项</span>
+            </div>
+            {taskAttentionSummaryItems.map((item) => (
+              <div
+                className={`task-attention-item ${item.statusKind}`}
+                key={item.task.id}
+              >
+                <div className="task-attention-main">
+                  <span className="task-attention-name">{item.task.name}</span>
+                  <span className="task-attention-status">
+                    {item.statusLabel}
+                  </span>
+                </div>
+                <div className="task-attention-detail">{item.reason}</div>
+                <div className="task-attention-action">{item.action}</div>
+              </div>
+            ))}
+            {hiddenAttentionTaskCount > 0 && (
+              <div className="task-attention-more">
+                还有 {hiddenAttentionTaskCount} 个需处理任务，切到“需处理”查看
+              </div>
+            )}
           </div>
         )}
         {taskSchedulerError && (
@@ -2329,6 +2449,109 @@ const Popup = () => {
                     border-color: #cbd5e1;
                     background: #f8fafc;
                     color: #475569;
+                }
+
+                .task-attention-summary {
+                    margin: 0 0 6px;
+                    padding: 6px 8px;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 4px;
+                    background: #ffffff;
+                }
+
+                .task-attention-summary-title {
+                    display: flex;
+                    justify-content: space-between;
+                    gap: 8px;
+                    margin-bottom: 4px;
+                    color: #334155;
+                    font-size: 10px;
+                    font-weight: 800;
+                    line-height: 1.3;
+                }
+
+                .task-attention-item {
+                    padding: 5px 0;
+                    border-top: 1px solid #f1f5f9;
+                }
+
+                .task-attention-summary-title + .task-attention-item {
+                    border-top: 0;
+                }
+
+                .task-attention-main {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    min-width: 0;
+                }
+
+                .task-attention-name {
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    color: #111827;
+                    font-size: 11px;
+                    font-weight: 700;
+                }
+
+                .task-attention-status {
+                    flex: 0 0 auto;
+                    padding: 1px 4px;
+                    border-radius: 4px;
+                    background: #f1f5f9;
+                    color: #475569;
+                    font-size: 9px;
+                    font-weight: 800;
+                    line-height: 1.35;
+                }
+
+                .task-attention-item.warning .task-attention-status {
+                    background: #fef3c7;
+                    color: #92400e;
+                }
+
+                .task-attention-item.failed .task-attention-status {
+                    background: #fee2e2;
+                    color: #991b1b;
+                }
+
+                .task-attention-item.skipped .task-attention-status {
+                    background: #f1f5f9;
+                    color: #475569;
+                }
+
+                .task-attention-item.executing .task-attention-status {
+                    background: #e0f2fe;
+                    color: #075985;
+                }
+
+                .task-attention-detail,
+                .task-attention-action,
+                .task-attention-more {
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    font-size: 10px;
+                    line-height: 1.35;
+                }
+
+                .task-attention-detail {
+                    margin-top: 2px;
+                    color: #64748b;
+                }
+
+                .task-attention-action {
+                    margin-top: 1px;
+                    color: #334155;
+                    font-weight: 700;
+                }
+
+                .task-attention-more {
+                    padding-top: 4px;
+                    border-top: 1px solid #f1f5f9;
+                    color: #64748b;
                 }
 
                 .task-health-strip {

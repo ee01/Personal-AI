@@ -7,9 +7,11 @@ import { getLocalStorageItem, setLocalStorageItem } from "./storage";
 import {
   JIRA_AUTOMATION_IMPORT_MAX_FILE_BYTES,
   buildJiraAutomationImportedRuleName,
+  buildJiraAutomationImportEnablementPlan,
   buildJiraAutomationImportRule,
   buildJiraAutomationImportReviewFindings,
   buildJiraAutomationImportReviewChecklist,
+  buildJiraAutomationImportReviewPacket,
   buildJiraAutomationImportWarnings,
   buildJiraAutomationUniqueImportedRuleName,
   collectJiraAutomationImportReviewSignals,
@@ -18,6 +20,7 @@ import {
   summarizeJiraAutomationImportRule,
   type ExportedData,
   type ImportRule,
+  type JiraAutomationImportEnablementStep,
   type JiraAutomationImportReviewFinding,
   type JiraAutomationImportReviewChecklistItem,
 } from './jira-automation-import/transform';
@@ -510,6 +513,42 @@ function createDialogButton(doc: Document, text: string, variant: 'primary' | 's
   return button;
 }
 
+async function copyTextToClipboard(doc: Document, text: string): Promise<boolean> {
+  const clipboard = doc.defaultView?.navigator?.clipboard || navigator.clipboard;
+  if (clipboard?.writeText) {
+    try {
+      await clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      console.debug('Clipboard API copy failed, falling back to textarea copy:', error);
+    }
+  }
+
+  const textarea = doc.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.cssText = `
+    position: fixed;
+    top: -9999px;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+  `;
+  doc.body.appendChild(textarea);
+
+  try {
+    textarea.focus();
+    textarea.select();
+    return doc.execCommand('copy');
+  } catch (error) {
+    console.debug('Textarea clipboard copy failed:', error);
+    return false;
+  } finally {
+    doc.body.removeChild(textarea);
+  }
+}
+
 function getFocusableDialogElements(container: HTMLElement): HTMLElement[] {
   const elements = container.querySelectorAll<HTMLElement>(
     'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
@@ -665,12 +704,95 @@ function renderReviewChecklist(
   });
 }
 
+function renderEnablementPlan(
+  doc: Document,
+  container: HTMLElement,
+  steps: JiraAutomationImportEnablementStep[],
+): void {
+  container.textContent = '';
+
+  const title = doc.createElement('div');
+  title.textContent = 'Activation plan';
+  title.style.cssText = 'font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #172B4D;';
+  container.appendChild(title);
+
+  const help = doc.createElement('div');
+  help.textContent = 'Follow these steps after the disabled copy is created and before enabling it in Jira.';
+  help.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-bottom: 10px;';
+  container.appendChild(help);
+
+  steps.forEach((step, index) => {
+    const row = doc.createElement('div');
+    row.style.cssText = `
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 10px;
+      padding: 9px 0;
+      border-top: 1px solid #EBECF0;
+    `;
+
+    const stepNumber = doc.createElement('span');
+    stepNumber.textContent = String(index + 1);
+    stepNumber.style.cssText = `
+      align-self: start;
+      justify-self: start;
+      width: 22px;
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #DFE1E6;
+      border-radius: 50%;
+      background: #F7F8F9;
+      color: #172B4D;
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 700;
+    `;
+
+    const content = doc.createElement('div');
+    content.style.cssText = 'min-width: 0;';
+
+    const labelRow = doc.createElement('div');
+    labelRow.style.cssText = 'display: flex; align-items: center; gap: 8px; flex-wrap: wrap;';
+
+    const label = doc.createElement('span');
+    label.textContent = step.label;
+    label.style.cssText = 'font-size: 13px; line-height: 1.35; font-weight: 600; color: #172B4D;';
+
+    const severity = doc.createElement('span');
+    severity.textContent = step.severity.toUpperCase();
+    severity.style.cssText = `
+      padding: 1px 5px;
+      border: 1px solid;
+      border-radius: 3px;
+      font-size: 10px;
+      line-height: 1.35;
+      font-weight: 700;
+      ${getChecklistSeverityStyle(step.severity)}
+    `;
+
+    const detail = doc.createElement('div');
+    detail.textContent = step.detail;
+    detail.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-top: 2px; word-break: break-word;';
+
+    labelRow.appendChild(label);
+    labelRow.appendChild(severity);
+    content.appendChild(labelRow);
+    content.appendChild(detail);
+    row.appendChild(stepNumber);
+    row.appendChild(content);
+    container.appendChild(row);
+  });
+}
+
 function renderImportOutcomeSummary(
   doc: Document,
   container: HTMLElement,
   importedRuleName: string,
   projectContext: JiraAutomationProjectContext,
   checklist: JiraAutomationImportReviewChecklistItem[],
+  enablementPlan: JiraAutomationImportEnablementStep[],
   sourceAllowsChainedTrigger: boolean,
   preventChainedTrigger: boolean,
 ): void {
@@ -686,7 +808,9 @@ function renderImportOutcomeSummary(
   title.style.cssText = 'font-weight: 700; font-size: 14px; margin-bottom: 4px; color: #172B4D;';
 
   const body = doc.createElement('div');
-  body.textContent = `${importedRuleName} will be created disabled in ${projectContext.projectKey}. ${formatChecklistSeverityCounts(checklist)}; ${highCount} high-risk item(s); ${chainingState}.`;
+  const firstAction = enablementPlan.find((step) => step.severity === 'high') || enablementPlan[0];
+  const nextActionText = firstAction ? ` Next: ${firstAction.label}.` : '';
+  body.textContent = `${importedRuleName} will be created disabled in ${projectContext.projectKey}. ${formatChecklistSeverityCounts(checklist)}; ${highCount} high-risk item(s); ${chainingState}.${nextActionText}`;
   body.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; word-break: break-word;';
 
   container.appendChild(title);
@@ -852,6 +976,7 @@ function showImportPreviewDialog(
     let highRiskReviewAcknowledged = false;
     let highRiskAcknowledgementRequired = false;
     let confirmButton: HTMLButtonElement | null = null;
+    let currentReviewPacket = '';
 
     if (exportedData.rules.length > 1) {
       const selectLabel = doc.createElement('label');
@@ -912,6 +1037,16 @@ function showImportPreviewDialog(
     `;
     dialog.appendChild(checklistBox);
 
+    const enablementPlanBox = doc.createElement('div');
+    enablementPlanBox.style.cssText = `
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #DFE1E6;
+      border-radius: 6px;
+      background: white;
+    `;
+    dialog.appendChild(enablementPlanBox);
+
     const safeguardBox = doc.createElement('div');
     safeguardBox.style.cssText = `
       margin-bottom: 16px;
@@ -969,6 +1104,38 @@ function showImportPreviewDialog(
     highRiskAcknowledgementBox.appendChild(highRiskAcknowledgementLabel);
     dialog.appendChild(highRiskAcknowledgementBox);
 
+    const reviewPacketBox = doc.createElement('div');
+    reviewPacketBox.style.cssText = `
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid #DFE1E6;
+      border-radius: 6px;
+      background: white;
+    `;
+
+    const reviewPacketTitle = doc.createElement('div');
+    reviewPacketTitle.textContent = 'Enablement review packet';
+    reviewPacketTitle.style.cssText = 'font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #172B4D;';
+
+    const reviewPacketHelp = doc.createElement('div');
+    reviewPacketHelp.textContent = 'Copy the sanitized checklist and detected bindings before you leave the preview.';
+    reviewPacketHelp.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-bottom: 10px;';
+
+    const reviewPacketActions = doc.createElement('div');
+    reviewPacketActions.style.cssText = 'display: flex; align-items: center; gap: 10px; flex-wrap: wrap;';
+
+    const copyReviewPacketButton = createDialogButton(doc, 'Copy review packet', 'secondary');
+    const copyReviewPacketStatus = doc.createElement('span');
+    copyReviewPacketStatus.setAttribute('role', 'status');
+    copyReviewPacketStatus.style.cssText = 'font-size: 12px; color: #44546F;';
+
+    reviewPacketActions.appendChild(copyReviewPacketButton);
+    reviewPacketActions.appendChild(copyReviewPacketStatus);
+    reviewPacketBox.appendChild(reviewPacketTitle);
+    reviewPacketBox.appendChild(reviewPacketHelp);
+    reviewPacketBox.appendChild(reviewPacketActions);
+    dialog.appendChild(reviewPacketBox);
+
     const warningBox = doc.createElement('div');
     warningBox.style.cssText = `
       margin-bottom: 18px;
@@ -1000,6 +1167,7 @@ function showImportPreviewDialog(
       const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
       const reviewChecklist = buildJiraAutomationImportReviewChecklist(rule);
       const reviewFindings = buildJiraAutomationImportReviewFindings(rule);
+      const enablementPlan = buildJiraAutomationImportEnablementPlan(rule);
       const highRiskCount = reviewChecklist.filter((item) => item.severity === 'high').length;
       const defaultImportedRuleName = buildJiraAutomationImportedRuleName(rule.name);
       const importedRuleName = buildJiraAutomationUniqueImportedRuleName(rule.name, existingRuleNames);
@@ -1010,6 +1178,16 @@ function showImportPreviewDialog(
       ];
       const accountReferenceCount = summary.emailReferenceCount + summary.accountReferenceCount;
       const sourceAllowsChainedTrigger = Boolean(rule.canOtherRuleTrigger);
+      const allowOtherRuleTrigger = sourceAllowsChainedTrigger && !preventChainedTrigger;
+      currentReviewPacket = buildJiraAutomationImportReviewPacket(rule, {
+        projectId: projectContext.projectId,
+        projectKey: projectContext.projectKey,
+        projectTypeKey: projectContext.projectTypeKey,
+        allowOtherRuleTrigger,
+        existingRuleNames,
+        importedRuleName,
+      });
+      copyReviewPacketStatus.textContent = '';
       chainedTriggerCheckbox.disabled = !sourceAllowsChainedTrigger;
       chainedTriggerCheckbox.checked = sourceAllowsChainedTrigger && preventChainedTrigger;
       chainedTriggerText.textContent = sourceAllowsChainedTrigger
@@ -1028,6 +1206,7 @@ function showImportPreviewDialog(
         importedRuleName,
         projectContext,
         reviewChecklist,
+        enablementPlan,
         sourceAllowsChainedTrigger,
         preventChainedTrigger,
       );
@@ -1073,6 +1252,7 @@ function showImportPreviewDialog(
       appendInfoRow(doc, details, 'Imported state', 'DISABLED');
       renderReviewFindings(doc, findingsBox, reviewFindings);
       renderReviewChecklist(doc, checklistBox, reviewChecklist);
+      renderEnablementPlan(doc, enablementPlanBox, enablementPlan);
 
       warningBox.textContent = '';
       const warnings = buildJiraAutomationImportWarnings(rule);
@@ -1102,6 +1282,16 @@ function showImportPreviewDialog(
     highRiskAcknowledgementCheckbox.addEventListener('change', () => {
       highRiskReviewAcknowledged = highRiskAcknowledgementCheckbox.checked;
       syncConfirmButtonState();
+    });
+
+    copyReviewPacketButton.addEventListener('click', async () => {
+      copyReviewPacketButton.disabled = true;
+      copyReviewPacketStatus.textContent = 'Copying review packet...';
+      const copied = await copyTextToClipboard(doc, currentReviewPacket);
+      copyReviewPacketStatus.textContent = copied
+        ? 'Review packet copied.'
+        : 'Copy failed. Select and copy from the review note after import.';
+      copyReviewPacketButton.disabled = false;
     });
 
     const footer = doc.createElement('div');

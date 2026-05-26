@@ -206,6 +206,10 @@ const analysisResult = {
     attentionProjects: 1,
     riskProjects: 1,
     keyFindings: ['MTR-123407 status can move to on track'],
+    analysisWarnings: ['幻灯片包含 2 个可信项目表格，已合并分析'],
+    analyzedSlideCount: 1,
+    totalSlideCount: 4,
+    requestedSlideId: 'slide-1',
   },
 };
 
@@ -302,7 +306,7 @@ try {
   await context.route('https://docs.google.com/presentation/d/test/edit**', route => {
     route.fulfill({
       status: 200,
-      contentType: 'text/html',
+      contentType: 'text/html; charset=utf-8',
       body: fixtureHtml,
     });
   });
@@ -353,6 +357,9 @@ try {
   assert.match(pageText, /风险项目 4/);
   assert.match(pageText, /缺少来源 1/);
   assert.match(pageText, /无法写回字段 1/);
+  assert.match(pageText, /分析范围与提醒/);
+  assert.match(pageText, /已分析 1 \/ 4 张 slide · 当前目标 slide-1/);
+  assert.match(pageText, /幻灯片包含 2 个可信项目表格，已合并分析/);
   assert.match(pageText, /字段复核队列/);
   assert.match(pageText, /需复核 2 个字段，无法写回 1 个字段/);
   assert.match(pageText, /MTR-123407 · Quarterly status deck · 备注/);
@@ -490,7 +497,7 @@ try {
 
   assert.equal(await opener.evaluate(() => {
     window.pendingUpdateErrors = [
-      '无法更新备注: AIT2-11063 - Leadership summary 缺少可写表格列',
+      '无法更新负责人: AIT2-11063 - Leadership summary 缺少可写表格列',
     ];
     return window.sendPendingUpdateSuccess();
   }), true);
@@ -503,8 +510,15 @@ try {
   assert.match(successText, /AIT2-11063 · Leadership summary · 负责人/);
   assert.match(successText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara/);
   assert.match(successText, /跳过原因/);
-  assert.match(successText, /无法更新备注: AIT2-11063 - Leadership summary 缺少可写表格列/);
+  assert.match(successText, /无法更新负责人: AIT2-11063 - Leadership summary 缺少可写表格列/);
+  assert.match(successText, /人工接管清单/);
+  assert.match(successText, /对照建议值和跳过原因，处理完再重新分析或手动更新 Slides/);
+  assert.match(successText, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(successText, /Ben -> Cara/);
+  assert.match(successText, /下一步: 在 Slides 表格补齐对应列，或按建议值手动填入后重新分析。/);
   assert.equal(await analysisPage.locator('.applied-field-receipt-item').count(), 3);
+  assert.equal(await analysisPage.locator('.apply-skipped-handoff-item').count(), 1);
+  assert.equal(await analysisPage.locator('#copy-apply-skipped-handoff').count(), 1);
   assert.equal(await analysisPage.locator('#apply-updates-button').isDisabled(), true);
   assert.match(await analysisPage.locator('#apply-updates-button').innerText(), /应用 0 个字段到 Slides/);
 

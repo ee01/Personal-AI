@@ -1,6 +1,6 @@
 # Meeting Pilot
 
-_最后更新: 2026-05-21_
+_最后更新: 2026-05-26_
 
 ## 是什么
 
@@ -23,7 +23,7 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 
 1. 用户是否主动开始 Capture：这是最强门槛，没有开始就只显示入口和准备状态。
 2. Readiness 状态：Meeting Pilot 开关、ASR、memory-service、分析模型、Minutes API 任一不可用都会影响能力完整度。
-3. 会前 handoff：Today Pilot / Video Home 提前准备的 meeting prep 会影响会中 cue cards 和目标提示。
+3. 会前 handoff：Today Pilot / Video Home 提前准备的 meeting prep 和 Rehearsal 预演提醒会影响会中 cue cards 和目标提示。
 4. ASR 层级：浏览器 ASR、Desktop Whisper、远端分析可用性决定实时文本质量和延迟。
 5. 会议结束归档：停止 capture 后的摘要、行动项、Panorama 依赖已收集转写和事件是否完整。
 
@@ -79,7 +79,7 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 
 - 当前话题
 - Catch Up 轻量快照
-- Today Pilot / Context Assist 会前准备 handoff（目标、问题、证据来源）
+- Today Pilot / Context Assist 会前准备 handoff（目标、问题、Rehearsal 预演提醒、证据来源）
 - 时间线（支持展开详情）
 - 行动项列表（owner / deadline / transcript 依据）
 - readiness 状态
@@ -102,9 +102,10 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
   - 标题
   - 日期/时间
   - 参会者
-  - Digest / PDF 状态
+  - Digest / PDF 状态（包含生成中、失败、PDF 缺失或链接不可用）
   - 摘要
   - 结构化数量（话题 / 行动项 / 决议）
+- 历史页默认加载最新 50 条，并展示“已显示 / 总数”；当归档超过一页时，用户可以继续加载更早会议，避免旧会议只存在于后端但 UI 不可达。
 - 可直接打开 Panorama 或 PDF
 
 ## 配置
@@ -170,6 +171,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - RingCentral Video Home 的 Today Pilot 卡片初始只读取预生成 meeting prep；用户点击刷新时会先为当前日期 backfill meeting prep，再把缓存结果写入 Meeting Pilot handoff，避免缺少 nightly 预生成缓存时会中面板拿不到准备内容。
 - Side Panel 每条行动项支持回跳到同章时间线证据；点击 `时间线` 后会切到时间线 tab、展开并高亮最相关的 action / chapter 事件，便于从任务回看会议上下文。
 - Side Panel 的 Live 卡片和页脚会在 Capture 未开启时提供 `查看开启步骤`，直接在会议页打开扩展 icon / popup 授权 coachmark，避免用户只看到静态说明。
+- 会议页浮动入口支持当前页面临时隐藏或保存为“永不展示”；保存成功后当前会议页会立即隐藏入口，之后可在 Options 的 Meeting Pilot 配置里重新打开，避免入口关闭像失败一样停留在页面上。
 - popup 开始 Capture 失败时会直接展示阻断原因、已有录制冲突或授权失败的下一步；配置阻断时可从提示里直达 Meeting Pilot 配置页。
 - Capture 停止后重新开始会重置本次 `startedAt` 并清空旧 `stoppedAt`，避免 REC 计时、归档时长和会后记录沿用上一段录制时间。
 - Side Panel 的实时页会在存在待复核或处理中行动项时显示 `Action Review` 卡片，直接跳到行动项复核筛选，避免用户只看实时提醒而漏掉会后跟进。
@@ -177,7 +179,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Side Panel 会在行动项卡片、实时页下一项提示和复制文本里标出 `补负责人` / `补截止` / `缺依据`，提醒用户在把 AI 建议流入外部任务系统前补齐关键信息。
 - Side Panel 行动项增加 `需补信息` 筛选；批量确认只处理当前筛选里已具备负责人、截止和依据的待复核项，缺信息项仍可单条确认，作为用户明确接受的例外路径。
 - 缺负责人、截止或依据的待复核项在单条确认/完成时会显示 `确认例外` / `确认例外并完成`，避免用户把低置信 AI 建议误当成已完整复核的正式任务。
-- Side Panel 实时页会把本轮最重要的关联记忆提升到顶部 `会中关联记忆` 卡片；这些已提升的记忆不会再重复进入下方提醒 feed，`displayPriority: hidden` 的记忆也不会展示，避免同一条 context 在会中主控面重复打扰用户。
+- Side Panel 实时页会把本轮最重要的关联记忆提升到顶部 `会中关联记忆` 卡片；如果命中 `type='rehearsal'`，文案显示为“预演提醒”，并解释参会人、会议、项目或 issue 等命中线索。这些已提升的记忆不会再重复进入下方提醒 feed；会议页记忆弹幕和 side panel feed 都会过滤 `displayPriority: hidden` 或无解释价值的记忆，并且记忆弹幕只暴露安全的记忆库/来源链接，避免同一条 context 在会中主控面重复或不安全地打扰用户。
 - 行动项更新会同时校验 `tabId` 和 `meetingId`；如果会议标签页已经切换到另一场会议，旧 side panel / 独立窗口不能继续改写新会议的行动项。
 - 被忽略的行动项不会进入会议记忆 recap 的主行动项列表，但仍会保留在 session 的完整结构化数据里，方便排查 AI 误判。
 - LLM 结构化分析 prompt 要求输出 `actionItems.evidence`，启发式路径会把触发行动项的 transcript 句子写入 `evidence`。
@@ -185,6 +187,8 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - LLM 返回的行动项 / 决议会补齐当前 chapterId，避免时间线展开时找不到同章行动项。
 - 实时分析刷新时优先保留当前识别到的行动项；已确认/已忽略的旧项只在容量有余时继续保留，避免旧复核记录挤掉新任务。
 - 从会议历史归档打开 Panorama 时，会保留行动项的 evidence、timestamp、source、chapterId 和 review 状态。
+- 会议历史归档会透出 Digest 的真实状态和错误码：PDF 生成失败、完成但 URL 缺失、或 PDF 链接不是安全 http(s) 地址时，不再显示成“等待 PDF”，并且不会把不安全链接带入 Panorama 或打开动作。
+- 会议历史归档会显示已加载数量和总数，超过 50 条时提供 `加载更早会议`；加载第二页失败时保留当前列表并显示可重试错误，避免用户误以为历史归档只有第一页。
 - Panorama 会单独展示 `会后跟进状态`：区分可直接跟进、待复核、需补信息和已完成行动项，并支持复制带负责人、截止、状态和依据的 Markdown 跟进清单，避免用户把未复核或缺依据的 AI 行动项直接外发。
 
 ## 行业与论文参考方向
@@ -192,7 +196,10 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Zoom AI Companion 和 Teams Intelligent recap 都把会议 AI 的启动/停止、转写质量、会后 recap 分享作为显性状态，而不是隐藏后台动作。
 - Zoom AI Companion 要求 host/co-host 在会中控件里显式开始/停止摘要，并在参与者侧显示 AI Companion 正在运行；Microsoft Teams 的转写也有开始、停止、权限和通知路径。Meeting Pilot 因此保持“用户主动从 popup 授权开始”的路径，并在开始失败时给出可见恢复步骤。
 - Zoom AI Companion 的会中 side panel 把会议问答、复制、发送到聊天、创建任务/文档放在同一上下文里；Teams Facilitator 则把实时 notes、agenda timer、open questions 和 follow-up tasks 放在会议期间/会后同一条协作路径中。Meeting Pilot 的 side panel 因此应减少重复 context，把“当前要看什么”和“下一步能做什么”分层呈现。
+- Zoom 的会中问题预设包含 “Was my name mentioned?” / “What are the action items?”，Teams Facilitator 也会围绕 agenda timer、open questions 和 follow-up tasks 给出实时提示；Meeting Pilot 的会中提醒因此应优先保留点名、行动项、决策和强相关记忆，过滤纯上下文刷新、低置信或无解释线索的噪声提醒。
+- RingCentral 自身的 AI Meetings / AI Notes 也把 live recap、action items、transcripts 和 post-meeting notes 串在会议体验内；Meeting Pilot 的会议页入口因此需要保留低摩擦控制，不应让“隐藏/关闭入口”这种基础操作产生不确定状态。
 - AI meeting assistant governance 讨论强调 consent、transparency、accountability 和 audit 应进入系统设计；Meeting Pilot 的 Capture 路径因此优先暴露授权、阻断、降级、单场录制冲突和计时状态，而不是只在后台静默失败。
+- CHI 2025 会中目标反思研究指出被动提示更不打断会议、主动介入更容易触发行动但有打扰风险；Meeting Pilot 的浮动入口和 Catch Up 因此保持轻量、可关闭、可恢复，而不是强制常驻。
 - Otter 的 Meeting Summary 把 topics、action items、highlights、slides 放在同一封会后摘要里，说明行动项最好和会议材料/上下文并列呈现。
 - Granola 的 AI-enhanced notes 支持回看增强笔记来自 transcript / raw notes 的依据，并允许用户编辑单次会议笔记；Meeting Pilot 的行动项 review 因此把证据、确认/忽略/完成状态和人工校正入口放在同一条任务上。
 - Otter 的 Conversation / Summary 体验支持复制单条或全部 action items；Teams Facilitator 把 AI 会议笔记放到可编辑的 Loop 页面。Meeting Pilot 的行动项卡片因此需要保留低摩擦的“带依据复制”和“确认后跟进清单复制”能力，先满足会后跟进，再考虑写入外部任务系统。
@@ -201,6 +208,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - Teams Facilitator 会检查会议议程、提示目标并管理议题时间；Meeting Pilot 的 Today Pilot handoff 因此不应只显示会前摘要，还要允许用户把关键问题/目标直接转成会中待处理行动项。
 - Notion AI Meeting Notes 把 transcript citation 和 consent 放在会议笔记体验里；Meeting Pilot 的行动项也应持续保留依据、待分配/缺依据标记和用户确认路径，而不是把 AI 猜测当成正式任务。
 - Read AI 的 meeting intelligence 强调跨会议检索 action items、decisions 和 transcript；Meeting Pilot 的会议归档因此要保持可检索结构化字段，同时避免把低置信泛泛承诺写成错误 owner。
+- Zoom 的 transcript 管理支持按状态、日期、meeting ID、topic 或关键词找回历史；Teams Intelligent recap 也明确列出转写、录制、章节和任务的前置条件/跳过情况。因此 Meeting Pilot 的会议历史不能只显示“有/没有 PDF”，也不能只显示第一页，而要把生成失败、缺失链接、不可用链接、已显示数量和可继续回看 Panorama 的路径一起露出。
 - 业内会议助手普遍把用户编辑后的 notes / tasks 视为会后协作材料的一部分；Meeting Pilot 因此需要把人工补录和 AI 识别的行动项放进同一条“可复核、可回看、可复制”的路径，而不是把人工记录降级成一次性备注。
 - Zoom 的 summary template 和 Teams Intelligent recap 都把不同会议类型的后续动作、推荐任务、章节和录制/转写依赖放在 recap 里；Panorama 因此需要先暴露跟进清单是否可交付，再提供复制或外发入口。
 - Action Item Detection 相关论文强调行动项依赖 local/global context；Meeting Pilot 因此不应只显示一句“任务”，而应保留 owner、deadline 和证据句。
@@ -210,6 +218,10 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 参考：
 
 - [Zoom: Meeting Summary with AI Companion](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0058013)
+- [Zoom: Asking in-meeting questions with AI Companion](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0057748)
+- [Zoom: Accessing meeting transcripts for Meeting Summary with AI Companion](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0076632)
+- [Microsoft: Facilitator in Teams meetings](https://support.microsoft.com/en-us/office/facilitator-in-microsoft-teams-meetings-37657f91-39b5-40eb-9421-45141e3ce9f6)
+- [RingCentral: AI-powered Online Meetings](https://www.ringcentral.com/video.html)
 - [Microsoft Teams: Intelligent recap](https://learn.microsoft.com/en-gb/microsoftteams/intelligent-recap-calls-meetings)
 - [Granola: AI-enhanced notes](https://docs.granola.ai/help-center/taking-notes/ai-enhanced-notes)
 - [Otter: Meeting Summary Overview](https://help.otter.ai/hc/en-us/articles/9156381229079-Meeting-Summary-Overview)
@@ -218,6 +230,7 @@ side panel 的 `设置` 只保留会中体验和个性化配置，例如：
 - [Notion: AI Meeting Notes](https://www.notion.com/help/ai-meeting-notes)
 - [Read AI: Ada Meeting Intelligence & Preparation](https://support.read.ai/hc/en-us/articles/49437229480595-Ada-Meeting-Intelligence-Preparation)
 - [arXiv: Meeting Action Item Detection with Regularized Context Modeling](https://arxiv.org/abs/2303.16763)
+- [arXiv: Are We On Track? AI-Assisted Active and Passive Goal Reflection During Meetings](https://arxiv.org/abs/2504.01082)
 - [Microsoft Research: Detecting Actionable Items in Meetings](https://www.microsoft.com/en-us/research/publication/detecting-actionable-items-in-meetings-by-convolutional-deep-structured-semantic-models-2/)
 - [arXiv: Summaries, Highlights, and Action items](https://arxiv.org/abs/2307.15793)
 - [OpenReview: Meetalk](https://openreview.net/forum?id=yVXsMxmfEh)

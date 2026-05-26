@@ -141,6 +141,53 @@ const fixtureActions = [
     sourceRefId: 'release-summary',
     queueStatus: 'succeeded',
   },
+  {
+    id: 'action-delegation-succeeded',
+    type: 'delegate_openclaw',
+    actionType: 'delegate_openclaw',
+    title: '确认 Jira 发布状态',
+    description: 'OpenClaw 已返回可验证外部事实。',
+    params: { mode: 'read', targetSystem: 'jira' },
+    riskLevel: 'low',
+    confidence: 0.88,
+    evidenceRefs: ['thread:release'],
+    requiresApproval: false,
+    state: 'executed',
+    createdAt: nowSeconds - 2600,
+    finishedAt: nowSeconds - 2500,
+    executedAt: nowSeconds - 2500,
+    executionMode: 'manual',
+    priority: 4,
+    dependsOn: [],
+    retryCount: 0,
+    sourceKind: 'openclaw',
+    sourceRefId: 'ORB-123',
+    queueStatus: 'succeeded',
+    result: {
+      status: 'success',
+      summary: 'Jira 查询成功，ORB-123 当前处于 Ready for QA。',
+      artifacts: [
+        {
+          kind: 'external_evidence',
+          title: 'Jira ORB-123',
+          content: 'ORB-123 status=Ready for QA, assignee=Esone Qiu.',
+          metadata: {
+            sourceSystem: 'jira',
+            entityKey: 'ORB-123',
+            verification: 'jira_api',
+            observedFields: ['status', 'assignee'],
+            observedAt: '2026-05-23T10:00:00Z',
+          },
+        },
+      ],
+      payload: {
+        jiraKey: 'ORB-123',
+        status: 'Ready for QA',
+        assignee: 'Esone Qiu',
+      },
+      transcriptPath: 'delegations/thread-release-action-delegation-succeeded-1770000000.json',
+    },
+  },
 ];
 
 function actionsForRequest(parsed) {
@@ -199,6 +246,28 @@ try {
       return;
     }
 
+    if (
+      pathname.endsWith(
+        '/user-files/delegations/thread-release-action-delegation-succeeded-1770000000.json',
+      )
+    ) {
+      await route.fulfill(
+        jsonResponse({
+          filename: 'thread-release-action-delegation-succeeded-1770000000.json',
+          content: JSON.stringify(
+            {
+              request: { model: 'openclaw:main', user: 'thread-release' },
+              response: { output_text: '{"status":"success"}' },
+              outputText: '{"status":"success"}',
+            },
+            null,
+            2,
+          ),
+        }),
+      );
+      return;
+    }
+
     await route.fulfill(jsonResponse(apiFallback(requestUrl)));
   });
 
@@ -216,12 +285,25 @@ try {
 
   await page.getByText('动作队列').first().waitFor({ timeout: 10000 });
   await page.locator('[aria-label="动作队列健康摘要"]').waitFor({ timeout: 10000 });
-  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '5' }).waitFor();
+  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '6' }).waitFor();
   await page.locator('.queue-stat', { hasText: '需要处理' }).locator('strong', { hasText: '3' }).waitFor();
   await page.locator('.queue-stat', { hasText: '执行中' }).locator('strong', { hasText: '1' }).waitFor();
   await page.locator('.queue-stat', { hasText: '失败/死信' }).locator('strong', { hasText: '1' }).waitFor();
   await page.getByText('有动作运行时间过长').waitFor({ timeout: 10000 });
   await page.getByText('动作已运行超过 30 分钟').waitFor({ timeout: 10000 });
+  await page.getByText('确认 Jira 发布状态').waitFor({ timeout: 10000 });
+  await page.getByText('成功获取外部事实').waitFor({ timeout: 10000 });
+  await page.getByText('可验证 artifact 1 条').waitFor({ timeout: 10000 });
+  await page.getByText('对象 ORB-123').waitFor({ timeout: 10000 });
+  await page.getByText('字段 status, assignee').waitFor({ timeout: 10000 });
+  await page.getByText('"jiraKey": "ORB-123"').waitFor({ timeout: 10000 });
+  await page
+    .locator('.transcript-panel', {
+      hasText: 'thread-release-action-delegation-succeeded-1770000000.json',
+    })
+    .getByRole('button', { name: '展开' })
+    .click();
+  await page.getByText('"model": "openclaw:main"').waitFor({ timeout: 10000 });
 
   await page.locator('select.filter-select').first().selectOption('failed');
   await page.getByText('优先处理失败动作').waitFor({ timeout: 10000 });
@@ -235,7 +317,7 @@ try {
   });
   await page.getByRole('button', { name: '清除状态/模式筛选' }).click();
   await page.getByText('有动作运行时间过长').waitFor({ timeout: 10000 });
-  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '5' }).waitFor();
+  await page.locator('.queue-stat', { hasText: '当前结果' }).locator('strong', { hasText: '6' }).waitFor();
 
   console.log('verify-action-queue-e2e: ok');
 } finally {

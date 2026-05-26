@@ -30,6 +30,8 @@
    - 确认目标项目、触发器、组件数量、Web request / external action / secret / sensitive or hidden value / JQL / URL / custom field / filter / connection / account / smart value / schedule 摘要、迁移复核清单和导入警告后再执行导入
    - 预览会显示最终导入规则名；如果目标项目里已经有同名导入副本，会自动生成编号名称，避免重复导入后难以区分
    - 预览会汇总启用前检查数量，并把精简复核备注和关键环境绑定样例写入导入副本的描述，方便跳转到 Jira 规则详情后继续检查
+   - 预览会生成 `Activation plan`，把导入后到启用前最该做的几步排出来：保持 disabled、映射目标项目查询依赖、重连外部请求/secret/账号、测试 schedule / smart value / 链式触发，再确认 actor 权限和 audit 结果
+   - 预览里可复制一份脱敏的启用前复核包，包含目标项目、最终导入名、高/中/低风险检查、环境绑定样例、Activation plan 和导入警告，便于在 Jira 规则详情或审查线程里继续跟进
    - 如果预检发现高风险项，需要先勾选高风险复核确认，才能创建这个禁用态副本
    - 如果源规则允许被其它规则触发，预览会默认阻止导入副本继承这个链式触发能力；确实需要时可手动保留
 
@@ -72,7 +74,7 @@
    - 多项目来源会折叠为当前项目，避免重复项目 scope
    - 导入时强制新规则为 `DISABLED`
    - 生成 `(Imported by Personal AI) ...` 导入名，并在目标项目已有同名规则时追加编号
-   - 保留原规则描述，并追加 Personal AI 导入复核备注，记录目标项目、环境绑定摘要和链式触发状态
+   - 保留原规则描述，并追加 Personal AI 导入复核备注，记录目标项目、环境绑定摘要、Activation plan 和链式触发状态
    - 复核备注会保留关键 JQL/filter、URL、secret、敏感或隐藏值、custom field、saved filter、connection、账号/收件人、smart value 和源项目引用样例；复核备注中的敏感值只记录脱敏标签，URL 中的 token/API key/password 等参数和常见 webhook path token 会写成 `REDACTED`
    - 对没有安全显示名的 `secret=true` 字段只记录通用 secret 标签，不把 `keyOrValue` 里的原始值写进预览或描述，也不再把隐藏值二次识别成 URL、JQL、smart value 或 source project 样例
    - 导入 UI 默认关闭链式触发开关，避免启用后被其它规则意外触发
@@ -95,6 +97,8 @@
    - 预览顶部显示导入结果摘要，明确新规则会作为 disabled copy 创建
    - 预览中按类别展示检测到的环境绑定，和导入后写入描述的复核样例保持一致
    - 预览中显示高 / 中 / 低风险检查数量，并说明复核备注会随规则一起导入
+   - 预览中的 `Activation plan` 复用同一套风险扫描结果，给出启用前的下一步顺序；这份计划也会写入复制包和导入副本描述，避免用户离开预览后丢失复核路径
+   - 预览中提供 `Copy review packet`，复制内容复用同一套脱敏检查结果，不额外暴露 secret、token 或隐藏 payload
    - 检测到高风险项时，导入按钮会先保持禁用，直到用户确认已经阅读高风险复核项
    - 链式触发保护在预览里可见、可切换，目标状态会直接显示在摘要中
    - 显示成功/错误消息

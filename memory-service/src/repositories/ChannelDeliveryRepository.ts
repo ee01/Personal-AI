@@ -11,8 +11,10 @@ export interface ChannelDeliveryRecord {
   channel: DeliveryChannel;
   lane: DeliveryLane;
   status: DeliveryStatus;
+  effectiveStatus: DeliveryStatus;
   externalRef?: string;
   lastError?: string;
+  hasSuccessfulDelivery: boolean;
   firstDeliveredAt?: number;
   lastDeliveredAt?: number;
   seenAt?: number;
@@ -50,17 +52,37 @@ export class ChannelDeliveryRepository {
   constructor(private readonly db: Database.Database) {}
 
   private rowToRecord(row: ChannelDeliveryRow): ChannelDeliveryRecord {
+    const firstDeliveredAt = row.first_delivered_at ?? undefined;
+    const lastDeliveredAt = row.last_delivered_at ?? undefined;
+    const seenAt = row.seen_at ?? undefined;
+    const dismissedAt = row.dismissed_at ?? undefined;
+    const hasSuccessfulDelivery =
+      firstDeliveredAt !== undefined ||
+      lastDeliveredAt !== undefined ||
+      seenAt !== undefined ||
+      dismissedAt !== undefined;
+    const effectiveStatus: DeliveryStatus =
+      dismissedAt !== undefined
+        ? 'dismissed'
+        : seenAt !== undefined
+          ? 'clicked'
+          : firstDeliveredAt !== undefined || lastDeliveredAt !== undefined
+            ? 'delivered'
+            : row.status;
+
     return {
       sourceRef: row.source_ref,
       channel: row.channel,
       lane: row.lane,
       status: row.status,
+      effectiveStatus,
       externalRef: row.external_ref ?? undefined,
       lastError: row.last_error ?? undefined,
-      firstDeliveredAt: row.first_delivered_at ?? undefined,
-      lastDeliveredAt: row.last_delivered_at ?? undefined,
-      seenAt: row.seen_at ?? undefined,
-      dismissedAt: row.dismissed_at ?? undefined,
+      hasSuccessfulDelivery,
+      firstDeliveredAt,
+      lastDeliveredAt,
+      seenAt,
+      dismissedAt,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -126,6 +148,24 @@ export class ChannelDeliveryRepository {
 
     run(events);
     return results;
+  }
+
+  getRecord(
+    sourceRef: string,
+    channel: DeliveryChannel,
+    lane: DeliveryLane,
+  ): ChannelDeliveryRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT source_ref, channel, lane, status, external_ref, last_error,
+                first_delivered_at, last_delivered_at, seen_at, dismissed_at,
+                created_at, updated_at
+           FROM channel_delivery_records
+          WHERE source_ref = ? AND channel = ? AND lane = ?`,
+      )
+      .get(sourceRef, channel, lane) as ChannelDeliveryRow | undefined;
+
+    return row ? this.rowToRecord(row) : undefined;
   }
 
   getSuccessfulSourceRefs(

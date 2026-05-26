@@ -97,7 +97,10 @@ describe('Ask API', () => {
     fetchMock.mockReset();
     generateMock.mockReset();
     generateStreamMock.mockReset();
+    db.prepare('DELETE FROM conversation_context_frames').run();
     db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
     db.prepare('DELETE FROM watched_projects').run();
     db.prepare('DELETE FROM entities').run();
     db.prepare('DELETE FROM memory_metadata').run();
@@ -346,6 +349,108 @@ describe('Ask API', () => {
     expect(recallSpy.mock.calls[0][0].scope).toBe('all');
     expect(res.json().evidence?.[0]?.id).toBe('ask-all-scope-memory');
     recallSpy.mockRestore();
+  });
+
+  it('expands short VBG backend ask queries before recall', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO watched_projects
+        (id, name, aliases_json, is_active, priority, created_at)
+       VALUES (?, ?, ?, 1, 8, ?)`,
+    ).run(
+      'project-vbg',
+      'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+      JSON.stringify(['AI VBG', 'VBG', 'AI Generated Background']),
+      currentTime,
+    );
+
+    const rows = [
+      {
+        id: 'ask-vbg-backend-pending',
+        chunkId: 9100,
+        content:
+          'Ivan confirmed AI Generated VBG backend BE still has pending work on RCV-148412 and RCV-148411 before ready.',
+        hash: 'hash-ask-vbg-backend-pending',
+      },
+      {
+        id: 'ask-vbg-daily-limit',
+        chunkId: 9101,
+        content:
+          'AI Generated VBG daily generation limit is 20 per day with retry-after on quota errors.',
+        hash: 'hash-ask-vbg-daily-limit',
+      },
+    ];
+
+    for (const row of rows) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, source_type, source_url, source_title, sender, group_id,
+           group_name, timestamp, importance, sentiment, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        row.id,
+        row.content,
+        'glip',
+        `https://app.ringcentral.com/messages/${row.id}`,
+        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        'Ivan Velencoso',
+        'vbg-group',
+        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        currentTime - 600,
+        0.86,
+        'neutral',
+        JSON.stringify({
+          groupId: 'vbg-group',
+          groupName:
+            'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        }),
+        currentTime - 600,
+      );
+      db.prepare(
+        `INSERT INTO chunks
+          (chunk_id, file_path, line_start, line_end, content, content_hash,
+           scope, source, source_type, related_project, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        row.chunkId,
+        `messages/${row.id}`,
+        1,
+        1,
+        row.content,
+        row.hash,
+        'work',
+        'glip',
+        'glip',
+        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        currentTime - 600,
+      );
+      db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+        row.chunkId,
+        row.content,
+      );
+    }
+
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'VBG backend still has pending work before it is ready.',
+        keyFindings: ['Backend work is still pending.'],
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'AI VBG 的 BE 部分完成情况如何',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.evidence?.[0]?.id).toBe('9100');
+    expect(body.evidence?.[0]?.content).toContain('pending work');
+    expect(body.answer).toContain('pending work');
   });
 
   it('adds a decision evidence chain block for historical decision questions', async () => {

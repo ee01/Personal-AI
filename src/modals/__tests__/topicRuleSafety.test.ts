@@ -24,7 +24,7 @@ test('rule safety flags global auto-executed linked actions as highest risk', ()
 
 test('rule safety asks for review on short scopes and auto execution', () => {
   const summary = getRuleSafetySummary({
-    filterGroup: 'AI',
+    filterGroup: 'AI, Release Chat',
     filterSender: 'Morgan Lee',
     automationPrompt: '同步 OpenClaw 状态',
     automationRequiresApproval: false,

@@ -17,7 +17,13 @@ import {
   loadRingCentralNativeJoinEnabled,
   openRingCentralVideoNativeJoin,
   parseRingCentralVideoJoinTarget,
+  RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE,
+  RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST,
+  RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE,
   type RingCentralVideoJoinTarget,
+  type RingCentralNativeJoinSetEnabledRequestMessage,
+  type RingCentralNativeJoinSetEnabledResponseMessage,
+  setRingCentralNativeJoinEnabled,
   setRingCentralNativeJoinEnabledAttribute,
   shouldPreserveDefaultNativeJoinClick,
   watchRingCentralNativeJoinEnabled,
@@ -171,6 +177,7 @@ let glipNativePopoutBridgeListenerAttached = false;
 let ringCentralVideoNativeJoinInterceptorAttached = false;
 let ringCentralVideoNativeJoinEnabled = true;
 let ringCentralVideoNativeJoinConfigWatcherAttached = false;
+let ringCentralNativeJoinPreferenceBridgeListenerAttached = false;
 
 // 初始化时获取 JIRA Base URL
 async function initJiraBaseUrl() {
@@ -1408,7 +1415,72 @@ function setRingCentralVideoNativeJoinEnabled(enabled: boolean) {
   setRingCentralNativeJoinEnabledAttribute(enabled);
 }
 
+function postRingCentralNativeJoinPreferenceBridgeResponse(
+  response: RingCentralNativeJoinSetEnabledResponseMessage,
+): void {
+  window.postMessage(response, getSameWindowPostMessageTargetOrigin());
+}
+
+function getSameWindowPostMessageTargetOrigin(): string {
+  const origin = window.location?.origin;
+  return origin && origin !== 'null' ? origin : '*';
+}
+
+function attachRingCentralNativeJoinPreferenceBridgeListener() {
+  if (ringCentralNativeJoinPreferenceBridgeListenerAttached) {
+    return;
+  }
+
+  window.addEventListener('message', (event: MessageEvent) => {
+    if (event.source !== window) {
+      return;
+    }
+
+    const message = event.data as
+      | RingCentralNativeJoinSetEnabledRequestMessage
+      | undefined;
+    if (
+      !message ||
+      message.source !== RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE ||
+      message.target !== 'content-script' ||
+      message.type !== RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_REQUEST ||
+      typeof message.requestId !== 'string' ||
+      typeof message.enabled !== 'boolean'
+    ) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        await setRingCentralNativeJoinEnabled(message.enabled);
+        setRingCentralVideoNativeJoinEnabled(message.enabled);
+        postRingCentralNativeJoinPreferenceBridgeResponse({
+          source: RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE,
+          target: 'page',
+          type: RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE,
+          requestId: message.requestId,
+          success: true,
+          enabled: message.enabled,
+        });
+      } catch (error) {
+        postRingCentralNativeJoinPreferenceBridgeResponse({
+          source: RINGCENTRAL_NATIVE_JOIN_PREFERENCE_BRIDGE_SOURCE,
+          target: 'page',
+          type: RINGCENTRAL_NATIVE_JOIN_SET_ENABLED_RESPONSE,
+          requestId: message.requestId,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+  });
+
+  ringCentralNativeJoinPreferenceBridgeListenerAttached = true;
+}
+
 function initRingCentralVideoNativeJoinConfig() {
+  attachRingCentralNativeJoinPreferenceBridgeListener();
+
   if (ringCentralVideoNativeJoinConfigWatcherAttached) {
     return;
   }
@@ -2145,24 +2217,45 @@ async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
   }
 }
 
+const MESSAGE_REACTION_ENV_KEYS = [
+  'ENABLE_SNOOZE',
+  'ENABLE_FOLLOW_THREAD',
+  'ENABLE_AUTO_REPLY',
+  'ENABLE_LINKED_ACTION',
+] as const;
+let messageReactionConfigWatcherAttached = false;
+
+function didMessageReactionEnvConfigChange(change?: chrome.storage.StorageChange) {
+  if (!change) return false;
+  const oldValue = change.oldValue || {};
+  const newValue = change.newValue || {};
+  return MESSAGE_REACTION_ENV_KEYS.some(
+    (key) => oldValue[key] !== newValue[key],
+  );
+}
+
+function watchMessageReactionConfigChanges() {
+  if (messageReactionConfigWatcherAttached) return;
+  messageReactionConfigWatcherAttached = true;
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return;
+    if (!didMessageReactionEnvConfigChange(changes.envConfig)) return;
+
+    console.log('🔔 消息交互功能开关已变化，刷新当前页面工具栏');
+    void setupMessageReaction();
+  });
+}
+
 // 初始化消息交互功能（包装器）
 async function setupMessageReaction() {
   const config = await getMessageReactionConfig();
   console.log('🔔 消息交互功能配置:', config);
 
-  // 如果四个功能都禁用，跳过初始化
-  if (
-    !config.enableSnooze &&
-    !config.enableFollowThread &&
-    !config.enableAutoReply &&
-    !config.enableLinkedAction
-  ) {
-    console.log('🔔 消息交互功能都已禁用，不显示工具栏');
-    return;
-  }
-
   initMessageReaction(config);
 }
+
+watchMessageReactionConfigChanges();
 
 // 在页面加载后初始化
 if (document.readyState === 'loading') {

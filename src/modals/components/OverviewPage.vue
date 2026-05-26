@@ -40,6 +40,23 @@
           {{ attentionBudget.used }} / {{ attentionBudget.max }}
         </span>
       </div>
+
+      <div
+        v-if="rankingSummary.length > 0"
+        class="ranking-strip"
+        aria-label="今日领航筛选摘要"
+      >
+        <span class="ranking-kicker">筛选口径</span>
+        <span
+          v-for="item in rankingSummary"
+          :key="item.key"
+          :class="['ranking-chip', item.tone]"
+        >
+          <strong>{{ item.value }}</strong>
+          {{ item.label }}
+        </span>
+        <span class="ranking-note">{{ rankingNote }}</span>
+      </div>
     </section>
 
     <div v-if="loadError" class="load-error" role="status">
@@ -207,6 +224,12 @@
                     class="redaction-note"
                   >
                     已默认脱敏；复制前可展开预览确认。
+                  </div>
+                  <div
+                    v-if="currentContextPack(card)?.truncated"
+                    class="redaction-note"
+                  >
+                    正文已按当前预算截断；完整证据仍以卡片证据和详情页为准。
                   </div>
                   <div
                     v-if="currentRedactionPreview(card).length > 0"
@@ -386,6 +409,10 @@ import {
   type RuntimeAction,
   type StatsResponse,
 } from '../../services/MemoryServiceClient';
+import {
+  getEnvConfig,
+  isSceneRehearsalDisplayEnabledFromConfig,
+} from '../../utils';
 
 type MissionPriority = 'critical' | 'high' | 'medium' | 'low';
 type MissionStateClass = 'now' | 'prepare' | 'waiting';
@@ -417,6 +444,13 @@ interface AttentionItem {
   label: string;
   count: number;
   route: string;
+}
+
+interface RankingSummaryItem {
+  key: string;
+  value: string;
+  label: string;
+  tone: 'normal' | 'quiet' | 'warn';
 }
 
 const store = useMemoryStore();
@@ -452,6 +486,7 @@ const refreshedAt = ref(Date.now());
 const expandedCardId = ref<string | null>(null);
 const openContextPackIds = ref(new Set<string>());
 const hiddenDayPilotCardIds = ref(new Set<string>());
+const sceneRehearsalDisplayEnabled = ref(true);
 const contextProvider = ref<DayPilotProviderTarget>('codex');
 const includeSensitiveContext = ref(false);
 const contextPackCache = ref<Record<string, DayPilotContextPackResponse>>({});
@@ -504,6 +539,11 @@ const sourceTags = computed(() => {
         key: 'notifications',
         label: `${sourceStats.notifications.pending} 待提醒`,
         warn: sourceStats.notifications.pending > 0,
+      },
+      {
+        key: 'rehearsals',
+        label: `${sourceStats.rehearsals?.active || 0} 预演`,
+        warn: false,
       },
       {
         key: 'missions',
@@ -561,6 +601,27 @@ const currentProviderLabel = computed(
       ?.shortLabel || '上下文包',
 );
 
+function providerShortLabel(provider: DayPilotProviderTarget) {
+  return (
+    providerOptions.find((item) => item.id === provider)?.shortLabel || '通用'
+  );
+}
+
+function contextPackCopyReceipt(pack: DayPilotContextPackResponse) {
+  const details = [`${pack.evidenceRefs.length} 条证据`];
+  if (pack.redactionApplied) {
+    details.push('已脱敏');
+  } else if (includeSensitiveContext.value) {
+    details.push('含敏感原文');
+  }
+  if (pack.truncated) {
+    details.push('已按预算截断');
+  }
+  return `已复制 ${providerShortLabel(pack.targetProvider)} 上下文包（${details.join(
+    '，',
+  )}）。`;
+}
+
 const attentionBudget = computed(() => ({
   max: dayBrief.value?.attentionBudget.maxInterruptions ?? 3,
   used:
@@ -580,10 +641,74 @@ const budgetPercent = computed(() => {
   return `${Math.min(100, Math.max(0, percent))}%`;
 });
 
+const rankingSummary = computed<RankingSummaryItem[]>(() => {
+  const sourceStats = dayBrief.value?.sourceStats;
+  if (!sourceStats) return [];
+
+  const sourcePairs = [
+    [sourceStats.messages.totalRecent, sourceStats.messages.scanned],
+    [sourceStats.calendar.upcoming, sourceStats.calendar.scanned],
+    [sourceStats.notifications.pending, sourceStats.notifications.scanned],
+    [sourceStats.actions.queued, sourceStats.actions.scanned],
+    [sourceStats.reflections.active, sourceStats.reflections.scanned],
+    [
+      sourceStats.rehearsals?.active || 0,
+      sourceStats.rehearsals?.scanned || 0,
+    ],
+    [sourceStats.skills.suggestions, sourceStats.skills.scanned],
+    [
+      sourceStats.relationships.highFrequencyPeople,
+      sourceStats.relationships.scanned,
+    ],
+  ];
+  const scanned = sourcePairs.reduce((sum, [, passed]) => sum + passed, 0);
+  const total = sourcePairs.reduce((sum, [available]) => sum + available, 0);
+  const filtered = Math.max(0, total - scanned);
+  const boardOnly =
+    dayBrief.value?.attentionBudget.boardOnlyCardIds?.length || 0;
+
+  return [
+    {
+      key: 'passed',
+      value: `${scanned}/${total}`,
+      label: '条候选通过行动性筛选',
+      tone: filtered > 0 ? 'normal' : 'quiet',
+    },
+    {
+      key: 'filtered',
+      value: String(filtered),
+      label: '条低行动/重复信号未进首页',
+      tone: filtered > 0 ? 'quiet' : 'normal',
+    },
+    {
+      key: 'delivery',
+      value: `${attentionBudget.value.used}/${attentionBudget.value.max}`,
+      label: `计划打断，${boardOnly} 个留在首页`,
+      tone: attentionBudget.value.used > 0 ? 'warn' : 'quiet',
+    },
+  ];
+});
+
+const rankingNote = computed(() => {
+  if (!dayBrief.value) return '';
+  if (visibleMissionCards.value.length === 0) {
+    return '没有足够强的今日动作信号，低价值同步和旧提醒不会抬高优先级。';
+  }
+  if (attentionBudget.value.used > 0) {
+    return '只有 Now/高优先级且低隐私风险的 mission 会占用提醒预算。';
+  }
+  return '当前 mission 仅在首页展示，waiting、低优先级或高隐私风险保持静默。';
+});
+
 const MISSION_LIMIT = 7;
 
 const missionCards = computed<MissionCard[]>(() => {
   return (dayBrief.value?.cards ?? [])
+    .filter(
+      (card) =>
+        sceneRehearsalDisplayEnabled.value ||
+        card.cardType !== 'rehearsal_prompt',
+    )
     .map(mapDayPilotCard)
     .slice(0, MISSION_LIMIT);
 });
@@ -645,6 +770,9 @@ async function loadDayPilot() {
   loading.value = true;
   loadError.value = '';
   try {
+    const envConfig = await getEnvConfig();
+    sceneRehearsalDisplayEnabled.value =
+      isSceneRehearsalDisplayEnabledFromConfig(envConfig);
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const result = await client.getTodayPilotToday({
       timezone: timezone || 'Asia/Shanghai',
@@ -756,6 +884,7 @@ function cardTypeLabel(cardType: DayPilotCard['cardType']) {
     ai_tool_shift: 'AI 工具',
     project_risk: '项目风险',
     relationship_ping: '关系上下文',
+    rehearsal_prompt: '预演提醒',
     skill_opportunity: '技能机会',
     memory_quality: '记忆质量',
   };
@@ -765,6 +894,7 @@ function cardTypeLabel(cardType: DayPilotCard['cardType']) {
 function routeForDayPilotCard(card: DayPilotCard) {
   const primaryEvidence = card.evidenceRefs[0];
   if (card.cardType === 'skill_opportunity') return '/skills';
+  if (card.cardType === 'rehearsal_prompt') return '/rehearsals';
   if (card.cardType === 'meeting_prepare') return '/timeline';
   if (card.cardType === 'memory_quality') {
     return primaryEvidence?.sourceId
@@ -981,7 +1111,7 @@ async function copyContextPack(card: MissionCard) {
       return;
     }
     await navigator.clipboard.writeText(pack.bodyMd);
-    showToast('已复制上下文包。');
+    showToast(contextPackCopyReceipt(pack));
   } catch (error) {
     console.error('复制上下文包失败:', error);
     showToast('复制失败，请展开上下文包手动复制。');
@@ -1744,6 +1874,62 @@ onMounted(() => {
   border-radius: inherit;
   background: linear-gradient(90deg, #22c55e, #60a5fa);
   transition: width 0.3s ease;
+}
+
+.ranking-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.ranking-kicker,
+.ranking-chip,
+.ranking-note {
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.ranking-kicker {
+  color: #60a5fa;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.ranking-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 1.75rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.45rem;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.55);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.ranking-chip strong {
+  color: #ffffff;
+  font-weight: 850;
+}
+
+.ranking-chip.quiet strong {
+  color: #22c55e;
+}
+
+.ranking-chip.warn strong {
+  color: #fbbf24;
+}
+
+.ranking-note {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: #94a3b8;
 }
 
 .load-error {

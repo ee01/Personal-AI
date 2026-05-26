@@ -29,6 +29,9 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 - 配置型入口（关注后续、自动答复 / 跟进追问、联动操作）点击后会进入短暂 pending 状态，并等待 Background 明确返回成功后才提示正在打开配置，避免失败时给出误导性成功反馈或重复打开多个配置窗口。
 - Snooze 创建中会把快捷菜单标记为 busy 并禁用菜单项，避免鼠标或键盘重复触发；自定义时间选择器打开后会把焦点移到日期时间输入框，返回快捷菜单时恢复菜单焦点。
 - 隐藏后的工具栏和长悬停设置按钮会退出键盘 Tab 顺序；只有当前可见的操作按钮可聚焦，避免用户 Tab 到不可见控件。
+- 跟进追问参考 Boomerang / Superhuman 的 “if no reply” 跟进模型，但比单纯计时提醒多一层信息目标判断：系统先检查是否已有回复满足完成标准，未命中才继续追问；同一条消息已存在跟进时不会重复创建。
+- Teams Recap / Facilitator 把 follow-up tasks 放在可复核、可同步的任务路径里；本功能仍保持轻量弹窗入口，但会在创建前说明跟进范围、下一次检查语义和是否复用已有 session。
+- Gmail / Google Chat Smart Reply 和 Outlook Suggested Replies 都把生成文本作为可编辑建议，不会绕过用户发送动作；Intercom Fin 的 human-in-the-loop procedure 也会把高风险步骤交给 teammate 审核。自动答复因此在配置页直接展示发送口径：是否下一分钟直接发送、是否延迟可拦截、是否只进待审核列表，以及每次是否重新 AI 生成。
 
 ## 功能开关
 
@@ -43,6 +46,7 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 
 - 如果四个功能都关闭，消息上将不会显示交互工具栏
 - 如果只开启其中部分功能，工具栏只显示对应的按钮，顺序保持不变
+- 当前 RingCentral 页面会监听 Options 中四个开关的变化：如果页面加载时四个入口全关，之后重新开启任一入口，当前会话页无需刷新也会恢复工具栏；再次全关时会隐藏已有工具栏和浮层。
 
 ---
 
@@ -53,7 +57,7 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 1. **稍后处理**：常态显示「稍后」，点击或 hover 展开快速菜单，选择具体提醒时间后创建提醒
 2. **关注后续**：紫色按钮，打开关注后续规则配置
 3. **自动答复 / 跟进追问**：别人发送的消息显示自动答复；自己发送的消息显示跟进追问，不再显示自动答复
-4. **联动操作**：红色按钮，打开“记忆入口规则”弹窗并预填一条带“关联操作”的规则
+4. **联动操作**：红色按钮，打开“记忆入口规则”弹窗并预填一条带“联动操作”的规则
 5. **PAI 图标**：视觉标识
 6. **齿轮设置**：工具栏再长悬停约 1.4 秒后出现，可快速开关四个入口
 
@@ -91,6 +95,8 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 | 直接发送 | 匹配后立即执行发送（下一分钟）              |
 | 延迟拦截 | 设置延迟时间（如 X 小时后发送），期间可拦截 |
 | 仅审核   | 添加到待审核列表，需手动批准后发送          |
+
+配置页会在模式选择下方显示一条“发送口径”回执，把实际发送时间、审核/拦截路径和 AI 生成方式合并说明；延迟拦截时间统一限制在 1 到 72 小时，旧数据或导入配置超出范围时按边界值执行。
 
 ### 答复内容生成
 
@@ -155,6 +161,10 @@ interface TopicItem {
 | 信息目标   | 必填，自动聚焦                 |
 
 提交前会把追问间隔限制在 1 到 720 小时，最多追问次数限制在 0 到 10 次；创建失败会在弹窗内保留错误提示并允许用户直接重试。
+
+弹窗会根据原消息时间和追问间隔显示执行口径：如果原消息已经超过间隔，创建后会立即检查当前会话是否已有满足目标的回复；如果还没到间隔，则显示预计检查时间。重复对同一条消息提交跟进追问时，后端返回已有 session，前端提示“未重复创建”，不会静默覆盖已经运行中的信息目标。
+
+创建成功或复用已有 session 后，Toast 会提供「查看追问」入口，直接打开对应 Outreach session 详情；如果响应里缺少 session id，则退回到 Outreach 会话列表并筛选 message reaction 来源。
 
 ### 创建语义
 
@@ -360,12 +370,11 @@ interface SnoozeRequest {
 
 ---
 
-## 联动操作 / 关联操作
+## 联动操作
 
 ### 命名约定
 
-- **联动操作**：消息悬浮工具栏里的入口名
-- **关联操作**：规则编辑页里的能力名
+- 消息悬浮工具栏、规则编辑页和文档统一使用 **联动操作**
 - 底层持久化字段仍然使用 `automationPrompt` / `automationRequiresApproval`
 
 ### 触发方式
@@ -373,6 +382,7 @@ interface SnoozeRequest {
 - 在 RingCentral 消息页面悬停一条消息后，点击工具栏里的 **联动操作**
 - Background 会写入 `pendingLinkedActionConfig` 到 `chrome.storage.local`
 - 随后打开 `topic-modal.html`
+- 手动新建记忆入口规则时，联动操作区默认折叠；从工具栏联动操作入口进入时会自动展开并进入建议生成流程
 
 ### 默认流程
 
@@ -380,8 +390,8 @@ interface SnoozeRequest {
 联动操作
   -> topic-modal / 记忆入口规则
   -> 预填一条规则
-  -> 默认开启 写入记忆 + 关联操作
-  -> 异步生成一条可编辑的关联操作建议
+  -> 默认开启 写入记忆 + 联动操作
+  -> 异步生成一条可编辑的联动操作建议
 ```
 
 ### 预填规则
@@ -411,9 +421,10 @@ interface SnoozeRequest {
 
 ### OpenClaw 禁用态
 
-- 当 `OPENCLAW_ENABLED` 未启用或 `OPENCLAW_BASE_URL` 未配置时，规则页中的 **关联操作** 输入框会 disabled
-- UI 会显示遮罩与 CTA，跳转到 `options.html#OPENCLAW_ENABLED`
-- 选项页配置完成后，topic-modal 通过 `chrome.storage.onChanged` 实时解除禁用；若当前来自联动操作入口且文本仍为空，会自动触发一次建议生成
+- 当 `OPENCLAW_ENABLED` 未启用或 `OPENCLAW_BASE_URL` 未配置时，规则页仍允许先填写并保存 **联动操作** 描述，但会以“待激活”状态提示连接前不会执行外部写操作
+- UI 会在输入框下方显示连接 CTA，跳转到 `options.html#OPENCLAW_ENABLED`
+- 选项页配置完成后，topic-modal 通过 `chrome.storage.onChanged` 实时更新状态；若当前来自联动操作入口且文本仍为空，会自动触发一次建议生成
+- 从旧消息点击联动操作时，pending 配置的新鲜度以本次点击时间为准，原消息时间单独保留，避免历史消息被误判为过期而无法预填
 
 ### 关联关系检测
 
@@ -624,3 +635,10 @@ LLM 返回的匹配结果格式：
 
 - [定时消息管理](./scheduled_messages_manager.md)
 - [消息分析过滤](./message_analysis_filter.md)
+
+**外部参考**:
+
+- [Slack Workflow Builder](https://slack.com/help/articles/17542172840595-Build-a-workflow--Create-a-workflow-in-Slack)：触发、步骤、变量、权限分开配置，提醒联动操作要把“触发上下文”和“外部执行能力”分清楚。
+- [Zapier AI Actions](https://docs.zapier.com/integrations/reference/ai-actions)：自然语言动作可以接入外部自动化平台，但需要保留用户可编辑的动作描述。
+- [Supporting mental model accuracy in trigger-action programming](https://hcrlab.cs.washington.edu/publications/huang2015ubicomp/)：TAP 研究说明触发 / 动作类型混淆会造成误解，联动操作应明确点击时间、消息时间和执行前提。
+- [If This Context Then That Concern](https://arxiv.org/abs/2012.12518)：自动化风险会随上下文变化；OpenClaw 未连接时应可保存草稿，但不能暗示已具备外部执行能力。

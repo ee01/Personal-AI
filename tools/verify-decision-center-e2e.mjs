@@ -19,6 +19,7 @@ const userDataDir = await fs.mkdtemp(
 const nowSeconds = Math.floor(Date.now() / 1000);
 const answerRequests = [];
 let failConfirmRequests = false;
+let includeDeepLinkPeer = false;
 
 function jsonResponse(body, status = 200) {
   return {
@@ -83,6 +84,19 @@ const decisionItem = {
   updatedAt: nowSeconds - 60,
 };
 
+const unrelatedDecisionItem = {
+  ...decisionItem,
+  id: 'cr-general-review',
+  question: '是否继续保留旧的部署检查提醒？',
+  context: '这条确认项用于证明通知深链会把目标卡片置顶，而不是只停在列表顶部。',
+  evidenceRefs: ['notification:notif-general-review'],
+  category: 'notification_center',
+  reasonCode: 'authority_required',
+  sourceAnchor: 'notification-center',
+  createdAt: nowSeconds - 30,
+  updatedAt: nowSeconds - 20,
+};
+
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
   headless: true,
@@ -108,8 +122,11 @@ try {
       const queue = parsed.searchParams.get('queue');
       const state = parsed.searchParams.get('state');
       if (queue === 'decision' && state === 'pending') {
+        const items = includeDeepLinkPeer
+          ? [unrelatedDecisionItem, decisionItem]
+          : [decisionItem];
         await route.fulfill(
-          jsonResponse({ items: [decisionItem], total: 1, limit: 50, state, queue }),
+          jsonResponse({ items, total: items.length, limit: 50, state, queue }),
         );
         return;
       }
@@ -147,6 +164,36 @@ try {
   const extensionId = new URL(worker.url()).host;
   assert.ok(extensionId, 'extension id should be available');
 
+  includeDeepLinkPeer = true;
+  const deepLinkPage = await context.newPage();
+  await deepLinkPage.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/decisions?confirmRequestId=cr-risky-deploy`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await deepLinkPage.getByText('决策中心 (2)').waitFor({ timeout: 10000 });
+  await deepLinkPage
+    .getByText('已定位通知对应确认项')
+    .waitFor({ timeout: 10000 });
+  const firstCardQuestion = await deepLinkPage
+    .locator('.decision-card')
+    .first()
+    .locator('.question-text')
+    .innerText();
+  assert.match(firstCardQuestion, /OpenClaw 继续查询生产部署状态/);
+  await deepLinkPage
+    .locator('.decision-card.deep-link-target[data-request-id="cr-risky-deploy"]')
+    .waitFor({ timeout: 10000 });
+
+  const missingLinkPage = await context.newPage();
+  await missingLinkPage.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/decisions?confirmRequestId=cr-already-handled`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await missingLinkPage
+    .getByText('通知对应确认项不在当前队列')
+    .waitFor({ timeout: 10000 });
+
+  includeDeepLinkPeer = false;
   const page = await context.newPage();
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {

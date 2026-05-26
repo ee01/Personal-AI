@@ -26,6 +26,7 @@ export type RecallSourceType =
   | 'project_summary'
   | 'reflection'
   | 'dream'
+  | 'rehearsal'
   | 'entity_profile'
   | 'markdown'
   | 'user_core';
@@ -95,6 +96,86 @@ export type OpinionDimension =
   | 'risk';
 export type OpinionStatus = 'pending_confirm' | 'active' | 'retracted';
 export type AgentProfileKind = 'identity' | 'soul' | 'policy';
+
+export type RehearsalStatus =
+  | 'candidate'
+  | 'active'
+  | 'paused'
+  | 'used'
+  | 'stale'
+  | 'archived'
+  | 'dismissed';
+
+export type RehearsalActivationOutcome =
+  | 'matched'
+  | 'shown'
+  | 'accepted'
+  | 'used'
+  | 'ignored'
+  | 'dismissed'
+  | 'irrelevant';
+
+export interface RehearsalActivationCues {
+  people?: string[];
+  projects?: string[];
+  topics?: string[];
+  keywords?: string[];
+  groupIds?: string[];
+  conversationIds?: string[];
+  meetingIds?: string[];
+  calendarEventIds?: string[];
+  issueKeys?: string[];
+  urls?: string[];
+  surfaces?: string[];
+}
+
+export interface Rehearsal {
+  id: string;
+  title: string;
+  scenarioType: string;
+  status: RehearsalStatus;
+  summary?: string;
+  content: string;
+  activationCues: RehearsalActivationCues;
+  evidenceRefs: string[];
+  sourceKind: string;
+  sourceRefId?: string;
+  confidence: number;
+  priority: number;
+  validFrom?: number;
+  validUntil?: number;
+  lastActivatedAt?: number;
+  lastUsedAt?: number;
+  activationCount: number;
+  usedCount: number;
+  dismissedCount: number;
+  staleReason?: string;
+  markdownPath?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RehearsalActivation {
+  id: string;
+  rehearsalId: string;
+  surface: string;
+  contextType?: string;
+  sceneKey?: string;
+  score: number;
+  displayPriority: ContextRecallDisplayPriority;
+  matchedCues: RehearsalActivationCues;
+  outcome: RehearsalActivationOutcome;
+  feedbackNote?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RehearsalListResponse {
+  items: Rehearsal[];
+  total: number;
+  limit: number;
+  offset: number;
+}
 
 export interface Entity {
   id: string;
@@ -183,6 +264,8 @@ export interface MeetingRecord {
   participants: string[];
   pdfUrl?: string;
   digestId?: string;
+  digestStatus?: 'idle' | 'uploading' | 'processing' | 'completed' | 'failed';
+  digestErrorCode?: string;
   summary?: string;
   topicCount?: number;
   actionItemCount?: number;
@@ -751,6 +834,26 @@ export interface ContextRecallSourceContext {
   calendarEventId?: string;
 }
 
+export interface ContextRecallVisibleMessage {
+  id?: string;
+  sender?: string;
+  text: string;
+  timestamp?: number;
+  timestampLabel?: string;
+}
+
+export interface ContextRecallCurrentContext {
+  title?: string;
+  url?: string;
+  conversationId?: string;
+  groupId?: string;
+  meetingId?: string;
+  issueKey?: string;
+  participants?: string[];
+  visibleMessages?: ContextRecallVisibleMessage[];
+  sourceAnchorHints?: string[];
+}
+
 export interface ContextRecallExclude {
   ids?: string[];
   urls?: string[];
@@ -771,7 +874,8 @@ export type ContextRecallReasonType =
   | 'keyword'
   | 'source'
   | 'recent'
-  | 'entity';
+  | 'entity'
+  | 'prospective_cue';
 
 export type ContextRecallEvidenceRole =
   | 'decision'
@@ -780,7 +884,8 @@ export type ContextRecallEvidenceRole =
   | 'risk'
   | 'context'
   | 'artifact'
-  | 'issue';
+  | 'issue'
+  | 'rehearsal_cue';
 
 export type ContextRecallDisplayPriority = 'p1' | 'p2' | 'hidden';
 
@@ -790,6 +895,12 @@ export interface ContextRecallRequest {
   title?: string;
   url?: string;
   sourceContext?: ContextRecallSourceContext;
+  /**
+   * Structured current-surface hints used for anaphora/deictic resolution
+   * (e.g. RingCentral "那个 BE ready 了吗"). Unlike `exclude`, these fields
+   * are anchors for recall expansion and must not suppress same-group memory.
+   */
+  currentContext?: ContextRecallCurrentContext;
   exclude?: ContextRecallExclude;
   /**
    * The single most representative chunk of context. The server rejects
@@ -809,7 +920,7 @@ export interface ContextRecallRequest {
 
 export interface ContextRecallMatch {
   id: string;
-  type: 'message' | 'chunk' | 'entity';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
   score: number;
   title?: string;
   snippet: string;
@@ -851,6 +962,17 @@ export interface ContextRecallDebug {
   channelsHit: string[];
   rejectedReason?: string;
   suppressionReasons?: string[];
+  contextExpansion?: {
+    expandedQuery?: string;
+    addedTerms?: string[];
+    resolvedProject?: string;
+    resolvedRole?: string;
+    ambiguity?: {
+      state: 'none' | 'ambiguous';
+      candidates: Array<{ label: string; score: number; reason?: string }>;
+    };
+    sourceAnchors?: string[];
+  };
 }
 
 export interface ContextRecallResponse {
@@ -949,7 +1071,7 @@ export interface ComposerAssistRequest {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -958,6 +1080,12 @@ export interface ComposerAssistEvidence {
   exploreLink?: string;
   links?: Array<{ label: string; url: string }>;
   whyMatched?: string;
+  whyRelevant?: string[];
+  matchedAnchors?: ContextRecallMatch['matchedAnchors'];
+  reasonType?: ContextRecallReasonType;
+  evidenceRole?: ContextRecallEvidenceRole;
+  displayPriority?: ContextRecallDisplayPriority;
+  metadata?: Record<string, any>;
   timestamp?: number;
   score?: number;
 }
@@ -974,6 +1102,66 @@ export interface ComposerAssistResponse {
   confidence: number;
   queryTimeMs: number;
   debug?: Record<string, unknown>;
+}
+
+export type StorylineType =
+  | 'sharing'
+  | 'status_report'
+  | 'retro'
+  | 'training'
+  | 'proposal'
+  | 'weekly_update';
+
+export type StorylineSuggestedArtifact =
+  | 'speaker_notes'
+  | 'slides_outline'
+  | 'ringcentral_post'
+  | 'docs_brief';
+
+export interface StorylineOpportunity {
+  available: boolean;
+  confidence: number;
+  storyType?: StorylineType;
+  buttonLabel?: string;
+  oneLineReason?: string;
+  audienceHint?: string;
+  estimatedLengthMinutes?: number;
+  evidenceClusters?: Array<{
+    label: string;
+    sourceKinds: string[];
+    evidenceCount: number;
+  }>;
+  blockedReasons?: string[];
+  suggestedArtifact?: StorylineSuggestedArtifact;
+}
+
+export type StorylineSourceKind = 'today_meeting_prep';
+
+export interface StorylineDraftRequest {
+  sourceKind: StorylineSourceKind;
+  prepId: string;
+  targetArtifact?: StorylineSuggestedArtifact;
+  audienceHint?: string;
+}
+
+export interface StorylineDraftSegment {
+  title: string;
+  intent: string;
+  narrative: string;
+  evidenceIds: string[];
+}
+
+export interface StorylineDraftResponse {
+  id: string;
+  sourceKind: StorylineSourceKind;
+  sourceId: string;
+  title: string;
+  audience: string;
+  targetArtifact: StorylineSuggestedArtifact;
+  segments: StorylineDraftSegment[];
+  gaps: string[];
+  riskNotes: string[];
+  artifactText: string;
 }
 
 export type ContextAssistSurface = 'meeting_prep' | 'composer_guard';
@@ -1048,6 +1236,7 @@ export interface ContextAssistResponse {
   previewRequired: boolean;
   confidence: number;
   queryTimeMs: number;
+  storylineOpportunity?: StorylineOpportunity;
   debug?: Record<string, unknown>;
 }
 

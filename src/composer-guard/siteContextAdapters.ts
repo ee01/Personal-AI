@@ -1,4 +1,4 @@
-import { normalizeContextPageUrl } from '../web-intelligence/contextRecallGuards';
+import { normalizeContextPageUrl } from '../web-intelligence/contextRecallGuards.js';
 import type {
   ComposerContextItem,
   ComposerSurface,
@@ -6,7 +6,7 @@ import type {
   SiteContextAdapter,
   SiteContextSnapshot,
   VisibleMessageSnapshot,
-} from './types';
+} from './types.js';
 
 export interface OwnerAuthoredLearningPayload {
   content: string;
@@ -798,7 +798,7 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
             : collectPeopleFromMessages(visibleMessages)),
       },
       contextItems,
-      sourceTypes: ['glip', 'manual', 'markdown', 'web', 'jira', 'system'],
+      sourceTypes: ['glip', 'manual', 'markdown', 'web', 'jira', 'system', 'rehearsal'],
     };
   },
   findComposer: findRingCentralComposer,
@@ -1102,7 +1102,7 @@ const jiraIssueAdapter: SiteContextAdapter = {
         people: getJiraPeople(doc),
       },
       contextItems,
-      sourceTypes: ['jira', 'glip', 'meeting', 'web', 'manual', 'system'],
+      sourceTypes: ['jira', 'glip', 'meeting', 'web', 'manual', 'system', 'rehearsal'],
     };
   },
   findComposer(doc, fromElement) {
@@ -1281,6 +1281,7 @@ const webAgentAdapter: SiteContextAdapter = {
         'user_core',
         'markdown',
         'reflection',
+        'rehearsal',
       ],
     };
   },
@@ -1324,7 +1325,7 @@ const genericPageAdapter: SiteContextAdapter = {
       url,
       primaryText,
       keywords: collectKeywords([title, primaryText]),
-      sourceTypes: ['web', 'manual', 'system', 'meeting', 'glip', 'jira'],
+      sourceTypes: ['web', 'manual', 'system', 'meeting', 'glip', 'jira', 'rehearsal'],
     };
   },
   findComposer() {
@@ -1380,13 +1381,142 @@ export function readComposerText(target: ComposerTarget): string {
   );
 }
 
+export interface ComposerTextSnapshot {
+  kind: ComposerTarget['kind'];
+  value?: string;
+  html?: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+}
+
+function isNodeInsideElement(node: Node, element: HTMLElement): boolean {
+  return node === element || element.contains(node);
+}
+
+function getSelectionRangeInside(
+  element: HTMLElement,
+): Range | null {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (
+    isNodeInsideElement(range.startContainer, element) &&
+    isNodeInsideElement(range.endContainer, element)
+  ) {
+    return range;
+  }
+  return null;
+}
+
+function collapseRangeToEnd(element: HTMLElement): Range {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  return range;
+}
+
+function getTextAroundRange(
+  element: HTMLElement,
+  range: Range,
+): { before: string; after: string } {
+  const before = document.createRange();
+  before.selectNodeContents(element);
+  before.setEnd(range.startContainer, range.startOffset);
+
+  const after = document.createRange();
+  after.selectNodeContents(element);
+  after.setStart(range.endContainer, range.endOffset);
+
+  return {
+    before: before.toString(),
+    after: after.toString(),
+  };
+}
+
+function setSelectionRange(range: Range): void {
+  const selection = document.getSelection();
+  if (!selection) return;
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+export function captureComposerTextSnapshot(
+  target: ComposerTarget,
+): ComposerTextSnapshot {
+  const element = target.element as HTMLTextAreaElement | HTMLInputElement;
+  if (target.kind === 'textarea' || target.kind === 'input') {
+    return {
+      kind: target.kind,
+      value: element.value || '',
+      selectionStart: element.selectionStart ?? element.value.length,
+      selectionEnd: element.selectionEnd ?? element.value.length,
+    };
+  }
+
+  return {
+    kind: target.kind,
+    html: target.element.innerHTML,
+  };
+}
+
+export function restoreComposerTextSnapshot(
+  target: ComposerTarget,
+  snapshot: ComposerTextSnapshot,
+): boolean {
+  const element = target.element as HTMLTextAreaElement | HTMLInputElement;
+  target.element.focus({ preventScroll: true });
+
+  if (
+    (target.kind === 'textarea' || target.kind === 'input') &&
+    typeof snapshot.value === 'string'
+  ) {
+    element.value = snapshot.value;
+    const selectionStart = Math.min(
+      snapshot.selectionStart ?? snapshot.value.length,
+      snapshot.value.length,
+    );
+    const selectionEnd = Math.min(
+      snapshot.selectionEnd ?? selectionStart,
+      snapshot.value.length,
+    );
+    element.setSelectionRange(selectionStart, selectionEnd);
+    element.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        inputType: 'historyUndo',
+        data: null,
+      }),
+    );
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  if (typeof snapshot.html === 'string') {
+    target.element.innerHTML = snapshot.html;
+    const range = collapseRangeToEnd(target.element);
+    setSelectionRange(range);
+    target.element.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        composed: true,
+        inputType: 'historyUndo',
+        data: null,
+      }),
+    );
+    target.element.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  return false;
+}
+
 export function insertTextIntoComposer(
   target: ComposerTarget,
   text: string,
-): void {
+): boolean {
   const element = target.element as HTMLTextAreaElement | HTMLInputElement;
   const insertion = text.trim();
-  if (!insertion) return;
+  if (!insertion) return false;
 
   target.element.focus({ preventScroll: true });
 
@@ -1409,25 +1539,34 @@ export function insertTextIntoComposer(
       }),
     );
     element.dispatchEvent(new Event('change', { bubbles: true }));
-    return;
+    return true;
   }
 
-  const prefix = readComposerText(target) ? '\n\n' : '';
-  const insertedText = `${prefix}${insertion}`;
-  const selection = document.getSelection();
-  if (selection) {
-    const range = document.createRange();
-    range.selectNodeContents(target.element);
-    range.collapse(false);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
+  const activeRange =
+    getSelectionRangeInside(target.element) ||
+    collapseRangeToEnd(target.element);
+  const surroundingText = getTextAroundRange(target.element, activeRange);
+  const separatorBefore =
+    surroundingText.before && !/\n\s*$/.test(surroundingText.before)
+      ? '\n\n'
+      : '';
+  const separatorAfter =
+    surroundingText.after && !/^\s*\n/.test(surroundingText.after)
+      ? '\n\n'
+      : '';
+  const insertedText = `${separatorBefore}${insertion}${separatorAfter}`;
+  setSelectionRange(activeRange);
 
   const insertedWithCommand = document.queryCommandSupported?.('insertText')
     ? document.execCommand('insertText', false, insertedText)
     : false;
   if (!insertedWithCommand) {
-    target.element.appendChild(document.createTextNode(insertedText));
+    activeRange.deleteContents();
+    const insertedNode = document.createTextNode(insertedText);
+    activeRange.insertNode(insertedNode);
+    activeRange.setStartAfter(insertedNode);
+    activeRange.collapse(true);
+    setSelectionRange(activeRange);
   }
   target.element.dispatchEvent(
     new InputEvent('input', {
@@ -1438,6 +1577,7 @@ export function insertTextIntoComposer(
     }),
   );
   target.element.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
 }
 
 export function isComposerElement(

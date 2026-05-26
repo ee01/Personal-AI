@@ -42,6 +42,9 @@ interface LocalPlatformSkillPackage {
   version?: string;
   sha256?: string;
   mtime?: number;
+  root?: string;
+  directory?: string;
+  skillMdPath?: string;
   skillMd: string;
   files?: Array<{ path?: string; relativePath?: string; content: string; sha256?: string; byteSize?: number; byte_size?: number }>;
 }
@@ -134,6 +137,19 @@ function localPackageFiles(files: NonNullable<LocalPlatformSkillPackage['files']
       byteSize: file.byteSize ?? file.byte_size,
     }))
     .filter((file) => file.relativePath && file.relativePath !== 'SKILL.md');
+}
+
+function localSkillMetadata(skill: LocalPlatformSkillPackage): Record<string, unknown> {
+  const files = localPackageFiles(skill.files || []);
+  const totalByteSize = files.reduce((sum, file) => sum + (file.byteSize || 0), 0);
+  return {
+    source: 'desktop_app_fs',
+    sourceRoot: typeof skill.root === 'string' ? skill.root : undefined,
+    sourceDirectory: typeof skill.directory === 'string' ? skill.directory : undefined,
+    skillMdPath: typeof skill.skillMdPath === 'string' ? skill.skillMdPath : undefined,
+    fileCount: files.length,
+    totalByteSize,
+  };
 }
 
 function skillPackageForPlatform(pkg: SkillSyncPackage, options?: { sha256?: string }) {
@@ -573,7 +589,7 @@ function runLocalPlatformSkillSync(
           files: localPackageFiles(local.files || []),
           sha256: local.sha256,
           remoteMtime: local.mtime,
-          metadata: { source: 'desktop_app_fs' },
+          metadata: localSkillMetadata(local),
         });
         result.processed += 1;
         if (imported.status === 'created_suggestion') result.imported += 1;
@@ -588,7 +604,7 @@ function runLocalPlatformSkillSync(
           version: local.version || existing.currentVersion,
           sha256: local.sha256,
           remoteMtime: local.mtime,
-          metadata: { source: 'desktop_app_fs' },
+          metadata: localSkillMetadata(local),
         });
         result.skipped += 1;
         continue;
@@ -605,7 +621,7 @@ function runLocalPlatformSkillSync(
           version: local.version || existing.currentVersion,
           sha256: local.sha256,
           remoteMtime: local.mtime,
-          metadata: { source: 'desktop_app_fs' },
+          metadata: localSkillMetadata(local),
         });
         result.skipped += 1;
         continue;
@@ -622,7 +638,7 @@ function runLocalPlatformSkillSync(
           files: localPackageFiles(local.files || []),
           sha256: local.sha256,
           remoteMtime: local.mtime,
-          metadata: { source: 'desktop_app_fs' },
+          metadata: localSkillMetadata(local),
         });
         result.processed += 1;
         if (updated.status === 'created_external_change') result.externalChanges += 1;

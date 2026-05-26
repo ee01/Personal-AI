@@ -74,6 +74,21 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     toggleExpand(index);
   };
 
+  const jumpToStep = (index: number) => {
+    setExpandedSteps(prevExpanded =>
+      prevExpanded.includes(index)
+        ? prevExpanded
+        : [...prevExpanded, index],
+    );
+
+    window.requestAnimationFrame(() => {
+      const stepElement = document.getElementById(`agent-step-${index}`);
+      const stepHeader = document.getElementById(`agent-step-header-${index}`);
+      stepElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      stepHeader?.focus();
+    });
+  };
+
   const copyTextToClipboard = async (text: string) => {
     if (navigator.clipboard?.writeText) {
       try {
@@ -236,6 +251,24 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                   <div className="agent-run-review-title">{item.title}</div>
                   <div className="agent-run-review-detail">{item.detail}</div>
                   <div className="agent-run-review-action">{item.action}</div>
+                  {item.stepIndexes && item.stepIndexes.length > 0 && (
+                    <div
+                      className="agent-run-review-step-links"
+                      aria-label={`${item.title}涉及的步骤`}
+                    >
+                      <span>涉及步骤</span>
+                      {item.stepIndexes.map((stepIndex) => (
+                        <button
+                          key={stepIndex}
+                          type="button"
+                          onClick={() => jumpToStep(stepIndex)}
+                          aria-label={`跳到步骤 ${stepIndex + 1}`}
+                        >
+                          #{stepIndex + 1}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -278,6 +311,26 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                     <div className="agent-approval-review-hint">
                       <span>复核重点</span>
                       <p>{approval.reviewHint}</p>
+                    </div>
+                    {approval.safetyNote && (
+                      <div className="agent-approval-policy-note">
+                        <span>工具安全说明</span>
+                        <p>{approval.safetyNote}</p>
+                      </div>
+                    )}
+                    <div className="agent-approval-decision-options">
+                      <span>处理方式</span>
+                      <ul>
+                        {approval.decisionOptions.map((option) => (
+                          <li key={option.type}>
+                            <strong>{option.label}</strong>
+                            <p>{option.description}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="agent-approval-resume-note" role="note">
+                      {approval.resumeInstruction}
                     </div>
                     <div className="agent-approval-params">
                       <span>参数</span>
@@ -370,10 +423,12 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
               return (
                 <div
                   key={index}
+                  id={`agent-step-${index}`}
                   className={`thought-step ${isExpanded ? 'expanded' : ''}`}
                   style={{ borderLeftColor: color }}
                 >
                   <div
+                    id={`agent-step-header-${index}`}
                     className="step-header"
                     onClick={() => toggleExpand(index)}
                     onKeyDown={(event) => handleHeaderKeyDown(event, index)}

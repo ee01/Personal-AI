@@ -42,20 +42,8 @@ describe('Today Pilot meeting prep API', () => {
   let app: FastifyInstance;
   let db: BetterSqlite3.Database;
 
-  beforeAll(async () => {
-    db = getTestDb();
-    const result = await buildApp({ db });
-    app = result.app;
-    await app.ready();
-  });
-
-  afterAll(async () => {
-    await app?.close();
-  });
-
-  beforeEach(() => {
-    mockGenerateJSON.mockReset();
-    mockGenerateJSON.mockResolvedValue({
+  function buildLlmPrepResponse(overrides: Record<string, unknown> = {}) {
+    return {
       summaryMd: '## Meeting prep\n- Review AI Notes owner and retry risk.',
       cueCards: [
         {
@@ -71,8 +59,48 @@ describe('Today Pilot meeting prep API', () => {
       contextPackMd:
         '# Today Pilot meeting prep\n\nConfirm owner and next step.',
       redactionPreview: [],
+      storylineOpportunity: {
+        available: true,
+        confidence: 0.84,
+        storyType: 'status_report',
+        buttonLabel: '生成项目汇报故事线',
+        oneLineReason:
+          '这场会有 retry owner、消费异常和后续风险三类材料，可以整理成项目汇报。',
+        audienceHint: 'AI Notes 项目组',
+        estimatedLengthMinutes: 8,
+        evidenceClusters: [
+          {
+            label: 'GeneratedNotes retry/ack',
+            sourceKinds: ['calendar', 'meeting'],
+            evidenceCount: 2,
+          },
+          {
+            label: 'owner 风险',
+            sourceKinds: ['meeting'],
+            evidenceCount: 1,
+          },
+        ],
+        suggestedArtifact: 'speaker_notes',
+      },
       usage: { promptTokens: 10, completionTokens: 20 },
-    });
+      ...overrides,
+    };
+  }
+
+  beforeAll(async () => {
+    db = getTestDb();
+    const result = await buildApp({ db });
+    app = result.app;
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  beforeEach(() => {
+    mockGenerateJSON.mockReset();
+    mockGenerateJSON.mockResolvedValue(buildLlmPrepResponse());
     for (const table of [
       'today_meeting_preps',
       'calendar_events',
@@ -195,6 +223,10 @@ describe('Today Pilot meeting prep API', () => {
     expect(body.items[0].generatedMode).toBe('nightly_llm');
     expect(body.items[0].contextPackMd).toContain('Today Pilot meeting prep');
     expect(body.items[0].evidenceRefs.length).toBeGreaterThan(0);
+    expect(body.items[0].storylineOpportunity.available).toBe(true);
+    expect(body.items[0].storylineOpportunity.buttonLabel).toBe(
+      '生成项目汇报故事线',
+    );
   });
 
   it('resolves a pre-generated prep without another LLM call', async () => {
@@ -230,6 +262,8 @@ describe('Today Pilot meeting prep API', () => {
     expect(body.source).toBe('cached');
     expect(body.prep.id).toBeTruthy();
     expect(body.assist.debug.prepId).toBe(body.prep.id);
+    expect(body.prep.storylineOpportunity.available).toBe(true);
+    expect(body.assist.storylineOpportunity.available).toBe(true);
     expect(mockGenerateJSON).toHaveBeenCalledTimes(1);
   });
 
@@ -262,6 +296,41 @@ describe('Today Pilot meeting prep API', () => {
     expect(body.prep.generatedMode).toBe('on_demand_llm');
   });
 
+  it('downgrades invalid storyline opportunities instead of showing them', async () => {
+    const event = seedCalendarEvent();
+    mockGenerateJSON.mockResolvedValueOnce(
+      buildLlmPrepResponse({
+        storylineOpportunity: {
+          available: true,
+          confidence: 0.95,
+          oneLineReason: '',
+          evidenceClusters: [],
+          suggestedArtifact: 'slides_outline',
+        },
+      }),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/today-pilot/meeting-prep/resolve',
+      payload: {
+        event: {
+          externalId: event.externalId,
+          title: event.title,
+          startTime: event.startAt,
+        },
+        timezone: 'Asia/Shanghai',
+        autoGenerate: true,
+        forceGenerate: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.prep.storylineOpportunity.available).toBe(false);
+    expect(body.assist.storylineOpportunity.available).toBe(false);
+  });
+
   it('stores deterministic fallback when LLM generation fails', async () => {
     const event = seedCalendarEvent();
     mockGenerateJSON.mockRejectedValueOnce(new Error('llm unavailable'));
@@ -287,6 +356,8 @@ describe('Today Pilot meeting prep API', () => {
     expect(body.prep.status).toBe('fallback');
     expect(body.prep.generatedMode).toBe('deterministic_fallback');
     expect(body.assist.available).toBe(true);
+    expect(body.prep.storylineOpportunity).toBeUndefined();
+    expect(body.assist.storylineOpportunity).toBeUndefined();
     expect(body.prep.error).toContain('llm unavailable');
   });
 

@@ -1,6 +1,6 @@
 # Today Pilot / 今日领航
 
-_最后更新: 2026-05-22_
+_最后更新: 2026-05-26_
 
 ## 是什么
 
@@ -10,14 +10,14 @@ Today Pilot 是 Personal AI 的每日任务和会前准备层。它从用户已�
 
 ## 大白话运行逻辑
 
-Today Pilot 像每天早上的“今日注意力筛选器”：它从日历、会议、记忆、通知、行动队列、反思线程、人物关系和技能建议里挑出今天真的值得看的几件事，并把原因和下一步说清楚。
+Today Pilot 像每天早上的“今日注意力筛选器”：它从日历、会议、记忆、通知、行动队列、反思线程、Rehearsal 预演提醒、人物关系和技能建议里挑出今天真的值得看的几件事，并把原因和下一步说清楚。
 
 结果主要受这些因素影响：
 
 1. 今日时间窗口：今天的会议、临近 deadline、近期活跃消息和待处理动作权重最高。
 2. 真实行动信号：owner、deadline、decision、approval、blocked、follow-up、meeting prep 这类信号比泛泛 FYI 更重要。
 3. 证据可追溯性：没有来源证据或只有系统 heartbeat 的内容不能进入主 mission。
-4. 去噪规则：旧通知、重复 digest、没有 nextBestAction 的聚类会被降级或排除。
+4. 去噪规则：旧通知、重复 digest、没有 nextBestAction 的聚类会被降级或排除；旧 Rehearsal 默认降权，不把历史预演当成今天必须做的事。
 5. 预生成缓存：会前准备优先使用 nightly/backfill 生成的 meeting prep；用户刷新时再触发补齐。
 
 ## 核心功能
@@ -76,6 +76,7 @@ Today Pilot 的 mission 必须是“事情”，不是“分类”或“系统�
 - Jira dashboard 或 meeting link 本身不算行动语义。
 - raw calendar memories 只进入当前 Today Pilot 的近期/未来窗口；远期会议不会因为同步为 message 而提前进入今日排序。
 - 普通通知必须带具体 follow-up / owner / deadline / decision / approval / retry 等行动信号；仅说明同步完成、后台运行完成或泛泛 FYI 的通知不进入 mission。
+- 高重要度消息里的普通问句不会因为带 `?` / `？` 就自动变成 open loop。问句只有同时指向 owner、risk、deadline、decision、approval、reply、fix/retry、准备或类似动作语义时，才会进入 Today Pilot 排序。
 
 ### 2. 会前准备
 
@@ -85,12 +86,84 @@ Today Pilot 会提前扫描当天和近期会议，根据日历事件和相关�
 
 - 会议背景摘要。
 - 会中可以使用的 cue cards。
+- 命中参会人、会议标题、项目或日历事件的 Rehearsal 预演提示。
 - 建议带进会议的问题。
 - 相关风险或未关闭事项。
 - 证据来源。
 - Meeting Pilot 可消费的 context pack。
 
 RingCentral Video Home 只是 Today Pilot 会前准备的消费面：用户打开会议列表时，直接看到已准备内容，不需要输入“本次目标”或点击生成。
+
+#### 2.1 Storyline 生成提示
+
+部分会议不是只需要会前摘要，而是可能需要用户准备一段可讲述材料，例如分享、汇报、复盘、培训、workshop、项目 review 或对外解释。Today Pilot 可以在生成 meeting prep 的同一轮 LLM 判断里，附带产出一个轻量 `storylineOpportunity`，用于决定是否在会前准备卡片里展示 `生成故事线草稿` 按钮。
+
+这个判断不应是独立的关键词匹配规则。关键词可以作为成本控制的弱 prefilter，但不能作为最终展示依据。最终是否展示提示，必须由 LLM 基于以下结构化上下文判断：
+
+- 日历事件：标题、描述、时间、组织者、参会人、链接类型和是否重复会议。
+- 召回证据：相关消息、会议、Jira、资料记忆、AI 对话、skill、Rehearsal、关系上下文。
+- 输出意图：这场会是否需要对别人表达、讲述、培训、同步进展、解释方案或复盘经验。
+- 素材规模：是否有足够证据形成至少 3 个 story segment，而不是只有一条 cue 或一个待办。
+- 受众范围：是否面向小组、社区、项目干系人或多人 review；普通 1:1 / daily sync 默认不展示，除非证据显示用户要做明确分享或复盘。
+- 风险边界：证据是否主要来自私聊、内部 Jira、meeting URL 或未确认推断；如果风险过高，只显示内部版/需打码提示，或者不展示按钮。
+
+`storylineOpportunity` 只决定是否显示按钮，不自动生成完整 Storyline。按钮文案需要让用户知道“点击后才生成”，例如：
+
+- `生成 8 分钟分享故事线`
+- `整理复盘故事线`
+- `生成 Slides 提纲`
+
+展示时应同时显示一个很短的 reason，例如：
+
+> 这场会有 4 类可讲素材：Cursor workshop、Codex/Jira 自动化、NotebookLM 资料理解、OpenClaw skill。
+
+如果 LLM 判断没有足够素材，或这只是普通同步会，Today Pilot 不显示 Storyline 入口，只保留普通 meeting prep。
+
+推荐的结构字段：
+
+```ts
+interface StorylineOpportunity {
+  available: boolean;
+  confidence: number;
+  storyType?:
+    | 'sharing'
+    | 'status_report'
+    | 'retro'
+    | 'training'
+    | 'proposal'
+    | 'weekly_update';
+  buttonLabel?: string;
+  oneLineReason?: string;
+  audienceHint?: string;
+  estimatedLengthMinutes?: number;
+  evidenceClusters?: Array<{
+    label: string;
+    sourceKinds: string[];
+    evidenceCount: number;
+  }>;
+  blockedReasons?: string[];
+  suggestedArtifact?:
+    | 'speaker_notes'
+    | 'slides_outline'
+    | 'ringcentral_post'
+    | 'docs_brief';
+}
+```
+
+会前准备 UI 中的注入位置建议：
+
+1. 放在 meeting prep 摘要和 cue cards 之间，作为一个小条幅，而不是新的大卡片。
+2. 折叠态只显示 `为什么值得生成`、`素材数`、`生成按钮`、`不需要`。
+3. 点击 `生成` 后打开 `memory-exploring.html#/storylines/draft?source=today_meeting_prep&prepId=...&target=...`，由 Storyline draft 页面调用 `POST /api/v1/storylines/draft` 生成草稿。
+4. 用户点 `不需要` 后，Video Home 先写入本地 `chrome.storage.local.storylineOpportunityDismissals`，key 由 `prepId + sourceHash + eventExternalId` 组成，默认 30 天不再展示同一条提示。P0 不复用 Day Pilot card feedback，因为这里不是 mission/card 级反馈。
+5. Storyline draft P0 不持久化、不自动写回 Slides / Docs / RingCentral，只提供可人工复核和复制的 speaker notes、Slides 提纲、Docs 简报或分享帖草稿。
+
+当前 P0 的实现边界：
+
+- `storylineOpportunity` 存在于 `today_meeting_preps.llm_usage_json.storylineOpportunity`，并在 `TodayPilotMeetingPrepRecord` 与 `ContextAssistResponse` 中以 typed field 暴露。
+- `POST /api/v1/storylines/draft` 只支持 `sourceKind='today_meeting_prep'`，根据已存在的 meeting prep、evidence refs 和 context pack 生成 3-6 段 Storyline。
+- `memory-exploring` 的 `/storylines/draft` 是深链页面，不是独立 Storyline 管理中心；刷新同一页面时用 `sessionStorage` 缓存当前 `prepId/sourceHash/target` 的草稿，避免重复生成。
+- Compose Assist、Slides Analyzer、Memory Lens 暂不显示 Storyline 入口，等 Today Pilot 入口验证后再扩展同一 `StorylineOpportunity` 判定模型。
 
 ### 3. Meeting Pilot Handoff
 
@@ -99,6 +172,20 @@ RingCentral Video Home 只是 Today Pilot 会前准备的消费面：用户打�
 Meeting Pilot 在进入会议时读取这份 handoff，并在会中展示会前目标、cue cards 和证据。这个过程不需要用户手动“发送到 Meeting Pilot”。
 
 Video Home 初始加载仍只读取已经准备好的 meeting prep；如果用户点击“刷新会前准备”，页面会先触发 Today Pilot 为当前日期做一次 meeting prep backfill，再用同一条缓存读取路径写入 handoff。这样缺少 nightly/pre-generated 缓存时不会卡在“暂无准备”，但仍不要求用户输入本次目标或手动发送给 Meeting Pilot。
+
+Handoff 是低打扰的本地缓存，不是全局状态覆盖。Video Home 会保留最近少量会议的候选 handoff，并清理过期项；Meeting Pilot 优先用 RingCentral meeting id 精确匹配，只有在没有 meeting id 时才用会议标题兜底，而且标题兜底必须落在该日历事件的时间窗口附近。这样用户在 Video Home 连续浏览多个会议，或遇到同名 recurring meeting 时，不会轻易把旧会议准备错带进当前会议。
+
+### 3.1 Rehearsal 预演提示
+
+Today Pilot 会扫描 active Rehearsal，把今天可能要带入的预演提示生成 `rehearsal_prompt` card。它不是事实卡，也不是任务卡；它的语义是“如果今天遇到这个人、会议、issue 或项目，请记得这条预演脚本”。
+
+进入主列表需要满足至少一个强场景线索：
+
+- 今天或近期日历参会人、会议标题、会议 ID 命中。
+- 近期消息会话的人、群组、项目或 issue 命中。
+- 明确有效期落在今天附近。
+
+过期或长期未触发的 Rehearsal 默认不主动弹出；只有精确人/会议/issue 命中时作为弱提示保留。面对面场景目前没有实时投射能力，因此 Today Pilot 只能提前提醒，不承诺现场触发。
 
 ### 4. Chrome Popup Top 3
 
@@ -111,6 +198,8 @@ Video Home 初始加载仍只读取已经准备好的 meeting prep；如果用�
 - popup 可直接把 card 标记完成、稍后 6 小时或复制 context pack；反馈失败时必须恢复卡片并提示。
 - API 不可用时显示 degraded empty state，不回退假数据。
 
+首页顶部会展示一条轻量 `筛选口径`：候选信号总量、通过行动性筛选的数量、被降噪的低行动/重复信号数量，以及本次会不会占用提醒预算。用户不用展开每张卡也能知道 Today Pilot 不是把所有同步结果都推上首页。
+
 ### 5. Context Pack
 
 每个 mission 可以生成 context pack，用于带到 Codex、ChatGPT、Claude、豆包或通用 AI 工具。
@@ -119,12 +208,15 @@ P0/P1 阶段 context pack 只基于真实证据 deterministic 拼装，不自动
 
 如果 context pack 生成失败，首页不会把卡片摘要伪装成完整上下文包并提示复制成功；用户会看到失败提示并可以稍后重试。
 
+复制成功时，首页和 popup 会给出一条简短 receipt，说明目标 AI、证据条数、是否默认脱敏，以及正文是否因 token 预算被截断。被截断的 context pack 仍可复制，但 UI 和 API 都必须明确提示用户它不是完整证据全文。
+
 ## 业内参考
 
 当前设计参考了几个相近方向，但保留 Personal AI 的本地记忆、显式证据和低打扰边界：
 
-- ChatGPT Pulse / Gemini Daily Brief：都依赖记忆或 Workspace/Calendar/Gmail 等个人上下文，并提供每日主动摘要、反馈和来源查看能力。
+- ChatGPT Pulse / Gemini Daily Brief：都依赖记忆或 Workspace/Calendar/Gmail 等个人上下文，并提供每日主动摘要、反馈和来源查看能力；Context Pack 复制路径延续同样的“可扫描、可展开、可确认来源”原则。
 - Microsoft 365 Copilot Plan My Day / meeting prep：强调 top priorities、等待用户决策、会议准备、直接链接和可快速扫描的日程/任务摘要。
+- Gemini Daily Brief：把 Gmail、Calendar 和 Gemini chats 组织成早晨一次性的优先级快照，并要求用户在 Personal Intelligence / Memory 范围内启用来源；这支持 Today Pilot 保留来源开关、证据入口和每日低频刷新。
 - Microsoft Research Viva Daily Briefing 研究：AI reminder 更适合提醒协作承诺、请求和未闭环事项，而不是把所有信息流都推给用户。
 - 通知 batching / adaptive notification 研究：低打扰和可预测投递比即时打断更符合注意力管理，因此 Today Pilot 保留提醒预算、静默和稍后路径。
 
@@ -137,6 +229,7 @@ Today Pilot 主要读取：
 - `notification_records`
 - `proposed_actions`
 - `reflection_threads`
+- `rehearsals`
 - `personal_skills`
 - `relationships / chunks`
 
@@ -146,12 +239,13 @@ Today Pilot 主要读取：
 
 P0/P1 生成逻辑以 deterministic rules 为主，不依赖 LLM 聚类。当前流程：
 
-1. 扫描原始信号：过去 72 小时消息、未来 14 天日历、近期高价值通知、queued/failed actions、active reflections、skill suggestions、relationship radar。
+1. 扫描原始信号：过去 72 小时消息、未来 14 天日历、近期高价值通知、queued/failed actions、active reflections、active/stale rehearsals、skill suggestions、relationship radar。
 2. 按 meeting series、消息 topic terms、project/entity、notification topic、action source、reflection topic 等 key 聚类。
-3. 过滤低可操作性信号：heartbeat/fact follow-up 噪音、过期普通通知、无 follow-up 语义的关系雷达、无法生成具体动作的聚类。
-4. 对 mission 打分：urgency、open-loop pressure、user relevance、source importance、source diversity、evidence confidence、novelty、recurring noise、feedback fatigue、privacy risk、staleness。
+3. 过滤低可操作性信号：heartbeat/fact follow-up 噪音、过期普通通知、无 follow-up 语义的关系雷达、无法生成具体动作的聚类；stale Rehearsal 只有精确命中今天的人、会议、issue 或项目时才保留为弱提示。
+4. 对 mission 打分：urgency、open-loop pressure、user relevance、source importance、source diversity、evidence confidence、novelty、recurring noise、feedback fatigue、privacy risk、staleness。问号本身只是语言形态，不是 open-loop pressure；必须和具体行动词或阻塞语义一起出现。
 5. 生成 3-7 张首页 card。
-6. 每张 card 提供 context pack，但只从真实证据 deterministic 拼装。
+6. 把 sourceStats 和 attentionBudget 展示成可扫描的筛选摘要，说明多少候选通过、多少被降噪、哪些会打断。
+7. 每张 card 提供 context pack，但只从真实证据 deterministic 拼装。
 
 生成后用户反馈会影响下一次排序：
 

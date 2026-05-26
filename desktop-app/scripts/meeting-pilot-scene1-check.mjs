@@ -199,8 +199,83 @@ try {
   const { context, extensionId, serviceWorker } = launched;
 
   await serviceWorker.evaluate(
-    ({ configuredBaseUrl, meetingUrl, meetingTitle }) =>
-      chrome.storage.local.set({
+    ({ configuredBaseUrl, meetingUrl, meetingTitle }) => {
+      const now = Date.now();
+      const staleHandoff = {
+        createdAt: now - 3 * 60 * 60 * 1000,
+        expiresAt: now + 12 * 60 * 60 * 1000,
+        event: {
+          externalId: 'scene1-stale-context-assist-event',
+          title: meetingTitle,
+          startTime: now - 8 * 60 * 60 * 1000,
+          endTime: now - 7 * 60 * 60 * 1000,
+          organizer: { name: 'Alex Chen' },
+          attendees: [{ name: 'Esone Qiu' }, { name: 'Sarah Wang' }],
+        },
+        goal: '旧会议目标，不应该进入当前会议',
+        text: 'Personal AI stale prep for Fixture RingCentral Meeting:\n- This should not appear.',
+        cueCards: [
+          {
+            id: 'stale-brief',
+            kind: 'brief',
+            title: '旧会前准备',
+            body: '这条同标题旧 handoff 不应被 Meeting Pilot 选中。',
+          },
+        ],
+        evidence: [
+          {
+            id: 'scene1-stale-memory',
+            type: 'chunk',
+            title: 'Stale note',
+            snippet: 'Stale same-title meeting prep.',
+          },
+        ],
+      };
+      const freshHandoff = {
+        createdAt: now,
+        expiresAt: now + 12 * 60 * 60 * 1000,
+        event: {
+          externalId: 'scene1-context-assist-event',
+          title: meetingTitle,
+          startTime: now + 20 * 60 * 1000,
+          endTime: now + 50 * 60 * 1000,
+          joinUrl: meetingUrl,
+          sourceUrl: meetingUrl,
+          organizer: { name: 'Alex Chen' },
+          attendees: [{ name: 'Esone Qiu' }, { name: 'Sarah Wang' }],
+        },
+        goal: '确认预算风险、技术评审 owner 和下一步',
+        text: 'Personal AI meeting prep for Fixture RingCentral Meeting:\n- Confirm budget risk owner.\n- Confirm technical review next step.',
+        cueCards: [
+          {
+            id: 'brief',
+            kind: 'brief',
+            title: '进入会议前先看',
+            body: 'Fixture RingCentral Meeting 已匹配到会前上下文。优先确认预算风险和技术评审 owner。',
+          },
+          {
+            id: 'suggested-questions',
+            kind: 'question',
+            title: '建议带进会议的问题',
+            body: '预算风险现在卡在哪里，技术评审 owner 是谁来确认？',
+          },
+        ],
+        evidence: [
+          {
+            id: 'scene1-memory-1',
+            type: 'chunk',
+            title: 'Budget risk note',
+            snippet:
+              'Budget risk should be confirmed before the technical review handoff.',
+            sourceLabel: 'glip',
+            sourceUrl: 'https://internal.example.com/scene1-budget-risk',
+            sourceTitle: 'Budget risk thread',
+            whyMatched: '关键词命中会前准备',
+            score: 0.84,
+          },
+        ],
+      };
+      return chrome.storage.local.set({
         envConfig: {
           MEETING_PILOT_ENABLED: true,
           MEETING_FEATURE_ENABLED: true,
@@ -215,53 +290,13 @@ try {
           MEETING_MEMORY_CONTEXT_ENABLED: true,
           MEMORY_SERVICE_BASE_URL: configuredBaseUrl,
         },
-        meetingPrepHandoff: {
-          createdAt: Date.now(),
-          expiresAt: Date.now() + 12 * 60 * 60 * 1000,
-          event: {
-            externalId: 'scene1-context-assist-event',
-            title: meetingTitle,
-            startTime: Date.now() + 20 * 60 * 1000,
-            endTime: Date.now() + 50 * 60 * 1000,
-            joinUrl: meetingUrl,
-            sourceUrl: meetingUrl,
-            organizer: { name: 'Alex Chen' },
-            attendees: [{ name: 'Esone Qiu' }, { name: 'Sarah Wang' }],
-          },
-          goal: '确认预算风险、技术评审 owner 和下一步',
-          text:
-            'Personal AI meeting prep for Fixture RingCentral Meeting:\n- Confirm budget risk owner.\n- Confirm technical review next step.',
-          cueCards: [
-            {
-              id: 'brief',
-              kind: 'brief',
-              title: '进入会议前先看',
-              body:
-                'Fixture RingCentral Meeting 已匹配到会前上下文。优先确认预算风险和技术评审 owner。',
-            },
-            {
-              id: 'suggested-questions',
-              kind: 'question',
-              title: '建议带进会议的问题',
-              body: '预算风险现在卡在哪里，技术评审 owner 是谁来确认？',
-            },
-          ],
-          evidence: [
-            {
-              id: 'scene1-memory-1',
-              type: 'chunk',
-              title: 'Budget risk note',
-              snippet:
-                'Budget risk should be confirmed before the technical review handoff.',
-              sourceLabel: 'glip',
-              sourceUrl: 'https://internal.example.com/scene1-budget-risk',
-              sourceTitle: 'Budget risk thread',
-              whyMatched: '关键词命中会前准备',
-              score: 0.84,
-            },
-          ],
+        meetingPrepHandoff: staleHandoff,
+        meetingPrepHandoffs: {
+          'scene1-stale': staleHandoff,
+          'scene1-fresh': freshHandoff,
         },
-      }),
+      });
+    },
     { configuredBaseUrl: minutesBaseUrl, meetingUrl, meetingTitle },
   );
 
@@ -476,6 +511,7 @@ try {
   assert.match(meetingPrepState.text, /会前准备已带入/);
   assert.match(meetingPrepState.text, /确认预算风险、技术评审 owner 和下一步/);
   assert.match(meetingPrepState.text, /预算风险现在卡在哪里/);
+  assert.doesNotMatch(meetingPrepState.text, /旧会议目标|旧会前准备|stale/i);
   assert.ok(
     meetingPrepState.links.some((link) =>
       link.href.startsWith('https://internal.example.com/scene1-budget-risk'),
@@ -541,8 +577,7 @@ try {
     const stepText =
       shadow?.getElementById('mpCoachmarkStep2Text')?.textContent || '';
     return (
-      coachmark?.classList.contains('visible') &&
-      /开启会议全貌/.test(stepText)
+      coachmark?.classList.contains('visible') && /开启会议全貌/.test(stepText)
     );
   });
   const coachmarkState = await page.evaluate(() => {
@@ -553,8 +588,7 @@ try {
         shadow?.getElementById('mpCoachmark')?.classList.contains('visible') ||
         false,
       title: shadow?.getElementById('mpCoachmarkTitle')?.textContent || '',
-      step2:
-        shadow?.getElementById('mpCoachmarkStep2Text')?.textContent || '',
+      step2: shadow?.getElementById('mpCoachmarkStep2Text')?.textContent || '',
     };
   });
   assert.equal(coachmarkState.visible, true, 'side panel 未打开授权步骤');
@@ -649,9 +683,7 @@ try {
   assert.match(manualActionState.text, /Friday/);
   assert.ok(
     manualActionState.warnings.includes('补负责人'),
-    `手动未分配行动项缺少补负责人提示: ${JSON.stringify(
-      manualActionState,
-    )}`,
+    `手动未分配行动项缺少补负责人提示: ${JSON.stringify(manualActionState)}`,
   );
   assert.equal(
     manualActionState.hasTimelineButton,
@@ -851,6 +883,19 @@ try {
           transcript: [],
           memoryRefs: [
             {
+              id: 'fixture-memory-hidden',
+              title: 'Hidden stale memory',
+              snippet:
+                'This stale memory should not appear in meeting danmaku.',
+              fullSnippet:
+                'This stale memory should not appear in meeting danmaku or expose unsafe links.',
+              score: 0.43,
+              sourceLabel: 'memory-service',
+              sourceUrl: 'javascript:alert(1)',
+              displayPriority: 'hidden',
+              whyRelevant: ['低置信旧上下文'],
+            },
+            {
               id: 'fixture-memory-1',
               title: 'Q2 预算复盘',
               snippet: '上季度也讨论过类似的研发投入争议。',
@@ -859,6 +904,11 @@ try {
               score: 0.91,
               sourceLabel: 'memory-service',
               sourceUrl: 'https://example.com/q2-review',
+              displayPriority: 'p2',
+              evidenceRole: 'decision',
+              evidenceRoleLabel: '决策',
+              exploreLink: '#/search?q=q2-review',
+              whyRelevant: ['项目：Q2 预算'],
             },
           ],
           summary: 'Fixture summary',
@@ -899,6 +949,13 @@ try {
         shadow
           ?.querySelector('.danmaku-item.memory-danmaku a')
           ?.textContent?.trim() || '',
+      memoryHref:
+        shadow
+          ?.querySelector('.danmaku-item.memory-danmaku a')
+          ?.getAttribute('href') || '',
+      memoryHrefs: Array.from(
+        shadow?.querySelectorAll('.danmaku-item.memory-danmaku a') || [],
+      ).map((link) => link.getAttribute('href') || ''),
       memorySummary:
         shadow
           ?.querySelector('.danmaku-item.memory-danmaku .danmaku-summary')
@@ -909,13 +966,37 @@ try {
           ?.textContent?.trim() || '',
       memoryClass:
         shadow?.querySelector('.danmaku-item.memory-danmaku')?.className || '',
+      allMemoryText: Array.from(
+        shadow?.querySelectorAll('.danmaku-item.memory-danmaku') || [],
+      )
+        .map((item) => item.textContent || '')
+        .join('\n'),
     };
   });
 
   assert.ok(overlayAlertState.p0Age.length > 0, 'P0 提醒未显示年龄标签');
   assert.match(overlayAlertState.memoryLink, /查看/);
+  assert.match(
+    overlayAlertState.memoryHref,
+    /memory-exploring\.html#\/search\?q=q2-review/,
+    '记忆弹幕应优先打开安全的记忆库内部路由',
+  );
+  assert.ok(
+    overlayAlertState.memoryHrefs.every(
+      (href) => !href.toLowerCase().startsWith('javascript:'),
+    ),
+    '记忆弹幕不应暴露 unsafe 来源链接',
+  );
   assert.match(overlayAlertState.memoryClass, /memory-danmaku/);
-  assert.ok(overlayAlertState.memorySummary.length > 0, '记忆弹幕未渲染 summary');
+  assert.doesNotMatch(
+    overlayAlertState.allMemoryText,
+    /Hidden stale memory/,
+    'displayPriority=hidden 的记忆不应进入会议页弹幕',
+  );
+  assert.ok(
+    overlayAlertState.memorySummary.length > 0,
+    '记忆弹幕未渲染 summary',
+  );
   assert.ok(
     overlayAlertState.memoryFullText.includes('Sarah 当时建议提前锁定 QA 资源'),
     '记忆弹幕未保留完整展开文本',
@@ -980,6 +1061,63 @@ try {
   await saveScreenshot(panoramaPage, 'scene1-5-panorama.png');
   assertNoPanoramaErrors();
   await panoramaPage.close();
+
+  log('附加校验: 会议页入口永不展示保存后立即隐藏');
+  await page.evaluate(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    shadow?.getElementById('mpEntryCloseBtn')?.click();
+  });
+  await page.waitForFunction(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    return shadow
+      ?.getElementById('mpEntryClosePopover')
+      ?.classList.contains('visible');
+  });
+  await page.evaluate(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    shadow?.getElementById('mpDisableFeatureAction')?.click();
+  });
+  await page.waitForFunction(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    const dock = shadow?.getElementById('mpDock');
+    return (
+      dock instanceof HTMLElement && getComputedStyle(dock).display === 'none'
+    );
+  });
+  const floatingVisibilityState = await page.evaluate(() => {
+    const shadow = document.getElementById(
+      'meeting-pilot-overlay-root',
+    )?.shadowRoot;
+    const dock = shadow?.getElementById('mpDock');
+    return {
+      dockDisplay:
+        dock instanceof HTMLElement ? getComputedStyle(dock).display : '',
+    };
+  });
+  const persistedFloatingIconVisible = await panelPage.evaluate(async () => {
+    const { envConfig } = await chrome.storage.local.get(['envConfig']);
+    return envConfig?.MEETING_PILOT_FLOATING_ICON_VISIBLE;
+  });
+  assert.equal(
+    floatingVisibilityState.dockDisplay,
+    'none',
+    `会议页入口保存永不展示后未立即隐藏: ${JSON.stringify(
+      floatingVisibilityState,
+    )}`,
+  );
+  assert.equal(
+    persistedFloatingIconVisible,
+    false,
+    '会议页入口永不展示配置未写入 storage',
+  );
 
   await panelPage.close();
 

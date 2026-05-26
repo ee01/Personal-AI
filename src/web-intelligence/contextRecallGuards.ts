@@ -183,6 +183,7 @@ const CONTEXT_RECALL_SOURCE_LABELS: Record<string, string> = {
   markdown: 'Markdown',
   meeting: '会议',
   message: '消息',
+  rehearsal: '预演提醒',
   reflection: '反思记录',
   system: '系统记忆',
   user_core: '用户画像',
@@ -202,6 +203,7 @@ const CONTEXT_RECALL_REASON_TYPE_LABELS: Record<string, string> = {
   meeting_series: '同系列会议',
   open_action: '未关闭行动项',
   prior_decision: '历史决策',
+  prospective_cue: '预演线索',
   recent_context: '近期上下文',
   recent: '近期上下文',
   same_people: '相关人员',
@@ -228,6 +230,7 @@ const CONTEXT_RECALL_EVIDENCE_ROLE_LABELS: Record<string, string> = {
   issue: '问题线索',
   open_question: '开放问题',
   related_context: '相关上下文',
+  rehearsal_cue: '预演提醒',
   risk: '风险',
   supporting: '支持证据',
 };
@@ -518,6 +521,8 @@ export function formatContextRecallMemoryType(
       return '片段记忆';
     case 'entity':
       return '实体记忆';
+    case 'rehearsal':
+      return '预演提醒';
     default: {
       const cleaned = normalizeContextRecallInfo(type);
       return cleaned ? `${cleaned}记忆` : '记忆';

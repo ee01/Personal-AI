@@ -17,6 +17,7 @@ import {
 import { getEnvConfig } from '../utils';
 import { Logger } from '../utils/logger';
 import { digestQueueService } from './DigestQueueService';
+import type { DigestProcessResult } from '../types/digestQueue';
 import { getMemoryServiceClient } from './MemoryServiceClient';
 import { concernedItemsSyncService } from './ConcernedItemsSyncService';
 import { TASK_DEFINITIONS } from './taskSchedulerDefinitions';
@@ -43,6 +44,7 @@ export interface ScheduledTask {
   lastSuccess?: boolean;
   lastError?: string;
   lastSkipReason?: string;
+  lastResultSummary?: string;
   nextRun?: number;
   runHistory?: ScheduledTaskRunRecord[];
 }
@@ -64,6 +66,7 @@ export interface TaskExecutionResult {
   success: boolean;
   skipped?: boolean;
   error?: string;
+  summary?: string;
 }
 
 export type TaskExecutionTrigger = 'scheduled' | 'manual' | 'startup';
@@ -76,6 +79,7 @@ export interface ScheduledTaskRunRecord {
   skipped?: boolean;
   trigger: TaskExecutionTrigger;
   error?: string;
+  summary?: string;
 }
 
 interface TaskStatusOptions {
@@ -96,6 +100,43 @@ function getTaskErrorMessage(error: unknown): string {
     return error;
   }
   return '未知错误';
+}
+
+export function summarizeDigestQueueProcessResults(
+  results: DigestProcessResult[],
+): TaskExecutionResult {
+  if (results.length === 0) {
+    return {
+      success: true,
+      summary: '无到期摘要',
+    };
+  }
+
+  const failedResults = results.filter((result) => !result.success);
+  const totalItems = results.reduce(
+    (sum, result) => sum + result.itemsProcessed,
+    0,
+  );
+  const successCount = results.length - failedResults.length;
+
+  if (failedResults.length > 0) {
+    const failureSummary = failedResults
+      .map((result) => `${result.taskId}: ${result.error || '处理失败'}`)
+      .join('; ');
+    return {
+      success: false,
+      error: `摘要推送失败 ${failedResults.length}/${results.length}：${failureSummary}`,
+      summary: `${successCount} 个摘要任务成功，${failedResults.length} 个失败，队列已保留`,
+    };
+  }
+
+  return {
+    success: true,
+    summary:
+      totalItems > 0
+        ? `${successCount} 个摘要任务成功，推送 ${totalItems} 条`
+        : `${successCount} 个摘要任务完成，无到期条目`,
+  };
 }
 
 function isAlarmPersistenceFlagUnsupported(error: unknown): boolean {
@@ -340,6 +381,7 @@ export class TaskScheduler {
             task.lastSuccess = state.lastSuccess;
             task.lastError = state.lastError;
             task.lastSkipReason = state.lastSkipReason;
+            task.lastResultSummary = state.lastResultSummary;
             task.nextRun = state.nextRun;
             task.runHistory = Array.isArray(state.runHistory)
               ? state.runHistory.slice(0, TASK_RUN_HISTORY_LIMIT)
@@ -372,6 +414,7 @@ export class TaskScheduler {
           lastSuccess: task.lastSuccess,
           lastError: task.lastError,
           lastSkipReason: task.lastSkipReason,
+          lastResultSummary: task.lastResultSummary,
           nextRun: task.nextRun,
           runHistory: task.runHistory,
         };
@@ -805,9 +848,11 @@ export class TaskScheduler {
       const wasSkipped = taskResult?.skipped === true;
       const success = taskResult?.success ?? true;
       const resultMessage = taskResult?.error;
+      const resultSummary = taskResult?.summary;
       task.lastCompletedAt = completedAt;
       task.lastSuccess = success;
       task.lastError = success ? undefined : resultMessage;
+      task.lastResultSummary = success ? resultSummary : undefined;
       if (wasSkipped) {
         task.lastSkippedAt = completedAt;
         task.lastSkipReason = resultMessage || '任务条件未满足，已跳过';
@@ -822,12 +867,22 @@ export class TaskScheduler {
         skipped: wasSkipped || undefined,
         trigger,
         error: wasSkipped || !success ? resultMessage : undefined,
+        summary: success ? resultSummary : undefined,
       });
       console.log(
         `${success ? '✅' : '❌'} 任务 ${task.name}${
           wasSkipped ? ' 已跳过' : ' 执行完成'
         }，耗时: ${duration}ms`,
       );
+
+      const logContext: Record<string, unknown> = {
+        duration: `${duration}ms`,
+        category: task.category,
+        skipped: wasSkipped || undefined,
+      };
+      if (resultSummary) {
+        logContext.summary = resultSummary;
+      }
 
       // 记录任务执行日志
       Logger.task(
@@ -836,11 +891,7 @@ export class TaskScheduler {
         wasSkipped
           ? `${task.name} 已跳过: ${task.lastSkipReason}`
           : `${task.name} 执行完成`,
-        {
-          duration: `${duration}ms`,
-          category: task.category,
-          skipped: wasSkipped || undefined,
-        },
+        logContext,
       );
       return {
         success,
@@ -1113,7 +1164,7 @@ export class TaskScheduler {
   /**
    * 执行汇总推送队列处理
    */
-  private async executeDigestQueueProcess(): Promise<void> {
+  private async executeDigestQueueProcess(): Promise<TaskExecutionResult> {
     try {
       console.log('📬 开始处理汇总推送队列...');
 
@@ -1125,13 +1176,18 @@ export class TaskScheduler {
 
       const successCount = results.filter((r) => r.success).length;
       const totalItems = results.reduce((sum, r) => sum + r.itemsProcessed, 0);
+      const result = summarizeDigestQueueProcessResults(results);
 
       console.log(
         `✅ 汇总推送处理完成: ${successCount}/${results.length} 个任务成功, 共推送 ${totalItems} 条`,
       );
+      if (!result.success) {
+        console.warn(`⚠️ 汇总推送队列存在失败: ${result.error}`);
+      }
 
       // 保存任务状态
       await digestQueueService.saveTaskStates();
+      return result;
     } catch (error) {
       console.error('❌ 汇总推送队列处理失败:', error);
       throw error;

@@ -70,6 +70,22 @@ describe('Meetings API', () => {
         (id, content, source_type, source_title, group_id, group_name, timestamp, importance, sentiment, metadata_json, created_at)
        VALUES (?, ?, 'meeting', ?, ?, ?, ?, ?, 'neutral', ?, ?)`,
     ).run(
+      'meeting-1-msg-3',
+      'Intermediate chapter',
+      'Older chapter title',
+      'meeting-1',
+      'Planning Review Draft',
+      1050,
+      0.85,
+      JSON.stringify({ participants: ['Alex'] }),
+      1050,
+    );
+
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_title, group_id, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, 'meeting', ?, ?, ?, ?, ?, 'neutral', ?, ?)`,
+    ).run(
       'meeting-2-msg-1',
       'Another meeting',
       'Fallback title',
@@ -77,7 +93,12 @@ describe('Meetings API', () => {
       null,
       900,
       0.8,
-      JSON.stringify({ participants: ['Sarah'] }),
+      JSON.stringify({
+        participants: ['Sarah'],
+        digestId: 'digest-failed',
+        digestStatus: 'failed',
+        digestErrorCode: 'minutes_api_timeout',
+      }),
       900,
     );
 
@@ -111,6 +132,9 @@ describe('Meetings API', () => {
       date: 900,
       lastEventAt: 900,
       participants: ['Sarah'],
+      digestId: 'digest-failed',
+      digestStatus: 'failed',
+      digestErrorCode: 'minutes_api_timeout',
     });
   });
 

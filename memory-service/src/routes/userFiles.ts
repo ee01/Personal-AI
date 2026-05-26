@@ -7,7 +7,14 @@
 
 import type { FastifyInstance } from 'fastify';
 
-const ALLOWED_SUBDIRS = ['dreams', 'reflections', 'reflection-threads', 'reports', 'delegations'];
+const ALLOWED_SUBDIRS = [
+  'dreams',
+  'reflections',
+  'reflection-threads',
+  'rehearsals',
+  'reports',
+  'delegations',
+];
 
 export async function userFilesRoutes(app: FastifyInstance): Promise<void> {
   // GET /user-files/:subdir - list files

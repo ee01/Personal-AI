@@ -2,6 +2,7 @@ import type {
   MeetingPilotMemoryRef,
   MeetingPilotSessionSnapshot,
 } from './protocol';
+import { shouldSurfaceMeetingPilotAlert } from './alertPresentation.js';
 
 export type MeetingPilotLiveFeedItem =
   | {
@@ -53,7 +54,7 @@ export function buildMeetingPilotLiveFeedItems(
       memory: ref,
     }));
   const alertItems: MeetingPilotLiveFeedItem[] = session.alerts
-    .filter((alert) => !alert.resolved)
+    .filter((alert) => !alert.resolved && shouldSurfaceMeetingPilotAlert(alert))
     .map((alert) => ({
       kind: 'alert' as const,
       id: alert.id,

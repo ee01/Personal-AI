@@ -140,7 +140,14 @@ function getNextCandidateMinute(now: Date): Date {
 }
 
 function buildExplicitRecoverySuggestion(now: Date, reason: string): ScheduleHealthRecoverySuggestion {
-  const { dateStr, timeStr } = formatLocalScheduleDateTime(getNextCandidateMinute(now));
+  return buildExplicitRecoverySuggestionAt(getNextCandidateMinute(now), reason);
+}
+
+function buildExplicitRecoverySuggestionAt(
+  date: Date,
+  reason: string,
+): ScheduleHealthRecoverySuggestion {
+  const { dateStr, timeStr } = formatLocalScheduleDateTime(date);
   return {
     dateStr,
     timeStr,
@@ -148,6 +155,69 @@ function buildExplicitRecoverySuggestion(now: Date, reason: string): ScheduleHea
     clearsScheduleTime: false,
     reason,
   };
+}
+
+function addMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + minutes * 60000);
+}
+
+function getMinuteKey(date: Date): number {
+  return Math.floor(date.getTime() / 60000);
+}
+
+function getExplicitRecoveryReason(issue: ScheduleHealthIssue): string {
+  return issue.code === 'invalid_time'
+    ? '把异常时间改成下一分钟的明确本地时间。'
+    : '把已错过的明确时间改成下一分钟，恢复到可执行窗口内。';
+}
+
+function needsExplicitRecoverySuggestion(
+  message: ScheduleHealthMessage,
+  issue: ScheduleHealthIssue,
+): boolean {
+  return issue.code === 'invalid_time' || hasExplicitScheduleTime(message);
+}
+
+function getFutureExplicitReservationKeys(
+  messages: ScheduleHealthMessage[],
+  issueIds: Set<string>,
+  now: Date,
+): Set<number> {
+  const reserved = new Set<number>();
+  const firstRecoveryMinute = getNextCandidateMinute(now);
+
+  for (const message of messages) {
+    if (issueIds.has(message.ID)) {
+      continue;
+    }
+
+    if (message.Status !== 'Active' || !hasExplicitScheduleTime(message)) {
+      continue;
+    }
+
+    if (!normalizeLocalScheduleTime(message.Schedule_Time)) {
+      continue;
+    }
+
+    const nextExecution = calculateScheduledMessageNextExecution(message, now);
+    if (!nextExecution) {
+      continue;
+    }
+
+    const executionDate = nextExecution.slice(0, 10);
+    if (isTerminalExecutionForDate(message, executionDate)) {
+      continue;
+    }
+
+    const scheduledAt = parseScheduleDateTime(nextExecution);
+    if (!scheduledAt || scheduledAt.getTime() < firstRecoveryMinute.getTime()) {
+      continue;
+    }
+
+    reserved.add(getMinuteKey(scheduledAt));
+  }
+
+  return reserved;
 }
 
 function getNextDefaultScheduleDate(
@@ -304,6 +374,46 @@ export function getScheduleHealthRecoverySuggestion(
     clearsScheduleTime: true,
     reason: '保留默认发送时间，并把执行日期移到下一个仍可发送的日期。',
   };
+}
+
+export function getScheduleHealthRecoverySuggestions(
+  messages: ScheduleHealthMessage[],
+  now = new Date(),
+): Map<string, ScheduleHealthRecoverySuggestion> {
+  const issues = getScheduleHealthIssues(messages, now);
+  const issueIds = new Set(issues.map(issue => issue.messageId));
+  const messagesById = new Map(messages.map(message => [message.ID, message]));
+  const suggestions = new Map<string, ScheduleHealthRecoverySuggestion>();
+  const reservedExplicitMinutes = getFutureExplicitReservationKeys(messages, issueIds, now);
+  let explicitCursor = getNextCandidateMinute(now);
+
+  for (const issue of issues) {
+    const message = messagesById.get(issue.messageId);
+    if (!message) {
+      continue;
+    }
+
+    if (needsExplicitRecoverySuggestion(message, issue)) {
+      while (reservedExplicitMinutes.has(getMinuteKey(explicitCursor))) {
+        explicitCursor = addMinutes(explicitCursor, 1);
+      }
+
+      suggestions.set(
+        issue.messageId,
+        buildExplicitRecoverySuggestionAt(explicitCursor, getExplicitRecoveryReason(issue)),
+      );
+      reservedExplicitMinutes.add(getMinuteKey(explicitCursor));
+      explicitCursor = addMinutes(explicitCursor, 1);
+      continue;
+    }
+
+    const suggestion = getScheduleHealthRecoverySuggestion(message, now);
+    if (suggestion) {
+      suggestions.set(issue.messageId, suggestion);
+    }
+  }
+
+  return suggestions;
 }
 
 export function formatScheduleHealthIssue(issue: ScheduleHealthIssue): string {

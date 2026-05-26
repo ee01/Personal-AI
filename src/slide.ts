@@ -84,6 +84,19 @@ export interface ProjectUpdateSuggestion {
   };
 }
 
+export interface SlideProjectExtractionMetadata {
+  totalSlideCount: number;
+  analyzedSlideCount: number;
+  analyzedSlideIds: string[];
+  requestedSlideId?: string;
+  warnings: string[];
+}
+
+export interface SlideProjectExtractionResult {
+  projects: ProjectData[];
+  metadata: SlideProjectExtractionMetadata;
+}
+
 function isValidColumnIndex(columnIndex: unknown): columnIndex is number {
   return Number.isInteger(columnIndex) && (columnIndex as number) >= 0;
 }
@@ -160,7 +173,7 @@ export function getPresentationIdFromUrl(url: string): string {
  */
 export function getCurrentSlideIdFromUrl(url: string): string | undefined {
   // 例如：https://docs.google.com/presentation/d/1AbCdEfG123456/edit#slide=id.g123456abcde_0_123
-  const match = url.match(/slide=id\.([a-zA-Z0-9_]+)/);
+  const match = url.match(/slide=id\.([a-zA-Z0-9_-]+)/);
   if (match && match[1]) {
     return match[1];
   }
@@ -186,6 +199,27 @@ export async function getProjectsFromSlide(
     minConfidence?: number;    // 最小置信度阈值
   }
 ): Promise<ProjectData[]> {
+  const result = await getProjectsFromSlideWithMetadata(
+    presentationId,
+    token,
+    slideId,
+    currentUrl,
+    options,
+  );
+
+  return result.projects;
+}
+
+export async function getProjectsFromSlideWithMetadata(
+  presentationId: string,
+  token: string,
+  slideId?: string,
+  currentUrl?: string,
+  options?: {
+    useLLMFallback?: boolean;
+    minConfidence?: number;
+  }
+): Promise<SlideProjectExtractionResult> {
   try {
     // 使用静态导入的工厂
     const analyzerFactory = new SlideAnalyzerFactoryImpl({
@@ -194,35 +228,53 @@ export async function getProjectsFromSlide(
     
     // 首先获取演示文稿内容
     const presentationData = await fetchPresentationData(presentationId, token);
+    const allSlides = presentationData.slides || [];
+    const totalSlideCount = allSlides.length;
+    const warnings: string[] = [];
     
     // 如果没有提供slideId，尝试从URL获取当前幻灯片ID
     let currentSlideId: string | undefined;
     if (!slideId && currentUrl) {
       currentSlideId = getCurrentSlideIdFromUrl(currentUrl);
     }
+    const requestedSlideId = slideId || currentSlideId;
     
     // 决定处理哪些幻灯片
-    let slidesToProcess = presentationData.slides;
+    let slidesToProcess = allSlides;
     
     // 优先使用传入的slideId
     if (slideId) {
-      slidesToProcess = presentationData.slides.filter((slide: GoogleSlide) => slide.objectId === slideId);
+      slidesToProcess = allSlides.filter((slide: GoogleSlide) => slide.objectId === slideId);
     } 
     // 其次使用从URL解析的当前幻灯片ID
     else if (currentSlideId) {
-      slidesToProcess = presentationData.slides.filter((slide: GoogleSlide) => slide.objectId === currentSlideId);
+      slidesToProcess = allSlides.filter((slide: GoogleSlide) => slide.objectId === currentSlideId);
+    } else if (currentUrl && totalSlideCount > 1) {
+      warnings.push('未能从当前 URL 解析当前 slide id，已改为分析整份演示文稿。');
     }
     
     if (!slidesToProcess || slidesToProcess.length === 0) {
-      console.warn('未找到幻灯片内容');
-      return [];
+      const missingTarget = requestedSlideId
+        ? `未找到目标幻灯片 ${requestedSlideId}，未执行分析。`
+        : '未找到幻灯片内容。';
+      warnings.push(missingTarget);
+      console.warn(missingTarget);
+      return {
+        projects: [],
+        metadata: {
+          totalSlideCount,
+          analyzedSlideCount: 0,
+          analyzedSlideIds: [],
+          requestedSlideId,
+          warnings
+        }
+      };
     }
     
     console.log('需要处理的目标slide数量: ', slidesToProcess.length);
 
     // 保存分析结果
     const allProjects: ProjectData[] = [];
-    const warnings: string[] = [];
     
     // 设置最小置信度阈值
     const minConfidence = options?.minConfidence || 0.3;
@@ -313,7 +365,16 @@ export async function getProjectsFromSlide(
       console.warn('幻灯片分析警告:', warnings);
     }
     
-    return allProjects;
+    return {
+      projects: allProjects,
+      metadata: {
+        totalSlideCount,
+        analyzedSlideCount: slidesToProcess.length,
+        analyzedSlideIds: slidesToProcess.map((slide: GoogleSlide) => slide.objectId).filter(Boolean),
+        requestedSlideId,
+        warnings
+      }
+    };
   } catch (error) {
     console.error('获取幻灯片项目数据失败:', error);
     throw error;

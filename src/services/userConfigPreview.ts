@@ -57,9 +57,35 @@ export interface IndependentUserConfigPreviewOptions {
   userContextScope?: UserContextPreferenceScope;
 }
 
+export type PreferenceInjectionReceiptStatus =
+  | 'included'
+  | 'excluded'
+  | 'paused'
+  | 'empty';
+
+export interface PreferenceInjectionReceiptItem {
+  id: 'user-context' | 'message-prompt' | 'project-prompt';
+  label: string;
+  status: PreferenceInjectionReceiptStatus;
+  statusLabel: string;
+  detail: string;
+}
+
+export interface PreferenceInjectionReceipt {
+  scope: UserContextPreferenceScope;
+  scopeLabel: string;
+  items: PreferenceInjectionReceiptItem[];
+}
+
 const PROMPT_SCOPE_LABELS: Record<'message' | 'project', string> = {
   message: '消息分析',
   project: '项目分析',
+};
+
+const PREVIEW_SCOPE_LABELS: Record<UserContextPreferenceScope, string> = {
+  all: '全部',
+  message: '消息',
+  project: '项目',
 };
 
 const PROMPT_SCOPE_INJECTION_KEYS: Record<
@@ -217,6 +243,11 @@ const pushListIfPresent = (lines: string[], label: string, value: any) => {
 };
 
 const shouldIncludeUserContextScope = (
+  requestedScope: UserContextPreferenceScope,
+  candidateScope: 'message' | 'project',
+): boolean => requestedScope === 'all' || requestedScope === candidateScope;
+
+const shouldIncludePromptScope = (
   requestedScope: UserContextPreferenceScope,
   candidateScope: 'message' | 'project',
 ): boolean => requestedScope === 'all' || requestedScope === candidateScope;
@@ -395,13 +426,15 @@ export function buildIndependentUserConfigPreview(
           scope: userContextScope,
         })
       : '',
-    isCustomPromptScopeInjectionEnabled(sanitized, 'message')
+    shouldIncludePromptScope(userContextScope, 'message') &&
+      isCustomPromptScopeInjectionEnabled(sanitized, 'message')
       ? buildCustomPromptPreferenceSection(
           customPrompts.message,
           PROMPT_SCOPE_LABELS.message,
         )
       : '',
-    isCustomPromptScopeInjectionEnabled(sanitized, 'project')
+    shouldIncludePromptScope(userContextScope, 'project') &&
+      isCustomPromptScopeInjectionEnabled(sanitized, 'project')
       ? buildCustomPromptPreferenceSection(
           customPrompts.project,
           PROMPT_SCOPE_LABELS.project,
@@ -421,6 +454,149 @@ function countContextSignals(
   const preview = buildUserContextPreferenceSection(userContextConfig, { scope });
   if (!preview) return 0;
   return preview.split('\n').filter((line) => line && !line.startsWith('#')).length;
+}
+
+export function buildPreferenceInjectionReceipt(
+  config: any,
+  options: IndependentUserConfigPreviewOptions = {},
+): PreferenceInjectionReceipt {
+  const sanitized = sanitizeIndependentUserConfig(config);
+  const scope = options.userContextScope || 'all';
+  const customPrompts = sanitized.customPrompts || {};
+  const globalInjectionEnabled = isPreferenceInjectionEnabled(sanitized);
+  const customPromptsInjectionEnabled =
+    isCustomPromptsInjectionEnabled(sanitized);
+  const userContextInjectionEnabled = isUserContextInjectionEnabled(sanitized);
+  const contextSignalCount = userContextInjectionEnabled
+    ? countContextSignals(sanitized.userContextConfig || {}, scope)
+    : 0;
+
+  const items: PreferenceInjectionReceiptItem[] = [];
+
+  if (!globalInjectionEnabled) {
+    return {
+      scope,
+      scopeLabel: PREVIEW_SCOPE_LABELS[scope],
+      items: [
+        {
+          id: 'user-context',
+          label: '用户上下文',
+          status: 'paused',
+          statusLabel: '暂停',
+          detail: '全局偏好注入已暂停',
+        },
+        {
+          id: 'message-prompt',
+          label: '消息提示词',
+          status: 'paused',
+          statusLabel: '暂停',
+          detail: '全局偏好注入已暂停',
+        },
+        {
+          id: 'project-prompt',
+          label: '项目提示词',
+          status: 'paused',
+          statusLabel: '暂停',
+          detail: '全局偏好注入已暂停',
+        },
+      ],
+    };
+  }
+
+  if (!userContextInjectionEnabled) {
+    items.push({
+      id: 'user-context',
+      label: '用户上下文',
+      status: 'paused',
+      statusLabel: '暂停',
+      detail: '用户上下文来源已暂停',
+    });
+  } else if (contextSignalCount > 0) {
+    items.push({
+      id: 'user-context',
+      label: '用户上下文',
+      status: 'included',
+      statusLabel: '注入',
+      detail: `${contextSignalCount} 项上下文信号`,
+    });
+  } else {
+    items.push({
+      id: 'user-context',
+      label: '用户上下文',
+      status: 'empty',
+      statusLabel: '空',
+      detail: '当前范围没有可注入信号',
+    });
+  }
+
+  (Object.keys(PROMPT_SCOPE_LABELS) as Array<'message' | 'project'>).forEach(
+    (promptScope) => {
+      const prompt = customPrompts[promptScope];
+      const promptLabel =
+        promptScope === 'message' ? '消息提示词' : '项目提示词';
+      const promptId =
+        promptScope === 'message' ? 'message-prompt' : 'project-prompt';
+      const content = cleanString(prompt?.content);
+
+      if (!shouldIncludePromptScope(scope, promptScope)) {
+        items.push({
+          id: promptId,
+          label: promptLabel,
+          status: 'excluded',
+          statusLabel: '不在范围',
+          detail: `${PREVIEW_SCOPE_LABELS[scope]}预览不会注入${promptLabel}`,
+        });
+        return;
+      }
+
+      if (!customPromptsInjectionEnabled) {
+        items.push({
+          id: promptId,
+          label: promptLabel,
+          status: 'paused',
+          statusLabel: '暂停',
+          detail: '自定义提示词来源已暂停',
+        });
+        return;
+      }
+
+      if (!isCustomPromptScopeInjectionEnabled(sanitized, promptScope)) {
+        items.push({
+          id: promptId,
+          label: promptLabel,
+          status: 'paused',
+          statusLabel: '暂停',
+          detail: `${promptLabel}作用域已暂停`,
+        });
+        return;
+      }
+
+      if (!prompt?.enabled || !content) {
+        items.push({
+          id: promptId,
+          label: promptLabel,
+          status: 'empty',
+          statusLabel: '空',
+          detail: '未启用或内容为空',
+        });
+        return;
+      }
+
+      items.push({
+        id: promptId,
+        label: promptLabel,
+        status: 'included',
+        statusLabel: '注入',
+        detail: `${content.length} 字符`,
+      });
+    },
+  );
+
+  return {
+    scope,
+    scopeLabel: PREVIEW_SCOPE_LABELS[scope],
+    items,
+  };
 }
 
 export function buildIndependentUserConfigFootprint(
@@ -445,13 +621,15 @@ export function buildIndependentUserConfigFootprint(
           scope: userContextScope,
         })
       : '',
-    isCustomPromptScopeInjectionEnabled(sanitized, 'message')
+    shouldIncludePromptScope(userContextScope, 'message') &&
+      isCustomPromptScopeInjectionEnabled(sanitized, 'message')
       ? buildCustomPromptPreferenceSection(
           customPrompts.message,
           PROMPT_SCOPE_LABELS.message,
         )
       : '',
-    isCustomPromptScopeInjectionEnabled(sanitized, 'project')
+    shouldIncludePromptScope(userContextScope, 'project') &&
+      isCustomPromptScopeInjectionEnabled(sanitized, 'project')
       ? buildCustomPromptPreferenceSection(
           customPrompts.project,
           PROMPT_SCOPE_LABELS.project,
@@ -463,7 +641,9 @@ export function buildIndependentUserConfigFootprint(
     Object.keys(PROMPT_SCOPE_LABELS) as Array<'message' | 'project'>
   ).reduce((total, scope) => {
     const prompt = customPrompts[scope];
-    return isCustomPromptScopeInjectionEnabled(sanitized, scope) && prompt?.enabled
+    return shouldIncludePromptScope(userContextScope, scope) &&
+      isCustomPromptScopeInjectionEnabled(sanitized, scope) &&
+      prompt?.enabled
       ? total + cleanString(prompt.content).length
       : total;
   }, 0);

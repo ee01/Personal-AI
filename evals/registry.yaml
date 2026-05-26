@@ -1,0 +1,138 @@
+version: 1
+defaults:
+  agent: codex
+  resultRoot: .eval-runs
+  repair:
+    mode: auto
+    landing: current_worktree
+    requireCleanWorktree: true
+
+suites:
+  - id: context-recall
+    title: Context Recall Experience Eval
+    enabled: true
+    workflow: evals/workflows/context-recall/experience.md
+    cases: evals/cases/context-recall/real-ringcentral-groups.jsonl
+    runMode: scheduled
+    schedule:
+      cron: "0 9 * * 1"
+      timezone: Asia/Shanghai
+    endpoint:
+      url: http://10.32.56.212:3210/api/v1/context-recall
+      userId: esone.qiu
+    judge:
+      heuristic: true
+      llm: true
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: auto
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/**
+        - memory-service/src/routes/**
+        - memory-service/src/__tests__/**
+        - src/web-intelligence/**
+        - src/contentScriptWebIntelligence.ts
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts
+        - npm run verify:webpage-memory-detection
+
+  - id: meeting-pilot
+    title: Meeting Pilot Experience Eval
+    enabled: true
+    workflow: evals/workflows/meeting-pilot/experience.md
+    cases: evals/cases/meeting-pilot/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: true
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - src/meeting-shell/**
+        - memory-service/src/core/**
+        - docs/features/**
+      validate:
+        - npm run verify:context-assist-meeting-prep
+        - npm run test:meeting-pilot-scene1
+
+  - id: compose-assist
+    title: Compose Assist Experience Eval
+    enabled: true
+    workflow: evals/workflows/compose-assist/experience.md
+    cases: evals/cases/compose-assist/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: true
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - src/composer-guard/**
+        - docs/features/**
+      validate:
+        - npm run verify:context-assist-meeting-prep
+
+  - id: today-pilot
+    title: Today Pilot Experience Eval
+    enabled: true
+    workflow: evals/workflows/today-pilot/experience.md
+    cases: evals/cases/today-pilot/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: true
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/DayPilotService.ts
+        - docs/features/**
+      validate:
+        - npm run verify:day-pilot-home
+
+  - id: memory-search
+    title: Memory Search Experience Eval
+    enabled: true
+    workflow: evals/workflows/memory-search/experience.md
+    cases: evals/cases/memory-search/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: true
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - src/modals/**
+        - memory-service/src/core/**
+        - docs/features/**
+      validate:
+        - npm run verify:memory-search-results
+
+  - id: user-profile
+    title: User Profile Experience Eval
+    enabled: true
+    workflow: evals/workflows/user-profile/experience.md
+    cases: evals/cases/user-profile/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: true
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - src/modals/**
+        - memory-service/src/core/**
+        - docs/features/**
+      validate:
+        - npm run verify:custom-prompts

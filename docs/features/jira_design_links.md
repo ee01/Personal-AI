@@ -5,7 +5,7 @@ alwaysApply: false
 ---
 # Jira 设计链接显示功能
 
-*最后更新: 2026-05-21*
+*最后更新: 2026-05-25*
 
 ## 功能概述
 
@@ -30,7 +30,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 3. **自定义设计域名识别**：通过 `DESIGN_LINK_DOMAINS` 补充内部原型、设计系统或交付站点域名；精确域名只匹配该 host，`*.example.com` 只匹配子域名。
 4. **层级关联分析**：Epic 和非 Epic ticket 都会尝试向上查找相关 UX ticket。
 5. **稳定展示**：在 Jira summary 下方展示紧凑面板，长标题会截断，标签会换行，面板会按实际内容高度自适应，hover 效果与 Backend ETA 卡片保持一致且不挤压页面内容；Jira SPA 切换到无设计链接的 ticket、带尾斜杠的 ticket URL 或非 ticket 页面时会正确识别并清理旧面板。
-6. **状态补充**：对 UX ticket 额外显示 UX Epic、Epic 状态和 ETA（due date 或 fixVersion），对 Jira remote link/UX ticket 设计链接显示可用的设计状态和更新时间；`ready_for_development`、`not_ready_for_dev` 这类机器状态会显示成人可读标签并映射到正确状态色。
+6. **状态补充**：对 UX ticket 额外显示 UX Epic、Epic 状态和 ETA（due date 或 fixVersion），对 Jira remote link/UX ticket 设计链接显示可用的设计状态和更新时间；`ready_for_development`、`not_ready_for_dev` 这类机器状态会显示成人可读标签并映射到正确状态色，Jira/Figma 的 `Changed`/过期类状态会统一呈现为 `Design updated`。
 7. **可行动状态展示**：逐条展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的状态，并用左侧状态扫描线降低多链接场景下的识别成本；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
 8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态和 UX ticket key，但不展示设计 ticket 标题，并把该项排在普通链接之前，避免开发者误以为没有设计依赖。
 9. **安全和去重**：只接受 http/https 设计链接，过滤重复设计链接/UX 链接，并保留合并后的来源标签；Figma 文件/节点链接会按稳定设计身份去重，避免 Jira encoded URL、描述中的可读 URL 或分享参数差异把同一设计展示成多行。
@@ -82,7 +82,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 
 ### 4. Linked Issues 分析
 - 从DOM中直接提取Issue Links部分
-- 筛选UX开头的相关tickets
+- 筛选UX开头的相关tickets；如果 Jira DOM 只暴露 issue key 文本或 `data-issue-key` 而没有可点击 href，也会用 `/browse/KEY` 作为回退链接继续展示
 - 获取对应的summary信息
 
 ### 5. Epic 层级分析
@@ -173,10 +173,12 @@ interface FigmaLink {
 - 面板 hover 使用与 Backend ETA 卡片一致的轻微浮动和 footer 展开效果，不挤压页面内容。
 - 面板不做顶部开工判定、状态摘要或主行动推荐，因为真实设计入口可能分布在多个 UX ticket 中；用户直接扫描每一条 ticket/link 自行判断。
 - 每个链接项包含 Personal AI 图标、设计入口、UX ticket、设计状态、UX Epic 状态、ETA 和来源标签；缺失设计链接时只展示 UX ticket key 和 `Missing link` 状态，避免设计 ticket 标题占据扫描空间。
-- Remote link 提供更新时间时额外显示 `Updated YYYY-MM-DD`，不做强提醒或阻塞，只给开发者一个低噪音的新旧判断信号。
+- Remote link 提供更新时间时额外显示 `Updated YYYY-MM-DD`，同等行动状态下最近更新的设计会排在更前；日期 hover 会说明“如果实现已经开始，需要重新检查设计”，但不做强提醒或阻塞。
 - 每行会按状态添加轻量视觉扫描线：Ready、Updated、Missing/Not ready/Blocked、Review 使用不同边线和浅底色，普通链接保持中性样式。
-- Jira/Figma 的设计状态会按 tone 展示：Ready for dev、Design updated、Missing link、Not ready、Blocked、Review、Done、Neutral；Ready/Updated/Missing/Not ready 等更需要处理的入口会排在普通 description 链接前面。
+- Jira/Figma 的设计状态会按 tone 展示：Ready for dev、Design updated、Missing link、Not ready、Blocked、Review、Done、Neutral；Ready/Updated/Missing/Not ready 等更需要处理的入口会排在普通 description 链接前面。状态标签 hover 会说明它对开发者意味着什么，例如设计已变更时提示重新检查链接设计。
 - 重复链接合并时会优先保留 Jira remote link / Designs 提供的结构化标题和状态，UX ticket 行也会优先展示具体设计名，避免 description 或工具默认名覆盖真正可行动的设计状态。
+- 行内来源 tag 会优先显示更权威的来源，例如合并行显示 `Remote link, Linked issue`，而不是按内部合并顺序把关联票放在前面；hover 文案使用 `Source: ...` 人类可读格式，不暴露 `linked_issues` 这类内部 key。
+- 面板 footer 和无障碍标签会展示紧凑来源摘要，例如 `8 entries · Remote link, Jira Designs, Linked issue, Description`，用于快速确认本次结果来自哪些扫描通道。
 
 ### 响应式设计
 - 多个设计链接垂直排列。
@@ -326,6 +328,10 @@ const PAGE_CHANGE_DELAY = 1000;
 29. 设计链接行按状态输出 `data-design-attention` 并展示轻量扫描线，用户在 Jira summary 下方可以更快定位 Ready、Updated、Missing link 和 Not ready 项
 30. Zeplin 链接标签会区分 `Zeplin screen`、`Zeplin section`、`Zeplin project`、`Zeplin flow`、`Zeplin component` 和 `Zeplin styleguide`，但仍只把 `app.zeplin.io/project/...` 与 `zpl.io` 短链当作默认可信设计入口
 31. Figma 设计链接去重使用稳定 identity key，`node-id=89%3A6`、`node-id=89-6`、重命名后的路径标题和非身份分享参数不会把同一设计节点拆成多行
+32. Jira/Figma `Changed`、过期或 out-of-sync 状态会显示为 `Design updated`，并在状态标签 tooltip 中给出重新检查设计的含义；面板 footer 会显示本次结果的来源摘要
+33. 合并后的行内来源 tag 会按来源权威性排序，并使用人类可读 hover 文案，帮助用户确认状态来自 Jira remote link、Jira Designs、UX ticket 还是 description
+34. 同等状态优先级下，带有更新时间的设计行会先按最新更新时间排序；更新时间标签 hover 会把原始日期转成复查提示，避免用户只看到一个孤立日期
+35. Linked issue 解析支持没有 href 的纯文本 issue key；当 Jira 或插件只渲染 `UX-123` 文本时，相关 UX ticket 仍会进入设计上下文并显示 `Missing link`
 
 ### 未来增强计划 🔄
 1. 在权限允许时展示轻量预览或缩略图，减少打开外部工具的次数。
@@ -338,6 +344,9 @@ const PAGE_CHANGE_DELAY = 1000;
 - Atlassian Automation 暴露的 design URL 可能是 encoded URL，当前功能把 encoded URL 与页面可读 URL 归并，优先解决重复行和状态丢失，而不是额外做自动提醒。
 - Zeplin for Jira 支持把 screens、sections、projects 等设计资源挂到 Jira；当前功能只做路径级标签细分，不尝试推断具体屏幕状态或替代 Zeplin 预览。
 - Atlassian Automation 支持设计链接创建、更新和状态变化触发；后续如果要做提醒或批量处理，应优先基于这些状态事件，而不是在当前面板里加入需要用户决策的自动改票。
+- Figma Dev Mode 把 `Changed` 视为已标记 Ready/Completed 的设计被修改后的状态；当前面板把这类状态归一为 `Design updated`，比直接显示 `Changed` 更贴近开发者下一步动作。
+- 软件 artifact traceability 研究强调不同工程 artifact 之间的路径要能被角色快速理解；当前面板用按权威性排序的逐行 source tag 加 footer 来源摘要，保持低噪音同时让用户知道结果来自 description、Jira Designs、remote links 还是 UX ticket。
+- Jira issue link 可视化研究强调大项目里缺失或未知 issue links 会破坏依赖总览；因此当前功能在 linked issue 只有纯文本 key 时也保留 `Missing link` 提醒，而不是因为 DOM 不是标准链接就静默忽略。
 - Relay 设计交付研究强调开发者容易丢失设计意图；当前阶段更适合提高设计入口和状态的可追溯性，暂不把缩略图或模型化意图解释做成默认阻塞流程。
 
 ## 参考资料

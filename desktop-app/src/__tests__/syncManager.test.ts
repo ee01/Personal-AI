@@ -380,6 +380,7 @@ test('runNow skips placeholder todo and notice digests when itemCount is 0', asy
     status: 'skipped',
     errorMessage: 'No pending todos to sync / No notices to sync',
     packageKinds: ['todo_digest', 'notice_digest'],
+    packageItemCount: 0,
     sourceRefCount: 0,
   });
   assert.deepEqual(calls, ['render:todo_sync', 'render:notice_sync']);
@@ -723,6 +724,7 @@ test('runNow skips placeholder mobile briefing when itemCount is 0', async () =>
     status: 'skipped',
     errorMessage: 'No recent memory highlights to sync',
     packageKinds: ['active_focus_digest'],
+    packageItemCount: 0,
     sourceRefCount: 0,
   });
   assert.deepEqual(calls, ['render:mobile_briefing']);
@@ -817,6 +819,7 @@ test('runNow skips mobile briefing metadata-only packages', async () => {
     status: 'skipped',
     errorMessage: 'No mobile briefing bullets extracted',
     packageKinds: ['active_focus_digest'],
+    packageItemCount: 1,
     sourceRefCount: 1,
   });
   assert.deepEqual(calls, ['render:mobile_briefing']);
@@ -899,6 +902,7 @@ test('runNow skips placeholder stable memory when itemCount is 0', async () => {
     status: 'skipped',
     errorMessage: 'No stable memory items to sync',
     packageKinds: ['persona_core'],
+    packageItemCount: 0,
     sourceRefCount: 0,
   });
   assert.deepEqual(calls, ['render:stable_memory']);
@@ -1077,6 +1081,7 @@ test('runNow records recent manual sync attempts for audit display', async () =>
     status: 'skipped',
     errorMessage: 'No stable memory items to sync',
     packageKinds: ['persona_core'],
+    packageItemCount: 0,
     sourceRefCount: 0,
   });
   assert.equal(manager.getSnapshot().recentAttempts.length, 1);
@@ -1087,6 +1092,8 @@ test('runNow records recent manual sync attempts for audit display', async () =>
       status: manager.getSnapshot().recentAttempts[0].status,
       errorMessage: manager.getSnapshot().recentAttempts[0].errorMessage,
       packageKinds: manager.getSnapshot().recentAttempts[0].packageKinds,
+      packageItemCount:
+        manager.getSnapshot().recentAttempts[0].packageItemCount,
       sourceRefCount: manager.getSnapshot().recentAttempts[0].sourceRefCount,
     },
     {
@@ -1095,6 +1102,7 @@ test('runNow records recent manual sync attempts for audit display', async () =>
       status: 'skipped',
       errorMessage: 'No stable memory items to sync',
       packageKinds: ['persona_core'],
+      packageItemCount: 0,
       sourceRefCount: 0,
     },
   );

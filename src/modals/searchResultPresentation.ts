@@ -1,5 +1,15 @@
 const SAFE_SOURCE_PROTOCOLS = new Set(['http:', 'https:']);
 const UNSAFE_EXPLORE_ROUTE_VISIBLE_CHARS_PATTERN = /[\s<>"'`]/;
+const SEARCH_HIGHLIGHT_SPLIT_PATTERN = /[\s,.;:!?，。；：！？、()[\]{}<>"'`]+/;
+const MIN_SEARCH_HIGHLIGHT_TOKEN_LENGTH = 2;
+const MAX_SEARCH_HIGHLIGHT_TOKENS = 8;
+const ALLOWED_MEMORY_EXPLORE_PATHS = [
+  /^\/timeline$/,
+  /^\/topic\/[^/]+$/,
+  /^\/person\/[^/]+$/,
+  /^\/project\/[^/]+$/,
+  /^\/entity\/[^/]+$/,
+];
 
 export const MEMORY_RESULT_TYPE_CONFIG: Record<
   string,
@@ -27,6 +37,14 @@ const RECALL_CHANNEL_STATUS_LABELS: Record<string, string> = {
 
 const RECALL_CHANNEL_REASON_LABELS: Record<string, string> = {
   embedding_unavailable: '语义索引不可用',
+};
+
+const HTML_ESCAPE_MAP: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
 };
 
 export interface SearchResultTypeOption {
@@ -69,10 +87,80 @@ export interface MemoryScopeBreakdown {
   total: number;
 }
 
+export interface MemoryLinkSafetyState {
+  exploreRoute: string | null;
+  sourceUrl: string | null;
+  sourceHost: string;
+  blockedLabels: string[];
+}
+
 export function getScopeLabel(scope: unknown): string {
   if (scope === 'personal') return '个人记忆';
   if (scope === 'both' || scope === 'all') return '全部记忆';
   return '工作记忆';
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    (character) => HTML_ESCAPE_MAP[character],
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function getSearchHighlightTokens(query: unknown): string[] {
+  if (typeof query !== 'string') return [];
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return [];
+
+  const rawTokens = trimmedQuery
+    .split(SEARCH_HIGHLIGHT_SPLIT_PATTERN)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= MIN_SEARCH_HIGHLIGHT_TOKEN_LENGTH);
+  const tokens =
+    rawTokens.length > 0 && rawTokens.length <= MAX_SEARCH_HIGHLIGHT_TOKENS
+      ? rawTokens
+      : [trimmedQuery];
+  const seen = new Set<string>();
+
+  return tokens
+    .filter((token) => {
+      const key = token.toLocaleLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => right.length - left.length)
+    .slice(0, MAX_SEARCH_HIGHLIGHT_TOKENS);
+}
+
+export function renderHighlightedSearchText(
+  text: unknown,
+  query: unknown,
+): string {
+  const value = String(text ?? '');
+  if (!value) return '';
+
+  const tokens = getSearchHighlightTokens(query);
+  if (tokens.length === 0) return escapeHtml(value);
+
+  const pattern = new RegExp(tokens.map(escapeRegExp).join('|'), 'gi');
+  let highlighted = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value)) !== null) {
+    const index = match.index ?? 0;
+    highlighted += escapeHtml(value.slice(lastIndex, index));
+    highlighted += `<mark class="search-highlight">${escapeHtml(match[0])}</mark>`;
+    lastIndex = index + match[0].length;
+  }
+
+  highlighted += escapeHtml(value.slice(lastIndex));
+  return highlighted;
 }
 
 function getResultScope(
@@ -250,6 +338,25 @@ export function sanitizeMemoryExploreRoute(
     const code = char.charCodeAt(0);
     if (code < 32 || code === 127) return null;
   }
+  const routePath = value.slice(1);
+  if (!routePath.startsWith('/') || routePath.startsWith('//')) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(routePath, 'https://memory.local');
+  } catch (_error) {
+    return null;
+  }
+
+  if (
+    parsed.origin !== 'https://memory.local' ||
+    !ALLOWED_MEMORY_EXPLORE_PATHS.some((pattern) =>
+      pattern.test(parsed.pathname),
+    )
+  ) {
+    return null;
+  }
+
   return value;
 }
 
@@ -267,6 +374,44 @@ export function normalizeMemorySourceUrl(rawUrl?: unknown): string | null {
   } catch (_error) {
     return null;
   }
+}
+
+export function getMemorySourceHost(rawUrl?: unknown): string {
+  const safeUrl = normalizeMemorySourceUrl(rawUrl);
+  if (!safeUrl) return '';
+
+  try {
+    return new URL(safeUrl).host;
+  } catch (_error) {
+    return '';
+  }
+}
+
+export function getMemoryLinkSafetyState(input: {
+  exploreLink?: unknown;
+  sourceUrl?: unknown;
+}): MemoryLinkSafetyState {
+  const rawExploreLink =
+    typeof input.exploreLink === 'string' ? input.exploreLink.trim() : '';
+  const rawSourceUrl =
+    typeof input.sourceUrl === 'string' ? input.sourceUrl.trim() : '';
+  const exploreRoute = sanitizeMemoryExploreRoute(rawExploreLink);
+  const sourceUrl = normalizeMemorySourceUrl(rawSourceUrl);
+  const blockedLabels: string[] = [];
+
+  if (rawExploreLink && !exploreRoute) {
+    blockedLabels.push('记忆内跳转已隐藏：不支持的目标');
+  }
+  if (rawSourceUrl && !sourceUrl) {
+    blockedLabels.push('来源链接已隐藏：仅支持 http/https');
+  }
+
+  return {
+    exploreRoute,
+    sourceUrl,
+    sourceHost: getMemorySourceHost(sourceUrl),
+    blockedLabels,
+  };
 }
 
 export function shouldResetTypeFilter(

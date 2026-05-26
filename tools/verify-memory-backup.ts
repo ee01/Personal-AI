@@ -1,11 +1,16 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
+const requireFromMemoryService = createRequire(
+  new URL('../memory-service/package.json', import.meta.url),
+);
+const AdmZip = requireFromMemoryService('adm-zip');
 
 interface MemoryBackupManifest {
   format: string;
@@ -137,6 +142,18 @@ async function pathExists(targetPath: string): Promise<boolean> {
 async function unzipArchive(zipPath: string, outputDir: string): Promise<void> {
   await fs.mkdir(outputDir, { recursive: true });
   await execFile('unzip', ['-q', zipPath, '-d', outputDir]);
+}
+
+function createZipWithUnmanifestedUserFile(
+  sourceZipPath: string,
+  targetZipPath: string,
+): void {
+  const zip = new AdmZip(sourceZipPath);
+  zip.addFile(
+    'user/unmanifested.md',
+    Buffer.from('# Unmanifested\n\nThis file is not declared in manifest.json.\n'),
+  );
+  zip.writeZip(targetZipPath);
 }
 
 async function ensureOkResponse(response: Response, label: string): Promise<void> {
@@ -404,6 +421,33 @@ async function main(): Promise<void> {
     assert(
       invalidModeBody.includes('Import mode must be merge or replace'),
       'Invalid import mode response should explain the accepted modes',
+    );
+
+    const tamperedExportFilePath = path.join(exportDir, 'tampered-unmanifested.zip');
+    createZipWithUnmanifestedUserFile(exportFilePath, tamperedExportFilePath);
+    const tamperedExportBuffer = await fs.readFile(tamperedExportFilePath);
+    const tamperedForm = new FormData();
+    tamperedForm.append(
+      'file',
+      new Blob([tamperedExportBuffer], { type: 'application/zip' }),
+      'tampered-unmanifested.zip',
+    );
+    tamperedForm.append('dryRun', 'true');
+
+    const tamperedResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: tamperedForm,
+    });
+    const tamperedBody = await tamperedResponse.text();
+
+    assert(
+      tamperedResponse.status === 400,
+      'Import dry-run should reject files not declared in manifest',
+    );
+    assert(
+      tamperedBody.includes('Zip contains file not listed in manifest: user/unmanifested.md'),
+      'Unmanifested file response should explain the manifest mismatch',
     );
 
     const mergeForm = new FormData();

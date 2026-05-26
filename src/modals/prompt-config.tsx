@@ -15,6 +15,7 @@ import {
     buildIndependentUserConfigFootprint,
     buildIndependentUserConfigSummary,
     buildIndependentUserConfigPreview,
+    buildPreferenceInjectionReceipt,
     createConfigHistoryEntry,
     describeIndependentUserConfigChange,
     detectPromptImprovementHints,
@@ -337,6 +338,12 @@ const PromptConfig: React.FC = () => {
     );
     const preferenceFootprint = useMemo(
         () => buildIndependentUserConfigFootprint(configData, {
+            userContextScope: previewScope
+        }),
+        [configData, previewScope]
+    );
+    const preferenceReceipt = useMemo(
+        () => buildPreferenceInjectionReceipt(configData, {
             userContextScope: previewScope
         }),
         [configData, previewScope]
@@ -1091,7 +1098,7 @@ const PromptConfig: React.FC = () => {
                     </div>
                 </div>
                 <span>
-                    {configSummary.hasInjectablePreferences
+                    {preferenceFootprint.previewCharCount > 0
                         ? `清洗后 · ${preferenceFootprint.previewCharCount} 字符 · 约 ${preferenceFootprint.estimatedTokenCount} token`
                         : '未注入'}
                 </span>
@@ -1116,6 +1123,18 @@ const PromptConfig: React.FC = () => {
                     </label>
                 </div>
             )}
+            <div className="injection-receipt-grid" aria-label={`${preferenceReceipt.scopeLabel}注入回执`}>
+                {preferenceReceipt.items.map((item) => (
+                    <div
+                        key={item.id}
+                        className={`injection-receipt-item ${item.status}`}
+                    >
+                        <span>{item.statusLabel}</span>
+                        <strong>{item.label}</strong>
+                        <small>{item.detail}</small>
+                    </div>
+                ))}
+            </div>
             <pre className="prompt-preview">{injectedPreview}</pre>
         </div>
     );
@@ -2045,6 +2064,79 @@ const PromptConfig: React.FC = () => {
                 .risk-acknowledgement input {
                     flex: 0 0 auto;
                     margin-top: 2px;
+                }
+
+                .injection-receipt-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                    gap: 8px;
+                    margin-bottom: 12px;
+                }
+
+                .injection-receipt-item {
+                    min-width: 0;
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 3px 8px;
+                    align-items: start;
+                    padding: 9px 10px;
+                    border: 1px solid #d8dee4;
+                    border-left: 4px solid #8c959f;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #475569;
+                    line-height: 1.45;
+                }
+
+                .injection-receipt-item span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: #f1f5f9;
+                    color: #475569;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .injection-receipt-item strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .injection-receipt-item small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: #64748b;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .injection-receipt-item.included {
+                    border-left-color: #16a34a;
+                }
+
+                .injection-receipt-item.included span {
+                    background: #dcfce7;
+                    color: #166534;
+                }
+
+                .injection-receipt-item.excluded {
+                    border-left-color: #64748b;
+                    background: #f8fafc;
+                }
+
+                .injection-receipt-item.paused {
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                }
+
+                .injection-receipt-item.paused span {
+                    background: #fef3c7;
+                    color: #92400e;
                 }
 
                 .prompt-preview {

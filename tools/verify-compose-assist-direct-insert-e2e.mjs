@@ -109,13 +109,17 @@ function installChromeStub(page) {
                   '请结合下面上下文回答：\n\n目标：Factory AI rollout status\n\n相关记忆：\n1. Factory AI passed security approval, but production still needs RingCentral email login. [M1]',
                 evidence: [
                   {
-                    id: 'memory-1',
-                    type: 'chunk',
+                    id: 'rehearsal-1',
+                    type: 'rehearsal',
                     snippet:
                       'Factory AI passed security approval, but production still needs RingCentral email login.',
-                    sourceTitle: 'Factory AI rollout',
+                    sourceTitle: 'Factory AI rollout rehearsal',
                     sourceUrl: 'https://example.com/factory-ai-rollout',
                     exploreLink: '#/thread/factory-ai?focus=memory-1',
+                    whyRelevant: ['线索：Factory AI', '同会话'],
+                    evidenceRole: 'rehearsal_cue',
+                    reasonType: 'prospective_cue',
+                    displayPriority: 'p1',
                     links: [
                       {
                         label: '打开来源',
@@ -215,6 +219,9 @@ async function main() {
       confirmInsertButtons: document.querySelectorAll(
         '[data-action="confirm-insert"]',
       ).length,
+      cueLabels: document.querySelectorAll('.pai-composer-guard-cue').length,
+      cueText:
+        document.querySelector('.pai-composer-guard-cue')?.textContent || '',
       provenanceBlocks: document.querySelectorAll(
         '.pai-composer-guard-provenance',
       ).length,
@@ -223,13 +230,113 @@ async function main() {
       copyButtons: 0,
       dismissButtons: 0,
       confirmInsertButtons: 0,
+      cueLabels: 1,
+      cueText: '预演提醒 · 线索：Factory AI / 同会话',
       provenanceBlocks: 0,
     });
 
     await page.locator('.pai-composer-guard-icon-button').click();
     const composerText = await page.locator('#prompt-textarea').innerText();
     assert.match(composerText, /Factory AI passed security approval/);
+    await page.locator('.pai-composer-guard-undo-button').waitFor({
+      state: 'visible',
+      timeout: 3000,
+    });
+
+    await page.goto(fixtureUrl);
+    await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#prompt-textarea').click();
+    await page.locator('#prompt-textarea').fill('Before replace this after');
+    await page.waitForFunction(
+      () =>
+        window.__paiComposeAssistRequests?.some(
+          (request) => request.draftText === 'Before replace this after',
+        ),
+      null,
+      { timeout: 6000 },
+    );
+    await page.locator('.pai-composer-guard-icon-button').waitFor({
+      state: 'visible',
+      timeout: 6000,
+    });
+    await page.locator('#prompt-textarea').evaluate((element) => {
+      element.focus();
+      const textNode = element.firstChild;
+      if (!textNode) throw new Error('missing composer text node');
+      const text = textNode.textContent || '';
+      const start = text.indexOf('replace this');
+      if (start < 0) throw new Error('missing selection marker');
+      const range = document.createRange();
+      range.setStart(textNode, start);
+      range.setEnd(textNode, start + 'replace this'.length);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    await page.locator('.pai-composer-guard-icon-button').click();
+    const replacedComposerText = await page
+      .locator('#prompt-textarea')
+      .innerText();
+    assert.doesNotMatch(replacedComposerText, /replace this/);
+    assert.match(replacedComposerText, /Before/);
+    assert.match(replacedComposerText, /Factory AI passed security approval/);
+    assert.match(replacedComposerText, /after/);
+    assert.ok(
+      replacedComposerText.indexOf('Before') <
+        replacedComposerText.indexOf('Factory AI passed security approval'),
+      'inserted context should replace the selected draft range in place',
+    );
+    assert.ok(
+      replacedComposerText.indexOf('Factory AI passed security approval') <
+        replacedComposerText.indexOf('after'),
+      'draft text after the selection should be preserved after insertion',
+    );
+    await page.locator('.pai-composer-guard-undo-button').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector('#prompt-textarea')?.textContent ===
+        'Before replace this after',
+      null,
+      { timeout: 3000 },
+    );
     assert.equal(await page.locator('#pai-composer-guard-root').count(), 0);
+
+    await page.goto(fixtureUrl);
+    await page.addScriptTag({ path: contentScriptPath });
+    await page.locator('#prompt-textarea').click();
+    await page.locator('#prompt-textarea').fill('First rejected prompt');
+    await page.waitForFunction(
+      () =>
+        window.__paiComposeAssistRequests?.some(
+          (request) => request.draftText === 'First rejected prompt',
+        ),
+      null,
+      { timeout: 6000 },
+    );
+    await page.locator('.pai-composer-guard-icon-button').waitFor({
+      state: 'visible',
+      timeout: 6000,
+    });
+    await page.locator('.pai-composer-guard-icon-button').hover();
+    await page.locator('.pai-composer-guard-feedback-button').click();
+    await page.waitForFunction(
+      () => !document.querySelector('#pai-composer-guard-root'),
+      null,
+      { timeout: 3000 },
+    );
+    await page
+      .locator('#prompt-textarea')
+      .fill('Second unrelated prompt should still ask for assist');
+    await page.waitForFunction(
+      () =>
+        window.__paiComposeAssistRequests?.some(
+          (request) =>
+            request.draftText ===
+            'Second unrelated prompt should still ask for assist',
+        ),
+      null,
+      { timeout: 6000 },
+    );
 
     console.log('Compose Assist direct insert E2E passed.');
   } finally {

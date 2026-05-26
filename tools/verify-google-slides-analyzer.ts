@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {
   applyProjectUpdates,
+  getCurrentSlideIdFromUrl,
+  getProjectsFromSlideWithMetadata,
   ProjectUpdateSuggestion,
 } from '../src/slide';
 import { TableContentAnalyzerImpl } from '../src/analyzers/tableAnalyzer';
@@ -64,6 +66,16 @@ assert.equal(
 assert.deepEqual(
   extractJiraTicketKeys('MTR-123407: Project', 'See AIT2-11063 and MTR-123407 again', 'bad-123'),
   ['MTR-123407', 'AIT2-11063'],
+);
+
+assert.equal(
+  getCurrentSlideIdFromUrl('https://docs.google.com/presentation/d/presentation-1/edit#slide=id.slide-1'),
+  'slide-1',
+);
+
+assert.equal(
+  getCurrentSlideIdFromUrl('https://docs.google.com/presentation/d/presentation-1/edit#slide=id.g123456abcde_0_123'),
+  'g123456abcde_0_123',
 );
 
 assert.equal(includesRiskKeyword('No risk: launch is on track'), false);
@@ -795,6 +807,107 @@ assert.equal(nestedTextProject.projects[0].id, 'MTR-123500');
 assert.equal(nestedTextProject.projects[0].status, 'In progress');
 assert.equal(nestedTextProject.projects[0].owner, 'Ada');
 assert.equal(nestedTextProject.projects[0].comments, 'Need rollout plan');
+
+(globalThis as any).fetch = async (url: string, init: RequestInit) => {
+  assert.equal(url, 'https://slides.googleapis.com/v1/presentations/presentation-1');
+  assert.equal((init.headers as Record<string, string>).Authorization, 'Bearer token-1');
+
+  return {
+    ok: true,
+    json: async () => ({
+      presentationId: 'presentation-1',
+      slides: [
+        {
+          objectId: 'slide-1',
+          pageElements: [
+            {
+              objectId: 'table-slide-1',
+              table: {
+                tableRows: [
+                  {
+                    tableCells: [
+                      makeCell('Project'),
+                      makeCell('Status'),
+                      makeCell('Owner'),
+                      makeCell('Comments'),
+                    ],
+                  },
+                  {
+                    tableCells: [
+                      makeCell('MTR-123900: Scoped current slide'),
+                      makeCell('In progress'),
+                      makeCell('Ada'),
+                      makeCell('Current slide only'),
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          objectId: 'slide-2',
+          pageElements: [
+            {
+              objectId: 'table-slide-2',
+              table: {
+                tableRows: [
+                  {
+                    tableCells: [
+                      makeCell('Project'),
+                      makeCell('Status'),
+                      makeCell('Owner'),
+                      makeCell('Comments'),
+                    ],
+                  },
+                  {
+                    tableCells: [
+                      makeCell('MTR-123901: Fallback whole deck'),
+                      makeCell('Blocked'),
+                      makeCell('Ben'),
+                      makeCell('Fallback slide'),
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  };
+};
+
+const scopedExtraction = await getProjectsFromSlideWithMetadata(
+  'presentation-1',
+  'token-1',
+  undefined,
+  'https://docs.google.com/presentation/d/presentation-1/edit#slide=id.slide-1',
+);
+
+assert.equal(scopedExtraction.metadata.totalSlideCount, 2);
+assert.equal(scopedExtraction.metadata.analyzedSlideCount, 1);
+assert.equal(scopedExtraction.metadata.requestedSlideId, 'slide-1');
+assert.deepEqual(scopedExtraction.metadata.analyzedSlideIds, ['slide-1']);
+assert.deepEqual(scopedExtraction.metadata.warnings, []);
+assert.deepEqual(
+  scopedExtraction.projects.map(project => project.id),
+  ['MTR-123900'],
+);
+
+const wholeDeckExtraction = await getProjectsFromSlideWithMetadata(
+  'presentation-1',
+  'token-1',
+  undefined,
+  'https://docs.google.com/presentation/d/presentation-1/edit',
+);
+
+assert.equal(wholeDeckExtraction.metadata.analyzedSlideCount, 2);
+assert.match(wholeDeckExtraction.metadata.warnings.join('\n'), /整份演示文稿/);
+assert.deepEqual(
+  wholeDeckExtraction.projects.map(project => project.id),
+  ['MTR-123900', 'MTR-123901'],
+);
 
 const requestsSeen: any[] = [];
 

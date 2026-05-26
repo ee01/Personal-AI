@@ -19,10 +19,14 @@ import {
   extractDesignLinks,
   formatDesignStatusLabel,
   formatDesignUpdatedDate,
+  formatDesignUpdatedTooltip,
   getDesignAttentionLevel,
   getDesignDisplayLabel,
   getDesignDisplayStatusTone,
+  getDesignSourceSummary,
+  getDesignSourceTooltip,
   getDesignStatusTone,
+  getDesignStatusActionHint,
   getDesignSourceLabel,
   getUXEpicStatusTone,
   isMeaningfulDesignTitle,
@@ -401,8 +405,8 @@ function extractNativeDesignStatus(text: string): string | undefined {
 
   const statusPatterns: Array<[RegExp, string]> = [
     [/\bnot\s+ready\s+for\s+(?:dev|development|handoff|implementation)\b/i, 'Not ready for dev'],
+    [/\b(?:design\s+)?(?:updated|changed|outdated|out\s+of\s+sync|stale)\b/i, 'Design updated'],
     [/\bready\s+for\s+(?:dev|development|handoff|implementation)\b/i, 'Ready for dev'],
-    [/\bdesign\s+updated\b/i, 'Design updated'],
     [/\bready\s+for\s+review\b/i, 'Ready for review'],
     [/\bneeds\s+review\b/i, 'Needs review'],
     [/\bblocked\b/i, 'Blocked'],
@@ -419,8 +423,8 @@ function extractNativeDesignStatus(text: string): string | undefined {
 function stripNativeDesignStatusText(text: string): string {
   return text
     .replace(/\bnot\s+ready\s+for\s+(?:dev|development|handoff|implementation)\b/ig, ' ')
+    .replace(/\b(?:design\s+)?(?:updated|changed|outdated|out\s+of\s+sync|stale)\b/ig, ' ')
     .replace(/\bready\s+for\s+(?:dev|development|handoff|implementation)\b/ig, ' ')
-    .replace(/\bdesign\s+updated\b/ig, ' ')
     .replace(/\bready\s+for\s+review\b/ig, ' ')
     .replace(/\bneeds\s+review\b/ig, ' ')
     .replace(/\bblocked\b/ig, ' ')
@@ -520,6 +524,40 @@ function getNativeJiraDesignLinks(
   return nativeDesignLinks;
 }
 
+function getLinkedIssueHref(linkElement: Element): string {
+  if (linkElement instanceof HTMLAnchorElement) {
+    return linkElement.href || linkElement.getAttribute('href') || '';
+  }
+
+  const nestedLink = linkElement.querySelector<HTMLAnchorElement>('a[href]');
+  return nestedLink?.href || nestedLink?.getAttribute('href') || '';
+}
+
+function getLinkedIssueReference(linkElement: Element): { key: string; url: string } | null {
+  const href = getLinkedIssueHref(linkElement).trim();
+  const key = parseJiraIssueKeyFromUrl(href)
+    || parseJiraIssueKeyFromText(linkElement.getAttribute('data-issue-key'))
+    || parseJiraIssueKeyFromText(linkElement.getAttribute('aria-label'))
+    || parseJiraIssueKeyFromText(linkElement.textContent);
+  if (!key) return null;
+
+  const fallbackUrl = `/browse/${key}`;
+  if (!href || parseJiraIssueKeyFromUrl(href) !== key) {
+    return { key, url: fallbackUrl };
+  }
+
+  try {
+    const parsedHref = new URL(href, window.location.origin);
+    if (parsedHref.protocol === 'http:' || parsedHref.protocol === 'https:') {
+      return { key, url: href };
+    }
+  } catch {
+    // Fall through to the synthesized Jira issue URL.
+  }
+
+  return { key, url: fallbackUrl };
+}
+
 // 从DOM中查找linked issues中的UX tickets
 function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url: string; summary: string; source: 'linked_issues' }[] {
   const uxTickets: { key: string; url: string; summary: string; source: 'linked_issues' }[] = [];
@@ -530,17 +568,16 @@ function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url
   issueLinkSections.forEach(section => {
     const links = section.querySelectorAll('.issue-link-key');
     links.forEach(linkElement => {
-      const href = (linkElement as HTMLAnchorElement).href;
-      const key = parseJiraIssueKeyFromUrl(href) || parseJiraIssueKeyFromText(linkElement.textContent);
+      const reference = getLinkedIssueReference(linkElement);
       
-      if (key && matchesProjectPattern(key, projectPrefix) && href) {
+      if (reference && matchesProjectPattern(reference.key, projectPrefix)) {
         // 尝试获取summary
         const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
-        const summary = summaryElement?.textContent?.trim() || key;
+        const summary = summaryElement?.textContent?.trim() || reference.key;
         
         uxTickets.push({
-          key: key,
-          url: href,
+          key: reference.key,
+          url: reference.url,
           summary: summary,
           source: 'linked_issues'
         });
@@ -968,13 +1005,14 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
   if (designData.length === 0) return;
   
   const designLinksContainer = document.createElement('div');
+  const sourceSummary = getDesignSourceSummary(designData);
   
   // 获取扩展内的 icon 路径
   const iconUrl = chrome.runtime.getURL('icons/icon48.png');
 
   designLinksContainer.className = 'design-links-container';
   designLinksContainer.setAttribute('role', 'region');
-  designLinksContainer.setAttribute('aria-label', 'Design context');
+  designLinksContainer.setAttribute('aria-label', `Design context: ${sourceSummary}`);
   
   let linksHtml = '';
   designData.forEach((design, _index) => {
@@ -984,12 +1022,14 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       const linkLabel = getDesignDisplayLabel(design);
       const safeUrl = escapeAttribute(design.url);
       const designStatusLabel = formatDesignStatusLabel(design.status);
+      const designStatusHint = getDesignStatusActionHint(design.status);
       const statusTag = designStatusLabel
-        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(design.status)}">${escapeHtml(designStatusLabel)}</span>`
+        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(design.status)}" title="${escapeAttribute(designStatusHint || designStatusLabel)}">${escapeHtml(designStatusLabel)}</span>`
         : '';
       const updatedDateLabel = formatDesignUpdatedDate(design.updatedAt);
+      const updatedDateTooltip = formatDesignUpdatedTooltip(design.updatedAt);
       const updatedTag = updatedDateLabel
-        ? `<span class="design-updated-tag" title="${escapeAttribute(design.updatedAt)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
+        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.updatedAt || updatedDateLabel)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
         : '';
       linksHtml += `
         <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" data-design-attention="${escapeAttribute(designAttentionLevel)}" tabindex="-1">
@@ -1000,7 +1040,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
           </a>
           ${statusTag}
           ${updatedTag}
-          <span class="source-tag" title="${escapeAttribute(design.source)}">${escapeHtml(getDesignSourceLabel(design.source))}</span>
+          <span class="source-tag" title="${escapeAttribute(getDesignSourceTooltip(design.source))}">${escapeHtml(getDesignSourceLabel(design.source))}</span>
         </div>
       `;
     } else if (design.type === 'ux_ticket') {
@@ -1009,7 +1049,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       const uxEpicUrl = `/browse/${uxEpicDisplayKey}`;
       const shouldShowUxEpicLink = uxEpicDisplayKey !== design.uxTicketKey;
       const uxEpicStatusTone = design.uxEpicStatus ? getUXEpicStatusTone(design.uxEpicStatus) : null;
-      const sourceTag = `<span class="source-tag" title="${escapeAttribute(design.source)}">${escapeHtml(getDesignSourceLabel(design.source))}</span>`;
+      const sourceTag = `<span class="source-tag" title="${escapeAttribute(getDesignSourceTooltip(design.source))}">${escapeHtml(getDesignSourceLabel(design.source))}</span>`;
       const designLabel = design.designLabel || design.summary || design.uxTicketKey;
       const designContent = design.linkProvided && design.url
         ? `
@@ -1024,8 +1064,9 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
           </a>
         `;
       const designStatusText = design.linkProvided ? formatDesignStatusLabel(design.designStatus) : 'Missing link';
+      const designStatusHint = getDesignStatusActionHint(designStatusText);
       const designStatusTag = designStatusText
-        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(designStatusText)}">${escapeHtml(designStatusText)}</span>`
+        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(designStatusText)}" title="${escapeAttribute(designStatusHint || designStatusText)}">${escapeHtml(designStatusText)}</span>`
         : '';
       const statusTag = design.uxEpicStatus
         ? `
@@ -1043,8 +1084,9 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
         ? `<span class="ux-eta-tag" title="${design.uxEtaSource === 'duedate' ? 'Due date' : 'Fix Version'}">ETA: ${escapeHtml(design.uxEta)}</span>`
         : '';
       const updatedDateLabel = formatDesignUpdatedDate(design.designUpdatedAt);
+      const updatedDateTooltip = formatDesignUpdatedTooltip(design.designUpdatedAt);
       const updatedTag = updatedDateLabel
-        ? `<span class="design-updated-tag" title="${escapeAttribute(design.designUpdatedAt)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
+        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.designUpdatedAt || updatedDateLabel)}">Updated ${escapeHtml(updatedDateLabel)}</span>`
         : '';
 
       linksHtml += `
@@ -1067,7 +1109,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       ${linksHtml}
     </div>
     <div class="design-links-footer">
-      <span class="footer-text">Personal AI provided</span>
+      <span class="footer-text" title="${escapeAttribute(sourceSummary)}">Personal AI provided · ${escapeHtml(sourceSummary)}</span>
       <span class="author-text">by <a href="https://app.ringcentral.com/messages/49046011906" target="_blank" rel="noopener noreferrer">Esone</a></span>
     </div>
   `;
@@ -1172,6 +1214,7 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 12px;
     }
     .design-links-container:hover .design-links-footer {
       opacity: 1;
@@ -1180,6 +1223,10 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
     .footer-text {
       font-size: 12px;
       color: #666;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .author-text {
       font-size: 11px;
@@ -1429,13 +1476,12 @@ function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: str
   issueLinkSections.forEach(section => {
     const links = section.querySelectorAll('.issue-link-key');
     links.forEach(linkElement => {
-      const key = linkElement.textContent?.trim();
-      const href = (linkElement as HTMLAnchorElement).href;
+      const reference = getLinkedIssueReference(linkElement);
       
-      if (key && matchesProjectPattern(key, projectPrefix) && href) {
+      if (reference && matchesProjectPattern(reference.key, projectPrefix)) {
         const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');
-        const summary = summaryElement?.textContent?.trim() || key;
-        tickets.push({ key, url: href, summary });
+        const summary = summaryElement?.textContent?.trim() || reference.key;
+        tickets.push({ key: reference.key, url: reference.url, summary });
       }
     });
   });

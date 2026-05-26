@@ -86,6 +86,9 @@ async function startMemoryServiceFixture() {
     ) {
       const body = await readJsonBody(request);
       requests.push(body);
+      const duplicate = requests.filter(
+        (item) => item.chatId === body.chatId && item.postId === body.postId,
+      ).length > 1;
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
@@ -96,6 +99,8 @@ async function startMemoryServiceFixture() {
             sentChatId: body.chatId,
             sentPostId: body.postId,
           },
+          created: !duplicate,
+          reason: duplicate ? 'existing_message_reaction_session' : undefined,
         }),
       );
       return;
@@ -220,6 +225,79 @@ async function main() {
     }, { baseUrl: memoryFixture.baseUrl });
     await configPage.close();
 
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['envConfig']);
+      await chrome.storage.local.set({
+        envConfig: {
+          ...(result.envConfig || {}),
+          OPENCLAW_ENABLED: false,
+          OPENCLAW_BASE_URL: '',
+        },
+        pendingLinkedActionConfig: {
+          sender: 'Alicia Chen',
+          groupId: '12345',
+          groupName: 'Release Room',
+          content:
+            'Please follow up with the release owner before tomorrow noon.',
+          messageId: 'msg-1',
+          messageTimestamp: Date.parse('2026-05-15T09:30:00Z'),
+          timestamp: Date.now(),
+          messageLink: 'https://app.ringcentral.com/messages/12345/msg-1',
+        },
+      });
+    });
+    const linkedActionPage = await context.newPage();
+    await linkedActionPage.goto(
+      `chrome-extension://${extensionId}/topic-modal.html`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    await linkedActionPage.waitForSelector('.add-topic-form', {
+      timeout: 10_000,
+    });
+    assert.match(
+      await linkedActionPage.locator('.add-topic-form .text-input').inputValue(),
+      /Please follow up with the release owner/,
+    );
+    const linkedActionTextarea = linkedActionPage
+      .locator('.add-topic-form .automation-config textarea')
+      .first();
+    const linkedActionTextareaState = await linkedActionTextarea.evaluate(
+      (textarea) => ({
+        readOnly: textarea.readOnly,
+        ariaDisabled: textarea.getAttribute('aria-disabled'),
+        pointerEvents: window.getComputedStyle(textarea).pointerEvents,
+      }),
+    );
+    assert.deepEqual(linkedActionTextareaState, {
+      readOnly: false,
+      ariaDisabled: null,
+      pointerEvents: 'auto',
+    });
+    await linkedActionTextarea.fill(
+      '把当前消息整理成待激活的联动操作草稿，连接 OpenClaw 后再执行。',
+    );
+    assert.match(
+      (await linkedActionPage
+        .locator('.automation-offline-note')
+        .first()
+        .textContent()) || '',
+      /仍可先保存联动操作描述/,
+    );
+    await linkedActionPage.close();
+
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['envConfig']);
+      await chrome.storage.local.set({
+        envConfig: {
+          ...(result.envConfig || {}),
+          ENABLE_SNOOZE: false,
+          ENABLE_FOLLOW_THREAD: false,
+          ENABLE_AUTO_REPLY: false,
+          ENABLE_LINKED_ACTION: false,
+        },
+      });
+    });
+
     await context.route('https://app.ringcentral.com/messages/12345', (route) =>
       route.fulfill({
         status: 200,
@@ -241,11 +319,31 @@ async function main() {
 
     const message = page.locator('.conversation-card-wrapper[data-id="msg-1"]');
     await message.waitFor({ state: 'visible', timeout: 10_000 });
+
+    await message.hover();
+    await delay(4_300);
+    assert.equal(
+      await message.locator('.message-reaction-toolbar.visible').count(),
+      0,
+      'Toolbar should stay hidden when all message-reaction features start disabled',
+    );
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['envConfig']);
+      await chrome.storage.local.set({
+        envConfig: {
+          ...(result.envConfig || {}),
+          ENABLE_SNOOZE: true,
+          ENABLE_FOLLOW_THREAD: true,
+          ENABLE_AUTO_REPLY: true,
+          ENABLE_LINKED_ACTION: true,
+        },
+      });
+    });
     await page.waitForSelector('.message-reaction-toolbar', {
       state: 'attached',
       timeout: 12_000,
     });
-
+    await page.mouse.move(5, 5);
     await message.hover();
     const toolbar = page.locator('.message-reaction-toolbar.visible');
     await delay(1800);
@@ -646,6 +744,10 @@ async function main() {
       await page.locator('.followup-ask-target-value').textContent(),
       'Jordan Lee',
     );
+    assert.match(
+      (await page.locator('.followup-ask-run-summary').textContent()) || '',
+      /立即检查/,
+    );
     await page.locator('.followup-ask-submit').click();
     await page.waitForSelector('.followup-ask-textarea.input-error', {
       timeout: 3_000,
@@ -690,6 +792,53 @@ async function main() {
       '确认最终发布日期和是否需要额外资源',
     );
     assert.equal(capturedFollowup.messageCreatedAt, 1_778_841_000);
+    const reviewAction = page.locator('.snooze-toast-action', {
+      hasText: '查看追问',
+    });
+    await reviewAction.waitFor({ state: 'visible', timeout: 3_000 });
+    const reviewPagePromise = context.waitForEvent('page');
+    await reviewAction.click();
+    const reviewPage = await reviewPagePromise;
+    await reviewPage.waitForLoadState('domcontentloaded');
+    assert.match(
+      reviewPage.url(),
+      /memory-exploring\.html#\/outreach\/session-from-message$/,
+      'Follow-up success toast should link to the created Outreach session',
+    );
+    await reviewPage.close();
+
+    await page.mouse.move(5, 5);
+    await ownMessage.hover();
+    await ownMessage
+      .locator('.message-reaction-toolbar.visible')
+      .waitFor({ state: 'visible', timeout: 8_000 });
+    await ownMessage.locator('.followup-ask-btn').click();
+    await page.waitForSelector('.followup-ask-dialog', { timeout: 3_000 });
+    await page
+      .locator('#followup-ask-objective')
+      .fill('再次确认最终发布日期');
+    await page.locator('.followup-ask-submit').click();
+    await page.waitForFunction(
+      () => document.querySelectorAll('.followup-ask-overlay').length === 0,
+      null,
+      { timeout: 5_000 },
+    );
+    await page.waitForFunction(
+      () =>
+        document.body.textContent?.includes('这条消息已有跟进，未重复创建'),
+      null,
+      { timeout: 5_000 },
+    );
+    assert.equal(
+      await page.locator('.snooze-toast-action', { hasText: '查看追问' }).count(),
+      1,
+      'Duplicate follow-up toast should still offer a path to the existing session',
+    );
+    assert.equal(memoryFixture.requests.length, 2);
+    assert.equal(
+      memoryFixture.requests[1].informationGoal,
+      '再次确认最终发布日期',
+    );
 
     await page.mouse.move(5, 5);
     await message.hover();

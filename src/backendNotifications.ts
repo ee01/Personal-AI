@@ -7,6 +7,18 @@ export type BackendNotificationDeliveryStatus =
   | 'clicked'
   | 'dismissed';
 
+export type BackendNotificationDeliveryReason =
+  | 'new'
+  | 'retry_after_cooldown'
+  | 'previous_delivery_failed';
+
+export interface BackendNotificationDeliveryContext {
+  reason: BackendNotificationDeliveryReason;
+  lastStatus?: BackendNotificationDeliveryStatus;
+  lastAttemptAt?: number;
+  lastDeliveredAt?: number;
+}
+
 export interface BackendNotificationMeta {
   sourceRef: string;
   sourceType?: BackendNotificationSourceType;
@@ -35,15 +47,30 @@ export function buildBackendNotificationId(sourceRef: string): string {
   return `backend-${sourceRef.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 }
 
+function getStringPayloadValue(
+  payload: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 export function getBackendTargetHash(
   type?: string,
   sourceType?: BackendNotificationSourceType,
   sourceId?: string,
+  payload?: Record<string, unknown>,
 ): string {
   if (sourceType === 'proposed_action') {
     return sourceId
       ? `/actions?actionId=${encodeURIComponent(sourceId)}`
       : '/actions';
+  }
+  const confirmRequestId = getStringPayloadValue(payload, 'confirmRequestId');
+  if (sourceType === 'notification' && confirmRequestId) {
+    return `/decisions?confirmRequestId=${encodeURIComponent(
+      confirmRequestId,
+    )}`;
   }
   if (type === 'dream_digest' || type === 'weekly_report') {
     return '/dreams';
@@ -70,6 +97,19 @@ function formatDueAt(dueAt: number): string {
   const hour = rawHour < 10 ? `0${rawHour}` : String(rawHour);
   const minute = rawMinute < 10 ? `0${rawMinute}` : String(rawMinute);
   return `${month}/${day} ${hour}:${minute}`;
+}
+
+function getSnoozeReminderContextLabel(
+  payload?: Record<string, unknown>,
+): string | undefined {
+  const snooze = payload?.snooze;
+  if (!snooze || typeof snooze !== 'object') return undefined;
+
+  const count = (snooze as Record<string, unknown>).count;
+  if (typeof count === 'number' && Number.isFinite(count) && count > 1) {
+    return `第${Math.floor(count)}次稍后提醒`;
+  }
+  return '稍后提醒';
 }
 
 function compactNotificationText(raw: unknown, maxLength: number): string {
@@ -130,12 +170,23 @@ export function buildBackendNotificationContextMessage(
   lane: BackendNotificationLane,
   priority: BackendNotificationPriority,
   dueAt?: number,
+  deliveryContext?: BackendNotificationDeliveryContext,
+  payload?: Record<string, unknown>,
 ): string {
   const laneLabel = lane === 'todo' ? '待处理' : '通知';
   const priorityLabel = priority === 'high' ? '高优先级' : '普通';
   const parts = [`${laneLabel}`, `${priorityLabel}`];
   if (lane === 'todo' && typeof dueAt === 'number' && dueAt > 0) {
     parts.push(`截止 ${formatDueAt(dueAt)}`);
+  }
+  const snoozeLabel = getSnoozeReminderContextLabel(payload);
+  if (snoozeLabel) {
+    parts.push(snoozeLabel);
+  }
+  if (deliveryContext?.reason === 'retry_after_cooldown') {
+    parts.push('再次提醒');
+  } else if (deliveryContext?.reason === 'previous_delivery_failed') {
+    parts.push('上次发送失败');
   }
   return parts.join(' · ');
 }

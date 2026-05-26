@@ -1,6 +1,6 @@
 # Agent Workflow 智能工作流系统
 
-*最后更新: 2026-05-22*
+*最后更新: 2026-05-25*
 
 ## 功能概述
 
@@ -45,9 +45,9 @@ Agent Workflow 像一条消息处理流水线：一条消息进来后，先识�
 
 ## 配置体验
 
-Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数、启用工具数、首个执行阶段和记忆审计字段，并用按优先级排序的卡片展示每个 Agent 的阶段、状态、优先级和工具。页面会先做轻量配置检查，提示重复 Agent ID、启用但无工具、未注册工具、关系分析缺少前置实体，以及外部查询仍是占位实现等问题。
+Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数、启用工具数、首个执行阶段和记忆审计字段，并用按优先级排序的卡片展示每个 Agent 的阶段、状态、优先级和工具。页面会先做轻量配置检查，提示重复 Agent ID、启用但无工具、未注册工具、关系分析缺少前置实体，以及外部查询仍是占位实现等问题。运行时也会保护重复 Agent ID：同一个 ID 只保留配置列表中第一个启用 Agent，后续重复项会进入 skipped trace，并把 `storageReview.traceStatus` 标为 `partial`，避免旧自定义 Agent 覆盖默认阶段的存储、通知或重要性判断结果。
 
-页面提供“关注项测试”入口，可以手动输入消息，也可以从内置样例、最近 Memory Service 消息或本地保存样例中选择一条回放；默认会填入当前内置样例，用户第一次进入页面就能直接运行测试。回放会兼容 Memory Service 的秒级/毫秒级时间戳并保留群组 ID，最近消息标签会带上来源和相似度等上下文，方便选择真实样本。用户可以切换样例、手动编辑消息，也可以直接一键回放测试，预览存储、通知、置信度、复核状态、`storageReview` 存储原因、匹配规则、实体/关系摘要和每个 Agent/工具的执行 trace。当前输入可以保存到 `chrome.storage.local.agentWorkflowSavedScenarios`，若保存时已有测试结果，会同时记录存储、通知、复核、置信度、Trace 状态和匹配规则基线；再次运行同一保存样例时，结果区会显示基线对比，帮助发现规则或 Agent 配置变更后的行为漂移。保存样例支持一键批量回归：逐条运行当前样例集，汇总通过、变化、无基线和失败数量，并列出每个样例的漂移字段，便于在发布或修改规则前快速扫完高风险用例。每次测试会记录对应输入和 Agent 配置快照；如果用户在结果展示后改动消息、群组、时间或 Agent 配置，页面会提示当前看到的是上一次运行结果，并把主按钮切换为重新运行测试。测试结果会先展示“运行结论”，把本次运行压成就绪、复核、阻塞或无动作，并给出最应该处理的下一步；随后展示面向用户的决策路径，把关注项匹配、存储归因、通知复核和 trace 健康状态压缩成可读步骤；再给出“运行就绪检查”，把执行 trace、记忆写入、通知/自动化、规则动作、外部查询占位和慢 Agent/工具压成就绪/复核/阻塞/跳过的门禁结论；然后给出“下一步”动作，把低置信度复核、无动作规则命中、失败 Agent、工具错误、缺失通知归因、跳过工具、慢 Agent/工具、存储审计和通知/自动化确认转换为可执行提示；旁边仍保留运行诊断，集中提示低置信度复核、通知缺少规则归因、命中规则但没有后续动作、缺失 trace、失败 Agent、工具错误、跳过工具和慢 Agent/工具。存储审计区域会把失败 Agent、工具错误和跳过工具合并成一条异常摘要，方便用户先修旧配置再继续测试。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`，表单会校验 ID、工具选择并预览插入顺序；旧配置里没有 `enabled` 字段的自定义 Agent 会按启用处理，和 Options 的配置检查一致。
+页面提供“关注项测试”入口，可以手动输入消息，也可以从内置样例、最近 Memory Service 消息或本地保存样例中选择一条回放；默认会填入当前内置样例，用户第一次进入页面就能直接运行测试。回放会兼容 Memory Service 的秒级/毫秒级时间戳并保留群组 ID，最近消息标签会带上来源和相似度等上下文，方便选择真实样本。用户可以切换样例、手动编辑消息，也可以直接一键回放测试，预览存储、通知、置信度、复核状态、`storageReview` 存储原因、匹配规则、实体/关系摘要和每个 Agent/工具的执行 trace。当前输入可以保存到 `chrome.storage.local.agentWorkflowSavedScenarios`，若保存时已有测试结果，会同时记录存储、通知、复核、置信度、Trace 状态和匹配规则基线；再次运行同一保存样例时，结果区会显示基线对比，帮助发现规则或 Agent 配置变更后的行为漂移。保存样例支持一键批量回归：逐条运行当前样例集，汇总通过、变化、无基线和失败数量，并列出每个样例的漂移字段；单个保存样例跑出结果后，可以直接建立基线或接受当前结果为新基线；批量回归完成后，也可以一次性把变化项和无基线项的本次结果写回基线，避免预期变化长期停留在“变化”状态。每次测试会记录对应输入和 Agent 配置快照；如果用户在结果展示后改动消息、群组、时间或 Agent 配置，页面会提示当前看到的是上一次运行结果，并把主按钮切换为重新运行测试。测试结果会先展示“运行结论”，把本次运行压成就绪、复核、阻塞或无动作，并给出最应该处理的下一步；随后展示面向用户的决策路径，把关注项匹配、存储归因、通知复核和 trace 健康状态压缩成可读步骤；再给出“运行就绪检查”，把执行 trace、记忆写入、通知/自动化、规则动作、外部查询占位和慢 Agent/工具压成就绪/复核/阻塞/跳过的门禁结论；然后给出“下一步”动作，把低置信度复核、无动作规则命中、失败 Agent、工具错误、缺失通知归因、跳过工具、慢 Agent/工具、存储审计和通知/自动化确认转换为可执行提示；旁边仍保留运行诊断，集中提示低置信度复核、通知缺少规则归因、命中规则但没有后续动作、缺失 trace、失败 Agent、工具错误、跳过工具和慢 Agent/工具。存储审计区域会把失败 Agent、工具错误和跳过工具合并成一条异常摘要，方便用户先修旧配置再继续测试。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`，表单会校验 ID、工具选择并预览插入顺序；旧配置里没有 `enabled` 字段的自定义 Agent 会按启用处理，和 Options 的配置检查一致。
 
 ## 当前边界
 
@@ -65,7 +65,8 @@ Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数
 - [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/) 把 workflow、agent、tool、guardrail 等运行片段组织成 trace，并单独提醒敏感数据处理；[Human-in-the-loop](https://openai.github.io/openai-agents-js/guides/human-in-the-loop/) 则把需要审批的工具调用暂停并允许恢复。Agent Workflow 当前适合继续保留轻量 trace 摘要，把敏感原文留在消息本体而不是审计字段，同时在测试面板把 trace 转成“复核/修复/优化/确认”的下一步动作。
 - [LangSmith observability](https://docs.langchain.com/oss/python/langchain/observability) 强调按工具调用、提示和决策点追踪执行；Agent Workflow 的测试面板应继续把用户最关心的决策摘要前置，而不是只暴露原始 trace。
 - [OpenTelemetry GenAI agent spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/) 已把 agent、workflow、tool execution 作为可观测 span 建模，并提醒输入/输出内容可能包含敏感信息；Agent Workflow 的“运行结论”继续沿用轻量摘要，不默认把完整消息原文写进审计字段。
-- [LangSmith Evaluations](https://www.langchain.com/langsmith/evaluation) 把 curated datasets、版本对比和人工标注串在一起；Agent Workflow 当前先做本地保存样例和结果基线，后续再升级为批量回归。
+- [LangSmith Evaluations](https://www.langchain.com/langsmith/evaluation) 把 curated datasets、版本对比和人工标注串在一起；Agent Workflow 当前先做本地保存样例、结果基线和显式基线更新，后续再升级为可导出的批量回归。
+- [Laminar agent observability](https://laminar.sh/article/agent-observability) 强调从 trace 中抽取失败信号、沉淀为 eval dataset、再对比修复前后结果；Agent Workflow 的保存样例和基线更新优先覆盖这个轻量闭环。
 - [Regres.ai](https://regres.ai/) 强调对结构化 JSON 输出做字段级 diff 和审计记录；Agent Workflow 的保存样例因此只比较存储、通知、复核、Trace、规则和置信度这些会影响下游行为的字段。
 - Generative Agents 论文强调 observation、planning、reflection 对行为质量的作用；Reflexion 论文强调把反馈写入 episodic memory 改进后续决策。Agent Workflow 更适合先加入失败/误报反馈回流，而不是增加更多固定 Agent。
 - [AgentGraph](https://ojs.aaai.org/index.php/AAAI/article/view/42393) 和 [XAgen](https://arxiv.org/abs/2512.17896) 都把多 Agent trace 的可视化、失败定位和人工反馈作为核心体验；Agent Workflow 的 UI 继续优先展示决策路径、运行门禁和可复跑样例，而不是直接暴露完整日志。
@@ -77,5 +78,5 @@ Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数
 
 1. 把低置信度 `notificationReview` 接入一个真实复核队列，让用户可以确认、忽略并把反馈回流给关注项规则。
 2. 把 `externalServiceQuery` 拆成真实 Jira/Wiki adapter，并按工具能力在 UI 中标注“可执行外部副作用”。
-3. 为批量回归结果增加导出或固定基线更新入口，方便把高价值样例纳入更长期的发布前检查。
+3. 为批量回归结果增加导出入口，方便把高价值样例纳入更长期的发布前检查。
 4. 把 Options 里的 trace / storageReview / 运行诊断明细扩展到通知或记忆记录详情，让用户能从真实结果追溯每个 Agent 的判断。

@@ -1,6 +1,6 @@
 # RingCentral Native Join
 
-_最后更新: 2026-05-21_
+_最后更新: 2026-05-25_
 
 ## 是什么
 
@@ -8,11 +8,13 @@ _最后更新: 2026-05-21_
 
 当用户点击可识别的 `https://v.ringcentral.com/join/...`、`https://v.ringcentral.com/launcher/...` 或 `https://v.ringcentral.com/conf/on/...` 入口时，扩展会转换为 `rcvdt://join/...`，交给 macOS 上已安装的 RingCentral native client 处理。
 
-打开 native client 时，页面会显示可关闭的兜底浮层；如果本机 app 未安装、外部协议弹窗被取消，或 native client 没有正常接管，用户可以选择 `Join in browser`、复制浏览器会议链接，或直接从浮层中人工复制可见的浏览器链接。兜底浮层不会自动消失，避免用户处理系统外部协议弹窗后丢失恢复路径；如果用户几秒后仍停留在网页，浮层会把状态切换成更明确的恢复提示。`Join in browser` 会先打开新的浏览器窗口、断开 opener，再跳到 Web 会场；如果浏览器拦截了新窗口，会自动改为在当前 tab 打开。浏览器兜底会直接打开 `https://v.ringcentral.com/conf/on/:meetingId`，避开 RingCentral `/launcher/:meetingId` 中间页。
+打开 native client 时，页面会显示一个 `Opening RingCentral app...` 兜底浮层。默认认为用户已经交给本机 app 加会，所以浮层会在 5 秒后自动消失；用户也可以点右上角 `x` 手动关闭。5 秒内如果用户选择 `Join in browser`、复制浏览器会议链接，或切换默认加会路径，浮层会进入手动恢复状态并取消自动消失，避免恢复操作进行中被收走。`Join in browser` 会先打开新的浏览器窗口、断开 opener，再跳到 Web 会场；如果浏览器拦截了新窗口，会自动改为在当前 tab 打开。浏览器兜底会直接打开 `https://v.ringcentral.com/conf/on/:meetingId`，避开 RingCentral `/launcher/:meetingId` 中间页。
+
+浮层里的默认路径切换是可撤销的：点 `Use browser by default` 后会写入同一个 Native Join 开关，并立刻切换成 `Use app by default`，误点时不需要离开当前页面去 Options 找回。Glip rich invite 这类运行在页面上下文的入口会通过 content script 桥接写入 extension storage，避免按钮看似保存但实际没有改变默认路径。
 
 ## 大白话运行逻辑
 
-这个功能做的事很单一：用户点 RingCentral 网页里的入会链接时，优先尝试用本机 RingCentral app 打开；如果 native app 没接住，就把浏览器兜底入口留在页面上。
+这个功能做的事很单一：用户点 RingCentral 网页里的入会链接时，优先尝试用本机 RingCentral app 打开，并短暂保留浏览器兜底入口；如果用户没有使用兜底入口，浮层 5 秒后自动消失。
 
 结果主要受这些因素影响：
 
@@ -20,7 +22,7 @@ _最后更新: 2026-05-21_
 2. 链接是否可识别：只有可信 `v.ringcentral.com` 的 `/join`、`/launcher`、`/conf/on` 会被转换。
 3. meetingId 是否安全：异常 scheme、异常 path、过长或不安全 meeting id 不会透传给 native scheme。
 4. 浏览器外部协议策略：Chrome 可能要求用户确认打开 `rcvdt://`，扩展无法绕过。
-5. 兜底路径可用性：native 是否安装无法可靠探测，所以 Web fallback 必须一直可见。
+5. 兜底路径可用性：native 是否安装无法可靠探测，所以 5 秒自动消失前必须提供 Web fallback；一旦用户进入恢复操作，浮层必须取消自动消失。
 
 ## 开关
 
@@ -28,7 +30,7 @@ _最后更新: 2026-05-21_
 
 入口：`Options -> Meeting Pilot -> 优先用 RingCentral app 加会`
 
-默认开启。关闭后扩展不再拦截 RingCentral Web 的加会入口，恢复 RingCentral Web 原始点击行为。兜底浮层里的 `Use browser by default` 会写入同一个配置，相当于关闭 Options 里的这个开关。
+默认开启。关闭后扩展不再拦截 RingCentral Web 的加会入口，恢复 RingCentral Web 原始点击行为。兜底浮层里的 `Use browser by default` 会写入同一个配置，相当于关闭 Options 里的这个开关；保存后同一浮层会显示 `Use app by default`，可直接恢复 native app 优先。
 
 ## 覆盖范围
 
@@ -52,7 +54,7 @@ _最后更新: 2026-05-21_
 
 ## 产品参考
 
-- RingCentral、Teams 和 Zoom 都把浏览器加入作为无下载或失败恢复路径呈现；本功能保持 native 优先，但必须让 Web fallback 一直可见。
+- RingCentral、Teams 和 Zoom 都把浏览器加入作为无下载或失败恢复路径呈现；本功能保持 native 优先，同时把 Web fallback 做成短暂可见的恢复入口，默认 5 秒后收起，减少用户已用 app 加会后的网页噪音。
 - 深链研究和安全资料反复强调 deep link 覆盖、稳定性、失效反馈和 scheme hijack 风险；本功能只从可信 RingCentral Video host 提取 join URL，并尽量把失败恢复路径留在浏览器内。
 
 ## 边界

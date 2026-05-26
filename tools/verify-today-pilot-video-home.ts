@@ -84,6 +84,21 @@ function verifyVideoHomeUsesTodayPilot() {
     /generatedMode/,
     'Meeting Pilot generated mode handoff',
   );
+  assertContains(
+    videoHomeSource,
+    /MEETING_PREP_HANDOFFS_STORAGE_KEY/,
+    'Meeting Pilot multi-handoff cache key',
+  );
+  assertContains(
+    videoHomeSource,
+    /pruneMeetingPrepHandoffs/,
+    'Meeting Pilot handoff cache pruning',
+  );
+  assertContains(
+    videoHomeSource,
+    /MEETING_PREP_HANDOFF_MAX_ITEMS/,
+    'Meeting Pilot handoff cache bound',
+  );
 }
 
 function verifyBackgroundHandlers() {
@@ -121,6 +136,31 @@ function verifyMeetingPilotConsumption() {
     meetingPilotSource,
     /会前准备已带入/,
     'Meeting Pilot handoff copy',
+  );
+  assertContains(
+    meetingPilotSource,
+    /MEETING_PREP_HANDOFFS_STORAGE_KEY/,
+    'Meeting Pilot reads multi-handoff cache',
+  );
+  assertContains(
+    meetingPilotSource,
+    /selectMeetingPrepHandoffForSession/,
+    'Meeting Pilot selects best relevant handoff',
+  );
+  assertContains(
+    meetingPilotSource,
+    /getMeetingPrepHandoffMatchScore/,
+    'Meeting Pilot handoff relevance scoring',
+  );
+  assertContains(
+    meetingPilotSource,
+    /isMeetingPrepHandoffTimePlausible/,
+    'Meeting Pilot title-match time guard',
+  );
+  assertContains(
+    meetingPilotSource,
+    /eventStart - earlyWindowMs[\s\S]+eventEnd \+ lateWindowMs/,
+    'Meeting Pilot title handoff time window',
   );
 }
 

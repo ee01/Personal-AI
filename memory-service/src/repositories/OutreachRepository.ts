@@ -43,6 +43,7 @@ export type OutreachEventType =
   | 'no_reply'
   | 'escalated'
   | 'cancelled'
+  | 'retried'
   | 'failed';
 
 export interface OutreachTemplateRecord {

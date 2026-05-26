@@ -23,6 +23,9 @@ import OutreachSessions from './components/OutreachSessions.vue';
 import OutreachSessionDetail from './components/OutreachSessionDetail.vue';
 import MeetingHistoryPage from './components/MeetingHistoryPage.vue';
 import PersonalSkillsPage from './components/PersonalSkillsPage.vue';
+import RehearsalsPage from './components/RehearsalsPage.vue';
+import MemoryCoveragePage from './components/MemoryCoveragePage.vue';
+import StorylineDraftPage from './components/StorylineDraftPage.vue';
 
 // 路由配置
 const routes = [
@@ -44,8 +47,15 @@ const routes = [
     props: true,
   },
   { path: '/actions', name: 'ActionQueue', component: ActionQueue },
+  { path: '/rehearsals', name: 'Rehearsals', component: RehearsalsPage },
   { path: '/outreach', name: 'OutreachSessions', component: OutreachSessions },
   { path: '/skills', name: 'PersonalSkills', component: PersonalSkillsPage },
+  { path: '/coverage', name: 'MemoryCoverage', component: MemoryCoveragePage },
+  {
+    path: '/storylines/draft',
+    name: 'StorylineDraft',
+    component: StorylineDraftPage,
+  },
   {
     path: '/outreach/:id',
     name: 'OutreachSessionDetail',

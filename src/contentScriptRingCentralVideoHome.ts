@@ -1,11 +1,17 @@
 import type {
   CalendarEventSyncItem,
   ContextAssistResponse,
+  StorylineOpportunity,
   TodayPilotMeetingPrepRecord,
   TodayPilotMeetingPrepResolveResponse,
 } from './services/MemoryServiceClient';
 import { readRingCentralCalendarEvents } from './context-assist/ringCentralCalendar';
-import { normalizeEnvConfigShape, type EnvConfigType } from './utils';
+import {
+  DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+  filterSceneRehearsalSourceTypes,
+  normalizeEnvConfigShape,
+  type EnvConfigType,
+} from './utils';
 import {
   extractRingCentralVideoJoinUrl,
   isRingCentralNativeJoinEnabledFromConfig,
@@ -21,6 +27,11 @@ import {
 } from './web-intelligence/contextRecallGuards';
 
 const HOST_ID = 'pai-meeting-prep-host';
+const MEETING_PREP_HANDOFF_STORAGE_KEY = 'meetingPrepHandoff';
+const MEETING_PREP_HANDOFFS_STORAGE_KEY = 'meetingPrepHandoffs';
+const MEETING_PREP_HANDOFF_MAX_ITEMS = 8;
+const STORYLINE_DISMISS_STORAGE_KEY = 'storylineOpportunityDismissals';
+const STORYLINE_DISMISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DESCRIPTION_BOX_SELECTOR = [
   '#upcoming-meeting-detail-description-box',
   '[data-test-automation-id="upcoming-meeting-detail-description-box"]',
@@ -52,6 +63,20 @@ interface MeetingPrepState {
   error: string;
 }
 
+interface MeetingPrepHandoffStorageItem {
+  createdAt: number;
+  expiresAt: number;
+  event: CalendarEventSyncItem;
+  goal: string;
+  text: string;
+  cueCards: ContextAssistResponse['cueCards'];
+  evidence: ContextAssistResponse['evidence'];
+  source: 'today_pilot';
+  prepId?: string;
+  missionId?: string;
+  generatedMode?: string;
+}
+
 class RingCentralVideoHomePrep {
   private host: HTMLElement | null = null;
   private shadow: ShadowRoot | null = null;
@@ -65,6 +90,8 @@ class RingCentralVideoHomePrep {
   private nativeJoinConfigWatcherAttached = false;
   private nativeJoinInterceptorAttached = false;
   private config: EnvConfigType | null = null;
+  private storylineDismissals: Record<string, number> = {};
+  private storylineDismissalsLoaded = false;
   private state: MeetingPrepState = {
     enabled: true,
     events: [],
@@ -78,6 +105,7 @@ class RingCentralVideoHomePrep {
 
   async start(): Promise<void> {
     this.config = await this.loadConfig();
+    await this.loadStorylineDismissals();
     this.initNativeJoinConfig();
     this.initNativeJoinInterceptor();
 
@@ -121,6 +149,36 @@ class RingCentralVideoHomePrep {
       type: 'PERSONAL_AI_GET_ENV_CONFIG',
     }).catch(() => null);
     return normalizeEnvConfigShape(response?.envConfig || {});
+  }
+
+  private async loadStorylineDismissals(): Promise<void> {
+    if (this.storylineDismissalsLoaded) return;
+    this.storylineDismissalsLoaded = true;
+    try {
+      const stored = await chrome.storage.local.get([
+        STORYLINE_DISMISS_STORAGE_KEY,
+      ]);
+      const raw = stored?.[STORYLINE_DISMISS_STORAGE_KEY];
+      const nowMs = Date.now();
+      const next: Record<string, number> = {};
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        for (const [key, expiresAt] of Object.entries(
+          raw as Record<string, unknown>,
+        )) {
+          const numericExpiresAt = Number(expiresAt);
+          if (key && numericExpiresAt > nowMs) {
+            next[key] = numericExpiresAt;
+          }
+        }
+      }
+      this.storylineDismissals = next;
+      await chrome.storage.local.set({
+        [STORYLINE_DISMISS_STORAGE_KEY]: next,
+      });
+    } catch (error) {
+      console.debug('[TodayPilot] storyline dismissal load failed:', error);
+      this.storylineDismissals = {};
+    }
   }
 
   private initNativeJoinConfig(): void {
@@ -361,6 +419,11 @@ class RingCentralVideoHomePrep {
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           autoGenerate: false,
           forceGenerate: false,
+          sourceTypes: filterSceneRehearsalSourceTypes(
+            undefined,
+            this.config,
+            DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+          ),
         },
       });
       if (
@@ -391,20 +454,31 @@ class RingCentralVideoHomePrep {
   private async persistMeetingPilotHandoff(): Promise<void> {
     if (!this.state.selectedEvent || !this.state.assist?.insertText) return;
     if (!this.isPrepCurrent()) return;
+    const createdAt = Date.now();
+    const handoff: MeetingPrepHandoffStorageItem = {
+      createdAt,
+      expiresAt: createdAt + 12 * 60 * 60 * 1000,
+      event: this.state.selectedEvent,
+      goal: '',
+      text: this.state.assist.insertText,
+      cueCards: this.state.assist.cueCards,
+      evidence: this.state.assist.evidence,
+      source: 'today_pilot',
+      prepId: this.state.prep?.id,
+      missionId: this.state.prep?.missionId,
+      generatedMode: this.state.prep?.generatedMode,
+    };
+    const handoffKey = getMeetingPrepHandoffStorageKey(handoff);
+    const existing = await chrome.storage.local.get([
+      MEETING_PREP_HANDOFFS_STORAGE_KEY,
+    ]);
+    const handoffs = normalizeMeetingPrepHandoffStore(
+      existing?.[MEETING_PREP_HANDOFFS_STORAGE_KEY],
+    );
+    handoffs[handoffKey] = handoff;
     await chrome.storage.local.set({
-      meetingPrepHandoff: {
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 12 * 60 * 60 * 1000,
-        event: this.state.selectedEvent,
-        goal: '',
-        text: this.state.assist.insertText,
-        cueCards: this.state.assist.cueCards,
-        evidence: this.state.assist.evidence,
-        source: 'today_pilot',
-        prepId: this.state.prep?.id,
-        missionId: this.state.prep?.missionId,
-        generatedMode: this.state.prep?.generatedMode,
-      },
+      [MEETING_PREP_HANDOFF_STORAGE_KEY]: handoff,
+      [MEETING_PREP_HANDOFFS_STORAGE_KEY]: pruneMeetingPrepHandoffs(handoffs),
     });
   }
 
@@ -471,6 +545,10 @@ class RingCentralVideoHomePrep {
     const cueCards = displayAssist
       ? getDisplayCueCards(displayAssist, event, evidence.length)
       : [];
+    const storylineOpportunity =
+      displayAssist && prep
+        ? this.getVisibleStorylineOpportunity(displayAssist, prep, event)
+        : null;
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
     this.shadow.innerHTML = `
       <style>${styles()}</style>
@@ -513,6 +591,15 @@ class RingCentralVideoHomePrep {
               ? `<div class="pai-empty">${escapeHtml(
                   displayAssist.summary,
                 )}</div>`
+              : ''
+          }
+          ${
+            storylineOpportunity && prep
+              ? renderStorylineOpportunity(
+                  storylineOpportunity,
+                  prep,
+                  event,
+                )
               : ''
           }
           ${
@@ -576,7 +663,67 @@ class RingCentralVideoHomePrep {
       target?.closest<HTMLElement>('[data-action]')?.dataset.action;
     if (action === 'sync') {
       void this.refreshMeetingPrep();
+    } else if (action === 'storyline-generate') {
+      this.openStorylineDraft();
+    } else if (action === 'storyline-dismiss') {
+      void this.dismissStorylineOpportunity();
     }
+  }
+
+  private getVisibleStorylineOpportunity(
+    assist: ContextAssistResponse,
+    prep: TodayPilotMeetingPrepRecord,
+    event: CalendarEventSyncItem,
+  ): StorylineOpportunity | null {
+    const opportunity =
+      prep.storylineOpportunity || assist.storylineOpportunity || null;
+    if (
+      !opportunity?.available ||
+      opportunity.confidence < 0.55 ||
+      !opportunity.oneLineReason
+    ) {
+      return null;
+    }
+    const dismissKey = getStorylineDismissKey(prep, event);
+    if (dismissKey && this.storylineDismissals[dismissKey] > Date.now()) {
+      return null;
+    }
+    return opportunity;
+  }
+
+  private openStorylineDraft(): void {
+    const prep = this.state.prep;
+    const event = this.state.selectedEvent;
+    const assist = this.state.assist;
+    if (!prep || !event || !assist || !this.isPrepCurrent()) return;
+    const opportunity = this.getVisibleStorylineOpportunity(assist, prep, event);
+    if (!opportunity) return;
+    const params = new URLSearchParams({
+      source: 'today_meeting_prep',
+      prepId: prep.id,
+      target: opportunity.suggestedArtifact || 'speaker_notes',
+    });
+    if (opportunity.audienceHint) {
+      params.set('audience', opportunity.audienceHint);
+    }
+    const url = chrome.runtime.getURL(
+      `memory-exploring.html#/storylines/draft?${params.toString()}`,
+    );
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  private async dismissStorylineOpportunity(): Promise<void> {
+    const prep = this.state.prep;
+    const event = this.state.selectedEvent;
+    if (!prep || !event) return;
+    const dismissKey = getStorylineDismissKey(prep, event);
+    if (!dismissKey) return;
+    this.storylineDismissals[dismissKey] =
+      Date.now() + STORYLINE_DISMISS_TTL_MS;
+    await chrome.storage.local.set({
+      [STORYLINE_DISMISS_STORAGE_KEY]: this.storylineDismissals,
+    });
+    this.render();
   }
 
   private async refreshMeetingPrep(): Promise<void> {
@@ -1011,6 +1158,69 @@ function getEventKey(event: CalendarEventSyncItem | null): string | null {
   );
 }
 
+function getMeetingPrepHandoffStorageKey(
+  handoff: MeetingPrepHandoffStorageItem,
+): string {
+  return [
+    handoff.event.externalId,
+    handoff.event.seriesKey,
+    handoff.event.startTime,
+    handoff.prepId,
+  ]
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(String(part)))
+    .join('|');
+}
+
+function isMeetingPrepHandoffStorageItem(
+  value: unknown,
+): value is MeetingPrepHandoffStorageItem {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const item = value as Partial<MeetingPrepHandoffStorageItem>;
+  return Boolean(
+    Number.isFinite(Number(item.createdAt)) &&
+      Number.isFinite(Number(item.expiresAt)) &&
+      item.event &&
+      typeof item.event === 'object' &&
+      String((item.event as CalendarEventSyncItem).title || '').trim() &&
+      String(item.text || '').trim(),
+  );
+}
+
+function normalizeMeetingPrepHandoffStore(
+  value: unknown,
+): Record<string, MeetingPrepHandoffStorageItem> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  const store: Record<string, MeetingPrepHandoffStorageItem> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (isMeetingPrepHandoffStorageItem(item)) {
+      store[key] = item;
+    }
+  }
+  return store;
+}
+
+function pruneMeetingPrepHandoffs(
+  store: Record<string, MeetingPrepHandoffStorageItem>,
+): Record<string, MeetingPrepHandoffStorageItem> {
+  const nowMs = Date.now();
+  return Object.entries(store)
+    .filter(([, handoff]) => Number(handoff.expiresAt) > nowMs)
+    .sort((left, right) => right[1].createdAt - left[1].createdAt)
+    .slice(0, MEETING_PREP_HANDOFF_MAX_ITEMS)
+    .reduce<Record<string, MeetingPrepHandoffStorageItem>>(
+      (next, [key, handoff]) => {
+        next[key] = handoff;
+        return next;
+      },
+      {},
+    );
+}
+
 function escapeHtml(value: string | undefined): string {
   const div = document.createElement('div');
   div.textContent = value || '';
@@ -1208,6 +1418,70 @@ function renderMeetingMeta(event: CalendarEventSyncItem): string {
   return `<div class="pai-time">${escapeHtml(parts.join(' · '))}</div>`;
 }
 
+function getStorylineDismissKey(
+  prep: TodayPilotMeetingPrepRecord,
+  event: CalendarEventSyncItem,
+): string {
+  return [
+    'today_meeting_prep',
+    prep.id,
+    prep.sourceHash,
+    event.externalId || event.seriesKey || event.title,
+  ]
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(String(part)))
+    .join('|');
+}
+
+function renderStorylineOpportunity(
+  opportunity: StorylineOpportunity,
+  prep: TodayPilotMeetingPrepRecord,
+  event: CalendarEventSyncItem,
+): string {
+  const evidenceCount =
+    opportunity.evidenceClusters?.reduce(
+      (sum, cluster) => sum + cluster.evidenceCount,
+      0,
+    ) || prep.evidenceRefs.length;
+  const clusters = (opportunity.evidenceClusters || [])
+    .slice(0, 3)
+    .map((cluster) => cluster.label)
+    .join(' · ');
+  const meta = [
+    opportunity.audienceHint ? `受众：${opportunity.audienceHint}` : '',
+    evidenceCount ? `${evidenceCount} 条素材` : '',
+    opportunity.estimatedLengthMinutes
+      ? `约 ${opportunity.estimatedLengthMinutes} 分钟`
+      : '',
+  ].filter(Boolean);
+  const buttonLabel = opportunity.buttonLabel || '生成故事线草稿';
+  return `
+    <section class="pai-storyline" data-storyline-key="${escapeHtmlAttribute(
+      getStorylineDismissKey(prep, event),
+    )}">
+      <div class="pai-storyline-main">
+        <div class="pai-storyline-kicker">可生成 Storyline</div>
+        <div class="pai-storyline-reason">${escapeHtml(
+          opportunity.oneLineReason || '这场会有足够素材整理成可讲述故事线。',
+        )}</div>
+        ${
+          clusters || meta.length
+            ? `<div class="pai-storyline-meta">${escapeHtml(
+                [clusters, ...meta].filter(Boolean).join(' · '),
+              )}</div>`
+            : ''
+        }
+      </div>
+      <div class="pai-storyline-actions">
+        <button class="pai-primary" data-action="storyline-generate" type="button">${escapeHtml(
+          buttonLabel,
+        )}</button>
+        <button class="pai-secondary" data-action="storyline-dismiss" type="button">不需要</button>
+      </div>
+    </section>
+  `;
+}
+
 function styles(): string {
   return `
     :host {
@@ -1340,6 +1614,40 @@ function styles(): string {
     .pai-assist-output[hidden] {
       display: none !important;
     }
+    .pai-storyline {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid #bfdbfe;
+      border-radius: 6px;
+      background: #f0f7ff;
+    }
+    .pai-storyline-kicker {
+      color: #0b66b2;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 3px;
+    }
+    .pai-storyline-reason {
+      color: #1e293b;
+      font-weight: 700;
+      word-break: break-word;
+    }
+    .pai-storyline-meta {
+      margin-top: 4px;
+      color: #64748b;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .pai-storyline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
     .pai-cues {
       display: grid;
       gap: 8px;
@@ -1408,6 +1716,14 @@ function styles(): string {
       width: 14px;
       height: 14px;
       border-radius: 4px;
+    }
+    @media (max-width: 560px) {
+      .pai-storyline {
+        grid-template-columns: 1fr;
+      }
+      .pai-storyline-actions {
+        justify-content: flex-start;
+      }
     }
   `;
 }

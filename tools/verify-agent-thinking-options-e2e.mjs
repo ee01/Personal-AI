@@ -144,6 +144,24 @@ try {
   await page.locator('.agent-approval-review-hint', {
     hasText: '确认通知内容、接收渠道和触发原因后再批准。',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-policy-note', {
+    hasText: '只允许发送给项目告警渠道',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-decision-options', {
+    hasText: '处理方式',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-decision-options li', {
+    hasText: /批准[\s\S]*approvalKey/,
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-decision-options li', {
+    hasText: /拒绝[\s\S]*反馈给 Agent/,
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-decision-options li', {
+    hasText: /修改[\s\S]*不复用旧 key/,
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-approval-resume-note', {
+    hasText: '拒绝或修改参数时不要复用旧 key',
+  }).waitFor({ timeout: 12000 });
   await page.locator('.agent-approval-copy', {
     hasText: '复制 key',
   }).click();
@@ -168,6 +186,15 @@ try {
   await page.locator('.agent-run-review-item.warning', {
     hasText: '工具证据不足',
   }).waitFor({ timeout: 12000 });
+  const emptyEvidenceStepLink = page
+    .locator('.agent-run-review-item.warning', { hasText: '工具证据不足' })
+    .locator('.agent-run-review-step-links button')
+    .first();
+  await emptyEvidenceStepLink.waitFor({ timeout: 12000 });
+  await emptyEvidenceStepLink.click();
+  await page.locator('.thought-step.expanded', {
+    hasText: 'historySearch 已执行，但没有返回可用证据。',
+  }).waitFor({ timeout: 3000 });
   await page.locator('.agent-run-review-action', {
     hasText: '补齐必填参数',
   }).waitFor({ timeout: 12000 });
@@ -195,20 +222,23 @@ try {
       }),
     );
   assert.equal(await blockedHeader.getAttribute('aria-expanded'), 'true');
-  await page.locator('.thought-step.expanded .tool-result', {
+  const blockedStep = page.locator('.thought-step.expanded', {
+    hasText: 'orgStructure',
+  });
+  await blockedStep.locator('.tool-result', {
     hasText: '工具结果',
   }).waitFor({ timeout: 3000 });
-  await page.locator('.thought-step.expanded .thought-content', {
+  await blockedStep.locator('.thought-content', {
     hasText: '决策摘要',
   }).waitFor({ timeout: 3000 });
-  await page.locator('.thought-step.expanded .intent-content', {
+  await blockedStep.locator('.intent-content', {
     hasText: '调用意图',
   }).waitFor({ timeout: 3000 });
-  await page.locator('.thought-step.expanded .diagnostic-content', {
+  await blockedStep.locator('.diagnostic-content', {
     hasText: '执行前校验',
   }).waitFor({ timeout: 3000 });
   assert.equal(
-    await page.locator('.thought-step.expanded .thought-content', {
+    await blockedStep.locator('.thought-content', {
       hasText: '思考过程',
     }).count(),
     0,
@@ -223,16 +253,31 @@ try {
     hasText: 'messageNotification 需要人工确认，当前未执行。',
   }).waitFor({ timeout: 3000 });
   await approvalHeader.click();
-  await page.locator('.thought-step.expanded .diagnostic-content', {
+  const approvalStep = page.locator('.thought-step.expanded', {
+    hasText: 'messageNotification',
+  });
+  await approvalStep.locator('.diagnostic-content', {
     hasText: 'approval-tail-token-visible-in-ui',
   }).waitFor({ timeout: 3000 });
-  await page.locator('.thought-step.expanded .diagnostic-content', {
+  await approvalStep.locator('.diagnostic-content', {
     hasText: '批准 key: messageNotification',
   }).waitFor({ timeout: 3000 });
 
   await page.locator('.agent-result-summary', { hasText: '处理结果' }).waitFor({
     timeout: 12000,
   });
+  await page.locator('.agent-run-review-item.warning', {
+    hasText: '行动次数用完',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.agent-run-review-detail', {
+    hasText: /待确认 1 个步骤、被阻断 1 个步骤、证据不足 1 个步骤/,
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.decision', {
+    hasText: '预算耗尽',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.decision .node-detail', {
+    hasText: /预算用完时仍有待确认 1 个步骤、被阻断 1 个步骤、证据不足 1 个步骤/,
+  }).waitFor({ timeout: 12000 });
   await page.locator('.result-pending-approval', {
     hasText: '待确认动作未执行',
   }).waitFor({ timeout: 12000 });
@@ -253,9 +298,14 @@ try {
     '存在待确认通知动作时，结果区不应只显示未通知',
   );
   assert.equal(
-    await page.locator('.flow-node.decision', { hasText: '最终决策' }).count(),
+    await page.locator('.flow-node.decision', { hasText: '预算耗尽' }).count(),
     1,
-    '流程完成后应显示最终决策节点',
+    '预算耗尽后应显示预算终止节点',
+  );
+  assert.equal(
+    await page.locator('.flow-node.decision', { hasText: '最终决策' }).count(),
+    0,
+    '预算耗尽的演示不应误显示最终决策节点',
   );
   assert.equal(
     await page.locator('.agent-run-review-item', { hasText: '正在运行' }).count(),

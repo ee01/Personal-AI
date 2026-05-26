@@ -20,6 +20,7 @@ export interface LocalSkillSyncPlatformResult {
   imported: number;
   pulled: number;
   pushed: number;
+  externalChanges: number;
   skipped: number;
   errors: Array<{ slug?: string; error: string }>;
 }
@@ -105,6 +106,7 @@ export class LocalSkillSyncManager {
           imported: 0,
           pulled: 0,
           pushed: 0,
+          externalChanges: 0,
           skipped: 0,
           errors: [],
         });
@@ -122,6 +124,9 @@ export class LocalSkillSyncManager {
             version: record.version,
             sha256: record.sha256,
             mtime: record.mtime,
+            root: record.root,
+            directory: record.directory,
+            skillMdPath: record.skillMdPath,
             skillMd: record.skillMd,
             files: record.files,
           })),
@@ -146,6 +151,7 @@ export class LocalSkillSyncManager {
           imported: response.imported,
           pulled: response.pulled,
           pushed: response.pushed,
+          externalChanges: response.externalChanges,
           skipped: response.skipped,
           errors,
         });
@@ -158,6 +164,7 @@ export class LocalSkillSyncManager {
           imported: 0,
           pulled: 0,
           pushed: 0,
+          externalChanges: 0,
           skipped: 0,
           errors: [{ error: error instanceof Error ? error.message : String(error) }],
         });

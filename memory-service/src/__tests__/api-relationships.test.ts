@@ -319,6 +319,34 @@ describe('Relationships API', () => {
     expect(brief.matrix[1].matchStatus).toBe('未匹配');
   });
 
+  it('makes large meeting attendee truncation explicit', async () => {
+    const overflowAttendees = Array.from({ length: 17 }, (_, index) => ({
+      name: `Overflow Reviewer ${index + 1}`,
+      email: `overflow-${index + 1}@example.com`,
+    }));
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/meeting-brief',
+      payload: {
+        title: 'Large relationship review',
+        attendees: [{ email: 'alice@example.com' }, ...overflowAttendees],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const brief = res.json();
+    expect(brief.coverage.totalAttendees).toBe(18);
+    expect(brief.coverage.processedAttendees).toBe(16);
+    expect(brief.coverage.omittedAttendees).toBe(2);
+    expect(brief.coverage.matchedAttendees).toBe(1);
+    expect(brief.coverage.unmatchedAttendees).toBe(15);
+    expect(brief.attendees).toHaveLength(16);
+    expect(brief.omittedAttendees).toHaveLength(2);
+    expect(brief.omittedAttendees[0].displayName).toBe('Overflow Reviewer 16');
+    expect(brief.omittedAttendees[0].reason).toContain('前 16 位分析上限');
+    expect(brief.coverage.coverageNote).toContain('已分析前 16/18 位参会人');
+  });
+
   it('returns timeline and open loop evidence', async () => {
     const timeline = await app.inject({
       method: 'GET',

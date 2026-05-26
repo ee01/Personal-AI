@@ -40,6 +40,7 @@ describe('Context Recall API (POST /context-recall)', () => {
   });
 
   beforeEach(() => {
+    db.prepare('DELETE FROM conversation_context_frames').run();
     db.prepare('DELETE FROM memory_feedback_events').run();
     db.prepare('DELETE FROM memory_metadata').run();
     db.prepare('DELETE FROM messages_raw').run();
@@ -901,6 +902,190 @@ describe('Context Recall API (POST /context-recall)', () => {
     const ids = body.matches.map((match: any) => match.id);
     expect(ids).toContain('9001');
     expect(ids).toContain('9002');
+  });
+
+  it('resolves deictic RingCentral BE references from the current context', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const backendContent =
+      'Ivan said AI Generated VBG backend BE has pending work on RCV-148412 and RCV-148411 before it can be called ready.';
+    const dailyLimitContent =
+      'AI Generated VBG daily generation limit is 20 per day and retry-after should be returned on quota errors.';
+    const rows = [
+      {
+        id: 'vbg-backend-pending',
+        chunkId: 9060,
+        content: backendContent,
+        hash: 'hash-vbg-backend-pending',
+      },
+      {
+        id: 'vbg-daily-limit',
+        chunkId: 9061,
+        content: dailyLimitContent,
+        hash: 'hash-vbg-daily-limit',
+      },
+    ];
+
+    for (const row of rows) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, source_type, source_url, source_title, sender, group_id,
+           group_name, timestamp, importance, sentiment, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        row.id,
+        row.content,
+        'glip',
+        `https://app.ringcentral.com/messages/${row.id}`,
+        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        'Ivan Velencoso',
+        'vbg-group',
+        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        now - 600,
+        0.85,
+        'neutral',
+        JSON.stringify({
+          groupId: 'vbg-group',
+          groupName:
+            'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        }),
+        now - 600,
+      );
+      db.prepare(
+        `INSERT INTO chunks
+          (chunk_id, file_path, line_start, line_end, content, content_hash,
+           scope, source, source_type, related_project, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        row.chunkId,
+        `messages/${row.id}`,
+        1,
+        1,
+        row.content,
+        row.hash,
+        'work',
+        'glip',
+        'glip',
+        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        now - 600,
+      );
+      db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+        row.chunkId,
+        row.content,
+      );
+    }
+
+    db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, conversation_id, group_id, title, summary,
+         dominant_projects_json, topics_json, role_terms_json, source_anchors_json,
+         confidence, window_start, window_end, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'glip:vbg-group',
+      'glip',
+      'glip',
+      'vbg-group',
+      'vbg-group',
+      'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+      backendContent,
+      JSON.stringify([
+        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+      ]),
+      JSON.stringify(['VBG', 'AI Generated Background']),
+      JSON.stringify(['backend']),
+      JSON.stringify(['RCV-148412', 'RCV-148411']),
+      0.9,
+      now - 600,
+      now - 600,
+      now - 600,
+      now - 600,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'follow_thread',
+        contextType: 'message_thread',
+        primaryText: '那个 BE ready 了吗',
+        sourceContext: {
+          groupId: 'vbg-group',
+          conversationId: 'vbg-group',
+          title:
+            'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        },
+        currentContext: {
+          groupId: 'vbg-group',
+          conversationId: 'vbg-group',
+          visibleMessages: [
+            {
+              sender: 'Ivan',
+              text: 'For AI Generated VBG, backend pending work is on the thread.',
+            },
+          ],
+        },
+        sourceTypes: ['glip'],
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.matches[0]?.id).toBe('9060');
+    expect(body.matches.map((match: any) => match.id)).toContain('9060');
+    expect(body.debug?.contextExpansion?.resolvedProject).toContain(
+      'AI-Generated VBGs',
+    );
+    expect(body.debug?.contextExpansion?.resolvedRole).toBe('backend');
+  });
+
+  it('does not show a passive bubble when a deictic backend reference is ambiguous', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [id, project] of [
+      ['glip:vbg-be', 'AI Generated VBG'],
+      ['glip:notes-be', 'AI Notes'],
+    ]) {
+      db.prepare(
+        `INSERT INTO conversation_context_frames
+          (id, surface, source_type, title, summary, dominant_projects_json,
+           role_terms_json, confidence, window_start, window_end, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        'glip',
+        'glip',
+        project,
+        `${project} backend BE status is being discussed.`,
+        JSON.stringify([project]),
+        JSON.stringify(['backend']),
+        0.8,
+        now - 300,
+        now - 300,
+        now - 300,
+        now - 300,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'follow_thread',
+        contextType: 'message_thread',
+        primaryText: '那个 BE ready 了吗',
+        sourceTypes: ['glip'],
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.matches).toEqual([]);
+    expect(body.topMatch).toBeNull();
+    expect(body.debug?.rejectedReason).toBe('ambiguous_context');
+    expect(body.debug?.contextExpansion?.ambiguity?.state).toBe('ambiguous');
   });
 
   it('responds quickly (<200ms in the in-memory test harness)', async () => {

@@ -14,6 +14,7 @@ const DIRECTORY_TREE = [
   'skills',
   'reflections',
   'reflection-threads',
+  'rehearsals',
   'dreams',
   'reports',
   'agent',

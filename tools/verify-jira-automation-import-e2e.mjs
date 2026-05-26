@@ -201,6 +201,12 @@ try {
   assert.match(previewText, /Detected environment bindings/);
   assert.match(previewText, /Enablement checks/);
   assert.match(previewText, /Review note/);
+  assert.match(previewText, /Activation plan/);
+  assert.match(previewText, /Map target-project search dependencies/);
+  assert.match(previewText, /Reconnect external effects and credentials/);
+  assert.match(previewText, /Test dynamic trigger behavior/);
+  assert.match(previewText, /Enablement review packet/);
+  assert.match(previewText, /Copy review packet/);
   assert.match(previewText, /Secrets/);
   assert.match(previewText, /Custom fields/);
   assert.match(previewText, /Connections/);
@@ -214,6 +220,9 @@ try {
   assert.match(previewText, /\/SRC\/release\/REDACTED\?apiToken=REDACTED/);
   assert.match(previewText, /Smart values/);
   assert.match(previewText, /I reviewed the high-risk bindings before creating this disabled copy/);
+
+  await frame.getByRole('button', { name: 'Copy review packet' }).click();
+  await frame.getByText('Review packet copied.').waitFor({ timeout: 5000 });
 
   const importDisabledCopyButton = frame.getByRole('button', { name: 'Import disabled copy' });
   assert.equal(await importDisabledCopyButton.isDisabled(), true);
@@ -253,6 +262,9 @@ try {
   assert.match(createPayload.description, /Imported as a disabled copy into TGT \(22222\)\./);
   assert.match(createPayload.description, /Detected bindings: .*custom field.*connection\/credential/);
   assert.match(createPayload.description, /Top detected bindings: .*JQL \/ filters \(1\): project = SRC/);
+  assert.match(createPayload.description, /Activation plan: .*Map target-project search dependencies/);
+  assert.match(createPayload.description, /Reconnect external effects and credentials/);
+  assert.match(createPayload.description, /Test dynamic trigger behavior/);
   assert.match(createPayload.description, /Secrets \(2\): release-webhook-token \| hidden secret value/);
   assert.match(createPayload.description, /Connections \(1\): connectionId: prod-webhook-connection/);
   assert.match(createPayload.description, /Sensitive \/ hidden values \(5\): URL query apiToken: sensitive value present \| URL path segment: sensitive value present, 3 more/);

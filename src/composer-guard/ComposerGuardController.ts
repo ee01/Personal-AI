@@ -1,36 +1,40 @@
 import {
   hasSensitiveUrlSignal,
   isSensitiveControlDescriptor,
-} from '../web-intelligence/contextRecallGuards';
+} from '../web-intelligence/contextRecallGuards.js';
 import {
+  captureComposerTextSnapshot,
   findActiveComposerContext,
   insertTextIntoComposer,
   isComposerElement,
   readComposerText,
-} from './siteContextAdapters';
+  restoreComposerTextSnapshot,
+  type ComposerTextSnapshot,
+} from './siteContextAdapters.js';
 import {
   DEFAULT_ASSIST_CONFIDENCE_THRESHOLD,
   getComposerAssistPreviewText,
   getNextComposerAssistThreshold,
   normalizeComposerAssistThreshold,
   sanitizeComposerAssistInsertText,
-} from './assistPreviewPolicy';
+} from './assistPreviewPolicy.js';
 import {
   CONFIDENCE_THRESHOLD_CONFIG_KEY,
   ENV_CONFIG_KEY,
   isComposerAssistEnabledFromConfig,
-} from './assistConfig';
+} from './assistConfig.js';
 import type {
   ComposerAssistRequest,
   ComposerAssistResponse,
   ComposerTarget,
   SiteContextSnapshot,
-} from './types';
+} from './types.js';
 
 const ROOT_ID = 'pai-composer-guard-root';
 const STYLE_ID = 'pai-composer-guard-styles';
 const REQUEST_DEBOUNCE_MS = 700;
 const DISMISS_TTL_MS = 30 * 60 * 1000;
+const INSERT_UNDO_TTL_MS = 10 * 1000;
 const FEEDBACK_EVENTS_KEY = 'composerGuardFeedbackEvents';
 const MAX_FEEDBACK_EVENTS = 100;
 const ICON_SIZE = 24;
@@ -65,10 +69,46 @@ interface ComposerGuardFeedbackEvent {
   contextKey?: string;
 }
 
+interface ComposerGuardFeedbackContext {
+  assist: ComposerAssistResponse | null;
+  contextKey?: string;
+  snapshot?: SiteContextSnapshot;
+}
+
+interface PendingInsertionUndo {
+  target: ComposerTarget;
+  before: ComposerTextSnapshot;
+  contextKey: string;
+  feedbackContext: ComposerGuardFeedbackContext;
+}
+
 function escapeHtml(text: string): string {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function getDraftContextSignature(draftText: string): string {
+  const normalized = draftText.replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (!normalized) return 'empty';
+
+  let hash = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = ((hash << 5) - hash + normalized.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function buildSessionContextKey(
+  snapshot: SiteContextSnapshot,
+  target: ComposerTarget,
+  draftText: string,
+): string {
+  const baseKey = `${snapshot.contextKey}|${target.mode || 'composer'}`;
+  if (snapshot.contextType !== 'web_agent_prompt') {
+    return baseKey;
+  }
+  return `${baseKey}|draft:${getDraftContextSignature(draftText)}`;
 }
 
 function looksLikeSendableComposerText(text?: string): boolean {
@@ -79,6 +119,14 @@ function looksLikeSendableComposerText(text?: string): boolean {
   if (/^我补充一下相关背景[:：]/.test(cleaned)) return false;
   if (/Personal AI context|Please review/i.test(cleaned)) return false;
   return true;
+}
+
+function getRehearsalCueLabel(assist: ComposerAssistResponse): string | null {
+  const rehearsal = assist.evidence.find((item) => item.type === 'rehearsal');
+  if (!rehearsal) return null;
+  const reasons = rehearsal.whyRelevant?.filter(Boolean).slice(0, 2) ?? [];
+  const suffix = reasons.length ? ` · ${reasons.join(' / ')}` : '';
+  return `预演提醒${suffix}`;
 }
 
 function isSensitiveEditableElement(element: HTMLElement): boolean {
@@ -164,11 +212,14 @@ export class ComposerGuardController {
   private latestAssist: ComposerAssistResponse | null = null;
   private requestTimer: number | null = null;
   private positionTimer: number | null = null;
+  private undoTimer: number | null = null;
   private requestSeq = 0;
   private dismissedContexts = new Map<string, number>();
   private assistConfidenceThreshold = DEFAULT_ASSIST_CONFIDENCE_THRESHOLD;
   private configLoaded = false;
   private composeAssistEnabled = false;
+  private pendingInsertionUndo: PendingInsertionUndo | null = null;
+  private restoringSnapshot = false;
 
   start(): void {
     if (hasSensitiveUrlSignal(window.location.href)) {
@@ -223,6 +274,7 @@ export class ComposerGuardController {
   };
 
   private handleInput = (event: Event): void => {
+    if (this.restoringSnapshot) return;
     if (!this.canRunComposerAssist()) {
       this.clearIfConfigReadyAndDisabled();
       return;
@@ -283,9 +335,11 @@ export class ComposerGuardController {
     }
 
     const draftText = readComposerText(context.target);
-    const contextKey = `${context.snapshot.contextKey}|${
-      context.target.mode || 'composer'
-    }`;
+    const contextKey = buildSessionContextKey(
+      context.snapshot,
+      context.target,
+      draftText,
+    );
     if (this.isDismissed(contextKey)) {
       this.clear();
       return;
@@ -337,13 +391,24 @@ export class ComposerGuardController {
   private refreshActiveDraft(): boolean {
     if (!this.activeSession) return false;
     const nextDraftText = readComposerText(this.activeSession.target);
-    const changed = nextDraftText !== this.activeSession.draftText;
+    const draftChanged = nextDraftText !== this.activeSession.draftText;
+    const nextContextKey = buildSessionContextKey(
+      this.activeSession.snapshot,
+      this.activeSession.target,
+      nextDraftText,
+    );
+    const contextChanged = nextContextKey !== this.activeSession.contextKey;
     this.activeSession.draftText = nextDraftText;
-    if (changed) {
+    if (draftChanged || contextChanged) {
+      this.activeSession.contextKey = nextContextKey;
       this.activeSession.draftRevision += 1;
     }
     this.positionRoot();
-    return changed;
+    if (contextChanged && this.isDismissed(nextContextKey)) {
+      this.clear();
+      return false;
+    }
+    return draftChanged || contextChanged;
   }
 
   private scheduleAssistRequest = (): void => {
@@ -364,6 +429,7 @@ export class ComposerGuardController {
     const session = this.activeSession;
     const requestSeq = ++this.requestSeq;
     const draftRevision = session.draftRevision;
+    const contextKey = session.contextKey;
 
     const payload = this.buildAssistRequest(session);
 
@@ -394,7 +460,7 @@ export class ComposerGuardController {
 
       if (
         requestSeq !== this.requestSeq ||
-        this.activeSession?.contextKey !== session.contextKey ||
+        this.activeSession?.contextKey !== contextKey ||
         this.activeSession?.draftRevision !== draftRevision
       ) {
         return;
@@ -471,12 +537,15 @@ export class ComposerGuardController {
 
   private render(state: GuardState): void {
     if (!this.activeSession || !this.latestAssist) return;
+    this.clearInsertionUndo(true);
 
     const root = this.ensureRoot();
+    root.className = 'pai-composer-guard';
     root.dataset.state = state;
     const assist = this.latestAssist;
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
     const preview = this.buildSuggestionPreview(assist);
+    const cueLabel = getRehearsalCueLabel(assist);
 
     root.innerHTML = `
       <button class="pai-composer-guard-icon-button" data-action="insert" type="button" title="插入建议内容">
@@ -492,6 +561,11 @@ export class ComposerGuardController {
             </svg>
           </button>
         </div>
+        ${
+          cueLabel
+            ? `<div class="pai-composer-guard-cue">${escapeHtml(cueLabel)}</div>`
+            : ''
+        }
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
       </div>
     `;
@@ -535,13 +609,23 @@ export class ComposerGuardController {
 
   private insertLatestAssist(): void {
     if (!this.activeSession || !this.latestAssist?.insertText) return;
+    const target = this.activeSession.target;
+    const before = captureComposerTextSnapshot(target);
+    const contextKey = this.activeSession.contextKey;
+    const feedbackContext = this.getCurrentFeedbackContext();
     const insertText = sanitizeComposerAssistInsertText(
       this.latestAssist.insertText,
     );
     if (!insertText) return;
-    void this.recordAssistFeedback('accepted');
-    insertTextIntoComposer(this.activeSession.target, insertText);
+    const inserted = insertTextIntoComposer(target, insertText);
+    if (!inserted) return;
     this.clear();
+    this.showInsertionUndo({
+      target,
+      before,
+      contextKey,
+      feedbackContext,
+    });
   }
 
   private async loadComposerGuardConfig(): Promise<void> {
@@ -560,9 +644,19 @@ export class ComposerGuardController {
     );
   }
 
-  private async recordAssistFeedback(kind: AssistFeedbackKind): Promise<void> {
-    const session = this.activeSession;
-    const assist = this.latestAssist;
+  private getCurrentFeedbackContext(): ComposerGuardFeedbackContext {
+    return {
+      assist: this.latestAssist,
+      contextKey: this.activeSession?.contextKey,
+      snapshot: this.activeSession?.snapshot,
+    };
+  }
+
+  private async recordAssistFeedback(
+    kind: AssistFeedbackKind,
+    feedbackContext = this.getCurrentFeedbackContext(),
+  ): Promise<void> {
+    const { assist, contextKey, snapshot } = feedbackContext;
     const result = await getChromeLocal<{
       envConfig?: Record<string, unknown>;
       composerGuardFeedbackEvents?: ComposerGuardFeedbackEvent[];
@@ -585,10 +679,10 @@ export class ComposerGuardController {
       thresholdAfter: nextThreshold,
       confidence: assist?.confidence,
       suggestionType: assist?.suggestionType,
-      surface: session?.snapshot.surface,
-      scenario: session?.snapshot.scenario,
-      contextType: session?.snapshot.contextType,
-      contextKey: session?.contextKey,
+      surface: snapshot?.surface,
+      scenario: snapshot?.scenario,
+      contextType: snapshot?.contextType,
+      contextKey,
     };
     const events = Array.isArray(result.composerGuardFeedbackEvents)
       ? result.composerGuardFeedbackEvents
@@ -635,6 +729,7 @@ export class ComposerGuardController {
       window.clearTimeout(this.requestTimer);
       this.requestTimer = null;
     }
+    this.clearInsertionUndo(true);
     this.setTargetGlow(false);
     this.activeSession = null;
     this.latestAssist = null;
@@ -643,6 +738,7 @@ export class ComposerGuardController {
   }
 
   private removeAffordance(): void {
+    this.clearInsertionUndo(true);
     this.setTargetGlow(false);
     this.root?.remove();
     this.root = null;
@@ -659,9 +755,67 @@ export class ComposerGuardController {
     if (this.positionTimer != null) return;
     this.positionTimer = window.setTimeout(() => {
       this.positionTimer = null;
-      this.positionRoot();
+      if (this.activeSession) {
+        this.positionRoot();
+      } else if (this.pendingInsertionUndo) {
+        this.positionUndoRoot(this.pendingInsertionUndo.target);
+      }
     }, 80);
   };
+
+  private showInsertionUndo(undo: PendingInsertionUndo): void {
+    this.clearInsertionUndo(false);
+    this.pendingInsertionUndo = undo;
+    const root = this.ensureRoot();
+    root.className = 'pai-composer-guard pai-composer-guard--undo';
+    root.dataset.state = 'undo';
+    root.innerHTML = `
+      <div class="pai-composer-guard-undo-toast" role="status">
+        <span>已插入</span>
+        <button class="pai-composer-guard-undo-button" data-action="undo-insert" type="button">撤销</button>
+      </div>
+    `;
+    root
+      .querySelector('[data-action="undo-insert"]')
+      ?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.restoreLastInsertion();
+      });
+    this.positionUndoRoot(undo.target);
+    this.undoTimer = window.setTimeout(() => {
+      this.clearInsertionUndo(true);
+    }, INSERT_UNDO_TTL_MS);
+  }
+
+  private restoreLastInsertion(): void {
+    const undo = this.pendingInsertionUndo;
+    if (!undo) return;
+    this.clearInsertionUndo(false);
+    this.dismissedContexts.set(undo.contextKey, Date.now());
+    this.restoringSnapshot = true;
+    try {
+      restoreComposerTextSnapshot(undo.target, undo.before);
+    } finally {
+      this.restoringSnapshot = false;
+    }
+  }
+
+  private clearInsertionUndo(commitAccepted: boolean): void {
+    const undo = this.pendingInsertionUndo;
+    if (this.undoTimer != null) {
+      window.clearTimeout(this.undoTimer);
+      this.undoTimer = null;
+    }
+    this.pendingInsertionUndo = null;
+    if (this.root?.dataset.state === 'undo') {
+      this.root.remove();
+      this.root = null;
+    }
+    if (commitAccepted && undo) {
+      void this.recordAssistFeedback('accepted', undo.feedbackContext);
+    }
+  }
 
   private positionRoot(): void {
     if (!this.root || !this.activeSession) return;
@@ -713,7 +867,10 @@ export class ComposerGuardController {
   private getTargetAnchorRect(): DOMRect | null {
     const targetElement = this.activeSession?.target.element;
     if (!targetElement) return null;
+    return this.getAnchorRectForElement(targetElement);
+  }
 
+  private getAnchorRectForElement(targetElement: HTMLElement): DOMRect | null {
     const candidates: HTMLElement[] = [targetElement];
     const anchorSelectors = [
       '.ql-container',
@@ -754,6 +911,27 @@ export class ComposerGuardController {
     return null;
   }
 
+  private positionUndoRoot(target: ComposerTarget): void {
+    if (!this.root) return;
+    const rect = this.getAnchorRectForElement(target.element);
+    if (!rect) {
+      this.clearInsertionUndo(true);
+      return;
+    }
+    const top = clamp(
+      rect.top + ICON_INSET,
+      VIEWPORT_MARGIN,
+      Math.max(VIEWPORT_MARGIN, window.innerHeight - 36 - VIEWPORT_MARGIN),
+    );
+    const left = clamp(
+      rect.right - 112,
+      VIEWPORT_MARGIN,
+      Math.max(VIEWPORT_MARGIN, window.innerWidth - 112 - VIEWPORT_MARGIN),
+    );
+    this.root.style.top = `${top}px`;
+    this.root.style.left = `${left}px`;
+  }
+
   private injectStyles(): void {
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement('style');
@@ -770,6 +948,37 @@ export class ComposerGuardController {
         font-size: 12px;
         line-height: 1.35;
         pointer-events: auto;
+      }
+      #${ROOT_ID}.pai-composer-guard--undo {
+        width: auto;
+        height: auto;
+      }
+      .pai-composer-guard-undo-toast {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 28px;
+        padding: 5px 7px 5px 9px;
+        border: 1px solid rgba(17, 24, 39, 0.12);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: 0 10px 24px rgba(17, 24, 39, 0.16);
+        color: #374151;
+        white-space: nowrap;
+      }
+      .pai-composer-guard-undo-button {
+        margin: 0;
+        border: 0;
+        border-radius: 5px;
+        padding: 3px 6px;
+        background: rgba(198, 40, 40, 0.08);
+        color: #c62828;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .pai-composer-guard-undo-button:hover {
+        background: rgba(198, 40, 40, 0.14);
       }
       .pai-composer-guard-icon-button {
         display: flex;
@@ -847,6 +1056,16 @@ export class ComposerGuardController {
       .pai-composer-guard-label {
         color: #c62828;
         font-weight: 700;
+      }
+      .pai-composer-guard-cue {
+        margin: 0 0 7px;
+        padding: 5px 7px;
+        border-radius: 6px;
+        background: rgba(15, 118, 110, 0.08);
+        color: #0f766e;
+        font-size: 11px;
+        font-weight: 650;
+        overflow-wrap: anywhere;
       }
       .pai-composer-guard-feedback-button {
         display: inline-flex;

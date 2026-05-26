@@ -696,6 +696,9 @@ describe('Personal Skill Library API', () => {
   });
 
   it('syncs local Desktop App platforms bidirectionally through Memory Service', async () => {
+    const codexRoot = '/Users/skill-user/.codex/skills';
+    const meetingPrepDir = path.join(codexRoot, 'meeting-prep');
+    const meetingPrepSkillMdPath = path.join(meetingPrepDir, 'SKILL.md');
     await app.inject({
       method: 'PUT',
       url: '/api/v1/skills/sync-settings/codex',
@@ -748,6 +751,9 @@ describe('Personal Skill Library API', () => {
             version: 'v1',
             sha256: filesystemSha,
             mtime: 1,
+            root: codexRoot,
+            directory: meetingPrepDir,
+            skillMdPath: meetingPrepSkillMdPath,
             skillMd: installPackage.skillMd,
             files: [],
           },
@@ -776,8 +782,17 @@ describe('Personal Skill Library API', () => {
             version: 'v2',
             sha256: 'local-v2-sha',
             mtime: 9_999_999_999,
+            root: codexRoot,
+            directory: meetingPrepDir,
+            skillMdPath: meetingPrepSkillMdPath,
             skillMd: '# Meeting Prep\n\nUpdated locally.',
-            files: [],
+            files: [
+              {
+                path: 'scripts/brief.js',
+                content: 'console.log("brief");\n',
+                byteSize: 22,
+              },
+            ],
           },
         ],
       },
@@ -803,6 +818,16 @@ describe('Personal Skill Library API', () => {
     expect(externalChange).toMatchObject({
       status: 'suggestion',
       reviewRequired: true,
+    });
+    expect(externalChange.bindings[0].metadata).toMatchObject({
+      source: 'desktop_app_fs',
+      sourceRoot: codexRoot,
+      sourceDirectory: meetingPrepDir,
+      skillMdPath: meetingPrepSkillMdPath,
+      fileCount: 1,
+      totalByteSize: 22,
+      externalChangeFor: expect.any(String),
+      originalSlug: 'meeting-prep',
     });
 
     const applyRes = await app.inject({

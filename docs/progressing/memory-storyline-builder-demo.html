@@ -1,0 +1,1267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>故事线编排器 · memory-exploring tab demo</title>
+  <!--
+    与现有 memory-exploring.vue 同构：sidebar (entity-types) + main-content。
+    Storyline 作为 /storylines 路由的 tab，不是弹窗。
+    Surface 入口（会前准备 banner / Compose Assist / Slides Analyzer / Memory Lens）
+    都 deep-link 到这里 #/storylines/:projectId。
+  -->
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      color-scheme: dark;
+      --ink: #f8fafc;
+      --ink-2: #e2e8f0;
+      --muted: #94a3b8;
+      --muted-2: #64748b;
+      --line: rgba(148, 163, 184, 0.12);
+      --line-strong: rgba(148, 163, 184, 0.24);
+      --panel: rgba(15, 23, 42, 0.6);
+      --panel-2: rgba(15, 23, 42, 0.78);
+      --panel-3: rgba(30, 41, 59, 0.55);
+      --panel-soft: rgba(15, 23, 42, 0.35);
+      --accent: #60a5fa;
+      --accent-2: #a78bfa;
+      --accent-3: #34d399;
+      --teal: #2dd4bf;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --code-bg: rgba(2, 6, 23, 0.65);
+    }
+
+    html, body { height: 100%; }
+    body {
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+      color: var(--ink);
+      overflow-x: hidden;
+      min-height: 100vh;
+    }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button { background: transparent; border: 0; cursor: pointer; }
+    h1, h2, h3, h4, p { margin: 0; }
+    a { color: inherit; }
+
+    /* ============ memory-exploring shell ============ */
+    .memory-container {
+      display: flex;
+      min-height: 100vh;
+    }
+    .sidebar {
+      width: 280px;
+      flex-shrink: 0;
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(20px);
+      border-right: 1px solid var(--line);
+      padding: 2rem 0;
+    }
+    .sidebar-header {
+      padding: 0 2rem 1.6rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .logo {
+      font-size: 1.4rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .sidebar-note {
+      margin-top: 0.7rem;
+      color: #cbd5e1;
+      font-size: 0.78rem;
+      line-height: 1.55;
+    }
+    .memory-user-status {
+      margin-top: 0.9rem;
+      padding: 0.55rem 0.7rem;
+      border-radius: 0.55rem;
+      background: rgba(34, 197, 94, 0.08);
+      border: 1px solid rgba(34, 197, 94, 0.22);
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-size: 0.72rem;
+    }
+    .memory-user-dot {
+      width: 0.45rem; height: 0.45rem;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
+      animation: pulse 1.8s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+      70% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+    }
+    .memory-user-value { font-weight: 700; color: var(--ink-2); }
+    .memory-user-label { color: var(--muted); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; }
+
+    .entity-types { padding: 1.2rem 0; }
+    .entity-type {
+      display: flex;
+      align-items: center;
+      padding: 0.65rem 2rem;
+      margin: 0.2rem 0;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      border-left: 3px solid transparent;
+      text-decoration: none;
+      color: inherit;
+    }
+    .entity-type:hover {
+      background: rgba(59, 130, 246, 0.08);
+      border-left-color: var(--accent);
+    }
+    .entity-type.active {
+      background: rgba(167, 139, 250, 0.18);
+      border-left-color: var(--accent-2);
+    }
+    .entity-icon { width: 1.5rem; margin-right: 0.7rem; font-size: 1.05rem; text-align: center; }
+    .entity-name { flex: 1; font-size: 0.92rem; font-weight: 500; }
+    .entity-subnote { font-size: 0.7rem; color: var(--muted); margin-top: 1px; }
+    .entity-count {
+      background: rgba(167, 139, 250, 0.22);
+      color: var(--accent-2);
+      padding: 0.18rem 0.5rem;
+      border-radius: 0.7rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .sidebar-divider { margin: 0.8rem 1.6rem; border: none; border-top: 1px solid var(--line); }
+
+    /* ============ main content ============ */
+    .main-content {
+      flex: 1;
+      padding: 1.4rem 1.8rem 2rem;
+      overflow-y: auto;
+      height: 100vh;
+      max-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      min-width: 0;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .page-eyebrow {
+      color: var(--accent);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .page-title {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 1.45rem;
+      font-weight: 700;
+      margin-top: 0.3rem;
+    }
+    .page-title-mark {
+      width: 2.1rem; height: 2.1rem;
+      border-radius: 0.55rem;
+      background: linear-gradient(135deg, rgba(96,165,250,0.32), rgba(167,139,250,0.32));
+      border: 1px solid rgba(167, 139, 250, 0.45);
+      display: grid; place-items: center;
+      font-size: 1.1rem;
+    }
+    .page-subtitle {
+      margin-top: 0.4rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.55;
+      max-width: 760px;
+    }
+    .page-subtitle code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--code-bg);
+      color: #cbd5e1;
+      font-size: 0.78rem;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+    }
+    .trigger-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.42rem 0.7rem;
+      border-radius: 999px;
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.32);
+      color: var(--green);
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .trigger-chip .dot {
+      width: 0.4rem; height: 0.4rem;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+      animation: pulse 1.6s infinite;
+    }
+    .segmented {
+      display: inline-flex;
+      gap: 0.15rem;
+      padding: 0.18rem;
+      border-radius: 0.55rem;
+      border: 1px solid var(--line-strong);
+      background: var(--panel-soft);
+    }
+    .segmented button {
+      padding: 0.4rem 0.7rem;
+      border-radius: 0.4rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .segmented button.active {
+      color: var(--ink);
+      background: rgba(96, 165, 250, 0.18);
+    }
+    .btn {
+      padding: 0.45rem 0.75rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--line-strong);
+      background: rgba(15, 23, 42, 0.55);
+      color: var(--ink-2);
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .btn:hover { background: rgba(30, 41, 59, 0.75); border-color: rgba(96,165,250,0.4); }
+    .btn.primary {
+      color: #0b1220;
+      background: linear-gradient(135deg, #60a5fa, #a78bfa);
+      border-color: transparent;
+    }
+    .btn.primary:hover { filter: brightness(1.05); }
+    .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+    .btn.ghost:hover { color: var(--ink); background: rgba(59, 130, 246, 0.08); }
+
+    /* ============ coverage strip ============ */
+    .coverage-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.7rem;
+      padding: 0.85rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+    }
+    .metric {
+      padding: 0.55rem 0.7rem;
+      border-radius: 0.55rem;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid var(--line);
+    }
+    .metric .label {
+      color: var(--muted);
+      font-size: 0.66rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .metric .value {
+      margin-top: 0.25rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .metric .sub { color: var(--muted); font-size: 0.7rem; margin-top: 0.1rem; }
+    .metric.ok .value { color: var(--accent); }
+    .metric.warn .value { color: var(--amber); }
+    .metric.alert .value { color: var(--red); }
+
+    /* ============ workspace 3-col ============ */
+    .workspace {
+      display: grid;
+      grid-template-columns: 288px minmax(0, 1fr) 320px;
+      gap: 1rem;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 0.75rem;
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.75rem 0.95rem;
+      border-bottom: 1px solid var(--line);
+      background: rgba(15, 23, 42, 0.45);
+    }
+    .panel-head .title { font-size: 0.85rem; font-weight: 700; }
+    .panel-head .meta { color: var(--muted); font-size: 0.7rem; }
+    .panel-body {
+      padding: 0.85rem;
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* ---- LEFT: scenarios + clusters ---- */
+    .scenario {
+      width: 100%;
+      text-align: left;
+      padding: 0.65rem 0.7rem;
+      border-radius: 0.55rem;
+      border: 1px solid var(--line);
+      background: rgba(15, 23, 42, 0.45);
+      color: var(--ink-2);
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .scenario:hover { border-color: rgba(96,165,250,0.42); }
+    .scenario.active {
+      border-color: rgba(167, 139, 250, 0.55);
+      background: rgba(167, 139, 250, 0.12);
+    }
+    .scenario .row-1 {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;
+    }
+    .scenario .type-pill {
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: var(--accent);
+      background: rgba(96, 165, 250, 0.16);
+      border: 1px solid rgba(96, 165, 250, 0.32);
+    }
+    .scenario .from {
+      font-size: 0.66rem; color: var(--muted);
+    }
+    .scenario h4 {
+      margin-top: 0.35rem;
+      font-size: 0.85rem;
+      line-height: 1.35;
+    }
+    .scenario .time { color: var(--muted); font-size: 0.7rem; margin-top: 0.2rem; }
+    .scenario .progress {
+      margin-top: 0.5rem;
+      display: flex; gap: 0.3rem; align-items: center;
+      color: var(--muted); font-size: 0.68rem;
+    }
+    .scenario .bar {
+      flex: 1; height: 4px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.18);
+      overflow: hidden;
+    }
+    .scenario .bar span {
+      display: block; height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    }
+
+    .group-label {
+      margin: 0.85rem 0 0.4rem;
+      color: var(--muted);
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .cluster {
+      padding: 0.65rem 0.75rem;
+      border-radius: 0.55rem;
+      border: 1px solid var(--line);
+      background: rgba(15, 23, 42, 0.4);
+      margin-bottom: 0.45rem;
+    }
+    .cluster .row {
+      display: flex; justify-content: space-between; gap: 0.4rem;
+    }
+    .cluster .name { font-size: 0.8rem; font-weight: 600; }
+    .cluster .count {
+      font-size: 0.66rem; color: var(--muted); font-weight: 600;
+    }
+    .cluster .desc {
+      margin-top: 0.25rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      line-height: 1.5;
+    }
+    .cluster .coverage {
+      margin-top: 0.55rem;
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.66rem; color: var(--muted);
+    }
+    .cluster .coverage .bar {
+      flex: 1; height: 4px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.18);
+      overflow: hidden;
+    }
+    .cluster .coverage .bar span {
+      display: block; height: 100%;
+      background: linear-gradient(90deg, var(--accent-3), var(--accent));
+    }
+
+    /* ---- CENTER: canvas ---- */
+    .canvas-head {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 0.6rem;
+      padding: 0.95rem 1.05rem 0.7rem;
+    }
+    .canvas-head h2 {
+      font-size: 1.15rem; line-height: 1.3;
+      max-width: 540px;
+    }
+    .canvas-head .audience {
+      margin-top: 0.3rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }
+    .canvas-head .chip-row {
+      display: flex; flex-wrap: wrap; gap: 0.3rem;
+      margin-top: 0.5rem;
+    }
+    .canvas-body {
+      padding: 0 1rem 1rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .timeline {
+      position: relative;
+      padding-left: 1.6rem;
+      display: grid;
+      gap: 0.65rem;
+    }
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 0.55rem; top: 0.4rem; bottom: 0.4rem;
+      width: 2px;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2), #ef4444);
+      border-radius: 999px;
+      opacity: 0.55;
+    }
+    .segment {
+      position: relative;
+      width: 100%;
+      text-align: left;
+      padding: 0.85rem 0.95rem;
+      border-radius: 0.7rem;
+      border: 1px solid var(--line);
+      background: rgba(15, 23, 42, 0.55);
+      color: inherit;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .segment::before {
+      content: "";
+      position: absolute;
+      left: -1.35rem; top: 1.1rem;
+      width: 0.85rem; height: 0.85rem;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.9), 0 0 0 4px rgba(96, 165, 250, 0.32);
+    }
+    .segment[data-boundary="internal_only"]::before { background: var(--amber); box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.9), 0 0 0 4px rgba(245, 158, 11, 0.32); }
+    .segment[data-boundary="needs_redaction"]::before { background: var(--red); box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.9), 0 0 0 4px rgba(239, 68, 68, 0.32); }
+    .segment.active {
+      border-color: rgba(96, 165, 250, 0.55);
+      background: rgba(96, 165, 250, 0.08);
+      transform: translateX(2px);
+    }
+    .segment .row-meta {
+      display: flex; gap: 0.4rem; align-items: center;
+      color: var(--muted);
+      font-size: 0.66rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .segment h3 {
+      margin-top: 0.3rem;
+      font-size: 0.95rem;
+      line-height: 1.35;
+    }
+    .segment p {
+      margin-top: 0.4rem;
+      color: var(--ink-2);
+      font-size: 0.82rem;
+      line-height: 1.6;
+    }
+    .segment .seg-foot {
+      margin-top: 0.6rem;
+      display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.18rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--accent);
+      background: rgba(96, 165, 250, 0.14);
+      border: 1px solid rgba(96, 165, 250, 0.28);
+    }
+    .chip.green { color: var(--green); background: rgba(34, 197, 94, 0.14); border-color: rgba(34, 197, 94, 0.32); }
+    .chip.amber { color: var(--amber); background: rgba(245, 158, 11, 0.14); border-color: rgba(245, 158, 11, 0.32); }
+    .chip.red { color: var(--red); background: rgba(239, 68, 68, 0.14); border-color: rgba(239, 68, 68, 0.32); }
+    .chip.purple { color: var(--accent-2); background: rgba(167, 139, 250, 0.14); border-color: rgba(167, 139, 250, 0.32); }
+    .chip.neutral { color: var(--muted); background: rgba(148, 163, 184, 0.1); border-color: var(--line-strong); }
+
+    /* ---- RIGHT inspector ---- */
+    .inspector-section { border-bottom: 1px solid var(--line); padding: 0.85rem 0.95rem; }
+    .inspector-section:last-of-type { border-bottom: 0; }
+    .inspector-section .label {
+      color: var(--muted);
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .inspector-section h3 {
+      margin-top: 0.35rem;
+      font-size: 0.95rem;
+      line-height: 1.35;
+    }
+    .inspector-section p.body {
+      margin-top: 0.5rem;
+      color: var(--ink-2);
+      font-size: 0.78rem;
+      line-height: 1.6;
+    }
+    .draft-area {
+      width: 100%;
+      min-height: 130px;
+      margin-top: 0.6rem;
+      padding: 0.65rem 0.75rem;
+      border-radius: 0.55rem;
+      border: 1px solid var(--line-strong);
+      background: rgba(2, 6, 23, 0.45);
+      color: var(--ink-2);
+      font-size: 0.78rem;
+      line-height: 1.55;
+      resize: vertical;
+    }
+    .evidence {
+      padding: 0.55rem 0.65rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.35);
+      margin-top: 0.4rem;
+    }
+    .evidence .row1 {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.7rem; color: var(--muted);
+    }
+    .evidence .source {
+      padding: 0.1rem 0.35rem;
+      border-radius: 0.3rem;
+      background: rgba(96, 165, 250, 0.12);
+      color: var(--accent);
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 0.6rem;
+    }
+    .evidence .title {
+      margin-top: 0.2rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--ink-2);
+    }
+    .evidence .desc {
+      margin-top: 0.25rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      line-height: 1.5;
+    }
+    .gap {
+      padding: 0.5rem 0.65rem;
+      border-radius: 0.5rem;
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: #fbd38d;
+      font-size: 0.74rem;
+      line-height: 1.5;
+      margin-top: 0.4rem;
+    }
+    .gap.ok {
+      background: rgba(34, 197, 94, 0.08);
+      border-color: rgba(34, 197, 94, 0.3);
+      color: #86efac;
+    }
+    .gap strong { display: block; color: inherit; }
+
+    .artifact {
+      width: 100%;
+      text-align: left;
+      padding: 0.55rem 0.7rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.3);
+      color: var(--ink-2);
+      margin-top: 0.4rem;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .artifact:hover { border-color: rgba(96, 165, 250, 0.4); background: rgba(96, 165, 250, 0.06); }
+    .artifact .row {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.45rem;
+    }
+    .artifact .name { font-size: 0.78rem; font-weight: 600; }
+    .artifact .size { font-size: 0.66rem; color: var(--muted); }
+    .artifact .desc {
+      margin-top: 0.25rem;
+      color: var(--muted);
+      font-size: 0.7rem;
+      line-height: 1.5;
+    }
+
+    /* ============ toast ============ */
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      max-width: 360px;
+      padding: 0.7rem 0.95rem;
+      border-radius: 0.6rem;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(96, 165, 250, 0.35);
+      color: var(--ink);
+      font-size: 0.78rem;
+      line-height: 1.5;
+      box-shadow: 0 18px 40px rgba(2, 6, 23, 0.6);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      z-index: 30;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    /* ============ responsive ============ */
+    @media (max-width: 1240px) {
+      .workspace { grid-template-columns: 264px minmax(0, 1fr); }
+      .right-panel { display: none; }
+    }
+    @media (max-width: 980px) {
+      .memory-container { flex-direction: column; }
+      .sidebar { width: 100%; padding: 1rem 0; }
+      .main-content { height: auto; max-height: none; }
+      .workspace { grid-template-columns: 1fr; }
+      .coverage-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="memory-container">
+    <!-- ===== sidebar (matches memory-exploring.vue structure) ===== -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">🧠 记忆查询系统</div>
+        <p class="sidebar-note">
+          故事线只在你要"对外讲述"时生成。所有 surface 入口（会前准备 / Compose / Slides Analyzer / Memory Lens）都 deep-link 到这里。
+        </p>
+        <div class="memory-user-status">
+          <span class="memory-user-dot" aria-hidden="true"></span>
+          <div>
+            <div class="memory-user-label">当前记忆用户</div>
+            <div class="memory-user-value">esone.qiu</div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="entity-types">
+        <a class="entity-type" href="#/today"><span class="entity-icon">🏠</span><span class="entity-name">今日领航</span></a>
+        <a class="entity-type" href="#/timeline"><span class="entity-icon">⏰</span><span class="entity-name">时间轴</span></a>
+        <a class="entity-type" href="#/meetings"><span class="entity-icon">📡</span><span class="entity-name">会议记录</span><span class="entity-count">349</span></a>
+        <a class="entity-type" href="#/user-profile"><span class="entity-icon">👤</span><span class="entity-name">用户画像</span></a>
+        <a class="entity-type" href="#/follow-threads"><span class="entity-icon">👁</span>
+          <span style="flex:1;">
+            <span class="entity-name" style="display:block;">关注后续</span>
+            <span class="entity-subnote">仅统计手动规则</span>
+          </span>
+          <span class="entity-count">12</span>
+        </a>
+        <a class="entity-type" href="#/dreams"><span class="entity-icon">🌙</span><span class="entity-name">梦境重放</span></a>
+        <a class="entity-type" href="#/reflection-threads"><span class="entity-icon">🧠</span><span class="entity-name">自我反思</span></a>
+        <a class="entity-type" href="#/rehearsals"><span class="entity-icon">🎭</span>
+          <span style="flex:1;">
+            <span class="entity-name" style="display:block;">Rehearsal</span>
+            <span class="entity-subnote">未来场景预演</span>
+          </span>
+        </a>
+        <a class="entity-type" href="#/decisions"><span class="entity-icon">⚖️</span><span class="entity-name">决策中心</span></a>
+        <a class="entity-type active" href="#/storylines">
+          <span class="entity-icon">📖</span>
+          <span style="flex:1;">
+            <span class="entity-name" style="display:block;">故事线</span>
+            <span class="entity-subnote">分享 / 汇报 / 复盘草稿</span>
+          </span>
+          <span class="entity-count">3</span>
+        </a>
+        <a class="entity-type" href="#/outreach"><span class="entity-icon">📡</span>
+          <span style="flex:1;">
+            <span class="entity-name" style="display:block;">主动询问</span>
+            <span class="entity-subnote">系统证据在这里看</span>
+          </span>
+        </a>
+        <hr class="sidebar-divider" />
+        <a class="entity-type" href="#/skills"><span class="entity-icon">🧪</span>
+          <span style="flex:1;">
+            <span class="entity-name" style="display:block;">个人技能</span>
+            <span class="entity-subnote">在用技能与萃取建议</span>
+          </span>
+          <span class="entity-count">5</span>
+        </a>
+        <a class="entity-type" href="#/coverage"><span class="entity-icon">🗺</span>
+          <span style="flex:1;">
+            <span class="entity-name" style="display:block;">记忆覆盖</span>
+            <span class="entity-subnote">平台覆盖与智能导入</span>
+          </span>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- ===== main content ===== -->
+    <main class="main-content">
+      <header class="page-header">
+        <div style="min-width:0;">
+          <div class="page-eyebrow">memory-exploring · /storylines</div>
+          <div class="page-title">
+            <span class="page-title-mark">📖</span>
+            <span>故事线编排器</span>
+          </div>
+          <p class="page-subtitle">
+            把日历、Glip、会议、AI 对话、Operation Episode 和 Skill 真实经历编排成可讲述的故事线草稿。
+            触发来自 <code>today_meeting_prep</code> / <code>compose_assist</code> / <code>slides_analyzer</code> / <code>memory_lens</code>，
+            生成稿不会自动外发，只在这里供编辑、版本切换和导出。
+          </p>
+        </div>
+        <div class="header-actions">
+          <span class="trigger-chip">
+            <span class="dot"></span>
+            triggered by · today_meeting_prep · 2026-06-04 CoP
+          </span>
+          <div class="segmented" id="versionSeg">
+            <button data-version="internal" class="active" type="button">内部版</button>
+            <button data-version="public" type="button">公开版</button>
+            <button data-version="private" type="button">自用版</button>
+          </div>
+          <button class="btn ghost" id="shortenBtn" type="button">缩短当前段</button>
+          <button class="btn primary" id="exportBtn" type="button">生成 Slides outline →</button>
+        </div>
+      </header>
+
+      <!-- coverage strip -->
+      <section class="coverage-strip" id="coverageStrip">
+        <div class="metric ok">
+          <div class="label">Evidence refs</div>
+          <div class="value" id="metricEvidence">18</div>
+          <div class="sub">来自 4 类证据 cluster</div>
+        </div>
+        <div class="metric ok">
+          <div class="label">Story segments</div>
+          <div class="value" id="metricSegments">7</div>
+          <div class="sub">默认 hook → playbook → Q&amp;A</div>
+        </div>
+        <div class="metric warn">
+          <div class="label">Gaps</div>
+          <div class="value" id="metricGaps">2</div>
+          <div class="sub">需补 outcome 数字 / 公开版去敏</div>
+        </div>
+        <div class="metric ok">
+          <div class="label">Sendable %</div>
+          <div class="value" id="metricSafe">83%</div>
+          <div class="sub">公开版会再过一次 boundary preflight</div>
+        </div>
+      </section>
+
+      <!-- 3 col workspace -->
+      <section class="workspace">
+        <!-- LEFT: scenarios + clusters -->
+        <aside class="panel">
+          <div class="panel-head">
+            <div class="title">Drafts &amp; Sources</div>
+            <button class="btn ghost" style="padding:.25rem .45rem;" type="button">＋</button>
+          </div>
+          <div class="panel-body" id="leftPanel">
+            <div class="group-label">In progress · 3</div>
+            <div id="scenarioList"></div>
+            <div class="group-label">Source clusters · 当前草稿</div>
+            <div id="clusterList"></div>
+          </div>
+        </aside>
+
+        <!-- CENTER: canvas -->
+        <section class="panel">
+          <div class="panel-head">
+            <div class="title">Storyline canvas</div>
+            <div class="meta" id="canvasMeta">7 段 · 8 分钟 · 内部版预览</div>
+          </div>
+          <div class="canvas-head">
+            <div style="min-width:0;">
+              <h2 id="storyTitle">从试用 AI 到可复用工作流</h2>
+              <p class="audience" id="storyAudience">受众：AI CoP · 8 人 · 8 分钟 · practical / teaching</p>
+              <div class="chip-row" id="storyChips"></div>
+            </div>
+          </div>
+          <div class="canvas-body">
+            <div class="timeline" id="timeline"></div>
+          </div>
+        </section>
+
+        <!-- RIGHT inspector -->
+        <aside class="panel right-panel">
+          <div class="panel-head">
+            <div class="title">Inspector</div>
+            <div class="meta">当前段落 · 证据 / 缺口 / 导出</div>
+          </div>
+          <div class="panel-body" style="padding:0;">
+            <section class="inspector-section">
+              <div class="label">Selected segment</div>
+              <h3 id="detailTitle">开场：为什么现在讲</h3>
+              <p class="body" id="detailBody"></p>
+              <textarea class="draft-area" id="draftBox" aria-label="当前段落讲稿"></textarea>
+            </section>
+            <section class="inspector-section">
+              <div class="label">Evidence · <span id="evidenceCount">2</span> refs</div>
+              <div id="evidenceList"></div>
+            </section>
+            <section class="inspector-section">
+              <div class="label">Gaps &amp; boundary</div>
+              <div id="gapList"></div>
+            </section>
+            <section class="inspector-section">
+              <div class="label">Artifacts</div>
+              <button class="artifact" data-artifact="slides" type="button">
+                <div class="row"><span class="name">Google Slides outline</span><span class="size">6 页 · ~480 字</span></div>
+                <div class="desc">每页 bullets + speaker notes，evidence refs 附在 note 末尾。</div>
+              </button>
+              <button class="artifact" data-artifact="speaker" type="button">
+                <div class="row"><span class="name">Speaker notes</span><span class="size">~720 字</span></div>
+                <div class="desc">中文口播稿，按段落分；自用版可保留更多证据提醒。</div>
+              </button>
+              <button class="artifact" data-artifact="ringcentral" type="button">
+                <div class="row"><span class="name">RingCentral post</span><span class="size">~180 字</span></div>
+                <div class="desc">短版 TL;DR + next step；不包含 meeting URL 和私聊原文。</div>
+              </button>
+              <button class="artifact" data-artifact="passport" type="button">
+                <div class="row"><span class="name">Context Passport</span><span class="size">summary only</span></div>
+                <div class="desc">给外部 AI 做润色，仅含 evidence ref 摘要，不含敏感原文。</div>
+              </button>
+            </section>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">已记录。</div>
+
+  <script>
+    const scenarios = [
+      {
+        id: "cop",
+        type: "Sharing",
+        from: "today_meeting_prep",
+        title: "CoP - 基于AI的个人发展和工具",
+        time: "2026-06-04 · 8 分钟",
+        progress: 78,
+        storyTitle: "从试用 AI 到可复用工作流",
+        audience: "受众：AI CoP · 8 人 · 8 分钟 · practical / teaching",
+        chips: [["内部版", "amber"], ["资料 + 操作 + skill", "purple"], ["可外发率 83%", "green"]],
+        metrics: { evidence: 18, segments: 7, gaps: 2, safe: "83%" },
+        clusters: [
+          ["Codex / Cursor 讨论", "AI Tools 群和敏捷教练群里近期高频讨论权限、成本、harness 和 PRD to PR workshop。", 88, 6],
+          ["NotebookLM / Gemini 资料", "AI Refresh 事件和 AI Weekly Pulse 可作为资料理解工具趋势输入。", 72, 4],
+          ["OpenClaw skill 经验", "已安装 find-skills、Webinar Release Tracker、CapDev 每月数据,可讲 skill 沉淀路径。", 77, 5],
+          ["Jira 自动化案例", "Bug - AI 先修一遍我再看、Jira ticket 批量处理、Story Points 等适合做方法案例。", 69, 3]
+        ],
+        segments: [
+          {
+            id: "hook", role: "hook", boundary: "public_ok",
+            title: "开场：为什么现在讲",
+            body: "最近团队的 AI 工具讨论已经从「能不能用」进入「怎么稳定用」。Cursor workshop、Codex 额度、NotebookLM / Gemini 资料理解、OpenClaw skill 都在同一个问题上汇合：AI 要变成工作流，而不是一次性聊天。",
+            evidence: [
+              ["calendar", "2026-05-26 Cursor Workshop", "PRD to PR workshop 提醒用户和团队正在进入 AI coding 工作流训练。", "shareable"],
+              ["glip", "AI Tools for Engineering", "Codex、Cursor、Claude、额度和政策在团队中高频讨论。", "internal"]
+            ],
+            gaps: ["公开版需要去掉公司内部政策细节。"]
+          },
+          {
+            id: "case-codex", role: "case", boundary: "internal_only",
+            title: "案例一：Codex 不是魔法，harness 才是关键",
+            body: "一次真实讨论里，大家提到 Codex 可以接 Jira、改 ticket、甚至从 API 做 app。但真正的分水岭不是模型多强，而是有没有清楚的 repo、验证脚本、权限边界和最终人工 review。",
+            evidence: [
+              ["glip", "敏捷教练 - RC China", "有人提到 Codex Chrome 插件和 webpage-mcp 能力重叠。", "internal"],
+              ["glip", "AI Tools for Engineering", "Codex 可接 Jira 的讨论显示团队已经在探索文书和工程自动化。", "internal"],
+              ["jira", "INGEST-1284", "一次 AI first-pass bug fix 的真实 ticket。", "internal"]
+            ],
+            gaps: ["缺少一个可公开量化 outcome，例如节省了多少时间。"]
+          },
+          {
+            id: "case-source", role: "case", boundary: "public_ok",
+            title: "案例二：NotebookLM 适合资料理解，但长期价值要回到 Personal AI",
+            body: "NotebookLM / Gemini 适合把资料读懂、变成 overview、提纲或学习材料。但如果资料只留在某个 notebook，下一次打开 Jira、会议或 AI 输入框时并不会自动出现。Personal AI 应该保存资料胶囊和未来触发条件。",
+            evidence: [
+              ["calendar", "AI Refresh: Google AI Studio · Gems · NotebookLM", "日历显示这些资料理解工具已经进入用户工作环境。", "shareable"],
+              ["capsule", "Source Memory Distiller capsule #c-094", "资料胶囊保存 takeaways / source anchors / future triggers。", "shareable"]
+            ],
+            gaps: []
+          },
+          {
+            id: "case-skill", role: "case", boundary: "public_ok",
+            title: "案例三：把重复成功流程沉淀成 skill",
+            body: "OpenClaw skill 的价值不是多一个 prompt，而是把「什么时候用、怎么验证、哪些工具需要、哪些字段不要碰」沉淀下来。Personal AI 可以从操作记忆和用户修正里识别 skill 候选。",
+            evidence: [
+              ["skill", "CapDev 每月数据", "每月 10 号整理 release Key Features 并同步到 CapDev Phase。", "shareable"],
+              ["skill", "Webinar Release Tracker", "每日检查 release schedule 变化并管理 Jira tickets。", "shareable"]
+            ],
+            gaps: []
+          },
+          {
+            id: "playbook", role: "playbook", boundary: "public_ok",
+            title: "可复制模式：先让 AI 跑，但不要让它自己决定事实",
+            body: "可落地流程：先明确任务边界，让 AI 先修一遍或先分析一遍；再要求它输出证据、命令、diff 和验证结果；最后把通过验证的流程沉淀成 skill 或 story case。",
+            evidence: [
+              ["calendar", "Bug - AI 先修一遍我再看", "日历里有明确的 AI first-pass 工作流信号。", "internal"],
+              ["profile", "用户偏好", "准确优先于速度，外部动作需要用户确认。", "shareable"]
+            ],
+            gaps: []
+          },
+          {
+            id: "risk", role: "risk", boundary: "needs_redaction",
+            title: "限制：不是所有记忆都适合进入分享稿",
+            body: "私聊、内部 Jira、meeting URL、未确认的人物判断和 AI 未验证输出，都不能直接放进公开稿。故事线要保留证据边界，必要时只讲匿名方法，不讲原始细节。",
+            evidence: [
+              ["profile", "Personal AI rules", "Never inject private memories into group chat contexts.", "no_export"],
+              ["system", "sendability boundary", "Lens / Passport / Compose 区分可看见和可外发。", "internal"]
+            ],
+            gaps: ["内部版可保留匿名项目名；公开版需要去掉具体组织和链接。"]
+          },
+          {
+            id: "qa", role: "qa", boundary: "public_ok",
+            title: "Q&A：听众可能问什么",
+            body: "如果有人问「到底该用 Cursor、Codex 还是 Claude」，不要给统一答案。更好的回答是：看任务是否需要 repo 改动、浏览器上下文、资料理解、成本控制和公司权限；Personal AI 可以用工具记忆给出当下推荐，但最终要看验证结果。",
+            evidence: [
+              ["progressing", "AI Tool Compass plan", "工具选择应解释为什么是它、限制是什么、哪些能力不可用。", "shareable"],
+              ["glip", "AI Tools for Engineering", "团队确实在讨论 Cursor、Codex、Claude 和成本。", "internal"]
+            ],
+            gaps: []
+          }
+        ]
+      },
+      {
+        id: "bug",
+        type: "Retro",
+        from: "calendar_event",
+        title: "Bug - AI 先修一遍我再看",
+        time: "2026-06-03 · 复盘材料",
+        progress: 52,
+        storyTitle: "AI 先修一遍，人再做证据检查",
+        audience: "受众：项目组 · 6 人 · 12 分钟 · technical",
+        chips: [["内部版", "amber"], ["操作 episode 主线", "green"]],
+        metrics: { evidence: 12, segments: 6, gaps: 3, safe: "71%" },
+        clusters: [
+          ["Bug 修复流程", "从 repo、branch、MR、测试输出整理事件线。", 82, 5],
+          ["验证证据", "命令输出、diff、失败重试和人工 review。", 74, 4],
+          ["可沉淀 skill", "把通过验证的步骤提炼成 AI first-pass bug fix workflow。", 63, 3]
+        ],
+        segments: [
+          {
+            id: "b-hook", role: "hook", boundary: "internal_only",
+            title: "开场：AI first-pass 的价值不是替代 review",
+            body: "复盘不是证明 AI 可以独立修 bug，而是说明它可以先跑一遍，把假设、diff 和验证证据提前摆出来，让人类 review 更聚焦。",
+            evidence: [["calendar", "Bug - AI 先修一遍我再看", "事件包含 repo 和当前开发分支。", "internal"]],
+            gaps: ["需要补充最终 bug id 或 MR 链接。"]
+          },
+          {
+            id: "b-flow", role: "case", boundary: "needs_redaction",
+            title: "流程：先限定边界，再让 AI 执行",
+            body: "把 repo、branch、目标问题、禁止触碰范围和验证命令给 AI。要求它每一步留下可复查证据，而不是只给结论。",
+            evidence: [["memory", "AGENT workflow", "项目要求修改后运行 targeted verifier、npm start 编译和 diff check。", "shareable"]],
+            gaps: ["公开版不能带内部 repo 地址。"]
+          },
+          {
+            id: "b-risk", role: "risk", boundary: "public_ok",
+            title: "风险：AI 会漏掉上下文和隐含约束",
+            body: "如果 source anchor 不清楚，AI 可能做出看似合理但不符合真实业务的改动。复盘要强调：让 AI 先跑，不等于省掉证据检查。",
+            evidence: [["episode", "OpenClaw delegation failures", "过去有缺 source anchor 或 capability 导致的失败记录。", "internal"]],
+            gaps: []
+          },
+          {
+            id: "b-playbook", role: "playbook", boundary: "public_ok",
+            title: "可复制清单",
+            body: "可复用 checklist：任务边界、禁止项、验证命令、diff 摘要、失败重试、人工 review、结果写回记忆。",
+            evidence: [["skill", "Skill Foundry", "重复成功流程可转成 skill，并记录平台同步状态。", "shareable"]],
+            gaps: ["缺一条衡量「我节省了多少 review 时间」的指标。"]
+          }
+        ]
+      },
+      {
+        id: "sharing",
+        type: "Update",
+        from: "compose_assist",
+        title: "Sharing · 周内轻量分享",
+        time: "2026-05-29 · 5 分钟",
+        progress: 38,
+        storyTitle: "本周三个可复用 AI 工作技巧",
+        audience: "受众：小组 · 5 人 · 5 分钟 · casual",
+        chips: [["公开版", "green"], ["5 分钟", "neutral"]],
+        metrics: { evidence: 9, segments: 5, gaps: 1, safe: "89%" },
+        clusters: [
+          ["工具选择", "Codex、Cursor、Claude、NotebookLM 场景差异。", 76, 3],
+          ["资料吸收", "AI Weekly Pulse 和 Google AI Studio refresh。", 70, 3],
+          ["输出复用", "把一次成功处理沉淀成 skill 或分享稿。", 68, 3]
+        ],
+        segments: [
+          {
+            id: "s-hook", role: "hook", boundary: "public_ok",
+            title: "开场：本周不是工具更多，而是选择更难",
+            body: "团队同时接触 Codex、Cursor、NotebookLM、Gemini 和 OpenClaw。真正提高效率的是为任务选对工具，并把成功方式保存下来。",
+            evidence: [["calendar", "Cursor Workshop", "PRD to PR workshop 是本周强信号。", "shareable"]],
+            gaps: []
+          },
+          {
+            id: "s-one", role: "case", boundary: "public_ok",
+            title: "技巧一：资料类任务先做 source capsule",
+            body: "长文、视频、AI 周报不要只复制摘要。保存 takeaways、source anchors 和未来触发条件，后面开会或写 prompt 时才会自动出现。",
+            evidence: [["progressing", "Source Memory Distiller", "资料记忆负责把 sources 转成可召回 capsule。", "shareable"]],
+            gaps: []
+          },
+          {
+            id: "s-two", role: "case", boundary: "internal_only",
+            title: "技巧二：代码类任务先给验证契约",
+            body: "给 Codex 的不是一句「修一下」，而是 repo、范围、测试命令、不要改什么和最终输出契约。这样结果才容易被人接住。",
+            evidence: [["memory", "AGENT.md", "项目验证顺序和 harness 是稳定约束。", "internal"]],
+            gaps: []
+          },
+          {
+            id: "s-three", role: "takeaway", boundary: "public_ok",
+            title: "技巧三：能复用的流程要变成 skill",
+            body: "如果同一类任务出现第二次，就不要只保存聊天记录。把触发条件、步骤、工具、风险和验证方式存成 skill 候选。",
+            evidence: [["skill", "Personal Skill Foundry", "已有 skill 平台同步和 review 状态设计。", "shareable"]],
+            gaps: []
+          }
+        ]
+      }
+    ];
+
+    let activeScenario = scenarios[0];
+    let activeSegmentId = activeScenario.segments[0].id;
+    let exportVersion = "internal";
+
+    const $ = (sel) => document.querySelector(sel);
+    const escape = (str) => String(str).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    }[c]));
+
+    function chip(label, tone) {
+      return `<span class="chip ${tone || ""}">${escape(label)}</span>`;
+    }
+    function boundaryChip(boundary) {
+      if (boundary === "public_ok") return chip("可公开表达", "green");
+      if (boundary === "internal_only") return chip("仅内部", "amber");
+      if (boundary === "needs_redaction") return chip("需打码", "red");
+      return chip(boundary, "neutral");
+    }
+    function sendabilityChip(s) {
+      if (s === "no_export") return chip("no_export", "red");
+      if (s === "internal") return chip("internal", "amber");
+      return chip("shareable", "green");
+    }
+
+    function renderScenarios() {
+      $("#scenarioList").innerHTML = scenarios.map((s) => `
+        <button class="scenario ${s.id === activeScenario.id ? "active" : ""}" data-scenario="${s.id}" type="button">
+          <div class="row-1">
+            <span class="type-pill">${escape(s.type)}</span>
+            <span class="from">from · ${escape(s.from)}</span>
+          </div>
+          <h4>${escape(s.title)}</h4>
+          <div class="time">${escape(s.time)}</div>
+          <div class="progress">
+            <div class="bar"><span style="width:${s.progress}%"></span></div>
+            <span>${s.progress}%</span>
+          </div>
+        </button>
+      `).join("");
+    }
+
+    function renderClusters() {
+      $("#clusterList").innerHTML = activeScenario.clusters.map(([name, desc, coverage, count]) => `
+        <div class="cluster">
+          <div class="row">
+            <span class="name">${escape(name)}</span>
+            <span class="count">${count} refs</span>
+          </div>
+          <div class="desc">${escape(desc)}</div>
+          <div class="coverage">
+            <div class="bar"><span style="width:${coverage}%"></span></div>
+            <span>${coverage}%</span>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function renderHeader() {
+      $("#storyTitle").textContent = activeScenario.storyTitle;
+      $("#storyAudience").textContent = activeScenario.audience;
+      $("#storyChips").innerHTML = activeScenario.chips.map(([label, tone]) => chip(label, tone)).join("");
+      $("#metricEvidence").textContent = activeScenario.metrics.evidence;
+      $("#metricSegments").textContent = activeScenario.metrics.segments;
+      $("#metricGaps").textContent = activeScenario.metrics.gaps;
+      $("#metricSafe").textContent = activeScenario.metrics.safe;
+      $("#canvasMeta").textContent = `${activeScenario.metrics.segments} 段 · ${activeScenario.time.split("·")[1]?.trim() || "—"} · ${
+        exportVersion === "public" ? "公开版预览" : exportVersion === "private" ? "自用版预览" : "内部版预览"
+      }`;
+    }
+
+    function renderTimeline() {
+      $("#timeline").innerHTML = activeScenario.segments.map((seg, i) => `
+        <button class="segment ${seg.id === activeSegmentId ? "active" : ""}" data-segment="${seg.id}" data-boundary="${seg.boundary}" type="button">
+          <div class="row-meta"><span>段 ${i + 1}</span><span>·</span><span>${seg.role}</span></div>
+          <h3>${escape(seg.title)}</h3>
+          <p>${escape(seg.body)}</p>
+          <div class="seg-foot">
+            ${chip(seg.evidence.length + " refs", "purple")}
+            ${boundaryChip(seg.boundary)}
+            ${seg.gaps.length ? chip(seg.gaps.length + " gap", "amber") : chip("ready", "green")}
+          </div>
+        </button>
+      `).join("");
+    }
+
+    function activeSegment() {
+      return activeScenario.segments.find((s) => s.id === activeSegmentId) || activeScenario.segments[0];
+    }
+
+    function buildDraft(seg) {
+      const prefix = exportVersion === "public"
+        ? "公开版会避免内部链接和私聊原文：\n\n"
+        : exportVersion === "private"
+          ? "自用版可以保留更多证据提醒：\n\n"
+          : "内部版讲稿：\n\n";
+      return prefix + seg.body + "\n\n（提示：这不是工具宣传，是从真实工作记忆里整理的可复用经验。）";
+    }
+
+    function renderInspector() {
+      const seg = activeSegment();
+      $("#detailTitle").textContent = seg.title;
+      $("#detailBody").textContent = seg.body;
+      $("#draftBox").value = buildDraft(seg);
+      $("#evidenceCount").textContent = seg.evidence.length;
+      $("#evidenceList").innerHTML = seg.evidence.map(([source, title, desc, send]) => `
+        <div class="evidence">
+          <div class="row1">
+            <span class="source">${escape(source)}</span>
+            ${sendabilityChip(send)}
+          </div>
+          <div class="title">${escape(title)}</div>
+          <div class="desc">${escape(desc)}</div>
+        </div>
+      `).join("");
+      $("#gapList").innerHTML = seg.gaps.length
+        ? seg.gaps.map((g) => `<div class="gap"><strong>需要处理</strong>${escape(g)}</div>`).join("")
+        : `<div class="gap ok"><strong>当前段落可用</strong>没有明显缺口；导出时仍会保留证据引用。</div>`;
+    }
+
+    function renderAll() {
+      renderScenarios();
+      renderClusters();
+      renderHeader();
+      renderTimeline();
+      renderInspector();
+    }
+
+    const toast = $("#toast");
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.t);
+      showToast.t = window.setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    document.addEventListener("click", (event) => {
+      const scenarioBtn = event.target.closest("[data-scenario]");
+      if (scenarioBtn) {
+        activeScenario = scenarios.find((s) => s.id === scenarioBtn.dataset.scenario) || scenarios[0];
+        activeSegmentId = activeScenario.segments[0].id;
+        renderAll();
+        showToast(`已切换到 ${activeScenario.title}`);
+        return;
+      }
+      const segBtn = event.target.closest("[data-segment]");
+      if (segBtn) {
+        activeSegmentId = segBtn.dataset.segment;
+        renderTimeline();
+        renderInspector();
+        return;
+      }
+      const verBtn = event.target.closest("[data-version]");
+      if (verBtn) {
+        exportVersion = verBtn.dataset.version;
+        document.querySelectorAll("[data-version]").forEach((b) => b.classList.toggle("active", b === verBtn));
+        renderHeader();
+        renderInspector();
+        showToast(`已切换为${verBtn.textContent}`);
+        return;
+      }
+      const artifactBtn = event.target.closest("[data-artifact]");
+      if (artifactBtn) {
+        const name = artifactBtn.querySelector(".name").textContent;
+        showToast(`${name} 预览已生成；敏感证据会按 ${exportVersion} 版本处理。`);
+        return;
+      }
+    });
+
+    $("#exportBtn").addEventListener("click", () => {
+      showToast(`Slides outline 已按 ${exportVersion} 版本生成：${activeScenario.metrics.segments} 段 · ${activeScenario.metrics.evidence} 证据。`);
+    });
+    $("#shortenBtn").addEventListener("click", () => {
+      const seg = activeSegment();
+      $("#draftBox").value = `${seg.title}\n\n${seg.body.split("。").slice(0, 2).join("。")}。\n\n（口播版：保留证据边界，不展开内部细节。）`;
+      showToast("当前段已缩短为口播版。");
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>

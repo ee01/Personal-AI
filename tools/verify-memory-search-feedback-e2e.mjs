@@ -84,6 +84,8 @@ try {
               displayText: 'This result restores and updates recall feedback.',
               score: 0.93,
               source: 'manual',
+              sourceUrl: 'javascript:alert(1)',
+              exploreLink: '#/settings',
               timestamp: nowSeconds,
               scope: 'work',
               metadata: { channels: ['fts'], recallFeedback: 'negative' },
@@ -126,6 +128,26 @@ try {
   const resultCard = page.locator('.search-result-card', {
     hasText: 'Search feedback memory',
   });
+  await resultCard
+    .locator('mark.search-highlight', { hasText: 'feedback' })
+    .first()
+    .waitFor({ timeout: 10000 });
+  await resultCard
+    .getByText('来源链接已隐藏：仅支持 http/https')
+    .waitFor({ timeout: 10000 });
+  await resultCard
+    .getByText('记忆内跳转已隐藏：不支持的目标')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await resultCard.getByRole('button', { name: '打开来源' }).count(),
+    0,
+    'unsafe search result source should not expose an open-source button',
+  );
+  assert.equal(
+    await resultCard.getByRole('button', { name: '在记忆中查看' }).count(),
+    0,
+    'unsupported search result route should not expose an internal jump button',
+  );
   await resultCard.getByText('已记录为不相关').waitFor({ timeout: 10000 });
   assert.equal(
     await resultCard

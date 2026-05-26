@@ -27,6 +27,10 @@ function normalizeDoubaoUrl(href?: string): string {
   }
 }
 
+function formatDomFallbackError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient {
   constructor(private readonly host: WebpageMcpHost) {}
 
@@ -152,10 +156,16 @@ export class WebpageMcpDoubaoSource implements DoubaoConversationCollectorClient
       const raw = await this.host.evalInTab(tabId, js);
       const parsed = JSON.parse(raw) as {
         conversations?: typeof convInfoList;
+        error?: unknown;
       };
+      if (parsed.error) {
+        throw new Error(String(parsed.error));
+      }
       convInfoList = parsed.conversations ?? [];
-    } catch {
-      return [];
+    } catch (error) {
+      throw new Error(
+        `Doubao DOM fallback failed: ${formatDomFallbackError(error)}`,
+      );
     }
 
     const snapshots: BrowserConversationSnapshot[] = [];

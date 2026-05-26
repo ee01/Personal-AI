@@ -61,7 +61,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
 
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
+    db.prepare('DELETE FROM rehearsal_activations').run();
+    db.prepare('DELETE FROM rehearsals').run();
     db.prepare('DELETE FROM user_profile_items').run();
+    db.prepare('DELETE FROM watched_projects').run();
     db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
 
     const now = Math.floor(Date.now() / 1000);
@@ -166,6 +169,61 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.evidence.length).toBeGreaterThan(0);
   });
 
+  it('uses Web AI draft text as the context-enrichment recall signal', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO watched_projects
+        (id, name, aliases_json, is_active, priority, created_at)
+       VALUES (?, ?, ?, 1, 8, ?)`,
+    ).run(
+      'project-ai-vbg',
+      'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+      JSON.stringify(['AI VBG', 'VBG', 'AI Generated Background']),
+      now,
+    );
+    insertChunk({
+      id: 9211,
+      content:
+        'AI-Generated VBG backend status: RCV-148412 is ready for review, while FE follow-up is still separate.',
+      sourceType: 'glip',
+      source: 'glip',
+      scope: 'work',
+      createdAt: now - 15,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        title: 'ChatGPT',
+        primaryText: 'New blank AI chat',
+        draftText: 'AI VBG 的 BE 部分完成情况如何',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['glip', 'jira', 'manual'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('context_pack');
+    expect(body.insertText).toContain('目标：AI VBG 的 BE 部分完成情况如何');
+    expect(body.insertText).toContain('仍需确认');
+    expect(body.evidence.map((item: any) => item.snippet).join('\n')).toContain(
+      'RCV-148412',
+    );
+    expect(body.debug.recallRequest.primaryText).toContain(
+      'Draft prompt: AI VBG 的 BE 部分完成情况如何',
+    );
+    expect(
+      body.debug.recall.contextExpansion.expandedQuery,
+    ).toContain('AI-Generated VBGs');
+    expect(body.debug.recall.contextExpansion.expandedQuery).toContain('backend');
+  });
+
   it('returns reply context for RingCentral threads and includes thread root', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -199,6 +257,72 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).not.toContain('我这边先补充几个相关点');
     expect(body.insertText).toContain('Factory AI');
     expect(llmGenerateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps scene-cue rehearsal reminders for RingCentral composer assist', async () => {
+    const created = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/rehearsals',
+        payload: {
+          title: 'Next Colin Liu check-in',
+          scenarioType: 'person_chat',
+          content:
+            'Ask Colin whether the review reminder should name a concrete owner.',
+          summary: 'Ask Colin to confirm the review owner.',
+          activationCues: {
+            people: ['Colin Liu'],
+            groupIds: ['colin-group'],
+          },
+          confidence: 0.92,
+          priority: 9,
+        },
+      })
+    ).json().rehearsal;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        title: 'Chat with Colin Liu',
+        primaryText: 'Could you reply?',
+        identifiers: {
+          conversationId: 'colin-group',
+          groupId: 'colin-group',
+        },
+        audience: {
+          conversationTitle: 'Colin Liu',
+          conversationId: 'colin-group',
+          groupId: 'colin-group',
+          people: ['Colin Liu'],
+        },
+        visibleMessages: [
+          {
+            sender: 'Colin Liu',
+            text: 'Could you reply?',
+          },
+        ],
+        sourceTypes: ['rehearsal'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.summary).toContain('预演提醒');
+    expect(body.evidence).toHaveLength(1);
+    expect(body.evidence[0].id).toBe(created.id);
+    expect(body.evidence[0].type).toBe('rehearsal');
+    expect(body.evidence[0].evidenceRole).toBe('rehearsal_cue');
+    expect(body.evidence[0].reasonType).toBe('prospective_cue');
+    expect(body.evidence[0].whyRelevant).toEqual(
+      expect.arrayContaining(['人物：Colin Liu', '同群聊']),
+    );
+    expect(llmGenerateMock).toHaveBeenCalledTimes(1);
+    expect(llmGenerateMock.mock.calls[0][0]).toContain('预演提醒');
   });
 
   it('filters weak composer memories that do not match the current scene', async () => {

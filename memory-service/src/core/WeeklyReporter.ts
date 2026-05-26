@@ -9,7 +9,10 @@ import { now, formatDate } from '../utils/time.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { randomUUID } from 'node:crypto';
-import { getUserRuntimeConfig } from '../runtimeConfig.js';
+import {
+  getUserRuntimeConfig,
+  type RuntimePushTarget,
+} from '../runtimeConfig.js';
 import { NotificationCenterService } from './NotificationCenterService.js';
 
 // ---------------------------------------------------------------------------
@@ -21,7 +24,9 @@ export interface WeeklyReportResult {
   reportPath?: string;
   messageCount: number;
   reflectionCount: number;
+  notificationCreated?: boolean;
   botSent?: boolean;
+  pushTarget?: RuntimePushTarget;
   reason?: string;
 }
 
@@ -32,6 +37,16 @@ interface MessageSummaryRow {
   group_name: string | null;
   source_type: string;
   importance: number;
+}
+
+function normalizePushTarget(
+  value: unknown,
+  fallback: RuntimePushTarget,
+): RuntimePushTarget {
+  if (value === 'group' || value === 'team') return 'group';
+  if (value === 'me' || value === 'user') return 'me';
+  if (value === 'none') return 'none';
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,13 +74,25 @@ export class WeeklyReporter {
     ignoreEnabled?: boolean;
     ignoreMinMessages?: boolean;
     manual?: boolean;
+    pushTarget?: RuntimePushTarget;
+    pushGroupId?: string;
   }): Promise<WeeklyReportResult> {
     const config = getUserRuntimeConfig(this.userDataManager);
+    const pushTarget = normalizePushTarget(
+      options?.pushTarget,
+      config.weeklyReportPushTarget,
+    );
+    const pushGroupId = (
+      options?.pushGroupId ?? config.weeklyReportPushGroupId
+    ).trim();
     if (!options?.ignoreEnabled && !config.weeklyReportEnabled) {
       return {
         generated: false,
         messageCount: 0,
         reflectionCount: 0,
+        notificationCreated: false,
+        botSent: false,
+        pushTarget,
         reason: 'Weekly report is disabled.',
       };
     }
@@ -85,6 +112,9 @@ export class WeeklyReporter {
         generated: false,
         messageCount: msgCount,
         reflectionCount: 0,
+        notificationCreated: false,
+        botSent: false,
+        pushTarget,
         reason: `Only ${msgCount} messages found; minimum is ${config.weeklyReportMinMessages}.`,
       };
     }
@@ -97,6 +127,9 @@ export class WeeklyReporter {
         generated: false,
         messageCount: msgCount,
         reflectionCount: 0,
+        notificationCreated: false,
+        botSent: false,
+        pushTarget,
         reason: 'User data manager is not available.',
       };
     }
@@ -154,35 +187,40 @@ Keep it concise (under 500 words). Write in the same language as the source cont
     udm.writeFile(reportPath, reportContent);
     await this.markdownManager?.reindexFile(reportPath);
 
-    // 6. Insert notification
-    const notificationId = randomUUID();
-    this.db.prepare(
-      `INSERT INTO notification_records
-        (id, channel, type, title, body, payload_json, topic_id, sent_at, created_at)
-       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?, ?, ?)`
-    ).run(
-      notificationId,
-      'Weekly Report Ready',
-      `Your weekly report for ${dateStr} is ready`,
-      JSON.stringify({ reportPath, messageCount: msgCount }),
-      `weekly_report_${dateStr}`,
-      currentTime, currentTime,
-    );
-
+    let notificationCreated = false;
     let botSent = false;
-    const botResult = await this.notificationCenterService.deliverNoticeToGlip({
-      sourceRef: `notification:${notificationId}`,
-      title: 'Weekly Report',
-      body: reportText,
-      mention: false,
-      targetUserId: this.userId,
-    });
-    if (botResult.sent) {
-      botSent = true;
-    }
+    if (pushTarget !== 'none') {
+      // 6. Insert notification
+      const notificationId = randomUUID();
+      this.db.prepare(
+        `INSERT INTO notification_records
+          (id, channel, type, title, body, payload_json, topic_id, sent_at, created_at)
+         VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?, ?, ?)`
+      ).run(
+        notificationId,
+        'Weekly Report Ready',
+        `Your weekly report for ${dateStr} is ready`,
+        JSON.stringify({ reportPath, messageCount: msgCount }),
+        `weekly_report_${dateStr}`,
+        currentTime, currentTime,
+      );
+      notificationCreated = true;
 
-    if (!botResult.sent && botResult.error) {
-      console.warn(`[WeeklyReporter] Weekly report bot delivery skipped: ${botResult.error}`);
+      const botResult = await this.notificationCenterService.deliverNoticeToGlip({
+        sourceRef: `notification:${notificationId}`,
+        title: 'Weekly Report',
+        body: reportText,
+        mention: false,
+        targetUserId: pushTarget === 'me' ? this.userId : undefined,
+        targetGroupId: pushTarget === 'group' ? pushGroupId : undefined,
+      });
+      if (botResult.sent) {
+        botSent = true;
+      }
+
+      if (!botResult.sent && botResult.error) {
+        console.warn(`[WeeklyReporter] Weekly report bot delivery skipped: ${botResult.error}`);
+      }
     }
 
     console.log(`[WeeklyReporter] Report generated: ${reportPath}`);
@@ -191,7 +229,9 @@ Keep it concise (under 500 words). Write in the same language as the source cont
       reportPath,
       messageCount: msgCount,
       reflectionCount: reflections.length,
+      notificationCreated,
       botSent,
+      pushTarget,
     };
   }
 }

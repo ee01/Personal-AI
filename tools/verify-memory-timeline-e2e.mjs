@@ -68,6 +68,7 @@ try {
             source: 'manual',
             sourceUrl: 'javascript:alert(1)',
             sourceTitle: 'Unsafe source',
+            exploreLink: '#/settings',
             timestamp: nowSeconds - 60,
             scope: 'work',
             metadata: { channels: ['time'] },
@@ -204,6 +205,25 @@ try {
     openSourceButtons,
     2,
     'only http/https source URLs should render',
+  );
+  const unsafeTimelineCard = page.locator('article', {
+    hasText: 'Unsafe source memory',
+  });
+  await unsafeTimelineCard
+    .getByText('来源链接已隐藏：仅支持 http/https')
+    .waitFor({ timeout: 10000 });
+  await unsafeTimelineCard
+    .getByText('记忆内跳转已隐藏：不支持的目标')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await unsafeTimelineCard.getByRole('button', { name: '打开来源' }).count(),
+    0,
+    'unsafe source URL should not expose an open-source button',
+  );
+  assert.equal(
+    await unsafeTimelineCard.getByRole('button', { name: '在记忆中查看' }).count(),
+    0,
+    'unsupported internal route should not expose a memory-jump button',
   );
 
   const safeTimelineCard = page.locator('article', {

@@ -27,6 +27,7 @@ import type {
 } from '../types/index.js';
 import { SalienceScorer } from './SalienceScorer.js';
 import { TruthMaintainer } from './TruthMaintainer.js';
+import { RecallContextExpansionService } from './RecallContextExpansionService.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
@@ -100,6 +101,7 @@ export class IngestionPipeline {
   private db: Database.Database;
   private scorer: SalienceScorer;
   private truthMaintainer: TruthMaintainer;
+  private contextExpansion: RecallContextExpansionService;
   private userDataManager?: UserDataManager;
 
   constructor(
@@ -111,6 +113,7 @@ export class IngestionPipeline {
     this.userDataManager = userDataManager;
     this.scorer = new SalienceScorer(db);
     this.truthMaintainer = new TruthMaintainer(db, userId);
+    this.contextExpansion = new RecallContextExpansionService(db);
   }
 
   /**
@@ -394,6 +397,30 @@ export class IngestionPipeline {
     } catch (err) {
       console.warn(
         '[IngestionPipeline] Watched project matching failed:',
+        (err as Error).message,
+      );
+    }
+
+    try {
+      this.contextExpansion.upsertFrameFromMessage({
+        messageId: id,
+        content: contentNormalized,
+        sourceType: payload.sourceType,
+        source,
+        sourceUrl: payload.sourceUrl ?? null,
+        sourceTitle: payload.sourceTitle ?? null,
+        sender: payload.sender ?? null,
+        groupId: payload.groupId ?? null,
+        groupName: payload.groupName ?? null,
+        timestamp: ts,
+        entities: entitiesList,
+        matchedProjects,
+        summary,
+        metadata: payload.metadata,
+      });
+    } catch (err) {
+      console.warn(
+        '[IngestionPipeline] Context frame update failed:',
         (err as Error).message,
       );
     }

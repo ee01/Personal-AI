@@ -109,6 +109,10 @@ function extractDoubaoThreadId(url?: string): string | undefined {
   if (!url) return undefined;
   try {
     const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname !== 'doubao.com' && !hostname.endsWith('.doubao.com')) {
+      return undefined;
+    }
     const match = parsed.pathname.match(/\/(?:chat|thread)\/([^/?#]+)/);
     return match?.[1];
   } catch {
@@ -748,14 +752,13 @@ export async function createBridgeServer(
   app.post<{
     Body: { title?: string };
   }>('/threads/auto-bind-mobile', async (request, reply) => {
+    const title = request.body?.title?.trim() || '手机版对话';
     try {
-      const binding = await service.bindMobileContextByTitle(
-        request.body?.title || '手机版对话',
-      );
+      const binding = await service.bindMobileContextByTitle(title);
       if (!binding) {
-        return reply
-          .code(404)
-          .send({ error: 'Mobile-context thread not found' });
+        return reply.code(404).send({
+          error: `没有找到名为“${title}”的豆包对话，也没有可绑定的当前豆包 /chat 或 /thread 页面。请先在豆包中打开你真正会继续使用的手机对话，再点击“自动绑定手机对话”。`,
+        });
       }
       return binding;
     } catch (error) {

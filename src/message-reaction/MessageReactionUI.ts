@@ -38,6 +38,7 @@ import {
   showSuccessToast,
   showErrorToast,
 } from './SnoozeManager';
+import type { ToastAction } from './SnoozeManager';
 import { formatLocalScheduleDateTime } from '../scheduled-messages/scheduleDateTime.js';
 import {
   LINKED_ACTION_RUNTIME_MESSAGE_TYPE,
@@ -144,6 +145,28 @@ let snoozeMenuRequestSeq = 0;
 
 // 处理过的消息元素
 const processedMessages = new WeakSet<HTMLElement>();
+let messageReactionInitialized = false;
+let messageReactionDocumentClickBound = false;
+
+function hasEnabledMessageReactionFeature(config: MessageReactionConfig): boolean {
+  return (
+    config.enableSnooze ||
+    config.enableFollowThread ||
+    config.enableAutoReply ||
+    config.enableLinkedAction
+  );
+}
+
+function hideAllMessageReactionToolbars() {
+  document
+    .querySelectorAll<HTMLElement>('.message-reaction-toolbar')
+    .forEach((toolbar) => setToolbarVisible(toolbar, false));
+}
+
+function runMessageReactionScan(label: string) {
+  console.log(`💬 MessageReaction: ${label}`);
+  scanAndProcessMessages();
+}
 
 /**
  * 注入样式
@@ -949,6 +972,17 @@ function injectStyles() {
       font-weight: 650;
     }
 
+    .followup-ask-run-summary {
+      padding: 8px 10px;
+      border-radius: 7px;
+      background: #ecfeff;
+      border: 1px solid #bae6fd;
+      color: #0f4c81;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
     .followup-ask-preview {
       max-height: 72px;
       overflow: auto;
@@ -1259,6 +1293,34 @@ function parseMessageTimestampSeconds(messageInfo: MessageInfo): number | undefi
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
 }
 
+function formatFollowupCheckTime(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function buildFollowupRunSummary(
+  messageInfo: MessageInfo,
+  intervalHours: number,
+): string {
+  const createdAt = parseMessageTimestampSeconds(messageInfo);
+  if (!createdAt) {
+    return '创建后会先检查当前会话是否已有满足目标的回复；没有命中时才继续追问。';
+  }
+
+  const dueAt = createdAt + intervalHours * 3600;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (dueAt <= nowSeconds) {
+    return `原消息已超过 ${intervalHours} 小时，创建后会立即检查是否已有满足目标的回复；没有命中时才继续追问。`;
+  }
+
+  return `预计 ${formatFollowupCheckTime(dueAt)} 后检查回复；如果已有回复满足目标，会自动结束而不追问。`;
+}
+
 function parseBoundedInteger(
   value: FormDataEntryValue | null,
   fallback: number,
@@ -1403,12 +1465,13 @@ async function runToolbarButtonAction(
 async function sendToolbarRuntimeAction(
   request: unknown,
   fallbackMessage: string,
-) {
+): Promise<any> {
   const response = await chrome.runtime.sendMessage(request);
   const errorMessage = getToolbarRuntimeActionError(response, fallbackMessage);
   if (errorMessage) {
     throw new Error(errorMessage);
   }
+  return response;
 }
 
 function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
@@ -1436,6 +1499,12 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
             <span class="followup-ask-target-label">跟进范围</span>
             <span class="followup-ask-target-value">${escapedTarget}</span>
           </div>
+          <div class="followup-ask-run-summary" role="status">${escapeDialogText(
+            buildFollowupRunSummary(
+              messageInfo,
+              FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS,
+            ),
+          )}</div>
           <div class="followup-ask-row">
             <label class="followup-ask-label followup-ask-label-primary" for="followup-ask-objective">
               追问的信息目标 / 完成标准
@@ -1526,6 +1595,9 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
     const errorEl = overlay.querySelector(
       '.followup-ask-error',
     ) as HTMLElement | null;
+    const runSummaryEl = overlay.querySelector(
+      '.followup-ask-run-summary',
+    ) as HTMLElement | null;
 
     const setError = (message: string | null) => {
       if (!errorEl) return;
@@ -1545,6 +1617,22 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
       closeBtn.disabled = submitting;
       submitBtn.textContent = submitting ? '创建中...' : '开始追问';
     };
+
+    const refreshRunSummary = () => {
+      if (!runSummaryEl) return;
+      const intervalHours = parseBoundedInteger(
+        intervalInput?.value ?? null,
+        FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS,
+        1,
+        FOLLOWUP_ASK_MAX_INTERVAL_HOURS,
+      );
+      runSummaryEl.textContent = buildFollowupRunSummary(
+        messageInfo,
+        intervalHours,
+      );
+    };
+
+    intervalInput?.addEventListener('input', refreshRunSummary);
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -1579,7 +1667,7 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
         if (intervalInput) intervalInput.value = String(intervalHours);
         if (maxFollowupInput) maxFollowupInput.value = String(maxFollowup);
 
-        await sendToolbarRuntimeAction(
+        const response = await sendToolbarRuntimeAction(
           {
             type: 'CREATE_OUTREACH_FROM_MESSAGE',
             data: {
@@ -1604,7 +1692,16 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
           '创建跟进追问失败，请稍后重试',
         );
         close();
-        showSuccessToast('已开始跟进');
+        const sessionId =
+          typeof response?.session?.id === 'string'
+            ? response.session.id
+            : undefined;
+        showSuccessToast(
+          response?.created === false
+            ? '这条消息已有跟进，未重复创建'
+            : '已开始跟进',
+          getFollowupAskToastActions(sessionId),
+        );
         resolve();
       } catch (error) {
         console.error('创建跟进追问失败:', error);
@@ -1623,6 +1720,25 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
     document.body.appendChild(overlay);
     objectiveTextarea?.focus();
   });
+}
+
+function getFollowupAskToastActions(sessionId?: string): ToastAction[] {
+  return [
+    {
+      label: '查看追问',
+      onClick: () => openOutreachSessionReview(sessionId),
+    },
+  ];
+}
+
+async function openOutreachSessionReview(sessionId?: string): Promise<void> {
+  await sendToolbarRuntimeAction(
+    {
+      type: 'OPEN_OUTREACH_SESSION_REVIEW',
+      data: { sessionId },
+    },
+    '打开追问详情失败，请稍后重试',
+  );
 }
 
 function resetSnoozeMenuAnchorState() {
@@ -3055,20 +3171,18 @@ export function initMessageReaction(config?: MessageReactionConfig) {
     globalConfig = config;
   }
 
-  // 如果所有功能都禁用，跳过初始化
-  if (
-    !globalConfig.enableSnooze &&
-    !globalConfig.enableFollowThread &&
-    !globalConfig.enableAutoReply &&
-    !globalConfig.enableLinkedAction
-  ) {
-    console.log('💬 MessageReaction: 消息交互功能都已禁用，跳过初始化');
-    return;
-  }
-
   // 检查是否在 RingCentral 页面
   if (!window.location.href.includes('app.ringcentral.com')) {
     console.log('💬 MessageReaction: 不是 RingCentral 页面，跳过初始化');
+    return;
+  }
+
+  // 如果所有功能都禁用，隐藏现有入口；未初始化过时保持零成本跳过。
+  if (!hasEnabledMessageReactionFeature(globalConfig)) {
+    hideAllSnoozeUI();
+    hideSettingsPopup();
+    hideAllMessageReactionToolbars();
+    console.log('💬 MessageReaction: 消息交互功能都已禁用，已隐藏工具栏');
     return;
   }
 
@@ -3076,10 +3190,17 @@ export function initMessageReaction(config?: MessageReactionConfig) {
   injectStyles();
   console.log('💬 MessageReaction: 样式已注入');
 
+  if (messageReactionInitialized) {
+    runMessageReactionScan('配置已更新，重新扫描消息');
+    return;
+  }
+  messageReactionInitialized = true;
+
+  runMessageReactionScan('开始即时扫描');
+
   // 初始扫描（延迟更长时间等待页面加载）
   setTimeout(() => {
-    console.log('💬 MessageReaction: 开始初始扫描...');
-    scanAndProcessMessages();
+    runMessageReactionScan('开始初始扫描...');
 
     const messages = document.querySelectorAll(
       '.conversation-card-wrapper[data-id]',
@@ -3089,8 +3210,7 @@ export function initMessageReaction(config?: MessageReactionConfig) {
 
   // 再次扫描
   setTimeout(() => {
-    console.log('💬 MessageReaction: 第二次扫描...');
-    scanAndProcessMessages();
+    runMessageReactionScan('第二次扫描...');
   }, 5000);
 
   // 监听 DOM 变化
@@ -3115,19 +3235,22 @@ export function initMessageReaction(config?: MessageReactionConfig) {
   });
 
   // 点击页面其他区域时，如果不是在选择器打开状态，隐藏 Snooze 菜单
-  document.addEventListener('click', (e) => {
-    if (isSnoozePickerOpen) return; // 选择器打开时不处理
+  if (!messageReactionDocumentClickBound) {
+    document.addEventListener('click', (e) => {
+      if (isSnoozePickerOpen) return; // 选择器打开时不处理
 
-    const target = e.target as HTMLElement;
-    if (
-      !target.closest('.snooze-menu') &&
-      !target.closest('.message-reaction-toolbar') &&
-      !target.closest('.snooze-picker')
-    ) {
-      invalidateSnoozeMenuRequests();
-      hideSnoozeMenu();
-    }
-  });
+      const target = e.target as HTMLElement;
+      if (
+        !target.closest('.snooze-menu') &&
+        !target.closest('.message-reaction-toolbar') &&
+        !target.closest('.snooze-picker')
+      ) {
+        invalidateSnoozeMenuRequests();
+        hideSnoozeMenu();
+      }
+    });
+    messageReactionDocumentClickBound = true;
+  }
 
   console.log('✅ MessageReaction: 初始化完成');
 }

@@ -29,6 +29,7 @@ export interface SyncAttemptResult {
   errorMessage?: string;
   externalThreadId?: string;
   packageKinds?: string[];
+  packageItemCount?: number;
   sourceRefCount?: number;
   transportUsed?: SyncResult['transportUsed'];
   transportMode?: SyncResult['transportMode'];
@@ -277,6 +278,9 @@ function cleanAttemptMetadata(
   if (metadata.packageKinds?.length) {
     cleaned.packageKinds = metadata.packageKinds;
   }
+  if (typeof metadata.packageItemCount === 'number') {
+    cleaned.packageItemCount = metadata.packageItemCount;
+  }
   if (typeof metadata.sourceRefCount === 'number') {
     cleaned.sourceRefCount = metadata.sourceRefCount;
   }
@@ -306,10 +310,16 @@ function cleanAttemptMetadata(
 
 function packageMetadata(
   rendered: RenderContextPackageResponse,
-): Pick<SyncAttemptResult, 'packageKinds' | 'sourceRefCount'> {
+): Pick<
+  SyncAttemptResult,
+  'packageKinds' | 'packageItemCount' | 'sourceRefCount'
+> {
   const packageKinds = Array.from(
     new Set(rendered.packages.map((pkg) => pkg.kind).filter(Boolean)),
   );
+  const itemCounts = rendered.packages
+    .map((pkg) => pkg.itemCount)
+    .filter((value): value is number => typeof value === 'number');
   const sourceRefCount = new Set(
     rendered.packages
       .flatMap((pkg) => pkg.sourceRefs || [])
@@ -318,6 +328,10 @@ function packageMetadata(
 
   return {
     packageKinds,
+    packageItemCount:
+      itemCounts.length > 0
+        ? itemCounts.reduce((total, count) => total + count, 0)
+        : undefined,
     sourceRefCount,
   };
 }
@@ -332,6 +346,9 @@ function mergeAttemptMetadata(
     (total, result) => total + (result.sourceRefCount || 0),
     0,
   );
+  const itemCounts = results
+    .map((result) => result.packageItemCount)
+    .filter((value): value is number => typeof value === 'number');
   const delivered = results.filter((result) => result.status === 'succeeded');
   const transportUsed =
     delivered.find((result) => result.transportUsed)?.transportUsed ||
@@ -363,6 +380,10 @@ function mergeAttemptMetadata(
 
   return cleanAttemptMetadata({
     packageKinds,
+    packageItemCount:
+      itemCounts.length > 0
+        ? itemCounts.reduce((total, count) => total + count, 0)
+        : undefined,
     sourceRefCount,
     externalThreadId,
     transportUsed,
@@ -550,6 +571,7 @@ export class BridgeSyncManager {
     errorMessage?: string;
     externalThreadId?: string;
     packageKinds?: string[];
+    packageItemCount?: number;
     sourceRefCount?: number;
     transportUsed?: SyncResult['transportUsed'];
     transportMode?: SyncResult['transportMode'];
@@ -609,6 +631,7 @@ export class BridgeSyncManager {
         errorMessage: result.errorMessage,
         externalThreadId: result.externalThreadId,
         packageKinds: result.packageKinds,
+        packageItemCount: result.packageItemCount,
         sourceRefCount: result.sourceRefCount,
         transportUsed: result.transportUsed,
         transportMode: result.transportMode,
@@ -1182,6 +1205,7 @@ export class BridgeSyncManager {
           errorMessage: reason,
           result: {
             packageKinds: rendered.packages.map((pkg) => pkg.kind),
+            packageItemCount: packageMetadata(rendered).packageItemCount,
             reason,
           },
           startedAt,
@@ -1218,6 +1242,7 @@ export class BridgeSyncManager {
           externalThreadId,
           result: {
             packageKinds: rendered.packages.map((pkg) => pkg.kind),
+            packageItemCount: packageMetadata(rendered).packageItemCount,
           },
           startedAt,
           completedAt: Date.now(),

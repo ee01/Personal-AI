@@ -19,10 +19,11 @@ import {
   ProjectAnalysisResult
 } from './interfaces/analysisInterfaces';
 import { 
-  getProjectsFromSlide, 
+  getProjectsFromSlideWithMetadata,
   applyProjectUpdates as applySlideUpdates, 
   getPresentationIdFromUrl,
   ProjectData,
+  SlideProjectExtractionMetadata,
   ProjectUpdateSuggestion
 } from './slide';
 import { JiraTicket } from './types';
@@ -61,6 +62,10 @@ export interface DisplaySlideAnalysisResult {
     attentionProjects: number;
     riskProjects: number;
     keyFindings: string[];
+    analysisWarnings?: string[];
+    analyzedSlideCount?: number;
+    totalSlideCount?: number;
+    requestedSlideId?: string;
   };
 }
 
@@ -225,10 +230,12 @@ async function analyzeSlideProjects(token: string) {
     const presentationId = getPresentationIdFromUrl(currentUrl);
     
     // 获取幻灯片内容，传入当前URL以便只分析当前幻灯片
-    const projectsData = await getProjectsFromSlide(presentationId, token, undefined, currentUrl, {useLLMFallback: true});
+    const extractionResult = await getProjectsFromSlideWithMetadata(presentationId, token, undefined, currentUrl, {useLLMFallback: true});
+    const projectsData = extractionResult.projects;
     
     if (!projectsData || projectsData.length === 0) {
-      showToast('未找到项目信息', 'warning');
+      const extractionWarning = extractionResult.metadata.warnings[0];
+      showToast(extractionWarning ? `未找到项目信息：${extractionWarning}` : '未找到项目信息', 'warning');
       return;
     }
     
@@ -236,7 +243,7 @@ async function analyzeSlideProjects(token: string) {
     console.log('需求处理的目标projects数据: ', projectsData);
     
     // 分析项目数据
-    const analysisResult = await analyzeProjectsData(projectsData);
+    const analysisResult = await analyzeProjectsData(projectsData, extractionResult.metadata);
     
     // 显示分析结果
     showAnalysisResults(analysisResult, presentationId, token);
@@ -248,7 +255,10 @@ async function analyzeSlideProjects(token: string) {
 }
 
 // 分析项目数据
-async function analyzeProjectsData(projectsData: ProjectData[]): Promise<DisplaySlideAnalysisResult> {
+async function analyzeProjectsData(
+  projectsData: ProjectData[],
+  extractionMetadata?: SlideProjectExtractionMetadata
+): Promise<DisplaySlideAnalysisResult> {
   // 初始化分析结果
   const analysisResult: DisplaySlideAnalysisResult = {
     projects: projectsData,
@@ -259,7 +269,11 @@ async function analyzeProjectsData(projectsData: ProjectData[]): Promise<Display
       normalProjects: 0,
       attentionProjects: 0,
       riskProjects: 0,
-      keyFindings: []
+      keyFindings: [],
+      analysisWarnings: extractionMetadata?.warnings,
+      analyzedSlideCount: extractionMetadata?.analyzedSlideCount,
+      totalSlideCount: extractionMetadata?.totalSlideCount,
+      requestedSlideId: extractionMetadata?.requestedSlideId
     }
   };
   

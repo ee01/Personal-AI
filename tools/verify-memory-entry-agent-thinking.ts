@@ -499,8 +499,10 @@ async function main() {
   assert.ok(agentVisualizerCss.includes('.node-result.approval'));
   assert.ok(agentVisualizerCss.includes('.diagnostic-content'));
   assert.ok(agentVisualizerCss.includes('.agent-run-review'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-review-step-links'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-queue'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-review-hint'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-policy-note'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-actions'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-retry-config'));
   assert.ok(agentVisualizerCss.includes('.agent-approval-copy-status'));
@@ -557,6 +559,7 @@ async function main() {
     '工具被阻断',
     '缺少完成状态',
   ]);
+  assert.deepEqual(blockedReviewItems[0].stepIndexes, [0]);
 
   registerTool({
     id: 'approvalWriteTest',
@@ -611,6 +614,10 @@ async function main() {
   assert.equal(approvalToolResult.approvalWriteTest.blocked, true);
   assert.equal(approvalToolResult.approvalWriteTest.approvalRequired, true);
   assert.equal(approvalToolResult.approvalWriteTest.approvalKey, approvalKey);
+  assert.equal(
+    approvalToolResult.approvalWriteTest.safetyNote,
+    '测试工具，不应在未批准时执行。',
+  );
   assert.equal(approvalUsedTools.has('approvalWriteTest'), false);
   assert.equal(stepHasToolApprovalRequired(approvalStep), true);
   assert.equal(getStepKind(approvalStep), '待确认');
@@ -624,6 +631,7 @@ async function main() {
   });
   const approvalReviewItems = buildAgentRunReviewItems([approvalStep]);
   assert.equal(approvalReviewItems[0].title, '需要人工确认');
+  assert.deepEqual(approvalReviewItems[0].stepIndexes, [0]);
   const pendingApprovalActions = buildPendingApprovalActions([approvalStep]);
   assert.equal(pendingApprovalActions.length, 1);
   assert.deepEqual(
@@ -634,6 +642,7 @@ async function main() {
       riskLevel: pendingApprovalActions[0].riskLevel,
       paramsPreview: pendingApprovalActions[0].paramsPreview,
       reviewHint: pendingApprovalActions[0].reviewHint,
+      safetyNote: pendingApprovalActions[0].safetyNote,
     },
     {
       toolId: 'approvalWriteTest',
@@ -643,7 +652,24 @@ async function main() {
       paramsPreview: JSON.stringify(approvalParams),
       reviewHint:
         '确认写入对象、字段变化和回滚方式后再批准。 高风险动作需要明确用户授权。',
+      safetyNote: '测试工具，不应在未批准时执行。',
     },
+  );
+  assert.deepEqual(
+    pendingApprovalActions[0].decisionOptions.map((option) => option.type),
+    ['approve', 'reject', 'edit'],
+  );
+  assert.match(
+    pendingApprovalActions[0].decisionOptions[0].description,
+    /approvalKey/,
+  );
+  assert.match(
+    pendingApprovalActions[0].decisionOptions[2].description,
+    /不复用旧 key/,
+  );
+  assert.match(
+    pendingApprovalActions[0].resumeInstruction,
+    /拒绝或修改参数时不要复用旧 key/,
   );
   assert.match(
     pendingApprovalActions[0].reviewPayload,
@@ -669,9 +695,23 @@ async function main() {
   );
   assert.equal(pendingApprovalReviewPayload.approvalKey, approvalKey);
   assert.deepEqual(pendingApprovalReviewPayload.params, approvalParams);
+  assert.equal(
+    pendingApprovalReviewPayload.safetyNote,
+    '测试工具，不应在未批准时执行。',
+  );
   assert.deepEqual(pendingApprovalReviewPayload.retryConfigPatch, {
     approvedToolActionKeys: [approvalKey],
   });
+  assert.deepEqual(
+    pendingApprovalReviewPayload.decisionOptions.map(
+      (option: { type: string }) => option.type,
+    ),
+    ['approve', 'reject', 'edit'],
+  );
+  assert.match(
+    pendingApprovalReviewPayload.resumeInstruction,
+    /批准后复制重跑配置重新运行/,
+  );
   assert.equal(formatApprovalEffect(pendingApprovalActions[0].effect), '写入');
   assert.equal(formatApprovalRisk(pendingApprovalActions[0].riskLevel), '高风险');
   assert.match(
@@ -777,6 +817,7 @@ async function main() {
   assert.deepEqual(skippedReviewItems.map((item) => item.title), [
     '重复调用已跳过',
   ]);
+  assert.deepEqual(skippedReviewItems[0].stepIndexes, [0]);
 
   const errorStep = {
     timestamp: timestamp + 2000,
@@ -802,6 +843,7 @@ async function main() {
   ]);
   assert.equal(getAgentRunReviewSeverity(errorReviewItems), 'critical');
   assert.equal(errorReviewItems[0].title, '工具调用失败');
+  assert.deepEqual(errorReviewItems[0].stepIndexes, [0]);
 
   const jiraSoftFailureStep = {
     timestamp: timestamp + 2600,
@@ -871,6 +913,7 @@ async function main() {
   assert.deepEqual(emptyEvidenceReviewItems.map((item) => item.title), [
     '工具证据不足',
   ]);
+  assert.deepEqual(emptyEvidenceReviewItems[0].stepIndexes, [0]);
 
   const budgetReviewItems = buildAgentRunReviewItems([
     {
@@ -882,6 +925,33 @@ async function main() {
   ]);
   assert.equal(getAgentRunReviewSeverity(budgetReviewItems), 'warning');
   assert.equal(budgetReviewItems[0].title, '行动次数用完');
+  assert.deepEqual(budgetReviewItems[0].stepIndexes, [0]);
+
+  const budgetWithOpenIssues = buildAgentRunReviewItems([
+    errorStep,
+    approvalStep,
+    blockedStep,
+    emptyEvidenceStep,
+    {
+      timestamp: timestamp + 3200,
+      thought: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+      publicSummary: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+      action: 'max_actions_reached',
+    },
+  ]);
+  const budgetWithOpenIssuesItem = budgetWithOpenIssues.find(
+    (item) => item.title === '行动次数用完',
+  );
+  assert.ok(budgetWithOpenIssuesItem);
+  assert.match(
+    budgetWithOpenIssuesItem.detail,
+    /工具失败 1 个步骤、待确认 1 个步骤、被阻断 1 个步骤、证据不足 1 个步骤/,
+  );
+  assert.match(
+    budgetWithOpenIssuesItem.action,
+    /先处理失败、待确认、阻断或缺证问题/,
+  );
+  assert.deepEqual(budgetWithOpenIssuesItem.stepIndexes, [0, 1, 2, 3, 4]);
 
   const okReviewItems = buildAgentRunReviewItems([
     {
@@ -930,6 +1000,27 @@ async function main() {
       .filter((step) => step.type === 'decision')
       .map((step) => step.name),
     ['最终决策'],
+  );
+  const budgetFlowSteps = buildAgentFlowSteps(
+    [
+      approvalStep,
+      emptyEvidenceStep,
+      {
+        timestamp: timestamp + 5200,
+        thought: '已达到最大行动次数 2，使用当前已收集的信息结束本轮分析。',
+        publicSummary: '已达到最大行动次数 2，使用当前已收集的信息结束本轮分析。',
+        action: 'max_actions_reached',
+      },
+    ],
+    (time) => String(time),
+  );
+  const budgetDecisionStep = budgetFlowSteps.find(
+    (step) => step.type === 'decision',
+  );
+  assert.equal(budgetDecisionStep?.name, '预算耗尽');
+  assert.match(
+    budgetDecisionStep?.detail || '',
+    /待确认 1 个步骤、证据不足 1 个步骤/,
   );
   const flowStepsWithDetails = buildAgentFlowSteps(
     [

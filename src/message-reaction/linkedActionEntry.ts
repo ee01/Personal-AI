@@ -12,6 +12,7 @@ export interface OpenLinkedActionConfigPayload {
 
 export function buildPendingLinkedActionConfig(
   payload: OpenLinkedActionConfigPayload,
+  requestedAt = Date.now(),
 ): PendingLinkedActionConfig {
   return {
     sender: payload.sender,
@@ -19,7 +20,8 @@ export function buildPendingLinkedActionConfig(
     groupName: payload.groupName,
     content: payload.content,
     messageId: payload.messageId,
-    timestamp: payload.timestamp ?? Date.now(),
+    timestamp: requestedAt,
+    messageTimestamp: payload.timestamp,
     messageLink: payload.messageLink,
   };
 }

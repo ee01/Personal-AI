@@ -12,6 +12,7 @@ export type DayPilotCardType =
   | 'ai_tool_shift'
   | 'project_risk'
   | 'relationship_ping'
+  | 'rehearsal_prompt'
   | 'skill_opportunity'
   | 'memory_quality';
 export type DayPilotFeedbackAction =
@@ -52,6 +53,7 @@ export interface DayPilotSourceStats {
   notifications: { scanned: number; pending: number };
   actions: { scanned: number; queued: number };
   reflections: { scanned: number; active: number };
+  rehearsals: { scanned: number; active: number };
   skills: { scanned: number; suggestions: number };
   relationships: { scanned: number; highFrequencyPeople: number };
 }
@@ -699,6 +701,7 @@ export class DayPilotRepository {
       notifications: { scanned: 0, pending: 0 },
       actions: { scanned: 0, queued: 0 },
       reflections: { scanned: 0, active: 0 },
+      rehearsals: { scanned: 0, active: 0 },
       skills: { scanned: 0, suggestions: 0 },
       relationships: { scanned: 0, highFrequencyPeople: 0 },
     };

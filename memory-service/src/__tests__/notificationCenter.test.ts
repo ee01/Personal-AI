@@ -112,7 +112,7 @@ describe('NotificationCenterService', () => {
     );
 
     const service = new NotificationCenterService(db);
-    service.recordDelivery([
+    const records = service.recordDelivery([
       {
         sourceRef: 'notification:notif-sticky',
         channel: 'chrome',
@@ -127,6 +127,14 @@ describe('NotificationCenterService', () => {
         error: 'transient_after_delivery',
       },
     ]);
+
+    expect(records[records.length - 1]).toMatchObject({
+      sourceRef: 'notification:notif-sticky',
+      status: 'failed',
+      effectiveStatus: 'delivered',
+      hasSuccessfulDelivery: true,
+      lastError: 'transient_after_delivery',
+    });
 
     const feed = service.listFeed({
       channel: 'chrome',
@@ -253,8 +261,7 @@ describe('NotificationCenterService', () => {
       'notification:notif-notice-sticky',
     );
 
-    const staleDeliveredAt =
-      now - TODO_DELIVERY_RETRY_COOLDOWN_SECONDS - 60;
+    const staleDeliveredAt = now - TODO_DELIVERY_RETRY_COOLDOWN_SECONDS - 60;
     db.prepare(
       `UPDATE channel_delivery_records
           SET first_delivered_at = ?,
@@ -275,15 +282,22 @@ describe('NotificationCenterService', () => {
       lanes: ['todo', 'notice'],
       limit: 10,
     });
-    expect(retryFeed.map((item) => item.sourceRef)).toContain(
-      'notification:notif-deadline-retry',
-    );
-    expect(retryFeed.map((item) => item.sourceRef)).toContain(
-      'proposed_action:action-retry',
-    );
-    expect(retryFeed.map((item) => item.sourceRef)).not.toContain(
-      'notification:notif-notice-sticky',
-    );
+    const retryRefs = retryFeed.map((item) => item.sourceRef);
+    expect(retryRefs).toContain('notification:notif-deadline-retry');
+    expect(retryRefs).toContain('proposed_action:action-retry');
+    expect(retryRefs).not.toContain('notification:notif-notice-sticky');
+    expect(
+      retryFeed.find(
+        (item) => item.sourceRef === 'notification:notif-deadline-retry',
+      )?.deliveryContext,
+    ).toMatchObject({
+      channel: 'chrome',
+      reason: 'retry_after_cooldown',
+      lastStatus: 'delivered',
+      effectiveStatus: 'delivered',
+      hasSuccessfulDelivery: true,
+      cooldownSeconds: TODO_DELIVERY_RETRY_COOLDOWN_SECONDS,
+    });
 
     service.recordDelivery([
       {
@@ -302,6 +316,51 @@ describe('NotificationCenterService', () => {
     expect(clickedFeed.map((item) => item.sourceRef)).not.toContain(
       'notification:notif-deadline-retry',
     );
+  });
+
+  it('exposes previous failed delivery context on feed items', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+    ).run(
+      'notif-failed-context',
+      'Weekly Report Ready',
+      'The previous push failed before reaching Chrome',
+      now,
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-failed-context',
+        channel: 'chrome',
+        lane: 'notice',
+        status: 'failed',
+        error: 'chrome_unavailable',
+      },
+    ]);
+
+    const feed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['notice'],
+      limit: 10,
+    });
+
+    const item = feed.find(
+      (candidate) =>
+        candidate.sourceRef === 'notification:notif-failed-context',
+    );
+    expect(item?.deliveryContext).toMatchObject({
+      channel: 'chrome',
+      reason: 'previous_delivery_failed',
+      lastStatus: 'failed',
+      effectiveStatus: 'failed',
+      hasSuccessfulDelivery: false,
+    });
   });
 
   it('does not surface expired proposed actions as todos', () => {
@@ -398,6 +457,11 @@ describe('NotificationCenterService', () => {
     const feedBody = feedRes.json();
     expect(feedBody.total).toBe(1);
     expect(feedBody.items[0].sourceRef).toBe('notification:notif-weekly-route');
+    expect(feedBody.items[0].deliveryContext).toMatchObject({
+      channel: 'chrome',
+      reason: 'new',
+      hasSuccessfulDelivery: false,
+    });
 
     const deliveryRes = await app.inject({
       method: 'POST',
@@ -419,6 +483,12 @@ describe('NotificationCenterService', () => {
     const deliveryBody = deliveryRes.json();
     expect(deliveryBody.ok).toBe(true);
     expect(deliveryBody.updated).toBe(1);
+    expect(deliveryBody.items[0]).toMatchObject({
+      sourceRef: 'notification:notif-weekly-route',
+      status: 'delivered',
+      effectiveStatus: 'delivered',
+      hasSuccessfulDelivery: true,
+    });
 
     const feedAfterDelivery = await app.inject({
       method: 'GET',
@@ -434,12 +504,13 @@ describe('NotificationCenterService', () => {
 
     db.prepare(
       `INSERT INTO notification_records
-        (id, channel, type, title, body, sent_at, created_at)
-       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?)`,
+        (id, channel, type, title, body, payload_json, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?, ?)`,
     ).run(
       'notif-deadline-snooze',
       'Deadline needs attention',
       'This should come back before the deadline',
+      JSON.stringify({ details: 'Original context should be preserved' }),
       now,
       now,
     );
@@ -462,9 +533,24 @@ describe('NotificationCenterService', () => {
     expect(snoozeBody.scheduledAt).toBeLessThanOrEqual(after + 45 * 60);
 
     const created = db
-      .prepare('SELECT sent_at FROM notification_records WHERE id = ?')
-      .get(snoozeBody.newNotificationId) as { sent_at: number } | undefined;
+      .prepare(
+        'SELECT sent_at, payload_json FROM notification_records WHERE id = ?',
+      )
+      .get(snoozeBody.newNotificationId) as
+      | { sent_at: number; payload_json: string }
+      | undefined;
     expect(created?.sent_at).toBe(snoozeBody.scheduledAt);
+    const createdPayload = JSON.parse(created?.payload_json ?? '{}');
+    expect(createdPayload.details).toBe('Original context should be preserved');
+    expect(createdPayload.snooze).toMatchObject({
+      sourceNotificationId: 'notif-deadline-snooze',
+      rootNotificationId: 'notif-deadline-snooze',
+      delaySeconds: 45 * 60,
+      scheduledAt: snoozeBody.scheduledAt,
+      count: 1,
+    });
+    expect(createdPayload.snooze.snoozedAt).toBeGreaterThanOrEqual(before);
+    expect(createdPayload.snooze.snoozedAt).toBeLessThanOrEqual(after);
 
     const scheduledRes = await app.inject({
       method: 'GET',
@@ -472,9 +558,14 @@ describe('NotificationCenterService', () => {
     });
 
     expect(scheduledRes.statusCode).toBe(200);
-    expect(scheduledRes.json().map((item: { id: string }) => item.id)).toEqual([
+    const scheduledItems = scheduledRes.json();
+    expect(scheduledItems.map((item: { id: string }) => item.id)).toEqual([
       snoozeBody.newNotificationId,
     ]);
+    expect(scheduledItems[0].payload.snooze).toMatchObject({
+      sourceNotificationId: 'notif-deadline-snooze',
+      scheduledAt: snoozeBody.scheduledAt,
+    });
 
     const statsRes = await app.inject({
       method: 'GET',
