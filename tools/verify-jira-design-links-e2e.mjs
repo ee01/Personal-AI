@@ -57,6 +57,14 @@ const fixtureHtml = `<!doctype html>
             <span class="issue-link-key" data-issue-key="UXRAW-400">blocked by UXRAW-400</span>
             <span class="issue-link-summary">Raw text fallback UX spec</span>
           </div>
+          <div class="issue-link">
+            <span class="issue-link-key" aria-label="blocked by ABC-999 and design owner UXMULTI-500">ABC-999 references UXMULTI-500</span>
+            <span class="issue-link-summary">Mixed raw key fallback UX spec</span>
+          </div>
+          <div class="issue-link">
+            <a class="issue-link-key" href="https://jira.ringcentral.com/jira/software/c/projects/UX/issues/UXCLOUD-600">Open design dependency</a>
+            <span class="issue-link-summary">Cloud URL fallback UX spec</span>
+          </div>
         </div>
       </div>
     </main>
@@ -99,6 +107,7 @@ try {
               icon: {
                 title: 'ready_for_development',
               },
+              updatedAt: '2026-05-19T12:34:00.000+0000',
             },
             updatedDate: '2026-05-18T10:20:00.000+0000',
           },
@@ -154,6 +163,14 @@ try {
     }
 
     if (pathname === '/rest/api/2/issue/UXRAW-400/remotelink') {
+      return fulfillJson([]);
+    }
+
+    if (pathname === '/rest/api/2/issue/UXMULTI-500/remotelink') {
+      return fulfillJson([]);
+    }
+
+    if (pathname === '/rest/api/2/issue/UXCLOUD-600/remotelink') {
       return fulfillJson([]);
     }
 
@@ -217,6 +234,36 @@ try {
       });
     }
 
+    if (pathname === '/rest/api/2/issue/UXMULTI-500') {
+      return fulfillJson({
+        key: 'UXMULTI-500',
+        fields: {
+          summary: 'Mixed raw key fallback UX spec',
+          issuetype: { name: 'Story' },
+          status: { name: 'To Do' },
+          customfield_21233: null,
+          customfield_11450: null,
+          duedate: null,
+          fixVersions: [],
+        },
+      });
+    }
+
+    if (pathname === '/rest/api/2/issue/UXCLOUD-600') {
+      return fulfillJson({
+        key: 'UXCLOUD-600',
+        fields: {
+          summary: 'Cloud URL fallback UX spec',
+          issuetype: { name: 'Story' },
+          status: { name: 'To Do' },
+          customfield_21233: null,
+          customfield_11450: null,
+          duedate: null,
+          fixVersions: [],
+        },
+      });
+    }
+
     if (pathname === '/rest/api/2/search') {
       return fulfillJson({ issues: [] });
     }
@@ -233,25 +280,33 @@ try {
   await page.waitForSelector('.design-links-container', { state: 'attached', timeout: 20000 });
 
   const itemTexts = await page.locator('.design-link-item').allTextContents();
-  const sourceSummary = '9 entries · Remote link, Jira Designs, Linked issue, Description';
+  const missingLinkStatusPattern = /Missing link|缺少设计稿链接/;
+  const designUpdatedStatusPattern = /Design updated|设计已更新/;
+  const notReadyStatusPattern = /Not ready for dev|尚未可开发|未准备好/;
+  const sourceSummary = '11 entries · Remote link, Jira Designs, Linked issue, Description';
   assert.equal(
     await page.locator('.design-links-container').getAttribute('aria-label'),
     `Design context: ${sourceSummary}`,
     'design panel should expose a compact source summary to assistive tech',
   );
-  assert.match(await page.locator('.design-links-footer .footer-text').textContent(), /9 entries · Remote link, Jira Designs, Linked issue, Description/);
+  assert.match(await page.locator('.design-links-footer .footer-text').textContent(), /11 entries · Remote link, Jira Designs, Linked issue, Description/);
   assert.equal(await page.locator('.design-links-header').count(), 0, 'design panel should not render a summary header');
-  assert.equal(itemTexts.length, 9, 'description, native Jira Designs, remote, and missing UX design rows should render once each');
+  assert.equal(itemTexts.length, 11, 'description, native Jira Designs, remote, and missing UX design rows should render once each');
   assert.match(itemTexts[0], /Ready checkout prototype/);
   assert.match(itemTexts[0], /UX-100/);
   assert.match(itemTexts[0], /Ready for development/);
-  assert.match(itemTexts[0], /Updated 2026-05-18/);
+  assert.match(itemTexts[0], /(Updated|已更新) 2026-05-19/);
   assert.match(itemTexts[0], /Cancelled/);
   assert.match(itemTexts[0], /Linked issue/);
   assert.match(itemTexts[0], /Remote link/);
   assert.match(
+    await page.locator('.design-link-item', { hasText: 'Ready checkout prototype' }).locator('.design-updated-tag').getAttribute('aria-label'),
+    /2026-05-19 12:34 UTC/,
+    'updated timestamp should expose the latest valid remote metadata time to assistive tech',
+  );
+  assert.match(
     await page.locator('.design-link-item', { hasText: 'Ready checkout prototype' }).locator('.design-updated-tag').getAttribute('title'),
-    /Re-check the linked design if implementation started before this update/,
+    /2026-05-19 12:34 UTC.*Re-check the linked design if implementation started before this update/,
     'updated timestamp tooltip should explain why the date matters',
   );
   assert.equal(
@@ -266,7 +321,7 @@ try {
   );
   assert.equal((itemTexts[0].match(/UX-100/g) || []).length, 1, 'UX epic key should not render twice');
   assert.match(itemTexts[1], /Native pricing handoff/);
-  assert.match(itemTexts[1], /Design updated/);
+  assert.match(itemTexts[1], designUpdatedStatusPattern);
   assert.match(itemTexts[1], /Jira Designs/);
   assert.doesNotMatch(itemTexts[1], /Open in Figma/);
   assert.equal(
@@ -276,33 +331,47 @@ try {
   );
   assert.match(itemTexts[2], /UX-200/);
   assert.doesNotMatch(itemTexts[2], /Missing design spec/);
-  assert.match(itemTexts[2], /Missing link/);
+  assert.match(itemTexts[2], missingLinkStatusPattern);
   assert.equal(
     await page.locator('.design-link-item', { hasText: 'UX-200' }).locator('.ux-ticket-link').getAttribute('title'),
     'UX-200',
   );
   assert.match(itemTexts[3], /UXDES-300/);
   assert.doesNotMatch(itemTexts[3], /Shared UXDES spec/);
-  assert.match(itemTexts[3], /Missing link/);
+  assert.match(itemTexts[3], missingLinkStatusPattern);
   assert.equal(
     await page.locator('.design-link-item', { hasText: 'UXDES-300' }).locator('.ux-ticket-link').getAttribute('title'),
     'UXDES-300',
   );
   assert.match(itemTexts[4], /UXRAW-400/);
   assert.doesNotMatch(itemTexts[4], /Raw text fallback UX spec/);
-  assert.match(itemTexts[4], /Missing link/);
+  assert.match(itemTexts[4], missingLinkStatusPattern);
   assert.equal(
     await page.locator('.design-link-item', { hasText: 'UXRAW-400' }).locator('.ux-ticket-link').getAttribute('href'),
     '/browse/UXRAW-400',
   );
-  assert.match(itemTexts[5], /Draft onboarding walkthrough/);
-  assert.match(itemTexts[5], /Not ready for dev/);
-  assert.match(itemTexts[5], /Updated 2026-05-17/);
-  assert.match(itemTexts[6], /Checkout mobile handoff/);
-  assert.match(itemTexts[6], /Description/);
-  assert.match(itemTexts[7], /Miro board/);
-  assert.match(itemTexts[8], /Zeplin screen/);
+  assert.match(itemTexts[5], /UXMULTI-500/);
+  assert.doesNotMatch(itemTexts[5], /ABC-999/);
+  assert.match(itemTexts[5], missingLinkStatusPattern);
+  assert.equal(
+    await page.locator('.design-link-item', { hasText: 'UXMULTI-500' }).locator('.ux-ticket-link').getAttribute('href'),
+    '/browse/UXMULTI-500',
+  );
+  assert.match(itemTexts[6], /UXCLOUD-600/);
+  assert.doesNotMatch(itemTexts[6], /Open design dependency/);
+  assert.match(itemTexts[6], missingLinkStatusPattern);
+  assert.equal(
+    await page.locator('.design-link-item', { hasText: 'UXCLOUD-600' }).locator('.ux-ticket-link').getAttribute('href'),
+    '/browse/UXCLOUD-600',
+  );
+  assert.match(itemTexts[7], /Draft onboarding walkthrough/);
+  assert.match(itemTexts[7], notReadyStatusPattern);
+  assert.match(itemTexts[7], /(Updated|已更新) 2026-05-17/);
+  assert.match(itemTexts[8], /Checkout mobile handoff/);
   assert.match(itemTexts[8], /Description/);
+  assert.match(itemTexts[9], /Miro board/);
+  assert.match(itemTexts[10], /Zeplin screen/);
+  assert.match(itemTexts[10], /Description/);
   assert.equal(
     await page.locator('.design-readiness, .design-readiness-action, .design-status-summary-chip').count(),
     0,
@@ -318,7 +387,7 @@ try {
   assert.match(statusClass, /design-status-tag--ready/);
   assert.equal(await page.locator('.design-link-item[data-design-attention="ready"]').count(), 1);
   assert.equal(await page.locator('.design-link-item[data-design-attention="updated"]').count(), 1);
-  assert.equal(await page.locator('.design-link-item[data-design-attention="missing"]').count(), 3);
+  assert.equal(await page.locator('.design-link-item[data-design-attention="missing"]').count(), 5);
   assert.equal(await page.locator('.design-link-item[data-design-attention="not-ready"]').count(), 1);
   assert.equal(await page.locator('.design-link-item[data-design-attention="neutral"]').count(), 3);
   const readyItemStyles = await page.locator('.design-link-item[data-design-attention="ready"]').evaluate(element => {
@@ -330,16 +399,16 @@ try {
   });
   assert.notEqual(readyItemStyles.borderLeftColor, 'rgba(0, 0, 0, 0)');
   assert.notEqual(readyItemStyles.backgroundColor, 'rgba(0, 0, 0, 0)');
-  const missingStatusTags = page.locator('.design-status-tag', { hasText: 'Missing link' });
-  assert.equal(await missingStatusTags.count(), 3, 'missing UX rows should show a missing status even when parsed from raw text');
+  const missingStatusTags = page.locator('.design-status-tag', { hasText: missingLinkStatusPattern });
+  assert.equal(await missingStatusTags.count(), 5, 'missing UX rows should show a missing status even when parsed from raw text or Jira issue URLs');
   const missingStatusClass = await missingStatusTags.first().getAttribute('class');
   assert.match(missingStatusClass, /design-status-tag--missing/);
-  const notReadyStatusClass = await page.locator('.design-status-tag', { hasText: 'Not ready for dev' }).getAttribute('class');
+  const notReadyStatusClass = await page.locator('.design-status-tag', { hasText: notReadyStatusPattern }).getAttribute('class');
   assert.match(notReadyStatusClass, /design-status-tag--not-ready/);
-  const updatedStatusClass = await page.locator('.design-status-tag', { hasText: 'Design updated' }).getAttribute('class');
+  const updatedStatusClass = await page.locator('.design-status-tag', { hasText: designUpdatedStatusPattern }).getAttribute('class');
   assert.match(updatedStatusClass, /design-status-tag--updated/);
   assert.match(
-    await page.locator('.design-status-tag', { hasText: 'Design updated' }).first().getAttribute('title'),
+    await page.locator('.design-status-tag', { hasText: designUpdatedStatusPattern }).first().getAttribute('title'),
     /Re-check the linked design/,
     'updated status should explain the action implied by Figma/Jira changed state',
   );

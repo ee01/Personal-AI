@@ -22,6 +22,7 @@ export interface Config {
   difyAppMode: 'chat' | 'completion';
   ollamaBaseUrl: string;
   ollamaModel: string;
+  llmRequestTimeoutMs: number;
 
   // Embedding
   embeddingProvider: string;
@@ -118,6 +119,13 @@ export function getConfig(): Readonly<Config> {
   const dreamDigestIntervalDays = Number.isFinite(parsedDreamIntervalDays)
     ? Math.max(1, parsedDreamIntervalDays)
     : 7;
+  const parsedLlmRequestTimeoutMs = parseInt(
+    process.env.LLM_REQUEST_TIMEOUT_MS || '60000',
+    10,
+  );
+  const llmRequestTimeoutMs = Number.isFinite(parsedLlmRequestTimeoutMs)
+    ? Math.max(1000, parsedLlmRequestTimeoutMs)
+    : 60000;
 
   const config: Config = {
     // Server
@@ -138,6 +146,7 @@ export function getConfig(): Readonly<Config> {
       : 'chat') as 'chat' | 'completion',
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'llama3',
+    llmRequestTimeoutMs,
 
     // Embedding
     embeddingProvider: process.env.EMBEDDING_PROVIDER || 'local',
@@ -199,7 +208,7 @@ export function getConfig(): Readonly<Config> {
     dreamDigestIntervalDays,
 
     // Reflection runtime
-    reflectionEnabled: process.env.REFLECTION_ENABLED === 'true',
+    reflectionEnabled: process.env.REFLECTION_ENABLED !== 'false',
     reflectionActiveTopicLimit: parseInt(
       process.env.REFLECTION_ACTIVE_TOPIC_LIMIT || '6',
       10,

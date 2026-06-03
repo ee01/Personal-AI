@@ -253,8 +253,127 @@ describe('Smart Memory Import API', () => {
     expect(result.detectedKind).toBe('external_ai_history');
     expect(result.status).toBe('ready');
     expect(result.summary.externalAiConversations).toBe(1);
+    expect(result.summary.externalAiImportedMessages).toBe(2);
+    expect(result.summary.externalAiTotalMessages).toBe(2);
+    expect(result.summary.externalAiTruncatedConversations).toBe(0);
     expect(result.entries[0].title).toBe('Memory import discussion');
     expect(result.entries[0].preview).toContain('Source: chatgpt');
+  });
+
+  it('reports external AI message truncation before import commit', () => {
+    const service = new SmartMemoryImportService(createUserContext(db));
+    const mapping = Object.fromEntries(
+      Array.from({ length: 85 }, (_, index) => [
+        `message-${index}`,
+        {
+          message: {
+            author: { role: index % 2 === 0 ? 'user' : 'assistant' },
+            create_time: index + 1,
+            content: { parts: [`Long memory message ${index + 1}`] },
+          },
+        },
+      ]),
+    );
+
+    const result = service.inspect({
+      inputKind: 'file',
+      fileName: 'long-chatgpt-export.zip',
+      buffer: createZipBuffer({
+        'conversations.json': JSON.stringify([
+          {
+            title: 'Long memory thread',
+            mapping,
+          },
+        ]),
+      }),
+    });
+
+    expect(result.detectedKind).toBe('external_ai_history');
+    expect(result.summary.externalAiConversations).toBe(1);
+    expect(result.summary.externalAiImportedMessages).toBe(80);
+    expect(result.summary.externalAiTotalMessages).toBe(85);
+    expect(result.summary.externalAiTruncatedConversations).toBe(1);
+    expect(result.summary.externalAiTruncatedMessages).toBe(5);
+    expect(result.warnings).toContain(
+      'Conversation "Long memory thread" includes 85 messages; only the first 80 were included in this import preview.',
+    );
+  });
+
+  it('parses Claude chat_messages content arrays as external AI history text', () => {
+    const service = new SmartMemoryImportService(createUserContext(db));
+    const result = service.inspect({
+      inputKind: 'file',
+      fileName: 'claude-export.zip',
+      buffer: createZipBuffer({
+        'conversations.json': JSON.stringify([
+          {
+            title: 'Claude requirements thread',
+            chat_messages: [
+              {
+                role: 'user',
+                content: [{ type: 'text', text: 'Please remember the dashboard scope.' }],
+              },
+              {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'Dashboard scope remembered for review.' }],
+              },
+            ],
+          },
+        ]),
+      }),
+    });
+
+    expect(result.detectedKind).toBe('external_ai_history');
+    expect(result.summary.externalAiConversations).toBe(1);
+    expect(result.summary.externalAiImportedMessages).toBe(2);
+    expect(result.entries[0]).toMatchObject({
+      title: 'Claude requirements thread',
+      path: 'claude/1-claude-requirements-thread.md',
+    });
+    expect(result.entries[0].preview).toContain('Source: claude');
+    expect(result.entries[0].preview).toContain('Please remember the dashboard scope.');
+    expect(result.entries[0].preview).not.toContain('[object Object]');
+  });
+
+  it('detects external AI conversations.json before applying ordinary zip entry limits', () => {
+    const service = new SmartMemoryImportService(createUserContext(db));
+    const entries: Record<string, string | Buffer> = {};
+    for (let index = 0; index < 90; index += 1) {
+      entries[`attachments/filler-${String(index).padStart(3, '0')}.txt`] =
+        `Attachment filler ${index}`;
+    }
+    entries['exports/conversations.json'] = JSON.stringify([
+      {
+        title: 'Late archive conversation',
+        mapping: {
+          user: {
+            message: {
+              author: { role: 'user' },
+              create_time: 1,
+              content: { parts: ['Remember this late conversations.json export.'] },
+            },
+          },
+        },
+      },
+    ]);
+
+    const result = service.inspect({
+      inputKind: 'file',
+      fileName: 'large-chatgpt-export.zip',
+      buffer: createZipBuffer(entries),
+    });
+
+    expect(result.detectedKind).toBe('external_ai_history');
+    expect(result.status).toBe('ready');
+    expect(result.summary.externalAiConversations).toBe(1);
+    expect(result.summary.unsupported).toBe(0);
+    expect(result.entries[0]).toMatchObject({
+      title: 'Late archive conversation',
+      path: 'chatgpt/1-late-archive-conversation.md',
+    });
+    expect(result.warnings).toContain(
+      'Detected external AI history from exports/conversations.json; other archive files were ignored.',
+    );
   });
 
   it('detects Personal AI backup zip so the UI can switch to restore mode', () => {

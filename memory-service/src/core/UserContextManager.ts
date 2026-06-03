@@ -4,6 +4,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { Database } from '../storage/Database.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
 import { ProfileManager } from './ProfileManager.js';
+import { assertValidUserId, isValidUserId } from '../utils/userIdentity.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,12 +63,13 @@ export class UserContextManager {
    * Bumps `lastAccessedAt` on every access so the eviction timer stays fresh.
    */
   getContext(userId: string): UserContext {
-    const existing = this.contexts.get(userId);
+    const normalizedUserId = assertValidUserId(userId);
+    const existing = this.contexts.get(normalizedUserId);
     if (existing) {
       existing.lastAccessedAt = Date.now();
       return existing;
     }
-    return this.createContext(userId);
+    return this.createContext(normalizedUserId);
   }
 
   /**
@@ -79,7 +81,8 @@ export class UserContextManager {
     return fs
       .readdirSync(this.usersBaseDir, { withFileTypes: true })
       .filter((d) => d.isDirectory())
-      .map((d) => d.name);
+      .map((d) => d.name)
+      .filter(isValidUserId);
   }
 
   /**

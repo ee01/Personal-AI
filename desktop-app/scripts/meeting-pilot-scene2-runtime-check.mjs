@@ -288,6 +288,67 @@ try {
     'stopped',
     `停止 Capture 未进入 stopped: ${JSON.stringify(stoppedResult)}`,
   );
+
+  log('使用无效 streamId 验证 Capture 启动失败不会被覆盖成 recording');
+  await panelPage.evaluate(async () => {
+    await chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_TEST_SET_API_MOCK',
+      enabled: false,
+    });
+  });
+  const failedStartResult = await panelPage.evaluate(
+    async ({ meetingId, tabId, title, url }) =>
+      chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_START_CAPTURE',
+        meetingId,
+        tabId,
+        title,
+        url,
+        streamId: '__meeting_pilot_invalid_stream__',
+      }),
+    { meetingId, tabId: meetingTabId, title: meetingTitle, url: meetingUrl },
+  );
+  assert.equal(
+    failedStartResult?.success,
+    false,
+    `无效 streamId 启动不应返回成功: ${JSON.stringify(failedStartResult)}`,
+  );
+  assert.equal(
+    failedStartResult?.session?.capture?.kind,
+    'error',
+    `无效 streamId 启动不应进入 recording: ${JSON.stringify(
+      failedStartResult?.session?.capture,
+    )}`,
+  );
+  assert.ok(
+    failedStartResult?.session?.capture?.lastError,
+    `无效 streamId 启动应保留真实错误: ${JSON.stringify(
+      failedStartResult?.session?.capture,
+    )}`,
+  );
+  await panelPage.waitForTimeout(150);
+  const failedState = await panelPage.evaluate(
+    async ({ tabId }) =>
+      chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_GET_STATE',
+        tabId,
+      }),
+    { tabId: meetingTabId },
+  );
+  assert.equal(
+    failedState?.activeSession?.capture?.kind,
+    'error',
+    `失败后状态不应被异步覆盖成 recording: ${JSON.stringify(
+      failedState?.activeSession?.capture,
+    )}`,
+  );
+  await panelPage.evaluate(async () => {
+    await chrome.runtime.sendMessage({
+      type: 'MEETING_PILOT_TEST_SET_API_MOCK',
+      enabled: true,
+    });
+  });
+
   await panelPage.waitForTimeout(30);
   const restartedResult = await panelPage.evaluate(
     async ({ meetingId, tabId, title, url }) =>
@@ -665,6 +726,17 @@ try {
       );
     },
     { timeout: 15000 },
+  );
+  const panoramaText = await panoramaPage.locator('body').textContent();
+  assert.doesNotMatch(
+    panoramaText || '',
+    /\bProbing\b/,
+    'Panorama 不应暴露英文内部转写探测状态',
+  );
+  assert.match(
+    panoramaText || '',
+    /检测中|RC 转写|本机转写|本地 ASR|云端 ASR|无转写/,
+    'Panorama 应展示用户可理解的转写状态文案',
   );
   await saveScreenshot(panoramaPage, 'scene2-panorama-runtime.png');
 

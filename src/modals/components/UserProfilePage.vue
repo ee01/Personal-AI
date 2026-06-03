@@ -491,6 +491,14 @@
           >
             {{ isLoadingAllProfileItems ? '加载中...' : '加载全部' }}
           </button>
+          <button
+            type="button"
+            class="secondary-action-btn retracted-items-toggle-btn"
+            :disabled="isLoadingRetractedProfileItems"
+            @click="toggleRetractedProfileItems"
+          >
+            {{ retractedItemsToggleLabel }}
+          </button>
         </div>
         <div class="profile-items-summary">{{ profileItemsDisplaySummary }}</div>
         <div v-if="filteredProfileItems.length === 0" class="inline-empty">
@@ -615,6 +623,92 @@
             >
               显示更多 {{ hiddenProfileItemsCount }} 条
             </button>
+          </div>
+        </div>
+        <div
+          v-if="showRetractedProfileItems"
+          class="retracted-profile-section"
+        >
+          <div class="retracted-profile-header">
+            <div>
+              <h4>已排除画像</h4>
+              <p>这些条目不会进入个性化上下文；确认误排后可以恢复。</p>
+            </div>
+            <span>{{ retractedProfileItems.length }}/{{ retractedProfileItemsTotal }} 条</span>
+          </div>
+          <div v-if="isLoadingRetractedProfileItems" class="inline-empty compact">
+            加载已排除画像...
+          </div>
+          <div v-else-if="retractedProfileItems.length === 0" class="inline-empty compact">
+            暂无已排除画像条目
+          </div>
+          <div v-else class="profile-items-list retracted-profile-items-list">
+            <div
+              v-for="item in retractedProfileItems"
+              :key="item.id"
+              class="profile-item-row retracted-profile-item"
+              :class="{ updating: isItemPending(item.id) }"
+            >
+              <div class="profile-item-main">
+                <div class="profile-item-title">
+                  <span class="profile-item-name">{{ item.name }}</span>
+                  <span class="profile-item-type">{{ getCategoryDisplayName(item.category) }}</span>
+                  <span class="profile-item-state retracted">
+                    {{ getProfileStatusDisplayName(item.status, item.userConfirmed) }}
+                  </span>
+                </div>
+                <div class="profile-item-meta">
+                  <span>重要性 {{ formatPercent(item.explicitImportance) }}</span>
+                  <span>命中 {{ item.mentionCount }} 次</span>
+                  <span>{{ getSourceDisplayName(item.sourceKind) }}</span>
+                  <button
+                    v-if="(item.evidenceRefs?.length || 0) > 0"
+                    type="button"
+                    class="evidence-toggle-btn"
+                    :aria-expanded="isEvidenceExpanded(item.id)"
+                    @click="toggleEvidence(item.id)"
+                  >
+                    {{ getEvidenceLabel(item) }} · {{ isEvidenceExpanded(item.id) ? '收起' : '查看' }}
+                  </button>
+                  <span v-else>{{ getEvidenceLabel(item) }}</span>
+                  <span class="context-use-pill inactive">已排除，不参与个性化</span>
+                  <span>{{ formatTime(item.lastSeen) }}</span>
+                  <span class="profile-calibration-reason">{{ item.calibrationReason }}</span>
+                </div>
+                <div
+                  v-if="(item.evidencePreview?.length || 0) > 0 && isEvidenceExpanded(item.id)"
+                  class="profile-evidence-panel"
+                >
+                  <component
+                    :is="evidence.sourceUrl ? 'a' : 'span'"
+                    v-for="(evidence, evidenceIndex) in (item.evidencePreview || []).slice(0, 4)"
+                    :key="`${item.id}-retracted-evidence-${evidenceIndex}`"
+                    class="profile-evidence-item"
+                    :href="evidence.sourceUrl || undefined"
+                    :target="evidence.sourceUrl ? '_blank' : undefined"
+                    :rel="evidence.sourceUrl ? 'noreferrer' : undefined"
+                  >
+                    <span class="profile-evidence-label">{{ evidence.label }}</span>
+                    <span class="profile-evidence-detail">{{ evidence.detail }}</span>
+                    <span
+                      v-if="evidence.sourceUrlHiddenReason"
+                      class="profile-evidence-warning"
+                    >
+                      {{ evidence.sourceUrlHiddenReason }}
+                    </span>
+                  </component>
+                </div>
+              </div>
+              <div class="profile-item-actions">
+                <button
+                  class="secondary-action-btn"
+                  :disabled="isItemPending(item.id)"
+                  @click="restoreProfileItemById(item.id, item.name)"
+                >
+                  {{ isItemPending(item.id) ? '恢复中' : '恢复' }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -899,7 +993,9 @@ import {
 const isLoading = ref(true);
 const isExporting = ref(false);
 const isLoadingAllProfileItems = ref(false);
+const isLoadingRetractedProfileItems = ref(false);
 const showAdvancedSettings = ref(false);
+const showRetractedProfileItems = ref(false);
 const isApplyingSettings = ref(false);
 const isCreatingExplicitProfile = ref(false);
 const isRestoringProfileItem = ref(false);
@@ -910,6 +1006,8 @@ const userProfileAnalysis = ref<UserProfileAnalysisViewModel | null>(null);
 const pendingItemIds = ref<Set<string>>(new Set());
 const expandedEvidenceItemIds = ref<Set<string>>(new Set());
 const recentlyRetractedProfileItem = ref<{ id: string; name: string } | null>(null);
+const retractedProfileItems = ref<UserProfileInterestItem[]>([]);
+const retractedProfileItemsTotal = ref(0);
 const CUSTOM_PROFILE_KEY = '__custom__';
 const explicitProfileDraft = ref({
   itemType: 'preference',
@@ -1009,6 +1107,10 @@ const profileItemsEmptyMessage = computed(() => {
     return '当前已加载条目中没有匹配结果，可先加载全部画像后再搜索';
   }
   return '当前筛选没有匹配的画像条目';
+});
+const retractedItemsToggleLabel = computed(() => {
+  if (isLoadingRetractedProfileItems.value) return '加载已排除...';
+  return showRetractedProfileItems.value ? '收起已排除' : '查看已排除';
 });
 
 watch([profileItemSearchQuery, profileItemStatusFilter, profileItemSortMode], () => {
@@ -1163,6 +1265,45 @@ const loadAllProfileItems = async () => {
   }
 };
 
+const loadRetractedProfileItems = async () => {
+  if (isLoadingRetractedProfileItems.value) return;
+  isLoadingRetractedProfileItems.value = true;
+  try {
+    const response = await chromeAPI.sendMessage({
+      type: 'GET_RETRACTED_PROFILE_ITEMS',
+      maxItems: 'all',
+    });
+
+    if (response && (response as any).success) {
+      const page = (response as any).data ?? {};
+      const viewModel = buildUserProfileViewModel({
+        items: page.items ?? [],
+        totalItems: page.total ?? page.items?.length ?? 0,
+        truncated: page.truncated,
+        viewLimit: page.viewLimit,
+        includeRetracted: true,
+      });
+      retractedProfileItems.value = viewModel.profile.allItems.filter(
+        (item) => item.status === 'retracted'
+      );
+      retractedProfileItemsTotal.value = page.total ?? retractedProfileItems.value.length;
+    } else {
+      setStatus((response as any)?.error || '已排除画像加载失败', 'error');
+    }
+  } catch (error: any) {
+    setStatus(error?.message || '已排除画像加载失败', 'error');
+  } finally {
+    isLoadingRetractedProfileItems.value = false;
+  }
+};
+
+const toggleRetractedProfileItems = async () => {
+  showRetractedProfileItems.value = !showRetractedProfileItems.value;
+  if (showRetractedProfileItems.value) {
+    await loadRetractedProfileItems();
+  }
+};
+
 const formatPercent = (value: number) => `${Math.round((value || 0) * 100)}%`;
 
 const formatTime = (timestamp: number) => {
@@ -1192,13 +1333,15 @@ const getSourceDisplayName = (sourceKind: string): string => {
 };
 
 const getProfileStatusDisplayName = (status: string, userConfirmed = false): string => {
-  if (userConfirmed) return '已确认';
   const names: Record<string, string> = {
     pending_confirm: '待确认',
     active: '推断',
     superseded: '已替换',
     archived: '已归档',
+    retracted: '已排除',
   };
+  if (status !== 'active' && names[status]) return names[status];
+  if (userConfirmed) return '已确认';
   return names[status] || '待确认';
 };
 
@@ -1340,6 +1483,9 @@ const retractProfileItem = async (itemId: string) => {
         keepUndoAction: true,
       });
       await loadUserProfile({ showLoading: false });
+      if (showRetractedProfileItems.value) {
+        await loadRetractedProfileItems();
+      }
     } else {
       setStatus((response as any)?.error || '画像条目排除失败', 'error');
     }
@@ -1350,32 +1496,55 @@ const retractProfileItem = async (itemId: string) => {
   }
 };
 
-const restoreRetractedProfileItem = async () => {
-  const item = recentlyRetractedProfileItem.value;
-  if (!item || isRestoringProfileItem.value) return;
+const restoreProfileItemById = async (
+  itemId: string,
+  itemName = '该画像条目',
+  options: { fromUndo?: boolean } = {},
+) => {
+  if (!itemId || isItemPending(itemId)) return;
+  if (options.fromUndo && isRestoringProfileItem.value) return;
 
-  isRestoringProfileItem.value = true;
+  if (options.fromUndo) {
+    isRestoringProfileItem.value = true;
+  }
+  setItemPending(itemId, true);
   try {
     const response = await chromeAPI.sendMessage({
       type: 'RESTORE_PROFILE_ITEM',
-      itemId: item.id,
+      itemId,
     });
 
     if (response && (response as any).success) {
-      setStatus(`已恢复“${item.name}”`, 'success');
+      retractedProfileItems.value = retractedProfileItems.value.filter(
+        (candidate) => candidate.id !== itemId
+      );
+      retractedProfileItemsTotal.value = Math.max(
+        0,
+        retractedProfileItemsTotal.value - 1
+      );
+      setStatus(`已恢复“${itemName}”`, 'success');
       await loadUserProfile({ showLoading: false });
     } else {
       setStatus((response as any)?.error || '画像条目恢复失败', 'error', {
-        keepUndoAction: true,
+        keepUndoAction: options.fromUndo,
       });
     }
   } catch (error: any) {
     setStatus(error?.message || '画像条目恢复失败', 'error', {
-      keepUndoAction: true,
+      keepUndoAction: options.fromUndo,
     });
   } finally {
-    isRestoringProfileItem.value = false;
+    setItemPending(itemId, false);
+    if (options.fromUndo) {
+      isRestoringProfileItem.value = false;
+    }
   }
+};
+
+const restoreRetractedProfileItem = async () => {
+  const item = recentlyRetractedProfileItem.value;
+  if (!item) return;
+  await restoreProfileItemById(item.id, item.name, { fromUndo: true });
 };
 
 const createExplicitProfileItem = async () => {
@@ -1436,14 +1605,18 @@ const exportUserProfile = async () => {
       const warnings = Array.isArray(exportData?.exportInfo?.warnings)
         ? exportData.exportInfo.warnings
         : [];
+      const profileAudit = exportData?.exportInfo?.profileAudit ?? {};
       const itemCountLabel = pagination
         ? `（${pagination.exportedProfileItems}/${pagination.totalProfileItems} 条）`
+        : '';
+      const retractedAuditLabel = Number(profileAudit.retractedItems) > 0
+        ? `，含 ${profileAudit.retractedItems} 条已排除审计`
         : '';
       const warningLabel = warnings.length > 0
         ? `；${warnings.length} 个诊断项未同步`
         : '';
       setStatus(
-        `画像已导出：${fileName}${itemCountLabel}${warningLabel}`,
+        `画像已导出：${fileName}${itemCountLabel}${retractedAuditLabel}${warningLabel}`,
         warnings.length > 0 ? 'info' : 'success',
       );
     } else {
@@ -2165,6 +2338,11 @@ onMounted(() => {
   color: #2e7d32;
 }
 
+.context-use-pill.inactive {
+  background: #f1f3f5;
+  color: #5f6f7f;
+}
+
 .prediction-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2200,7 +2378,7 @@ onMounted(() => {
 
 .profile-items-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(140px, auto) minmax(140px, auto) auto auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(140px, auto) minmax(140px, auto) auto auto auto;
   gap: 10px;
   align-items: end;
   margin-bottom: 10px;
@@ -2321,6 +2499,11 @@ onMounted(() => {
 .profile-item-state.pending {
   background: #fff8e1;
   color: #8a5a00;
+}
+
+.profile-item-state.retracted {
+  background: #f1f3f5;
+  color: #5f6f7f;
 }
 
 .calibration-priority-pill {
@@ -2502,6 +2685,48 @@ a.profile-evidence-item:hover .profile-evidence-label {
 
 .load-all-items-btn {
   white-space: nowrap;
+}
+
+.retracted-items-toggle-btn {
+  white-space: nowrap;
+}
+
+.retracted-profile-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e9ecef;
+}
+
+.retracted-profile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.retracted-profile-header h4 {
+  margin: 0 0 4px 0;
+  color: #2c3e50;
+  font-size: 15px;
+}
+
+.retracted-profile-header p {
+  margin: 0;
+  color: #6c757d;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.retracted-profile-header span {
+  flex-shrink: 0;
+  color: #6c757d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.retracted-profile-item {
+  background: #fbfcfd;
 }
 
 .stat-card {

@@ -138,6 +138,121 @@ describe('Meetings API', () => {
     });
   });
 
+  it('searches and filters archived meetings before pagination', async () => {
+    const insertMeeting = (
+      id: string,
+      content: string,
+      title: string,
+      groupId: string,
+      timestamp: number,
+      metadata: Record<string, unknown>,
+    ) => {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, source_type, source_title, group_id, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+         VALUES (?, ?, 'meeting', ?, ?, ?, ?, ?, 'neutral', ?, ?)`,
+      ).run(
+        id,
+        content,
+        title,
+        groupId,
+        title,
+        timestamp,
+        0.8,
+        JSON.stringify(metadata),
+        timestamp,
+      );
+    };
+
+    insertMeeting(
+      'meeting-filter-ready',
+      'Launch plan recap',
+      'Customer Launch Review',
+      'meeting-filter-ready',
+      3000,
+      {
+        participants: ['Esone', 'Morgan'],
+        pdfUrl: 'https://example.com/launch.pdf',
+        digestStatus: 'completed',
+        summary: 'Launch owner and budget were confirmed.',
+      },
+    );
+    insertMeeting(
+      'meeting-filter-attention',
+      'Retrospective with missing PDF',
+      'Incident Follow-up',
+      'meeting-filter-attention',
+      2900,
+      {
+        participants: ['Sarah'],
+        digestStatus: 'completed',
+        summary: 'Digest completed but PDF was missing.',
+      },
+    );
+    insertMeeting(
+      'meeting-filter-processing',
+      'Q3 roadmap status',
+      'Roadmap Sync',
+      'meeting-filter-processing',
+      2800,
+      {
+        participants: ['Alex'],
+        digestId: 'digest-processing',
+        digestStatus: 'processing',
+      },
+    );
+    insertMeeting(
+      'meeting-filter-archived',
+      'Transcript mentioned migration blockers',
+      'Migration Notes',
+      'meeting-filter-archived',
+      2700,
+      {
+        participants: ['Priya'],
+      },
+    );
+    insertMeeting(
+      'meeting-filter-archived-latest',
+      'Archive checkpoint without the search terms',
+      'Migration Notes',
+      'meeting-filter-archived',
+      2750,
+      {
+        participants: ['Priya'],
+      },
+    );
+
+    const launchRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/meetings?limit=10&offset=0&q=launch%20Morgan&status=ready',
+    });
+
+    expect(launchRes.statusCode).toBe(200);
+    expect(launchRes.json().total).toBe(1);
+    expect(launchRes.json().items[0].meetingId).toBe('meeting-filter-ready');
+
+    const attentionRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/meetings?limit=10&offset=0&status=attention',
+    });
+
+    expect(attentionRes.statusCode).toBe(200);
+    expect(
+      attentionRes.json().items.map((item: any) => item.meetingId),
+    ).toEqual(['meeting-filter-attention']);
+
+    const transcriptSearchRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/meetings?limit=10&offset=0&q=migration%20blockers&status=archived',
+    });
+
+    expect(transcriptSearchRes.statusCode).toBe(200);
+    expect(transcriptSearchRes.json().total).toBe(1);
+    expect(transcriptSearchRes.json().items[0].meetingId).toBe(
+      'meeting-filter-archived',
+    );
+  });
+
   it('returns archived meeting detail from the latest meeting record metadata', async () => {
     db.prepare(
       `INSERT INTO messages_raw

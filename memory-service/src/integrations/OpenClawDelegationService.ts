@@ -36,6 +36,7 @@ export interface DelegationRequest {
   actionId: string;
   sessionKey: string;
   agentId?: string;
+  timeoutMs?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -551,8 +552,12 @@ export class OpenClawDelegationService {
       ],
     };
 
+    const requestTimeoutMs =
+      typeof input.timeoutMs === 'number' && Number.isFinite(input.timeoutMs)
+        ? Math.max(1000, Math.min(Math.floor(input.timeoutMs), config.openClawTimeoutMs))
+        : config.openClawTimeoutMs;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), config.openClawTimeoutMs);
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
 
     try {
       const response = await fetch(buildResponsesUrl(config.openClawBaseUrl), {

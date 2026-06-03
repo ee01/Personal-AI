@@ -8,16 +8,23 @@ export type EntityType =
   | 'Document'
   | 'Technology'
   | 'Topic';
-export type SourceType =
-  | 'glip'
-  | 'jira'
-  | 'web'
-  | 'manual'
-  | 'system'
-  | 'meeting'
-  | 'calendar'
-  | 'ai_chat'
-  | 'doubao';
+export const SOURCE_TYPES = [
+  'glip',
+  'jira',
+  'web',
+  'manual',
+  'system',
+  'meeting',
+  'calendar',
+  'ai_chat',
+  'doubao',
+  'chatgpt',
+  'doubao_chat',
+  'codex_cli',
+  'claude_code_cli',
+  'cursor_agent_cli',
+] as const;
+export type SourceType = (typeof SOURCE_TYPES)[number];
 export type MemoryScope = 'work' | 'personal';
 export type RecallScope = MemoryScope | 'both' | 'all';
 export type RecallSourceType =
@@ -27,6 +34,7 @@ export type RecallSourceType =
   | 'reflection'
   | 'dream'
   | 'rehearsal'
+  | 'reflection_thread'
   | 'source_memory'
   | 'entity_profile'
   | 'markdown'
@@ -563,14 +571,27 @@ export type IngestDecisionReason =
   | 'extraction_unavailable'
   | 'duplicate_post_id'
   | 'duplicate_content_source_sender'
+  | 'indexing_failed'
   | 'insert_failed';
 
 export type IngestDedupeReason = 'post_id' | 'content_source_sender';
+export type IngestExtractionStatus = 'extracted' | 'skipped' | 'unavailable';
+
+export interface IngestSalienceComponents {
+  importance: number;
+  frequency: number;
+  recency: number;
+  surprise: number;
+  redundancy: number;
+  userInterestBoost?: number;
+}
 
 export interface IngestDecision {
   storage: IngestStorageDecision;
   reason: IngestDecisionReason;
   salienceScore?: number;
+  salienceComponents?: IngestSalienceComponents;
+  extractionStatus?: IngestExtractionStatus;
   shouldIndex?: boolean;
   indexed?: boolean;
   duplicateOf?: string;
@@ -603,6 +624,20 @@ export type RecallPresentationHint =
   | 'meeting_pilot'
   | 'research'
   | 'dashboard';
+export type MemoryRetrievalTier =
+  | 'core'
+  | 'active'
+  | 'weak'
+  | 'historical'
+  | 'archive_only'
+  | 'forgotten';
+export type RecallLifecycleMode =
+  | 'active_default'
+  | 'passive_surface'
+  | 'composer_surface'
+  | 'historical'
+  | 'explicit_search'
+  | 'audit';
 
 export interface RecallQuery {
   query: string;
@@ -619,6 +654,7 @@ export interface RecallQuery {
   minImportance?: number;
   sourceTypes?: RecallSourceType[];
   presentationHint?: RecallPresentationHint;
+  lifecycleMode?: RecallLifecycleMode;
   previewMaxLength?: number;
   /** Hint to ActiveRecallService about the desired second-stage processing. */
   analysisMode?: RecallAnalysisMode;
@@ -890,6 +926,47 @@ export type ContextRecallEvidenceRole =
 
 export type ContextRecallDisplayPriority = 'p1' | 'p2' | 'hidden';
 
+export type ContextRecallAutopilotMode =
+  | 'silent'
+  | 'chip'
+  | 'card'
+  | 'context_pack';
+
+export interface ContextRecallSceneSummary {
+  people?: string[];
+  topics?: string[];
+  projects?: string[];
+  source?: string[];
+}
+
+export interface ContextRecallAutopilotQuietReason {
+  reason: string;
+  label: string;
+  count: number;
+}
+
+export interface ContextRecallAutopilotDecision {
+  /**
+   * Scene-aware display decision after recall/rerank. Lens treats `silent` as
+   * no prompt, `chip` as low-interruption, `card` as strong contextual prompt,
+   * and `context_pack` as evidence for generated assist surfaces.
+   */
+  mode: ContextRecallAutopilotMode;
+  summary: string;
+  candidateCount: number;
+  shownCount: number;
+  strongCount: number;
+  possibleCount: number;
+  quietedCount: number;
+  hiddenCount: number;
+  lowInformationCount: number;
+  sourceExcludedCount: number;
+  duplicateMergedCount: number;
+  quietReasons: ContextRecallAutopilotQuietReason[];
+  sceneAnchors?: ContextRecallSceneSummary;
+  gates: string[];
+}
+
 export interface ContextRecallRequest {
   surface: ContextRecallSurface;
   contextType: ContextRecallContextType;
@@ -963,6 +1040,7 @@ export interface ContextRecallDebug {
   channelsHit: string[];
   rejectedReason?: string;
   suppressionReasons?: string[];
+  autopilot?: ContextRecallAutopilotDecision;
   contextExpansion?: {
     expandedQuery?: string;
     addedTerms?: string[];
@@ -973,6 +1051,13 @@ export interface ContextRecallDebug {
       candidates: Array<{ label: string; score: number; reason?: string }>;
     };
     sourceAnchors?: string[];
+    contextMatch?: {
+      state: 'locked' | 'ambiguous' | 'none';
+      selectedTopic?: Record<string, any>;
+      candidates: Array<Record<string, any>>;
+      expandedQuery?: string;
+      userFacingSummary: string;
+    };
   };
 }
 
@@ -980,6 +1065,7 @@ export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch: ContextRecallMatch | null;
   queryTimeMs: number;
+  autopilot?: ContextRecallAutopilotDecision;
   debug?: ContextRecallDebug;
 }
 
@@ -991,6 +1077,9 @@ export type ComposerSurface =
   | 'doubao'
   | 'claude'
   | 'gemini'
+  | 'codex_cli'
+  | 'claude_code_cli'
+  | 'cursor_agent_cli'
   | 'generic_agent';
 
 export type ComposerContextType =
@@ -1003,6 +1092,8 @@ export type ComposerScenario =
   | 'thread_reply'
   | 'jira_comment'
   | 'web_agent_prompt'
+  | 'compose_to_ai'
+  | 'agent_compose'
   | 'document_note';
 
 export type ComposerContextItemType =
@@ -1160,6 +1251,7 @@ export interface StorylineDraftResponse {
   audience: string;
   targetArtifact: StorylineSuggestedArtifact;
   segments: StorylineDraftSegment[];
+  evidence?: ComposerAssistEvidence[];
   gaps: string[];
   riskNotes: string[];
   artifactText: string;

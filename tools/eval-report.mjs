@@ -9,6 +9,7 @@ import {
   getResultRoot,
   loadSuiteCases,
   loadRegistry,
+  readTextIfExists,
   readJsonFileIfExists,
   resolveRepoPath,
 } from './eval-lib.mjs';
@@ -29,22 +30,32 @@ const scheduledKeys = new Set(buildScheduledKeys());
 const reportPath = process.argv.includes('--stdout')
   ? null
   : registry.scheduler?.latestReport || path.join(resultRoot, 'latest-report.html');
-const report = await buildLatestReport();
+const reportData = await collectReportData();
+const report = buildLatestReport(reportData);
 
 if (reportPath) {
   await ensureDir(path.dirname(resolveRepoPath(reportPath)));
   await fs.writeFile(resolveRepoPath(reportPath), report);
+  for (const detailReport of buildSuiteDetailReports(reportData)) {
+    await fs.writeFile(resolveRepoPath(detailReport.path), detailReport.html);
+  }
   console.log(reportPath);
 } else {
   console.log(report);
 }
 
-async function buildLatestReport() {
+async function collectReportData() {
   const suiteRows = [];
   for (const suite of registry.suites || []) {
     const latest = latestBySuite.get(suite.id);
     const caseCount = await countCases(suite.cases);
-    suiteRows.push({ suite, latest, caseCount });
+    const workflowText = await readTextIfExists(suite.workflow);
+    suiteRows.push({
+      suite,
+      latest,
+      caseCount,
+      workflowSummary: summarizeWorkflow(workflowText, suite),
+    });
   }
 
   const caseSections = [];
@@ -61,7 +72,10 @@ async function buildLatestReport() {
   const contextSection = caseSections.find((section) => section.suite.id === 'context-recall');
   const otherSections = caseSections.filter((section) => section.suite.id !== 'context-recall');
   const contextAverage = contextSection ? averageCaseScore(contextSection.caseResults) : null;
+  return { suiteRows, caseSections, stateRows, contextSection, otherSections, contextAverage };
+}
 
+function buildLatestReport({ suiteRows, stateRows, contextSection, otherSections, contextAverage }) {
   return buildHtmlShell({
     title: 'Personal AI 体验评估报告',
     body: `
@@ -81,7 +95,7 @@ async function buildLatestReport() {
 
       <section>
         <h2>Memory Lens 真实群组评估</h2>
-        ${contextSection ? renderContextRecallSection(contextSection) : '<p class="muted">还没有 context-recall 结果。</p>'}
+        ${contextSection ? renderContextRecallOverview(contextSection) : '<p class="muted">还没有 context-recall 结果。</p>'}
       </section>
 
       <section>
@@ -90,11 +104,20 @@ async function buildLatestReport() {
       </section>
 
       <section>
+        <h2>套件说明</h2>
+        <p class="muted section-note">每个 suite 的“做什么”来自对应的 human-readable workflow Markdown。case 文件只存样本数据；workflow 文件描述评估目的、执行步骤和判分标准。</p>
+        <div class="suite-guide">
+          ${suiteRows.map(renderSuiteGuideCard).join('\n')}
+        </div>
+      </section>
+
+      <section>
         <h2>套件运行状态</h2>
         <table>
           <thead>
             <tr>
               <th>Suite</th>
+              <th>做什么</th>
               <th>样本</th>
               <th>运行方式</th>
               <th>频率</th>
@@ -130,6 +153,43 @@ async function buildLatestReport() {
   });
 }
 
+function buildSuiteDetailReports({ contextSection }) {
+  if (!contextSection) return [];
+  const detailPath = latestSuiteReportPath(contextSection.suite.id);
+  return [{
+    path: detailPath,
+    html: buildHtmlShell({
+      title: 'Memory Lens 群组评估报告',
+      body: `
+        <section class="hero">
+          <div>
+            <p class="eyebrow">Context Recall Eval</p>
+            <h1>Memory Lens 群组评估报告</h1>
+            <p class="lead">${escapeHtml(buildPlatformConclusion(contextSection))}</p>
+            <p class="muted">生成时间 ${escapeHtml(new Date().toISOString())}</p>
+          </div>
+          <div class="hero-metrics">
+            ${metricCard('群组样本', contextSection.caseResults.length)}
+            ${metricCard('平均分', averageCaseScore(contextSection.caseResults) ?? '-')}
+            ${metricCard('失败', countStatuses(contextSection.caseResults).fail || 0)}
+          </div>
+        </section>
+
+        <section>
+          <h2>完整分析</h2>
+          ${renderContextRecallSection(contextSection)}
+        </section>
+
+        <section>
+          <h2>报告层级</h2>
+          <p class="muted">这份是 context-recall suite 的汇总报告；每张卡片里的“单条证据报告”会进入对应 case 的一次执行详情，查看 input/request/response 等原始证据。</p>
+          <p><a class="button-link" href="${escapeAttr(relativeReportHref(reportPath || path.join(resultRoot, 'latest-report.html')))}">返回体验评估总览</a></p>
+        </section>
+      `,
+    }),
+  }];
+}
+
 function buildScheduledKeys() {
   const keys = [];
   for (const suite of registry.suites || []) {
@@ -159,7 +219,11 @@ async function collectSuiteCaseResults(suite, latest) {
       const runDir = value.reportPath ? path.dirname(value.reportPath) : null;
       if (!runDir) continue;
       const caseResults = await readJsonFileIfExists(path.join(runDir, 'case-results.json'), []);
-      results.push(...caseResults);
+      results.push(...caseResults.map((result) => ({
+        ...result,
+        runReportPath: value.reportPath,
+        runCompletedAt: value.lastCompletedAt,
+      })));
     }
     return results;
   }
@@ -180,8 +244,16 @@ async function countCases(casesPath) {
   }
 }
 
-function escapeTable(value) {
-  return String(value || '-').replace(/\|/g, '\\|').replace(/\n/g, '<br>');
+function summarizeWorkflow(workflowText, suite) {
+  if (suite.description) return truncateText(suite.description, 150);
+  const fallback = suite.title || suite.id;
+  const lines = String(workflowText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const firstParagraph = lines.find((line) => !line.startsWith('#') && !line.startsWith('-') && !line.startsWith('```'));
+  if (!firstParagraph) return fallback;
+  return truncateText(firstParagraph.replace(/`/g, ''), 150);
 }
 
 function buildPlatformConclusion(contextSection) {
@@ -219,6 +291,57 @@ function renderContextRecallSection({ caseResults, caseDefinitions }) {
     ${sortedResults.map((result) => renderContextRecallCard(result, casesById.get(result.caseId))).join('\n')}`;
 }
 
+function renderContextRecallOverview({ suite, caseResults, caseDefinitions }) {
+  const casesById = new Map((caseDefinitions || []).map((item) => [item.id, item]));
+  const sortedResults = [...caseResults].sort((left, right) => {
+    const leftIndex = (caseDefinitions || []).findIndex((item) => item.id === left.caseId);
+    const rightIndex = (caseDefinitions || []).findIndex((item) => item.id === right.caseId);
+    return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+  });
+  const counts = countStatuses(sortedResults);
+  const average = averageCaseScore(sortedResults);
+  const detailPath = latestSuiteReportPath(suite.id);
+  return `<div class="overview-head">
+      <p class="muted">这里是总览：只展示这组 eval 的状态、分数和入口。完整的每个群组分析在 suite 汇总报告里；单条 run report 只作为证据详情。</p>
+      <a class="button-link" href="${escapeAttr(relativeReportHref(detailPath))}">查看完整 Memory Lens 报告</a>
+    </div>
+    <div class="context-summary compact-summary">
+      ${metricCard('群组样本', sortedResults.length)}
+      ${metricCard('通过', counts.pass || 0)}
+      ${metricCard('需关注', counts.warn || 0)}
+      ${metricCard('失败', counts.fail || 0)}
+      ${metricCard('平均分', average ?? '-')}
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>群组</th>
+          <th>状态</th>
+          <th>分数</th>
+          <th>用户视角结论</th>
+          <th>证据</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${sortedResults.map((result) => renderContextRecallOverviewRow(result, casesById.get(result.caseId))).join('\n')}
+      </tbody>
+    </table>`;
+}
+
+function renderContextRecallOverviewRow(result, caseItem = {}) {
+  const score = result.overallScore ?? computeOverallScore(result.scores, result.status);
+  const evidence = result.runReportPath
+    ? `<a href="${escapeAttr(relativeReportHref(result.runReportPath))}">单条证据报告</a>`
+    : '-';
+  return `<tr>
+    <td><strong>${escapeHtml(result.caseTitle || caseItem.title || result.caseId)}</strong><div class="muted"><code>${escapeHtml(result.caseId)}</code></div></td>
+    <td>${statusBadge(result.status)}</td>
+    <td><strong>${escapeHtml(score ?? '-')}</strong></td>
+    <td>${escapeHtml(result.userConclusion || buildFallbackConclusion(result))}</td>
+    <td>${evidence}</td>
+  </tr>`;
+}
+
 function renderContextRecallCard(result, caseItem = {}) {
   const score = result.overallScore ?? computeOverallScore(result.scores, result.status);
   const topMatch = result.topMatch;
@@ -229,12 +352,15 @@ function renderContextRecallCard(result, caseItem = {}) {
   const suggestions = result.improvementSuggestions?.length
     ? result.improvementSuggestions
     : buildFallbackSuggestions(result, caseItem);
+  const evidenceLink = result.runReportPath
+    ? ` · <a href="${escapeAttr(relativeReportHref(result.runReportPath))}">单条证据报告</a>`
+    : '';
   return `<article class="lens-case">
     <div class="lens-case-head">
       <div>
         <p class="eyebrow">${escapeHtml(result.caseId)}</p>
         <h3>${escapeHtml(result.caseTitle || caseItem.title || result.caseId)}</h3>
-        <p class="muted">${targetUrl ? `<a href="${escapeAttr(targetUrl)}">${escapeHtml(targetUrl)}</a>` : '-'}</p>
+        <p class="muted">${targetUrl ? `<a href="${escapeAttr(targetUrl)}">${escapeHtml(targetUrl)}</a>` : '-'}${evidenceLink}</p>
       </div>
       <div class="score-box">
         ${statusBadge(result.status)}
@@ -276,12 +402,31 @@ function renderContextRecallCard(result, caseItem = {}) {
   </article>`;
 }
 
-function renderSuiteRow({ suite, latest, caseCount }) {
-  const report = latest?.reportPath
-    ? `<a href="${escapeAttr(relativeReportHref(latest.reportPath))}">${escapeHtml(latest.reportPath)}</a>`
+function renderSuiteGuideCard({ suite, caseCount, workflowSummary }) {
+  const workflowLink = suite.workflow
+    ? `<a href="${escapeAttr(relativeReportHref(suite.workflow))}">查看 workflow</a>`
+    : '<span class="muted">没有 workflow</span>';
+  return `<article class="suite-card">
+    <div>
+      <p class="eyebrow">${escapeHtml(suite.id)}</p>
+      <h3>${escapeHtml(suite.title || suite.id)}</h3>
+      <p>${escapeHtml(workflowSummary)}</p>
+    </div>
+    <div class="suite-card-meta">
+      <span>${escapeHtml(caseCount)} 个 case</span>
+      ${workflowLink}
+    </div>
+  </article>`;
+}
+
+function renderSuiteRow({ suite, latest, caseCount, workflowSummary }) {
+  const suiteReportPath = suite.id === 'context-recall' ? latestSuiteReportPath(suite.id) : latest?.reportPath;
+  const report = suiteReportPath
+    ? `<a href="${escapeAttr(relativeReportHref(suiteReportPath))}">${escapeHtml(suiteReportPath)}</a>`
     : '-';
   return `<tr>
     <td><code>${escapeHtml(suite.id)}</code><div class="muted">${escapeHtml(suite.title || '')}</div></td>
+    <td>${escapeHtml(workflowSummary)}${suite.workflow ? `<div><a href="${escapeAttr(relativeReportHref(suite.workflow))}">workflow</a></div>` : ''}</td>
     <td>${escapeHtml(caseCount)}</td>
     <td>${escapeHtml(suite.runMode || 'manual')}</td>
     <td>${escapeHtml(formatSchedule(suite.schedule))}</td>
@@ -467,6 +612,11 @@ function relativeReportHref(reportPath) {
   return path.relative(fromDir, reportPath) || path.basename(reportPath);
 }
 
+function latestSuiteReportPath(suiteId) {
+  const baseReportPath = registry.scheduler?.latestReport || path.join(resultRoot, 'latest-report.html');
+  return path.join(path.dirname(baseReportPath), `latest-${suiteId}-report.html`);
+}
+
 function metricCard(label, value) {
   return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? '-')}</strong></div>`;
 }
@@ -540,7 +690,36 @@ function buildHtmlShell({ title, body }) {
     .badge-warn { color: var(--warn); background: #fffaeb; }
     .badge-fail, .badge-error { color: var(--danger); background: #fef3f2; }
     .badge-skipped, .badge-hide_expected, .badge-unknown, .badge-- { color: var(--skip); background: #f2f4f7; }
+    .overview-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+    .overview-head p { margin: 0; max-width: 780px; }
+    .button-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 8px 12px;
+      border: 1px solid #b6ded4;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .button-link:hover { text-decoration: none; background: #d8eee8; }
+    .suite-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .suite-card {
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: none;
+      margin: 0;
+    }
+    .suite-card h3 { margin: 0 0 8px; font-size: 16px; }
+    .suite-card p { margin: 0; color: #475467; }
+    .suite-card-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 13px; }
     .context-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+    .compact-summary { margin-bottom: 14px; }
     .section-note { margin: 0 0 14px; }
     .lens-case {
       border: 1px solid #dfcfb8;
@@ -573,6 +752,9 @@ function buildHtmlShell({ title, body }) {
       main { width: min(100vw - 24px, 1240px); margin-top: 16px; }
       .hero { display: block; }
       .hero-metrics { grid-template-columns: 1fr; min-width: 0; margin-top: 16px; }
+      .overview-head { display: block; }
+      .overview-head .button-link { margin-top: 12px; }
+      .suite-guide { grid-template-columns: 1fr; }
       .context-summary { grid-template-columns: 1fr 1fr; }
       .lens-case-head, .lens-grid { display: block; }
       .score-box { justify-items: start; margin-top: 12px; }

@@ -68,7 +68,7 @@
         <article class="summary-card gap">
           <span>覆盖缺口</span>
           <strong>{{ coverage.summary.coverageGaps }}</strong>
-          <em>非 info 级修复建议</em>
+          <em>需主动处理的修复项</em>
         </article>
       </section>
 
@@ -252,7 +252,25 @@
           <header class="panel-head">
             <div>
               <h2>修复队列</h2>
-              <p>只展示可解释的下一步，不自动改同步设置。</p>
+              <p>{{ repairPanelSubtitle }}</p>
+            </div>
+            <div class="repair-scope-controls" role="group" aria-label="修复队列范围">
+              <button
+                type="button"
+                :class="{ active: repairScope === 'selected' }"
+                @click="repairScope = 'selected'"
+              >
+                当前平台
+                <span>{{ selectedRepairActionCount }}</span>
+              </button>
+              <button
+                type="button"
+                :class="{ active: repairScope === 'all' }"
+                @click="repairScope = 'all'"
+              >
+                全部
+                <span>{{ globalRepairActionCount }}</span>
+              </button>
             </div>
           </header>
           <div class="repair-list">
@@ -261,12 +279,25 @@
               :key="action.id"
               :class="action.severity"
             >
-              <strong>{{ action.title }}</strong>
+              <div class="repair-action-head">
+                <strong>{{ action.title }}</strong>
+                <span v-if="repairScope === 'all'" class="repair-platform">
+                  {{ repairPlatformName(action.platformId) }}
+                </span>
+              </div>
               <p>{{ action.description }}</p>
               <code>{{ action.source }}</code>
             </article>
             <div v-if="visibleRepairActions.length === 0" class="empty-state">
-              当前平台没有需要处理的覆盖修复项。
+              <p>{{ repairEmptyText }}</p>
+              <button
+                v-if="repairScope === 'selected' && globalRepairActionCount > 0"
+                class="inline-action"
+                type="button"
+                @click="repairScope = 'all'"
+              >
+                查看全部修复项
+              </button>
             </div>
           </div>
         </aside>
@@ -352,6 +383,14 @@
           <button
             type="button"
             class="source-chip"
+            :class="{ active: importMode === 'file' && detectedImportLabel === '外部 AI 历史' }"
+            @click="openImportFilePicker('file')"
+          >
+            外部 AI
+          </button>
+          <button
+            type="button"
+            class="source-chip"
             :class="{ active: importMode === 'backup' || isBackupRestoreCandidate }"
             @click="openImportFilePicker('backup')"
           >
@@ -407,6 +446,18 @@
             <span>高风险</span>
             <strong>{{ importInspect?.summary.highRisk ?? '-' }}</strong>
           </div>
+          <div v-if="isExternalAiImport">
+            <span>外部 AI 对话</span>
+            <strong>{{ importInspect?.summary.externalAiConversations ?? 0 }}</strong>
+          </div>
+          <div v-if="isExternalAiImport">
+            <span>纳入消息</span>
+            <strong>{{ externalAiMessageCoverageText }}</strong>
+          </div>
+          <div v-if="isExternalAiImport">
+            <span>截断会话</span>
+            <strong>{{ formatCount(importInspect?.summary.externalAiTruncatedConversations ?? 0) }}</strong>
+          </div>
         </div>
 
         <div v-if="visibleImportWarnings.length > 0" class="import-warning-box">
@@ -416,6 +467,15 @@
               {{ warning }}
             </li>
           </ul>
+        </div>
+
+        <div
+          v-if="isExternalAiImport"
+          class="external-ai-review-box"
+          :class="{ warn: externalAiHasTruncation }"
+        >
+          <strong>外部 AI 历史预检</strong>
+          <p>{{ externalAiImportReviewText }}</p>
         </div>
 
         <div v-if="hasHighRiskImport" class="risk-review-box">
@@ -450,6 +510,29 @@
               <strong>{{ item.value }}</strong>
             </div>
           </div>
+          <div v-if="backupImpactPathGroups.length > 0" class="backup-impact-list">
+            <strong>影响路径预览</strong>
+            <article
+              v-for="group in backupImpactPathGroups"
+              :key="group.label"
+              :class="group.tone"
+            >
+              <span>{{ group.label }}</span>
+              <ul>
+                <li v-for="path in group.paths" :key="path">
+                  {{ path }}
+                </li>
+              </ul>
+              <em v-if="group.remaining > 0">另有 {{ formatCount(group.remaining) }} 项未展开</em>
+            </article>
+          </div>
+          <label
+            v-if="backupRestoreReviewRequired"
+            class="confirm-option backup-review-confirm"
+          >
+            <input v-model="backupRestoreReviewed" type="checkbox" />
+            <span>已复核恢复影响路径、恢复模式和提醒</span>
+          </label>
           <div v-if="backupRestoreReceipt" class="restore-receipt">
             <strong>恢复已写入</strong>
             <div
@@ -481,7 +564,10 @@
               <span>{{ entry.kind }} · {{ formatCount(entry.sizeBytes) }} bytes</span>
             </div>
             <p v-if="entry.status === 'blocked'">{{ entry.blockedReason }}</p>
-            <p v-else>{{ entry.chunkCount }} chunks · {{ entry.path }}</p>
+            <template v-else>
+              <p>{{ entry.chunkCount }} chunks · {{ entry.path }}</p>
+              <p v-if="entry.preview" class="entry-preview">{{ entry.preview }}</p>
+            </template>
           </article>
         </div>
 
@@ -529,6 +615,7 @@ const coverage = ref<MemoryCoverageMapResponse | null>(null);
 const loading = ref(false);
 const errorMessage = ref('');
 const selectedPlatformId = ref('');
+const repairScope = ref<'selected' | 'all'>('selected');
 const exportingBackup = ref(false);
 const toastText = ref('');
 
@@ -545,6 +632,7 @@ const importError = ref('');
 const replaceExisting = ref(false);
 const backupPreview = ref<MemoryBackupImportPreviewResponse | null>(null);
 const backupRestoreReceipt = ref<MemoryBackupImportResponse | null>(null);
+const backupRestoreReviewed = ref(false);
 const highRiskImportConfirmed = ref(false);
 
 const groupOrder: Array<{ key: MemoryCoveragePlatformGroup; title: string }> = [
@@ -585,12 +673,41 @@ const selectedPlatform = computed<MemoryCoveragePlatform | null>(() => {
   );
 });
 
+const selectedRepairActionCount = computed(() => {
+  if (!coverage.value || !selectedPlatform.value) return 0;
+  return coverage.value.repairActions.filter(
+    (action) => action.platformId === selectedPlatform.value?.id,
+  ).length;
+});
+
+const globalRepairActionCount = computed(() => coverage.value?.repairActions.length ?? 0);
+
 const visibleRepairActions = computed<MemoryCoverageRepairAction[]>(() => {
   if (!coverage.value) return [];
-  if (!selectedPlatform.value) return coverage.value.repairActions;
+  if (repairScope.value === 'all' || !selectedPlatform.value) {
+    return coverage.value.repairActions;
+  }
   return coverage.value.repairActions.filter(
     (action) => action.platformId === selectedPlatform.value?.id,
   );
+});
+
+const repairPanelSubtitle = computed(() => {
+  if (repairScope.value === 'all') {
+    return '全部可解释的下一步，不自动改同步设置。';
+  }
+  const name = selectedPlatform.value?.name ?? '当前平台';
+  return `${name} 的修复项；可切到全部查看全局覆盖缺口。`;
+});
+
+const repairEmptyText = computed(() => {
+  if (repairScope.value === 'all') {
+    return '当前没有需要处理的覆盖修复项。';
+  }
+  if (globalRepairActionCount.value > 0) {
+    return '当前平台没有修复项，但全局仍有覆盖缺口。';
+  }
+  return '当前平台没有需要处理的覆盖修复项。';
 });
 
 const generatedAtText = computed(() => {
@@ -611,6 +728,7 @@ const selectedFileName = computed(() => importFile.value?.name ?? '');
 const detectedImportLabel = computed(() => {
   const kind = importInspect.value?.detectedKind;
   if (kind === 'backup_zip') return '备份 zip';
+  if (kind === 'external_ai_history') return '外部 AI 历史';
   if (kind === 'document_zip') return '普通 zip';
   if (kind === 'document') return '文档';
   return importMode.value === 'paste' ? '粘贴文本' : '文档';
@@ -618,6 +736,10 @@ const detectedImportLabel = computed(() => {
 
 const isBackupRestoreCandidate = computed(
   () => importInspect.value?.detectedKind === 'backup_zip',
+);
+
+const isExternalAiImport = computed(
+  () => importInspect.value?.detectedKind === 'external_ai_history',
 );
 
 const importHintText = computed(() => {
@@ -629,6 +751,9 @@ const importHintText = computed(() => {
   }
   if (isBackupRestoreCandidate.value) {
     return '恢复前会先 dry-run；勾选覆盖替换后才会使用 replace。';
+  }
+  if (isExternalAiImport.value) {
+    return '已识别为外部 AI 历史；只会写入用户主动上传的低权重 shadow memory，不自动抓取原平台。';
   }
   if (importMode.value === 'backup') {
     return '请选择 Personal AI 备份 zip；系统会先验证 manifest，不会直接恢复。';
@@ -646,6 +771,37 @@ const importStatusText = computed(() =>
 const visibleImportWarnings = computed(() =>
   (importInspect.value?.warnings ?? []).filter((warning) => warning.trim().length > 0),
 );
+
+const externalAiMessageCoverageText = computed(() => {
+  const summary = importInspect.value?.summary;
+  if (!summary) return '-';
+  const imported = summary.externalAiImportedMessages ?? 0;
+  const total = summary.externalAiTotalMessages ?? imported;
+  return total > 0 ? `${formatCount(imported)}/${formatCount(total)}` : '-';
+});
+
+const externalAiHasTruncation = computed(
+  () => (importInspect.value?.summary.externalAiTruncatedConversations ?? 0) > 0,
+);
+
+const externalAiImportReviewText = computed(() => {
+  const summary = importInspect.value?.summary;
+  if (!summary) return '';
+  const conversations = summary.externalAiConversations ?? summary.readyFiles;
+  const importedMessages = summary.externalAiImportedMessages ?? 0;
+  const totalMessages = summary.externalAiTotalMessages ?? importedMessages;
+  const truncatedConversations = summary.externalAiTruncatedConversations ?? 0;
+  const truncatedMessages = summary.externalAiTruncatedMessages ?? 0;
+  const truncationText =
+    truncatedConversations > 0
+      ? `；${formatCount(truncatedConversations)} 个长会话超过上限，后续 ${formatCount(
+          truncatedMessages,
+        )} 条消息不会写入。`
+      : '；未检测到长会话截断。';
+  return `${formatCount(conversations)} 个会话，纳入 ${formatCount(
+    importedMessages,
+  )}/${formatCount(totalMessages)} 条消息${truncationText}`;
+});
 
 const hasHighRiskImport = computed(
   () =>
@@ -673,6 +829,13 @@ const primaryImportDisabled = computed(() => {
   if (importBusy.value) return true;
   if (backupRestoreReceipt.value) return true;
   if (importMode.value === 'backup' && !isBackupRestoreCandidate.value) return true;
+  if (
+    isBackupRestoreCandidate.value &&
+    backupRestoreReviewRequired.value &&
+    !backupRestoreReviewed.value
+  ) {
+    return true;
+  }
   if (isBackupRestoreCandidate.value) return !importFile.value;
   if (importInspect.value?.status === 'duplicate') return true;
   if (importInspect.value?.status === 'blocked') return true;
@@ -682,10 +845,23 @@ const primaryImportDisabled = computed(() => {
   return false;
 });
 
+const importReadySummaryText = computed(() => {
+  const inspect = importInspect.value;
+  if (!inspect) return '';
+  const readyCount = isExternalAiImport.value
+    ? (inspect.summary.externalAiConversations ?? inspect.summary.readyFiles)
+    : inspect.summary.readyFiles;
+  const unit = isExternalAiImport.value ? '个 AI 会话' : '个文件';
+  return `${formatCount(readyCount)} ${unit}可录入，约 ${formatCount(
+    inspect.summary.chunks,
+  )} 个 chunks`;
+});
+
 watch(importScope, () => resetImportInspection());
 watch(replaceExisting, () => {
   if (backupRestoreReceipt.value) return;
   backupPreview.value = null;
+  backupRestoreReviewed.value = false;
 });
 
 const backupPreviewDetails = computed(() => {
@@ -759,6 +935,45 @@ const backupWarningList = computed(() =>
     ]),
   ),
 );
+
+const backupImpactPathGroups = computed(() => {
+  const preview = backupPreview.value;
+  if (!preview) return [];
+  return [
+    {
+      label: '将写入',
+      tone: 'write',
+      paths: preview.files.writtenPaths,
+    },
+    {
+      label: '将覆盖',
+      tone: 'overwrite',
+      paths: preview.files.overwrittenPaths,
+    },
+    {
+      label: '将删除',
+      tone: 'delete',
+      paths: preview.files.deletedPaths,
+    },
+  ]
+    .filter((group) => group.paths.length > 0)
+    .map((group) => ({
+      ...group,
+      paths: group.paths.slice(0, 4),
+      remaining: Math.max(0, group.paths.length - 4),
+    }));
+});
+
+const backupRestoreReviewRequired = computed(() => {
+  const preview = backupPreview.value;
+  if (!preview || backupRestoreReceipt.value) return false;
+  return (
+    replaceExisting.value ||
+    backupWarningList.value.length > 0 ||
+    preview.files.overwritten > 0 ||
+    preview.files.deleted > 0
+  );
+});
 
 const scorePriorityHint = computed(() => {
   const platform = selectedPlatform.value;
@@ -894,6 +1109,13 @@ function directionLabel(direction: MemoryCoverageDirection): string {
   return labels[direction] ?? direction;
 }
 
+function repairPlatformName(platformId: string): string {
+  return (
+    coverage.value?.platforms.find((platform) => platform.id === platformId)?.name ??
+    platformId
+  );
+}
+
 function showToast(message: string) {
   toastText.value = message;
   window.setTimeout(() => {
@@ -963,6 +1185,7 @@ function resetImportInspection() {
   backupRestoreReceipt.value = null;
   importError.value = '';
   importStatus.value = '';
+  backupRestoreReviewed.value = false;
   highRiskImportConfirmed.value = false;
 }
 
@@ -996,6 +1219,7 @@ async function inspectImport() {
   importError.value = '';
   importStatus.value = '正在分析来源类型和可录入内容...';
   backupPreview.value = null;
+  backupRestoreReviewed.value = false;
 
   try {
     const client = getMemoryServiceClient();
@@ -1038,10 +1262,10 @@ async function inspectImport() {
       return;
     }
     if ((result.summary.highRisk ?? 0) > 0) {
-      importStatus.value = `${mismatchPrefix}dry-run 完成：${result.summary.readyFiles} 个文件可录入，约 ${result.summary.chunks} 个 chunks；提交前需要确认高风险资料。`;
+      importStatus.value = `${mismatchPrefix}dry-run 完成：${importReadySummaryText.value}；提交前需要确认高风险资料。`;
       return;
     }
-    importStatus.value = `${mismatchPrefix}dry-run 完成：${result.summary.readyFiles} 个文件可录入，约 ${result.summary.chunks} 个 chunks。`;
+    importStatus.value = `${mismatchPrefix}dry-run 完成：${importReadySummaryText.value}。`;
   } catch (error) {
     console.error('智能记忆录入分析失败:', error);
     importError.value =
@@ -1084,10 +1308,14 @@ async function commitSmartImport() {
       throw new Error('请先选择文件或粘贴文本');
     }
 
+    const receiptPrefix =
+      result.detectedKind === 'external_ai_history'
+        ? '外部 AI 历史录入完成'
+        : '录入完成';
     importStatus.value =
       result.status === 'duplicate'
         ? '这份资料已经录入过，本次未重复写入。'
-        : `录入完成：${result.importedMessages} 条记忆，${result.importedChunks} 个 chunks。`;
+        : `${receiptPrefix}：${result.importedMessages} 条记忆，${result.importedChunks} 个 chunks。`;
     showToast(importStatus.value);
     await loadCoverage();
   } catch (error) {
@@ -1120,7 +1348,13 @@ async function continueBackupRestore() {
     const client = getMemoryServiceClient();
     if (!backupPreview.value) {
       backupPreview.value = await client.previewImportMemory(importFile.value, mode);
+      backupRestoreReviewed.value = !backupRestoreReviewRequired.value;
       importStatus.value = `dry-run 完成：${backupPreview.value.backup.includeCount} 个备份条目，模式 ${mode}。`;
+      return;
+    }
+
+    if (backupRestoreReviewRequired.value && !backupRestoreReviewed.value) {
+      importError.value = '请先复核恢复影响路径、恢复模式和提醒。';
       return;
     }
 
@@ -1643,8 +1877,10 @@ code {
 .entry-list article,
 .import-status,
 .import-warning-box,
+.external-ai-review-box,
 .risk-review-box,
 .preview-box,
+.backup-impact-list,
 .restore-receipt,
 .backup-warning-list {
   border: 1px solid rgba(148, 163, 184, 0.12);
@@ -1801,6 +2037,41 @@ code {
   gap: 0.55rem;
 }
 
+.repair-scope-controls {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.repair-scope-controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.34rem 0.48rem;
+  white-space: nowrap;
+}
+
+.repair-scope-controls button.active {
+  color: #0f172a;
+  background: #5eead4;
+}
+
+.repair-scope-controls span {
+  font-variant-numeric: tabular-nums;
+}
+
 .repair-list article {
   padding: 0.75rem;
   border-left: 3px solid rgba(96, 165, 250, 0.5);
@@ -1819,10 +2090,44 @@ code {
   font-size: 0.86rem;
 }
 
+.repair-action-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.repair-platform {
+  color: #5eead4;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
 .empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  align-items: center;
   padding: 1rem;
   color: #94a3b8;
   text-align: center;
+}
+
+.empty-state p {
+  margin: 0;
+}
+
+.inline-action {
+  border: 1px solid rgba(94, 234, 212, 0.26);
+  border-radius: 7px;
+  background: rgba(45, 212, 191, 0.12);
+  color: #99f6e4;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 0.45rem 0.68rem;
 }
 
 .timeline-list {
@@ -1970,7 +2275,7 @@ code {
 
 .analysis-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
   gap: 0.45rem;
 }
 
@@ -1997,7 +2302,9 @@ code {
 .entry-list article,
 .import-status,
 .import-warning-box,
+.external-ai-review-box,
 .risk-review-box,
+.backup-impact-list,
 .restore-receipt,
 .backup-warning-list {
   padding: 0.75rem;
@@ -2018,6 +2325,7 @@ code {
 }
 
 .import-warning-box strong,
+.external-ai-review-box strong,
 .risk-review-box strong,
 .backup-warning-list strong,
 .restore-receipt > strong {
@@ -2032,6 +2340,23 @@ code {
   color: #cbd5e1;
   font-size: 0.76rem;
   line-height: 1.45;
+}
+
+.external-ai-review-box {
+  color: #c7d2fe;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.external-ai-review-box.warn {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(120, 53, 15, 0.16);
+  color: #fde68a;
+}
+
+.external-ai-review-box p {
+  margin: 0.35rem 0 0;
+  color: inherit;
 }
 
 .risk-review-box {
@@ -2091,6 +2416,65 @@ code {
   overflow-wrap: anywhere;
 }
 
+.backup-impact-list {
+  margin-top: 0.65rem;
+  color: #cbd5e1;
+}
+
+.backup-impact-list > strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 0.82rem;
+  margin-bottom: 0.55rem;
+}
+
+.backup-impact-list article {
+  border-left: 3px solid rgba(94, 234, 212, 0.54);
+  padding-left: 0.65rem;
+}
+
+.backup-impact-list article + article {
+  margin-top: 0.65rem;
+}
+
+.backup-impact-list article.overwrite {
+  border-left-color: rgba(251, 191, 36, 0.72);
+}
+
+.backup-impact-list article.delete {
+  border-left-color: rgba(248, 113, 113, 0.72);
+}
+
+.backup-impact-list span {
+  display: block;
+  color: #e2e8f0;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.backup-impact-list ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.4rem 0 0;
+  padding-left: 1rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.backup-impact-list em {
+  display: block;
+  margin-top: 0.35rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.backup-review-confirm {
+  margin-top: 0.65rem;
+}
+
 .restore-receipt,
 .backup-warning-list {
   margin-top: 0.65rem;
@@ -2129,6 +2513,14 @@ code {
   color: #94a3b8;
   font-size: 0.72rem;
   white-space: nowrap;
+}
+
+.entry-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: #bfdbfe;
 }
 
 .import-status {

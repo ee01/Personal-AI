@@ -10,6 +10,7 @@ import {
   formatAgentWorkflowDatetimeInputValue,
   formatAgentWorkflowReplayLabel,
   formatAgentWorkflowSavedScenarioLabel,
+  getAgentWorkflowTraceStatus,
   normalizeAgentWorkflowSavedScenarios,
   normalizeAgentWorkflowInputDatetime,
 } from '../src/agentWorkflowReplay.ts';
@@ -231,6 +232,28 @@ const expectationFromTrace = buildAgentWorkflowResultExpectation({
   ],
 });
 assert.equal(expectationFromTrace?.traceStatus, 'complete');
+
+const placeholderTraceResult = {
+  shouldStore: false,
+  shouldNotify: false,
+  agentWorkflowTrace: [
+    {
+      status: 'success',
+      tools: [
+        {
+          name: 'externalServiceQuery',
+          status: 'placeholder',
+          summary: 'success=false, message=不支持的服务或缺少参数',
+        },
+      ],
+    },
+  ],
+};
+assert.equal(getAgentWorkflowTraceStatus(placeholderTraceResult), 'partial');
+assert.equal(
+  buildAgentWorkflowResultExpectation(placeholderTraceResult)?.traceStatus,
+  'partial',
+);
 
 const normalizedSavedScenarios = normalizeAgentWorkflowSavedScenarios(
   [

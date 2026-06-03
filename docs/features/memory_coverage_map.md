@@ -1,6 +1,6 @@
 # Memory Coverage Map / 记忆覆盖地图
 
-*最后更新: 2026-05-26*
+*最后更新: 2026-05-29*
 
 ## 是什么
 
@@ -40,7 +40,7 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 - 需关注平台数。
 - 积压压力。
 - 未启用通道。
-- 覆盖缺口。
+- 覆盖缺口：只统计需要用户主动处理的 warning / critical 修复项；未启用的 P1+ 可选通道作为 info 规划项展示，不把“尚未接入”误报成当前故障。
 - 当前 Memory Service 消息、chunks、entities 总量。
 
 这些数字来自 `GET /api/v1/coverage/map`，不是 demo 固定值。
@@ -71,6 +71,8 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 
 修复队列只展示可解释的下一步，不自动修改同步设置。
 
+右侧修复队列默认跟随当前选中的平台，便于先处理当前卡片的质量分短板；同时提供 `当前平台 / 全部` 切换。用户选到健康平台但顶部仍有全局覆盖缺口时，空态会提示“全局仍有覆盖缺口”并可一键切到全部修复项，避免全局 warning 被平台筛选藏起来。全部视图会标出每条修复项所属平台。
+
 典型修复项包括：
 
 - 某个 provider sync job 最近失败。
@@ -78,6 +80,7 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 - 某个通道尚未配置。
 - 扫描件 PDF 暂未启用 OCR。
 - 如果某个 active / derived 平台质量分低于 80 分、但没有手写 warning/critical 修复项，后端会根据最严重的非 healthy contribution 自动补一条质量分短板修复建议；已有明确修复项时不重复制造建议。
+- Codex、Claude Code、Cursor、ChatGPT GPTs、Claude Skills Web 等 P1+ skill 同步通道默认是 info 规划项；只有用户启用后探测失败，才作为 warning 修复项进入覆盖缺口。
 
 ### 智能录入抽屉
 
@@ -87,9 +90,9 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 |---|---|
 | 粘贴文本 | `inspect` dry-run 后，确认写入低权重 shadow memory |
 | `.md` / `.markdown` / `.txt` / `.json` / `.csv` / `.log` | 读取文本，拆 chunk，确认写入 |
-| 普通 `.zip` | 只读解压，枚举最多 80 个文件，支持上述文本类型、PDF 文本流和外部 AI `conversations.json` |
+| 普通 `.zip` | 未命中备份或外部 AI schema 后，只读解压并枚举最多 80 个文件，支持上述文本类型和 PDF 文本流 |
 | `.pdf` | best-effort 抽取常见 PDF 文本流；扫描件或无文本 PDF 会明确阻塞 |
-| ChatGPT / Claude `conversations.json` zip | 基础识别为外部 AI 历史，按会话转成低权重 shadow memory |
+| ChatGPT / Claude `conversations.json` zip | 会先在完整 zip 目录里查找 `conversations.json`，按会话转成低权重 shadow memory；抽屉显示外部 AI 对话数、纳入消息数、长会话截断数、来源预览和被忽略的非对话文件提醒 |
 | Personal AI 备份 zip | 自动切到恢复模式，不按普通文档分析 |
 
 普通资料的写入规则：
@@ -102,7 +105,9 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 - metadata 标记 `shadowMemory: true`、`lowWeight: true`、`importBatchId`、`importEntryPath`、`parserVersion`。
 - `memory_metadata` 以低 salience / temporary consolidation 写入，避免刚导入的资料直接压过长期高质量记忆。
 - `memory_import_batches` 记录 batch id、hash、来源名、解析结果和 warning，用于去重和审计。
-- batch summary 会记录 `profileCandidates`、`skillSignals`、`highRisk`、`unsupported` 和 `externalAiConversations`，方便后续把高价值条目升级成候选。
+- batch summary 会记录 `profileCandidates`、`skillSignals`、`highRisk`、`unsupported`、`externalAiConversations` 和被跳过/忽略的 warning，方便后续把高价值条目升级成候选。
+- 外部 AI 历史包不会受普通 zip 80 文件预检上限影响；命中 `conversations.json` 后只把对话内容作为导入候选，归档里的附件、账户文件或其他导出元数据会被忽略并在 dry-run 中提示。
+- 外部 AI 历史最多预检前 40 个会话、每个会话纳入前 80 条消息；如果长会话被截断，dry-run 会显示纳入消息数、总消息数、截断会话数和 warning，避免用户误以为完整历史已经写入。
 
 ### 备份下载与恢复
 
@@ -114,8 +119,8 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 2. `POST /api/v1/import/inspect` 识别是否为 Personal AI backup schema。
 3. 只有后端预检明确返回 `backup_zip` 后才显示恢复区域；如果用户从 `备份 zip` 入口选了普通 zip，页面会退回普通资料 dry-run，不会误报成备份。
 4. 命中备份 zip 后默认 merge；勾选 `覆盖替换现有记忆` 后使用 replace。
-5. restore dry-run 会先展示备份用户、导出时间、DB 行数、文件写入/覆盖/保留/删除影响和 warning，避免用户在不知道影响范围时确认。
-6. replace 仍需要二次确认。
+5. restore dry-run 会先展示备份用户、导出时间、DB 行数、文件写入/覆盖/保留/删除影响、关键影响路径和 warning，避免用户在不知道影响范围时确认。
+6. 如果存在跨用户 warning、replace、覆盖或删除影响，确认恢复前必须勾选已复核影响预览；replace 仍需要二次确认。
 7. 最终恢复复用现有 `POST /api/v1/import`；恢复完成后抽屉显示写入回执并禁用重复确认按钮，需要再次恢复时重新选择备份文件。
 
 备份 zip 的 schema 识别会先扫描完整 zip 文件列表确认 `manifest.json`、`user/memory.db`、`user/config.json` 和 `personal-ai-memory-backup` manifest，再把普通资料解析限制在前 80 个文件内。这样大型 Personal AI 备份不会因为条目数较多而被误判为普通文档包，但普通资料导入仍保持预检上限。
@@ -172,13 +177,15 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 - Slack Enterprise Search 的 custom connector 把外部知识库接入搜索和 AI answers，但前提是保留 source system 的权限模型。
 - Notion Enterprise Search 强调 connector 权限同步、查询时权限过滤、删除/断开后的数据保留边界；Coverage Map 应继续把来源、范围和删除/恢复路径展示清楚。
 - Microsoft 365 Copilot / Graph connectors 会暴露连接、索引、队列和 ACL 类错误；Coverage Map 的质量分也应把失败、积压和权限/配置问题转成可操作的修复项。
-- OpenAI ChatGPT data export 与 Claude memory import/export 说明外部 AI 记忆迁移正在变成用户预期，但导出通常是 zip / 文本 / conversations 数据，不能假设所有内容都安全或高质量。
+- Microsoft 365 Copilot connector 的 index browser / error report 会区分 indexed、partially indexed、权限/ACL、queue throttling 和 connector agent 失败；Coverage Map 也应区分“已启用但失败”和“可选但尚未启用”，避免把规划项变成故障告警。
+- OpenAI ChatGPT data export 与 Claude data export 说明外部 AI 历史迁移正在变成用户预期，但导出通常是 zip / conversations 数据，不能假设所有内容都安全、完整或高质量；长对话必须把纳入范围展示清楚。
 - Google Takeout、ChatGPT data export 和 Claude memory import/export 都把“先生成/下载归档，再由用户选择导入或保存”的路径变成常见心智；Coverage Map 因此保持一键下载、上传后自动识别、恢复前 dry-run 的轻量路径。
 - PIM 研究反复指出，个人信息会碎片化在多个设备和应用之间；Coverage Map 的价值是让用户先看见 Personal AI 实际覆盖了哪里，而不是假设所有来源都已统一。
 - 数据质量研究通常把完整性、时效性/新鲜度、准确性、一致性和相关性视为核心维度；当前 `qualityScore` 先落在覆盖状态、新鲜度和失败/积压可解释性上，暂不假装评估内容准确性。
 - 数据可携带性用户研究显示，用户查看导出数据本身会增强控制感，但“迁移到替代服务”的可用性经常有限；恢复入口要把归档识别、影响预览和失败原因直接展示出来，而不是只给一个成功/失败提示。
 - 数据可携带性风险讨论也提醒，过度顺滑的转移会带来隐私和安全风险；replace 恢复继续保留 dry-run 与二次确认，不做无预览的破坏性恢复。
 - Opal 等 personal AI memory 研究强调长期个人记忆的隐私和访问模式风险；智能录入默认低权重、显式来源和高风险确认是必要边界。
+- LongMemEval 等长期记忆评测把 indexing、retrieval、reading 拆开看；外部 AI 历史导入因此先保留会话粒度、来源和 warning，再让后续召回/晋升流程决定哪些内容真正有用。
 
 ## 后续增强
 

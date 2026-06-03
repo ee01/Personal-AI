@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import path from 'node:path';
 import type { UserContextManager } from '../core/UserContextManager.js';
 import {
   hashSkillFilesystemPackage,
@@ -10,10 +11,15 @@ import {
 } from '../core/SkillLibraryService.js';
 import { OpenClawClient } from '../integrations/OpenClawClient.js';
 import { OpenClawSkillSyncService } from '../integrations/OpenClawSkillSyncService.js';
+import { normalizeUserId } from '../utils/userIdentity.js';
 
 interface SkillRouteQuery {
   filter?: 'active' | 'all' | 'dismissed';
   q?: string;
+}
+
+interface SkillSuggestionQuery {
+  view?: 'ready' | 'snoozed' | 'all';
 }
 
 interface UpdateSyncSettingBody {
@@ -46,7 +52,14 @@ interface LocalPlatformSkillPackage {
   directory?: string;
   skillMdPath?: string;
   skillMd: string;
-  files?: Array<{ path?: string; relativePath?: string; content: string; sha256?: string; byteSize?: number; byte_size?: number }>;
+  files?: Array<{
+    path?: string;
+    relativePath?: string;
+    content: string;
+    sha256?: string;
+    byteSize?: number;
+    byte_size?: number;
+  }>;
 }
 
 interface LocalPlatformSyncBody {
@@ -72,14 +85,19 @@ interface SkillSyncPlatformResult {
 }
 
 function serviceForRequest(request: FastifyRequest): SkillLibraryService {
-  return new SkillLibraryService(request.userContext.db, request.userId || 'default');
+  return new SkillLibraryService(
+    request.userContext.db,
+    request.userId || 'default',
+  );
 }
 
 function parseShareTokenUserId(token: string): string | null {
   const [encoded] = token.split('.');
   if (!encoded) return null;
   try {
-    return Buffer.from(encoded, 'base64url').toString('utf8') || null;
+    return normalizeUserId(
+      Buffer.from(encoded, 'base64url').toString('utf8'),
+    );
   } catch {
     return null;
   }
@@ -118,7 +136,12 @@ function normalizeSyncLimit(value: unknown): number {
 }
 
 function toPackageFiles(
-  files: Array<{ path: string; content: string; sha256?: string; byteSize?: number }>,
+  files: Array<{
+    path: string;
+    content: string;
+    sha256?: string;
+    byteSize?: number;
+  }>,
 ): SkillPackageFile[] {
   return files.map((file) => ({
     relativePath: file.path,
@@ -128,31 +151,109 @@ function toPackageFiles(
   }));
 }
 
-function localPackageFiles(files: NonNullable<LocalPlatformSkillPackage['files']>): SkillPackageFile[] {
-  return files
-    .map((file) => ({
-      relativePath: file.relativePath || file.path || '',
-      content: file.content || '',
-      sha256: file.sha256,
-      byteSize: file.byteSize ?? file.byte_size,
-    }))
-    .filter((file) => file.relativePath && file.relativePath !== 'SKILL.md');
+function normalizeLocalPackageFilePath(rawPath: string): string | null {
+  const trimmed = rawPath.trim();
+  if (!trimmed || trimmed === 'SKILL.md') return null;
+  if (path.win32.isAbsolute(trimmed)) return null;
+  const slashPath = trimmed.replace(/\\/g, '/');
+  if (path.posix.isAbsolute(slashPath)) return null;
+  const normalized = path.posix.normalize(slashPath);
+  if (
+    !normalized ||
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized === 'SKILL.md' ||
+    normalized.startsWith('../')
+  ) {
+    return null;
+  }
+  return normalized;
 }
 
-function localSkillMetadata(skill: LocalPlatformSkillPackage): Record<string, unknown> {
-  const files = localPackageFiles(skill.files || []);
-  const totalByteSize = files.reduce((sum, file) => sum + (file.byteSize || 0), 0);
+function analyzeLocalPackageFiles(
+  files: NonNullable<LocalPlatformSkillPackage['files']>,
+): { files: SkillPackageFile[]; rejectedFilePaths: string[] } {
+  const accepted: SkillPackageFile[] = [];
+  const rejectedFilePaths: string[] = [];
+  const seen = new Set<string>();
+
+  for (const file of files) {
+    const rawPath = file.relativePath || file.path || '';
+    const relativePath = normalizeLocalPackageFilePath(rawPath);
+    if (!relativePath) {
+      if (rawPath && rawPath !== 'SKILL.md') rejectedFilePaths.push(rawPath);
+      continue;
+    }
+    if (seen.has(relativePath)) {
+      rejectedFilePaths.push(rawPath || relativePath);
+      continue;
+    }
+    seen.add(relativePath);
+    const content = file.content || '';
+    accepted.push({
+      relativePath,
+      content,
+      sha256: file.sha256,
+      byteSize:
+        file.byteSize ??
+        file.byte_size ??
+        Buffer.byteLength(content, 'utf8'),
+    });
+  }
+
   return {
-    source: 'desktop_app_fs',
-    sourceRoot: typeof skill.root === 'string' ? skill.root : undefined,
-    sourceDirectory: typeof skill.directory === 'string' ? skill.directory : undefined,
-    skillMdPath: typeof skill.skillMdPath === 'string' ? skill.skillMdPath : undefined,
-    fileCount: files.length,
-    totalByteSize,
+    files: accepted.sort((left, right) =>
+      left.relativePath.localeCompare(right.relativePath),
+    ),
+    rejectedFilePaths,
   };
 }
 
-function skillPackageForPlatform(pkg: SkillSyncPackage, options?: { sha256?: string }) {
+function localSkillMetadata(
+  skill: LocalPlatformSkillPackage,
+  analysis = analyzeLocalPackageFiles(skill.files || []),
+): Record<string, unknown> {
+  const totalByteSize = analysis.files.reduce(
+    (sum, file) => sum + (file.byteSize || 0),
+    0,
+  );
+  return {
+    source: 'desktop_app_fs',
+    sourceRoot: typeof skill.root === 'string' ? skill.root : undefined,
+    sourceDirectory:
+      typeof skill.directory === 'string' ? skill.directory : undefined,
+    skillMdPath:
+      typeof skill.skillMdPath === 'string' ? skill.skillMdPath : undefined,
+    fileCount: analysis.files.length,
+    totalByteSize,
+    rejectedFileCount: analysis.rejectedFilePaths.length || undefined,
+    rejectedFilePaths:
+      analysis.rejectedFilePaths.length > 0
+        ? analysis.rejectedFilePaths.slice(0, 5)
+        : undefined,
+  };
+}
+
+function localSkillPackageInput(skill: LocalPlatformSkillPackage): {
+  files: SkillPackageFile[];
+  metadata: Record<string, unknown>;
+  sha256?: string;
+} {
+  const analysis = analyzeLocalPackageFiles(skill.files || []);
+  return {
+    files: analysis.files,
+    metadata: localSkillMetadata(skill, analysis),
+    // The Desktop App package hash includes everything it scanned. If the API
+    // ignored unsafe paths, compute the Memory Service hash from the sanitized
+    // package instead of trusting a hash for a different file set.
+    sha256: analysis.rejectedFilePaths.length > 0 ? undefined : skill.sha256,
+  };
+}
+
+function skillPackageForPlatform(
+  pkg: SkillSyncPackage,
+  options?: { sha256?: string },
+) {
   return {
     slug: pkg.slug,
     title: pkg.title,
@@ -254,7 +355,8 @@ async function runOpenClawSkillSync(
       title?: string;
       description?: string;
     }) => {
-      if (slugSet.size > 0 && !slugSet.has(normalizeSkillSlug(skill.slug))) return false;
+      if (slugSet.size > 0 && !slugSet.has(normalizeSkillSlug(skill.slug)))
+        return false;
       if (!query) return true;
       return [skill.slug, skill.title || '', skill.description || '']
         .join(' ')
@@ -351,18 +453,23 @@ async function runOpenClawSkillSync(
       if (!matchesFilter(active)) continue;
       const remote = remoteBySlug.get(normalizeSkillSlug(active.slug));
       if (remote?.sha256 === active.sha256) continue;
-      if (remote && service.isExternalNewerThanSkill(
-        {
-          currentVersion: active.version,
-          currentSha256: active.sha256,
-          updatedAt: active.updatedAt,
-        },
-        remote,
-      )) {
+      if (
+        remote &&
+        service.isExternalNewerThanSkill(
+          {
+            currentVersion: active.version,
+            currentSha256: active.sha256,
+            updatedAt: active.updatedAt,
+          },
+          remote,
+        )
+      ) {
         continue;
       }
       try {
-        const pushed = await sync.upsertSkillPackage(skillPackageForPlatform(active));
+        const pushed = await sync.upsertSkillPackage(
+          skillPackageForPlatform(active),
+        );
         result.processed += 1;
         result.pushed += pushed.action === 'noop' ? 0 : 1;
         if (pushed.action === 'noop') result.skipped += 1;
@@ -372,7 +479,10 @@ async function runOpenClawSkillSync(
           version: pushed.version || active.version,
           sha256: pushed.sha256 || active.sha256,
           remoteMtime: pushed.mtime,
-          metadata: { source: 'personal_ai_push', action: pushed.action || 'updated' },
+          metadata: {
+            source: 'personal_ai_push',
+            action: pushed.action || 'updated',
+          },
         });
       } catch (error) {
         result.errors.push({
@@ -455,7 +565,8 @@ async function syncOneActiveSkillToOpenClaw(
     const active = service.toSyncPackage(detail);
     const list = await sync.listInstalledSkills();
     const remote = list.skills.find(
-      (item) => normalizeSkillSlug(item.slug) === normalizeSkillSlug(active.slug),
+      (item) =>
+        normalizeSkillSlug(item.slug) === normalizeSkillSlug(active.slug),
     );
     if (remote?.sha256 === active.sha256) {
       service.recordPlatformSync({
@@ -504,14 +615,19 @@ async function syncOneActiveSkillToOpenClaw(
       };
     }
 
-    const pushed = await sync.upsertSkillPackage(skillPackageForPlatform(active));
+    const pushed = await sync.upsertSkillPackage(
+      skillPackageForPlatform(active),
+    );
     service.recordPlatformSync({
       skillId: active.skillId,
       platform: 'openclaw',
       version: pushed.version || active.version,
       sha256: pushed.sha256 || active.sha256,
       remoteMtime: pushed.mtime,
-      metadata: { source: 'personal_ai_push', action: pushed.action || 'updated' },
+      metadata: {
+        source: 'personal_ai_push',
+        action: pushed.action || 'updated',
+      },
     });
     return {
       ...result,
@@ -523,7 +639,9 @@ async function syncOneActiveSkillToOpenClaw(
     return {
       ...result,
       status: 'failed',
-      errors: [{ error: error instanceof Error ? error.message : String(error) }],
+      errors: [
+        { error: error instanceof Error ? error.message : String(error) },
+      ],
     };
   }
 }
@@ -531,7 +649,9 @@ async function syncOneActiveSkillToOpenClaw(
 function runLocalPlatformSkillSync(
   service: SkillLibraryService,
   body: LocalPlatformSyncBody,
-): SkillSyncPlatformResult & { packagesToInstall: ReturnType<typeof skillPackageForPlatform>[] } {
+): SkillSyncPlatformResult & {
+  packagesToInstall: ReturnType<typeof skillPackageForPlatform>[];
+} {
   const platform = body.platform?.trim();
   if (!platform) {
     throw new Error('Local skill sync platform is required.');
@@ -577,6 +697,7 @@ function runLocalPlatformSkillSync(
 
   for (const local of body.skills || []) {
     try {
+      const localPackage = localSkillPackageInput(local);
       const existing = service.getSkillBySlug(local.slug);
       if (!existing) {
         const imported = service.importExternalSkillPackage({
@@ -586,10 +707,10 @@ function runLocalPlatformSkillSync(
           summary: local.description,
           version: local.version,
           skillMd: local.skillMd,
-          files: localPackageFiles(local.files || []),
-          sha256: local.sha256,
+          files: localPackage.files,
+          sha256: localPackage.sha256,
           remoteMtime: local.mtime,
-          metadata: localSkillMetadata(local),
+          metadata: localPackage.metadata,
         });
         result.processed += 1;
         if (imported.status === 'created_suggestion') result.imported += 1;
@@ -602,32 +723,41 @@ function runLocalPlatformSkillSync(
           skillId: existing.id,
           platform,
           version: local.version || existing.currentVersion,
-          sha256: local.sha256,
+          sha256: localPackage.sha256,
           remoteMtime: local.mtime,
-          metadata: localSkillMetadata(local),
+          metadata: localPackage.metadata,
         });
         result.skipped += 1;
         continue;
       }
 
       if (
-        local.sha256 &&
-        (existing.currentSha256 === local.sha256 ||
-          service.platformBindingMatchesSha(existing.id, platform, local.sha256))
+        localPackage.sha256 &&
+        (existing.currentSha256 === localPackage.sha256 ||
+          service.platformBindingMatchesSha(
+            existing.id,
+            platform,
+            localPackage.sha256,
+          ))
       ) {
         service.recordPlatformSync({
           skillId: existing.id,
           platform,
           version: local.version || existing.currentVersion,
-          sha256: local.sha256,
+          sha256: localPackage.sha256,
           remoteMtime: local.mtime,
-          metadata: localSkillMetadata(local),
+          metadata: localPackage.metadata,
         });
         result.skipped += 1;
         continue;
       }
 
-      if (service.isExternalNewerThanSkill(existing, local)) {
+      if (
+        service.isExternalNewerThanSkill(existing, {
+          ...local,
+          sha256: localPackage.sha256,
+        })
+      ) {
         const updated = service.importExternalSkillPackage({
           platform,
           slug: local.slug,
@@ -635,13 +765,14 @@ function runLocalPlatformSkillSync(
           summary: local.description,
           version: local.version,
           skillMd: local.skillMd,
-          files: localPackageFiles(local.files || []),
-          sha256: local.sha256,
+          files: localPackage.files,
+          sha256: localPackage.sha256,
           remoteMtime: local.mtime,
-          metadata: localSkillMetadata(local),
+          metadata: localPackage.metadata,
         });
         result.processed += 1;
-        if (updated.status === 'created_external_change') result.externalChanges += 1;
+        if (updated.status === 'created_external_change')
+          result.externalChanges += 1;
         else if (updated.status === 'created_suggestion') result.imported += 1;
         else if (updated.status === 'skipped') result.skipped += 1;
         else result.updated += 1;
@@ -656,13 +787,18 @@ function runLocalPlatformSkillSync(
 
   for (const active of service.listActiveSyncPackages()) {
     const local = localBySlug.get(normalizeSkillSlug(active.slug));
+    const localPackage = local ? localSkillPackageInput(local) : null;
     if (
-      local?.sha256 &&
-      service.platformBindingMatchesSha(active.skillId, platform, local.sha256)
+      localPackage?.sha256 &&
+      service.platformBindingMatchesSha(
+        active.skillId,
+        platform,
+        localPackage.sha256,
+      )
     ) {
       continue;
     }
-    if (local?.sha256 === active.sha256) continue;
+    if (localPackage?.sha256 === active.sha256) continue;
     if (
       local &&
       service.isExternalNewerThanSkill(
@@ -671,7 +807,7 @@ function runLocalPlatformSkillSync(
           currentSha256: active.sha256,
           updatedAt: active.updatedAt,
         },
-        local,
+        { ...local, sha256: localPackage?.sha256 },
       )
     ) {
       continue;
@@ -699,15 +835,21 @@ function runLocalPlatformSkillSync(
 }
 
 export async function skillRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Querystring: SkillRouteQuery }>('/skills', async (request, reply) => {
-    const service = serviceForRequest(request);
-    return reply.status(200).send(service.listSkills(request.query));
-  });
+  app.get<{ Querystring: SkillRouteQuery }>(
+    '/skills',
+    async (request, reply) => {
+      const service = serviceForRequest(request);
+      return reply.status(200).send(service.listSkills(request.query));
+    },
+  );
 
-  app.get('/skills/suggestions', async (request, reply) => {
-    const service = serviceForRequest(request);
-    return reply.status(200).send(service.listSuggestions());
-  });
+  app.get<{ Querystring: SkillSuggestionQuery }>(
+    '/skills/suggestions',
+    async (request, reply) => {
+      const service = serviceForRequest(request);
+      return reply.status(200).send(service.listSuggestions(request.query));
+    },
+  );
 
   app.post<{ Body: CreateSuggestionBody }>(
     '/skills/suggestions',
@@ -734,7 +876,9 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
         if (service.getSyncSetting('openclaw')?.enabled) {
           sync = await syncOneActiveSkillToOpenClaw(request, service, skill.id);
         }
-        return reply.status(200).send({ skill: service.getSkill(skill.id) || skill, sync });
+        return reply
+          .status(200)
+          .send({ skill: service.getSkill(skill.id) || skill, sync });
       } catch (error) {
         return sendError(reply, error, suggestionActionStatus(error));
       }
@@ -746,7 +890,10 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const service = serviceForRequest(request);
       try {
-        const skill = service.dismissSuggestion(request.params.id, request.body?.reason);
+        const skill = service.dismissSuggestion(
+          request.params.id,
+          request.body?.reason,
+        );
         return reply.status(200).send({ skill });
       } catch (error) {
         return sendError(reply, error, suggestionActionStatus(error));
@@ -759,7 +906,23 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const service = serviceForRequest(request);
       try {
-        const skill = service.snoozeSuggestion(request.params.id, request.body?.days);
+        const skill = service.snoozeSuggestion(
+          request.params.id,
+          request.body?.days,
+        );
+        return reply.status(200).send({ skill });
+      } catch (error) {
+        return sendError(reply, error, suggestionActionStatus(error));
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/skills/suggestions/:id/unsnooze',
+    async (request, reply) => {
+      const service = serviceForRequest(request);
+      try {
+        const skill = service.unsnoozeSuggestion(request.params.id);
         return reply.status(200).send({ skill });
       } catch (error) {
         return sendError(reply, error, suggestionActionStatus(error));
@@ -805,7 +968,8 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
           });
           return reply.status(200).send(result);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           service.recordSyncProbe(platform, { ok: false, error: message });
           return reply.status(200).send({
             platform,
@@ -826,56 +990,66 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post<{ Body: SyncRunBody }>('/skills/sync/run', async (request, reply) => {
-    const service = serviceForRequest(request);
-    const settings = service.listSyncSettings();
-    const active = service.listSkills({ filter: 'active' });
-    const requestedPlatform = request.body?.platform || 'all';
-    const limit = normalizeSyncLimit(request.body?.limit);
-    const syncFilter = {
-      q: request.body?.q,
-      slugs: Array.isArray(request.body?.slugs) ? request.body.slugs : undefined,
-    };
-    const platformResults: SkillSyncPlatformResult[] = [];
+  app.post<{ Body: SyncRunBody }>(
+    '/skills/sync/run',
+    async (request, reply) => {
+      const service = serviceForRequest(request);
+      const settings = service.listSyncSettings();
+      const active = service.listSkills({ filter: 'active' });
+      const requestedPlatform = request.body?.platform || 'all';
+      const limit = normalizeSyncLimit(request.body?.limit);
+      const syncFilter = {
+        q: request.body?.q,
+        slugs: Array.isArray(request.body?.slugs)
+          ? request.body.slugs
+          : undefined,
+      };
+      const platformResults: SkillSyncPlatformResult[] = [];
 
-    if (requestedPlatform === 'all' || requestedPlatform === 'openclaw') {
-      platformResults.push(await runOpenClawSkillSync(request, service, limit, syncFilter));
-    }
+      if (requestedPlatform === 'all' || requestedPlatform === 'openclaw') {
+        platformResults.push(
+          await runOpenClawSkillSync(request, service, limit, syncFilter),
+        );
+      }
 
-    if (requestedPlatform !== 'all' && requestedPlatform !== 'openclaw') {
-      platformResults.push({
-        platform: requestedPlatform,
-        status: 'skipped',
-        processed: 0,
-        imported: 0,
-        updated: 0,
-        pulled: 0,
-        pushed: 0,
-        externalChanges: 0,
-        skipped: 0,
-        errors: [],
-        note: 'This platform is handled by Desktop App or manual install in the current MVP.',
+      if (requestedPlatform !== 'all' && requestedPlatform !== 'openclaw') {
+        platformResults.push({
+          platform: requestedPlatform,
+          status: 'skipped',
+          processed: 0,
+          imported: 0,
+          updated: 0,
+          pulled: 0,
+          pushed: 0,
+          externalChanges: 0,
+          skipped: 0,
+          errors: [],
+          note: 'This platform is handled by Desktop App or manual install in the current MVP.',
+        });
+      }
+
+      const failed = platformResults.some(
+        (result) => result.status === 'failed' || result.errors.length > 0,
+      );
+      return reply.status(200).send({
+        status: failed ? 'partial_failed' : 'succeeded',
+        processed: platformResults.reduce(
+          (sum, result) => sum + result.processed,
+          0,
+        ),
+        activeSkillCount: active.total,
+        enabledPlatforms: settings
+          .filter((setting) => setting.enabled)
+          .map((setting) => setting.platform),
+        limit,
+        filter: {
+          q: syncFilter.q || undefined,
+          slugs: syncFilter.slugs,
+        },
+        platforms: platformResults,
       });
-    }
-
-    const failed = platformResults.some(
-      (result) => result.status === 'failed' || result.errors.length > 0,
-    );
-    return reply.status(200).send({
-      status: failed ? 'partial_failed' : 'succeeded',
-      processed: platformResults.reduce((sum, result) => sum + result.processed, 0),
-      activeSkillCount: active.total,
-      enabledPlatforms: settings
-        .filter((setting) => setting.enabled)
-        .map((setting) => setting.platform),
-      limit,
-      filter: {
-        q: syncFilter.q || undefined,
-        slugs: syncFilter.slugs,
-      },
-      platforms: platformResults,
-    });
-  });
+    },
+  );
 
   app.post<{ Body: LocalPlatformSyncBody }>(
     '/skills/sync/local-platform',
@@ -929,7 +1103,8 @@ export async function publicSkillRoutes(
       typeof (request.query as { token?: unknown }).token === 'string'
         ? (request.query as { token: string }).token
         : '';
-    const slugVersion = (request.params as { slugVersion?: string }).slugVersion || '';
+    const slugVersion =
+      (request.params as { slugVersion?: string }).slugVersion || '';
     const service = resolveService(request);
     if (!service) {
       reply.status(404).send({ error: 'Shared skill not found' });
@@ -965,9 +1140,15 @@ export async function publicSkillRoutes(
       const skillMdUrl = `${basePath}/SKILL.md?${query}`;
       const fileLinks = version.files
         .map((file) => {
-          const href = `${basePath}/files/${encodeSkillFilePath(file.relativePath)}?${query}`;
-          const hashLabel = file.sha256 ? ` ${escapeHtml(file.sha256.slice(0, 12))}` : '';
-          return `<li><a href="${escapeHtml(href)}">${escapeHtml(file.relativePath)}</a><span class="muted">${hashLabel}</span></li>`;
+          const href = `${basePath}/files/${encodeSkillFilePath(
+            file.relativePath,
+          )}?${query}`;
+          const hashLabel = file.sha256
+            ? ` ${escapeHtml(file.sha256.slice(0, 12))}`
+            : '';
+          return `<li><a href="${escapeHtml(href)}">${escapeHtml(
+            file.relativePath,
+          )}</a><span class="muted">${hashLabel}</span></li>`;
         })
         .join('\n');
       const installPrompt = [
@@ -993,17 +1174,25 @@ export async function publicSkillRoutes(
   </style>
 </head>
 <body>
-  <p class="muted">Personal AI Skill · ${escapeHtml(version.version)} · ${escapeHtml(version.sha256.slice(0, 12))}</p>
+  <p class="muted">Personal AI Skill · ${escapeHtml(
+    version.version,
+  )} · ${escapeHtml(version.sha256.slice(0, 12))}</p>
   <h1>${escapeHtml(detail.title)}</h1>
   <p>${escapeHtml(detail.summary)}</p>
   <section class="panel">
     <h2>完整安装</h2>
-    <p>让你的 agent 先读取 <a href="${escapeHtml(packageUrl)}">package.json</a>；它包含 SKILL.md 和已打包的脚本/资源文件内容。</p>
+    <p>让你的 agent 先读取 <a href="${escapeHtml(
+      packageUrl,
+    )}">package.json</a>；它包含 SKILL.md 和已打包的脚本/资源文件内容。</p>
     <pre>${escapeHtml(installPrompt)}</pre>
     <h3>直接链接</h3>
     <ul class="links">
-      <li><a href="${escapeHtml(packageUrl)}">package.json</a> <span class="muted">完整 package</span></li>
-      <li><a href="${escapeHtml(skillMdUrl)}">SKILL.md</a> <span class="muted">技能说明</span></li>
+      <li><a href="${escapeHtml(
+        packageUrl,
+      )}">package.json</a> <span class="muted">完整 package</span></li>
+      <li><a href="${escapeHtml(
+        skillMdUrl,
+      )}">SKILL.md</a> <span class="muted">技能说明</span></li>
       ${fileLinks || '<li class="muted">这个版本没有额外 files。</li>'}
     </ul>
   </section>

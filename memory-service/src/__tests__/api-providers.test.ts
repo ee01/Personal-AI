@@ -399,12 +399,17 @@ describe('Provider API', () => {
 
     db.prepare(
       `INSERT INTO notification_records
-        (id, channel, type, title, body, sent_at, created_at)
-       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+        (id, channel, type, title, body, payload_json, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?, ?)`,
     ).run(
       'notif-weekly-1',
       'Weekly Report Ready',
       'Your weekly report is ready',
+      JSON.stringify({
+        reportSummary: 'Weekly launch summary: project remains on track.',
+        reportExcerpt:
+          'Highlights\n- Weekly launch summary: project remains on track.\n\nAction Items\n- Review the rollout notes.',
+      }),
       now,
       now,
     );
@@ -465,6 +470,10 @@ describe('Provider API', () => {
     expect(noticeBody.packages[0].kind).toBe('notice_digest');
     expect(noticeBody.packages[0].itemCount).toBe(1);
     expect(noticeBody.packages[0].bodyMd).toContain('Weekly Report Ready');
+    expect(noticeBody.packages[0].bodyMd).toContain(
+      'Weekly launch summary',
+    );
+    expect(noticeBody.packages[0].bodyMd).toContain('Review the rollout notes');
     expect(noticeBody.packages[0].bodyMd).not.toContain('Need a decision');
 
     const reminderAliasRes = await app.inject({
@@ -500,7 +509,7 @@ describe('Provider API', () => {
     expect(todoBody.packages).toHaveLength(1);
     expect(todoBody.packages[0].itemCount).toBe(0);
     expect(todoBody.packages[0].sourceRefs).toEqual([]);
-    expect(todoBody.packages[0].bodyMd).toContain('No pending todos.');
+    expect(todoBody.packages[0].bodyMd).toContain('暂无待处理事项。');
 
     const noticeRes = await app.inject({
       method: 'POST',
@@ -516,6 +525,6 @@ describe('Provider API', () => {
     expect(noticeBody.packages).toHaveLength(1);
     expect(noticeBody.packages[0].itemCount).toBe(0);
     expect(noticeBody.packages[0].sourceRefs).toEqual([]);
-    expect(noticeBody.packages[0].bodyMd).toContain('No new notices.');
+    expect(noticeBody.packages[0].bodyMd).toContain('暂无新通知。');
   });
 });

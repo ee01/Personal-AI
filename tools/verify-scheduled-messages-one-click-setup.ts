@@ -12,6 +12,7 @@ type CapturedRequest = {
 const capturedRequests: CapturedRequest[] = [];
 const originalFetch = globalThis.fetch;
 const originalChrome = (globalThis as any).chrome;
+const storageState: Record<string, unknown> = {};
 
 function jsonResponse(data: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -32,6 +33,22 @@ function textResponse(text: string, init: ResponseInit = {}): Response {
 (globalThis as any).chrome = {
   runtime: {
     getURL: (resourcePath: string) => `chrome-extension://personal-ai/${resourcePath}`,
+  },
+  storage: {
+    local: {
+      async get(keys?: string[] | string) {
+        if (Array.isArray(keys)) {
+          return Object.fromEntries(keys.map((key) => [key, storageState[key]]));
+        }
+        if (typeof keys === 'string') {
+          return { [keys]: storageState[keys] };
+        }
+        return { ...storageState };
+      },
+      async set(values: Record<string, unknown>) {
+        Object.assign(storageState, values);
+      },
+    },
   },
 };
 
@@ -108,6 +125,37 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise
     });
   }
 
+  if (
+    url === 'https://script.google.com/macros/s/deployment-123/exec?action=setupTriggers' &&
+    method === 'GET'
+  ) {
+    return jsonResponse({
+      success: true,
+      message: 'Trigger created successfully: minuteTrigger',
+    });
+  }
+
+  if (
+    url === 'https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Messages!A2:AA2?valueInputOption=USER_ENTERED' &&
+    method === 'PUT'
+  ) {
+    return jsonResponse({});
+  }
+
+  if (
+    url === 'https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Config!A2:B' &&
+    method === 'GET'
+  ) {
+    return jsonResponse({ values: [] });
+  }
+
+  if (
+    url === 'https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Config!A2:B57?valueInputOption=RAW' &&
+    method === 'PUT'
+  ) {
+    return jsonResponse({});
+  }
+
   throw new Error(`Unexpected fetch: ${method} ${url}`);
 };
 
@@ -119,6 +167,9 @@ try {
   assert.equal(result.needsAuthorization, true);
   assert.equal(result.sheetId, 'sheet-123');
   assert.equal(result.scriptId, 'script-123');
+  assert.equal(result.deploymentId, 'deployment-123');
+  assert.equal(result.messagesSheetId, 101);
+  assert.equal(result.logsSheetId, 103);
   assert.match(result.authUrl || '', /action=authSuccess/);
   assert.ok(
     result.setupWarnings?.some((warning) => warning.includes('仅创建者可编辑')),
@@ -138,6 +189,39 @@ try {
     false,
     'Initializer must not silently fall back to anyone-with-link writer sharing',
   );
+
+  const phaseTwoInitializer = new SheetInitializer('fake-token');
+  const completed = await phaseTwoInitializer.completeInitialization(
+    result.sheetId,
+    result.scriptId,
+    result.webAppUrl,
+    {
+      deploymentId: result.deploymentId,
+      messagesSheetId: result.messagesSheetId,
+      logsSheetId: result.logsSheetId,
+    },
+  );
+
+  assert.equal(completed.success, true);
+  assert.equal(completed.deploymentId, 'deployment-123');
+  assert.equal(completed.messagesSheetId, 101);
+  assert.equal(completed.logsSheetId, 103);
+
+  const configWrite = capturedRequests.find((request) =>
+    request.url === 'https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Config!A2:B57?valueInputOption=RAW',
+  );
+  assert.ok(configWrite, 'Completed setup should write Config rows');
+  const configRows = JSON.parse(configWrite.body || '{}').values as [string, string][];
+  const configMap = new Map(configRows);
+  assert.equal(configMap.get('deployment_id'), 'deployment-123');
+  assert.equal(configMap.get('messages_sheet_id'), '101');
+  assert.equal(configMap.get('logs_sheet_id'), '103');
+  assert.equal(configMap.get('last_sync_action'), 'one_click_setup');
+
+  const storedConfig = storageState.scheduledMessagesConfig as Record<string, unknown>;
+  assert.equal(storedConfig.deploymentId, 'deployment-123');
+  assert.equal(storedConfig.messagesSheetId, 101);
+  assert.equal(storedConfig.logsSheetId, 103);
 
   console.log('Scheduled Messages one-click setup safety verifier passed');
 } finally {

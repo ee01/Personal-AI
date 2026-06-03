@@ -255,6 +255,180 @@ function createMuteReasonTopic() {
   };
 }
 
+function createDeferUndoTopic() {
+  return {
+    id: 'topic-defer-undo',
+    type: 'Topic',
+    name: 'Defer Undo Topic',
+    description: 'Topic should offer an immediate restore path after defer.',
+    importance: 0.76,
+    accessCount: 0,
+    mentionCount: 1,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    properties: [],
+    statistic: {
+      conversations: 1,
+      projects: 0,
+      participants: 2,
+      resources: 0,
+    },
+    readStatus: {
+      isRead: false,
+      unreadCount: 1,
+      lastReadTime: null,
+      lastUpdateTime: now - 30_000,
+    },
+    unreadDiscussions: [
+      {
+        messageId: 'defer-undo-msg',
+        text: 'Need to revisit later',
+      },
+    ],
+    recentDataDetails: {
+      conversations: [
+        {
+          id: 'defer-undo-msg',
+          isRead: false,
+          sender: 'Ada',
+          groupName: 'Product Team',
+          datetime: now - 30_000,
+          summary: 'Need to revisit later',
+        },
+      ],
+      webpages: [],
+      resources: [],
+      projects: [],
+      people: [],
+      topics: [],
+      jiraTickets: [],
+      cooccurringEntities: [],
+    },
+  };
+}
+
+function createAutoReleaseTopic() {
+  return {
+    id: 'topic-auto-release',
+    type: 'Topic',
+    name: 'Auto Release Topic',
+    description: 'Topic should return when its local defer time passes.',
+    importance: 0.74,
+    accessCount: 0,
+    mentionCount: 1,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    properties: [],
+    statistic: {
+      conversations: 1,
+      projects: 0,
+      participants: 2,
+      resources: 0,
+    },
+    readStatus: {
+      isRead: false,
+      unreadCount: 1,
+      lastReadTime: null,
+      lastUpdateTime: now - 30_000,
+    },
+    unreadDiscussions: [
+      {
+        messageId: 'auto-release-msg',
+        text: 'Return to unread after defer expires',
+      },
+    ],
+    recentDataDetails: {
+      conversations: [
+        {
+          id: 'auto-release-msg',
+          isRead: false,
+          sender: 'Ada',
+          groupName: 'Product Team',
+          datetime: now - 30_000,
+          summary: 'Return to unread after defer expires',
+        },
+      ],
+      webpages: [],
+      resources: [],
+      projects: [],
+      people: [],
+      topics: [],
+      jiraTickets: [],
+      cooccurringEntities: [],
+    },
+  };
+}
+
+function createSearchOnlyTopic() {
+  return {
+    id: 'topic-search-only',
+    type: 'Topic',
+    name: 'Quiet Planning Topic',
+    description: 'Name does not include the operator query.',
+    importance: 0.71,
+    accessCount: 0,
+    mentionCount: 1,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    properties: [],
+    statistic: {
+      conversations: 1,
+      projects: 0,
+      participants: 2,
+      resources: 0,
+    },
+    readStatus: {
+      isRead: false,
+      unreadCount: 1,
+      lastReadTime: null,
+      lastUpdateTime: now - 30_000,
+    },
+    unreadDiscussions: [
+      {
+        messageId: 'search-only-msg',
+        text: 'Escalation owner is missing before ship room.',
+      },
+    ],
+    recentDataDetails: {
+      conversations: [
+        {
+          id: 'search-only-msg',
+          isRead: false,
+          sender: 'Ada',
+          groupName: 'Ops Review',
+          datetime: now - 30_000,
+          summary: 'Pager blocker needs one more owner.',
+          contextMessages: [
+            {
+              id: 'search-only-context',
+              isRead: false,
+              sender: 'Ben',
+              content: 'Runbook update is needed for the rollout.',
+              datetime: now - 45_000,
+            },
+          ],
+        },
+      ],
+      webpages: [],
+      resources: [
+        {
+          id: 'search-only-resource',
+          name: 'Release checklist',
+          url: 'https://example.com/release-checklist',
+        },
+      ],
+      projects: [],
+      people: [],
+      topics: [],
+      jiraTickets: [],
+      cooccurringEntities: [],
+    },
+  };
+}
+
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
   headless: true,
@@ -285,7 +459,16 @@ try {
       pathname.endsWith('/entities') &&
       new URL(url).searchParams.get('type') === 'Topic'
     ) {
-      await route.fulfill(jsonResponse({ items: [createMuteReasonTopic()] }));
+      await route.fulfill(
+        jsonResponse({
+          items: [
+            createDeferUndoTopic(),
+            createAutoReleaseTopic(),
+            createMuteReasonTopic(),
+            createSearchOnlyTopic(),
+          ],
+        }),
+      );
       return;
     }
 
@@ -324,9 +507,11 @@ try {
   const contextItem = page.locator('.context-item', {
     hasText: 'Historical note without read state',
   });
-  await contextItem.locator('.targeted-message-badge', {
-    hasText: '链接定位',
-  }).waitFor({ timeout: 10000 });
+  await contextItem
+    .locator('.targeted-message-badge', {
+      hasText: '链接定位',
+    })
+    .waitFor({ timeout: 10000 });
   assert.equal(
     await contextItem.evaluate((node) => node.classList.contains('targeted')),
     true,
@@ -394,7 +579,9 @@ try {
   );
   assert.equal(
     await page
-      .locator('[data-conversation-id="conv-unsafe-only"] .conversation-source-link')
+      .locator(
+        '[data-conversation-id="conv-unsafe-only"] .conversation-source-link',
+      )
       .count(),
     0,
     'unsafe-only candidates should never render a clickable source link',
@@ -409,6 +596,81 @@ try {
   await page
     .getByText('Unread parent with context')
     .waitFor({ timeout: 10000 });
+
+  await page
+    .locator('.topic-detail-action-btn', { hasText: '稍后处理' })
+    .click({
+      timeout: 10000,
+    });
+  await page.getByRole('menuitem', { name: /1小时后/ }).click({
+    timeout: 10000,
+  });
+  const detailDeferUndoToast = page.locator('.topic-defer-undo-toast');
+  await detailDeferUndoToast
+    .getByText('已将「Unread Sticky Topic」稍后到')
+    .waitFor({ timeout: 10000 });
+  const detailDeferredState = await page.evaluate(() => {
+    const raw = localStorage.getItem('personal-ai-deferred-topics-v1');
+    return raw ? JSON.parse(raw)['topic-unread-sticky'] || null : null;
+  });
+  assert.ok(
+    Number.isFinite(detailDeferredState?.until),
+    'detail defer action should persist the current topic in local deferred state',
+  );
+  await detailDeferUndoToast.getByRole('button', { name: /恢复/ }).click({
+    timeout: 10000,
+  });
+  const detailDeferredStateAfterRestore = await page.evaluate(() => {
+    const raw = localStorage.getItem('personal-ai-deferred-topics-v1');
+    return raw ? JSON.parse(raw)['topic-unread-sticky'] || null : null;
+  });
+  assert.equal(
+    detailDeferredStateAfterRestore,
+    null,
+    'detail defer undo should restore the topic without leaving stale local state',
+  );
+
+  await page.locator('.topic-detail-action-btn.mute').click({
+    timeout: 10000,
+  });
+  await page.getByRole('button', { name: /重复讨论/ }).click({
+    timeout: 10000,
+  });
+  await page.getByRole('menuitem', { name: /静音1天/ }).click({
+    timeout: 10000,
+  });
+  const detailMuteUndoToast = page.locator('.topic-mute-undo-toast');
+  await detailMuteUndoToast
+    .getByText('已将「Unread Sticky Topic」静音')
+    .waitFor({ timeout: 10000 });
+  const detailMutedState = await page.evaluate(() => {
+    const raw = localStorage.getItem('personal-ai-muted-topics-v1');
+    return raw ? JSON.parse(raw)['topic-unread-sticky'] || null : null;
+  });
+  assert.ok(
+    Number.isFinite(detailMutedState?.until),
+    'detail mute action should persist the current topic in local muted state',
+  );
+  assert.equal(
+    detailMutedState.reason,
+    'duplicate-discussion',
+    'detail mute action should preserve the selected mute reason',
+  );
+  await page
+    .locator('.muted-meta', { hasText: '已静音：重复讨论' })
+    .waitFor({ timeout: 10000 });
+  await detailMuteUndoToast.getByRole('button', { name: /取消静音/ }).click({
+    timeout: 10000,
+  });
+  const detailMutedStateAfterRestore = await page.evaluate(() => {
+    const raw = localStorage.getItem('personal-ai-muted-topics-v1');
+    return raw ? JSON.parse(raw)['topic-unread-sticky'] || null : null;
+  });
+  assert.equal(
+    detailMutedStateAfterRestore,
+    null,
+    'detail mute undo should restore the topic without leaving stale local muted state',
+  );
 
   const stickyConversation = page.locator(
     '[data-conversation-id="unread-sticky-conv"]',
@@ -438,8 +700,102 @@ try {
     { waitUntil: 'domcontentloaded', timeout: 15000 },
   );
 
+  const deferUndoCard = page.locator('[data-topic-id="topic-defer-undo"]');
+  await deferUndoCard.getByText('Defer Undo Topic').waitFor({
+    timeout: 10000,
+  });
+
+  const topicSearchInput = page.locator('.search-input').first();
+  await topicSearchInput.fill('pager owner');
+  const searchOnlyCard = page.locator('[data-topic-id="topic-search-only"]');
+  await searchOnlyCard.getByText('Quiet Planning Topic').waitFor({
+    timeout: 10000,
+  });
+  await searchOnlyCard.getByText('Escalation owner is missing').waitFor({
+    timeout: 10000,
+  });
+  await page.waitForFunction(
+    () => !document.querySelector('[data-topic-id="topic-defer-undo"]'),
+    null,
+    { timeout: 10000 },
+  );
+  assert.equal(
+    await page.locator('[data-topic-id="topic-defer-undo"]').count(),
+    0,
+    'typing in the topic list search should hide topics that only match container names',
+  );
+  await topicSearchInput.fill('release-checklist');
+  await searchOnlyCard.getByText('Quiet Planning Topic').waitFor({
+    timeout: 10000,
+  });
+  await topicSearchInput.fill('');
+
+  await deferUndoCard.getByText('Defer Undo Topic').waitFor({
+    timeout: 10000,
+  });
+  await deferUndoCard.locator('.topic-action-btn.later').click({
+    timeout: 10000,
+  });
+  await deferUndoCard.getByRole('menuitem', { name: /1小时后/ }).click({
+    timeout: 10000,
+  });
+  const deferUndoToast = page.locator('.topic-defer-undo-toast');
+  await deferUndoToast.getByText('已将「Defer Undo Topic」稍后到').waitFor({
+    timeout: 10000,
+  });
+  await deferUndoToast.getByRole('button', { name: /恢复/ }).click({
+    timeout: 10000,
+  });
+  await deferUndoCard.getByText('Defer Undo Topic').waitFor({
+    timeout: 10000,
+  });
+  assert.equal(
+    await deferUndoCard.locator('.topic-deferred-note').count(),
+    0,
+    'defer undo should restore the topic to the unread view without a later badge',
+  );
+
+  const autoReleaseUntil = Date.now() + 900;
+  await page.evaluate((until) => {
+    localStorage.setItem(
+      'personal-ai-deferred-topics-v1',
+      JSON.stringify({
+        'topic-auto-release': {
+          until,
+          createdAt: Date.now(),
+        },
+      }),
+    );
+  }, autoReleaseUntil);
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.locator('.view-toggle-btn', { hasText: '稍后 1' }).waitFor({
+    timeout: 10000,
+  });
+  assert.equal(
+    await page.locator('[data-topic-id="topic-auto-release"]').count(),
+    0,
+    'future deferred topics should be hidden from the unread view before release',
+  );
+  await page
+    .locator('[data-topic-id="topic-auto-release"]', {
+      hasText: 'Auto Release Topic',
+    })
+    .waitFor({ timeout: 5000 });
+  const laterButtonText = (
+    (await page
+      .locator('.view-toggle-btn', { hasText: '稍后' })
+      .textContent()) || ''
+  ).replace(/\s+/g, ' ');
+  assert.match(
+    laterButtonText,
+    /稍后\s*$/,
+    'expired deferred topics should be pruned from the Later count without another user interaction',
+  );
+
   const muteReasonCard = page.locator('[data-topic-id="topic-mute-reason"]');
-  await muteReasonCard.getByText('Mute Reason Topic').waitFor({ timeout: 10000 });
+  await muteReasonCard
+    .getByText('Mute Reason Topic')
+    .waitFor({ timeout: 10000 });
   await muteReasonCard.locator('.topic-action-btn.mute').click({
     timeout: 10000,
   });
@@ -494,7 +850,11 @@ try {
     })
     .waitFor({ timeout: 10000 });
 
-  assert.deepEqual(pageErrors, [], `Topic detail page errors: ${pageErrors.join('; ')}`);
+  assert.deepEqual(
+    pageErrors,
+    [],
+    `Topic detail page errors: ${pageErrors.join('; ')}`,
+  );
   console.log('verify-topic-based-messages-e2e: ok');
 } finally {
   await context.close();

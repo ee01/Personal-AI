@@ -37,23 +37,45 @@ async function installMocks(page) {
         },
       },
     };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error('clipboard denied in e2e');
+        },
+      },
+    });
+    document.execCommand = (command) => {
+      window.__storylineCopyCommand = command;
+      window.__storylineCopyValue = document.activeElement?.value || '';
+      return command === 'copy';
+    };
+    window.__storylineDraftRequests = [];
     window.fetch = async (url, init) => {
       const href = String(url);
       if (href.includes('/api/v1/storylines/draft')) {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
+        const targetArtifact = body.targetArtifact || 'speaker_notes';
+        window.__storylineDraftRequests.push(targetArtifact);
+        if (targetArtifact === 'speaker_notes') {
+          await new Promise((resolve) => setTimeout(resolve, 180));
+        }
+        const isSlides = targetArtifact === 'slides_outline';
         return new Response(
           JSON.stringify({
             id: 'storyline-draft-e2e',
             sourceKind: 'today_meeting_prep',
             sourceId: body.prepId || 'prep-storyline',
-            title: 'Workshop 复盘故事线',
+            title: isSlides ? 'Workshop 复盘故事线' : '旧请求口播稿',
             audience: '项目组',
-            targetArtifact: 'slides_outline',
+            targetArtifact,
             segments: [
               {
                 title: '背景',
                 intent: '说明为什么需要复盘。',
-                narrative: 'Workshop 沉淀了可复用的自动化经验。',
+                narrative: isSlides
+                  ? 'Workshop 沉淀了可复用的自动化经验。'
+                  : '旧口播稿请求已经不是当前选择。',
                 evidenceIds: ['memory-1'],
               },
               {
@@ -69,10 +91,55 @@ async function installMocks(page) {
                 evidenceIds: ['memory-3'],
               },
             ],
+            evidence: [
+              {
+                id: 'memory-1',
+                type: 'message',
+                sourceLabel: 'RingCentral',
+                sourceTitle: 'Workshop planning thread',
+                sourceUrl: 'https://example.com/workshop-planning',
+                exploreLink: '#/source-memory/memory-1',
+                snippet: 'Workshop 沉淀了可复用的自动化经验。',
+                links: [
+                  {
+                    label: '辅助材料',
+                    url: 'https://example.com/workshop-support',
+                  },
+                  {
+                    label: '不安全链接',
+                    url: 'javascript:alert(1)',
+                  },
+                ],
+              },
+              {
+                id: 'memory-2',
+                type: 'chunk',
+                sourceLabel: 'Jira',
+                sourceTitle: 'Automation rollout note',
+                snippet: '会议记忆、Jira 和技能沉淀被组合成素材。',
+              },
+              {
+                id: 'memory-3',
+                type: 'source_memory',
+                sourceLabel: 'Source Memory',
+                sourceTitle: 'Storyline follow-up',
+                snippet: '确认哪些内容可以转成长期 Storyline。',
+              },
+            ],
             gaps: ['确认哪些素材可以对外分享。'],
             riskNotes: ['复制前去掉内部链接。'],
-            artifactText:
-              '# Slides Outline\n\n1. 背景\n2. 做法\n3. 下一步',
+            artifactText: isSlides
+              ? [
+                  '# Slides Outline',
+                  '',
+                  '1. 背景',
+                  '2. 做法',
+                  '3. 下一步',
+                  '',
+                  '## Evidence key',
+                  '- memory-1: RingCentral - Workshop planning thread',
+                ].join('\n')
+              : '# Speaker Notes\n\n旧请求不应覆盖当前 Slides 选择。',
           }),
           {
             status: 200,
@@ -102,24 +169,94 @@ async function main() {
     });
     const page = await context.newPage();
     await installMocks(page);
-    const url = `${pathToFileURL(memoryExploringHtml).href}#/storylines/draft?source=today_meeting_prep&prepId=prep-storyline&target=slides_outline`;
+    const url = `${pathToFileURL(memoryExploringHtml).href}#/storylines/draft?source=today_meeting_prep&prepId=prep-storyline&target=speaker_notes`;
     await page.goto(url);
     await page.waitForSelector('.storyline-page');
+    await page.locator('.target-segmented button', { hasText: 'Slides' }).click();
     await page.waitForFunction(() =>
       document.body.textContent?.includes('Workshop 复盘故事线'),
     );
+    await page.waitForTimeout(260);
     const bodyText = await page.textContent('body');
-    assert(bodyText?.includes('故事线段落'), 'segments section missing');
+    assert(
+      !bodyText?.includes('旧请求口播稿'),
+      'stale speaker-notes response overwrote the selected Slides draft',
+    );
+    assert(bodyText?.includes('Storyline canvas'), 'canvas section missing');
+    assert(bodyText?.includes('Inspector'), 'inspector panel missing');
+    assert(bodyText?.includes('Workshop planning thread'), 'evidence detail missing');
+    assert(bodyText?.includes('打开记忆'), 'safe memory route link missing');
+    assert(bodyText?.includes('打开来源 · example.com'), 'safe source link missing');
+    assert(
+      bodyText?.includes('不安全链接已隐藏'),
+      'unsafe evidence link warning missing',
+    );
     assert(bodyText?.includes('Slides 提纲'), 'artifact label missing');
     assert(bodyText?.includes('确认哪些素材可以对外分享'), 'gap text missing');
     assert(bodyText?.includes('复制前去掉内部链接'), 'risk note missing');
+    assert(
+      bodyText?.includes('已复核 1 个待确认和 1 条边界提醒'),
+      'pre-copy review gate missing',
+    );
+    assert(
+      bodyText?.includes('先复核 1 个待确认和 1 条边界提醒'),
+      'header copy gate reason missing',
+    );
     const artifactValue = await page.$eval(
-      '.artifact-panel textarea',
+      '.artifact-output textarea',
       (textarea) => textarea.value,
     );
     assert(
       artifactValue.includes('# Slides Outline'),
       'artifact textarea missing generated text',
+    );
+    assert(
+      artifactValue.includes('## Evidence key'),
+      'artifact textarea missing evidence key',
+    );
+    assert(
+      !artifactValue.includes('# Speaker Notes'),
+      'artifact textarea was overwritten by the stale speaker-notes result',
+    );
+    const requests = await page.evaluate(() => window.__storylineDraftRequests);
+    assert.deepEqual(
+      requests,
+      ['speaker_notes', 'slides_outline'],
+      'storyline draft should request the initial and selected artifact targets',
+    );
+    const copyButton = page.locator('.artifact-output button', {
+      hasText: /^复制$/,
+    });
+    const headerCopyTitle = await page
+      .locator('.header-actions .btn.primary')
+      .getAttribute('title');
+    assert.equal(
+      headerCopyTitle,
+      '先复核 1 个待确认和 1 条边界提醒',
+      'header copy button should explain why it is disabled',
+    );
+    assert.equal(
+      await copyButton.isDisabled(),
+      true,
+      'copy should be disabled until review is acknowledged',
+    );
+    await page.locator('.review-gate input[type="checkbox"]').check();
+    await page.waitForFunction(() =>
+      !document.body.textContent?.includes('先复核 1 个待确认和 1 条边界提醒'),
+    );
+    assert.equal(
+      await copyButton.isEnabled(),
+      true,
+      'copy should be enabled after review acknowledgement',
+    );
+    await copyButton.click();
+    await page.waitForFunction(() =>
+      document.body.textContent?.includes('已复制'),
+    );
+    const copiedValue = await page.evaluate(() => window.__storylineCopyValue);
+    assert(
+      copiedValue.includes('# Slides Outline'),
+      'copy fallback did not select generated artifact text',
     );
     console.log('Storyline draft page E2E verified.');
   } finally {

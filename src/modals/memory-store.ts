@@ -445,9 +445,8 @@ const inferUnreadCountFromConversations = (topic: any): number => {
     0,
     ...lists.map(
       (conversations) =>
-        conversations.filter(
-          (conversation: any) =>
-            hasExplicitUnreadReadStateNode(conversation),
+        conversations.filter((conversation: any) =>
+          hasExplicitUnreadReadStateNode(conversation),
         ).length,
     ),
   );
@@ -2017,10 +2016,7 @@ export const useMemoryStore = defineStore('memory', () => {
       entities.value.forEach((entity: any) => {
         if (entity.type === 'Topic' && entity.readStatus) {
           const unreadSignalCount = getTopicUnreadSignalCount(entity);
-          if (
-            entity.readStatus.unreadCount === 0 &&
-            unreadSignalCount > 0
-          ) {
+          if (entity.readStatus.unreadCount === 0 && unreadSignalCount > 0) {
             setTopicReadStatus(
               entity,
               unreadSignalCount,
@@ -2200,6 +2196,29 @@ export const useMemoryStore = defineStore('memory', () => {
       deferredTopics.value = next;
       saveDeferredTopicsToLocalStorage();
     }
+
+    return changed;
+  };
+
+  const refreshDeferredTopics = (now = Date.now()) => {
+    const changed = pruneExpiredDeferredTopics(now);
+    if (changed) {
+      updateTopicUnreadCount();
+    }
+    return changed;
+  };
+
+  const getNextDeferredTopicReleaseAt = (now = Date.now()) => {
+    let nextReleaseAt: number | null = null;
+
+    Object.values(deferredTopics.value).forEach((state) => {
+      if (!Number.isFinite(state.until) || state.until <= now) return;
+      if (nextReleaseAt === null || state.until < nextReleaseAt) {
+        nextReleaseAt = state.until;
+      }
+    });
+
+    return nextReleaseAt;
   };
 
   const deferTopicForLater = async (
@@ -2834,6 +2853,8 @@ export const useMemoryStore = defineStore('memory', () => {
     markConversationAsRead,
     deferTopicForLater,
     restoreDeferredTopic,
+    refreshDeferredTopics,
+    getNextDeferredTopicReleaseAt,
     muteTopic,
     restoreMutedTopic,
     undoLastTopicRead,

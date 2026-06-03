@@ -153,54 +153,76 @@
               >
             </div>
             <p>
-              输出和输入都共用这一层。配置好 Base URL、User ID
-              和节奏之后，豆包输出、Quick Ask 与 Explorer
-              缓存读取才能共享同一份记忆上下文。
+              输出广播、Quick Ask 与 Explorer 共用这一层；待办分为新内容即时推送和每日完整摘要。
             </p>
           </div>
         </div>
 
         <form id="settings-form" class="settings-form settings-form-wide">
-          <div class="field-grid field-grid-wide">
-            <label>
-              <span>Memory Service Base URL</span>
-              <input
-                id="memory-base-url"
-                type="url"
-                placeholder="http://127.0.0.1:3210"
-              />
-            </label>
-            <label>
-              <span>Memory Service User ID</span>
-              <input
-                id="memory-user-id"
-                type="text"
-                placeholder="必填，例如 esone.qiu"
-              />
-            </label>
-            <label class="field-span-2">
-              <span>Memory Service API Key</span>
-              <input id="memory-api-key" type="password" placeholder="可选" />
-            </label>
-          </div>
+          <div class="settings-compact-grid">
+            <fieldset class="settings-compact-group settings-compact-group-service">
+              <legend>连接</legend>
+              <label class="compact-field compact-field-wide">
+                <span>Base URL</span>
+                <input
+                  id="memory-base-url"
+                  type="url"
+                  placeholder="http://127.0.0.1:3210"
+                />
+              </label>
+              <label class="compact-field">
+                <span>User ID</span>
+                <input
+                  id="memory-user-id"
+                  type="text"
+                  placeholder="esone.qiu"
+                />
+              </label>
+              <label class="compact-field">
+                <span>API Key</span>
+                <input id="memory-api-key" type="password" placeholder="可选" />
+              </label>
+            </fieldset>
 
-          <div class="interval-grid">
-            <label>
-              <span>轮询间隔（分钟）</span>
-              <input id="poll-minutes" type="number" min="1" step="1" />
-            </label>
-            <label>
-              <span>长期记忆（小时）</span>
-              <input id="stable-hours" type="number" min="1" step="1" />
-            </label>
-            <label>
-              <span>近期记忆重点（小时）</span>
-              <input id="briefing-hours" type="number" min="1" step="1" />
-            </label>
-            <label>
-              <span>待办 / 通知（分钟）</span>
-              <input id="reminder-minutes" type="number" min="1" step="1" />
-            </label>
+            <fieldset class="settings-compact-group">
+              <legend>基础节奏</legend>
+              <label class="compact-field">
+                <span>轮询</span>
+                <input id="poll-minutes" type="number" min="1" step="1" />
+                <small>分钟</small>
+              </label>
+              <label class="compact-field">
+                <span>长期记忆</span>
+                <input id="stable-hours" type="number" min="1" step="1" />
+                <small>小时</small>
+              </label>
+              <label class="compact-field">
+                <span>近期重点</span>
+                <input id="briefing-hours" type="number" min="1" step="1" />
+                <small>小时</small>
+              </label>
+            </fieldset>
+
+            <fieldset class="settings-compact-group settings-compact-group-todo">
+              <legend>待办投递</legend>
+              <label class="compact-field">
+                <span>新待办间隔</span>
+                <input id="reminder-minutes" type="number" min="1" step="1" />
+                <small>分钟</small>
+              </label>
+              <label class="compact-field">
+                <span>每日完整摘要</span>
+                <input id="reminder-daily-time" type="time" step="60" />
+              </label>
+              <label class="compact-toggle">
+                <input id="reminder-daily-enabled" type="checkbox" />
+                <span>每天推送未完成待办</span>
+              </label>
+              <label class="compact-toggle">
+                <input id="reminder-dedup-same-day" type="checkbox" />
+                <span>新待办当天不重复推送</span>
+              </label>
+            </fieldset>
           </div>
 
           <div class="action-row">
@@ -338,6 +360,10 @@
                 现在推一次 persona
               </button>
             </div>
+            <div
+              id="memory-thread-detail"
+              class="thread-detail thread-detail-pending"
+            ></div>
             <p id="memory-thread-message" class="inline-message"></p>
           </article>
 
@@ -493,7 +519,7 @@
                 <strong id="doubao-source-pending-count">-</strong>
               </div>
               <div>
-                <label>已提炼记忆</label>
+                <label>活跃提炼记忆</label>
                 <strong id="doubao-source-artifact-count">-</strong>
               </div>
               <div>
@@ -609,7 +635,27 @@
               >
                 立即抓取
               </button>
+              <button
+                id="doubao-source-preview-button"
+                class="secondary"
+                type="button"
+              >
+                预览缓存
+              </button>
+              <button
+                id="doubao-source-reset-button"
+                class="secondary source-reset-button"
+                type="button"
+              >
+                重置本地缓存
+              </button>
             </div>
+
+            <div
+              id="doubao-source-preview-panel"
+              class="source-preview-panel"
+              hidden
+            ></div>
 
             <div class="source-revoke-panel">
               <div>
@@ -617,7 +663,7 @@
                 <strong id="doubao-source-revoke-scope">-</strong>
                 <p>
                   撤回这个来源在当前范围写入 Memory Service
-                  的记忆；不会删除豆包聊天，也不会清理本地审计缓存。
+                  的记忆；不会删除豆包聊天，本地 artifact 会保留为已撤回审计。
                 </p>
               </div>
               <button
@@ -681,7 +727,7 @@
                 <strong id="chatgpt-source-pending-count">-</strong>
               </div>
               <div>
-                <label>已提炼记忆</label>
+                <label>活跃提炼记忆</label>
                 <strong id="chatgpt-source-artifact-count">-</strong>
               </div>
               <div>
@@ -807,7 +853,27 @@
               >
                 立即抓取
               </button>
+              <button
+                id="chatgpt-source-preview-button"
+                class="secondary"
+                type="button"
+              >
+                预览缓存
+              </button>
+              <button
+                id="chatgpt-source-reset-button"
+                class="secondary source-reset-button"
+                type="button"
+              >
+                重置本地缓存
+              </button>
             </div>
+
+            <div
+              id="chatgpt-source-preview-panel"
+              class="source-preview-panel"
+              hidden
+            ></div>
 
             <div class="source-revoke-panel">
               <div>
@@ -815,7 +881,7 @@
                 <strong id="chatgpt-source-revoke-scope">-</strong>
                 <p>
                   撤回这个来源在当前范围写入 Memory Service 的记忆；不会删除
-                  ChatGPT 对话，也不会清理本地审计缓存。
+                  ChatGPT 对话，本地 artifact 会保留为已撤回审计。
                 </p>
               </div>
               <button

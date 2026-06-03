@@ -22,6 +22,7 @@ import type {
   IngestResult,
   IngestDedupeReason,
   IngestDecision,
+  IngestSalienceComponents,
   EntityType,
   ProfileCandidate,
 } from '../types/index.js';
@@ -219,6 +220,11 @@ export class IngestionPipeline {
         );
       }
     }
+    const extractionStatus = skip
+      ? 'skipped'
+      : extraction
+        ? 'extracted'
+        : 'unavailable';
 
     const importance =
       extraction?.importance ?? payload.metadata?.importance ?? 0.5;
@@ -230,8 +236,11 @@ export class IngestionPipeline {
     const entitiesList = extraction ? this.flattenEntities(extraction) : [];
 
     // ---- 3. Compute salience score ----
+    const scoreSkippedArtifact =
+      skip && payload.metadata?.indexExtractedArtifact === true;
     let salienceScore: number | undefined;
-    if (!skip) {
+    let salienceComponents: IngestSalienceComponents | undefined;
+    if (!skip || scoreSkippedArtifact) {
       salienceScore = 0.5;
       try {
         const salienceResult = await this.scorer.scoreMessage(
@@ -241,6 +250,7 @@ export class IngestionPipeline {
           ts,
         );
         salienceScore = salienceResult.score;
+        salienceComponents = salienceResult.components;
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Salience scoring failed, using default:',
@@ -291,6 +301,8 @@ export class IngestionPipeline {
           storage: 'error',
           reason: 'insert_failed',
           salienceScore,
+          salienceComponents,
+          extractionStatus,
           shouldIndex,
           indexed: false,
         },
@@ -316,18 +328,21 @@ export class IngestionPipeline {
 
     // ---- 6. High-salience processing: entities, relationships, chunks ----
     let indexed = false;
-    if (shouldIndex && extraction) {
-      try {
-        this.processEntities(extraction, id, ts);
-      } catch (err) {
-        console.warn(
-          '[IngestionPipeline] Entity processing failed:',
-          (err as Error).message,
-        );
+    if (shouldIndex) {
+      if (extraction) {
+        try {
+          this.processEntities(extraction, id, ts);
+        } catch (err) {
+          console.warn(
+            '[IngestionPipeline] Entity processing failed:',
+            (err as Error).message,
+          );
+        }
       }
 
+      let chunksCreated = 0;
       try {
-        this.processChunks(
+        chunksCreated = this.processChunks(
           contentNormalized,
           id,
           scope,
@@ -342,15 +357,23 @@ export class IngestionPipeline {
         );
       }
 
+      let metadataUpdated = false;
       try {
-        this.scorer.ensureMetadata('message', id, salienceScore ?? 0);
-        indexed = true;
+        this.scorer.ensureMetadata(
+          'message',
+          id,
+          salienceScore ?? 0,
+          salienceComponents,
+        );
+        metadataUpdated = true;
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Metadata update failed:',
           (err as Error).message,
         );
       }
+
+      indexed = chunksCreated > 0 || metadataUpdated;
     }
 
     // ---- 6b. Profile candidate extraction ----
@@ -452,6 +475,8 @@ export class IngestionPipeline {
       skip,
       extraction,
       salienceScore,
+      salienceComponents,
+      extractionStatus,
       shouldIndex,
       indexed,
     });
@@ -471,6 +496,8 @@ export class IngestionPipeline {
     skip: boolean;
     extraction: LLMExtraction | null;
     salienceScore: number | undefined;
+    salienceComponents: IngestSalienceComponents | undefined;
+    extractionStatus: 'extracted' | 'skipped' | 'unavailable';
     shouldIndex: boolean;
     indexed: boolean;
   }): IngestDecision {
@@ -479,8 +506,22 @@ export class IngestionPipeline {
         storage: 'indexed',
         reason: 'salience_indexed',
         salienceScore: args.salienceScore,
+        salienceComponents: args.salienceComponents,
+        extractionStatus: args.extractionStatus,
         shouldIndex: args.shouldIndex,
         indexed: true,
+      };
+    }
+
+    if (args.shouldIndex) {
+      return {
+        storage: 'stored_unindexed',
+        reason: 'indexing_failed',
+        salienceScore: args.salienceScore,
+        salienceComponents: args.salienceComponents,
+        extractionStatus: args.extractionStatus,
+        shouldIndex: args.shouldIndex,
+        indexed: false,
       };
     }
 
@@ -489,6 +530,8 @@ export class IngestionPipeline {
         storage: 'stored_unindexed',
         reason: 'extraction_skipped',
         salienceScore: args.salienceScore,
+        salienceComponents: args.salienceComponents,
+        extractionStatus: args.extractionStatus,
         shouldIndex: args.shouldIndex,
         indexed: false,
       };
@@ -499,6 +542,8 @@ export class IngestionPipeline {
         storage: 'stored_unindexed',
         reason: 'extraction_unavailable',
         salienceScore: args.salienceScore,
+        salienceComponents: args.salienceComponents,
+        extractionStatus: args.extractionStatus,
         shouldIndex: args.shouldIndex,
         indexed: false,
       };
@@ -508,6 +553,8 @@ export class IngestionPipeline {
       storage: 'stored_unindexed',
       reason: 'salience_below_threshold',
       salienceScore: args.salienceScore,
+      salienceComponents: args.salienceComponents,
+      extractionStatus: args.extractionStatus,
       shouldIndex: args.shouldIndex,
       indexed: false,
     };
@@ -1108,9 +1155,9 @@ Rules:
     source: string | null,
     sourceType: string,
     ts: number,
-  ): void {
+  ): number {
     const chunks = chunkText(content);
-    if (chunks.length === 0) return;
+    if (chunks.length === 0) return 0;
 
     const insertChunk = this.db.prepare(
       `INSERT INTO chunks
@@ -1141,6 +1188,7 @@ Rules:
       const chunkId = result.lastInsertRowid;
       this.embedChunkAsync(Number(chunkId), chunk.content);
     }
+    return chunks.length;
   }
 
   /**

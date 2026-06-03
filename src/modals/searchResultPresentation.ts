@@ -9,6 +9,7 @@ const ALLOWED_MEMORY_EXPLORE_PATHS = [
   /^\/person\/[^/]+$/,
   /^\/project\/[^/]+$/,
   /^\/entity\/[^/]+$/,
+  /^\/source-memory\/[^/]+$/,
 ];
 
 export const MEMORY_RESULT_TYPE_CONFIG: Record<
@@ -155,7 +156,9 @@ export function renderHighlightedSearchText(
   while ((match = pattern.exec(value)) !== null) {
     const index = match.index ?? 0;
     highlighted += escapeHtml(value.slice(lastIndex, index));
-    highlighted += `<mark class="search-highlight">${escapeHtml(match[0])}</mark>`;
+    highlighted += `<mark class="search-highlight">${escapeHtml(
+      match[0],
+    )}</mark>`;
     lastIndex = index + match[0].length;
   }
 
@@ -209,6 +212,23 @@ export function formatScopeBreakdownLabel(
     .join(' · ');
 }
 
+export function formatScopeExposureNotice(
+  results: MemorySearchResultLike[],
+  requestedScope: unknown,
+): string {
+  const scope = requestedScope === 'both' ? 'all' : requestedScope;
+  if (scope !== 'all') return '';
+
+  const breakdown = getScopeBreakdown(results);
+  if (breakdown.personal <= 0) return '';
+
+  if (breakdown.work > 0) {
+    return `已包含 ${breakdown.personal} 条个人记忆；复制或引用前先确认是否适合当前工作场景。`;
+  }
+
+  return '当前结果来自个人记忆；复制或引用前先确认是否适合当前场景。';
+}
+
 export function formatMemoryTimestamp(timestamp: unknown): string {
   if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return '';
   const ms = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
@@ -227,16 +247,17 @@ export function getResultMeta(entity: MemorySearchResultLike): string[] {
     typeof entity.sourceTitle === 'string' && entity.sourceTitle.trim()
       ? entity.sourceTitle
       : typeof entity.source === 'string'
-        ? entity.source
-        : '',
+      ? entity.source
+      : '',
     formatMemoryTimestamp(entity.timestamp),
   ].filter(Boolean);
 }
 
 export function getResultChannels(entity: MemorySearchResultLike): string[] {
   return Array.isArray(entity.channels)
-    ? entity.channels.filter((channel): channel is string =>
-        typeof channel === 'string' && channel.length > 0,
+    ? entity.channels.filter(
+        (channel): channel is string =>
+          typeof channel === 'string' && channel.length > 0,
       )
     : [];
 }
@@ -289,10 +310,10 @@ export function formatRecallChannelDiagnostic(
       rawStatus === 'hit'
         ? 'ok'
         : rawStatus === 'failed'
-          ? 'danger'
-          : rawStatus === 'skipped'
-            ? 'warning'
-            : 'muted',
+        ? 'danger'
+        : rawStatus === 'skipped'
+        ? 'warning'
+        : 'muted',
   };
 }
 
@@ -323,8 +344,8 @@ export function getSearchResultKey(entity: MemorySearchResultLike): string {
     typeof entity.recallType === 'string' && entity.recallType.trim()
       ? entity.recallType
       : typeof entity.type === 'string' && entity.type.trim()
-        ? entity.type
-        : 'result';
+      ? entity.type
+      : 'result';
   return `${type}:${String(entity.id ?? '')}`;
 }
 

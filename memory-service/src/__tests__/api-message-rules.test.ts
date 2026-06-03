@@ -340,24 +340,99 @@ describe('Message Rule Automation API', () => {
     expect(metadata).toBe('jira_comment');
   });
 
-  it('returns skippedReason when the automation prompt is unsupported or cannot parse dates', async () => {
+  it('delegates unclassified linked-action prompts to OpenClaw with attachment context', async () => {
+    const automationPrompt =
+      '把这个视频下载下来并上传到 https://drive.google.com/drive/u/1/folders/1PLSseleeEXedYDvbNT8ph48wVONupLhd Drive 目录中，且文件名加上后缀 " - YYYYMMDD"时间后缀，最后把 drive 视频 link 用单独发送消息给我。';
+    const messageUrl =
+      'https://app.ringcentral.com/messages/160443817990/80220230991876';
+    const message = {
+      postId: '80220230991876',
+      groupId: '160443817990',
+      groupName: '🍸 Nova CA - Brandy',
+      sender: 'Rondo Yang',
+      content:
+        '这个是LLM只返回意图，然后在NECA这边转成WhatsApp格式发出去，不在skill那边添加模板\n[Attachment 1] Video: az_recorder_20260527_092549.mp4 (type=mp4, 13.4 MB, link=https://app.ringcentral.com/messages/160443817990/80220230991876)',
+      messageUrl,
+      attachments: [
+        {
+          id: 4103941627914,
+          name: 'az_recorder_20260527_092549.mp4',
+          type: 'mp4',
+          category: 'video',
+          size: 14033215,
+          sourceUrl: messageUrl,
+          messageUrl,
+        },
+      ],
+    };
+    const preview = await app.inject({
+      method: 'POST',
+      url: '/api/v1/message-rules/preview',
+      payload: {
+        ruleRef: 'manual:video-rule',
+        automationPrompt,
+        message,
+      },
+    });
+
+    expect(preview.statusCode).toBe(200);
+    const previewBody = preview.json();
+    expect(previewBody.canPlan).toBe(true);
+    expect(previewBody.actionFamily).toBe('openclaw_delegation');
+    expect(
+      previewBody.warnings.some(
+        (warning: { code: string }) =>
+          warning.code === 'delegated_to_openclaw_black_box',
+      ),
+    ).toBe(true);
+
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/message-rules/plan',
       payload: {
-        ruleRef: 'manual:generic-rule',
-        automationPrompt: '命中后做一些复杂事情。',
-        message: {
-          content: 'please handle this someday',
-        },
+        ruleRef: 'manual:video-rule',
+        automationPrompt,
+        message,
       },
     });
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.actions).toEqual([]);
-    expect(body.skippedReason).toBe(
-      'unsupported_or_unparseable_automation_prompt',
+    expect(body.deduped).toBe(false);
+    expect(body.skippedReason).toBeUndefined();
+    expect(body.actions).toHaveLength(2);
+
+    const repo = new ActionRepository(db);
+    const delegated = repo
+      .list({
+        sourceKind: 'message_rule',
+        sourceRefId: 'manual:video-rule',
+        limit: 10,
+      })
+      .items.find((item) => item.actionType === 'delegate_openclaw');
+
+    expect(delegated).toBeTruthy();
+    expect(delegated?.params.targetSystem).toBe('google_drive');
+    const task = String(delegated?.params.task ?? '');
+    expect(task).toContain(
+      'https://drive.google.com/drive/u/1/folders/1PLSseleeEXedYDvbNT8ph48wVONupLhd',
     );
+    expect(task).toContain('az_recorder_20260527_092549.mp4');
+    expect(task).toContain(messageUrl);
+    const metadata =
+      delegated &&
+      delegated.params &&
+      typeof delegated.params === 'object' &&
+      'metadata' in delegated.params &&
+      delegated.params.metadata &&
+      typeof delegated.params.metadata === 'object'
+        ? (delegated.params.metadata as Record<string, unknown>)
+        : {};
+    expect(metadata.actionFamily).toBe('openclaw_delegation');
+    expect(
+      Array.isArray(metadata.messageAttachments)
+        ? metadata.messageAttachments
+        : [],
+    ).toHaveLength(1);
   });
 });

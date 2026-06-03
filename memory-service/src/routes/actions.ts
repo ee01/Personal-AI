@@ -67,6 +67,7 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{
     Params: { id: string };
+    Body?: { approve?: boolean };
   }>('/actions/:id/execute', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
@@ -74,9 +75,23 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
     if (!action) {
       return reply.status(404).send({ error: 'Action not found' });
     }
+    if (
+      action.requiresApproval &&
+      !action.approvedAt &&
+      action.executionMode !== 'auto' &&
+      request.body?.approve !== true
+    ) {
+      return reply.status(409).send({
+        code: 'approval_required',
+        error: 'Action requires human approval before execution',
+        action,
+      });
+    }
 
     const executor = new ActionExecutor(db, userDataManager, request.userId);
-    const result = await executor.executeAction(request.params.id);
+    const result = await executor.executeAction(request.params.id, {
+      approve: request.body?.approve === true,
+    });
     return reply.status(200).send(result);
   });
 }

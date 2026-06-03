@@ -26,6 +26,8 @@ import PersonalSkillsPage from './components/PersonalSkillsPage.vue';
 import RehearsalsPage from './components/RehearsalsPage.vue';
 import MemoryCoveragePage from './components/MemoryCoveragePage.vue';
 import StorylineDraftPage from './components/StorylineDraftPage.vue';
+import SourceMemoryDetailPage from './components/SourceMemoryDetailPage.vue';
+import ReportsPage from './components/ReportsPage.vue';
 
 // 路由配置
 const routes = [
@@ -51,6 +53,17 @@ const routes = [
   { path: '/outreach', name: 'OutreachSessions', component: OutreachSessions },
   { path: '/skills', name: 'PersonalSkills', component: PersonalSkillsPage },
   { path: '/coverage', name: 'MemoryCoverage', component: MemoryCoveragePage },
+  {
+    path: '/source-memory/:id',
+    name: 'SourceMemoryDetail',
+    component: SourceMemoryDetailPage,
+    props: true,
+  },
+  {
+    path: '/storylines',
+    name: 'Storylines',
+    component: StorylineDraftPage,
+  },
   {
     path: '/storylines/draft',
     name: 'StorylineDraft',
@@ -93,6 +106,7 @@ const routes = [
   },
   { path: '/search', name: 'Search', component: SearchResultPage },
   { path: '/dreams', name: 'Dreams', component: DreamInsights },
+  { path: '/reports', name: 'Reports', component: ReportsPage },
 ];
 
 // 等待DOM加载完成

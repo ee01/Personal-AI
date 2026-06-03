@@ -20,6 +20,7 @@ export type ProviderScenario =
   | 'notice_sync'
   | 'reminder_sync'
   | 'general';
+export type ProviderDeliveryMode = 'incremental' | 'daily_digest';
 export type ProviderMemoryProductKind =
   | 'persona_core'
   | 'voice_mode'
@@ -48,6 +49,7 @@ export interface ProviderContextPackageInput {
   includeKinds?: ProviderMemoryProductKind[];
   deviceContext?: string;
   bindingType?: string;
+  deliveryMode?: ProviderDeliveryMode;
   createSyncJob?: boolean;
 }
 
@@ -119,6 +121,14 @@ function compactText(text: string, maxLength: number): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function normalizeDeliveryMode(
+  value: ProviderDeliveryMode | undefined,
+): ProviderDeliveryMode | undefined {
+  return value === 'incremental' || value === 'daily_digest'
+    ? value
+    : undefined;
 }
 
 function asRecord(value: unknown): Record<string, any> | null {
@@ -413,6 +423,7 @@ export class ProviderContextService {
         query: input.query,
         freshnessWindowDays,
         tokenBudget,
+        deliveryMode: normalizeDeliveryMode(input.deliveryMode),
       });
 
       if (!rendered) continue;
@@ -438,6 +449,7 @@ export class ProviderContextService {
           freshnessWindowDays,
           tokenBudget,
           kinds,
+          deliveryMode: normalizeDeliveryMode(input.deliveryMode),
           deviceContext: input.deviceContext ?? '',
         }),
       );
@@ -457,6 +469,7 @@ export class ProviderContextService {
           includeKinds: kinds,
           deviceContext: input.deviceContext ?? null,
           bindingType,
+          deliveryMode: normalizeDeliveryMode(input.deliveryMode),
         },
         response: packageResponse,
         status: 'queued',
@@ -482,6 +495,7 @@ export class ProviderContextService {
       query?: string;
       freshnessWindowDays: number;
       tokenBudget: number;
+      deliveryMode?: ProviderDeliveryMode;
     },
   ): Promise<ProviderMemoryProduct | null> {
     switch (kind) {
@@ -492,11 +506,21 @@ export class ProviderContextService {
       case 'active_focus_digest':
         return this.renderActiveFocusDigest(context.provider, context.freshnessWindowDays, context.tokenBudget);
       case 'todo_digest':
-        return this.renderTodoDigest(context.provider, context.tokenBudget);
+        return this.renderTodoDigest(
+          context.provider,
+          context.tokenBudget,
+          'todo_digest',
+          context.deliveryMode,
+        );
       case 'notice_digest':
         return this.renderNoticeDigest(context.provider, context.tokenBudget);
       case 'reminder_digest':
-        return this.renderTodoDigest(context.provider, context.tokenBudget, 'reminder_digest');
+        return this.renderTodoDigest(
+          context.provider,
+          context.tokenBudget,
+          'reminder_digest',
+          context.deliveryMode,
+        );
       case 'query_answer_card':
         return context.query
           ? this.renderQueryAnswerCard(context.provider, context.query, context.tokenBudget)
@@ -705,8 +729,19 @@ export class ProviderContextService {
     provider: string,
     tokenBudget: number,
     kind: 'todo_digest' | 'reminder_digest' = 'todo_digest',
+    deliveryMode?: ProviderDeliveryMode,
   ): ProviderMemoryProduct {
-    const rendered = this.notificationCenterService.formatTodoDigest(provider, tokenBudget);
+    const todoDigestOptions = deliveryMode
+      ? {
+          deliveryMode:
+            deliveryMode === 'daily_digest' ? 'daily_digest' : 'incremental',
+        } as const
+      : undefined;
+    const rendered = this.notificationCenterService.formatTodoDigest(
+      provider,
+      tokenBudget,
+      todoDigestOptions,
+    );
     const bodyMd = clampMarkdownByBudget(rendered.bodyMd, tokenBudget);
     return {
       id: contentHash(`${provider}:${kind}:${bodyMd}`),
@@ -719,7 +754,9 @@ export class ProviderContextService {
       targetBindingType: 'mobile_context_thread',
       ttlSeconds: ttlForKind(kind),
       sourceRefs: rendered.sourceRefs,
-      dedupeKey: contentHash(`${provider}:${kind}:${rendered.dedupeSuffix}:${bodyMd}`),
+      dedupeKey: contentHash(
+        `${provider}:${kind}:${deliveryMode ?? 'default'}:${rendered.dedupeSuffix}:${bodyMd}`,
+      ),
       generatedAt: now(),
     };
   }
@@ -750,6 +787,7 @@ export class ProviderContextService {
       channels: ['vector', 'fts', 'graph', 'time'],
       includeMetadata: true,
       minImportance: 0.2,
+      lifecycleMode: 'active_default',
     });
 
     const bodySections = [

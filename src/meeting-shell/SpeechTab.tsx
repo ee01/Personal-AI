@@ -48,7 +48,7 @@ const ASR_BADGE_LABEL: Record<
   NonNullable<MeetingPilotSessionSnapshot['tier']>['badge'],
   string
 > = {
-  Probing: 'Probing',
+  Probing: '检测中',
   'RC Transcript': 'RingCentral Transcript',
   'On-Device': 'Chrome On-Device',
   'Local ASR': 'Local ASR',

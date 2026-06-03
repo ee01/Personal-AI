@@ -127,7 +127,8 @@ async function runSuite(selection) {
     caseResults.push(caseResult);
   }
 
-  const status = summarizeStatus(caseResults);
+  const reportContract = applyReportContract(caseResults);
+  const status = summarizeStatus(caseResults, reportContract);
   let repairStatus = 'not_requested';
   if (shouldRunRepair(status, suite)) {
     const repairResult = await runRepair({ suite, runDir, caseResults });
@@ -139,6 +140,7 @@ async function runSuite(selection) {
     completedAt: new Date().toISOString(),
     status,
     repairStatus,
+    reportContract,
     counts: countStatuses(caseResults),
     failedCaseIds: caseResults.filter((item) => item.status === 'fail').map((item) => item.caseId),
     runDir,
@@ -156,13 +158,109 @@ async function runCase({ suite, caseItem, runDir }) {
     ...collected,
   });
 
+  if (suite.id === 'ask-context-gap') {
+    const request = buildAskContextGapRequest({ caseItem, collected });
+    await appendJsonl(path.join(runDir, 'requests.jsonl'), { caseId: caseItem.id, request });
+
+    const responseEnvelope = await postAskContextGap({ suite, caseItem, request });
+    await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+      caseId: caseItem.id,
+      ...responseEnvelope,
+    });
+
+    const heuristic = judgeAskContextGap({ caseItem, response: responseEnvelope.response });
+    const status = responseEnvelope.ok ? heuristic.verdict : 'error';
+    const result = {
+      caseId: caseItem.id,
+      suiteId: suite.id,
+      caseKind: caseItem.kind,
+      caseTitle: caseItem.title,
+      query: caseItem.query,
+      providedContext: caseItem.context,
+      problemStatement: caseItem.problemStatement,
+      expectedExtraction: caseItem.expectedExtraction,
+      targetUrl: caseItem.canonicalUrl || caseItem.url,
+      expectedTopics: caseItem.expectedTopics || [],
+      mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+      expectedBehavior: caseItem.expectedBehavior,
+      sampleDetails: buildAskContextGapSampleDetails(caseItem, collected),
+      sampleSummary: summarizeSampleText(collected.primaryText),
+      status,
+      verdict: status,
+      scores: heuristic.scores,
+      overallScore: computeOverallScore(heuristic.scores, status),
+      userConclusion: buildAskContextGapUserConclusion({
+        status,
+        heuristic,
+        error: responseEnvelope.error,
+      }),
+      improvementSuggestions: buildAskContextGapImprovementSuggestions({
+        caseItem,
+        status,
+        heuristic,
+        error: responseEnvelope.error,
+      }),
+      why: heuristic.why,
+      topMatch: heuristic.topMatch,
+      contextMatch: heuristic.contextMatch,
+      matchedExpectedTopics: heuristic.matchedExpectedTopics,
+      matchedEvidenceTopics: heuristic.matchedEvidenceTopics,
+      matchedMustNotReturnTopics: heuristic.matchedMustNotReturnTopics,
+      missingInfo: heuristic.missingInfo,
+      evidenceCount: heuristic.evidenceCount,
+      actualOutput: summarizeAskContextGapActualOutput({
+        response: responseEnvelope.response,
+        error: responseEnvelope.ok ? undefined : responseEnvelope.error,
+        statusCode: responseEnvelope.statusCode,
+        durationMs: responseEnvelope.durationMs,
+        timeoutMs: responseEnvelope.timeoutMs,
+      }),
+      judge: {
+        heuristic,
+        llm: null,
+      },
+      error: responseEnvelope.ok ? undefined : responseEnvelope.error,
+    };
+    await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+    return result;
+  }
+
+  if (suite.id === 'answer-memory-tracker') {
+    return runAnswerMemoryTrackerCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'compose-assist') {
+    return runComposeAssistCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'memory-lifecycle') {
+    return runMemoryLifecycleCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'scene-memory-autopilot') {
+    return runSceneMemoryAutopilotCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (suite.id === 'compose-style-memory') {
+    return runComposeStyleMemoryCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id !== 'context-recall') {
     const skipped = {
       caseId: caseItem.id,
+      suiteId: suite.id,
+      caseKind: caseItem.kind,
+      caseTitle: caseItem.title,
       status: 'skipped',
       verdict: 'skipped',
       reason: 'suite_runner_not_implemented',
       scores: {},
+      sampleSummary: summarizeSampleText(collected.primaryText),
+      expectedBehavior: caseItem.expectedBehavior,
+      userConclusion: '这个 suite 还没有可执行 runner，无法产生真实体验评估。',
+      improvementSuggestions: [
+        '为该 suite 增加 runner，并让结果包含 sampleSummary/sampleDetails、expectedBehavior、actualOutput 或 topMatch、scores、userConclusion、improvementSuggestions。',
+      ],
     };
     await appendJsonl(path.join(runDir, 'judge-results.jsonl'), skipped);
     return skipped;
@@ -215,6 +313,7 @@ async function runCase({ suite, caseItem, runDir }) {
     }),
     why: heuristic.why,
     topMatch: heuristic.topMatch,
+    autopilot: heuristic.autopilot,
     judge: {
       heuristic,
       llm: llmJudge,
@@ -225,20 +324,815 @@ async function runCase({ suite, caseItem, runDir }) {
   return result;
 }
 
+async function runComposeAssistCase({ suite, caseItem, runDir, collected }) {
+  if (caseItem.kind === 'compose_assist_context_pack') {
+    return runComposeAssistContextPackCase({ suite, caseItem, runDir, collected });
+  }
+
+  if (caseItem.kind !== 'compose_assist_ambient_calibration') {
+    const skipped = {
+      caseId: caseItem.id,
+      suiteId: suite.id,
+      caseTitle: caseItem.title,
+      status: 'skipped',
+      verdict: 'skipped',
+      reason: `unsupported_compose_assist_case_kind:${caseItem.kind || 'unknown'}`,
+      scores: {},
+      userConclusion: '这个 Compose Assist case 类型还没有 runner。',
+      improvementSuggestions: ['为该 case kind 增加可执行 runner，避免只登记样本但无法判分。'],
+    };
+    await appendJsonl(path.join(runDir, 'judge-results.jsonl'), skipped);
+    return skipped;
+  }
+
+  const simulatedTrace = buildComposeAmbientCalibrationTrace(caseItem);
+  const request = {
+    kind: caseItem.kind,
+    sampleContext: redactComposeAmbientSample(caseItem.sampleContext || {}),
+    expectedBehavior: caseItem.expectedBehavior,
+  };
+  const responseEnvelope = {
+    ok: true,
+    response: {
+      assist: caseItem.expectedBehavior?.assist || null,
+      ambientTrace: simulatedTrace,
+    },
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), { caseId: caseItem.id, request });
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    ...responseEnvelope,
+  });
+
+  const heuristic = judgeComposeAmbientCalibration({
+    caseItem,
+    trace: simulatedTrace,
+  });
+  const status = heuristic.verdict;
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    sampleDetails: redactComposeAmbientSample(caseItem.sampleContext || {}),
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleSummary: summarizeSampleText(collected.primaryText),
+    status,
+    verdict: status,
+    scores: heuristic.scores,
+    overallScore: heuristic.overallScore,
+    userConclusion: heuristic.userConclusion,
+    improvementSuggestions: heuristic.improvementSuggestions,
+    why: heuristic.why,
+    topMatch: {
+      id: simulatedTrace.action,
+      title: 'Ambient calibration trace',
+      sourceLabel: simulatedTrace.surface,
+      displayPriority: heuristic.verdict === 'pass' ? 'p1' : 'review',
+      whyRelevant: heuristic.whyItems,
+    },
+    actualOutput: {
+      assist: responseEnvelope.response.assist,
+      ambientTrace: summarizeComposeAmbientTrace(simulatedTrace),
+    },
+    judge: {
+      heuristic,
+      llm: null,
+    },
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runComposeAssistContextPackCase({ suite, caseItem, runDir, collected }) {
+  const request = buildComposeAssistContextPackRequest({ caseItem, collected });
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), { caseId: caseItem.id, request });
+
+  const responseEnvelope = await postComposerAssist({ suite, caseItem, request });
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    ...responseEnvelope,
+  });
+
+  const heuristic = judgeComposeContextPack({
+    caseItem,
+    response: responseEnvelope.response,
+    request,
+  });
+  const status = responseEnvelope.ok ? heuristic.verdict : 'error';
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    targetUrl: request.url,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: summarizeComposeContextPackSample(collected, request),
+    sampleSummary: summarizeSampleText(collected.primaryText || request.primaryText || ''),
+    status,
+    verdict: status,
+    scores: heuristic.scores,
+    overallScore: computeOverallScore(heuristic.scores, status),
+    userConclusion: buildComposeContextPackUserConclusion({
+      status,
+      heuristic,
+      error: responseEnvelope.error,
+    }),
+    improvementSuggestions: buildComposeContextPackImprovementSuggestions({
+      caseItem,
+      status,
+      heuristic,
+      error: responseEnvelope.error,
+    }),
+    why: responseEnvelope.ok ? heuristic.why : responseEnvelope.error,
+    topMatch: heuristic.topMatch,
+    actualOutput: summarizeComposeContextPackOutput(responseEnvelope.response),
+    judge: {
+      heuristic,
+      llm: null,
+    },
+    error: responseEnvelope.ok ? undefined : responseEnvelope.error,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runMemoryLifecycleCase({ suite, caseItem, runDir, collected }) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    scenario: caseItem.scenario,
+    expectedBehavior: caseItem.expectedBehavior,
+    memoryCount: caseItem.sampleContext?.memories?.length ?? 0,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-memory-lifecycle.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseMemoryLifecycleEvalOutput(commandResult);
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      scenario: caseItem.scenario,
+      memories: (caseItem.sampleContext?.memories || []).map((memory) => ({
+        id: memory.id,
+        ageDays: memory.ageDays,
+        retrievalTier: memory.retrievalTier ?? 'no_metadata',
+        consolidationLevel: memory.consolidationLevel,
+        feedbackAction: memory.feedbackAction,
+      })),
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 lifecycle eval 时出错，未能判断记忆是否正确降权或归档。'
+        : 'Lifecycle eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runComposeStyleMemoryCase({ suite, caseItem, runDir, collected }) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    traceCount: caseItem.sampleContext?.traces?.length ?? 0,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-compose-style-memory.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'compose_style_memory_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      traceCount: caseItem.sampleContext?.traces?.length ?? 0,
+      composeRequest: caseItem.sampleContext?.composeRequest
+        ? {
+            surface: caseItem.sampleContext.composeRequest.surface,
+            contextType: caseItem.sampleContext.composeRequest.contextType,
+            scenario: caseItem.sampleContext.composeRequest.scenario,
+            title: caseItem.sampleContext.composeRequest.title,
+          }
+        : null,
+    },
+    sampleSummary: summarizeSampleText(
+      collected.primaryText || caseItem.title || caseItem.id,
+    ),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 compose style memory eval 时出错，未能判断写作风格是否晋升。'
+        : 'Compose style memory eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runSceneMemoryAutopilotCase({ suite, caseItem, runDir, collected }) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+
+  const request = {
+    kind: caseItem.kind,
+    title: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    memoryCount: caseItem.sampleContext?.memories?.length ?? 0,
+    recallRequest: caseItem.request,
+  };
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request,
+  });
+
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-scene-memory-autopilot.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('memory-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'scene_memory_autopilot_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-4000),
+    stderr: commandResult.stderr.slice(-4000),
+    ...responseEnvelope,
+  });
+
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleDetails: {
+      collectionMode: collected.collectionMode,
+      memoryCount: caseItem.sampleContext?.memories?.length ?? 0,
+      sourceProvenance: caseItem.sampleContext?.sourceProvenance || [],
+      request: caseItem.request,
+    },
+    sampleSummary: summarizeSampleText(collected.primaryText || caseItem.title),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore:
+      response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Scene Memory Autopilot eval 时出错，未能判断静默策略。'
+        : 'Scene Memory Autopilot eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval command stderr/stdout，确认 runner 是否可执行。',
+    ],
+    why: response.why || responseEnvelope.error,
+    topMatch: response.topMatch,
+    autopilot: response.autopilot || response.actualOutput?.autopilot,
+    actualOutput:
+      response.actualOutput || {
+        ok: false,
+        exitCode: commandResult.code,
+        error: responseEnvelope.error,
+      },
+    judge: {
+      heuristic: response,
+      llm: null,
+    },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+function parseMemoryLifecycleEvalOutput(commandResult) {
+  return parseCommandJsonOutput(commandResult, 'memory_lifecycle_eval');
+}
+
+function parseCommandJsonOutput(commandResult, label) {
+  if (commandResult.code !== 0) {
+    return {
+      ok: false,
+      error: commandResult.stderr || commandResult.stdout || `${label}_failed`,
+      response: null,
+    };
+  }
+
+  const lines = String(commandResult.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const jsonLines = [...lines].reverse().filter((line) => line.startsWith('{'));
+  if (!jsonLines.length) {
+    return {
+      ok: false,
+      error: `${label}_returned_no_json`,
+      response: null,
+    };
+  }
+
+  let lastParseError = null;
+  for (const line of jsonLines) {
+    try {
+      const response = JSON.parse(line);
+      if (isCommandEvalResponse(response)) {
+        return {
+          ok: true,
+          response,
+        };
+      }
+    } catch (err) {
+      lastParseError = err;
+    }
+  }
+
+  try {
+    const fallback = JSON.parse(jsonLines[0]);
+    return {
+      ok: false,
+      error: `${label}_returned_json_but_no_eval_response`,
+      response: fallback,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${label}_invalid_json: ${(lastParseError || err).message}`,
+      response: null,
+    };
+  }
+}
+
+function isCommandEvalResponse(value) {
+  if (!value || typeof value !== 'object') return false;
+  const status = value.status || value.verdict;
+  if (!['pass', 'warn', 'fail', 'error'].includes(status)) return false;
+  return (
+    value.scores != null ||
+    value.overallScore != null ||
+    value.userConclusion != null ||
+    value.actualOutput != null
+  );
+}
+
+function summarizeComposeAmbientTrace(trace) {
+  return {
+    surface: trace.surface,
+    sceneKey: trace.sceneKey,
+    action: trace.action,
+    strength: trace.strength,
+    polarity: trace.polarity,
+    privacyClass: trace.privacyClass,
+    evidenceRefs: trace.evidenceRefs || [],
+    redactedDiff: {
+      rawTextStored: trace.redactedDiff?.rawTextStored,
+      suggestionTextLength: trace.redactedDiff?.suggestionTextLength,
+      finalTextLength: trace.redactedDiff?.finalTextLength,
+      similarityScore: trace.redactedDiff?.similarityScore,
+      editDistanceBand: trace.redactedDiff?.editDistanceBand,
+      semanticRelation: trace.redactedDiff?.semanticRelation,
+    },
+    metadata: trace.metadata || {},
+  };
+}
+
 async function collectContext(caseItem) {
   if (args.live && caseItem.kind === 'ringcentral_group') {
     const live = await collectLiveRingCentralContext(caseItem);
     if (live.ok) return live;
   }
+  if (args.live && caseItem.kind === 'compose_assist_context_pack') {
+    const live = await collectLiveWebAiComposerContext(caseItem);
+    if (live.ok) return live;
+    return {
+      ...collectSnapshotContext(caseItem),
+      collectionMode: 'snapshot_after_live_failed',
+      liveError: live.error || live.reason || 'live_web_ai_context_unavailable',
+    };
+  }
+  return collectSnapshotContext(caseItem);
+}
+
+function collectSnapshotContext(caseItem) {
   const snapshot = caseItem.sampleContext || {};
   return {
     ok: true,
     collectionMode: snapshot.collectionMode || 'snapshot',
-    title: caseItem.title,
-    url: caseItem.canonicalUrl || caseItem.url,
+    title: snapshot.title || caseItem.title,
+    url: snapshot.url || caseItem.canonicalUrl || caseItem.url,
     primaryText: snapshot.primaryText || caseItem.expectedTopics?.join(', ') || caseItem.title,
     secondaryTexts: snapshot.secondaryTexts || [caseItem.title].filter(Boolean),
+    draftText: snapshot.draftText,
+    visibleMessages: snapshot.visibleMessages,
+    raw: snapshot,
   };
+}
+
+function redactComposeAmbientSample(sampleContext = {}) {
+  return {
+    collectionMode: sampleContext.collectionMode || 'snapshot',
+    site: sampleContext.site,
+    composerType: sampleContext.composerType,
+    currentThreadHash: sampleContext.currentThread
+      ? stableHash(sampleContext.currentThread)
+      : undefined,
+    draftTextLength: String(sampleContext.draftText || '').length,
+    suggestionTextLength: String(sampleContext.suggestionText || '').length,
+    finalSentTextLength: String(sampleContext.finalSentText || '').length,
+    evidenceRefs: (sampleContext.evidenceRefs || []).map((ref) => ({
+      id: ref.id,
+      type: ref.type,
+      title: ref.title,
+    })),
+  };
+}
+
+function buildAskContextGapSampleDetails(caseItem, collected) {
+  return {
+    collectionMode: collected.collectionMode,
+    problemStatement: caseItem.problemStatement,
+    query: caseItem.query,
+    context: caseItem.context,
+    expectedExtraction: caseItem.expectedExtraction,
+    scope: caseItem.scope,
+    includeEvidence: caseItem.includeEvidence,
+    primaryText: collected.primaryText,
+    secondaryTexts: collected.secondaryTexts || [],
+    contextGapSignals: caseItem.contextGapSignals || [],
+    completionSignals: caseItem.completionSignals || [],
+  };
+}
+
+function summarizeAskContextGapActualOutput({ response, error, statusCode, durationMs, timeoutMs }) {
+  if (error) {
+    return {
+      ok: false,
+      statusCode,
+      durationMs,
+      timeoutMs,
+      error,
+      answer: null,
+      evidenceCount: 0,
+      evidence: [],
+      contextMatch: null,
+      structuredAnswer: null,
+    };
+  }
+  const evidence = Array.isArray(response?.evidence) ? response.evidence : [];
+  return {
+    ok: true,
+    statusCode,
+    durationMs,
+    timeoutMs,
+    queryTimeMs: response?.queryTimeMs,
+    answer: truncateText(String(response?.answer || response?.structuredAnswer?.summary || ''), 600),
+    evidenceCount: evidence.length,
+    evidence: evidence.slice(0, 5).map((item) => ({
+      id: item.id,
+      title: item.sourceTitle || item.source || item.type || item.id,
+      source: item.source || item.type,
+      snippet: truncateText(String(item.content || item.summary || ''), 220),
+    })),
+    contextMatch: summarizeAskContextMatch(response?.contextMatch),
+    structuredAnswer: response?.structuredAnswer
+      ? {
+          summary: truncateText(String(response.structuredAnswer.summary || ''), 300),
+          keyFindings: (response.structuredAnswer.keyFindings || []).slice(0, 5),
+          missingInfo: (response.structuredAnswer.missingInfo || []).slice(0, 5),
+        }
+      : null,
+  };
+}
+
+function buildComposeAmbientCalibrationTrace(caseItem) {
+  const sample = caseItem.sampleContext || {};
+  const suggestionText = String(sample.suggestionText || '');
+  const finalText = String(sample.finalSentText || '');
+  const similarity = textSimilarity(suggestionText, finalText);
+  const action = classifyComposeAmbientAction({ suggestionText, finalText, similarity });
+  const evidenceRole =
+    action === 'sent_after_insert'
+      ? 'used'
+      : action === 'edited_before_send'
+        ? 'corrected'
+        : action === 'deleted_before_send'
+          ? 'deleted'
+          : 'ignored';
+  const polarity =
+    action === 'sent_after_insert'
+      ? 'positive'
+      : action === 'edited_before_send'
+        ? 'correction'
+        : 'negative';
+
+  return {
+    surface: 'compose_assist',
+    sceneKey: `compose-assist:${stableHash(
+      [sample.site, sample.composerType, sample.currentThread].filter(Boolean).join('|'),
+    )}`,
+    action,
+    strength: action === 'sent_after_insert' ? 'strong' : 'strong',
+    polarity,
+    privacyClass: 'sensitive_redacted',
+    evidenceRefs: (sample.evidenceRefs || []).map((ref) => ({
+      id: ref.id,
+      type: ref.type,
+      title: ref.title,
+      role: evidenceRole,
+    })),
+    redactedDiff: {
+      rawTextStored: false,
+      suggestionHash: stableHash(suggestionText),
+      finalHash: stableHash(finalText),
+      suggestionTextLength: suggestionText.length,
+      finalTextLength: finalText.length,
+      similarityScore: Number(similarity.toFixed(3)),
+      editDistanceBand: editDistanceBand(similarity),
+      semanticRelation:
+        similarity >= 0.65
+          ? 'same_intent'
+          : similarity >= 0.35
+            ? 'partially_rewritten'
+            : 'different_intent',
+    },
+    metadata: {
+      site: sample.site,
+      composerType: sample.composerType,
+      traceGeneratedBy: 'eval-runner',
+    },
+  };
+}
+
+function classifyComposeAmbientAction({ suggestionText, finalText, similarity }) {
+  if (!String(finalText || '').trim()) return 'deleted_before_send';
+  const normalizedSuggestion = normalizeForSimilarity(suggestionText);
+  const normalizedFinal = normalizeForSimilarity(finalText);
+  if (
+    similarity >= 0.92 ||
+    (normalizedSuggestion && normalizedFinal.includes(normalizedSuggestion))
+  ) {
+    return 'sent_after_insert';
+  }
+  if (similarity >= 0.35) return 'edited_before_send';
+  return 'deleted_before_send';
+}
+
+function judgeComposeAmbientCalibration({ caseItem, trace }) {
+  const expected = caseItem.expectedBehavior?.ambientTrace || {};
+  const sample = caseItem.sampleContext || {};
+  const failures = [];
+  const warnings = [];
+
+  if (expected.action && trace.action !== expected.action) {
+    failures.push(`trace action 应为 ${expected.action}，实际为 ${trace.action}`);
+  }
+  if (expected.polarity && trace.polarity !== expected.polarity) {
+    failures.push(`trace polarity 应为 ${expected.polarity}，实际为 ${trace.polarity}`);
+  }
+  if (expected.privacyClass && trace.privacyClass !== expected.privacyClass) {
+    failures.push(`trace privacyClass 应为 ${expected.privacyClass}，实际为 ${trace.privacyClass}`);
+  }
+
+  const traceText = JSON.stringify(trace);
+  for (const field of expected.mustNotStore || []) {
+    const rawValue = sample[field];
+    if (rawValue && traceText.includes(String(rawValue))) {
+      failures.push(`trace 泄露了原始 ${field}`);
+    }
+  }
+  for (const field of expected.mustStore || []) {
+    if (trace[field] === undefined || trace[field] === null) {
+      failures.push(`trace 缺少 ${field}`);
+    }
+  }
+  if (trace.redactedDiff?.rawTextStored !== false) {
+    failures.push('redactedDiff.rawTextStored 必须是 false');
+  }
+  if (!Array.isArray(trace.evidenceRefs) || !trace.evidenceRefs.length) {
+    failures.push('trace 必须保留 evidenceRefs，后续才能回调召回质量');
+  }
+  if (!trace.redactedDiff?.suggestionHash || !trace.redactedDiff?.finalHash) {
+    warnings.push('trace 缺少 hash，后续难以做去重或一致性诊断');
+  }
+
+  const scores = {
+    calibration_action: expected.action && trace.action === expected.action ? 3 : 0,
+    privacy_redaction: failures.some((item) => /泄露|rawTextStored|privacyClass/.test(item)) ? 0 : 3,
+    evidence_refs: Array.isArray(trace.evidenceRefs) && trace.evidenceRefs.length ? 3 : 0,
+    diff_quality:
+      trace.redactedDiff?.suggestionHash &&
+      trace.redactedDiff?.finalHash &&
+      Number.isFinite(trace.redactedDiff?.similarityScore)
+        ? 3
+        : 1,
+  };
+  const scoreValues = Object.values(scores);
+  const overallScore = Math.round(
+    (scoreValues.reduce((sum, value) => sum + value, 0) /
+      (scoreValues.length * 3)) *
+      100,
+  );
+  const verdict = failures.length ? 'fail' : warnings.length ? 'warn' : 'pass';
+  const whyItems = [
+    `action=${trace.action}`,
+    `polarity=${trace.polarity}`,
+    `privacy=${trace.privacyClass}`,
+    `similarity=${trace.redactedDiff?.similarityScore ?? '-'}`,
+  ];
+
+  return {
+    verdict,
+    scores,
+    overallScore: verdict === 'fail' ? Math.min(overallScore, 49) : overallScore,
+    why: failures[0] || warnings[0] || 'Compose Assist send-time edit produced a redacted calibration trace with evidence refs.',
+    whyItems,
+    userConclusion: failures.length
+      ? '不通过：无感校准 trace 的动作、隐私或证据字段不符合预期。'
+      : warnings.length
+        ? '需关注：trace 可用，但诊断字段还不完整。'
+        : '通过：send-time edit 能转成无感校准 trace，且没有保存原始发送文本。',
+    improvementSuggestions: failures.length
+      ? failures
+      : warnings.length
+        ? warnings
+        : ['保持无感采样，不新增用户校准平台；继续补 Memory Lens / Today Pilot / Meeting Pilot 的自然动作 trace。'],
+  };
+}
+
+function stableHash(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  let hash = 2166136261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function normalizeForSimilarity(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function textSimilarity(left, right) {
+  const normalizedLeft = normalizeForSimilarity(left);
+  const normalizedRight = normalizeForSimilarity(right);
+  if (!normalizedLeft || !normalizedRight) return 0;
+  if (normalizedLeft === normalizedRight) return 1;
+  if (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)) {
+    return Math.min(normalizedLeft.length, normalizedRight.length) /
+      Math.max(normalizedLeft.length, normalizedRight.length);
+  }
+
+  const leftTokens = new Set(tokenizeForSimilarity(normalizedLeft));
+  const rightTokens = new Set(tokenizeForSimilarity(normalizedRight));
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union > 0 ? overlap / union : 0;
+}
+
+function tokenizeForSimilarity(text) {
+  const tokens = String(text || '').match(/[a-z0-9]+|[\u4e00-\u9fff]+/g) || [];
+  if (tokens.length > 1) return tokens;
+  return Array.from(String(text || '').replace(/\s+/g, '')).filter(Boolean);
+}
+
+function editDistanceBand(score) {
+  if (score >= 0.92) return 'none';
+  if (score >= 0.65) return 'light';
+  if (score >= 0.35) return 'material';
+  return 'replacement';
 }
 
 async function collectLiveRingCentralContext(caseItem) {
@@ -280,6 +1174,208 @@ async function collectLiveRingCentralContext(caseItem) {
     secondaryTexts: [caseItem.title, ...(caseItem.sampleContext?.secondaryTexts || [])].filter(Boolean),
     raw: parsed || page.stdout,
   };
+}
+
+async function collectLiveWebAiComposerContext(caseItem) {
+  const mcporterConfig = process.env.MCPORTER_CONFIG || '/Users/Esone/.openclaw/config/mcporter.json';
+  const liveTarget = caseItem.liveTarget || {};
+  const tabsResult = await runProcess(
+    'mcporter',
+    ['--config', mcporterConfig, 'call', 'webpage-mcp.get_windows_and_tabs'],
+    { timeoutMs: 30_000 },
+  );
+  if (tabsResult.code !== 0) {
+    return { ok: false, collectionMode: 'live_failed', error: tabsResult.stderr || tabsResult.stdout };
+  }
+
+  const tabsSnapshot = parseMaybeJson(tabsResult.stdout);
+  let tab = pickLiveComposerTab(tabsSnapshot, caseItem);
+  if (!tab && liveTarget.openUrl) {
+    const navigate = await runProcess(
+      'mcporter',
+      [
+        '--config',
+        mcporterConfig,
+        'call',
+        'webpage-mcp.chrome_navigate',
+        `url=${liveTarget.openUrl}`,
+        'openMode=newTab',
+      ],
+      { timeoutMs: 30_000 },
+    );
+    if (navigate.code !== 0) {
+      return { ok: false, collectionMode: 'live_failed', error: navigate.stderr || navigate.stdout };
+    }
+    await new Promise((resolve) => setTimeout(resolve, Number(liveTarget.waitMs || 3000)));
+    const refreshedTabs = await runProcess(
+      'mcporter',
+      ['--config', mcporterConfig, 'call', 'webpage-mcp.get_windows_and_tabs'],
+      { timeoutMs: 30_000 },
+    );
+    tab = pickLiveComposerTab(parseMaybeJson(refreshedTabs.stdout), caseItem);
+  }
+
+  if (!tab?.tabId) {
+    return {
+      ok: false,
+      collectionMode: 'live_no_matching_tab',
+      reason: 'no_matching_web_ai_or_codex_tab',
+      tabs: summarizeBrowserTabs(tabsSnapshot),
+    };
+  }
+
+  const code = `return (() => {
+    const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+    const unique = (items) => {
+      const seen = new Set();
+      const out = [];
+      for (const item of items) {
+        const text = clean(item);
+        if (!text || text.length < 8) continue;
+        const key = text.slice(0, 160);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(text);
+      }
+      return out;
+    };
+    const inputValues = unique([
+      ...document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
+    ].map((el) => el.value || el.innerText || el.textContent || ''));
+    const messageCandidates = unique([
+      ...document.querySelectorAll('[data-message-author-role], article, main [role="listitem"], [class*="message"], [class*="conversation"], [class*="turn"]')
+    ].map((el) => el.innerText || el.textContent || ''));
+    const mainText = clean((document.querySelector('main') || document.body)?.innerText || '');
+    return {
+      title: document.title,
+      url: location.href,
+      focusedText: document.activeElement ? clean(document.activeElement.value || document.activeElement.innerText || document.activeElement.textContent || '') : '',
+      inputValues: inputValues.slice(-6),
+      messages: messageCandidates.slice(-12),
+      bodyText: mainText.slice(-3500)
+    };
+  })();`;
+  const page = await runProcess(
+    'mcporter',
+    [
+      '--config',
+      mcporterConfig,
+      'call',
+      'webpage-mcp.chrome_javascript',
+      `tabId=${tab.tabId}`,
+      `code=${code}`,
+      'maxOutputBytes=60000',
+    ],
+    { timeoutMs: 30_000 },
+  );
+  if (page.code !== 0) {
+    return { ok: false, collectionMode: 'live_failed', error: page.stderr || page.stdout };
+  }
+
+  const parsed = parseMaybeJson(page.stdout);
+  const resultValue = parseMaybeJson(parsed?.result) || parsed?.result || parsed;
+  const messages = Array.isArray(resultValue?.messages) ? resultValue.messages : [];
+  const inputValues = Array.isArray(resultValue?.inputValues) ? resultValue.inputValues : [];
+  const draftText =
+    resultValue?.focusedText ||
+    inputValues.find((value) => String(value || '').trim()) ||
+    caseItem.sampleContext?.draftText;
+  const primaryText =
+    messages.join('\n\n') ||
+    resultValue?.bodyText ||
+    caseItem.sampleContext?.primaryText ||
+    caseItem.title;
+
+  return {
+    ok: true,
+    collectionMode: 'live_webpage_mcp',
+    title: resultValue?.title || tab.title || caseItem.title,
+    url: resultValue?.url || tab.url || caseItem.url,
+    primaryText,
+    secondaryTexts: [
+      caseItem.title,
+      ...(caseItem.sampleContext?.secondaryTexts || []),
+    ].filter(Boolean),
+    draftText,
+    visibleMessages: messages.slice(-8).map((text, index) => ({
+      id: `live-${index + 1}`,
+      sender: 'visible-page',
+      text,
+    })),
+    raw: {
+      tab: {
+        tabId: tab.tabId,
+        title: tab.title,
+        url: tab.url,
+      },
+      inputValues,
+      bodyText: resultValue?.bodyText,
+    },
+  };
+}
+
+function pickLiveComposerTab(tabsSnapshot, caseItem) {
+  const tabs = flattenBrowserTabs(tabsSnapshot).filter((tab) => !tab.restricted);
+  const liveTarget = caseItem.liveTarget || {};
+  const urlIncludes = normalizeArray(liveTarget.urlIncludes);
+  const titleIncludes = normalizeArray(liveTarget.titleIncludes);
+  const fallbackTerms = normalizeArray([
+    liveTarget.provider,
+    caseItem.sampleContext?.site,
+    'chatgpt',
+    'gemini',
+    'claude',
+    'doubao',
+    'codex',
+  ]);
+
+  const scored = tabs.map((tab) => {
+    const haystack = normalize([tab.title, tab.url].filter(Boolean).join(' '));
+    let urlMatchCount = 0;
+    let score = tab.active ? 1 : 0;
+    for (const term of urlIncludes) {
+      if (normalize(tab.url).includes(normalize(term))) {
+        urlMatchCount += 1;
+        score += 4;
+      }
+    }
+    for (const term of titleIncludes) {
+      if (normalize(tab.title).includes(normalize(term))) {
+        score += 4;
+      }
+    }
+    for (const term of fallbackTerms) {
+      if (term && haystack.includes(normalize(term))) score += 1;
+    }
+    if (urlIncludes.length && urlMatchCount === 0 && !liveTarget.allowTitleOnly) {
+      score = 0;
+    }
+    return { tab, score };
+  });
+  scored.sort((left, right) => right.score - left.score);
+  return scored[0]?.score > 0 ? scored[0].tab : null;
+}
+
+function flattenBrowserTabs(tabsSnapshot) {
+  const windows = Array.isArray(tabsSnapshot?.windows) ? tabsSnapshot.windows : [];
+  return windows.flatMap((windowItem) =>
+    (windowItem.tabs || []).map((tab) => ({
+      ...tab,
+      windowId: windowItem.windowId,
+    })),
+  );
+}
+
+function summarizeBrowserTabs(tabsSnapshot) {
+  return flattenBrowserTabs(tabsSnapshot)
+    .slice(0, 20)
+    .map((tab) => ({
+      tabId: tab.tabId,
+      title: tab.title,
+      url: tab.url,
+      active: tab.active,
+      restricted: tab.restricted,
+    }));
 }
 
 function buildContextRecallRequest({ caseItem, collected }) {
@@ -343,10 +1439,377 @@ async function postContextRecall({ suite, caseItem, request }) {
   }
 }
 
+function buildAskContextGapRequest({ caseItem }) {
+  const request = {
+    query: caseItem.query,
+    includeEvidence: caseItem.includeEvidence ?? true,
+    scope: caseItem.scope || 'work',
+  };
+  if (caseItem.context) request.context = caseItem.context;
+  return request;
+}
+
+async function postAskContextGap({ suite, caseItem, request }) {
+  const endpoint = process.env.EVAL_ASK_URL || suite.endpoint?.url;
+  const userId = process.env.EVAL_USER_ID || suite.endpoint?.userId || caseItem.owner;
+  if (!endpoint) return { ok: false, error: 'missing_ask_endpoint' };
+  if (!request.query) return { ok: false, error: 'missing_ask_query' };
+
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.EVAL_ASK_TIMEOUT_MS || process.env.EVAL_HTTP_TIMEOUT_MS || 90_000);
+  const startedAt = Date.now();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userId,
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const response = parseMaybeJson(text);
+    return {
+      ok: res.ok,
+      statusCode: res.status,
+      durationMs: Date.now() - startedAt,
+      timeoutMs,
+      response,
+      error: res.ok ? undefined : text,
+    };
+  } catch (err) {
+    const isAbort = err?.name === 'AbortError';
+    return {
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      timeoutMs,
+      error: isAbort ? `ask_request_timeout_after_${timeoutMs}ms` : err.message,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runAnswerMemoryTrackerCase({ suite, caseItem, runDir, collected }) {
+  const steps = Array.isArray(caseItem.steps) ? caseItem.steps : [];
+  if (!steps.length) {
+    const result = {
+      caseId: caseItem.id,
+      suiteId: suite.id,
+      caseKind: caseItem.kind,
+      caseTitle: caseItem.title,
+      status: 'error',
+      verdict: 'error',
+      scores: { answer_memory_tracking: 0 },
+      overallScore: 0,
+      userConclusion: '样本没有定义 steps，无法执行多轮 Ask。',
+      improvementSuggestions: ['为 answer-memory-tracker case 增加 steps 数组。'],
+      actualOutput: { ok: false, error: 'missing_steps' },
+      judge: { heuristic: null, llm: null },
+      error: 'missing_steps',
+    };
+    await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+    return result;
+  }
+
+  const stepResults = [];
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    const request = {
+      query: step.query,
+      context: step.context ?? caseItem.context,
+      includeEvidence: step.includeEvidence ?? caseItem.includeEvidence ?? true,
+      scope: step.scope ?? caseItem.scope ?? 'work',
+    };
+    if (!request.context) delete request.context;
+    await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+      caseId: caseItem.id,
+      stepId: step.id || `step-${index + 1}`,
+      request,
+    });
+    const responseEnvelope = await postAskContextGap({ suite, caseItem, request });
+    await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+      caseId: caseItem.id,
+      stepId: step.id || `step-${index + 1}`,
+      ...responseEnvelope,
+    });
+    stepResults.push({
+      step,
+      request,
+      responseEnvelope,
+      answerMemoryState: responseEnvelope.response?.answerMemory?.state,
+    });
+  }
+
+  const heuristic = judgeAnswerMemoryTracker({ caseItem, stepResults });
+  const anyError = stepResults.some((item) => !item.responseEnvelope.ok);
+  const status = anyError ? 'error' : heuristic.verdict;
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    query: steps.map((step) => step.query).join(' -> '),
+    providedContext: caseItem.context,
+    problemStatement: caseItem.problemStatement,
+    expectedExtraction: caseItem.expectedExtraction,
+    expectedBehavior: caseItem.expectedBehavior,
+    expectedTopics: caseItem.expectedTopics || [],
+    mustNotReturnTopics: caseItem.mustNotReturnTopics || [],
+    sampleDetails: buildAskContextGapSampleDetails(caseItem, collected),
+    sampleSummary: summarizeSampleText(collected.primaryText),
+    status,
+    verdict: status,
+    scores: heuristic.scores,
+    overallScore: computeOverallScore(heuristic.scores, status),
+    userConclusion: heuristic.userConclusion,
+    improvementSuggestions: heuristic.improvementSuggestions,
+    why: heuristic.why,
+    contextMatch: heuristic.contextMatch,
+    matchedExpectedTopics: heuristic.matchedExpectedTopics,
+    matchedEvidenceTopics: heuristic.matchedEvidenceTopics,
+    matchedMustNotReturnTopics: heuristic.matchedMustNotReturnTopics,
+    evidenceCount: heuristic.evidenceCount,
+    actualOutput: summarizeAnswerMemoryTrackerActualOutput(stepResults),
+    judge: {
+      heuristic,
+      llm: null,
+    },
+    error: anyError
+      ? stepResults.find((item) => !item.responseEnvelope.ok)?.responseEnvelope.error
+      : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+function judgeAnswerMemoryTracker({ caseItem, stepResults }) {
+  const expectedStates = stepResults.map((item, index) => {
+    if (item.step.expectedAnswerMemoryState) {
+      return item.step.expectedAnswerMemoryState;
+    }
+    return Array.isArray(caseItem.expectedAnswerMemoryStates)
+      ? caseItem.expectedAnswerMemoryStates[index]
+      : undefined;
+  });
+  const actualStates = stepResults.map((item) => item.answerMemoryState || null);
+  const stateMatches = expectedStates.map((expected, index) => {
+    if (!expected) return true;
+    const actual = actualStates[index];
+    return Array.isArray(expected)
+      ? expected.includes(actual)
+      : actual === expected;
+  });
+  const lastResponse = stepResults.at(-1)?.responseEnvelope.response;
+  const lastHeuristic = judgeAskContextGap({ caseItem, response: lastResponse });
+  const stateMatchCount = stateMatches.filter(Boolean).length;
+  const trackingScore = Math.min(3, stateMatchCount);
+  const progressionOk = stateMatches.every(Boolean);
+  const evidenceOk = lastHeuristic.evidenceCount > 0;
+  const verdict =
+    progressionOk && lastHeuristic.verdict !== 'fail'
+      ? 'pass'
+      : progressionOk && evidenceOk
+        ? 'warn'
+        : 'fail';
+  const mismatches = expectedStates
+    .map((expected, index) => ({ expected, actual: actualStates[index], index }))
+    .filter((item) => item.expected && !stateMatches[item.index]);
+  return {
+    verdict,
+    scores: {
+      answer_memory_tracking: trackingScore,
+      context_match: lastHeuristic.scores?.context_match ?? 0,
+      evidence_grounding: lastHeuristic.scores?.evidence_grounding ?? 0,
+      answer_quality: lastHeuristic.scores?.answer_quality ?? 0,
+    },
+    why: mismatches.length
+      ? `Answer memory state mismatch: ${mismatches
+          .map((item) => `step ${item.index + 1} expected ${item.expected} got ${item.actual || 'none'}`)
+          .join('; ')}`
+      : `Answer memory states matched: ${actualStates.join(' -> ')}`,
+    userConclusion: progressionOk
+      ? '多轮 Ask 返回了预期的 answerMemory 状态，活答案底层追踪可观察。'
+      : '多轮 Ask 没有按预期完成 observation/promote/priorHit 递进。',
+    improvementSuggestions: progressionOk
+      ? ['继续检查新证据改变答案时是否返回 updated，并确认旧 prior 没有替代当前证据。']
+      : [
+          '检查 AnswerMemoryService 的 canonical key 是否在短问句和展开问句之间保持稳定。',
+          '检查 /ask 是否在最终答案后 observe，并且 contextMatch 是否 locked。',
+        ],
+    contextMatch: lastHeuristic.contextMatch,
+    matchedExpectedTopics: lastHeuristic.matchedExpectedTopics,
+    matchedEvidenceTopics: lastHeuristic.matchedEvidenceTopics,
+    matchedMustNotReturnTopics: lastHeuristic.matchedMustNotReturnTopics,
+    evidenceCount: lastHeuristic.evidenceCount,
+    states: actualStates,
+  };
+}
+
+function summarizeAnswerMemoryTrackerActualOutput(stepResults) {
+  return {
+    ok: stepResults.every((item) => item.responseEnvelope.ok),
+    steps: stepResults.map((item, index) => ({
+      id: item.step.id || `step-${index + 1}`,
+      query: item.request.query,
+      statusCode: item.responseEnvelope.statusCode,
+      durationMs: item.responseEnvelope.durationMs,
+      answerMemory: item.responseEnvelope.response?.answerMemory || null,
+      contextMatch: summarizeAskContextMatch(item.responseEnvelope.response?.contextMatch),
+      answer: truncateText(String(item.responseEnvelope.response?.answer || ''), 400),
+      evidenceCount: Array.isArray(item.responseEnvelope.response?.evidence)
+        ? item.responseEnvelope.response.evidence.length
+        : 0,
+      error: item.responseEnvelope.error,
+    })),
+  };
+}
+
+function buildComposeAssistContextPackRequest({ caseItem, collected }) {
+  const sample = caseItem.sampleContext || {};
+  const site = sample.site || sample.provider || 'chatgpt';
+  const surface = normalizeComposeSurface(sample.surface || site);
+  const visibleMessages = normalizeVisibleMessages(
+    collected.visibleMessages || sample.visibleMessages,
+    collected.primaryText || sample.primaryText,
+  );
+  const primaryText =
+    collected.primaryText ||
+    sample.primaryText ||
+    sample.currentThread ||
+    visibleMessages.map((message) => message.text).join('\n\n') ||
+    caseItem.title;
+
+  return {
+    surface,
+    contextType: 'web_agent_prompt',
+    scenario: sample.scenario || caseItem.scenario || 'compose_to_ai',
+    title: collected.title || sample.title || caseItem.title,
+    url: collected.url || sample.url || caseItem.canonicalUrl || caseItem.url,
+    draftText: collected.draftText || sample.draftText || caseItem.draftText,
+    primaryText,
+    secondaryTexts: [
+      sample.currentThread,
+      ...(collected.secondaryTexts || []),
+      ...(sample.secondaryTexts || []),
+    ]
+      .filter(Boolean)
+      .slice(0, 8),
+    visibleMessages,
+    audience: {
+      conversationTitle: collected.title || sample.title || caseItem.title,
+      provider: sample.provider || site,
+    },
+    identifiers: {
+      provider: sample.provider || site,
+      conversationId: sample.conversationId || caseItem.id,
+    },
+    sourceTypes: sample.sourceTypes || caseItem.sourceTypes || [
+      'chatgpt',
+      'doubao_chat',
+      'codex_cli',
+      'claude_code_cli',
+      'cursor_agent_cli',
+      'ai_chat',
+      'doubao',
+      'glip',
+      'jira',
+      'web',
+      'manual',
+      'system',
+      'markdown',
+      'reflection',
+      'reflection_thread',
+      'rehearsal',
+    ],
+    debug: true,
+  };
+}
+
+function normalizeComposeSurface(value) {
+  const normalized = normalize(value);
+  if (normalized.includes('doubao')) return 'doubao';
+  if (normalized.includes('claude')) return 'claude';
+  if (normalized.includes('gemini')) return 'gemini';
+  if (normalized.includes('codex_cli')) return 'codex_cli';
+  if (normalized.includes('claude_code_cli')) return 'claude_code_cli';
+  if (normalized.includes('cursor_agent_cli')) return 'cursor_agent_cli';
+  return 'chatgpt';
+}
+
+function normalizeVisibleMessages(messages, fallbackText) {
+  const rows = Array.isArray(messages) ? messages : [];
+  const normalized = rows
+    .map((message, index) => {
+      if (typeof message === 'string') {
+        return { id: `m-${index + 1}`, sender: 'visible-page', text: message };
+      }
+      return {
+        id: message.id || `m-${index + 1}`,
+        sender: message.sender || 'visible-page',
+        text: message.text || message.content || '',
+        timestampLabel: message.timestampLabel,
+      };
+    })
+    .filter((message) => String(message.text || '').trim())
+    .slice(-12);
+  if (normalized.length) return normalized;
+  const text = String(fallbackText || '').trim();
+  return text ? [{ id: 'm-1', sender: 'visible-page', text }] : [];
+}
+
+async function postComposerAssist({ suite, caseItem, request }) {
+  const endpoint =
+    process.env.EVAL_COMPOSER_ASSIST_URL ||
+    caseItem.endpoint?.url ||
+    suite.endpoint?.url;
+  const userId =
+    process.env.EVAL_USER_ID ||
+    caseItem.endpoint?.userId ||
+    suite.endpoint?.userId ||
+    caseItem.owner;
+  if (!endpoint) return { ok: false, error: 'missing_composer_assist_endpoint' };
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.EVAL_COMPOSER_ASSIST_TIMEOUT_MS || process.env.EVAL_HTTP_TIMEOUT_MS || 45_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userId || 'default',
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const response = parseMaybeJson(text);
+    return {
+      ok: res.ok,
+      statusCode: res.status,
+      response,
+      error: res.ok ? undefined : text,
+    };
+  } catch (err) {
+    const isAbort = err?.name === 'AbortError';
+    return {
+      ok: false,
+      error: isAbort ? `composer_assist_request_timeout_after_${timeoutMs}ms` : err.message,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function judgeContextRecall({ caseItem, response }) {
   const matches = Array.isArray(response?.matches) ? response.matches : [];
   const visibleMatches = matches.filter((match) => match.displayPriority !== 'hidden');
   const topMatch = visibleMatches[0] || matches[0] || null;
+  const autopilot = summarizeContextRecallAutopilot(
+    response?.autopilot || response?.debug?.autopilot,
+  );
   const expected = caseItem.expectedTopics || [];
   const banned = caseItem.mustNotReturnTopics || [];
   const topText = matchText(topMatch);
@@ -357,6 +1820,7 @@ function judgeContextRecall({ caseItem, response }) {
   const hasWhyRelevant = Array.isArray(topMatch?.whyRelevant) && topMatch.whyRelevant.some(Boolean);
   const title = String(topMatch?.title || topMatch?.sourceTitle || '');
   const genericTitle = /^(ringcentral\s*消息|glip|message|消息|meeting|calendar|时间)$/i.test(title.trim());
+  const autopilotSignal = autopilot ? 3 : 0;
 
   if (!matches.length || !visibleMatches.length) {
     return {
@@ -367,10 +1831,13 @@ function judgeContextRecall({ caseItem, response }) {
         specificity: 0,
         title_quality: 0,
         explanation_quality: 0,
-        suppression_correctness: 3,
+        autopilot_signal: autopilotSignal,
+        suppression_correctness:
+          autopilot?.mode === 'silent' && autopilot.quietReasons.length ? 3 : 2,
       },
       why: 'No visible recall match surfaced.',
       topMatch: null,
+      autopilot,
       matchedExpectedTopics,
       matchedMustNotReturnTopics,
       visibleMatchCount: visibleMatches.length,
@@ -382,12 +1849,22 @@ function judgeContextRecall({ caseItem, response }) {
   const titleQuality = genericTitle ? 0 : expectedHits ? 3 : title.length >= 8 ? 2 : 1;
   const explanationQuality = hasWhyRelevant ? (expectedHits ? 3 : 2) : 0;
   const userValue = bannedHits ? 0 : Math.min(3, contextRelevance + (topMatch.displayPriority === 'p1' ? 1 : 0));
-  const suppressionCorrectness = bannedHits ? 0 : contextRelevance >= 2 ? 3 : 1;
+  const suppressionCorrectness = bannedHits
+    ? 0
+    : contextRelevance >= 2 && autopilotSignal >= 2
+      ? 3
+      : 1;
 
   let verdict = 'fail';
   if (bannedHits) {
     verdict = 'fail';
-  } else if (contextRelevance >= 2 && userValue >= 2 && titleQuality >= 2) {
+  } else if (
+    contextRelevance >= 2 &&
+    userValue >= 2 &&
+    titleQuality >= 2 &&
+    explanationQuality >= 2 &&
+    autopilotSignal >= 2
+  ) {
     verdict = 'pass';
   } else if (contextRelevance >= 1 || visibleMatches.some((match) => countHits(matchText(match), expected) > 0)) {
     verdict = 'warn';
@@ -401,13 +1878,307 @@ function judgeContextRecall({ caseItem, response }) {
       specificity,
       title_quality: titleQuality,
       explanation_quality: explanationQuality,
+      autopilot_signal: autopilotSignal,
       suppression_correctness: suppressionCorrectness,
     },
     why: buildWhy({ expectedHits, bannedHits, genericTitle, hasWhyRelevant, topMatch }),
     topMatch: summarizeMatch(topMatch),
+    autopilot,
     matchedExpectedTopics,
     matchedMustNotReturnTopics,
     visibleMatchCount: visibleMatches.length,
+  };
+}
+
+function judgeAskContextGap({ caseItem, response }) {
+  const expected = caseItem.expectedTopics || [];
+  const banned = caseItem.mustNotReturnTopics || [];
+  const answerText = askAnswerText(response);
+  const evidence = Array.isArray(response?.evidence) ? response.evidence : [];
+  const evidenceText = evidence.map(askEvidenceText).join('\n');
+  const blocksText = JSON.stringify(response?.blocks || []);
+  const contextMatch = summarizeAskContextMatch(response?.contextMatch);
+  const contextMatchText = askContextMatchText(response?.contextMatch);
+  const responseText = [answerText, evidenceText, blocksText, contextMatchText].filter(Boolean).join('\n');
+  const matchedExpectedTopics = hitTerms(responseText, expected);
+  const matchedEvidenceTopics = hitTerms(evidenceText, expected);
+  const matchedContextMatchTopics = hitTerms(contextMatchText, expected);
+  const matchedMustNotReturnTopics = hitTerms(responseText, banned);
+  const minExpectedHits = Number(caseItem.minExpectedTopicHits ?? 2);
+  const minEvidenceHits = Number(caseItem.minEvidenceTopicHits ?? 1);
+  const missingInfo = Array.isArray(response?.missingInfo) ? response.missingInfo.filter(Boolean) : [];
+  const hasEvidence = evidence.length > 0;
+  const hasGroundedEvidence =
+    hasEvidence && matchedEvidenceTopics.length >= Math.max(1, minEvidenceHits);
+  const hasCompletionStance =
+    countHits(answerText, caseItem.completionSignals || ['ready', '完成', '未完成', '没有', '不明确', '还没有', 'insufficient', 'not enough']) > 0;
+  const hasGapFill =
+    (matchedExpectedTopics.length >= minExpectedHits || matchedContextMatchTopics.length >= minExpectedHits) &&
+    countHits(responseText, caseItem.contextGapSignals || ['BE', 'backend', '后端', 'AI VBG', 'MTR-141852']) > 0;
+  const hasLockedContext = contextMatch?.state === 'locked';
+  const hasAmbiguousContext = contextMatch?.state === 'ambiguous';
+  const allowAmbiguous = Boolean(caseItem.allowAmbiguous);
+  const ambiguousHasExpected =
+    allowAmbiguous && hasAmbiguousContext && matchedContextMatchTopics.length >= minExpectedHits;
+  const topMatch = summarizeAskEvidence(evidence[0]);
+
+  if (!response || typeof response !== 'object') {
+    return {
+      verdict: 'fail',
+      scores: {
+        context_relevance: 0,
+        evidence_grounding: 0,
+        context_match: 0,
+        gap_resolution: 0,
+        specificity: 0,
+        answer_quality: 0,
+        suppression_correctness: 3,
+      },
+      why: 'Ask did not return a structured response.',
+      topMatch: null,
+      contextMatch: null,
+      matchedExpectedTopics,
+      matchedEvidenceTopics,
+      matchedContextMatchTopics,
+      matchedMustNotReturnTopics,
+      missingInfo,
+    };
+  }
+
+  const bannedHits = matchedMustNotReturnTopics.length;
+  const contextRelevance = bannedHits ? 0 : Math.min(3, matchedExpectedTopics.length);
+  const evidenceGrounding = bannedHits
+    ? 0
+    : ambiguousHasExpected
+      ? 3
+      : hasGroundedEvidence
+        ? Math.min(3, matchedEvidenceTopics.length)
+        : 0;
+  const contextMatchScore = bannedHits
+    ? 0
+    : hasLockedContext && matchedContextMatchTopics.length >= minExpectedHits
+      ? 3
+      : hasLockedContext || (hasAmbiguousContext && matchedContextMatchTopics.length)
+        ? 2
+        : matchedContextMatchTopics.length
+          ? 1
+          : 0;
+  const gapResolution = bannedHits
+    ? 0
+    : ambiguousHasExpected
+      ? 3
+      : hasGapFill && contextMatchScore >= 2
+      ? 3
+      : hasGapFill
+        ? 2
+        : matchedExpectedTopics.length
+          ? 1
+          : 0;
+  const specificity = bannedHits
+    ? 0
+    : Math.min(3, matchedExpectedTopics.length + countDistinctEvidenceSources(evidence));
+  const answerQuality = bannedHits
+    ? 0
+    : ambiguousHasExpected
+      ? 2
+    : hasCompletionStance && hasGroundedEvidence
+      ? 3
+      : hasCompletionStance || hasGroundedEvidence
+        ? 2
+        : answerText.length >= 40
+          ? 1
+          : 0;
+  const suppressionCorrectness = bannedHits ? 0 : hasGapFill && hasGroundedEvidence ? 3 : 1;
+
+  let verdict = 'fail';
+  if (bannedHits) {
+    verdict = 'fail';
+  } else if (
+    (ambiguousHasExpected ||
+    (matchedExpectedTopics.length >= minExpectedHits &&
+    matchedEvidenceTopics.length >= minEvidenceHits &&
+    gapResolution >= 3 &&
+    answerQuality >= 2))
+  ) {
+    verdict = 'pass';
+  } else if (matchedExpectedTopics.length >= 1 || matchedEvidenceTopics.length >= 1 || missingInfo.length) {
+    verdict = 'warn';
+  }
+
+  return {
+    verdict,
+    scores: {
+      context_relevance: contextRelevance,
+      evidence_grounding: evidenceGrounding,
+      context_match: contextMatchScore,
+      gap_resolution: gapResolution,
+      specificity,
+      answer_quality: answerQuality,
+      suppression_correctness: suppressionCorrectness,
+    },
+    why: buildAskContextGapWhy({
+      matchedExpectedTopics,
+      matchedEvidenceTopics,
+      matchedMustNotReturnTopics,
+      hasGapFill,
+      hasCompletionStance,
+      contextMatch,
+      matchedContextMatchTopics,
+      allowAmbiguous,
+      ambiguousHasExpected,
+      missingInfo,
+      evidenceCount: evidence.length,
+    }),
+    topMatch,
+    contextMatch,
+    allowAmbiguous,
+    ambiguousHasExpected,
+    matchedExpectedTopics,
+    matchedEvidenceTopics,
+    matchedContextMatchTopics,
+    matchedMustNotReturnTopics,
+    missingInfo,
+    evidenceCount: evidence.length,
+  };
+}
+
+function judgeComposeContextPack({ caseItem, response, request }) {
+  const expected = caseItem.expectedTopics || [];
+  const banned = caseItem.mustNotReturnTopics || [];
+  const expectedBehavior = caseItem.expectedBehavior || {};
+  const insertText = String(response?.insertText || '');
+  const evidence = Array.isArray(response?.evidence) ? response.evidence : [];
+  const evidenceText = evidence.map(composeEvidenceText).join('\n');
+  const contextPackMemoryText = [
+    extractContextPackSection(insertText, '相关记忆'),
+    extractContextPackSection(insertText, '来源'),
+    evidenceText,
+  ].filter(Boolean).join('\n');
+  const combinedText = [insertText, response?.summary, evidenceText].filter(Boolean).join('\n');
+  const matchedExpectedTopics = hitTerms(contextPackMemoryText || evidenceText, expected);
+  const matchedEvidenceTopics = hitTerms(evidenceText, expected);
+  const matchedMustNotReturnTopics = hitTerms(combinedText, banned);
+  const minExpectedHits = Number(caseItem.minExpectedTopicHits ?? 2);
+  const minEvidenceHits = Number(caseItem.minEvidenceTopicHits ?? 1);
+  const requiredSections = expectedBehavior.requiredSections || [
+    '任务判断',
+    '目标工具适配',
+    '相关记忆',
+    '约束',
+    '来源',
+  ];
+  const matchedSections = hitTerms(insertText, requiredSections);
+  const missingSections = requiredSections.filter((section) => !matchedSections.includes(section));
+  const mustInclude = expectedBehavior.mustInclude || [];
+  const mustNotInclude = expectedBehavior.mustNotInclude || [];
+  const matchedMustInclude = hitTerms(contextPackMemoryText || insertText, mustInclude);
+  const matchedMustNotInclude = hitTerms(insertText, mustNotInclude);
+  const hasMustInclude = mustInclude.length === 0 || matchedMustInclude.length >= mustInclude.length;
+  const expectedSuggestionType = expectedBehavior.suggestionType || 'context_pack';
+  const hasExpectedSuggestionType = response?.suggestionType === expectedSuggestionType;
+  const expectedPreview = expectedBehavior.previewRequired;
+  const previewMatches = expectedPreview == null || response?.previewRequired === expectedPreview;
+  const expectedRisk = expectedBehavior.riskLevel;
+  const riskMatches = !expectedRisk || response?.riskLevel === expectedRisk;
+  const hasContextPack = response?.available === true && hasExpectedSuggestionType && insertText.length >= 80;
+  const hasGroundedEvidence = evidence.length > 0 && matchedEvidenceTopics.length >= minEvidenceHits;
+  const hasRelevantText = matchedExpectedTopics.length >= minExpectedHits;
+  const bannedHits = matchedMustNotReturnTopics.length + matchedMustNotInclude.length;
+
+  if (!response || typeof response !== 'object') {
+    return {
+      verdict: 'fail',
+      scores: {
+        context_relevance: 0,
+        evidence_grounding: 0,
+        answer_quality: 0,
+        specificity: 0,
+        suppression_correctness: 0,
+      },
+      why: 'Composer Assist did not return a structured response.',
+      topMatch: null,
+      matchedExpectedTopics,
+      matchedEvidenceTopics,
+      matchedMustNotReturnTopics,
+      missingSections,
+    };
+  }
+
+  const contextRelevance = bannedHits ? 0 : Math.min(3, matchedExpectedTopics.length);
+  const evidenceGrounding = bannedHits ? 0 : hasGroundedEvidence ? Math.min(3, matchedEvidenceTopics.length) : 0;
+  const answerQuality = bannedHits
+    ? 0
+    : hasContextPack && !missingSections.length && previewMatches && riskMatches
+      && hasMustInclude
+      ? 3
+      : hasContextPack && matchedSections.length >= 3
+        ? 2
+        : insertText
+          ? 1
+          : 0;
+  const specificity = bannedHits
+    ? 0
+    : Math.min(3, matchedExpectedTopics.length + matchedMustInclude.length + countDistinctComposerEvidenceSources(evidence));
+  const suppressionCorrectness = bannedHits
+    ? 0
+    : expectedBehavior.assist === 'hide'
+      ? response.available === false
+        ? 3
+        : 0
+      : hasContextPack
+        ? 3
+        : 0;
+
+  let verdict = 'fail';
+  if (bannedHits) {
+    verdict = 'fail';
+  } else if (
+    hasContextPack &&
+    hasRelevantText &&
+    hasGroundedEvidence &&
+    hasMustInclude &&
+    !missingSections.length &&
+    previewMatches &&
+    riskMatches
+  ) {
+    verdict = 'pass';
+  } else if (hasContextPack || hasRelevantText || hasGroundedEvidence) {
+    verdict = 'warn';
+  }
+
+  return {
+    verdict,
+    scores: {
+      context_relevance: contextRelevance,
+      evidence_grounding: evidenceGrounding,
+      answer_quality: answerQuality,
+      specificity,
+      suppression_correctness: suppressionCorrectness,
+    },
+    why: buildComposeContextPackWhy({
+      response,
+      request,
+      matchedExpectedTopics,
+      matchedEvidenceTopics,
+      matchedMustNotReturnTopics,
+      missingSections,
+      matchedMustInclude,
+      matchedMustNotInclude,
+      hasExpectedSuggestionType,
+      previewMatches,
+      riskMatches,
+      evidenceCount: evidence.length,
+    }),
+    topMatch: summarizeComposeEvidence(evidence[0]),
+    matchedExpectedTopics,
+    matchedEvidenceTopics,
+    matchedMustNotReturnTopics,
+    missingSections,
+    matchedMustInclude,
+    matchedMustNotInclude,
+    evidenceCount: evidence.length,
+    suggestionType: response?.suggestionType,
+    available: response?.available,
   };
 }
 
@@ -556,6 +2327,7 @@ ${failures.map((item) => `- ${item.caseId}: ${item.why || item.error || item.ver
 Instructions:
 - Inspect the run artifacts before editing.
 - Keep changes scoped to allowed paths.
+- Preserve the eval report contract: every runnable case report must show what data was evaluated, expected behavior, actual system output, score/verdict rationale, and improvement suggestions.
 - Do not commit or deploy.
 - After editing, run the listed validation commands if practical.
 - Leave a concise final summary of changed files and validation results.
@@ -570,6 +2342,9 @@ async function writeSummary(runDir, summary, caseResults) {
 
 function buildRunReportHtml(summary, caseResults) {
   const isContextRecall = summary.suiteId === 'context-recall';
+  const isSceneMemoryAutopilot = summary.suiteId === 'scene-memory-autopilot';
+  const isComposeAssist = summary.suiteId === 'compose-assist';
+  const isAskContextGap = summary.suiteId === 'ask-context-gap';
   const averageScore = averageCaseScore(caseResults);
   const artifactRows = [
     ['input.jsonl', '采集到的页面或快照上下文'],
@@ -579,14 +2354,7 @@ function buildRunReportHtml(summary, caseResults) {
     ['case-results.json', '结构化评估结果'],
     ['repair-attempts.jsonl', '仅在触发 repair 时生成'],
   ];
-  const nextSteps = summary.status === 'fail'
-    ? [
-        '优先查看失败 case 的“改进建议”，确认是召回门槛、标题摘要，还是解释质量问题。',
-        '需要自动修复时，在 worktree 状态可控后运行 --repair=auto。',
-      ]
-    : summary.status === 'skipped'
-      ? ['这个 suite 还没有可执行 case，先补 JSONL 样本再加入调度。']
-      : ['本次没有必须立即处理的问题；仍建议查看 warn case 是否影响真实体验。'];
+  const nextSteps = buildRunNextSteps(summary, caseResults);
   return buildHtmlShell({
     title: `体验评估 - ${summary.suiteId}`,
     body: `
@@ -616,15 +2384,20 @@ function buildRunReportHtml(summary, caseResults) {
           <div><span>运行目录</span><code>${escapeHtml(summary.runDir || '-')}</code></div>
           <div><span>结果分布</span><span>${escapeHtml(formatCounts(summary.counts || {}))}</span></div>
           <div><span>失败样本</span><span>${escapeHtml((summary.failedCaseIds || []).join(', ') || '-')}</span></div>
+          <div><span>报告契约</span><span>${escapeHtml(formatReportContract(summary.reportContract))}</span></div>
         </div>
       </section>
 
       <section>
-        <h2>${isContextRecall ? 'Memory Lens 群组样本' : '样本结果'}</h2>
+        <h2>${isContextRecall || isSceneMemoryAutopilot ? 'Memory Lens 群组样本' : isComposeAssist ? 'Compose Assist 样本' : isAskContextGap ? 'Ask 缺上下文样本' : '样本结果'}</h2>
         ${caseResults.length
-          ? isContextRecall
+          ? isContextRecall || isSceneMemoryAutopilot
             ? caseResults.map(renderContextRecallCaseCard).join('\n')
-            : renderGenericCasesTable(caseResults)
+            : isComposeAssist
+              ? caseResults.map(renderComposeAssistCaseCard).join('\n')
+              : isAskContextGap
+                ? caseResults.map(renderAskContextGapCaseCard).join('\n')
+                : renderGenericCaseCards(caseResults)
           : '<p class="muted">没有可展示的样本结果。</p>'}
       </section>
 
@@ -637,6 +2410,14 @@ function buildRunReportHtml(summary, caseResults) {
           </tbody>
         </table>
       </section>
+
+      ${summary.reportContract?.issueCount ? `
+        <section>
+          <h2>报告契约问题</h2>
+          <p class="muted">这不是业务能力判分，而是 eval report 自身是否足够可读的检查。新 suite 必须让报告回答：跑了什么数据、期望什么、实际输出什么、如何判分、下一步怎么改。</p>
+          ${renderReportContractIssues(caseResults)}
+        </section>
+      ` : ''}
 
       <section>
         <h2>建议动作</h2>
@@ -654,6 +2435,10 @@ function formatScores(scores = {}) {
 
 function reportTitle(summary) {
   if (summary.suiteId === 'context-recall') return 'Memory Lens 真实群组关联评估';
+  if (summary.suiteId === 'scene-memory-autopilot')
+    return 'Scene Memory Autopilot 本地过滤评估';
+  if (summary.suiteId === 'ask-context-gap') return 'Ask 缺上下文回补评估';
+  if (summary.suiteId === 'answer-memory-tracker') return 'Ask 活答案记忆追踪评估';
   return summary.title || summary.suiteId;
 }
 
@@ -662,6 +2447,21 @@ function runExecutiveConclusion(summary, caseResults) {
   if (!caseResults.length) return '本次没有可展示的样本结果。';
   const counts = countStatuses(caseResults);
   const averageScore = averageCaseScore(caseResults);
+  if (summary.reportContract?.issueCount) {
+    return `本次结果存在 ${summary.reportContract.issueCount} 个报告契约问题：即使业务判分可用，也需要先补齐“跑了什么、期望什么、实际输出、判断和建议”。`;
+  }
+  if (summary.suiteId === 'ask-context-gap') {
+    if ((counts.error || 0) > 0) {
+      return `这次 Ask 缺上下文评估没有拿到完整业务结果：${counts.error} 条请求错误或超时，平均体验分 ${averageScore ?? '-'}。优先看每个 case 的“实际运行结果”和服务端错误，再判断是否进入召回修复。`;
+    }
+    if ((counts.fail || 0) > 0) {
+      return `这次 Ask 缺上下文评估未达标：${counts.fail} 条没有把短问句锁定到预期记忆话题或证据，平均体验分 ${averageScore ?? '-'}。优先检查 MemoryContextMatchService、context frames 和 evidence grounding。`;
+    }
+    if ((counts.warn || 0) > 0) {
+      return `这次 Ask 缺上下文评估有 ${counts.warn} 条只补到了部分上下文，平均体验分 ${averageScore ?? '-'}。需要人工确认是否能接受。`;
+    }
+    return `这次 Ask 缺上下文评估通过，短问句能补齐上下文并用 evidence 回答，平均体验分 ${averageScore ?? '-'}.`;
+  }
   if (summary.suiteId === 'context-recall') {
     if ((counts.fail || 0) > 0) {
       return `这次 Memory Lens 真实群组评估未达标：${counts.fail || 0} 条明显不该展示，平均体验分 ${averageScore ?? '-'}。优先改进召回门槛、标题摘要和为什么相关的解释。`;
@@ -671,9 +2471,52 @@ function runExecutiveConclusion(summary, caseResults) {
     }
     return `这次 Memory Lens 关联结果整体可用，平均体验分 ${averageScore ?? '-'}。`;
   }
+  if (summary.suiteId === 'scene-memory-autopilot') {
+    if ((counts.fail || 0) > 0) {
+      return `这次 Scene Memory Autopilot 本地过滤评估未达标：${counts.fail || 0} 条没有正确展示或静默，平均体验分 ${averageScore ?? '-'}。优先检查场景锚点、quietReasons 和 source cluster 去重。`;
+    }
+    if ((counts.warn || 0) > 0) {
+      return `这次 Scene Memory Autopilot 有 ${counts.warn || 0} 条诊断不完整，平均体验分 ${averageScore ?? '-'}。需要补齐 Autopilot 摘要或解释锚点。`;
+    }
+    return `这次 Scene Memory Autopilot 本地过滤评估通过，弱关联和重复候选被静默，平均体验分 ${averageScore ?? '-'}。`;
+  }
   if ((counts.fail || 0) > 0) return `本次有 ${counts.fail} 条失败样本，需要查看下方建议。`;
   if ((counts.warn || 0) > 0) return `本次有 ${counts.warn} 条需关注样本，建议人工复核。`;
   return '本次样本没有发现明显体验问题。';
+}
+
+function buildRunNextSteps(summary, caseResults) {
+  if (summary.suiteId === 'ask-context-gap') {
+    const hasError = caseResults.some((item) => item.status === 'error');
+    const hasFail = caseResults.some((item) => item.status === 'fail');
+    if (hasError) {
+      return [
+        '先处理 Ask 请求错误或超时；如果是 LLMClient/fetch 问题，本次不能用于判断召回质量。',
+        '服务恢复后重跑同一 suite，再看“命中上下文锚点”和“命中证据锚点”。',
+      ];
+    }
+    if (hasFail) {
+      return [
+        '优先检查 MemoryContextMatchService 是否先把短问句锁定到最近高频/强互动/强锚点话题。',
+        '再检查 Ask 的 recall query 是否使用了锁定话题的 aliases、role terms、source anchors 和 source ids。',
+      ];
+    }
+    return ['继续保留这条 suite，并从最新高频记忆定期补充新的短问句样本。'];
+  }
+  if (summary.status === 'fail') {
+    return [
+      '优先查看失败 case 的“改进建议”，确认是召回门槛、标题摘要，还是解释质量问题。',
+      '需要自动修复时，在 worktree 状态可控后运行 --repair=auto。',
+    ];
+  }
+  if (summary.status === 'error') {
+    return [
+      '先查看错误 case 的 actualOutput/error、requests.jsonl 和 responses.jsonl。',
+      '修复服务请求或 runner 错误后再判断业务体验质量。',
+    ];
+  }
+  if (summary.status === 'skipped') return ['这个 suite 还没有可执行 case，先补 JSONL 样本再加入调度。'];
+  return ['本次没有必须立即处理的问题；仍建议查看 warn case 是否影响真实体验。'];
 }
 
 function formatCounts(counts = {}) {
@@ -682,6 +2525,12 @@ function formatCounts(counts = {}) {
     .filter((key) => counts[key])
     .map((key) => `${localizeStatus(key)} ${counts[key]}`);
   return labels.length ? labels.join('，') : '-';
+}
+
+function formatReportContract(reportContract) {
+  if (!reportContract) return '未检查';
+  if (!reportContract.issueCount) return `通过，检查 ${reportContract.checkedCaseCount || 0} 个 case`;
+  return `需补齐，${reportContract.issueCount} 个问题 / ${reportContract.checkedCaseCount || 0} 个 case`;
 }
 
 function averageCaseScore(caseResults) {
@@ -696,9 +2545,14 @@ function computeOverallScore(scores = {}, status = '') {
   const weights = {
     context_relevance: 30,
     user_value: 25,
+    evidence_grounding: 25,
+    context_match: 25,
+    gap_resolution: 25,
+    answer_memory_tracking: 30,
     specificity: 15,
     title_quality: 10,
     explanation_quality: 10,
+    answer_quality: 10,
     suppression_correctness: 10,
   };
   const keys = Object.keys(weights).filter((key) => Number.isFinite(Number(scores[key])));
@@ -732,6 +2586,22 @@ function buildUserConclusion({ status, heuristic, error }) {
   return heuristic?.why || '需要人工复核这个样本。';
 }
 
+function buildAskContextGapUserConclusion({ status, heuristic, error }) {
+  if (status === 'error') return `未完成：Ask 接口请求失败${error ? `（${error}）` : ''}。`;
+  if (status === 'pass') return '通过：Ask 从短问句里补到了关键上下文，并用证据回答了缺失上下文问题。';
+  if (status === 'warn') return '需复核：Ask 触到了部分相关锚点，但上下文补全或证据支撑还不够稳定。';
+  if (status === 'fail') return '失败：Ask 没有把短问句关联到预期项目证据，用户仍需要自己补 ticket、群组或文档上下文。';
+  return heuristic?.why || '需要人工复核这个 Ask 样本。';
+}
+
+function buildComposeContextPackUserConclusion({ status, heuristic, error }) {
+  if (status === 'error') return `未完成：Composer Assist 请求失败${error ? `（${error}）` : ''}。`;
+  if (status === 'pass') return '通过：AI 输入框场景生成了有证据、有任务判断、可预览插入的跨 AI 上下文包。';
+  if (status === 'warn') return '需复核：生成了部分上下文包，但相关性、证据或隐私边界还不够稳定。';
+  if (status === 'fail') return '失败：没有生成可用的跨 AI 上下文包，或生成内容与当前 chat/记忆证据不匹配。';
+  return heuristic?.why || '需要人工复核这个 Compose Assist 样本。';
+}
+
 function buildImprovementSuggestions({ caseItem, status, heuristic, error }) {
   if (status === 'error') {
     return [`先修复 eval 请求失败：${error || '未知错误'}`];
@@ -746,6 +2616,11 @@ function buildImprovementSuggestions({ caseItem, status, heuristic, error }) {
 
   if (!topMatch) {
     suggestions.push('继续保持无强相关时安静；如果用户认为应该有结果，需要补充记忆覆盖或降低到用户主动点击后搜索。');
+  }
+  if (!heuristic.autopilot) {
+    suggestions.push('context-recall 响应必须带 Autopilot 摘要，报告才能区分“无记忆”和“有候选但被静默”。');
+  } else if (heuristic.autopilot.mode === 'silent' && !heuristic.autopilot.quietReasons?.length) {
+    suggestions.push('Autopilot 静默时应返回 quietReasons，避免用户或 eval 看不出为什么没有提示。');
   }
   if (status === 'fail' || scores.context_relevance < 2) {
     suggestions.push(`强相关展示前至少命中 2 个当前场景锚点；本样本优先锚点是：${expected.slice(0, 5).join('、') || caseItem.title}。`);
@@ -769,11 +2644,121 @@ function buildImprovementSuggestions({ caseItem, status, heuristic, error }) {
   return [...new Set(suggestions)];
 }
 
-function summarizeStatus(caseResults) {
+function buildComposeContextPackImprovementSuggestions({ caseItem, status, heuristic, error }) {
+  if (status === 'error') {
+    return [`先修复 Composer Assist eval 请求失败：${error || '未知错误'}`];
+  }
+
+  const suggestions = [];
+  const expected = caseItem.expectedTopics || [];
+  const matched = heuristic.matchedExpectedTopics || [];
+  const evidenceMatched = heuristic.matchedEvidenceTopics || [];
+  const missing = expected.filter((topic) => !matched.includes(topic));
+
+  if (heuristic.available === false) {
+    suggestions.push('如果当前 chat 有明确任务且记忆库有证据，不能只返回 available=false；优先查看 debug.rejectedReason 和 recallRequest。');
+  }
+  if (!heuristic.evidenceCount) {
+    suggestions.push('context pack 必须带 evidence；没有证据时应该保持安静并在 report 里解释 rejectedReason。');
+  }
+  if (!evidenceMatched.length) {
+    suggestions.push('证据没有命中预期锚点；检查 sourceTypes、当前 provider 自回声过滤，以及 web_agent_prompt 的 primaryText/draftText 是否进入 recall。');
+  }
+  if ((heuristic.missingSections || []).length) {
+    suggestions.push(`补齐 context pack 固定结构：${heuristic.missingSections.join('、')}。`);
+  }
+  if (missing.length && status !== 'pass') {
+    suggestions.push(`生成文本缺少当前任务锚点：${missing.slice(0, 6).join('、')}。`);
+  }
+  if ((heuristic.matchedMustNotReturnTopics || []).length || (heuristic.matchedMustNotInclude || []).length) {
+    suggestions.push('生成文本包含禁止主题或无关旧上下文，应加强 rerank 和 egress 过滤。');
+  }
+  if ((heuristic.missingSections || []).length && (heuristic.scores?.answer_quality ?? 0) < 3) {
+    suggestions.push('报告期望看到任务判断、目标工具适配、相关记忆、约束、来源；缺任何一块都应降级。');
+  }
+  if (!suggestions.length) suggestions.push('维持这条回归；后续用 --live 接入真实 ChatGPT/Codex 页面采样。');
+  return [...new Set(suggestions)];
+}
+
+function buildAskContextGapImprovementSuggestions({ caseItem, status, heuristic, error }) {
+  if (status === 'error') {
+    return [`先修复 Ask eval 请求失败：${error || '未知错误'}`];
+  }
+
+  const suggestions = [];
+  const expected = caseItem.expectedTopics || [];
+  const matched = heuristic.matchedExpectedTopics || [];
+  const evidenceMatched = heuristic.matchedEvidenceTopics || [];
+  const missing = expected.filter((topic) => !matched.includes(topic));
+
+  const ambiguousAllowedAndUseful = heuristic.allowAmbiguous && heuristic.ambiguousHasExpected;
+  if (!heuristic.evidenceCount && !ambiguousAllowedAndUseful) {
+    suggestions.push('Ask 应该返回 evidence；短问句不能只给泛化回答，否则无法判断上下文是否自动补齐。');
+  }
+  if (!heuristic.contextMatch || heuristic.contextMatch.state === 'none') {
+    suggestions.push('Ask 应该返回 contextMatch，并在证据召回前说明是否锁定到某个近期高频话题。');
+  } else if (heuristic.contextMatch.state === 'ambiguous' && !ambiguousAllowedAndUseful) {
+    suggestions.push('contextMatch 已发现多个接近候选；Ask 应该先让用户确认候选，而不是直接编一个结论。');
+  }
+  if (status === 'fail' || (heuristic.scores?.gap_resolution ?? 0) < 3) {
+    suggestions.push('缺上下文问句要先通过 Memory Context Match 锁定“近期话题 + 角色词 + 来源锚点”，再进入证据召回。');
+  }
+  if (!evidenceMatched.length && !ambiguousAllowedAndUseful) {
+    suggestions.push('judge 没有在 evidence 中看到预期锚点；优先检查 Ask recall 是否使用了 contextMatch 的 aliases、source anchors、role terms 和 source ids。');
+  }
+  if (missing.length && status !== 'pass') {
+    suggestions.push(`预期锚点缺失：${missing.slice(0, 6).join('、')}。`);
+  }
+  if ((heuristic.matchedMustNotReturnTopics || []).length) {
+    suggestions.push(`命中了禁止主题：${heuristic.matchedMustNotReturnTopics.join('、')}，说明短问句被错误路由到噪音记忆。`);
+  }
+  if ((heuristic.scores?.answer_quality ?? 0) < 2 && !ambiguousAllowedAndUseful) {
+    suggestions.push('回答需要明确说明“已完成 / 未完成 / 证据不足”，并列出支撑证据，而不是只复述搜索结果。');
+  }
+  if (!suggestions.length) suggestions.push('维持这条回归，并继续从最新高频记忆补充新的短问句样本。');
+  return [...new Set(suggestions)];
+}
+
+function applyReportContract(caseResults) {
+  let issueCount = 0;
+  for (const result of caseResults) {
+    const issues = reportContractIssues(result);
+    result.reportContract = {
+      status: issues.length ? 'warn' : 'pass',
+      issues,
+    };
+    issueCount += issues.length;
+  }
+  return {
+    status: issueCount ? 'warn' : 'pass',
+    issueCount,
+    checkedCaseCount: caseResults.length,
+  };
+}
+
+function reportContractIssues(result) {
+  if (!result || result.status === 'skipped') {
+    return result?.reason === 'suite_runner_not_implemented'
+      ? ['suite 没有 runner；无法生成可读体验报告。']
+      : [];
+  }
+  const issues = [];
+  if (!result.caseTitle) issues.push('缺少 caseTitle。');
+  if (!result.sampleSummary && !result.sampleDetails) issues.push('缺少 sampleSummary 或 sampleDetails，用户看不出跑了什么数据。');
+  if (!result.expectedBehavior && !(result.expectedTopics || []).length) issues.push('缺少 expectedBehavior 或 expectedTopics，用户看不出评估目标。');
+  if (!result.actualOutput && !result.topMatch && !result.error && !result.reason) issues.push('缺少 actualOutput/topMatch/error，用户看不出系统实际产出。');
+  if (!result.scores || !Object.keys(result.scores).length) issues.push('缺少 scores。');
+  if (!result.userConclusion) issues.push('缺少 userConclusion。');
+  if (!Array.isArray(result.improvementSuggestions)) issues.push('缺少 improvementSuggestions。');
+  return issues;
+}
+
+function summarizeStatus(caseResults, reportContract = null) {
   if (caseResults.some((item) => item.status === 'error')) return 'error';
   if (caseResults.some((item) => item.status === 'fail')) return 'fail';
   if (caseResults.some((item) => item.status === 'warn')) return 'warn';
   if (caseResults.every((item) => item.status === 'skipped')) return 'skipped';
+  if (reportContract?.issueCount) return 'warn';
   return 'pass';
 }
 
@@ -814,6 +2799,12 @@ function normalize(value) {
   return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+function normalizeArray(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  if (value == null || value === '') return [];
+  return [String(value)];
+}
+
 function matchText(match) {
   if (!match) return '';
   return [
@@ -829,6 +2820,289 @@ function matchText(match) {
     ...(match.matchedAnchors?.projects || []),
     ...(match.matchedAnchors?.source || []),
   ].filter(Boolean).join('\n');
+}
+
+function askAnswerText(response) {
+  if (!response || typeof response !== 'object') return '';
+  const structured = response.structuredAnswer || {};
+  return [
+    response.answer,
+    ...(structured.keyFindings || []),
+    ...(structured.insights || []),
+    ...(structured.timeline || []).map((item) => `${item.date || ''} ${item.event || ''}`),
+    ...(structured.relatedEntities || []).map((item) => `${item.name || ''} ${item.type || ''} ${item.relevance || ''}`),
+    response.analysis?.summary,
+    ...(response.analysis?.keyFindings || []),
+    ...(response.analysis?.insights || []),
+  ].filter(Boolean).join('\n');
+}
+
+function askEvidenceText(item) {
+  if (!item) return '';
+  return [
+    item.id,
+    item.type,
+    item.content,
+    item.summary,
+    item.source,
+    item.sourceTitle,
+    item.sourceUrl,
+    item.sender,
+    item.groupName,
+    JSON.stringify(item.metadata || {}),
+  ].filter(Boolean).join('\n');
+}
+
+function summarizeAskEvidence(item) {
+  if (!item) return null;
+  return {
+    id: item.id,
+    title: item.sourceTitle || item.source || item.type || item.id,
+    sourceLabel: item.source || item.type,
+    sourceTitle: item.sourceTitle,
+    displayPriority: item.score == null ? undefined : `score:${Number(item.score).toFixed(3)}`,
+    whyRelevant: [truncateText(String(item.content || item.summary || ''), 220)].filter(Boolean),
+  };
+}
+
+function summarizeAskContextMatch(contextMatch) {
+  if (!contextMatch || typeof contextMatch !== 'object') return null;
+  return {
+    state: contextMatch.state || 'none',
+    selectedTopic: summarizeAskContextTopic(contextMatch.selectedTopic),
+    userFacingSummary: contextMatch.userFacingSummary,
+    expandedQuery: truncateText(String(contextMatch.expandedQuery || ''), 360),
+    candidates: (Array.isArray(contextMatch.candidates) ? contextMatch.candidates : [])
+      .slice(0, 5)
+      .map(summarizeAskContextTopic)
+      .filter(Boolean),
+  };
+}
+
+function summarizeAskContextTopic(topic) {
+  if (!topic || typeof topic !== 'object') return null;
+  return {
+    label: topic.label,
+    score: formatContextScore(topic.score),
+    confidence: formatContextScore(topic.confidence),
+    reasons: (topic.reasons || []).slice(0, 6),
+    anchors: (topic.anchors || []).slice(0, 8),
+    roleTerms: (topic.roleTerms || []).slice(0, 6),
+    aliases: (topic.aliases || []).slice(0, 8),
+    sourceIds: (topic.sourceIds || []).slice(0, 6),
+  };
+}
+
+function formatContextScore(value) {
+  if (!Number.isFinite(Number(value))) return undefined;
+  return Number(value).toFixed(3);
+}
+
+function askContextMatchText(contextMatch) {
+  if (!contextMatch || typeof contextMatch !== 'object') return '';
+  const candidates = Array.isArray(contextMatch.candidates) ? contextMatch.candidates : [];
+  return [
+    contextMatch.state,
+    contextMatch.userFacingSummary,
+    contextMatch.expandedQuery,
+    topicToText(contextMatch.selectedTopic),
+    ...candidates.slice(0, 5).map(topicToText),
+  ].filter(Boolean).join('\n');
+}
+
+function topicToText(topic) {
+  if (!topic || typeof topic !== 'object') return '';
+  return [
+    topic.label,
+    ...(topic.reasons || []),
+    ...(topic.anchors || []),
+    ...(topic.roleTerms || []),
+    ...(topic.aliases || []),
+    ...(topic.sourceIds || []),
+  ].filter(Boolean).join('\n');
+}
+
+function summarizeComposeContextPackSample(collected, request) {
+  const visibleMessages = request.visibleMessages || [];
+  return {
+    collectionMode: collected.collectionMode,
+    liveError: collected.liveError,
+    site: request.surface,
+    title: request.title,
+    url: request.url,
+    draftText: request.draftText || '',
+    primaryText: truncateText(request.primaryText || '', 1200),
+    visibleMessages: visibleMessages.map((message) => ({
+      sender: message.sender,
+      text: truncateText(message.text || '', 500),
+    })),
+    sourceTypes: request.sourceTypes || [],
+  };
+}
+
+function summarizeComposeContextPackOutput(response) {
+  if (!response || typeof response !== 'object') return null;
+  return {
+    available: response.available,
+    suggestionType: response.suggestionType,
+    title: response.title,
+    summary: response.summary,
+    insertText: response.insertText || '',
+    riskLevel: response.riskLevel,
+    previewRequired: response.previewRequired,
+    confidence: response.confidence,
+    evidence: (response.evidence || []).slice(0, 6).map((item) => ({
+      id: item.id,
+      title: item.title,
+      sourceLabel: item.sourceLabel,
+      sourceTitle: item.sourceTitle,
+      snippet: truncateText(item.snippet || '', 420),
+      whyRelevant: item.whyRelevant || [],
+      displayPriority: item.displayPriority,
+      score: item.score,
+    })),
+    debug: summarizeComposeDebug(response.debug),
+  };
+}
+
+function summarizeComposeDebug(debug) {
+  if (!debug || typeof debug !== 'object') return null;
+  return {
+    taskFrame: debug.taskFrame,
+    targetToolFit: debug.targetToolFit,
+    sourceMix: debug.sourceMix,
+    egressRisk: debug.egressRisk,
+    relatedAgentSessions: debug.relatedAgentSessions,
+    rejectedReason: debug.rejectedReason,
+    recallRejectedReason: debug.recall?.rejectedReason,
+  };
+}
+
+function countDistinctEvidenceSources(evidence) {
+  const sources = new Set();
+  for (const item of evidence || []) {
+    const key = item?.sourceUrl || item?.sourceTitle || item?.source || item?.id;
+    if (key) sources.add(key);
+  }
+  return sources.size;
+}
+
+function countDistinctComposerEvidenceSources(evidence) {
+  const sources = new Set();
+  for (const item of evidence || []) {
+    const key = item?.sourceUrl || item?.sourceTitle || item?.sourceLabel || item?.id;
+    if (key) sources.add(key);
+  }
+  return sources.size;
+}
+
+function composeEvidenceText(item) {
+  if (!item) return '';
+  return [
+    item.id,
+    item.title,
+    item.snippet,
+    item.sourceLabel,
+    item.sourceTitle,
+    item.whyMatched,
+    ...(item.whyRelevant || []),
+    JSON.stringify(item.metadata || {}),
+  ].filter(Boolean).join('\n');
+}
+
+function summarizeComposeEvidence(item) {
+  if (!item) return null;
+  return {
+    id: item.id,
+    title: item.title || item.sourceTitle || item.sourceLabel || item.id,
+    sourceLabel: item.sourceLabel,
+    sourceTitle: item.sourceTitle,
+    displayPriority: item.displayPriority,
+    whyRelevant: [
+      ...(item.whyRelevant || []),
+      truncateText(item.snippet || '', 220),
+    ].filter(Boolean),
+  };
+}
+
+function extractContextPackSection(text, heading) {
+  const value = String(text || '');
+  const index = value.indexOf(`${heading}：`);
+  if (index === -1) return '';
+  const start = index + `${heading}：`.length;
+  const rest = value.slice(start);
+  const next = rest.search(/\n\S[^：\n]{0,20}：/);
+  return (next === -1 ? rest : rest.slice(0, next)).trim();
+}
+
+function buildAskContextGapWhy({
+  matchedExpectedTopics,
+  matchedEvidenceTopics,
+  matchedMustNotReturnTopics,
+  hasGapFill,
+  hasCompletionStance,
+  contextMatch,
+  matchedContextMatchTopics,
+  allowAmbiguous,
+  ambiguousHasExpected,
+  missingInfo,
+  evidenceCount,
+}) {
+  if (matchedMustNotReturnTopics.length) return 'Ask response hit a banned/noise topic.';
+  if (!contextMatch) return 'Ask did not return memory context match diagnostics, so the report cannot see how the missing context was resolved.';
+  if (ambiguousHasExpected) return 'Memory context match correctly found multiple close candidates and included the expected topic for user clarification.';
+  if (contextMatch.state === 'none') return 'Memory context match did not lock any recent topic before evidence recall.';
+  if (contextMatch.state === 'ambiguous') {
+    return allowAmbiguous
+      ? 'Memory context match found multiple close candidates, but the expected topic was not visible enough in the candidate set.'
+      : 'Memory context match found multiple close candidates and should ask the user to clarify.';
+  }
+  if (contextMatch.state === 'locked' && !matchedContextMatchTopics.length) return 'Memory context match locked a topic, but it did not contain expected anchors.';
+  if (!evidenceCount) return 'Ask returned no evidence, so context gap recovery is not grounded.';
+  if (!matchedEvidenceTopics.length) return 'Ask returned evidence, but it did not contain the expected project/context anchors.';
+  if (!hasGapFill) return `Ask hit ${matchedExpectedTopics.length} expected topic(s), but did not clearly fill the context gap.`;
+  if (!hasCompletionStance) return 'Ask found relevant context but did not clearly answer the completion/readiness question.';
+  if (missingInfo.length) return 'Ask found context and also surfaced remaining missing information.';
+  return `Ask locked the topic via memory context match and hit ${matchedExpectedTopics.length} expected topic(s), including ${matchedEvidenceTopics.length} grounded evidence anchor(s).`;
+}
+
+function buildComposeContextPackWhy({
+  response,
+  request,
+  matchedExpectedTopics,
+  matchedEvidenceTopics,
+  matchedMustNotReturnTopics,
+  missingSections,
+  matchedMustInclude,
+  matchedMustNotInclude,
+  hasExpectedSuggestionType,
+  previewMatches,
+  riskMatches,
+  evidenceCount,
+}) {
+  if (matchedMustNotReturnTopics.length || matchedMustNotInclude.length) {
+    return `Compose context pack included banned topic(s): ${[
+      ...matchedMustNotReturnTopics,
+      ...matchedMustNotInclude,
+    ].join('、')}`;
+  }
+  if (!response?.available) {
+    return `Composer Assist stayed quiet: ${response?.debug?.rejectedReason || response?.summary || 'available=false'}`;
+  }
+  if (!hasExpectedSuggestionType) {
+    return `Expected context_pack, got ${response?.suggestionType || '-'}.`;
+  }
+  if (!evidenceCount) return 'Composer Assist generated no evidence-backed context.';
+  if (!matchedEvidenceTopics.length) return 'Evidence was returned, but it did not contain the expected memory anchors.';
+  if (missingSections.length) return `Context pack is missing section(s): ${missingSections.join('、')}.`;
+  if (!previewMatches || !riskMatches) {
+    return `Privacy boundary mismatch: risk=${response?.riskLevel}, preview=${response?.previewRequired}.`;
+  }
+  if (!matchedExpectedTopics.length) return 'Context pack did not mention the expected current-task anchors.';
+  if (!matchedMustInclude.length && request?.draftText) {
+    return 'Context pack was generated, but it missed the case-specific must-include terms.';
+  }
+  return `Context pack hit ${matchedExpectedTopics.length} expected topic(s) and ${matchedEvidenceTopics.length} evidence anchor(s).`;
 }
 
 function anchorCount(match) {
@@ -859,6 +3133,35 @@ function summarizeMatch(match) {
     sourceTitle: match.sourceTitle,
     displayPriority: match.displayPriority,
     whyRelevant: match.whyRelevant,
+    matchedAnchors: match.matchedAnchors,
+    suppressionReason: match.suppressionReason,
+    mergedCount: match.mergedCount,
+  };
+}
+
+function summarizeContextRecallAutopilot(autopilot) {
+  if (!autopilot || typeof autopilot !== 'object') return null;
+  return {
+    mode: autopilot.mode,
+    summary: autopilot.summary,
+    candidateCount: autopilot.candidateCount,
+    shownCount: autopilot.shownCount,
+    strongCount: autopilot.strongCount,
+    possibleCount: autopilot.possibleCount,
+    quietedCount: autopilot.quietedCount,
+    hiddenCount: autopilot.hiddenCount,
+    lowInformationCount: autopilot.lowInformationCount,
+    sourceExcludedCount: autopilot.sourceExcludedCount,
+    duplicateMergedCount: autopilot.duplicateMergedCount,
+    quietReasons: Array.isArray(autopilot.quietReasons)
+      ? autopilot.quietReasons.map((item) => ({
+          reason: item.reason,
+          label: item.label,
+          count: item.count,
+        }))
+      : [],
+    sceneAnchors: autopilot.sceneAnchors,
+    gates: Array.isArray(autopilot.gates) ? autopilot.gates : [],
   };
 }
 
@@ -872,26 +3175,211 @@ function renderCaseRow(item) {
   </tr>`;
 }
 
-function renderGenericCasesTable(caseResults) {
-  return `<table>
-    <thead>
-      <tr>
-        <th>样本</th>
-        <th>状态</th>
-        <th>结论</th>
-        <th>评分</th>
-        <th>Top Match</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${caseResults.map(renderCaseRow).join('\n')}
-    </tbody>
-  </table>`;
+function renderGenericCaseCards(caseResults) {
+  return caseResults.map(renderGenericCaseCard).join('\n');
+}
+
+function renderGenericCaseCard(item) {
+  const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
+  return `<article class="case-card">
+    <div class="case-card-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(item.caseId)}</p>
+        <h3>${escapeHtml(item.caseTitle || item.caseId)}</h3>
+        <p class="muted">${escapeHtml(item.caseKind || item.suiteId || 'eval case')}</p>
+      </div>
+      <div class="score-box">
+        ${statusBadge(item.status)}
+        ${score == null ? '' : `<strong>${escapeHtml(score)}</strong><span>体验分 / 100</span>`}
+      </div>
+    </div>
+    <div class="case-grid">
+      <div>
+        <h4>跑了什么数据</h4>
+        <p>${escapeHtml(item.sampleSummary || item.caseTitle || '-')}</p>
+        ${item.sampleDetails ? renderKeyValueList(flattenDetailObject(item.sampleDetails)) : ''}
+        ${renderChipGroup('期望命中', item.expectedTopics || [], 'chip-good')}
+        ${renderChipGroup('不能命中', item.mustNotReturnTopics || [], 'chip-bad')}
+      </div>
+      <div>
+        <h4>期望评估什么</h4>
+        ${renderExpectedBehavior(item)}
+      </div>
+    </div>
+    <div class="case-grid">
+      <div>
+        <h4>实际输出/结果</h4>
+        ${item.actualOutput ? renderActualOutput(item.actualOutput) : item.topMatch ? `
+          <p class="result-title">${escapeHtml(item.topMatch.title || item.topMatch.sourceTitle || item.topMatch.id || '-')}</p>
+          <p class="muted">${escapeHtml(item.topMatch.sourceLabel || '-')} · ${escapeHtml(item.topMatch.displayPriority || '-')}</p>
+          ${renderChipGroup('原因', item.topMatch.whyRelevant || [], 'chip-neutral')}
+        ` : `<p class="muted">${escapeHtml(item.reason || item.error || '-')}</p>`}
+      </div>
+      <div>
+        <h4>判断</h4>
+        <p>${escapeHtml(item.userConclusion || item.why || item.reason || '-')}</p>
+        <p class="muted">${escapeHtml(item.why || '')}</p>
+      </div>
+      <div>
+        <h4>改进建议</h4>
+        <ul>${(item.improvementSuggestions || []).map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join('') || '<li>没有记录改进建议。</li>'}</ul>
+      </div>
+    </div>
+    ${renderCaseReportContract(item)}
+    <div class="score-grid">${renderScoreBars(item.scores || {})}</div>
+  </article>`;
+}
+
+function renderAskContextGapCaseCard(item) {
+  const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
+  const sample = item.sampleDetails || {};
+  const output = item.actualOutput || {};
+  const heuristic = item.judge?.heuristic || {};
+  return `<article class="case-card">
+    <div class="case-card-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(item.caseId)}</p>
+        <h3>${escapeHtml(item.caseTitle || item.caseId)}</h3>
+        <p class="muted">${escapeHtml(item.caseKind || 'ask_context_gap')}</p>
+      </div>
+      <div class="score-box">
+        ${statusBadge(item.status)}
+        ${score == null ? '' : `<strong>${escapeHtml(score)}</strong><span>体验分 / 100</span>`}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>评估的问题</h4>
+        ${renderKeyValueList([
+          ['用户问句', item.query || sample.query],
+          ['补充上下文', item.providedContext || sample.context],
+          ['检索范围', sample.scope || 'work'],
+          ['要验证的问题', item.problemStatement || sample.problemStatement],
+          ['预期抽取', item.expectedExtraction || sample.expectedExtraction],
+          ['预期行为', item.expectedBehavior],
+        ])}
+        ${renderChipGroup('期望命中', item.expectedTopics || [], 'chip-good')}
+        ${renderChipGroup('不能命中', item.mustNotReturnTopics || [], 'chip-bad')}
+      </div>
+      <div>
+        <h4>输入快照</h4>
+        ${renderKeyValueList([
+          ['采集方式', sample.collectionMode],
+          ['includeEvidence', sample.includeEvidence],
+          ['上下文缺口信号', sample.contextGapSignals || []],
+          ['完成状态信号', sample.completionSignals || []],
+        ])}
+        ${sample.primaryText ? renderTextBlock(sample.primaryText) : '<p class="muted">没有样本快照。</p>'}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>实际运行结果</h4>
+        ${renderKeyValueList([
+          ['HTTP 状态', output.statusCode],
+          ['请求耗时', output.durationMs == null ? undefined : `${output.durationMs}ms`],
+          ['超时阈值', output.timeoutMs == null ? undefined : `${output.timeoutMs}ms`],
+          ['Ask queryTimeMs', output.queryTimeMs == null ? undefined : `${output.queryTimeMs}ms`],
+          ['错误', output.error],
+          ['Evidence 数量', output.evidenceCount],
+        ])}
+        ${output.answer ? `<h4>Ask 回答</h4>${renderTextBlock(output.answer)}` : '<p class="muted">没有拿到 Ask 回答。</p>'}
+      </div>
+      <div>
+        <h4>Memory Context Match</h4>
+        ${renderAskContextMatchDetails(output.contextMatch || item.contextMatch)}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>Evidence</h4>
+        ${renderAskEvidenceDetails(output.evidence || [])}
+      </div>
+      <div>
+        <h4>提取出的缺口判断</h4>
+        ${renderKeyValueList([
+          ['contextMatch.state', output.contextMatch?.state || item.contextMatch?.state],
+          ['锁定话题', output.contextMatch?.selectedTopic?.label || item.contextMatch?.selectedTopic?.label],
+          ['命中 Context Match 锚点', item.matchedContextMatchTopics || heuristic.matchedContextMatchTopics || []],
+          ['命中 Evidence 锚点', item.matchedEvidenceTopics || heuristic.matchedEvidenceTopics || []],
+          ['评估结论', item.userConclusion || item.why],
+        ])}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>评估结论</h4>
+        <p>${escapeHtml(item.userConclusion || item.why || '-')}</p>
+        <p class="muted">${escapeHtml(item.why || '')}</p>
+        ${renderChipGroup('命中上下文锚点', item.matchedExpectedTopics || heuristic.matchedExpectedTopics || [], 'chip-good')}
+        ${renderChipGroup('命中 Context Match 锚点', item.matchedContextMatchTopics || heuristic.matchedContextMatchTopics || [], 'chip-good')}
+        ${renderChipGroup('命中 evidence 锚点', item.matchedEvidenceTopics || heuristic.matchedEvidenceTopics || [], 'chip-neutral')}
+        ${renderChipGroup('命中禁止主题', item.matchedMustNotReturnTopics || heuristic.matchedMustNotReturnTopics || [], 'chip-bad')}
+        ${renderChipGroup('仍缺信息', item.missingInfo || heuristic.missingInfo || [], 'chip-neutral')}
+      </div>
+      <div>
+        <h4>提取出的问题 / 下一步</h4>
+        <ul>${(item.improvementSuggestions || []).map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join('') || '<li>没有记录改进建议。</li>'}</ul>
+      </div>
+    </div>
+
+    <div class="score-grid">${renderScoreBars(item.scores || {})}</div>
+  </article>`;
+}
+
+function renderAskContextMatchDetails(contextMatch) {
+  if (!contextMatch) return '<p class="muted">没有 contextMatch，无法判断 Ask 是否先做了话题锁定。</p>';
+  const selected = contextMatch.selectedTopic;
+  return `<div class="context-match-box">
+    ${renderKeyValueList([
+      ['决策', contextMatch.state],
+      ['锁定话题', selected?.label],
+      ['锁定分数', selected?.score],
+      ['锁定置信度', selected?.confidence],
+      ['用户可见说明', contextMatch.userFacingSummary],
+      ['expandedQuery', contextMatch.expandedQuery],
+    ])}
+    ${selected ? renderChipGroup('锁定原因', selected.reasons || [], 'chip-good') : ''}
+    ${selected ? renderChipGroup('锁定锚点', selected.anchors || [], 'chip-neutral') : ''}
+    ${selected ? renderChipGroup('角色词', selected.roleTerms || [], 'chip-neutral') : ''}
+    <h4>候选话题</h4>
+    ${renderAskContextCandidateTable(contextMatch.candidates || [])}
+  </div>`;
+}
+
+function renderAskContextCandidateTable(candidates) {
+  const rows = (candidates || []).filter(Boolean);
+  if (!rows.length) return '<p class="muted">没有候选话题。</p>';
+  return `<table class="compact-table"><thead><tr><th>候选</th><th>分数</th><th>置信度</th><th>原因 / 锚点</th></tr></thead><tbody>
+    ${rows.map((item) => `<tr>
+      <td>${escapeHtml(item.label || '-')}</td>
+      <td>${escapeHtml(item.score ?? '-')}</td>
+      <td>${escapeHtml(item.confidence ?? '-')}</td>
+      <td>${escapeHtml([...(item.reasons || []), ...(item.anchors || [])].slice(0, 8).join('；') || '-')}</td>
+    </tr>`).join('')}
+  </tbody></table>`;
+}
+
+function renderAskEvidenceDetails(evidence) {
+  const rows = (evidence || []).filter(Boolean);
+  if (!rows.length) return '<p class="muted">没有 evidence，无法判断是否真的补齐上下文。</p>';
+  return `<div class="message-list evidence-list">
+    ${rows.map((item, index) => `<div>
+      <span>${escapeHtml(`E${index + 1} · ${item.source || item.id || 'evidence'}`)}</span>
+      <p><strong>${escapeHtml(item.title || item.id || '-')}</strong></p>
+      <p>${escapeHtml(item.snippet || '')}</p>
+    </div>`).join('')}
+  </div>`;
 }
 
 function renderContextRecallCaseCard(item) {
   const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
   const topMatch = item.topMatch;
+  const autopilot = item.autopilot || item.judge?.heuristic?.autopilot;
   return `<article class="case-card">
     <div class="case-card-head">
       <div>
@@ -910,6 +3398,7 @@ function renderContextRecallCaseCard(item) {
       <div>
         <h4>跑了什么数据</h4>
         <p>${escapeHtml(item.sampleSummary || '-')}</p>
+        ${renderSceneSourceProvenance(item.sampleDetails?.sourceProvenance)}
         ${renderChipGroup('期望命中', item.expectedTopics || [], 'chip-good')}
         ${renderChipGroup('不能命中', item.mustNotReturnTopics || [], 'chip-bad')}
       </div>
@@ -919,7 +3408,35 @@ function renderContextRecallCaseCard(item) {
           <p class="result-title">${escapeHtml(topMatch.title || topMatch.sourceTitle || topMatch.id || '-')}</p>
           <p class="muted">${escapeHtml(topMatch.sourceLabel || '-')} · ${escapeHtml(topMatch.displayPriority || '-')}</p>
           ${renderChipGroup('关联理由', topMatch.whyRelevant || [], 'chip-neutral')}
+          ${renderChipGroup('命中锚点', flattenSceneAnchors(topMatch.matchedAnchors), 'chip-good')}
         ` : '<p class="muted">没有展示可见关联记忆。</p>'}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>Autopilot 决策</h4>
+        ${autopilot ? renderKeyValueList([
+          ['模式', autopilot.mode],
+          ['摘要', autopilot.summary],
+          ['候选 / 展示', `${autopilot.candidateCount ?? 0} / ${autopilot.shownCount ?? 0}`],
+          ['强相关 / 可能相关', `${autopilot.strongCount ?? 0} / ${autopilot.possibleCount ?? 0}`],
+          ['静默 / hidden', `${autopilot.quietedCount ?? 0} / ${autopilot.hiddenCount ?? 0}`],
+          ['低信息 / 来源排除 / 重复合并', `${autopilot.lowInformationCount ?? 0} / ${autopilot.sourceExcludedCount ?? 0} / ${autopilot.duplicateMergedCount ?? 0}`],
+          ['门控', autopilot.gates || []],
+        ]) : '<p class="muted">响应没有返回 Autopilot 摘要。</p>'}
+        ${renderChipGroup('静默原因', (autopilot?.quietReasons || []).map((item) => `${item.label || item.reason} x${item.count}`), 'chip-neutral')}
+      </div>
+      <div>
+        <h4>场景锚点</h4>
+        ${autopilot?.sceneAnchors
+          ? renderKeyValueList([
+              ['人物', autopilot.sceneAnchors.people || []],
+              ['主题', autopilot.sceneAnchors.topics || []],
+              ['项目', autopilot.sceneAnchors.projects || []],
+              ['来源', autopilot.sceneAnchors.source || []],
+            ])
+          : '<p class="muted">没有解析出可用场景锚点。</p>'}
       </div>
     </div>
 
@@ -935,10 +3452,326 @@ function renderContextRecallCaseCard(item) {
       </div>
     </div>
 
+    ${renderCaseReportContract(item)}
     <div class="score-grid">
       ${renderScoreBars(item.scores || {})}
     </div>
   </article>`;
+}
+
+function renderSceneSourceProvenance(sourceProvenance) {
+  const sources = Array.isArray(sourceProvenance) ? sourceProvenance : [];
+  if (!sources.length) return '';
+  return `<div class="source-provenance">
+    <h5>样本来源</h5>
+    <ul>
+      ${sources
+        .map(
+          (source) => `<li>
+            <strong>${escapeHtml(source.status || 'unknown')}</strong>
+            <span>${source.source ? `<a href="${escapeAttr(source.source)}">${escapeHtml(source.source)}</a>` : '-'}</span>
+            ${source.note ? `<em>${escapeHtml(source.note)}</em>` : ''}
+          </li>`,
+        )
+        .join('')}
+    </ul>
+  </div>`;
+}
+
+function renderComposeAssistCaseCard(item) {
+  if (item.caseKind === 'compose_assist_context_pack') {
+    return renderComposeContextPackCaseCard(item);
+  }
+
+  const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
+  const sample = item.sampleDetails || {};
+  const ambientExpected = item.expectedBehavior?.ambientTrace || {};
+  const trace = item.actualOutput?.ambientTrace || {};
+  return `<article class="case-card">
+    <div class="case-card-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(item.caseId)}</p>
+        <h3>${escapeHtml(item.caseTitle || item.caseId)}</h3>
+        <p class="muted">${escapeHtml(item.caseKind || 'compose_assist')}</p>
+      </div>
+      <div class="score-box">
+        ${statusBadge(item.status)}
+        ${score == null ? '' : `<strong>${escapeHtml(score)}</strong><span>体验分 / 100</span>`}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>跑了什么数据</h4>
+        ${renderKeyValueList([
+          ['站点', sample.site],
+          ['输入框类型', sample.composerType],
+          ['当前线程 hash', sample.currentThreadHash],
+          ['草稿长度', sample.draftTextLength],
+          ['建议文本长度', sample.suggestionTextLength],
+          ['最终发送文本长度', sample.finalSentTextLength],
+        ])}
+        ${renderEvidenceRefs(sample.evidenceRefs || [])}
+        <p class="muted">报告只展示长度、hash 和证据引用，不展示原始 suggestion/finalSentText。</p>
+      </div>
+      <div>
+        <h4>期望评估什么</h4>
+        ${renderKeyValueList([
+          ['Assist 行为', item.expectedBehavior?.assist],
+          ['Trace action', ambientExpected.action],
+          ['Trace polarity', ambientExpected.polarity],
+          ['隐私等级', ambientExpected.privacyClass],
+          ['不能存储', (ambientExpected.mustNotStore || []).join('、')],
+          ['必须保留', (ambientExpected.mustStore || []).join('、')],
+        ])}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>实际生成/评估结果</h4>
+        ${renderKeyValueList([
+          ['Assist 输出', item.actualOutput?.assist],
+          ['Trace action', trace.action],
+          ['Trace polarity', trace.polarity],
+          ['隐私等级', trace.privacyClass],
+          ['rawTextStored', trace.redactedDiff?.rawTextStored],
+          ['相似度', trace.redactedDiff?.similarityScore],
+          ['编辑距离段', trace.redactedDiff?.editDistanceBand],
+          ['语义关系', trace.redactedDiff?.semanticRelation],
+        ])}
+        ${renderEvidenceRefs(trace.evidenceRefs || [])}
+      </div>
+      <div>
+        <h4>用户视角结论</h4>
+        <p>${escapeHtml(item.userConclusion || item.why || '-')}</p>
+        <p class="muted">${escapeHtml(item.why || '')}</p>
+        <h4>改进建议</h4>
+        <ul>${(item.improvementSuggestions || []).map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join('') || '<li>没有记录改进建议。</li>'}</ul>
+      </div>
+    </div>
+
+    ${renderCaseReportContract(item)}
+    <div class="score-grid">${renderScoreBars(item.scores || {})}</div>
+  </article>`;
+}
+
+function renderExpectedBehavior(item) {
+  const rows = [];
+  if (item.expectedBehavior) rows.push(['期望行为', summarizeDetailValue(item.expectedBehavior)]);
+  if (item.expectedTopics?.length) rows.push(['期望命中', item.expectedTopics.join('、')]);
+  if (item.mustNotReturnTopics?.length) rows.push(['不能命中', item.mustNotReturnTopics.join('、')]);
+  return renderKeyValueList(rows);
+}
+
+function renderActualOutput(output) {
+  if (!output) return '<p class="muted">没有结构化实际输出。</p>';
+  if (output.error) {
+    return renderKeyValueList([
+      ['错误', output.error],
+      ['证据数', output.evidenceCount],
+    ]);
+  }
+  const rows = flattenDetailObject(output).slice(0, 12);
+  return renderKeyValueList(rows);
+}
+
+function flattenDetailObject(object, prefix = '') {
+  const rows = [];
+  for (const [key, value] of Object.entries(object || {})) {
+    const label = prefix ? `${prefix}.${key}` : key;
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) {
+      rows.push([label, summarizeDetailValue(value)]);
+    } else if (typeof value === 'object') {
+      const nested = flattenDetailObject(value, label);
+      if (nested.length) rows.push(...nested);
+      else rows.push([label, summarizeDetailValue(value)]);
+    } else {
+      rows.push([label, value]);
+    }
+  }
+  return rows;
+}
+
+function summarizeDetailValue(value) {
+  if (typeof value === 'string') return truncateText(value, 260);
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item)))
+      .join('、');
+  }
+  if (typeof value === 'object') return truncateText(JSON.stringify(value), 320);
+  return value;
+}
+
+function renderCaseReportContract(item) {
+  const issues = item.reportContract?.issues || [];
+  if (!issues.length) return '';
+  return `<div class="contract-warning">
+    <h4>报告契约缺口</h4>
+    <ul>${issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>
+  </div>`;
+}
+
+function renderReportContractIssues(caseResults) {
+  const rows = caseResults
+    .filter((item) => item.reportContract?.issues?.length)
+    .map((item) => `<tr>
+      <td><code>${escapeHtml(item.caseId)}</code></td>
+      <td>${escapeHtml((item.reportContract.issues || []).join('；'))}</td>
+    </tr>`);
+  if (!rows.length) return '<p>没有报告契约问题。</p>';
+  return `<table><thead><tr><th>Case</th><th>问题</th></tr></thead><tbody>${rows.join('\n')}</tbody></table>`;
+}
+
+function renderComposeContextPackCaseCard(item) {
+  const score = item.overallScore ?? computeOverallScore(item.scores, item.status);
+  const sample = item.sampleDetails || {};
+  const output = item.actualOutput || {};
+  const expected = item.expectedBehavior || {};
+  return `<article class="case-card">
+    <div class="case-card-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(item.caseId)}</p>
+        <h3>${escapeHtml(item.caseTitle || item.caseId)}</h3>
+        <p class="muted">${escapeHtml(item.caseKind || 'compose_assist_context_pack')}</p>
+      </div>
+      <div class="score-box">
+        ${statusBadge(item.status)}
+        ${score == null ? '' : `<strong>${escapeHtml(score)}</strong><span>体验分 / 100</span>`}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>跑了什么 chat / 数据</h4>
+        ${renderKeyValueList([
+          ['采集方式', sample.collectionMode],
+          ['live 失败', sample.liveError],
+          ['站点', sample.site],
+          ['标题', sample.title],
+          ['URL', sample.url],
+          ['草稿', sample.draftText],
+          ['sourceTypes', sample.sourceTypes],
+        ])}
+        <h4>当前 chat 内容</h4>
+        ${renderTextBlock(sample.primaryText || '-')}
+        ${renderVisibleMessages(sample.visibleMessages || [])}
+      </div>
+      <div>
+        <h4>期望评估什么</h4>
+        ${renderKeyValueList([
+          ['Assist 行为', expected.assist],
+          ['Suggestion Type', expected.suggestionType],
+          ['风险等级', expected.riskLevel],
+          ['需要预览', expected.previewRequired],
+          ['必须包含章节', expected.requiredSections || []],
+          ['必须包含词', expected.mustInclude || []],
+          ['禁止包含词', expected.mustNotInclude || []],
+        ])}
+        ${renderChipGroup('期望命中', item.expectedTopics || [], 'chip-good')}
+        ${renderChipGroup('不能命中', item.mustNotReturnTopics || [], 'chip-bad')}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>Compose 文本</h4>
+        ${output.insertText ? renderPreBlock(output.insertText) : '<p class="muted">没有生成 insertText。</p>'}
+      </div>
+      <div>
+        <h4>服务端返回</h4>
+        ${renderKeyValueList([
+          ['available', output.available],
+          ['suggestionType', output.suggestionType],
+          ['标题', output.title],
+          ['摘要', output.summary],
+          ['riskLevel', output.riskLevel],
+          ['previewRequired', output.previewRequired],
+          ['confidence', output.confidence],
+        ])}
+        ${renderComposeEvidenceDetails(output.evidence || [])}
+      </div>
+    </div>
+
+    <div class="case-grid">
+      <div>
+        <h4>评估结果</h4>
+        <p>${escapeHtml(item.userConclusion || item.why || '-')}</p>
+        <p class="muted">${escapeHtml(item.why || '')}</p>
+        ${renderChipGroup('命中任务锚点', item.judge?.heuristic?.matchedExpectedTopics || [], 'chip-good')}
+        ${renderChipGroup('命中证据锚点', item.judge?.heuristic?.matchedEvidenceTopics || [], 'chip-neutral')}
+      </div>
+      <div>
+        <h4>改进建议</h4>
+        <ul>${(item.improvementSuggestions || []).map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join('') || '<li>没有记录改进建议。</li>'}</ul>
+        ${output.debug ? `<h4>Debug 摘要</h4>${renderPreBlock(JSON.stringify(output.debug, null, 2))}` : ''}
+      </div>
+    </div>
+
+    <div class="score-grid">${renderScoreBars(item.scores || {})}</div>
+  </article>`;
+}
+
+function renderTextBlock(text) {
+  return `<p class="text-block">${escapeHtml(text || '-')}</p>`;
+}
+
+function renderPreBlock(text) {
+  return `<pre>${escapeHtml(text || '')}</pre>`;
+}
+
+function renderVisibleMessages(messages) {
+  const rows = (messages || []).filter((message) => message?.text);
+  if (!rows.length) return '';
+  return `<div class="message-list">
+    ${rows.map((message) => `<div><span>${escapeHtml(message.sender || 'message')}</span><p>${escapeHtml(message.text)}</p></div>`).join('')}
+  </div>`;
+}
+
+function renderComposeEvidenceDetails(evidence) {
+  const rows = (evidence || []).filter(Boolean);
+  if (!rows.length) return '<p class="muted">没有 evidence。</p>';
+  return `<div class="message-list evidence-list">
+    ${rows.map((item, index) => `<div>
+      <span>${escapeHtml(`M${index + 1} · ${item.sourceLabel || item.sourceTitle || item.id || 'evidence'}`)}</span>
+      <p><strong>${escapeHtml(item.title || item.sourceTitle || item.id || '-')}</strong></p>
+      <p>${escapeHtml(item.snippet || '')}</p>
+      ${renderChipGroup('原因', item.whyRelevant || [], 'chip-neutral')}
+    </div>`).join('')}
+  </div>`;
+}
+
+function renderKeyValueList(rows) {
+  const visibleRows = rows.filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (!visibleRows.length) return '<p class="muted">没有结构化字段。</p>';
+  return `<dl class="detail-list">
+    ${visibleRows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(formatDetailValue(value))}</dd></div>`).join('')}
+  </dl>`;
+}
+
+function flattenSceneAnchors(anchors) {
+  if (!anchors || typeof anchors !== 'object') return [];
+  return [
+    ...(anchors.people || []),
+    ...(anchors.topics || []),
+    ...(anchors.projects || []),
+    ...(anchors.source || []),
+  ].filter(Boolean);
+}
+
+function renderEvidenceRefs(refs) {
+  const items = (refs || []).filter(Boolean);
+  if (!items.length) return '';
+  return `<div class="chip-row"><span>证据引用</span>${items.map((ref) => `<em class="chip chip-neutral">${escapeHtml([ref.id, ref.type, ref.role].filter(Boolean).join(' · '))}</em>`).join('')}</div>`;
+}
+
+function formatDetailValue(value) {
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (Array.isArray(value)) return value.join('、');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return value;
 }
 
 function renderChipGroup(label, values, className = 'chip-neutral') {
@@ -986,12 +3819,25 @@ function localizeRepair(status) {
 
 function localizeScoreKey(key) {
   const labels = {
+    calibration_action: '校准动作',
+    privacy_redaction: '隐私脱敏',
+    evidence_refs: '证据引用',
+    diff_quality: 'Diff 质量',
     context_relevance: '语义相关',
     user_value: '用户价值',
+    evidence_grounding: '证据支撑',
+    context_match: '话题锁定',
+    gap_resolution: '缺口补齐',
     specificity: '具体性',
     title_quality: '标题质量',
     explanation_quality: '解释质量',
+    autopilot_signal: 'Autopilot 摘要',
+    answer_quality: '回答质量',
     suppression_correctness: '静默正确性',
+    scene_filtering: '场景过滤',
+    quiet_reasoning: '静默解释',
+    deduplication: '同源去重',
+    explainability: '解释质量',
   };
   return labels[key] || key;
 }
@@ -1095,6 +3941,55 @@ function buildHtmlShell({ title, body }) {
     .chip-good { background: var(--accent-soft); color: #0f766e; border-color: #b6ded4; }
     .chip-bad { background: #fef3f2; color: #b42318; border-color: #fecdca; }
     .chip-neutral { background: #f2f4f7; color: #344054; border-color: #d0d5dd; }
+    .detail-list { display: grid; gap: 8px; margin: 0 0 10px; }
+    .detail-list div { display: grid; grid-template-columns: 136px minmax(0, 1fr); gap: 10px; align-items: start; }
+    .detail-list dt { color: var(--muted); font-size: 12px; }
+    .detail-list dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; color: #344054; }
+    .contract-warning {
+      margin-top: 16px;
+      padding: 12px;
+      border: 1px solid #fedf89;
+      border-radius: 8px;
+      background: #fffaeb;
+      color: #7a2e0e;
+    }
+    .contract-warning ul { margin: 6px 0 0; }
+    .text-block {
+      max-height: 280px;
+      overflow: auto;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      white-space: pre-wrap;
+    }
+    pre {
+      max-height: 420px;
+      overflow: auto;
+      margin: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      color: #243047;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .message-list { display: grid; gap: 8px; margin-top: 10px; }
+    .message-list div {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px;
+    }
+    .message-list span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .message-list p { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .evidence-list { max-height: 420px; overflow: auto; }
+    .context-match-box { display: grid; gap: 8px; }
+    .compact-table { font-size: 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .compact-table th, .compact-table td { padding: 8px; }
     .score-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; margin-top: 16px; }
     .score-line { display: grid; grid-template-columns: 86px minmax(0, 1fr) 36px; gap: 8px; align-items: center; font-size: 12px; color: #475467; }
     .score-line div { height: 8px; border-radius: 999px; background: #ece5da; overflow: hidden; }

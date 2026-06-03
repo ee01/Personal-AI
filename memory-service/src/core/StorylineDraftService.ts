@@ -53,6 +53,13 @@ function normalizeStringArray(value: unknown, maxItems: number): string[] {
     .slice(0, maxItems);
 }
 
+function appendOnce(items: string[], value: string): string[] {
+  return items.includes(value) ? items : [...items, value];
+}
+
+const FALLBACK_GROUNDING_RISK =
+  '原始模型输出缺少足够证据引用，已用会前准备证据重新生成可复制草稿。';
+
 export class StorylineDraftService {
   private readonly repo: TodayPilotMeetingPrepRepository;
   private readonly llmClient: LLMClient;
@@ -146,6 +153,7 @@ export class StorylineDraftService {
       'Rules:',
       '- Produce 3 to 6 segments.',
       '- Every segment must cite one or more allowed evidence ids, using either E1 aliases or the exact id values.',
+      '- The target artifact is fixed by the user request; do not switch output formats.',
       '- Do not invent source ids, people, decisions, dates, or product names.',
       '- Keep the artifact manually copyable; do not include instructions to auto-send or write back.',
       '',
@@ -177,9 +185,7 @@ export class StorylineDraftService {
     requestedTarget: StorylineSuggestedArtifact,
     requestedAudience: string,
   ): StorylineDraftResponse {
-    const targetArtifact =
-      normalizeStorylineArtifactTarget(response.targetArtifact) ||
-      requestedTarget;
+    const targetArtifact = requestedTarget;
     const audience = firstNonEmpty(response.audience, requestedAudience);
     const evidenceByAlias = new Map<string, string>();
     const allowedEvidenceIds = new Set<string>();
@@ -204,20 +210,28 @@ export class StorylineDraftService {
           )
           .slice(0, 6)
       : [];
-    const normalizedSegments =
-      segments.length >= 3 ? segments : this.fallbackSegments(prep);
+    const usedFallbackSegments = segments.length < 3;
+    const normalizedSegments = usedFallbackSegments
+      ? this.fallbackSegments(prep)
+      : segments;
     const gaps = normalizeStringArray(response.gaps, 6);
-    const riskNotes = normalizeStringArray(response.riskNotes, 6);
-    const artifactText = firstNonEmpty(
-      response.artifactText,
-      this.renderArtifactText(
-        firstNonEmpty(response.title, this.defaultTitle(prep, targetArtifact)),
-        audience,
-        targetArtifact,
-        normalizedSegments,
-        gaps,
-        riskNotes,
-      ),
+    const riskNotes = usedFallbackSegments
+      ? appendOnce(
+          normalizeStringArray(response.riskNotes, 6),
+          FALLBACK_GROUNDING_RISK,
+        )
+      : normalizeStringArray(response.riskNotes, 6);
+    const title = usedFallbackSegments
+      ? this.defaultTitle(prep, targetArtifact)
+      : firstNonEmpty(response.title, this.defaultTitle(prep, targetArtifact));
+    const artifactText = this.renderArtifactText(
+      title,
+      audience,
+      targetArtifact,
+      normalizedSegments,
+      prep.evidenceRefs,
+      gaps,
+      riskNotes,
     );
 
     return {
@@ -232,13 +246,11 @@ export class StorylineDraftService {
       ).slice(0, 20)}`,
       sourceKind: 'today_meeting_prep',
       sourceId: prep.id,
-      title: firstNonEmpty(
-        response.title,
-        this.defaultTitle(prep, targetArtifact),
-      ),
+      title,
       audience,
       targetArtifact,
       segments: normalizedSegments,
+      evidence: prep.evidenceRefs.slice(0, 8),
       gaps,
       riskNotes,
       artifactText,
@@ -281,7 +293,10 @@ export class StorylineDraftService {
       title: compactText(card.title, 90) || `第 ${index + 1} 段`,
       intent: compactText(card.body, 160) || '把会前准备转成可讲述材料。',
       narrative: compactText(card.body, 700) || prep.summaryMd,
-      evidenceIds: this.resolveFallbackEvidenceIds(card.evidenceIds, prep.evidenceRefs),
+      evidenceIds: this.resolveFallbackEvidenceIds(
+        card.evidenceIds,
+        prep.evidenceRefs,
+      ),
     }));
     while (baseSegments.length < 3) {
       const evidence = fallbackEvidence[baseSegments.length] || fallbackEvidence[0];
@@ -333,32 +348,67 @@ export class StorylineDraftService {
     audience: string,
     targetArtifact: StorylineSuggestedArtifact,
     segments: StorylineDraftSegment[],
+    evidence: ComposerAssistEvidence[],
     gaps: string[],
     riskNotes: string[],
   ): string {
-    const heading =
-      targetArtifact === 'slides_outline'
-        ? `# Slides Outline: ${title}`
-        : `# Speaker Notes: ${title}`;
-    return [
-      heading,
+    const headingByArtifact: Record<StorylineSuggestedArtifact, string> = {
+      speaker_notes: `# Speaker Notes: ${title}`,
+      slides_outline: `# Slides Outline: ${title}`,
+      ringcentral_post: `# RingCentral Post: ${title}`,
+      docs_brief: `# Docs Brief: ${title}`,
+    };
+    const segmentPrefixByArtifact: Record<StorylineSuggestedArtifact, string> = {
+      speaker_notes: 'Part',
+      slides_outline: 'Slide',
+      ringcentral_post: 'Point',
+      docs_brief: 'Section',
+    };
+    const evidenceKey = this.renderEvidenceKey(segments, evidence);
+    const lines = [
+      headingByArtifact[targetArtifact],
       '',
       `Audience: ${audience}`,
       '',
       ...segments.flatMap((segment, index) => [
-        `## ${index + 1}. ${segment.title}`,
+        `## ${segmentPrefixByArtifact[targetArtifact]} ${index + 1}: ${segment.title}`,
         `Intent: ${segment.intent}`,
         segment.narrative,
-        `Evidence: ${segment.evidenceIds.join(', ')}`,
+        `Evidence refs: ${segment.evidenceIds.join(', ')}`,
         '',
       ]),
+      evidenceKey.length ? '## Evidence key' : '',
+      ...evidenceKey,
+      evidenceKey.length ? '' : '',
       gaps.length ? '## Gaps to verify' : '',
       ...gaps.map((gap) => `- ${gap}`),
       gaps.length ? '' : '',
       riskNotes.length ? '## Risk notes' : '',
       ...riskNotes.map((note) => `- ${note}`),
-    ]
-      .filter((line) => line !== '')
-      .join('\n');
+    ];
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  private renderEvidenceKey(
+    segments: StorylineDraftSegment[],
+    evidence: ComposerAssistEvidence[],
+  ): string[] {
+    const evidenceById = new Map(evidence.map((item) => [item.id, item]));
+    const orderedIds = segments
+      .flatMap((segment) => segment.evidenceIds)
+      .filter((id, index, all) => all.indexOf(id) === index);
+
+    return orderedIds.map((id) => {
+      const item = evidenceById.get(id);
+      if (!item) {
+        return `- ${id}: evidence detail not returned`;
+      }
+      const source = compactText(item.sourceLabel || item.type || 'memory', 60);
+      const title = compactText(
+        item.sourceTitle || item.title || item.snippet || id,
+        140,
+      );
+      return `- ${id}: ${source} - ${title}`;
+    });
   }
 }

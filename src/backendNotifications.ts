@@ -10,7 +10,8 @@ export type BackendNotificationDeliveryStatus =
 export type BackendNotificationDeliveryReason =
   | 'new'
   | 'retry_after_cooldown'
-  | 'previous_delivery_failed';
+  | 'previous_delivery_failed'
+  | 'already_delivered_unfinished';
 
 export interface BackendNotificationDeliveryContext {
   reason: BackendNotificationDeliveryReason;
@@ -27,6 +28,30 @@ export interface BackendNotificationMeta {
   targetHash: string;
   notificationId?: string;
   dueAt?: number;
+}
+
+export interface BackendNotificationDeliveryEvent {
+  sourceRef: string;
+  lane: BackendNotificationLane;
+  status: BackendNotificationDeliveryStatus;
+  externalRef?: string;
+  error?: string;
+}
+
+export interface BackendNotificationSecondaryActionHandlers {
+  reportDelivery(events: BackendNotificationDeliveryEvent[]): Promise<void>;
+  snoozeNotification(
+    id: string,
+    delaySeconds: number,
+  ): Promise<unknown>;
+  dismissNotification(id: string, detail?: string): Promise<unknown>;
+}
+
+export interface BackendNotificationSecondaryActionResult {
+  action: 'snoozed' | 'dismissed' | 'channel_hidden';
+  notificationId?: string;
+  delaySeconds?: number;
+  deliveryStatus: BackendNotificationDeliveryStatus;
 }
 
 export const BACKEND_NOTIFICATION_META_STORAGE_PREFIX =
@@ -55,6 +80,35 @@ function getStringPayloadValue(
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function normalizeReportFilename(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  const filename = trimmed.startsWith('reports/')
+    ? trimmed.slice('reports/'.length)
+    : trimmed;
+  if (
+    !filename ||
+    filename.includes('/') ||
+    filename.includes('\\') ||
+    filename.includes('..') ||
+    !filename.endsWith('.md')
+  ) {
+    return undefined;
+  }
+  return filename;
+}
+
+function getWeeklyReportTargetHash(
+  payload: Record<string, unknown> | undefined,
+): string {
+  const reportFilename = normalizeReportFilename(
+    getStringPayloadValue(payload, 'reportPath'),
+  );
+  return reportFilename
+    ? `/reports?file=${encodeURIComponent(reportFilename)}`
+    : '/reports';
+}
+
 export function getBackendTargetHash(
   type?: string,
   sourceType?: BackendNotificationSourceType,
@@ -72,7 +126,10 @@ export function getBackendTargetHash(
       confirmRequestId,
     )}`;
   }
-  if (type === 'dream_digest' || type === 'weekly_report') {
+  if (type === 'weekly_report') {
+    return getWeeklyReportTargetHash(payload);
+  }
+  if (type === 'dream_digest') {
     return '/dreams';
   }
   if (type === 'project_update' || type === 'property_change') {
@@ -145,18 +202,26 @@ export function buildBackendNotificationMessage(input: {
   maxLength?: number;
 }): string {
   const maxLength = Math.max(40, input.maxLength ?? 200);
-  const payloadPreview =
-    input.type === 'dream_digest'
-      ? firstPayloadPreview(
-          input.payload,
-          ['digestBody', 'summary', 'details', 'body'],
-          maxLength,
-        )
-      : firstPayloadPreview(
-          input.payload,
-          ['summary', 'details', 'message'],
-          maxLength,
-        );
+  let payloadPreview = '';
+  if (input.type === 'dream_digest') {
+    payloadPreview = firstPayloadPreview(
+      input.payload,
+      ['digestBody', 'summary', 'details', 'body'],
+      maxLength,
+    );
+  } else if (input.type === 'weekly_report') {
+    payloadPreview = firstPayloadPreview(
+      input.payload,
+      ['reportSummary', 'reportExcerpt', 'summary', 'details', 'body'],
+      maxLength,
+    );
+  } else {
+    payloadPreview = firstPayloadPreview(
+      input.payload,
+      ['summary', 'details', 'message'],
+      maxLength,
+    );
+  }
   const bodyPreview = compactNotificationText(input.body, maxLength);
   if (!payloadPreview) return bodyPreview;
   if (!bodyPreview) return payloadPreview;
@@ -187,6 +252,8 @@ export function buildBackendNotificationContextMessage(
     parts.push('再次提醒');
   } else if (deliveryContext?.reason === 'previous_delivery_failed') {
     parts.push('上次发送失败');
+  } else if (deliveryContext?.reason === 'already_delivered_unfinished') {
+    parts.push('仍待处理');
   }
   return parts.join(' · ');
 }
@@ -254,6 +321,56 @@ export function getBackendNotificationClosedDeliveryStatus(
   meta: Pick<BackendNotificationMeta, 'lane'>,
 ): BackendNotificationDeliveryStatus {
   return meta.lane === 'todo' ? 'delivered' : 'dismissed';
+}
+
+export async function performBackendNotificationSecondaryAction(
+  meta: BackendNotificationMeta,
+  externalRef: string,
+  handlers: BackendNotificationSecondaryActionHandlers,
+): Promise<BackendNotificationSecondaryActionResult> {
+  const deliveryStatus = getBackendNotificationSecondaryActionDeliveryStatus(
+    meta,
+  );
+  const deliveryEvent: BackendNotificationDeliveryEvent = {
+    sourceRef: meta.sourceRef,
+    lane: meta.lane,
+    status: deliveryStatus,
+    externalRef,
+  };
+
+  if (meta.sourceRef.startsWith('notification:')) {
+    const notificationId =
+      meta.notificationId || meta.sourceRef.slice('notification:'.length);
+
+    if (meta.sourceType === 'notification' && meta.lane === 'todo') {
+      const delaySeconds = getBackendNotificationSnoozeSeconds(meta);
+      await handlers.snoozeNotification(notificationId, delaySeconds);
+      await handlers.reportDelivery([deliveryEvent]);
+      return {
+        action: 'snoozed',
+        notificationId,
+        delaySeconds,
+        deliveryStatus,
+      };
+    }
+
+    await handlers.dismissNotification(
+      notificationId,
+      'chrome_notification_dismiss_button',
+    );
+    await handlers.reportDelivery([deliveryEvent]);
+    return {
+      action: 'dismissed',
+      notificationId,
+      deliveryStatus,
+    };
+  }
+
+  await handlers.reportDelivery([deliveryEvent]);
+  return {
+    action: 'channel_hidden',
+    deliveryStatus,
+  };
 }
 
 export function normalizeBackendNotificationMeta(

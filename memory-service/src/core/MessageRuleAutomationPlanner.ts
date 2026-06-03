@@ -12,6 +12,29 @@ import {
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
 import { detectAutomationActionFamily } from './actions/detectAutomationActionFamily.js';
 
+export interface MessageRuleAutomationAttachment {
+  id?: string | number;
+  name?: string;
+  type?: string;
+  mimeType?: string;
+  category?: string;
+  size?: number;
+  sourceUrl?: string;
+  messageUrl?: string;
+  downloadUrl?: string;
+  previewUrl?: string;
+}
+
+type PlannedAutomationActionFamily =
+  | Exclude<
+      ReturnType<typeof detectAutomationActionFamily>,
+      'leave_glip_status' | 'unknown'
+    >
+  | 'openclaw_delegation';
+type PreviewAutomationActionFamily =
+  | ReturnType<typeof detectAutomationActionFamily>
+  | 'openclaw_delegation';
+
 export interface MessageRuleAutomationPlanInput {
   ruleRef: string;
   ruleText?: string;
@@ -23,6 +46,9 @@ export interface MessageRuleAutomationPlanInput {
     groupId?: string;
     groupName?: string;
     content: string;
+    sourceUrl?: string;
+    messageUrl?: string;
+    attachments?: MessageRuleAutomationAttachment[];
     timestamp?: number;
     timezone?: string;
     event?: {
@@ -69,7 +95,7 @@ export interface MessageRuleAutomationPreviewAction {
 export interface MessageRuleAutomationPreviewResult {
   canPlan: boolean;
   skippedReason?: string;
-  actionFamily: ReturnType<typeof detectAutomationActionFamily>;
+  actionFamily: PreviewAutomationActionFamily;
   actions: MessageRuleAutomationPreviewAction[];
   warnings: MessageRuleAutomationWarning[];
   suggestedPrompt?: string;
@@ -92,11 +118,12 @@ interface ParsedLeaveWindow {
 }
 
 interface GenericActionPlan {
-  family: Exclude<ReturnType<typeof detectAutomationActionFamily>, 'unknown'>;
+  family: PlannedAutomationActionFamily;
   targetSystem: string;
   title: string;
   description: string;
   task: string;
+  delegatedAsFallback?: boolean;
 }
 
 interface ParsedDateToken {
@@ -106,6 +133,170 @@ interface ParsedDateToken {
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeOptionalString(value: unknown): string {
+  return typeof value === 'string' ? normalizeWhitespace(value) : '';
+}
+
+function normalizeHttpUrl(value: unknown): string {
+  const raw = normalizeOptionalString(value);
+  if (!raw) return '';
+
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.toString()
+      : '';
+  } catch {
+    return '';
+  }
+}
+
+function buildRingCentralMessageUrl(
+  message: MessageRuleAutomationPlanInput['message'],
+): string {
+  const groupId = normalizeOptionalString(message.groupId);
+  const postId = normalizeOptionalString(message.postId);
+  if (!groupId) return '';
+
+  return postId
+    ? `https://app.ringcentral.com/messages/${encodeURIComponent(groupId)}/${encodeURIComponent(postId)}`
+    : `https://app.ringcentral.com/messages/${encodeURIComponent(groupId)}`;
+}
+
+function resolveSourceMessageUrl(
+  message: MessageRuleAutomationPlanInput['message'],
+): string {
+  return (
+    normalizeHttpUrl(message.sourceUrl) ||
+    normalizeHttpUrl(message.messageUrl) ||
+    buildRingCentralMessageUrl(message)
+  );
+}
+
+function formatAttachmentSize(size?: number): string {
+  if (typeof size !== 'number' || !Number.isFinite(size)) {
+    return '';
+  }
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatAttachmentTaskLine(
+  attachment: MessageRuleAutomationAttachment,
+  index: number,
+): string {
+  const name =
+    normalizeOptionalString(attachment.name) ||
+    (attachment.id !== undefined ? `id:${String(attachment.id)}` : 'unnamed');
+  const details = [
+    attachment.id !== undefined ? `id=${String(attachment.id)}` : '',
+    normalizeOptionalString(attachment.category)
+      ? `category=${normalizeOptionalString(attachment.category)}`
+      : '',
+    normalizeOptionalString(attachment.type)
+      ? `type=${normalizeOptionalString(attachment.type)}`
+      : '',
+    normalizeOptionalString(attachment.mimeType)
+      ? `mime=${normalizeOptionalString(attachment.mimeType)}`
+      : '',
+    formatAttachmentSize(attachment.size),
+    normalizeHttpUrl(attachment.sourceUrl)
+      ? `sourceUrl=${normalizeHttpUrl(attachment.sourceUrl)}`
+      : '',
+    normalizeHttpUrl(attachment.messageUrl)
+      ? `messageUrl=${normalizeHttpUrl(attachment.messageUrl)}`
+      : '',
+    normalizeHttpUrl(attachment.downloadUrl)
+      ? `downloadUrl=${normalizeHttpUrl(attachment.downloadUrl)}`
+      : '',
+    normalizeHttpUrl(attachment.previewUrl)
+      ? `previewUrl=${normalizeHttpUrl(attachment.previewUrl)}`
+      : '',
+  ].filter(Boolean);
+
+  return details.length > 0
+    ? `${index + 1}. ${name} (${details.join(', ')})`
+    : `${index + 1}. ${name}`;
+}
+
+function buildTaskContextLines(
+  input: MessageRuleAutomationPlanInput,
+): string[] {
+  const sourceUrl = resolveSourceMessageUrl(input.message);
+  const attachments = Array.isArray(input.message.attachments)
+    ? input.message.attachments
+    : [];
+  const lines = [
+    `You are executing a memory-entry linked action hit for rule ${input.ruleRef}.`,
+    `User linked-action instruction: ${normalizeWhitespace(input.automationPrompt)}`,
+  ];
+
+  if (input.ruleText) {
+    lines.push(`Rule text: ${normalizeWhitespace(input.ruleText)}`);
+  }
+  if (input.match?.summary) {
+    lines.push(`Message summary: ${normalizeWhitespace(input.match.summary)}`);
+  }
+  if (input.message.groupName || input.message.groupId) {
+    lines.push(
+      `Message group: ${normalizeOptionalString(input.message.groupName) || '(unknown)'} (${normalizeOptionalString(input.message.groupId) || 'no id'})`,
+    );
+  }
+  if (input.message.sender) {
+    lines.push(`Message sender: ${normalizeWhitespace(input.message.sender)}`);
+  }
+  if (input.message.postId) {
+    lines.push(`Message post id: ${normalizeWhitespace(input.message.postId)}`);
+  }
+  if (sourceUrl) {
+    lines.push(`Source message URL: ${sourceUrl}`);
+  }
+
+  lines.push('Matched message content:');
+  lines.push(input.message.content);
+
+  if (attachments.length > 0) {
+    lines.push('Structured message attachments:');
+    for (let index = 0; index < attachments.length; index += 1) {
+      lines.push(formatAttachmentTaskLine(attachments[index], index));
+    }
+  }
+
+  return lines;
+}
+
+function inferOpenClawTargetSystem(automationPrompt: string): string {
+  const normalized = automationPrompt.toLowerCase();
+  if (
+    /drive\.google|google\s*drive|\bdrive\b|云端硬盘|谷歌云盘|google 云盘/u.test(
+      normalized,
+    )
+  ) {
+    return 'google_drive';
+  }
+  if (/sheet|spreadsheet|google\s*sheets|表格|工作表/u.test(normalized)) {
+    return 'google_sheets';
+  }
+  if (/jira|ticket|工单|issue/u.test(normalized)) {
+    return 'jira';
+  }
+  if (/glip|ringcentral|whatsapp|消息|私信|群组|发给|发送/u.test(normalized)) {
+    return 'ringcentral';
+  }
+  if (/calendar|remind|提醒|日程|会议/u.test(normalized)) {
+    return 'calendar';
+  }
+  if (/memory|recall|记忆|关联记忆|回忆/u.test(normalized)) {
+    return 'memory_service';
+  }
+  if (/download|upload|file|attachment|下载|上传|文件|附件|图片|视频/u.test(normalized)) {
+    return 'file_or_browser';
+  }
+
+  return 'openclaw';
 }
 
 function sanitizeTimeZone(value?: string): string | undefined {
@@ -453,7 +644,13 @@ function parseLeaveWindow(
 function buildGenericActionPlan(
   input: MessageRuleAutomationPlanInput,
 ): GenericActionPlan | null {
+  const prompt = normalizeWhitespace(input.automationPrompt);
+  if (!prompt) {
+    return null;
+  }
+
   const family = detectAutomationActionFamily(input.automationPrompt);
+  const contextLines = buildTaskContextLines(input);
   switch (family) {
     case 'forward_message':
       return {
@@ -462,8 +659,8 @@ function buildGenericActionPlan(
         title: '根据消息内容转发信息',
         description: '整理当前消息并转发给指定对象，附带原始上下文。',
         task: [
-          `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
-          `The matched message content is: ${input.message.content}`,
+          ...contextLines,
+          'Specific execution guidance:',
           'Summarize the message, identify the intended recipient from the rule or message context, and forward the information with the original message link when available.',
         ].join('\n'),
       };
@@ -474,8 +671,8 @@ function buildGenericActionPlan(
         title: '为 Jira 工单补充评论',
         description: '识别消息中的 Jira / ticket 编号并追加 comment。',
         task: [
-          `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
-          `The matched message content is: ${input.message.content}`,
+          ...contextLines,
+          'Specific execution guidance:',
           'Extract the Jira ticket identifier, summarize the actionable update, and append it as a comment. If no ticket id can be identified, do not perform the write and report the missing identifier.',
         ].join('\n'),
       };
@@ -486,8 +683,8 @@ function buildGenericActionPlan(
         title: '将消息字段写入表格',
         description: '从消息提取结构化字段并写入一行表格。',
         task: [
-          `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
-          `The matched message content is: ${input.message.content}`,
+          ...contextLines,
+          'Specific execution guidance:',
           'Extract the relevant structured fields from the message and append a new row to the configured spreadsheet. Preserve missing fields as blank cells and include the source message link if available.',
         ].join('\n'),
       };
@@ -498,8 +695,8 @@ function buildGenericActionPlan(
         title: '更新 Glip 状态',
         description: '根据消息上下文更新 Glip status。',
         task: [
-          `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
-          `The matched message content is: ${input.message.content}`,
+          ...contextLines,
+          'Specific execution guidance:',
           'Infer the intended Glip status update from the message, including status text and end time when the message provides one, then apply the status change.',
         ].join('\n'),
       };
@@ -510,13 +707,28 @@ function buildGenericActionPlan(
         title: '创建提醒或日程',
         description: '从消息中提取时间和行动项，创建提醒或日程。',
         task: [
-          `You are executing a memory-entry automation hit for rule ${input.ruleRef}.`,
-          `The matched message content is: ${input.message.content}`,
+          ...contextLines,
+          'Specific execution guidance:',
           'Extract the time and action item, then create a reminder or calendar event. If the time is ambiguous, create a confirmation-needed reminder instead of silently guessing.',
         ].join('\n'),
       };
-    case 'leave_glip_status':
     case 'unknown':
+      return {
+        family: 'openclaw_delegation',
+        targetSystem: inferOpenClawTargetSystem(prompt),
+        title: '委派 OpenClaw 执行联动操作',
+        description:
+          'Memory Service 没有可确定的内部执行器，保留完整消息上下文并委派 OpenClaw 判断能力后执行。',
+        task: [
+          ...contextLines,
+          'OpenClaw delegation policy:',
+          'Treat OpenClaw capability as unknown until execution. Attempt the user linked-action instruction using available OpenClaw/browser/local connectors.',
+          'If the task requires a source file, attachment, auth token, account access, Drive folder permission, or an unsupported connector and it is missing, stop and return a capability_missing/auth_error/need_human_decision style result instead of claiming completion.',
+          'Do not fabricate downloaded files, Drive links, public links, message links, or success state. Return the concrete artifact URL or the precise blocker.',
+        ].join('\n'),
+        delegatedAsFallback: true,
+      };
+    case 'leave_glip_status':
       return null;
   }
 }
@@ -560,6 +772,14 @@ export class MessageRuleAutomationPlanner {
           suggestionReason: review.suggestionReason,
         };
       }
+      if (genericPlan.delegatedAsFallback) {
+        warnings.push({
+          code: 'delegated_to_openclaw_black_box',
+          severity: 'info',
+          message:
+            'Memory Service 没有确定性的内部执行器；这条联动操作会带完整消息上下文委派给 OpenClaw，实际能力以 OpenClaw 执行结果为准。',
+        });
+      }
 
       const policy = resolveDelegateOpenClawPolicy({
         params: { mode: 'write' },
@@ -570,7 +790,7 @@ export class MessageRuleAutomationPlanner {
 
       return {
         canPlan: true,
-        actionFamily,
+        actionFamily: genericPlan.family,
         actions: [
           {
             actionType: 'notify_user',
@@ -769,6 +989,8 @@ export class MessageRuleAutomationPlanner {
         messageGroupId: input.message.groupId || '',
         messagePostId: input.message.postId || '',
         messageTimestamp: input.message.timestamp ?? null,
+        messageUrl: resolveSourceMessageUrl(input.message),
+        messageAttachments: input.message.attachments || [],
         sourceMessage: input.message.content,
       };
 
@@ -867,6 +1089,8 @@ export class MessageRuleAutomationPlanner {
       messageTimestamp: input.message.timestamp ?? null,
       messageTimezone: input.message.timezone || '',
       messageEvent: input.message.event || null,
+      messageUrl: resolveSourceMessageUrl(input.message),
+      messageAttachments: input.message.attachments || [],
       sourceMessage: input.message.content,
       startAt: parsedLeaveWindow.startAt,
       endAt: parsedLeaveWindow.endAt,

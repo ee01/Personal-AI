@@ -8,7 +8,9 @@
           <span>个人技能炼金台</span>
         </h1>
         <p class="page-subtitle">
-          你的真源技能库：从 Codex / Claude / OpenClaw / Jira / 会议中沉淀「做事方法」，再以一句安装指引 + URL 的方式快速绑定到任意 agent 平台。
+          你的真源技能库：从 Codex / Claude / OpenClaw / Jira /
+          会议中沉淀「做事方法」，再以一句安装指引 + URL 的方式快速绑定到任意
+          agent 平台。
         </p>
       </div>
       <div class="header-actions">
@@ -71,17 +73,24 @@
               >
                 <div class="top">
                   <div class="title">{{ suggestion.title }}</div>
-                  <span class="when">{{ suggestionSourceLabel(suggestion) }}</span>
+                  <span class="when">{{
+                    suggestionSourceLabel(suggestion)
+                  }}</span>
                   <span v-if="suggestion.reviewRequired" class="review-chip">
                     需审核
                   </span>
-                  <span v-if="isExternalChangeSuggestion(suggestion)" class="change-chip">
+                  <span
+                    v-if="isExternalChangeSuggestion(suggestion)"
+                    class="change-chip"
+                  >
                     变更
                   </span>
                 </div>
                 <div class="desc">{{ suggestion.summary || '暂无摘要' }}</div>
                 <div class="source">
-                  <span>{{ isExternalChangeSuggestion(suggestion) ? '变更' : '来源' }}</span>
+                  <span>{{
+                    isExternalChangeSuggestion(suggestion) ? '变更' : '来源'
+                  }}</span>
                   <span class="source-link">
                     {{ suggestionOriginText(suggestion) }}
                   </span>
@@ -92,7 +101,11 @@
                   :class="{ ready: canConfirmSuggestion(suggestion) }"
                 >
                   <div class="review-preview-head">
-                    <span>{{ canConfirmSuggestion(suggestion) ? '已查看证据' : '待审核摘要' }}</span>
+                    <span>{{
+                      canConfirmSuggestion(suggestion)
+                        ? '已查看证据'
+                        : '待审核摘要'
+                    }}</span>
                     <em>{{ reviewReasonCountLabel(suggestion) }}</em>
                   </div>
                   <ul>
@@ -142,7 +155,60 @@
       </div>
     </section>
 
+    <section v-if="snoozedSuggestions.length > 0" class="snoozed-inbox">
+      <div class="snoozed-inbox-head">
+        <div>
+          <strong>稍后建议</strong>
+          <span
+            >{{ snoozedSuggestions.length }} 条已暂缓，仍可随时恢复审阅</span
+          >
+        </div>
+      </div>
+      <div class="snoozed-suggestion-list" role="list">
+        <article
+          v-for="suggestion in snoozedSuggestions"
+          :key="suggestion.id"
+          class="snoozed-suggestion-card"
+          :class="{ active: selectedId === suggestion.id }"
+          role="button"
+          tabindex="0"
+          @click="selectSkill(suggestion.id)"
+          @keydown.enter="selectSkill(suggestion.id)"
+          @keydown.space.prevent="selectSkill(suggestion.id)"
+        >
+          <div class="snoozed-card-main">
+            <strong>{{ suggestion.title }}</strong>
+            <span>{{ suggestionOriginText(suggestion) }}</span>
+          </div>
+          <div class="snoozed-card-meta">
+            <span
+              >回到 Inbox
+              {{ formatSnoozedUntil(suggestion.snoozedUntil) }}</span
+            >
+            <span v-if="suggestion.reviewRequired">需审核</span>
+          </div>
+          <div class="snoozed-card-actions">
+            <button
+              class="btn primary"
+              type="button"
+              @click.stop="unsnoozeSuggestion(suggestion.id)"
+            >
+              现在审
+            </button>
+            <button
+              class="btn danger"
+              type="button"
+              @click.stop="dismissSuggestion(suggestion.id)"
+            >
+              丢弃
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <div v-if="errorMessage" class="status-box error">{{ errorMessage }}</div>
+    <div v-if="actionMessage" class="status-box info">{{ actionMessage }}</div>
     <div v-if="loading" class="status-box">加载个人技能中...</div>
 
     <div class="foundry-grid">
@@ -154,14 +220,21 @@
             placeholder="搜索技能 / 平台..."
             aria-label="搜索技能"
           />
-          <div class="rail-segmented segmented" role="group" aria-label="技能过滤">
+          <div
+            class="rail-segmented segmented"
+            role="group"
+            aria-label="技能过滤"
+          >
             <button
               :class="{ active: filter === 'active' }"
               @click="setFilter('active')"
             >
               在用
             </button>
-            <button :class="{ active: filter === 'all' }" @click="setFilter('all')">
+            <button
+              :class="{ active: filter === 'all' }"
+              @click="setFilter('all')"
+            >
               全部
             </button>
             <button
@@ -174,7 +247,11 @@
         </div>
 
         <div v-if="filteredSkills.length === 0" class="empty-card">
-          {{ filter === 'dismissed' ? '目前没有已丢弃的技能。' : '还没有在用技能。' }}
+          {{
+            filter === 'dismissed'
+              ? '目前没有已丢弃的技能。'
+              : '还没有在用技能。'
+          }}
         </div>
         <div class="candidate-list">
           <button
@@ -200,13 +277,18 @@
                 <span class="dot"></span>
                 {{ platformLabel(binding.platform) }}
               </span>
-              <span v-if="visibleBindings(skill).length === 0" class="binding-pill muted">
+              <span
+                v-if="visibleBindings(skill).length === 0"
+                class="binding-pill muted"
+              >
                 <span class="dot"></span>
                 未绑定
               </span>
             </div>
             <div class="candidate-status card-foot">
-              <span :class="['badge', skill.status]">{{ statusLabel(skill.status) }}</span>
+              <span :class="['badge', skill.status]">{{
+                statusLabel(skill.status)
+              }}</span>
               <span>{{ skill.currentVersion || 'no version' }}</span>
             </div>
           </button>
@@ -227,6 +309,16 @@
               <button
                 v-if="
                   selectedSkill.status === 'suggestion' &&
+                  isSnoozedSuggestion(selectedSkill)
+                "
+                class="btn secondary secondary-btn"
+                @click="unsnoozeSuggestion(selectedSkill.id)"
+              >
+                现在审
+              </button>
+              <button
+                v-if="
+                  selectedSkill.status === 'suggestion' &&
                   requiresReview(selectedSkill) &&
                   !canConfirmSuggestion(selectedSkill)
                 "
@@ -236,7 +328,10 @@
                 查看证据
               </button>
               <button
-                v-if="selectedSkill.status === 'suggestion'"
+                v-if="
+                  selectedSkill.status === 'suggestion' &&
+                  !isSnoozedSuggestion(selectedSkill)
+                "
                 class="btn primary primary-btn"
                 @click="handleSuggestionPrimary(selectedSkill.id)"
               >
@@ -261,12 +356,49 @@
               @click="setActiveTab(tab.key)"
             >
               {{ tab.label }}
-              <span v-if="tabCount(tab.key)" class="tab-badge tab-count">{{ tabCount(tab.key) }}</span>
+              <span v-if="tabCount(tab.key)" class="tab-badge tab-count">{{
+                tabCount(tab.key)
+              }}</span>
             </button>
           </nav>
 
           <section
-            v-if="selectedSkill.status === 'suggestion' && requiresReview(selectedSkill)"
+            v-if="
+              selectedSkill.status === 'suggestion' &&
+              isSnoozedSuggestion(selectedSkill)
+            "
+            class="review-gate snoozed-review-gate"
+          >
+            <div class="review-gate-icon">i</div>
+            <div class="review-gate-body">
+              <strong>已放入稍后建议</strong>
+              <p>
+                这条建议暂时不参与 Inbox 决策；恢复到 Inbox 后再确认使用或覆盖。
+              </p>
+              <div class="review-audit-summary">
+                <span class="review-audit-state">
+                  回到 Inbox {{ formatSnoozedUntil(selectedSkill.snoozedUntil) }}
+                </span>
+                <span>{{ suggestionOriginText(selectedSkill) }}</span>
+                <span v-if="requiresReview(selectedSkill)">需审核</span>
+              </div>
+            </div>
+            <div class="review-gate-actions">
+              <button
+                class="btn primary mini"
+                type="button"
+                @click="unsnoozeSuggestion(selectedSkill.id)"
+              >
+                现在审
+              </button>
+            </div>
+          </section>
+
+          <section
+            v-if="
+              selectedSkill.status === 'suggestion' &&
+              requiresReview(selectedSkill)
+            "
             class="review-gate"
           >
             <div class="review-gate-icon">!</div>
@@ -279,7 +411,11 @@
                 aria-live="polite"
               >
                 <span class="review-audit-state">
-                  {{ canConfirmSuggestion(selectedSkill) ? '证据已查看，可以确认' : '需先查看证据和风险' }}
+                  {{
+                    canConfirmSuggestion(selectedSkill)
+                      ? '证据已查看，可以确认'
+                      : '需先查看证据和风险'
+                  }}
                 </span>
                 <span
                   v-for="fact in reviewAuditFacts(selectedSkill)"
@@ -289,7 +425,10 @@
                 </span>
               </div>
               <ul>
-                <li v-for="reason in reviewReasons(selectedSkill)" :key="reason">
+                <li
+                  v-for="reason in reviewReasons(selectedSkill)"
+                  :key="reason"
+                >
                   {{ reason }}
                 </li>
               </ul>
@@ -304,10 +443,12 @@
                 查看证据
               </button>
               <button
-                v-else
+                v-else-if="!isSnoozedSuggestion(selectedSkill)"
                 class="btn primary mini"
                 type="button"
-                @click="useSuggestion(selectedSkill.id, { reviewConfirmed: true })"
+                @click="
+                  useSuggestion(selectedSkill.id, { reviewConfirmed: true })
+                "
               >
                 {{ suggestionPrimaryLabel(selectedSkill) }}
               </button>
@@ -318,17 +459,28 @@
             <section v-if="activeTab === 'workflow'" class="detail-section">
               <section class="section">
                 <div class="section-head">
-                  <h3><span class="icon">🔁</span>工作流（{{ selectedSkill.workflow.length }} 步）</h3>
-                  <span class="status draft">{{ selectedSkill.currentVersion || 'no version' }}</span>
+                  <h3>
+                    <span class="icon">🔁</span>工作流（{{
+                      selectedSkill.workflow.length
+                    }}
+                    步）
+                  </h3>
+                  <span class="status draft">{{
+                    selectedSkill.currentVersion || 'no version'
+                  }}</span>
                 </div>
                 <div class="section-body">
                   <div class="kv">
                     <div class="label">触发</div>
-                    <div class="value">{{ selectedSkill.trigger || '未配置触发条件' }}</div>
+                    <div class="value">
+                      {{ selectedSkill.trigger || '未配置触发条件' }}
+                    </div>
                   </div>
                   <div class="kv">
                     <div class="label">不要触发</div>
-                    <div class="value">{{ selectedSkill.notUse || '未配置排除条件' }}</div>
+                    <div class="value">
+                      {{ selectedSkill.notUse || '未配置排除条件' }}
+                    </div>
                   </div>
                   <div class="kv">
                     <div class="label">来源</div>
@@ -341,7 +493,10 @@
                         >
                           {{ source }}
                         </span>
-                        <span v-if="selectedSkill.sources.length === 0" class="pill muted">
+                        <span
+                          v-if="selectedSkill.sources.length === 0"
+                          class="pill muted"
+                        >
                           未标注
                         </span>
                       </div>
@@ -349,7 +504,9 @@
                   </div>
                   <div class="kv">
                     <div class="label">风险策略</div>
-                    <div class="value">{{ selectedSkill.riskBrief || selectedSkill.risk }}</div>
+                    <div class="value">
+                      {{ selectedSkill.riskBrief || selectedSkill.risk }}
+                    </div>
                   </div>
                   <div class="steps">
                     <article
@@ -362,7 +519,12 @@
                         <strong>{{ step.title }}</strong>
                         <p>{{ step.desc }}</p>
                         <div v-if="step.tools?.length" class="step-tools">
-                          <span v-for="tool in step.tools" :key="tool" class="pill muted">{{ tool }}</span>
+                          <span
+                            v-for="tool in step.tools"
+                            :key="tool"
+                            class="pill muted"
+                            >{{ tool }}</span
+                          >
                         </div>
                       </div>
                     </article>
@@ -372,11 +534,18 @@
 
               <section class="section">
                 <div class="section-head">
-                  <h3><span class="icon">🛫</span>来源 episode（Flight Recorder）</h3>
-                  <span class="status muted">{{ selectedSkill.sourceEpisodes.length }} 条</span>
+                  <h3>
+                    <span class="icon">🛫</span>来源 episode（Flight Recorder）
+                  </h3>
+                  <span class="status muted"
+                    >{{ selectedSkill.sourceEpisodes.length }} 条</span
+                  >
                 </div>
                 <div class="section-body compact">
-                  <div v-if="selectedSkill.sourceEpisodes.length === 0" class="empty-card">
+                  <div
+                    v-if="selectedSkill.sourceEpisodes.length === 0"
+                    class="empty-card"
+                  >
                     尚未链接到来源 episode。
                   </div>
                   <article
@@ -389,7 +558,9 @@
                         <span class="binding-icon">🛫</span>
                         <div>
                           <strong>{{ episode.title }}</strong>
-                          <p>{{ episode.date || '无日期' }} · {{ episode.id }}</p>
+                          <p>
+                            {{ episode.date || '无日期' }} · {{ episode.id }}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -398,10 +569,18 @@
               </section>
             </section>
 
-            <section v-else-if="activeTab === 'evidence'" class="detail-section">
+            <section
+              v-else-if="activeTab === 'evidence'"
+              class="detail-section"
+            >
               <section class="section">
                 <div class="section-head">
-                  <h3><span class="icon">🧾</span>证据链（{{ selectedSkill.evidence.length }} refs）</h3>
+                  <h3>
+                    <span class="icon">🧾</span>证据链（{{
+                      selectedSkill.evidence.length
+                    }}
+                    refs）
+                  </h3>
                   <span class="status muted">来源证据</span>
                 </div>
                 <div class="section-body">
@@ -413,30 +592,52 @@
                     >
                       <div class="evidence-head evidence-top">
                         <h3>{{ evidence.title }}</h3>
-                        <span class="pill muted">{{ evidence.kind || 'memory' }}</span>
+                        <span class="pill muted">{{
+                          evidence.kind || 'memory'
+                        }}</span>
                       </div>
                       <p>{{ evidence.desc }}</p>
                       <div class="evidence-foot">
-                        <span :class="['status', evidenceStateClass(evidence.evidenceState)]">
+                        <span
+                          :class="[
+                            'status',
+                            evidenceStateClass(evidence.evidenceState),
+                          ]"
+                        >
                           {{ evidenceStateLabel(evidence.evidenceState) }}
                         </span>
-                        <span v-if="evidence.episodeId">episode {{ evidence.episodeId }}</span>
+                        <span v-if="evidence.episodeId"
+                          >episode {{ evidence.episodeId }}</span
+                        >
                         <span v-else>无来源 episode</span>
                       </div>
                     </article>
                   </div>
-                  <div v-if="selectedSkill.evidence.length === 0" class="empty-card">
+                  <div
+                    v-if="selectedSkill.evidence.length === 0"
+                    class="empty-card"
+                  >
                     暂无证据。
                   </div>
                 </div>
               </section>
             </section>
 
-            <section v-else-if="activeTab === 'versions'" class="detail-section">
+            <section
+              v-else-if="activeTab === 'versions'"
+              class="detail-section"
+            >
               <section class="section">
                 <div class="section-head">
-                  <h3><span class="icon">🪜</span>版本历史（{{ selectedSkill.versions.length }}）</h3>
-                  <span class="status muted">当前 {{ selectedSkill.currentVersion || 'no version' }}</span>
+                  <h3>
+                    <span class="icon">🪜</span>版本历史（{{
+                      selectedSkill.versions.length
+                    }}）
+                  </h3>
+                  <span class="status muted"
+                    >当前
+                    {{ selectedSkill.currentVersion || 'no version' }}</span
+                  >
                 </div>
                 <div class="section-body">
                   <div class="version-list">
@@ -448,7 +649,8 @@
                       <div class="version-head version-top">
                         <h3>{{ version.version }}</h3>
                         <span class="pill muted">
-                          {{ formatDate(version.createdAt) }} · {{ version.createdFrom || 'personal_ai' }}
+                          {{ formatDate(version.createdAt) }} ·
+                          {{ version.createdFrom || 'personal_ai' }}
                         </span>
                       </div>
                       <p>{{ version.changelog || '无变更说明' }}</p>
@@ -500,30 +702,44 @@
                     {{ selectedSkill.shareError }}
                   </p>
                   <p>
-                    短链只用于识别 slug/version；直接打开或给 agent 安装时会使用带 token
-                    的可访问 URL，拉取 SKILL.md 和资源。已绑定状态由后台同步程序异步更新。
+                    短链只用于识别 slug/version；直接打开或给 agent
+                    安装时会使用带 token 的可访问 URL，拉取 SKILL.md
+                    和资源。已绑定状态由后台同步程序异步更新。
                   </p>
                   <span class="install-banner-scope">
-                    自动同步开关在平台维度，不是单条技能；开启后同步所有 active 技能。
+                    自动同步开关在平台维度，不是单条技能；开启后同步所有 active
+                    技能。
                   </span>
                 </div>
               </div>
 
               <section class="section">
                 <div class="section-head">
-                  <h3><span class="icon">🔌</span>平台绑定（{{ bindingCards.length }}）</h3>
-                  <button class="btn secondary mini" type="button" @click="openSyncDialog">
+                  <h3>
+                    <span class="icon">🔌</span>平台绑定（{{
+                      bindingCards.length
+                    }}）
+                  </h3>
+                  <button
+                    class="btn secondary mini"
+                    type="button"
+                    @click="openSyncDialog"
+                  >
                     ⚙ 平台级自动同步
                   </button>
                 </div>
                 <div class="section-body">
-                  <div v-if="showDesktopAppBindingNotice" class="binding-tab-notice warn">
+                  <div
+                    v-if="showDesktopAppBindingNotice"
+                    class="binding-tab-notice warn"
+                  >
                     <span class="binding-hint-icon" aria-hidden="true">!</span>
                     <div>
                       <strong>需要 Desktop App 才能读取本机平台状态</strong>
                       <p>
-                        Codex CLI / Claude Code / Cursor 的 skill 目录在本机文件系统里。
-                        安装并运行最新版 Desktop App 后，Personal AI 才能判断是否已安装并执行双向同步。
+                        Codex CLI / Claude Code / Cursor 的 skill
+                        目录在本机文件系统里。 安装并运行最新版 Desktop App
+                        后，Personal AI 才能判断是否已安装并执行双向同步。
                       </p>
                       <a
                         :href="DESKTOP_APP_RELEASE_URL"
@@ -542,13 +758,19 @@
                     >
                       <div class="binding-head binding-card-top">
                         <div class="binding-name-block">
-                          <span class="binding-icon">{{ platformIcon(binding.platform) }}</span>
+                          <span class="binding-icon">{{
+                            platformIcon(binding.platform)
+                          }}</span>
                           <div>
-                            <strong>{{ platformLabel(binding.platform) }}</strong>
+                            <strong>{{
+                              platformLabel(binding.platform)
+                            }}</strong>
                             <p>{{ platformNote(binding.platform) }}</p>
                           </div>
                         </div>
-                        <span :class="['binding-state', bindingStateClass(binding)]">
+                        <span
+                          :class="['binding-state', bindingStateClass(binding)]"
+                        >
                           {{ bindingStatusLabel(binding) }}
                         </span>
                       </div>
@@ -571,7 +793,9 @@
                             {{ bindingHint(binding)?.cta }}
                           </a>
                           <button
-                            v-else-if="bindingHint(binding)?.action === 'sync-settings'"
+                            v-else-if="
+                              bindingHint(binding)?.action === 'sync-settings'
+                            "
                             type="button"
                             class="text-action"
                             @click="openSyncDialog"
@@ -580,8 +804,13 @@
                           </button>
                         </div>
                       </div>
-                      <div v-if="binding.platform !== 'personal_ai'" class="install-command binding-instruction">
-                        <span class="text">{{ installCommand(binding.platform) }}</span>
+                      <div
+                        v-if="binding.platform !== 'personal_ai'"
+                        class="install-command binding-instruction"
+                      >
+                        <span class="text">{{
+                          installCommand(binding.platform)
+                        }}</span>
                         <button
                           class="btn secondary mini"
                           :disabled="!selectedSkill.share"
@@ -592,14 +821,18 @@
                       </div>
                       <div class="binding-meta binding-meta-row">
                         <span>{{ syncTag(binding.platform) }}</span>
-                        <span v-if="binding.installedVersion">已安装 {{ binding.installedVersion }}</span>
+                        <span v-if="binding.installedVersion"
+                          >已安装 {{ binding.installedVersion }}</span
+                        >
                         <span v-if="localSkillSourceSummary(binding)">
                           来源 {{ localSkillSourceSummary(binding) }}
                         </span>
                         <span v-if="localSkillPackageSummary(binding)">
                           {{ localSkillPackageSummary(binding) }}
                         </span>
-                        <span v-if="binding.lastError">{{ binding.lastError }}</span>
+                        <span v-if="binding.lastError">{{
+                          binding.lastError
+                        }}</span>
                       </div>
                     </article>
                   </div>
@@ -614,13 +847,18 @@
       </section>
     </div>
 
-    <div v-if="syncDialogOpen" class="dialog-backdrop" @click.self="closeSyncDialog">
+    <div
+      v-if="syncDialogOpen"
+      class="dialog-backdrop"
+      @click.self="closeSyncDialog"
+    >
       <div class="sync-dialog" role="dialog" aria-label="平台级自动同步">
         <header>
           <div>
             <h3>平台级自动同步</h3>
             <p>
-              开关按平台生效，不按单条技能生效。开启后该平台会跟随推送所有 active 技能。
+              开关按平台生效，不按单条技能生效。开启后该平台会跟随推送所有
+              active 技能。
             </p>
           </div>
           <div class="dialog-actions">
@@ -631,16 +869,35 @@
           {{ syncResultMessage }}
         </div>
         <div class="conflict-note">
-          sha256 相同视为已对齐；远端 mtime 晚于真源时进入萃取建议审稿，不自动覆盖。
+          sha256 相同视为已对齐；远端 mtime
+          晚于真源时进入萃取建议审稿，不自动覆盖。
         </div>
         <div class="sync-rows">
-          <article v-for="setting in syncSettings" :key="setting.platform" class="sync-row">
-            <div class="sync-row-icon">{{ platformIcon(setting.platform) }}</div>
+          <article
+            v-for="setting in syncSettings"
+            :key="setting.platform"
+            class="sync-row"
+          >
+            <div class="sync-row-icon">
+              {{ platformIcon(setting.platform) }}
+            </div>
             <div class="sync-row-body">
               <strong>{{ platformLabel(setting.platform) }}</strong>
               <p>{{ syncDescription(setting) }}</p>
               <span class="mode">{{ setting.mode }}</span>
               <span class="scope sync-scope">{{ syncScope(setting) }}</span>
+              <div
+                v-if="syncDiagnostics(setting).length > 0"
+                class="sync-diagnostics"
+              >
+                <span
+                  v-for="diagnostic in syncDiagnostics(setting)"
+                  :key="`${setting.platform}:${diagnostic.text}`"
+                  :class="['sync-diagnostic', diagnostic.tone]"
+                >
+                  {{ diagnostic.text }}
+                </span>
+              </div>
             </div>
             <div class="sync-row-actions">
               <button
@@ -656,8 +913,14 @@
               <button
                 v-else-if="localDesktopPlatforms.includes(setting.platform)"
                 class="icon-btn sync-now-btn"
-                :disabled="syncRunning || !setting.enabled || !desktopAppInstalled"
-                :title="syncRunning ? '同步中' : `立即同步 ${platformLabel(setting.platform)}`"
+                :disabled="
+                  syncRunning || !setting.enabled || !desktopAppInstalled
+                "
+                :title="
+                  syncRunning
+                    ? '同步中'
+                    : `立即同步 ${platformLabel(setting.platform)}`
+                "
                 :aria-label="`立即同步 ${platformLabel(setting.platform)}`"
                 @click="runDesktopSkillSync(setting.platform)"
               >
@@ -703,8 +966,11 @@ const client = getMemoryServiceClient();
 const desktopClient = new DesktopAppClient();
 const loading = ref(false);
 const errorMessage = ref('');
+const actionMessage = ref('');
 const skills = ref<PersonalSkillListItem[]>([]);
+const activeSkillTotal = ref(0);
 const suggestions = ref<PersonalSkillListItem[]>([]);
+const snoozedSuggestions = ref<PersonalSkillListItem[]>([]);
 const selectedSkill = ref<PersonalSkillDetail | null>(null);
 const selectedId = ref('');
 const activeTab = ref<SkillTab>('workflow');
@@ -729,14 +995,37 @@ const tabs: Array<{ key: SkillTab; label: string }> = [
   { key: 'bindings', label: '绑定' },
 ];
 
-const platformMeta: Record<string, { label: string; note: string; icon: string }> = {
-  personal_ai: { label: 'Personal AI', icon: '🧠', note: '技能真源，永远 active' },
-  openclaw: { label: 'OpenClaw remote', icon: '🐾', note: '通过 /v1/responses + skills.* RPC 同步' },
+const platformMeta: Record<
+  string,
+  { label: string; note: string; icon: string }
+> = {
+  personal_ai: {
+    label: 'Personal AI',
+    icon: '🧠',
+    note: '技能真源，永远 active',
+  },
+  openclaw: {
+    label: 'OpenClaw remote',
+    icon: '🐾',
+    note: '通过 /v1/responses + skills.* RPC 同步',
+  },
   codex: { label: 'Codex CLI', icon: '🤖', note: '本机 ~/.codex/skills' },
-  claude_code: { label: 'Claude Code', icon: '🪶', note: '本机 ~/.claude/skills 或用户绑定目录' },
+  claude_code: {
+    label: 'Claude Code',
+    icon: '🪶',
+    note: '本机 ~/.claude/skills 或用户绑定目录',
+  },
   cursor: { label: 'Cursor', icon: '🅒', note: 'Cursor user rules + skills' },
-  chatgpt_gpts: { label: 'ChatGPT / GPTs', icon: '💬', note: '纯 Web，不可写文件' },
-  claude_skills_web: { label: 'Claude.ai Skills', icon: '🅰', note: 'Web 版本，不可写文件' },
+  chatgpt_gpts: {
+    label: 'ChatGPT / GPTs',
+    icon: '💬',
+    note: '纯 Web，不可写文件',
+  },
+  claude_skills_web: {
+    label: 'Claude.ai Skills',
+    icon: '🅰',
+    note: 'Web 版本，不可写文件',
+  },
 };
 
 const platformOrder = [
@@ -754,7 +1043,8 @@ const filteredSkills = computed(() => {
   return skills.value.filter((skill) => {
     if (skill.status === 'suggestion') return false;
     if (filter.value === 'active' && skill.status !== 'active') return false;
-    if (filter.value === 'dismissed' && skill.status !== 'dismissed') return false;
+    if (filter.value === 'dismissed' && skill.status !== 'dismissed')
+      return false;
     if (!q) return true;
     const platforms = (skill.bindings || [])
       .map((binding) => platformLabel(binding.platform))
@@ -766,16 +1056,16 @@ const filteredSkills = computed(() => {
   });
 });
 
-const activeSkillCount = computed(
-  () => skills.value.filter((skill) => skill.status === 'active').length,
-);
+const activeSkillCount = computed(() => activeSkillTotal.value);
 
 const inboxSourceMeta = computed(() => {
   const sourceSet = new Set(
-    suggestions.value.flatMap((suggestion) => [
-      suggestion.suggestedFrom,
-      ...(suggestion.sources || []),
-    ]).filter(Boolean),
+    suggestions.value
+      .flatMap((suggestion) => [
+        suggestion.suggestedFrom,
+        ...(suggestion.sources || []),
+      ])
+      .filter(Boolean),
   );
   if (sourceSet.size === 1 && sourceSet.has('openclaw')) {
     return {
@@ -795,8 +1085,7 @@ const inboxSourceMeta = computed(() => {
       hintIcon: '🛫',
       title: 'Flight Recorder 操作轨迹萃取',
       meta: '由 Flight Recorder 从真实操作 episode 萃取',
-      description:
-        '这些建议来自真实操作 episode；可以直接使用、丢弃或稍后审。',
+      description: '这些建议来自真实操作 episode；可以直接使用、丢弃或稍后审。',
     };
   }
   return {
@@ -820,13 +1109,18 @@ const suggestionGroups = computed(() => {
     return groups.get(key)!;
   };
   for (const suggestion of suggestions.value) {
-    if (suggestion.suggestedFrom === 'openclaw' || suggestion.sources?.includes('openclaw')) {
+    if (
+      suggestion.suggestedFrom === 'openclaw' ||
+      suggestion.sources?.includes('openclaw')
+    ) {
       ensure('openclaw', '🐾', 'OpenClaw 导入').items.push(suggestion);
     } else if (
       suggestion.suggestedFrom === 'flight_recorder' ||
       suggestion.sources?.includes('flight_recorder')
     ) {
-      ensure('flight_recorder', '🛫', 'Flight Recorder 萃取').items.push(suggestion);
+      ensure('flight_recorder', '🛫', 'Flight Recorder 萃取').items.push(
+        suggestion,
+      );
     } else if (
       suggestion.sources?.some((source) =>
         ['codex', 'claude_code', 'cursor'].includes(source),
@@ -873,7 +1167,9 @@ const bindingCards = computed<SkillPlatformBinding[]>(() => {
 const showDesktopAppBindingNotice = computed(() => {
   return (
     !desktopAppInstalled.value &&
-    bindingCards.value.some((binding) => isLocalDesktopPlatform(binding.platform))
+    bindingCards.value.some((binding) =>
+      isLocalDesktopPlatform(binding.platform),
+    )
   );
 });
 
@@ -881,22 +1177,40 @@ async function loadData(preferredId?: string) {
   loading.value = true;
   errorMessage.value = '';
   try {
-    const [skillList, suggestionList, settings] = await Promise.all([
-      client.getPersonalSkills({ filter: filter.value }),
+    const skillListRequest = client.getPersonalSkills({ filter: filter.value });
+    const activeSkillListRequest =
+      filter.value === 'active'
+        ? skillListRequest
+        : client.getPersonalSkills({ filter: 'active' });
+    const [
+      skillList,
+      activeSkillList,
+      suggestionList,
+      snoozedSuggestionList,
+      settings,
+    ] = await Promise.all([
+      skillListRequest,
+      activeSkillListRequest,
       client.getSkillSuggestions(),
+      client.getSkillSuggestions({ view: 'snoozed' }),
       client.getSkillSyncSettings(),
     ]);
     skills.value = skillList.items;
+    activeSkillTotal.value = activeSkillList.total;
     suggestions.value = suggestionList.items;
+    snoozedSuggestions.value = snoozedSuggestionList.items;
     syncSettings.value = settings.items;
     const visibleIds = new Set([
       ...skills.value.map((skill) => skill.id),
       ...suggestions.value.map((skill) => skill.id),
+      ...snoozedSuggestions.value.map((skill) => skill.id),
     ]);
-    const preferredVisibleId = preferredId && visibleIds.has(preferredId) ? preferredId : '';
-    const currentVisibleId = selectedId.value && visibleIds.has(selectedId.value)
-      ? selectedId.value
-      : '';
+    const preferredVisibleId =
+      preferredId && visibleIds.has(preferredId) ? preferredId : '';
+    const currentVisibleId =
+      selectedId.value && visibleIds.has(selectedId.value)
+        ? selectedId.value
+        : '';
     const nextId =
       preferredVisibleId ||
       currentVisibleId ||
@@ -920,6 +1234,12 @@ async function selectSkill(id: string) {
   activeTab.value = 'workflow';
   try {
     selectedSkill.value = (await client.getPersonalSkill(id)).skill;
+    if (
+      selectedSkill.value?.status === 'suggestion' &&
+      isSnoozedSuggestion(selectedSkill.value)
+    ) {
+      activeTab.value = 'evidence';
+    }
   } catch (error: any) {
     errorMessage.value = error?.message || '加载技能详情失败';
   }
@@ -929,11 +1249,14 @@ function visibleSkillById(id: string) {
   if (selectedSkill.value?.id === id) return selectedSkill.value;
   return (
     suggestions.value.find((skill) => skill.id === id) ||
+    snoozedSuggestions.value.find((skill) => skill.id === id) ||
     skills.value.find((skill) => skill.id === id)
   );
 }
 
-function externalChangeBinding(skill?: Pick<PersonalSkillListItem, 'bindings'> | null) {
+function externalChangeBinding(
+  skill?: Pick<PersonalSkillListItem, 'bindings'> | null,
+) {
   return (skill?.bindings || []).find((binding) => {
     const targetId = binding.metadata?.externalChangeFor;
     return typeof targetId === 'string' && targetId.trim().length > 0;
@@ -958,7 +1281,12 @@ function externalChangePlatformLabel(skill?: ReviewableSkill | null) {
   return platform ? platformLabel(platform) : '外部平台';
 }
 
-function requiresReview(skill?: Pick<PersonalSkillListItem, 'reviewRequired' | 'reviewReasons'> | null) {
+function requiresReview(
+  skill?: Pick<
+    PersonalSkillListItem,
+    'reviewRequired' | 'reviewReasons'
+  > | null,
+) {
   return Boolean(skill?.reviewRequired || skill?.reviewReasons?.length);
 }
 
@@ -968,7 +1296,10 @@ function markSuggestionReviewed(id: string) {
 }
 
 function canConfirmSuggestion(
-  skill?: Pick<PersonalSkillListItem, 'id' | 'reviewRequired' | 'reviewReasons'> | null,
+  skill?: Pick<
+    PersonalSkillListItem,
+    'id' | 'reviewRequired' | 'reviewReasons'
+  > | null,
 ) {
   if (!skill) return false;
   return !requiresReview(skill) || reviewedSuggestionIds.value.has(skill.id);
@@ -983,12 +1314,16 @@ function suggestionPrimaryLabel(skill?: ReviewableSkill | null) {
 }
 
 function reviewGateTitle(skill?: ReviewableSkill | null) {
-  return isExternalChangeSuggestion(skill) ? '外部变更需要审核' : '使用前需要审核';
+  return isExternalChangeSuggestion(skill)
+    ? '外部变更需要审核'
+    : '使用前需要审核';
 }
 
 function reviewGateDescription(skill?: ReviewableSkill | null) {
   if (isExternalChangeSuggestion(skill)) {
-    return `${externalChangePlatformLabel(skill)} 检测到 ${externalChangeOriginalSlug(
+    return `${externalChangePlatformLabel(
+      skill,
+    )} 检测到 ${externalChangeOriginalSlug(
       skill,
     )} 的新版本；确认后才会覆盖 Personal AI 的 active 真源版本。`;
   }
@@ -1001,12 +1336,16 @@ function reviewReasons(skill: Pick<PersonalSkillListItem, 'reviewReasons'>) {
     : ['来源或风险信息需要人工确认'];
 }
 
-function reviewReasonCountLabel(skill: Pick<PersonalSkillListItem, 'reviewReasons'>) {
+function reviewReasonCountLabel(
+  skill: Pick<PersonalSkillListItem, 'reviewReasons'>,
+) {
   const count = reviewReasons(skill).length;
   return `${count} 项原因`;
 }
 
-function reviewReasonPreview(skill: Pick<PersonalSkillListItem, 'reviewReasons'>) {
+function reviewReasonPreview(
+  skill: Pick<PersonalSkillListItem, 'reviewReasons'>,
+) {
   return reviewReasons(skill).slice(0, 2);
 }
 
@@ -1025,7 +1364,9 @@ function suggestionReviewFacts(skill: PersonalSkillListItem) {
 function reviewAuditFacts(skill: PersonalSkillDetail) {
   const facts = [
     isExternalChangeSuggestion(skill)
-      ? `${externalChangePlatformLabel(skill)} -> ${externalChangeOriginalSlug(skill)}`
+      ? `${externalChangePlatformLabel(skill)} -> ${externalChangeOriginalSlug(
+          skill,
+        )}`
       : `来源 ${suggestionSourceLabel(skill)}`,
     ...localSkillSourceFacts(skill),
     skill.currentVersion ? `版本 ${skill.currentVersion}` : '',
@@ -1056,6 +1397,10 @@ async function prepareSuggestionReview(id: string) {
 
 async function handleSuggestionPrimary(id: string) {
   const candidate = visibleSkillById(id);
+  if (isSnoozedSuggestion(candidate)) {
+    await unsnoozeSuggestion(id);
+    return;
+  }
   if (requiresReview(candidate) && !canConfirmSuggestion(candidate)) {
     await prepareSuggestionReview(id);
     return;
@@ -1067,6 +1412,10 @@ async function handleSuggestionPrimary(id: string) {
 
 async function useSuggestion(id: string, options: UseSuggestionOptions = {}) {
   const candidate = visibleSkillById(id);
+  if (isSnoozedSuggestion(candidate)) {
+    await unsnoozeSuggestion(id);
+    return;
+  }
   if (!options.reviewConfirmed && requiresReview(candidate)) {
     await prepareSuggestionReview(id);
     return;
@@ -1090,6 +1439,7 @@ async function useSuggestion(id: string, options: UseSuggestionOptions = {}) {
 async function dismissSuggestion(id: string) {
   try {
     const response = await client.dismissSkillSuggestion(id);
+    actionMessage.value = '已丢弃技能建议；同来源重复建议会按冷却规则处理。';
     await loadData(response.skill.id);
   } catch (error: any) {
     errorMessage.value = error?.message || '丢弃技能建议失败';
@@ -1097,11 +1447,28 @@ async function dismissSuggestion(id: string) {
 }
 
 async function snoozeSuggestion(id: string) {
+  const candidate = visibleSkillById(id);
   try {
-    await client.snoozeSkillSuggestion(id);
+    const response = await client.snoozeSkillSuggestion(id);
+    actionMessage.value = `已将「${
+      candidate?.title || response.skill.title
+    }」放入稍后建议，${formatSnoozedUntil(
+      response.skill.snoozedUntil,
+    )}回到 Inbox。`;
+    selectedId.value = '';
     await loadData();
   } catch (error: any) {
     errorMessage.value = error?.message || '稍后审技能建议失败';
+  }
+}
+
+async function unsnoozeSuggestion(id: string) {
+  try {
+    const response = await client.unsnoozeSkillSuggestion(id);
+    actionMessage.value = `已恢复「${response.skill.title}」，可以继续审核。`;
+    await loadData(response.skill.id);
+  } catch (error: any) {
+    errorMessage.value = error?.message || '恢复技能建议失败';
   }
 }
 
@@ -1112,7 +1479,10 @@ function setFilter(next: SkillFilter) {
 
 function visibleBindings(skill: PersonalSkillListItem) {
   return (skill.bindings || [])
-    .filter((binding) => binding.state === 'installed' || binding.state === 'outdated')
+    .filter(
+      (binding) =>
+        binding.state === 'installed' || binding.state === 'outdated',
+    )
     .slice(0, 4);
 }
 
@@ -1142,7 +1512,10 @@ function suggestionSourceLabel(suggestion: PersonalSkillListItem) {
   }
   const localBinding = localSkillSourceBinding(suggestion);
   if (localBinding) return platformLabel(localBinding.platform);
-  if (suggestion.suggestedFrom === 'openclaw' || suggestion.sources?.includes('openclaw')) {
+  if (
+    suggestion.suggestedFrom === 'openclaw' ||
+    suggestion.sources?.includes('openclaw')
+  ) {
     return 'OpenClaw';
   }
   if (
@@ -1161,7 +1534,10 @@ function suggestionOriginText(suggestion: PersonalSkillListItem) {
   const localBinding = localSkillSourceBinding(suggestion);
   const localSource = localBinding ? localSkillSourceSummary(localBinding) : '';
   if (localSource) return `本机目录 ${localSource}`;
-  if (suggestion.suggestedFrom === 'openclaw' || suggestion.sources?.includes('openclaw')) {
+  if (
+    suggestion.suggestedFrom === 'openclaw' ||
+    suggestion.sources?.includes('openclaw')
+  ) {
     return 'OpenClaw installed skill';
   }
   if (
@@ -1182,8 +1558,15 @@ function statusLabel(status: string) {
 
 function workspaceStatusLabel(skill: PersonalSkillListItem) {
   if (skill.status === 'suggestion') {
+    if (isSnoozedSuggestion(skill)) {
+      return isExternalChangeSuggestion(skill)
+        ? 'External Change · 稍后审'
+        : 'Skill Suggestion · 稍后审';
+    }
     if (isExternalChangeSuggestion(skill)) return 'External Change · 需审核';
-    return requiresReview(skill) ? 'Skill Suggestion · 需审核' : 'Skill Suggestion';
+    return requiresReview(skill)
+      ? 'Skill Suggestion · 需审核'
+      : 'Skill Suggestion';
   }
   if (skill.status === 'dismissed') return 'Dismissed Skill';
   return 'Active Skill';
@@ -1215,7 +1598,9 @@ function bindingMetadataNumber(binding: SkillPlatformBinding, key: string) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function localSkillSourceBinding(skill?: Pick<PersonalSkillListItem, 'bindings'> | null) {
+function localSkillSourceBinding(
+  skill?: Pick<PersonalSkillListItem, 'bindings'> | null,
+) {
   return (skill?.bindings || []).find(
     (binding) =>
       isLocalDesktopPlatform(binding.platform) &&
@@ -1249,18 +1634,27 @@ function localSkillPackageSummary(binding: SkillPlatformBinding) {
   if (!isLocalDesktopPlatform(binding.platform)) return '';
   const fileCount = bindingMetadataNumber(binding, 'fileCount');
   const totalByteSize = bindingMetadataNumber(binding, 'totalByteSize');
+  const rejectedFileCount = bindingMetadataNumber(
+    binding,
+    'rejectedFileCount',
+  );
   const parts = [
     fileCount > 0 ? `${fileCount} 个资源文件` : '',
     totalByteSize > 0 ? formatByteSize(totalByteSize) : '',
+    rejectedFileCount > 0 ? `已忽略 ${rejectedFileCount} 个越界文件` : '',
   ].filter(Boolean);
   return parts.join(' · ');
 }
 
-function localSkillSourceFacts(skill?: Pick<PersonalSkillListItem, 'bindings'> | null) {
+function localSkillSourceFacts(
+  skill?: Pick<PersonalSkillListItem, 'bindings'> | null,
+) {
   const binding = localSkillSourceBinding(skill);
   if (!binding) return [];
   return [
-    localSkillSourceSummary(binding) ? `目录 ${localSkillSourceSummary(binding)}` : '',
+    localSkillSourceSummary(binding)
+      ? `目录 ${localSkillSourceSummary(binding)}`
+      : '',
     localSkillPackageSummary(binding),
   ].filter(Boolean);
 }
@@ -1289,17 +1683,15 @@ function bindingStateClass(binding: SkillPlatformBinding) {
   return binding.state;
 }
 
-function bindingHint(binding: SkillPlatformBinding):
-  | {
-      tone: 'warn' | 'info';
-      icon: string;
-      title: string;
-      text: string;
-      cta: string;
-      href?: string;
-      action?: 'sync-settings';
-    }
-  | null {
+function bindingHint(binding: SkillPlatformBinding): {
+  tone: 'warn' | 'info';
+  icon: string;
+  title: string;
+  text: string;
+  cta: string;
+  href?: string;
+  action?: 'sync-settings';
+} | null {
   const platform = platformLabel(binding.platform);
   if (isManualOnlyPlatform(binding.platform)) {
     return {
@@ -1348,6 +1740,20 @@ function formatDate(timestamp: number) {
   return new Date(timestamp * 1000).toISOString().slice(0, 10);
 }
 
+function formatSnoozedUntil(timestamp?: number) {
+  if (!timestamp) return '稍后';
+  return new Date(timestamp * 1000).toISOString().slice(0, 10);
+}
+
+function isSnoozedSuggestion(
+  skill?: Pick<PersonalSkillListItem, 'snoozedUntil'> | null,
+) {
+  return Boolean(
+    typeof skill?.snoozedUntil === 'number' &&
+      skill.snoozedUntil > Math.floor(Date.now() / 1000),
+  );
+}
+
 function installCommand(platform: string) {
   const url = actualSkillUrl.value || displaySkillUrl.value;
   switch (platform) {
@@ -1392,8 +1798,13 @@ function syncTag(platform: string) {
   if (!setting) return '未配置同步';
   if (setting.capability === 'internal') return '真源';
   if (setting.capability === 'manual_only') return '仅手动安装';
-  if (setting.capability === 'fs_via_desktop_app' && !desktopAppInstalled.value) {
-    return setting.enabled ? '平台同步: 开（等待 Desktop App）' : '平台同步: 关';
+  if (
+    setting.capability === 'fs_via_desktop_app' &&
+    !desktopAppInstalled.value
+  ) {
+    return setting.enabled
+      ? '平台同步: 开（等待 Desktop App）'
+      : '平台同步: 关';
   }
   return setting.enabled ? '平台同步: 开（所有技能）' : '平台同步: 关';
 }
@@ -1407,8 +1818,10 @@ function syncDisabled(setting: SkillSyncSetting) {
 }
 
 function syncDescription(setting: SkillSyncSetting) {
-  if (setting.capability === 'internal') return 'Personal AI 是技能真源，始终 active。';
-  if (setting.capability === 'api') return '通过 OpenClaw 远端 API 直连，同步状态并可回拉 SKILL 包。';
+  if (setting.capability === 'internal')
+    return 'Personal AI 是技能真源，始终 active。';
+  if (setting.capability === 'api')
+    return '通过 OpenClaw 远端 API 直连，同步状态并可回拉 SKILL 包。';
   if (setting.capability === 'fs_via_desktop_app') {
     return desktopAppInstalled.value
       ? 'Desktop App 监听本地 SKILL.md mtime + sha256。'
@@ -1428,10 +1841,67 @@ function syncScope(setting: SkillSyncSetting) {
 function syncControlLabel(setting: SkillSyncSetting) {
   if (setting.capability === 'internal') return '始终开启';
   if (setting.capability === 'manual_only') return '仅手动';
-  if (setting.capability === 'fs_via_desktop_app' && !desktopAppInstalled.value) {
+  if (
+    setting.capability === 'fs_via_desktop_app' &&
+    !desktopAppInstalled.value
+  ) {
     return '需 Desktop App';
   }
   return setting.enabled ? '已开启' : '未开启';
+}
+
+type SyncDiagnostic = {
+  tone: 'ready' | 'info' | 'warn' | 'blocked';
+  text: string;
+};
+
+function truncateSyncError(value?: string) {
+  const trimmed = (value || '').trim().replace(/\s+/g, ' ');
+  if (!trimmed) return '';
+  return trimmed.length <= 96 ? trimmed : `${trimmed.slice(0, 93)}...`;
+}
+
+function formatSyncProbeTime(timestamp?: number) {
+  if (!timestamp) return '';
+  return new Date(timestamp * 1000).toISOString().replace('T', ' ').slice(0, 16);
+}
+
+function syncDiagnostics(setting: SkillSyncSetting): SyncDiagnostic[] {
+  const diagnostics: SyncDiagnostic[] = [];
+  if (setting.capability === 'internal') {
+    diagnostics.push({ tone: 'ready', text: '真源已开启' });
+  } else if (setting.capability === 'manual_only') {
+    diagnostics.push({ tone: 'info', text: '仅手动安装，不参与自动写入' });
+  } else if (
+    setting.capability === 'fs_via_desktop_app' &&
+    !desktopAppInstalled.value
+  ) {
+    diagnostics.push({
+      tone: 'blocked',
+      text: 'Desktop App 未运行，无法读写本机目录',
+    });
+  } else if (!setting.enabled) {
+    diagnostics.push({
+      tone: 'info',
+      text: '同步未开启，启用后覆盖所有 active 技能',
+    });
+  } else if (setting.capability === 'fs_via_desktop_app') {
+    diagnostics.push({ tone: 'ready', text: 'Desktop App 同步已开启' });
+  } else {
+    diagnostics.push({ tone: 'ready', text: '自动同步已开启' });
+  }
+
+  const lastError = truncateSyncError(setting.lastError);
+  const probeTime = formatSyncProbeTime(setting.lastProbeAt);
+  if (lastError) {
+    diagnostics.push({
+      tone: 'warn',
+      text: `最近失败${probeTime ? ` ${probeTime}` : ''}: ${lastError}`,
+    });
+  } else if (probeTime) {
+    diagnostics.push({ tone: 'info', text: `最近探测 ${probeTime}` });
+  }
+  return diagnostics;
 }
 
 function openSyncDialog() {
@@ -1445,7 +1915,10 @@ function closeSyncDialog() {
 async function toggleSync(setting: SkillSyncSetting, event: Event) {
   const input = event.target as HTMLInputElement;
   try {
-    const result = await client.updateSkillSyncSetting(setting.platform, input.checked);
+    const result = await client.updateSkillSyncSetting(
+      setting.platform,
+      input.checked,
+    );
     const index = syncSettings.value.findIndex(
       (item) => item.platform === setting.platform,
     );
@@ -1464,12 +1937,15 @@ async function runOpenClawSync() {
       platform: 'openclaw',
       limit: 10,
     });
-    const openclaw = result.platforms.find((item) => item.platform === 'openclaw');
+    const openclaw = result.platforms.find(
+      (item) => item.platform === 'openclaw',
+    );
     if (!openclaw) {
       syncResultMessage.value = 'OpenClaw 未参与本次同步。';
     } else if (openclaw.status === 'failed') {
       syncResultMessage.value =
         openclaw.errors[0]?.error || 'OpenClaw 同步失败。';
+      await loadData(selectedId.value);
     } else {
       syncResultMessage.value = [
         `已处理 ${openclaw.processed} 条`,
@@ -1481,9 +1957,11 @@ async function runOpenClawSync() {
         openclaw.externalChanges
           ? '请到顶部 Inbox 审核外部变更。'
           : openclaw.hasMore
-            ? '还有更多远端技能，可继续同步。'
-            : '已无待导入远端技能。',
-      ].filter(Boolean).join(' · ');
+          ? '还有更多远端技能，可继续同步。'
+          : '已无待导入远端技能。',
+      ]
+        .filter(Boolean)
+        .join(' · ');
       await loadData(selectedId.value);
     }
   } catch (error: any) {
@@ -1499,7 +1977,9 @@ async function runDesktopSkillSync(platform: string) {
   try {
     await desktopClient.loadSettings();
     const result = await desktopClient.syncSkills(platform);
-    const item = result.platforms.find((platformResult) => platformResult.platform === platform);
+    const item = result.platforms.find(
+      (platformResult) => platformResult.platform === platform,
+    );
     if (!item) {
       syncResultMessage.value = `${platformLabel(platform)} 未参与本次同步。`;
     } else {
@@ -1511,14 +1991,15 @@ async function runDesktopSkillSync(platform: string) {
         `回拉 ${item.pulled} 条`,
         `推送 ${item.pushed} 条`,
         item.errors.length ? `失败 ${item.errors.length} 条` : '',
-        item.externalChanges
-          ? '请到顶部 Inbox 审核本机目录变更。'
-          : '',
-      ].filter(Boolean).join(' · ');
+        item.externalChanges ? '请到顶部 Inbox 审核本机目录变更。' : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
       await loadData(selectedId.value);
     }
   } catch (error: any) {
-    syncResultMessage.value = error?.message || `${platformLabel(platform)} 同步失败`;
+    syncResultMessage.value =
+      error?.message || `${platformLabel(platform)} 同步失败`;
   } finally {
     syncRunning.value = false;
   }
@@ -1594,7 +2075,11 @@ input {
   width: 2.1rem;
   height: 2.1rem;
   border-radius: 0.55rem;
-  background: linear-gradient(135deg, rgba(96, 165, 250, 0.32), rgba(167, 139, 250, 0.32));
+  background: linear-gradient(
+    135deg,
+    rgba(96, 165, 250, 0.32),
+    rgba(167, 139, 250, 0.32)
+  );
   border: 1px solid rgba(167, 139, 250, 0.45);
   display: grid;
   place-items: center;
@@ -1695,7 +2180,11 @@ button:disabled {
 
 .btn.primary,
 .primary-btn {
-  background: linear-gradient(135deg, rgba(96, 165, 250, 0.85), rgba(167, 139, 250, 0.85));
+  background: linear-gradient(
+    135deg,
+    rgba(96, 165, 250, 0.85),
+    rgba(167, 139, 250, 0.85)
+  );
   border-color: rgba(167, 139, 250, 0.6);
   color: #fff;
 }
@@ -1742,7 +2231,11 @@ button:disabled {
 }
 
 .inbox-bar {
-  background: linear-gradient(135deg, rgba(96, 165, 250, 0.08), rgba(167, 139, 250, 0.08));
+  background: linear-gradient(
+    135deg,
+    rgba(96, 165, 250, 0.08),
+    rgba(167, 139, 250, 0.08)
+  );
   border: 1px solid rgba(167, 139, 250, 0.28);
   border-radius: 0.85rem;
   backdrop-filter: blur(12px);
@@ -2027,6 +2520,111 @@ button:disabled {
   justify-content: center;
 }
 
+.snoozed-inbox {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 0.85rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.snoozed-inbox-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.snoozed-inbox-head div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.snoozed-inbox-head strong {
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+
+.snoozed-inbox-head span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.snoozed-suggestion-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.55rem;
+}
+
+.snoozed-suggestion-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem 0.65rem;
+  align-items: center;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.62);
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.snoozed-suggestion-card:hover,
+.snoozed-suggestion-card.active {
+  border-color: rgba(96, 165, 250, 0.42);
+  transform: translateY(-1px);
+}
+
+.snoozed-card-main {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.snoozed-card-main strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snoozed-card-main span,
+.snoozed-card-meta {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.snoozed-card-meta {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  grid-column: 1 / 2;
+}
+
+.snoozed-card-meta span {
+  padding: 0.1rem 0.38rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.snoozed-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  grid-row: 1 / span 2;
+  grid-column: 2 / 3;
+}
+
+.snoozed-card-actions .btn {
+  height: 1.7rem;
+  padding: 0 0.55rem;
+  font-size: 0.72rem;
+}
+
 .status-box,
 .empty-card,
 .empty-workspace {
@@ -2040,6 +2638,11 @@ button:disabled {
 .status-box.error {
   border-color: rgba(239, 68, 68, 0.45);
   color: #fecaca;
+}
+
+.status-box.info {
+  border-color: rgba(96, 165, 250, 0.36);
+  color: #bfdbfe;
 }
 
 .foundry-grid {
@@ -2562,6 +3165,25 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.snoozed-review-gate {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.snoozed-review-gate .review-gate-icon {
+  background: #60a5fa;
+}
+
+.snoozed-review-gate .review-audit-summary span {
+  border-color: rgba(96, 165, 250, 0.24);
+  color: #bfdbfe;
+}
+
+.snoozed-review-gate .review-audit-summary .review-audit-state {
+  background: rgba(96, 165, 250, 0.12);
+  color: var(--ink);
+}
+
 .steps {
   display: grid;
   gap: 0.55rem;
@@ -2672,7 +3294,11 @@ button:disabled {
 }
 
 .install-banner {
-  background: linear-gradient(135deg, rgba(96, 165, 250, 0.12), rgba(167, 139, 250, 0.12));
+  background: linear-gradient(
+    135deg,
+    rgba(96, 165, 250, 0.12),
+    rgba(167, 139, 250, 0.12)
+  );
   border: 1px solid rgba(167, 139, 250, 0.3);
   border-radius: 0.6rem;
   padding: 0.75rem 0.95rem;
@@ -3049,6 +3675,47 @@ button:disabled {
   color: var(--muted);
 }
 
+.sync-diagnostics {
+  margin-top: 0.42rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.sync-diagnostic {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  max-width: 100%;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: var(--muted);
+  background: rgba(15, 23, 42, 0.66);
+  font-size: 0.68rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.sync-diagnostic.ready {
+  color: #bbf7d0;
+  border-color: rgba(34, 197, 94, 0.34);
+  background: rgba(22, 163, 74, 0.12);
+}
+
+.sync-diagnostic.info {
+  color: #bfdbfe;
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.sync-diagnostic.warn,
+.sync-diagnostic.blocked {
+  color: #fed7aa;
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
+}
+
 .switch {
   position: relative;
   display: inline-flex;
@@ -3072,7 +3739,7 @@ button:disabled {
 }
 
 .switch input::after {
-  content: "";
+  content: '';
   position: absolute;
   width: 1.05rem;
   height: 1.05rem;

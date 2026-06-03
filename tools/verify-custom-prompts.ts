@@ -19,6 +19,7 @@ import {
   buildIndependentUserConfigSummary,
   buildIndependentUserConfigPreview,
   buildPreferenceInjectionReceipt,
+  buildUserContextScopeBreakdown,
   createConfigHistoryEntry,
   describeIndependentUserConfigChange,
   detectPromptImprovementHints,
@@ -623,6 +624,14 @@ function verifyPreviewAndHistoryHelpers() {
     projectScopedFootprint.customPromptCharCount,
     storage.customPrompts.project.content.length,
   );
+  const messageContextBreakdown = buildUserContextScopeBreakdown(
+    storage.userContextConfig,
+    { scope: 'message' },
+  );
+  assert.equal(messageContextBreakdown.messageSignalCount, 3);
+  assert.equal(messageContextBreakdown.projectSignalCount, 2);
+  assert.equal(messageContextBreakdown.excludedSignalCount, 2);
+  assert.deepEqual(messageContextBreakdown.excludedScopeLabels, ['项目 2 项']);
   const messageScopedReceipt = buildPreferenceInjectionReceipt(storage, {
     userContextScope: 'message',
   });
@@ -631,6 +640,11 @@ function verifyPreviewAndHistoryHelpers() {
     messageScopedReceipt.items.find((item) => item.id === 'user-context')
       ?.status,
     'included',
+  );
+  assert.match(
+    messageScopedReceipt.items.find((item) => item.id === 'user-context')
+      ?.detail || '',
+    /基础 \d+ · 消息 3）；项目 2 项未注入/,
   );
   assert.equal(
     messageScopedReceipt.items.find((item) => item.id === 'message-prompt')
@@ -646,6 +660,33 @@ function verifyPreviewAndHistoryHelpers() {
     messageScopedReceipt.items.find((item) => item.id === 'project-prompt')
       ?.detail || '',
     /消息预览不会注入项目提示词/,
+  );
+  const outOfScopeContextReceipt = buildPreferenceInjectionReceipt(
+    {
+      preferenceInjection: {
+        enabled: true,
+        customPromptsEnabled: true,
+        userContextEnabled: true,
+      },
+      userContextConfig: {
+        analysisPreferences: {
+          projectAnalysis: {
+            riskFactors: ['供应商依赖'],
+          },
+        },
+      },
+    },
+    { userContextScope: 'message' },
+  );
+  assert.equal(
+    outOfScopeContextReceipt.items.find((item) => item.id === 'user-context')
+      ?.status,
+    'excluded',
+  );
+  assert.match(
+    outOfScopeContextReceipt.items.find((item) => item.id === 'user-context')
+      ?.detail || '',
+    /项目 1 项不在消息预览范围/,
   );
   const pausedReceipt = buildPreferenceInjectionReceipt({
     ...storage,
@@ -1086,6 +1127,18 @@ function verifyPromptConfigSurface() {
     new URL('../src/modals/topic-modal.tsx', import.meta.url),
     'utf8',
   );
+  const optionsSource = readFileSync(
+    new URL('../src/options.tsx', import.meta.url),
+    'utf8',
+  );
+  const i18nSource = readFileSync(
+    new URL('../src/i18n/index.ts', import.meta.url),
+    'utf8',
+  );
+  const optionsCss = readFileSync(
+    new URL('../static/options.css', import.meta.url),
+    'utf8',
+  );
   const previewSource = readFileSync(
     new URL('../src/services/userConfigPreview.ts', import.meta.url),
     'utf8',
@@ -1162,6 +1215,13 @@ function verifyPromptConfigSurface() {
   assert.match(topicModalSource, /openPromptConfigWindow/);
   assert.match(topicModalSource, /header-secondary-btn/);
   assert.match(topicModalSource, /自定义提示词与上下文/);
+  assert.match(optionsSource, /openPromptConfigPage/);
+  assert.match(optionsSource, /prompt-config\.html/);
+  assert.match(optionsSource, /options\.sections\.promptConfig/);
+  assert.match(optionsSource, /prompt-config-open-btn/);
+  assert.match(i18nSource, /options\.sections\.promptConfig/);
+  assert.match(i18nSource, /options\.promptConfig\.description/);
+  assert.match(optionsCss, /prompt-config-entry-section/);
   assert.match(source, /当前有未保存修改，重新加载会丢弃这些修改/);
   assert.match(source, /hasUnsavedChanges[\s\S]+persistConfiguration\(\)/);
   assert.match(previewSource, new RegExp(USER_CONFIG_HISTORY_KEY));

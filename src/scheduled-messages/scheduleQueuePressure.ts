@@ -25,6 +25,7 @@ export interface ScheduleQueuePressure {
   hasExplicitTime: boolean;
   exceedsCompensationWindow: boolean;
   remainingSameDaySlots?: number;
+  reservedExplicitMinutes?: number;
   exceedsExecutionWindow?: boolean;
 }
 
@@ -45,6 +46,7 @@ export interface ScheduleQueueSlotSummary {
   hasExplicitTime: boolean;
   exceedsCompensationWindow: boolean;
   remainingSameDaySlots?: number;
+  reservedExplicitMinutes?: number;
   exceedsExecutionWindow?: boolean;
   messageIds: string[];
   sampleTopics: string[];
@@ -67,6 +69,11 @@ export interface ScheduleQueueSummary {
 }
 
 type ScheduleQueueMode = 'explicit-time' | 'no-time';
+
+interface NoTimeQueueSameDayCapacity {
+  availableSlots: number;
+  reservedExplicitMinutes: number;
+}
 
 function isExecutorDrivenMessage(message: Pick<ScheduledMessage, 'Push_Method' | 'AI_Endpoint'>): boolean {
   return isExecutorDrivenSchedule(message);
@@ -155,10 +162,17 @@ function getElapsedCompensationMinutes(slotKey: string, now: Date): number {
   return Math.floor(elapsedMs / 60000);
 }
 
-function getNoTimeQueueRemainingSameDaySlots(slotKey: string, now: Date): number {
+function getNoTimeQueueSameDayCapacity(
+  slotKey: string,
+  messages: ScheduledMessage[],
+  now: Date,
+): NoTimeQueueSameDayCapacity {
   const slotTime = parseScheduleSlotKey(slotKey);
   if (!slotTime) {
-    return 0;
+    return {
+      availableSlots: 0,
+      reservedExplicitMinutes: 0,
+    };
   }
 
   const queueStart = new Date(Math.max(slotTime.getTime(), getNextCandidateMinute(now).getTime()));
@@ -166,10 +180,33 @@ function getNoTimeQueueRemainingSameDaySlots(slotKey: string, now: Date): number
   executionDayEnd.setHours(23, 59, 0, 0);
 
   if (queueStart.getTime() > executionDayEnd.getTime()) {
-    return 0;
+    return {
+      availableSlots: 0,
+      reservedExplicitMinutes: 0,
+    };
   }
 
-  return Math.floor((executionDayEnd.getTime() - queueStart.getTime()) / 60000) + 1;
+  const reservedExplicitSlotKeys = getReservedExplicitSlotKeys(messages, now);
+  let availableSlots = 0;
+  let reservedExplicitMinutes = 0;
+  for (
+    let cursor = new Date(queueStart);
+    cursor.getTime() <= executionDayEnd.getTime();
+    cursor = addMinutes(cursor, 1)
+  ) {
+    const { dateStr, timeStr } = formatLocalScheduleDateTime(cursor);
+    if (reservedExplicitSlotKeys.has(`${dateStr} ${timeStr}`)) {
+      reservedExplicitMinutes += 1;
+      continue;
+    }
+
+    availableSlots += 1;
+  }
+
+  return {
+    availableSlots,
+    reservedExplicitMinutes,
+  };
 }
 
 function hasScheduleQueueExecutionRisk(
@@ -237,9 +274,11 @@ function buildSlotSummary(
   const actionMessage = slotMessages[slotMessages.length - 1];
   const exceedsCompensationWindow = hasExplicitTime &&
     elapsedCompensationMinutes + maxDelayMinutes > COMPENSATION_WINDOW_MINUTES;
-  const remainingSameDaySlots = hasExplicitTime
+  const sameDayCapacity = hasExplicitTime
     ? undefined
-    : getNoTimeQueueRemainingSameDaySlots(slotKey, now);
+    : getNoTimeQueueSameDayCapacity(slotKey, allMessages, now);
+  const remainingSameDaySlots = sameDayCapacity?.availableSlots;
+  const reservedExplicitMinutes = sameDayCapacity?.reservedExplicitMinutes;
   const exceedsExecutionWindow = !hasExplicitTime &&
     typeof remainingSameDaySlots === 'number' &&
     maxDelayMinutes >= remainingSameDaySlots;
@@ -258,6 +297,7 @@ function buildSlotSummary(
     exceedsCompensationWindow,
     ...(exceedsExecutionWindow ? {
       remainingSameDaySlots,
+      ...(reservedExplicitMinutes ? { reservedExplicitMinutes } : {}),
       exceedsExecutionWindow,
     } : {}),
     messageIds: slotMessages.map(message => message.ID).filter(Boolean),
@@ -319,7 +359,7 @@ function getReservedExplicitMinuteKeys(messages: ScheduledMessage[], now: Date):
   }
 
   const reservedMinuteKeys = new Set<number>();
-  for (const [slotKey, slotMessages] of explicitSlots.entries()) {
+  for (const [slotKey, slotMessages] of Array.from(explicitSlots.entries())) {
     if (isExpiredExplicitSlot(slotKey, slotMessages, now)) {
       continue;
     }
@@ -336,6 +376,18 @@ function getReservedExplicitMinuteKeys(messages: ScheduledMessage[], now: Date):
   }
 
   return reservedMinuteKeys;
+}
+
+function getReservedExplicitSlotKeys(messages: ScheduledMessage[], now: Date): Set<string> {
+  const reservedMinuteKeys = getReservedExplicitMinuteKeys(messages, now);
+  const reservedSlotKeys = new Set<string>();
+
+  for (const minuteKey of Array.from(reservedMinuteKeys)) {
+    const { dateStr, timeStr } = formatLocalScheduleDateTime(new Date(minuteKey * 60000));
+    reservedSlotKeys.add(`${dateStr} ${timeStr}`);
+  }
+
+  return reservedSlotKeys;
 }
 
 function addMinutes(date: Date, minutes: number): Date {
@@ -440,6 +492,36 @@ function formatNoTimeQueueSuggestionLabel(
   return `${dateStr} ${queueLabel}`;
 }
 
+function canNoTimeQueueMessageFitOnExecutionDate(
+  existingMessages: ScheduledMessage[],
+  targetMessage: ScheduledMessage,
+  now: Date,
+): boolean {
+  const targetSlotKey = getScheduleSlotKey(targetMessage, now);
+  if (!targetSlotKey) {
+    return false;
+  }
+
+  const targetGroupKey = getScheduleQueueGroupKey(targetMessage, now);
+  if (!targetGroupKey) {
+    return false;
+  }
+
+  const messagesWithTarget = [...existingMessages, targetMessage];
+  const targetExecutionDate = getExecutionDateFromSlotKey(targetSlotKey);
+  const sameSlotMessages = messagesWithTarget.filter(message => (
+    getScheduleQueueGroupKey(message, now) === targetGroupKey &&
+    !isTerminalExecutionForDate(message, targetExecutionDate)
+  ));
+  const position = sameSlotMessages.findIndex(message => isSameMessage(message, targetMessage)) + 1;
+  if (position <= 0) {
+    return false;
+  }
+
+  const capacity = getNoTimeQueueSameDayCapacity(targetSlotKey, messagesWithTarget, now);
+  return position <= capacity.availableSlots;
+}
+
 function getNoTimeOverflowQueueSuggestion(
   existingMessages: ScheduledMessage[],
   targetMessage: ScheduledMessage,
@@ -464,8 +546,7 @@ function getNoTimeOverflowQueueSuggestion(
       continue;
     }
 
-    const pressure = getScheduleQueuePressure(existingMessages, candidateMessage, now);
-    if (pressure?.exceedsExecutionWindow) {
+    if (!canNoTimeQueueMessageFitOnExecutionDate(existingMessages, candidateMessage, now)) {
       continue;
     }
 
@@ -611,9 +692,11 @@ export function getScheduleQueuePressure(
   const remainingCompensationMinutes = hasExplicitTime
     ? Math.max(0, COMPENSATION_WINDOW_MINUTES - elapsedCompensationMinutes)
     : 0;
-  const remainingSameDaySlots = hasExplicitTime
+  const sameDayCapacity = hasExplicitTime
     ? undefined
-    : getNoTimeQueueRemainingSameDaySlots(targetSlotKey, now);
+    : getNoTimeQueueSameDayCapacity(targetSlotKey, messagesWithTarget, now);
+  const remainingSameDaySlots = sameDayCapacity?.availableSlots;
+  const reservedExplicitMinutes = sameDayCapacity?.reservedExplicitMinutes;
   const exceedsExecutionWindow = !hasExplicitTime &&
     typeof remainingSameDaySlots === 'number' &&
     delayMinutes >= remainingSameDaySlots;
@@ -630,6 +713,7 @@ export function getScheduleQueuePressure(
       elapsedCompensationMinutes + delayMinutes > COMPENSATION_WINDOW_MINUTES,
     ...(exceedsExecutionWindow ? {
       remainingSameDaySlots,
+      ...(reservedExplicitMinutes ? { reservedExplicitMinutes } : {}),
       exceedsExecutionWindow,
     } : {}),
   };
@@ -775,6 +859,9 @@ export function formatScheduleQueueBlockReason(pressure: ScheduleQueuePressure):
       typeof pressure.remainingSameDaySlots === 'number'
         ? `当天剩余可执行约 ${pressure.remainingSameDaySlots} 条`
         : '',
+      pressure.reservedExplicitMinutes
+        ? `已避开 ${pressure.reservedExplicitMinutes} 个明确时间分钟`
+        : '',
       '可能排到执行日期结束后',
       '请改成未来日期，或填写明确时间。',
     ].filter(Boolean).join('，');
@@ -802,7 +889,12 @@ export function formatScheduleQueueSlotSummary(slot: ScheduleQueueSlotSummary): 
       ? '可能排到执行日期结束后'
       : '';
   const remainingWindowLabel = slot.exceedsExecutionWindow && typeof slot.remainingSameDaySlots === 'number'
-    ? `当天剩余可执行约 ${slot.remainingSameDaySlots} 条`
+    ? [
+      `当天剩余可执行约 ${slot.remainingSameDaySlots} 条`,
+      slot.reservedExplicitMinutes
+        ? `已扣除 ${slot.reservedExplicitMinutes} 个明确时间分钟`
+        : '',
+    ].filter(Boolean).join('，')
     : '';
   const sampleLabel = slot.sampleTopics.length > 0
     ? `示例：${slot.sampleTopics.join('、')}`

@@ -20,8 +20,10 @@ const fixtureDir = await fs.mkdtemp(
   path.join(os.tmpdir(), 'personal-ai-memory-coverage-fixtures-'),
 );
 const ordinaryArchivePath = path.join(fixtureDir, 'ordinary-notes.zip');
+const externalAiArchivePath = path.join(fixtureDir, 'chatgpt-export.zip');
 const backupArchivePath = path.join(fixtureDir, 'personal-ai-memory.zip');
 await fs.writeFile(ordinaryArchivePath, Buffer.from('ordinary archive fixture'));
+await fs.writeFile(externalAiArchivePath, Buffer.from('external ai archive fixture'));
 await fs.writeFile(backupArchivePath, Buffer.from('backup archive fixture'));
 const nowSeconds = Math.floor(Date.now() / 1000);
 
@@ -253,6 +255,60 @@ function ordinaryArchiveInspectFixture() {
   };
 }
 
+function externalAiInspectFixture() {
+  return {
+    detectedKind: 'external_ai_history',
+    inputKind: 'file',
+    fileName: 'chatgpt-export.zip',
+    sourceHash: 'fixture-external-ai-archive',
+    status: 'ready',
+    summary: {
+      files: 2,
+      readyFiles: 2,
+      chunks: 5,
+      profileCandidates: 1,
+      skillSignals: 0,
+      highRisk: 0,
+      unsupported: 0,
+      backup: false,
+      externalAiConversations: 2,
+      externalAiImportedMessages: 85,
+      externalAiTotalMessages: 90,
+      externalAiTruncatedConversations: 1,
+      externalAiTruncatedMessages: 5,
+      promotionCandidates: 1,
+    },
+    entries: [
+      {
+        id: 'external-entry-1',
+        path: 'chatgpt/1-memory-import.md',
+        title: 'Memory import',
+        kind: 'markdown',
+        status: 'ready',
+        sizeBytes: 384,
+        hash: 'external-entry-1-hash',
+        chunkCount: 3,
+        preview: 'Source: chatgpt\n\n## user\n\nI prefer visible provenance.',
+      },
+      {
+        id: 'external-entry-2',
+        path: 'chatgpt/2-project-context.md',
+        title: 'Project context',
+        kind: 'markdown',
+        status: 'ready',
+        sizeBytes: 256,
+        hash: 'external-entry-2-hash',
+        chunkCount: 2,
+        preview: 'Source: chatgpt\n\n## assistant\n\nUse dry-run before import.',
+      },
+    ],
+    warnings: [
+      'Conversation "Project context" includes 85 messages; only the first 80 were included in this import preview.',
+      'Detected external AI history from exports/conversations.json; other archive files were ignored.',
+    ],
+  };
+}
+
 function backupInspectFixture() {
   return {
     detectedKind: 'backup_zip',
@@ -405,6 +461,8 @@ try {
       const response =
         smartImportInspectMode === 'backup'
           ? backupInspectFixture()
+          : smartImportInspectMode === 'external-ai'
+            ? externalAiInspectFixture()
           : smartImportInspectMode === 'ordinary'
             ? ordinaryArchiveInspectFixture()
             : smartImportInspectFixture();
@@ -455,6 +513,7 @@ try {
   await page.getByRole('heading', { name: '记忆覆盖地图' }).waitFor({
     timeout: 10000,
   });
+  await page.getByText('需主动处理的修复项').waitFor({ timeout: 10000 });
   const ringCentralCard = page.locator('.platform-card', {
     hasText: 'RingCentral',
   });
@@ -479,6 +538,28 @@ try {
     .getByText('先检查最近一次同步或读取错误，再重跑该来源的采集链路。')
     .waitFor({ timeout: 10000 });
   await page.getByText('检查 RingCentral 日历同步').waitFor({ timeout: 10000 });
+  await page
+    .locator('.platform-card', {
+      hasText: '网页记忆',
+    })
+    .click();
+  await page
+    .locator('.repair-panel .empty-state', {
+      hasText: '当前平台没有修复项，但全局仍有覆盖缺口。',
+    })
+    .waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: '查看全部修复项' }).click();
+  await page
+    .locator('.repair-panel', {
+      hasText: '全部可解释的下一步，不自动改同步设置。',
+    })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.repair-panel .repair-platform', { hasText: 'RingCentral' })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.repair-panel', { hasText: '检查 RingCentral 日历同步' })
+    .waitFor({ timeout: 10000 });
 
   await page.getByRole('button', { name: '录入' }).click();
   await page.locator('textarea.paste-box').fill('api_key=secret token=abc');
@@ -518,6 +599,38 @@ try {
   );
   await page.getByRole('button', { name: '提交录入' }).waitFor({ timeout: 10000 });
 
+  smartImportInspectMode = 'external-ai';
+  const externalAiChooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: '外部 AI' }).click();
+  const externalAiChooser = await externalAiChooserPromise;
+  await externalAiChooser.setFiles(externalAiArchivePath);
+  await page
+    .locator('.import-status', {
+      hasText: 'dry-run 完成：2 个 AI 会话可录入，约 5 个 chunks。',
+    })
+    .waitFor({ timeout: 10000 });
+  await page.getByText('外部 AI 对话').waitFor({ timeout: 10000 });
+  await page.getByText('纳入消息').waitFor({ timeout: 10000 });
+  await page
+    .locator('.analysis-summary strong', { hasText: '85/90' })
+    .waitFor({ timeout: 10000 });
+  await page.getByText('截断会话').waitFor({ timeout: 10000 });
+  await page.getByText('1 个长会话超过上限，后续 5 条消息不会写入。').waitFor({
+    timeout: 10000,
+  });
+  await page.getByText('已识别为外部 AI 历史').waitFor({ timeout: 10000 });
+  await page
+    .getByText(
+      'Conversation "Project context" includes 85 messages; only the first 80 were included in this import preview.',
+    )
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText(
+      'Detected external AI history from exports/conversations.json; other archive files were ignored.',
+    )
+    .waitFor({ timeout: 10000 });
+  await page.getByText('Source: chatgpt').first().waitFor({ timeout: 10000 });
+
   smartImportInspectMode = 'backup';
   const backupChooserPromise = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '备份 zip' }).click();
@@ -533,12 +646,23 @@ try {
     .waitFor({ timeout: 10000 });
   await page.getByText('DB 行数').waitFor({ timeout: 10000 });
   await page.getByText('42 行').waitFor({ timeout: 10000 });
+  await page.getByText('影响路径预览').waitFor({ timeout: 10000 });
+  await page.getByText('projects/project-alpha.md').waitFor({ timeout: 10000 });
+  await page.getByText('USER_CORE.md').waitFor({ timeout: 10000 });
   await page
     .getByText('Backup was exported for user backup-user; import target is verify-user.')
     .waitFor({ timeout: 10000 });
   assert.equal(backupPreviewCount, 1);
 
-  await page.getByRole('button', { name: '确认恢复' }).click();
+  const confirmRestore = page.getByRole('button', { name: '确认恢复' });
+  assert.equal(
+    await confirmRestore.isDisabled(),
+    true,
+    'backup restore with warnings or overwritten paths should require impact review confirmation',
+  );
+  await page.getByLabel('已复核恢复影响路径、恢复模式和提醒').check();
+  assert.equal(await confirmRestore.isDisabled(), false);
+  await confirmRestore.click();
   await page.getByText('恢复已写入').waitFor({ timeout: 10000 });
   await page.getByText('merged · 42 行').waitFor({ timeout: 10000 });
   await page.getByRole('button', { name: '已恢复' }).waitFor({ timeout: 10000 });

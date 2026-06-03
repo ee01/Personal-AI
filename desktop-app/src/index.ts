@@ -19,6 +19,7 @@ import { FallbackChatGPTClient } from './explorer/sources/FallbackChatGPTClient.
 import { WebpageMcpChatGPTClient } from './explorer/sources/WebpageMcpChatGPTClient.js';
 import { DoubaoChatSource } from './explorer/sources/DoubaoChatSource.js';
 import { FallbackDoubaoSource } from './explorer/sources/FallbackDoubaoSource.js';
+import { LocalAgentSessionSource } from './explorer/sources/LocalAgentSessionSource.js';
 import { WebpageMcpDoubaoSource } from './explorer/sources/WebpageMcpDoubaoSource.js';
 import { WebpageMcpHost } from './explorer/transports/WebpageMcpHost.js';
 import { FallbackDoubaoBroadcast } from './transports/FallbackDoubaoBroadcast.js';
@@ -110,6 +111,27 @@ async function main(): Promise<void> {
     memoryClient,
     chatgptApiClient,
   );
+  const codexCliSource = new LocalAgentSessionSource({
+    source: 'codex_cli',
+    settingsStore,
+    rawStore: rawMessageStore,
+    cursorStore,
+    memoryClient,
+  });
+  const claudeCodeCliSource = new LocalAgentSessionSource({
+    source: 'claude_code_cli',
+    settingsStore,
+    rawStore: rawMessageStore,
+    cursorStore,
+    memoryClient,
+  });
+  const cursorAgentCliSource = new LocalAgentSessionSource({
+    source: 'cursor_agent_cli',
+    settingsStore,
+    rawStore: rawMessageStore,
+    cursorStore,
+    memoryClient,
+  });
   const explorerManager = new ExplorerManager({
     settingsStore,
     memoryClient,
@@ -118,6 +140,9 @@ async function main(): Promise<void> {
     sourceAdapters: {
       doubao: doubaoSource,
       chatgpt: chatgptSource,
+      codex_cli: codexCliSource,
+      claude_code_cli: claudeCodeCliSource,
+      cursor_agent_cli: cursorAgentCliSource,
     },
   });
   const syncManager = new BridgeSyncManager(

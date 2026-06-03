@@ -798,7 +798,16 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
             : collectPeopleFromMessages(visibleMessages)),
       },
       contextItems,
-      sourceTypes: ['glip', 'manual', 'markdown', 'web', 'jira', 'system', 'rehearsal'],
+      sourceTypes: [
+        'glip',
+        'manual',
+        'source_memory',
+        'markdown',
+        'web',
+        'jira',
+        'system',
+        'rehearsal',
+      ],
     };
   },
   findComposer: findRingCentralComposer,
@@ -1102,7 +1111,16 @@ const jiraIssueAdapter: SiteContextAdapter = {
         people: getJiraPeople(doc),
       },
       contextItems,
-      sourceTypes: ['jira', 'glip', 'meeting', 'web', 'manual', 'system', 'rehearsal'],
+      sourceTypes: [
+        'jira',
+        'glip',
+        'meeting',
+        'web',
+        'manual',
+        'source_memory',
+        'system',
+        'rehearsal',
+      ],
     };
   },
   findComposer(doc, fromElement) {
@@ -1249,7 +1267,7 @@ const webAgentAdapter: SiteContextAdapter = {
       adapterId: this.id,
       surface: provider,
       contextType: 'web_agent_prompt',
-      scenario: 'web_agent_prompt',
+      scenario: 'compose_to_ai',
       contextKey: `web-agent:${provider}|${location.origin}${
         location.pathname
       }|${signature(primaryText)}`,
@@ -1271,16 +1289,23 @@ const webAgentAdapter: SiteContextAdapter = {
       })),
       sourceTypes: [
         'ai_chat',
+        'chatgpt',
         'doubao',
+        'doubao_chat',
+        'codex_cli',
+        'claude_code_cli',
+        'cursor_agent_cli',
         'glip',
         'jira',
         'meeting',
         'web',
         'manual',
+        'source_memory',
         'system',
         'user_core',
         'markdown',
         'reflection',
+        'reflection_thread',
         'rehearsal',
       ],
     };
@@ -1325,7 +1350,16 @@ const genericPageAdapter: SiteContextAdapter = {
       url,
       primaryText,
       keywords: collectKeywords([title, primaryText]),
-      sourceTypes: ['web', 'manual', 'system', 'meeting', 'glip', 'jira', 'rehearsal'],
+      sourceTypes: [
+        'web',
+        'manual',
+        'source_memory',
+        'system',
+        'meeting',
+        'glip',
+        'jira',
+        'rehearsal',
+      ],
     };
   },
   findComposer() {

@@ -44,12 +44,16 @@ const elements = {
   stableHours: document.getElementById('stable-hours'),
   briefingHours: document.getElementById('briefing-hours'),
   reminderMinutes: document.getElementById('reminder-minutes'),
+  reminderDailyEnabled: document.getElementById('reminder-daily-enabled'),
+  reminderDailyTime: document.getElementById('reminder-daily-time'),
+  reminderDedupSameDay: document.getElementById('reminder-dedup-same-day'),
   testMemoryButton: document.getElementById('test-memory-button'),
   settingsMessage: document.getElementById('settings-message'),
   loginButton: document.getElementById('login-button'),
   loginMessage: document.getElementById('login-message'),
   memoryThreadButton: document.getElementById('memory-thread-button'),
   runStableButton: document.getElementById('run-stable-button'),
+  memoryThreadDetail: document.getElementById('memory-thread-detail'),
   memoryThreadMessage: document.getElementById('memory-thread-message'),
   mobileThreadButton: document.getElementById('mobile-thread-button'),
   runBriefingButton: document.getElementById('run-briefing-button'),
@@ -101,6 +105,15 @@ const elements = {
     'doubao-source-login-button',
   ),
   doubaoSourceRunButton: document.getElementById('doubao-source-run-button'),
+  doubaoSourcePreviewButton: document.getElementById(
+    'doubao-source-preview-button',
+  ),
+  doubaoSourceResetButton: document.getElementById(
+    'doubao-source-reset-button',
+  ),
+  doubaoSourcePreviewPanel: document.getElementById(
+    'doubao-source-preview-panel',
+  ),
   doubaoSourceMessage: document.getElementById('doubao-source-message'),
   doubaoSourceRevokeScope: document.getElementById(
     'doubao-source-revoke-scope',
@@ -147,6 +160,15 @@ const elements = {
     'chatgpt-source-login-button',
   ),
   chatgptSourceRunButton: document.getElementById('chatgpt-source-run-button'),
+  chatgptSourcePreviewButton: document.getElementById(
+    'chatgpt-source-preview-button',
+  ),
+  chatgptSourceResetButton: document.getElementById(
+    'chatgpt-source-reset-button',
+  ),
+  chatgptSourcePreviewPanel: document.getElementById(
+    'chatgpt-source-preview-panel',
+  ),
   chatgptSourceMessage: document.getElementById('chatgpt-source-message'),
   chatgptSourceRevokeScope: document.getElementById(
     'chatgpt-source-revoke-scope',
@@ -409,6 +431,13 @@ function formatAttemptTransport(attempt) {
   return attempt?.transportUsed || '';
 }
 
+function formatReminderDeliveryMode(mode) {
+  if (mode === 'new_items') return '新待办短轮询';
+  if (mode === 'daily_digest') return '每日完整摘要';
+  if (mode === 'manual') return '手动完整推送';
+  return '';
+}
+
 function attemptTone(status) {
   if (status === 'succeeded') return 'ready';
   if (status === 'failed') return 'error';
@@ -428,6 +457,14 @@ function shortThreadId(value) {
   return text.length > 18 ? `${text.slice(0, 8)}...${text.slice(-6)}` : text;
 }
 
+function formatInterval(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  if (ms % 3_600_000 === 0) return `${ms / 3_600_000} 小时`;
+  if (ms % 60_000 === 0) return `${ms / 60_000} 分钟`;
+  return `${Math.round(ms / 1000)} 秒`;
+}
+
 function formatAttemptDetails(attempt) {
   const details = [];
   const packageKinds = Array.isArray(attempt?.packageKinds)
@@ -441,6 +478,12 @@ function formatAttemptDetails(attempt) {
   }
   if (typeof attempt?.sourceRefCount === 'number') {
     details.push(`来源引用：${attempt.sourceRefCount}`);
+  }
+  const reminderDeliveryMode = formatReminderDeliveryMode(
+    attempt?.reminderDeliveryMode,
+  );
+  if (reminderDeliveryMode) {
+    details.push(`待办模式：${reminderDeliveryMode}`);
   }
   if (attempt?.externalThreadId) {
     details.push(`线程：${shortThreadId(attempt.externalThreadId)}`);
@@ -659,6 +702,240 @@ function formatExplorerRunCompletionMessage(source, result) {
   const summary = formatExplorerRunSummary(result);
   const subject = source === 'doubao' ? '豆包对话' : 'ChatGPT 输入';
   return `${subject}抓取完成：${summary}。`;
+}
+
+function getSourceUi(source) {
+  return source === 'doubao'
+    ? {
+        label: '豆包',
+        messageElement: elements.doubaoSourceMessage,
+        previewButton: elements.doubaoSourcePreviewButton,
+        resetButton: elements.doubaoSourceResetButton,
+        previewPanel: elements.doubaoSourcePreviewPanel,
+      }
+    : {
+        label: 'ChatGPT',
+        messageElement: elements.chatgptSourceMessage,
+        previewButton: elements.chatgptSourcePreviewButton,
+        resetButton: elements.chatgptSourceResetButton,
+        previewPanel: elements.chatgptSourcePreviewPanel,
+      };
+}
+
+function previewText(value, maxLength = 180) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1)}...`;
+}
+
+function formatPreviewRole(role) {
+  if (role === 'user') return '用户';
+  if (role === 'assistant') return '助手';
+  return role || '未知角色';
+}
+
+function appendPreviewCounts(container, cache) {
+  const counts = document.createElement('div');
+  counts.className = 'source-preview-counts';
+  const countLabels = [
+    `缓存 ${formatMessageCount(cache?.messageCount)}`,
+    `对话 ${formatMessageCount(cache?.conversationCount)}`,
+    `待提炼 ${formatMessageCount(cache?.pendingExtractCount)}`,
+    `活跃记忆 ${formatMessageCount(cache?.artifactCount)}`,
+    `已撤回 ${formatMessageCount(cache?.revokedArtifactCount)}`,
+  ];
+  for (const label of countLabels) {
+    const pill = document.createElement('span');
+    pill.textContent = label;
+    counts.appendChild(pill);
+  }
+  container.appendChild(counts);
+}
+
+function formatArtifactCount(cache) {
+  const active = Number(cache?.artifactCount ?? 0);
+  const revoked = Number(cache?.revokedArtifactCount ?? 0);
+  return revoked > 0
+    ? `${formatMessageCount(active)}（已撤回 ${formatMessageCount(revoked)}）`
+    : formatMessageCount(active);
+}
+
+function formatRevokePreview(preview, fallbackScope) {
+  const scope = normalizeInputScope(preview?.scope, fallbackScope);
+  const active = Number(preview?.activeArtifactCount ?? 0);
+  const legacy = Number(preview?.legacyUnscopedArtifactCount ?? 0);
+  const revoked = Number(preview?.revokedArtifactCount ?? 0);
+  const parts = [
+    formatAskScope(scope),
+    `可撤回 ${formatMessageCount(active)} 条本地 artifact`,
+  ];
+  if (legacy > 0) parts.push(`含旧审计 ${formatMessageCount(legacy)}`);
+  if (revoked > 0) parts.push(`已撤回 ${formatMessageCount(revoked)}`);
+  return parts.join(' · ');
+}
+
+function createPreviewListItem(title, body, meta) {
+  const item = document.createElement('li');
+  const titleElement = document.createElement('strong');
+  titleElement.textContent = title;
+  item.appendChild(titleElement);
+  if (body) {
+    const bodyElement = document.createElement('div');
+    bodyElement.textContent = body;
+    item.appendChild(bodyElement);
+  }
+  if (meta) {
+    const metaElement = document.createElement('small');
+    metaElement.textContent = meta;
+    item.appendChild(metaElement);
+  }
+  return item;
+}
+
+function appendPreviewSection(panel, title, emptyText, rows, buildRow) {
+  const section = document.createElement('section');
+  section.className = 'source-preview-section';
+  const heading = document.createElement('h5');
+  heading.textContent = title;
+  section.appendChild(heading);
+
+  if (!rows.length) {
+    const empty = document.createElement('p');
+    empty.textContent = emptyText;
+    section.appendChild(empty);
+    panel.appendChild(section);
+    return;
+  }
+
+  const list = document.createElement('ul');
+  list.className = 'source-preview-list';
+  for (const row of rows) {
+    list.appendChild(buildRow(row));
+  }
+  section.appendChild(list);
+  panel.appendChild(section);
+}
+
+function clearSourcePreviewPanel(source) {
+  const panel = getSourceUi(source).previewPanel;
+  if (!panel) return;
+  panel.replaceChildren();
+  panel.hidden = true;
+}
+
+function renderSourcePreview(source, preview) {
+  const { label, previewPanel } = getSourceUi(source);
+  if (!previewPanel) return;
+  const conversations = Array.isArray(preview?.conversations)
+    ? preview.conversations
+    : [];
+  const messages = Array.isArray(preview?.cleanedMessages)
+    ? preview.cleanedMessages
+    : [];
+  const artifacts = Array.isArray(preview?.artifacts) ? preview.artifacts : [];
+  const cursor = preview?.cursor;
+
+  previewPanel.replaceChildren();
+  previewPanel.hidden = false;
+
+  const head = document.createElement('div');
+  head.className = 'source-preview-head';
+  const headMain = document.createElement('div');
+  const title = document.createElement('h4');
+  title.textContent = `${label} 本地缓存预览`;
+  headMain.appendChild(title);
+  const subtitle = document.createElement('p');
+  subtitle.textContent = preview?.conversationId
+    ? `当前会话：${preview.conversationId}`
+    : '当前来源还没有可预览的会话。';
+  headMain.appendChild(subtitle);
+  head.appendChild(headMain);
+  appendPreviewCounts(head, preview?.cache);
+  previewPanel.appendChild(head);
+
+  appendPreviewSection(
+    previewPanel,
+    '最近会话',
+    '暂无本地缓存会话。',
+    conversations.slice(0, 3),
+    (conversation) =>
+      createPreviewListItem(
+        conversation.conversationId || '未知会话',
+        previewText(conversation.latestMessagePreview || ''),
+        [
+          `消息 ${formatMessageCount(conversation.messageCount)}`,
+          `待提炼 ${formatMessageCount(conversation.pendingMessageCount)}`,
+          `已提炼 ${formatMessageCount(conversation.extractedMessageCount)}`,
+          `活跃记忆 ${formatMessageCount(conversation.artifactCount)}`,
+          Number(conversation.revokedArtifactCount ?? 0) > 0
+            ? `已撤回 ${formatMessageCount(conversation.revokedArtifactCount)}`
+            : '',
+          `最新 ${formatTime(conversation.latestTs)}`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      ),
+  );
+
+  appendPreviewSection(
+    previewPanel,
+    '清洗后消息',
+    '暂无可预览的缓存消息。',
+    messages.slice(0, 6),
+    (message) =>
+      createPreviewListItem(
+        `${formatPreviewRole(message.role)} · ${message.extracted ? '已提炼' : '待提炼'}`,
+        previewText(message.content),
+        [
+          message.messageId ? `消息 ${message.messageId}` : '',
+          message.ts ? `时间 ${formatTime(message.ts)}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      ),
+  );
+
+  appendPreviewSection(
+    previewPanel,
+    '提炼结果',
+    '这个会话还没有本地 artifact。',
+    artifacts.slice(0, 6),
+    (artifact) =>
+      createPreviewListItem(
+        [
+          artifact.kind || 'fact',
+          artifact.conversationRef || artifact.conversationId || '未知会话',
+          artifact.scope ? formatAskScope(artifact.scope) : '',
+          artifact.revokedAt ? '本地审计已撤回' : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        previewText(artifact.text),
+        [
+          artifact.sourceQuote
+            ? `原句：${previewText(artifact.sourceQuote, 140)}`
+            : '',
+          artifact.revokedAt ? `撤回时间 ${formatTime(artifact.revokedAt)}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      ),
+  );
+
+  const cursorText = cursor
+    ? [
+        cursor.lastMessageId ? `lastMessageId=${cursor.lastMessageId}` : '',
+        cursor.lastProcessedUpdateTime
+          ? `lastProcessed=${formatTime(cursor.lastProcessedUpdateTime)}`
+          : '',
+        cursor.processedMessageIds?.length
+          ? `processed=${cursor.processedMessageIds.length}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '当前会话没有 cursor 记录。';
+  appendPreviewSection(previewPanel, 'Cursor', cursorText, [], () => null);
 }
 
 function formatExplorerIssueMessage(source, sourceStatus) {
@@ -931,6 +1208,9 @@ function collectRuntimeSettings() {
       Number(elements.briefingHours.value || 4) * 3_600_000,
     reminderSyncIntervalMs:
       Number(elements.reminderMinutes.value || 15) * 60_000,
+    reminderDailyDigestEnabled: !!elements.reminderDailyEnabled.checked,
+    reminderDailyDigestTime: elements.reminderDailyTime.value || '09:00',
+    reminderDedupSameDay: !!elements.reminderDedupSameDay.checked,
   };
 }
 
@@ -1053,6 +1333,10 @@ function applyRuntimeSettings(settings, { force = false } = {}) {
   elements.reminderMinutes.value = String(
     minutesFromMs(settings.reminderSyncIntervalMs || 900_000),
   );
+  elements.reminderDailyEnabled.checked =
+    settings.reminderDailyDigestEnabled !== false;
+  elements.reminderDailyTime.value = settings.reminderDailyDigestTime || '09:00';
+  elements.reminderDedupSameDay.checked = settings.reminderDedupSameDay !== false;
   clearSettingsDirty();
 }
 
@@ -1354,6 +1638,128 @@ function renderStepStatuses(status) {
   elements.extensionMemoryCopy.textContent = `最近 ${memoryGrowth.windowDays} 天已经累计 ${memoryGrowth.recentMessageCount} 条消息。若还想继续补充日常上下文，仍可安装 extension 并开启“静默消息分析”。`;
 }
 
+function resolveBoundThread(status, bindingType) {
+  const binding = status?.bindings?.[bindingType];
+  const record = (status?.threads || []).find(
+    (thread) => thread.id === binding?.threadId,
+  );
+  return {
+    binding,
+    record,
+    threadId: binding?.threadId || record?.id,
+    title: binding?.title || record?.title,
+    url: binding?.threadUrl || record?.url,
+  };
+}
+
+function appendThreadDetailLine(container, text) {
+  if (!text) return;
+  const line = document.createElement('span');
+  line.textContent = text;
+  container.appendChild(line);
+}
+
+function renderMemoryThreadDetail(status) {
+  const panel = elements.memoryThreadDetail;
+  if (!panel) return;
+
+  panel.replaceChildren();
+  const checklist = status?.setupChecklist || {};
+  const ready = Boolean(checklist.memorySyncBound);
+  const stableAttempt = (status?.syncState?.recentAttempts || []).find(
+    (attempt) => attempt.kind === 'stable_memory',
+  );
+  const thread = resolveBoundThread(status, 'memory_sync');
+  const hasFailure = stableAttempt?.status === 'failed';
+  const tone = hasFailure ? 'error' : ready ? 'ready' : 'pending';
+  panel.className = `thread-detail thread-detail-${tone}`;
+
+  const head = document.createElement('div');
+  head.className = 'thread-detail-head';
+  const title = document.createElement('strong');
+  title.textContent = ready
+    ? hasFailure
+      ? '长期记忆线程需要检查'
+      : '长期记忆线程已绑定'
+    : '长期记忆线程未就绪';
+  head.appendChild(title);
+  const badge = document.createElement('span');
+  badge.textContent = ready ? '可审计' : '待修复';
+  head.appendChild(badge);
+  panel.appendChild(head);
+
+  const meta = document.createElement('div');
+  meta.className = 'thread-detail-meta';
+  if (ready) {
+    appendThreadDetailLine(
+      meta,
+      `目标：${thread.title || '长期记忆同步线程'}${
+        thread.threadId ? ` · ${shortThreadId(thread.threadId)}` : ''
+      }`,
+    );
+    appendThreadDetailLine(meta, thread.url ? `链接：${thread.url}` : '');
+  } else {
+    const blocker = (status?.blockingReasons || []).find(
+      (reason) => reason.code === 'memory_sync_not_bound',
+    );
+    appendThreadDetailLine(
+      meta,
+      blocker?.message ||
+        '还没有绑定可打开的 doubao.com /chat 或 /thread 长期记忆线程。',
+    );
+  }
+
+  if (stableAttempt) {
+    appendThreadDetailLine(
+      meta,
+      `最近长期记忆同步：${formatAttemptStatus(
+        stableAttempt.status,
+      )} · ${formatSyncTrigger(stableAttempt.trigger)} · ${formatTime(
+        stableAttempt.completedAt || stableAttempt.startedAt,
+      )}`,
+    );
+    const attemptMessage = formatAttemptMessage(stableAttempt);
+    appendThreadDetailLine(meta, attemptMessage);
+  } else {
+    appendThreadDetailLine(
+      meta,
+      '最近长期记忆同步：还没有记录，手动推送 persona 后会写入审计。',
+    );
+  }
+
+  const stableTask = status?.syncState?.tasks?.stableMemory;
+  const interval = formatInterval(stableTask?.intervalMs);
+  appendThreadDetailLine(
+    meta,
+    [
+      interval ? `节奏：每 ${interval}` : '',
+      stableTask?.nextDueAt ? `下次：${formatTime(stableTask.nextDueAt)}` : '',
+      stableTask?.lastRunAt ? `上次：${formatTime(stableTask.lastRunAt)}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  );
+  panel.appendChild(meta);
+
+  const recoveryActions = getAttemptRecoveryActions(stableAttempt);
+  if (recoveryActions.length > 0) {
+    const actionRow = document.createElement('div');
+    actionRow.className = 'thread-detail-actions';
+    for (const recoveryAction of recoveryActions.slice(0, 3)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary compact-button thread-detail-action';
+      button.dataset.threadAction = recoveryAction.action;
+      if (recoveryAction.kind) {
+        button.dataset.threadKind = recoveryAction.kind;
+      }
+      button.textContent = recoveryAction.label;
+      actionRow.appendChild(button);
+    }
+    panel.appendChild(actionRow);
+  }
+}
+
 function renderSyncAudit(status) {
   const attempts = status?.syncState?.recentAttempts || [];
   const latest = attempts[0];
@@ -1516,6 +1922,17 @@ function renderBroadcastTransportStatus(status) {
     '当前广播传输：日常 Chrome（webpage-mcp）。保存后会优先借用日常 Chrome 中的豆包登录态。';
 }
 
+function clearSourceTransportBanner(source) {
+  const banner =
+    source === 'doubao'
+      ? elements.doubaoSourceTransportBanner
+      : elements.chatgptSourceTransportBanner;
+  if (!banner) return;
+  banner.hidden = true;
+  banner.textContent = '';
+  banner.className = 'inline-message';
+}
+
 function renderSourceCard(source, sourceStatus) {
   const isDoubao = source === 'doubao';
   const authPill = isDoubao
@@ -1547,6 +1964,7 @@ function renderSourceCard(source, sourceStatus) {
     : elements.chatgptSourceStatusMessage;
 
   if (!sourceStatus) {
+    clearSourceTransportBanner(source);
     setStatusPill(authPill, '暂不可用', 'error');
     cacheCount.textContent = '-';
     conversationCount.textContent = '-';
@@ -1580,15 +1998,18 @@ function renderSourceCard(source, sourceStatus) {
     );
   }
   if (artifactCount) {
-    artifactCount.textContent = formatMessageCount(
-      sourceStatus.cache?.artifactCount,
-    );
+    artifactCount.textContent = formatArtifactCount(sourceStatus.cache);
   }
   lastRun.textContent = formatTime(sourceStatus.lastRunAt);
   runState.textContent = formatRunOutcome(sourceStatus);
   if (revokeScope) {
-    revokeScope.textContent = formatAskScope(
+    const defaultScope = normalizeInputScope(
       sourceStatus.settings?.defaultScope,
+      source === 'doubao' ? 'personal' : 'work',
+    );
+    revokeScope.textContent = formatRevokePreview(
+      sourceStatus.revokePreview,
+      defaultScope,
     );
   }
   setVisibleMessage(
@@ -1715,6 +2136,14 @@ function applyButtonAvailability(status, explorerStatus) {
     !doubaoSource ||
     doubaoSource.running ||
     doubaoSource.authStatus !== 'connected';
+  if (elements.doubaoSourcePreviewButton) {
+    elements.doubaoSourcePreviewButton.disabled =
+      !doubaoSource || doubaoSource.running;
+  }
+  if (elements.doubaoSourceResetButton) {
+    elements.doubaoSourceResetButton.disabled =
+      !doubaoSource || doubaoSource.running;
+  }
 
   elements.chatgptSourceLoginButton.disabled =
     !chatgptSource ||
@@ -1724,6 +2153,14 @@ function applyButtonAvailability(status, explorerStatus) {
     !chatgptSource ||
     chatgptSource.running ||
     chatgptSource.authStatus === 'unsupported';
+  if (elements.chatgptSourcePreviewButton) {
+    elements.chatgptSourcePreviewButton.disabled =
+      !chatgptSource || chatgptSource.running;
+  }
+  if (elements.chatgptSourceResetButton) {
+    elements.chatgptSourceResetButton.disabled =
+      !chatgptSource || chatgptSource.running;
+  }
   if (elements.doubaoSourceRevokeButton) {
     elements.doubaoSourceRevokeButton.disabled =
       !memoryConnected || !doubaoSource || doubaoSource.running;
@@ -1822,6 +2259,7 @@ async function refreshStatus() {
   renderNextStep(status);
   renderBlockingReasons(status);
   renderStepStatuses(status);
+  renderMemoryThreadDetail(status);
   renderBroadcastTransportStatus(status);
   renderSyncAudit(status);
   applyRuntimeSettings(settings.effective);
@@ -1998,6 +2436,64 @@ async function savePendingExplorerSourceSettings(source) {
   );
 }
 
+async function previewExplorerCacheForSource(source) {
+  const { label, messageElement, previewButton } = getSourceUi(source);
+  await withAction(previewButton, '加载中...', async () => {
+    try {
+      const preview = await explorerApi.preview({ source, limit: 6 });
+      renderSourcePreview(source, preview);
+      setMessage(
+        messageElement,
+        `已加载 ${label} 本地缓存预览。这里展示的是本机 raw cache / artifact / cursor，不会读取远端聊天。`,
+        'success',
+      );
+    } catch (error) {
+      setMessage(
+        messageElement,
+        error instanceof Error ? `预览失败：${error.message}` : '预览缓存失败',
+        'error',
+      );
+    }
+  });
+}
+
+async function resetExplorerCacheForSource(source) {
+  const sourceStatus = latestExplorerStatus?.sources?.[source];
+  const { label, messageElement, resetButton } = getSourceUi(source);
+  const cachedMessages = Number(sourceStatus?.cache?.messageCount ?? 0);
+  const artifacts = Number(sourceStatus?.cache?.artifactCount ?? 0);
+  const revokedArtifacts = Number(
+    sourceStatus?.cache?.revokedArtifactCount ?? 0,
+  );
+  const ok = window.confirm(
+    `确定重置 ${label} 的本地 Explorer 缓存吗？\n\n将清理约 ${cachedMessages} 条缓存消息、${artifacts} 条活跃 artifact 和 ${revokedArtifacts} 条已撤回审计 artifact，并重置抓取 cursor。已写入 Memory Service 的记忆不会被删除；需要删除已入库记忆时请使用“撤回已入库记忆”。`,
+  );
+  if (!ok) return;
+
+  await withAction(resetButton, '重置中...', async () => {
+    try {
+      const result = await explorerApi.resetCache(source);
+      const deletedMessages = Number(result?.deletedMessages ?? 0);
+      const deletedCursors = Number(result?.deletedCursors ?? 0);
+      clearSourcePreviewPanel(source);
+      setMessage(
+        messageElement,
+        `已重置 ${label} 本地缓存：清理 ${deletedMessages} 条缓存消息，重置 ${deletedCursors} 个 cursor。已入库记忆未变。`,
+        'success',
+      );
+      await refreshStatus();
+    } catch (error) {
+      setMessage(
+        messageElement,
+        error instanceof Error
+          ? `重置缓存失败：${error.message}`
+          : '重置本地缓存失败',
+        'error',
+      );
+    }
+  });
+}
+
 async function revokeIngestedMemoryForSource(source) {
   const sourceStatus = latestExplorerStatus?.sources?.[source];
   const scope = normalizeInputScope(
@@ -2013,11 +2509,18 @@ async function revokeIngestedMemoryForSource(source) {
     source === 'doubao'
       ? elements.doubaoSourceRevokeButton
       : elements.chatgptSourceRevokeButton;
+  const preview = sourceStatus?.revokePreview;
+  const localArtifacts = Number(preview?.activeArtifactCount ?? 0);
+  const legacyArtifacts = Number(preview?.legacyUnscopedArtifactCount ?? 0);
+  const legacyNote =
+    legacyArtifacts > 0
+      ? `\n其中 ${legacyArtifacts} 条来自旧版本地审计记录，缺少历史 scope；本次会按当前范围一起标记为已撤回。`
+      : '';
 
   const ok = window.confirm(
     `确定撤回 ${sourceLabel} 来源写入「${formatAskScope(
       scope,
-    )}」范围的已入库记忆吗？\n\n这只会删除 Memory Service 中对应来源/范围的记忆，不会删除原始聊天，也不会清理本地审计缓存。`,
+    )}」范围的已入库记忆吗？\n\n本地可审计 artifact 约 ${localArtifacts} 条。${legacyNote}\n这只会删除 Memory Service 中对应来源/范围的记忆，不会删除原始聊天，也不会清理本地审计缓存；成功后本地 artifact 会标记为已撤回，避免继续显示成活跃记忆。`,
   );
   if (!ok) return;
 
@@ -2026,11 +2529,21 @@ async function revokeIngestedMemoryForSource(source) {
       const result = await explorerApi.revokeIngestedMemory(source, scope);
       const deletedMessages = Number(result?.deletedMessages ?? 0);
       const deletedChunks = Number(result?.deletedChunks ?? 0);
+      const localArtifactsRevoked = Number(
+        result?.localArtifactsRevoked ?? 0,
+      );
+      const localLegacyArtifactsRevoked = Number(
+        result?.localLegacyArtifactsRevoked ?? 0,
+      );
+      const legacyResult =
+        localLegacyArtifactsRevoked > 0
+          ? `，其中旧审计 ${localLegacyArtifactsRevoked} 条`
+          : '';
       setMessage(
         messageElement,
         `已撤回 ${sourceLabel} / ${formatAskScope(
           scope,
-        )}：删除 ${deletedMessages} 条消息、${deletedChunks} 个记忆块。记忆列表仍保留本地审计记录。`,
+        )}：删除 ${deletedMessages} 条消息、${deletedChunks} 个记忆块；本地 ${localArtifactsRevoked} 条 artifact 已标记为审计撤回${legacyResult}。`,
         'success',
       );
       await refreshStatus();
@@ -2062,6 +2575,7 @@ async function handleRefresh() {
       ],
     });
     renderStepStatuses(null);
+    renderMemoryThreadDetail(null);
     renderBroadcastTransportStatus(null);
     renderSyncAudit(null);
     renderExplorerOverview(null, latestSettingsPayload?.effective?.explorer);
@@ -2079,6 +2593,12 @@ elements.syncAuditList?.addEventListener('click', (event) => {
     button.dataset.syncAuditAction,
     button.dataset.syncAuditKind,
   );
+});
+
+elements.memoryThreadDetail?.addEventListener('click', (event) => {
+  const button = event.target?.closest?.('[data-thread-action]');
+  if (!button) return;
+  handleSyncAuditAction(button.dataset.threadAction, button.dataset.threadKind);
 });
 
 elements.openMemoryListButton?.addEventListener('click', () => {
@@ -2203,6 +2723,9 @@ elements.settingsForm.addEventListener('submit', (event) => {
   elements.stableHours,
   elements.briefingHours,
   elements.reminderMinutes,
+  elements.reminderDailyEnabled,
+  elements.reminderDailyTime,
+  elements.reminderDedupSameDay,
 ].forEach((field) => {
   field?.addEventListener('input', markSettingsDirty);
   field?.addEventListener('change', markSettingsDirty);
@@ -2599,6 +3122,22 @@ elements.chatgptSourceRunButton.addEventListener('click', () => {
       );
     }
   });
+});
+
+elements.doubaoSourcePreviewButton?.addEventListener('click', () => {
+  void previewExplorerCacheForSource('doubao');
+});
+
+elements.chatgptSourcePreviewButton?.addEventListener('click', () => {
+  void previewExplorerCacheForSource('chatgpt');
+});
+
+elements.doubaoSourceResetButton?.addEventListener('click', () => {
+  void resetExplorerCacheForSource('doubao');
+});
+
+elements.chatgptSourceResetButton?.addEventListener('click', () => {
+  void resetExplorerCacheForSource('chatgpt');
 });
 
 elements.doubaoSourceRevokeButton?.addEventListener('click', () => {

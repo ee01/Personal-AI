@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.8.4';
-var APP_SCRIPT_LAST_UPDATED = '2026-05-19';
+var APP_SCRIPT_VERSION = '2.8.5';
+var APP_SCRIPT_LAST_UPDATED = '2026-05-28';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -2938,7 +2938,12 @@ function getTimelineProjectInfo(releaseInfo, project) {
 
   const projectInfo = releaseInfo[project];
   if (!projectInfo) {
-    return null;
+    const projectConfig = getTimelineProjectConfig(project);
+    if (!projectConfig) {
+      return null;
+    }
+
+    return releaseInfo[projectConfig.project] || releaseInfo[projectConfig.paramKey] || null;
   }
 
   return projectInfo;
@@ -3348,6 +3353,15 @@ function findGroovyMapPairSeparator(pairText, depth) {
 function getTimelineProjectConfigByParamKey(paramKey) {
   for (const config of TIMELINE_PROJECT_PARAM_MAP) {
     if (config.paramKey === paramKey) {
+      return config;
+    }
+  }
+  return null;
+}
+
+function getTimelineProjectConfig(projectOrParamKey) {
+  for (const config of TIMELINE_PROJECT_PARAM_MAP) {
+    if (config.project === projectOrParamKey || config.paramKey === projectOrParamKey) {
       return config;
     }
   }

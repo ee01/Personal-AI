@@ -116,6 +116,7 @@ export class ASROrchestrator {
   private async _activateProvider(
     provider: ASRProvider,
     audio: MediaStreamTrack | MediaStream,
+    transitionReason?: string,
   ): Promise<void> {
     this.activeProvider = provider;
     this.activeProviderHasTranscript = false;
@@ -162,7 +163,7 @@ export class ASROrchestrator {
     this._emitTierStatus(
       provider.tier,
       newBadge,
-      `ASR tier ${provider.tier} activated`,
+      transitionReason || `ASR tier ${provider.tier} activated`,
     );
 
     try {
@@ -208,7 +209,14 @@ export class ASROrchestrator {
       const avail = await provider.isAvailable();
       if (avail.ok) {
         this.demoting = false;
-        await this._activateProvider(provider, this.activeAudio);
+        const fallbackReason = this.demotionReason
+          ? `${this.demotionReason}. ASR fallback activated: ${provider.tier}`
+          : `ASR fallback activated: ${provider.tier}`;
+        await this._activateProvider(
+          provider,
+          this.activeAudio,
+          fallbackReason,
+        );
         return;
       }
       unavailableReasons.push(

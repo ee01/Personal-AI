@@ -582,20 +582,26 @@ async function evaluateMeetingReadiness(
           checkedAt,
         );
 
-    const desktopAvailable = await (async () => {
+    const desktopAsrStatus = await (async () => {
       try {
         const data = await sendWhisperBridgeRequest<{
           ok?: boolean;
           ready?: boolean;
+          liveReady?: boolean;
+          finalReady?: boolean;
         }>({
           method: 'GET',
           path: '/asr/status',
         });
-        return Boolean(data?.ready);
+        return {
+          available: Boolean(data?.finalReady ?? data?.ready),
+          liveReady: Boolean(data?.liveReady),
+        };
       } catch {
-        return false;
+        return { available: false, liveReady: false };
       }
     })();
+    const desktopAvailable = desktopAsrStatus.available;
 
     const transcription = (() => {
       if (transcriptionMode === 'cloud-only') {
@@ -605,7 +611,9 @@ async function evaluateMeetingReadiness(
         if (desktopAvailable) {
           return createDependencyReadiness(
             'ready',
-            'Local ASR is available.',
+            desktopAsrStatus.liveReady
+              ? 'Local ASR is available.'
+              : 'Local ASR final transcription is available; live partial captions may be delayed until speech ends.',
             checkedAt,
           );
         }
@@ -1671,10 +1679,18 @@ async function getMediaStreamId(tabId: number): Promise<string | null> {
   });
 }
 
+type OffscreenCommandResponse = {
+  success?: boolean;
+  error?: string;
+  [key: string]: unknown;
+};
+
 async function pushOffscreenCommand(
   message: Record<string, unknown>,
-): Promise<void> {
-  await chrome.runtime.sendMessage(message);
+): Promise<OffscreenCommandResponse | undefined> {
+  return chrome.runtime.sendMessage(message) as Promise<
+    OffscreenCommandResponse | undefined
+  >;
 }
 
 async function upsertMeetingSession(
@@ -1972,7 +1988,7 @@ async function startMeetingCapture(
   await ensureOffscreenDocument();
   await new Promise((resolve) => setTimeout(resolve, 150));
   try {
-    await pushOffscreenCommand({
+    const offscreenStartResult = await pushOffscreenCommand({
       type: 'MEETING_PILOT_OFFSCREEN_START_CAPTURE',
       tabId,
       meetingId,
@@ -1983,6 +1999,20 @@ async function startMeetingCapture(
       speakerLabel: session.speakerLabel,
       webTranscriptActive,
     });
+    if (offscreenStartResult?.success === false) {
+      const updated = await registry.setCaptureState(tabId, {
+        kind: 'error',
+        lastError:
+          offscreenStartResult.error || 'offscreen_capture_start_failed',
+        startedAt: captureStartedAt,
+        streamId,
+      });
+      if (updated) {
+        await updateBrowserAction(updated);
+        await broadcastSessionSnapshot(updated);
+      }
+      return { session: updated };
+    }
   } catch (error) {
     const updated = await registry.setCaptureState(tabId, {
       kind: 'error',

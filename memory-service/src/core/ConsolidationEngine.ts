@@ -501,15 +501,26 @@ Brief current status
     const currentTime = now();
     let itemsProcessed = 0;
 
-    // Step 1 — Decay all active items (0.98 daily decay → half-life ~34 days)
+    // Step 1 — Decay active items with slower decay for confirmed stable facts
+    // and faster decay for ephemeral focus/context items.
     const decayResult = this.db
       .prepare(
         `UPDATE user_profile_items
-         SET salience_score = salience_score * 0.98,
+         SET salience_score = salience_score * CASE
+               WHEN user_confirmed = 1
+                    AND item_type = 'fact'
+                    AND item_key IN ('name', 'role', 'organization', 'timezone')
+                 THEN 0.995
+               WHEN user_confirmed = 1 AND item_type = 'preference'
+                 THEN 0.99
+               WHEN last_seen >= ?
+                 THEN 0.97
+               ELSE 0.96
+             END,
              updated_at = ?
          WHERE status = 'active'`,
       )
-      .run(currentTime);
+      .run(currentTime - 7 * 86400, currentTime);
     itemsProcessed += decayResult.changes;
 
     // Step 2 — Merge semantic duplicates within the same item_key
@@ -598,10 +609,11 @@ Brief current status
     const pruneResult = this.db
       .prepare(
         `UPDATE user_profile_items
-         SET status = 'archived'
+         SET status = 'archived',
+             updated_at = ?
          WHERE status = 'active' AND salience_score < 0.1`,
       )
-      .run();
+      .run(currentTime);
     itemsProcessed += pruneResult.changes;
 
     // Step 4 — Rebuild USER_CORE.md
@@ -615,6 +627,8 @@ Brief current status
                 salience_score, mention_count, last_seen, created_at, updated_at
          FROM user_profile_items
          WHERE status = 'active'
+           AND user_confirmed = 1
+           AND salience_score >= 0.1
          ORDER BY salience_score DESC
          LIMIT 20`,
       )
@@ -628,6 +642,7 @@ Brief current status
                 e.name as entity_name
          FROM social_edges se
          JOIN entities e ON se.to_entity_id = e.id
+         WHERE se.user_confirmed = 1
          ORDER BY se.strength DESC
          LIMIT 10`,
       )

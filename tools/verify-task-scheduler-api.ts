@@ -224,6 +224,14 @@ const { concernedItemsSyncService } = await import(
 const { TaskScheduler, taskScheduler } = await import(
   '../src/services/TaskScheduler.ts'
 );
+const {
+  CONCERNED_ITEMS_DIGEST_TASK_ID,
+  digestQueueService,
+  registerConcernedItemsDigestTaskWithHour,
+} = await import('../src/services/DigestQueueService.ts');
+const { notificationService } = await import(
+  '../src/services/NotificationService.ts'
+);
 
 assert.equal(
   await getTaskEnabled('vectorized_data_maintenance'),
@@ -514,6 +522,82 @@ assert.equal(
   false,
   'recent run history should be persisted to chrome.storage.local',
 );
+
+const originalSendNotification =
+  notificationService.sendNotification.bind(notificationService);
+(notificationService as any).sendNotification = async () => ({
+  success: false,
+  results: [{ method: 'bot', success: false, error: 'bot route unavailable' }],
+});
+registerConcernedItemsDigestTaskWithHour(8);
+storage.digestTaskStates = {};
+storage.digestQueues = {
+  [CONCERNED_ITEMS_DIGEST_TASK_ID]: {
+    taskId: CONCERNED_ITEMS_DIGEST_TASK_ID,
+    items: [
+      {
+        id: 'retained-digest-item',
+        createdAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
+        sourceId: 'rule-retained',
+        data: {
+          ruleId: 'rule-retained',
+          matchedRule: 'Retained digest',
+          sender: 'Alice',
+          teamName: 'Release',
+          messageContent: 'Digest should stay queued after failure',
+          summary: 'Digest should stay queued after failure',
+          datetime: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
+          digestConfig: {
+            enabled: true,
+            frequency: 'daily',
+            preferredHour: 8,
+          },
+        },
+      },
+    ],
+  },
+};
+try {
+  digestQueueService.updateTask(CONCERNED_ITEMS_DIGEST_TASK_ID, {
+    enabled: true,
+    frequency: { type: 'custom', intervalMinutes: 0 },
+    lastExecutedAt: new Date(0).toISOString(),
+  });
+  const failedDigestRun = await taskScheduler.runTaskManuallyWithResult(
+    'digest_queue_process',
+  );
+  assert.equal(
+    failedDigestRun.success,
+    false,
+    'digest queue failures should report a failed task run',
+  );
+  assert.match(
+    failedDigestRun.summary || '',
+    /队列已保留 1 条/,
+    'manual digest failure result should keep the queue-retained summary',
+  );
+  status = taskScheduler.getTaskStatus();
+  const digestTaskStatus = status.find(
+    (task) => task.id === 'digest_queue_process',
+  );
+  assert.match(
+    digestTaskStatus?.lastResultSummary || '',
+    /队列已保留 1 条/,
+    'failed digest queue runs should persist the recovery summary',
+  );
+  assert.match(
+    digestTaskStatus?.runHistory?.[0]?.summary || '',
+    /队列已保留 1 条/,
+    'failed digest queue run history should retain the recovery summary',
+  );
+  assert.match(
+    storage.taskSchedulerStates.digest_queue_process.lastResultSummary || '',
+    /队列已保留 1 条/,
+    'failed digest queue recovery summary should be saved to chrome.storage.local',
+  );
+} finally {
+  (notificationService as any).sendNotification = originalSendNotification;
+}
 
 for (let i = 0; i < 6; i += 1) {
   const result = await taskScheduler.runTaskManuallyWithResult(

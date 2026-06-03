@@ -60,6 +60,30 @@ function formatDiffValue(
   return `${normalizedValue.slice(0, 30)}...${normalizedValue.slice(-18)}`;
 }
 
+function formatSyncActionLabel(value?: string): string {
+  const action = normalizeDiffValue(value);
+  if (!action) {
+    return '';
+  }
+
+  const labels: Record<string, string> = {
+    one_click_setup: '一键初始化',
+    manual_bind_minimal_config: '手动绑定补齐基础 Config',
+    manual_bind_recovered_worksheet_ids: '手动绑定补齐子表定位',
+    manual_bind_keep_local: '手动绑定：保留本机',
+    manual_bind_use_sheet: '手动绑定：使用 Sheet',
+    manual_sync_recovered_worksheet_ids: '手动同步补齐子表定位',
+    app_script_metadata_update: 'App Script 元数据更新',
+    sheet_schema_update: 'Sheet schema 更新',
+    bot_config_update: 'Bot / Timeline 配置更新',
+    jira_rule_update: 'Jira Rule 更新',
+    partial_update: '局部配置更新',
+    config_sync: '配置同步',
+  };
+
+  return labels[action] || action;
+}
+
 function addDiffItem(
   items: ManualBindConfigDiffItem[],
   label: string,
@@ -94,6 +118,12 @@ export function getManualBindConfigDiff(
   const sheetBotAutomation = getBotAutomationConfig(sheetConfig);
 
   addDiffItem(items, 'Schema 版本', localConfig.sheet_version, sheetConfig.sheet_version);
+  addDiffItem(
+    items,
+    '最近同步动作',
+    formatSyncActionLabel(localConfig.last_sync_action),
+    formatSyncActionLabel(sheetConfig.last_sync_action),
+  );
   addDiffItem(items, 'Web App URL', localConfig.webAppUrl, sheetConfig.webAppUrl);
   addDiffItem(items, 'Apps Script ID', localConfig.scriptId, sheetConfig.scriptId);
   addDiffItem(items, 'Deployment ID', localConfig.deploymentId, sheetConfig.deploymentId);

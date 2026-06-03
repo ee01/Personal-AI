@@ -8,6 +8,7 @@ import {
   getSnoozeReminderSourceKey,
   isOpenSnoozeReminder,
   isOpenSnoozeReminderForMessage,
+  isSpecificRingCentralMessageLink,
 } from '../snoozeDeduplication.js';
 
 const sourceLink = 'https://app.ringcentral.com/messages/123/456';
@@ -75,6 +76,20 @@ test('does not match non-Snooze messages or other source links', () => {
   );
 });
 
+test('does not dedupe against broad conversation links', () => {
+  const conversationLink = 'https://app.ringcentral.com/messages/123';
+  assert.equal(isSpecificRingCentralMessageLink(conversationLink), false);
+  assert.equal(
+    isOpenSnoozeReminderForMessage(
+      makeMessage({
+        Content: `source\n\n🔗 [点击查看原消息](${conversationLink})`,
+      }),
+      { messageLink: conversationLink },
+    ),
+    false,
+  );
+});
+
 test('finds the first open reminder and ignores closed duplicates', () => {
   const openReminder = makeMessage({ ID: 'open' });
   assert.equal(
@@ -91,6 +106,14 @@ test('finds the first open reminder and ignores closed duplicates', () => {
 });
 
 test('builds a stable source key from message link or RingCentral ids', () => {
+  assert.equal(isSpecificRingCentralMessageLink(sourceLink), true);
+  assert.equal(
+    isSpecificRingCentralMessageLink(
+      'https://app.ringcentral.com/messages/123?messageId=456',
+    ),
+    true,
+  );
+
   assert.equal(
     getSnoozeReminderSourceKey({
       id: '456',
@@ -107,6 +130,24 @@ test('builds a stable source key from message link or RingCentral ids', () => {
       messageLink: '',
     }),
     '123:456',
+  );
+
+  assert.equal(
+    getSnoozeReminderSourceKey({
+      id: '456',
+      groupId: '123',
+      messageLink: 'https://app.ringcentral.com/messages/123',
+    }),
+    '123:456',
+  );
+
+  assert.match(
+    getSnoozeReminderSourceKey({
+      id: 'temp_1778841000',
+      groupId: '123',
+      messageLink: 'https://app.ringcentral.com/messages/123',
+    }),
+    /^temp_/,
   );
 });
 

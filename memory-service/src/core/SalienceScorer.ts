@@ -16,6 +16,7 @@
 import type Database from 'better-sqlite3';
 import { now } from '../utils/time.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
+import { classifyMemoryLifecycle } from './MemoryLifecyclePolicy.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,6 +85,16 @@ interface InterestItemRow {
   item_value: string;
 }
 
+interface MemoryMetadataExistingRow {
+  id: number;
+  access_count: number;
+  decay_rate: number;
+  half_life_days: number;
+  consolidation_level: string;
+  retrieval_tier?: string | null;
+  created_at: number;
+}
+
 // ---------------------------------------------------------------------------
 // SalienceScorer
 // ---------------------------------------------------------------------------
@@ -91,6 +102,7 @@ interface InterestItemRow {
 export class SalienceScorer {
   private db: Database.Database;
   private weights: SalienceWeights;
+  private memoryMetadataColumns?: Set<string>;
 
   constructor(db: Database.Database, weights?: Partial<SalienceWeights>) {
     this.db = db;
@@ -330,50 +342,158 @@ export class SalienceScorer {
 
   /**
    * Ensure a memory_metadata row exists for the given target and update
-   * the salience score.  Uses INSERT OR REPLACE keyed on the UNIQUE
-   * (target_type, target_id) constraint.
+   * the salience score plus debug components while preserving access stats.
    */
-  ensureMetadata(targetType: string, targetId: string, score: number): void {
+  ensureMetadata(
+    targetType: string,
+    targetId: string,
+    score: number,
+    components?: SalienceInput,
+  ): void {
     const currentTime = now();
+    const columns = this.getMemoryMetadataColumns();
 
     // Check if a row already exists so we can preserve access_count, etc.
+    const selectColumns = [
+      'id',
+      'access_count',
+      'decay_rate',
+      'half_life_days',
+      'consolidation_level',
+      'created_at',
+    ];
+    if (columns.has('retrieval_tier')) {
+      selectColumns.push('retrieval_tier');
+    }
+
     const existing = this.db
       .prepare(
-        `SELECT id, access_count, decay_rate, half_life_days, consolidation_level
+        `SELECT ${selectColumns.join(', ')}
          FROM memory_metadata
          WHERE target_type = ? AND target_id = ?`,
       )
-      .get(targetType, targetId) as
-      | {
-          id: number;
-          access_count: number;
-          decay_rate: number;
-          half_life_days: number;
-          consolidation_level: string;
-        }
-      | undefined;
+      .get(targetType, targetId) as MemoryMetadataExistingRow | undefined;
+
+    const metadataComponents = {
+      importance: 0.5,
+      frequency: 1,
+      recency: 1.0,
+      surprise: 0,
+      redundancy: 0,
+      ...components,
+    } satisfies SalienceInput;
+    const lifecycle = classifyMemoryLifecycle({
+      salienceScore: score,
+      effectiveSalience: score,
+      retrievalTier: existing?.retrieval_tier,
+      consolidationLevel: existing?.consolidation_level ?? 'temporary',
+      createdAt: existing?.created_at ?? currentTime,
+      currentTime,
+    });
 
     if (existing) {
+      const updates = [
+        'salience_score = ?',
+        'importance = ?',
+        'frequency = ?',
+        'recency_boost = ?',
+        'surprise_score = ?',
+        'redundancy = ?',
+      ];
+      const params: unknown[] = [
+        score,
+        metadataComponents.importance,
+        metadataComponents.frequency,
+        metadataComponents.recency,
+        metadataComponents.surprise,
+        metadataComponents.redundancy,
+      ];
+      if (columns.has('effective_salience')) {
+        updates.push('effective_salience = ?');
+        params.push(lifecycle.effectiveSalience);
+      }
+      if (columns.has('retrieval_tier')) {
+        updates.push('retrieval_tier = ?');
+        params.push(lifecycle.tier);
+      }
+      if (columns.has('lifecycle_updated_at')) {
+        updates.push('lifecycle_updated_at = ?');
+        params.push(currentTime);
+      }
+      updates.push('updated_at = ?');
+      params.push(currentTime, existing.id);
+
       this.db
         .prepare(
           `UPDATE memory_metadata
-           SET salience_score = ?,
-               updated_at = ?
+           SET ${updates.join(', ')}
            WHERE id = ?`,
         )
-        .run(score, currentTime, existing.id);
+        .run(...params);
     } else {
+      const insertColumns = [
+        'target_type',
+        'target_id',
+        'salience_score',
+        'importance',
+        'frequency',
+        'recency_boost',
+        'surprise_score',
+        'redundancy',
+        'access_count',
+        'decay_rate',
+        'half_life_days',
+        'consolidation_level',
+        'created_at',
+        'updated_at',
+      ];
+      const values: unknown[] = [
+        targetType,
+        targetId,
+        score,
+        metadataComponents.importance,
+        metadataComponents.frequency,
+        metadataComponents.recency,
+        metadataComponents.surprise,
+        metadataComponents.redundancy,
+        0,
+        1.0,
+        30,
+        'temporary',
+        currentTime,
+        currentTime,
+      ];
+      if (columns.has('effective_salience')) {
+        insertColumns.push('effective_salience');
+        values.push(lifecycle.effectiveSalience);
+      }
+      if (columns.has('retrieval_tier')) {
+        insertColumns.push('retrieval_tier');
+        values.push(lifecycle.tier);
+      }
+      if (columns.has('lifecycle_updated_at')) {
+        insertColumns.push('lifecycle_updated_at');
+        values.push(currentTime);
+      }
+
       this.db
         .prepare(
           `INSERT INTO memory_metadata
-            (target_type, target_id, salience_score, importance, frequency,
-             recency_boost, surprise_score, redundancy,
-             access_count, decay_rate, half_life_days,
-             consolidation_level, created_at, updated_at)
-           VALUES (?, ?, ?, 0.5, 1, 1.0, 0, 0, 0, 1.0, 30, 'temporary', ?, ?)`,
+            (${insertColumns.join(', ')})
+           VALUES (${insertColumns.map(() => '?').join(', ')})`,
         )
-        .run(targetType, targetId, score, currentTime, currentTime);
+        .run(...values);
     }
+  }
+
+  private getMemoryMetadataColumns(): Set<string> {
+    if (!this.memoryMetadataColumns) {
+      const rows = this.db
+        .prepare(`PRAGMA table_info(memory_metadata)`)
+        .all() as Array<{ name: string }>;
+      this.memoryMetadataColumns = new Set(rows.map((row) => row.name));
+    }
+    return this.memoryMetadataColumns;
   }
 }
 

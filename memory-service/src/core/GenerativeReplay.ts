@@ -202,11 +202,14 @@ export class GenerativeReplay {
 
     // 2a. Recall related memories
     const recallEngine = new RecallEngine(this.db);
-    const recallResult = await recallEngine.recall({
-      query: topicName,
-      topK: RECALL_TOP_K,
-      sourceTypes: ['glip', 'jira', 'web', 'manual', 'system'],
-    });
+    const recallResult = await recallEngine.recall(
+      {
+        query: topicName,
+        topK: RECALL_TOP_K,
+        sourceTypes: ['glip', 'jira', 'web', 'manual', 'system'],
+      },
+      { reinforceAccess: false },
+    );
 
     const memories = recallResult.items;
     const memoriesBullets = memories
@@ -296,8 +299,7 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
 
     for (const memory of memories) {
       try {
-        const targetType = /^\d+$/.test(memory.id) ? 'chunk' : 'message';
-        forgettingEngine.reinforceMemory(targetType, memory.id);
+        forgettingEngine.reinforceMemory(memory.type, memory.id);
         reinforced++;
       } catch (err) {
         console.warn(

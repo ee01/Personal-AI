@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type {
   ConversationArtifactRecord,
   ExplorerConversationSummary,
+  ExplorerRevokePreview,
   RawMessageRecord,
   RawMessageStoreStats,
   SourceId,
@@ -15,6 +16,7 @@ type CountRow = {
   pending_extract_count?: number;
   conversation_count?: number;
   artifact_count?: number;
+  revoked_artifact_count?: number;
 };
 
 type RawMessageRow = {
@@ -32,6 +34,9 @@ type ArtifactRow = {
   source: SourceId;
   conversation_id: string;
   extracted_at: string;
+  scope: string | null;
+  revoked_at: string | null;
+  revoked_scope: string | null;
   kind: 'fact' | 'preference' | 'event' | 'plan';
   text: string;
   source_quote: string;
@@ -46,7 +51,18 @@ type ConversationRow = {
   pending_message_count?: number;
   extracted_message_count?: number;
   artifact_count?: number;
+  revoked_artifact_count?: number;
   latest_message_preview?: string | null;
+};
+
+type TableInfoRow = {
+  name?: string;
+};
+
+type RevokePreviewRow = {
+  active_artifact_count?: number;
+  legacy_unscoped_artifact_count?: number;
+  revoked_artifact_count?: number;
 };
 
 export class RawMessageStore {
@@ -75,6 +91,9 @@ export class RawMessageStore {
         source TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         extracted_at TEXT NOT NULL,
+        scope TEXT,
+        revoked_at TEXT,
+        revoked_scope TEXT,
         kind TEXT NOT NULL,
         text TEXT NOT NULL,
         source_quote TEXT NOT NULL,
@@ -83,6 +102,7 @@ export class RawMessageStore {
       CREATE INDEX IF NOT EXISTS idx_conversation_artifacts_source_conversation
         ON conversation_artifacts (source, conversation_id, extracted_at DESC);
     `);
+    this.ensureConversationArtifactColumns();
   }
 
   get filePath(): string {
@@ -140,19 +160,25 @@ export class RawMessageStore {
             (
               SELECT COUNT(*)
               FROM conversation_artifacts AS ca
-              WHERE ca.source = ?
-            ) AS artifact_count
+              WHERE ca.source = ? AND ca.revoked_at IS NULL
+            ) AS artifact_count,
+            (
+              SELECT COUNT(*)
+              FROM conversation_artifacts AS ca
+              WHERE ca.source = ? AND ca.revoked_at IS NOT NULL
+            ) AS revoked_artifact_count
           FROM raw_messages
           WHERE source = ?
         `,
       )
-      .get(source, source) as CountRow | undefined;
+      .get(source, source, source) as CountRow | undefined;
 
     return {
       messageCount: Number(row?.message_count ?? 0),
       pendingExtractCount: Number(row?.pending_extract_count ?? 0),
       conversationCount: Number(row?.conversation_count ?? 0),
       artifactCount: Number(row?.artifact_count ?? 0),
+      revokedArtifactCount: Number(row?.revoked_artifact_count ?? 0),
     };
   }
 
@@ -268,7 +294,14 @@ export class RawMessageStore {
                 SELECT COUNT(*)
                 FROM conversation_artifacts AS ca
                 WHERE ca.source = rm.source AND ca.conversation_id = rm.conversation_id
+                  AND ca.revoked_at IS NULL
               ), 0) AS artifact_count,
+              COALESCE((
+                SELECT COUNT(*)
+                FROM conversation_artifacts AS ca
+                WHERE ca.source = rm.source AND ca.conversation_id = rm.conversation_id
+                  AND ca.revoked_at IS NOT NULL
+              ), 0) AS revoked_artifact_count,
               (
                 SELECT rm2.content
                 FROM raw_messages AS rm2
@@ -293,6 +326,7 @@ export class RawMessageStore {
       pendingMessageCount: Number(row.pending_message_count ?? 0),
       extractedMessageCount: Number(row.extracted_message_count ?? 0),
       artifactCount: Number(row.artifact_count ?? 0),
+      revokedArtifactCount: Number(row.revoked_artifact_count ?? 0),
       latestMessagePreview: row.latest_message_preview || undefined,
     }));
   }
@@ -334,6 +368,7 @@ export class RawMessageStore {
   replaceConversationArtifacts(options: {
     source: SourceId;
     conversationId: string;
+    scope?: 'work' | 'personal';
     extractedAt?: string;
     artifacts: Array<{
       kind: 'fact' | 'preference' | 'event' | 'plan';
@@ -351,11 +386,14 @@ export class RawMessageStore {
         source,
         conversation_id,
         extracted_at,
+        scope,
+        revoked_at,
+        revoked_scope,
         kind,
         text,
         source_quote,
         conversation_ref
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.db.exec('BEGIN');
@@ -367,6 +405,9 @@ export class RawMessageStore {
           options.source,
           options.conversationId,
           extractedAt,
+          options.scope ?? null,
+          null,
+          null,
           artifact.kind,
           artifact.text,
           artifact.sourceQuote,
@@ -413,12 +454,14 @@ export class RawMessageStore {
       wheres.push('(LOWER(text) LIKE ? OR LOWER(source_quote) LIKE ?)');
       params.push(needle, needle);
     }
+    wheres.push('revoked_at IS NULL');
 
-    const whereClause = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+    const whereClause = `WHERE ${wheres.join(' AND ')}`;
     const rows = (this.db
       .prepare(
         `
-          SELECT source, conversation_id, extracted_at, kind, text, source_quote, conversation_ref
+          SELECT source, conversation_id, extracted_at, scope, revoked_at, revoked_scope,
+                 kind, text, source_quote, conversation_ref
           FROM conversation_artifacts
           ${whereClause}
           ORDER BY extracted_at DESC, rowid DESC
@@ -427,15 +470,7 @@ export class RawMessageStore {
       )
       .all(...params, limit, offset) as ArtifactRow[]) ?? [];
 
-    return rows.map((row) => ({
-      source: row.source,
-      conversationId: row.conversation_id,
-      extractedAt: row.extracted_at,
-      kind: row.kind,
-      text: row.text,
-      sourceQuote: row.source_quote,
-      conversationRef: row.conversation_ref,
-    }));
+    return rows.map(mapArtifactRow);
   }
 
   /**
@@ -458,8 +493,9 @@ export class RawMessageStore {
       wheres.push('(LOWER(text) LIKE ? OR LOWER(source_quote) LIKE ?)');
       params.push(needle, needle);
     }
+    wheres.push('revoked_at IS NULL');
 
-    const whereClause = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+    const whereClause = `WHERE ${wheres.join(' AND ')}`;
     const row = this.db
       .prepare(
         `SELECT COUNT(*) AS total FROM conversation_artifacts ${whereClause}`,
@@ -478,7 +514,8 @@ export class RawMessageStore {
       ? ((this.db
           .prepare(
             `
-              SELECT source, conversation_id, extracted_at, kind, text, source_quote, conversation_ref
+              SELECT source, conversation_id, extracted_at, scope, revoked_at, revoked_scope,
+                     kind, text, source_quote, conversation_ref
               FROM conversation_artifacts
               WHERE source = ? AND conversation_id = ?
               ORDER BY extracted_at DESC, rowid DESC
@@ -493,7 +530,8 @@ export class RawMessageStore {
       : ((this.db
           .prepare(
             `
-              SELECT source, conversation_id, extracted_at, kind, text, source_quote, conversation_ref
+              SELECT source, conversation_id, extracted_at, scope, revoked_at, revoked_scope,
+                     kind, text, source_quote, conversation_ref
               FROM conversation_artifacts
               WHERE source = ?
               ORDER BY extracted_at DESC, rowid DESC
@@ -502,15 +540,66 @@ export class RawMessageStore {
           )
           .all(options.source, limit) as ArtifactRow[]) ?? []);
 
-    return rows.map((row) => ({
-      source: row.source,
-      conversationId: row.conversation_id,
-      extractedAt: row.extracted_at,
-      kind: row.kind,
-      text: row.text,
-      sourceQuote: row.source_quote,
-      conversationRef: row.conversation_ref,
-    }));
+    return rows.map(mapArtifactRow);
+  }
+
+  getRevokePreview(
+    source: SourceId,
+    scope: 'work' | 'personal',
+  ): ExplorerRevokePreview {
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            SUM(CASE
+              WHEN revoked_at IS NULL AND (scope = ? OR scope IS NULL) THEN 1
+              ELSE 0
+            END) AS active_artifact_count,
+            SUM(CASE
+              WHEN revoked_at IS NULL AND scope IS NULL THEN 1
+              ELSE 0
+            END) AS legacy_unscoped_artifact_count,
+            SUM(CASE
+              WHEN revoked_at IS NOT NULL
+                AND (revoked_scope = ? OR (revoked_scope IS NULL AND scope = ?))
+              THEN 1
+              ELSE 0
+            END) AS revoked_artifact_count
+          FROM conversation_artifacts
+          WHERE source = ?
+        `,
+      )
+      .get(scope, scope, scope, source) as RevokePreviewRow | undefined;
+
+    return {
+      scope,
+      activeArtifactCount: Number(row?.active_artifact_count ?? 0),
+      legacyUnscopedArtifactCount: Number(
+        row?.legacy_unscoped_artifact_count ?? 0,
+      ),
+      revokedArtifactCount: Number(row?.revoked_artifact_count ?? 0),
+    };
+  }
+
+  markArtifactsRevoked(
+    source: SourceId,
+    scope: 'work' | 'personal',
+    revokedAt = new Date().toISOString(),
+  ): number {
+    const result = this.db
+      .prepare(
+        `
+          UPDATE conversation_artifacts
+          SET revoked_at = ?,
+              revoked_scope = ?,
+              scope = COALESCE(scope, ?)
+          WHERE source = ?
+            AND revoked_at IS NULL
+            AND (scope = ? OR scope IS NULL)
+        `,
+      )
+      .run(revokedAt, scope, scope, source, scope);
+    return Number(result.changes ?? 0);
   }
 
   reset(source: SourceId, conversationId?: string): number {
@@ -544,4 +633,49 @@ export class RawMessageStore {
   close(): void {
     this.db.close();
   }
+
+  private ensureConversationArtifactColumns(): void {
+    const columns = new Set(
+      (this.db
+        .prepare('PRAGMA table_info(conversation_artifacts)')
+        .all() as TableInfoRow[])
+        .map((row) => row.name)
+        .filter(Boolean),
+    );
+    const addColumn = (name: string): void => {
+      if (!columns.has(name)) {
+        this.db.exec(`ALTER TABLE conversation_artifacts ADD COLUMN ${name} TEXT`);
+      }
+    };
+
+    addColumn('scope');
+    addColumn('revoked_at');
+    addColumn('revoked_scope');
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_conversation_artifacts_source_scope_revoke
+        ON conversation_artifacts (source, scope, revoked_at);
+    `);
+  }
+}
+
+function normalizeArtifactScope(
+  value: string | null,
+): 'work' | 'personal' | undefined {
+  if (value === 'work' || value === 'personal') return value;
+  return undefined;
+}
+
+function mapArtifactRow(row: ArtifactRow): ConversationArtifactRecord {
+  return {
+    source: row.source,
+    conversationId: row.conversation_id,
+    extractedAt: row.extracted_at,
+    scope: normalizeArtifactScope(row.scope),
+    revokedAt: row.revoked_at ?? undefined,
+    revokedScope: normalizeArtifactScope(row.revoked_scope),
+    kind: row.kind,
+    text: row.text,
+    sourceQuote: row.source_quote,
+    conversationRef: row.conversation_ref,
+  };
 }

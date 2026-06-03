@@ -825,18 +825,18 @@ function renderReviewFindings(
   container.textContent = '';
 
   const title = doc.createElement('div');
-  title.textContent = 'Detected environment bindings';
+  title.textContent = 'Detected environment bindings and components';
   title.style.cssText = 'font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #172B4D;';
   container.appendChild(title);
 
   const help = doc.createElement('div');
-  help.textContent = 'These values are copied into the disabled rule description so they are still visible after import.';
+  help.textContent = 'These values and component types are copied into the disabled rule description so they are still visible after import.';
   help.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F; margin-bottom: 10px;';
   container.appendChild(help);
 
   if (findings.length === 0) {
     const empty = doc.createElement('div');
-    empty.textContent = 'No JQL, URL, account, sensitive value, custom field, saved filter, connection, smart value, or source-project binding was detected.';
+    empty.textContent = 'No JQL, URL, account, sensitive value, custom field, saved filter, connection, smart value, custom/app component, or source-project binding was detected.';
     empty.style.cssText = 'font-size: 12px; line-height: 1.45; color: #44546F;';
     container.appendChild(empty);
     return;
@@ -906,6 +906,29 @@ function formatChecklistSeverityCounts(items: JiraAutomationImportReviewChecklis
   ].filter(Boolean).join(', ') || 'No blocking checks detected';
 }
 
+function formatHighRiskAcknowledgementDetail(
+  items: JiraAutomationImportReviewChecklistItem[],
+  enablementPlan: JiraAutomationImportEnablementStep[],
+): string {
+  const highRiskItems = items.filter((item) => item.severity === 'high');
+  if (highRiskItems.length === 0) {
+    return '';
+  }
+
+  const visibleLabels = highRiskItems.slice(0, 4).map((item) => item.label);
+  const hiddenCount = Math.max(0, highRiskItems.length - visibleLabels.length);
+  const labelsText = [
+    visibleLabels.join(', '),
+    hiddenCount > 0 ? `${hiddenCount} more` : '',
+  ].filter(Boolean).join(', ');
+  const firstHighRiskStep = enablementPlan.find((step) => step.severity === 'high');
+  const nextText = firstHighRiskStep
+    ? ` Next: ${firstHighRiskStep.label}.`
+    : '';
+
+  return `${highRiskItems.length} high-risk item(s): ${labelsText}.${nextText} Confirm these before Jira creates the disabled copy.`;
+}
+
 function showImportPreviewDialog(
   exportedData: ExportedData,
   file: File,
@@ -925,9 +948,10 @@ function showImportPreviewDialog(
       background-color: rgba(9, 30, 66, 0.54);
       z-index: 10000;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
-      padding: 24px;
+      overflow-y: auto;
+      padding: 24px 24px 12px;
       box-sizing: border-box;
     `;
 
@@ -949,14 +973,30 @@ function showImportPreviewDialog(
       box-sizing: border-box;
     `;
 
+    const header = doc.createElement('div');
+    header.style.cssText = `
+      position: sticky;
+      top: -24px;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: -24px -24px 12px;
+      padding: 16px 24px 12px;
+      background: white;
+      border-bottom: 1px solid #EBECF0;
+    `;
+
     const title = doc.createElement('h3');
     title.id = 'personal-ai-jira-import-title';
     title.textContent = 'Import Jira Automation Rule';
-    title.style.cssText = 'margin: 0 0 12px; font-size: 18px; line-height: 1.3;';
-    dialog.appendChild(title);
+    title.style.cssText = 'margin: 0; font-size: 18px; line-height: 1.3;';
+    header.appendChild(title);
+    dialog.appendChild(header);
 
     const intro = doc.createElement('p');
-    intro.textContent = `Found ${exportedData.rules.length} rule(s) in ${file.name}. Select one rule to import into ${projectContext.projectKey}.`;
+    intro.textContent = `Found ${exportedData.rules.length} rule(s) in ${file.name}. Review what the selected rule does, then import a disabled copy into ${projectContext.projectKey}.`;
     intro.style.cssText = 'margin: 0 0 16px; color: #44546F; font-size: 13px; line-height: 1.5;';
     dialog.appendChild(intro);
 
@@ -973,9 +1013,8 @@ function showImportPreviewDialog(
     let selectedRuleIndex = 0;
     let select: HTMLSelectElement | null = null;
     let preventChainedTrigger = Boolean(exportedData.rules[0]?.canOtherRuleTrigger);
-    let highRiskReviewAcknowledged = false;
-    let highRiskAcknowledgementRequired = false;
     let confirmButton: HTMLButtonElement | null = null;
+    let topConfirmButton: HTMLButtonElement | null = null;
     let currentReviewPacket = '';
 
     if (exportedData.rules.length > 1) {
@@ -1082,16 +1121,9 @@ function showImportPreviewDialog(
       background: #FFEBE6;
     `;
 
-    const highRiskAcknowledgementLabel = doc.createElement('label');
-    highRiskAcknowledgementLabel.style.cssText = 'display: flex; align-items: flex-start; gap: 8px; color: #172B4D; font-size: 13px; line-height: 1.45;';
-
-    const highRiskAcknowledgementCheckbox = doc.createElement('input');
-    highRiskAcknowledgementCheckbox.type = 'checkbox';
-    highRiskAcknowledgementCheckbox.style.cssText = 'margin-top: 2px;';
-
     const highRiskAcknowledgementContent = doc.createElement('span');
     const highRiskAcknowledgementTitle = doc.createElement('span');
-    highRiskAcknowledgementTitle.textContent = 'I reviewed the high-risk bindings before creating this disabled copy.';
+    highRiskAcknowledgementTitle.textContent = 'High-risk bindings detected';
     highRiskAcknowledgementTitle.style.cssText = 'display: block; font-weight: 700; color: #AE2E24;';
 
     const highRiskAcknowledgementText = doc.createElement('span');
@@ -1099,9 +1131,7 @@ function showImportPreviewDialog(
 
     highRiskAcknowledgementContent.appendChild(highRiskAcknowledgementTitle);
     highRiskAcknowledgementContent.appendChild(highRiskAcknowledgementText);
-    highRiskAcknowledgementLabel.appendChild(highRiskAcknowledgementCheckbox);
-    highRiskAcknowledgementLabel.appendChild(highRiskAcknowledgementContent);
-    highRiskAcknowledgementBox.appendChild(highRiskAcknowledgementLabel);
+    highRiskAcknowledgementBox.appendChild(highRiskAcknowledgementContent);
     dialog.appendChild(highRiskAcknowledgementBox);
 
     const reviewPacketBox = doc.createElement('div');
@@ -1146,19 +1176,13 @@ function showImportPreviewDialog(
     `;
     dialog.appendChild(warningBox);
 
-    const syncConfirmButtonState = () => {
-      if (!confirmButton) {
-        return;
-      }
-
-      const disabled = highRiskAcknowledgementRequired && !highRiskReviewAcknowledged;
-      confirmButton.disabled = disabled;
-      confirmButton.setAttribute('aria-disabled', String(disabled));
-      confirmButton.title = disabled
-        ? 'Review and acknowledge high-risk bindings before importing.'
-        : '';
-      confirmButton.style.opacity = disabled ? '0.55' : '1';
-      confirmButton.style.cursor = disabled ? 'not-allowed' : 'pointer';
+    const triggerImport = () => {
+      const selectedRule = exportedData.rules[selectedRuleIndex];
+      close({
+        confirmed: true,
+        selectedRuleIndex,
+        allowOtherRuleTrigger: Boolean(selectedRule.canOtherRuleTrigger) && !preventChainedTrigger,
+      });
     };
 
     const renderRuleDetails = () => {
@@ -1193,13 +1217,10 @@ function showImportPreviewDialog(
       chainedTriggerText.textContent = sourceAllowsChainedTrigger
         ? 'Prevent other automation rules from triggering this imported copy until it has been reviewed.'
         : 'The source rule does not allow other automation rules to trigger it.';
-      highRiskAcknowledgementRequired = highRiskCount > 0;
-      highRiskAcknowledgementBox.style.display = highRiskAcknowledgementRequired ? 'block' : 'none';
-      highRiskAcknowledgementCheckbox.checked = highRiskReviewAcknowledged;
-      highRiskAcknowledgementText.textContent = highRiskAcknowledgementRequired
-        ? `${highRiskCount} high-risk item(s) were found. This gate keeps the import flow aligned with the disabled-copy review checklist.`
+      highRiskAcknowledgementBox.style.display = highRiskCount > 0 ? 'block' : 'none';
+      highRiskAcknowledgementText.textContent = highRiskCount > 0
+        ? `${formatHighRiskAcknowledgementDetail(reviewChecklist, enablementPlan)} You can continue importing and finish review before enabling the rule.`
         : '';
-      syncConfirmButtonState();
       renderImportOutcomeSummary(
         doc,
         outcomeBox,
@@ -1223,6 +1244,7 @@ function showImportPreviewDialog(
       appendInfoRow(doc, details, 'Source state', rule.state || 'UNKNOWN');
       appendInfoRow(doc, details, 'Trigger', rule.trigger?.type || 'UNKNOWN');
       appendInfoRow(doc, details, 'Components', `${summary.componentCount} total`);
+      appendInfoRow(doc, details, 'Custom/app components', formatReviewSignalValue(summary.customComponentCount, reviewSignals.customComponentReferences));
       appendInfoRow(doc, details, 'Enablement checks', formatChecklistSeverityCounts(reviewChecklist));
       appendInfoRow(doc, details, 'Review note', 'Added to imported rule description');
       appendInfoRow(doc, details, 'Actions', String(summary.actionCount));
@@ -1270,18 +1292,12 @@ function showImportPreviewDialog(
     select?.addEventListener('change', () => {
       selectedRuleIndex = Number(select?.value || '0');
       preventChainedTrigger = Boolean(exportedData.rules[selectedRuleIndex]?.canOtherRuleTrigger);
-      highRiskReviewAcknowledged = false;
       renderRuleDetails();
     });
 
     chainedTriggerCheckbox.addEventListener('change', () => {
       preventChainedTrigger = chainedTriggerCheckbox.checked;
       renderRuleDetails();
-    });
-
-    highRiskAcknowledgementCheckbox.addEventListener('change', () => {
-      highRiskReviewAcknowledged = highRiskAcknowledgementCheckbox.checked;
-      syncConfirmButtonState();
     });
 
     copyReviewPacketButton.addEventListener('click', async () => {
@@ -1310,6 +1326,10 @@ function showImportPreviewDialog(
 
     const cancelButton = createDialogButton(doc, 'Cancel', 'secondary');
     confirmButton = createDialogButton(doc, 'Import disabled copy', 'primary');
+    topConfirmButton = createDialogButton(doc, 'Import disabled copy', 'primary');
+    topConfirmButton.style.padding = '6px 12px';
+    topConfirmButton.style.fontSize = '13px';
+    header.appendChild(topConfirmButton);
     footer.appendChild(cancelButton);
     footer.appendChild(confirmButton);
     dialog.appendChild(footer);
@@ -1337,18 +1357,8 @@ function showImportPreviewDialog(
 
     doc.addEventListener('keydown', onKeyDown);
     cancelButton.addEventListener('click', () => close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false }));
-    confirmButton.addEventListener('click', () => {
-      if (confirmButton?.disabled) {
-        return;
-      }
-
-      const selectedRule = exportedData.rules[selectedRuleIndex];
-      close({
-        confirmed: true,
-        selectedRuleIndex,
-        allowOtherRuleTrigger: Boolean(selectedRule.canOtherRuleTrigger) && !preventChainedTrigger,
-      });
-    });
+    confirmButton.addEventListener('click', triggerImport);
+    topConfirmButton.addEventListener('click', triggerImport);
     overlay.addEventListener('click', (event) => {
       if (event.target === overlay) {
         close({ confirmed: false, selectedRuleIndex, allowOtherRuleTrigger: false });

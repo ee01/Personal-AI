@@ -76,8 +76,19 @@
         正在整理今天的记忆信号...
       </div>
 
-      <div v-else-if="visibleMissionCards.length === 0" class="empty-panel">
-        当前没有需要放到首页的高优先级事项。可以从左侧进入决策中心、动作队列或主题页查看完整列表。
+      <div
+        v-else-if="visibleMissionCards.length === 0"
+        :class="['empty-panel', { error: loadError }]"
+      >
+        <span>{{ missionEmptyMessage }}</span>
+        <button
+          v-if="showMissionRetry"
+          type="button"
+          class="empty-retry"
+          @click="loadDayPilot()"
+        >
+          重试生成
+        </button>
       </div>
 
       <div v-else class="mission-cards">
@@ -169,7 +180,27 @@
                 </div>
               </div>
 
-              <div class="sub-section">
+              <div
+                v-if="card.executionChannel === 'openclaw'"
+                class="sub-section"
+              >
+                <div class="sub-title">执行通道</div>
+                <div class="execution-channel">
+                  <div>
+                    <div class="execution-channel-kicker">OpenClaw 外部执行</div>
+                    <p>{{ card.executionNote }}</p>
+                  </div>
+                  <button
+                    type="button"
+                    class="execution-link"
+                    @click.stop="navigateTo(card.route)"
+                  >
+                    {{ card.route.startsWith('/actions') ? '打开动作队列' : '打开处理页' }}
+                  </button>
+                </div>
+              </div>
+
+              <div v-else class="sub-section">
                 <div class="context-toolbar">
                   <div
                     class="provider-segment"
@@ -252,7 +283,7 @@
                   class="card-action primary"
                   @click.stop="hideCardForToday(card, 'done')"
                 >
-                  完成
+                  {{ card.executionChannel ? '从首页移除' : '完成' }}
                 </button>
                 <button
                   type="button"
@@ -276,6 +307,7 @@
                   不准确
                 </button>
                 <button
+                  v-if="!card.executionChannel"
                   type="button"
                   class="card-action secondary"
                   @click.stop="copyContextPack(card)"
@@ -423,6 +455,8 @@ interface MissionCard {
   missionId?: string;
   sourceHash?: string;
   cardType?: string;
+  executionChannel?: 'openclaw';
+  executionNote?: string;
   priority: MissionPriority;
   state: string;
   stateClass: MissionStateClass;
@@ -522,9 +556,9 @@ const refreshedAtLabel = computed(() =>
 );
 
 const sourceTags = computed(() => {
-  const sourceStats = dayBrief.value?.sourceStats;
+  const sourceStats = displaySourceStats.value;
   if (sourceStats) {
-    return [
+    const tags: Array<{ key: string; label: string; warn: boolean }> = [
       {
         key: 'messages',
         label: `${sourceStats.messages.totalRecent} 消息`,
@@ -540,17 +574,20 @@ const sourceTags = computed(() => {
         label: `${sourceStats.notifications.pending} 待提醒`,
         warn: sourceStats.notifications.pending > 0,
       },
-      {
+    ];
+    if (sceneRehearsalDisplayEnabled.value) {
+      tags.push({
         key: 'rehearsals',
         label: `${sourceStats.rehearsals?.active || 0} 预演`,
         warn: false,
-      },
-      {
-        key: 'missions',
-        label: `${dayBrief.value?.cards.length || 0} mission`,
-        warn: false,
-      },
-    ];
+      });
+    }
+    tags.push({
+      key: 'missions',
+      label: `${visibleMissionCards.value.length} mission`,
+      warn: false,
+    });
+    return tags;
   }
   const current = stats.value;
   if (!current)
@@ -624,16 +661,34 @@ function contextPackCopyReceipt(pack: DayPilotContextPackResponse) {
 
 const attentionBudget = computed(() => ({
   max: dayBrief.value?.attentionBudget.maxInterruptions ?? 3,
-  used:
-    dayBrief.value?.attentionBudget.usedInterruptions ??
-    Math.min(
+  used: displayAttentionBudgetUsed.value,
+}));
+
+const displayAttentionBudgetUsed = computed(() => {
+  const budget = dayBrief.value?.attentionBudget;
+  if (!budget) {
+    return Math.min(
       3,
       Number(decisionTotal.value > 0) +
         Number(watchTotal.value > 0) +
         Number(queuedActionTotal.value > 0) +
         Number(outreachTotal.value > 0),
-    ),
-}));
+    );
+  }
+
+  const planned = budget.plannedInterruptions;
+  if (planned?.length) {
+    const visibleIds = visibleDayPilotCardIds.value;
+    return planned.filter((item) => visibleIds.has(item.cardId)).length;
+  }
+
+  if (
+    visibleDayPilotCards.value.length !== (dayBrief.value?.cards.length || 0)
+  ) {
+    return Math.min(budget.usedInterruptions, visibleDayPilotCards.value.length);
+  }
+  return budget.usedInterruptions;
+});
 
 const budgetPercent = computed(() => {
   const percent =
@@ -642,7 +697,7 @@ const budgetPercent = computed(() => {
 });
 
 const rankingSummary = computed<RankingSummaryItem[]>(() => {
-  const sourceStats = dayBrief.value?.sourceStats;
+  const sourceStats = displaySourceStats.value;
   if (!sourceStats) return [];
 
   const sourcePairs = [
@@ -665,7 +720,9 @@ const rankingSummary = computed<RankingSummaryItem[]>(() => {
   const total = sourcePairs.reduce((sum, [available]) => sum + available, 0);
   const filtered = Math.max(0, total - scanned);
   const boardOnly =
-    dayBrief.value?.attentionBudget.boardOnlyCardIds?.length || 0;
+    dayBrief.value?.attentionBudget.boardOnlyCardIds?.filter((cardId) =>
+      visibleDayPilotCardIds.value.has(cardId),
+    ).length || 0;
 
   return [
     {
@@ -700,21 +757,56 @@ const rankingNote = computed(() => {
   return '当前 mission 仅在首页展示，waiting、低优先级或高隐私风险保持静默。';
 });
 
+const missionEmptyMessage = computed(() => {
+  if (loadError.value) {
+    return '今日领航暂时不可用，尚不能判断今天是否没有高优先级事项。请稍后刷新。';
+  }
+  return '当前没有需要放到首页的高优先级事项。可以从左侧进入决策中心、动作队列或主题页查看完整列表。';
+});
+
+const showMissionRetry = computed(() => Boolean(loadError.value && !loading.value));
+
 const MISSION_LIMIT = 7;
 
+const displaySourceStats = computed<DayPilotBrief['sourceStats'] | null>(() => {
+  const sourceStats = dayBrief.value?.sourceStats;
+  if (!sourceStats) return null;
+  if (sceneRehearsalDisplayEnabled.value) return sourceStats;
+  return {
+    ...sourceStats,
+    rehearsals: {
+      scanned: 0,
+      active: 0,
+    },
+  };
+});
+
+function isDayPilotCardDisplayable(card: DayPilotCard) {
+  return (
+    sceneRehearsalDisplayEnabled.value || card.cardType !== 'rehearsal_prompt'
+  );
+}
+
+const displayDayPilotCards = computed(() =>
+  (dayBrief.value?.cards ?? []).filter(isDayPilotCardDisplayable),
+);
+
 const missionCards = computed<MissionCard[]>(() => {
-  return (dayBrief.value?.cards ?? [])
-    .filter(
-      (card) =>
-        sceneRehearsalDisplayEnabled.value ||
-        card.cardType !== 'rehearsal_prompt',
-    )
+  return displayDayPilotCards.value
     .map(mapDayPilotCard)
     .slice(0, MISSION_LIMIT);
 });
 
 const visibleMissionCards = computed(() =>
   missionCards.value.filter((card) => !isDayPilotCardClosed(card.id)),
+);
+
+const visibleDayPilotCards = computed(() =>
+  displayDayPilotCards.value.filter((card) => !isDayPilotCardClosed(card.id)),
+);
+
+const visibleDayPilotCardIds = computed(
+  () => new Set(visibleDayPilotCards.value.map((card) => card.id)),
 );
 
 const attentionItems = computed<AttentionItem[]>(() => [
@@ -793,6 +885,7 @@ async function loadDayPilot() {
   } catch (error) {
     console.error('加载今日领航失败:', error);
     dayBrief.value = null;
+    resetDayPilotDerivedCounts();
     loadError.value =
       '今日领航后端暂时不可用，无法从原始记忆生成今日 mission。请稍后刷新。';
   } finally {
@@ -806,8 +899,22 @@ function countCards(cardType: string) {
   ).length;
 }
 
+function resetDayPilotDerivedCounts() {
+  decisionTotal.value = 0;
+  queuedActionTotal.value = 0;
+  pendingTemplateCount.value = 0;
+  outreachSummary.value = {
+    upcomingCount: 0,
+    waitingReplyCount: 0,
+    escalatedCount: 0,
+    pendingApprovalCount: 0,
+  };
+  skillSuggestionTotal.value = 0;
+}
+
 function mapDayPilotCard(card: DayPilotCard): MissionCard {
   const route = routeForDayPilotCard(card);
+  const executionChannel = detectExecutionChannel(card);
   const evidence = card.evidenceRefs.slice(0, 5).map((item) => ({
     source: limitText(item.title || `${item.sourceKind}:${item.sourceId}`, 40),
     text: limitText(item.snippet, 220),
@@ -817,6 +924,11 @@ function mapDayPilotCard(card: DayPilotCard): MissionCard {
     missionId: card.missionId,
     sourceHash: card.sourceHash,
     cardType: card.cardType,
+    executionChannel,
+    executionNote:
+      executionChannel === 'openclaw'
+        ? '这条确认不是选择 Codex、ChatGPT、Claude 或豆包来执行。Today Pilot 只负责提醒和整理证据；批准、拒绝或拍板需要进入对应处理页，真正的外部执行只会由 OpenClaw 接管。'
+        : undefined,
     priority: card.priority,
     state: stateLabel(card.state),
     stateClass:
@@ -863,6 +975,29 @@ function mapDayPilotCard(card: DayPilotCard): MissionCard {
           ]),
     route,
   };
+}
+
+function detectExecutionChannel(card: DayPilotCard): 'openclaw' | undefined {
+  if (card.cardType !== 'decision_check') return undefined;
+
+  const evidenceText = card.evidenceRefs
+    .map((item) =>
+      [item.sourceKind, item.sourceId, item.title, item.snippet]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .join(' ');
+  const hasOpenClawDelegation =
+    /delegate[_-]?openclaw|openclaw_delegation/i.test(evidenceText);
+  const hasOpenClawActionEvidence = card.evidenceRefs.some((item) => {
+    if (item.sourceKind !== 'action') return false;
+    return /openclaw|ringclaw/i.test(
+      [item.sourceId, item.title, item.snippet].filter(Boolean).join(' '),
+    );
+  });
+  return hasOpenClawDelegation || hasOpenClawActionEvidence
+    ? 'openclaw'
+    : undefined;
 }
 
 function stateLabel(state: DayPilotCard['state']) {
@@ -1963,9 +2098,34 @@ onMounted(() => {
 }
 
 .empty-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
   padding: 1.25rem;
   color: #94a3b8;
   line-height: 1.6;
+}
+
+.empty-panel.error {
+  border-color: rgba(245, 158, 11, 0.24);
+  background: rgba(120, 53, 15, 0.2);
+  color: #fcd34d;
+}
+
+.empty-retry {
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 0.6rem;
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+  cursor: pointer;
+  font-weight: 750;
+  padding: 0.45rem 0.85rem;
+}
+
+.empty-retry:hover {
+  background: rgba(251, 191, 36, 0.18);
 }
 
 .mission-cards {
@@ -2345,6 +2505,45 @@ onMounted(() => {
 .context-toggle:hover {
   border-color: rgba(59, 130, 246, 0.3);
   color: #60a5fa;
+}
+
+.execution-channel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 0.5rem;
+  background: rgba(30, 41, 59, 0.42);
+}
+
+.execution-channel-kicker {
+  color: #60a5fa;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.execution-channel p {
+  max-width: 760px;
+  margin: 0.25rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.execution-link {
+  min-height: 2rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 0.5rem;
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .context-pack {

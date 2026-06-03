@@ -43,6 +43,7 @@ const candidateBodySchema = {
       type: 'string' as const,
       enum: [
         'webpage',
+        'visual_memory',
         'selection',
         'jira_comment',
         'message_reply',
@@ -85,6 +86,14 @@ const dismissBodySchema = {
   type: 'object' as const,
   properties: {
     reason: { type: 'string' as const },
+  },
+  additionalProperties: false,
+};
+
+const noteBodySchema = {
+  type: 'object' as const,
+  properties: {
+    note: { type: 'string' as const },
   },
   additionalProperties: false,
 };
@@ -156,6 +165,29 @@ export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
         const { db } = request.userContext;
         const service = new SourceMemoryCaptureService(db);
         return reply.status(200).send({ capsule: service.getCapsule(request.params.id) });
+      } catch (error) {
+        if (error instanceof SourceMemoryCaptureValidationError) {
+          return reply.status(error.statusCode).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { note?: string } }>(
+    '/source-memory/capsules/:id/note',
+    {
+      schema: {
+        body: noteBodySchema,
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { db, userDataManager } = request.userContext;
+        const service = new SourceMemoryCaptureService(db, userDataManager);
+        return reply
+          .status(200)
+          .send({ capsule: service.updateCapsuleNote(request.params.id, request.body?.note) });
       } catch (error) {
         if (error instanceof SourceMemoryCaptureValidationError) {
           return reply.status(error.statusCode).send({ error: error.message });

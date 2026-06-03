@@ -434,6 +434,73 @@ describe('Confirm Requests API', () => {
     ]);
   });
 
+  it('snoozes and restores decision items through the state endpoint', async () => {
+    const context = userContextManager.getContext('confirm-retry-user');
+    const currentTime = Math.floor(Date.now() / 1000);
+
+    context.db
+      .prepare(
+        `INSERT INTO confirm_requests
+        (id, question, options_json, evidence_refs_json, category, priority, state, routing, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'cr-decision-snooze',
+        'Should we let OpenClaw retry the production deploy check?',
+        JSON.stringify([{ label: 'Retry', value: 'retry' }]),
+        JSON.stringify(['action:deploy-check']),
+        'openclaw_delegation',
+        'high',
+        'pending',
+        'decision',
+        currentTime,
+        currentTime,
+      );
+
+    const snoozeResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/cr-decision-snooze/state',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { state: 'snoozed' },
+    });
+    expect(snoozeResponse.statusCode).toBe(200);
+    expect(snoozeResponse.json().confirmRequest.state).toBe('snoozed');
+    expect(snoozeResponse.json().confirmRequest.snoozeCount).toBe(1);
+    expect(snoozeResponse.json().confirmRequest.snoozeUntil).toBeGreaterThan(
+      currentTime,
+    );
+
+    const pendingResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/confirm-requests?queue=decision&state=pending',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+    });
+    expect(pendingResponse.statusCode).toBe(200);
+    expect(
+      pendingResponse.json().items.map((item: any) => item.id),
+    ).not.toContain('cr-decision-snooze');
+
+    const snoozedResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/confirm-requests?queue=decision&state=snoozed',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+    });
+    expect(snoozedResponse.statusCode).toBe(200);
+    expect(snoozedResponse.json().items.map((item: any) => item.id)).toContain(
+      'cr-decision-snooze',
+    );
+
+    const restoreResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/cr-decision-snooze/state',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { state: 'pending' },
+    });
+    expect(restoreResponse.statusCode).toBe(200);
+    expect(restoreResponse.json().confirmRequest.state).toBe('pending');
+    expect(restoreResponse.json().queuedActionId).toBeUndefined();
+  });
+
   it('transitions watch item state through the state endpoint and rejects answer endpoint', async () => {
     const context = userContextManager.getContext('confirm-retry-user');
     const currentTime = Math.floor(Date.now() / 1000);

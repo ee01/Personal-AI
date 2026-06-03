@@ -169,7 +169,7 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { db } = request.userContext;
-      const service = new ContextRecallService(db);
+      const service = new ContextRecallService(db, request.userId);
       try {
         const result: ContextRecallResponse = await service.recall(
           request.body,

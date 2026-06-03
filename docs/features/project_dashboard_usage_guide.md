@@ -1,6 +1,6 @@
 # 项目进度仪表盘使用指南
 
-*最后更新: 2026-05-26*
+*最后更新: 2026-05-31*
 
 ## 概述
 
@@ -49,7 +49,7 @@
 - **决策依据**：每个项目会列出阻塞、过期、近 7 天到期、缺 ETA、缺 Jira/平台来源等信号，并给出建议下一步。
 - **视图归类原因**：每张项目卡会解释它被归入“需处理 / 需关注 / 待规划 / 正常”的主要原因和下一步；证据覆盖不完整的项目会进入“需关注”，避免被误看成完全正常。
 - **项目视图筛选**：可按“全部 / 需处理 / 需关注 / 待规划 / 正常”切换项目列表；计划陈旧、需复核或状态复核过期会归入“需关注”，缺时间线会归入“待规划”，减少多项目扫描成本。
-- **数据来源提示**：顶部常驻显示“本地工作台”边界，可从 Memory Service 关注项目补齐本地工作台；同步结果会列出新增/匹配项目名，并用“可读取 / 暂不可用 / 未接入”区分 Memory Service 运行故障和 Jira/GitHub/Confluence 尚未接入，同时列出每个来源的使用边界。新导入的关注项目会保持未复核状态，直到用户检查状态草稿和证据后确认。
+- **数据来源提示**：顶部常驻显示“本地工作台”边界，可从 Memory Service 关注项目补齐本地工作台；同步结果会列出新增/匹配项目名，并用“可读取 / 暂不可用 / 未接入”区分 Memory Service 运行故障和 Jira/GitHub/Confluence 尚未接入，同时列出每个来源的使用边界和本地诊断。新导入的关注项目会保持未复核状态，直到用户检查状态草稿和证据后确认。
 - **关键指标**：完成任务数、阻塞任务数、过期任务数、近 7 天到期任务、下个里程碑。
 - **风险优先排序**：项目列表按需处理、需关注、待规划、正常排序；同类项目优先显示阻塞和过期更多的项目。
 - **优先处理项**：每张项目卡内仍会展示该项目的重点风险任务，可直接点击进入任务详情。
@@ -57,13 +57,14 @@
 - **项目建议**：新增项目弹窗会用输入的查找提示词向 Memory Service 请求项目名建议，结果优先匹配提示词。
 - **来源项目聚焦**：从实体记忆入口打开时会保留项目 ID / 名称，优先定位对应本地项目，避免从记忆项目跳转后迷失在默认列表里。
 - **鱼骨时间线**：展示里程碑、依赖、设计任务、开发任务和平台状态。
+- **图表概览**：每个项目卡片会把现有本地数据整理成甘特就绪度、依赖图和燃尽/完成三个轻量图表卡，明确哪些图能可信使用、哪些缺 ETA/Jira/平台来源，以及下一步应补哪条任务证据；每张卡会列出驱动该判断的关键任务行，点击后进入任务详情，并在缺 ETA 或缺来源时直接聚焦修复输入区。这不是完整甘特引擎，不会把缺数据的鱼骨位置伪装成真实排期。
 
 ### 2. 数据同步与管理
-- **⚡ 同步/检查数据源**：读取 Memory Service active watched projects，本地没有的关注项目会创建成待规划、未复核的工作台；同步面板会显示新增/匹配项目名。Memory Service 读失败时会显示“暂不可用”并说明本地工作台不会被清空或覆盖；Jira/GitHub/Confluence 会显示“未接入”和不会读取的对象，避免把本地数据误认为权威快照。
+- **⚡ 同步/检查数据源**：读取 Memory Service active watched projects，本地没有的关注项目会创建成待规划、未复核的工作台；同步面板会显示新增/匹配项目名。扩展端会覆盖 Memory Service 可读取和暂不可用两种路径，避免把 service worker 运行态问题误报成数据源不可用。Memory Service 读失败时会显示“暂不可用”并说明本地工作台不会被清空或覆盖；Jira/GitHub/Confluence 会显示“未接入”和不会读取的对象，避免把本地数据误认为权威快照。每张来源卡还会显示本地诊断，包括项目/活动任务数量、ETA 覆盖率、Jira key 覆盖、平台来源覆盖和缺来源任务样例。
 - **🔄 刷新数据**：手动刷新本地缓存数据
 - **后台刷新**：页面会定时静默刷新项目数据，避免打断正在查看或编辑的仪表盘状态。
 - **📄 导出报告**：导出当前仪表盘项目数据为 JSON 报告
-- **📥 导入报告**：从 JSON 报告导入项目数据，支持合并或替换当前项目列表
+- **📥 导入报告复核**：从 JSON 报告导入项目数据前，会先展示报告范围、项目/里程碑/任务数量、项目名预览，以及“合并导入”和“替换当前项目”分别会新增、更新、保留或移除多少本地项目；用户选择后才会写入本地工作台。
 - **本地持久化**：项目、里程碑、任务和导入结果会保存到 `chrome.storage.local`
 
 ### 3. 实时状态监控
@@ -93,6 +94,8 @@
 - 项目决策依据与建议下一步
 - 项目视图归类原因
 - 优先处理项快捷入口
+- 项目图表概览：甘特就绪度、依赖图、燃尽/完成
+- 图表关键任务行：展示每张图表判断背后的排期、阻塞、过期或缺证据任务，并可直接打开修复
 - 鱼骨时间线
 - 新增项目弹窗
 - 来自实体记忆的项目聚焦 / 创建提示
@@ -100,10 +103,11 @@
 - 任务详情编辑弹窗
 - 任务详情证据修复面板和平台来源编辑区
 - 状态更新草稿预览弹窗（展示本地任务 ETA、Jira、平台状态、活动风险、里程碑、复核和证据覆盖度）
+- 项目报告导入复核弹窗（导入前比较合并/替换影响）
 - JSON 导入/导出
 - 本地数据来源提示条
 
-以下高级可视化仍是后续方向：
+当前图表概览已经能基于本地任务和里程碑做轻量可视化判断。以下更完整的交互式图表仍是后续方向：
 
 ### 甘特图
 - **交互式时间线**：拖拽调整任务时间
@@ -145,7 +149,8 @@
 ### 类人脑记忆机制
 - **本地项目工作台**：仪表盘数据保存在 `chrome.storage.local`
 - **长期记忆**：项目实体和上下文由 Memory Service 管理
-- **关注项目补齐**：点击“同步/检查数据源”后，本地缺少的 Memory Service watched projects 会被补成带来源说明的待规划项目；新导入项目不会自动写入复核时间，Memory Service 暂不可用只会阻止本次补齐，不会覆盖本地项目
+- **关注项目补齐**：点击“同步/检查数据源”后，本地缺少的 Memory Service watched projects 会被补成带来源说明的待规划项目；新导入项目不会自动写入复核时间，Memory Service 暂不可用只会阻止本次补齐，不会覆盖本地项目；成功同步路径在扩展 service worker 中直接使用 Memory Service client，确保可读取状态能真正新增/匹配 watched projects
+- **本地来源诊断**：数据源检查会统计当前工作台的活动任务 ETA、Jira key 和平台状态/负责人/平台 Jira 覆盖率；这只说明本地证据质量，不代表 Jira/GitHub/Confluence 已完成真实同步
 - **后续方向**：把本地项目与 Memory Service watched projects 做可审阅的双向同步
 
 ### 当前限制
@@ -178,19 +183,21 @@
 ### 处理流程
 1. **数据维护**：在仪表盘里创建/编辑项目数据，或导入 JSON 报告
 2. **关注项目补齐**：同步/检查数据源时读取 Memory Service active watched projects，本地缺少的项目会新增为待规划、未复核的工作台，并在同步结果中列出新增/匹配项目名
-3. **本地持久化**：保存到 `chrome.storage.local`
-4. **健康计算**：按阻塞、过期、近期到期、完成数和里程碑生成摘要
-5. **计划新鲜度计算**：按任务 ETA 和里程碑日期识别陈旧计划或缺时间线项目
-6. **状态复核计算**：按最近一次状态复核时间识别待复核或复核过期项目
-7. **证据覆盖计算**：按活动任务的 ETA 与 Jira/平台来源识别证据缺口；平台状态、平台负责人和平台 Jira 会作为平台来源证据，并生成带缺口构成摘要的可点击补全队列，进入详情时聚焦对应修复字段
-8. **活动级风险计算**：按阻塞、过期/临期、来源缺口、平台状态和临近里程碑生成规则化风险分
-9. **视图归类解释**：按健康、计划新鲜度、状态复核和证据缺口解释项目为什么进入当前视图
-10. **决策解释**：把风险信号、计划新鲜度、状态复核和数据缺口整理成“建议下一步”，供用户审阅
-11. **决策摘要计算**：按阻塞/过期/临期任务、证据缺口构成和状态复核队列生成首屏下一步入口
-12. **可视化渲染**：渲染决策摘要、项目卡片、健康摘要、活动风险、归类原因、计划新鲜度、复核队列、证据覆盖度、决策依据和鱼骨时间线
+3. **导入复核**：JSON 报告先在前端解析并计算合并/替换影响，用户确认模式后才交给后台写入。
+4. **本地持久化**：保存到 `chrome.storage.local`
+5. **健康计算**：按阻塞、过期、近期到期、完成数和里程碑生成摘要
+6. **计划新鲜度计算**：按任务 ETA 和里程碑日期识别陈旧计划或缺时间线项目
+7. **状态复核计算**：按最近一次状态复核时间识别待复核或复核过期项目
+8. **证据覆盖计算**：按活动任务的 ETA 与 Jira/平台来源识别证据缺口；平台状态、平台负责人和平台 Jira 会作为平台来源证据，并生成带缺口构成摘要的可点击补全队列，进入详情时聚焦对应修复字段
+9. **活动级风险计算**：按阻塞、过期/临期、来源缺口、平台状态和临近里程碑生成规则化风险分
+10. **视图归类解释**：按健康、计划新鲜度、状态复核和证据缺口解释项目为什么进入当前视图
+11. **决策解释**：把风险信号、计划新鲜度、状态复核和数据缺口整理成“建议下一步”，供用户审阅
+12. **决策摘要计算**：按阻塞/过期/临期任务、证据缺口构成和状态复核队列生成首屏下一步入口
+13. **图表可用性计算**：按活动任务 ETA、里程碑日期、依赖任务状态、来源证据和完成状态生成甘特就绪度、依赖图、燃尽/完成三个轻量图表概览；每个图表卡会列出关键任务驱动项，缺 ETA 或来源时会给出直达任务详情并聚焦修复字段的入口
+14. **可视化渲染**：渲染决策摘要、项目卡片、健康摘要、活动风险、归类原因、计划新鲜度、复核队列、证据覆盖度、决策依据、图表概览和鱼骨时间线
 
 ### 输出形式
-1. **项目仪表盘**：首屏决策摘要、项目卡片、健康摘要、活动级风险分、视图归类原因、计划新鲜度、状态复核队列、证据补全队列、证据覆盖度、决策依据、鱼骨时间线
+1. **项目仪表盘**：首屏决策摘要、项目卡片、健康摘要、活动级风险分、视图归类原因、计划新鲜度、状态复核队列、证据补全队列、证据覆盖度、决策依据、图表概览、鱼骨时间线
 2. **JSON 报告**：可导出并回读导入
 3. **状态更新草稿**：可在复制前预览，并附带本地证据来源
 4. **后续方向**：真实数据同步、风险预测
@@ -210,13 +217,21 @@
 10. **点击任务卡片**：编辑状态、ETA、描述和 Jira 链接
 
 ### 日常使用
-1. **同步/检查数据源**：点击“同步/检查数据源”把 Memory Service 关注项目补进本地工作台，确认新增/匹配项目名；如果看到 Memory Service “暂不可用”，先检查服务/API Key，如果看到 Jira/GitHub/Confluence “未接入”，则继续按本地工作台维护
+1. **同步/检查数据源**：点击“同步/检查数据源”把 Memory Service 关注项目补进本地工作台，确认新增/匹配项目名；如果看到 Memory Service “暂不可用”，先检查服务/API Key；如果看到 Jira/GitHub/Confluence “未接入”，再看本地诊断里的 ETA、Jira key、平台来源覆盖和缺来源任务，优先补齐这些证据
 2. **监控进度**：查看项目整体进度和关键指标
 3. **切换项目视图**：用“需处理 / 需关注 / 待规划 / 正常”筛选当前项目列表
 4. **导出备份**：使用“导出全部”或项目卡片上的“导出当前项目”生成 JSON 备份
-5. **导入回读**：使用“导入报告”导入 JSON，按提示选择合并或替换
+5. **导入回读**：使用“导入报告”导入 JSON，先看复核弹窗里的项目清单和合并/替换影响；默认选择合并导入，只有确认需要移除当前本地项目时才选择替换。
 6. **识别风险**：优先处理“需处理”项目中的阻塞和过期项；“需关注”也包括计划陈旧、状态复核过期或证据严重不足的项目，先更新 ETA / 里程碑、完成状态复核或补齐来源再判断风险
 7. **团队协调**：先从复核队列或项目卡片打开状态更新草稿，确认左侧证据和右侧文本后再标记已复核；若证据覆盖度不足，先从证据补全队列进入任务详情，看顶部证据修复面板，必要时展开全部队列，补齐 ETA、平台状态、平台负责人或 Jira 链接再同步给相关人
+
+### 图表概览使用原则
+
+2026-05-28 对齐业内项目管理产品和软件工程 dashboard 研究后的当前原则：时间线、依赖和燃尽视图不能只给抽象分数或装饰性图形，必须能回到具体工作项。Project Dashboard 因此先把图表做成“就绪度 + 关键任务 + 修复入口”：甘特卡暴露 ETA 锚点和缺 ETA 任务，依赖卡暴露阻塞或缺来源依赖，燃尽卡暴露阻塞、过期或剩余任务。完整拖拽甘特、网络布局和趋势预测仍是后续方向，当前不把缺数据的本地鱼骨位置当成权威排期。
+
+### 导入报告使用原则
+
+2026-05-31 对齐 Jira / Asana / Linear 的项目状态面板和 PMIS 信息质量研究后，导入报告被视为会改变本地项目事实的高信任操作，不再用浏览器原生确认框一跳完成。当前实现会先解析报告并显示合并/替换两种模式的影响：合并保留本地项目、更新同 ID 项目并新增缺失项目；替换会移除报告外的本地项目。导入只写当前浏览器本地工作台，不会反写 Memory Service 或外部项目系统。
 
 ### 后续高级方向
 1. **自定义筛选**：根据时间、状态、人员筛选信息
@@ -269,4 +284,9 @@
 - [GitHub Projects roadmap](https://docs.github.com/en/enterprise-server%403.16/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-roadmap-layout) / [status updates](https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/sharing-project-updates) 把里程碑、日期标记和项目状态放进可扫描视图。
 - [Asana project status](https://help.asana.com/s/article/project-progress-and-status-updates?language=en_US) / [portfolio views](https://help.asana.com/s/article/portfolio-views) 强调状态、负责人、到期时间、里程碑、风险摘要和 portfolio 级视图。
 - [Linear project updates](https://linear.app/docs/initiative-and-project-updates) 和 [Microsoft Planner premium](https://support.microsoft.com/en-gb/office/advanced-capabilities-with-premium-plans-in-planner-6cdba2aa-da06-4e08-be4c-baaa4fda17ba) 都把健康状态、进度变化、里程碑、依赖、关键路径和定期更新提醒放在项目决策路径里。
+- [Jira burndown](https://support.atlassian.com/jira-software-cloud/docs/view-and-understand-the-burndown-chart/) 和 [Asana chart styles](https://help.asana.com/s/article/chart-styles?language=en-US) 都把燃尽图视为剩余工作/完成趋势视图；Personal AI 当前只在本地任务有足够 ETA 与完成状态时展示轻量判断，避免在数据不足时制造精确趋势。
+- [Linear project dependencies](https://linear.app/docs/project-dependencies) 和 [Planner premium dependencies / Timeline](https://support.microsoft.com/en-US/Planner/teams/advanced-capabilities-with-premium-plans-in-planner) 都把依赖关系放在时间线旁边处理；当前实现先把阻塞依赖和缺来源依赖显性化，再引导用户补证据。
+- [GitHub project updates](https://docs.github.com/en/enterprise-cloud@latest/issues/planning-and-tracking-with-projects/sharing-project-updates) 和 [Linear initiative/project updates](https://linear.app/docs/initiative-and-project-updates) 都把状态、目标日期、历史更新和人工发布放在可审阅路径里；[Linear Project Graph](https://linear.app/docs/project-graph) 明确需要足够 issue 数据才生成图表和预测。本地数据源诊断沿用这个边界：先说明本地证据是否够，再考虑真实外部同步。
+- 软件工程数据质量研究指出，敏捷/软件项目数据常见缺口包括不可访问、不完整、不一致、低精度和跨系统语义不一致；状态面板因此要把来源覆盖和缺口显性化，可参考 [agile data management challenges SLR](https://link.springer.com/article/10.1007/s10664-025-10630-4)、[GitHub mining perils](https://www.microsoft.com/en-us/research/publication/an-in-depth-study-of-the-promises-and-perils-of-mining-github/) 和 [Project Intelligence](https://research.google/pubs/project-intelligence/)。
 - Dashboard、PMIS 和项目风险研究通常建议控制信息过载，把异常、下一步动作、数据新鲜度和活动级风险贡献放在首屏，可参考 [dashboard evaluation framework](https://arxiv.org/abs/2009.04792)、[dashboard information load 研究](https://www.sciencedirect.com/science/article/pii/S0926580523002893)、[PMIS 多项目决策研究](https://www.sciencedirect.com/science/article/abs/pii/S0263786311000688) 和 [Activity Risk Index](https://arxiv.org/abs/2406.00078)。
+- Gantt/项目可视化研究提醒，传统甘特图在大项目中容易丢失历史和趋势，需要概览、异常和 details-on-demand 配合使用，可参考 [3D project task visualization empirical study](https://www.sciencedirect.com/science/article/pii/S016412121600008X)、[Project Tube Maps vs Gantt Charts](https://kar.kent.ac.uk/14324/) 和 [Gantt visualization task taxonomy](https://arxiv.org/abs/2408.04050)。

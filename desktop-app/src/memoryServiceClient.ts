@@ -121,6 +121,12 @@ export interface AskResponse {
     sourceUrl?: string;
   }>;
   queryTimeMs: number;
+  answerMemory?: {
+    state: 'priorHit' | 'observed' | 'promoted' | 'updated' | 'skipped';
+    threadId?: string;
+    canonicalKey?: string;
+    skipReason?: string;
+  };
   blocks?: RecallBlock[];
   analysis?: RecallAnalysis;
   structuredAnswer?: {
@@ -171,6 +177,7 @@ export type AskStreamEvent =
       blocks?: RecallBlock[];
       analysis?: RecallAnalysis;
       structuredAnswer?: AskResponse['structuredAnswer'];
+      answerMemory?: AskResponse['answerMemory'];
       resolutionState?: AskResponse['resolutionState'];
       missingInfo?: AskResponse['missingInfo'];
       followUpActions?: AskResponse['followUpActions'];
@@ -234,15 +241,47 @@ export interface ContextRecallMatch {
   links?: Array<{ url: string; label?: string }>;
 }
 
+export interface ContextRecallSceneSummary {
+  people?: string[];
+  topics?: string[];
+  projects?: string[];
+  source?: string[];
+}
+
+export interface ContextRecallAutopilotQuietReason {
+  reason: string;
+  label: string;
+  count: number;
+}
+
+export interface ContextRecallAutopilotDecision {
+  mode: 'silent' | 'chip' | 'card' | 'context_pack';
+  summary: string;
+  candidateCount: number;
+  shownCount: number;
+  strongCount: number;
+  possibleCount: number;
+  quietedCount: number;
+  hiddenCount: number;
+  lowInformationCount: number;
+  sourceExcludedCount: number;
+  duplicateMergedCount: number;
+  quietReasons: ContextRecallAutopilotQuietReason[];
+  sceneAnchors?: ContextRecallSceneSummary;
+  gates: string[];
+}
+
 export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch?: ContextRecallMatch | null;
   queryTimeMs: number;
+  autopilot?: ContextRecallAutopilotDecision;
   debug?: {
     normalizedQuery: string;
     channelsHit: string[];
     rejectedReason?: string;
     suppressionReasons?: string[];
+    autopilot?: ContextRecallAutopilotDecision;
   };
 }
 
@@ -387,6 +426,7 @@ export interface ExtractFromChatResponse {
     matchedProjects?: string[];
   }>;
   scopeUsed: 'work' | 'personal';
+  outcomeSignals?: Array<Record<string, unknown>>;
 }
 
 export interface DeleteMemoriesBySourceScopeResponse {
@@ -679,6 +719,7 @@ export class BridgeMemoryServiceClient {
       | 'notice_sync'
       | 'reminder_sync';
     deviceContext?: string;
+    deliveryMode?: 'incremental' | 'daily_digest';
   }): Promise<RenderContextPackageResponse> {
     this.ensureWriteIdentity();
     return this.request<RenderContextPackageResponse>(
@@ -688,6 +729,7 @@ export class BridgeMemoryServiceClient {
         provider: input.provider,
         scenario: input.scenario,
         deviceContext: input.deviceContext ?? 'doubao_bridge_daemon',
+        deliveryMode: input.deliveryMode,
         createSyncJob: true,
       },
     );
@@ -855,8 +897,11 @@ export class BridgeMemoryServiceClient {
 
   async extractFromChat(input: {
     source: string;
+    sourceType?: string;
     scope: 'work' | 'personal';
     autoClassify?: boolean;
+    extractMode?: 'chat' | 'agent_session';
+    conversationMeta?: Record<string, unknown>;
     segments: ExtractFromChatSegment[];
   }): Promise<ExtractFromChatResponse> {
     this.ensureWriteIdentity();

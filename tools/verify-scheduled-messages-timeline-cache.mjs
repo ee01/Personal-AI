@@ -85,6 +85,32 @@ assert.equal(
 
 assert.equal(context.getTimelineProjectInfo(cachedShape, 'Unknown'), null);
 
+const paramKeyShape = {
+  'Jupiter web': {
+    currentRelease: '26.2',
+    currentPhase: 'Regression',
+    releaseInfo: {
+      FF: '05/06/2026',
+    },
+  },
+};
+
+assert.equal(
+  context.replaceProjectVariablesInText(
+    'Release {currentRelease} is in {currentPhase}',
+    context.getTimelineProjectInfo(paramKeyShape, 'jupiterWeb')
+  ),
+  'Release 26.2 is in Regression'
+);
+assert.equal(
+  isoDate(context.getTimelineTargetDate({
+    Timeline_Project: 'jupiterWeb',
+    Timeline_Milestone: 'FF',
+    Timeline_Offset: '0',
+  }, paramKeyShape)),
+  '2026-05-06'
+);
+
 assert.match(
   managerSource,
   /fetch\(buildWebAppActionUrl\(webAppUrl, 'getTimelineCacheStatus'\), \{\s*method: 'GET',\s*credentials: 'omit',/s,

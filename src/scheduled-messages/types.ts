@@ -169,6 +169,7 @@ export interface SheetConfig {
   created_by: string;
   created_at: string;
   last_sync_time?: string;
+  last_sync_action?: string;
   // 新版 Bot 配置（双 Jira Automation Rule）
   botAutomation?: BotAutomationConfig;
   // 旧版兼容字段：仅 executor rule
@@ -184,6 +185,9 @@ export interface InitializationResult {
   sheetUrl: string;
   scriptId: string;
   webAppUrl: string;
+  deploymentId?: string;         // Web App deployment ID, used by App Script updates
+  messagesSheetId?: number;      // Messages worksheet grid ID
+  logsSheetId?: number;          // Logs worksheet grid ID
   error?: string;
   setupWarnings?: string[];
   needsAuthorization?: boolean;  // 是否需要用户授权

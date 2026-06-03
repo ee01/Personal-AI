@@ -115,6 +115,7 @@ test('manual bind config diff summarizes changed recovery fields without exposin
     getManualBindConfigDiff(
       {
         ...baseConfig,
+        last_sync_action: 'bot_config_update',
         webAppUrl: 'https://script.google.com/macros/s/local/exec',
         messagesSheetId: 101,
         botAutomation: {
@@ -144,6 +145,7 @@ test('manual bind config diff summarizes changed recovery fields without exposin
       },
       {
         ...baseConfig,
+        last_sync_action: 'manual_bind_use_sheet',
         webAppUrl: 'https://script.google.com/macros/s/sheet/exec',
         messagesSheetId: 202,
         botAutomation: {
@@ -173,6 +175,11 @@ test('manual bind config diff summarizes changed recovery fields without exposin
       },
     ),
     [
+      {
+        label: '最近同步动作',
+        localValue: 'Bot / Timeline 配置更新',
+        sheetValue: '手动绑定：使用 Sheet',
+      },
       {
         label: 'Web App URL',
         localValue: 'https://script.google.com/macros/s/local/exec',

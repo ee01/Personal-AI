@@ -7,6 +7,7 @@ import {
   registerTool,
 } from '../src/agentThinking.ts';
 import {
+  buildAgentRunDiagnosticPacket,
   buildPendingApprovalActions,
   buildAgentRunReviewItems,
   buildAgentFlowSteps,
@@ -366,6 +367,9 @@ function installFetchMock() {
 async function main() {
   installChromeMock();
   installFetchMock();
+  const outreachBaselineAt = Math.floor(
+    Date.parse('2026-04-14T23:00:00.000Z') / 1000,
+  );
 
   const manualItems: TopicItemWithAutoReply[] = [
     {
@@ -385,8 +389,8 @@ async function main() {
       requiresApproval: false,
       followupCount: 0,
       maxFollowup: 2,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: outreachBaselineAt,
+      updatedAt: outreachBaselineAt,
     },
   ];
 
@@ -468,9 +472,16 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('待确认动作未执行'));
   assert.ok(agentVisualizerSource.includes('pending-notify'));
   assert.ok(agentVisualizerSource.includes('node-detail'));
+  assert.ok(agentVisualizerSource.includes('AGENT_TRACE_JUMP_EVENT'));
+  assert.ok(agentVisualizerSource.includes('node-step-index'));
+  assert.ok(agentVisualizerSource.includes('跳到时间线步骤'));
+  assert.ok(agentVisualizerSource.includes('复制诊断包'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择 key'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择审核包'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择重跑配置'));
+  assert.ok(agentVisualizerSource.includes('复制失败，请手动选择诊断包'));
+  assert.ok(agentVisualizerSource.includes('agent-run-diagnostic-manual-copy'));
+  assert.ok(agentVisualizerSource.includes('agent-approval-manual-copy'));
   assert.ok(!agentVisualizerSource.includes('思考过程:'));
   const agentVisualizerPresentationSource = readFileSync(
     'src/agentVisualizerPresentation.ts',
@@ -489,10 +500,15 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('buildApprovalReviewHint'));
   assert.ok(agentVisualizerPresentationSource.includes('retryConfigPatch'));
   assert.ok(agentVisualizerPresentationSource.includes('detail?: string'));
+  assert.ok(agentVisualizerPresentationSource.includes('stepIndex?: number'));
+  assert.ok(agentVisualizerPresentationSource.includes('buildAgentRunDiagnosticPacket'));
+  assert.ok(agentVisualizerPresentationSource.includes('agent_thinking_run_diagnostics'));
   const agentVisualizerCss = readFileSync('static/agent-visualizer.css', 'utf8');
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
+  assert.ok(agentVisualizerCss.includes('.flow-node.jumpable'));
   assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
   assert.ok(agentVisualizerCss.includes('.node-detail'));
+  assert.ok(agentVisualizerCss.includes('.node-step-index'));
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.empty'));
   assert.ok(agentVisualizerCss.includes('.node-result.empty'));
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.approval'));
@@ -508,6 +524,9 @@ async function main() {
   assert.ok(agentVisualizerCss.includes('.agent-approval-copy-status'));
   assert.ok(agentVisualizerCss.includes('.result-pending-approval'));
   assert.ok(agentVisualizerCss.includes('.decision-badge.pending-notify'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-copy'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-diagnostic-manual-copy'));
+  assert.ok(agentVisualizerCss.includes('.agent-approval-manual-copy'));
   const optionsCss = readFileSync('static/options.css', 'utf8');
   assert.ok(optionsCss.includes('.tool-safety-badge'));
 
@@ -983,6 +1002,12 @@ async function main() {
       'jiraQuery:失败:error',
     ],
   );
+  assert.deepEqual(
+    flowSteps
+      .filter((step) => step.type === 'tool')
+      .map((step) => step.stepIndex),
+    [0, 1, 2, 3],
+  );
   const completedFlowSteps = buildAgentFlowSteps(
     [
       blockedStep,
@@ -998,8 +1023,8 @@ async function main() {
   assert.deepEqual(
     completedFlowSteps
       .filter((step) => step.type === 'decision')
-      .map((step) => step.name),
-    ['最终决策'],
+      .map((step) => `${step.name}:${step.stepIndex}`),
+    ['最终决策:1'],
   );
   const budgetFlowSteps = buildAgentFlowSteps(
     [
@@ -1018,10 +1043,58 @@ async function main() {
     (step) => step.type === 'decision',
   );
   assert.equal(budgetDecisionStep?.name, '预算耗尽');
+  assert.equal(budgetDecisionStep?.stepIndex, 2);
   assert.match(
     budgetDecisionStep?.detail || '',
     /待确认 1 个步骤、证据不足 1 个步骤/,
   );
+  const diagnosticPacket = buildAgentRunDiagnosticPacket(
+    [
+      approvalStep,
+      blockedStep,
+      emptyEvidenceStep,
+      {
+        timestamp: timestamp + 5300,
+        thought: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+        publicSummary: '已达到最大行动次数 3，使用当前已收集的信息结束本轮分析。',
+        action: 'max_actions_reached',
+      },
+    ],
+    { generatedAt: '2026-05-31T00:00:00.000Z' },
+  );
+  assert.equal(diagnosticPacket.type, 'agent_thinking_run_diagnostics');
+  assert.equal(diagnosticPacket.status, 'max_actions_reached');
+  assert.equal(diagnosticPacket.severity, 'warning');
+  assert.equal(diagnosticPacket.summary.stepCount, 4);
+  assert.equal(diagnosticPacket.summary.pendingApprovalCount, 1);
+  assert.deepEqual(diagnosticPacket.summary.toolsInvolved, [
+    'approvalWriteTest',
+    'historySearch',
+    'orgStructure',
+  ]);
+  assert.deepEqual(
+    diagnosticPacket.reviewItems
+      .find((item) => item.title === '行动次数用完')
+      ?.stepNumbers,
+    [1, 2, 3, 4],
+  );
+  assert.deepEqual(diagnosticPacket.pendingApprovals.map((item) => ({
+    stepNumber: item.stepNumber,
+    toolId: item.toolId,
+    approvalKeyAvailable: item.approvalKeyAvailable,
+    retryConfigAvailable: item.retryConfigAvailable,
+  })), [
+    {
+      stepNumber: 1,
+      toolId: 'approvalWriteTest',
+      approvalKeyAvailable: true,
+      retryConfigAvailable: true,
+    },
+  ]);
+  const serializedDiagnosticPacket = JSON.stringify(diagnosticPacket);
+  assert.ok(!serializedDiagnosticPacket.includes('approval-tail-token-visible-in-ui'));
+  assert.ok(!serializedDiagnosticPacket.includes('approvalWriteTest:{'));
+  assert.match(diagnosticPacket.privacyNote, /omits raw tool results/);
   const flowStepsWithDetails = buildAgentFlowSteps(
     [
       {

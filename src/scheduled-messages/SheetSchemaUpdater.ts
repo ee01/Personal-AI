@@ -224,7 +224,9 @@ export class SheetSchemaUpdater {
         // 保存到 Config Sheet
         const { ConfigSyncService } = await import('./ConfigSyncService');
         const syncService = new ConfigSyncService(this.token);
-        await syncService.saveConfigToSheet(this.config);
+        await syncService.saveConfigToSheet(this.config, undefined, {
+          syncAction: 'sheet_schema_update',
+        });
         
         console.log('✅ Sheet IDs 已修复并同步');
       } else {
@@ -482,7 +484,7 @@ export class SheetSchemaUpdater {
     // 使用 ConfigSyncService 同步配置
     const { ConfigSyncService } = await import('./ConfigSyncService');
     const syncService = new ConfigSyncService(this.token);
-    await syncService.syncConfig(updatedConfig);
+    await syncService.syncConfig(updatedConfig, { syncAction: 'sheet_schema_update' });
   }
   
   /**

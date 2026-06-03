@@ -1,0 +1,1103 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Memory Relevance Trainer Demo</title>
+    <style>
+      :root {
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --ink: #172033;
+        --muted: #657089;
+        --line: #d9dfeb;
+        --soft: #eef2f8;
+        --blue: #275be8;
+        --blue-soft: #e9efff;
+        --green: #177a56;
+        --green-soft: #e7f5ee;
+        --amber: #a86104;
+        --amber-soft: #fff2dd;
+        --red: #b3261e;
+        --red-soft: #fdebea;
+        --shadow: 0 18px 50px rgba(28, 39, 64, 0.16);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--ink);
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 72px minmax(300px, 1fr);
+      }
+
+      .rail {
+        background: #192034;
+        color: white;
+        padding: 16px 12px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .logo {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: #ffffff;
+        color: #192034;
+        font-weight: 800;
+      }
+
+      .rail-btn {
+        width: 42px;
+        height: 42px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.08);
+        color: white;
+        display: grid;
+        place-items: center;
+      }
+
+      .workspace {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: 64px 1fr;
+      }
+
+      .topbar {
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+        padding: 0 22px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .top-title {
+        min-width: 0;
+      }
+
+      .top-title strong {
+        display: block;
+        font-size: 16px;
+        line-height: 1.25;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .top-title span {
+        display: block;
+        margin-top: 3px;
+        font-size: 12px;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .search {
+        width: min(320px, 38vw);
+        height: 36px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--soft);
+        color: var(--muted);
+        padding: 0 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+
+      .chat {
+        min-height: 0;
+        padding: 22px;
+        overflow: auto;
+      }
+
+      .scene-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .scene-head {
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+      }
+
+      .scene-head h1 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .scene-head p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .scene-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .chip {
+        border: 1px solid var(--line);
+        background: var(--soft);
+        border-radius: 999px;
+        padding: 5px 9px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .chip.blue {
+        color: var(--blue);
+        border-color: #c7d4ff;
+        background: var(--blue-soft);
+      }
+
+      .chip.green {
+        color: var(--green);
+        border-color: #bfe4d3;
+        background: var(--green-soft);
+      }
+
+      .chip.amber {
+        color: var(--amber);
+        border-color: #ffd8a1;
+        background: var(--amber-soft);
+      }
+
+      .messages {
+        padding: 18px 20px 160px;
+        display: grid;
+        gap: 14px;
+        position: relative;
+      }
+
+      .msg {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+      }
+
+      .avatar {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        background: #dfe6f4;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 700;
+        color: #34405c;
+      }
+
+      .bubble {
+        max-width: 740px;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+
+      .bubble .name {
+        font-weight: 700;
+        font-size: 13px;
+        margin-bottom: 5px;
+      }
+
+      .bubble p {
+        margin: 0;
+        color: #2d374d;
+        line-height: 1.55;
+        font-size: 14px;
+      }
+
+      .memory-pop {
+        position: fixed;
+        right: 26px;
+        bottom: 26px;
+        width: min(390px, calc(100vw - 110px));
+        background: #ffffff;
+        border: 1px solid #cbd5e8;
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        z-index: 20;
+      }
+
+      .memory-pop.hidden {
+        display: none;
+      }
+
+      .pop-head {
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .pop-head strong {
+        display: block;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      .pop-head span {
+        display: block;
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .risk {
+        border-radius: 999px;
+        padding: 5px 8px;
+        background: var(--amber-soft);
+        color: var(--amber);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .pop-body {
+        padding: 14px;
+      }
+
+      .pop-body p {
+        margin: 0 0 12px;
+        color: #33405a;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .why {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+
+      .feedback-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .micro-copy {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .icon-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .icon-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--muted);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+      }
+
+      .icon-btn svg {
+        width: 17px;
+        height: 17px;
+        stroke-width: 2;
+      }
+
+      .icon-btn:hover {
+        border-color: #9fb0cc;
+        color: var(--ink);
+      }
+
+      .icon-btn.danger:hover {
+        border-color: #f0aaa5;
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .btn {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        height: 36px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      .btn.primary {
+        background: var(--blue);
+        border-color: var(--blue);
+        color: #fff;
+      }
+
+      .btn.danger {
+        background: var(--red-soft);
+        border-color: #f4b7b4;
+        color: var(--red);
+      }
+
+      .trainer-scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        justify-content: flex-end;
+        background: rgba(23, 32, 51, 0.16);
+      }
+
+      .trainer-scrim[hidden] {
+        display: none;
+      }
+
+      .trainer {
+        width: 420px;
+        max-width: calc(100vw - 56px);
+        height: 100vh;
+        min-width: 0;
+        background: #fbfcff;
+        display: grid;
+        grid-template-rows: 64px 1fr;
+        border-left: 1px solid var(--line);
+        box-shadow: var(--shadow);
+      }
+
+      .trainer-top {
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+        padding: 0 18px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .trainer-top strong {
+        display: block;
+        font-size: 15px;
+      }
+
+      .trainer-top span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .trainer-title {
+        min-width: 0;
+      }
+
+      .close-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .trainer-body {
+        min-height: 0;
+        overflow: auto;
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        line-height: 1.3;
+        letter-spacing: 0;
+      }
+
+      .panel p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .metric-row {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+
+      .metric {
+        min-width: 0;
+        background: var(--soft);
+        border-radius: 8px;
+        padding: 10px;
+      }
+
+      .metric b {
+        display: block;
+        font-size: 16px;
+      }
+
+      .metric span {
+        display: block;
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .reason-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .reason {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 8px;
+        padding: 10px;
+        display: grid;
+        grid-template-columns: 20px 1fr;
+        gap: 8px;
+        cursor: pointer;
+      }
+
+      .reason.active {
+        border-color: #9ab0ff;
+        background: var(--blue-soft);
+      }
+
+      .radio {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 2px solid #98a4b8;
+        margin-top: 1px;
+      }
+
+      .reason.active .radio {
+        border-color: var(--blue);
+        box-shadow: inset 0 0 0 4px #fff;
+        background: var(--blue);
+      }
+
+      .reason strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .reason span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .note-toggle {
+        width: 100%;
+        border: 1px dashed #bfc8d8;
+        background: #fff;
+        color: var(--muted);
+        height: 36px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      .note-area {
+        display: none;
+        margin-top: 8px;
+      }
+
+      .note-area.open {
+        display: block;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 76px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        font: inherit;
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--ink);
+      }
+
+      .note-save {
+        display: none;
+        margin-top: 8px;
+      }
+
+      .note-save.show {
+        display: block;
+      }
+
+      .patch {
+        border: 1px solid #bfe4d3;
+        background: var(--green-soft);
+        color: #123f2f;
+        border-radius: 8px;
+        padding: 11px;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .replay {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .candidate-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .candidate {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 8px;
+        padding: 9px;
+      }
+
+      .candidate.bad {
+        border-color: #f0b7b4;
+        background: #fff7f6;
+      }
+
+      .candidate.good {
+        border-color: #b9dfcd;
+        background: #f5fbf8;
+      }
+
+      .candidate .rank {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .candidate strong {
+        display: block;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .candidate span {
+        display: block;
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .trainer-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .toast {
+        border: 1px solid #bfe4d3;
+        background: var(--green-soft);
+        color: var(--green);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 13px;
+        opacity: 0;
+        transform: translateY(4px);
+        transition:
+          opacity 160ms ease,
+          transform 160ms ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      @media (max-width: 1080px) {
+        .app {
+          grid-template-columns: 58px 1fr;
+        }
+
+        .workspace {
+          grid-column: 2;
+        }
+
+        .memory-pop {
+          right: 18px;
+          width: min(390px, calc(100vw - 96px));
+        }
+      }
+
+      @media (max-width: 720px) {
+        .app {
+          display: block;
+        }
+
+        .rail {
+          display: none;
+        }
+
+        .workspace {
+          display: block;
+          border-right: 0;
+        }
+
+        .topbar {
+          height: auto;
+          min-height: 66px;
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 12px 14px;
+        }
+
+        .top-title strong,
+        .top-title span {
+          white-space: normal;
+          overflow: visible;
+          text-overflow: clip;
+          overflow-wrap: anywhere;
+        }
+
+        .top-title,
+        .scene-card,
+        .scene-meta {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .chip,
+        .bubble p,
+        .pop-body p {
+          max-width: 100%;
+          overflow-wrap: anywhere;
+        }
+
+        .search {
+          width: 100%;
+        }
+
+        .chat {
+          padding: 12px;
+        }
+
+        .scene-head {
+          flex-direction: column;
+          padding: 14px;
+        }
+
+        .scene-meta {
+          justify-content: flex-start;
+        }
+
+        .messages {
+          padding: 14px 14px 220px;
+        }
+
+        .memory-pop {
+          left: 12px;
+          right: 12px;
+          bottom: 12px;
+          width: auto;
+        }
+
+        .trainer-scrim {
+          align-items: flex-end;
+          justify-content: center;
+          background: rgba(23, 32, 51, 0.22);
+        }
+
+        .trainer {
+          width: 100%;
+          max-width: none;
+          height: min(80vh, 720px);
+          border-left: 0;
+          border-radius: 12px 12px 0 0;
+          overflow: hidden;
+        }
+
+        .trainer-top {
+          height: auto;
+          min-height: 64px;
+          padding: 12px 14px;
+        }
+
+        .trainer-body {
+          padding: 12px;
+        }
+
+        .metric-row,
+        .replay,
+        .trainer-actions {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="rail" aria-label="模拟应用导航">
+        <div class="logo">PA</div>
+        <button class="rail-btn" title="消息">M</button>
+        <button class="rail-btn" title="记忆">R</button>
+        <button class="rail-btn" title="设置">S</button>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="top-title">
+            <strong>RingCentral · Nova - whatsapp product discussion</strong>
+            <span>模拟当前网页：用户正在讨论 Q2 scope、David requirement、LLM rendering PoC</span>
+          </div>
+          <div class="search">搜索当前会话或记忆</div>
+        </header>
+
+        <section class="chat">
+          <div class="scene-card">
+            <div class="scene-head">
+              <div>
+                <h1>Nova - whatsapp product discussion</h1>
+                <p>Personal AI 检测到当前场景：同群消息 + 产品 scope + David / Antonio / Q2</p>
+              </div>
+              <div class="scene-meta">
+                <span class="chip blue">同群：Nova WhatsApp</span>
+                <span class="chip green">人物：David / Antonio</span>
+                <span class="chip amber">主题：Q2 scope</span>
+              </div>
+            </div>
+
+            <div class="messages">
+              <div class="msg">
+                <div class="avatar">EQ</div>
+                <div class="bubble">
+                  <div class="name">Esone Qiu · 17:10</div>
+                  <p>David，麻烦你今天先把 Q2 scope 定下来，再和 Antonio 对一下 approach。这个方向有点急，最好这周安排一个 team meeting 把 requirements 讲清楚。</p>
+                </div>
+              </div>
+
+              <div class="msg">
+                <div class="avatar">DT</div>
+                <div class="bubble">
+                  <div class="name">David Theis · 17:18</div>
+                  <p>Got it. I will consolidate the requirement notes and check whether design handoff is ready.</p>
+                </div>
+              </div>
+
+              <div class="msg">
+                <div class="avatar">BL</div>
+                <div class="bubble">
+                  <div class="name">Barry Li · 17:42</div>
+                  <p>Exploratory LLM rendering PoC is just a demo for now. It should not be treated as Q2 delivery scope.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="memory-pop" id="memoryPop">
+          <div class="pop-head">
+            <div>
+              <strong>可能相关：AI 工具预算和 Codex policy</strong>
+              <span>来自 AI Tools for Engineering - Workgroup</span>
+            </div>
+            <span class="risk">弱锚点</span>
+          </div>
+          <div class="pop-body">
+            <p>Fred Yang announced Cursor licenses were reclaimed and suggested trying Codex. Codex will soon require payment, while Kimi and GLM models are cheaper.</p>
+            <div class="why">
+              <span class="chip amber">命中泛词：AI</span>
+              <span class="chip">非同群</span>
+              <span class="chip">无 David / Q2 anchor</span>
+            </div>
+            <div class="feedback-row">
+              <span class="micro-copy">轻反馈：选择后自动记录，可撤销。</span>
+              <div class="icon-actions" aria-label="关联记忆反馈">
+                <button class="icon-btn" title="有用" aria-label="有用">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path d="M7 10v11" />
+                    <path d="M15 5.9 14 10h5.8a1.8 1.8 0 0 1 1.8 2.1l-1.4 7A2.4 2.4 0 0 1 17.8 21H7" />
+                    <path d="M7 10 11 3a2.2 2.2 0 0 1 4 1.6L14 10" />
+                    <path d="M3 10h4v11H3z" />
+                  </svg>
+                </button>
+                <button class="icon-btn danger" id="openTrainer" title="不是这个意思" aria-label="不是这个意思">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path d="M17 14V3" />
+                    <path d="M9 18.1 10 14H4.2a1.8 1.8 0 0 1-1.8-2.1l1.4-7A2.4 2.4 0 0 1 6.2 3H17" />
+                    <path d="M17 14 13 21a2.2 2.2 0 0 1-4-1.6L10 14" />
+                    <path d="M21 3h-4v11h4z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <div class="trainer-scrim" id="trainerScrim" hidden>
+      <aside class="trainer" aria-label="记忆相关性调教师">
+        <header class="trainer-top">
+          <div class="trainer-title">
+            <strong>记忆相关性调教师</strong>
+            <span id="trainerState">等待用户指出一次错误召回</span>
+          </div>
+          <button class="close-btn" id="closeTrainer" title="关闭" aria-label="关闭">×</button>
+        </header>
+
+        <div class="trainer-body">
+          <div class="panel">
+            <h2>这次系统看到了什么</h2>
+            <p>当前页面是 Nova WhatsApp product discussion，同群强锚点是 David、Antonio、Q2 scope、requirements。错误候选来自另一个 AI 工具群，只命中了泛词 AI/Codex。</p>
+          </div>
+
+          <div class="panel">
+            <h2>诊断指标</h2>
+            <div class="metric-row">
+              <div class="metric">
+                <b>0</b>
+                <span>同群命中</span>
+              </div>
+              <div class="metric">
+                <b>1/5</b>
+                <span>主题重叠</span>
+              </div>
+              <div class="metric">
+                <b>p1</b>
+                <span>原展示等级</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>哪里不对</h2>
+            <div class="reason-list">
+              <div class="reason active" data-reason="generic">
+                <div class="radio"></div>
+                <div>
+                  <strong>只是泛 AI 词重合</strong>
+                  <span>候选没有同群、同人、同项目锚点，不应该自动弹出。</span>
+                </div>
+              </div>
+              <div class="reason" data-reason="group">
+                <div class="radio"></div>
+                <div>
+                  <strong>不是同一个群或项目</strong>
+                  <span>同一概念在不同团队语境里含义不同，需要限制 scope。</span>
+                </div>
+              </div>
+              <div class="reason" data-reason="shell">
+                <div class="radio"></div>
+                <div>
+                  <strong>这是空会议或壳信息</strong>
+                  <span>没有决定、行动、风险、依赖的记录只应保留在时间线。</span>
+                </div>
+              </div>
+            </div>
+            <button class="note-toggle" id="noteToggle">补充一句原因（可选，不填也会生效）</button>
+            <div class="note-area" id="noteArea">
+              <textarea id="reasonNote" placeholder="例如：这个群里说的是 WhatsApp Q2 scope，不是 AI 工具预算。"></textarea>
+              <button class="btn note-save" id="saveNote">保存补充</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>修复补丁预览</h2>
+            <div class="patch" id="patchText">
+              在 RingCentral product discussion 场景下，泛 AI / Codex / tool 词重合不足以自动 p1；候选必须命中同群、同人或 Q2 scope / requirement anchor，否则降为 possible。
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Before / After 回放</h2>
+            <div class="replay">
+              <div>
+                <p style="margin-bottom: 8px">修复前</p>
+                <div class="candidate-list">
+                  <div class="candidate bad">
+                    <div class="rank">#1 · p1 · 自动弹出</div>
+                    <strong>AI 工具预算和 Codex policy</strong>
+                    <span>非同群，只命中泛 AI 词。</span>
+                  </div>
+                  <div class="candidate">
+                    <div class="rank">#2 · p1</div>
+                    <strong>Meeting Pilot recorded no decisions</strong>
+                    <span>会议壳信息，缺少项目锚点。</span>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p style="margin-bottom: 8px">修复后</p>
+                <div class="candidate-list">
+                  <div class="candidate good">
+                    <div class="rank">#1 · p1 · 保留</div>
+                    <strong>David requirement consolidation</strong>
+                    <span>同群 + David + requirements anchor。</span>
+                  </div>
+                  <div class="candidate">
+                    <div class="rank">hidden</div>
+                    <strong>AI 工具预算和 Codex policy</strong>
+                    <span>降级为主动打开时的 possible。</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="toast show" id="toast">选择一个原因即可自动记录；不需要额外提交。</div>
+
+          <div class="trainer-actions">
+            <button class="btn" id="undoBtn">撤销这次反馈</button>
+            <button class="btn primary" id="previewBtn">查看回放影响</button>
+          </div>
+        </div>
+      </aside>
+      </div>
+    </div>
+
+    <script>
+      const trainerState = document.getElementById("trainerState");
+      const patchText = document.getElementById("patchText");
+      const toast = document.getElementById("toast");
+      const memoryPop = document.getElementById("memoryPop");
+      const trainerScrim = document.getElementById("trainerScrim");
+      const noteArea = document.getElementById("noteArea");
+      const reasonNote = document.getElementById("reasonNote");
+      const saveNote = document.getElementById("saveNote");
+
+      function openTrainer() {
+        trainerScrim.hidden = false;
+        trainerState.textContent = "选择原因后自动记录，可随时关闭";
+        toast.textContent = "选择一个原因即可自动记录；不需要额外提交。";
+        toast.classList.add("show");
+      }
+
+      function closeTrainer() {
+        trainerScrim.hidden = true;
+      }
+
+      document.getElementById("openTrainer").addEventListener("click", () => {
+        openTrainer();
+      });
+
+      document.getElementById("closeTrainer").addEventListener("click", closeTrainer);
+      trainerScrim.addEventListener("click", (event) => {
+        if (event.target === trainerScrim) closeTrainer();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !trainerScrim.hidden) closeTrainer();
+      });
+
+      document.querySelectorAll(".reason").forEach((item) => {
+        item.addEventListener("click", () => {
+          document.querySelectorAll(".reason").forEach((el) => el.classList.remove("active"));
+          item.classList.add("active");
+          const reason = item.dataset.reason;
+          if (reason === "group") {
+            patchText.textContent =
+              "将该负反馈限制在当前 Nova / WhatsApp product discussion 场景：跨群候选必须额外命中同人或同项目，否则只进入 possible。";
+          } else if (reason === "shell") {
+            patchText.textContent =
+              "把 no decisions / no action items / RingCentral Video invite 这类会议壳信息标记为 archive-only candidate，除非当前场景显式请求会议记录。";
+          } else {
+            patchText.textContent =
+              "在 RingCentral product discussion 场景下，泛 AI / Codex / tool 词重合不足以自动 p1；候选必须命中同群、同人或 Q2 scope / requirement anchor，否则降为 possible。";
+          }
+          trainerState.textContent = "已记录：这类候选不会再自动弹出";
+          toast.textContent = "已自动记录，可撤销；补充原因是可选的。";
+          toast.classList.add("show");
+        });
+      });
+
+      document.getElementById("noteToggle").addEventListener("click", () => {
+        noteArea.classList.toggle("open");
+        if (noteArea.classList.contains("open")) reasonNote.focus();
+      });
+
+      reasonNote.addEventListener("input", () => {
+        saveNote.classList.toggle("show", reasonNote.value.trim().length > 0);
+      });
+
+      saveNote.addEventListener("click", () => {
+        trainerState.textContent = "已保存补充说明";
+        toast.textContent = "补充原因已保存到这次 relevance patch。";
+        toast.classList.add("show");
+      });
+
+      document.getElementById("previewBtn").addEventListener("click", () => {
+        trainerState.textContent = "已回放：错误候选从 p1 降到 hidden";
+        toast.textContent = "回放完成：未来同类场景不再自动弹出泛 AI 工具记忆。";
+        toast.classList.add("show");
+      });
+
+      document.getElementById("undoBtn").addEventListener("click", () => {
+        trainerState.textContent = "已撤销这次反馈";
+        toast.textContent = "已撤销，不会写入 relevance patch 或 eval case。";
+        toast.classList.add("show");
+      });
+    </script>
+  </body>
+</html>

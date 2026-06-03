@@ -401,10 +401,10 @@ export async function profileRoutes(
       params.push(type);
     }
 
-    if (status) {
+    if (status && status !== 'all') {
       conditions.push('status = ?');
       params.push(status);
-    } else {
+    } else if (!status) {
       conditions.push("status IN ('active', 'pending_confirm')");
     }
 

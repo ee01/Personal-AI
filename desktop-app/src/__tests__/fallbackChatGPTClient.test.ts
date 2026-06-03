@@ -114,6 +114,11 @@ test('FallbackChatGPTClient falls back to Playwright if webpage-mcp fails', asyn
   assert.equal(outcome.mode, 'playwright');
   assert.equal(outcome.fellBackFromWebpageMcp, true);
   assert.match(outcome.fallbackReason ?? '', /extension-not-connected/);
+  assert.match(outcome.fallbackCooldownUntil ?? '', /^\d{4}-/);
+  assert.match(
+    client.getClientStatus().fallbackCooldownUntil ?? '',
+    /^\d{4}-/,
+  );
   assert.equal(logged.length, 1);
   assert.match(logged[0], /webpage-mcp transport failed/);
 });
@@ -157,9 +162,10 @@ test('FallbackChatGPTClient surfaces fallback reason if Playwright also fails', 
   assert.equal(outcome.fellBackFromWebpageMcp, true);
   assert.match(outcome.fallbackReason ?? '', /mcp-down/);
   assert.match(outcome.fallbackReason ?? '', /pw-down/);
+  assert.match(outcome.fallbackCooldownUntil ?? '', /^\d{4}-/);
 });
 
-test('FallbackChatGPTClient enters cooldown after webpage-mcp fails', async () => {
+test('FallbackChatGPTClient keeps fallback reason and cooldown during cooldown', async () => {
   const opts = makeOptions('webpage_mcp', {
     throwAccessToken: new Error('mcp-error'),
   });
@@ -172,9 +178,21 @@ test('FallbackChatGPTClient enters cooldown after webpage-mcp fails', async () =
 
   // Second call within cooldown: should go straight to pw, skipping mcp
   await client.getAccessToken();
-  assert.equal(opts.mcp.calls.length, 1, 'mcp should not be called during cooldown');
+  assert.equal(
+    opts.mcp.calls.length,
+    1,
+    'mcp should not be called during cooldown',
+  );
   assert.equal(opts.pw.calls.length, 2);
-  assert.equal(client.getLastOutcome().fellBackFromWebpageMcp, false);
+  const outcome = client.getLastOutcome();
+  assert.equal(outcome.mode, 'playwright');
+  assert.equal(outcome.fellBackFromWebpageMcp, true);
+  assert.match(outcome.fallbackReason ?? '', /mcp-error/);
+  assert.match(outcome.fallbackCooldownUntil ?? '', /^\d{4}-/);
+  const status = client.getClientStatus();
+  assert.equal(status.mode, 'playwright');
+  assert.match(status.fallbackReason ?? '', /mcp-error/);
+  assert.match(status.fallbackCooldownUntil ?? '', /^\d{4}-/);
 });
 
 test('FallbackChatGPTClient re-evaluates transport on every call', async () => {

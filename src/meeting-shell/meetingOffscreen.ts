@@ -607,7 +607,9 @@ async function setWebTranscriptActive(active: boolean): Promise<void> {
   }
 }
 
-async function startCapture(message: Record<string, any>): Promise<void> {
+async function startCapture(
+  message: Record<string, any>,
+): Promise<{ success: boolean; error?: string }> {
   if (state.recorder && state.recorder.state !== 'inactive') {
     state.recorder.stop();
   }
@@ -641,7 +643,7 @@ async function startCapture(message: Record<string, any>): Promise<void> {
     setStatus(`Mock recording ${state.meetingId || ''}`);
     appendCaptureLog('info', 'MediaRecorder started');
     emitCaptureStatus('recording');
-    return;
+    return { success: true };
   }
 
   try {
@@ -716,13 +718,15 @@ async function startCapture(message: Record<string, any>): Promise<void> {
       status: 'idle',
       message: 'Capture running. Digest will start after stop.',
     });
+    return { success: true };
   } catch (error) {
     const messageText = String(
       (error as Error)?.message || error || 'capture_failed',
     );
-    setStatus(`Mock recording: ${messageText}`);
+    setStatus(`Error: ${messageText}`);
     appendCaptureLog('error', `capture start failed: ${messageText}`);
     emitCaptureStatus('error', messageText);
+    return { success: false, error: messageText };
   }
 }
 
@@ -933,8 +937,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === 'MEETING_PILOT_OFFSCREEN_START_CAPTURE') {
     void startCapture(message)
-      .then(() => {
-        sendResponse({ success: true });
+      .then((result) => {
+        sendResponse(result);
       })
       .catch((error) => {
         const messageText = String(

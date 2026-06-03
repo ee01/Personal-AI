@@ -227,6 +227,14 @@ assert.ok(
   'Scheduled Messages UI should surface update-check failures with a retry path',
 );
 assert.ok(
+  managerSource.includes('先打开版本端点确认是否返回 JSON version/lastUpdated') &&
+    managerSource.includes('打开版本端点') &&
+    managerSource.includes('打开 Apps Script') &&
+    managerSource.includes("buildAppScriptWebAppActionUrl(config.webAppUrl, 'getVersion')") &&
+    managerSource.includes('buildAppScriptProjectUrl(config.scriptId)'),
+  'Scheduled Messages UI should offer direct diagnostics when App Script update checks fail',
+);
+assert.ok(
   featureDoc.includes('预检是否存在可更新的正式 Web App deployment'),
   'Feature doc should describe the deployment preflight behavior',
 );
@@ -323,6 +331,18 @@ assert.ok(
   managerSource.includes('已是最新时不会重复创建脚本版本') ||
     managerSource.includes('如果已是最新，会跳过脚本写入和版本创建'),
   'Scheduled Messages UI should explain that stale update state will not create duplicate script versions',
+);
+const updateAvailableBannerIndex = managerSource.indexOf('{updateAvailable && (');
+const updateAvailableBannerEnd = managerSource.indexOf('{/* Bot 配置失效警告 */}', updateAvailableBannerIndex);
+const updateAvailableBannerSource = managerSource.slice(
+  updateAvailableBannerIndex,
+  updateAvailableBannerEnd,
+);
+assert.ok(
+  updateAvailableBannerSource.includes('清理 Project History 后重新读取版本额度') &&
+    updateAvailableBannerSource.includes('重新检查') &&
+    updateAvailableBannerSource.includes('isCheckingUpdates || isUpdating'),
+  'Scheduled Messages update banner should let users re-check after cleaning Project History without reloading',
 );
 
 assert.equal(compareAppScriptVersions('2.6.16', '2.6.16'), 0);
@@ -741,6 +761,12 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
       }
 
       if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-match' && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        assert.equal(
+          body.deploymentConfig.scriptId,
+          'script-123',
+          'deployments.update should include scriptId in deploymentConfig',
+        );
         updatedDeploymentId = 'deployment-match';
         deploymentUpdated = true;
         return new Response('{}', { status: 200 });
@@ -947,6 +973,11 @@ async function verifyPostDeploymentVersionMismatchDoesNotSyncConfig(): Promise<v
 
       if (url === 'https://script.googleapis.com/v1/projects/script-123/deployments/deployment-123' && init?.method === 'PUT') {
         const body = JSON.parse(String(init.body));
+        assert.equal(
+          body.deploymentConfig.scriptId,
+          'script-123',
+          'rollback deployments.update should include scriptId in deploymentConfig',
+        );
         deploymentVersionUpdates.push(body.deploymentConfig.versionNumber);
         return new Response('{}', { status: 200 });
       }

@@ -54,6 +54,41 @@ function verifyDayPilotStructure() {
   assertContains(overviewSource, /生成上下文包/, 'context pack control');
   assertContains(overviewSource, /provider-segment/, 'provider selector');
   assertContains(overviewSource, /包含敏感原文/, 'sensitive handoff toggle');
+  assertContains(
+    overviewSource,
+    /card\.executionChannel === 'openclaw'/,
+    'OpenClaw execution channel branch',
+  );
+  assertContains(
+    overviewSource,
+    /v-if="!card\.executionChannel"/,
+    'execution cards hide context pack controls',
+  );
+  assertContains(
+    overviewSource,
+    /detectExecutionChannel/,
+    'execution channel detector',
+  );
+  assertContains(
+    overviewSource,
+    /delegate\[_-\]\?openclaw\|openclaw_delegation/,
+    'OpenClaw delegation detection',
+  );
+  assertContains(
+    overviewSource,
+    /missionEmptyMessage/,
+    'degraded mission empty state',
+  );
+  assertContains(
+    overviewSource,
+    /resetDayPilotDerivedCounts/,
+    'failed Today Pilot load resets derived counters',
+  );
+  assertContains(
+    overviewSource,
+    /尚不能判断今天是否没有高优先级事项/,
+    'failed Today Pilot copy avoids false empty success',
+  );
 }
 
 function verifyRealDataSources() {
@@ -325,6 +360,21 @@ function verifyMissionCardsAreConcreteItems() {
   );
   assertContains(
     overviewSource,
+    /displaySourceStats/,
+    'display-visible source stats',
+  );
+  assertContains(
+    overviewSource,
+    /visibleDayPilotCardIds/,
+    'display-visible interruption budget filter',
+  );
+  assertContains(
+    overviewSource,
+    /card\.cardType !== 'rehearsal_prompt'/,
+    'hidden rehearsal prompts excluded from display counts',
+  );
+  assertContains(
+    overviewSource,
     /低行动\/重复信号未进首页/,
     'visible filtered-signal count',
   );
@@ -360,8 +410,8 @@ function verifyDemoContentWasRemoved() {
 function verifyShellLabel() {
   assertContains(
     shellSource,
-    /<div class="entity-name">今日领航<\/div>/,
-    'sidebar label',
+    /memoryExplorer\.nav\.today/,
+    'sidebar Today Pilot label key',
   );
   assertNotContains(shellSource, /首页概览/, 'old overview label/comment');
 }
@@ -392,6 +442,21 @@ function verifyPopupTopThree() {
     popupSource,
     /formatTodayPilotContextPackReceipt/,
     'popup context pack receipt',
+  );
+  assertContains(
+    popupSource,
+    /isTodayPilotExternalExecutionCard/,
+    'popup external execution context-pack guard',
+  );
+  assertContains(
+    popupSource,
+    /getTodayPilotProcessingPath/,
+    'popup external execution processing route',
+  );
+  assertContains(
+    popupSource,
+    /popup\.today\.reviewExternal/,
+    'popup external execution review action',
   );
   assertContains(
     popupSource,

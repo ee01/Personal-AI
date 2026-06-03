@@ -81,6 +81,7 @@ export interface JiraAutomationRuleSummary {
   sensitiveReferenceCount: number;
   sourceProjectReferenceCount: number;
   smartValueReferenceCount: number;
+  customComponentCount: number;
   scheduledTrigger: boolean;
 }
 
@@ -96,6 +97,7 @@ export interface JiraAutomationRuleReviewSignals {
   sensitiveReferences: string[];
   sourceProjectReferences: string[];
   smartValueReferences: string[];
+  customComponentReferences: string[];
 }
 
 export type JiraAutomationImportReviewSeverity = 'high' | 'medium' | 'low';
@@ -299,6 +301,7 @@ function formatChecklistSeveritySummary(items: JiraAutomationImportReviewCheckli
 
 function formatDetectedReferenceSummary(summary: JiraAutomationRuleSummary): string {
   const parts = [
+    summary.customComponentCount > 0 ? `${summary.customComponentCount} custom/app component` : '',
     summary.jqlReferenceCount > 0 ? `${summary.jqlReferenceCount} JQL/filter` : '',
     summary.customFieldReferenceCount > 0 ? `${summary.customFieldReferenceCount} custom field` : '',
     summary.savedFilterReferenceCount > 0 ? `${summary.savedFilterReferenceCount} saved filter` : '',
@@ -313,7 +316,7 @@ function formatDetectedReferenceSummary(summary: JiraAutomationRuleSummary): str
     summary.smartValueReferenceCount > 0 ? `${summary.smartValueReferenceCount} smart value` : '',
   ].filter(Boolean);
 
-  return parts.join(', ') || 'no environment-bound references detected';
+  return parts.join(', ') || 'no environment-bound references or custom components detected';
 }
 
 function createReviewFinding(
@@ -385,9 +388,15 @@ function formatEnablementPlanSummary(steps: JiraAutomationImportEnablementStep[]
     return 'keep imported copy disabled until Jira review is complete';
   }
 
+  const maxDetailLength = steps.length >= 5 ? 120 : 170;
   const value = steps
     .slice(0, 5)
-    .map((step) => `${step.label}: ${step.detail}`)
+    .map((step) => {
+      const detail = step.detail.length <= maxDetailLength
+        ? step.detail
+        : `${step.detail.slice(0, Math.max(0, maxDetailLength - 3))}...`;
+      return `${step.label}: ${detail}`;
+    })
     .join('; ');
 
   if (value.length <= 900) {
@@ -397,10 +406,26 @@ function formatEnablementPlanSummary(steps: JiraAutomationImportEnablementStep[]
   return `${value.slice(0, 897)}...`;
 }
 
+function getHiddenSecretReferences(exportedRule: ExportedRule): string[] {
+  return collectJiraAutomationImportReviewSignals(exportedRule)
+    .secretReferences
+    .filter((reference) => /\bhidden secret value\b/i.test(reference));
+}
+
+function formatHiddenSecretReferenceSummary(hiddenSecretReferences: string[]): string {
+  const visibleReferences = hiddenSecretReferences.slice(0, 3).join(' | ');
+  const hiddenCount = Math.max(0, hiddenSecretReferences.length - 3);
+  return [
+    visibleReferences,
+    hiddenCount > 0 ? `${hiddenCount} more` : '',
+  ].filter(Boolean).join(', ');
+}
+
 export function buildJiraAutomationImportEnablementPlan(
   exportedRule: ExportedRule,
 ): JiraAutomationImportEnablementStep[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
+  const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
   const steps: JiraAutomationImportEnablementStep[] = [
     {
       id: 'keep-disabled',
@@ -451,10 +476,22 @@ export function buildJiraAutomationImportEnablementPlan(
         ? `${summary.emailReferenceCount + summary.accountReferenceCount} account/recipient reference(s)`
         : '',
     ].filter(Boolean);
+    const hiddenSecretDetail = hiddenSecretReferences.length > 0
+      ? `Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. `
+      : '';
     steps.push({
       id: 'reconnect-external-effects',
       label: 'Reconnect external effects and credentials',
-      detail: `${parts.join(', ')} should be reconnected or re-entered in the target Jira project before enabling.`,
+      detail: `${hiddenSecretDetail}${parts.join(', ')} should be reconnected or re-entered in the target Jira project before enabling.`,
+      severity: 'high',
+    });
+  }
+
+  if (summary.customComponentCount > 0) {
+    steps.push({
+      id: 'confirm-app-components',
+      label: 'Confirm app-provided components are available',
+      detail: `${summary.customComponentCount} custom/app component type(s) must exist in the target Jira project before the imported copy can be trusted.`,
       severity: 'high',
     });
   }
@@ -573,14 +610,27 @@ export function buildJiraAutomationImportReviewNote(
 
 function buildJiraAutomationImportDescription(
   exportedRule: ExportedRule,
-  context: ImportRuleContext,
+  _context: ImportRuleContext,
 ): string {
   const sourceDescription = typeof exportedRule.description === 'string'
     ? stripExistingImportReviewNote(exportedRule.description)
     : '';
-  const reviewNote = buildJiraAutomationImportReviewNote(exportedRule, context);
+  if (sourceDescription) {
+    return sourceDescription;
+  }
 
-  return sourceDescription ? `${sourceDescription}\n\n${reviewNote}` : reviewNote;
+  const summary = summarizeJiraAutomationImportRule(exportedRule);
+  const triggerType = typeof exportedRule.trigger?.type === 'string' && exportedRule.trigger.type.trim()
+    ? exportedRule.trigger.type.trim()
+    : 'unknown trigger';
+  const normalizedTrigger = triggerType.replace(/^jira\./, '').replace(/\./g, ' ');
+  const conditionLabel = summary.conditionCount === 1 ? 'condition' : 'conditions';
+  const actionLabel = summary.actionCount === 1 ? 'action' : 'actions';
+  const triggerLabel = summary.scheduledTrigger
+    ? 'a scheduled trigger'
+    : `trigger type "${normalizedTrigger}"`;
+
+  return `Rule purpose: ${exportedRule.name}. It runs with ${triggerLabel}, ${summary.conditionCount} ${conditionLabel}, and ${summary.actionCount} ${actionLabel}.`;
 }
 
 function addReviewSignal(values: Set<string>, value: string): void {
@@ -656,6 +706,57 @@ function isLikelyConnectionKey(key: string): boolean {
   return /(connection|credential|connector|integration|webhook)/i.test(key);
 }
 
+function isLikelyNativeJiraAutomationType(type: string): boolean {
+  const normalized = type.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return normalized.startsWith('jira.') ||
+    normalized.startsWith('jsd.') ||
+    normalized.startsWith('sd.') ||
+    normalized.startsWith('servicedesk.') ||
+    normalized.startsWith('opsgenie.') ||
+    normalized.startsWith('atlassian.') ||
+    normalized.startsWith('com.atlassian.');
+}
+
+function addCustomComponentReference(value: unknown, references: Set<string>): void {
+  if (!isRecord(value)) {
+    return;
+  }
+
+  const type = typeof value.type === 'string' ? value.type.trim() : '';
+  if (!type || isLikelyNativeJiraAutomationType(type)) {
+    return;
+  }
+
+  const component = typeof value.component === 'string'
+    ? value.component.trim().toUpperCase()
+    : 'COMPONENT';
+  addReviewSignal(references, `${component}: ${type}`);
+}
+
+function collectCustomComponentReferences(value: unknown, references: Set<string>): void {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectCustomComponentReferences(item, references));
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  addCustomComponentReference(value, references);
+
+  ['children', 'conditions'].forEach((key) => {
+    const nestedNodes = value[key];
+    if (Array.isArray(nestedNodes)) {
+      nestedNodes.forEach((nestedNode) => collectCustomComponentReferences(nestedNode, references));
+    }
+  });
+}
+
 function keyTokens(key: string): string[] {
   return key
     .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -705,6 +806,95 @@ function isMaskedSensitiveValue(text: string): boolean {
 function addSensitiveReference(values: Set<string>, key: string, masked: boolean): void {
   const label = key.replace(/\s+/g, ' ').trim() || 'sensitive field';
   addReviewSignal(values, `${label}: ${masked ? 'hidden/masked value' : 'sensitive value present'}`);
+}
+
+function isGenericSecretContextKey(key: string): boolean {
+  return /^(value|keyorvalue|secret|secrets|usedsecretskeys|headers?|items?)$/i.test(key.replace(/[^a-z0-9]/gi, ''));
+}
+
+function isUnsafeSecretDisplayLabel(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || isMaskedSensitiveValue(trimmed)) {
+    return true;
+  }
+
+  if (/https?:\/\//i.test(trimmed) || /\{\{[^{}]+}}/.test(trimmed)) {
+    return true;
+  }
+
+  if (/^(bearer|basic)\s+[a-z0-9._~+/-]+=*$/i.test(trimmed)) {
+    return true;
+  }
+
+  if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(trimmed)) {
+    return true;
+  }
+
+  if (/^(gh[pousr]_|github_pat_|sk-|xox[abprs]-|AKIA|ASIA)[A-Za-z0-9_-]{8,}/.test(trimmed)) {
+    return true;
+  }
+
+  const compact = trimmed.replace(/[^A-Za-z0-9_-]/g, '');
+  const hasLetter = /[A-Za-z]/.test(compact);
+  const hasDigit = /\d/.test(compact);
+  const hasMixedCase = /[A-Z]/.test(compact) && /[a-z]/.test(compact);
+  return compact.length >= 24 && hasLetter && (hasDigit || hasMixedCase);
+}
+
+function sanitizeSecretDisplayLabel(value: unknown): string {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return '';
+  }
+
+  const label = normalizeReviewSignal(String(value));
+  if (!label || isUnsafeSecretDisplayLabel(label)) {
+    return '';
+  }
+
+  return label;
+}
+
+function buildHiddenSecretReferenceLabel(contextLabel?: string): string {
+  const safeContextLabel = sanitizeSecretDisplayLabel(contextLabel);
+  return safeContextLabel
+    ? `${safeContextLabel}: hidden secret value`
+    : 'hidden secret value';
+}
+
+function chooseSecretReferenceLabel(value: Record<string, any>, contextLabel?: string): string {
+  const namedSecretCandidates = [
+    value.key,
+    value.secretKey,
+    value.id,
+  ];
+  const safeNamedSecretLabel = namedSecretCandidates
+    .map(sanitizeSecretDisplayLabel)
+    .find(Boolean);
+
+  if (safeNamedSecretLabel) {
+    return safeNamedSecretLabel;
+  }
+
+  const fieldContextLabel = [
+    value.headerName,
+    value.name,
+    contextLabel,
+  ].map(sanitizeSecretDisplayLabel).find(Boolean);
+
+  return buildHiddenSecretReferenceLabel(fieldContextLabel);
+}
+
+function getRecordSecretContext(value: Record<string, any>, fallbackKey?: string, parentContext?: string): string | undefined {
+  const candidates = [
+    value.headerName,
+    value.name,
+    value.key,
+    fallbackKey && !isGenericSecretContextKey(fallbackKey) ? fallbackKey : undefined,
+    parentContext,
+  ];
+  return candidates
+    .map(sanitizeSecretDisplayLabel)
+    .find(Boolean);
 }
 
 function isLikelyAccountKey(key: string): boolean {
@@ -830,9 +1020,9 @@ function collectReviewSignals(
   });
 }
 
-function addSecretReferences(value: unknown, references: Set<string>): void {
+function addSecretReferences(value: unknown, references: Set<string>, contextLabel?: string): void {
   if (Array.isArray(value)) {
-    value.forEach((item) => addSecretReferences(item, references));
+    value.forEach((item) => addSecretReferences(item, references, contextLabel));
     return;
   }
 
@@ -840,27 +1030,29 @@ function addSecretReferences(value: unknown, references: Set<string>): void {
     return;
   }
 
+  const recordContextLabel = getRecordSecretContext(value, undefined, contextLabel);
+
   if (Array.isArray(value.usedSecretsKeys)) {
     value.usedSecretsKeys.forEach((secret, index) => {
       if (typeof secret === 'string' && secret.trim()) {
-        references.add(secret.trim());
+        references.add(sanitizeSecretDisplayLabel(secret) || `secret-${index + 1}`);
       } else if (isRecord(secret)) {
         const label = secret.key || secret.id || secret.name || secret.secretKey;
-        references.add(String(label || `secret-${index + 1}`));
+        references.add(sanitizeSecretDisplayLabel(label) || `secret-${index + 1}`);
       }
     });
   }
 
   if (value.secret === true) {
-    const label = value.key || value.id || value.name || value.headerName || value.secretKey;
-    references.add(String(label || 'hidden secret value'));
+    references.add(chooseSecretReferenceLabel(value, recordContextLabel));
   }
 
   Object.entries(value).forEach(([key, nestedValue]) => {
     if (key === 'usedSecretsKeys' || key === 'secret') {
       return;
     }
-    addSecretReferences(nestedValue, references);
+    const childContextLabel = getRecordSecretContext(value, key, contextLabel);
+    addSecretReferences(nestedValue, references, childContextLabel);
   });
 }
 
@@ -1013,6 +1205,7 @@ export function summarizeJiraAutomationImportRule(
     sensitiveReferenceCount: 0,
     sourceProjectReferenceCount: 0,
     smartValueReferenceCount: 0,
+    customComponentCount: 0,
     scheduledTrigger: false,
   };
   const secretReferences = new Set<string>();
@@ -1034,6 +1227,7 @@ export function summarizeJiraAutomationImportRule(
   summary.sensitiveReferenceCount = reviewSignals.sensitiveReferences.length;
   summary.sourceProjectReferenceCount = reviewSignals.sourceProjectReferences.length;
   summary.smartValueReferenceCount = reviewSignals.smartValueReferences.length;
+  summary.customComponentCount = reviewSignals.customComponentReferences.length;
   return summary;
 }
 
@@ -1052,6 +1246,7 @@ export function collectJiraAutomationImportReviewSignals(
   const sensitiveReferences = new Set<string>();
   const sourceProjectReferences = new Set<string>();
   const smartValueReferences = new Set<string>();
+  const customComponentReferences = new Set<string>();
 
   collectReviewSignals(
     exportedRule.trigger,
@@ -1130,6 +1325,8 @@ export function collectJiraAutomationImportReviewSignals(
   );
   addSecretReferences(exportedRule.trigger, secretReferences);
   addSecretReferences(exportedRule.components, secretReferences);
+  collectCustomComponentReferences(exportedRule.trigger, customComponentReferences);
+  collectCustomComponentReferences(exportedRule.components, customComponentReferences);
 
   return {
     jqlReferences: Array.from(jqlReferences),
@@ -1143,6 +1340,7 @@ export function collectJiraAutomationImportReviewSignals(
     sensitiveReferences: Array.from(sensitiveReferences),
     sourceProjectReferences: Array.from(sourceProjectReferences),
     smartValueReferences: Array.from(smartValueReferences),
+    customComponentReferences: Array.from(customComponentReferences),
   };
 }
 
@@ -1162,6 +1360,7 @@ export function buildJiraAutomationImportReviewFindings(
     createReviewFinding('source-project-references', 'Source project refs', summary.sourceProjectReferenceCount, signals.sourceProjectReferences, 'high'),
     createReviewFinding('custom-fields', 'Custom fields', summary.customFieldReferenceCount, signals.customFieldReferences, 'high'),
     createReviewFinding('saved-filters', 'Saved filters', summary.savedFilterReferenceCount, signals.savedFilterReferences, 'high'),
+    createReviewFinding('custom-components', 'Custom / app components', summary.customComponentCount, signals.customComponentReferences, 'high'),
     createReviewFinding('secrets', 'Secrets', summary.secretReferenceCount, signals.secretReferences, 'high'),
     createReviewFinding('connections', 'Connections', summary.connectionReferenceCount, signals.connectionReferences, 'high'),
     createReviewFinding('sensitive-values', 'Sensitive / hidden values', summary.sensitiveReferenceCount, signals.sensitiveReferences, 'high'),
@@ -1248,6 +1447,7 @@ export function buildJiraAutomationImportWarnings(
   exportedRule: ExportedRule,
 ): string[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
+  const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
   const warnings = [
     'Imported rules are created disabled. Review and enable them in Jira after import.',
     'Project scope is remapped to the current Jira project.',
@@ -1283,8 +1483,16 @@ export function buildJiraAutomationImportWarnings(
     warnings.push('Includes secret references. Verify target Jira secrets and connections before enabling.');
   }
 
+  if (hiddenSecretReferences.length > 0) {
+    warnings.push(`Includes ${hiddenSecretReferences.length} hidden secret field(s): ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}. Jira export/import will not restore hidden values, so re-enter them in the target rule before enabling.`);
+  }
+
   if (summary.sourceProjectReferenceCount > 0) {
     warnings.push('Possible source project references were found inside the rule body. Project scope remapping does not rewrite JQL, URLs, or custom fields.');
+  }
+
+  if (summary.customComponentCount > 0) {
+    warnings.push(`Includes ${summary.customComponentCount} custom or app-provided component type(s). Confirm the target Jira site has the same app/module before enabling.`);
   }
 
   if (summary.jqlReferenceCount > 0) {
@@ -1305,9 +1513,11 @@ export function buildJiraAutomationImportWarnings(
     summary.savedFilterReferenceCount > 0 ||
     summary.connectionReferenceCount > 0 ||
     summary.sensitiveReferenceCount > 0 ||
-    summary.smartValueReferenceCount > 0
+    summary.smartValueReferenceCount > 0 ||
+    summary.customComponentCount > 0
   ) {
     const parts = [
+      summary.customComponentCount > 0 ? `${summary.customComponentCount} custom/app component type(s)` : '',
       summary.accountReferenceCount > 0 ? `${summary.accountReferenceCount} account id/reference(s)` : '',
       summary.customFieldReferenceCount > 0 ? `${summary.customFieldReferenceCount} custom field reference(s)` : '',
       summary.savedFilterReferenceCount > 0 ? `${summary.savedFilterReferenceCount} saved filter id/reference(s)` : '',
@@ -1337,6 +1547,7 @@ export function buildJiraAutomationImportReviewChecklist(
   exportedRule: ExportedRule,
 ): JiraAutomationImportReviewChecklistItem[] {
   const summary = summarizeJiraAutomationImportRule(exportedRule);
+  const hiddenSecretReferences = getHiddenSecretReferences(exportedRule);
   const items: JiraAutomationImportReviewChecklistItem[] = [
     {
       id: 'target-project',
@@ -1384,14 +1595,26 @@ export function buildJiraAutomationImportReviewChecklist(
       summary.connectionReferenceCount > 0 ? `${summary.connectionReferenceCount} connection/credential reference(s)` : '',
       summary.sensitiveReferenceCount > 0 ? `${summary.sensitiveReferenceCount} sensitive/hidden value reference(s)` : '',
     ].filter(Boolean);
+    const hiddenSecretDetail = hiddenSecretReferences.length > 0
+      ? ` Hidden secret fields to re-enter: ${formatHiddenSecretReferenceSummary(hiddenSecretReferences)}.`
+      : '';
 
     items.push({
       id: 'external-effects',
       label: 'External effects and credentials',
-      detail: `${parts.join(', ')} need endpoint, credential, and recipient review.`,
+      detail: `${parts.join(', ')} need endpoint, credential, and recipient review.${hiddenSecretDetail}`,
       severity: summary.webRequestCount > 0 || summary.externalIntegrationCount > 0 || summary.secretReferenceCount > 0 || summary.connectionReferenceCount > 0 || summary.sensitiveReferenceCount > 0
         ? 'high'
         : 'medium',
+    });
+  }
+
+  if (summary.customComponentCount > 0) {
+    items.push({
+      id: 'custom-components',
+      label: 'Custom / app components',
+      detail: `${summary.customComponentCount} custom/app component type(s) should be checked against target Jira app/module availability before enabling.`,
+      severity: 'high',
     });
   }
 

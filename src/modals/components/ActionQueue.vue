@@ -106,7 +106,7 @@
             :to="`/outreach/${outreachSessionForAction(action)!.id}`"
             class="thread-link"
           >查看询问会话</router-link>
-          <span v-if="action.requiresApproval">需人工确认</span>
+          <span v-if="action.requiresApproval">{{ approvalStatusLabel(action) }}</span>
           <span>置信 {{ action.confidence.toFixed(2) }}</span>
           <span>重试 {{ action.retryCount }}</span>
           <router-link
@@ -114,6 +114,19 @@
             :to="`/reflection-threads/${action.threadId}`"
             class="thread-link"
           >查看线程</router-link>
+        </div>
+
+        <div v-if="showApprovalCheckpoint(action)" class="approval-panel">
+          <div>
+            <span class="panel-kicker">人工确认</span>
+            <strong>{{ approvalCheckpointTitle(action) }}</strong>
+          </div>
+          <p>{{ approvalCheckpointBody(action) }}</p>
+          <div class="approval-facts">
+            <span>{{ riskReviewLabel(action) }}</span>
+            <span>{{ executionReviewLabel(action) }}</span>
+            <span v-if="action.approvedAt">批准时间 {{ formatActionTime(action.approvedAt) }}</span>
+          </div>
         </div>
 
         <div v-if="actionResultSummary(action)" class="result-box">
@@ -190,12 +203,12 @@
 
         <div class="button-row">
           <button
-            v-if="action.queueStatus === 'queued' || action.queueStatus === 'failed' || isActionOperation(action.id, 'execute')"
+            v-if="canShowExecuteButton(action)"
             class="tiny-btn"
             :class="{ loading: isActionOperation(action.id, 'execute') }"
             :disabled="isActionBusy(action.id)"
-            @click="executeAction(action.id)"
-          >{{ actionButtonLabel(action.id, 'execute', '执行') }}</button>
+            @click="executeAction(action)"
+          >{{ actionButtonLabel(action.id, 'execute', executeButtonLabel(action)) }}</button>
           <button
             v-if="action.queueStatus === 'failed'"
             class="tiny-btn"
@@ -298,7 +311,9 @@ const staleRunningActionCount = computed(() =>
 );
 const dueActionCount = computed(() => actions.value.filter((action) => isScheduledDue(action)).length);
 const approvalActionCount = computed(() =>
-  actions.value.filter((action) => action.queueStatus === 'queued' && action.requiresApproval).length,
+  actions.value.filter(
+    (action) => action.queueStatus === 'queued' && action.requiresApproval && !action.approvedAt,
+  ).length,
 );
 const highRiskActionCount = computed(() =>
   actions.value.filter((action) => action.queueStatus === 'queued' && action.riskLevel === 'high').length,
@@ -380,7 +395,7 @@ const queueGuidance = computed<QueueGuidance | null>(() => {
   if (approvalActionCount.value > 0 || highRiskActionCount.value > 0) {
     return {
       title: '有动作需要人工确认',
-      body: '先查看参数、来源和关联线程，再决定是否执行；高风险动作不会在未确认前静默推进。',
+      body: '先查看参数、来源和关联线程；点击“确认并执行”会记录批准时间，再触发动作。',
       tone: 'warning',
     };
   }
@@ -539,11 +554,15 @@ async function hydrateOutreachSessions(items: RuntimeAction[]) {
   outreachByActionId.value = mapping;
 }
 
-async function executeAction(id: string) {
+async function executeAction(action: RuntimeAction) {
+  const { id } = action;
   setActionOperation(id, 'execute');
   markActionRunning(id);
   try {
-    await client.executeAction(id);
+    const result = await client.executeAction(id, approvalExecutePayload(action));
+    if (result.error) {
+      throw new Error(result.error);
+    }
     await loadActions({ silent: true });
   } catch (error) {
     setActionOperationError(id, `执行请求失败：${formatActionError(error)}`);
@@ -615,6 +634,26 @@ function actionButtonLabel(id: string, operation: ActionOperation, fallback: str
   return '取消中...';
 }
 
+function approvalExecutePayload(action: RuntimeAction): { approve: boolean } | undefined {
+  if (!action.requiresApproval || action.approvedAt) return undefined;
+  return {
+    approve: true,
+  };
+}
+
+function canShowExecuteButton(action: RuntimeAction): boolean {
+  return (
+    action.queueStatus === 'queued' ||
+    action.queueStatus === 'failed' ||
+    isActionOperation(action.id, 'execute')
+  );
+}
+
+function executeButtonLabel(action: RuntimeAction): string {
+  if (action.requiresApproval && !action.approvedAt) return '确认并执行';
+  return '执行';
+}
+
 function markActionRunning(id: string) {
   const currentTime = Date.now();
   actions.value = actions.value.map((action) =>
@@ -641,6 +680,46 @@ function runningStatusLabel(action: RuntimeAction): string {
     return 'OpenClaw 正在执行，页面会静默刷新结果；刷新页面后也会继续显示 running 状态。';
   }
   return '动作正在执行，页面会静默刷新结果；刷新页面后也会继续显示 running 状态。';
+}
+
+function approvalStatusLabel(action: RuntimeAction): string {
+  if (!action.requiresApproval) return '';
+  if (action.approvedAt) return `已人工确认 ${formatActionTime(action.approvedAt)}`;
+  return '待人工确认';
+}
+
+function showApprovalCheckpoint(action: RuntimeAction): boolean {
+  return (
+    action.requiresApproval &&
+    action.queueStatus !== 'succeeded' &&
+    action.queueStatus !== 'cancelled'
+  );
+}
+
+function approvalCheckpointTitle(action: RuntimeAction): string {
+  if (action.approvedAt) return '已经记录人工批准';
+  if (action.riskLevel === 'high') return '执行前需要确认高风险动作';
+  return '执行前需要人工确认';
+}
+
+function approvalCheckpointBody(action: RuntimeAction): string {
+  if (action.approvedAt) {
+    return '这条动作已经记录批准时间；后续重试仍会保留批准痕迹，便于审计为什么允许继续执行。';
+  }
+  return '点击“确认并执行”会先写入批准时间，再触发执行；如果只是想放弃这条动作，请使用取消。';
+}
+
+function riskReviewLabel(action: RuntimeAction): string {
+  if (action.riskLevel === 'high') return '风险：高';
+  if (action.riskLevel === 'medium') return '风险：中';
+  if (action.riskLevel === 'low') return '风险：低';
+  return `风险：${action.riskLevel || '未知'}`;
+}
+
+function executionReviewLabel(action: RuntimeAction): string {
+  return action.executionMode === 'auto'
+    ? '模式：自动调度'
+    : '模式：手动执行';
 }
 
 function formatActionError(error: unknown): string {
@@ -768,7 +847,8 @@ function isAttentionAction(action: RuntimeAction): boolean {
     action.queueStatus === 'failed' ||
     action.queueStatus === 'dead_letter' ||
     isScheduledDue(action) ||
-    (action.queueStatus === 'queued' && (action.requiresApproval || action.riskLevel === 'high'))
+    (action.queueStatus === 'queued' &&
+      ((action.requiresApproval && !action.approvedAt) || action.riskLevel === 'high'))
   );
 }
 
@@ -786,7 +866,9 @@ function scheduledExecutionLabel(action: RuntimeAction): string {
     return '未设置具体时间；下一次调度扫描会执行';
   }
   if (action.queueStatus === 'queued' && action.requiresApproval) {
-    return '等待人工批准后才能执行';
+    return action.approvedAt
+      ? '已人工确认；等待手动执行或重试'
+      : '等待人工确认后才能执行';
   }
   if (action.queueStatus === 'queued' && action.executionMode === 'manual') {
     return '手动执行模式；不会被定时调度自动触发';
@@ -1330,6 +1412,41 @@ function transcriptFilename(transcriptPath: string): string | null {
   border: 1px solid rgba(125, 211, 252, 0.18);
   color: #e2e8f0;
   line-height: 1.55;
+}
+
+.approval-panel {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.8rem;
+  background: rgba(120, 53, 15, 0.18);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: #fde68a;
+}
+
+.approval-panel strong {
+  display: block;
+  color: #fef3c7;
+}
+
+.approval-panel p {
+  margin: 0.45rem 0 0;
+  color: #fde68a;
+  line-height: 1.55;
+}
+
+.approval-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.approval-facts span {
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #fef3c7;
+  font-size: 0.74rem;
 }
 
 .delegation-result-panel {

@@ -397,24 +397,26 @@ async function main() {
       'Native join fallback should include a subtle browser-default hint',
     );
     await page.waitForTimeout(5300);
-    const handoffAutoDismissState = await page.evaluate(() => ({
+    const handoffRecoveryState = await page.evaluate(() => ({
       fallbackStillVisible: Boolean(
         document.querySelector('#pai-ringcentral-native-join-fallback'),
       ),
+      status:
+        document.querySelector(
+          '[data-pai-ringcentral-native-join-status]',
+        )?.textContent || '',
       launchLinkStillPresent: Boolean(
         document.querySelector('#pai-ringcentral-native-join-launch-link'),
       ),
     }));
     assert(
-      !handoffAutoDismissState.fallbackStillVisible &&
-        !handoffAutoDismissState.launchLinkStillPresent,
-      `Native join fallback should auto-dismiss five seconds after app handoff: ${JSON.stringify(
-        handoffAutoDismissState,
+      handoffRecoveryState.fallbackStillVisible &&
+        handoffRecoveryState.status.includes('Still on this page?'),
+      `Native join fallback should stay visible with recovery guidance when the browser page remains active: ${JSON.stringify(
+        handoffRecoveryState,
       )}`,
     );
 
-    await page.click('[data-test-automation-id="calendar-event-item-join-button"]');
-    await page.waitForSelector('#pai-ringcentral-native-join-fallback');
     await page.click('[data-pai-ringcentral-native-join-copy-link]');
     await page.waitForFunction(
       () =>

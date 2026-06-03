@@ -98,6 +98,11 @@ describe('Ask API', () => {
     generateMock.mockReset();
     generateStreamMock.mockReset();
     db.prepare('DELETE FROM conversation_context_frames').run();
+    db.prepare('DELETE FROM answer_memory_versions').run();
+    db.prepare('DELETE FROM answer_memory_threads').run();
+    db.prepare('DELETE FROM answer_memory_observations').run();
+    db.prepare('DELETE FROM proposed_action_attempts').run();
+    db.prepare('DELETE FROM proposed_actions').run();
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
     db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
@@ -214,7 +219,47 @@ describe('Ask API', () => {
     expect(body.structuredAnswer).toBeUndefined();
   });
 
-  it('includes archived meeting records in /ask by default when relevant', async () => {
+  it('returns a deterministic evidence summary when answer generation times out', async () => {
+    generateMock
+      .mockResolvedValueOnce({
+        resolutionState: 'partial',
+        directFindings: ['John said the release risks are increasing.'],
+        resolvedConclusion: 'John raised release risk.',
+        remainingQuestions: ['需要确认下一步 owner。'],
+        candidateArtifacts: [],
+        recommendedAction: 'none',
+        confidence: 0.72,
+        legacyClassification: 'answer',
+        summary: 'John raised release risk.',
+      })
+      .mockRejectedValueOnce(
+        new Error('[LLMClient] Request timed out after 5000ms'),
+      );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '最近三天 John 说过什么？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+
+    expect(body.answer).toContain('基于已检索到的记忆');
+    expect(body.answer).toContain('release risks are increasing');
+    expect(body.evidence).toHaveLength(1);
+    expect(body.evidence[0].id).toBe('ask-john-message');
+    expect(body.missingInfo).toContain(
+      'LLM 综合生成超时，当前回答为确定性证据摘要。',
+    );
+    expect(body.analysis.summary).toContain('可能相关的记忆');
+    expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses active lifecycle recall in /ask by default', async () => {
     db.prepare(`DELETE FROM messages_raw WHERE source_type = 'glip'`).run();
     const recallSpy = vi
       .spyOn(RecallEngine.prototype, 'recall')
@@ -259,6 +304,7 @@ describe('Ask API', () => {
     expect(recallSpy).toHaveBeenCalled();
     expect(recallSpy.mock.calls[0][0].sourceTypes).toBeUndefined();
     expect(recallSpy.mock.calls[0][0].scope).toBe('work');
+    expect(recallSpy.mock.calls[0][0].lifecycleMode).toBe('active_default');
     expect(body.evidence).toHaveLength(1);
     expect(body.evidence[0].source).toBe('meeting');
     expect(body.evidence[0].id).toBe('ask-meeting-memory');
@@ -359,7 +405,7 @@ describe('Ask API', () => {
        VALUES (?, ?, ?, 1, 8, ?)`,
     ).run(
       'project-vbg',
-      'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+      'Next gen VBG',
       JSON.stringify(['AI VBG', 'VBG', 'AI Generated Background']),
       currentTime,
     );
@@ -369,7 +415,7 @@ describe('Ask API', () => {
         id: 'ask-vbg-backend-pending',
         chunkId: 9100,
         content:
-          'Ivan confirmed AI Generated VBG backend BE still has pending work on RCV-148412 and RCV-148411 before ready.',
+          'Ivan confirmed RCV BE new design still has pending work on RCV-148412 and RCV-148411 before ready.',
         hash: 'hash-ask-vbg-backend-pending',
       },
       {
@@ -392,17 +438,16 @@ describe('Ask API', () => {
         row.content,
         'glip',
         `https://app.ringcentral.com/messages/${row.id}`,
-        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        'MTR-141852: AI Custom VBG',
         'Ivan Velencoso',
         'vbg-group',
-        'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+        'MTR-141852: AI Custom VBG',
         currentTime - 600,
         0.86,
         'neutral',
         JSON.stringify({
           groupId: 'vbg-group',
-          groupName:
-            'RCV Working Team: Modernize Existing Backgrounds and Add AI-Generated VBGs',
+          groupName: 'MTR-141852: AI Custom VBG',
         }),
         currentTime - 600,
       );
@@ -436,6 +481,80 @@ describe('Ask API', () => {
         keyFindings: ['Backend work is still pending.'],
       }),
     });
+    const recallSpy = vi.spyOn(RecallEngine.prototype, 'recall');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'AI VBG 的 BE 部分完成情况如何',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(recallSpy).toHaveBeenCalled();
+    expect(recallSpy.mock.calls[0][0].query).toContain('backend');
+    expect(recallSpy.mock.calls[0][0].query).toContain('VBG');
+    expect(recallSpy.mock.calls[0][0].lifecycleMode).toBe('active_default');
+    const body = res.json();
+    expect(body.evidence?.[0]?.id).toBe('ask-vbg-backend-pending');
+    expect(body.evidence?.[0]?.content).toContain('pending work');
+    expect(body.answer).toContain('pending work');
+    recallSpy.mockRestore();
+  });
+
+  it('uses query topical anchors for ambiguous VBG backend ask queries', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    for (const row of [
+      {
+        id: 'ask-vbg-ambiguous-target',
+        content:
+          'AI VBG RCV BE new design is still pending before the backend can be ready.',
+        sourceTitle: 'MTR-141852: AI Custom VBG',
+        groupName: 'MTR-141852: AI Custom VBG',
+        timestamp: currentTime - 60,
+        importance: 0.9,
+      },
+      {
+        id: 'ask-vbg-ambiguous-other',
+        content:
+          'AI VBG backend planning is also mentioned in a different video launch thread.',
+        sourceTitle: 'New AI Meetings Desktop Client',
+        groupName: 'New AI Meetings Desktop Client',
+        timestamp: currentTime - 120,
+        importance: 0.7,
+      },
+    ]) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, source_type, source_url, source_title, sender, group_id,
+           group_name, timestamp, importance, sentiment, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        row.id,
+        row.content,
+        'glip',
+        `https://app.ringcentral.com/messages/${row.id}`,
+        row.sourceTitle,
+        'Ivan Velencoso',
+        row.id,
+        row.groupName,
+        row.timestamp,
+        row.importance,
+        'neutral',
+        JSON.stringify({
+          groupName: row.groupName,
+        }),
+        row.timestamp,
+      );
+    }
+
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'AI VBG 的 BE 仍在等 RCV BE new design。',
+      }),
+    });
 
     const res = await app.inject({
       method: 'POST',
@@ -448,9 +567,409 @@ describe('Ask API', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.evidence?.[0]?.id).toBe('9100');
-    expect(body.evidence?.[0]?.content).toContain('pending work');
-    expect(body.answer).toContain('pending work');
+    expect(body.evidence?.[0]?.id).toBe('ask-vbg-ambiguous-target');
+    expect(body.evidence?.[0]?.content).toContain('RCV BE new design');
+  });
+
+  it('uses provided surface context to resolve deictic BE ask queries before recall', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO watched_projects
+        (id, name, aliases_json, is_active, priority, created_at)
+       VALUES (?, ?, ?, 1, 9, ?)`,
+    ).run(
+      'project-ai-custom-vbg',
+      'AI Custom VBG',
+      JSON.stringify(['MTR-141852', 'AI VBG', 'AI Generated VBG']),
+      currentTime,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-vbg-deictic-backend',
+      'MTR-141852 AI Custom VBG backend BE is not ready yet because RCV BE new design is still pending.',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-vbg-deictic-backend',
+      'MTR-141852: AI Custom VBG',
+      'Ivan Velencoso',
+      'mtr-141852',
+      'MTR-141852: AI Custom VBG',
+      currentTime - 300,
+      0.9,
+      'neutral',
+      JSON.stringify({
+        groupName: 'MTR-141852: AI Custom VBG',
+      }),
+      currentTime - 300,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-vbg-ui-color-noise',
+      'MTR-141852 AI Custom VBG UI color token still needs design confirmation.',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-vbg-ui-color-noise',
+      'MTR-141852: AI Custom VBG',
+      'Eva Zhang',
+      'mtr-141852',
+      'MTR-141852: AI Custom VBG',
+      currentTime - 100,
+      0.99,
+      'neutral',
+      JSON.stringify({
+        groupName: 'MTR-141852: AI Custom VBG',
+      }),
+      currentTime - 100,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-vbg-webpage-distractor',
+      'RingCentral Video page capture mentions MTR-141852 but does not contain the chat answer.',
+      'web',
+      'https://v.ringcentral.com/conf/on/292463811',
+      'MTR-141852: AI Custom VBG',
+      'Memory Capture',
+      'v.ringcentral.com',
+      'v.ringcentral.com',
+      currentTime - 120,
+      0.99,
+      'neutral',
+      JSON.stringify({
+        sourceKind: 'webpage',
+        sourceTitle: 'RingCentral Video',
+      }),
+      currentTime - 120,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash,
+         scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      9200,
+      'messages/ask-vbg-deictic-backend',
+      1,
+      1,
+      'MTR-141852 AI Custom VBG backend BE is not ready yet because RCV BE new design is still pending.',
+      'hash-ask-vbg-deictic-backend',
+      'work',
+      'glip',
+      'glip',
+      'AI Custom VBG',
+      currentTime - 300,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9200,
+      'MTR-141852 AI Custom VBG backend BE is not ready yet because RCV BE new design is still pending.',
+    );
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'AI Custom VBG 的 BE 还没有 ready，RCV BE new design 仍 pending。',
+      }),
+    });
+    const recallSpy = vi.spyOn(RecallEngine.prototype, 'recall');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        context:
+          'Surface: RingCentral chat. Current chat title: MTR-141852: AI Custom VBG. Visible message: 那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(recallSpy).toHaveBeenCalled();
+    const recallQuery = recallSpy.mock.calls[0][0].query;
+    expect(recallQuery).toContain('AI Custom VBG');
+    expect(recallQuery).toContain('MTR-141852');
+    expect(recallQuery).toContain('backend');
+    const body = res.json();
+    expect(body.evidence?.[0]?.id).toBe('ask-vbg-deictic-backend');
+    expect(body.answer).toContain('还没有 ready');
+    recallSpy.mockRestore();
+  });
+
+  it('tracks repeated locked ask outcomes without changing the Ask UI payload shape', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO watched_projects
+        (id, name, aliases_json, is_active, priority, created_at)
+       VALUES (?, ?, ?, 1, 9, ?)`,
+    ).run(
+      'project-ai-custom-vbg',
+      'AI Custom VBG',
+      JSON.stringify(['MTR-141852', 'AI VBG', 'AI Generated VBG']),
+      currentTime,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-vbg-answer-memory-backend',
+      'MTR-141852 AI Custom VBG backend BE is not ready yet because RCV BE new design is still pending.',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-vbg-answer-memory-backend',
+      'MTR-141852: AI Custom VBG',
+      'Ivan Velencoso',
+      'mtr-141852',
+      'MTR-141852: AI Custom VBG',
+      currentTime - 300,
+      0.9,
+      'neutral',
+      JSON.stringify({
+        groupName: 'MTR-141852: AI Custom VBG',
+      }),
+      currentTime - 300,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash,
+         scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      9300,
+      'messages/ask-vbg-answer-memory-backend',
+      1,
+      1,
+      'MTR-141852 AI Custom VBG backend BE is not ready yet because RCV BE new design is still pending.',
+      'hash-ask-vbg-answer-memory-backend',
+      'work',
+      'glip',
+      'glip',
+      'AI Custom VBG',
+      currentTime - 300,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9300,
+      'MTR-141852 AI Custom VBG backend BE is not ready yet because RCV BE new design is still pending.',
+    );
+
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'AI Custom VBG 的 BE 还没有 ready，RCV BE new design 仍 pending。',
+        keyFindings: ['Backend work is still pending.'],
+        confidence: 0.78,
+      }),
+    });
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        context:
+          'Surface: RingCentral chat. Current chat title: MTR-141852: AI Custom VBG. Visible message: 那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().answerMemory?.state).toBe('observed');
+    expect(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM answer_memory_threads')
+        .get(),
+    ).toEqual({ count: 0 });
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: 'AI VBG 的 BE 部分完成情况如何？',
+        context:
+          'Surface: RingCentral chat. Current chat title: MTR-141852: AI Custom VBG.',
+        includeEvidence: true,
+      },
+    });
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json();
+    expect(secondBody.answerMemory?.state).toBe('promoted');
+    expect(secondBody.answerMemory?.threadId).toBeTruthy();
+
+    const third = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        context:
+          'Surface: RingCentral chat. Current chat title: MTR-141852: AI Custom VBG. Visible message: 那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+    expect(third.statusCode).toBe(200);
+    expect(third.json().answerMemory?.state).toBe('priorHit');
+    expect(third.json().answer).toContain('还没有 ready');
+  });
+
+  it('does not promote noisy web captures as context anchors for deictic BE queries without surface context', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-noisy-docs-capture',
+      'Story Points estimation by AI Service Restore this version Ask Gemini FileEditViewInsertFormatTools Accessibility Belarusian Create a new doc',
+      'web',
+      'https://docs.google.com/document/d/noisy/edit',
+      'Story Points estimation by AI Service - Google Docs',
+      'Memory Capture',
+      'docs.google.com',
+      'docs.google.com',
+      currentTime - 30,
+      0.99,
+      'neutral',
+      JSON.stringify({
+        captureLayer: 'memory_capture',
+        sourceTitle: 'Story Points estimation by AI Service - Google Docs',
+      }),
+      currentTime - 30,
+    );
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-recent-vbg-be-status',
+      'AI Generate 现在我们需要等 RCV BE 新的 design，所以 BE 还没有 ready。',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-recent-vbg-be-status',
+      'MTR-141852: AI Custom VBG',
+      'Quintin Xiao',
+      '153798238214',
+      'MTR-141852: AI Custom VBG',
+      currentTime - 120,
+      0.9,
+      'neutral',
+      JSON.stringify({
+        groupName: 'MTR-141852: AI Custom VBG',
+      }),
+      currentTime - 120,
+    );
+
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'BE 还没有 ready，仍在等 RCV BE 新的 design。',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.evidence?.[0]?.id).toBe('ask-recent-vbg-be-status');
+    expect(body.evidence?.[0]?.source).toBe('glip');
+    expect(body.evidence?.[0]?.content).toContain('RCV BE 新的 design');
+    expect(body.contextMatch?.state).toBe('locked');
+    expect(body.contextMatch?.selectedTopic?.label).toContain('MTR-141852');
+    expect(body.evidence?.[0]?.metadata?.contextAnchorReason).toBe(
+      'locked_memory_context_match',
+    );
+    expect(
+      body.evidence
+        ?.slice(0, 3)
+        .some((item: any) => item.id === 'ask-noisy-docs-capture'),
+    ).toBe(false);
+  });
+
+  it('keeps direct older BE status evidence ahead of newer generic backend mentions', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insert = db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertMany = db.transaction(() => {
+      for (let index = 0; index < 170; index += 1) {
+        insert.run(
+          `ask-generic-backend-${index}`,
+          index === 0
+            ? 'Generic backend maintenance note 0. See [routing ticket](https://jira.ringcentral.com/browse/INIT-26199), but no direct project ready signal here.'
+            : `Generic backend maintenance note ${index}. No direct project ready signal here.`,
+          'glip',
+          `https://app.ringcentral.com/messages/ask-generic-backend-${index}`,
+          'RCW Backend team',
+          'Backend Bot',
+          'backend-team',
+          'RCW Backend team',
+          currentTime - index,
+          0.7,
+          'neutral',
+          JSON.stringify({
+            groupName: 'RCW Backend team',
+          }),
+          currentTime - index,
+        );
+      }
+    });
+    insertMany();
+
+    insert.run(
+      'ask-older-vbg-be-status',
+      'AI Generate 现在我们需要等RCV BE新的design，所以 BE 还没有 ready。',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-older-vbg-be-status',
+      'MTR-141852: AI Custom VBG',
+      'Quintin Xiao',
+      '153798238214',
+      'MTR-141852: AI Custom VBG',
+      currentTime - 80 * 24 * 60 * 60,
+      0.5,
+      'neutral',
+      JSON.stringify({
+        groupName: 'MTR-141852: AI Custom VBG',
+      }),
+      currentTime - 80 * 24 * 60 * 60,
+    );
+
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer: 'BE 还没有 ready，仍在等 RCV BE 新的 design。',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.evidence?.[0]?.id).toBe('ask-older-vbg-be-status');
+    expect(body.evidence?.[0]?.metadata?.contextAnchorReason).toBe(
+      'locked_memory_context_match',
+    );
+    expect(body.contextMatch?.state).toBe('locked');
+    expect(body.answer).toContain('Memory service 先把这个问题锁定到');
+    expect(body.followUpActions ?? []).toHaveLength(0);
   });
 
   it('adds a decision evidence chain block for historical decision questions', async () => {
@@ -515,6 +1034,7 @@ describe('Ask API', () => {
     });
 
     expect(res.statusCode).toBe(200);
+    expect(recallSpy.mock.calls[0][0].lifecycleMode).toBe('historical');
     const body = res.json();
     const decisionBlock = body.blocks?.find(
       (block: any) => block.type === 'decision_evidence_chain',

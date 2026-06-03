@@ -133,9 +133,12 @@ const localAgentListItem = {
         source: 'desktop_app_fs',
         sourceRoot: '/Users/skill-user/.codex/skills',
         sourceDirectory: '/Users/skill-user/.codex/skills/local-agent-import',
-        skillMdPath: '/Users/skill-user/.codex/skills/local-agent-import/SKILL.md',
+        skillMdPath:
+          '/Users/skill-user/.codex/skills/local-agent-import/SKILL.md',
         fileCount: 2,
         totalByteSize: 2048,
+        rejectedFileCount: 1,
+        rejectedFilePaths: ['../outside.js'],
       },
       createdAt: 1778235000,
       updatedAt: 1778235000,
@@ -144,13 +147,64 @@ const localAgentListItem = {
 };
 
 const syncSettings = [
-  { platform: 'personal_ai', enabled: true, capability: 'internal', mode: 'internal', config: {}, updatedAt: 1778230000 },
-  { platform: 'openclaw', enabled: false, capability: 'api', mode: 'API direct', config: {}, updatedAt: 1778230000 },
-  { platform: 'codex', enabled: true, capability: 'fs_via_desktop_app', mode: 'Desktop App fs watcher', config: {}, updatedAt: 1778230000 },
-  { platform: 'claude_code', enabled: false, capability: 'fs_via_desktop_app', mode: 'Desktop App fs watcher', config: {}, updatedAt: 1778230000 },
-  { platform: 'cursor', enabled: false, capability: 'fs_via_desktop_app', mode: 'Desktop App fs watcher', config: {}, updatedAt: 1778230000 },
-  { platform: 'chatgpt_gpts', enabled: false, capability: 'manual_only', mode: 'Manual install only', config: {}, updatedAt: 1778230000 },
-  { platform: 'claude_skills_web', enabled: false, capability: 'manual_only', mode: 'Manual install only', config: {}, updatedAt: 1778230000 },
+  {
+    platform: 'personal_ai',
+    enabled: true,
+    capability: 'internal',
+    mode: 'internal',
+    config: {},
+    updatedAt: 1778230000,
+  },
+  {
+    platform: 'openclaw',
+    enabled: false,
+    capability: 'api',
+    mode: 'API direct',
+    config: {},
+    lastProbeAt: 1778230500,
+    lastError: 'OpenClaw is not configured',
+    updatedAt: 1778230000,
+  },
+  {
+    platform: 'codex',
+    enabled: true,
+    capability: 'fs_via_desktop_app',
+    mode: 'Desktop App fs watcher',
+    config: {},
+    updatedAt: 1778230000,
+  },
+  {
+    platform: 'claude_code',
+    enabled: false,
+    capability: 'fs_via_desktop_app',
+    mode: 'Desktop App fs watcher',
+    config: {},
+    updatedAt: 1778230000,
+  },
+  {
+    platform: 'cursor',
+    enabled: false,
+    capability: 'fs_via_desktop_app',
+    mode: 'Desktop App fs watcher',
+    config: {},
+    updatedAt: 1778230000,
+  },
+  {
+    platform: 'chatgpt_gpts',
+    enabled: false,
+    capability: 'manual_only',
+    mode: 'Manual install only',
+    config: {},
+    updatedAt: 1778230000,
+  },
+  {
+    platform: 'claude_skills_web',
+    enabled: false,
+    capability: 'manual_only',
+    mode: 'Manual install only',
+    config: {},
+    updatedAt: 1778230000,
+  },
 ];
 
 function detailFor(item) {
@@ -244,13 +298,19 @@ function collectPageErrors(page) {
     errors.push(error instanceof Error ? error.message : String(error));
   });
   return () => {
-    assert.deepEqual(errors, [], `Skill Foundry page errors: ${errors.join('; ')}`);
+    assert.deepEqual(
+      errors,
+      [],
+      `Skill Foundry page errors: ${errors.join('; ')}`,
+    );
   };
 }
 
 let launched;
 let suggestionVisible = true;
+let suggestionSnoozedVisible = false;
 let snoozePosted = false;
+let unsnoozePosted = false;
 let desktopSyncPosted = false;
 
 try {
@@ -263,18 +323,33 @@ try {
     const endpoint = url.pathname.replace('/api/v1', '') || '/';
 
     if (request.method() === 'GET' && endpoint === '/skills') {
+      const filter = url.searchParams.get('filter') || 'active';
+      const items = filter === 'dismissed' ? [] : [activeListItem];
       return jsonResponse(route, {
-        items: [activeListItem],
-        total: 1,
+        items,
+        total: items.length,
       });
     }
 
     if (request.method() === 'GET' && endpoint === '/skills/suggestions') {
-      const visibleSuggestions = [
-        externalChangeListItem,
-        localAgentListItem,
-        ...(suggestionVisible ? [suggestionListItem] : []),
-      ];
+      const view = url.searchParams.get('view') || 'ready';
+      const visibleSuggestions =
+        view === 'snoozed'
+          ? [
+              ...(suggestionSnoozedVisible
+                ? [
+                    {
+                      ...suggestionListItem,
+                      snoozedUntil: 1893456000,
+                    },
+                  ]
+                : []),
+            ]
+          : [
+              externalChangeListItem,
+              localAgentListItem,
+              ...(suggestionVisible ? [suggestionListItem] : []),
+            ];
       return jsonResponse(route, {
         items: visibleSuggestions,
         total: visibleSuggestions.length,
@@ -290,14 +365,22 @@ try {
     }
 
     if (request.method() === 'GET' && endpoint === '/skills/snooze-candidate') {
-      return jsonResponse(route, { skill: detailFor(suggestionListItem) });
+      return jsonResponse(route, {
+        skill: {
+          ...detailFor(suggestionListItem),
+          snoozedUntil: suggestionSnoozedVisible ? 1893456000 : undefined,
+        },
+      });
     }
 
     if (request.method() === 'GET' && endpoint === '/skills/external-change') {
       return jsonResponse(route, { skill: detailFor(externalChangeListItem) });
     }
 
-    if (request.method() === 'GET' && endpoint === '/skills/local-agent-import') {
+    if (
+      request.method() === 'GET' &&
+      endpoint === '/skills/local-agent-import'
+    ) {
       return jsonResponse(route, { skill: detailFor(localAgentListItem) });
     }
 
@@ -307,15 +390,32 @@ try {
     ) {
       snoozePosted = true;
       suggestionVisible = false;
+      suggestionSnoozedVisible = true;
       return jsonResponse(route, {
         skill: {
           ...detailFor(suggestionListItem),
-          snoozedUntil: 1778834800,
+          snoozedUntil: 1893456000,
         },
       });
     }
 
-    return jsonResponse(route, { error: `Unexpected ${request.method()} ${endpoint}` }, 500);
+    if (
+      request.method() === 'POST' &&
+      endpoint === '/skills/suggestions/snooze-candidate/unsnooze'
+    ) {
+      unsnoozePosted = true;
+      suggestionVisible = true;
+      suggestionSnoozedVisible = false;
+      return jsonResponse(route, {
+        skill: detailFor(suggestionListItem),
+      });
+    }
+
+    return jsonResponse(
+      route,
+      { error: `Unexpected ${request.method()} ${endpoint}` },
+      500,
+    );
   });
 
   await context.route('http://mock-desktop/**', async (route) => {
@@ -348,7 +448,11 @@ try {
         ],
       });
     }
-    return jsonResponse(route, { error: `Unexpected desktop ${request.method()} ${url.pathname}` }, 500);
+    return jsonResponse(
+      route,
+      { error: `Unexpected desktop ${request.method()} ${url.pathname}` },
+      500,
+    );
   });
 
   const setupPage = await context.newPage();
@@ -373,46 +477,89 @@ try {
 
   const page = await context.newPage();
   const assertNoPageErrors = collectPageErrors(page);
-  await page.goto(`chrome-extension://${extensionId}/memory-exploring.html#/skills`, {
-    waitUntil: 'load',
-    timeout: 15000,
-  });
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/skills`,
+    {
+      waitUntil: 'load',
+      timeout: 15000,
+    },
+  );
 
   await page.locator('h1', { hasText: '个人技能炼金台' }).waitFor({
     timeout: 15000,
   });
-  await page.locator('.suggestion-card', { hasText: 'Snooze Candidate' }).waitFor({
-    timeout: 15000,
-  });
-  await page.locator('.workspace-title h2', { hasText: 'Active Skill' }).waitFor({
-    timeout: 15000,
-  });
+  await page
+    .locator('.suggestion-card', { hasText: 'Snooze Candidate' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.workspace-title h2', { hasText: 'Active Skill' })
+    .waitFor({
+      timeout: 15000,
+    });
   await page.locator('.tab-btn', { hasText: '绑定' }).click();
   const chatGptBinding = page.locator('.binding-card', {
     hasText: 'ChatGPT / GPTs',
   });
-  await chatGptBinding.locator('.binding-state.manual', { hasText: '手动安装' }).waitFor({
-    timeout: 15000,
-  });
-  await chatGptBinding.locator('.binding-hint', {
-    hasText: '仅提供手动安装指引',
-  }).waitFor({ timeout: 15000 });
-  await chatGptBinding.locator('.binding-hint', {
-    hasText: '暂不能由 Personal AI 自动写入或探测安装状态',
-  }).waitFor({ timeout: 15000 });
+  await chatGptBinding
+    .locator('.binding-state.manual', { hasText: '手动安装' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await chatGptBinding
+    .locator('.binding-hint', {
+      hasText: '仅提供手动安装指引',
+    })
+    .waitFor({ timeout: 15000 });
+  await chatGptBinding
+    .locator('.binding-hint', {
+      hasText: '暂不能由 Personal AI 自动写入或探测安装状态',
+    })
+    .waitFor({ timeout: 15000 });
   const claudeWebBinding = page.locator('.binding-card', {
     hasText: 'Claude.ai Skills',
   });
-  await claudeWebBinding.locator('.binding-state.manual', { hasText: '手动安装' }).waitFor({
-    timeout: 15000,
-  });
-  await page.locator('.section-head button', { hasText: '平台级自动同步' }).click();
+  await claudeWebBinding
+    .locator('.binding-state.manual', { hasText: '手动安装' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.section-head button', { hasText: '平台级自动同步' })
+    .click();
   const chatGptSyncRow = page.locator('.sync-row', {
     hasText: 'ChatGPT / GPTs',
   });
-  await chatGptSyncRow.locator('.scope', { hasText: '不参与自动同步' }).waitFor({
-    timeout: 15000,
+  const openClawSyncRow = page.locator('.sync-row', {
+    hasText: 'OpenClaw remote',
   });
+  await openClawSyncRow
+    .locator('.sync-diagnostic.info', {
+      hasText: '同步未开启，启用后覆盖所有 active 技能',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
+  await openClawSyncRow
+    .locator('.sync-diagnostic.warn', {
+      hasText: '最近失败 2026-05-08 08:55: OpenClaw is not configured',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
+  await chatGptSyncRow
+    .locator('.scope', { hasText: '不参与自动同步' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await chatGptSyncRow
+    .locator('.sync-diagnostic.info', {
+      hasText: '仅手动安装，不参与自动写入',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
   await chatGptSyncRow.locator('.switch span', { hasText: '仅手动' }).waitFor({
     timeout: 15000,
   });
@@ -420,13 +567,38 @@ try {
   await codexSyncRow.locator('.switch span', { hasText: '已开启' }).waitFor({
     timeout: 15000,
   });
+  await codexSyncRow
+    .locator('.sync-diagnostic.ready', {
+      hasText: 'Desktop App 同步已开启',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
   await codexSyncRow.locator('button[aria-label="立即同步 Codex CLI"]').click();
-  await page.locator('.sync-dialog .status-box', {
-    hasText: '待审核变更 1 条',
-  }).waitFor({ timeout: 15000 });
-  await page.locator('.sync-dialog .status-box', {
-    hasText: '请到顶部 Inbox 审核本机目录变更',
-  }).waitFor({ timeout: 15000 });
+  await page
+    .locator('.sync-dialog .status-box', {
+      hasText: '待审核变更 1 条',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.sync-dialog .status-box', {
+      hasText: '请到顶部 Inbox 审核本机目录变更',
+    })
+    .waitFor({ timeout: 15000 });
+  await page.locator('.secondary-btn', { hasText: '关闭' }).click();
+  await page.locator('.rail-segmented button', { hasText: '已丢弃' }).click();
+  await page
+    .locator('.empty-card', { hasText: '目前没有已丢弃的技能' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.header-actions button', { hasText: '平台级自动同步' })
+    .click();
+  await page
+    .locator('.sync-row', { hasText: 'OpenClaw remote' })
+    .locator('.sync-scope', {
+      hasText: '开启后将自动推送 1 条 active 技能',
+    })
+    .waitFor({ timeout: 15000 });
   await page.locator('.secondary-btn', { hasText: '关闭' }).click();
 
   const suggestionCard = page.locator('.suggestion-card', {
@@ -435,27 +607,37 @@ try {
   await suggestionCard.locator('.review-chip', { hasText: '需审核' }).waitFor({
     timeout: 15000,
   });
-  await suggestionCard.locator('.review-preview', { hasText: '待审核摘要' }).waitFor({
-    timeout: 15000,
-  });
-  await suggestionCard.locator('.review-preview', { hasText: '2 项原因' }).waitFor({
-    timeout: 15000,
-  });
-  await suggestionCard.locator('.review-preview', { hasText: '风险 medium' }).waitFor({
-    timeout: 15000,
-  });
+  await suggestionCard
+    .locator('.review-preview', { hasText: '待审核摘要' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await suggestionCard
+    .locator('.review-preview', { hasText: '2 项原因' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await suggestionCard
+    .locator('.review-preview', { hasText: '风险 medium' })
+    .waitFor({
+      timeout: 15000,
+    });
   const externalChangeCard = page.locator('.suggestion-card', {
     hasText: 'Active Skill (openclaw change)',
   });
-  await externalChangeCard.locator('.change-chip', { hasText: '变更' }).waitFor({
-    timeout: 15000,
-  });
+  await externalChangeCard
+    .locator('.change-chip', { hasText: '变更' })
+    .waitFor({
+      timeout: 15000,
+    });
   await externalChangeCard
     .locator('.review-preview', { hasText: '覆盖 active-skill' })
     .waitFor({ timeout: 15000 });
   await externalChangeCard.click();
   await page
-    .locator('.workspace-title h2', { hasText: 'Active Skill (openclaw change)' })
+    .locator('.workspace-title h2', {
+      hasText: 'Active Skill (openclaw change)',
+    })
     .waitFor({ timeout: 15000 });
   await page
     .locator('.workspace-actions button', { hasText: '查看变更' })
@@ -463,15 +645,23 @@ try {
   await page.locator('.review-gate', { hasText: '外部变更需要审核' }).waitFor({
     timeout: 15000,
   });
-  await page.locator('.review-gate', { hasText: 'active-skill 的新版本' }).waitFor({
-    timeout: 15000,
-  });
-  await page.locator('.review-audit-summary', { hasText: '证据已查看，可以确认' }).waitFor({
-    timeout: 15000,
-  });
-  await page.locator('.review-audit-summary', { hasText: 'OpenClaw remote -> active-skill' }).waitFor({
-    timeout: 15000,
-  });
+  await page
+    .locator('.review-gate', { hasText: 'active-skill 的新版本' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.review-audit-summary', { hasText: '证据已查看，可以确认' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await page
+    .locator('.review-audit-summary', {
+      hasText: 'OpenClaw remote -> active-skill',
+    })
+    .waitFor({
+      timeout: 15000,
+    });
   await page
     .locator('.workspace-actions button', { hasText: '确认覆盖' })
     .waitFor({ timeout: 15000 });
@@ -479,51 +669,74 @@ try {
   const localAgentCard = page.locator('.suggestion-card', {
     hasText: 'Local Agent Import',
   });
-  await page.locator('.suggestion-group', { hasText: '本地 agent 导入' }).waitFor({
-    timeout: 15000,
-  });
-  await localAgentCard.locator('.source-link', {
-    hasText: '本机目录 ~/.codex/skills/local-agent-import',
-  }).waitFor({ timeout: 15000 });
-  await localAgentCard.locator('.review-preview', {
-    hasText: '2 个资源文件 · 2 KB',
-  }).waitFor({ timeout: 15000 });
+  await page
+    .locator('.suggestion-group', { hasText: '本地 agent 导入' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await localAgentCard
+    .locator('.source-link', {
+      hasText: '本机目录 ~/.codex/skills/local-agent-import',
+    })
+    .waitFor({ timeout: 15000 });
+  await localAgentCard
+    .locator('.review-preview', {
+      hasText: '2 个资源文件 · 2 KB · 已忽略 1 个越界文件',
+    })
+    .waitFor({ timeout: 15000 });
+  await localAgentCard
+    .locator('.review-preview', {
+      hasText: '已忽略',
+    })
+    .waitFor({ timeout: 15000 });
   await localAgentCard.click();
-  await page.locator('.workspace-title h2', { hasText: 'Local Agent Import' }).waitFor({
-    timeout: 15000,
-  });
+  await page
+    .locator('.workspace-title h2', { hasText: 'Local Agent Import' })
+    .waitFor({
+      timeout: 15000,
+    });
   await page
     .locator('.workspace-actions button', { hasText: '查看风险' })
     .click();
-  await page.locator('.review-audit-summary', {
-    hasText: '目录 ~/.codex/skills/local-agent-import',
-  }).waitFor({ timeout: 15000 });
-  await page.locator('.review-audit-summary', {
-    hasText: '2 个资源文件 · 2 KB',
-  }).waitFor({ timeout: 15000 });
+  await page
+    .locator('.review-audit-summary', {
+      hasText: '目录 ~/.codex/skills/local-agent-import',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.review-audit-summary', {
+      hasText: '2 个资源文件 · 2 KB · 已忽略 1 个越界文件',
+    })
+    .waitFor({ timeout: 15000 });
 
   await suggestionCard.click();
-  await page.locator('.workspace-title h2', { hasText: 'Snooze Candidate' }).waitFor({
-    timeout: 15000,
-  });
+  await page
+    .locator('.workspace-title h2', { hasText: 'Snooze Candidate' })
+    .waitFor({
+      timeout: 15000,
+    });
   await page
     .locator('.workspace-actions button', { hasText: '查看风险' })
     .click();
   await page.locator('.review-gate', { hasText: '使用前需要审核' }).waitFor({
     timeout: 15000,
   });
-  await page.locator('.review-audit-summary', { hasText: '证据已查看，可以确认' }).waitFor({
-    timeout: 15000,
-  });
+  await page
+    .locator('.review-audit-summary', { hasText: '证据已查看，可以确认' })
+    .waitFor({
+      timeout: 15000,
+    });
   await page.locator('.review-audit-summary', { hasText: '1 条证据' }).waitFor({
     timeout: 15000,
   });
   await page.locator('.tab-btn.active', { hasText: '证据' }).waitFor({
     timeout: 15000,
   });
-  await suggestionCard.locator('.review-preview', { hasText: '已查看证据' }).waitFor({
-    timeout: 15000,
-  });
+  await suggestionCard
+    .locator('.review-preview', { hasText: '已查看证据' })
+    .waitFor({
+      timeout: 15000,
+    });
   await page
     .locator('.workspace-actions button', { hasText: '确认使用' })
     .waitFor({ timeout: 15000 });
@@ -533,19 +746,69 @@ try {
     .locator('button', { hasText: '稍后审' })
     .click();
 
-  await page.locator('.workspace-title h2', { hasText: 'Active Skill' }).waitFor({
+  await page
+    .locator('.workspace-title h2', { hasText: 'Active Skill' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await assert.doesNotReject(async () =>
+    page.locator('.suggestion-card', { hasText: 'Snooze Candidate' }).waitFor({
+      state: 'detached',
+      timeout: 5000,
+    }),
+  );
+  const snoozedCard = page.locator('.snoozed-suggestion-card', {
+    hasText: 'Snooze Candidate',
+  });
+  await page.locator('.snoozed-inbox', { hasText: '稍后建议' }).waitFor({
     timeout: 15000,
   });
-  await assert
-    .doesNotReject(async () =>
-      page.locator('.suggestion-card', { hasText: 'Snooze Candidate' }).waitFor({
+  await snoozedCard
+    .locator('.snoozed-card-meta', { hasText: '回到 Inbox' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await snoozedCard.click();
+  await page
+    .locator('.workspace-eyebrow', { hasText: '稍后审' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.snoozed-review-gate', { hasText: '已放入稍后建议' })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.snoozed-review-gate', { hasText: '恢复到 Inbox 后再确认使用' })
+    .waitFor({ timeout: 15000 });
+  assert.equal(
+    await page
+      .locator('.workspace-actions button', { hasText: '确认使用' })
+      .count(),
+    0,
+    'Snoozed suggestions should not be confirmable before restore',
+  );
+  await page
+    .locator('.workspace-actions button', { hasText: '现在审' })
+    .click();
+  await page
+    .locator('.suggestion-card', { hasText: 'Snooze Candidate' })
+    .waitFor({
+      timeout: 15000,
+    });
+  await assert.doesNotReject(async () =>
+    page
+      .locator('.snoozed-suggestion-card', { hasText: 'Snooze Candidate' })
+      .waitFor({
         state: 'detached',
         timeout: 5000,
       }),
-    );
+  );
 
   assert.equal(snoozePosted, true, 'Expected the snooze API to be called');
-  assert.equal(desktopSyncPosted, true, 'Expected the Desktop App skill sync API to be called');
+  assert.equal(unsnoozePosted, true, 'Expected the unsnooze API to be called');
+  assert.equal(
+    desktopSyncPosted,
+    true,
+    'Expected the Desktop App skill sync API to be called',
+  );
   await assertNoPageErrors();
 
   console.log('verify-personal-skill-foundry-e2e: ok');

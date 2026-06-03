@@ -9,6 +9,14 @@ This is a Chrome Extension project called "Personal AI" (Radar PoC), built with:
 - React & Vue.js
 - Webpack (dev/prod configurations)
 
+Icon assets under `static/icons/` are Personal AI icons. Treat them as the product/brand icon source for UI badges, extension entry points, and Personal AI identity markers, not as generic decorative images.
+
+## Product Vision Guardrails
+
+Personal AI is a private memory system for the user. Its purpose is to retain the user's memories across AI conversations, messages, browsing, operations, preferences, personal skills, and memories formed on other platforms, then bring the right memory back into scenes such as chat, meetings, Jira work, and conversations with other AI tools.
+
+Treat the memory system as an autonomous reflective companion, not as a queue that asks the user to review every internal judgment. New capability proposals should prefer internal mechanisms such as salience scoring, decay, consolidation, self-reflection, dream replay, ambient calibration, confidence thresholds, and reversible receipts. Add explicit user review only when the action crosses a high-responsibility boundary: external sending, destructive deletion, privacy/scope crossing, durable user-profile facts, or other irreversible/user-representing mutations.
+
 ## Development Workflow
 
 ### After Modifying Code
@@ -59,6 +67,19 @@ Failure loop:
 - If the failure shows a missing lower-level guard, add or update a targeted test before rerunning higher-level E2E
 - Stop and ask the user only when blocked by credentials, external service state, unavailable browser connection, or a required human click
 - Never report a validation as passed unless it actually ran in this turn
+
+### Experience Evals For Complete Features
+
+When implementing a complete new feature, decide whether ordinary unit/API/E2E checks are enough or whether the user-facing quality needs an experience eval. If the feature's value depends on LLM judgment, ranking quality, recall relevance, generated content usefulness, or long-running behavioral drift, create or update a suite under `evals/`.
+
+For a new eval suite:
+
+- Add cases under `evals/cases/<suite>/`, workflow instructions under `evals/workflows/<suite>/experience.md`, and register the suite in `evals/registry.yaml`
+- Set a reasonable schedule in `registry.yaml` based on drift risk; weekly is the default for recall/ranking/generation features, while lower-risk deterministic features can be manual or every 14-30 days
+- Use LLM judge only when heuristic checks cannot judge the user-facing quality; otherwise keep the eval deterministic and explain that choice in the workflow
+- Run `npm run eval:validate`
+- Run the new/updated suite once with `npm run eval:run -- --suite <suite-id> --no-repair`
+- Return the generated report path and a short pass/fail summary to the user
 
 Manual-interaction pauses:
 
@@ -249,6 +270,7 @@ When modifying `src/scheduled-messages/app-script-template.gs`:
   - what gets filtered, gated, delayed, or requires user confirmation
 - If a feature uses scoring, ranking, recall, rules, thresholds, routing, or multiple data sources, include a necessary implementation-logic section after the plain-language summary. Keep formulas/tables only where they help maintainers, and put the user-readable summary before technical details. If there is no fixed source weight, say so explicitly and describe the actual allowlist, gate, priority, or fallback mechanism instead.
 - Avoid feature docs that are only bullet lists of capabilities. Each current feature doc should include: product boundary, primary user flow, important data sources, decision/gating logic, safety/privacy defaults, key source-of-truth files or APIs, and minimal validation guidance.
+- For Rehearsal / 场景预演 work, preserve the product boundary in docs and implementation: it is future-scene memory for “when a recognizable future scene appears, remember/say/do this,” not unrestricted brainstorming, ordinary facts, Dream weak association, or generic todos. Relevant `docs/features/` entries should state this in human language: the future trigger, the content to bring into that moment, and when the system should stay quiet.
 - For `google_slides_analyzer` changes, keep `docs/features/google_slides_analyzer.md` concise and current. Verify invalid row/column indexes are not sent, cell replacement uses `deleteText.textRange.type = ALL` plus `insertText.insertionIndex = 0`, review windows use constrained `postMessage` origins, default selections are field-level, review and blocked queues show before/after plus rationale, partial-success results keep skipped reasons visible, writeback selection is locked while pending, and risk detection does not treat negated phrases, open statuses, closed high-priority issues, or `medium` risk as normal.
 
 ## Language Preference

@@ -18,8 +18,11 @@ const userDataDir = await fs.mkdtemp(
 );
 const nowSeconds = Math.floor(Date.now() / 1000);
 const answerRequests = [];
+const stateRequests = [];
 let failConfirmRequests = false;
+let failWatchRequests = false;
 let includeDeepLinkPeer = false;
+let decisionState = 'pending';
 
 function jsonResponse(body, status = 200) {
   return {
@@ -97,6 +100,15 @@ const unrelatedDecisionItem = {
   updatedAt: nowSeconds - 20,
 };
 
+function currentDecisionItem() {
+  return {
+    ...decisionItem,
+    state: decisionState,
+    snoozeUntil: decisionState === 'snoozed' ? nowSeconds + 24 * 3600 : null,
+    snoozeCount: decisionState === 'snoozed' ? 1 : 0,
+  };
+}
+
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
   headless: true,
@@ -116,15 +128,34 @@ try {
 
     if (pathname.endsWith('/confirm-requests') && request.method() === 'GET') {
       if (failConfirmRequests) {
-        await route.fulfill(jsonResponse({ error: 'memory service unavailable' }, 503));
+        await route.fulfill(
+          jsonResponse({ error: 'memory service unavailable' }, 503),
+        );
         return;
       }
       const queue = parsed.searchParams.get('queue');
       const state = parsed.searchParams.get('state');
+      if (failWatchRequests && queue === 'watch') {
+        await route.fulfill(
+          jsonResponse({ error: 'watch queue temporarily unavailable' }, 503),
+        );
+        return;
+      }
       if (queue === 'decision' && state === 'pending') {
-        const items = includeDeepLinkPeer
-          ? [unrelatedDecisionItem, decisionItem]
-          : [decisionItem];
+        const items =
+          decisionState === 'pending'
+            ? includeDeepLinkPeer
+              ? [unrelatedDecisionItem, currentDecisionItem()]
+              : [currentDecisionItem()]
+            : [];
+        await route.fulfill(
+          jsonResponse({ items, total: items.length, limit: 50, state, queue }),
+        );
+        return;
+      }
+      if (queue === 'decision' && state === 'snoozed') {
+        const items =
+          decisionState === 'snoozed' ? [currentDecisionItem()] : [];
         await route.fulfill(
           jsonResponse({ items, total: items.length, limit: 50, state, queue }),
         );
@@ -140,6 +171,7 @@ try {
     ) {
       const payload = request.postDataJSON();
       answerRequests.push(payload);
+      decisionState = 'answered';
       await route.fulfill(
         jsonResponse({
           status: 'resolved',
@@ -149,6 +181,22 @@ try {
             userAnswer: payload.answer,
             answeredAt: nowSeconds,
           },
+        }),
+      );
+      return;
+    }
+
+    if (
+      pathname.endsWith('/confirm-requests/cr-risky-deploy/state') &&
+      request.method() === 'POST'
+    ) {
+      const payload = request.postDataJSON();
+      stateRequests.push(payload);
+      decisionState = payload.state;
+      await route.fulfill(
+        jsonResponse({
+          status: 'updated',
+          confirmRequest: currentDecisionItem(),
         }),
       );
       return;
@@ -181,7 +229,9 @@ try {
     .innerText();
   assert.match(firstCardQuestion, /OpenClaw 继续查询生产部署状态/);
   await deepLinkPage
-    .locator('.decision-card.deep-link-target[data-request-id="cr-risky-deploy"]')
+    .locator(
+      '.decision-card.deep-link-target[data-request-id="cr-risky-deploy"]',
+    )
     .waitFor({ timeout: 10000 });
 
   const missingLinkPage = await context.newPage();
@@ -205,15 +255,34 @@ try {
       },
     });
   });
-  await page.goto(`chrome-extension://${extensionId}/memory-exploring.html#/decisions`, {
-    waitUntil: 'domcontentloaded',
-  });
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/decisions`,
+    {
+      waitUntil: 'domcontentloaded',
+    },
+  );
 
   await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
   await page.getByText('审核上下文').waitFor({ timeout: 10000 });
   await page.getByText('可选项：批准执行 / 拒绝执行 / 需要更多上下文').waitFor({
     timeout: 10000,
   });
+
+  failWatchRequests = true;
+  await page.getByRole('button', { name: '刷新' }).click();
+  await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
+  await page.getByText('部分队列刷新失败').waitFor({ timeout: 10000 });
+  await page.getByText(/失败队列：待观察/).waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: '批准执行' }).waitFor({
+    timeout: 10000,
+  });
+
+  failWatchRequests = false;
+  await page.getByRole('button', { name: '重试全部' }).click();
+  await page
+    .getByText('部分队列刷新失败')
+    .waitFor({ state: 'detached', timeout: 10000 });
+
   await page.locator('.evidence-chip').filter({ hasText: '动作 ·' }).waitFor({
     timeout: 10000,
   });
@@ -221,10 +290,21 @@ try {
 
   await page.getByRole('button', { name: '复制审核包' }).click();
   await page.getByText('已复制审核包').waitFor({ timeout: 10000 });
-  const copiedText = await page.evaluate(() => window.__decisionCenterCopiedText);
+  const copiedText = await page.evaluate(
+    () => window.__decisionCenterCopiedText,
+  );
   assert.match(copiedText, /OpenClaw 继续查询生产部署状态/);
   assert.match(copiedText, /可选项: 批准执行 \/ 拒绝执行 \/ 需要更多上下文/);
   assert.match(copiedText, /action:action-risky-deploy-approval-1/);
+
+  await page.getByRole('button', { name: '稍后再决定' }).click();
+  await page.getByText('决策中心 (0)').waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: /稍后决策/ }).click();
+  await page.getByText('稍后处理上下文').waitFor({ timeout: 10000 });
+  await page.getByText(/回到主队列/).waitFor({ timeout: 10000 });
+  await page.getByRole('button', { name: '现在处理' }).click();
+  await page.getByText('决策中心 (1)').waitFor({ timeout: 10000 });
+  assert.deepEqual(stateRequests, [{ state: 'snoozed' }, { state: 'pending' }]);
 
   await page.getByRole('button', { name: '批准执行' }).click();
   await page.getByText('决策中心 (0)').waitFor({ timeout: 10000 });

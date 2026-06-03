@@ -13,6 +13,31 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
 const extensionPath = path.join(repoRoot, 'dist');
 const SELF_EXTENSION_ID = '20367368195';
+const markerFixtureItems = [
+  {
+    id: 'outreach:session-from-message:12345:msg-1',
+    type: 'outreach_initial_ask',
+    label: '跟进中',
+    chatId: '12345',
+    postId: 'msg-1',
+    source: 'memory_service',
+    sourceId: 'session-from-message',
+    sessionId: 'session-from-message',
+    updatedAt: 1778841000,
+    tooltip: '等待 Jordan Lee 确认最终发布日期',
+  },
+  {
+    id: 'snooze-pending:snooze-row-1:12345:msg-1',
+    type: 'snooze_pending',
+    label: '稍后 5/18 09:00',
+    chatId: '12345',
+    postId: 'msg-1',
+    source: 'sheet',
+    sourceId: 'snooze-row-1',
+    updatedAt: 1778840900,
+    tooltip: '提醒时间：2026-05-18 09:00',
+  },
+];
 
 const fixtureHtml = `<!doctype html>
 <html>
@@ -35,10 +60,67 @@ const fixtureHtml = `<!doctype html>
       [data-name="text"] { line-height: 1.5; }
       [data-name="time"] { display: block; margin-top: 8px; color: #64748b; font-size: 12px; }
       [data-name="avatar"] { display: none; }
+      [data-name="conversationTitle"] { display: block; margin-bottom: 16px; font-size: 18px; font-weight: 700; }
+      .composer-shell { margin-top: 24px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px 8px; }
+      .ql-editor { min-height: 72px; outline: none; }
+      .composer-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 30px;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 8px;
+      }
+      .composer-toolbar button {
+        height: 28px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #334155;
+        padding: 0 8px;
+        font: inherit;
+      }
+      .composer-toolbar button:hover { background: #f1f5f9; }
+      .composer-leading,
+      .composer-tail {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .composer-tail { margin-left: auto; }
+      .inline-reply-shell {
+        width: 420px;
+        margin: 18px 0 0 auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 8px;
+      }
+      .inline-reply-shell .ql-editor { min-height: 36px; }
+      .message-action-bar-inline-reply {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 6px;
+      }
     </style>
+    <script>
+      const glipDbRequest = indexedDB.open('Glip', 1);
+      glipDbRequest.onupgradeneeded = () => {
+        const db = glipDbRequest.result;
+        if (!db.objectStoreNames.contains('group')) db.createObjectStore('group', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('person')) db.createObjectStore('person', { keyPath: 'id' });
+      };
+      glipDbRequest.onsuccess = () => {
+        const db = glipDbRequest.result;
+        const tx = db.transaction(['group', 'person'], 'readwrite');
+        tx.objectStore('group').put({ id: 12345, is_team: true, set_abbreviation: 'Release Team' });
+        tx.objectStore('person').put({ id: 20367368195, first_name: 'Esone', last_name: 'Qiu' });
+      };
+    </script>
   </head>
   <body>
     <main class="conversation">
+      <span data-name="conversationTitle">Release Team</span>
       <article class="conversation-card">
         <div class="conversation-card-wrapper" data-id="msg-1" groupid="12345">
           <button data-name="avatar" data-uid="GLIP_PERSON.99999"></button>
@@ -54,7 +136,28 @@ const fixtureHtml = `<!doctype html>
           <div data-name="text">@Jordan Lee can you confirm the release date before Friday?</div>
           <span data-name="time" datetime="2026-05-15T10:30:00Z">10:30</span>
         </div>
+        <div class="inline-reply-shell" data-test-automation-id="reply-inline-input">
+          <div class="ql-editor" contenteditable="true" role="textbox"></div>
+          <div class="message-action-bar-inline-reply">
+            <button type="button" aria-label="Attach file">Attach</button>
+            <button type="button" class="inline-more" aria-label="More">More</button>
+          </div>
+        </div>
       </article>
+      <footer class="composer-shell" data-test-automation-id="message-compose">
+        <div class="ql-editor" contenteditable="true" role="textbox">
+          <p>Hi <span role="link" data-id="20367368195">@Esone Qiu</span> and @team, please check this later.</p>
+        </div>
+        <div class="composer-toolbar" role="toolbar" aria-label="Composer actions">
+          <div class="composer-leading">
+            <button type="button" aria-label="Attach">Attach</button>
+            <button type="button" aria-label="Emoji">Emoji</button>
+          </div>
+          <div class="composer-tail">
+            <button type="button" class="composer-more" aria-label="More">More</button>
+          </div>
+        </div>
+      </footer>
     </main>
   </body>
 </html>`;
@@ -98,6 +201,9 @@ async function startMemoryServiceFixture() {
             status: 'waiting_reply',
             sentChatId: body.chatId,
             sentPostId: body.postId,
+            renderedContext: duplicate
+              ? '确认最终发布日期和是否需要额外资源'
+              : body.informationGoal,
           },
           created: !duplicate,
           reason: duplicate ? 'existing_message_reaction_session' : undefined,
@@ -113,7 +219,7 @@ async function startMemoryServiceFixture() {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
-          items: [],
+          items: markerFixtureItems,
           generatedAt: Math.floor(Date.now() / 1000),
         }),
       );
@@ -319,6 +425,159 @@ async function main() {
 
     const message = page.locator('.conversation-card-wrapper[data-id="msg-1"]');
     await message.waitFor({ state: 'visible', timeout: 10_000 });
+    await page.waitForFunction(
+      () =>
+        Array.from(document.querySelectorAll('style')).some((style) =>
+          style.textContent?.includes('.glip-ai-marker-badge'),
+        ),
+      null,
+      { timeout: 12_000 },
+    );
+
+    await serviceWorker.evaluate(async () => {
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          version: 1,
+          updatedAt: Date.now(),
+          markersByChatId: {
+            '12345': {
+              'msg-1': [
+                {
+                  id: 'outreach:session-from-message:12345:msg-1',
+                  type: 'outreach_initial_ask',
+                  label: '跟进中',
+                  chatId: '12345',
+                  postId: 'msg-1',
+                  source: 'memory_service',
+                  sourceId: 'session-from-message',
+                  sessionId: 'session-from-message',
+                  updatedAt: 1778841000,
+                  tooltip: '等待 Jordan Lee 确认最终发布日期',
+                },
+                {
+                  id: 'snooze-pending:snooze-row-1:12345:msg-1',
+                  type: 'snooze_pending',
+                  label: '稍后 5/18 09:00',
+                  chatId: '12345',
+                  postId: 'msg-1',
+                  source: 'sheet',
+                  sourceId: 'snooze-row-1',
+                  updatedAt: 1778840900,
+                  tooltip: '提醒时间：2026-05-18 09:00',
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+    const markerBadge = message.locator('.glip-ai-marker-badge');
+    await markerBadge.waitFor({ state: 'visible', timeout: 5_000 });
+    const markerBadgeState = await markerBadge.evaluate((badge) => ({
+      tagName: badge.tagName,
+      text: badge.textContent?.replace(/\s+/g, '').trim(),
+      ariaLabel: badge.getAttribute('aria-label'),
+      title: badge.getAttribute('title'),
+      tabIndex: badge.tabIndex,
+      countText: badge
+        .querySelector('.glip-ai-marker-count')
+        ?.textContent?.trim(),
+    }));
+    assert.deepEqual(markerBadgeState, {
+      tagName: 'BUTTON',
+      text: '跟进中+1',
+      ariaLabel:
+        'AI 标注，共 2 项：跟进中：等待 Jordan Lee 确认最终发布日期；稍后 5/18 09:00：提醒时间：2026-05-18 09:00',
+      title:
+        'AI 标注，共 2 项：跟进中：等待 Jordan Lee 确认最终发布日期；稍后 5/18 09:00：提醒时间：2026-05-18 09:00',
+      tabIndex: 0,
+      countText: '+1',
+    });
+    await markerBadge.focus();
+    await page.waitForFunction(
+      () => {
+        const tooltip = document.querySelector('.glip-ai-marker-tooltip');
+        return tooltip && Number(getComputedStyle(tooltip).opacity) > 0.9;
+      },
+      null,
+      { timeout: 3_000 },
+    );
+    const markerTooltipText = await message
+      .locator('.glip-ai-marker-tooltip')
+      .textContent();
+    assert.match(markerTooltipText || '', /跟进中/);
+    assert.match(markerTooltipText || '', /稍后 5\/18 09:00/);
+
+    await serviceWorker.evaluate(async () => {
+      const result = await chrome.storage.local.get(['glipMessageMarkers']);
+      await chrome.storage.local.set({
+        glipMessageMarkers: {
+          ...(result.glipMessageMarkers || {
+            version: 1,
+            markersByChatId: {},
+          }),
+          updatedAt: Date.now(),
+          pendingScheduledByChatId: {
+            '12345': [
+              {
+                id: 'compose-scheduled:row-1',
+                chatId: '12345',
+                messageId: 'row-1',
+                topic: '定时发送: release note',
+                content: 'Hi @esone.qiu，请晚点看一下 release note 的最终措辞。',
+                scheduledAt: '2026-06-03T10:30:00.000Z',
+                targetType: 'group',
+                targetLabel: '12345',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+            ],
+          },
+        },
+      });
+    });
+    const pendingScheduledBubble = page.locator(
+      '.pai-glip-pending-scheduled-item',
+    );
+    await pendingScheduledBubble.waitFor({ state: 'visible', timeout: 5_000 });
+    const pendingScheduledState = await page.evaluate(() => {
+      const pending = document.querySelector('.pai-glip-pending-scheduled-list');
+      const pendingItem = document.querySelector('.pai-glip-pending-scheduled-item');
+      const lastMessage = document.querySelector(
+        '.conversation-card-wrapper[data-id="msg-own"]',
+      );
+      const composer = document.querySelector('.composer-shell');
+      const icon = document.querySelector('.pai-glip-pending-scheduled-icon');
+      const manage = document.querySelector('.pai-glip-pending-scheduled-manage');
+      const pendingRect = pending?.getBoundingClientRect();
+      const lastMessageRect = lastMessage?.getBoundingClientRect();
+      const composerRect = composer?.getBoundingClientRect();
+      return {
+        text: pendingItem?.textContent?.replace(/\s+/g, ' ').trim() || '',
+        iconSrc: icon?.getAttribute('src') || '',
+        manageText: manage?.textContent?.trim() || '',
+        afterLastMessage: Boolean(
+          pendingRect && lastMessageRect && pendingRect.top >= lastMessageRect.bottom - 1,
+        ),
+        beforeComposer: Boolean(
+          pendingRect && composerRect && pendingRect.bottom <= composerRect.top + 1,
+        ),
+      };
+    });
+    assert.match(pendingScheduledState.text, /待发送/);
+    assert.match(pendingScheduledState.text, /release note/);
+    assert.match(pendingScheduledState.iconSrc, /icon48\.png/);
+    assert.equal(pendingScheduledState.manageText, '管理');
+    assert.equal(
+      pendingScheduledState.afterLastMessage,
+      true,
+      JSON.stringify(pendingScheduledState),
+    );
+    assert.equal(
+      pendingScheduledState.beforeComposer,
+      true,
+      JSON.stringify(pendingScheduledState),
+    );
 
     await message.hover();
     await delay(4_300);
@@ -438,6 +697,54 @@ async function main() {
       true,
       'Only the first action should own the segmented toolbar left radius',
     );
+
+    const followThreadConfigPagePromise = context.waitForEvent('page', {
+      timeout: 10_000,
+    });
+    await toolbar.locator('.follow-thread-btn').click();
+    const followThreadConfigPage = await followThreadConfigPagePromise;
+    await followThreadConfigPage.waitForLoadState('domcontentloaded');
+    await followThreadConfigPage.waitForSelector('.add-topic-form', {
+      timeout: 10_000,
+    });
+    assert.match(
+      await followThreadConfigPage
+        .locator('.add-topic-form .text-input')
+        .inputValue(),
+      /Please follow up with the release owner/,
+    );
+    assert.equal(
+      await followThreadConfigPage.locator('#new-follow-thread').isChecked(),
+      true,
+      'Watch prefill should enable the follow-thread rule toggle',
+    );
+    assert.equal(
+      await followThreadConfigPage.locator('#new-filter-sender').inputValue(),
+      '',
+      'Watch prefill should observe the conversation instead of only the original sender',
+    );
+    assert.equal(
+      await followThreadConfigPage.locator('#new-filter-group').inputValue(),
+      'Release Team',
+    );
+    const expectedOriginalDateText = await followThreadConfigPage.evaluate(() =>
+      new Date('2026-05-15T09:30:00Z').toLocaleString(),
+    );
+    assert.equal(
+      (
+        (await followThreadConfigPage
+          .locator('.follow-thread-config .datetime')
+          .first()
+          .textContent()) || ''
+      ).trim(),
+      expectedOriginalDateText,
+      'Watch prefill should show the original message time, not the config click time',
+    );
+    await followThreadConfigPage.close();
+    await page.mouse.move(5, 5);
+    await message.hover();
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
+
     const compactButtonMetrics = await page.$$eval(
       '.message-reaction-toolbar .message-reaction-action-btn',
       (buttons) =>
@@ -720,6 +1027,77 @@ async function main() {
       )}`,
     );
 
+    await message.focus();
+    const keyboardToolbar = message.locator('.message-reaction-toolbar.visible');
+    await keyboardToolbar.waitFor({ state: 'visible', timeout: 2_000 });
+    const keyboardRevealState = await message.evaluate((messageElement) => {
+      const toolbarElement = messageElement.querySelector(
+        '.message-reaction-toolbar',
+      );
+      return {
+        focusAnchor: messageElement.getAttribute(
+          'data-pai-message-reaction-focus-anchor',
+        ),
+        tabIndex: messageElement.tabIndex,
+        activeIsMessage: document.activeElement === messageElement,
+        ariaHidden: toolbarElement?.getAttribute('aria-hidden'),
+        actionTabIndexes: Array.from(
+          toolbarElement?.querySelectorAll('.message-reaction-action-btn') || [],
+        ).map((button) => button.tabIndex),
+        settingsTabIndex:
+          toolbarElement?.querySelector('.reaction-settings-btn')?.tabIndex,
+      };
+    });
+    assert.deepEqual(
+      keyboardRevealState,
+      {
+        focusAnchor: 'true',
+        tabIndex: 0,
+        activeIsMessage: true,
+        ariaHidden: 'false',
+        actionTabIndexes: [0, 0, 0, 0],
+        settingsTabIndex: -1,
+      },
+      `Focused message should expose the toolbar without mouse hover: ${JSON.stringify(
+        keyboardRevealState,
+      )}`,
+    );
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (
+        await page.evaluate(() =>
+          document.activeElement?.classList.contains('message-reaction-action-btn'),
+        )
+      ) {
+        break;
+      }
+      await page.keyboard.press('Tab');
+    }
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.classList.contains('message-reaction-action-btn'),
+      ),
+      true,
+      'Keyboard users should be able to tab from the focused message into toolbar actions',
+    );
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(
+      () => {
+        const messageElement = document.querySelector(
+          '.conversation-card-wrapper[data-id="msg-1"]',
+        );
+        const toolbarElement = messageElement?.querySelector(
+          '.message-reaction-toolbar',
+        );
+        return (
+          document.activeElement === messageElement &&
+          toolbarElement?.getAttribute('aria-hidden') === 'true' &&
+          !toolbarElement?.classList.contains('visible')
+        );
+      },
+      null,
+      { timeout: 3_000 },
+    );
+
     const ownMessage = page.locator(
       '.conversation-card-wrapper[data-id="msg-own"]',
     );
@@ -742,7 +1120,7 @@ async function main() {
     await page.waitForSelector('.followup-ask-dialog', { timeout: 3_000 });
     assert.equal(
       await page.locator('.followup-ask-target-value').textContent(),
-      'Jordan Lee',
+      'Release Team（提及 Jordan Lee）',
     );
     assert.match(
       (await page.locator('.followup-ask-run-summary').textContent()) || '',
@@ -777,7 +1155,10 @@ async function main() {
     );
     assert.equal(capturedFollowup.chatId, '12345');
     assert.equal(capturedFollowup.postId, 'msg-own');
-    assert.equal(capturedFollowup.targetResolvedLabel, 'Jordan Lee');
+    assert.equal(
+      capturedFollowup.targetResolvedLabel,
+      'Release Team（提及 Jordan Lee）',
+    );
     assert.equal(
       capturedFollowup.followupIntervalSeconds,
       720 * 60 * 60,
@@ -796,7 +1177,9 @@ async function main() {
       hasText: '查看追问',
     });
     await reviewAction.waitFor({ state: 'visible', timeout: 3_000 });
-    const reviewPagePromise = context.waitForEvent('page');
+    const reviewPagePromise = context.waitForEvent('page', {
+      timeout: 10_000,
+    });
     await reviewAction.click();
     const reviewPage = await reviewPagePromise;
     await reviewPage.waitForLoadState('domcontentloaded');
@@ -825,7 +1208,9 @@ async function main() {
     );
     await page.waitForFunction(
       () =>
-        document.body.textContent?.includes('这条消息已有跟进，未重复创建'),
+        document.body.textContent?.includes(
+          '这条消息已有跟进，未覆盖原目标：确认最终发布日期和是否需要额外资源',
+        ),
       null,
       { timeout: 5_000 },
     );
@@ -977,8 +1362,8 @@ async function main() {
       els.map((el) => el.textContent?.trim()),
     );
     assert.ok(
-      quickLabels.length >= 6 && quickLabels.length <= 8,
-      `Expected 6 to 8 quick options, got ${quickLabels.length}`,
+      quickLabels.length >= 6 && quickLabels.length <= 9,
+      `Expected 6 to 9 quick options, got ${quickLabels.length}`,
     );
     assert.deepEqual(quickLabels.slice(0, 5), [
       '15 分钟后',
@@ -988,6 +1373,10 @@ async function main() {
       '3 小时后',
     ]);
     const routineLabels = quickLabels.slice(5);
+    assert.ok(
+      routineLabels.filter((label) => label === '下个整点').length <= 1,
+      `Expected at most one next-full-hour option in ${routineLabels.join(', ')}`,
+    );
     const workdayEndLabel = routineLabels.find((label) =>
       label?.endsWith('下班前'),
     );
@@ -1008,6 +1397,25 @@ async function main() {
     assert.equal(quickTimes.length, quickLabels.length);
     assert.equal(quickTimes.every(Boolean), true);
     assert.equal(new Set(quickTimes).size, quickTimes.length);
+
+    const snoozeManagePagePromise = context.waitForEvent('page', {
+      timeout: 10_000,
+    });
+    await page.locator('.snooze-manage-option').click();
+    const snoozeManagePage = await snoozeManagePagePromise;
+    await snoozeManagePage.waitForLoadState('domcontentloaded');
+    assert.match(
+      snoozeManagePage.url(),
+      /scheduled-messages\.html\?category=Snooze$/,
+      'Snooze manage entry should open the filtered Scheduled Messages view',
+    );
+    await snoozeManagePage.close();
+
+    await page.mouse.move(5, 5);
+    await message.hover();
+    await toolbar.waitFor({ state: 'visible', timeout: 8_000 });
+    await snoozeButton.hover();
+    await page.waitForSelector('.snooze-menu', { timeout: 3_000 });
 
     await page.locator('.snooze-custom-option').click();
     await page.waitForSelector('.snooze-picker', { timeout: 3_000 });
@@ -1054,6 +1462,135 @@ async function main() {
       '请选择未来时间',
     );
     assert.equal(await page.locator('.snooze-btn-confirm').isDisabled(), true);
+    await page.locator('.snooze-btn-cancel').click();
+    await page.waitForSelector('.snooze-picker', {
+      state: 'detached',
+      timeout: 3_000,
+    });
+
+    const composeScheduleButton = page.locator('.pai-glip-compose-schedule-btn');
+    await composeScheduleButton.waitFor({ state: 'visible', timeout: 8_000 });
+    const composeSchedulePlacement = await composeScheduleButton.evaluate(
+      (button) => {
+        const toolbar = document.querySelector('.composer-toolbar');
+        const more = toolbar?.querySelector('.composer-more');
+        const inlineReply = button.closest('[data-test-automation-id="reply-inline-input"]');
+        const buttonStyle = window.getComputedStyle(button);
+        const brand = button.querySelector('.pai-glip-compose-schedule-brand');
+        const brandStyle = brand ? window.getComputedStyle(brand) : null;
+        const buttonRect = button.getBoundingClientRect();
+        const moreRect = more?.getBoundingClientRect();
+        const brandRect = brand?.getBoundingClientRect();
+        const svgRect = button.querySelector('svg')?.getBoundingClientRect();
+        return {
+          placement: button.getAttribute('data-pai-placement'),
+          pin: button.getAttribute('data-pai-toolbar-pin'),
+          toolbarPresent: Boolean(toolbar),
+          parentTag: button.parentElement?.tagName,
+          inInlineReply: Boolean(inlineReply),
+          sameLineAsMore: Boolean(
+            moreRect &&
+              Math.abs(
+                buttonRect.top +
+                  buttonRect.height / 2 -
+                  (moreRect.top + moreRect.height / 2),
+              ) <= 1.5,
+          ),
+          rightOfMore: Boolean(moreRect && buttonRect.left >= moreRect.right - 0.5),
+          brandBadgeTopRight: Boolean(
+            brandRect &&
+              brandRect.right <= buttonRect.right + 0.5 &&
+              buttonRect.right - brandRect.right <= 4 &&
+              brandRect.top >= buttonRect.top - 0.5 &&
+              brandRect.top - buttonRect.top <= 4,
+          ),
+          buttonLeft: buttonRect.left,
+          buttonRight: buttonRect.right,
+          moreLeft: moreRect?.left ?? 0,
+          moreRight: moreRect?.right ?? 0,
+          svgWidth: svgRect?.width ?? 0,
+          svgHeight: svgRect?.height ?? 0,
+          brandWidth: brandRect?.width ?? 0,
+          brandHeight: brandRect?.height ?? 0,
+          brandOpacity: Number.parseFloat(brandStyle?.opacity || '0'),
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          visibleInViewport:
+            buttonRect.left >= 0 &&
+            buttonRect.right <= window.innerWidth &&
+            buttonRect.top >= 0 &&
+            buttonRect.bottom <= window.innerHeight,
+          position: buttonStyle.position,
+          borderRadius: buttonStyle.borderRadius,
+          brandImage: brandStyle?.backgroundImage || '',
+        };
+      },
+    );
+    assert.equal(composeSchedulePlacement.placement, 'toolbar');
+    assert.equal(composeSchedulePlacement.toolbarPresent, true);
+    assert.equal(composeSchedulePlacement.parentTag, 'BODY');
+    assert.equal(composeSchedulePlacement.inInlineReply, false);
+    assert.equal(
+      await page.locator('[data-test-automation-id="reply-inline-input"] .pai-glip-compose-schedule-btn').count(),
+      0,
+      'Compose schedule button should not attach to inline reply editors',
+    );
+    assert.equal(composeSchedulePlacement.pin, 'more');
+    assert.equal(
+      composeSchedulePlacement.sameLineAsMore,
+      true,
+      JSON.stringify(composeSchedulePlacement),
+    );
+    assert.equal(
+      composeSchedulePlacement.rightOfMore,
+      true,
+      JSON.stringify(composeSchedulePlacement),
+    );
+    assert.equal(
+      composeSchedulePlacement.visibleInViewport,
+      true,
+      JSON.stringify(composeSchedulePlacement),
+    );
+    assert.equal(
+      composeSchedulePlacement.brandBadgeTopRight,
+      true,
+      JSON.stringify(composeSchedulePlacement),
+    );
+    assert.equal(composeSchedulePlacement.position, 'fixed');
+    assert.equal(composeSchedulePlacement.borderRadius, '6px');
+    assert.ok(
+      composeSchedulePlacement.svgWidth >= 20 &&
+        composeSchedulePlacement.svgHeight >= 20,
+      `Compose schedule clock icon should be visibly sized: ${JSON.stringify(
+        composeSchedulePlacement,
+      )}`,
+    );
+    assert.ok(
+      composeSchedulePlacement.brandWidth >= 8 &&
+        composeSchedulePlacement.brandWidth <= 11 &&
+        composeSchedulePlacement.brandHeight >= 8 &&
+        composeSchedulePlacement.brandHeight <= 11 &&
+        composeSchedulePlacement.brandOpacity >= 0.95,
+      `Compose schedule icon48 badge should be visible in the clock corner: ${JSON.stringify(
+        composeSchedulePlacement,
+      )}`,
+    );
+    assert.match(composeSchedulePlacement.brandImage, /icon48\.png/);
+    await composeScheduleButton.click();
+    await page.waitForSelector('.pai-glip-compose-schedule-popover', {
+      timeout: 3_000,
+    });
+    assert.match(
+      (await page.locator('.pai-glip-compose-schedule-popover').textContent()) ||
+        '',
+      /定时发送/,
+    );
+    assert.match(
+      (await page.locator('.pai-glip-compose-schedule-warning').textContent()) ||
+        '',
+      /群体提及/,
+    );
+    await page.keyboard.press('Escape');
 
     await serviceWorker.evaluate(async () => {
       await chrome.storage.local.set({
@@ -1145,7 +1682,9 @@ async function main() {
           (label) =>
             /^(Today|Tomorrow|Mon|Tue|Wed|Thu|Fri) (by EOD|9 AM)$/.test(
               label || '',
-            ) || label === 'Next Mon 9 AM',
+            ) ||
+            label === 'Next Mon 9 AM' ||
+            label === 'Next full hour',
         ),
       true,
       `English routine Remind labels should be localized: ${englishQuickLabels.join(

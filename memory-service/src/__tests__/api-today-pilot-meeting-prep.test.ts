@@ -114,6 +114,15 @@ describe('Today Pilot meeting prep API', () => {
     ).run();
   });
 
+  function formatLocalDate(timestampSeconds: number, timezone: string): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(timestampSeconds * 1000));
+  }
+
   function seedCalendarEvent(overrides: Record<string, unknown> = {}) {
     const current = Math.floor(Date.now() / 1000);
     const event = {
@@ -200,9 +209,7 @@ describe('Today Pilot meeting prep API', () => {
 
   it('prepares offline LLM meeting prep for calendar events', async () => {
     const event = seedCalendarEvent();
-    const localDate = new Date(Number(event.startAt) * 1000)
-      .toISOString()
-      .slice(0, 10);
+    const localDate = formatLocalDate(Number(event.startAt), 'Asia/Shanghai');
 
     const res = await app.inject({
       method: 'POST',
@@ -231,9 +238,7 @@ describe('Today Pilot meeting prep API', () => {
 
   it('resolves a pre-generated prep without another LLM call', async () => {
     const event = seedCalendarEvent();
-    const localDate = new Date(Number(event.startAt) * 1000)
-      .toISOString()
-      .slice(0, 10);
+    const localDate = formatLocalDate(Number(event.startAt), 'Asia/Shanghai');
     await app.inject({
       method: 'POST',
       url: '/api/v1/today-pilot/meeting-prep/prepare',

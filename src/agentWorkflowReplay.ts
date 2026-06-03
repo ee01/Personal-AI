@@ -273,7 +273,7 @@ function normalizeNumberArray(value: any): number[] {
     : [];
 }
 
-function getAgentWorkflowTraceStatus(result: any): string {
+export function getAgentWorkflowTraceStatus(result: any): string {
   const explicitStatus = normalizeText(result?.storageReview?.traceStatus);
   if (explicitStatus) return explicitStatus;
 
@@ -287,7 +287,10 @@ function getAgentWorkflowTraceStatus(result: any): string {
       step?.status === 'error' ||
       (Array.isArray(step?.tools) &&
         step.tools.some(
-          (tool: any) => tool?.status === 'error' || tool?.status === 'skipped',
+          (tool: any) =>
+            tool?.status === 'error' ||
+            tool?.status === 'skipped' ||
+            tool?.status === 'placeholder',
         )),
   );
   return hasIssue ? 'partial' : 'complete';

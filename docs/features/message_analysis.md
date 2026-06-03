@@ -1,6 +1,6 @@
 # 记忆入口消息观察规则
 
-_最后更新: 2026-05-26_
+_最后更新: 2026-05-30_
 
 > 说明：旧引用里可能还会出现 `message_analysis_filter.md`；当前功能文档文件名是 `message_analysis.md`。本文档描述的已经不是旧版“消息过滤器”，而是当前的“记忆入口规则 + 系统观察规则”体系。
 
@@ -92,6 +92,7 @@ _最后更新: 2026-05-26_
 - 手动规则的 `filterSender`
 - 手动规则的 `filterGroup`
 - 系统观察规则的目标群组、已发送会话或目标对象
+- 系统观察规则的观察起点，旧消息不能倒灌成新证据
 
 LLM 返回命中后，通知、自动回复、摘要、联动操作和入库分发前还会再次按消息上下文校验范围。这样可以避免一条只属于某个群组或某个发送人的规则，因为模型误判而在其他聊天里触发。
 
@@ -139,7 +140,7 @@ LLM 返回命中后，通知、自动回复、摘要、联动操作和入库分�
 - 生成一个或多个未来执行的动作
 - 在指定时间调用外部执行器
 
-用户看到的是自然语言动作描述，底层再映射成 RuntimeAction 和 OpenClaw 委派。
+用户看到的是自然语言动作描述，底层会先尝试映射到 Memory Service 已能确定规划的内部动作；无法内部确定但 prompt 非空的动作，不再因为动作族未知而跳过，而是带完整消息上下文委派给 OpenClaw。
 
 ## 联动操作与 OpenClaw
 
@@ -180,15 +181,14 @@ LLM 返回命中后，通知、自动回复、摘要、联动操作和入库分�
 - 支持 `delegate_openclaw` 的 `requiresApproval=true|false`
 - Action Queue 可查看对应规则产生的动作
 
-当前 planner 已支持一个明确场景：
+当前 planner 的分层规则是：
 
-- 从请假 / PTO 消息中解析时间范围
-- 生成 3 个 RuntimeAction：
-  - 1 个立即通知动作
-  - 1 个请假开始前动作
-  - 1 个请假结束后恢复动作
+- Memory Service 自身确定能规划的动作优先内部处理，例如从请假 / PTO 消息中解析时间范围，并生成 1 个通知动作、1 个请假开始前动作、1 个请假结束后恢复动作。
+- 已知外部目标族（转发、Jira comment、写入表格、Glip status、提醒 / 日程）会生成带目标系统说明的 `delegate_openclaw`。
+- 其他非空自然语言联动操作会生成 `openclaw_delegation` fallback：Memory Service 不预判 OpenClaw 是否有能力，只把规则、原消息、消息链接、附件列表和安全要求打包给 OpenClaw，由执行结果返回 success / capability missing / auth error / need human decision。
+- 空 prompt 或请假时间窗无法解析这类内部规划失败，仍会返回 `unsupported_or_unparseable_automation_prompt`。
 
-这个能力证明了“规则命中 -> 提取结构化时间 -> 定时外部动作”的链路可行。
+这个能力证明了“规则命中 -> Memory Service 先做确定性规划 -> 可执行外部动作交给 OpenClaw 黑盒执行”的链路可行。
 
 ## 定时动作为什么放在 memory-service
 
@@ -203,7 +203,7 @@ LLM 返回命中后，通知、自动回复、摘要、联动操作和入库分�
 因此当前设计是：
 
 - 扩展负责“发现消息命中规则”
-- memory-service 负责“计划和调度动作”
+- memory-service 负责“计划和调度动作”，并先处理自己能确定完成的内部规划
 - OpenClaw 负责“执行外部系统操作”
 
 ## 端到端链路
@@ -253,6 +253,8 @@ LLM 返回命中后，通知、自动回复、摘要、联动操作和入库分�
 - follow-thread
 - digest
 - 自动化规划
+
+同一条消息可以同时命中多条手动规则。摘要分发会按所有启用摘要的命中规则分别入队；即时通知会选择第一条非摘要且配置了通知渠道的命中规则。因此“摘要-only”规则不会吞掉同一条消息上的其他即时通知规则。
 
 ### 6. 自动化规划
 
@@ -570,6 +572,7 @@ Popup 中的入口名称已改为：
 - 顶部说明区会读取 Outreach runtime status，显示正在运行的内部观察总数。
 - 摘要按 `发送前观察 / 等待回复 / 待批准 / 延后` 展示当前状态，区分“待发送”和“等别人答复”。
 - 只展示前几条观察样例的目标、状态和问题摘要，帮助用户理解来源；这些系统规则仍不会写入 `concernedItems`，也不会进入手动规则的导入、导出、编辑和统计。
+- 摘要区提供“查看主动询问证据”入口，让用户能从内部观察样例跳到 Outreach 的证据、状态变化和追问记录页。
 - Memory Service 未配置或读取失败时，规则页会显示不可用状态，但手动规则管理不受阻塞。
 
 产品依据仍然是显式条件与可审计自动化：Slack Workflow Builder 要求先选 channel 和关键词条件，Zapier filter/path 会把条件作为明确 gate；TAP 可理解性研究指出用户需要看到触发条件和动作后果，attention-sensitive alerting 研究也提醒内部观察不应伪装成即时通知。这里的改动重点是给系统观察一个只读运行时窗口，而不是把内部规则暴露成可编辑配置。
@@ -579,6 +582,61 @@ Popup 中的入口名称已改为：
 - [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811)
 - [Zapier：Filter and path rules in Zaps](https://help.zapier.com/hc/en-us/articles/8496180919949-Filter-and-path-rules-in-Zaps)
 - [Making trigger-action rules more comprehensible](https://www.sciencedirect.com/science/article/pii/S1071581925001703)
+- [Attention-Sensitive Alerting](https://arxiv.org/abs/1301.6707)
+
+## 2026-05-27 更新：联动操作默认 OpenClaw 委派
+
+本轮复查发现，旧 message-rule planner 会先把 `automationPrompt` 映射到少数动作族；无法映射时直接跳过，因此“下载消息视频、上传到 Drive、把链接发给我”这类自然语言联动操作即使命中了规则，也不会进入 OpenClaw。新的机制改为内部优先、外部兜底：Memory Service 能确定规划的动作先内部处理，其他非空 prompt 一律创建 `delegate_openclaw`，并用 `openclaw_delegation` 标记说明这是黑盒委派。
+
+委派任务会携带原始联动描述、命中消息、RingCentral message URL、结构化附件列表、文件名、类型、大小和可用 source/message/download/preview link。OpenClaw 在执行后再返回真实能力状态；如果缺少附件源、Drive 权限、connector 或账号授权，必须返回明确 blocker，而不是假装完成。
+
+产品依据是把“触发判断”和“执行能力”分开：Memory Service 负责确定性范围校验、去重、调度和审计；OpenClaw 负责外部系统执行。这样既不会因为 planner 白名单过窄丢任务，也保留了失败、缺能力、缺授权时可追踪的恢复路径。
+
+## 2026-05-27 更新：系统观察证据跳转
+
+本轮复查保留“系统观察只读、手动规则可编辑”的边界，但把排障路径补齐：当规则页显示内部观察正在运行时，用户可以直接跳到主动询问页查看证据、状态变化和追问记录。这样既不把系统规则混入手动规则列表，也不让“系统还在观察消息”停留在无法追溯的黑盒状态。
+
+产品依据仍然是触发条件和动作后果必须可解释：Slack / Zapier 会把触发条件、范围和后续步骤拆开展示；触发-动作规则研究也说明，用户需要能检查规则为什么触发、为什么没有触发以及触发后会发生什么。
+
+## 2026-05-28 更新：多规则命中的摘要与即时通知分发
+
+本轮复查聚焦“消息入库与通知分发”。旧运行时在普通 filter、Agent Workflow 和 Agent Thinking 三条路径里，摘要与即时通知只看第一条命中的手动规则；如果第一条规则是摘要-only，后面另一条即时通知规则会被吞掉，界面上看起来“都命中了”，实际却只进摘要。
+
+当前实现已收敛为：
+
+- 摘要队列按所有命中的摘要规则分别入队，同一 `postId + ruleId` 仍保持去重。
+- 即时通知选择第一条非摘要且配置了 `notifyMethod` 的命中规则。
+- 关注后续通知仍优先于普通即时通知，保持“后续回复”场景的原消息上下文。
+- 普通 filter、Agent Workflow 和 Agent Thinking 共用同一套分发选择逻辑。
+- Agent Workflow 的测试结果也按同一逻辑解释：摘要-only 命中代表写入记忆和进入摘要队列，不再在 `shouldNotify` / 保存基线里显示成即时通知。
+
+产品依据是触发条件与后续步骤需要显式、可预测：Slack 关键词 workflow 会先限制 channel 和 keyword，再执行后续 steps；Zapier filter/path 也把条件 gate 与分支步骤拆开。Trigger-action programming 研究指出，多规则和隐藏控制流会让用户误判自动化结果；attention-sensitive alerting 研究则提醒即时通知与延后摘要应分开权衡打断成本。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811)
+- [Zapier：Filter & Paths](https://help.zapier.com/hc/en-us/sections/16074338520461)
+- [Supporting mental model accuracy in trigger-action programming](https://hcrlab.cs.washington.edu/publications/huang2015ubicomp/)
+- [Attention-Sensitive Alerting](https://arxiv.org/abs/1301.6707)
+
+## 2026-05-30 更新：系统观察时间边界
+
+本轮复查聚焦“系统观察规则”。旧运行时已经会按目标群组 / 会话过滤 Outreach 观察规则，但没有使用规则自带的 `baselineAt`。如果消息分析批次里混入旧消息，模型仍可能把观察开始前的历史内容标成当前主动询问证据，导致系统以为“已经有人回答了”。
+
+当前实现已收敛为：
+
+- Outreach 系统观察规则继续按已发送会话、目标 chat 或目标标签做范围校验。
+- 当消息时间可用时，候选规则筛选和最终 `matched_rule_refs` 解析都会要求消息时间不早于系统观察起点。
+- 同一群组批次里只要有一条新消息在观察窗口内，就保留该系统规则给 LLM；最终单条消息入库前仍会再按该消息自己的时间校验。
+- 缺少消息时间的旧调用保持兼容，不因为没有时间字段而直接屏蔽系统观察，但新版 filter、Agent Workflow 和 Agent Thinking 都会传入时间。
+
+产品依据是触发范围不仅包括“哪里 / 谁”，也包括“从什么时候开始”：Slack 关键词 workflow 把 channel 和 keyword 条件显式化，Zapier filter 支持 date/time 条件；TAP 心智模型研究也提示，用户容易误判隐藏的状态与事件边界。因此系统观察需要只读可审计，同时避免旧证据倒灌成新结论。
+
+参考资料：
+
+- [Slack：Create a Slack workflow that starts with a keyword](https://slack.com/help/articles/43844341409811)
+- [Zapier：Filter and path rules in Zap workflows](https://help.zapier.com/hc/en-us/articles/8496180919949-Filter-and-path-rules-in-Zap-workflows)
+- [Supporting mental model accuracy in trigger-action programming](https://hcrlab.cs.washington.edu/publications/huang2015ubicomp/)
 - [Attention-Sensitive Alerting](https://arxiv.org/abs/1301.6707)
 
 ## 2026-05-24 更新：后台采集关闭时的保存后恢复路径

@@ -69,6 +69,7 @@ test('ConfigSyncService reads App Script deployment metadata from Config sheet',
           ['app_script_last_updated', '2026-04-03'],
           ['created_by', 'Personal AI Extension'],
           ['created_at', '2026-04-30 12:00:00'],
+          ['last_sync_action', 'app_script_metadata_update'],
         ],
       }),
       { status: 200 },
@@ -83,6 +84,7 @@ test('ConfigSyncService reads App Script deployment metadata from Config sheet',
   assert.equal(config.deploymentId, 'deployment-456');
   assert.equal(config.appScriptVersion, '2.6.1');
   assert.equal(config.appScriptLastUpdated, '2026-04-03');
+  assert.equal(config.last_sync_action, 'app_script_metadata_update');
 });
 
 test('ConfigSyncService keeps canonical Config keys ahead of stale duplicate aliases', async () => {
@@ -225,6 +227,34 @@ test('ConfigSyncService writes App Script deployment metadata to Config sheet', 
   assert.equal(configMap.get('deployment_id'), 'deployment-456');
   assert.equal(configMap.get('app_script_version'), '2.6.1');
   assert.equal(configMap.get('app_script_last_updated'), '2026-04-03');
+});
+
+test('ConfigSyncService writes sync action metadata to Config sheet', async () => {
+  const calls = installFetchMock((_url, init) => {
+    if (init?.method === 'PUT') {
+      return new Response('{}', { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  });
+
+  const service = new ConfigSyncService('token');
+  await service.saveConfigToSheet({
+    sheetId: 'sheet-123',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+    sheet_version: '2.7',
+    created_by: 'Personal AI Extension',
+    created_at: '2026-04-30 12:00:00',
+  }, undefined, {
+    syncAction: 'app_script_metadata_update',
+  });
+
+  const putCall = calls.find((call) => call.init?.method === 'PUT');
+  assert.ok(putCall);
+  const body = JSON.parse(String(putCall.init?.body));
+  const configMap = new Map((body.values as [string, string][]).filter(([key]) => key));
+
+  assert.equal(configMap.get('last_sync_action'), 'app_script_metadata_update');
 });
 
 test('ConfigSyncService writes RingCentral sender config to Config sheet', async () => {
@@ -729,6 +759,7 @@ test('ConfigSyncService writes Sheet before local storage during full sync', asy
       const body = JSON.parse(String(init.body));
       const rows = body.values as [string, string][];
       sheetLastSyncTime = new Map(rows.filter(([key]) => key)).get('last_sync_time') || '';
+      assert.equal(new Map(rows.filter(([key]) => key)).get('last_sync_action'), 'one_click_setup');
       return new Response('{}', { status: 200 });
     }
 
@@ -755,11 +786,14 @@ test('ConfigSyncService writes Sheet before local storage during full sync', asy
     sheet_version: '2.7',
     created_by: 'Personal AI Extension',
     created_at: '2026-04-30 12:00:00',
+  }, {
+    syncAction: 'one_click_setup',
   });
 
   assert.deepEqual(events, ['sheet', 'storage']);
   assert.ok(sheetLastSyncTime);
   assert.equal(storedConfig.last_sync_time, sheetLastSyncTime);
+  assert.equal(storedConfig.last_sync_action, 'one_click_setup');
 });
 
 test('ConfigSyncService keeps sibling Bot Automation rule on partial update', async () => {
@@ -1043,4 +1077,6 @@ test('ConfigSyncService returns the persisted timestamp from partial updates', a
   assert.equal(sheetLastSyncTime, '2026-05-10T00:00:00.000Z');
   assert.equal(config.last_sync_time, sheetLastSyncTime);
   assert.equal(storedConfig.last_sync_time, sheetLastSyncTime);
+  assert.equal(config.last_sync_action, 'partial_update');
+  assert.equal(storedConfig.last_sync_action, 'partial_update');
 });

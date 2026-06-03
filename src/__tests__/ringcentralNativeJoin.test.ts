@@ -375,7 +375,7 @@ test('setRingCentralNativeJoinEnabled uses a page bridge when chrome storage is 
   }
 });
 
-test('openRingCentralVideoNativeJoin auto-dismisses app handoff after five seconds', () => {
+test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff leaves the page active', () => {
   const originalDocument = (globalThis as typeof globalThis & {
     document?: unknown;
   }).document;
@@ -501,9 +501,15 @@ test('openRingCentralVideoNativeJoin auto-dismisses app handoff after five secon
 
   const body = new FakeElement('body');
   const documentElement = new FakeElement('html');
+  let pageVisibilityState: 'visible' | 'hidden' = 'visible';
+  let pageHasFocus = true;
   (globalThis as typeof globalThis & { document?: unknown }).document = {
     body,
     documentElement,
+    get visibilityState() {
+      return pageVisibilityState;
+    },
+    hasFocus: () => pageHasFocus,
     createElement: (tagName: string) => new FakeElement(tagName),
     createTextNode: (text: string) => {
       const node = new FakeElement('#text');
@@ -583,19 +589,28 @@ test('openRingCentralVideoNativeJoin auto-dismisses app handoff after five secon
 
     scheduledTimeouts[0].callback();
     assert.ok(
-      !elementsById.get('pai-ringcentral-native-join-fallback'),
-      'native app handoff panel should auto-dismiss after five seconds',
+      elementsById.get('pai-ringcentral-native-join-fallback'),
+      'native app handoff panel should stay visible when the page is still active',
     );
     assert.equal(
-      elementsById.get('pai-ringcentral-native-join-launch-link'),
-      undefined,
-      'auto-dismiss should remove the temporary native launch link',
+      status?.textContent,
+      'Still on this page? RingCentral app may not have opened. Use Join in browser or Copy link.',
+      'active page handoff should become an explicit recovery state',
     );
     assert.ok(
       clearedTimeouts.includes(2),
-      'auto-dismiss should clear the pending handoff escalation timer',
+      'manual recovery state should clear the pending handoff escalation timer',
     );
 
+    closeButton?.dispatchTestEvent('click');
+    assert.equal(
+      elementsById.get('pai-ringcentral-native-join-fallback'),
+      undefined,
+      'top-right close control should remove the native handoff panel',
+    );
+
+    pageVisibilityState = 'hidden';
+    pageHasFocus = false;
     openRingCentralVideoNativeJoin({
       originalUrl: 'https://v.ringcentral.com/join/123456',
       nativeUrl: 'rcvdt://join/123456',
@@ -603,15 +618,15 @@ test('openRingCentralVideoNativeJoin auto-dismisses app handoff after five secon
       meetingId: '123456',
     });
 
-    const reopenedCloseButton = findElementByAttribute(
-      elementsById.get('pai-ringcentral-native-join-fallback')!,
-      'data-pai-ringcentral-native-join-close',
+    scheduledTimeouts[3].callback();
+    assert.ok(
+      !elementsById.get('pai-ringcentral-native-join-fallback'),
+      'native app handoff panel should auto-dismiss when the page is no longer active',
     );
-    reopenedCloseButton?.dispatchTestEvent('click');
     assert.equal(
-      elementsById.get('pai-ringcentral-native-join-fallback'),
+      elementsById.get('pai-ringcentral-native-join-launch-link'),
       undefined,
-      'top-right close control should remove the native handoff panel',
+      'auto-dismiss should remove the temporary native launch link',
     );
   } finally {
     if (originalDocument === undefined) {

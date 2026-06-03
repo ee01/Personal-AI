@@ -19,6 +19,7 @@ import {
   buildProjectStatusUpdateDraft,
   buildProjectTaskSourceSummary,
   buildProjectTaskRiskSummary,
+  buildProjectVisualizationSummary,
   compareProjectsByDashboardPriority,
   filterProjectsByDashboardView,
   parseProjectDashboardLaunchContext,
@@ -30,6 +31,12 @@ import {
   type ProjectSyncReadiness,
   type ProjectStatusEvidenceItem,
 } from '../../utils/dashboardIntegration';
+import {
+  importProjectsFromReport,
+  parseProjectReport,
+  type ProjectReportFile,
+  type ProjectReportImportMode,
+} from '../../utils/projectReport';
 import { getEnvConfig, EnvConfigType } from '../../utils';
 
 // 新仪表盘数据结构（与 docs/demo/项目进展图-缩放版.html 对齐）
@@ -76,6 +83,23 @@ type TaskAttention = {
     label: string;
     drivers: string[];
   };
+};
+
+type ProjectImportStats = {
+  importedProjectCount: number;
+  createdProjectCount: number;
+  updatedProjectCount: number;
+  retainedProjectCount: number;
+  removedProjectCount: number;
+};
+
+type ImportReviewState = {
+  fileName: string;
+  reportContent: string;
+  report: ProjectReportFile;
+  mergeStats: ProjectImportStats;
+  replaceStats: ProjectImportStats;
+  projectNames: string[];
 };
 
 const ALL_PLATFORM_KEYS: PlatformKey[] = ['sdk', 'ios', 'android', 'qa', 'dev'];
@@ -214,6 +238,7 @@ const ProjectDashboard: React.FC = () => {
   const [focusExpanded, setFocusExpanded] = useState(false);
   const [reviewQueueExpanded, setReviewQueueExpanded] = useState(false);
   const [evidenceGapExpanded, setEvidenceGapExpanded] = useState(false);
+  const [importReview, setImportReview] = useState<ImportReviewState | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // 新增项目入口
@@ -853,6 +878,51 @@ const ProjectDashboard: React.FC = () => {
     importInputRef.current?.click();
   };
 
+  const buildImportImpactText = (mode: ProjectReportImportMode, stats: ProjectImportStats) => {
+    const parts = [
+      `导入 ${stats.importedProjectCount}`,
+      `新增 ${stats.createdProjectCount}`,
+      `更新 ${stats.updatedProjectCount}`,
+    ];
+
+    if (mode === 'merge') {
+      parts.push(`保留 ${stats.retainedProjectCount}`);
+    } else {
+      parts.push(`移除 ${stats.removedProjectCount}`);
+    }
+
+    return parts.join('，');
+  };
+
+  const executeImportReport = async (mode: ProjectReportImportMode) => {
+    if (!importReview || isImporting) return;
+
+    setIsImporting(true);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'IMPORT_PROJECT_REPORT',
+        reportContent: importReview.reportContent,
+        mode,
+      });
+
+      if (!response?.success) {
+        throw new Error(response?.error || '导入失败');
+      }
+
+      await loadProjects();
+
+      const stats = (response.stats || (mode === 'replace' ? importReview.replaceStats : importReview.mergeStats)) as ProjectImportStats;
+      const modeLabel = mode === 'replace' ? '替换导入' : '合并导入';
+      showActionStatus('success', `${modeLabel}完成：${buildImportImpactText(mode, stats)}`);
+      setImportReview(null);
+    } catch (error) {
+      console.error('导入项目报告失败:', error);
+      showActionStatus('error', error instanceof Error ? error.message : '导入项目报告失败');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const handleImportReport = (event: React.ChangeEvent<HTMLInputElement>) => {
     const input = event.target;
     const file = input.files?.[0];
@@ -867,27 +937,18 @@ const ProjectDashboard: React.FC = () => {
           throw new Error('导入文件内容为空');
         }
 
-        const replaceExisting = window.confirm(
-          '是否用导入内容替换当前项目列表？\n选择“确定”会替换当前项目；选择“取消”会合并导入并保留现有项目。',
-        );
-
-        const response = await chrome.runtime.sendMessage({
-          type: 'IMPORT_PROJECT_REPORT',
+        const report = parseProjectReport(reportContent);
+        const mergePreview = importProjectsFromReport(projects as any[], report, { mode: 'merge' });
+        const replacePreview = importProjectsFromReport(projects as any[], report, { mode: 'replace' });
+        setImportReview({
+          fileName: file.name || 'project-report.json',
           reportContent,
-          mode: replaceExisting ? 'replace' : 'merge',
+          report,
+          mergeStats: mergePreview.stats,
+          replaceStats: replacePreview.stats,
+          projectNames: report.projects.map(entry => entry.project.name).filter(Boolean),
         });
-
-        if (!response?.success) {
-          throw new Error(response?.error || '导入失败');
-        }
-
-        await loadProjects();
-
-        const stats = response.stats;
-        const summary = stats
-          ? `导入 ${stats.importedProjectCount} 个项目，新增 ${stats.createdProjectCount}，更新 ${stats.updatedProjectCount}，保留 ${stats.retainedProjectCount}，移除 ${stats.removedProjectCount}`
-          : '项目报告导入完成';
-        showActionStatus('success', summary);
+        showActionStatus('success', `已读取 ${report.projects.length} 个项目，请先复核导入影响`);
       } catch (error) {
         console.error('导入项目报告失败:', error);
         showActionStatus('error', error instanceof Error ? error.message : '导入项目报告失败');
@@ -1433,6 +1494,14 @@ const ProjectDashboard: React.FC = () => {
                     ))}
                   </div>
                 )}
+                {!!source.diagnostics?.length && (
+                  <div className="data-source-diagnostics" aria-label={`${source.label} 本地诊断`}>
+                    <strong>本地诊断</strong>
+                    {source.diagnostics.map(diagnostic => (
+                      <span key={diagnostic}>{diagnostic}</span>
+                    ))}
+                  </div>
+                )}
                 {!!source.boundaries?.length && (
                   <ul className="data-source-boundaries" aria-label={`${source.label} 使用边界`}>
                     {source.boundaries.map(boundary => (
@@ -1713,6 +1782,7 @@ const ProjectDashboard: React.FC = () => {
             const decisionSummary = buildProjectDecisionSummary(project, { now: dashboardNow });
             const viewReason = buildProjectDashboardViewReason(project, dashboardNow);
             const attentionTasks = buildProjectAttentionTasks(project, dashboardNow);
+            const chartSummary = buildProjectVisualizationSummary(project, { now: dashboardNow });
             return (
               <div
                 className={`project-card ${projectMatchesDashboardLaunchContext(project, launchContext) ? 'launch-highlight' : ''}`}
@@ -1831,6 +1901,77 @@ const ProjectDashboard: React.FC = () => {
                     </div>
                   </div>
                 )}
+                <div className="chart-insight-strip" aria-label={`${project.name} 图表概览`}>
+                  <div className="chart-insight-header">
+                    <span>图表概览</span>
+                    <strong>{chartSummary.headline}</strong>
+                    <em>{chartSummary.nextStep}</em>
+                  </div>
+                  <div className="chart-insight-grid">
+                    {chartSummary.panels.map(panel => (
+                      <section className={`chart-insight-card ${panel.state}`} key={panel.id}>
+                        <div className="chart-insight-card-top">
+                          <span>{panel.label}</span>
+                          <strong>{panel.headline}</strong>
+                        </div>
+                        {typeof panel.progressPercent === 'number' && (
+                          <div className="chart-progress" aria-label={`${panel.label} 进度 ${panel.progressPercent}%`}>
+                            <span style={{ width: `${panel.progressPercent}%` }} />
+                          </div>
+                        )}
+                        {!!panel.markers?.length && (
+                          <div className="chart-timeline-track" aria-label={`${panel.label} 时间点`}>
+                            {panel.markers.map(marker => (
+                              <span
+                                key={marker.id}
+                                className={`chart-marker ${marker.tone}`}
+                                style={{ left: `${marker.position}%` }}
+                                title={`${marker.label} · ${marker.detail}`}
+                                aria-label={`${marker.label}，${marker.detail}`}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        <p>{panel.detail}</p>
+                        <div className="chart-insight-metrics">
+                          {panel.metrics.map(metric => (
+                            <span key={metric}>{metric}</span>
+                          ))}
+                        </div>
+                        {!!panel.drivers?.length && (
+                          <div className="chart-driver-list" aria-label={`${panel.label} 关键任务`}>
+                            {panel.drivers.map(driver => (
+                              <button
+                                key={`${panel.id}-${driver.id}-${driver.label}`}
+                                type="button"
+                                className={`chart-driver-item ${driver.tone}`}
+                                onClick={() => driver.action && openDetail(project.id, driver.action.taskId, driver.action.evidenceFocus)}
+                                disabled={!driver.action}
+                              >
+                                <span>{driver.label}</span>
+                                <strong>{driver.title}</strong>
+                                <em>{driver.detail}</em>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <div className="chart-insight-next">
+                          <span>下一步</span>
+                          <strong>{panel.nextStep}</strong>
+                        </div>
+                        {panel.action && (
+                          <button
+                            type="button"
+                            className="chart-insight-action"
+                            onClick={() => openDetail(project.id, panel.action!.taskId, panel.action!.evidenceFocus)}
+                          >
+                            {panel.action.label}
+                          </button>
+                        )}
+                      </section>
+                    ))}
+                  </div>
+                </div>
                 <div
                   className="fishbone-container" 
                   onClick={(e) => {
@@ -2008,8 +2149,89 @@ const ProjectDashboard: React.FC = () => {
                     </div>
                     </div>
           </div>
-                      </div>
-                    )}
+        </div>
+      )}
+
+      {importReview && (
+        <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay') && !isImporting) setImportReview(null); }}>
+          <div className="zoom-content import-review-modal" style={{ width: 760 }}>
+            <div className="zoom-header">
+              <h2 className="zoom-title">导入报告复核</h2>
+              <button className="close-btn" onClick={() => setImportReview(null)} disabled={isImporting}>×</button>
+            </div>
+            <div className="zoom-body">
+              <div className="import-review-summary">
+                <span>待导入文件</span>
+                <strong>{importReview.fileName}</strong>
+                <em>
+                  {importReview.report.metadata.scope === 'single_project' ? '单项目报告' : '全部项目报告'}
+                  {' · '}
+                  {importReview.report.summary.totalProjects} 项目 / {importReview.report.summary.totalMilestones} 里程碑 / {importReview.report.summary.totalTasks} 任务
+                  {' · '}
+                  导出于 {new Date(importReview.report.metadata.exportedAt).toLocaleString()}
+                </em>
+              </div>
+              <div className="import-project-preview" aria-label="导入项目列表">
+                {importReview.projectNames.slice(0, 5).map(name => (
+                  <span key={name}>{name}</span>
+                ))}
+                {importReview.projectNames.length > 5 && (
+                  <span>另 {importReview.projectNames.length - 5} 个项目</span>
+                )}
+              </div>
+              <div className="import-impact-grid">
+                <section className="import-impact-card">
+                  <span>推荐</span>
+                  <strong>合并导入</strong>
+                  <p>保留当前本地项目，只用报告更新同 ID 项目并新增缺失项目。</p>
+                  <div className="import-impact-metrics">
+                    <span>新增 {importReview.mergeStats.createdProjectCount}</span>
+                    <span>更新 {importReview.mergeStats.updatedProjectCount}</span>
+                    <span>保留 {importReview.mergeStats.retainedProjectCount}</span>
+                    <span>移除 0</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="save-btn"
+                    onClick={() => executeImportReport('merge')}
+                    disabled={isImporting}
+                  >
+                    {isImporting ? '导入中...' : '合并导入'}
+                  </button>
+                </section>
+                <section className={`import-impact-card destructive ${importReview.replaceStats.removedProjectCount ? 'has-removals' : ''}`}>
+                  <span>高风险</span>
+                  <strong>替换当前项目</strong>
+                  <p>用报告项目列表作为新的本地工作台；报告中不存在的本地项目会被移除。</p>
+                  <div className="import-impact-metrics">
+                    <span>新增 {importReview.replaceStats.createdProjectCount}</span>
+                    <span>更新 {importReview.replaceStats.updatedProjectCount}</span>
+                    <span>保留 0</span>
+                    <span>移除 {importReview.replaceStats.removedProjectCount}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="delete-btn"
+                    onClick={() => executeImportReport('replace')}
+                    disabled={isImporting}
+                  >
+                    {isImporting ? '导入中...' : '替换当前项目'}
+                  </button>
+                </section>
+              </div>
+              <div className="import-review-boundary">
+                <strong>导入边界</strong>
+                <span>导入只修改当前浏览器的本地项目工作台，不会写回 Memory Service、Jira、GitHub 或 Confluence。</span>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="cancel-btn" onClick={() => setImportReview(null)} disabled={isImporting}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {statusDraftPreview && (
         <div className="zoom-overlay active" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('zoom-overlay')) setStatusDraftPreview(null); }}>
@@ -2473,6 +2695,9 @@ const ProjectDashboard: React.FC = () => {
         .data-source-card p { margin: 0 0 8px; color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
         .data-source-highlights { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
         .data-source-highlights span { border-radius: 999px; padding: 3px 8px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+        .data-source-diagnostics { display: grid; gap: 5px; margin: 0 0 8px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; }
+        .data-source-diagnostics strong { color: var(--text); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
+        .data-source-diagnostics span { color: var(--text-muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
         .data-source-boundaries { margin: 0 0 8px; padding: 8px 10px 8px 24px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
         .data-source-boundaries li + li { margin-top: 3px; }
         .data-source-next { color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
@@ -2660,6 +2885,48 @@ const ProjectDashboard: React.FC = () => {
         .project-alert.due-soon .project-alert-label { background: var(--info); }
         .project-alert-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
         .project-alert-detail { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+
+        .chart-insight-strip { margin: -2px 0 18px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: #f8fafc; }
+        .chart-insight-header { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; align-items: center; margin-bottom: 12px; }
+        .chart-insight-header span { grid-row: span 2; align-self: start; border-radius: 999px; padding: 3px 9px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: 800; white-space: nowrap; }
+        .chart-insight-header strong { color: var(--text); font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
+        .chart-insight-header em { color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.4; overflow-wrap: anywhere; }
+        .chart-insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+        .chart-insight-card { min-width: 0; display: flex; flex-direction: column; gap: 9px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--card); padding: 12px; }
+        .chart-insight-card.ready { border-left-color: var(--success); }
+        .chart-insight-card.partial { border-left-color: var(--warning); background: #fffbeb; }
+        .chart-insight-card.attention { border-left-color: var(--danger); background: #fef2f2; }
+        .chart-insight-card.empty { border-left-color: var(--text-muted); }
+        .chart-insight-card-top { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 8px; align-items: center; }
+        .chart-insight-card-top span { border-radius: 999px; padding: 3px 8px; background: rgba(255,255,255,.8); border: 1px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: 800; white-space: nowrap; }
+        .chart-insight-card-top strong { color: var(--text); font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; }
+        .chart-insight-card p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+        .chart-insight-metrics { display: flex; flex-wrap: wrap; gap: 6px; }
+        .chart-insight-metrics span { border-radius: 999px; padding: 3px 7px; background: rgba(255,255,255,.82); border: 1px solid var(--border); color: var(--text); font-size: 11px; white-space: nowrap; }
+        .chart-driver-list { display: flex; flex-direction: column; gap: 6px; }
+        .chart-driver-item { width: 100%; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: center; text-align: left; border: 0; border-top: 1px solid rgba(226,232,240,.9); background: transparent; color: var(--text); padding: 8px 0 0; cursor: pointer; }
+        .chart-driver-item:hover:not(:disabled) strong { color: var(--primary); text-decoration: underline; }
+        .chart-driver-item:disabled { cursor: default; }
+        .chart-driver-item span { grid-row: span 2; align-self: start; border-radius: 999px; padding: 2px 7px; background: var(--card); border: 1px solid var(--border); color: var(--text-muted); font-size: 10px; font-weight: 800; white-space: nowrap; }
+        .chart-driver-item.critical span { color: #b91c1c; border-color: #fecaca; background: #fee2e2; }
+        .chart-driver-item.warning span { color: #92400e; border-color: #fde68a; background: #fef3c7; }
+        .chart-driver-item.complete span { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+        .chart-driver-item strong { min-width: 0; color: var(--text); font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .chart-driver-item em { min-width: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; font-style: normal; overflow-wrap: anywhere; }
+        .chart-insight-next { margin-top: auto; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: start; padding-top: 8px; border-top: 1px solid rgba(226,232,240,.85); }
+        .chart-insight-next span { color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
+        .chart-insight-next strong { color: var(--text); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+        .chart-insight-action { align-self: flex-start; border: 1px solid #bfdbfe; border-radius: 6px; background: var(--primary-light); color: #1d4ed8; padding: 6px 10px; font-size: 12px; font-weight: 800; cursor: pointer; }
+        .chart-insight-action:hover { background: #bfdbfe; }
+        .chart-progress { height: 7px; border-radius: 999px; background: rgba(203,213,225,.75); overflow: hidden; }
+        .chart-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--success), var(--primary)); min-width: 3px; }
+        .chart-timeline-track { position: relative; height: 18px; margin: 2px 4px 0; }
+        .chart-timeline-track::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 2px; border-radius: 999px; background: #cbd5e1; }
+        .chart-marker { position: absolute; top: 4px; width: 10px; height: 10px; border-radius: 50%; transform: translateX(-50%); background: var(--info); border: 2px solid var(--card); box-shadow: 0 0 0 1px rgba(15,23,42,.12); }
+        .chart-marker.critical { background: var(--danger); }
+        .chart-marker.warning { background: var(--warning); }
+        .chart-marker.neutral { background: var(--info); }
+        .chart-marker.complete { background: var(--success); }
 
         .fishbone-container { position: relative; height: 200px; margin: 20px 0; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 12px; padding: 20px; border: 2px solid var(--border); cursor: crosshair; }
         .timeline-spine { position: absolute; left: 40px; right: 40px; top: 50%; height: 4px; background: linear-gradient(90deg, var(--design-color), var(--primary), var(--dep-color)); border-radius: 2px; transform: translateY(-50%); }
@@ -2909,17 +3176,38 @@ const ProjectDashboard: React.FC = () => {
         .status-evidence-item span:not(.status-evidence-label) { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
         .status-evidence-item em { display: block; margin-top: 3px; color: var(--text-muted); font-size: 11px; font-style: normal; }
         .status-evidence-empty { padding: 12px; color: var(--text-muted); background: var(--card); border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
+        .import-review-modal .zoom-body { display: grid; gap: 14px; }
+        .import-review-summary { display: grid; gap: 3px; border: 1px solid var(--border); border-left: 4px solid var(--info); border-radius: 8px; background: var(--bg); padding: 12px; }
+        .import-review-summary span { color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0; }
+        .import-review-summary strong { color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
+        .import-review-summary em { color: var(--text-muted); font-size: 12px; font-style: normal; line-height: 1.45; }
+        .import-project-preview { display: flex; flex-wrap: wrap; gap: 6px; }
+        .import-project-preview span { border-radius: 999px; padding: 4px 9px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+        .import-impact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+        .import-impact-card { display: grid; gap: 9px; align-content: start; border: 1px solid #a7f3d0; border-left: 4px solid var(--success); border-radius: 8px; background: #ecfdf5; padding: 12px; }
+        .import-impact-card.destructive { border-color: #fecaca; border-left-color: var(--danger); background: #fff7ed; }
+        .import-impact-card > span { justify-self: start; border-radius: 999px; padding: 3px 8px; border: 1px solid var(--border); background: var(--card); color: var(--text-muted); font-size: 11px; font-weight: 800; }
+        .import-impact-card strong { color: var(--text); font-size: 14px; }
+        .import-impact-card p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+        .import-impact-metrics { display: flex; flex-wrap: wrap; gap: 6px; }
+        .import-impact-metrics span { border-radius: 6px; padding: 4px 7px; background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 700; }
+        .import-review-boundary { display: grid; gap: 3px; border: 1px dashed var(--border); border-radius: 8px; background: var(--card); padding: 10px 12px; }
+        .import-review-boundary strong { color: var(--text); font-size: 13px; }
+        .import-review-boundary span { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
         .status-draft-textarea { width: 100%; min-height: 360px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--card); color: var(--text); font-size: 13px; line-height: 1.55; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; box-sizing: border-box; }
         .status-draft-textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14); }
         .status-draft-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--text-muted); font-size: 12px; }
         .status-draft-meta span { padding: 3px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
-        .status-draft-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
-        .save-btn, .cancel-btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
+        .status-draft-actions, .modal-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+        .save-btn, .cancel-btn, .delete-btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
         .save-btn { background: var(--success); color: white; }
         .save-btn:hover:not(:disabled) { background: #0ea55c; }
         .save-btn.review-confirm-btn { background: #0f766e; }
         .save-btn.review-confirm-btn:hover:not(:disabled) { background: #0d665f; }
         .save-btn:disabled { background: var(--text-muted); cursor: not-allowed; }
+        .delete-btn { background: var(--danger); color: white; }
+        .delete-btn:hover:not(:disabled) { background: #dc2626; }
+        .delete-btn:disabled { background: var(--text-muted); cursor: not-allowed; }
         .cancel-btn { background: var(--border); color: var(--text); }
         .cancel-btn:hover:not(:disabled) { background: var(--text-muted); color: white; }
         .cancel-btn:disabled { opacity: .55; cursor: not-allowed; }

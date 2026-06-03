@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
+import {
+  DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL,
+  filterSceneRehearsalSourceTypes,
+} from '../src/utils';
 import {
   CONTEXT_SITE_ALLOW_STORAGE_KEY,
   CONTEXT_SITE_ALLOWLIST_MODE_STORAGE_KEY,
@@ -33,6 +38,7 @@ import {
   pruneContextSiteAllowRecord,
   pruneContextSiteBlockRecord,
   pruneContextSiteMuteRecord,
+  removeContextSiteRecordConflicts,
   sanitizeContextExternalUrl,
   sanitizeExploreRoute,
 } from '../src/web-intelligence/contextRecallGuards';
@@ -222,6 +228,31 @@ assert.equal(
   false,
 );
 
+assert.deepEqual(
+  filterSceneRehearsalSourceTypes(
+    ['rehearsal'],
+    { CONTEXT_ASSIST_ENABLED: true, SCENE_REHEARSAL_DISPLAY_ENABLED: false },
+  ),
+  Array.from(DEFAULT_RECALL_SOURCE_TYPES_WITHOUT_REHEARSAL),
+  'disabled scene rehearsal should not fall back to an undefined sourceTypes default',
+);
+assert.deepEqual(
+  filterSceneRehearsalSourceTypes(
+    ['glip', 'rehearsal'],
+    { CONTEXT_ASSIST_ENABLED: true, SCENE_REHEARSAL_DISPLAY_ENABLED: false },
+  ),
+  ['glip'],
+  'disabled scene rehearsal should preserve non-rehearsal requested sources',
+);
+assert.deepEqual(
+  filterSceneRehearsalSourceTypes(
+    ['rehearsal'],
+    { CONTEXT_ASSIST_ENABLED: true, SCENE_REHEARSAL_DISPLAY_ENABLED: true },
+  ),
+  ['rehearsal'],
+  'enabled scene rehearsal should preserve explicit rehearsal requests',
+);
+
 assert.equal(isLowValueContextHost('www.google.com'), true);
 assert.equal(isLowValueContextHost('m.youtube.com'), true);
 assert.equal(isLowValueContextHost('docs.google.com'), false);
@@ -328,6 +359,32 @@ assert.equal(
   }),
   false,
 );
+assert.deepEqual(
+  removeContextSiteRecordConflicts('docs.example.com', {
+    'example.com': now,
+    'api.example.com': now - 1,
+    'other.example.com': now - 2,
+  }),
+  {
+    record: {
+      'api.example.com': now - 1,
+      'other.example.com': now - 2,
+    },
+    removedHosts: ['example.com'],
+    changed: true,
+  },
+);
+assert.deepEqual(
+  removeContextSiteRecordConflicts('example.com', {
+    'docs.example.com': now,
+    'example.org': now - 1,
+  }),
+  {
+    record: { 'example.org': now - 1 },
+    removedHosts: ['docs.example.com'],
+    changed: true,
+  },
+);
 assert.equal(
   normalizeContextPageBlockPrefix(
     'https://user:pass@example.com/docs/project?a=1&token=secret#section',
@@ -359,6 +416,46 @@ assert.equal(
     'https://example.com/docs/project': now,
   }),
   false,
+);
+
+const contentScriptSource = readFileSync(
+  new URL('../src/contentScriptWebIntelligence.ts', import.meta.url),
+  'utf8',
+);
+assert.match(
+  contentScriptSource,
+  /CONTEXT_THUMB_DOWN_ICON_HTML/,
+  'negative feedback should remain a compact thumb-down icon entry',
+);
+assert.match(
+  contentScriptSource,
+  /pai-context-feedback-sheet/,
+  'negative feedback should open the lightweight reason sheet',
+);
+assert.match(
+  contentScriptSource,
+  /generic_topic_overlap/,
+  'relevance trainer should keep the generic-topic-overlap reason',
+);
+assert.match(
+  contentScriptSource,
+  /wrong_group_or_project/,
+  'relevance trainer should keep the wrong-group-or-project reason',
+);
+assert.match(
+  contentScriptSource,
+  /empty_meeting_shell/,
+  'relevance trainer should keep the empty-meeting-shell reason',
+);
+assert.match(
+  contentScriptSource,
+  /memory_relevance_trainer/,
+  'feedback detail should identify the relevance trainer interaction',
+);
+assert.match(
+  contentScriptSource,
+  /feedback_reason/,
+  'feedback detail should carry the selected reason',
 );
 
 console.log('[verify-webpage-memory-detection] helper checks passed');

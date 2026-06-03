@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ThoughtStep } from './agentThinking';
 import {
+  buildAgentRunDiagnosticPacket,
   buildPendingApprovalActions,
   buildAgentRunReviewItems,
   buildAgentFlowSteps,
@@ -31,11 +32,21 @@ type ApprovalCopyStatus = {
   target: 'key' | 'payload' | 'retry';
   state: 'copied' | 'failed';
   message: string;
+  manualText?: string;
 } | null;
+
+type RunPacketCopyStatus = {
+  state: 'copied' | 'failed';
+  message: string;
+  manualText?: string;
+} | null;
+
+const AGENT_TRACE_JUMP_EVENT = 'agent-thinking:jump-to-step';
 
 const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isProcessing = false }) => {
   const [expandedSteps, setExpandedSteps] = useState<number[]>([]);
   const [approvalCopyStatus, setApprovalCopyStatus] = useState<ApprovalCopyStatus>(null);
+  const [runPacketCopyStatus, setRunPacketCopyStatus] = useState<RunPacketCopyStatus>(null);
   const runReviewItems = buildAgentRunReviewItems(thoughtProcess, {
     isProcessing,
   });
@@ -74,7 +85,7 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     toggleExpand(index);
   };
 
-  const jumpToStep = (index: number) => {
+  const jumpToStep = useCallback((index: number) => {
     setExpandedSteps(prevExpanded =>
       prevExpanded.includes(index)
         ? prevExpanded
@@ -87,7 +98,27 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       stepElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       stepHeader?.focus();
     });
-  };
+  }, []);
+
+  useEffect(() => {
+    const handleExternalJump = (event: Event) => {
+      const stepIndex = (event as CustomEvent<{ stepIndex?: number }>).detail
+        ?.stepIndex;
+      if (
+        !Number.isInteger(stepIndex) ||
+        stepIndex < 0 ||
+        stepIndex >= thoughtProcess.length
+      ) {
+        return;
+      }
+      jumpToStep(stepIndex);
+    };
+
+    window.addEventListener(AGENT_TRACE_JUMP_EVENT, handleExternalJump);
+    return () => {
+      window.removeEventListener(AGENT_TRACE_JUMP_EVENT, handleExternalJump);
+    };
+  }, [jumpToStep, thoughtProcess.length]);
 
   const copyTextToClipboard = async (text: string) => {
     if (navigator.clipboard?.writeText) {
@@ -153,6 +184,7 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
             : target === 'payload'
               ? '复制失败，请手动选择审核包'
               : '复制失败，请手动选择重跑配置',
+        manualText: text,
       });
       console.warn('复制批准 key 失败:', error);
     }
@@ -182,6 +214,35 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
       'retry',
       '已复制重跑配置',
     );
+
+  const handleCopyRunDiagnosticPacket = async () => {
+    if (thoughtProcess.length === 0) return;
+
+    const diagnosticPacket = buildAgentRunDiagnosticPacket(thoughtProcess, {
+      isProcessing,
+    });
+    const diagnosticPacketText = JSON.stringify(diagnosticPacket, null, 2);
+    try {
+      const copied = await copyTextToClipboard(diagnosticPacketText);
+      if (!copied) {
+        throw new Error('clipboard copy returned false');
+      }
+      setRunPacketCopyStatus({
+        state: 'copied',
+        message: '已复制诊断包',
+      });
+      window.setTimeout(() => {
+        setRunPacketCopyStatus(null);
+      }, 1800);
+    } catch (error) {
+      setRunPacketCopyStatus({
+        state: 'failed',
+        message: '复制失败，请手动选择诊断包',
+        manualText: diagnosticPacketText,
+      });
+      console.warn('复制 Agent 运行诊断包失败:', error);
+    }
+  };
   
   // 格式化时间戳
   const formatTime = (timestamp: number) => {
@@ -238,10 +299,42 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                 <h4>运行检查</h4>
                 <p>先处理失败、阻断和预算耗尽，再阅读完整时间线。</p>
               </div>
-              <span className={`agent-run-review-status ${runReviewSeverity}`}>
-                {runReviewLabel[runReviewSeverity]}
-              </span>
+              <div className="agent-run-review-actions">
+                <button
+                  type="button"
+                  className="agent-run-diagnostic-copy"
+                  onClick={handleCopyRunDiagnosticPacket}
+                  disabled={thoughtProcess.length === 0}
+                >
+                  {runPacketCopyStatus?.state === 'copied'
+                    ? '已复制'
+                    : '复制诊断包'}
+                </button>
+                <span className={`agent-run-review-status ${runReviewSeverity}`}>
+                  {runReviewLabel[runReviewSeverity]}
+                </span>
+              </div>
             </div>
+            {runPacketCopyStatus && (
+              <>
+                <div
+                  className={`agent-run-diagnostic-copy-status ${runPacketCopyStatus.state}`}
+                  role="status"
+                >
+                  {runPacketCopyStatus.message}
+                </div>
+                {runPacketCopyStatus.state === 'failed' &&
+                  runPacketCopyStatus.manualText && (
+                    <textarea
+                      className="agent-run-diagnostic-manual-copy"
+                      aria-label="手动复制诊断包"
+                      readOnly
+                      value={runPacketCopyStatus.manualText}
+                      onFocus={(event) => event.currentTarget.select()}
+                    />
+                  )}
+              </>
+            )}
             <div className="agent-run-review-list">
               {runReviewItems.map((item, index) => (
                 <div
@@ -400,12 +493,30 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
                       <code>{approval.retryConfigPatch}</code>
                     </div>
                     {approvalCopyStatus?.key === approval.approvalKey && (
-                      <div
-                        className={`agent-approval-copy-status ${approvalCopyStatus.state}`}
-                        role="status"
-                      >
-                        {approvalCopyStatus.message}
-                      </div>
+                      <>
+                        <div
+                          className={`agent-approval-copy-status ${approvalCopyStatus.state}`}
+                          role="status"
+                        >
+                          {approvalCopyStatus.message}
+                        </div>
+                        {approvalCopyStatus.state === 'failed' &&
+                          approvalCopyStatus.manualText && (
+                            <textarea
+                              className="agent-approval-manual-copy"
+                              aria-label={`手动复制 ${approval.toolId} 的${
+                                approvalCopyStatus.target === 'key'
+                                  ? '批准 key'
+                                  : approvalCopyStatus.target === 'payload'
+                                    ? '审核包'
+                                    : '重跑配置'
+                              }`}
+                              readOnly
+                              value={approvalCopyStatus.manualText}
+                              onFocus={(event) => event.currentTarget.select()}
+                            />
+                          )}
+                      </>
                     )}
                   </div>
                 ))}
@@ -520,6 +631,22 @@ const AgentFlowVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess })
   }
 
   const flowSteps = buildAgentFlowSteps(thoughtProcess, formatTime);
+  const jumpToTimelineStep = (stepIndex?: number) => {
+    if (!Number.isInteger(stepIndex) || stepIndex < 0) return;
+    window.dispatchEvent(
+      new CustomEvent(AGENT_TRACE_JUMP_EVENT, {
+        detail: { stepIndex },
+      }),
+    );
+  };
+  const handleFlowNodeKeyDown = (
+    event: React.KeyboardEvent<HTMLDivElement>,
+    stepIndex?: number,
+  ) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    jumpToTimelineStep(stepIndex);
+  };
   
   return (
     <div className="agent-flow-visualizer">
@@ -528,6 +655,7 @@ const AgentFlowVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess })
       <div className="flow-diagram">
         {flowSteps.map((step, index) => {
           let iconClass = '';
+          const canJumpToTimeline = Number.isInteger(step.stepIndex);
           switch (step.type) {
             case 'analysis':
               iconClass = 'icon-analysis';
@@ -546,13 +674,30 @@ const AgentFlowVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess })
           return (
             <React.Fragment key={index}>
               <div
-                className={`flow-node ${step.type} ${step.resultClass || ''}`}
-                aria-label={`${step.name}${step.result ? `: ${step.result}` : ''}`}
+                className={`flow-node ${step.type} ${step.resultClass || ''} ${
+                  canJumpToTimeline ? 'jumpable' : ''
+                }`}
+                aria-label={`${step.name}${step.result ? `: ${step.result}` : ''}${
+                  canJumpToTimeline
+                    ? `，跳到时间线步骤 ${(step.stepIndex ?? 0) + 1}`
+                    : ''
+                }`}
+                role={canJumpToTimeline ? 'button' : undefined}
+                tabIndex={canJumpToTimeline ? 0 : undefined}
+                onClick={() => jumpToTimelineStep(step.stepIndex)}
+                onKeyDown={(event) =>
+                  handleFlowNodeKeyDown(event, step.stepIndex)
+                }
               >
                 <div className={`node-icon ${iconClass}`}></div>
                 <div className="node-content">
                   <div className="node-main">
                     <div className="node-title">{step.name}</div>
+                    {canJumpToTimeline && (
+                      <span className="node-step-index">
+                        #{(step.stepIndex ?? 0) + 1}
+                      </span>
+                    )}
                     {step.result && (
                       <span className={`node-result ${step.resultClass || 'success'}`}>
                         {step.result}

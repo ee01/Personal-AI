@@ -33,6 +33,7 @@ const analysisResult = {
             priority: 'High',
             summary: 'Finish Slides status integration',
             assignee: 'Ada',
+            updated: '2026-05-26T10:30:00.000+0000',
             url: 'https://jira.ringcentral.com/browse/MTR-123407',
           },
         ],
@@ -66,6 +67,7 @@ const analysisResult = {
             duedate: '2020-01-01',
             summary: 'Leadership summary owner follow-up',
             assignee: 'Cara',
+            updated: '2026-05-24T18:20:00.000+0000',
             url: 'https://jira.ringcentral.com/browse/AIT2-11063',
           },
         ],
@@ -152,6 +154,7 @@ const analysisResult = {
             priority: 'Low',
             summary: 'Duplicate comment result should not be actionable',
             assignee: 'Ada',
+            updated: '2026-05-20T09:00:00.000+0000',
             url: 'https://jira.ringcentral.com/browse/DUP-COMMENTS-1',
           },
         ],
@@ -183,7 +186,7 @@ const analysisResult = {
             priority: 'High',
             summary: 'API contract follow-up',
             assignee: 'Eve',
-            url: 'https://jira.ringcentral.com/browse/RISK-ONLY-1',
+            updated: '2026-05-25T15:45:00.000+0000',
           },
         ],
       },
@@ -237,6 +240,21 @@ async function launchExtensionContext() {
 }
 
 const { context, extensionId } = await launchExtensionContext();
+await context.addInitScript(() => {
+  Object.defineProperty(window, '__slidesAnalyzerCopiedTexts', {
+    value: [],
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(navigator, 'clipboard', {
+    value: {
+      writeText: async (text) => {
+        window.__slidesAnalyzerCopiedTexts.push(String(text));
+      },
+    },
+    configurable: true,
+  });
+});
 
 try {
   const fixtureHtml = `<!doctype html>
@@ -383,6 +401,7 @@ try {
   assert.equal(await analysisPage.locator('.project-risk-evidence-panel').count(), 4);
   assert.match(pageText, /来源证据/);
   assert.match(pageText, /Jira: MTR-123407/);
+  assert.match(pageText, /Jira 最近更新: MTR-123407/);
   assert.match(pageText, /Release notes are ready/);
   assert.doesNotMatch(pageText, /Jira moved to resolved and release notes are ready/);
   assert.match(pageText, /部分字段缺少直接来源，未默认勾选: 备注/);
@@ -390,6 +409,7 @@ try {
   assert.match(pageText, /状态来源: Jira MTR-123407: Resolved/);
   assert.match(pageText, /赛道来源: Planning source confirms Growth track/);
   assert.match(pageText, /备注缺少直接来源，不会默认写回/);
+  assert.match(pageText, /最近更新:/);
   assert.match(pageText, /无法写回 状态列/);
   assert.match(pageText, /无法写回字段建议值/);
   assert.match(pageText, /备注建议已存在于当前备注/);
@@ -401,6 +421,9 @@ try {
   assert.match(pageText, /MTR-123407 · Quarterly status deck · 赛道/);
   assert.match(pageText, /Core -> Growth/);
   assert.match(pageText, /当前视图 6 \/ 6 个建议/);
+  assert.equal(await analysisPage.locator('a.jira-issue-key-link', { hasText: 'MTR-123407' }).count(), 1);
+  assert.equal(await analysisPage.locator('a.jira-issue-key-link', { hasText: 'RISK-ONLY-1' }).count(), 0);
+  assert.equal(await analysisPage.locator('.jira-issue-key-text', { hasText: 'RISK-ONLY-1' }).count(), 1);
 
   assert.equal(await analysisPage.locator('#update-status-0').isChecked(), true);
   assert.equal(await analysisPage.locator('#update-status-0').getAttribute('aria-label'), 'MTR-123407 状态 写回选择');
@@ -476,10 +499,28 @@ try {
   const selectedPreviewText = await analysisPage.locator('.selected-writeback-preview').innerText();
   assert.match(selectedPreviewText, /AIT2-11063 · Leadership summary · 负责人/);
   assert.match(selectedPreviewText, /Ben -> Cara/);
-  assert.match(selectedPreviewText, /状态来源: Jira MTR-123407: Resolved/);
+  assert.match(selectedPreviewText, /状态来源: Jira MTR-123407: Resolved · 更新/);
   assert.match(selectedPreviewText, /赛道来源: Planning source confirms Growth track/);
-  assert.match(selectedPreviewText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara/);
+  assert.match(selectedPreviewText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara · 更新/);
   assert.match(selectedPreviewText, /需人工复核/);
+  assert.equal(await analysisPage.locator('#copy-selected-writeback-review').count(), 1);
+  await analysisPage.locator('#copy-selected-writeback-review').click();
+  await analysisPage.waitForFunction(() => window.__slidesAnalyzerCopiedTexts.length > 0);
+  const copiedReviewPacket = await analysisPage.evaluate(() => {
+    const copiedTexts = window.__slidesAnalyzerCopiedTexts;
+    return copiedTexts[copiedTexts.length - 1];
+  });
+  assert.match(copiedReviewPacket, /Google Slides 写回复核清单/);
+  assert.match(copiedReviewPacket, /Presentation: presentation-1/);
+  assert.match(copiedReviewPacket, /Selected fields: 3/);
+  assert.match(copiedReviewPacket, /MTR-123407 · Quarterly status deck · 状态/);
+  assert.match(copiedReviewPacket, /At risk -> On track/);
+  assert.match(copiedReviewPacket, /MTR-123407 · Quarterly status deck · 赛道/);
+  assert.match(copiedReviewPacket, /Core -> Growth/);
+  assert.match(copiedReviewPacket, /AIT2-11063 · Leadership summary · 负责人/);
+  assert.match(copiedReviewPacket, /Ben -> Cara/);
+  assert.match(copiedReviewPacket, /Jira AIT2-11063: assignee Cara · 更新/);
+  assert.match(copiedReviewPacket, /复核: 需人工复核/);
 
   await analysisPage.locator('#apply-updates-button').click();
   await opener.waitForFunction(() => Array.isArray(window.appliedUpdates) && window.appliedUpdates.length === 2);
@@ -508,7 +549,7 @@ try {
   assert.match(successText, /MTR-123407 · Quarterly status deck · 状态/);
   assert.match(successText, /MTR-123407 · Quarterly status deck · 赛道/);
   assert.match(successText, /AIT2-11063 · Leadership summary · 负责人/);
-  assert.match(successText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara/);
+  assert.match(successText, /负责人建议置信度偏低，需人工确认后勾选。 Jira AIT2-11063: assignee Cara · 更新/);
   assert.match(successText, /跳过原因/);
   assert.match(successText, /无法更新负责人: AIT2-11063 - Leadership summary 缺少可写表格列/);
   assert.match(successText, /人工接管清单/);

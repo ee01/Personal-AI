@@ -129,7 +129,9 @@ async function installNetworkMocks(context) {
       await new Promise((resolve) => setTimeout(resolve, 150));
       await route.fulfill(
         jsonResponse({
-          response: JSON.stringify(buildOllamaResponse(String(body.prompt || ''))),
+          response: JSON.stringify(
+            buildOllamaResponse(String(body.prompt || '')),
+          ),
         }),
       );
       return;
@@ -156,6 +158,7 @@ async function launchExtensionContext() {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
     headless: true,
+    acceptDownloads: true,
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -301,15 +304,16 @@ try {
     .locator('.agent-workflow-path-item strong', { hasText: /^执行链路$/ })
     .waitFor({ timeout: 15000 });
 
-  const decisionPathText = await page.locator('.agent-workflow-path').innerText();
+  const decisionPathText = await page
+    .locator('.agent-workflow-path')
+    .innerText();
   assert.match(decisionPathText, /manual:manual-1/);
   assert.match(decisionPathText, /置信度 88%/);
   assert.match(decisionPathText, /7 个 Agent \/ 9 个工具/);
   assert.match(decisionPathText, /跳过工具 1/);
+  assert.match(decisionPathText, /占位工具 1/);
   await page.locator('.agent-workflow-verdict').waitFor({ timeout: 15000 });
-  const verdictText = await page
-    .locator('.agent-workflow-verdict')
-    .innerText();
+  const verdictText = await page.locator('.agent-workflow-verdict').innerText();
   assert.match(verdictText, /需要复核后再执行/);
   assert.match(verdictText, /执行 Trace/);
   assert.match(verdictText, /补齐被跳过工具/);
@@ -321,6 +325,7 @@ try {
     .innerText();
   assert.match(readinessText, /执行 Trace/);
   assert.match(readinessText, /有 1 个工具被跳过/);
+  assert.match(readinessText, /有 1 个工具仍是占位结果/);
   assert.match(readinessText, /通知\/自动化/);
   assert.match(readinessText, /manual:manual-1/);
   assert.match(readinessText, /外部信息/);
@@ -332,14 +337,21 @@ try {
     .locator('.agent-workflow-next-actions')
     .innerText();
   assert.match(nextActionText, /补齐被跳过工具/);
+  assert.match(nextActionText, /接入外部查询适配器/);
   assert.match(nextActionText, /确认记忆审计/);
   assert.match(nextActionText, /确认通知发送/);
   assert.match(nextActionText, /manual:manual-1/);
+  const runDiagnosticText = await page
+    .locator('.agent-workflow-diagnostic-block.compact')
+    .innerText();
+  assert.match(runDiagnosticText, /外部查询仍是占位/);
+  assert.match(runDiagnosticText, /外部信息获取Agent \/ 外部服务查询工具/);
   const storageReviewText = await page
     .locator('.agent-test-review-grid')
     .innerText();
   assert.match(storageReviewText, /Trace 状态\s*部分异常/);
   assert.match(storageReviewText, /异常\s*跳过工具 1/);
+  assert.match(storageReviewText, /占位工具 1/);
 
   await page
     .locator('.agent-workflow-saved-actions button', {
@@ -354,13 +366,17 @@ try {
   await page
     .locator('.agent-workflow-baseline', { hasText: '保存基线对比' })
     .waitFor({ timeout: 5000 });
-  const baselineText = await page.locator('.agent-workflow-baseline').innerText();
+  const baselineText = await page
+    .locator('.agent-workflow-baseline')
+    .innerText();
   assert.match(baselineText, /存储/);
   assert.match(baselineText, /通知/);
   assert.match(baselineText, /Trace/);
   assert.match(baselineText, /一致/);
   const savedScenarioState = await page.evaluate(async () => {
-    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    const result = await chrome.storage.local.get(
+      'agentWorkflowSavedScenarios',
+    );
     return result.agentWorkflowSavedScenarios;
   });
   assert.equal(savedScenarioState.length, 1);
@@ -372,7 +388,9 @@ try {
   ]);
 
   await page.evaluate(async () => {
-    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    const result = await chrome.storage.local.get(
+      'agentWorkflowSavedScenarios',
+    );
     const scenarios = result.agentWorkflowSavedScenarios || [];
     scenarios[0] = {
       ...scenarios[0],
@@ -426,14 +444,22 @@ try {
     })
     .waitFor({ timeout: 5000 });
   const refreshedSavedScenarioState = await page.evaluate(async () => {
-    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    const result = await chrome.storage.local.get(
+      'agentWorkflowSavedScenarios',
+    );
     return result.agentWorkflowSavedScenarios;
   });
   assert.equal(refreshedSavedScenarioState.length, 1);
   assert.equal(refreshedSavedScenarioState[0].id, savedScenarioState[0].id);
-  assert.equal(refreshedSavedScenarioState[0].expectedResult.shouldNotify, true);
+  assert.equal(
+    refreshedSavedScenarioState[0].expectedResult.shouldNotify,
+    true,
+  );
   assert.equal(refreshedSavedScenarioState[0].expectedResult.confidence, 0.88);
-  assert.equal(refreshedSavedScenarioState[0].expectedResult.traceStatus, 'partial');
+  assert.equal(
+    refreshedSavedScenarioState[0].expectedResult.traceStatus,
+    'partial',
+  );
 
   await page
     .locator('.agent-workflow-saved-actions button', {
@@ -506,6 +532,50 @@ try {
   assert.match(regressionWithAcceptText, /接受 2 个结果为基线/);
   assert.match(regressionWithAcceptText, /变化 1/);
   assert.match(regressionWithAcceptText, /无基线 1/);
+  const [regressionDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page
+      .locator('.agent-workflow-regression-actions button', {
+        hasText: '导出报告',
+      })
+      .click(),
+  ]);
+  assert.match(
+    regressionDownload.suggestedFilename(),
+    /^agent-workflow-regression-.*\.json$/,
+  );
+  const regressionReportPath = await regressionDownload.path();
+  assert.ok(regressionReportPath);
+  const regressionReport = JSON.parse(
+    await fs.readFile(regressionReportPath, 'utf8'),
+  );
+  assert.equal(
+    regressionReport.type,
+    'agent-workflow.saved-regression-report',
+  );
+  assert.deepEqual(regressionReport.summary, {
+    total: 2,
+    same: 0,
+    changed: 1,
+    noBaseline: 1,
+    failed: 0,
+  });
+  assert.equal(regressionReport.results.length, 2);
+  assert.equal(
+    regressionReport.results.filter((item) => item.status === 'changed')
+      .length,
+    1,
+  );
+  assert.equal(
+    regressionReport.results.filter((item) => item.status === 'no-baseline')
+      .length,
+    1,
+  );
+  await page
+    .locator('.agent-workflow-saved-status', {
+      hasText: /已导出批量回归报告：agent-workflow-regression-.*\.json/,
+    })
+    .waitFor({ timeout: 5000 });
   await page
     .locator('.agent-workflow-regression-header button', {
       hasText: '接受 2 个结果为基线',
@@ -528,7 +598,9 @@ try {
   assert.match(acceptedRegressionText, /变化 0/);
   assert.doesNotMatch(acceptedRegressionText, /接受 2 个结果为基线/);
   const acceptedScenarioState = await page.evaluate(async () => {
-    const result = await chrome.storage.local.get('agentWorkflowSavedScenarios');
+    const result = await chrome.storage.local.get(
+      'agentWorkflowSavedScenarios',
+    );
     return result.agentWorkflowSavedScenarios;
   });
   assert.equal(acceptedScenarioState.length, 2);
@@ -543,7 +615,9 @@ try {
 
   await page.locator('#agentId').fill('auditSnapshotAgent');
   await page.locator('#agentName').fill('Audit Snapshot Agent');
-  await page.locator('#agentDescription').fill('Verifies stale config detection.');
+  await page
+    .locator('#agentDescription')
+    .fill('Verifies stale config detection.');
   await page.locator('#agentPriority').fill('58');
   await page.locator('.tools-list input[name="replyAdviser"]').check();
   await page.locator('button', { hasText: '添加 Agent' }).click();

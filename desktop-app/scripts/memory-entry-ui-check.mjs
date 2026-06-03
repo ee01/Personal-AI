@@ -156,7 +156,9 @@ async function main() {
     assert.match(topicText, /2 条内部观察正在运行/);
     assert.match(topicText, /等待回复 1/);
     assert.match(topicText, /待发观察 1/);
+    assert.match(topicText, /发送前观察/);
     assert.match(topicText, /migration guide 发布了吗？/);
+    assert.match(topicText, /查看主动询问证据/);
     assert.match(topicText, /我的规则/);
     assert.match(topicText, /内部观察规则/);
     assert.match(
@@ -164,6 +166,14 @@ async function main() {
       /需要开启后台记忆采集后，才会自动捕获新消息并触发写入记忆/,
       'disabled message analysis warning should cover plain memory-entry rules',
     );
+    const [outreachEvidencePage] = await Promise.all([
+      topicPage.waitForEvent('popup'),
+      topicPage.getByRole('button', { name: '查看主动询问证据' }).click(),
+    ]);
+    await outreachEvidencePage.waitForURL(/memory-exploring\.html#\/outreach/, {
+      timeout: 5000,
+    });
+    await outreachEvidencePage.close();
 
     await topicPage.evaluate(async () => {
       await chrome.storage.local.set({
@@ -264,18 +274,20 @@ async function main() {
     await topicPage.getByRole('button', { name: '＋ 添加规则' }).click();
     await topicPage.waitForFunction(
       () =>
-        document.body.innerText.includes('未填写消息模式') &&
+        document.body.innerText.includes('新建记忆入口规则') &&
         document.body.innerText.includes('写入记忆'),
       { timeout: 15000 },
     );
-    await topicPage
-      .getByPlaceholder(
-        '例如：Standup 里有人提到 blocker；或 Leave Chat 里出现与我相关的请假消息',
-      )
-      .fill('QA seeded rule for automation flow');
+    const newRuleInput = topicPage.getByPlaceholder(
+      '例如：Standup 里有人提到 blocker；或 Leave Chat 里出现与我相关的请假消息',
+    );
+    await newRuleInput.fill('QA seeded rule for automation flow');
+    assert.equal(
+      await newRuleInput.inputValue(),
+      'QA seeded rule for automation flow',
+    );
     await topicPage.waitForFunction(
       () =>
-        document.body.innerText.includes('QA seeded rule for automation flow') &&
         document.body.innerText.includes('所有群组 / 所有发送人'),
       { timeout: 15000 },
     );

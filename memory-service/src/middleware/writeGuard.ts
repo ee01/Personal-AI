@@ -6,6 +6,7 @@
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
+import { resolveUserIdHeader } from '../utils/userIdentity.js';
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -23,12 +24,13 @@ export async function writeGuardMiddleware(
     return;
   }
 
-  const rawUserId = request.headers['x-user-id'];
-  const isEmpty =
-    rawUserId == null ||
-    (typeof rawUserId === 'string' && rawUserId.trim() === '');
+  const resolvedUserId = resolveUserIdHeader(request.headers['x-user-id']);
 
-  if (isEmpty) {
+  if (resolvedUserId.error) {
+    return reply.status(400).send({ error: resolvedUserId.error });
+  }
+
+  if (resolvedUserId.fallbackToDefault) {
     return reply.status(403).send({
       error:
         'X-User-Id header is required for write operations. ' +

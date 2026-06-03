@@ -1046,6 +1046,7 @@ export class AppScriptUpdater {
         },
         body: JSON.stringify({
           deploymentConfig: {
+            scriptId,
             versionNumber: versionNumber,
             manifestFileName: 'appsscript',
             description
@@ -1187,7 +1188,9 @@ export class AppScriptUpdater {
     }
 
     const syncService = new ConfigSyncService(this.token);
-    this.config = await syncService.syncConfig(this.config);
+    this.config = await syncService.syncConfig(this.config, {
+      syncAction: 'app_script_metadata_update',
+    });
   }
 
   private async syncKnownDeployedVersionToConfigIfStale(

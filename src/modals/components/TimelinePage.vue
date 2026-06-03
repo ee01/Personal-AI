@@ -36,6 +36,29 @@
             {{ option.label }}
           </button>
         </div>
+        <label
+          v-if="timelineSourceOptions.length > 1"
+          class="source-filter"
+          for="timeline-source-filter"
+        >
+          <span>来源</span>
+          <select
+            id="timeline-source-filter"
+            v-model="selectedSourceFilterKey"
+            aria-label="按来源筛选时间轴"
+          >
+            <option :value="ALL_TIMELINE_SOURCE_FILTER_KEY">
+              全部来源
+            </option>
+            <option
+              v-for="option in timelineSourceOptions"
+              :key="option.key"
+              :value="option.key"
+            >
+              {{ option.label }}（{{ option.count }}）
+            </option>
+          </select>
+        </label>
         <button class="refresh-btn" type="button" @click="loadTimeline">
           刷新
         </button>
@@ -55,7 +78,10 @@
       <span>加载时间轴数据...</span>
     </div>
 
-    <div v-else-if="timelineEvents.length > 0" class="timeline-container">
+    <div
+      v-else-if="filteredTimelineEvents.length > 0"
+      class="timeline-container"
+    >
       <section
         v-for="group in timelineDayGroups"
         :key="group.key"
@@ -173,9 +199,16 @@
 
     <div v-else class="empty-state">
       <span>📭</span>
-      <p>{{ selectedRangeOption.emptyTitle }}</p>
-      <p class="empty-hint">{{ selectedRangeOption.emptyHint }}</p>
+      <p>{{ timelineEmptyTitle }}</p>
+      <p class="empty-hint">{{ timelineEmptyHint }}</p>
       <div class="empty-actions">
+        <button
+          v-if="selectedSourceFilterKey !== ALL_TIMELINE_SOURCE_FILTER_KEY"
+          type="button"
+          @click="selectedSourceFilterKey = ALL_TIMELINE_SOURCE_FILTER_KEY"
+        >
+          查看全部来源
+        </button>
         <button
           v-if="selectedRangeKey === 'today'"
           type="button"
@@ -201,6 +234,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { chromeAPI, useMemoryStore } from '../memory-store';
 import type {
   MemoryFeedbackAction,
+  MemoryFeedbackTargetType,
   RecallScope,
 } from '../../services/MemoryServiceClient';
 import type {
@@ -215,6 +249,9 @@ import {
   getTimelineIcon,
   groupTimelineEventsByDay,
   parseTimelineFocus,
+  ALL_TIMELINE_SOURCE_FILTER_KEY,
+  buildTimelineSourceFilterOptions,
+  filterTimelineEventsBySource,
 } from '../timelinePresentation';
 import {
   getRecallChannelLabel,
@@ -249,6 +286,7 @@ const timelineEvents = ref<MemoryTimelineEvent[]>([]);
 const feedbackByResultKey = ref<Record<string, TimelineFeedbackState>>({});
 const selectedScope = ref<RecallScope>(getInitialTimelineScope());
 const selectedRangeKey = ref<TimelineRangeKey>(getInitialRangeKey());
+const selectedSourceFilterKey = ref(ALL_TIMELINE_SOURCE_FILTER_KEY);
 const errorMessage = ref('');
 const focusNotice = ref('');
 const isLoading = computed(() => store.isLoading);
@@ -296,14 +334,45 @@ const selectedRangeOption = computed(
     rangeOptions.find((option) => option.key === selectedRangeKey.value) ||
     rangeOptions[0],
 );
-const timelineDayGroups = computed(() =>
-  groupTimelineEventsByDay(timelineEvents.value),
+const timelineSourceOptions = computed(() =>
+  buildTimelineSourceFilterOptions(timelineEvents.value),
 );
+const filteredTimelineEvents = computed(() =>
+  filterTimelineEventsBySource(
+    timelineEvents.value,
+    selectedSourceFilterKey.value,
+  ),
+);
+const timelineDayGroups = computed(() =>
+  groupTimelineEventsByDay(filteredTimelineEvents.value),
+);
+const selectedSourceFilterLabel = computed(() => {
+  if (selectedSourceFilterKey.value === ALL_TIMELINE_SOURCE_FILTER_KEY) {
+    return '全部来源';
+  }
+  return (
+    timelineSourceOptions.value.find(
+      (option) => option.key === selectedSourceFilterKey.value,
+    )?.label || '当前来源'
+  );
+});
 const timelineContextLabel = computed(
   () =>
     `${getScopeLabel(selectedScope.value)} · ${
       selectedRangeOption.value.label
-    } · 时间通道`,
+    } · ${selectedSourceFilterLabel.value} · 时间通道`,
+);
+const timelineEmptyTitle = computed(() =>
+  selectedSourceFilterKey.value !== ALL_TIMELINE_SOURCE_FILTER_KEY &&
+  timelineEvents.value.length > 0
+    ? '这个来源下没有可展示的记忆'
+    : selectedRangeOption.value.emptyTitle,
+);
+const timelineEmptyHint = computed(() =>
+  selectedSourceFilterKey.value !== ALL_TIMELINE_SOURCE_FILTER_KEY &&
+  timelineEvents.value.length > 0
+    ? '可以查看全部来源，或切换时间范围继续查找。'
+    : selectedRangeOption.value.emptyHint,
 );
 
 function firstQueryValue(value: unknown): string {
@@ -340,6 +409,18 @@ function isFocusedEvent(event: MemoryTimelineEvent): boolean {
   if (!focusId) return false;
   const focusType = getRouteFocusType();
   return event.id === focusId && (!focusType || event.type === focusType);
+}
+
+function reconcileSourceFilter() {
+  if (selectedSourceFilterKey.value === ALL_TIMELINE_SOURCE_FILTER_KEY) return;
+  if (
+    timelineSourceOptions.value.some(
+      (option) => option.key === selectedSourceFilterKey.value,
+    )
+  ) {
+    return;
+  }
+  selectedSourceFilterKey.value = ALL_TIMELINE_SOURCE_FILTER_KEY;
 }
 
 async function scrollFocusedEventIntoView() {
@@ -386,6 +467,7 @@ async function applyFocusedTimelineEvent() {
   ];
   timelineEvents.value = nextEvents;
   hydrateFeedbackStateFromEvents(nextEvents);
+  reconcileSourceFilter();
   focusNotice.value = '已置顶定位记忆；它可能不属于当前时间范围。';
   await scrollFocusedEventIntoView();
 }
@@ -411,8 +493,10 @@ const loadTimeline = async () => {
     timelineEvents.value = Array.isArray(response.data) ? response.data : [];
     hydrateFeedbackStateFromEvents(timelineEvents.value);
     await applyFocusedTimelineEvent();
+    reconcileSourceFilter();
   } catch (error: any) {
     timelineEvents.value = [];
+    selectedSourceFilterKey.value = ALL_TIMELINE_SOURCE_FILTER_KEY;
     errorMessage.value =
       error?.message || '时间轴暂时无法连接 Memory Service，请稍后刷新。';
   } finally {
@@ -537,6 +621,67 @@ function canClearFeedback(event: MemoryTimelineEvent): boolean {
   return state === 'positive' || state === 'negative';
 }
 
+function compactTimelineFeedbackDetailValue(
+  value: unknown,
+  maxLength = 160,
+): string | undefined {
+  const normalized =
+    typeof value === 'string'
+      ? value.replace(/\s+/g, ' ').trim()
+      : value == null
+      ? ''
+      : String(value).replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength).trimEnd()}...`
+    : normalized;
+}
+
+function buildTimelineFeedbackDetail(
+  event: MemoryTimelineEvent,
+  action: MemoryFeedbackAction,
+): string {
+  const signature = [
+    'memory-timeline',
+    selectedRangeKey.value,
+    selectedScope.value,
+    selectedSourceFilterKey.value,
+  ]
+    .filter(Boolean)
+    .join(':');
+  const detail = {
+    version: '1',
+    interaction:
+      action === 'negative'
+        ? 'memory_relevance_trainer'
+        : 'context_recall_feedback',
+    surface: 'memory_timeline',
+    action,
+    auto_applied: action === 'negative' ? 'true' : undefined,
+    feedback_reason:
+      action === 'negative' ? 'timeline_context_mismatch' : undefined,
+    scene_anchor_signature: compactTimelineFeedbackDetailValue(signature, 220),
+    range: selectedRangeKey.value,
+    scope: selectedScope.value,
+    source_filter: compactTimelineFeedbackDetailValue(
+      selectedSourceFilterKey.value,
+      120,
+    ),
+    target_type: event.type,
+    result_key: compactTimelineFeedbackDetailValue(event.resultKey, 180),
+    source_label: compactTimelineFeedbackDetailValue(event.source, 100),
+    source_title: compactTimelineFeedbackDetailValue(event.sourceTitle, 140),
+    source_url: compactTimelineFeedbackDetailValue(event.sourceUrl, 220),
+    current_title: compactTimelineFeedbackDetailValue(document.title, 120),
+  };
+
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(detail).filter(([, value]) => Boolean(value)),
+    ),
+  );
+}
+
 async function submitEventFeedback(
   event: MemoryTimelineEvent,
   action: MemoryFeedbackAction,
@@ -557,8 +702,9 @@ async function submitEventFeedback(
       type: 'SUBMIT_MEMORY_FEEDBACK',
       feedbackType: 'recall_quality',
       targetId: event.id,
-      targetType: event.type,
+      targetType: event.type as MemoryFeedbackTargetType,
       action,
+      detail: buildTimelineFeedbackDetail(event, action),
     })) as any;
 
     if (!response?.success) {
@@ -691,6 +837,30 @@ onMounted(() => {
 .control-tab.active {
   background: rgba(59, 130, 246, 0.28);
   color: #eff6ff;
+}
+
+.source-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: min(100%, 17rem);
+  color: #93c5fd;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.source-filter select {
+  min-width: 0;
+  width: 12rem;
+  max-width: 100%;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.78);
+  color: #dbeafe;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.45rem 0.65rem;
 }
 
 .refresh-btn {
@@ -943,6 +1113,8 @@ onMounted(() => {
   }
 
   .control-tabs,
+  .source-filter,
+  .source-filter select,
   .refresh-btn {
     width: 100%;
   }

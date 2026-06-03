@@ -259,6 +259,54 @@ function verifyTruncatedPayloadMetadata() {
   assert.equal(viewModel.profile.viewLimit, 1);
 }
 
+function verifyRetractedPayloadIsExplicitlyOptIn() {
+  const defaultView = buildUserProfileViewModel({
+    items: [
+      {
+        id: 'visible-profile',
+        itemType: 'interest',
+        itemKey: 'focus_project',
+        itemValue: 'Visible Project',
+        status: 'active',
+        userConfirmed: true,
+      },
+      {
+        id: 'retracted-profile',
+        itemType: 'interest',
+        itemKey: 'focus_project',
+        itemValue: 'Retracted Project',
+        status: 'retracted',
+        userConfirmed: true,
+      },
+    ],
+  });
+  assert.deepEqual(
+    defaultView.profile.allItems.map((item) => item.id),
+    ['visible-profile'],
+  );
+
+  const auditView = buildUserProfileViewModel({
+    items: [
+      {
+        id: 'retracted-profile',
+        itemType: 'interest',
+        itemKey: 'focus_project',
+        itemValue: 'Retracted Project',
+        status: 'retracted',
+        userConfirmed: true,
+      },
+    ],
+    includeRetracted: true,
+  });
+  assert.equal(auditView.profile.allItems.length, 1);
+  assert.equal(auditView.profile.allItems[0].status, 'retracted');
+  assert.equal(auditView.profile.allItems[0].canUseForPersonalization, false);
+  assert.equal(
+    auditView.profile.allItems[0].calibrationReason,
+    '已排除，不会用于个性化；恢复后才会重新进入画像。',
+  );
+}
+
 function verifyEvidenceSourceUrlSafety() {
   const viewModel = buildUserProfileViewModel({
     items: [
@@ -473,15 +521,51 @@ async function verifyProfileItemsPaginationBoundaries() {
   ]);
 }
 
+async function verifyProfileItemsStatusFilterForwarding() {
+  const requests: Array<{ status?: string; limit?: number; offset?: number }> = [];
+  const client = {
+    async getProfileItems(filters: { status?: string; limit?: number; offset?: number }) {
+      requests.push(filters);
+      return {
+        items: [],
+        total: 0,
+      };
+    },
+  } as any;
+
+  await getProfileItemsForView(client, 200, { status: 'retracted' });
+
+  assert.deepEqual(requests, [
+    {
+      status: 'retracted',
+      limit: 200,
+      offset: 0,
+    },
+  ]);
+
+  requests.length = 0;
+  await getProfileItemsForView(client, 'all', { status: 'all' });
+
+  assert.deepEqual(requests, [
+    {
+      status: 'all',
+      limit: 200,
+      offset: 0,
+    },
+  ]);
+}
+
 async function main() {
   verifyViewModelNormalization();
   verifyEmptyPayloadIsRenderable();
   verifyTruncatedPayloadMetadata();
+  verifyRetractedPayloadIsExplicitlyOptIn();
   verifyEvidenceSourceUrlSafety();
   await verifyProfileClientConfirmedOnlyQuery();
   await verifyProfileClientInferredItemQuery();
   await verifyProfileClientRestoreItemQuery();
   await verifyProfileItemsPaginationBoundaries();
+  await verifyProfileItemsStatusFilterForwarding();
   console.log('verify-user-profile-system: ok');
 }
 

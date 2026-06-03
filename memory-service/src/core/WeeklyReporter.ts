@@ -49,6 +49,19 @@ function normalizePushTarget(
   return fallback;
 }
 
+function compactReportText(raw: string, maxLength: number): string {
+  const compacted = raw
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*/g, '')
+    .replace(/^[-*]\s+/gm, '- ')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (compacted.length <= maxLength) return compacted;
+  return `${compacted.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
 // ---------------------------------------------------------------------------
 // WeeklyReporter
 // ---------------------------------------------------------------------------
@@ -177,6 +190,8 @@ Keep it concise (under 500 words). Write in the same language as the source cont
     const llm = getLLMClient();
     const response = await llm.generate(prompt, { maxTokens: 1500, temperature: 0.4 });
     const reportText = response.content;
+    const reportSummary = compactReportText(reportText, 240);
+    const reportExcerpt = compactReportText(reportText, 900);
 
     const reportContent = `# Weekly Report — ${dateStr}\n\n${reportText}`;
 
@@ -200,7 +215,13 @@ Keep it concise (under 500 words). Write in the same language as the source cont
         notificationId,
         'Weekly Report Ready',
         `Your weekly report for ${dateStr} is ready`,
-        JSON.stringify({ reportPath, messageCount: msgCount }),
+        JSON.stringify({
+          reportPath,
+          messageCount: msgCount,
+          reflectionCount: reflections.length,
+          reportSummary,
+          reportExcerpt,
+        }),
         `weekly_report_${dateStr}`,
         currentTime, currentTime,
       );

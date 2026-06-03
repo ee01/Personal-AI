@@ -48,7 +48,64 @@ export interface AgentFlowStep {
   result?: string;
   resultClass?: AgentFlowStepResultClass;
   detail?: string;
+  stepIndex?: number;
   time: string;
+}
+
+export type AgentRunDiagnosticStatus =
+  | 'empty'
+  | 'running'
+  | 'finished'
+  | 'max_actions_reached'
+  | 'stopped'
+  | 'missing_terminal';
+
+export interface AgentRunDiagnosticPacket {
+  type: 'agent_thinking_run_diagnostics';
+  version: 1;
+  generatedAt: string;
+  status: AgentRunDiagnosticStatus;
+  severity: AgentRunReviewSeverity;
+  summary: {
+    stepCount: number;
+    terminalStepNumber?: number;
+    terminalAction?: string;
+    toolErrorCount: number;
+    approvalRequiredCount: number;
+    blockedCount: number;
+    emptyEvidenceCount: number;
+    skippedCount: number;
+    pendingApprovalCount: number;
+    toolsInvolved: string[];
+  };
+  reviewItems: Array<{
+    severity: AgentRunReviewSeverity;
+    title: string;
+    detail: string;
+    action: string;
+    stepNumbers: number[];
+  }>;
+  pendingApprovals: Array<{
+    stepNumber: number;
+    toolId: string;
+    effect?: string;
+    riskLevel?: string;
+    message: string;
+    reviewHint: string;
+    safetyNote?: string;
+    approvalKeyAvailable: boolean;
+    retryConfigAvailable: boolean;
+  }>;
+  flowSteps: Array<{
+    type: AgentFlowStepType;
+    name: string;
+    result?: string;
+    resultClass?: AgentFlowStepResultClass;
+    detail?: string;
+    stepNumber?: number;
+    time: string;
+  }>;
+  privacyNote: string;
 }
 
 export const normalizeToolResult = (result: any) => {
@@ -777,9 +834,11 @@ export function buildAgentFlowSteps(
   formatTime: (timestamp: number) => string,
 ): AgentFlowStep[] {
   if (thoughtProcess.length === 0) return [];
-  const terminalStep = thoughtProcess.find((step) =>
+  const terminalStepIndex = thoughtProcess.findIndex((step) =>
     ['finish', 'max_actions_reached', 'stopped'].includes(step.action),
   );
+  const terminalStep =
+    terminalStepIndex >= 0 ? thoughtProcess[terminalStepIndex] : undefined;
   const budgetOpenIssueSummary =
     terminalStep?.action === 'max_actions_reached'
       ? countOpenToolIssues(thoughtProcess).summary
@@ -793,7 +852,7 @@ export function buildAgentFlowSteps(
     },
   ];
 
-  thoughtProcess.forEach((step) => {
+  thoughtProcess.forEach((step, index) => {
     if (step.toolUsed) {
       const presentation = getToolStepResultPresentation(step);
       const detail = getStepIntentSummary(step) || getStepVisibleSummary(step);
@@ -803,6 +862,7 @@ export function buildAgentFlowSteps(
         result: presentation.label,
         resultClass: presentation.className,
         detail,
+        stepIndex: index,
         time: formatTime(step.timestamp),
       });
     } else if (
@@ -812,6 +872,7 @@ export function buildAgentFlowSteps(
         type: 'thought',
         name: '思考分析',
         detail: getStepVisibleSummary(step),
+        stepIndex: index,
         time: formatTime(step.timestamp),
       });
     }
@@ -832,9 +893,110 @@ export function buildAgentFlowSteps(
         budgetOpenIssueSummary && terminalStep.action === 'max_actions_reached'
           ? `${terminalDetail} 预算用完时仍有${budgetOpenIssueSummary}需要处理。`
           : terminalDetail,
+      stepIndex: terminalStepIndex,
       time: formatTime(terminalStep.timestamp),
     });
   }
 
   return flowSteps;
+}
+
+const redactApprovalKeyText = (text: string) =>
+  text.replace(/批准 key[:：][\s\S]*$/i, '批准 key: [omitted]');
+
+export function buildAgentRunDiagnosticPacket(
+  thoughtProcess: ThoughtStep[],
+  options: { isProcessing?: boolean; generatedAt?: string } = {},
+): AgentRunDiagnosticPacket {
+  const terminalStepIndex = thoughtProcess.findIndex((step) =>
+    ['finish', 'max_actions_reached', 'stopped'].includes(step.action),
+  );
+  const terminalStep =
+    terminalStepIndex >= 0 ? thoughtProcess[terminalStepIndex] : undefined;
+  const status: AgentRunDiagnosticStatus =
+    thoughtProcess.length === 0
+      ? 'empty'
+      : terminalStep?.action === 'finish'
+        ? 'finished'
+        : terminalStep?.action === 'max_actions_reached'
+          ? 'max_actions_reached'
+          : terminalStep?.action === 'stopped'
+            ? 'stopped'
+            : options.isProcessing
+              ? 'running'
+              : 'missing_terminal';
+  const reviewItems = buildAgentRunReviewItems(thoughtProcess, {
+    isProcessing: options.isProcessing,
+  });
+  const pendingApprovals = buildPendingApprovalActions(thoughtProcess);
+  const toolIssueCounts = countOpenToolIssues(thoughtProcess);
+  const skippedCount = countSteps(thoughtProcess, stepWasSkipped);
+  const flowSteps = buildAgentFlowSteps(thoughtProcess, (timestamp) =>
+    Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : '',
+  );
+  const toolsInvolved = Array.from(
+    new Set(
+      flowSteps
+        .filter((step) => step.type === 'tool')
+        .flatMap((step) =>
+          step.name
+            .split(',')
+            .map((toolId) => toolId.trim())
+            .filter(Boolean),
+        ),
+    ),
+  ).sort();
+
+  return {
+    type: 'agent_thinking_run_diagnostics',
+    version: 1,
+    generatedAt: options.generatedAt || new Date().toISOString(),
+    status,
+    severity: getAgentRunReviewSeverity(reviewItems),
+    summary: {
+      stepCount: thoughtProcess.length,
+      terminalStepNumber:
+        terminalStepIndex >= 0 ? terminalStepIndex + 1 : undefined,
+      terminalAction: terminalStep?.action,
+      toolErrorCount: toolIssueCounts.toolErrorCount,
+      approvalRequiredCount: toolIssueCounts.approvalRequiredCount,
+      blockedCount: toolIssueCounts.blockedCount,
+      emptyEvidenceCount: toolIssueCounts.emptyEvidenceCount,
+      skippedCount,
+      pendingApprovalCount: pendingApprovals.length,
+      toolsInvolved,
+    },
+    reviewItems: reviewItems.map((item) => ({
+      severity: item.severity,
+      title: item.title,
+      detail: item.detail,
+      action: item.action,
+      stepNumbers: (item.stepIndexes || []).map((stepIndex) => stepIndex + 1),
+    })),
+    pendingApprovals: pendingApprovals.map((approval) => ({
+      stepNumber: approval.stepIndex + 1,
+      toolId: approval.toolId,
+      effect: approval.effect,
+      riskLevel: approval.riskLevel,
+      message: redactApprovalKeyText(approval.message),
+      reviewHint: approval.reviewHint,
+      safetyNote: approval.safetyNote,
+      approvalKeyAvailable: Boolean(approval.approvalKey),
+      retryConfigAvailable: Boolean(approval.retryConfigPatch),
+    })),
+    flowSteps: flowSteps.map((step) => ({
+      type: step.type,
+      name: step.name,
+      result: step.result,
+      resultClass: step.resultClass,
+      detail: step.detail,
+      stepNumber:
+        Number.isInteger(step.stepIndex) && step.stepIndex !== undefined
+          ? step.stepIndex + 1
+          : undefined,
+      time: step.time,
+    })),
+    privacyNote:
+      'This packet omits raw tool results, approval keys, and tool parameters. Use the approval review packet for action-specific approval context.',
+  };
 }

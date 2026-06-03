@@ -28,6 +28,78 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+async function routeDesktopAsrBridge(context) {
+  await context.route('http://127.0.0.1:46321/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const headers = {
+      'Access-Control-Allow-Headers':
+        'Authorization, Content-Type, X-Bridge-Token',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Origin': '*',
+      'Content-Type': 'application/json',
+    };
+
+    if (request.method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers, body: '' });
+      return;
+    }
+
+    if (url.pathname === '/pair' && request.method() === 'POST') {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({ token: 'meeting-options-test-token' }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/asr/status' && request.method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          ok: true,
+          ready: false,
+          liveReady: false,
+          finalReady: true,
+          modelRoot: '/tmp/personal-ai-asr-fixture',
+          engines: {
+            appleSpeech: { ready: false, reason: 'not_authorized' },
+            sherpaStreaming: { modelReady: false, reason: 'missing_model' },
+            funasrFinal: { modelReady: false, reason: 'missing_model' },
+            whisperFallback: {
+              ready: true,
+              modelReady: true,
+              whisperBinaryAvailable: true,
+            },
+          },
+          activeSessionId: null,
+          activeSessions: [],
+          downloadInProgress: false,
+          downloadProgress: 0,
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/asr/model/ensure' && request.method() === 'POST') {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({ ok: true, downloading: true }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      headers,
+      body: JSON.stringify({ ok: false, error: 'not_found' }),
+    });
+  });
+}
+
 function readRequestBody(request) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -155,6 +227,7 @@ try {
   memoryServiceStub = await startMemoryServiceStub();
   launched = await launchExtensionContext();
   const { context, extensionId, serviceWorker } = launched;
+  await routeDesktopAsrBridge(context);
   await serviceWorker.evaluate(
     async (envConfig) => {
       await chrome.storage.local.set({ envConfig });
@@ -211,7 +284,8 @@ try {
     (text) => text.trim() === '会议全貌',
   );
   const webpageMemorySectionIndex = sectionHeadings.findIndex(
-    (text) => text.trim() === '网页记忆提示控制',
+    (text) =>
+      ['网页记忆提示控制', '记忆提示控制', 'Memory Lens'].includes(text.trim()),
   );
   assert.ok(meetingSectionIndex >= 0, '未找到会议全貌板块');
   assert.ok(
@@ -230,6 +304,14 @@ try {
   if (!(await enableToggle.isChecked())) {
     await enableToggle.check({ force: true });
   }
+  await page.waitForFunction(() => {
+    const text = document.body.textContent || '';
+    return (
+      text.includes('Local ASR can transcribe now') &&
+      text.includes('Live: No live engine') &&
+      text.includes('Final: Whisper fallback ready')
+    );
+  });
   await page.locator('#MEETING_PROVIDER_BASE_URL').fill(providerUrl);
   await page.locator('#MEETING_PROVIDER_API_KEY').fill(providerKey);
   await page.locator('#MEETING_TRANSCRIBE_MODEL').fill(transcribeModel);

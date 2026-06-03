@@ -236,7 +236,9 @@ function normalizeOptionsForKey(options: ConfirmRequestOption[]): string {
   return mergeOptions([], options)
     .map(
       (option) =>
-        `${normalizeIntentText(option.value)}:${normalizeIntentText(option.label)}`,
+        `${normalizeIntentText(option.value)}:${normalizeIntentText(
+          option.label,
+        )}`,
     )
     .filter((value) => value !== ':')
     .sort()
@@ -418,6 +420,43 @@ export class ConfirmRequestRepository {
       );
     if (result.changes === 0) return null;
     return this.getById(id);
+  }
+
+  processDecisionSnoozeLifecycle(currentTime = now()): {
+    resumed: number;
+    expired: number;
+  } {
+    const expireResult = this.db
+      .prepare(
+        `UPDATE confirm_requests
+         SET state = 'expired',
+             snooze_until = NULL,
+             updated_at = ?
+         WHERE COALESCE(routing, 'decision') = 'decision'
+           AND state = 'snoozed'
+           AND expires_at IS NOT NULL
+           AND expires_at <= ?`,
+      )
+      .run(currentTime, currentTime);
+
+    const resumeResult = this.db
+      .prepare(
+        `UPDATE confirm_requests
+         SET state = 'pending',
+             snooze_until = NULL,
+             updated_at = ?
+         WHERE COALESCE(routing, 'decision') = 'decision'
+           AND state = 'snoozed'
+           AND snooze_until IS NOT NULL
+           AND snooze_until <= ?
+           AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .run(currentTime, currentTime, currentTime);
+
+    return {
+      resumed: resumeResult.changes,
+      expired: expireResult.changes,
+    };
   }
 
   processWatchLifecycle(currentTime = now()): {
@@ -637,7 +676,9 @@ export class ConfirmRequestRepository {
       for (const link of threadLinks) {
         const record = pendingById.get(link.confirm_request_id);
         if (!record) continue;
-        const key = `${link.thread_id}:${buildConfirmRequestQuestionKey(record)}`;
+        const key = `${link.thread_id}:${buildConfirmRequestQuestionKey(
+          record,
+        )}`;
         const list = threadGroups.get(key) ?? [];
         if (!list.some((item) => item.id === record.id)) {
           list.push(record);
@@ -731,16 +772,16 @@ export class ConfirmRequestRepository {
         typeof input.snoozeUntil === 'number'
           ? input.snoozeUntil
           : routing === 'watch'
-            ? createdAt + 72 * 3600
-            : undefined,
+          ? createdAt + 72 * 3600
+          : undefined,
       snoozeCount:
         typeof input.snoozeCount === 'number' ? input.snoozeCount : 0,
       expiresAt:
         typeof input.expiresAt === 'number'
           ? input.expiresAt
           : routing === 'watch'
-            ? createdAt + 14 * 24 * 3600
-            : undefined,
+          ? createdAt + 14 * 24 * 3600
+          : undefined,
       createdAt,
       updatedAt:
         typeof input.updatedAt === 'number' ? input.updatedAt : createdAt,

@@ -8,6 +8,7 @@ import {
   formatTimelineCacheLastAttempt,
   getTimelineCacheAttemptQuickFixText,
   getTimelineCacheExecutionImpactText,
+  getTimelineCacheProjectStatus,
   getTimelineProjectCacheSaveBlockText,
   getTimelineCacheReadinessBlockText,
   getTimelineCacheSaveBlockText,
@@ -227,6 +228,26 @@ test('Timeline cache response validation normalizes valid project status', () =>
   assert.equal(normalized.totalProjects, 1);
   assert.equal(normalized.readyProjects, 1);
   assert.deepEqual(normalized.projects[0].milestoneKeys, ['FF', 'Release']);
+});
+
+test('Timeline cache project status lookup accepts project names and Jira param keys', () => {
+  assert.equal(getTimelineCacheProjectStatus(readyStatus, 'mThor')?.project, 'mThor');
+
+  const jupiterStatus: TimelineCacheStatus = {
+    ...readyStatus,
+    projects: [{
+      project: 'Jupiter web',
+      paramKey: 'jupiterWeb',
+      cached: true,
+      valid: true,
+      expired: false,
+      status: 'ready',
+      milestoneKeys: ['FF'],
+    }],
+  };
+
+  assert.equal(getTimelineCacheProjectStatus(jupiterStatus, 'Jupiter web')?.paramKey, 'jupiterWeb');
+  assert.equal(getTimelineCacheProjectStatus(jupiterStatus, 'jupiterWeb')?.project, 'Jupiter web');
 });
 
 test('Timeline cache response validation preserves safe last sync attempt diagnostics', () => {

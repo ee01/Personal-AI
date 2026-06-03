@@ -22,6 +22,7 @@ type SheetMetadata = {
 type SaveConfigToSheetOptions = {
   includeRingCentralSenderKeys?: boolean;
   expectedLastSyncTime?: string;
+  syncAction?: string;
 };
 
 const CONFIG_MIN_ROW_COUNT = 56;
@@ -41,6 +42,7 @@ const CONFIG_BASE_KEYS = [
   'created_by',
   'created_at',
   'last_sync_time',
+  'last_sync_action',
   'messages_sheet_id',
   'logs_sheet_id',
   // 旧代码曾读取这些 camelCase alias；写回时统一清理为 snake_case，避免后续读取被旧值覆盖。
@@ -130,6 +132,11 @@ function mergeRule(
 
 function parseConfigBoolean(value: string): boolean {
   return ['true', '1', 'yes', 'y', 'on'].includes(value.trim().toLowerCase());
+}
+
+function normalizeSyncAction(value?: string): string | undefined {
+  const normalizedValue = value?.trim();
+  return normalizedValue || undefined;
 }
 
 function shouldUseSheetConfigForPartialUpdateBase(
@@ -355,6 +362,9 @@ export class ConfigSyncService {
             }
             break;
           }
+          case 'last_sync_action':
+            setScalarField('last_sync_action', value);
+            break;
           case 'messages_sheet_id': {
             const messagesSheetId = parseSheetGridId(value);
             if (messagesSheetId !== undefined) {
@@ -491,6 +501,7 @@ export class ConfigSyncService {
       const normalizedConfig = normalizeSheetConfig({
         ...config,
         last_sync_time: lastSyncTime || new Date().toISOString(),
+        last_sync_action: normalizeSyncAction(options?.syncAction || config.last_sync_action),
       }) as SheetConfig;
       const configData = this.buildManagedConfigRows(normalizedConfig, {
         includeRingCentralSenderKeys,
@@ -554,19 +565,24 @@ export class ConfigSyncService {
   /**
    * 同步配置：同时保存到 Sheet 和 Chrome Storage
    */
-  async syncConfig(config: SheetConfig): Promise<SheetConfig> {
+  async syncConfig(
+    config: SheetConfig,
+    options: { syncAction?: string } = {}
+  ): Promise<SheetConfig> {
     const lastSyncTime = new Date().toISOString();
     const expectedLastSyncTime = config.last_sync_time;
     const includeRingCentralSenderKeys = config.ringCentralSender !== undefined;
     const normalizedConfig = normalizeSheetConfig({
       ...config,
       last_sync_time: lastSyncTime,
+      last_sync_action: normalizeSyncAction(options.syncAction || config.last_sync_action || 'config_sync'),
     }) as SheetConfig;
 
     // Sheet 是跨设备恢复来源，先写入成功后再更新本地，避免失败时留下半同步状态。
     await this.saveConfigToSheet(normalizedConfig, lastSyncTime, {
       includeRingCentralSenderKeys,
       expectedLastSyncTime,
+      syncAction: normalizedConfig.last_sync_action,
     });
     await this.saveConfigToStorage(normalizedConfig);
 
@@ -684,7 +700,7 @@ export class ConfigSyncService {
 
     // 同步到两个位置
     const normalizedConfig = normalizeSheetConfig(updatedConfig) as SheetConfig;
-    return this.syncConfig(normalizedConfig);
+    return this.syncConfig(normalizedConfig, { syncAction: 'partial_update' });
   }
 
   private async readLatestConfigBase(existingConfig: SheetConfig): Promise<SheetConfig> {
@@ -831,6 +847,9 @@ export class ConfigSyncService {
     }
     if (normalizedConfig.last_sync_time) {
       configData.push(['last_sync_time', normalizedConfig.last_sync_time]);
+    }
+    if (normalizedConfig.last_sync_action) {
+      configData.push(['last_sync_action', normalizedConfig.last_sync_action]);
     }
 
     // Messages Sheet ID

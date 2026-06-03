@@ -131,6 +131,29 @@ try {
     });
   }, { baseUrl: memoryBaseUrl });
 
+  const optionsPage = await context.newPage();
+  const assertNoOptionsPageErrors = collectPageErrors(optionsPage);
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await optionsPage.locator('h2', {
+    hasText: '自定义提示词与上下文',
+  }).waitFor({ timeout: 15000 });
+  const [promptConfigFromOptions] = await Promise.all([
+    context.waitForEvent('page', { timeout: 10000 }),
+    optionsPage.locator('button.prompt-config-open-btn', {
+      hasText: '打开自定义提示词',
+    }).click(),
+  ]);
+  await promptConfigFromOptions.waitForLoadState('load', { timeout: 15000 });
+  await promptConfigFromOptions.locator('h1', {
+    hasText: '自定义提示词与上下文',
+  }).waitFor({ timeout: 15000 });
+  assertNoOptionsPageErrors();
+  await promptConfigFromOptions.close();
+  await optionsPage.close();
+
   const page = await context.newPage();
   const assertNoPageErrors = collectPageErrors(page);
 
@@ -401,6 +424,57 @@ try {
   }).waitFor({ timeout: 10000 });
   history = await readHistory(page);
   assert.equal(history.length, 2);
+
+  profileItem = null;
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.local.set({
+      preferenceInjection: {
+        enabled: true,
+        customPromptsEnabled: true,
+        messagePromptEnabled: true,
+        projectPromptEnabled: true,
+        userContextEnabled: true,
+      },
+      customPrompts: {},
+      userContextConfig: {
+        analysisPreferences: {
+          messageAnalysis: {
+            urgencyKeywords: ['blocked'],
+          },
+          projectAnalysis: {
+            riskFactors: ['供应商依赖'],
+          },
+        },
+      },
+      cloudSyncTime: Date.now() + 10000,
+    });
+  });
+  await page.reload({ waitUntil: 'load', timeout: 15000 });
+  await page.locator('h1', { hasText: '自定义提示词与上下文' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.preview-scope-switch button', { hasText: '消息' }).click();
+  await page.locator('.prompt-preview', {
+    hasText: '紧急关键词: blocked',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.included', {
+    hasText: /1 项上下文信号（消息 1）；项目 1 项未注入/,
+  }).waitFor({ timeout: 5000 });
+  assert.equal(
+    await page.locator('.prompt-preview', { hasText: '供应商依赖' }).count(),
+    0,
+  );
+  await page.locator('.preview-scope-switch button', { hasText: '项目' }).click();
+  await page.locator('.prompt-preview', {
+    hasText: '项目风险因素: 供应商依赖',
+  }).waitFor({ timeout: 5000 });
+  await page.locator('.injection-receipt-item.included', {
+    hasText: /1 项上下文信号（项目 1）；消息 1 项未注入/,
+  }).waitFor({ timeout: 5000 });
+  assert.equal(
+    await page.locator('.prompt-preview', { hasText: '紧急关键词: blocked' }).count(),
+    0,
+  );
 
   assertNoPageErrors();
   await context.close();

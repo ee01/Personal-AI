@@ -32,6 +32,7 @@ import {
   getSafeExternalUrl,
   hasBlockedExternalUrlCandidate,
 } from '../src/modals/topic-link-safety.ts';
+import { topicMatchesListQuery } from '../src/modals/topic-list-search.ts';
 import {
   getTopicTriagePriority,
   sortTopicsForTriage,
@@ -483,20 +484,36 @@ async function verifySingleConversationReadWithoutReadStatusUsesInferredCount() 
 async function verifyDeferredTopicLeavesUnreadQueueWithoutReading() {
   const store = createStore();
   const topic = createTopic('topic-deferred');
+  const deferUntil = Date.now() + 3600000;
 
   store.entities = [topic] as any;
 
-  await store.deferTopicForLater('topic-deferred', Date.now() + 3600000);
+  await store.deferTopicForLater('topic-deferred', deferUntil);
 
   assert.equal(topic.readStatus.unreadCount, 2);
   assert.equal(topic.readStatus.isRead, false);
   assert.equal(store.getUnreadTopics().length, 0);
   assert.equal(store.getDeferredTopics()[0].id, 'topic-deferred');
+  assert.equal(store.getNextDeferredTopicReleaseAt(), deferUntil);
   assert.equal(
     store.entityTypes.find((item) => item.type === 'Topic')?.count,
     0,
   );
 
+  assert.equal(store.refreshDeferredTopics(deferUntil - 1), false);
+  assert.equal(store.getDeferredTopics()[0].id, 'topic-deferred');
+  assert.equal(store.getUnreadTopics().length, 0);
+
+  assert.equal(store.refreshDeferredTopics(deferUntil + 1), true);
+  assert.equal(store.getDeferredTopics().length, 0);
+  assert.equal(store.getUnreadTopics().length, 1);
+  assert.equal(store.getNextDeferredTopicReleaseAt(), null);
+  assert.equal(
+    store.entityTypes.find((item) => item.type === 'Topic')?.count,
+    1,
+  );
+
+  await store.deferTopicForLater('topic-deferred', Date.now() + 3600000);
   store.restoreDeferredTopic('topic-deferred');
 
   assert.equal(store.getUnreadTopics().length, 1);
@@ -783,12 +800,69 @@ function verifyTopicConversationSearchCoversContextAndSource() {
   };
 
   assert.equal(topicConversationMatchesQuery(conversation, 'roadmap'), true);
-  assert.equal(topicConversationMatchesQuery(conversation, 'Product Sync'), true);
+  assert.equal(
+    topicConversationMatchesQuery(conversation, 'Product Sync'),
+    true,
+  );
   assert.equal(topicConversationMatchesQuery(conversation, 'thread-123'), true);
-  assert.equal(topicConversationMatchesQuery(conversation, 'budget risk'), true);
+  assert.equal(
+    topicConversationMatchesQuery(conversation, 'budget risk'),
+    true,
+  );
   assert.equal(topicConversationHasContextMatch(conversation, 'budget'), true);
-  assert.equal(topicConversationHasContextMatch(conversation, 'thread-123'), false);
+  assert.equal(
+    topicConversationHasContextMatch(conversation, 'thread-123'),
+    false,
+  );
   assert.equal(topicConversationMatchesQuery(conversation, 'unrelated'), false);
+}
+
+function verifyTopicListSearchCoversUnreadContextAndReferences() {
+  const topic = {
+    id: 'topic-release-risk',
+    name: 'Release Coordination',
+    description: 'Weekly planning thread',
+    tags: ['launch'],
+    unreadDiscussions: [
+      {
+        messageId: 'msg-risk',
+        text: 'Pager rotation has an unresolved blocker',
+      },
+    ],
+    recentDataDetails: {
+      conversations: [
+        {
+          id: 'conv-status',
+          sender: 'Ada',
+          groupName: 'Ops Review',
+          summary: 'Green path update',
+          contextMessages: [
+            {
+              id: 'ctx-escalation',
+              content: 'Escalation owner is missing before ship room.',
+            },
+          ],
+        },
+      ],
+      resources: [
+        {
+          name: 'Runbook',
+          url: 'https://example.com/release-checklist',
+        },
+      ],
+      projects: [{ name: 'Project Atlas' }],
+      jiraTickets: [{ key: 'OPS-42', title: 'Stabilize handoff' }],
+      webpages: [{ title: 'Incident playbook' }],
+    },
+  };
+
+  assert.equal(topicMatchesListQuery(topic, 'pager blocker'), true);
+  assert.equal(topicMatchesListQuery(topic, 'escalation owner'), true);
+  assert.equal(topicMatchesListQuery(topic, 'release-checklist'), true);
+  assert.equal(topicMatchesListQuery(topic, 'OPS-42'), true);
+  assert.equal(topicMatchesListQuery(topic, 'incident playbook'), true);
+  assert.equal(topicMatchesListQuery(topic, 'missing ship'), true);
+  assert.equal(topicMatchesListQuery(topic, 'finance blocker'), false);
 }
 
 function verifyTopicConversationReadTriageIncludesContextMessages() {
@@ -861,7 +935,9 @@ async function verifyUnknownConversationReadStateStaysNeutral() {
         {
           id: 'legacy-neutral-conv',
           summary: 'No explicit read state should stay neutral',
-          contextMessages: [{ id: 'legacy-neutral-context', content: 'Context' }],
+          contextMessages: [
+            { id: 'legacy-neutral-context', content: 'Context' },
+          ],
         },
       ],
     },
@@ -944,10 +1020,7 @@ function verifyTopicMuteReasonOptions() {
 
   assert.equal(optionByKey.get('not-now')?.label, '暂不关注');
   assert.equal(optionByKey.get('low-relevance')?.label, '低相关度');
-  assert.equal(
-    optionByKey.get('duplicate-discussion')?.label,
-    '重复讨论',
-  );
+  assert.equal(optionByKey.get('duplicate-discussion')?.label, '重复讨论');
   assert.equal(getTopicMuteReasonLabel('low-relevance'), '低相关度');
   assert.equal(getTopicMuteReasonLabel(undefined), '手动静音');
   assert.equal(getTopicMuteReasonLabel('unknown'), '手动静音');
@@ -1002,10 +1075,7 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
   );
   assert.equal(getSafeExternalUrl('javascript:alert(1)'), '');
   assert.equal(getSafeExternalUrl('file:///tmp/secret'), '');
-  assert.equal(
-    getSafeExternalUrl('https://user:pass@example.com/source'),
-    '',
-  );
+  assert.equal(getSafeExternalUrl('https://user:pass@example.com/source'), '');
   assert.equal(getSafeExternalUrl('#'), '');
   assert.deepEqual(
     {
@@ -1031,7 +1101,8 @@ function verifyTopicListResourcePreviewUsesSafeLinks() {
     {
       safeUrl: getExternalUrlSafety('https://user@example.com/source').safeUrl,
       reason: getExternalUrlSafety('https://user@example.com/source').reason,
-      hostname: getExternalUrlSafety('https://user@example.com/source').hostname,
+      hostname: getExternalUrlSafety('https://user@example.com/source')
+        .hostname,
       blocked: getExternalUrlSafety('https://user@example.com/source').blocked,
     },
     {
@@ -1150,7 +1221,9 @@ function verifyTopicTriagePrioritySort() {
   const driftedTopic = {
     id: 'preview-drift',
     readStatus: { unreadCount: 0, lastUpdateTime: now - 60_000 },
-    unreadDiscussions: [{ messageId: 'drift-msg', text: 'Preview says unread' }],
+    unreadDiscussions: [
+      { messageId: 'drift-msg', text: 'Preview says unread' },
+    ],
     importance: 0.4,
     statistic: { conversations: 1 },
   };
@@ -1270,6 +1343,13 @@ function verifyTopicMuteUiIsReachable() {
   assert.match(overviewSource, /\/entity\/Topic/);
   assert.match(listSource, /topicViewMode === 'muted'/);
   assert.match(listSource, /handleMuteTopic/);
+  assert.match(listSource, /topicDeferredUndo/);
+  assert.match(listSource, /topic-defer-undo-toast/);
+  assert.match(listSource, /handleUndoTopicDefer/);
+  assert.match(listSource, /scheduleTopicDeferredReleaseRefresh/);
+  assert.match(listSource, /store\.refreshDeferredTopics\(\)/);
+  assert.match(storeSource, /getNextDeferredTopicReleaseAt/);
+  assert.match(storeSource, /refreshDeferredTopics/);
   assert.match(listSource, /topicMuteUndo/);
   assert.match(listSource, /topic-mute-undo-toast/);
   assert.match(listSource, /handleUndoTopicMute/);
@@ -1293,6 +1373,19 @@ function verifyTopicDetailUnreadTriageUiIsReachable() {
 
   assert.match(source, /conversationUnreadCount/);
   assert.match(source, /convReadFilter/);
+  assert.match(source, /getTopicDeferPresetOptions/);
+  assert.match(source, /detailDeferMenuOpen/);
+  assert.match(source, /handleDeferTopicFromDetail/);
+  assert.match(source, /topic-detail-defer-options/);
+  assert.match(source, /topic-defer-undo-toast/);
+  assert.match(source, /getTopicMutePresetOptions/);
+  assert.match(source, /detailMuteMenuOpen/);
+  assert.match(source, /detailSelectedMuteReason/);
+  assert.match(source, /handleMuteTopicFromDetail/);
+  assert.match(source, /topic-detail-mute-options/);
+  assert.match(source, /topic-mute-undo-toast/);
+  assert.match(source, /handleUndoDetailMute/);
+  assert.match(source, /currentTopicMutedState/);
   assert.match(source, /getTopicDetailUnreadCount/);
   assert.match(source, /getConversationRenderId/);
   assert.match(source, /getTopicConversationPrimaryId/);
@@ -1343,6 +1436,7 @@ async function main() {
   verifyTopicDetailUnreadCountFallsBackToKnownMessages();
   verifyTopicDetailHighlightEscapesHtml();
   verifyTopicConversationSearchCoversContextAndSource();
+  verifyTopicListSearchCoversUnreadContextAndReferences();
   verifyTopicConversationReadTriageIncludesContextMessages();
   await verifyUnknownConversationReadStateStaysNeutral();
   verifyTopicDeferPresetOptions();

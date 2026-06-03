@@ -49,53 +49,88 @@
         </div>
       </div>
 
-      <article class="spotlight">
-        <div class="spotlight-tag">{{ selectedPerson ? stateLabel(selectedPerson.radarState) : '等待数据' }}</div>
-        <h1>
-          {{ selectedPerson?.name || '还没有可展示的人物关系雷达' }}
-        </h1>
-        <p>
-          {{
-            selectedPerson?.description ||
-            selectedPerson?.reason ||
-            '当 Memory Service 发现高频人物后，会先用 lazy fallback 展示索引级信息，再由后台整理生成更稳定的上下文卡。'
-          }}
-        </p>
-        <div v-if="selectedPerson" class="spotlight-meta">
-          <span>{{ selectedPerson.interactionCount }} 次交互</span>
-          <span>{{ selectedPerson.activeDays }} 个活跃日</span>
-          <span>{{ formatDate(selectedPerson.lastInteractionAt) }}</span>
-          <span :class="['chip', qualityTone(selectedPerson.dataQuality)]">
-            {{ qualityLabel(selectedPerson.dataQuality) }}
-          </span>
-        </div>
-        <div class="spotlight-actions">
-          <button
-            type="button"
-            class="primary"
-            :disabled="!selectedPerson"
-            @click="activeTab = 'context'"
-          >
-            查看上下文
-          </button>
-          <button
-            type="button"
-            :disabled="!selectedPerson || isConsolidating"
-            @click="runConsolidation(true)"
-          >
-            强制刷新此人
-          </button>
-          <button
-            type="button"
-            :disabled="!contextCard"
-            @click="copyContextPackage"
-          >
-            复制上下文包
-          </button>
-        </div>
+      <article :class="['spotlight', { loading: isInitialLoading }]">
+        <template v-if="isInitialLoading">
+          <div class="spotlight-tag skeleton-pill"></div>
+          <div class="skeleton-line title"></div>
+          <div class="skeleton-line body wide"></div>
+          <div class="skeleton-line body"></div>
+          <div class="spotlight-meta skeleton-meta">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="spotlight-actions">
+            <span class="skeleton-button"></span>
+            <span class="skeleton-button"></span>
+          </div>
+        </template>
+        <template v-else>
+          <div class="spotlight-tag">现在最该关注</div>
+          <h2>
+            <template v-if="spotlightPerson">
+              {{ spotlightShortName }} 在 <em>{{ spotlightTopic }}</em> 上还有未闭环事项
+            </template>
+            <template v-else>
+              等待 Memory Service 发现最该关注的人物
+            </template>
+          </h2>
+          <p class="spotlight-body">
+            {{ spotlightBody }}
+          </p>
+          <div v-if="spotlightPerson" class="spotlight-meta">
+            <span>{{ spotlightPerson.interactionCount }} 次交互</span>
+            <span>{{ spotlightPerson.activeDays }} 个活跃日</span>
+            <span>{{ formatDate(spotlightPerson.lastInteractionAt) }}</span>
+            <span :class="['chip', stateTone(spotlightPerson.radarState)]">
+              {{ stateLabel(spotlightPerson.radarState) }}
+            </span>
+            <span :class="['chip', qualityTone(spotlightPerson.dataQuality)]">
+              {{ qualityLabel(spotlightPerson.dataQuality) }}
+            </span>
+          </div>
+          <div v-else class="spotlight-meta">
+            <span>lazy fallback 会先展示索引信号</span>
+            <span>后台整理会补齐高质量上下文卡</span>
+          </div>
+          <div class="spotlight-actions">
+            <button
+              type="button"
+              class="primary"
+              :disabled="!spotlightPerson"
+              @click="focusSpotlightBrief"
+            >
+              查看完整 brief
+            </button>
+            <button
+              type="button"
+              :disabled="!spotlightPerson || isConsolidating"
+              @click="runConsolidation(true, spotlightPerson?.id)"
+            >
+              强制刷新此人
+            </button>
+            <button
+              type="button"
+              :disabled="!isSpotlightContextLoaded"
+              @click="copyContextPackage"
+            >
+              复制给 AI
+            </button>
+          </div>
+        </template>
       </article>
 
-      <div class="stat-strip">
+      <div v-if="isInitialLoading" class="stat-strip">
+        <div v-for="index in 3" :key="`stat-skeleton-${index}`" class="stat-card skeleton-card">
+          <div>
+            <span class="skeleton-line label"></span>
+            <span class="skeleton-line stat-value"></span>
+            <span class="skeleton-line stat-caption"></span>
+          </div>
+          <span class="stat-icon skeleton-icon"></span>
+        </div>
+      </div>
+      <div v-else class="stat-strip">
         <div class="stat-card">
           <div>
             <span class="label">高频阈值</span>
@@ -149,11 +184,64 @@
         </div>
       </div>
 
-      <div v-if="isLoading && people.length === 0" class="loading-state">
-        正在加载人物关系雷达...
+      <div v-if="hasActivePeopleFilters" class="filter-summary">
+        <div>
+          <span>当前范围</span>
+          <strong>{{ peopleFilterSummary }}</strong>
+        </div>
+        <div class="filter-actions">
+          <button
+            v-if="!appliedPeopleFilters.includeBelowThreshold"
+            type="button"
+            class="tiny-btn"
+            @click="showCandidatePeople"
+          >
+            查看候选
+          </button>
+          <button type="button" class="tiny-btn primary" @click="clearPeopleFilters">
+            清空筛选
+          </button>
+        </div>
       </div>
-      <div v-else-if="people.length === 0" class="empty-state">
-        暂无达到阈值的人物。打开“候选”可查看低频人物；后台整理会在每日 consolidation 后补充更高质量的投影。
+
+      <div v-if="isInitialLoading" class="radar-grid loading-grid" aria-busy="true">
+        <article
+          v-for="index in 6"
+          :key="`person-skeleton-${index}`"
+          class="person-card skeleton-card"
+        >
+          <div class="person-head">
+            <div class="avatar skeleton-avatar"></div>
+            <div class="person-name skeleton-name">
+              <span class="skeleton-line name"></span>
+              <span class="skeleton-line sub"></span>
+            </div>
+          </div>
+          <span class="skeleton-line body wide"></span>
+          <span class="skeleton-line body"></span>
+          <div class="person-foot">
+            <span class="skeleton-line foot"></span>
+            <span class="skeleton-line foot"></span>
+          <span class="skeleton-line foot"></span>
+          </div>
+        </article>
+      </div>
+      <div v-else-if="people.length === 0" class="empty-state people-empty">
+        <strong>{{ peopleEmptyTitle }}</strong>
+        <p>{{ peopleEmptyBody }}</p>
+        <div v-if="hasActivePeopleFilters" class="empty-actions">
+          <button
+            v-if="!appliedPeopleFilters.includeBelowThreshold"
+            type="button"
+            class="tiny-btn"
+            @click="showCandidatePeople"
+          >
+            查看候选
+          </button>
+          <button type="button" class="tiny-btn primary" @click="clearPeopleFilters">
+            清空筛选
+          </button>
+        </div>
       </div>
       <div v-else class="radar-grid">
         <button
@@ -161,7 +249,7 @@
           :key="person.id"
           type="button"
           :class="['person-card', toneForPerson(person), { active: person.id === selectedPersonId }]"
-          @click="selectPerson(person)"
+          @click="selectPerson(person, { scrollToBrief: true })"
         >
           <div class="person-head">
             <div :class="['avatar', `g-${(index % 5) + 1}`]">
@@ -175,13 +263,42 @@
               {{ person.reviewPendingCount }}
             </span>
           </div>
-          <p class="person-headline">{{ person.reason }}</p>
+          <p class="person-headline">{{ personCardSummary(person) }}</p>
           <div class="person-foot">
             <span>{{ person.interactionCount }} 次</span>
             <span>{{ person.activeDays }} 天</span>
             <span>{{ formatPercent(person.score) }}</span>
           </div>
         </button>
+      </div>
+    </section>
+
+    <section class="section detail-anchor" v-if="selectedPerson" ref="detailBriefRef">
+      <div class="section-head">
+        <div class="section-title stacked">
+          <h3>{{ selectedShortName }} 的沟通前 brief</h3>
+          <span class="sub">事实 / 推断 / 敏感分栏，证据可追溯，30 秒扫读。</span>
+        </div>
+        <div class="section-tools detail-tools">
+          <button type="button" :class="{ active: activeTab === 'context' }" @click="activeTab = 'context'">
+            brief
+          </button>
+          <button type="button" :class="{ active: activeTab === 'meeting' }" @click="activeTab = 'meeting'">
+            meeting
+          </button>
+          <button type="button" :class="{ active: activeTab === 'review' }" @click="activeTab = 'review'">
+            review
+          </button>
+          <button
+            v-if="activeTab === 'context'"
+            type="button"
+            class="copy-context-action"
+            :disabled="!contextCard || isContextLoading"
+            @click="copyContextPackage"
+          >
+            {{ contextCopyActionLabel }}
+          </button>
+        </div>
       </div>
     </section>
 
@@ -201,7 +318,7 @@
                     {{ qualityLabel(selectedPerson.dataQuality) }}
                   </span>
                 </h2>
-                <p>{{ selectedPerson.description || selectedPerson.reason }}</p>
+                <p>{{ selectedBriefSummary }}</p>
               </div>
             </div>
             <div class="detail-actions">
@@ -258,13 +375,25 @@
 
           <template v-else-if="activeTab === 'context' && contextCard">
             <div class="quote">
-              <div class="quote-body">{{ contextCard.bullets[0] || selectedPerson.reason }}</div>
+              <div class="quote-body">{{ contextQuote }}</div>
             </div>
 
             <div :class="['privacy-strip', contextCard.privacySummary.sensitiveIncluded ? 'warn' : '']">
               <div>
                 <strong>{{ contextPrivacyTitle }}</strong>
                 <p>{{ contextPrivacySummaryText }}</p>
+                <div
+                  v-if="contextHiddenSensitiveBreakdown.length > 0"
+                  class="privacy-breakdown"
+                  aria-label="隐藏敏感上下文类型"
+                >
+                  <span
+                    v-for="item in contextHiddenSensitiveBreakdown"
+                    :key="item.key"
+                  >
+                    {{ item.label }} {{ item.count }}
+                  </span>
+                </div>
               </div>
               <button
                 v-if="!contextCard.privacySummary.sensitiveIncluded && contextHiddenSensitiveCount > 0"
@@ -448,6 +577,13 @@
                   <span>需会中确认</span>
                   <strong>{{ meetingBrief.coverage.unmatchedAttendees }}</strong>
                 </article>
+                <article
+                  v-if="meetingBrief.coverage.identityCheckAttendees > 0"
+                  class="coverage-card warn"
+                >
+                  <span>身份待核对</span>
+                  <strong>{{ meetingBrief.coverage.identityCheckAttendees }}</strong>
+                </article>
                 <p class="coverage-note">{{ meetingBrief.coverage.coverageNote }}</p>
                 <div v-if="(meetingBrief.omittedAttendees?.length || 0) > 0" class="coverage-omitted">
                   <strong>未展开参会人</strong>
@@ -458,6 +594,36 @@
                     {{ attendee.displayName }}
                     <small v-if="attendee.email">{{ attendee.email }}</small>
                   </span>
+                </div>
+              </div>
+
+              <div :class="['brief-readiness', meetingReadinessTone(meetingBrief.readiness.status)]">
+                <div class="brief-readiness-head">
+                  <div>
+                    <span>会前准备状态</span>
+                    <strong>{{ meetingReadinessLabel(meetingBrief.readiness.status) }}</strong>
+                  </div>
+                  <p>{{ meetingBrief.readiness.summary }}</p>
+                </div>
+                <div class="brief-readiness-grid">
+                  <section>
+                    <strong>下一步</strong>
+                    <p
+                      v-for="action in meetingBrief.readiness.nextActions"
+                      :key="action"
+                    >
+                      {{ action }}
+                    </p>
+                  </section>
+                  <section>
+                    <strong>成功标准</strong>
+                    <p
+                      v-for="criterion in meetingBrief.readiness.successCriteria"
+                      :key="criterion"
+                    >
+                      {{ criterion }}
+                    </p>
+                  </section>
                 </div>
               </div>
 
@@ -481,11 +647,18 @@
                     <span :class="['chip', matchTone(attendee.matchedBy)]">
                       {{ matchLabel(attendee.matchedBy) }}
                     </span>
+                    <span v-if="attendee.identityCheckRequired" class="chip warn">
+                      身份待核对
+                    </span>
                     <span>{{ attendee.matchReason }}</span>
                     <span v-if="attendee.matchedBy !== 'none'">
                       {{ Math.round(attendee.matchConfidence * 100) }}%
                     </span>
                   </div>
+
+                  <p v-if="attendee.identityCheckRequired" class="identity-check-note">
+                    {{ attendee.identityCheckReason || '这个匹配需要先核对身份，再使用历史上下文。' }}
+                  </p>
 
                   <p>{{ attendee.summary }}</p>
 
@@ -813,7 +986,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
@@ -854,6 +1027,15 @@ const errorMessage = ref('');
 const searchText = ref('');
 const includeBelowThreshold = ref(false);
 const stateFilter = ref<RadarStateFilter>('all');
+const appliedPeopleFilters = ref<{
+  search: string;
+  state: RadarStateFilter;
+  includeBelowThreshold: boolean;
+}>({
+  search: '',
+  state: 'all',
+  includeBelowThreshold: false,
+});
 const peopleResponse = ref<RelationshipPeopleResponse | null>(null);
 const selectedPersonId = ref('');
 const activeTab = ref<DetailTab>('context');
@@ -877,6 +1059,7 @@ const meetingAttendeesAutoValue = ref('');
 const meetingBrief = ref<RelationshipMeetingBrief | null>(null);
 const assistantGoal = ref('');
 const assistantDraft = ref<RelationshipAssistantDraft | null>(null);
+const detailBriefRef = ref<HTMLElement | null>(null);
 
 const stateFilterOptions: Array<{ value: RadarStateFilter; label: string }> = [
   { value: 'all', label: '全部' },
@@ -896,8 +1079,81 @@ const reviewStatusOptions: Array<{ value: ReviewStatusFilter; label: string }> =
 ];
 
 const people = computed(() => peopleResponse.value?.items || []);
+const isInitialLoading = computed(() => isLoading.value && !peopleResponse.value);
+const hasActivePeopleFilters = computed(
+  () =>
+    Boolean(appliedPeopleFilters.value.search) ||
+    appliedPeopleFilters.value.state !== 'all' ||
+    appliedPeopleFilters.value.includeBelowThreshold,
+);
+const peopleFilterSummary = computed(() => {
+  const filters: string[] = [];
+  if (appliedPeopleFilters.value.search) {
+    filters.push(`搜索：${appliedPeopleFilters.value.search}`);
+  }
+  if (appliedPeopleFilters.value.state !== 'all') {
+    filters.push(`状态：${stateFilterLabel(appliedPeopleFilters.value.state)}`);
+  }
+  if (appliedPeopleFilters.value.includeBelowThreshold) {
+    filters.push('包含低频候选');
+  }
+  return filters.join(' · ') || '全部人物';
+});
+const peopleEmptyTitle = computed(() =>
+  hasActivePeopleFilters.value ? '当前筛选没有匹配人物' : '暂未发现雷达人物',
+);
+const peopleEmptyBody = computed(() => {
+  if (hasActivePeopleFilters.value) {
+    return '可以清空筛选回到全部人物，或打开低频候选检查别名、邮箱和新出现的人物。';
+  }
+  return '打开候选可查看低频人物；后台整理会在每日 consolidation 后补充更高质量的投影。';
+});
 const selectedPerson = computed(() =>
   people.value.find((person) => person.id === selectedPersonId.value),
+);
+const spotlightPerson = computed(() => {
+  const candidates = [...people.value];
+  candidates.sort((left, right) => spotlightPriority(right) - spotlightPriority(left));
+  return candidates[0] || null;
+});
+const spotlightShortName = computed(() =>
+  spotlightPerson.value ? shortPersonName(spotlightPerson.value.name) : '',
+);
+const spotlightTopic = computed(() => spotlightTopicForPerson(spotlightPerson.value));
+const spotlightBody = computed(() => {
+  const person = spotlightPerson.value;
+  if (!person) {
+    return '当 Memory Service 发现高频人物后，会先用 lazy fallback 展示索引级信号，再由后台整理生成更稳定的上下文卡。';
+  }
+  return compactText(
+    person.contextBullets[0] || person.reason || person.description || '近期有高频交互，建议先扫一遍上下文再沟通。',
+    168,
+  );
+});
+const selectedShortName = computed(() =>
+  selectedPerson.value ? shortPersonName(selectedPerson.value.name) : '',
+);
+const selectedBriefSummary = computed(() => {
+  const person = selectedPerson.value;
+  if (!person) return '';
+  return compactText(
+    person.contextBullets[0] || person.reason || person.description || '这张 brief 会把事实、推断和敏感项拆开，方便沟通前快速扫读。',
+    180,
+  );
+});
+const contextQuote = computed(() =>
+  compactText(
+    contextCard.value?.bullets[0] ||
+      selectedPerson.value?.reason ||
+      selectedPerson.value?.description ||
+      '上下文卡正在整理，稍后会补齐可追溯证据。',
+    240,
+  ),
+);
+const isSpotlightContextLoaded = computed(
+  () =>
+    Boolean(contextCard.value && spotlightPerson.value) &&
+    contextCard.value?.person.id === spotlightPerson.value?.id,
 );
 const pendingReviewCount = computed(() =>
   Math.max(pendingReviewTotal.value, pendingReviewItems.value.length),
@@ -920,6 +1176,18 @@ const contextPrivacyTitle = computed(() => {
   if (contextHiddenSensitiveCount.value > 0) return '已隐藏敏感上下文';
   return '默认不含敏感上下文';
 });
+const contextHiddenSensitiveBreakdown = computed(() => {
+  const summary = contextCard.value?.privacySummary;
+  if (!summary || summary.sensitiveIncluded) return [];
+  return [
+    { key: 'aliases', label: '别名', count: summary.redactedAliases },
+    { key: 'facts', label: '事实', count: summary.redactedFacts },
+    { key: 'relationships', label: '关系', count: summary.redactedRelationshipHints },
+    { key: 'evidence', label: '证据', count: summary.redactedEvidenceRefs },
+    { key: 'openLoops', label: '跟进', count: summary.redactedOpenLoops },
+    { key: 'retrieval', label: '检索', count: summary.redactedRetrievalHints },
+  ].filter((item) => item.count > 0);
+});
 const contextPrivacySummaryText = computed(() => {
   const summary = contextCard.value?.privacySummary;
   if (summary?.sensitiveIncluded) {
@@ -928,6 +1196,11 @@ const contextPrivacySummaryText = computed(() => {
   if (summary?.redactionNote) return summary.redactionNote;
   return '这张卡没有检测到需要默认隐藏的人物上下文。';
 });
+const contextCopyActionLabel = computed(() =>
+  contextCard.value?.privacySummary.sensitiveIncluded
+    ? '复制含敏感上下文'
+    : '复制当前上下文',
+);
 const generatedPeopleCount = computed(
   () => people.value.filter((person) => person.projectionSource !== 'lazy').length,
 );
@@ -960,14 +1233,20 @@ async function refreshAll() {
 async function loadPeople() {
   isLoading.value = true;
   errorMessage.value = '';
+  const requestFilters = {
+    search: searchText.value.trim(),
+    state: stateFilter.value,
+    includeBelowThreshold: includeBelowThreshold.value,
+  };
   try {
     const response = await client.getRelationshipPeople({
       limit: 36,
-      state: stateFilter.value,
-      search: searchText.value.trim() || undefined,
-      includeBelowThreshold: includeBelowThreshold.value,
+      state: requestFilters.state,
+      search: requestFilters.search || undefined,
+      includeBelowThreshold: requestFilters.includeBelowThreshold,
     });
     peopleResponse.value = response;
+    appliedPeopleFilters.value = requestFilters;
     const stillSelected = response.items.some(
       (person) => person.id === selectedPersonId.value,
     );
@@ -1053,13 +1332,15 @@ function syncReviewDrafts(items: RelationshipReviewItem[]) {
   }
 }
 
-async function runConsolidation(force: boolean) {
+async function runConsolidation(force: boolean, personId?: string) {
   isConsolidating.value = true;
   errorMessage.value = '';
   try {
     consolidationResult.value = await client.consolidateRelationships({
       limit: 40,
-      personIds: force && selectedPersonId.value ? [selectedPersonId.value] : undefined,
+      personIds: force && (personId || selectedPersonId.value)
+        ? [personId || selectedPersonId.value]
+        : undefined,
       force,
     });
     await refreshAll();
@@ -1080,6 +1361,18 @@ function toggleIncludeBelowThreshold() {
   void loadPeople();
 }
 
+function showCandidatePeople() {
+  includeBelowThreshold.value = true;
+  void loadPeople();
+}
+
+function clearPeopleFilters() {
+  searchText.value = '';
+  stateFilter.value = 'all';
+  includeBelowThreshold.value = false;
+  void loadPeople();
+}
+
 function setReviewStatus(next: ReviewStatusFilter) {
   reviewStatus.value = next;
   void loadReviewItems();
@@ -1093,17 +1386,51 @@ function openPendingReviewTab() {
   }
 }
 
-function selectPerson(person: RelationshipPersonSummary) {
+function selectPerson(
+  person: RelationshipPersonSummary,
+  options: { scrollToBrief?: boolean } = {},
+) {
   selectedPersonId.value = person.id;
   syncDefaultInputs(person);
   activeTab.value = 'context';
   contextIncludeSensitive.value = false;
   void loadContextCard(person.id);
+  if (options.scrollToBrief) {
+    void scrollToBrief();
+  }
 }
 
 function selectPersonById(personId: string) {
   const person = people.value.find((item) => item.id === personId);
-  if (person) selectPerson(person);
+  if (person) selectPerson(person, { scrollToBrief: true });
+}
+
+function focusSpotlightBrief() {
+  const person = spotlightPerson.value;
+  if (!person) return;
+  if (person.id !== selectedPersonId.value) {
+    selectPerson(person, { scrollToBrief: true });
+    return;
+  }
+  activeTab.value = 'context';
+  void scrollToBrief();
+}
+
+async function scrollToBrief() {
+  await nextTick();
+  const target = detailBriefRef.value;
+  if (!target) return;
+  const scrollContainer = target.closest('.main-content') as HTMLElement | null;
+  if (scrollContainer) {
+    const targetTop = target.getBoundingClientRect().top;
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    scrollContainer.scrollTo({
+      top: scrollContainer.scrollTop + targetTop - containerTop - 12,
+      behavior: 'smooth',
+    });
+    return;
+  }
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function syncDefaultInputs(person?: RelationshipPersonSummary) {
@@ -1204,7 +1531,10 @@ function canActOnReviewItem(item: RelationshipReviewItem) {
 
 async function copyContextPackage() {
   if (!contextCard.value) return;
-  await copyText(contextCard.value.contextMd, '已复制上下文包');
+  const message = contextCard.value.privacySummary.sensitiveIncluded
+    ? '已复制含敏感上下文，外发前请复核'
+    : '已复制上下文包';
+  await copyText(contextCard.value.contextMd, message);
 }
 
 async function copyAssistantDraft() {
@@ -1221,7 +1551,16 @@ async function copyMeetingBrief() {
     '',
     brief.coverage.coverageNote,
     '',
-    `匹配: ${brief.coverage.matchedAttendees}/${brief.coverage.totalAttendees}；证据: ${brief.coverage.evidenceRefs}；需确认: ${brief.coverage.unmatchedAttendees}`,
+    `匹配: ${brief.coverage.matchedAttendees}/${brief.coverage.totalAttendees}；证据: ${brief.coverage.evidenceRefs}；需确认: ${brief.coverage.unmatchedAttendees}；身份待核对: ${brief.coverage.identityCheckAttendees || 0}`,
+    '',
+    `会前准备状态: ${meetingReadinessLabel(brief.readiness.status)}`,
+    brief.readiness.summary,
+    '',
+    '下一步:',
+    ...brief.readiness.nextActions.map((action) => `- ${action}`),
+    '',
+    '成功标准:',
+    ...brief.readiness.successCriteria.map((criterion) => `- ${criterion}`),
     '',
   ];
 
@@ -1245,6 +1584,11 @@ async function copyMeetingBrief() {
     );
     if (attendee.openLoops[0]) {
       lines.push(`- Open loop: ${attendee.openLoops[0].snippet}`);
+    }
+    if (attendee.identityCheckRequired) {
+      lines.push(
+        `- 身份核对: ${attendee.identityCheckReason || '这个匹配需要先核对身份，再使用历史上下文。'}`,
+      );
     }
     if (attendee.suggestedQuestions[0]) {
       lines.push(`- 建议问法: ${attendee.suggestedQuestions[0]}`);
@@ -1322,6 +1666,11 @@ function stateLabel(state: RelationshipRadarState) {
     watch: '候选',
   };
   return labels[state];
+}
+
+function stateFilterLabel(state: RadarStateFilter) {
+  if (state === 'all') return '全部';
+  return stateLabel(state);
 }
 
 function qualityLabel(quality: RelationshipDataQuality | undefined) {
@@ -1414,6 +1763,59 @@ function formatDateTime(timestamp: number) {
   });
 }
 
+function compactText(text: string | undefined, maxLength = 180) {
+  const normalized = (text || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function shortPersonName(name: string) {
+  return name.trim().split(/\s+/)[0] || name;
+}
+
+function personCardSummary(person: RelationshipPersonSummary) {
+  return compactText(
+    person.contextBullets[0] || person.reason || person.description || '等待后台整理补齐关系上下文。',
+    112,
+  );
+}
+
+function spotlightPriority(person: RelationshipPersonSummary) {
+  const stateWeight: Record<RelationshipRadarState, number> = {
+    core: 80,
+    rising: 70,
+    active: 58,
+    watch: 38,
+    dormant: 24,
+  };
+  const qualityWeight: Partial<Record<RelationshipDataQuality, number>> = {
+    stale: 36,
+    indexed: 18,
+    generated: 10,
+    confirmed: 4,
+  };
+  return (
+    person.reviewPendingCount * 120 +
+    stateWeight[person.radarState] +
+    (qualityWeight[person.dataQuality] || 0) +
+    person.signals.recent * 35 +
+    Math.min(person.interactionCount, 80) * 0.35 +
+    Math.min(person.activeDays, 45) * 0.7 +
+    person.score * 25
+  );
+}
+
+function spotlightTopicForPerson(person: RelationshipPersonSummary | null) {
+  if (!person) return '人物关系投影';
+  if (person.reviewPendingCount > 0) return '关系事实确认';
+  if (person.radarState === 'rising') return '近期协作升温';
+  if (person.radarState === 'dormant' || person.dataQuality === 'stale') {
+    return '关系上下文刷新';
+  }
+  if (person.radarState === 'core') return '高频协作上下文';
+  return '近期协作上下文';
+}
+
 function evidenceLabel(evidence: RelationshipEvidenceRef) {
   const labels: Record<RelationshipEvidenceRef['sourceKind'], string> = {
     message: '消息证据',
@@ -1449,6 +1851,26 @@ function meetingCoverageTone(
     missing: 'danger',
   };
   return tones[state];
+}
+
+function meetingReadinessLabel(status: RelationshipMeetingBrief['readiness']['status']) {
+  const labels: Record<RelationshipMeetingBrief['readiness']['status'], string> = {
+    ready: '准备就绪',
+    partial: '部分就绪',
+    attention: '需要补齐',
+    empty: '缺少参会人',
+  };
+  return labels[status];
+}
+
+function meetingReadinessTone(status: RelationshipMeetingBrief['readiness']['status']) {
+  const tones: Record<RelationshipMeetingBrief['readiness']['status'], string> = {
+    ready: 'ready',
+    partial: 'partial',
+    attention: 'attention',
+    empty: 'empty',
+  };
+  return tones[status];
 }
 
 function matchLabel(matchedBy: RelationshipMeetingBrief['attendees'][number]['matchedBy']) {
@@ -1487,12 +1909,44 @@ function edgeLabel(nodeId: string) {
 
 <style scoped>
 .relationship-radar-page {
+  --bg-deep: #07080f;
+  --bg-mid: #0f1729;
+  --ink: #f1f5f9;
+  --ink-mid: #cbd5e1;
+  --ink-low: #94a3b8;
+  --ink-quiet: #64748b;
+  --line: rgba(148, 163, 184, 0.12);
+  --line-strong: rgba(148, 163, 184, 0.2);
+  --glass: rgba(15, 23, 42, 0.55);
+  --glass-soft: rgba(15, 23, 42, 0.36);
+  --accent: #60a5fa;
+  --accent-2: #a78bfa;
+  --accent-soft: rgba(96, 165, 250, 0.14);
+  --accent-line: rgba(96, 165, 250, 0.32);
+  --accent-glow: rgba(96, 165, 250, 0.45);
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, 0.12);
+  --warn-line: rgba(245, 158, 11, 0.32);
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.12);
+  --danger-line: rgba(239, 68, 68, 0.32);
+  --ok: #22c55e;
+  --ok-soft: rgba(34, 197, 94, 0.12);
+  --ok-line: rgba(34, 197, 94, 0.32);
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --shadow-soft: 0 12px 40px rgba(8, 14, 32, 0.4);
+  --shadow-strong: 0 24px 80px rgba(7, 12, 28, 0.55);
   min-height: 100%;
-  padding: 1.35rem;
-  color: #f1f5f9;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px clamp(20px, 4vw, 40px) 80px;
+  color: var(--ink);
   background:
-    radial-gradient(760px 380px at 12% 0%, rgba(96, 165, 250, 0.18), transparent 62%),
-    radial-gradient(640px 360px at 96% 8%, rgba(167, 139, 250, 0.14), transparent 64%),
+    radial-gradient(1200px 600px at 12% -10%, rgba(96, 165, 250, 0.18), transparent 60%),
+    radial-gradient(900px 500px at 95% 5%, rgba(167, 139, 250, 0.16), transparent 65%),
+    radial-gradient(700px 500px at 50% 110%, rgba(45, 212, 191, 0.1), transparent 60%),
     linear-gradient(180deg, #07080f 0%, #0c1124 45%, #0f1733 100%);
   overflow-x: hidden;
 }
@@ -1501,8 +1955,8 @@ function edgeLabel(nodeId: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.3rem;
+  gap: 24px;
+  padding: 8px 0 28px;
   flex-wrap: wrap;
 }
 
@@ -1521,7 +1975,7 @@ function edgeLabel(nodeId: string) {
 }
 
 .brand {
-  gap: 0.8rem;
+  gap: 14px;
   min-width: 0;
 }
 
@@ -1535,18 +1989,20 @@ function edgeLabel(nodeId: string) {
 }
 
 .brand-mark {
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: 0.8rem;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
   background: linear-gradient(135deg, #3b82f6, #8b5cf6 62%, #ec4899);
-  box-shadow: 0 0.5rem 1.8rem rgba(99, 102, 241, 0.36);
+  box-shadow:
+    0 6px 24px rgba(99, 102, 241, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
   color: #fff;
-  font-size: 0.9rem;
+  font-size: 18px;
   font-weight: 800;
 }
 
 .brand-text h2,
-.spotlight h1,
+.spotlight h2,
 .detail-name h2,
 .section-title h3,
 .panel-head h4,
@@ -1556,7 +2012,8 @@ p {
 }
 
 .brand-text h2 {
-  font-size: 1.05rem;
+  font-size: 17px;
+  line-height: 1.2;
   letter-spacing: 0;
 }
 
@@ -1570,18 +2027,18 @@ p {
 
 .brand-text span {
   display: block;
-  margin-top: 0.18rem;
-  font-size: 0.78rem;
+  margin-top: 3px;
+  font-size: 12px;
 }
 
 .top-actions {
-  gap: 0.6rem;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .search {
   position: relative;
-  min-width: min(24rem, 100%);
+  width: clamp(220px, 32vw, 380px);
 }
 
 .search input,
@@ -1597,8 +2054,9 @@ p {
 }
 
 .search input {
-  height: 2.5rem;
-  padding: 0 0.9rem 0 4.2rem;
+  height: 40px;
+  padding: 0 38px 0 76px;
+  font-size: 13.5px;
 }
 
 .search input:focus,
@@ -1611,11 +2069,11 @@ p {
 
 .search-icon {
   position: absolute;
-  left: 0.8rem;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
   color: #64748b;
-  font-size: 0.76rem;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -1639,8 +2097,9 @@ button {
 
 .ghost-btn,
 .pill-btn {
-  min-height: 2.5rem;
-  padding: 0 0.9rem;
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 13px;
 }
 
 .ghost-btn:hover,
@@ -1681,9 +2140,9 @@ button {
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(18rem, 0.65fr);
-  gap: 1rem;
-  margin-bottom: 1.35rem;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 18px;
+  margin-bottom: 22px;
 }
 
 .greeting-strip {
@@ -1691,27 +2150,29 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.8rem;
+  gap: 16px;
   flex-wrap: wrap;
+  margin-bottom: 4px;
 }
 
 .greeting-line {
-  gap: 0.55rem;
-  font-size: 0.82rem;
+  gap: 10px;
+  color: var(--ink-mid);
+  font-size: 13px;
 }
 
 .greeting-line i,
 .legend i {
-  width: 0.45rem;
-  height: 0.45rem;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #22c55e;
   box-shadow: 0 0 0.8rem rgba(34, 197, 94, 0.55);
 }
 
 .legend {
-  gap: 0.85rem;
-  font-size: 0.76rem;
+  gap: 14px;
+  font-size: 12px;
 }
 
 .legend span {
@@ -1739,21 +2200,22 @@ button {
 .person-card,
 .detail-main,
 .side-panel {
-  border: 1px solid rgba(148, 163, 184, 0.13);
-  background: rgba(15, 23, 42, 0.56);
+  border: 1px solid var(--line);
+  background: var(--glass);
   backdrop-filter: blur(18px);
 }
 
 .spotlight {
   position: relative;
   overflow: hidden;
-  border-radius: 1.15rem;
-  padding: 1.55rem;
+  border-radius: var(--radius-lg);
+  padding: 26px 26px 22px;
   background:
-    radial-gradient(520px 260px at 8% 0%, rgba(239, 68, 68, 0.16), transparent 64%),
-    radial-gradient(460px 240px at 100% 100%, rgba(167, 139, 250, 0.18), transparent 65%),
-    rgba(15, 23, 42, 0.62);
-  box-shadow: 0 1.5rem 5rem rgba(7, 12, 28, 0.45);
+    radial-gradient(600px 300px at 10% 0%, rgba(239, 68, 68, 0.18), transparent 60%),
+    radial-gradient(500px 280px at 100% 100%, rgba(167, 139, 250, 0.18), transparent 65%),
+    linear-gradient(135deg, rgba(20, 30, 60, 0.85), rgba(15, 23, 42, 0.7));
+  border-color: rgba(239, 68, 68, 0.22);
+  box-shadow: var(--shadow-strong);
 }
 
 .spotlight::before {
@@ -1763,92 +2225,128 @@ button {
   left: 0;
   right: 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, #60a5fa, #a78bfa, transparent);
-  opacity: 0.7;
+  background: linear-gradient(90deg, transparent, var(--danger), transparent);
+  opacity: 0.55;
 }
 
 .spotlight-tag {
   display: inline-flex;
-  border: 1px solid rgba(245, 158, 11, 0.32);
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--danger-line);
   border-radius: 99px;
-  background: rgba(245, 158, 11, 0.12);
-  color: #fcd34d;
-  padding: 0.3rem 0.7rem;
-  font-size: 0.72rem;
-  font-weight: 800;
+  background: var(--danger-soft);
+  color: #fca5a5;
+  padding: 5px 12px 5px 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
-.spotlight h1 {
-  margin-top: 0.85rem;
-  font-size: clamp(1.5rem, 3vw, 2.15rem);
+.spotlight-tag::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.4); }
+}
+
+.spotlight h2 {
+  margin: 14px 0 10px;
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 700;
   letter-spacing: 0;
 }
 
-.spotlight p {
-  max-width: 64ch;
-  margin-top: 0.65rem;
-  color: #cbd5e1;
+.spotlight h2 em {
+  background: linear-gradient(135deg, #93c5fd, #c4b5fd);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-style: normal;
+}
+
+.spotlight-body {
+  max-width: 56ch;
+  margin: 0 0 18px;
+  color: var(--ink-mid);
+  font-size: 14px;
   line-height: 1.65;
 }
 
 .spotlight-meta,
 .spotlight-actions {
-  gap: 0.55rem;
-  margin-top: 1rem;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .spotlight-meta {
-  color: #94a3b8;
-  font-size: 0.82rem;
+  gap: 8px 14px;
+  margin-bottom: 18px;
+  color: var(--ink-low);
+  font-size: 12.5px;
 }
 
 .spotlight-actions button {
-  min-height: 2.25rem;
-  padding: 0 0.85rem;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .stat-strip {
   display: grid;
-  gap: 0.75rem;
+  grid-template-rows: repeat(3, 1fr);
+  gap: 12px;
 }
 
 .stat-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.8rem;
+  gap: 10px;
   align-items: center;
-  border-radius: 0.9rem;
-  padding: 1rem;
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-soft);
 }
 
 .stat-card .label {
   display: block;
-  color: #94a3b8;
-  font-size: 0.72rem;
+  color: var(--ink-low);
+  font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .stat-card strong {
   display: block;
-  margin-top: 0.25rem;
-  font-size: 1.45rem;
+  margin-top: 4px;
+  font-size: 22px;
+  letter-spacing: 0;
 }
 
 .stat-card small {
   display: block;
-  margin-top: 0.15rem;
-  color: #94a3b8;
+  margin-top: 4px;
+  color: var(--ink-low);
   line-height: 1.35;
 }
 
 .stat-icon {
-  width: 2.4rem;
-  height: 2.4rem;
-  border-radius: 0.75rem;
-  background: rgba(96, 165, 250, 0.13);
-  color: #93c5fd;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
   font-weight: 800;
 }
 
@@ -1863,69 +2361,140 @@ button {
 }
 
 .section {
-  margin-bottom: 1.35rem;
+  margin-bottom: 22px;
 }
 
 .section-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 0.9rem;
-  margin-bottom: 0.9rem;
+  gap: 16px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
 }
 
 .section-title {
-  gap: 0.55rem;
+  gap: 10px;
 }
 
 .section-title h3 {
-  font-size: 1.05rem;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.section-title.stacked {
+  display: grid;
+  align-items: start;
+  gap: 4px;
+}
+
+.section-title .sub {
+  color: var(--ink-low);
+  font-size: 12.5px;
 }
 
 .section-tools,
 .review-filter {
   display: inline-flex;
-  gap: 0.25rem;
-  border: 1px solid rgba(148, 163, 184, 0.13);
-  border-radius: 0.75rem;
-  background: rgba(15, 23, 42, 0.4);
-  padding: 0.25rem;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--glass-soft);
+  padding: 4px;
   flex-wrap: wrap;
 }
 
 .section-tools button,
 .review-filter button {
-  min-height: 1.9rem;
-  padding: 0 0.7rem;
-  color: #94a3b8;
-  font-size: 0.78rem;
+  min-height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--ink-low);
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 .section-tools button.active,
 .review-filter button.active {
-  border-color: rgba(96, 165, 250, 0.42);
-  background: rgba(96, 165, 250, 0.16);
+  border-color: transparent;
+  background: rgba(96, 165, 250, 0.18);
+  color: #93c5fd;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.32);
+}
+
+.section-tools button.copy-context-action {
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(59, 130, 246, 0.12);
   color: #bfdbfe;
+}
+
+.section-tools button:disabled,
+.review-filter button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+.filter-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: -0.2rem 0 0.85rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 0.85rem;
+  background: rgba(96, 165, 250, 0.08);
+  padding: 0.75rem 0.85rem;
+  flex-wrap: wrap;
+}
+
+.filter-summary div:first-child {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.filter-summary span {
+  color: #93c5fd;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.filter-summary strong {
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.filter-actions,
+.empty-actions {
+  display: inline-flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
 }
 
 .radar-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
-  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
 }
 
 .person-card {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.7rem;
-  min-height: 10.5rem;
-  padding: 1rem;
-  border-radius: 0.95rem;
+  gap: 10px;
+  min-height: 170px;
+  padding: 18px;
+  border-radius: var(--radius-md);
   color: inherit;
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
 
 .person-card::before {
@@ -1953,29 +2522,54 @@ button {
   opacity: 0.9;
 }
 
-.person-card:hover,
-.person-card.active {
-  border-color: rgba(96, 165, 250, 0.48);
-  background: rgba(20, 32, 60, 0.72);
+.person-card.tone-quiet::before {
+  background: var(--ink-low);
+  opacity: 0.45;
+}
+
+.person-card:hover {
+  border-color: var(--accent-line);
+  background: rgba(20, 32, 60, 0.7);
+  transform: translateY(-3px);
 }
 
 .person-card.active {
-  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.35);
+  border-color: var(--accent);
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.16), rgba(167, 139, 250, 0.12));
+  box-shadow:
+    0 12px 40px rgba(96, 165, 250, 0.18),
+    inset 0 0 0 1px rgba(96, 165, 250, 0.4);
+}
+
+.person-card.active::after {
+  content: '';
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .person-head {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 12px;
 }
 
 .avatar {
-  width: 2.6rem;
-  height: 2.6rem;
-  border-radius: 0.85rem;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
   background: linear-gradient(135deg, #3b82f6, #8b5cf6);
   color: #fff;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 .avatar.large {
@@ -1997,6 +2591,8 @@ button {
 
 .person-name strong {
   display: block;
+  font-size: 14px;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2004,17 +2600,19 @@ button {
 
 .person-name span {
   display: block;
-  margin-top: 0.18rem;
-  color: #94a3b8;
-  font-size: 0.72rem;
+  margin-top: 2px;
+  color: var(--ink-low);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .person-headline {
-  color: #cbd5e1;
-  font-size: 0.82rem;
-  line-height: 1.55;
+  color: var(--ink-mid);
+  font-size: 13px;
+  line-height: 1.5;
   display: -webkit-box;
-  min-height: 2.55rem;
+  min-height: calc(1.5em * 2);
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -2022,25 +2620,27 @@ button {
 
 .person-foot {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 8px;
   margin-top: auto;
-  border-top: 1px dashed rgba(148, 163, 184, 0.16);
-  padding-top: 0.65rem;
-  color: #94a3b8;
-  font-size: 0.76rem;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+  color: var(--ink-low);
+  font-size: 11.5px;
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  gap: 5px;
+  border: 1px solid var(--line-strong);
   border-radius: 99px;
   background: rgba(15, 23, 42, 0.55);
-  color: #cbd5e1;
-  padding: 0.18rem 0.55rem;
-  font-size: 0.72rem;
-  font-weight: 800;
+  color: var(--ink-mid);
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -2075,19 +2675,22 @@ button {
 
 .detail {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem);
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  scroll-margin-top: 18px;
 }
 
 .detail-main,
 .side-panel {
-  border-radius: 1rem;
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-soft);
 }
 
 .detail-hero {
-  padding: 1.35rem;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  position: relative;
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid var(--line);
   background:
     radial-gradient(460px 240px at 0 0, rgba(96, 165, 250, 0.16), transparent 64%),
     radial-gradient(360px 220px at 100% 100%, rgba(167, 139, 250, 0.14), transparent 64%);
@@ -2095,29 +2698,34 @@ button {
 
 .detail-hero-row {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 18px;
   flex-wrap: wrap;
 }
 
 .detail-identity {
   display: flex;
   align-items: center;
-  gap: 0.9rem;
+  gap: 14px;
   min-width: 0;
 }
 
 .detail-name h2 {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 10px;
   flex-wrap: wrap;
-  font-size: 1.25rem;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .detail-name p {
-  margin-top: 0.4rem;
-  color: #94a3b8;
+  margin-top: 6px;
+  max-width: 60ch;
+  color: var(--ink-low);
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -2129,34 +2737,37 @@ button {
 .detail-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.65rem;
-  margin-top: 1rem;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .detail-metric {
-  border: 1px solid rgba(148, 163, 184, 0.13);
-  border-radius: 0.75rem;
-  background: rgba(15, 23, 42, 0.56);
-  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 12px 14px;
 }
 
 .detail-metric span {
   display: block;
-  color: #94a3b8;
-  font-size: 0.7rem;
+  color: var(--ink-low);
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .detail-metric strong {
   display: block;
-  margin-top: 0.25rem;
-  font-size: 1.15rem;
+  margin-top: 4px;
+  font-size: 20px;
+  letter-spacing: 0;
 }
 
 .detail-metric i {
   display: block;
-  height: 0.28rem;
-  margin-top: 0.45rem;
+  height: 4px;
+  margin-top: 6px;
   overflow: hidden;
   border-radius: 99px;
   background: rgba(148, 163, 184, 0.14);
@@ -2173,11 +2784,11 @@ button {
 
 .tabs {
   display: flex;
-  gap: 0.25rem;
+  gap: 4px;
   overflow-x: auto;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  border-bottom: 1px solid var(--line);
   background: rgba(15, 23, 42, 0.35);
-  padding: 0.45rem 0.8rem 0;
+  padding: 8px 14px 0;
 }
 
 .tabs button {
@@ -2185,14 +2796,16 @@ button {
   flex: 0 0 auto;
   border: 0;
   background: transparent;
-  color: #94a3b8;
+  color: var(--ink-low);
   cursor: pointer;
-  padding: 0.8rem 0.75rem;
-  font-weight: 800;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .tabs button.active {
-  color: #f8fafc;
+  color: var(--ink);
 }
 
 .tabs button.active::after {
@@ -2216,28 +2829,33 @@ button {
 }
 
 .tab-content {
-  padding: 1.25rem;
+  padding: 22px 26px 26px;
 }
 
 .quote {
   position: relative;
-  margin-bottom: 0.9rem;
+  margin-bottom: 18px;
   border: 1px solid rgba(96, 165, 250, 0.22);
-  border-radius: 0.9rem;
+  border-radius: 14px;
   background: linear-gradient(135deg, rgba(96, 165, 250, 0.1), rgba(167, 139, 250, 0.08));
-  padding: 1rem 1.1rem 1rem 2.4rem;
-  color: #e2e8f0;
+  padding: 16px 18px;
+  color: var(--ink);
+  font-size: 14.5px;
   line-height: 1.7;
 }
 
 .quote::before {
   content: '"';
   position: absolute;
-  left: 0.8rem;
-  top: 0.2rem;
+  left: 14px;
+  top: 4px;
   color: rgba(167, 139, 250, 0.5);
-  font-size: 2.2rem;
+  font-size: 36px;
   font-family: Georgia, serif;
+}
+
+.quote-body {
+  padding-left: 24px;
 }
 
 .privacy-strip {
@@ -2266,6 +2884,23 @@ button {
   color: #cbd5e1;
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.privacy-breakdown {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+
+.privacy-breakdown span {
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.42);
+  color: #bbf7d0;
+  padding: 0.16rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 .panel-grid {
@@ -2511,6 +3146,81 @@ button {
   font-weight: 700;
 }
 
+.brief-readiness {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.85rem 0.85rem 0;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.72rem;
+  background: rgba(8, 14, 32, 0.46);
+  padding: 0.85rem;
+}
+
+.brief-readiness.ready {
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.brief-readiness.partial {
+  border-color: rgba(96, 165, 250, 0.24);
+}
+
+.brief-readiness.attention {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(39, 27, 10, 0.34);
+}
+
+.brief-readiness.empty {
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+.brief-readiness-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brief-readiness-head span,
+.brief-readiness-grid strong {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.brief-readiness-head strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+  font-size: 1rem;
+}
+
+.brief-readiness-head p,
+.brief-readiness-grid p {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.55;
+}
+
+.brief-readiness-head p {
+  max-width: 34rem;
+}
+
+.brief-readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.brief-readiness-grid section {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.36);
+  padding: 0.7rem;
+}
+
 .attendee-brief-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
@@ -2569,6 +3279,16 @@ button {
 .attendee-brief-card > p {
   color: #cbd5e1;
   line-height: 1.55;
+}
+
+.identity-check-note {
+  margin: 0;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 0.65rem;
+  background: rgba(245, 158, 11, 0.08);
+  color: #fde68a;
+  padding: 0.55rem 0.65rem;
+  line-height: 1.5;
 }
 
 .match-row {
@@ -2922,6 +3642,167 @@ button {
   padding: 0.85rem;
 }
 
+.people-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.65rem;
+}
+
+.people-empty strong {
+  color: #e2e8f0;
+  font-size: 0.96rem;
+}
+
+.people-empty p {
+  max-width: 36rem;
+  color: #94a3b8;
+  line-height: 1.6;
+}
+
+.loading-grid .person-card {
+  cursor: default;
+  transform: none;
+}
+
+.skeleton-card {
+  pointer-events: none;
+}
+
+.skeleton-card::before {
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.skeleton-line,
+.skeleton-button,
+.skeleton-avatar,
+.skeleton-icon,
+.skeleton-meta span,
+.skeleton-pill {
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.skeleton-line::after,
+.skeleton-button::after,
+.skeleton-avatar::after,
+.skeleton-icon::after,
+.skeleton-meta span::after,
+.skeleton-pill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.13),
+    transparent
+  );
+  animation: shimmer 1.35s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+.skeleton-pill {
+  width: 124px;
+  height: 30px;
+  display: inline-flex;
+}
+
+.skeleton-pill::before {
+  display: none;
+}
+
+.skeleton-line {
+  display: block;
+  height: 12px;
+}
+
+.skeleton-line.title {
+  width: min(520px, 82%);
+  height: 32px;
+  margin-top: 18px;
+  border-radius: 10px;
+}
+
+.skeleton-line.body {
+  width: min(420px, 72%);
+  height: 14px;
+  margin-top: 12px;
+  border-radius: 8px;
+}
+
+.skeleton-line.body.wide {
+  width: min(620px, 94%);
+}
+
+.skeleton-meta span {
+  width: 96px;
+  height: 18px;
+  display: inline-flex;
+}
+
+.skeleton-button {
+  width: 128px;
+  height: 36px;
+  display: inline-flex;
+  border-radius: 10px;
+}
+
+.stat-card .skeleton-line.label {
+  width: 72px;
+  height: 12px;
+}
+
+.skeleton-line.stat-value {
+  width: 48px;
+  height: 24px;
+  margin-top: 9px;
+  border-radius: 8px;
+}
+
+.skeleton-line.stat-caption {
+  width: 124px;
+  height: 12px;
+  margin-top: 9px;
+}
+
+.skeleton-icon {
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.skeleton-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: rgba(96, 165, 250, 0.13);
+  box-shadow: none;
+}
+
+.skeleton-name {
+  display: grid;
+  gap: 8px;
+}
+
+.skeleton-name .name {
+  width: 128px;
+  height: 16px;
+}
+
+.skeleton-name .sub {
+  width: 92px;
+  height: 11px;
+}
+
+.person-foot .skeleton-line.foot {
+  width: 48px;
+  height: 11px;
+}
+
 .copy-toast {
   position: fixed;
   right: 1.25rem;
@@ -2965,10 +3846,15 @@ button {
 
   .hero,
   .brief-coverage,
+  .brief-readiness-grid,
   .panel-grid,
   .detail-metrics,
   .stat-strip {
     grid-template-columns: 1fr;
+  }
+
+  .brief-readiness-head {
+    flex-direction: column;
   }
 
   .privacy-strip {

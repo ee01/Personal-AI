@@ -135,6 +135,9 @@ export interface BridgeStatus extends BridgeServiceStatus {
     stableMemoryIntervalMs: number;
     mobileBriefingIntervalMs: number;
     reminderSyncIntervalMs: number;
+    reminderDailyDigestEnabled: boolean;
+    reminderDailyDigestTime: string;
+    reminderDedupSameDay: boolean;
   };
   setupChecklist?: {
     memoryServiceConfigured: boolean;
@@ -165,6 +168,7 @@ export interface BridgeSyncAttemptLogEntry {
   messageVisible?: boolean;
   challengeDetected?: boolean;
   telemetryError?: string;
+  reminderDeliveryMode?: 'new_items' | 'daily_digest' | 'manual';
 }
 
 export interface BridgeBlockingReason {
@@ -286,6 +290,12 @@ export interface BridgeAssistantAskResponse {
   blocks?: BridgeRecallBlock[];
   analysis?: BridgeRecallAnalysis;
   structuredAnswer?: BridgeStructuredAnswer;
+  answerMemory?: {
+    state: 'priorHit' | 'observed' | 'promoted' | 'updated' | 'skipped';
+    threadId?: string;
+    canonicalKey?: string;
+    skipReason?: string;
+  };
   evidence?: BridgeAssistantEvidenceItem[];
   resolutionState?: 'complete' | 'partial' | 'insufficient' | 'deferred';
   missingInfo?: string[];
@@ -328,6 +338,7 @@ export type BridgeAssistantStreamEvent =
       blocks?: BridgeRecallBlock[];
       analysis?: BridgeRecallAnalysis;
       structuredAnswer?: BridgeStructuredAnswer;
+      answerMemory?: BridgeAssistantAskResponse['answerMemory'];
       evidence?: BridgeAssistantEvidenceItem[];
       resolutionState?: BridgeAssistantAskResponse['resolutionState'];
       missingInfo?: BridgeAssistantAskResponse['missingInfo'];

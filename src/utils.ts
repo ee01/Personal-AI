@@ -575,7 +575,7 @@ export const defaultEnvConfig: EnvConfigType = {
     1,
     Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 1,
   ),
-  SELF_REFLECTION_ENABLED: process.env.REFLECTION_ENABLED === 'true',
+  SELF_REFLECTION_ENABLED: process.env.REFLECTION_ENABLED !== 'false',
   SELF_REFLECTION_HEARTBEAT_MINUTES: Math.max(
     1,
     Number(process.env.REFLECTION_HEARTBEAT_MINUTES) || 15,
@@ -814,11 +814,17 @@ export function filterSceneRehearsalSourceTypes<T extends string>(
   if (isSceneRehearsalDisplayEnabledFromConfig(config)) {
     return sourceTypes;
   }
+  const fallbackList = Array.from(fallbackWhenDisabled).filter(
+    (sourceType) => sourceType !== 'rehearsal',
+  );
   const sourceList = sourceTypes?.length
     ? sourceTypes
-    : Array.from(fallbackWhenDisabled);
-  const filtered = sourceList.filter((sourceType) => sourceType !== 'rehearsal');
-  return filtered.length ? filtered : undefined;
+    : fallbackList;
+  const filtered = sourceList.filter(
+    (sourceType) => sourceType !== 'rehearsal',
+  );
+  if (filtered.length) return filtered;
+  return fallbackList.length ? fallbackList : undefined;
 }
 
 export async function getUserInfo() {

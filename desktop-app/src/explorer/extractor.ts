@@ -10,8 +10,11 @@ import { toExplorerIngestSourceId } from './sourceIds.js';
 interface ExplorerExtractorClient {
   extractFromChat(input: {
     source: string;
+    sourceType?: string;
     scope: 'work' | 'personal';
     autoClassify?: boolean;
+    extractMode?: 'chat' | 'agent_session';
+    conversationMeta?: Record<string, unknown>;
     segments: Array<{
       id: string;
       speaker: string;
@@ -68,6 +71,7 @@ export class ExplorerExtractor {
     source: SourceId;
     defaultScope: 'work' | 'personal';
     autoClassify: boolean;
+    extractMode?: 'chat' | 'agent_session';
   }): Promise<{
     conversationCount: number;
     messageCount: number;
@@ -104,8 +108,15 @@ export class ExplorerExtractor {
       try {
         const response = await this.memoryClient.extractFromChat({
           source: toExplorerIngestSourceId(options.source),
+          sourceType: toExplorerIngestSourceId(options.source),
           scope: options.defaultScope,
           autoClassify: options.autoClassify,
+          extractMode:
+            options.extractMode ?? inferExtractModeForSource(options.source),
+          conversationMeta: buildConversationMeta(
+            options.source,
+            messages[0]!.conversationId,
+          ),
           segments: messages.map((message) => ({
             id: message.messageId,
             speaker: message.role,
@@ -116,6 +127,7 @@ export class ExplorerExtractor {
         artifactCount += this.persistConversationArtifacts(
           options.source,
           messages[0]!.conversationId,
+          options.defaultScope,
           response,
           extractedAt,
         );
@@ -126,6 +138,7 @@ export class ExplorerExtractor {
         this.rawStore.replaceConversationArtifacts({
           source: options.source,
           conversationId: messages[0]!.conversationId,
+          scope: options.defaultScope,
           extractedAt,
           artifacts: [],
         });
@@ -148,12 +161,14 @@ export class ExplorerExtractor {
   private persistConversationArtifacts(
     source: SourceId,
     conversationId: string,
+    scope: 'work' | 'personal',
     response: ExtractFromChatResponse,
     extractedAt: string,
   ): number {
     return this.rawStore.replaceConversationArtifacts({
       source,
       conversationId,
+      scope,
       extractedAt,
       artifacts: response.artifacts.map((artifact) => ({
         kind: toArtifactKind(artifact.kind),
@@ -163,4 +178,28 @@ export class ExplorerExtractor {
       })),
     });
   }
+}
+
+function inferExtractModeForSource(
+  source: SourceId,
+): 'chat' | 'agent_session' {
+  return isAgentSessionSource(source) ? 'agent_session' : 'chat';
+}
+
+function isAgentSessionSource(source: SourceId): boolean {
+  return (
+    source === 'codex_cli' ||
+    source === 'claude_code_cli' ||
+    source === 'cursor_agent_cli'
+  );
+}
+
+function buildConversationMeta(
+  source: SourceId,
+  conversationId: string,
+): Record<string, unknown> {
+  return {
+    toolKey: source,
+    sessionId: conversationId,
+  };
 }

@@ -152,7 +152,9 @@ try {
     hasText: '同步/检查数据源',
   }).waitFor({ timeout: 15000 });
   await serviceWorker.evaluate(() => {
-    const originalFetch = globalThis.fetch.bind(globalThis);
+    globalThis.__projectDashboardOriginalFetch =
+      globalThis.__projectDashboardOriginalFetch || globalThis.fetch.bind(globalThis);
+    const originalFetch = globalThis.__projectDashboardOriginalFetch;
     globalThis.fetch = async (input, init) => {
       const url = typeof input === 'string'
         ? input
@@ -179,6 +181,9 @@ try {
   await page.locator('.data-source-card.unavailable', {
     hasText: '不会清空或覆盖项目',
   }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.unavailable', {
+    hasText: 'ETA 覆盖 67%，来源覆盖 33%',
+  }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-card.not_configured', {
     hasText: 'Jira',
   }).locator('.data-source-card-top span', {
@@ -186,6 +191,12 @@ try {
   }).waitFor({ timeout: 15000 });
   await page.locator('.data-source-card.not_configured', {
     hasText: '不会读取 Jira 任务、状态、负责人或评论',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.not_configured', {
+    hasText: '1/3 个活动任务有 Jira key',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.not_configured', {
+    hasText: '缺来源任务：Resolve release blocker、Clarify launch readiness',
   }).waitFor({ timeout: 15000 });
 
   await page.locator('.decision-brief.critical', {
@@ -308,6 +319,42 @@ try {
   const riskCard = page.locator('.project-card', {
     hasText: 'Risk Demo Project',
   });
+  await riskCard.locator('.chart-insight-strip', {
+    hasText: '图表概览',
+  }).waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-insight-card.ready', {
+    hasText: '甘特就绪度',
+  }).locator('.chart-timeline-track').waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-insight-card.ready', {
+    hasText: '甘特就绪度',
+  }).locator('.chart-driver-item.critical', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-insight-card.attention', {
+    hasText: '依赖图',
+  }).locator('.chart-driver-item.critical', {
+    hasText: 'Resolve release blocker',
+  }).locator('em', {
+    hasText: '缺 Jira 或平台来源',
+  }).waitFor({ timeout: 15000 });
+  await riskCard.locator('.chart-insight-card.attention', {
+    hasText: '依赖图',
+  }).locator('.chart-driver-item.critical', {
+    hasText: 'Resolve release blocker',
+  }).click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.evidence-repair-card.missing', {
+    hasText: '来源',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.zoom-title', {
+    hasText: 'Resolve release blocker',
+  }).waitFor({ state: 'detached', timeout: 15000 });
+  await riskCard.locator('.chart-insight-card.attention', {
+    hasText: '燃尽/完成',
+  }).locator('.chart-progress').waitFor({ timeout: 15000 });
   await page.locator('.focus-item.blocked', {
     hasText: 'Resolve release blocker',
   }).locator('.focus-risk.risk-high', {
@@ -522,64 +569,88 @@ try {
   }).click();
   await page.waitForFunction(() => document.querySelectorAll('.review-queue-item').length === 3);
 
-  await page.evaluate(async () => {
-    const project = {
-      id: 'decision-review-only',
-      name: 'Decision Review Only',
-      description: 'No focus or evidence gaps; decision brief should open review gate',
-      lastStatusReviewAt: '2026-04-01T08:00:00+08:00',
-      milestones: [{ id: 'ga', label: 'GA', date: '2099-09-30' }],
-      tasks: [
-        {
-          id: 'review-ready-task',
-          type: 'task',
-          title: 'Prepare review-ready release note',
-          status: 'progress',
-          eta: '2099-09-01',
-          jira: [{ key: 'REV-42', title: 'Prepare review-ready release note' }],
-        },
-      ],
-      platformConfig: ['sdk', 'qa'],
-    };
-    const response = await chrome.runtime.sendMessage({
-      type: 'IMPORT_PROJECT_REPORT',
-      mode: 'replace',
-      reportContent: JSON.stringify({
-        metadata: {
-          version: '1.0.0',
-          exportType: 'project_dashboard_report',
-          scope: 'single_project',
-          exportedAt: new Date().toISOString(),
-          exportedTimestamp: Date.now(),
-          source: 'dashboard_memory',
-        },
+  const reviewOnlyProject = {
+    id: 'decision-review-only',
+    name: 'Decision Review Only',
+    description: 'No focus or evidence gaps; decision brief should open review gate',
+    lastStatusReviewAt: '2026-04-01T08:00:00+08:00',
+    milestones: [{ id: 'ga', label: 'GA', date: '2099-09-30' }],
+    tasks: [
+      {
+        id: 'review-ready-task',
+        type: 'task',
+        title: 'Prepare review-ready release note',
+        status: 'progress',
+        eta: '2099-09-01',
+        jira: [{ key: 'REV-42', title: 'Prepare review-ready release note' }],
+      },
+    ],
+    platformConfig: ['sdk', 'qa'],
+  };
+  const reviewOnlyReport = {
+    metadata: {
+      version: '1.0.0',
+      exportType: 'project_dashboard_report',
+      scope: 'single_project',
+      exportedAt: new Date().toISOString(),
+      exportedTimestamp: Date.now(),
+      source: 'dashboard_memory',
+    },
+    summary: {
+      totalProjects: 1,
+      totalMilestones: 1,
+      totalTasks: 1,
+    },
+    projects: [
+      {
+        project: reviewOnlyProject,
         summary: {
-          totalProjects: 1,
+          projectId: reviewOnlyProject.id,
+          projectName: reviewOnlyProject.name,
+          description: reviewOnlyProject.description,
           totalMilestones: 1,
           totalTasks: 1,
+          taskStatusCounts: { progress: 1 },
+          taskTypeCounts: { task: 1 },
+          platformStatusCounts: {},
+          jiraIssueCount: 1,
         },
-        projects: [
-          {
-            project,
-            summary: {
-              projectId: project.id,
-              projectName: project.name,
-              description: project.description,
-              totalMilestones: 1,
-              totalTasks: 1,
-              taskStatusCounts: { progress: 1 },
-              taskTypeCounts: { task: 1 },
-              platformStatusCounts: {},
-              jiraIssueCount: 1,
-            },
-          },
-        ],
-      }),
-    });
-    if (!response?.success) {
-      throw new Error(response?.error || 'replace project report failed');
-    }
+      },
+    ],
+  };
+
+  await page.setInputFiles('input[type="file"]', {
+    name: 'project-review-only.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(reviewOnlyReport)),
   });
+  await page.locator('.import-review-modal', {
+    hasText: '导入报告复核',
+  }).locator('.import-review-summary', {
+    hasText: 'project-review-only.json',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.import-project-preview', {
+    hasText: 'Decision Review Only',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.import-impact-card', {
+    hasText: '合并导入',
+  }).locator('.import-impact-metrics', {
+    hasText: '保留',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.import-impact-card.destructive', {
+    hasText: '替换当前项目',
+  }).locator('.import-impact-metrics', {
+    hasText: '移除',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.import-impact-card.destructive', {
+    hasText: '替换当前项目',
+  }).locator('.delete-btn', {
+    hasText: '替换当前项目',
+  }).click();
+  await page.locator('.dashboard-status.success', {
+    hasText: '替换导入完成',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.import-review-modal').waitFor({ state: 'detached', timeout: 15000 });
 
   await page.reload({ waitUntil: 'load', timeout: 15000 });
   await page.locator('.decision-brief', {
@@ -589,6 +660,65 @@ try {
   }).click();
   await page.locator('.status-review-gate.active', {
     hasText: '确认前先检查证据',
+  }).waitFor({ timeout: 15000 });
+
+  await page.locator('.zoom-overlay.active .close-btn').click();
+  await page.locator('.status-draft-modal').waitFor({ state: 'detached', timeout: 15000 });
+
+  await serviceWorker.evaluate(() => {
+    const originalFetch =
+      globalThis.__projectDashboardOriginalFetch || globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input?.url || String(input);
+      if (url.includes('/projects/watched')) {
+        return new Response(JSON.stringify([
+          {
+            id: 'decision-review-only',
+            name: 'Decision Review Only',
+            description: 'Already tracked as a local dashboard',
+            isActive: true,
+            priority: 5,
+            createdAt: 1,
+          },
+          {
+            id: 'memory-import-project',
+            name: 'Memory Import Project',
+            description: 'Imported from watched projects',
+            isActive: true,
+            priority: 9,
+            createdAt: 2,
+          },
+        ]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return originalFetch(input, init);
+    };
+  });
+
+  await page.locator('.data-source-action', {
+    hasText: '同步/检查数据源',
+  }).click();
+  await page.locator('.data-source-panel', {
+    hasText: '新增：Memory Import Project',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.ready', {
+    hasText: 'Memory Service',
+  }).locator('.data-source-card-top span', {
+    hasText: '可读取',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.data-source-card.ready', {
+    hasText: '本地工作台：2 个项目，1 个活动任务',
+  }).waitFor({ timeout: 15000 });
+  await page.locator('.project-card', {
+    hasText: 'Memory Import Project',
+  }).locator('.review-strip.unreviewed', {
+    hasText: '未复核',
   }).waitFor({ timeout: 15000 });
 
   assertNoPageErrors();

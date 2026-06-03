@@ -385,6 +385,43 @@ export function isContextHostCoveredBySiteRecord(
   });
 }
 
+export function removeContextSiteRecordConflicts(
+  rawHostname: string,
+  record: Record<string, number>,
+): {
+  record: Record<string, number>;
+  removedHosts: string[];
+  changed: boolean;
+} {
+  const hostname = normalizeContextSiteMuteHost(rawHostname);
+  const nextRecord: Record<string, number> = {};
+  const removedHosts: string[] = [];
+  let changed = false;
+
+  if (!hostname) {
+    return { record: { ...record }, removedHosts, changed };
+  }
+
+  for (const [rawHost, recordedAt] of Object.entries(record)) {
+    const host = normalizeContextSiteMuteHost(rawHost);
+    const hostCoversTarget = hostname === host || hostname.endsWith(`.${host}`);
+    const targetCoversHost = host === hostname || host.endsWith(`.${hostname}`);
+
+    if (host && (hostCoversTarget || targetCoversHost)) {
+      removedHosts.push(host);
+      changed = true;
+      continue;
+    }
+
+    nextRecord[host || rawHost] = recordedAt;
+    if (host && host !== rawHost) {
+      changed = true;
+    }
+  }
+
+  return { record: nextRecord, removedHosts, changed };
+}
+
 export function pruneContextPageBlockRecord(
   rawValue: unknown,
 ): { record: ContextPageBlockRecord; changed: boolean } {

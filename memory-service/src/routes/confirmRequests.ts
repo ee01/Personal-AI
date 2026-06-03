@@ -14,6 +14,9 @@ import { reclassifyLegacyEvidenceResolutionConfirmRequests } from '../core/Confi
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 
+const DECISION_SNOOZE_SECONDS = 24 * 3600;
+const WATCH_SNOOZE_SECONDS = 72 * 3600;
+
 // ---------------------------------------------------------------------------
 // Row interfaces
 // ---------------------------------------------------------------------------
@@ -121,7 +124,11 @@ export async function confirmRequestRoutes(
                created_at DESC
              LIMIT ?`
           : `SELECT * FROM confirm_requests
-             WHERE ${queue === 'decision' ? "COALESCE(routing, 'decision') = 'decision'" : 'routing = ?'}
+             WHERE ${
+               queue === 'decision'
+                 ? "COALESCE(routing, 'decision') = 'decision'"
+                 : 'routing = ?'
+             }
                AND state = ?
              ORDER BY
                CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END ASC,
@@ -132,8 +139,8 @@ export async function confirmRequestRoutes(
         ...(queue === 'all'
           ? [state, limit]
           : queue === 'decision'
-            ? [state, limit]
-            : [queue, state, limit]),
+          ? [state, limit]
+          : [queue, state, limit]),
       ) as ConfirmRequestRow[];
 
     const total =
@@ -282,12 +289,6 @@ export async function confirmRequestRoutes(
     if (!current) {
       return reply.status(404).send({ error: 'Confirm request not found' });
     }
-    if (current.routing !== 'watch') {
-      return reply.status(400).send({
-        error:
-          'Only watch items support state transitions through this endpoint.',
-      });
-    }
     if (
       current.state === 'answered' ||
       current.state === 'deduplicated' ||
@@ -299,12 +300,17 @@ export async function confirmRequestRoutes(
     }
 
     const targetState = request.body.state;
-    const validTransition =
-      (current.state === 'pending' && targetState === 'snoozed') ||
-      (current.state === 'snoozed' &&
-        (targetState === 'pending' ||
-          targetState === 'expired' ||
-          targetState === 'snoozed'));
+    const routing = current.routing ?? 'decision';
+    const isWatchItem = routing === 'watch';
+    const validTransition = isWatchItem
+      ? (current.state === 'pending' && targetState === 'snoozed') ||
+        (current.state === 'snoozed' &&
+          (targetState === 'pending' ||
+            targetState === 'expired' ||
+            targetState === 'snoozed'))
+      : (current.state === 'pending' && targetState === 'snoozed') ||
+        (current.state === 'snoozed' &&
+          (targetState === 'pending' || targetState === 'expired'));
 
     if (!validTransition) {
       return reply.status(400).send({
@@ -319,7 +325,8 @@ export async function confirmRequestRoutes(
       {
         snoozeUntil:
           targetState === 'snoozed'
-            ? Math.floor(Date.now() / 1000) + 72 * 3600
+            ? Math.floor(Date.now() / 1000) +
+              (isWatchItem ? WATCH_SNOOZE_SECONDS : DECISION_SNOOZE_SECONDS)
             : null,
         snoozeCount:
           targetState === 'snoozed'
@@ -327,8 +334,8 @@ export async function confirmRequestRoutes(
             : current.snoozeCount,
         expiresAt:
           targetState === 'expired'
-            ? (current.expiresAt ?? Math.floor(Date.now() / 1000))
-            : (current.expiresAt ?? null),
+            ? current.expiresAt ?? Math.floor(Date.now() / 1000)
+            : current.expiresAt ?? null,
       },
     );
 
@@ -337,7 +344,7 @@ export async function confirmRequestRoutes(
     }
 
     let queuedActionId: string | undefined;
-    if (targetState === 'pending') {
+    if (isWatchItem && targetState === 'pending') {
       const actionRepo = new ActionRepository(db);
       const action = actionRepo.create({
         actionType: 'delegate_openclaw',

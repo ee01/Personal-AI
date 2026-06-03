@@ -1,12 +1,12 @@
 /**
  * DigestQueueService - 通用定时汇总推送队列服务
- * 
+ *
  * 功能：
  * 1. 提供统一的队列管理（入队、消费、清理）
  * 2. 支持注册多种 Digest 任务，各有独立频率和处理器
  * 3. 由 TaskScheduler 定时触发 processAll()，检查并推送到期任务
  * 4. 通过 NotificationService 发送通知
- * 
+ *
  * 使用方式：
  *   // 注册任务
  *   digestQueueService.register({ id: 'my_task', ... });
@@ -22,7 +22,9 @@ import {
   DigestQueuesStorage,
   DigestProcessor,
   DigestTaskRegistration,
-  DigestProcessResult
+  DigestProcessResult,
+  DigestQueueStatusSummary,
+  DigestQueueTaskSnapshot,
 } from '../types/digestQueue';
 import {
   normalizeConcernedItemsDigestDayOfWeek,
@@ -61,13 +63,20 @@ export class DigestQueueService {
    */
   public register(task: DigestTaskRegistration): void {
     this.tasks.set(task.id, task);
-    console.log(`📋 DigestQueue: 注册任务 "${task.name}" (${task.id}), 频率: ${this.describeFrequency(task.frequency)}`);
+    console.log(
+      `📋 DigestQueue: 注册任务 "${task.name}" (${
+        task.id
+      }), 频率: ${this.describeFrequency(task.frequency)}`,
+    );
   }
 
   /**
    * 更新已注册任务
    */
-  public updateTask(taskId: string, patch: Partial<DigestTaskRegistration>): boolean {
+  public updateTask(
+    taskId: string,
+    patch: Partial<DigestTaskRegistration>,
+  ): boolean {
     const current = this.tasks.get(taskId);
     if (!current) {
       return false;
@@ -81,7 +90,11 @@ export class DigestQueueService {
     };
 
     this.tasks.set(taskId, nextTask);
-    console.log(`🔄 DigestQueue: 更新任务 "${nextTask.name}" (${taskId}), 频率: ${this.describeFrequency(nextTask.frequency)}`);
+    console.log(
+      `🔄 DigestQueue: 更新任务 "${
+        nextTask.name
+      }" (${taskId}), 频率: ${this.describeFrequency(nextTask.frequency)}`,
+    );
     return true;
   }
 
@@ -130,7 +143,10 @@ export class DigestQueueService {
   /**
    * 批量入队
    */
-  public async enqueueBatch(taskId: string, items: DigestQueueItem[]): Promise<void> {
+  public async enqueueBatch(
+    taskId: string,
+    items: DigestQueueItem[],
+  ): Promise<void> {
     try {
       await this.withStorageMutation(async () => {
         const storage = await this.loadStorage();
@@ -169,6 +185,25 @@ export class DigestQueueService {
     return storage[taskId]?.items || [];
   }
 
+  public async getQueueStatusSummary(
+    now = new Date(),
+  ): Promise<DigestQueueStatusSummary> {
+    const storage = await this.loadStorage();
+    const tasks = Object.entries(storage)
+      .map(([taskId, bucket]) =>
+        this.buildQueueSnapshot(taskId, bucket.items, now),
+      )
+      .filter((snapshot) => snapshot.totalItems > 0);
+    const nextReleaseAt = this.getEarliestReleaseAt(tasks);
+
+    return {
+      totalItems: tasks.reduce((sum, task) => sum + task.totalItems, 0),
+      dueItems: tasks.reduce((sum, task) => sum + task.dueItems, 0),
+      nextReleaseAt,
+      tasks,
+    };
+  }
+
   // ==================== 核心处理 ====================
 
   /**
@@ -178,17 +213,17 @@ export class DigestQueueService {
   public async processAll(): Promise<DigestProcessResult[]> {
     const results: DigestProcessResult[] = [];
     const now = new Date();
-    
+
     console.log(`🔄 DigestQueue: 开始检查 ${this.tasks.size} 个注册任务...`);
 
-    for (const [taskId, task] of this.tasks.entries()) {
+    for (const [taskId, task] of Array.from(this.tasks.entries())) {
       if (!task.enabled) {
         continue;
       }
 
       try {
         const shouldRun = this.shouldRunTask(task, now);
-        
+
         if (shouldRun) {
           console.log(`⚡ DigestQueue: 执行任务 "${task.name}" (${taskId})`);
           const result = await this.processTask(taskId);
@@ -200,14 +235,16 @@ export class DigestQueueService {
           taskId,
           success: false,
           itemsProcessed: 0,
-          error: error.message
+          error: error.message,
         });
       }
     }
 
-    const successCount = results.filter(r => r.success).length;
+    const successCount = results.filter((r) => r.success).length;
     const totalItems = results.reduce((sum, r) => sum + r.itemsProcessed, 0);
-    console.log(`✅ DigestQueue: 处理完成, ${successCount}/${results.length} 个任务成功, 共处理 ${totalItems} 条`);
+    console.log(
+      `✅ DigestQueue: 处理完成, ${successCount}/${results.length} 个任务成功, 共处理 ${totalItems} 条`,
+    );
 
     return results;
   }
@@ -218,7 +255,12 @@ export class DigestQueueService {
   public async processTask(taskId: string): Promise<DigestProcessResult> {
     const task = this.tasks.get(taskId);
     if (!task) {
-      return { taskId, success: false, itemsProcessed: 0, error: `任务 ${taskId} 未注册` };
+      return {
+        taskId,
+        success: false,
+        itemsProcessed: 0,
+        error: `任务 ${taskId} 未注册`,
+      };
     }
 
     return this.withStorageMutation(async () => {
@@ -229,7 +271,13 @@ export class DigestQueueService {
         // 更新 lastExecutedAt，即使没有条目
         task.lastExecutedAt = new Date().toISOString();
         await this.saveTaskStates();
-        return { taskId, success: true, itemsProcessed: 0 };
+        return {
+          taskId,
+          success: true,
+          itemsProcessed: 0,
+          itemsPending: 0,
+          itemsDue: 0,
+        };
       }
 
       try {
@@ -241,7 +289,12 @@ export class DigestQueueService {
         if (collectedItems.length === 0) {
           task.lastExecutedAt = new Date().toISOString();
           await this.saveTaskStates();
-          return { taskId, success: true, itemsProcessed: 0 };
+          return {
+            taskId,
+            success: true,
+            itemsProcessed: 0,
+            ...this.buildProcessQueueState(taskId, bucket.items),
+          };
         }
 
         // 2. 格式化消息
@@ -265,25 +318,27 @@ export class DigestQueueService {
             datetime: new Date().toLocaleString('zh-CN'),
             matchedRule: task.name,
             mention: notifyConfig.mention,
-            pushScenario: notifyConfig.pushScenario
+            pushScenario: notifyConfig.pushScenario,
           };
 
           const notificationResult = await notificationService.sendNotification(
             notificationData,
-            { notifyMethod }
+            { notifyMethod },
           );
 
           if (!notificationResult.success) {
             const errorSummary = notificationResult.results
-              .map(result => result.error || `${result.method} 推送失败`)
+              .map((result) => result.error || `${result.method} 推送失败`)
               .join('; ');
             throw new Error(errorSummary || '通知发送失败，已保留队列等待重试');
           }
         }
 
         // 4. 清理已处理的条目
-        const processedIds = new Set(collectedItems.map(item => item.id));
-        bucket.items = bucket.items.filter(item => !processedIds.has(item.id));
+        const processedIds = new Set(collectedItems.map((item) => item.id));
+        bucket.items = bucket.items.filter(
+          (item) => !processedIds.has(item.id),
+        );
         bucket.lastProcessedAt = new Date().toISOString();
         await this.saveStorage(storage);
 
@@ -293,16 +348,31 @@ export class DigestQueueService {
 
         Logger.task(`digest_${taskId}`, true, `${task.name} 推送完成`, {
           itemsProcessed: collectedItems.length,
-          remainingItems: bucket.items.length
+          remainingItems: bucket.items.length,
         });
 
-        return { taskId, success: true, itemsProcessed: collectedItems.length };
+        return {
+          taskId,
+          success: true,
+          itemsProcessed: collectedItems.length,
+          ...this.buildProcessQueueState(taskId, bucket.items),
+        };
       } catch (error: any) {
         console.error(`❌ DigestQueue: 处理任务 ${taskId} 失败:`, error);
 
-        Logger.task(`digest_${taskId}`, false, `${task.name} 推送失败: ${error.message}`);
+        Logger.task(
+          `digest_${taskId}`,
+          false,
+          `${task.name} 推送失败: ${error.message}`,
+        );
 
-        return { taskId, success: false, itemsProcessed: 0, error: error.message };
+        return {
+          taskId,
+          success: false,
+          itemsProcessed: 0,
+          ...this.buildProcessQueueState(taskId, bucket.items),
+          error: error.message,
+        };
       }
     });
   }
@@ -319,7 +389,8 @@ export class DigestQueueService {
     switch (freq.type) {
       case 'hourly': {
         if (!lastRun) return true;
-        const hoursSinceLastRun = (now.getTime() - lastRun.getTime()) / (1000 * 60 * 60);
+        const hoursSinceLastRun =
+          (now.getTime() - lastRun.getTime()) / (1000 * 60 * 60);
         return hoursSinceLastRun >= 1;
       }
 
@@ -331,15 +402,20 @@ export class DigestQueueService {
       }
 
       case 'weekly': {
-        if (!lastRun) return now.getDay() === freq.dayOfWeek && now.getHours() >= freq.hour;
-        const daysSinceLastRun = (now.getTime() - lastRun.getTime()) / (1000 * 60 * 60 * 24);
+        if (!lastRun)
+          return now.getDay() === freq.dayOfWeek && now.getHours() >= freq.hour;
+        const daysSinceLastRun =
+          (now.getTime() - lastRun.getTime()) / (1000 * 60 * 60 * 24);
         const isTargetDay = now.getDay() === freq.dayOfWeek;
-        return daysSinceLastRun >= 6 && isTargetDay && now.getHours() >= freq.hour;
+        return (
+          daysSinceLastRun >= 6 && isTargetDay && now.getHours() >= freq.hour
+        );
       }
 
       case 'custom': {
         if (!lastRun) return true;
-        const minutesSinceLastRun = (now.getTime() - lastRun.getTime()) / (1000 * 60);
+        const minutesSinceLastRun =
+          (now.getTime() - lastRun.getTime()) / (1000 * 60);
         return minutesSinceLastRun >= freq.intervalMinutes;
       }
 
@@ -360,7 +436,7 @@ export class DigestQueueService {
       const result = await chrome.storage.local.get('digestTaskStates');
       const savedStates = result.digestTaskStates || {};
 
-      for (const [taskId, task] of this.tasks.entries()) {
+      for (const [taskId, task] of Array.from(this.tasks.entries())) {
         if (savedStates[taskId]?.lastExecutedAt) {
           task.lastExecutedAt = savedStates[taskId].lastExecutedAt;
         }
@@ -378,7 +454,7 @@ export class DigestQueueService {
    */
   public async saveTaskStates(): Promise<void> {
     const states: Record<string, { lastExecutedAt?: string }> = {};
-    for (const [taskId, task] of this.tasks.entries()) {
+    for (const [taskId, task] of Array.from(this.tasks.entries())) {
       states[taskId] = { lastExecutedAt: task.lastExecutedAt };
     }
     await chrome.storage.local.set({ digestTaskStates: states });
@@ -400,7 +476,7 @@ export class DigestQueueService {
       storage[taskId] = {
         taskId,
         items: [],
-        lastProcessedAt: undefined
+        lastProcessedAt: undefined,
       };
     }
     return storage[taskId];
@@ -410,7 +486,7 @@ export class DigestQueueService {
     bucket: DigestQueuesStorage[string],
     items: DigestQueueItem[],
   ): number {
-    const existingIds = new Set(bucket.items.map(item => item.id));
+    const existingIds = new Set(bucket.items.map((item) => item.id));
     let addedCount = 0;
 
     for (const item of items) {
@@ -425,7 +501,74 @@ export class DigestQueueService {
     return addedCount;
   }
 
-  private async withStorageMutation<T>(operation: () => Promise<T>): Promise<T> {
+  private buildProcessQueueState(
+    taskId: string,
+    items: DigestQueueItem[],
+  ): Pick<DigestProcessResult, 'itemsPending' | 'itemsDue' | 'nextReleaseAt'> {
+    const snapshot = this.buildQueueSnapshot(taskId, items);
+    return {
+      itemsPending: snapshot.totalItems,
+      itemsDue: snapshot.dueItems,
+      nextReleaseAt: snapshot.nextReleaseAt,
+    };
+  }
+
+  private buildQueueSnapshot(
+    taskId: string,
+    items: DigestQueueItem[],
+    now = new Date(),
+  ): DigestQueueTaskSnapshot {
+    if (taskId === CONCERNED_ITEMS_DIGEST_TASK_ID) {
+      let dueItems = 0;
+      let nextReleaseAt: string | undefined;
+
+      for (const item of items) {
+        if (isConcernedItemDigestDue(item, now)) {
+          dueItems += 1;
+          continue;
+        }
+
+        const releaseAt = getConcernedItemDigestReleaseAt(item);
+        if (
+          Number.isFinite(releaseAt.getTime()) &&
+          (!nextReleaseAt ||
+            releaseAt.getTime() < new Date(nextReleaseAt).getTime())
+        ) {
+          nextReleaseAt = releaseAt.toISOString();
+        }
+      }
+
+      return {
+        taskId,
+        totalItems: items.length,
+        dueItems,
+        nextReleaseAt,
+      };
+    }
+
+    return {
+      taskId,
+      totalItems: items.length,
+      dueItems: items.length,
+    };
+  }
+
+  private getEarliestReleaseAt(
+    tasks: DigestQueueTaskSnapshot[],
+  ): string | undefined {
+    return tasks.reduce<string | undefined>((earliest, task) => {
+      if (!task.nextReleaseAt) return earliest;
+      if (!earliest) return task.nextReleaseAt;
+      return new Date(task.nextReleaseAt).getTime() <
+        new Date(earliest).getTime()
+        ? task.nextReleaseAt
+        : earliest;
+    }, undefined);
+  }
+
+  private async withStorageMutation<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const run = this.storageMutationQueue.then(operation, operation);
     this.storageMutationQueue = run.then(
       () => undefined,
@@ -441,14 +584,26 @@ export class DigestQueueService {
    */
   private describeFrequency(freq: DigestFrequency): string {
     switch (freq.type) {
-      case 'hourly': return '每小时';
-      case 'daily': return `每天 ${freq.hour}:00`;
+      case 'hourly':
+        return '每小时';
+      case 'daily':
+        return `每天 ${freq.hour}:00`;
       case 'weekly': {
-        const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+        const dayNames = [
+          '周日',
+          '周一',
+          '周二',
+          '周三',
+          '周四',
+          '周五',
+          '周六',
+        ];
         return `每${dayNames[freq.dayOfWeek]} ${freq.hour}:00`;
       }
-      case 'custom': return `每 ${freq.intervalMinutes} 分钟`;
-      default: return '未知';
+      case 'custom':
+        return `每 ${freq.intervalMinutes} 分钟`;
+      default:
+        return '未知';
     }
   }
 
@@ -456,25 +611,31 @@ export class DigestQueueService {
    * 获取调试信息
    */
   public async getDebugInfo(): Promise<{
-    registeredTasks: Array<{ id: string; name: string; frequency: string; enabled: boolean; lastExecutedAt?: string }>;
+    registeredTasks: Array<{
+      id: string;
+      name: string;
+      frequency: string;
+      enabled: boolean;
+      lastExecutedAt?: string;
+    }>;
     queueSizes: Record<string, number>;
   }> {
     const storage = await this.loadStorage();
     const queueSizes: Record<string, number> = {};
-    
+
     for (const [taskId, bucket] of Object.entries(storage)) {
       queueSizes[taskId] = bucket.items.length;
     }
 
     return {
-      registeredTasks: Array.from(this.tasks.values()).map(t => ({
+      registeredTasks: Array.from(this.tasks.values()).map((t) => ({
         id: t.id,
         name: t.name,
         frequency: this.describeFrequency(t.frequency),
         enabled: t.enabled,
-        lastExecutedAt: t.lastExecutedAt
+        lastExecutedAt: t.lastExecutedAt,
       })),
-      queueSizes
+      queueSizes,
     };
   }
 }
@@ -528,12 +689,17 @@ export function isConcernedItemDigestDue(
   now = new Date(),
   fallbackHour = 8,
 ): boolean {
-  const digestConfig = item.data?.digestConfig as Partial<DigestConfig> | undefined;
+  const digestConfig = item.data?.digestConfig as
+    | Partial<DigestConfig>
+    | undefined;
   if (digestConfig?.enabled === false) {
     return false;
   }
 
-  return now.getTime() >= getConcernedItemDigestReleaseAt(item, fallbackHour).getTime();
+  return (
+    now.getTime() >=
+    getConcernedItemDigestReleaseAt(item, fallbackHour).getTime()
+  );
 }
 
 function normalizeDigestConfig(
@@ -563,21 +729,26 @@ class ConcernedItemsDigestProcessor implements DigestProcessor {
 
   async collect(items: DigestQueueItem[]): Promise<DigestQueueItem[]> {
     const now = new Date();
-    return items.filter(item => isConcernedItemDigestDue(item, now, this.fallbackHour));
+    return items.filter((item) =>
+      isConcernedItemDigestDue(item, now, this.fallbackHour),
+    );
   }
 
   async format(items: DigestQueueItem[]): Promise<string> {
     if (items.length === 0) return '';
 
     // 按关注项分组
-    const grouped: Record<string, Array<{
-      matchedRule: string;
-      sender: string;
-      teamName: string;
-      summary: string;
-      datetime: string;
-      messageContent: string;
-    }>> = {};
+    const grouped: Record<
+      string,
+      Array<{
+        matchedRule: string;
+        sender: string;
+        teamName: string;
+        summary: string;
+        datetime: string;
+        messageContent: string;
+      }>
+    > = {};
 
     for (const item of items) {
       const {
@@ -609,13 +780,19 @@ class ConcernedItemsDigestProcessor implements DigestProcessor {
       const ruleLabel = messages[0]?.matchedRule || 'unknown';
       let section = `**关注项**: ${ruleLabel}\n`;
       section += `**匹配消息 ${messages.length} 条**:\n`;
-      
+
       // 最多展示最近 5 条
       const recent = messages.slice(-5);
       for (const msg of recent) {
-        section += `  - [${msg.teamName}] ${msg.sender}: ${(msg.summary || msg.messageContent || '').substring(0, 80)}${(msg.summary || msg.messageContent || '').length > 80 ? '...' : ''}\n`;
+        section += `  - [${msg.teamName}] ${msg.sender}: ${(
+          msg.summary ||
+          msg.messageContent ||
+          ''
+        ).substring(0, 80)}${
+          (msg.summary || msg.messageContent || '').length > 80 ? '...' : ''
+        }\n`;
       }
-      
+
       if (messages.length > 5) {
         section += `  - ...及其他 ${messages.length - 5} 条`;
       }
@@ -624,16 +801,22 @@ class ConcernedItemsDigestProcessor implements DigestProcessor {
     }
 
     const now = new Date();
-    const dateStr = now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
-    
-    return `📊 **定时消息摘要** (${dateStr})\n共 ${items.length} 条匹配消息\n\n${sections.join('\n\n---\n\n')}`;
+    const dateStr = now.toLocaleDateString('zh-CN', {
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+    });
+
+    return `📊 **定时消息摘要** (${dateStr})\n共 ${
+      items.length
+    } 条匹配消息\n\n${sections.join('\n\n---\n\n')}`;
   }
 
   getNotifyConfig(): import('../types/digestQueue').DigestNotifyConfig {
     return {
       notifyMethod: 'bot',
       mention: false,
-      pushScenario: 'message_analysis'
+      pushScenario: 'message_analysis',
     };
   }
 }
@@ -646,25 +829,32 @@ export function registerConcernedItemsDigestTask(): void {
   registerConcernedItemsDigestTaskWithHour(8);
 }
 
-export function registerConcernedItemsDigestTaskWithHour(preferredHour: number): void {
+export function registerConcernedItemsDigestTaskWithHour(
+  preferredHour: number,
+): void {
   const normalizedHour = normalizeConcernedItemsDigestHour(preferredHour, 8);
   digestQueueService.register({
     id: CONCERNED_ITEMS_DIGEST_TASK_ID,
     name: 'ConcernedItems 定时消息摘要',
     frequency: { type: 'hourly' },
     processor: new ConcernedItemsDigestProcessor(normalizedHour),
-    enabled: true
+    enabled: true,
   });
 }
 
-export function updateConcernedItemsDigestTaskSchedule(preferredHour: number): void {
+export function updateConcernedItemsDigestTaskSchedule(
+  preferredHour: number,
+): void {
   const normalizedHour = normalizeConcernedItemsDigestHour(preferredHour, 8);
-  const updated = digestQueueService.updateTask(CONCERNED_ITEMS_DIGEST_TASK_ID, {
-    name: 'ConcernedItems 定时消息摘要',
-    frequency: { type: 'hourly' },
-    processor: new ConcernedItemsDigestProcessor(normalizedHour),
-    enabled: true,
-  });
+  const updated = digestQueueService.updateTask(
+    CONCERNED_ITEMS_DIGEST_TASK_ID,
+    {
+      name: 'ConcernedItems 定时消息摘要',
+      frequency: { type: 'hourly' },
+      processor: new ConcernedItemsDigestProcessor(normalizedHour),
+      enabled: true,
+    },
+  );
 
   if (!updated) {
     registerConcernedItemsDigestTaskWithHour(normalizedHour);
@@ -695,6 +885,6 @@ export async function enqueueConcernedItemDigest(data: {
     id: stableId,
     data,
     createdAt: new Date().toISOString(),
-    sourceId: data.ruleId || data.matchedRule
+    sourceId: data.ruleId || data.matchedRule,
   });
 }

@@ -10,13 +10,26 @@
       </div>
     </div>
 
+    <div v-if="detailLoadError" class="load-error">
+      <div>
+        <div class="load-error-title">自我反思详情暂时不可用</div>
+        <p>{{ detailLoadError }}</p>
+      </div>
+      <button class="load-error-retry" @click="loadDetail">重试</button>
+    </div>
+
+    <div v-if="operationError" class="operation-error">
+      <span>{{ operationError }}</span>
+      <button class="tiny-btn" @click="operationError = ''">关闭</button>
+    </div>
+
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <p>加载自我反思详情中...</p>
     </div>
 
     <div v-else-if="!detail" class="empty-state">
-      <p>未找到自我反思线程。</p>
+      <p>{{ detailLoadError ? '无法加载这条自我反思线程。' : '未找到自我反思线程。' }}</p>
     </div>
 
     <div v-else class="detail-layout">
@@ -43,6 +56,11 @@
         <div v-if="detail.thread.currentHypothesis" class="hypothesis-box">
           <div class="box-title">当前假设</div>
           <p>{{ detail.thread.currentHypothesis }}</p>
+        </div>
+
+        <div v-if="detail.thread.continueReason || detail.thread.closureReason" class="reason-box">
+          <div class="box-title">{{ detail.thread.status === 'closed' ? '关闭原因' : '继续原因' }}</div>
+          <p>{{ detail.thread.closureReason || waitingReasonLabel(detail.thread.continueReason) }}</p>
         </div>
       </section>
 
@@ -105,8 +123,15 @@
 
       <section class="panel">
         <div class="panel-title">关联主动询问</div>
+        <div v-if="outreachLoadError" class="sub-error">
+          <div>
+            关联主动询问加载失败：{{ outreachLoadError }}
+            <span v-if="threadOutreachSessions.length > 0">下方保留上次成功读取的会话。</span>
+          </div>
+          <button class="tiny-btn" @click="loadOutreachSessions()">重试</button>
+        </div>
         <div v-if="threadOutreachLoading" class="muted">加载会话中...</div>
-        <div v-else-if="threadOutreachSessions.length === 0" class="muted">暂无关联主动询问会话</div>
+        <div v-else-if="threadOutreachSessions.length === 0 && !outreachLoadError" class="muted">暂无关联主动询问会话</div>
         <div v-else class="run-list">
           <div
             v-for="session in threadOutreachSessions"
@@ -176,7 +201,7 @@
             v-for="attempt in researchAttempts"
             :key="attempt.id"
             class="research-trace-card"
-            :class="attempt.status"
+            :class="[attempt.status, { degraded: Boolean(attempt.errorMessage && attempt.status !== 'failed') }]"
           >
             <div class="inline-head">
               <span>{{ attempt.purpose || '本地研究查询' }}</span>
@@ -285,6 +310,8 @@ const route = useRoute();
 const router = useRouter();
 const loading = ref(true);
 const busy = ref(false);
+const detailLoadError = ref('');
+const operationError = ref('');
 const detail = ref<ReflectionThreadDetailResponse | null>(null);
 const researchEvidence = computed(() => detail.value?.links.filter(link => link.role === 'research') ?? []);
 const researchAttempts = computed(() => detail.value?.researchAttempts ?? []);
@@ -293,6 +320,7 @@ const transcriptLoading = ref<Record<string, boolean>>({});
 const transcriptContent = ref<Record<string, string | null>>({});
 const threadOutreachLoading = ref(false);
 const threadOutreachSessions = ref<OutreachSession[]>([]);
+const outreachLoadError = ref('');
 
 onMounted(() => {
   void loadDetail();
@@ -309,23 +337,40 @@ async function loadDetail() {
   const threadId = route.params.id as string;
   if (!threadId) return;
   loading.value = true;
-  threadOutreachLoading.value = true;
+  detailLoadError.value = '';
   try {
-    const [threadDetail, outreach] = await Promise.all([
-      client.getReflectionThread(threadId),
-      client.getOutreachSessions({
-        threadId,
-        limit: 50,
-      }),
-    ]);
+    const threadDetail = await client.getReflectionThread(threadId);
     detail.value = threadDetail;
-    threadOutreachSessions.value = outreach.items;
   } catch (error) {
     console.error('Failed to load reflection detail:', error);
+    detailLoadError.value = errorMessage(error);
     detail.value = null;
-    threadOutreachSessions.value = [];
   } finally {
     loading.value = false;
+  }
+
+  if (detail.value) {
+    await loadOutreachSessions(threadId);
+  } else {
+    threadOutreachLoading.value = false;
+    threadOutreachSessions.value = [];
+  }
+}
+
+async function loadOutreachSessions(threadId = route.params.id as string) {
+  if (!threadId) return;
+  threadOutreachLoading.value = true;
+  outreachLoadError.value = '';
+  try {
+    const outreach = await client.getOutreachSessions({
+      threadId,
+      limit: 50,
+    });
+    threadOutreachSessions.value = outreach.items;
+  } catch (error) {
+    console.error('Failed to load reflection outreach sessions:', error);
+    outreachLoadError.value = errorMessage(error);
+  } finally {
     threadOutreachLoading.value = false;
   }
 }
@@ -333,9 +378,12 @@ async function loadDetail() {
 async function revisitThread() {
   if (!detail.value) return;
   busy.value = true;
+  operationError.value = '';
   try {
     await client.revisitReflectionThread(detail.value.thread.id, true);
     await loadDetail();
+  } catch (error) {
+    operationError.value = `立即自我反思失败：${errorMessage(error)}`;
   } finally {
     busy.value = false;
   }
@@ -344,9 +392,12 @@ async function revisitThread() {
 async function pauseThread() {
   if (!detail.value) return;
   busy.value = true;
+  operationError.value = '';
   try {
     await client.pauseReflectionThread(detail.value.thread.id, 'Paused from UI');
     await loadDetail();
+  } catch (error) {
+    operationError.value = `暂停失败：${errorMessage(error)}`;
   } finally {
     busy.value = false;
   }
@@ -355,9 +406,12 @@ async function pauseThread() {
 async function resumeThread() {
   if (!detail.value) return;
   busy.value = true;
+  operationError.value = '';
   try {
     await client.resumeReflectionThread(detail.value.thread.id);
     await loadDetail();
+  } catch (error) {
+    operationError.value = `恢复失败：${errorMessage(error)}`;
   } finally {
     busy.value = false;
   }
@@ -367,27 +421,45 @@ async function closeThread() {
   if (!detail.value) return;
   if (!window.confirm('确认关闭这个反思线程吗？')) return;
   busy.value = true;
+  operationError.value = '';
   try {
     await client.closeReflectionThread(detail.value.thread.id, 'Closed from UI');
     await loadDetail();
+  } catch (error) {
+    operationError.value = `关闭失败：${errorMessage(error)}`;
   } finally {
     busy.value = false;
   }
 }
 
 async function executeAction(id: string) {
-  await client.executeAction(id);
-  await loadDetail();
+  operationError.value = '';
+  try {
+    await client.executeAction(id);
+    await loadDetail();
+  } catch (error) {
+    operationError.value = `执行动作失败：${errorMessage(error)}`;
+  }
 }
 
 async function retryAction(id: string) {
-  await client.retryAction(id);
-  await loadDetail();
+  operationError.value = '';
+  try {
+    await client.retryAction(id);
+    await loadDetail();
+  } catch (error) {
+    operationError.value = `重试动作失败：${errorMessage(error)}`;
+  }
 }
 
 async function cancelAction(id: string) {
-  await client.cancelAction(id, 'Cancelled from UI');
-  await loadDetail();
+  operationError.value = '';
+  try {
+    await client.cancelAction(id, 'Cancelled from UI');
+    await loadDetail();
+  } catch (error) {
+    operationError.value = `取消动作失败：${errorMessage(error)}`;
+  }
 }
 
 async function toggleTranscript(resultId: string, transcriptPath?: string) {
@@ -481,6 +553,14 @@ function outreachTargetTypeLabel(targetType?: string) {
   return targetType || '未知目标';
 }
 
+function waitingReasonLabel(reason?: string) {
+  if (reason === 'waiting_for_delegation') return '等待外部委派结果回流';
+  if (reason === 'waiting_for_confirm_request') return '等待用户在决策中心确认';
+  if (reason === 'waiting_for_outreach') return '等待关联主动询问回复';
+  if (reason === 'waiting_for_manual_action') return '等待用户处理手动动作';
+  return reason || '等待下一轮自我反思';
+}
+
 function researchStatusLabel(status: string) {
   if (status === 'hit') return '已命中';
   if (status === 'empty') return '无结果';
@@ -507,6 +587,12 @@ function relativeTime(ts: number) {
 
 function normalizeTimestamp(ts: number) {
   return ts > 1_000_000_000_000 ? ts : ts * 1000;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error && error.message
+    ? error.message
+    : '无法连接 Memory Service，请稍后重试。';
 }
 </script>
 
@@ -569,6 +655,59 @@ function normalizeTimestamp(ts: number) {
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 1rem;
   padding: 1.25rem;
+}
+
+.load-error,
+.operation-error,
+.sub-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  padding: 0.85rem 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.operation-error,
+.sub-error {
+  margin-bottom: 0.8rem;
+}
+
+.sub-error {
+  background: rgba(120, 53, 15, 0.24);
+  border-color: rgba(251, 146, 60, 0.3);
+  color: #fed7aa;
+}
+
+.load-error-title {
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.load-error p {
+  color: #fca5a5;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.load-error-retry {
+  flex-shrink: 0;
+  border: 1px solid rgba(248, 113, 113, 0.36);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.7);
+  color: #fee2e2;
+  padding: 0.48rem 0.75rem;
+  cursor: pointer;
+}
+
+.load-error-retry:hover {
+  border-color: rgba(248, 113, 113, 0.58);
+  color: #fff1f2;
 }
 
 .hero-top,
@@ -673,6 +812,10 @@ function normalizeTimestamp(ts: number) {
   border-color: rgba(248, 113, 113, 0.28);
 }
 
+.research-trace-card.degraded {
+  border-color: rgba(251, 191, 36, 0.32);
+}
+
 .research-status {
   flex-shrink: 0;
   padding: 0.18rem 0.58rem;
@@ -735,6 +878,14 @@ function normalizeTimestamp(ts: number) {
 .hypothesis-box {
   margin-top: 1rem;
   background: rgba(30, 41, 59, 0.66);
+  border-radius: 0.9rem;
+  padding: 1rem;
+}
+
+.reason-box {
+  margin-top: 1rem;
+  background: rgba(22, 78, 99, 0.28);
+  border: 1px solid rgba(45, 212, 191, 0.18);
   border-radius: 0.9rem;
   padding: 1rem;
 }
@@ -818,6 +969,13 @@ function normalizeTimestamp(ts: number) {
 
   .action-bar {
     flex-wrap: wrap;
+  }
+
+  .load-error,
+  .operation-error,
+  .sub-error {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .detail-grid {

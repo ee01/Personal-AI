@@ -21,6 +21,8 @@ export interface LLMOptions {
   temperature?: number;   // default 0.3
   maxTokens?: number;     // default 2000
   systemPrompt?: string;
+  timeoutMs?: number;
+  retryCount?: number;
 }
 
 export interface LLMResponse {
@@ -36,6 +38,8 @@ export type LLMStreamDeltaHandler = (delta: string) => void | Promise<void>;
 
 const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_MAX_TOKENS = 2000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
+const MIN_REQUEST_TIMEOUT_MS = 1000;
 const RETRY_COUNT = 1;
 const RETRY_DELAY_MS = 1000;
 
@@ -76,7 +80,7 @@ export class LLMClient {
       }
     };
 
-    return this.withRetry(attempt);
+    return this.withRetry(attempt, options);
   }
 
   /**
@@ -148,36 +152,39 @@ export class LLMClient {
     }
     messages.push({ role: 'user', content: prompt });
 
-    const res = await fetch(baseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-      }),
+    return this.withRequestTimeout(options, async (signal) => {
+      const res = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
+          max_tokens: maxTokens,
+        }),
+        signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`[LLMClient] OpenAI-compatible API error ${res.status}: ${body}`);
+      }
+
+      const data = (await res.json()) as {
+        choices: Array<{ message: { content: string } }>;
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      };
+
+      const content = data.choices?.[0]?.message?.content ?? '';
+      const usage = data.usage
+        ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
+        : undefined;
+
+      return { content, usage };
     });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`[LLMClient] OpenAI-compatible API error ${res.status}: ${body}`);
-    }
-
-    const data = (await res.json()) as {
-      choices: Array<{ message: { content: string } }>;
-      usage?: { prompt_tokens: number; completion_tokens: number };
-    };
-
-    const content = data.choices?.[0]?.message?.content ?? '';
-    const usage = data.usage
-      ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
-      : undefined;
-
-    return { content, usage };
   }
 
   private async callOpenAICompatibleStream(
@@ -192,58 +199,61 @@ export class LLMClient {
     const maxTokens = options?.maxTokens ?? DEFAULT_MAX_TOKENS;
     const messages = this.buildMessages(prompt, options);
 
-    const res = await fetch(baseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-        stream: true,
-        stream_options: {
-          include_usage: true,
+    return this.withRequestTimeout(options, async (signal) => {
+      const res = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
         },
-      }),
-    });
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
+          max_tokens: maxTokens,
+          stream: true,
+          stream_options: {
+            include_usage: true,
+          },
+        }),
+        signal,
+      });
 
-    if (!res.ok || !res.body) {
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`[LLMClient] OpenAI-compatible streaming error ${res.status}: ${body}`);
-      }
-      return this.replayBlockingResponse(prompt, options, onDelta);
-    }
-
-    let content = '';
-    let usage;
-
-    await this.consumeSseStream(res, async ({ data }) => {
-      if (!data || data === '[DONE]') return;
-
-      const payload = JSON.parse(data) as {
-        choices?: Array<{ delta?: { content?: string } }>;
-        usage?: { prompt_tokens: number; completion_tokens: number };
-      };
-
-      const delta = payload.choices?.[0]?.delta?.content ?? '';
-      if (delta) {
-        content += delta;
-        await onDelta(delta);
+      if (!res.ok || !res.body) {
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          throw new Error(`[LLMClient] OpenAI-compatible streaming error ${res.status}: ${body}`);
+        }
+        return this.replayBlockingResponse(prompt, options, onDelta);
       }
 
-      if (payload.usage) {
-        usage = {
-          promptTokens: payload.usage.prompt_tokens,
-          completionTokens: payload.usage.completion_tokens,
+      let content = '';
+      let usage;
+
+      await this.consumeSseStream(res, async ({ data }) => {
+        if (!data || data === '[DONE]') return;
+
+        const payload = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+          usage?: { prompt_tokens: number; completion_tokens: number };
         };
-      }
-    });
 
-    return { content, usage };
+        const delta = payload.choices?.[0]?.delta?.content ?? '';
+        if (delta) {
+          content += delta;
+          await onDelta(delta);
+        }
+
+        if (payload.usage) {
+          usage = {
+            promptTokens: payload.usage.prompt_tokens,
+            completionTokens: payload.usage.completion_tokens,
+          };
+        }
+      });
+
+      return { content, usage };
+    });
   }
 
   /**
@@ -260,35 +270,38 @@ export class LLMClient {
     }
     messages.push({ role: 'user', content: prompt });
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: false,
-        options: { temperature },
-      }),
+    return this.withRequestTimeout(options, async (signal) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: false,
+          options: { temperature },
+        }),
+        signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`[LLMClient] Ollama API error ${res.status}: ${body}`);
+      }
+
+      const data = (await res.json()) as {
+        message?: { content: string };
+        prompt_eval_count?: number;
+        eval_count?: number;
+      };
+
+      const content = data.message?.content ?? '';
+      const usage =
+        data.prompt_eval_count != null && data.eval_count != null
+          ? { promptTokens: data.prompt_eval_count, completionTokens: data.eval_count }
+          : undefined;
+
+      return { content, usage };
     });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`[LLMClient] Ollama API error ${res.status}: ${body}`);
-    }
-
-    const data = (await res.json()) as {
-      message?: { content: string };
-      prompt_eval_count?: number;
-      eval_count?: number;
-    };
-
-    const content = data.message?.content ?? '';
-    const usage =
-      data.prompt_eval_count != null && data.eval_count != null
-        ? { promptTokens: data.prompt_eval_count, completionTokens: data.eval_count }
-        : undefined;
-
-    return { content, usage };
   }
 
   private async callOllamaStream(
@@ -301,44 +314,68 @@ export class LLMClient {
     const temperature = options?.temperature ?? DEFAULT_TEMPERATURE;
     const messages = this.buildMessages(prompt, options);
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-        options: { temperature },
-      }),
-    });
+    return this.withRequestTimeout(options, async (signal) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: true,
+          options: { temperature },
+        }),
+        signal,
+      });
 
-    if (!res.ok || !res.body) {
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`[LLMClient] Ollama streaming error ${res.status}: ${body}`);
+      if (!res.ok || !res.body) {
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          throw new Error(`[LLMClient] Ollama streaming error ${res.status}: ${body}`);
+        }
+        return this.replayBlockingResponse(prompt, options, onDelta);
       }
-      return this.replayBlockingResponse(prompt, options, onDelta);
-    }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let content = '';
-    let usage;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let content = '';
+      let usage;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() ?? '';
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? '';
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const payload = JSON.parse(line) as {
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const payload = JSON.parse(line) as {
+            message?: { content?: string };
+            prompt_eval_count?: number;
+            eval_count?: number;
+            done?: boolean;
+          };
+          const delta = payload.message?.content ?? '';
+          if (delta) {
+            content += delta;
+            await onDelta(delta);
+          }
+          if (payload.prompt_eval_count != null && payload.eval_count != null) {
+            usage = {
+              promptTokens: payload.prompt_eval_count,
+              completionTokens: payload.eval_count,
+            };
+          }
+        }
+
+        if (done) break;
+      }
+
+      if (buffer.trim()) {
+        const payload = JSON.parse(buffer) as {
           message?: { content?: string };
           prompt_eval_count?: number;
           eval_count?: number;
-          done?: boolean;
         };
         const delta = payload.message?.content ?? '';
         if (delta) {
@@ -353,29 +390,8 @@ export class LLMClient {
         }
       }
 
-      if (done) break;
-    }
-
-    if (buffer.trim()) {
-      const payload = JSON.parse(buffer) as {
-        message?: { content?: string };
-        prompt_eval_count?: number;
-        eval_count?: number;
-      };
-      const delta = payload.message?.content ?? '';
-      if (delta) {
-        content += delta;
-        await onDelta(delta);
-      }
-      if (payload.prompt_eval_count != null && payload.eval_count != null) {
-        usage = {
-          promptTokens: payload.prompt_eval_count,
-          completionTokens: payload.eval_count,
-        };
-      }
-    }
-
-    return { content, usage };
+      return { content, usage };
+    });
   }
 
   /**
@@ -396,31 +412,34 @@ export class LLMClient {
         ? { inputs: { query: effectivePrompt }, response_mode: 'blocking' as const, user: 'memory-service' }
         : { inputs: {}, query: effectivePrompt, response_mode: 'blocking' as const, user: 'memory-service' };
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.difyApiKey}`,
-      },
-      body: JSON.stringify(body),
+    return this.withRequestTimeout(options, async (signal) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.config.difyApiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`[LLMClient] Dify API error ${res.status} (${url}): ${body}`);
+      }
+
+      const data = (await res.json()) as {
+        answer?: string;
+        metadata?: { usage?: { prompt_tokens: number; completion_tokens: number } };
+      };
+
+      const content = data.answer ?? '';
+      const usage = data.metadata?.usage
+        ? { promptTokens: data.metadata.usage.prompt_tokens, completionTokens: data.metadata.usage.completion_tokens }
+        : undefined;
+
+      return { content, usage };
     });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`[LLMClient] Dify API error ${res.status} (${url}): ${body}`);
-    }
-
-    const data = (await res.json()) as {
-      answer?: string;
-      metadata?: { usage?: { prompt_tokens: number; completion_tokens: number } };
-    };
-
-    const content = data.answer ?? '';
-    const usage = data.metadata?.usage
-      ? { promptTokens: data.metadata.usage.prompt_tokens, completionTokens: data.metadata.usage.completion_tokens }
-      : undefined;
-
-    return { content, usage };
   }
 
   private async callDifyStream(
@@ -442,53 +461,56 @@ export class LLMClient {
         ? { inputs: { query: effectivePrompt }, response_mode: 'streaming' as const, user: 'memory-service' }
         : { inputs: {}, query: effectivePrompt, response_mode: 'streaming' as const, user: 'memory-service' };
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.difyApiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    return this.withRequestTimeout(options, async (signal) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.config.difyApiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
 
-    if (!res.ok || !res.body) {
-      if (!res.ok) {
-        const bodyText = await res.text().catch(() => '');
-        throw new Error(`[LLMClient] Dify streaming error ${res.status} (${url}): ${bodyText}`);
-      }
-      return this.replayBlockingResponse(prompt, options, onDelta);
-    }
-
-    let content = '';
-    let usage;
-
-    await this.consumeSseStream(res, async ({ data }) => {
-      if (!data || data === '[DONE]') return;
-
-      const payload = JSON.parse(data) as {
-        answer?: string;
-        event?: string;
-        metadata?: { usage?: { prompt_tokens: number; completion_tokens: number } };
-      };
-
-      const nextText = typeof payload.answer === 'string' ? payload.answer : '';
-      if (nextText) {
-        const delta = this.resolveIncrementalText(nextText, content);
-        if (delta) {
-          content += delta;
-          await onDelta(delta);
+      if (!res.ok || !res.body) {
+        if (!res.ok) {
+          const bodyText = await res.text().catch(() => '');
+          throw new Error(`[LLMClient] Dify streaming error ${res.status} (${url}): ${bodyText}`);
         }
+        return this.replayBlockingResponse(prompt, options, onDelta);
       }
 
-      if (payload.metadata?.usage) {
-        usage = {
-          promptTokens: payload.metadata.usage.prompt_tokens,
-          completionTokens: payload.metadata.usage.completion_tokens,
+      let content = '';
+      let usage;
+
+      await this.consumeSseStream(res, async ({ data }) => {
+        if (!data || data === '[DONE]') return;
+
+        const payload = JSON.parse(data) as {
+          answer?: string;
+          event?: string;
+          metadata?: { usage?: { prompt_tokens: number; completion_tokens: number } };
         };
-      }
-    });
 
-    return { content, usage };
+        const nextText = typeof payload.answer === 'string' ? payload.answer : '';
+        if (nextText) {
+          const delta = this.resolveIncrementalText(nextText, content);
+          if (delta) {
+            content += delta;
+            await onDelta(delta);
+          }
+        }
+
+        if (payload.metadata?.usage) {
+          usage = {
+            promptTokens: payload.metadata.usage.prompt_tokens,
+            completionTokens: payload.metadata.usage.completion_tokens,
+          };
+        }
+      });
+
+      return { content, usage };
+    });
   }
 
   // ---- Helpers ------------------------------------------------------------
@@ -496,12 +518,13 @@ export class LLMClient {
   /**
    * Retry an async operation once on failure with a 1 second delay.
    */
-  private async withRetry(fn: () => Promise<LLMResponse>): Promise<LLMResponse> {
-    for (let attempt = 0; attempt <= RETRY_COUNT; attempt++) {
+  private async withRetry(fn: () => Promise<LLMResponse>, options?: LLMOptions): Promise<LLMResponse> {
+    const retryCount = this.getRetryCount(options);
+    for (let attempt = 0; attempt <= retryCount; attempt++) {
       try {
         return await fn();
       } catch (err) {
-        if (attempt < RETRY_COUNT) {
+        if (attempt < retryCount) {
           console.warn(
             `[LLMClient] Attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS}ms:`,
             (err as Error).message,
@@ -515,6 +538,46 @@ export class LLMClient {
 
     // Unreachable, but TypeScript requires it.
     throw new Error('[LLMClient] All retry attempts exhausted');
+  }
+
+  private getRetryCount(options?: LLMOptions): number {
+    if (options?.retryCount === undefined) return RETRY_COUNT;
+    if (!Number.isFinite(options.retryCount)) return RETRY_COUNT;
+    return Math.max(0, Math.floor(options.retryCount));
+  }
+
+  private getRequestTimeoutMs(options?: LLMOptions): number {
+    const raw = options?.timeoutMs ?? this.config.llmRequestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (!Number.isFinite(raw)) return DEFAULT_REQUEST_TIMEOUT_MS;
+    return Math.max(MIN_REQUEST_TIMEOUT_MS, Math.floor(raw));
+  }
+
+  private async withRequestTimeout<T>(
+    options: LLMOptions | undefined,
+    fn: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const timeoutMs = this.getRequestTimeoutMs(options);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fn(controller.signal);
+    } catch (err) {
+      if (this.isAbortError(err)) {
+        throw new Error(`[LLMClient] Request timed out after ${timeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private isAbortError(err: unknown): boolean {
+    return (
+      typeof err === 'object' &&
+      err !== null &&
+      'name' in err &&
+      (err as { name?: unknown }).name === 'AbortError'
+    );
   }
 
   /**

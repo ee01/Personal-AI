@@ -186,6 +186,36 @@ test('flags no-time executor queues that cannot finish before the execution date
   );
 });
 
+test('subtracts explicit executor reservations from no-time same-day capacity', () => {
+  const noTimeMessages = Array.from({ length: 9 }, (_, index) => makeMessage(`late-${index + 1}`, {
+    Schedule_Time: '',
+  }));
+  const explicitReservation = makeMessage('explicit-23-55', {
+    Topic: 'Explicit 23:55',
+    Schedule_Time: '23:55',
+  });
+  const now = new Date('2026-05-04T23:50:30');
+
+  const pressure = getPressure([...noTimeMessages, explicitReservation], noTimeMessages[8], now);
+
+  assert.equal(pressure?.remainingSameDaySlots, 8);
+  assert.equal(pressure?.reservedExplicitMinutes, 1);
+  assert.equal(pressure?.exceedsExecutionWindow, true);
+  assert.equal(
+    formatScheduleQueueBlockReason(pressure!),
+    '当前 08:00 后队列排在第 9/9 个，预计延后 8 分钟，当天剩余可执行约 8 条，已避开 1 个明确时间分钟，可能排到执行日期结束后，请改成未来日期，或填写明确时间。',
+  );
+
+  const summary = getScheduleQueueSummary([...noTimeMessages, explicitReservation], now);
+  assert.equal(summary?.riskSlotCount, 1);
+  assert.equal(summary?.topSlots[0].remainingSameDaySlots, 8);
+  assert.equal(summary?.topSlots[0].reservedExplicitMinutes, 1);
+  assert.equal(
+    formatScheduleQueueSlotSummary(summary!.topSlots[0]),
+    '2026-05-04 08:00 后队列: 9 条，最大预计延后 8 分钟，可能排到执行日期结束后，当天剩余可执行约 8 条，已扣除 1 个明确时间分钟，建议处理：late-9（第 9/9 个），前面 8 条待执行：late-1、late-2、late-3，建议改到 2026-05-05 08:00 后队列，示例：late-1、late-2、late-3',
+  );
+});
+
 test('uses the caller clock when grouping repeating executor queues', () => {
   const first = makeMessage('repeat-1', {
     Repeat_Every: 1,
@@ -394,13 +424,13 @@ test('summarizes congested executor queue slots and sorts risk first', () => {
   assert.deepEqual(summary?.topSlots[0].blockingTopics, ['Risk 1', 'Risk 2', 'Risk 3']);
   assert.deepEqual(summary?.topSlots[0].suggestion, {
     dateStr: '2026-05-04',
-    timeStr: '09:51',
-    label: '2026-05-04 09:51',
-    inspectedMinutes: 1,
+    timeStr: '10:02',
+    label: '2026-05-04 10:02',
+    inspectedMinutes: 12,
   });
   assert.equal(
     formatScheduleQueueSlotSummary(summary!.topSlots[0]),
-    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，建议处理：Risk 12（第 12/12 个），前面 11 条待执行：Risk 1、Risk 2、Risk 3，建议改到 2026-05-04 09:51，示例：Risk 1、Risk 2、Risk 3',
+    '2026-05-04 09:30: 12 条，最大预计延后 11 分钟，可能超过 30 分钟补偿窗口，建议处理：Risk 12（第 12/12 个），前面 11 条待执行：Risk 1、Risk 2、Risk 3，建议改到 2026-05-04 10:02，示例：Risk 1、Risk 2、Risk 3',
   );
   assert.equal(
     formatScheduleQueueSummary(summary!),
@@ -517,6 +547,32 @@ test('skips a future no-time queue date that would still exceed the execution da
 
   assert.deepEqual(
     getScheduleQueueSuggestion([...currentDayMessages, ...saturatedNextDayMessages], currentDayMessages[9], now),
+    {
+      dateStr: '2026-05-06',
+      timeStr: '',
+      label: '2026-05-06 08:00 后队列',
+      inspectedMinutes: 2,
+      clearsScheduleTime: true,
+    },
+  );
+});
+
+test('skips a future no-time queue date fully reserved by explicit executor messages', () => {
+  const currentDayMessages = Array.from({ length: 10 }, (_, index) => makeMessage(`late-${index + 1}`, {
+    Schedule_Time: '',
+  }));
+  const explicitNextDayMessages = Array.from({ length: 960 }, (_, index) => {
+    const hours = 8 + Math.floor(index / 60);
+    const minutes = index % 60;
+    return makeMessage(`explicit-next-${index + 1}`, {
+      Schedule_Date: '2026-05-05',
+      Schedule_Time: `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`,
+    });
+  });
+  const now = new Date('2026-05-04T23:50:30');
+
+  assert.deepEqual(
+    getScheduleQueueSuggestion([...currentDayMessages, ...explicitNextDayMessages], currentDayMessages[9], now),
     {
       dateStr: '2026-05-06',
       timeStr: '',

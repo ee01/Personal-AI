@@ -4,13 +4,14 @@ import { getMemoryServiceClient } from './services/MemoryServiceClient';
 import { buildMessageFilterSystemPrompt } from './prompts';
 import { getEnvConfig } from './utils';
 import {
-  getFirstManualItemFromMatchedRules,
+  getManualItemsFromMatchedRules,
   isManualConcernedItem,
   filterWatchRulesForMessageContext,
   loadRuntimeWatchRules,
   resolveMatchedWatchRules,
 } from './watchRules';
 import type { TopicItemWithAutoReply } from './message-reaction/AutoReplyHandler';
+import { getImmediateNotificationItem } from './messageAnalysisDelivery';
 
 const AGENT_WORKFLOW_NOTIFY_CONFIDENCE_THRESHOLD = 0.7;
 
@@ -34,7 +35,7 @@ interface AgentTool {
 interface AgentWorkflowTraceTool {
   name: string;
   displayName: string;
-  status: 'success' | 'skipped' | 'error';
+  status: 'success' | 'skipped' | 'placeholder' | 'error';
   durationMs?: number;
   summary: string;
   error?: string;
@@ -83,6 +84,7 @@ interface AgentStorageReview {
   failedAgents: string[];
   toolErrorCount: number;
   toolSkippedCount: number;
+  toolPlaceholderCount: number;
   notificationReviewRequired?: boolean;
   notificationReviewReason?: string;
   notificationConfidenceThreshold?: number;
@@ -313,6 +315,21 @@ function summarizeToolResult(toolName: string, result: any): string {
   return truncateForTrace(result);
 }
 
+function getToolTraceStatus(
+  toolName: string,
+  result: any,
+): AgentWorkflowTraceTool['status'] {
+  if (toolName !== 'externalServiceQuery') {
+    return 'success';
+  }
+
+  if (!result || typeof result !== 'object' || result.success !== false) {
+    return 'success';
+  }
+
+  return 'placeholder';
+}
+
 function summarizeAgentOutput(toolResults: Record<string, any>): string {
   const summaries = Object.entries(toolResults).map(
     ([toolName, result]) => `${toolName}: ${summarizeToolResult(toolName, result)}`,
@@ -366,6 +383,12 @@ function buildStorageReview(params: {
   const toolSkippedCount = trace.reduce(
     (count, step) =>
       count + step.tools.filter((tool) => tool.status === 'skipped').length,
+    0,
+  );
+  const toolPlaceholderCount = trace.reduce(
+    (count, step) =>
+      count +
+      step.tools.filter((tool) => tool.status === 'placeholder').length,
     0,
   );
 
@@ -423,13 +446,15 @@ function buildStorageReview(params: {
         ? 'missing'
         : failedAgents.length > 0 ||
             toolErrorCount > 0 ||
-            toolSkippedCount > 0
+            toolSkippedCount > 0 ||
+            toolPlaceholderCount > 0
           ? 'partial'
           : 'complete',
     agentCount: trace.length,
     failedAgents,
     toolErrorCount,
     toolSkippedCount,
+    toolPlaceholderCount,
     notificationReviewRequired: Boolean(result.notificationReview?.required),
     notificationReviewReason: result.notificationReview?.reason,
     notificationConfidenceThreshold: result.notificationReview?.threshold,
@@ -558,10 +583,10 @@ function summarizePersistedTraceStep(step: AgentWorkflowTraceStep): string {
       counts[tool.status] += 1;
       return counts;
     },
-    { success: 0, skipped: 0, error: 0 },
+    { success: 0, skipped: 0, placeholder: 0, error: 0 },
   );
 
-  return `tools success=${toolCounts.success}, skipped=${toolCounts.skipped}, error=${toolCounts.error}`;
+  return `tools success=${toolCounts.success}, skipped=${toolCounts.skipped}, placeholder=${toolCounts.placeholder}, error=${toolCounts.error}`;
 }
 
 function buildPersistedAgentWorkflowTrace(params: {
@@ -822,6 +847,7 @@ const availableTools: Record<string, AgentTool> = {
           sender: params.sender,
           groupId: params.team_id,
           groupName: params.team_name,
+          datetime: params.datetime,
         },
       );
 
@@ -885,15 +911,19 @@ ${xmlMessage}
           sender: params.sender,
           groupId: params.team_id,
           groupName: params.team_name,
+          datetime: params.datetime,
         },
       });
-      const matchedManualItem = getFirstManualItemFromMatchedRules(
+      const matchedManualItems = getManualItemsFromMatchedRules(
         resolvedMatch.watchRules,
       );
+      const immediateNotificationItem = getImmediateNotificationItem({
+        manualItems: matchedManualItems,
+      });
       const hasResolvedMatch = resolvedMatch.watchRules.length > 0;
 
       return {
-        shouldNotify: Boolean(matchedManualItem?.notifyMethod),
+        shouldNotify: Boolean(immediateNotificationItem?.notifyMethod),
         shouldStore: hasResolvedMatch,
         matchedRule: hasResolvedMatch ? firstMatch.matched_rule || '' : '',
         matchedRuleRefs: hasResolvedMatch ? resolvedMatch.matchedRuleRefs : [],
@@ -1088,10 +1118,14 @@ class AgentCoordinator {
             const toolStartedAt = Date.now();
             try {
               toolResults[toolName] = await tool.execute(context);
+              const toolStatus = getToolTraceStatus(
+                toolName,
+                toolResults[toolName],
+              );
               traceStep.tools.push({
                 name: toolName,
                 displayName: tool.name,
-                status: 'success',
+                status: toolStatus,
                 durationMs: Date.now() - toolStartedAt,
                 summary: summarizeToolResult(toolName, toolResults[toolName]),
               });

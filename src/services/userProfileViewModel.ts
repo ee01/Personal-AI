@@ -148,6 +148,7 @@ interface BuildUserProfileInput {
   totalOpinions?: number;
   userId?: string;
   now?: number;
+  includeRetracted?: boolean;
 }
 
 const CATEGORY_KEYS: UserProfileCategory[] = [
@@ -431,6 +432,15 @@ function buildCalibrationReason(args: {
   canUseForPersonalization: boolean;
 }): string {
   const impact = Math.max(args.confidence, args.salienceScore);
+  if (args.status === 'retracted') {
+    return '已排除，不会用于个性化；恢复后才会重新进入画像。';
+  }
+  if (args.status === 'archived') {
+    return '已归档，不会进入当前个性化上下文。';
+  }
+  if (args.status === 'superseded') {
+    return '已被新画像替换，保留用于审计。';
+  }
   if (!args.canUseForPersonalization && args.evidenceCount === 0 && impact >= 0.65) {
     return '高影响但缺少可审计证据，建议优先确认或排除。';
   }
@@ -797,7 +807,7 @@ export function buildUserProfileViewModel(
   const now = input.now ?? Date.now();
   const normalizedItems = (input.items ?? [])
     .map(normalizeItem)
-    .filter((item) => item.status !== 'retracted')
+    .filter((item) => input.includeRetracted || item.status !== 'retracted')
     .sort((a, b) => itemSortScore(b) - itemSortScore(a));
   const totalItems = input.totalItems ?? normalizedItems.length;
   const isTruncated = Boolean(input.truncated) || (input.items ?? []).length < totalItems;

@@ -1,9 +1,19 @@
 import type { BridgeAuthStatus } from '../types.js';
 import type { ExplorerSettings } from '../settings.js';
 
-export type SourceId = 'doubao' | 'chatgpt';
+export type SourceId =
+  | 'doubao'
+  | 'chatgpt'
+  | 'codex_cli'
+  | 'claude_code_cli'
+  | 'cursor_agent_cli';
 
-export type ExplorerIngestSourceId = 'doubao_chat' | 'chatgpt';
+export type ExplorerIngestSourceId =
+  | 'doubao_chat'
+  | 'chatgpt'
+  | 'codex_cli'
+  | 'claude_code_cli'
+  | 'cursor_agent_cli';
 
 export interface ExplorationCursor {
   source: SourceId;
@@ -25,6 +35,9 @@ export interface ConversationArtifactRecord extends Artifact {
   source: SourceId;
   conversationId: string;
   extractedAt: string;
+  scope?: 'work' | 'personal';
+  revokedAt?: string;
+  revokedScope?: 'work' | 'personal';
 }
 
 export interface RawMessageRecord {
@@ -43,6 +56,14 @@ export interface RawMessageStoreStats {
   pendingExtractCount: number;
   conversationCount: number;
   artifactCount: number;
+  revokedArtifactCount: number;
+}
+
+export interface ExplorerRevokePreview {
+  scope: 'work' | 'personal';
+  activeArtifactCount: number;
+  legacyUnscopedArtifactCount: number;
+  revokedArtifactCount: number;
 }
 
 /** Identifies which underlying browser transport a source last used. */
@@ -75,6 +96,7 @@ export interface ExplorerSourceStatus {
   lastError?: string;
   lastRunSummary?: ExplorerRunSummary;
   cache: RawMessageStoreStats;
+  revokePreview: ExplorerRevokePreview;
   transport?: ExplorerTransportStatus;
 }
 
@@ -92,6 +114,7 @@ export interface ExplorerConversationSummary {
   pendingMessageCount: number;
   extractedMessageCount: number;
   artifactCount: number;
+  revokedArtifactCount: number;
   latestMessagePreview?: string;
 }
 

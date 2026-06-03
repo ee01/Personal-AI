@@ -14,6 +14,12 @@ export type ProfileItemsPage = {
 };
 
 type ProfileItemsMaxItems = number | 'all' | undefined;
+type ProfileItemsFilters = {
+    type?: string;
+    status?: string;
+    key?: string;
+    confirmedOnly?: boolean;
+};
 
 function normalizeProfileItemsMaxItems(value: ProfileItemsMaxItems): number {
     if (value === 'all') return Number.POSITIVE_INFINITY;
@@ -24,13 +30,15 @@ function normalizeProfileItemsMaxItems(value: ProfileItemsMaxItems): number {
 
 export async function getProfileItemsForView(
     client: ReturnType<typeof getMemoryServiceClient>,
-    maxItems = 1000,
+    maxItems: ProfileItemsMaxItems = 1000,
+    filters: ProfileItemsFilters = {},
 ): Promise<ProfileItemsPage> {
     const pageSize = 200;
     const itemLimit = Number.isFinite(maxItems)
         ? Math.max(1, Math.floor(maxItems))
         : Number.POSITIVE_INFINITY;
     const firstPage = await client.getProfileItems({
+        ...filters,
         limit: Math.min(pageSize, itemLimit),
         offset: 0,
     });
@@ -39,6 +47,7 @@ export async function getProfileItemsForView(
 
     for (let offset = items.length; offset < total && items.length < itemLimit; offset = items.length) {
         const nextPage = await client.getProfileItems({
+            ...filters,
             limit: Math.min(pageSize, itemLimit - items.length),
             offset,
         });
@@ -61,6 +70,11 @@ type OptionalExportSection<T> = {
 
 type ProfileExportAudit = {
     exportedProfileItems: number;
+    activeItems: number;
+    retractedItems: number;
+    archivedItems: number;
+    supersededItems: number;
+    inactiveAuditItems: number;
     confirmedItems: number;
     pendingConfirmationItems: number;
     usableProfileItems: number;
@@ -135,6 +149,10 @@ function buildProfileExportAudit(items: any[]): ProfileExportAudit {
     let pendingConfirmationItems = 0;
     let usableProfileItems = 0;
     let withoutEvidenceItems = 0;
+    let activeItems = 0;
+    let retractedItems = 0;
+    let archivedItems = 0;
+    let supersededItems = 0;
 
     for (const item of items) {
         const status = String(item?.status ?? item?.item_status ?? '').trim() || 'unknown';
@@ -144,6 +162,10 @@ function buildProfileExportAudit(items: any[]): ProfileExportAudit {
         incrementCount(byItemType, item?.itemType ?? item?.item_type, 'unknown');
         incrementCount(bySourceKind, item?.sourceKind ?? item?.source_kind, 'unknown');
 
+        if (status === 'active') activeItems += 1;
+        if (status === 'retracted') retractedItems += 1;
+        if (status === 'archived') archivedItems += 1;
+        if (status === 'superseded') supersededItems += 1;
         if (userConfirmed) confirmedItems += 1;
         if (!userConfirmed || status === 'pending_confirm') pendingConfirmationItems += 1;
         if (userConfirmed && status === 'active') usableProfileItems += 1;
@@ -155,6 +177,11 @@ function buildProfileExportAudit(items: any[]): ProfileExportAudit {
 
     return {
         exportedProfileItems,
+        activeItems,
+        retractedItems,
+        archivedItems,
+        supersededItems,
+        inactiveAuditItems: retractedItems + archivedItems + supersededItems,
         confirmedItems,
         pendingConfirmationItems,
         usableProfileItems,
@@ -377,6 +404,36 @@ export class UserProfileMessageHandler {
             return true;
         }
 
+        if (request.type === 'GET_RETRACTED_PROFILE_ITEMS') {
+            console.log('处理已排除画像条目获取请求');
+
+            (async () => {
+                try {
+                    const client = getMemoryServiceClient();
+                    const maxItems = normalizeProfileItemsMaxItems(request.maxItems);
+                    const profileItems = await getProfileItemsForView(
+                        client,
+                        maxItems,
+                        { status: 'retracted' },
+                    );
+
+                    sendResponse({
+                        success: true,
+                        data: profileItems,
+                        message: '已排除画像条目获取成功',
+                    });
+                } catch (error) {
+                    console.error('已排除画像条目获取失败:', error);
+                    sendResponse({
+                        success: false,
+                        error: error.message,
+                        message: '已排除画像条目获取失败',
+                    });
+                }
+            })();
+            return true;
+        }
+
         if (request.type === 'CREATE_PROFILE_ITEM') {
             console.log('处理显式画像条目创建请求:', request);
             const { itemType, itemKey, itemValue, confidence } = request;
@@ -431,18 +488,18 @@ export class UserProfileMessageHandler {
             (async () => {
                 try {
                     const client = getMemoryServiceClient();
-                    const [
-                        coreSection,
-                        profileItems,
-                        healthSection,
-                        statsSection,
-                    ] = await Promise.all([
+                    const [coreSection, profileItems, healthSection, statsSection] =
+                        await Promise.all([
                         getOptionalExportSection(
                             client.getUserCore(),
                             { content: '' },
                             '核心画像摘要',
                         ),
-                        getProfileItemsForView(client, Number.POSITIVE_INFINITY),
+                        getProfileItemsForView(
+                            client,
+                            Number.POSITIVE_INFINITY,
+                            { status: 'all' },
+                        ),
                         getOptionalExportSection<any>(
                             client.getHealth(),
                             null,
@@ -461,6 +518,14 @@ export class UserProfileMessageHandler {
                     const healthStatus = healthSection.value;
                     const stats = statsSection.value;
                     const profileAudit = buildProfileExportAudit(profileItems.items);
+                    const currentProfileItems = profileItems.items.filter((item) => {
+                        const status = String(item?.status ?? item?.item_status ?? '').trim();
+                        return status === 'active' || status === 'pending_confirm';
+                    });
+                    const inactiveAuditItems = profileItems.items.filter((item) => {
+                        const status = String(item?.status ?? item?.item_status ?? '').trim();
+                        return ['retracted', 'archived', 'superseded'].includes(status);
+                    });
                     const exportWarnings = [
                         coreSection.warning,
                         healthSection.warning,
@@ -472,10 +537,9 @@ export class UserProfileMessageHandler {
 
                     const viewModel = buildUserProfileViewModel({
                         core: coreResult.content,
-                        items: profileItems.items,
-                        totalItems: profileItems.total,
-                        truncated: profileItems.truncated,
-                        viewLimit: profileItems.viewLimit,
+                        items: currentProfileItems,
+                        totalItems: currentProfileItems.length,
+                        truncated: false,
                     });
 
                     // 构建导出数据结构
@@ -484,12 +548,13 @@ export class UserProfileMessageHandler {
                         exportInfo: {
                             exportTime: new Date().toISOString(),
                             exportTimestamp: Date.now(),
-                            version: '2.0',
+                            version: '2.1',
                             exportType: 'complete_user_profile',
                             pagination: {
                                 exportedProfileItems: profileItems.items.length,
                                 totalProfileItems: profileItems.total,
                                 truncated: profileItems.truncated,
+                                statusScope: 'all',
                             },
                             warnings: exportWarnings,
                             optionalSections: {
@@ -510,7 +575,10 @@ export class UserProfileMessageHandler {
                         userProfile: {
                             core: coreResult.content,
                             items: profileItems.items,
+                            currentItems: currentProfileItems,
+                            inactiveAuditItems,
                             totalItems: profileItems.total,
+                            currentTotalItems: currentProfileItems.length,
                             viewModel: viewModel.profile,
                         },
 
@@ -554,6 +622,8 @@ export class UserProfileMessageHandler {
                             pendingConfirmationItems: profileAudit.pendingConfirmationItems,
                             usableProfileItems: profileAudit.usableProfileItems,
                             heldForConfirmationItems: profileAudit.heldForConfirmationItems,
+                            retractedProfileItems: profileAudit.retractedItems,
+                            inactiveAuditItems: profileAudit.inactiveAuditItems,
                             withoutEvidenceItems: profileAudit.withoutEvidenceItems,
                             totalEntities: stats?.entities?.total ?? 0,
                             dataQuality: healthStatus?.database?.connected

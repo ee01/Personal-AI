@@ -7,6 +7,11 @@ import {
 } from '../messageReactionLayout.js';
 import { translateStaticText } from '../../i18n/staticTranslations.js';
 import { buildPendingLinkedActionConfig } from '../linkedActionEntry.js';
+import {
+  buildPendingFollowThreadConfig,
+  getPendingFollowThreadOriginalDatetime,
+  isPendingFollowThreadConfigFresh,
+} from '../followThreadPendingConfig.js';
 
 const toEnglish = (text: string): string => translateStaticText(text, 'en-US');
 
@@ -126,4 +131,40 @@ test('linked action pending config freshness uses request time, not message time
 
   assert.equal(pendingConfig.timestamp, requestedAt);
   assert.equal(pendingConfig.messageTimestamp, messageTimestamp);
+});
+
+test('follow-thread pending config preserves original message time separately from request freshness', () => {
+  const messageTimestamp = '2026-05-15T09:30:00Z';
+  const requestedAt = Date.parse('2026-05-31T08:20:00Z');
+
+  const pendingConfig = buildPendingFollowThreadConfig(
+    {
+      postId: 'msg-1',
+      sender: 'Alicia Chen',
+      groupId: '12345',
+      groupName: 'Release Team',
+      content: 'Please follow up with the release owner before tomorrow noon.',
+      timestamp: messageTimestamp,
+      messageLink: 'https://app.ringcentral.com/messages/12345/msg-1',
+    },
+    requestedAt,
+  );
+
+  assert.equal(pendingConfig.requestedAt, requestedAt);
+  assert.equal(pendingConfig.messageTimestamp, messageTimestamp);
+  assert.equal(
+    getPendingFollowThreadOriginalDatetime(pendingConfig),
+    messageTimestamp,
+  );
+  assert.equal(
+    isPendingFollowThreadConfigFresh(pendingConfig, requestedAt + 60_000),
+    true,
+  );
+  assert.equal(
+    isPendingFollowThreadConfigFresh(
+      pendingConfig,
+      requestedAt + 6 * 60_000,
+    ),
+    false,
+  );
 });

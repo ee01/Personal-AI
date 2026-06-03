@@ -30,6 +30,8 @@ const MARKDOWN_DIRECTORIES = [
   'reflection-threads',
   'reports',
   'projects',
+  'rehearsals',
+  'source-memory',
   'skills',
   'agent',
 ] as const;
@@ -660,7 +662,7 @@ async function extractAndValidateBackup(
     throw new MemoryBackupValidationError('Backup is missing manifest.json');
   }
 
-  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8')) as MemoryBackupManifest;
+  const manifest = await readManifestFile(manifestPath);
   validateManifest(manifest);
 
   const manifestPaths = new Set(
@@ -758,17 +760,181 @@ function validateManifest(manifest: MemoryBackupManifest): void {
   if (!Array.isArray(manifest.includes)) {
     throw new MemoryBackupValidationError('Backup manifest is missing includes');
   }
+  validateManifestLayerLists(manifest);
 
   const seen = new Set<string>();
-  for (const include of manifest.includes) {
-    const normalizedPath = normalizeRelativePath(include.path);
+  for (const include of manifest.includes as unknown[]) {
+    if (!include || typeof include !== 'object') {
+      throw new MemoryBackupValidationError('Backup manifest includes must be objects');
+    }
+
+    const entry = include as Partial<ManifestIncludeEntry>;
+    const normalizedPath = normalizeManifestPath(
+      entry.path,
+      'Backup manifest include path',
+    );
     if (seen.has(normalizedPath)) {
       throw new MemoryBackupValidationError(
         `Backup manifest contains duplicate path: ${normalizedPath}`,
       );
     }
     seen.add(normalizedPath);
+
+    if (!isBackupLayer(entry.layer)) {
+      throw new MemoryBackupValidationError(
+        `Backup manifest has invalid layer for ${normalizedPath}`,
+      );
+    }
+    if (
+      typeof entry.sizeBytes !== 'number' ||
+      !Number.isSafeInteger(entry.sizeBytes) ||
+      entry.sizeBytes < 0
+    ) {
+      throw new MemoryBackupValidationError(
+        `Backup manifest has invalid size for ${normalizedPath}`,
+      );
+    }
+    if (typeof entry.modifiedAt !== 'number' || !Number.isFinite(entry.modifiedAt)) {
+      throw new MemoryBackupValidationError(
+        `Backup manifest has invalid modifiedAt for ${normalizedPath}`,
+      );
+    }
+    if (typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(entry.sha256)) {
+      throw new MemoryBackupValidationError(
+        `Backup manifest has invalid checksum for ${normalizedPath}`,
+      );
+    }
+    if (typeof entry.required !== 'boolean') {
+      throw new MemoryBackupValidationError(
+        `Backup manifest has invalid required flag for ${normalizedPath}`,
+      );
+    }
+
+    validateManifestIncludePath(normalizedPath, entry.layer);
+    validateManifestLayerReference(manifest, normalizedPath, entry.layer);
   }
+}
+
+async function readManifestFile(manifestPath: string): Promise<MemoryBackupManifest> {
+  try {
+    return JSON.parse(await fs.readFile(manifestPath, 'utf-8')) as MemoryBackupManifest;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new MemoryBackupValidationError(
+      `Backup manifest is not valid JSON: ${message}`,
+    );
+  }
+}
+
+function validateManifestLayerLists(manifest: MemoryBackupManifest): void {
+  if (!manifest.layers || typeof manifest.layers !== 'object') {
+    throw new MemoryBackupValidationError('Backup manifest is missing layers');
+  }
+
+  validatePathArray(manifest.layers.A?.paths, 'layers.A.paths');
+  validatePathArray(manifest.layers.B?.paths, 'layers.B.paths');
+  validatePathArray(manifest.layers.C?.generated, 'layers.C.generated');
+  validatePathArray(manifest.layers.C?.skipped, 'layers.C.skipped');
+
+  if (!Array.isArray(manifest.layers.C?.failed)) {
+    throw new MemoryBackupValidationError('Backup manifest layers.C.failed must be an array');
+  }
+  for (const failure of manifest.layers.C.failed) {
+    if (!failure || typeof failure !== 'object') {
+      throw new MemoryBackupValidationError('Backup manifest layers.C.failed entries must be objects');
+    }
+    normalizeManifestPath(failure.path, 'Backup manifest failed snapshot path');
+    if (typeof failure.reason !== 'string') {
+      throw new MemoryBackupValidationError('Backup manifest failed snapshot reason must be a string');
+    }
+  }
+}
+
+function validatePathArray(value: unknown, label: string): void {
+  if (!Array.isArray(value)) {
+    throw new MemoryBackupValidationError(`Backup manifest ${label} must be an array`);
+  }
+  for (const item of value) {
+    normalizeManifestPath(item, `Backup manifest ${label} entry`);
+  }
+}
+
+function validateManifestIncludePath(
+  normalizedPath: string,
+  layer: BackupLayer,
+): void {
+  if (normalizedPath === 'user/memory.db' || normalizedPath === 'user/config.json') {
+    if (layer !== 'A') {
+      throw new MemoryBackupValidationError(
+        `Backup manifest assigns ${normalizedPath} to invalid layer ${layer}`,
+      );
+    }
+    return;
+  }
+
+  const rootMarkdownPaths = new Set(
+    ROOT_MARKDOWN_FILES.map((fileName) => `user/${fileName}`),
+  );
+  if (rootMarkdownPaths.has(normalizedPath)) {
+    if (layer !== 'B') {
+      throw new MemoryBackupValidationError(
+        `Backup manifest assigns ${normalizedPath} to invalid layer ${layer}`,
+      );
+    }
+    return;
+  }
+
+  if (normalizedPath.startsWith('user/')) {
+    const userRelativePath = normalizedPath.slice('user/'.length);
+    const [directory] = userRelativePath.split('/');
+    if (
+      layer !== 'B' ||
+      !MARKDOWN_DIRECTORIES.includes(directory as (typeof MARKDOWN_DIRECTORIES)[number]) ||
+      !normalizedPath.endsWith('.md')
+    ) {
+      throw new MemoryBackupValidationError(
+        `Backup manifest contains unsupported user file: ${normalizedPath}`,
+      );
+    }
+    return;
+  }
+
+  if (normalizedPath.startsWith('derived/')) {
+    if (layer !== 'C') {
+      throw new MemoryBackupValidationError(
+        `Backup manifest assigns ${normalizedPath} to invalid layer ${layer}`,
+      );
+    }
+    return;
+  }
+
+  throw new MemoryBackupValidationError(
+    `Backup manifest contains unsupported file path: ${normalizedPath}`,
+  );
+}
+
+function validateManifestLayerReference(
+  manifest: MemoryBackupManifest,
+  normalizedPath: string,
+  layer: BackupLayer,
+): void {
+  const layerPathSet = new Set(
+    layer === 'A'
+      ? manifest.layers.A.paths.map((item) => normalizeRelativePath(item))
+      : layer === 'B'
+        ? manifest.layers.B.paths.map((item) => normalizeRelativePath(item))
+        : manifest.layers.C.generated.map((item) => normalizeRelativePath(item)),
+  );
+
+  if (!layerPathSet.has(normalizedPath)) {
+    throw new MemoryBackupValidationError(
+      `Backup manifest layer list is missing ${normalizedPath}`,
+    );
+  }
+}
+
+function isBackupLayer(value: unknown): value is BackupLayer {
+  return value === 'A' || value === 'B' || value === 'C';
 }
 
 function buildDatabaseImportPreview(
@@ -1452,6 +1618,14 @@ function normalizeRelativePath(relativePath: string): string {
   }
 
   return segments.join('/');
+}
+
+function normalizeManifestPath(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new MemoryBackupValidationError(`${label} must be a string`);
+  }
+
+  return normalizeRelativePath(value);
 }
 
 function toPosixPath(value: string): string {

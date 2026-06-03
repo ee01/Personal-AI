@@ -7,20 +7,12 @@
 
 import type { FastifyInstance } from 'fastify';
 
-import type { IngestPayload, IngestResult } from '../types/index.js';
+import {
+  SOURCE_TYPES,
+  type IngestPayload,
+  type IngestResult,
+} from '../types/index.js';
 import { IngestionPipeline } from '../core/IngestionPipeline.js';
-
-const sourceTypeEnum = [
-  'glip',
-  'jira',
-  'web',
-  'manual',
-  'system',
-  'meeting',
-  'calendar',
-  'ai_chat',
-  'doubao',
-] as const;
 
 const ingestDecisionSchema = {
   type: 'object' as const,
@@ -38,10 +30,26 @@ const ingestDecisionSchema = {
         'extraction_unavailable',
         'duplicate_post_id',
         'duplicate_content_source_sender',
+        'indexing_failed',
         'insert_failed',
       ],
     },
     salienceScore: { type: 'number' as const },
+    salienceComponents: {
+      type: 'object' as const,
+      properties: {
+        importance: { type: 'number' as const },
+        frequency: { type: 'number' as const },
+        recency: { type: 'number' as const },
+        surprise: { type: 'number' as const },
+        redundancy: { type: 'number' as const },
+        userInterestBoost: { type: 'number' as const },
+      },
+    },
+    extractionStatus: {
+      type: 'string' as const,
+      enum: ['extracted', 'skipped', 'unavailable'],
+    },
     shouldIndex: { type: 'boolean' as const },
     indexed: { type: 'boolean' as const },
     duplicateOf: { type: 'string' as const },
@@ -64,7 +72,7 @@ const ingestBodySchema = {
     source: { type: 'string' as const, minLength: 1 },
     sourceType: {
       type: 'string' as const,
-      enum: sourceTypeEnum,
+      enum: SOURCE_TYPES,
     },
     sender: { type: 'string' as const },
     groupId: { type: 'string' as const },

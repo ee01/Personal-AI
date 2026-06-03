@@ -26,6 +26,8 @@ import type {
   RecallSourceType,
   RecallScope,
   SourceType,
+  MemoryRetrievalTier,
+  RecallLifecycleMode,
 } from '../types/index.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { now } from '../utils/time.js';
@@ -33,7 +35,11 @@ import { toSlug } from '../utils/slug.js';
 import { parseQueryTimeRange } from '../utils/queryTime.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
 import { buildExploreLink } from '../utils/exploreLink.js';
-import { getRecallFeedbackAction } from '../utils/recallFeedback.js';
+import {
+  getRecallFeedbackAction,
+  isSceneScopedRecallFeedbackDetail,
+} from '../utils/recallFeedback.js';
+import { decideMemoryLifecycle } from './MemoryLifecyclePolicy.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -54,6 +60,11 @@ interface RecallCandidate {
   entity?: Entity;
   recencyScore?: number;
   salienceScore?: number;
+  effectiveSalience?: number;
+  retrievalTier?: MemoryRetrievalTier;
+  lifecycleWeight?: number;
+  lifecycleReason?: string;
+  lifecycleAllowed?: boolean;
 }
 
 interface RecallAccessTarget {
@@ -133,8 +144,24 @@ interface RelationshipRow {
 }
 
 interface MemoryMetaRow {
+  target_type: string;
+  target_id: string;
   salience_score: number;
   access_count: number;
+  retrieval_tier: string | null;
+  effective_salience: number | null;
+  consolidation_level: string | null;
+  last_accessed: number | null;
+  created_at: number | null;
+  updated_at: number | null;
+}
+
+interface MemoryFeedbackRow {
+  target_type: string;
+  target_id: string;
+  action: string;
+  detail?: string | null;
+  updated_at: number;
 }
 
 interface EntityEvidenceRow extends MessageRow {
@@ -162,6 +189,17 @@ const DEFAULT_CHANNELS: RecallChannelName[] = [
   'graph',
   'time',
 ];
+const DEFAULT_RECALL_EMBEDDING_TIMEOUT_MS = 2500;
+const MAX_GRAPH_SEED_ENTITIES = 64;
+const LOW_SPECIFICITY_GRAPH_TOKENS = new Set([
+  'ai',
+  'be',
+  'fe',
+  'ui',
+  'ux',
+  'qa',
+  'pm',
+]);
 const CHANNEL_ORDER = new Map(
   DEFAULT_CHANNELS.map((channel, index) => [channel, index]),
 );
@@ -215,6 +253,69 @@ function tokenSetSimilarity(a: Set<string>, b: Set<string>): number {
   }
 
   return intersection / Math.sqrt(a.size * b.size);
+}
+
+function tokenizeGraphEntityText(value: string): string[] {
+  return (
+    value
+      .toLowerCase()
+      .match(/[\p{L}\p{N}_-]+/gu)
+      ?.map((token) => token.trim())
+      .filter((token) => token.length > 1) ?? []
+  );
+}
+
+function getRecallEmbeddingTimeoutMs(): number {
+  const parsed = Number.parseInt(
+    process.env.RECALL_EMBEDDING_TIMEOUT_MS ||
+      process.env.EMBEDDING_REQUEST_TIMEOUT_MS ||
+      `${DEFAULT_RECALL_EMBEDDING_TIMEOUT_MS}`,
+    10,
+  );
+  return Number.isFinite(parsed)
+    ? Math.max(100, parsed)
+    : DEFAULT_RECALL_EMBEDDING_TIMEOUT_MS;
+}
+
+function withRecallTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+function normalizeGraphPhrase(value: string): string {
+  return tokenizeGraphEntityText(value).join(' ');
+}
+
+function isSpecificGraphToken(token: string): boolean {
+  if (/[\u3400-\u9fff\uf900-\ufaff]/u.test(token)) {
+    return token.length >= 2;
+  }
+  if (token.length >= 3) return true;
+  return !LOW_SPECIFICITY_GRAPH_TOKENS.has(token);
+}
+
+function tokenMatchesEntityToken(queryToken: string, entityToken: string): boolean {
+  if (queryToken === entityToken) return true;
+  if (queryToken.length < 3) return false;
+  return entityToken.startsWith(queryToken) || queryToken.startsWith(entityToken);
 }
 
 /**
@@ -439,8 +540,17 @@ export class RecallEngine {
     let queryEmbedding: number[] | null = null;
     if (activeChannels.includes('vector')) {
       try {
-        const client = await EmbeddingClient.getInstance();
-        queryEmbedding = await client.embed(query.query);
+        const embeddingTimeoutMs = getRecallEmbeddingTimeoutMs();
+        const client = await withRecallTimeout(
+          EmbeddingClient.getInstance(),
+          embeddingTimeoutMs,
+          'EmbeddingClient.getInstance',
+        );
+        queryEmbedding = await withRecallTimeout(
+          client.embed(query.query),
+          embeddingTimeoutMs,
+          'EmbeddingClient.embed',
+        );
       } catch (err) {
         console.warn(
           '[RecallEngine] Embedding generation failed, skipping vector channel:',
@@ -524,14 +634,25 @@ export class RecallEngine {
       };
     }
 
-    // Enrich with salience scores from memory_metadata
-    this.enrichWithSalience(merged);
+    // Enrich with lifecycle metadata and suppress archived/forgotten items
+    // before ranking so every caller gets the same ambient forgetting behavior.
+    this.enrichWithLifecycle(
+      merged,
+      query.lifecycleMode ?? 'active_default',
+    );
+    const lifecycleFiltered = merged.filter(
+      (c) => c.lifecycleAllowed !== false,
+    );
 
     // Apply optional salience filter
     const filtered =
       query.minSalience != null
-        ? merged.filter((c) => (c.salienceScore ?? 0) >= query.minSalience!)
-        : merged;
+        ? lifecycleFiltered.filter(
+            (c) =>
+              (c.effectiveSalience ?? c.salienceScore ?? 0) >=
+              query.minSalience!,
+          )
+        : lifecycleFiltered;
 
     // MMR reranking
     const ranked = this.mmrRerank(filtered, topK);
@@ -579,6 +700,10 @@ export class RecallEngine {
           channels: c.channels,
           recencyScore: c.recencyScore,
           salienceScore: c.salienceScore,
+          effectiveSalience: c.effectiveSalience,
+          retrievalTier: c.retrievalTier,
+          lifecycleWeight: c.lifecycleWeight,
+          lifecycleReason: c.lifecycleReason,
         };
         if (recallFeedback) {
           item.metadata.recallFeedback = recallFeedback;
@@ -588,17 +713,20 @@ export class RecallEngine {
     });
 
     // Reinforce accessed memories (fire-and-forget)
-    const accessTargets = items.map((item) => ({
-      id: item.id,
-      type: item.type,
-    }));
+    const accessTargets = ranked
+      .filter((candidate) => candidate.retrievalTier !== 'archive_only')
+      .filter((candidate) => candidate.retrievalTier !== 'forgotten')
+      .map((candidate) => ({
+        id: candidate.id,
+        type: candidate.type,
+      }));
     if (options.reinforceAccess ?? true) {
       this.reinforceAccessedMemories(accessTargets);
     }
 
     return {
       items,
-      totalFound: merged.length,
+      totalFound: lifecycleFiltered.length,
       queryTimeMs: Date.now() - startMs,
       channels: usedChannels,
       channelDiagnostics,
@@ -1228,28 +1356,12 @@ export class RecallEngine {
   }
 
   /**
-   * Enrich candidates with salience scores from memory_metadata.
+   * Enrich candidates with lifecycle metadata from memory_metadata.
    */
-  private enrichWithSalience(candidates: RecallCandidate[]): void {
-    for (const c of candidates) {
-      try {
-        const meta = this.db
-          .prepare(
-            `SELECT salience_score, access_count
-             FROM memory_metadata
-             WHERE target_id = ? AND target_type = ?`,
-          )
-          .get(c.id, c.type) as MemoryMetaRow | undefined;
-
-        if (meta) {
-          c.salienceScore = meta.salience_score;
-        }
-      } catch {
-        // memory_metadata may not exist yet
-      }
-    }
-
-    // Also compute normalized recency scores
+  private enrichWithLifecycle(
+    candidates: RecallCandidate[],
+    lifecycleMode: RecallLifecycleMode,
+  ): void {
     const currentTime = now();
     const maxAge = 30 * 86400; // 30 days as normalization window
 
@@ -1259,6 +1371,124 @@ export class RecallEngine {
         c.recencyScore = Math.max(0, 1 - age / maxAge);
       }
     }
+
+    const metadataByKey = this.loadLifecycleMetadata(candidates);
+    const feedbackByKey = this.loadRecallFeedback(candidates);
+
+    for (const c of candidates) {
+      const key = getRecallCandidateKey(c);
+      const meta = metadataByKey.get(key);
+      const feedback = feedbackByKey.get(key);
+      if (meta) {
+        c.salienceScore = meta.salience_score;
+      }
+
+      const decision = decideMemoryLifecycle(
+        {
+          salienceScore: meta?.salience_score,
+          effectiveSalience: meta?.effective_salience,
+          retrievalTier: meta?.retrieval_tier,
+          consolidationLevel: meta?.consolidation_level,
+          lastAccessed: meta?.last_accessed,
+          createdAt: meta?.created_at ?? c.timestamp,
+          timestamp: c.timestamp,
+          feedbackAction: feedback?.action,
+          feedbackUpdatedAt: feedback?.updated_at,
+          currentTime,
+        },
+        lifecycleMode,
+      );
+
+      c.retrievalTier = decision.tier;
+      c.effectiveSalience = decision.effectiveSalience;
+      c.lifecycleWeight = decision.weight;
+      c.lifecycleReason = decision.reason;
+      c.lifecycleAllowed = decision.allowed;
+    }
+  }
+
+  private loadLifecycleMetadata(
+    candidates: RecallCandidate[],
+  ): Map<string, MemoryMetaRow> {
+    const result = new Map<string, MemoryMetaRow>();
+    const grouped = this.groupCandidateIdsByType(candidates);
+
+    try {
+      for (const [type, ids] of grouped) {
+        if (ids.length === 0) continue;
+        const placeholders = ids.map(() => '?').join(',');
+        const rows = this.db
+          .prepare(
+            `SELECT target_type, target_id, salience_score, access_count,
+                    retrieval_tier, effective_salience, consolidation_level,
+                    last_accessed, created_at, updated_at
+             FROM memory_metadata
+             WHERE target_type = ? AND target_id IN (${placeholders})`,
+          )
+          .all(type, ...ids) as MemoryMetaRow[];
+        for (const row of rows) {
+          result.set(`${row.target_type}:${row.target_id}`, row);
+        }
+      }
+    } catch {
+      // Older databases without lifecycle columns fall back to virtual tiers.
+    }
+
+    return result;
+  }
+
+  private loadRecallFeedback(
+    candidates: RecallCandidate[],
+  ): Map<string, MemoryFeedbackRow> {
+    const result = new Map<string, MemoryFeedbackRow>();
+    const grouped = this.groupCandidateIdsByType(candidates);
+
+    try {
+      for (const [type, ids] of grouped) {
+        if (ids.length === 0) continue;
+        const placeholders = ids.map(() => '?').join(',');
+        const rows = this.db
+          .prepare(
+            `SELECT target_type, target_id, action, detail, updated_at
+             FROM memory_feedback_events
+             WHERE feedback_type = 'recall_quality'
+               AND target_type = ?
+               AND target_id IN (${placeholders})`,
+          )
+          .all(type, ...ids) as MemoryFeedbackRow[];
+        for (const row of rows) {
+          if (
+            row.action === 'negative' &&
+            isSceneScopedRecallFeedbackDetail(row.detail)
+          ) {
+            continue;
+          }
+          result.set(`${row.target_type}:${row.target_id}`, row);
+        }
+      }
+    } catch {
+      // Feedback is optional for recall.
+    }
+
+    return result;
+  }
+
+  private groupCandidateIdsByType(
+    candidates: RecallCandidate[],
+  ): Map<RecallCandidate['type'], string[]> {
+    const grouped = new Map<RecallCandidate['type'], Set<string>>();
+    for (const candidate of candidates) {
+      const values = grouped.get(candidate.type) ?? new Set<string>();
+      values.add(candidate.id);
+      grouped.set(candidate.type, values);
+    }
+
+    return new Map(
+      Array.from(grouped.entries()).map(([type, ids]) => [
+        type,
+        Array.from(ids),
+      ]),
+    );
   }
 
   // =========================================================================
@@ -1281,9 +1511,11 @@ export class RecallEngine {
     for (const c of candidates) {
       const candidateKey = getRecallCandidateKey(c);
       const recency = c.recencyScore ?? 0;
-      const salience = c.salienceScore ?? 0;
+      const salience = c.effectiveSalience ?? c.salienceScore ?? 0;
+      const lifecycleWeight = c.lifecycleWeight ?? 1;
       const relevance =
-        c.score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience;
+        (c.score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience) *
+        lifecycleWeight;
       relevanceMap.set(candidateKey, relevance);
     }
 
@@ -1365,12 +1597,24 @@ export class RecallEngine {
 
     try {
       const upsert = this.db.prepare(
-        `INSERT INTO memory_metadata (target_type, target_id, salience_score, access_count, last_accessed, created_at, updated_at)
-         VALUES (?, ?, ?, 1, ?, ?, ?)
+        `INSERT INTO memory_metadata
+           (target_type, target_id, salience_score, access_count, last_accessed,
+            retrieval_tier, effective_salience, lifecycle_updated_at,
+            created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, 'active', ?, ?, ?, ?)
          ON CONFLICT(target_type, target_id) DO UPDATE SET
            access_count = access_count + 1,
            last_accessed = excluded.last_accessed,
            salience_score = salience_score + ?,
+           retrieval_tier = CASE
+             WHEN memory_metadata.consolidation_level = 'forgotten' THEN memory_metadata.retrieval_tier
+             ELSE 'active'
+           END,
+           effective_salience = CASE
+             WHEN memory_metadata.consolidation_level = 'forgotten' THEN memory_metadata.effective_salience
+             ELSE MAX(COALESCE(memory_metadata.effective_salience, 0) + ?, 0.4)
+           END,
+           lifecycle_updated_at = excluded.lifecycle_updated_at,
            updated_at = excluded.updated_at`,
       );
 
@@ -1381,9 +1625,12 @@ export class RecallEngine {
             target.id,
             SALIENCE_REINFORCE_BOOST, // initial salience for new entries
             currentTime,
+            Math.max(SALIENCE_REINFORCE_BOOST, 0.4),
+            currentTime,
             currentTime,
             currentTime,
             SALIENCE_REINFORCE_BOOST, // boost for existing entries
+            SALIENCE_REINFORCE_BOOST,
           );
         }
       });
@@ -1410,13 +1657,12 @@ export class RecallEngine {
     queryText: string,
     entityTypes?: EntityType[],
   ): Entity[] {
-    const queryLower = queryText.toLowerCase();
-    const queryTokens = queryLower
-      .split(/[^\p{L}\p{N}_-]+/u)
-      .map((token) => token.trim())
-      .filter((token) => token.length > 1);
+    const queryTokens = Array.from(new Set(tokenizeGraphEntityText(queryText)));
+    const specificQueryTokens = queryTokens.filter(isSpecificGraphToken);
+    const normalizedQueryPhrase = normalizeGraphPhrase(queryText);
 
-    if (queryTokens.length === 0 && queryLower.trim().length === 0) return [];
+    if (queryTokens.length === 0 && normalizedQueryPhrase.length === 0)
+      return [];
 
     try {
       // Build type filter
@@ -1440,36 +1686,79 @@ export class RecallEngine {
         )
         .all(...params) as EntityRow[];
 
-      const matched: Entity[] = [];
+      const matched: Array<{ entity: Entity; score: number }> = [];
 
       for (const row of entities) {
-        const nameLower = row.name.toLowerCase();
         const aliases: string[] = row.aliases_json
-          ? (safeJsonParse<string[]>(row.aliases_json) ?? [])
+          ? (safeJsonParse<unknown[]>(row.aliases_json) ?? []).filter(
+              (alias): alias is string => typeof alias === 'string',
+            )
           : [];
-        const aliasesLower = aliases.map((a) => a.toLowerCase());
-
-        const directPhraseMatch =
-          queryLower.includes(nameLower) ||
-          aliasesLower.some((alias) => queryLower.includes(alias));
-
-        const tokenMatch = queryTokens.some(
-          (token) =>
-            nameLower.includes(token) ||
-            token.includes(nameLower) ||
-            aliasesLower.some(
-              (alias) => alias.includes(token) || token.includes(alias),
-            ),
+        const terms = [row.name, ...aliases]
+          .map((term) => String(term).trim())
+          .filter(Boolean);
+        const entityTokenList = Array.from(
+          new Set(terms.flatMap((term) => tokenizeGraphEntityText(term))),
         );
+        const matchedTokens = queryTokens.filter((queryToken) =>
+          entityTokenList.some((entityToken) =>
+            tokenMatchesEntityToken(queryToken, entityToken),
+          ),
+        );
+        const specificMatches = matchedTokens.filter(isSpecificGraphToken);
+        const phraseMatch = terms.some((term) => {
+          const normalizedTerm = normalizeGraphPhrase(term);
+          if (!normalizedTerm) return false;
+          const termTokens = tokenizeGraphEntityText(term);
+          const hasShortOnlyTerm =
+            termTokens.length === 1 && termTokens[0].length < 3;
+          if (hasShortOnlyTerm) {
+            return queryTokens.includes(termTokens[0]);
+          }
+          if (queryTokens.length === 1 && queryTokens[0].length < 3) {
+            return false;
+          }
+          return (
+            normalizedQueryPhrase.includes(normalizedTerm) ||
+            (normalizedQueryPhrase.length >= 4 &&
+              normalizedTerm.includes(normalizedQueryPhrase))
+          );
+        });
 
-        if (directPhraseMatch || tokenMatch) {
-          matched.push(entityRowToEntity(row));
-        }
+        const hasSpecificMatch =
+          specificMatches.length > 0 ||
+          (phraseMatch &&
+            specificQueryTokens.some((queryToken) =>
+              entityTokenList.some((entityToken) =>
+                tokenMatchesEntityToken(queryToken, entityToken),
+              ),
+            ));
+        const hasAnyMatch = matchedTokens.length > 0 || phraseMatch;
+
+        if (!hasAnyMatch) continue;
+        if (specificQueryTokens.length > 0 && !hasSpecificMatch) continue;
+
+        const typeBoost =
+          row.type === 'Project' ? 0.2 : row.type === 'Topic' ? 0.1 : 0;
+        const score =
+          row.importance +
+          typeBoost +
+          specificMatches.length * 3 +
+          matchedTokens.length * 0.25 +
+          (phraseMatch ? 1 : 0);
+        matched.push({
+          entity: entityRowToEntity(row),
+          score,
+        });
       }
 
-      // Sort by importance descending
-      matched.sort((a, b) => b.importance - a.importance);
-      return matched;
+      matched.sort(
+        (a, b) =>
+          b.score - a.score || b.entity.importance - a.entity.importance,
+      );
+      return matched
+        .slice(0, MAX_GRAPH_SEED_ENTITIES)
+        .map((item) => item.entity);
     } catch (err) {
       console.warn('[RecallEngine] Entity matching failed:', err);
       return [];

@@ -99,6 +99,13 @@ const panoramaStyle = `
   .header-meta { display: flex; gap: 16px; font-size: 12px; color: var(--text-dim); margin-top: 2px; flex-wrap: wrap; }
   .header-meta span { display: flex; align-items: center; gap: 4px; }
   .header-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .header-copy-state {
+    min-width: 88px;
+    align-self: center;
+    color: var(--text-dim);
+    font-size: 11px;
+    text-align: right;
+  }
   .header-btn {
     padding: 8px 16px;
     border-radius: 8px;
@@ -996,6 +1003,7 @@ function PanoramaPage() {
   >(null);
   const [renameDraft, setRenameDraft] = useState<string>('');
   const [followUpCopyState, setFollowUpCopyState] = useState('');
+  const [linkCopyState, setLinkCopyState] = useState('');
   const archivedSession = useMemo(() => getArchivedSessionFromQuery(), []);
   const isArchivedHistoryMode = Boolean(archivedSession);
   const session =
@@ -1188,9 +1196,8 @@ function PanoramaPage() {
   };
 
   const replayRecording = () => {
-    const targetUrl = session.digest.videoUrl || session.digest.resultUrl;
-    if (!targetUrl) return;
-    void chrome.tabs.create({ url: targetUrl, active: true });
+    if (!session.digest.videoUrl) return;
+    void chrome.tabs.create({ url: session.digest.videoUrl, active: true });
   };
 
   const openMeetingArchive = () => {
@@ -1216,6 +1223,20 @@ function PanoramaPage() {
       setFollowUpCopyState('已复制');
     } catch {
       setFollowUpCopyState('复制失败');
+    }
+  };
+
+  const copyLink = async (url: string | undefined, successMessage: string) => {
+    if (!url) {
+      setLinkCopyState('没有可复制链接');
+      return;
+    }
+    try {
+      await writeClipboardText(url);
+      setLinkCopyState(successMessage);
+      window.setTimeout(() => setLinkCopyState(''), 3200);
+    } catch {
+      setLinkCopyState('复制失败，请手动复制');
     }
   };
 
@@ -1346,17 +1367,25 @@ function PanoramaPage() {
           </button>
           <button
             className="header-btn"
-            onClick={() => navigator.clipboard?.writeText(window.location.href)}
+            onClick={() => void copyLink(window.location.href, '页面链接已复制')}
           >
-            📤 分享到 RC
+            🔗 复制页面链接
           </button>
+          <span className="header-copy-state" aria-live="polite">
+            {linkCopyState}
+          </span>
           <button className="header-btn" onClick={exportSession}>
             📋 导出
           </button>
           <button
             className="header-btn primary"
             onClick={replayRecording}
-            disabled={!session.digest.videoUrl && !session.digest.resultUrl}
+            disabled={!session.digest.videoUrl}
+            title={
+              session.digest.videoUrl
+                ? '打开会议录制素材'
+                : '当前会议没有可回放的录制素材，请查看 PDF 或会议记录'
+            }
           >
             ▶️ 回放录制
           </button>
@@ -1886,7 +1915,7 @@ function PanoramaPage() {
                     href={window.location.href}
                     onClick={(event) => {
                       event.preventDefault();
-                      navigator.clipboard?.writeText(window.location.href);
+                      void copyLink(window.location.href, '页面链接已复制');
                     }}
                   >
                     复制链接
@@ -2075,7 +2104,7 @@ function PanoramaPage() {
                         href={pdfUrl}
                         onClick={(event) => {
                           event.preventDefault();
-                          navigator.clipboard?.writeText(pdfUrl);
+                          void copyLink(pdfUrl, 'PDF 链接已复制');
                         }}
                       >
                         分享链接
@@ -2139,7 +2168,7 @@ function PanoramaPage() {
                         return;
                       }
                       event.preventDefault();
-                      navigator.clipboard?.writeText(session.digest.videoUrl);
+                      void copyLink(session.digest.videoUrl, '录制链接已复制');
                     }}
                   >
                     复制链接

@@ -20,6 +20,28 @@ const askRequests = [];
 const feedbackRequests = [];
 const nowSeconds = Math.floor(Date.now() / 1000);
 
+function assertFeedbackRequest(index, expected, expectedDetail = {}) {
+  const request = feedbackRequests[index];
+  const { detail, ...base } = request;
+  assert.deepEqual(base, expected);
+  assert.equal(typeof detail, 'string', 'feedback detail should be serialized');
+  const parsedDetail = JSON.parse(detail);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(expectedDetail).map(([key, value]) => [
+        key,
+        parsedDetail[key],
+      ]),
+    ),
+    expectedDetail,
+  );
+  assert.equal(
+    typeof parsedDetail.scene_anchor_signature,
+    'string',
+    'feedback detail should include scene signature',
+  );
+}
+
 function jsonResponse(body) {
   return {
     status: 200,
@@ -159,30 +181,59 @@ try {
 
   await resultCard.getByRole('button', { name: '有用' }).click();
   await resultCard.getByText('已记录为有用').waitFor({ timeout: 10000 });
-  assert.deepEqual(feedbackRequests[0], {
-    type: 'recall_quality',
-    targetId: 'search-feedback-message',
-    targetType: 'message',
-    action: 'positive',
-  });
+  assertFeedbackRequest(
+    0,
+    {
+      type: 'recall_quality',
+      targetId: 'search-feedback-message',
+      targetType: 'message',
+      action: 'positive',
+    },
+    {
+      interaction: 'context_recall_feedback',
+      surface: 'ask_evidence',
+      action: 'positive',
+      target_type: 'message',
+    },
+  );
 
   await resultCard.getByRole('button', { name: '不相关' }).click();
   await resultCard.getByText('已记录为不相关').waitFor({ timeout: 10000 });
-  assert.deepEqual(feedbackRequests[1], {
-    type: 'recall_quality',
-    targetId: 'search-feedback-message',
-    targetType: 'message',
-    action: 'negative',
-  });
+  assertFeedbackRequest(
+    1,
+    {
+      type: 'recall_quality',
+      targetId: 'search-feedback-message',
+      targetType: 'message',
+      action: 'negative',
+    },
+    {
+      interaction: 'memory_relevance_trainer',
+      surface: 'ask_evidence',
+      action: 'negative',
+      feedback_reason: 'ask_evidence_mismatch',
+      auto_applied: 'true',
+      target_type: 'message',
+    },
+  );
 
   await resultCard.getByRole('button', { name: '撤销' }).click();
   await resultCard.getByText('已撤销反馈').waitFor({ timeout: 10000 });
-  assert.deepEqual(feedbackRequests[2], {
-    type: 'recall_quality',
-    targetId: 'search-feedback-message',
-    targetType: 'message',
-    action: 'clear',
-  });
+  assertFeedbackRequest(
+    2,
+    {
+      type: 'recall_quality',
+      targetId: 'search-feedback-message',
+      targetType: 'message',
+      action: 'clear',
+    },
+    {
+      interaction: 'context_recall_feedback',
+      surface: 'ask_evidence',
+      action: 'clear',
+      target_type: 'message',
+    },
+  );
   assert.equal(
     await resultCard.getByRole('button', { name: '撤销' }).count(),
     0,

@@ -61,6 +61,7 @@
       <select v-model="originKind" class="filter-select" @change="applyFilters">
         <option value="">全部来源</option>
         <option value="manual">手动/定时</option>
+        <option value="message_reaction">消息跟进</option>
         <option value="reflection">自我反思</option>
       </select>
       <input
@@ -78,9 +79,32 @@
       <button class="refresh-btn" @click="loadData">刷新</button>
     </div>
 
+    <div v-if="loadError && !loading" class="load-error-banner" role="alert">
+      <div>
+        <div class="load-error-title">主动询问数据加载失败</div>
+        <p class="load-error-text">{{ loadError }}</p>
+        <p v-if="hasLoadedData" class="load-error-text muted">
+          当前继续展示上次成功加载的数据，避免把服务错误误看成暂无会话。
+        </p>
+        <p v-else class="load-error-text muted">
+          暂时没有可展示的历史数据，请检查 Memory Service 后重试。
+        </p>
+      </div>
+      <button class="retry-btn" @click="loadData">重试加载</button>
+    </div>
+
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <p>加载主动询问会话中...</p>
+    </div>
+
+    <div
+      v-else-if="
+        loadError && sessions.length === 0 && visibleTemplates.length === 0
+      "
+      class="empty-state error-empty"
+    >
+      <p>暂时无法加载主动询问数据。</p>
     </div>
 
     <div
@@ -281,6 +305,14 @@
                 class="session-link"
                 >查看线程</router-link
               >
+              <a
+                v-if="messageReactionSourceUrl(session)"
+                :href="messageReactionSourceUrl(session)"
+                class="session-link"
+                target="_blank"
+                rel="noopener noreferrer"
+                >打开原消息</a
+              >
               <router-link :to="`/outreach/${session.id}`" class="session-link"
                 >查看详情</router-link
               >
@@ -416,6 +448,14 @@
                 class="session-link"
                 >查看线程</router-link
               >
+              <a
+                v-if="messageReactionSourceUrl(session)"
+                :href="messageReactionSourceUrl(session)"
+                class="session-link"
+                target="_blank"
+                rel="noopener noreferrer"
+                >打开原消息</a
+              >
               <router-link :to="`/outreach/${session.id}`" class="session-link"
                 >查看详情/修改</router-link
               >
@@ -536,6 +576,14 @@
                 class="session-link"
                 >查看线程</router-link
               >
+              <a
+                v-if="messageReactionSourceUrl(session)"
+                :href="messageReactionSourceUrl(session)"
+                class="session-link"
+                target="_blank"
+                rel="noopener noreferrer"
+                >打开原消息</a
+              >
               <router-link :to="`/outreach/${session.id}`" class="session-link"
                 >查看详情</router-link
               >
@@ -652,6 +700,14 @@
                 class="session-link"
                 >查看线程</router-link
               >
+              <a
+                v-if="messageReactionSourceUrl(session)"
+                :href="messageReactionSourceUrl(session)"
+                class="session-link"
+                target="_blank"
+                rel="noopener noreferrer"
+                >打开原消息</a
+              >
               <router-link :to="`/outreach/${session.id}`" class="session-link"
                 >查看详情</router-link
               >
@@ -688,10 +744,7 @@ import {
   type RuntimeConfigResponse,
 } from '../../services/MemoryServiceClient';
 import { getOutreachEvidenceSnapshot } from './outreachEvidence';
-import {
-  collectEvidenceMentionLabels,
-  RichEvidenceText,
-} from './evidenceText';
+import { collectEvidenceMentionLabels, RichEvidenceText } from './evidenceText';
 
 declare const chrome: any;
 
@@ -710,6 +763,8 @@ const summary = ref<OutreachSummary>({
 });
 const runtimeConfig = ref<RuntimeConfigResponse | null>(null);
 const busyById = reactive<Record<string, boolean>>({});
+const loadError = ref('');
+const hasLoadedData = ref(false);
 const TERMINAL_OUTREACH_STATUSES = new Set([
   'resolved',
   'no_reply',
@@ -820,33 +875,68 @@ function applyFilters() {
 
 async function loadData() {
   loading.value = true;
+  loadError.value = '';
   try {
-    const [configData, summaryData, templateData, listData] = await Promise.all(
-      [
-        client.getRuntimeConfig(),
-        client.getOutreachSummary(),
-        client.getOutreachTemplateRuntimeStatus(undefined, 100),
-        client.getOutreachSessions({
-          status: status.value,
-          originKind: originKind.value || undefined,
-          templateId: templateId.value || undefined,
-          threadId: threadId.value || undefined,
-          limit: 50,
-        }),
-      ],
-    );
-    runtimeConfig.value = configData;
-    summary.value = summaryData;
-    templateItems.value = templateData.items;
-    sessions.value = sortSessionsForDisplay(listData.items);
-  } catch (error) {
-    console.error('Failed to load outreach sessions:', error);
-    runtimeConfig.value = null;
-    sessions.value = [];
-    templateItems.value = [];
+    const results = await Promise.allSettled([
+      client.getRuntimeConfig(),
+      client.getOutreachSummary(),
+      client.getOutreachTemplateRuntimeStatus(undefined, 100),
+      client.getOutreachSessions({
+        status: status.value,
+        originKind: originKind.value || undefined,
+        templateId: templateId.value || undefined,
+        threadId: threadId.value || undefined,
+        limit: 50,
+      }),
+    ] as const);
+
+    const failures: string[] = [];
+    const [configResult, summaryResult, templateResult, listResult] = results;
+
+    if (configResult.status === 'fulfilled') {
+      runtimeConfig.value = configResult.value;
+    } else {
+      failures.push(formatLoadFailure('运行配置', configResult.reason));
+    }
+
+    if (summaryResult.status === 'fulfilled') {
+      summary.value = summaryResult.value;
+    } else {
+      failures.push(formatLoadFailure('统计摘要', summaryResult.reason));
+    }
+
+    if (templateResult.status === 'fulfilled') {
+      templateItems.value = templateResult.value.items;
+    } else {
+      failures.push(formatLoadFailure('待触发计划', templateResult.reason));
+    }
+
+    if (listResult.status === 'fulfilled') {
+      sessions.value = sortSessionsForDisplay(listResult.value.items);
+    } else {
+      failures.push(formatLoadFailure('会话列表', listResult.reason));
+    }
+
+    if (failures.length > 0) {
+      loadError.value = failures.join('；');
+      console.error('Failed to load outreach sessions:', failures.join('; '));
+    }
+    if (
+      templateResult.status === 'fulfilled' ||
+      listResult.status === 'fulfilled'
+    ) {
+      hasLoadedData.value =
+        sessions.value.length > 0 || templateItems.value.length > 0;
+    }
   } finally {
     loading.value = false;
   }
+}
+
+function formatLoadFailure(label: string, error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error);
+  const message = raw.replace(/^MemoryService\s+\d+:\s*/i, '').trim();
+  return `${label}：${message || 'unknown error'}`;
 }
 
 async function approveSession(id: string) {
@@ -933,9 +1023,28 @@ function statusLabel(statusValue: string) {
 
 function originLabel(originKind?: string) {
   if (originKind === 'reflection_action') return '自我反思';
+  if (originKind === 'message_reaction') return '消息跟进';
   if (originKind === 'scheduled_template' || originKind === 'manual_action')
     return '手动/定时';
   return originKind || '未知来源';
+}
+
+function isMessageReactionSession(session: OutreachSession) {
+  return session.originKind === 'message_reaction';
+}
+
+function messageReactionSourceUrl(session: OutreachSession): string {
+  if (!isMessageReactionSession(session)) return '';
+  const raw = session.outcome?.messageUrl;
+  if (typeof raw !== 'string' || !raw.trim()) return '';
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.href
+      : '';
+  } catch {
+    return '';
+  }
 }
 
 function formatTarget(targetType?: string, targetRef?: string) {
@@ -954,7 +1063,9 @@ function templateTargetResolutionLabel(
   item: OutreachTemplateRuntimeStatusItem,
 ) {
   if (item.latestSession?.targetResolutionStatus === 'resolved') {
-    return `已确认：${item.latestSession.targetResolvedLabel || item.latestSession.targetRef}`;
+    return `已确认：${
+      item.latestSession.targetResolvedLabel || item.latestSession.targetRef
+    }`;
   }
   if (item.latestSession?.targetResolutionStatus === 'ambiguous') {
     return '待你确认目标';
@@ -1018,7 +1129,9 @@ function resolveTemplateNextDispatchAt(
       : '';
   if (!scheduleDate) return null;
   const date = new Date(
-    `${scheduleDate}T${scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime}`,
+    `${scheduleDate}T${
+      scheduleTime.length === 5 ? `${scheduleTime}:00` : scheduleTime
+    }`,
   );
   if (Number.isNaN(date.getTime())) return null;
   const baseline = Math.floor(Date.now() / 1000);
@@ -1121,17 +1234,28 @@ function sessionStageHint(session: OutreachSession) {
       return '目标还没有解析成明确的 RingCentral 用户/群组，需先进入详情确认目标。';
     }
     if (session.nextCheckAt) {
-      return `已找到询问对象 ${formatTarget(session.targetType, session.targetRef)}。批准后会按计划在 ${relativeTime(session.nextCheckAt)} 发出。`;
+      return `已找到询问对象 ${formatTarget(
+        session.targetType,
+        session.targetRef,
+      )}。批准后会按计划在 ${relativeTime(session.nextCheckAt)} 发出。`;
     }
-    return `已找到询问对象 ${formatTarget(session.targetType, session.targetRef)}，等待你确认是否真的发出。`;
+    return `已找到询问对象 ${formatTarget(
+      session.targetType,
+      session.targetRef,
+    )}，等待你确认是否真的发出。`;
   }
   if (session.status === 'scheduled') {
     if (session.nextCheckAt) {
-      return `已完成审批或无需审批，计划在 ${relativeTime(session.nextCheckAt)} 发出。`;
+      return `已完成审批或无需审批，计划在 ${relativeTime(
+        session.nextCheckAt,
+      )} 发出。`;
     }
     return '已完成审批或无需审批，等待引擎真正发出。';
   }
   if (session.status === 'waiting_reply') {
+    if (isMessageReactionSession(session)) {
+      return '这条跟进来自原始消息；系统会先检查当前会话是否已有满足目标的回复，没命中才在等待时间后追问。';
+    }
     return '消息已发出，当前正在等待对方回复。';
   }
   if (session.status === 'deferred') {
@@ -1185,7 +1309,9 @@ function evidenceSnapshot(session: OutreachSession) {
   return getOutreachEvidenceSnapshot(session);
 }
 
-function evidenceMentionLabels(session: OutreachSession): Record<string, string> {
+function evidenceMentionLabels(
+  session: OutreachSession,
+): Record<string, string> {
   return collectEvidenceMentionLabels(session);
 }
 </script>
@@ -1316,6 +1442,50 @@ function evidenceMentionLabels(session: OutreachSession): Record<string, string>
 .refresh-btn {
   cursor: pointer;
   background: rgba(30, 41, 59, 0.84);
+}
+
+.load-error-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 1.05rem;
+  margin-bottom: 1rem;
+  border-radius: 1rem;
+  background: rgba(127, 29, 29, 0.26);
+  border: 1px solid rgba(248, 113, 113, 0.32);
+}
+
+.load-error-title {
+  font-weight: 700;
+  color: #fecaca;
+  margin-bottom: 0.35rem;
+}
+
+.load-error-text {
+  margin: 0;
+  color: #fee2e2;
+  line-height: 1.5;
+}
+
+.load-error-text.muted {
+  color: #fca5a5;
+  margin-top: 0.25rem;
+}
+
+.retry-btn {
+  border: none;
+  border-radius: 0.8rem;
+  padding: 0.72rem 1rem;
+  cursor: pointer;
+  background: #ef4444;
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.error-empty p {
+  color: #fecaca;
 }
 
 .title-link {

@@ -167,8 +167,52 @@ function buildLocalDate(date: Date, timezone: string): string {
   return formatter.format(date);
 }
 
-function localDateStartApprox(localDate: string): number {
-  return Math.floor(new Date(`${localDate}T00:00:00.000Z`).getTime() / 1000);
+function timeZoneOffsetSeconds(date: Date, timezone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour12: false,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, Number(part.value)]),
+  );
+  const localAsUtcSeconds = Math.floor(
+    Date.UTC(
+      values.year,
+      values.month - 1,
+      values.day,
+      values.hour,
+      values.minute,
+      values.second,
+    ) / 1000,
+  );
+  return localAsUtcSeconds - Math.floor(date.getTime() / 1000);
+}
+
+function localDateStartApprox(localDate: string, timezone: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(localDate);
+  if (!match) {
+    return Math.floor(new Date(`${localDate}T00:00:00.000Z`).getTime() / 1000);
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utcMidnightMs = Date.UTC(year, month - 1, day, 0, 0, 0);
+  let startAt =
+    Math.floor(utcMidnightMs / 1000) -
+    timeZoneOffsetSeconds(new Date(utcMidnightMs), timezone);
+  startAt =
+    Math.floor(utcMidnightMs / 1000) -
+    timeZoneOffsetSeconds(new Date(startAt * 1000), timezone);
+  return startAt;
 }
 
 function isRecurringNoise(event: ContextAssistMeetingEvent): boolean {
@@ -232,7 +276,7 @@ export class TodayPilotMeetingPrepService {
     options: { llmClient?: Pick<LLMClient, 'generateJSON'> } = {},
   ) {
     this.repo = new TodayPilotMeetingPrepRepository(db);
-    this.recallService = new ContextRecallService(db);
+    this.recallService = new ContextRecallService(db, userId);
     this.llmClient = options.llmClient ?? getLLMClient();
   }
 
@@ -245,7 +289,10 @@ export class TodayPilotMeetingPrepService {
     const horizonHours = Math.max(1, Math.min(options.horizonHours ?? 36, 96));
     const maxMeetings = Math.max(1, Math.min(options.maxMeetings ?? 5, 20));
     const mode = options.mode ?? 'nightly_llm';
-    const startAt = Math.max(now() - 15 * 60, localDateStartApprox(localDate));
+    const startAt = Math.max(
+      now() - 15 * 60,
+      localDateStartApprox(localDate, timezone),
+    );
     const endAt = startAt + horizonHours * 3600;
     const rows = this.db
       .prepare(

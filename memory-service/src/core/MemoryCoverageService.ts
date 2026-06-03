@@ -442,6 +442,29 @@ function scoreRepairActionForPlatform(input: {
   };
 }
 
+function repairActionForInactiveSkillPlatform(input: {
+  id: string;
+  name: string;
+  setting: SkillSyncCoverageRow | undefined;
+  enabled: boolean;
+}): MemoryCoverageRepairAction {
+  const hasError = input.enabled && Boolean(input.setting?.lastError);
+  return {
+    id: `${input.id}:enable`,
+    platformId: input.id,
+    title: hasError
+      ? `检查 ${input.name} 技能同步探测`
+      : `按需启用 ${input.name} 技能同步`,
+    description: hasError
+      ? `${input.name} 已启用但最近探测失败：${input.setting?.lastError}`
+      : input.enabled
+        ? `${input.name} 技能同步已启用；当前只是 P1+ 可选覆盖通道，不作为主覆盖缺口。`
+        : `${input.name} 是 P1+ 可选覆盖通道；未显式启用时只作为规划项，不算当前覆盖故障。`,
+    severity: hasError ? 'warning' : 'info',
+    source: `skill_platform_sync_settings.platform='${input.id}'`,
+  };
+}
+
 export class MemoryCoverageService {
   constructor(private readonly db: BetterSqlite3.Database) {}
 
@@ -1167,15 +1190,12 @@ export class MemoryCoverageService {
         description: 'P0 只展示是否配置和是否启用，不自动写入外部平台。',
         stateOverride: state,
         repairActions: [
-          {
-            id: `${item.id}:enable`,
-            platformId: item.id,
-            title: `按需启用 ${item.name} 技能同步`,
-            description:
-              '只有用户明确启用后，Personal AI 才会把个人技能推送到该平台。',
-            severity: enabled ? 'info' : 'warning',
-            source: `skill_platform_sync_settings.platform='${item.id}'`,
-          },
+          repairActionForInactiveSkillPlatform({
+            id: item.id,
+            name: item.name,
+            setting,
+            enabled,
+          }),
         ],
       });
     });

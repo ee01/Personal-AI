@@ -1090,6 +1090,76 @@ describe('Day Pilot API', () => {
     expect(nextIds.has(muteCard.id)).toBe(false);
   });
 
+  it('hides cached action cards after the source action is completed', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, risk_level, confidence, evidence_refs_json,
+         requires_approval, state, created_at, action_type, execution_mode,
+         priority, source_kind, source_ref_id, queue_status, utility_score, urgency_score)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'action-openclaw-author',
+      'delegate_openclaw',
+      '继续外部核实: 事实跟进: RingClaw · author',
+      '需要确认是否继续由 OpenClaw 外部核实 RingClaw 作者信息。',
+      'low',
+      0.92,
+      JSON.stringify([]),
+      1,
+      'pending',
+      current - 120,
+      'delegate_openclaw',
+      'manual',
+      9,
+      'reflection_run',
+      'ringclaw-author',
+      'queued',
+      0.9,
+      0.9,
+    );
+
+    const first = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+    expect(first.statusCode).toBe(200);
+    const card = first
+      .json()
+      .brief.cards.find((item: any) =>
+        item.evidenceRefs.some(
+          (ref: any) => ref.sourceId === 'action-openclaw-author',
+        ),
+      );
+    expect(card).toBeTruthy();
+
+    db.prepare(
+      `UPDATE proposed_actions
+       SET queue_status = 'succeeded',
+           state = 'executed',
+           executed_at = ?,
+           finished_at = ?
+       WHERE id = ?`,
+    ).run(current, current, 'action-openclaw-author');
+
+    const next = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=false`,
+    });
+    expect(next.statusCode).toBe(200);
+    expect(
+      next
+        .json()
+        .brief.cards.some((item: any) =>
+          item.evidenceRefs.some(
+            (ref: any) => ref.sourceId === 'action-openclaw-author',
+          ),
+        ),
+    ).toBe(false);
+  });
+
   it('defaults later feedback to a six-hour snooze when omitted by the client', async () => {
     const { localDate } = seedDayPilotData();
     const first = await app.inject({

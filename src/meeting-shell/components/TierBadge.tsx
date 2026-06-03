@@ -8,6 +8,7 @@ interface TierBadgeProps {
 
 const BADGE_COLORS: Record<MeetingPilotTierStatus['badge'], string> = {
   Probing: '#9ca3af',
+  'RC Transcript': '#0891b2',
   'On-Device': '#16a34a',
   'Local ASR': '#2563eb',
   'Local Whisper': '#2563eb',
@@ -16,12 +17,19 @@ const BADGE_COLORS: Record<MeetingPilotTierStatus['badge'], string> = {
 };
 
 const BADGE_LABELS: Record<MeetingPilotTierStatus['badge'], string> = {
-  Probing: 'Probing...',
-  'On-Device': 'On-Device',
-  'Local ASR': 'Local ASR',
-  'Local Whisper': 'Local ASR',
-  Cloud: 'Cloud',
-  'No ASR': 'No Transcription',
+  Probing: '检测中',
+  'RC Transcript': 'RC 转写',
+  'On-Device': '本机转写',
+  'Local ASR': '本地 ASR',
+  'Local Whisper': '本地 ASR',
+  Cloud: '云端 ASR',
+  'No ASR': '无转写',
+};
+
+const MODE_LABELS: Record<MeetingPilotTierStatus['mode'], string> = {
+  auto: '自动',
+  'local-only': '仅本地',
+  'cloud-only': '仅云端',
 };
 
 export function TierBadge({ tier }: TierBadgeProps): React.ReactElement | null {
@@ -48,8 +56,10 @@ export function TierBadge({ tier }: TierBadgeProps): React.ReactElement | null {
   }, [badge, tier?.lastTransitionReason]);
 
   const tooltipText = tier
-    ? `Mode: ${tier.mode}${tier.lastTransitionReason ? ` | ${tier.lastTransitionReason}` : ''}`
-    : 'Transcription mode unknown';
+    ? `转写模式：${MODE_LABELS[tier.mode]}${
+        tier.lastTransitionReason ? `；${tier.lastTransitionReason}` : ''
+      }`
+    : '正在检测转写链路';
 
   return (
     <span
@@ -62,7 +72,7 @@ export function TierBadge({ tier }: TierBadgeProps): React.ReactElement | null {
     >
       <span
         title={tooltipText}
-        aria-label={`Transcription: ${label}`}
+        aria-label={`转写状态：${label}`}
         style={{
           display: 'inline-block',
           padding: '2px 8px',
@@ -94,7 +104,7 @@ export function TierBadge({ tier }: TierBadgeProps): React.ReactElement | null {
             zIndex: 9999,
           }}
         >
-          Switched to {label}
+          已切换到 {label}
         </span>
       )}
     </span>

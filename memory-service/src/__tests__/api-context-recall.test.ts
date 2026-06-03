@@ -40,6 +40,9 @@ describe('Context Recall API (POST /context-recall)', () => {
   });
 
   beforeEach(() => {
+    db.prepare('DELETE FROM recall_training_cases').run();
+    db.prepare('DELETE FROM recall_patch_runs').run();
+    db.prepare('DELETE FROM recall_relevance_patches').run();
     db.prepare('DELETE FROM conversation_context_frames').run();
     db.prepare('DELETE FROM memory_feedback_events').run();
     db.prepare('DELETE FROM memory_metadata').run();
@@ -157,6 +160,9 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(top.displayPriority).toBe('p1');
     expect(top.whyRelevant?.length).toBeGreaterThan(0);
     expect(top.matchedAnchors?.projects || top.matchedAnchors?.topics).toBeTruthy();
+    expect(body.autopilot?.mode).toBe('card');
+    expect(body.autopilot?.strongCount).toBeGreaterThan(0);
+    expect(body.autopilot?.sceneAnchors?.projects || body.autopilot?.sceneAnchors?.topics).toBeTruthy();
     expect(
       typeof top.exploreLink === 'string' || top.exploreLink === undefined,
     ).toBe(true);
@@ -192,6 +198,80 @@ describe('Context Recall API (POST /context-recall)', () => {
       )
       .get() as { access_count: number } | undefined;
     expect(row).toBeUndefined();
+  });
+
+  it('applies scene-aware user relevance patches before displaying matches', async () => {
+    const feedback = await app.inject({
+      method: 'POST',
+      url: '/api/v1/feedback',
+      payload: {
+        type: 'recall_quality',
+        targetType: 'chunk',
+        targetId: '9001',
+        action: 'negative',
+        detail: JSON.stringify({
+          version: '1',
+          interaction: 'memory_relevance_trainer',
+          surface: 'web_passive_bubble',
+          action: 'negative',
+          feedback_reason: 'wrong_group_or_project',
+          current_url: 'https://internal.example.com/wiki/falcon-current',
+          current_title: 'Falcon launch readiness',
+          display_priority: 'p1',
+        }),
+      },
+    });
+    expect(feedback.statusCode).toBe(200);
+    expect(feedback.json().relevancePatch?.status).toBe('patched');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'webpage',
+        title: 'Falcon launch readiness',
+        url: 'https://internal.example.com/wiki/falcon-current',
+        primaryText: 'Project Falcon launch readiness',
+        limit: 5,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const ids = body.matches.map((match: any) => match.id);
+    expect(ids).not.toContain('9001');
+    expect(body.debug?.suppressionReasons).toContain('user_relevance_patch');
+    expect(
+      body.autopilot?.quietReasons.map((item: any) => item.reason),
+    ).toContain('user_relevance_patch');
+  });
+
+  it('does not return archived memories on passive context recall', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO memory_metadata
+        (target_type, target_id, salience_score, effective_salience,
+         retrieval_tier, consolidation_level, created_at, updated_at)
+       VALUES ('chunk', '9001', 0.1, 0.1, 'archive_only', 'archived', ?, ?)`,
+    ).run(now, now);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'webpage',
+        title: 'Falcon launch readiness',
+        primaryText: 'Project Falcon launch readiness',
+        limit: 5,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const ids = res.json().matches.map((match: any) => match.id);
+    expect(ids).not.toContain('9001');
   });
 
   it('filters exact current URL and negative feedback self echoes', async () => {
@@ -281,6 +361,10 @@ describe('Context Recall API (POST /context-recall)', () => {
     const body = res.json();
     expect(body.matches).toEqual([]);
     expect(body.topMatch).toBeNull();
+    expect(body.autopilot?.mode).toBe('silent');
+    expect(body.autopilot?.quietReasons.map((item: any) => item.reason)).toContain(
+      'source_context_excluded',
+    );
     expect(body.debug?.rejectedReason).toBe('low_information_match');
   });
 
@@ -882,6 +966,10 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(clusterMatches).toHaveLength(1);
     expect(clusterMatches[0].mergedCount).toBe(2);
     expect(clusterMatches[0].mergedIds.sort()).toEqual(['9021', '9022']);
+    expect(body.autopilot?.duplicateMergedCount).toBe(1);
+    expect(body.autopilot?.quietReasons.map((item: any) => item.reason)).toContain(
+      'duplicate_source_cluster',
+    );
   });
 
   it('uses all scope by default for passive recall', async () => {

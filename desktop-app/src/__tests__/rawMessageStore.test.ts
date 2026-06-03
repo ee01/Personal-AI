@@ -52,6 +52,7 @@ test('RawMessageStore deduplicates messages and tracks pending extract counts', 
       pendingExtractCount: 1,
       conversationCount: 1,
       artifactCount: 0,
+      revokedArtifactCount: 0,
     });
 
     const preview = store.listMessages({
@@ -132,6 +133,7 @@ test('RawMessageStore reset removes scoped cache entries', async () => {
       pendingExtractCount: 1,
       conversationCount: 1,
       artifactCount: 1,
+      revokedArtifactCount: 0,
     });
     assert.deepEqual(store.listConversationArtifacts({ source: 'doubao' }), [
       {
@@ -139,6 +141,9 @@ test('RawMessageStore reset removes scoped cache entries', async () => {
         conversationId: 'conv-2',
         extractedAt: store.listConversationArtifacts({ source: 'doubao' })[0]!
           .extractedAt,
+        scope: undefined,
+        revokedAt: undefined,
+        revokedScope: undefined,
         kind: 'plan',
         text: 'artifact-2',
         sourceQuote: 'second',
@@ -152,6 +157,7 @@ test('RawMessageStore reset removes scoped cache entries', async () => {
       pendingExtractCount: 0,
       conversationCount: 0,
       artifactCount: 0,
+      revokedArtifactCount: 0,
     });
     assert.deepEqual(store.listConversationArtifacts({ source: 'doubao' }), []);
   } finally {
@@ -268,6 +274,7 @@ test('RawMessageStore lists conversation summaries for browsing', async () => {
         pendingMessageCount: 1,
         extractedMessageCount: 0,
         artifactCount: 0,
+        revokedArtifactCount: 0,
         latestMessagePreview: 'latest overall',
       },
       {
@@ -278,6 +285,7 @@ test('RawMessageStore lists conversation summaries for browsing', async () => {
         pendingMessageCount: 1,
         extractedMessageCount: 1,
         artifactCount: 1,
+        revokedArtifactCount: 0,
         latestMessagePreview: 'latest in conv 1',
       },
     ]);
@@ -355,6 +363,113 @@ test('RawMessageStore.listAllArtifacts paginates and filters across sources', as
     assert.equal(store.countAllArtifacts(), 3);
     assert.equal(store.countAllArtifacts({ source: 'doubao' }), 2);
     assert.equal(store.countAllArtifacts({ query: 'tokyo' }), 1);
+  } finally {
+    store.close();
+  }
+});
+
+test('RawMessageStore marks source-scope artifacts revoked while keeping audit rows', async () => {
+  const tempDir = await createTempDir('explorer-store-revoke-');
+  const store = new RawMessageStore(path.join(tempDir, 'raw-messages.sqlite'));
+
+  try {
+    store.insertMany([
+      {
+        source: 'doubao',
+        conversationId: 'conv-work',
+        messageId: 'msg-work',
+        role: 'user',
+        contentHash: 'hash-work',
+        content: 'work message',
+      },
+      {
+        source: 'doubao',
+        conversationId: 'conv-personal',
+        messageId: 'msg-personal',
+        role: 'user',
+        contentHash: 'hash-personal',
+        content: 'personal message',
+      },
+    ]);
+    store.replaceConversationArtifacts({
+      source: 'doubao',
+      conversationId: 'conv-work',
+      scope: 'work',
+      artifacts: [
+        {
+          kind: 'fact',
+          text: 'work artifact',
+          sourceQuote: 'work message',
+          conversationRef: 'conv-work',
+        },
+      ],
+    });
+    store.replaceConversationArtifacts({
+      source: 'doubao',
+      conversationId: 'conv-personal',
+      scope: 'personal',
+      artifacts: [
+        {
+          kind: 'preference',
+          text: 'personal artifact',
+          sourceQuote: 'personal message',
+          conversationRef: 'conv-personal',
+        },
+      ],
+    });
+
+    assert.deepEqual(store.getRevokePreview('doubao', 'personal'), {
+      scope: 'personal',
+      activeArtifactCount: 1,
+      legacyUnscopedArtifactCount: 0,
+      revokedArtifactCount: 0,
+    });
+    assert.equal(
+      store.markArtifactsRevoked(
+        'doubao',
+        'personal',
+        '2026-05-30T08:00:00.000Z',
+      ),
+      1,
+    );
+    assert.deepEqual(store.getStats('doubao'), {
+      messageCount: 2,
+      pendingExtractCount: 2,
+      conversationCount: 2,
+      artifactCount: 1,
+      revokedArtifactCount: 1,
+    });
+    assert.deepEqual(store.getRevokePreview('doubao', 'personal'), {
+      scope: 'personal',
+      activeArtifactCount: 0,
+      legacyUnscopedArtifactCount: 0,
+      revokedArtifactCount: 1,
+    });
+    assert.equal(store.listAllArtifacts({ source: 'doubao' }).length, 1);
+    assert.deepEqual(
+      store
+        .listConversationArtifacts({ source: 'doubao' })
+        .map((artifact) => ({
+          text: artifact.text,
+          scope: artifact.scope,
+          revokedAt: artifact.revokedAt,
+          revokedScope: artifact.revokedScope,
+        })),
+      [
+        {
+          text: 'personal artifact',
+          scope: 'personal',
+          revokedAt: '2026-05-30T08:00:00.000Z',
+          revokedScope: 'personal',
+        },
+        {
+          text: 'work artifact',
+          scope: 'work',
+          revokedAt: undefined,
+          revokedScope: undefined,
+        },
+      ],
+    );
   } finally {
     store.close();
   }

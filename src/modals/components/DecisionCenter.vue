@@ -26,11 +26,15 @@
         <button class="load-error-retry" @click="loadQueues()">重试</button>
       </div>
 
-      <div
-        v-if="targetNotice"
-        class="target-notice"
-        :class="targetNotice.kind"
-      >
+      <div v-if="queueWarningText && !loadError" class="partial-load-warning">
+        <div>
+          <div class="partial-load-warning-title">部分队列刷新失败</div>
+          <p>{{ queueWarningText }}</p>
+        </div>
+        <button class="partial-load-retry" @click="loadQueues()">重试全部</button>
+      </div>
+
+      <div v-if="targetNotice" class="target-notice" :class="targetNotice.kind">
         <div>
           <div class="target-notice-title">{{ targetNotice.title }}</div>
           <p>{{ targetNotice.body }}</p>
@@ -48,7 +52,14 @@
           <span class="lane-count">{{ decisionTotal }}</span>
         </div>
 
-        <div v-if="decisionRequests.length === 0" class="empty-state compact">
+        <div v-if="queueErrors.decisionPending" class="lane-error">
+          {{ queueErrors.decisionPending }}
+        </div>
+
+        <div
+          v-if="decisionRequests.length === 0 && !queueErrors.decisionPending"
+          class="empty-state compact"
+        >
           <span>✅</span>
           <p>暂无待处理决策</p>
         </div>
@@ -122,9 +133,7 @@
               <div v-else class="evidence-empty">
                 未附带证据引用；请根据问题和上下文判断。
               </div>
-              <div class="option-preview">
-                可选项：{{ optionPreview(req) }}
-              </div>
+              <div class="option-preview">可选项：{{ optionPreview(req) }}</div>
               <div v-if="copyStatus[req.id]" class="copy-status">
                 {{ copyStatus[req.id] }}
               </div>
@@ -196,9 +205,152 @@
                   {{ submitting[req.id] ? '提交中...' : '否' }}
                 </button>
               </template>
+              <button
+                class="option-btn quiet"
+                :disabled="submitting[req.id]"
+                @click="transitionDecisionRequest(req.id, 'snoozed')"
+              >
+                {{ submitting[req.id] ? '处理中...' : '稍后再决定' }}
+              </button>
             </div>
           </div>
         </TransitionGroup>
+      </section>
+
+      <section class="lane-section deferred-section">
+        <button
+          class="watch-toggle"
+          @click="deferredCollapsed = !deferredCollapsed"
+        >
+          <div>
+            <h3 class="lane-title">稍后决策</h3>
+            <p class="lane-note">
+              已从主队列暂时收起的 decision 项，到期后会回到待拍板。
+            </p>
+          </div>
+          <div class="watch-toggle-side">
+            <span class="lane-count muted">{{ decisionSnoozedTotal }}</span>
+            <span class="watch-chevron">{{
+              deferredCollapsed ? '▼' : '▲'
+            }}</span>
+          </div>
+        </button>
+
+        <div v-if="!deferredCollapsed" class="watch-content">
+          <div v-if="queueErrors.decisionSnoozed" class="lane-error">
+            {{ queueErrors.decisionSnoozed }}
+          </div>
+
+          <div
+            v-if="
+              deferredDecisionRequests.length === 0 &&
+              !queueErrors.decisionSnoozed
+            "
+            class="empty-state compact muted-empty"
+          >
+            <span>暂无</span>
+            <p>当前没有稍后决策项</p>
+          </div>
+
+          <TransitionGroup v-else name="card" tag="div" class="decision-list">
+            <div
+              v-for="req in deferredDecisionRequests"
+              :key="req.id"
+              class="decision-card deferred-card"
+              :class="{ 'deep-link-target': req.id === targetConfirmRequestId }"
+              :data-request-id="req.id"
+            >
+              <div class="card-top">
+                <span
+                  class="priority-badge"
+                  :class="priorityClass(req.priority)"
+                  >{{ priorityLabel(req.priority) }}</span
+                >
+                <span class="reason-badge">{{ reasonLabel(req) }}</span>
+                <span v-if="req.category" class="category-tag">{{
+                  req.category
+                }}</span>
+                <span class="created-time">{{
+                  relativeTime(req.createdAt)
+                }}</span>
+              </div>
+
+              <h3 class="question-text">{{ req.question }}</h3>
+              <p v-if="req.context" class="context-text">
+                {{ req.context }}
+              </p>
+
+              <div class="review-context">
+                <div class="review-context-header">
+                  <span>稍后处理上下文</span>
+                  <button
+                    class="copy-review-btn"
+                    :disabled="submitting[req.id]"
+                    @click="copyDecisionReview(req)"
+                  >
+                    复制审核包
+                  </button>
+                </div>
+                <div v-if="req.evidenceRefs?.length" class="evidence-list">
+                  <span
+                    v-for="ref in visibleEvidenceRefs(req)"
+                    :key="ref"
+                    class="evidence-chip"
+                    :title="ref"
+                  >
+                    {{ evidenceRefLabel(ref) }}
+                  </span>
+                  <span
+                    v-if="hiddenEvidenceCount(req) > 0"
+                    class="evidence-chip muted"
+                  >
+                    另有 {{ hiddenEvidenceCount(req) }} 条
+                  </span>
+                </div>
+                <div v-else class="evidence-empty">
+                  未附带证据引用；恢复到主队列后再处理也可以。
+                </div>
+                <div class="option-preview">
+                  可选项：{{ optionPreview(req) }}
+                </div>
+                <div v-if="copyStatus[req.id]" class="copy-status">
+                  {{ copyStatus[req.id] }}
+                </div>
+              </div>
+
+              <div class="meta-row">
+                <span>来源 {{ routeLabel(req) }}</span>
+                <span v-if="req.snoozeUntil"
+                  >回到主队列 {{ futureTime(req.snoozeUntil) }}</span
+                >
+                <span v-if="req.snoozeCount > 0"
+                  >已稍后 {{ req.snoozeCount }} 次</span
+                >
+              </div>
+
+              <div v-if="cardErrors[req.id]" class="card-error">
+                {{ cardErrors[req.id] }}
+              </div>
+
+              <div class="action-buttons">
+                <button
+                  class="option-btn yes"
+                  :disabled="submitting[req.id]"
+                  @click="transitionDecisionRequest(req.id, 'pending')"
+                >
+                  {{ submitting[req.id] ? '处理中...' : '现在处理' }}
+                </button>
+                <button
+                  class="option-btn no"
+                  :disabled="submitting[req.id]"
+                  @click="transitionDecisionRequest(req.id, 'expired')"
+                >
+                  {{ submitting[req.id] ? '处理中...' : '不再追踪' }}
+                </button>
+              </div>
+            </div>
+          </TransitionGroup>
+        </div>
       </section>
 
       <section class="lane-section watch-section">
@@ -214,8 +366,12 @@
         </button>
 
         <div v-if="!watchCollapsed" class="watch-content">
+          <div v-if="hasWatchQueueError" class="lane-error">
+            {{ watchQueueErrorText }}
+          </div>
+
           <div
-            v-if="watchRequests.length === 0"
+            v-if="watchRequests.length === 0 && !hasWatchQueueError"
             class="empty-state compact muted-empty"
           >
             <span>👁</span>
@@ -249,7 +405,9 @@
                   v-for="req in visibleWatchItems(group)"
                   :key="req.id"
                   class="decision-card watch-card"
-                  :class="{ 'deep-link-target': req.id === targetConfirmRequestId }"
+                  :class="{
+                    'deep-link-target': req.id === targetConfirmRequestId,
+                  }"
                   :data-request-id="req.id"
                 >
                   <div class="card-top">
@@ -334,9 +492,14 @@ const route = useRoute();
 
 const loading = ref(true);
 const decisionTotal = ref(0);
-const watchTotal = ref(0);
+const decisionSnoozedTotal = ref(0);
+const watchPendingTotal = ref(0);
+const watchSnoozedTotal = ref(0);
 const decisionRequests = ref<ConfirmRequest[]>([]);
-const watchRequests = ref<ConfirmRequest[]>([]);
+const deferredDecisionRequests = ref<ConfirmRequest[]>([]);
+const watchPendingRequests = ref<ConfirmRequest[]>([]);
+const watchSnoozedRequests = ref<ConfirmRequest[]>([]);
+const deferredCollapsed = ref(true);
 const watchCollapsed = ref(true);
 const expandedWatchGroups = reactive<Record<string, boolean>>({});
 const showDetail = reactive<Record<string, boolean>>({});
@@ -345,14 +508,60 @@ const submitting = reactive<Record<string, boolean>>({});
 const cardErrors = reactive<Record<string, string>>({});
 const copyStatus = reactive<Record<string, string>>({});
 const loadError = ref<string | null>(null);
+type QueueErrorKey =
+  | 'decisionPending'
+  | 'decisionSnoozed'
+  | 'watchPending'
+  | 'watchSnoozed';
+type QueueLoadResponse = {
+  items: ConfirmRequest[];
+  total: number;
+};
+type QueueLoadResult =
+  | { status: 'fulfilled'; value: QueueLoadResponse }
+  | { status: 'rejected'; reason: unknown };
+
+const queueLabels: Record<QueueErrorKey, string> = {
+  decisionPending: '需你拍板',
+  decisionSnoozed: '稍后决策',
+  watchPending: '待观察',
+  watchSnoozed: '待观察（稍后）',
+};
+
+const queueErrors = reactive<Partial<Record<QueueErrorKey, string>>>({});
 const targetStatus = ref<
-  'idle' | 'found-decision' | 'found-watch' | 'missing'
+  'idle' | 'found-decision' | 'found-deferred' | 'found-watch' | 'missing'
 >('idle');
 
 const targetConfirmRequestId = computed(() =>
-  normalizeRouteQueryId(
-    route.query.confirmRequestId ?? route.query.requestId,
-  ),
+  normalizeRouteQueryId(route.query.confirmRequestId ?? route.query.requestId),
+);
+
+const watchTotal = computed(
+  () => watchPendingTotal.value + watchSnoozedTotal.value,
+);
+const watchRequests = computed(() =>
+  sortTargetFirst([
+    ...watchPendingRequests.value,
+    ...watchSnoozedRequests.value,
+  ]),
+);
+const queueWarningText = computed(() => {
+  const failedQueues = (Object.keys(queueLabels) as QueueErrorKey[]).filter(
+    (key) => queueErrors[key],
+  );
+  if (failedQueues.length === 0) return '';
+  return `已保留成功读取或上次成功的数据；失败队列：${failedQueues
+    .map((key) => queueLabels[key])
+    .join('、')}。`;
+});
+const hasWatchQueueError = computed(
+  () => Boolean(queueErrors.watchPending) || Boolean(queueErrors.watchSnoozed),
+);
+const watchQueueErrorText = computed(() =>
+  [queueErrors.watchPending, queueErrors.watchSnoozed]
+    .filter(Boolean)
+    .join('；'),
 );
 
 const targetNotice = computed(() => {
@@ -364,6 +573,13 @@ const targetNotice = computed(() => {
       kind: 'found',
       title: '已定位通知对应确认项',
       body: '这条通知打开的确认项已置顶并高亮，可以直接复核证据后选择处理方式。',
+    };
+  }
+  if (targetStatus.value === 'found-deferred') {
+    return {
+      kind: 'found',
+      title: '通知对应项在稍后决策',
+      body: '已展开稍后决策并高亮这条确认项，你可以恢复到主队列或结束追踪。',
     };
   }
   if (targetStatus.value === 'found-watch') {
@@ -404,7 +620,9 @@ onMounted(async () => {
 watch(targetConfirmRequestId, async () => {
   if (loading.value) return;
   decisionRequests.value = sortTargetFirst(decisionRequests.value);
-  watchRequests.value = sortTargetFirst(watchRequests.value);
+  deferredDecisionRequests.value = sortTargetFirst(
+    deferredDecisionRequests.value,
+  );
   await syncTargetDeepLink();
 });
 
@@ -412,29 +630,100 @@ async function loadQueues(showLoading = true) {
   if (showLoading) loading.value = true;
   try {
     loadError.value = null;
-    const [decisionRes, watchSnoozedRes, watchPendingRes] = await Promise.all([
-      client.getConfirmRequests('pending', 50, 'decision'),
-      client.getConfirmRequests('snoozed', 50, 'watch'),
-      client.getConfirmRequests('pending', 50, 'watch'),
-    ]);
-    decisionTotal.value = decisionRes.total;
-    watchTotal.value = watchSnoozedRes.total + watchPendingRes.total;
-    decisionRequests.value = sortTargetFirst(decisionRes.items);
-    watchRequests.value = sortTargetFirst([
-      ...watchPendingRes.items,
-      ...watchSnoozedRes.items,
-    ]);
+    clearQueueErrors();
+
+    const [decisionRes, decisionSnoozedRes, watchSnoozedRes, watchPendingRes] =
+      await Promise.allSettled([
+        client.getConfirmRequests('pending', 50, 'decision'),
+        client.getConfirmRequests('snoozed', 50, 'decision'),
+        client.getConfirmRequests('snoozed', 50, 'watch'),
+        client.getConfirmRequests('pending', 50, 'watch'),
+      ]);
+
+    let successCount = 0;
+    successCount += applyQueueResult(
+      'decisionPending',
+      decisionRes,
+      (res) => {
+        decisionTotal.value = res.total;
+        decisionRequests.value = sortTargetFirst(res.items);
+      },
+    );
+    successCount += applyQueueResult(
+      'decisionSnoozed',
+      decisionSnoozedRes,
+      (res) => {
+        decisionSnoozedTotal.value = res.total;
+        deferredDecisionRequests.value = sortTargetFirst(res.items);
+      },
+    );
+    successCount += applyQueueResult('watchSnoozed', watchSnoozedRes, (res) => {
+      watchSnoozedTotal.value = res.total;
+      watchSnoozedRequests.value = sortTargetFirst(res.items);
+    });
+    successCount += applyQueueResult('watchPending', watchPendingRes, (res) => {
+      watchPendingTotal.value = res.total;
+      watchPendingRequests.value = sortTargetFirst(res.items);
+    });
+
+    if (successCount === 0 && !hasAnyQueueData()) {
+      loadError.value = '无法连接 Memory Service，请稍后重试。';
+    }
     await syncTargetDeepLink();
   } catch (e: any) {
     console.error('Failed to load confirm requests', e);
     loadError.value = e?.message || '无法连接 Memory Service，请稍后重试。';
-    if (decisionRequests.value.length === 0 && watchRequests.value.length === 0) {
+    if (
+      decisionRequests.value.length === 0 &&
+      deferredDecisionRequests.value.length === 0 &&
+      watchRequests.value.length === 0
+    ) {
       decisionTotal.value = 0;
-      watchTotal.value = 0;
+      decisionSnoozedTotal.value = 0;
+      watchPendingTotal.value = 0;
+      watchSnoozedTotal.value = 0;
     }
   } finally {
     if (showLoading) loading.value = false;
   }
+}
+
+function clearQueueErrors() {
+  for (const key of Object.keys(queueLabels) as QueueErrorKey[]) {
+    delete queueErrors[key];
+  }
+}
+
+function queueErrorMessage(key: QueueErrorKey, error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+      ? error
+      : '刷新失败';
+  return `${queueLabels[key]}刷新失败：${message}`;
+}
+
+function applyQueueResult(
+  key: QueueErrorKey,
+  result: QueueLoadResult,
+  onSuccess: (response: QueueLoadResponse) => void,
+) {
+  if (result.status === 'fulfilled') {
+    onSuccess(result.value);
+    return 1;
+  }
+  queueErrors[key] = queueErrorMessage(key, result.reason);
+  return 0;
+}
+
+function hasAnyQueueData() {
+  return (
+    decisionRequests.value.length > 0 ||
+    deferredDecisionRequests.value.length > 0 ||
+    watchPendingRequests.value.length > 0 ||
+    watchSnoozedRequests.value.length > 0
+  );
 }
 
 function normalizeRouteQueryId(value: unknown): string {
@@ -475,6 +764,14 @@ async function syncTargetDeepLink() {
 
   if (decisionRequests.value.some((req) => req.id === targetId)) {
     targetStatus.value = 'found-decision';
+    await nextTick();
+    scrollTargetCardIntoView(targetId);
+    return;
+  }
+
+  if (deferredDecisionRequests.value.some((req) => req.id === targetId)) {
+    targetStatus.value = 'found-deferred';
+    deferredCollapsed.value = false;
     await nextTick();
     scrollTargetCardIntoView(targetId);
     return;
@@ -541,6 +838,22 @@ async function submitAnswer(id: string, answer: string) {
   }
 }
 
+async function transitionDecisionRequest(
+  id: string,
+  state: 'pending' | 'snoozed' | 'expired',
+) {
+  submitting[id] = true;
+  delete cardErrors[id];
+  try {
+    await client.transitionConfirmRequestState(id, state);
+    await loadQueues(false);
+  } catch (e: any) {
+    cardErrors[id] = e.message || '操作失败，请重试';
+  } finally {
+    submitting[id] = false;
+  }
+}
+
 function parseMessageRuleImprovement(
   req: ConfirmRequest,
 ): MessageRuleImprovementContext | null {
@@ -548,7 +861,9 @@ function parseMessageRuleImprovement(
     return null;
   }
   try {
-    const parsed = JSON.parse(req.context) as Partial<MessageRuleImprovementContext>;
+    const parsed = JSON.parse(
+      req.context,
+    ) as Partial<MessageRuleImprovementContext>;
     if (
       parsed.schema === 'message_rule_improvement.v1' &&
       typeof parsed.ruleRef === 'string' &&
@@ -600,7 +915,9 @@ function evidenceRefLabel(ref: string) {
   };
   const label = labels[kind] || kind || '证据';
   const tail = id || ref;
-  return tail.length > 12 ? `${label} · ...${tail.slice(-12)}` : `${label} · ${tail}`;
+  return tail.length > 12
+    ? `${label} · ...${tail.slice(-12)}`
+    : `${label} · ${tail}`;
 }
 
 function optionPreview(req: ConfirmRequest) {
@@ -763,6 +1080,17 @@ function relativeTime(ts: number) {
   const days = Math.floor(hours / 24);
   return `${days}天前`;
 }
+
+function futureTime(ts: number) {
+  const diff = ts * 1000 - Date.now();
+  if (diff <= 0) return '已到期';
+  const mins = Math.ceil(diff / 60000);
+  if (mins < 60) return `${mins}分钟后`;
+  const hours = Math.ceil(mins / 60);
+  if (hours < 24) return `${hours}小时后`;
+  const days = Math.ceil(hours / 24);
+  return `${days}天后`;
+}
 </script>
 
 <style scoped>
@@ -836,6 +1164,41 @@ function relativeTime(ts: number) {
   padding: 0.45rem 0.75rem;
   background: rgba(248, 113, 113, 0.12);
   color: #fecaca;
+  cursor: pointer;
+}
+
+.partial-load-warning {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  border-radius: 0.75rem;
+  background: rgba(120, 53, 15, 0.14);
+  color: #fde68a;
+}
+
+.partial-load-warning-title {
+  margin-bottom: 0.25rem;
+  color: #fef3c7;
+  font-weight: 700;
+}
+
+.partial-load-warning p {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.partial-load-retry {
+  flex: 0 0 auto;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  background: rgba(251, 191, 36, 0.12);
+  color: #fef3c7;
   cursor: pointer;
 }
 
@@ -922,6 +1285,17 @@ function relativeTime(ts: number) {
   gap: 1rem;
 }
 
+.lane-error {
+  margin-bottom: 0.9rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: 0.7rem;
+  background: rgba(120, 53, 15, 0.12);
+  color: #fde68a;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
 .decision-card {
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.1);
@@ -939,14 +1313,18 @@ function relativeTime(ts: number) {
 .decision-card.deep-link-target {
   scroll-margin-top: 1.5rem;
   border-color: rgba(56, 189, 248, 0.55);
-  box-shadow:
-    0 0 0 1px rgba(56, 189, 248, 0.22),
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.22),
     0 14px 36px rgba(14, 165, 233, 0.14);
 }
 
 .watch-card {
   background: rgba(15, 23, 42, 0.45);
   border-color: rgba(148, 163, 184, 0.08);
+}
+
+.deferred-card {
+  background: rgba(15, 23, 42, 0.5);
+  border-color: rgba(148, 163, 184, 0.1);
 }
 
 .watch-groups {
@@ -1273,6 +1651,11 @@ function relativeTime(ts: number) {
   padding-top: 1.25rem;
 }
 
+.deferred-section {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 1.25rem;
+}
+
 .watch-toggle {
   width: 100%;
   display: flex;
@@ -1286,9 +1669,7 @@ function relativeTime(ts: number) {
   color: inherit;
   cursor: pointer;
   text-align: left;
-  transition:
-    border-color 0.25s ease,
-    background 0.25s ease;
+  transition: border-color 0.25s ease, background 0.25s ease;
 }
 
 .watch-toggle:hover {

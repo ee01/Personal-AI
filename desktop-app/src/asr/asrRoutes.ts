@@ -164,11 +164,14 @@ export async function registerAsrRoutes(app: FastifyApp): Promise<void> {
       void ensureWhisperBinary();
     }
 
+    const liveReady = appleStatus.ready || sherpaStatus.ready;
+    const finalReady = funAsrStatus.ready || whisperStatus.ready;
+
     return reply.send({
       ok: true,
-      ready:
-        (appleStatus.ready || sherpaStatus.ready) &&
-        (funAsrStatus.ready || whisperStatus.ready),
+      ready: liveReady && finalReady,
+      liveReady,
+      finalReady,
       modelRoot: getAsrModelRoot(),
       engines: {
         appleSpeech: appleStatus,

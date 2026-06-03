@@ -28,6 +28,7 @@ test('scheduled messages query parser extracts a single category filter', () => 
       categories: ['Snooze'],
       filterPendingReview: false,
       filterSelfOnly: false,
+      configureRingCentralSender: false,
     },
   );
 });
@@ -39,8 +40,17 @@ test('scheduled messages query parser supports repeated and comma-separated cate
       categories: ['Snooze', '提醒', 'AutoReply'],
       filterPendingReview: true,
       filterSelfOnly: true,
+      configureRingCentralSender: false,
       targetMessageId: 'reply_123',
     },
+  );
+});
+
+test('scheduled messages query parser supports RingCentral sender config deep link', () => {
+  assert.equal(
+    parseScheduledMessagesQueryFilters('?configureRingCentralSender=true')
+      .configureRingCentralSender,
+    true,
   );
 });
 

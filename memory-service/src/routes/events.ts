@@ -13,7 +13,10 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { isValidUserId } from '../middleware/auth.js';
+import {
+  USER_ID_FORMAT_DESCRIPTION,
+  normalizeUserId,
+} from '../utils/userIdentity.js';
 
 // ---------------------------------------------------------------------------
 // EventBus singleton
@@ -107,15 +110,15 @@ export function resolveEventStreamUserId(options: {
       };
     }
 
-    const trimmed = queryUserId.trim();
-    if (!trimmed || !isValidUserId(trimmed)) {
+    const normalized = normalizeUserId(queryUserId);
+    if (!normalized) {
       return {
         error:
-          'Invalid userId query parameter format. Only a-z, 0-9, dots, hyphens, underscores allowed.',
+          `Invalid userId query parameter format. ${USER_ID_FORMAT_DESCRIPTION}`,
       };
     }
 
-    return { userId: trimmed };
+    return { userId: normalized };
   }
 
   return { userId: options.requestUserId };

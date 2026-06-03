@@ -16,6 +16,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { classifyMemoryLifecycle } from './MemoryLifecyclePolicy.js';
 import { now } from '../utils/time.js';
 
 // ---------------------------------------------------------------------------
@@ -48,9 +49,17 @@ interface MemoryMetadataRow {
   decay_rate: number;
   half_life_days: number;
   consolidation_level: string;
+  retrieval_tier?: string | null;
+  effective_salience?: number | null;
+  archived_at?: number | null;
+  archive_reason?: string | null;
+  archive_ref?: string | null;
+  lifecycle_updated_at?: number | null;
   next_review_at: number | null;
   created_at: number;
   updated_at: number | null;
+  recall_feedback_action?: string | null;
+  recall_feedback_updated_at?: number | null;
 }
 
 /** Ordered consolidation levels from highest to lowest. */
@@ -126,9 +135,15 @@ export class ForgettingEngine {
     // Fetch all records that are eligible for the forgetting cycle.
     const rows = this.db
       .prepare(
-        `SELECT *
-         FROM memory_metadata
-         WHERE consolidation_level NOT IN ('permanent', 'forgotten', 'archived')`,
+        `SELECT mm.*,
+                mfe.action AS recall_feedback_action,
+                mfe.updated_at AS recall_feedback_updated_at
+         FROM memory_metadata mm
+         LEFT JOIN memory_feedback_events mfe
+           ON mfe.feedback_type = 'recall_quality'
+          AND mfe.target_type = mm.target_type
+          AND mfe.target_id = mm.target_id
+         WHERE mm.consolidation_level NOT IN ('permanent', 'forgotten', 'archived')`,
       )
       .all() as MemoryMetadataRow[];
 
@@ -142,6 +157,11 @@ export class ForgettingEngine {
       `UPDATE memory_metadata
        SET salience_score = ?,
            consolidation_level = ?,
+           retrieval_tier = ?,
+           effective_salience = ?,
+           archived_at = ?,
+           archive_reason = ?,
+           lifecycle_updated_at = ?,
            updated_at = ?
        WHERE id = ?`,
     );
@@ -183,8 +203,33 @@ export class ForgettingEngine {
         }
       }
 
+      const lifecycle = classifyMemoryLifecycle({
+        salienceScore: currentSalience,
+        effectiveSalience: currentSalience,
+        consolidationLevel: newLevel,
+        lastAccessed: row.last_accessed,
+        createdAt: row.created_at,
+        feedbackAction: row.recall_feedback_action,
+        feedbackUpdatedAt: row.recall_feedback_updated_at,
+        currentTime,
+      });
+      const archivedAt =
+        lifecycle.tier === 'archive_only' || lifecycle.tier === 'forgotten'
+          ? row.archived_at ?? currentTime
+          : row.archived_at ?? null;
+
       // Persist the updated salience and level.
-      updateStmt.run(currentSalience, newLevel, currentTime, row.id);
+      updateStmt.run(
+        currentSalience,
+        newLevel,
+        lifecycle.tier,
+        lifecycle.effectiveSalience,
+        archivedAt,
+        lifecycle.archiveReason ?? row.archive_reason ?? null,
+        currentTime,
+        currentTime,
+        row.id,
+      );
     }
 
     return result;
@@ -230,6 +275,12 @@ export class ForgettingEngine {
                last_accessed = ?,
                decay_rate = ?,
                half_life_days = ?,
+               retrieval_tier = CASE
+                 WHEN consolidation_level = 'forgotten' THEN retrieval_tier
+                 ELSE 'active'
+               END,
+               effective_salience = ?,
+               lifecycle_updated_at = ?,
                updated_at = ?
            WHERE id = ?`,
         )
@@ -239,6 +290,8 @@ export class ForgettingEngine {
           currentTime,
           newDecayRate,
           newHalfLife,
+          Math.max(newSalience, 0.4),
+          currentTime,
           currentTime,
           existing.id,
         );
@@ -254,14 +307,18 @@ export class ForgettingEngine {
             (target_type, target_id, salience_score, importance, frequency,
              recency_boost, surprise_score, redundancy,
              access_count, last_accessed, decay_rate, half_life_days,
-             consolidation_level, created_at, updated_at)
-           VALUES (?, ?, ?, 0.5, 1, 1.0, 0, 0, ?, ?, 1.0, 30, 'temporary', ?, ?)`,
+             consolidation_level, retrieval_tier, effective_salience,
+             lifecycle_updated_at, created_at, updated_at)
+           VALUES (?, ?, ?, 0.5, 1, 1.0, 0, 0, ?, ?, 1.0, 30, 'temporary',
+                   'active', ?, ?, ?, ?)`,
         )
         .run(
           targetType,
           targetId,
           initialSalience,
           initialAccessCount,
+          currentTime,
+          Math.max(initialSalience, 0.4),
           currentTime,
           currentTime,
           currentTime,

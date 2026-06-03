@@ -70,6 +70,46 @@ function createAuthHook(service: DoubaoBridgeService) {
   };
 }
 
+async function loadActiveBrowserContext(): Promise<{
+  available: boolean;
+  title?: string;
+  url?: string;
+  selectionText?: string;
+  visibleText?: string;
+  error?: string;
+}> {
+  try {
+    const raw = await WebpageMcpHost.getInstance().evalInTab(
+      undefined,
+      `JSON.stringify((() => {
+        const text = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const title = text(document.title);
+        const url = text(window.location.href);
+        const selectionText = text(window.getSelection?.().toString?.() || '').slice(0, 1000);
+        const visibleText = text(document.body?.innerText || '').slice(0, 2600);
+        return { title, url, selectionText, visibleText };
+      })())`,
+    );
+    const parsed = JSON.parse(raw || '{}') as Record<string, unknown>;
+    return {
+      available: Boolean(parsed.url || parsed.title || parsed.visibleText),
+      title: typeof parsed.title === 'string' ? parsed.title : undefined,
+      url: typeof parsed.url === 'string' ? parsed.url : undefined,
+      selectionText:
+        typeof parsed.selectionText === 'string'
+          ? parsed.selectionText
+          : undefined,
+      visibleText:
+        typeof parsed.visibleText === 'string' ? parsed.visibleText : undefined,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 interface BridgeServerDependencies {
   memoryClient: BridgeMemoryServiceClient;
   settingsStore: BridgeSettingsStore;
@@ -289,6 +329,11 @@ async function buildStatus(
       mobileBriefingIntervalMs:
         settingsPayload.effective.mobileBriefingIntervalMs,
       reminderSyncIntervalMs: settingsPayload.effective.reminderSyncIntervalMs,
+      reminderDailyDigestEnabled:
+        settingsPayload.effective.reminderDailyDigestEnabled,
+      reminderDailyDigestTime:
+        settingsPayload.effective.reminderDailyDigestTime,
+      reminderDedupSameDay: settingsPayload.effective.reminderDedupSameDay,
     },
     setupChecklist: {
       memoryServiceConfigured: Boolean(
@@ -572,6 +617,10 @@ export async function createBridgeServer(
 
   app.get('/assistant/runtime-summary', async () =>
     loadAssistantRuntimeSummary(service, deps),
+  );
+
+  app.get('/assistant/active-browser-context', async () =>
+    loadActiveBrowserContext(),
   );
 
   app.post<{

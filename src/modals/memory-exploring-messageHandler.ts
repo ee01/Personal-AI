@@ -8,6 +8,8 @@
 
 import {
   getMemoryServiceClient,
+  type MeetingArchiveStatusFilter,
+  type MeetingRecord,
   type MemoryFeedbackAction,
   type MemoryFeedbackTargetType,
   type MemoryFeedbackType,
@@ -23,6 +25,77 @@ import {
 // Get the singleton client instance
 const client = getMemoryServiceClient();
 let testMeetingsFixture: any = null;
+
+function normalizeMeetingSearchQuery(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().replace(/\s+/g, ' ').slice(0, 120);
+  return normalized || undefined;
+}
+
+function normalizeMeetingArchiveStatus(
+  value: unknown,
+): MeetingArchiveStatusFilter {
+  return value === 'ready' ||
+    value === 'attention' ||
+    value === 'processing' ||
+    value === 'archived'
+    ? value
+    : 'all';
+}
+
+function hasOpenableMeetingPdf(value?: string): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function getMeetingArchiveStatus(
+  meeting: MeetingRecord,
+): Exclude<MeetingArchiveStatusFilter, 'all'> {
+  const hasPdf = hasOpenableMeetingPdf(meeting.pdfUrl);
+  if (meeting.digestStatus === 'failed') return 'attention';
+  if (meeting.digestStatus === 'completed' && !hasPdf) return 'attention';
+  if (hasPdf || meeting.digestStatus === 'completed') return 'ready';
+  if (
+    meeting.digestStatus === 'uploading' ||
+    meeting.digestStatus === 'processing' ||
+    meeting.digestId
+  ) {
+    return 'processing';
+  }
+  return 'archived';
+}
+
+function filterMeetingFixtureItems(
+  items: MeetingRecord[],
+  query?: string,
+  status: MeetingArchiveStatusFilter = 'all',
+): MeetingRecord[] {
+  const terms = query?.toLocaleLowerCase().split(/\s+/).filter(Boolean) || [];
+  return items.filter((meeting) => {
+    if (status !== 'all' && getMeetingArchiveStatus(meeting) !== status) {
+      return false;
+    }
+    if (terms.length === 0) return true;
+    const haystack = [
+      meeting.meetingId,
+      meeting.title,
+    meeting.summary,
+    meeting.digestErrorCode,
+    (meeting as any).archiveSearchText,
+    (meeting as any).latestObservationText,
+    ...(meeting.participants || []),
+  ]
+      .filter((item): item is string => typeof item === 'string' && item !== '')
+      .join('\n')
+      .toLocaleLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  });
+}
 
 const EMPTY_SEARCH_RESULT_DETAILS = {
   conversations: [],
@@ -306,7 +379,8 @@ const messageHandlers: Record<string, MessageHandler> = {
       const targetType =
         request.targetType === 'message' ||
         request.targetType === 'chunk' ||
-        request.targetType === 'entity'
+        request.targetType === 'entity' ||
+        request.targetType === 'source_memory'
           ? (request.targetType as MemoryFeedbackTargetType)
           : undefined;
       const action: MemoryFeedbackAction =
@@ -341,13 +415,19 @@ const messageHandlers: Record<string, MessageHandler> = {
   },
 
   GET_MEETINGS: async (request) => {
+    const query = normalizeMeetingSearchQuery(request.q || request.query);
+    const status = normalizeMeetingArchiveStatus(request.status);
     if (testMeetingsFixture) {
       const limit = Math.min(Math.max(Number(request.limit ?? 50), 1), 200);
       const offset = Math.max(Number(request.offset ?? 0), 0);
-      const items = Array.isArray(testMeetingsFixture.items)
-        ? testMeetingsFixture.items.slice(offset, offset + limit)
+      const sourceItems = Array.isArray(testMeetingsFixture.items)
+        ? filterMeetingFixtureItems(testMeetingsFixture.items, query, status)
         : [];
-      const total = Number(testMeetingsFixture.total ?? items.length);
+      const items = sourceItems.slice(offset, offset + limit);
+      const total =
+        query || status !== 'all'
+          ? sourceItems.length
+          : Number(testMeetingsFixture.total ?? sourceItems.length);
       return {
         success: true,
         data: {
@@ -356,13 +436,18 @@ const messageHandlers: Record<string, MessageHandler> = {
           total,
           limit,
           offset,
+          q: query,
+          status,
         },
         total,
       };
     }
     try {
       const { limit = 50, offset = 0 } = request;
-      const result = await client.getMeetings(limit, offset);
+      const result = await client.getMeetings(limit, offset, {
+        query,
+        status,
+      });
       return {
         success: true,
         data: {

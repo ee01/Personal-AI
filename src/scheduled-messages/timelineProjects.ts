@@ -92,6 +92,10 @@ function findTimelineProject(project?: string) {
   return TIMELINE_PROJECTS.find(item => item.value === project || item.paramKey === project);
 }
 
+export function normalizeTimelineProjectValue(project?: string): TimelineProject | undefined {
+  return findTimelineProject(project)?.value;
+}
+
 function buildTimelineSyncGetUrl(project: typeof TIMELINE_PROJECTS[number], baseUrl = '{{WEB_APP_URL}}'): string {
   const query = [
     'action=cacheReleaseInfo',
@@ -219,17 +223,17 @@ export function resolveTimelineProjectForSave(input: {
   hasProjectVariables: boolean;
   timelineProject?: string;
 }): TimelineProject | undefined {
-  const matchedProject = TIMELINE_PROJECTS.find(item => item.value === input.timelineProject);
+  const matchedProject = normalizeTimelineProjectValue(input.timelineProject);
 
   if (input.isTimelineTrigger) {
-    return matchedProject?.value;
+    return matchedProject;
   }
 
   if (input.pushMethod === 'AsMe' || !input.hasProjectVariables) {
     return undefined;
   }
 
-  return matchedProject?.value || DEFAULT_TIMELINE_PROJECT;
+  return matchedProject || DEFAULT_TIMELINE_PROJECT;
 }
 
 function buildReleaseInfoWebhookAction(project: typeof TIMELINE_PROJECTS[number]) {

@@ -125,6 +125,7 @@
         "memory.js",
         "scheduled-messages.html",
         "scheduled-messages.js",
+        "memory-exploring.html",
         "share-modal.html",
         "share-modal.js",
         "desktop-app.html",

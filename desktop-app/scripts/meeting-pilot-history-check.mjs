@@ -107,6 +107,8 @@ try {
             digestId: 'digest-q2-planning',
             digestStatus: 'completed',
             summary: '确认了 Q2 预算、技术评审 owner 与下一步行动。',
+            archiveSearchText:
+              'Transcript-only note: Morgan flagged procurement blockers.',
             topicCount: 3,
             actionItemCount: 2,
             decisionCount: 2,
@@ -235,6 +237,74 @@ try {
   assert.match(failedCardText || '', /PDF 链接不可用/);
   assert.match(failedCardText || '', /minutes_api_timeout/);
   await saveScreenshot(page, 'history-list.png');
+
+  log('验证会议归档搜索与状态筛选');
+  await page
+    .getByPlaceholder('搜索标题、摘要、参会者、会议 ID 或转写片段')
+    .fill('Incident');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.meeting-card').length === 1 &&
+      document.body.textContent.includes('Incident Review'),
+    { timeout: 15000 },
+  );
+  assert.match(
+    await page.locator('.meeting-list-toolbar').textContent(),
+    /已显示 1 \/ 1/,
+  );
+
+  await page
+    .getByPlaceholder('搜索标题、摘要、参会者、会议 ID 或转写片段')
+    .fill('procurement blockers');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.meeting-card').length === 1 &&
+      document.body.textContent.includes('Q2 Planning Review'),
+    { timeout: 15000 },
+  );
+  assert.match(
+    await page.locator('.meeting-list-toolbar').textContent(),
+    /关键词“procurement blockers”/,
+  );
+
+  await page
+    .getByPlaceholder('搜索标题、摘要、参会者、会议 ID 或转写片段')
+    .fill('Incident');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.meeting-card').length === 1 &&
+      document.body.textContent.includes('Incident Review'),
+    { timeout: 15000 },
+  );
+
+  await page.locator('.meeting-status-filter select').selectOption('ready');
+  await page.getByText('没有匹配的会议记录').waitFor({ timeout: 15000 });
+  assert.match(
+    await page.locator('.meeting-feedback-card').textContent(),
+    /关键词“Incident”.*状态 可打开/s,
+  );
+
+  await page.locator('.meeting-status-filter select').selectOption('attention');
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.meeting-card').length === 1 &&
+      document.body.textContent.includes('Incident Review') &&
+      document.body.textContent.includes('PDF 链接不可用'),
+    { timeout: 15000 },
+  );
+
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await page.waitForFunction(
+    () => document.querySelectorAll('.meeting-card').length >= 50,
+    { timeout: 15000 },
+  );
+  assert.match(
+    await page.locator('.meeting-list-toolbar').textContent(),
+    /已显示 50 \/ 52/,
+  );
 
   log('验证加载更早会议');
   await page.getByRole('button', { name: '加载更早会议' }).click();

@@ -183,6 +183,66 @@ describe('ActionExecutor', () => {
     expect(updatedThread?.continueReason).toBe('new action result available');
   });
 
+  it('records explicit approval before executing approval-required manual actions', async () => {
+    const action = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '写入 Jira 状态',
+      description: '高风险写操作需要先确认。',
+      params: {
+        task: '请把 ORB-123 状态改为 blocked。',
+        mode: 'write',
+        targetSystem: 'jira',
+      },
+      riskLevel: 'high',
+      executionMode: 'manual',
+      requiresApproval: true,
+      queueStatus: 'queued',
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    await expect(executor.executeAction(action.id)).rejects.toThrow(
+      'requires human approval',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(actionRepo.getById(action.id)?.queueStatus).toBe('queued');
+    expect(actionRepo.getById(action.id)?.approvedAt).toBeUndefined();
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: 'Jira 状态已更新。',
+            artifacts: [
+              {
+                kind: 'external_evidence',
+                title: 'Jira ORB-123',
+                content: 'ORB-123 status=blocked.',
+                metadata: {
+                  sourceSystem: 'jira',
+                  entityKey: 'ORB-123',
+                  verification: 'jira_api',
+                  changedFields: ['status'],
+                },
+              },
+            ],
+            payload: { jiraKey: 'ORB-123', status: 'blocked' },
+          }),
+        }),
+    });
+
+    const result = await executor.executeAction(action.id, { approve: true });
+
+    expect(result.queueStatus).toBe('succeeded');
+    expect(result.result?.status).toBe('success');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const updated = actionRepo.getById(action.id);
+    expect(updated?.approvedAt).toEqual(expect.any(Number));
+    expect(updated?.state).toBe('executed');
+  });
+
   it('syncs successful delegate_openclaw results back into outreach sessions', async () => {
     const session = outreachRepo.createSession({
       originKind: 'scheduled_template',

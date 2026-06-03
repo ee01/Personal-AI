@@ -1,23 +1,70 @@
-# 新能力：Memory Lifecycle Gardener / 记忆生命周期管家
+# 新能力：Ambient Memory Forgetting / 无感记忆遗忘层
 
-> Codex 会话标题建议：新能力：记忆生命周期管家  
+> Codex 会话标题建议：新能力：无感记忆遗忘层
 > 生成时间：2026-05-26 CST  
-> Demo：[`memory-lifecycle-gardener-demo.html`](./memory-lifecycle-gardener-demo.html)  
+> Demo：[`memory-lifecycle-gardener-demo.html`](./memory-lifecycle-gardener-demo.html)（仅作为架构可视化，不代表 P0 新页面）
 > Idea 来源：未使用 Reminder。本机 Reminders 可见列表没有 `Personal AI` 清单，因此没有可选的新功能 idea，也没有 item 需要标记 done。
 
 ## 结论
 
-建议设计一个新能力：**Memory Lifecycle Gardener / 记忆生命周期管家**。
+建议把这个方向从 **Memory Lifecycle Gardener / 记忆生命周期管家** 改成 **Ambient Memory Forgetting / 无感记忆遗忘层**。
+
+这个能力不应该是一个需要用户定期审批的管家、平台或 review queue。它应该是 Memory Service 后台定时任务的一部分：在巩固、画像重建、召回反馈和自然使用信号中，持续调整记忆影响力，让不常用、过期、重复、低价值的记忆慢慢淡出默认关联。
 
 它解决的不是“再多一个记忆召回入口”，而是 Personal AI 越记越多之后的核心问题：
 
 > 哪些记忆还应该影响 Ask、Memory Lens、Compose Assist、Today Pilot 和外部 AI 上下文包？哪些只应该作为原始证据保留，不再进入提示和排序？
 
-本轮真实数据里有一个很强的信号：`/stats` 返回 `9545` 条 messages、`4736` chunks、`13669` entities、`49364` relationships、`37` 条 pending confirm requests；SQLite 只读查询显示 `memory_metadata` 里 `temporary=1514`、`archived=2204`、`forgotten=1855`，但 `working/consolidated/core` 当前没有稳定分层。最近消息里还出现大量 future calendar、Doubao truth-conflict、OpenClaw capability-missing、重复日程和系统提醒。这说明 Personal AI 已经有“记住很多”的基础，但还缺一个用户可理解、可回滚的**记忆影响力生命周期层**。
+本轮真实数据里有一个很强的信号：`/stats` 返回 `9545` 条 messages、`4736` chunks、`13669` entities、`49364` relationships、`37` 条 pending confirm requests；SQLite 只读查询显示 `memory_metadata` 里 `temporary=1514`、`archived=2204`、`forgotten=1855`，但 `working/consolidated/core` 当前没有稳定分层。最近消息里还出现大量 future calendar、Doubao truth-conflict、OpenClaw capability-missing、重复日程和系统提醒。这说明 Personal AI 已经有“记住很多”的基础，但还缺一个**默认自动运行、能直接影响检索排序与过滤的遗忘层**。
 
 这个能力的产品承诺是：
 
-> 保留原始证据，但控制影响力。让重要记忆被提升，噪声记忆被降权，重复和过期记忆不再污染用户每天看到的提示。
+> 让记忆像人脑一样自然衰减：常用和重要的被巩固，久远且不用的被降权，最终归档为默认不关联；原始证据保留到流水账或冷归档中，只有显式搜索或审计时再找回。
+
+## 重要修订：无感后台，不做用户审批平台
+
+这份计划的 P0 不再设计 `/lifecycle` 主页面、候选 lane、批量审批按钮或用户日常 review 流程。
+
+正确的产品形态是：
+
+- Memory Service 定时任务自动运行遗忘/巩固。
+- User Profile 的历史画像同样参与衰减，低 salience 的画像不再注入 `USER_CORE`、provider context、Ask 风格提示。
+- Ask / Context Recall / Compose Assist / Today Pilot 统一读取 lifecycle / retrieval tier，不再各自手写降权规则。
+- 用户只在两个地方感知到结果：
+  - 召回变少、变准。
+  - 高级诊断或 Memory Coverage Map 中能看到“近期归档/降权了多少”，用于排障，不用于审批。
+
+换句话说，用户不需要每天判断“这条记忆要不要遗忘”。系统根据时间、使用、反馈、来源、重复度、当前项目状态自动处理；只有物理删除、敏感清理、或者会改变 confirmed profile/current truth 的高责任动作，才交给现有的 Decision Center / User Profile 确认。
+
+## 与人脑遗忘机制的关系
+
+是的，这个能力本质上应该被设计成 Personal AI 的**类人遗忘系统**，而不是普通的清理工具。
+
+人的记忆不是只有“存在 / 删除”两种状态：刚发生的事情会短期可用；反复使用、情绪强、决策价值高或被主动复习的内容会被巩固；长期不用、重复、低价值或已被新事实覆盖的内容会逐渐变弱，最后不会自然浮现在脑海里。Personal AI 也应该采用同样的模型：
+
+```text
+raw event -> temporary -> working -> consolidated/core
+                    \-> weak/raw-only -> archived -> explicit search only
+```
+
+关键原则：
+
+1. **遗忘的是默认关联影响力，不是先删除证据。**
+   太久远或很少使用的记忆，应该逐步降低 salience、缩短主动提示资格、退出 Memory Lens / Compose Assist / Today Pilot 的默认候选池；但原始 evidence 仍保留，除非用户明确要求物理删除。
+
+2. **不用的记忆最终归档，不再被动关联。**
+   `archived` 或 `raw_only` 记忆默认不参与被动召回、日级 mission、外部 AI context pack 和草稿证据，只能通过明确搜索、时间线定位、来源页面回溯或审计 receipt 打开。
+
+3. **使用会强化，纠错会降权。**
+   用户展开、复制、采纳、再次搜索同一记忆，应该延长半衰期；用户忽略、点不相关、删除插入内容、在同类场景反复不用，应该加速遗忘。
+
+4. **重要记忆不能只因时间久就遗忘。**
+   已确认画像、长期偏好、关键决策、仍开放的 action、当前项目事实、关系边界、用户 pin 的记忆，需要更长半衰期，甚至进入 core。遗忘系统要区分“久远但重要”和“久远且无用”。
+
+5. **旧事实要变成历史，不要假装当前仍成立。**
+   例如旧 owner、旧 deadline、旧 Jira 状态应被标成 `historical/as_of`。它可以回答“当时为什么这么做”，但不应默认回答“现在是什么”。
+
+所以更准确的名字可以理解为：**Memory Lifecycle + Forgetting Engine**。页面只是少量可见控制面；真正核心是在后台持续做衰减、巩固、归档和可回滚影响力调整。
 
 ## 为什么现在值得做
 
@@ -76,381 +123,382 @@ Lifecycle Gardener 不和这些能力抢入口。它从源头解决“哪些记�
 
 ## 一句话产品定位
 
-**Memory Lifecycle Gardener 是 Personal AI 的记忆影响力调度层。**
+**Ambient Memory Forgetting 是 Memory Service 的后台记忆衰减、巩固与归档策略。**
 
-它不要求用户逐条整理所有记忆，而是每周或在问题出现时，给用户一组很小的、可解释的建议：
+它不需要用户审批每条记忆，而是在 `ConsolidationEngine` / `ForgettingEngine` / `HeartbeatLoop` 这类定时任务里自动完成：
 
-- 这 8 条重复日程只保留最新一个进入 Day Pilot。
-- 这 12 条 Doubao truth-conflict 合并成 1 个冲突簇，先不再打扰。
-- 这条用户明确表达的工作偏好应该从 temporary 提升到 confirmed profile candidate。
-- 这批 OpenClaw capability-missing 只作为工具健康证据，不再进入普通 Ask 的答案证据。
-- 这条旧项目状态还可搜索，但默认不影响 Compose Assist，因为已有更新证据。
+- 太久远、低 salience、无访问、无反馈的临时记忆逐步降权。
+- 使用过、被采纳过、被反复搜索过的记忆被强化，半衰期变长。
+- 已确认 profile、关键决策、开放 action 和用户 pin 的内容被保护，不因时间久自动消失。
+- 旧 profile、旧项目状态、旧 source evidence 变成 historical，不再默认进入当前上下文。
+- 归档内容默认不参与 Ask / Context Recall / Compose Assist / Today Pilot 的被动关联，只保留在显式搜索或审计路径。
 
-## 核心用户需求
+## 后台任务设计
 
-1. **用户不想再看到错误或泛泛相关的记忆。**  
-   不是每条旧消息都值得出现在当前场景里。
+### 已有基础
 
-2. **用户不想维护一个复杂后台。**  
-   需要默认自动运行，只在高影响变化时给出可批处理建议。
+当前代码里已经有可复用骨架：
 
-3. **用户希望保留证据，不希望系统偷偷删除。**  
-   默认操作是 `archive influence` 或 `raw only`，物理删除必须显式确认。
+- `memory-service/src/core/ConsolidationEngine.ts`
+  - Phase 3.5 已经会衰减 `user_profile_items.salience_score`，低于阈值的 active profile 会变成 `archived`，并重建 `USER_CORE.md`。
+  - Phase 4 已经调用 `ForgettingEngine.runForgettingCycle()`。
+- `memory-service/src/core/ForgettingEngine.ts`
+  - 已经按 `memory_metadata.salience_score`、`last_accessed`、`half_life_days`、`decay_rate` 计算衰减。
+  - 当前阈值已有：`< 0.15 -> archived`，`< 0.05 -> forgotten`。
+- `memory-service/src/core/RecallEngine.ts`
+  - 已经在召回后读取 `memory_metadata.salience_score` 并把 salience 加进 MMR 排序。
+  - 当前缺口是只加分，没有统一过滤 `archived/forgotten`，Context Recall / Ask / Time / Graph 通道仍可能把旧记忆带回来。
 
-4. **用户需要知道调整会影响哪里。**  
-   每张生命周期建议卡都要显示：会影响 Ask / Memory Lens / Compose Assist / Today Pilot / Context Passport 哪些入口。
+所以 P0 不应该新建用户工作台，而应该把现有遗忘机制接到所有召回入口。
 
-5. **用户希望错了能撤销。**  
-   所有批处理都要产出 receipt，支持按批次回滚 influence 变更。
+### 定时任务流程
 
-## 用户体验设计
+建议每天低峰运行一次完整 lifecycle，Heartbeat 可以每小时做轻量版：
 
-### 入口
-
-入口不做成又一个常驻大红点。建议三个低打扰入口：
-
-1. **Memory Exploring 侧栏：记忆生命周期**  
-   用于主动查看本周影响力建议。
-
-2. **Coverage Map 页面右上角：整理影响力**  
-   当来源健康但召回质量差时，从来源健康跳到记忆治理。
-
-3. **Memory Lens / Ask 反馈之后的轻提示**  
-   用户点“不相关”后，如果系统发现同一噪声簇反复出现，显示小提示：  
-   `已发现 12 条类似噪声，可降权这个簇`。
-
-### 页面结构
-
-页面不是“记忆列表管理器”，而是一张影响力工作台：
-
-- 顶部：本周影响力摘要
-  - 可继续影响提示的记忆数
-  - 仅保留证据的记忆数
-  - 待提升候选
-  - 待合并噪声簇
-  - 可能影响用户体验的入口
-- 左侧：建议 lane
-  - `应提升`
-  - `应降权`
-  - `重复/噪声簇`
-  - `冲突待定`
-  - `策略规则`
-- 中间：建议卡
-  - 一句话说明
-  - 影响入口
-  - 证据样例
-  - 默认建议动作
-  - 风险等级
-- 右侧：影响预览
-  - 调整前/后 Ask、Lens、Today Pilot 的候选变化
-  - 不展示虚假准确率，只展示“会少出现什么、还可从哪里打开原始证据”
-
-### 卡片形态
-
-每张卡必须回答四个问题：
-
-1. **为什么出现？**  
-   例如：`同一 recurring meeting 在 14 天内出现 18 次，且从未被用户展开。`
-
-2. **建议做什么？**  
-   例如：`只保留下一场进入 Today Pilot，其余作为 raw calendar evidence。`
-
-3. **影响哪里？**  
-   例如：`Today Pilot、Timeline、Ask time channel。`
-
-4. **如何撤销？**  
-   例如：`本次批次 receipt 可在 30 天内撤销。`
-
-### 默认动作
-
-| 动作 | 用户感知 | 数据含义 |
-| --- | --- | --- |
-| 提升到 working | “这条最近会经常用到” | 提高 salience、延长 half-life、加入 influence index。 |
-| 提升到 core candidate | “这可能是稳定事实/偏好” | 创建 profile/decision/skill candidate，不直接确认。 |
-| 只保留原始证据 | “以后别主动提示，但搜索还能搜到” | 降低 active influence，不删除 raw message/chunk。 |
-| 合并噪声簇 | “同类重复只显示一个代表” | 创建 cluster，召回时 diversify / cap。 |
-| 标记历史事实 | “过去成立，现在不一定” | 进入 `as_of` 历史证据，默认不当 current truth。 |
-| 物理删除 | “彻底删除这批内容” | 只在用户显式 dry-run 后执行。P0 不做默认入口。 |
-
-## 推荐信息架构
-
-### 新路由
-
-`memory-exploring.html#/lifecycle`
-
-### 状态模型
-
-```ts
-type MemoryInfluenceState =
-  | 'active'
-  | 'working'
-  | 'core_candidate'
-  | 'raw_only'
-  | 'historical'
-  | 'cluster_representative'
-  | 'suppressed_noise'
-  | 'archived'
-  | 'delete_candidate';
-
-type LifecycleCandidateKind =
-  | 'promote'
-  | 'demote'
-  | 'dedupe_cluster'
-  | 'stale_fact'
-  | 'conflict_cluster'
-  | 'source_noise'
-  | 'scope_boundary'
-  | 'profile_candidate'
-  | 'skill_candidate';
+```text
+Heartbeat / daily consolidation
+  -> collect usage signals
+  -> decay memory_metadata
+  -> decay user_profile_items
+  -> assign retrieval tier
+  -> rebuild active retrieval projections
+  -> optionally export cold archive
+  -> write audit metrics
 ```
 
-### 数据表建议
+#### 1. 收集信号
+
+输入来源：
+
+- `memory_metadata.access_count / last_accessed / salience_score / half_life_days`
+- `memory_feedback_events`：有用、不相关、撤销、显式负反馈
+- `messages_raw.source_type / timestamp / importance / scope`
+- `chunks.source_type / created_at / related_project`
+- `user_profile_items.salience_score / mention_count / last_seen / user_confirmed / status`
+- `confirm_requests.state / reason_code`
+- `proposed_actions.state / last_error / source_kind`
+- 当前 active projects / recent day missions / open actions
+
+#### 2. 计算 effective salience
+
+不要只看时间。建议计算一个 `effective_salience`：
+
+```ts
+effectiveSalience =
+  baseSalience
+  * ageDecay
+  * sourcePolicyWeight
+  * scopeFitWeight
+  * feedbackWeight
+  * redundancyWeight
+  * conflictWeight
+  * openLoopProtection
+```
+
+其中：
+
+- `ageDecay`：按 half-life 指数衰减。
+- `feedbackWeight`：用户点不相关、删除插入内容、多次忽略会加速衰减；采纳/复制/打开来源会强化。
+- `sourcePolicyWeight`：`calendar` recurring、`system` 中间态、capability_missing 默认短半衰期；meeting / explicit user note / confirmed profile 更长。
+- `scopeFitWeight`：personal/work 场景错位时降权。
+- `openLoopProtection`：仍有 pending action / pending decision / active project 的记忆不自动归档。
+
+#### 3. 写入 retrieval tier
+
+建议沿用 `memory_metadata.consolidation_level`，但补一个更直接给检索用的字段：
 
 ```sql
-CREATE TABLE memory_lifecycle_candidates (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  title TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  target_refs_json TEXT NOT NULL,
-  evidence_refs_json TEXT NOT NULL,
-  source_kinds_json TEXT NOT NULL,
-  affected_surfaces_json TEXT NOT NULL,
-  suggested_action TEXT NOT NULL,
-  risk_level TEXT NOT NULL DEFAULT 'low',
-  confidence REAL NOT NULL DEFAULT 0.5,
-  status TEXT NOT NULL DEFAULT 'open',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-
-CREATE TABLE memory_lifecycle_decisions (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  candidate_id TEXT,
-  batch_id TEXT,
-  action TEXT NOT NULL,
-  before_json TEXT NOT NULL,
-  after_json TEXT NOT NULL,
-  receipt_md TEXT NOT NULL DEFAULT '',
-  reversible_until INTEGER,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE memory_influence_clusters (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  cluster_key TEXT NOT NULL,
-  title TEXT NOT NULL,
-  representative_ref_json TEXT NOT NULL,
-  member_refs_json TEXT NOT NULL,
-  policy_json TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
+ALTER TABLE memory_metadata ADD COLUMN retrieval_tier TEXT DEFAULT 'active';
+ALTER TABLE memory_metadata ADD COLUMN effective_salience REAL DEFAULT 0;
+ALTER TABLE memory_metadata ADD COLUMN archived_at INTEGER;
+ALTER TABLE memory_metadata ADD COLUMN archive_reason TEXT;
+ALTER TABLE memory_metadata ADD COLUMN archive_path TEXT;
 ```
 
-### 复用现有表
+`retrieval_tier` 取值：
 
-- `memory_metadata`
-  - 已有 `salience_score`、`importance`、`frequency`、`redundancy`、`access_count`、`decay_rate`、`half_life_days`、`consolidation_level`、`next_review_at`。
-  - P0 应优先复用这些字段，不要另建一套影响力分数。
-- `memory_feedback_events`
-  - 用于收集用户在 Lens / Timeline / Search / Compose Assist 的自然反馈。
-- `confirm_requests`
-  - 高风险事实冲突仍进入 Decision Center，不在 Lifecycle 页面直接拍板事实真伪。
-- `user_profile_items`
-  - 只有用户确认后才进入 confirmed profile。
-- `day_missions`
-  - Day Pilot 可以显示 lifecycle cleanup 结果，但不应该承担 lifecycle 的审核逻辑。
+| tier | 含义 | 默认检索行为 |
+| --- | --- | --- |
+| `core` | 稳定画像、长期偏好、关键身份、长期关系边界 | 可进入 Ask / provider context，但仍受 scope 和确认状态限制。 |
+| `active` | 近期或高价值普通记忆 | 默认可被 Ask / Context Recall 使用。 |
+| `weak` | 低 salience、低访问、可能过期 | Ask 可低权重使用；被动召回默认不使用。 |
+| `historical` | 过去成立、当前不确定 | 只在用户问“当时/以前/历史/为什么”时使用。 |
+| `archive_only` | 原始证据保留，不主动关联 | 默认所有被动和普通 Ask 排除。 |
+| `forgotten` | 已遗忘，只保留最小墓碑或冷归档 | 只在 explicit archive search / exact id / audit 中可见。 |
 
-## 生成候选的规则
+`consolidation_level` 仍表达巩固层级，`retrieval_tier` 表达检索资格。这样不会把“长期重要 core memory”和“当前需要用的 active memory”混在一个字段里。
 
-### P0 候选
+## User Profile 的遗忘策略
 
-1. **Recurring calendar 噪声**
-   - 同一 series/title 高频出现。
-   - 缺少具体 agenda 或只有 join link。
-   - 用户近期没有展开或用于行动。
-   - 建议：只保留下一场进入 Today Pilot，历史事件 raw only。
+历史画像数据也应该衰减。当前 `ConsolidationEngine.phaseProfileConsolidate()` 已经有基础逻辑，但需要把它变成明确策略。
 
-2. **系统 truth-conflict 噪声簇**
-   - 多条 `Pending truth conflict` 或 evidence-resolution 由同一 source anchor 派生。
-   - 建议：合并成一张冲突簇，除非高风险，不再逐条进 Today Pilot。
+### Profile item 生命周期
 
-3. **capability-missing / failed delegation 簇**
-   - OpenClaw / external tool 缺少能力导致重复失败。
-   - 建议：归入 provider health / Action Queue，不再作为普通项目事实证据。
+```text
+pending_confirm -> active -> weak -> archived
+                        \-> superseded
+                        \-> retracted
+```
 
-4. **用户明确偏好候选**
-   - 用户在对话中明确表达“我希望/不要/优先/以后都”。
-   - 建议：进入 `profile_candidate`，显示证据并要求用户确认。
+规则：
 
-5. **已被显式标记不相关的召回簇**
-   - 同一 entity/topic/source 在多个场景被点“不相关”。
-   - 建议：对该 scene 降权，不全局删除。
+1. `user_confirmed = 1` 的事实/偏好/约束不代表永久有效，只代表可以用于个性化；它仍然会按使用和时间衰减。
+2. `role/name/timezone` 这类 identity fact 半衰期很长，除非有冲突证据，不自动降为 archived。
+3. `writing_style / response_preference / current_focus / tool_preference` 这类偏好需要按最近使用和反馈衰减。
+4. `last_seen` 长期未更新、`mention_count` 低、`salience_score` 低的 profile item 不进入 `USER_CORE`。
+5. 被新 profile item 覆盖的旧项进入 `superseded` 或 `archived`，不再注入 provider context，但保留 evidence refs。
 
-### P1 候选
+### USER_CORE 和 provider context 选择
 
-1. **陈旧项目事实**
-   - Freshness Radar 或新证据显示旧 owner/date/status 已过期。
-   - 建议：旧事实改为 historical，当前事实进入 confirm request。
+需要调整所有用户画像注入点：
 
-2. **长期未访问临时记忆**
-   - temporary memory 半衰期到期，且无 access / no feedback / low salience。
-   - 建议：raw only 或 archived，不参与主动提示。
+- `ProfileManager.renderUserCore()`：只选 `status='active'`、`user_confirmed=1`、`salience_score >= profileActiveThreshold` 的 profile items。
+- `/ask` 的 `loadUserCoreContext()`：默认只加载 active/current profile；当用户明确问“我过去的偏好/历史画像是什么”时再允许 archived profile。
+- `ContextAssistService` / Compose Assist：只允许 confirmed active profile 作为风格约束，不使用 archived/superseded profile。
+- Provider package / Doubao bridge：只导出 active confirmed profile；历史 profile 只进入备份和审计。
 
-3. **重复 AI 对话摘要**
-   - ChatGPT / Doubao / Codex 同一任务导入多次。
-   - 建议：保留最新 source receipt，旧版本做 revision history。
+## 检索层如何降级和排除
 
-4. **scope 错位**
-   - personal 记忆反复进入 work 场景，或 work 记忆进入 personal 场景。
-   - 建议：修正 scope 或设置 scene gate。
+### 统一入口：LifecycleRetrievalPolicy
 
-## 影响力评分
-
-不要做一个用户看不懂的“大模型分数”。建议使用可解释加权：
+新增一个小的共享策略层，避免每个入口各自写规则：
 
 ```ts
-influenceScore =
-  confirmedBoost
-  + recencyBoost
-  + reuseBoost
-  + surfaceSuccessBoost
-  + sourceAuthorityBoost
-  - redundancyPenalty
-  - stalePenalty
-  - ignoredPenalty
-  - conflictPenalty
-  - scopeMismatchPenalty
-```
+type RetrievalMode =
+  | 'active_default'
+  | 'passive_surface'
+  | 'composer_surface'
+  | 'meeting_surface'
+  | 'historical_ask'
+  | 'explicit_search'
+  | 'audit_exact';
 
-每张卡只显示前 3 个原因：
-
-- `近期被 Compose Assist 使用 3 次`
-- `同一日程重复 18 次`
-- `用户两次点“不相关”`
-
-## API 设计
-
-### 聚合页面
-
-`GET /api/v1/lifecycle/overview`
-
-返回：
-
-```json
-{
-  "summary": {
-    "openCandidates": 18,
-    "safeBatchCount": 7,
-    "temporaryMemories": 1514,
-    "activeInfluenceItems": 2920,
-    "affectedSurfaces": ["today_pilot", "memory_lens", "ask"]
-  },
-  "lanes": [
-    {
-      "id": "demote",
-      "title": "应降权",
-      "count": 6,
-      "items": []
-    }
-  ]
+interface LifecycleDecision {
+  allow: boolean;
+  weight: number;
+  reason?: string;
+  tier: 'core' | 'active' | 'weak' | 'historical' | 'archive_only' | 'forgotten';
 }
 ```
 
-### 创建候选
+策略表：
 
-`POST /api/v1/lifecycle/scan`
+| 调用方 | 默认 mode | `weak` | `historical` | `archive_only` / `forgotten` |
+| --- | --- | --- | --- | --- |
+| Context Recall / Memory Lens | `passive_surface` | 默认排除 | 排除 | 排除 |
+| Compose Assist | `composer_surface` | 排除，除非当前 thread exact anchor | 排除 | 排除 |
+| Meeting prep / Today Pilot | `meeting_surface` / `active_default` | 仅低权重备选 | 只在会议明确要复盘历史时使用 | 排除 |
+| Ask 普通问题 | `active_default` | 低权重可用 | 用户问历史时可用 | 排除 |
+| Ask 历史问题 | `historical_ask` | 可用 | 可用并标注 as-of | `archive_only` 可二阶段加载 |
+| Search / Timeline | `explicit_search` | 可用 | 可用 | 可选开关显示 |
+| 精确证据链接 | `audit_exact` | 可用 | 可用 | 可打开，标明已归档 |
 
-参数：
+### RecallEngine 改造点
+
+当前 `RecallEngine` 已经有 `enrichWithSalience()`。建议改成：
+
+```ts
+enrichWithLifecycle(candidates, retrievalMode)
+  -> load memory_metadata for target_type/target_id
+  -> compute effective score
+  -> filter by LifecycleRetrievalPolicy
+  -> attach metadata.lifecycle = { tier, reason, effectiveSalience }
+```
+
+排序从：
+
+```ts
+score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience
+```
+
+改成：
+
+```ts
+(score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * effectiveSalience)
+  * lifecycleWeight
+```
+
+其中建议默认权重：
+
+| tier | weight |
+| --- | --- |
+| `core` | 1.15 |
+| `active` | 1.0 |
+| `weak` | 0.35 |
+| `historical` | 0.2，且必须带 as-of 文案 |
+| `archive_only` | 0 in default modes |
+| `forgotten` | 0 in default modes |
+
+### SQL / 性能优化
+
+P0 可以先 post-filter，因为当前数据规模不大；但为了避免 vector/FTS 先召回一堆 archived 结果，需要同步做 over-fetch：
+
+- Context Recall 原本 `CONTEXT_OVER_FETCH_FACTOR = 6`，保持或略提高。
+- RecallEngine vector/fts/time channel 先取 `topK * factor`，post-filter 后再 MMR。
+
+P1 再把过滤前移：
+
+- vector / fts query join `memory_metadata`，排除 `retrieval_tier IN ('archive_only','forgotten')`。
+- `chunks_fts` / `chunks_vec` 对冷归档内容做物理移除或维护 active-only index。
+- Graph channel 的 entity evidence check 必须只统计 active evidence；如果实体只剩 archived evidence，默认不返回。
+
+## 归档设计：DB 还是 MD / 流水账
+
+### 判断
+
+短期不建议直接把归档内容移出 DB 作为 P0。
+
+原因：
+
+- 当前规模约 9545 messages、4736 chunks，SQLite + 索引在这个量级不是主要性能瓶颈。
+- 真正影响体验的是 archived/forgotten 没有从召回层过滤，而不是 DB 体积。
+- 直接迁出 DB 会带来事务一致性、证据链接、graph evidence、backup/import、精确定位和回滚复杂度。
+
+但长期需要冷归档，否则几年后 FTS/vector 和 raw message 会持续膨胀。推荐分两阶段。
+
+### P0：热库标记归档
+
+P0 只做逻辑归档：
+
+- `memory_metadata.retrieval_tier='archive_only' | 'forgotten'`
+- `messages_raw` / `chunks` / `entities` 原表不删除。
+- RecallEngine / ContextRecallService 默认排除这些 tier。
+- Search/Timeline 明确开关 `includeArchived=true` 才显示。
+- 精确 evidence link 可打开，但显示 `已归档，不参与默认关联`。
+
+这样最安全，也能立刻解决“被关联到”的问题。
+
+### P1：冷归档流水账
+
+当单用户 DB 达到阈值时，再做物理冷归档。触发条件可以是：
+
+- `memory.db > 1GB`
+- `messages_raw > 200k`
+- `chunks > 500k`
+- `archive_only` 内容超过热库 50%
+- FTS/vector 查询 p95 超过目标
+
+推荐不要用纯 MD 作为唯一归档格式。更稳的结构是：
+
+```text
+memory-service/data/users/{userId}/archive/
+  2026/
+    05/
+      memory-ledger-2026-05.jsonl
+      memory-ledger-2026-05.md
+      manifest.json
+```
+
+JSONL 是真源流水账，MD 是人类可读摘要。
+
+`memory-ledger-YYYY-MM.jsonl` 每行：
 
 ```json
 {
-  "windowDays": 30,
-  "kinds": ["source_noise", "dedupe_cluster", "profile_candidate"],
-  "dryRun": true
+  "id": "message-id-or-chunk-id",
+  "targetType": "message",
+  "sourceType": "glip",
+  "scope": "work",
+  "timestamp": 1779660000,
+  "title": "RingCentral message",
+  "content": "...",
+  "summary": "...",
+  "entities": [],
+  "metadata": {},
+  "hash": "sha256...",
+  "archivedAt": 1780000000,
+  "archiveReason": "low_salience_no_access_180d"
 }
 ```
 
-### 应用一个建议
+热 DB 只保留墓碑表：
 
-`POST /api/v1/lifecycle/candidates/:id/apply`
-
-### 批量应用低风险建议
-
-`POST /api/v1/lifecycle/batches/apply-safe`
-
-只允许：
-
-- raw only
-- cluster cap
-- scene-specific demote
-- snooze duplicate prompts
-
-不允许：
-
-- 删除
-- confirmed profile 写入
-- current truth 改写
-- 自动发送给外部 AI
-
-### 回滚批次
-
-`POST /api/v1/lifecycle/batches/:batchId/revert`
-
-## 前端实现建议
-
-### 页面组件
-
-`src/modals/components/MemoryLifecyclePage.vue`
-
-建议结构：
-
-- `LifecycleSummaryStrip`
-- `LifecycleLaneTabs`
-- `LifecycleCandidateList`
-- `LifecycleImpactPreview`
-- `LifecycleReceiptDrawer`
-
-### MemoryServiceClient 方法
-
-```ts
-getLifecycleOverview(): Promise<LifecycleOverview>
-scanLifecycleCandidates(input: LifecycleScanInput): Promise<LifecycleScanResult>
-applyLifecycleCandidate(id: string, input: LifecycleApplyInput): Promise<LifecycleDecisionReceipt>
-applySafeLifecycleBatch(input: LifecycleBatchInput): Promise<LifecycleBatchReceipt>
-revertLifecycleBatch(batchId: string): Promise<LifecycleBatchReceipt>
+```sql
+CREATE TABLE archived_memory_entries (
+  id TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL,
+  original_table TEXT NOT NULL,
+  source_type TEXT,
+  scope TEXT,
+  title TEXT,
+  summary TEXT,
+  timestamp INTEGER,
+  archive_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  archive_reason TEXT,
+  archived_at INTEGER NOT NULL
+);
 ```
+
+冷归档事务流程：
+
+1. 选取 `retrieval_tier='archive_only'` 且超过冷却期的内容。
+2. 写入 JSONL，并 fsync。
+3. 写入 `archived_memory_entries` 墓碑。
+4. 从 `messages_vec`、`chunks_vec`、`chunks_fts` 删除向量/全文索引。
+5. 可选：从 `chunks` 删除正文，保留最小 source ref；或从 `messages_raw` 删除 content，仅保留 id/source/timestamp/hash。
+6. 更新 `memory_metadata.archive_path`。
+7. 跑 integrity check：hash、行数、manifest。
+
+归档后默认不会被关联，因为：
+
+- 它不在 active vector / FTS index。
+- RecallEngine 默认不读 archive ledger。
+- Graph evidence 只统计热库 active evidence。
+- Ask 普通 mode 不扫 `archive/`。
+
+只有这些路径会读归档：
+
+- 用户显式勾选“包含归档记忆”的 Search/Timeline。
+- Ask 检测到历史意图，例如“以前/当时/去年/历史上/为什么那时”。
+- evidence deep link 精确打开。
+- backup/export。
 
 ## P0 范围
 
-P0 只做“影响力治理”，不做物理删除。
+P0 只做后台遗忘和检索接入，不做用户审批平台。
 
 ### P0 必须做
 
-1. 后端生成 4 类候选：
-   - recurring calendar 噪声
-   - truth-conflict 噪声簇
-   - capability-missing 簇
-   - explicit preference/profile candidate
-2. 前端展示 `/lifecycle` 页面。
-3. 支持单条 apply 和低风险批量 apply。
-4. 每次 apply 写 `memory_lifecycle_decisions` receipt。
-5. Ask / Context Recall / Day Pilot 至少读取 `raw_only`、`suppressed_noise`、cluster cap 信息。
-6. 提供 path-scoped 验证脚本。
+1. 扩展 `memory_metadata`：增加 `retrieval_tier`、`effective_salience`、`archived_at`、`archive_reason`、`archive_path`。
+2. 改造 `ForgettingEngine.runForgettingCycle()`：
+   - 计算 `effective_salience`。
+   - 根据阈值写 `retrieval_tier`。
+   - 不物理删除。
+3. 改造 `ConsolidationEngine.phaseProfileConsolidate()`：
+   - 历史 profile 降权/归档。
+   - `USER_CORE.md` 只使用 active confirmed high-salience profile。
+4. 增加 `LifecycleRetrievalPolicy`。
+5. 改造 `RecallEngine`：
+   - `enrichWithSalience()` 升级为 lifecycle enrichment。
+   - 默认排除 `archive_only/forgotten`。
+   - `historical_ask` / `explicit_search` 才允许历史和归档。
+6. 改造 `ContextRecallService`：
+   - 默认使用 `passive_surface` mode。
+   - archived/forgotten 不返回，weak 默认不返回。
+7. 改造 `/ask`：
+   - 普通问题用 `active_default`。
+   - 检测历史意图时用 `historical_ask`，并在答案中标明 `as-of`。
+8. 增加只读诊断指标：
+   - `/stats` 或 Coverage Map 中显示过去 24h 降权、归档、profile 归档数量。
 
 ### P0 不做
 
-- 不做物理删除。
-- 不自动确认用户画像。
+- 不做 `/lifecycle` 审批页面。
+- 不做批量 apply 按钮。
+- 不要求用户确认每条降权。
+- 不物理删除或冷迁移 raw memory。
 - 不自动修改 current truth。
-- 不做复杂 memory graph 可视化。
-- 不新建通知流。
-- 不替代 Coverage Map / Decision Center / User Profile。
+- 不自动确认或删除 user profile。
+- 不把归档结果推送成通知。
+
+### P1 范围
+
+- 冷归档 JSONL + MD 流水账。
+- 删除 archived 内容的 active vector/FTS 索引。
+- `includeArchived` 显式搜索。
+- 冷归档 integrity check / restore。
+- archive manifest 纳入 backup/export。
 
 ## 验证计划
 
@@ -459,41 +507,43 @@ P0 只做“影响力治理”，不做物理删除。
 新增：
 
 ```bash
-npm --prefix memory-service test -- --run src/__tests__/api-lifecycle.test.ts
+npm --prefix memory-service test -- --run src/__tests__/forgettingEngine.test.ts src/__tests__/recallLifecyclePolicy.test.ts src/__tests__/api-ask.test.ts src/__tests__/api-context-recall.test.ts src/__tests__/api-profile.test.ts
 ```
 
 覆盖：
 
-- recurring calendar 被聚合成一个 source_noise candidate。
-- pending truth conflict 被合并成 conflict_cluster candidate。
-- capability_missing action/confirm request 被归入 provider/action 类，不进入普通事实降权。
-- profile candidate 只创建 pending，不写 confirmed profile。
-- apply-safe 不允许 delete / confirmed write / truth update。
-- revert batch 恢复 memory_metadata 旧值。
+- `ForgettingEngine` 会把低 salience / 长期未访问记忆写成 `retrieval_tier='archive_only'` 或 `forgotten`。
+- `ForgettingEngine` 不会归档仍有 open action、pending decision、active project protection 的记忆。
+- `ConsolidationEngine.phaseProfileConsolidate()` 会衰减历史 profile，并从 `USER_CORE` 排除 archived / low salience profile。
+- `RecallEngine` 普通 mode 默认排除 `archive_only/forgotten`。
+- `/ask` 普通问题不使用归档记忆；历史意图问题可以进入 `historical_ask` 并标注 as-of。
+- `/context-recall` / Compose Assist 不返回 weak / archived / forgotten 记忆。
+- Graph channel 不用只剩 archived evidence 的 entity 做默认关联。
 
-### 前端静态验证
+### 归档验证
 
 新增：
 
 ```bash
-node tools/verify-memory-lifecycle-e2e.mjs
+node tools/verify-memory-archive-ledger.ts
 ```
 
 覆盖：
 
-- 页面能渲染 summary / lane / candidate detail / impact preview。
-- 低风险批处理按钮只对 safe candidates 生效。
-- apply 后 receipt drawer 显示 batch id、影响入口、可回滚时间。
-- 空态说明“没有需要处理的影响力建议”，不显示假数据。
-- 服务失败显示可重试，不误报“已整理完成”。
+- P0 逻辑归档不会删除 `messages_raw` / `chunks`。
+- P1 冷归档写 JSONL 后，hash、manifest、墓碑表一致。
+- 冷归档内容从 active vector / FTS index 移除后，不再被普通 Context Recall 命中。
+- explicit search / exact evidence link 仍可找回归档内容。
 
 ### 召回回归
 
-用现有 context recall eval 样本加 3 类新 golden：
+用现有 context recall eval 样本加 5 类 new golden：
 
 1. RingCentral 空会议页不应因 recurring calendar 召回大量不相关历史。
 2. “那个 BE ready 了吗”不应召回泛 AI 工具分享。
 3. Today Pilot 不应把 20 条 truth conflict 分成 20 张 mission。
+4. 普通 Ask 不应用 archived profile 作为当前用户偏好。
+5. “去年/当时/以前为什么这么做”这类历史问题可以召回 historical / archive-only evidence，并明确标注时间。
 
 ### 构建验证
 
@@ -510,15 +560,9 @@ npm start
 
 Demo 文件：[`memory-lifecycle-gardener-demo.html`](./memory-lifecycle-gardener-demo.html)
 
-Demo 模拟一个集成在 Memory Exploring 中的新页面：
+这个 demo 是上一版“管家页面”的可视化草稿。按本次修订，它不应作为 P0 产品入口实现，只保留用于说明几类记忆如何从 active 变成 weak / archive-only。
 
-- 左侧为已有 Memory Exploring 导航。
-- 顶部展示本轮真实数据风格的影响力摘要。
-- 中间是 lifecycle candidate lanes。
-- 右侧展示调整前/后的 Ask、Memory Lens、Today Pilot 影响预览。
-- 支持切换候选、应用单条建议、应用低风险批处理，并显示 receipt。
-
-Demo 数据是模拟数据，但数值和场景来自本轮只读观察：temporary memory、truth conflict、recurring calendar、OpenClaw capability-missing、Doubao 随手记/系统候选。
+如果后续还要做 UI，应改成 Coverage Map 或 Memory System 里的只读诊断，不提供“每日审批 / 批量 apply”主流程。
 
 ## 真实使用场景
 
@@ -531,12 +575,12 @@ Demo 数据是模拟数据，但数值和场景来自本轮只读观察：tempor
 - OpenClaw 缺能力失败。
 - 真实需要准备的 Cursor workshop 或 CoP 分享反而被挤到下面。
 
-有 Lifecycle Gardener 后：
+有无感遗忘层后：
 
-1. 系统把 18 条 recurring calendar 聚合成 1 个低优先级日程背景。
-2. 把 37 条 evidence-resolution 冲突收敛成 1 张“待核对事实冲突”聚合卡。
+1. 夜间 `ForgettingEngine` 把重复 recurring calendar 写成 `weak/archive_only`。
+2. `DayPilotService` 读取 active/default retrieval policy，天然不再把这些历史日程拆成 mission。
 3. Day Pilot 只剩 3-5 个真正可行动 mission。
-4. 用户如果想审计，可以从 mission 打开 lifecycle receipt，看哪些记忆被降权，不会担心系统偷偷删了证据。
+4. 用户不需要审批；如果排障，可以在 Coverage/Stats 里看到“过去 24h 自动归档 recurring calendar 18 条”。
 
 ### 场景 2：用户在 RingCentral 回复“那个 BE ready 了吗”
 
@@ -545,23 +589,33 @@ Demo 数据是模拟数据，但数值和场景来自本轮只读观察：tempor
 - Context Recall 召回泛 AI 工具、Codex、Jira 自动化讨论。
 - 用户看到的建议像在复述 Personal AI 背景，不像能直接回复。
 
-有 Lifecycle Gardener 后：
+有无感遗忘层后：
 
-1. 同一群组里被多次忽略的泛 AI 工具记忆被 scene-specific 降权。
-2. capability_missing / truth-conflict 系统消息不再默认进入 composer 证据。
-3. Compose Assist 优先使用当前群组、最近 BE/Jira/source anchor 的 working memory。
-4. 如果用户仍觉得不相关，点一次“不相关”会强化这个 lifecycle rule，而不是要求用户进入校准后台。
+1. 泛 AI 工具讨论因为长期在具体 BE 场景被忽略，已自动进入 scene-specific weak tier。
+2. capability_missing / truth-conflict 系统消息是 archive-only 或 diagnostics-only，不进入 composer evidence。
+3. `ContextRecallService` 使用 `composer_surface` mode，只允许 active/current thread 证据。
+4. 用户点“不相关”只写反馈事件，后台下次定时任务自动加速同类记忆衰减。
+
+### 场景 3：用户问“我以前为什么决定这么做？”
+
+普通场景下 archived memory 不会被关联。但当 Ask 检测到历史意图：
+
+1. `/ask` 切到 `historical_ask` mode。
+2. RecallEngine 允许 `historical`，必要时二阶段读取 `archive_only`。
+3. 回答中明确写 `截至 2026-04 的证据显示...`，避免把历史事实当当前事实。
+4. 如果证据已经冷归档，答案只引用 summary / source ref，并提供精确证据链接。
 
 ## 风险与缓解
 
 | 风险 | 缓解 |
 | --- | --- |
-| 系统误降权重要记忆 | P0 默认 raw only，不物理删除；所有变更有 receipt 和 revert。 |
-| 用户被新页面打扰 | 不主动推送，只在 Coverage / Memory Exploring / 反馈后进入。 |
-| 降权逻辑变成黑箱 | 每张卡展示前 3 个原因、影响入口和证据样例。 |
-| 与 User Profile 重叠 | profile candidate 必须进入 User Profile 确认队列，Lifecycle 不直接确认。 |
+| 系统误降权重要记忆 | open action、pending decision、active project、confirmed identity、pinned memory 加保护；P0 不物理删除。 |
+| 用户不知道为什么少了某些记忆 | Stats/Coverage 只读显示过去 24h 衰减/归档数量和原因分布。 |
+| archived 仍被检索关联 | RecallEngine 统一 lifecycle policy，Context Recall / Compose / Day Pilot 默认排除 archive-only/forgotten。 |
+| 历史问题答不出来 | Ask 增加 historical intent mode，显式历史问题才二阶段读取 historical/archive。 |
+| DB 继续变大 | P0 逻辑归档先解决准确率；P1 JSONL+MD 冷归档和 active-only vector/FTS index 再解决体积。 |
+| 与 User Profile 重叠 | Profile 也走无感衰减，但 confirmed/current profile 写入和删除仍由 User Profile/Decision Center 控制。 |
 | 与 Freshness 重叠 | Freshness 负责 source change，Lifecycle 负责 influence state。 |
-| 批处理太危险 | safe batch 只允许低风险 demote / cluster / raw only，不允许 delete 和 truth update。 |
 
 ## 成功指标
 
@@ -569,36 +623,41 @@ Demo 数据是模拟数据，但数值和场景来自本轮只读观察：tempor
 2. Today Pilot mission 中系统噪声卡数量下降。
 3. 用户点“不相关”后，同类噪声重复出现次数下降。
 4. Ask / Compose Assist context pack token 数下降，但关键证据保留率不下降。
-5. 用户批处理后 7 天内 revert 比例低。
-6. 用户能从任意被降权记忆打开 raw evidence。
+5. 普通 Ask 中 archived/forgotten evidence 出现率接近 0。
+6. historical Ask 的证据找回率不下降，并能显示 as-of。
+7. `USER_CORE` 里低 salience / archived profile 不再出现。
+8. FTS/vector p95 在冷归档后下降或稳定。
 
 ## 推荐实施顺序
 
-1. **Plan / Demo review**  
-   先确认本方案是否作为独立能力推进。
+1. **Schema + policy**
+   增加 `retrieval_tier` / `effective_salience` / archive fields，新增 `LifecycleRetrievalPolicy`。
 
-2. **Backend P0 scan only**  
-   增加 candidate scan API，只读生成建议，不改变影响力。
+2. **ForgettingEngine 接入**
+   在定时任务里计算 effective salience 和 retrieval tier，不做物理删除。
 
-3. **Memory Exploring 页面**  
-   先能看见建议和影响预览。
+3. **Profile 衰减落地**
+   调整 `phaseProfileConsolidate()`、`renderUserCore()`、provider context，使历史画像不再注入。
 
-4. **Apply single low-risk decision**  
-   只支持 raw only / cluster cap。
+4. **RecallEngine 过滤**
+   `enrichWithSalience()` 升级为 lifecycle enrichment，Ask/Context Recall/Compose/Day Pilot 统一调用。
 
-5. **接入 Day Pilot / Context Recall**  
-   让两条最容易受噪声影响的入口读取 influence state。
+5. **历史 Ask 二阶段检索**
+   只在历史意图时允许 historical/archive-only evidence，并标注 as-of。
 
-6. **Safe batch + receipt + revert**  
-   再做批量应用。
+6. **只读诊断**
+   `/stats` 或 Coverage Map 展示最近衰减/归档摘要，不做审批操作。
+
+7. **P1 冷归档**
+   JSONL+MD 流水账、墓碑表、active-only vector/FTS index、restore/integrity check。
 
 ## 最小可交付定义
 
 如果未来进入实现，MVP 通过标准是：
 
-- 用户打开 `/lifecycle`，能看到至少 3 类真实候选。
-- 点击一个 recurring calendar 噪声建议，能看到它会影响 Today Pilot / Timeline。
-- 应用后，Day Pilot 不再把同类日程重复拆成多张卡。
-- 原始日程仍能在 Timeline/Search 中查到，并显示“仅保留为原始证据”。
-- 可以通过 receipt 撤销本次影响力变更。
-
+- 后台定时任务能把长期不用的 memory 写成 `weak/archive_only/forgotten`。
+- `ContextRecallService` 默认不返回 `archive_only/forgotten`。
+- `/ask` 普通问题不使用 archived evidence，历史问题可以显式读取 historical evidence。
+- `USER_CORE` 不包含 archived / low salience profile。
+- Day Pilot 不再把同类 recurring calendar / truth conflict 拆成多张 mission。
+- 原始证据仍可通过显式搜索、时间线或精确 evidence link 找回。

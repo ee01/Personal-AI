@@ -54,11 +54,11 @@ function collectPageErrors(page) {
 }
 
 async function visibleTaskNames(page) {
-  return page.locator('.task-row .task-name').evaluateAll((nodes) =>
-    nodes
-      .map((node) => node.textContent?.trim() || '')
-      .filter(Boolean),
-  );
+  return page
+    .locator('.task-row .task-name')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => node.textContent?.trim() || '').filter(Boolean),
+    );
 }
 
 let launched;
@@ -68,96 +68,147 @@ try {
   const { context, extensionId, serviceWorker } = launched;
   const now = Date.now();
 
-  await serviceWorker.evaluate(async ({ now }) => {
-    await chrome.storage.local.clear();
-    await chrome.storage.local.set({
-      envConfig: {
-        MEMORY_SERVICE_BASE_URL: 'https://memory.local/api/v1',
-        MESSAGE_ANALYSIS_INTERVAL: 30,
-      },
-      userinfo: {
-        username: 'popup.verify',
-        fullName: 'Popup Verify',
-      },
-      taskSchedulerStates: {
-        message_analysis: { enabled: false },
-        memory_sync: {
-          enabled: true,
-          lastSuccess: true,
-          lastCompletedAt: now - 20_000,
-          lastSkippedAt: now - 1_000,
-          lastSkipReason: '任务 记忆系统同步 正在执行，跳过重复触发',
-          runHistory: [
-            {
-              startedAt: now - 1_000,
-              completedAt: now - 1_000,
-              durationMs: 0,
-              success: false,
-              skipped: true,
-              trigger: 'manual',
-              error: '任务 记忆系统同步 正在执行，跳过重复触发',
-            },
-          ],
+  await serviceWorker.evaluate(
+    async ({ now }) => {
+      const nextDigestHour = (new Date(now).getHours() + 1) % 24;
+      await chrome.storage.local.clear();
+      await chrome.storage.local.set({
+        envConfig: {
+          MEMORY_SERVICE_BASE_URL: 'https://memory.local/api/v1',
+          MESSAGE_ANALYSIS_INTERVAL: 30,
         },
-        system_monitoring: {
-          enabled: true,
-          lastSuccess: false,
-          lastCompletedAt: now - 30_000,
-          lastError: 'memory service unavailable',
-          runHistory: [
-            {
-              startedAt: now - 30_500,
-              completedAt: now - 30_000,
-              durationMs: 500,
-              success: false,
-              trigger: 'manual',
-              error: 'memory service unavailable',
-            },
-            {
-              startedAt: now - 60_500,
-              completedAt: now - 60_000,
-              durationMs: 500,
-              success: false,
-              trigger: 'scheduled',
-              error: 'memory service unavailable',
-            },
-            {
-              startedAt: now - 90_500,
-              completedAt: now - 90_000,
-              durationMs: 500,
-              success: false,
-              trigger: 'scheduled',
-              error: 'memory service unavailable',
-            },
-          ],
+        userinfo: {
+          username: 'popup.verify',
+          fullName: 'Popup Verify',
         },
-        user_profile_decay: {
-          enabled: true,
-          lastSuccess: true,
-          lastCompletedAt: now - 40_000,
+        taskSchedulerStates: {
+          message_analysis: { enabled: false },
+          memory_sync: {
+            enabled: true,
+            lastSuccess: true,
+            lastCompletedAt: now - 20_000,
+            lastSkippedAt: now - 1_000,
+            lastSkipReason: '任务 记忆系统同步 正在执行，跳过重复触发',
+            runHistory: [
+              {
+                startedAt: now - 1_000,
+                completedAt: now - 1_000,
+                durationMs: 0,
+                success: false,
+                skipped: true,
+                trigger: 'manual',
+                error: '任务 记忆系统同步 正在执行，跳过重复触发',
+              },
+            ],
+          },
+          system_monitoring: {
+            enabled: true,
+            lastSuccess: false,
+            lastCompletedAt: now - 30_000,
+            lastError: 'memory service unavailable',
+            lastResultSummary: '检查 memory-service 连接后重试',
+            runHistory: [
+              {
+                startedAt: now - 30_500,
+                completedAt: now - 30_000,
+                durationMs: 500,
+                success: false,
+                trigger: 'manual',
+                error: 'memory service unavailable',
+                summary: '检查 memory-service 连接后重试',
+              },
+              {
+                startedAt: now - 60_500,
+                completedAt: now - 60_000,
+                durationMs: 500,
+                success: false,
+                trigger: 'scheduled',
+                error: 'memory service unavailable',
+              },
+              {
+                startedAt: now - 90_500,
+                completedAt: now - 90_000,
+                durationMs: 500,
+                success: false,
+                trigger: 'scheduled',
+                error: 'memory service unavailable',
+              },
+            ],
+          },
+          user_profile_decay: {
+            enabled: true,
+            lastSuccess: true,
+            lastCompletedAt: now - 40_000,
+          },
+          vectorized_data_maintenance: { enabled: true },
+          user_summary_generation: { enabled: true },
+          vector_quality_check: { enabled: true },
+          digest_queue_process: {
+            enabled: true,
+            lastSuccess: true,
+            lastCompletedAt: now - 50_000,
+            lastResultSummary: '无到期摘要',
+            runHistory: [
+              {
+                startedAt: now - 50_100,
+                completedAt: now - 50_000,
+                durationMs: 100,
+                success: true,
+                trigger: 'scheduled',
+                summary: '无到期摘要',
+              },
+            ],
+          },
         },
-        vectorized_data_maintenance: { enabled: true },
-        user_summary_generation: { enabled: true },
-        vector_quality_check: { enabled: true },
-        digest_queue_process: {
-          enabled: true,
-          lastSuccess: true,
-          lastCompletedAt: now - 50_000,
-          lastResultSummary: '无到期摘要',
-          runHistory: [
-            {
-              startedAt: now - 50_100,
-              completedAt: now - 50_000,
-              durationMs: 100,
-              success: true,
-              trigger: 'scheduled',
-              summary: '无到期摘要',
-            },
-          ],
+        digestQueues: {
+          concerned_items_daily: {
+            taskId: 'concerned_items_daily',
+            items: [
+              {
+                id: 'verify-future-digest-1',
+                createdAt: new Date(now).toISOString(),
+                sourceId: 'rule-future',
+                data: {
+                  ruleId: 'rule-future',
+                  matchedRule: 'Release risks',
+                  sender: 'Alice',
+                  teamName: 'Release',
+                  summary: 'Watch the risk later',
+                  messageContent: 'Watch the risk later',
+                  datetime: new Date(now).toISOString(),
+                  digestConfig: {
+                    enabled: true,
+                    frequency: 'daily',
+                    preferredHour: nextDigestHour,
+                  },
+                },
+              },
+              {
+                id: 'verify-future-digest-2',
+                createdAt: new Date(now).toISOString(),
+                sourceId: 'rule-future',
+                data: {
+                  ruleId: 'rule-future',
+                  matchedRule: 'Release risks',
+                  sender: 'Bob',
+                  teamName: 'Release',
+                  summary: 'Second item waits for summary',
+                  messageContent: 'Second item waits for summary',
+                  datetime: new Date(now).toISOString(),
+                  digestConfig: {
+                    enabled: true,
+                    frequency: 'daily',
+                    preferredHour: nextDigestHour,
+                  },
+                },
+              },
+            ],
+          },
         },
-      },
-    });
-  }, { now });
+      });
+    },
+    { now },
+  );
 
   const page = await context.newPage();
   const assertNoPageErrors = collectPageErrors(page);
@@ -257,13 +308,22 @@ try {
 
   await page.locator('.task-health-chip', { hasText: '失败 1' }).click();
   assert.deepEqual(await visibleTaskNames(page), ['系统健康监控']);
-  await page.locator('.task-row', { hasText: 'memory service unavailable' }).waitFor({
-    timeout: 15000,
-  });
+  await page
+    .locator('.task-row', { hasText: 'memory service unavailable' })
+    .waitFor({
+      timeout: 15000,
+    });
   await page
     .locator('.task-row', { hasText: '系统健康监控' })
     .locator('.task-latest-run', {
-      hasText: '最近一次 · 手动失败 · 500ms · memory service unavailable',
+      hasText:
+        '最近一次 · 手动失败 · 500ms · memory service unavailable · 检查 memory-service 连接后重试',
+    })
+    .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-row', {
+      hasText:
+        'memory service unavailable · 检查 memory-service 连接后重试',
     })
     .waitFor({ timeout: 15000 });
   await page.locator('.task-row', { hasText: '连续失败 3 次' }).waitFor({
@@ -278,7 +338,8 @@ try {
   await page
     .locator('.task-row', { hasText: '记忆系统同步' })
     .locator('.task-latest-run', {
-      hasText: '最近一次 · 手动跳过 · 0ms · 任务 记忆系统同步 正在执行，跳过重复触发',
+      hasText:
+        '最近一次 · 手动跳过 · 0ms · 任务 记忆系统同步 正在执行，跳过重复触发',
     })
     .waitFor({ timeout: 15000 });
 
@@ -297,6 +358,12 @@ try {
       hasText: '最近一次 · 排程成功 · 100ms · 无到期摘要',
     })
     .waitFor({ timeout: 15000 });
+  await page
+    .locator('.task-row', { hasText: '汇总推送队列处理' })
+    .locator('.task-queue-summary', {
+      hasText: '本地摘要队列 2 条，暂无到期',
+    })
+    .waitFor({ timeout: 15000 });
 
   assertNoPageErrors();
   await context.close();
@@ -305,9 +372,9 @@ try {
 } catch (error) {
   if (launched?.context) await launched.context.close().catch(() => undefined);
   if (launched?.userDataDir) {
-    await fs.rm(launched.userDataDir, { recursive: true, force: true }).catch(
-      () => undefined,
-    );
+    await fs
+      .rm(launched.userDataDir, { recursive: true, force: true })
+      .catch(() => undefined);
   }
   throw error;
 }

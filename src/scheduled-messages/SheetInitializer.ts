@@ -13,6 +13,11 @@ interface SharingPermissionResult {
   warning?: string;
 }
 
+type InitializationSetupMetadata = Pick<
+  InitializationResult,
+  'deploymentId' | 'messagesSheetId' | 'logsSheetId'
+>;
+
 /**
  * Messages 表的 Schema 定义
  * 当新增字段时，在 columns 中添加列名，并增加 version
@@ -134,6 +139,9 @@ export class SheetInitializer {
         sheetUrl: sheet.spreadsheetUrl,
         scriptId,
         webAppUrl,
+        deploymentId: this.deploymentId,
+        messagesSheetId: this.messagesSheetId,
+        logsSheetId: this.logsSheetId,
         setupWarnings,
         needsAuthorization: true,
         authUrl: `${webAppUrl}?action=authSuccess`, // 用户需要访问这个 URL 来授权
@@ -668,8 +676,14 @@ function minuteTrigger() {
     sheetId: string,
     scriptId: string,
     webAppUrl: string,
+    setupMetadata: InitializationSetupMetadata = {},
   ): Promise<InitializationResult> {
+    const setupWarnings: string[] = [];
+
     try {
+      this.applySetupMetadata(setupMetadata);
+      await this.ensureSetupMetadata(sheetId, setupWarnings);
+
       // 6. 创建触发器（通过 Web App 调用）
       console.log('步骤 6/8: 创建触发器...');
       const triggers = await this.createTriggers(webAppUrl);
@@ -694,6 +708,10 @@ function minuteTrigger() {
         sheetUrl: `https://docs.google.com/spreadsheets/d/${sheetId}/edit`,
         scriptId,
         webAppUrl,
+        deploymentId: this.deploymentId || undefined,
+        messagesSheetId: this.messagesSheetId || undefined,
+        logsSheetId: this.logsSheetId || undefined,
+        setupWarnings,
       };
     } catch (error) {
       console.error('完成初始化失败:', error);
@@ -703,8 +721,54 @@ function minuteTrigger() {
         sheetUrl: `https://docs.google.com/spreadsheets/d/${sheetId}/edit`,
         scriptId,
         webAppUrl,
+        deploymentId: this.deploymentId || setupMetadata.deploymentId,
+        messagesSheetId: this.messagesSheetId || setupMetadata.messagesSheetId,
+        logsSheetId: this.logsSheetId || setupMetadata.logsSheetId,
+        setupWarnings,
         error: error.message || '未知错误',
       };
+    }
+  }
+
+  private applySetupMetadata(metadata: InitializationSetupMetadata): void {
+    if (metadata.messagesSheetId && metadata.messagesSheetId > 0) {
+      this.messagesSheetId = metadata.messagesSheetId;
+    }
+
+    if (metadata.logsSheetId && metadata.logsSheetId > 0) {
+      this.logsSheetId = metadata.logsSheetId;
+    }
+
+    if (metadata.deploymentId) {
+      this.deploymentId = metadata.deploymentId;
+    }
+  }
+
+  private async ensureSetupMetadata(
+    sheetId: string,
+    setupWarnings: string[],
+  ): Promise<void> {
+    if (this.messagesSheetId > 0 && this.logsSheetId > 0) {
+      return;
+    }
+
+    try {
+      const { ConfigSyncService } = await import('./ConfigSyncService');
+      const syncService = new ConfigSyncService(this.token);
+      const worksheetIds = await syncService.getScheduledMessagesWorksheetIds(sheetId);
+
+      if (!this.messagesSheetId && worksheetIds.messagesSheetId !== undefined) {
+        this.messagesSheetId = worksheetIds.messagesSheetId;
+      }
+
+      if (!this.logsSheetId && worksheetIds.logsSheetId !== undefined) {
+        this.logsSheetId = worksheetIds.logsSheetId;
+      }
+    } catch (error) {
+      console.warn('读取维护表子表 ID 失败，将继续保存基础配置:', error);
+      setupWarnings.push(
+        '未能自动记录 Messages / Logs 子表 ID；初始化仍会继续，之后打开维护表或同步时会再次尝试恢复子表定位。',
+      );
     }
   }
 
@@ -872,11 +936,8 @@ function minuteTrigger() {
     const config: SheetConfig = {
       sheetId: spreadsheetId,
       sheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
-      messagesSheetId: this.messagesSheetId, // 保存 Messages Sheet ID
-      logsSheetId: this.logsSheetId, // 保存 Logs Sheet ID
       scriptId,
       webAppUrl,
-      deploymentId: this.deploymentId, // 保存 Deployment ID（用于更新部署）
       minute_trigger_id: triggers.minuteTriggerId,
       daily_trigger_id: triggers.dailyTriggerId,
       sheet_version: MESSAGES_SCHEMA.version,
@@ -887,10 +948,22 @@ function minuteTrigger() {
       last_sync_time: this.formatDateTime(now),
     };
 
+    if (this.messagesSheetId > 0) {
+      config.messagesSheetId = this.messagesSheetId;
+    }
+
+    if (this.logsSheetId > 0) {
+      config.logsSheetId = this.logsSheetId;
+    }
+
+    if (this.deploymentId) {
+      config.deploymentId = this.deploymentId;
+    }
+
     // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage
     const { ConfigSyncService } = await import('./ConfigSyncService');
     const syncService = new ConfigSyncService(this.token);
-    await syncService.syncConfig(config);
+    await syncService.syncConfig(config, { syncAction: 'one_click_setup' });
   }
 
   // 辅助方法

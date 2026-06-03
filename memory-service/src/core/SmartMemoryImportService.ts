@@ -55,6 +55,10 @@ export interface SmartMemoryImportInspectResult {
     unsupported: number;
     backup: boolean;
     externalAiConversations?: number;
+    externalAiImportedMessages?: number;
+    externalAiTotalMessages?: number;
+    externalAiTruncatedConversations?: number;
+    externalAiTruncatedMessages?: number;
     promotionCandidates?: number;
   };
   entries: SmartMemoryImportEntry[];
@@ -93,6 +97,14 @@ interface ParsedImportEntry extends SmartMemoryImportEntry {
   content: string;
   sourceKind?: 'document' | 'pdf' | 'external_ai_history';
   metadata?: Record<string, unknown>;
+}
+
+interface ExternalAiImportStats {
+  conversations: number;
+  importedMessages: number;
+  totalMessages: number;
+  truncatedConversations: number;
+  truncatedMessages: number;
 }
 
 const PARSER_VERSION = 'smart-memory-import-v1';
@@ -142,6 +154,7 @@ export class SmartMemoryImportService {
     const externalAiConversations = readyEntries.filter(
       (entry) => entry.sourceKind === 'external_ai_history',
     ).length;
+    const externalAiStats = summarizeExternalAiEntries(readyEntries);
     const unsupported = parsed.entries.filter(
       (entry) => entry.status === 'blocked',
     ).length;
@@ -170,6 +183,10 @@ export class SmartMemoryImportService {
         unsupported,
         backup: Boolean(parsed.backup),
         externalAiConversations,
+        externalAiImportedMessages: externalAiStats.importedMessages,
+        externalAiTotalMessages: externalAiStats.totalMessages,
+        externalAiTruncatedConversations: externalAiStats.truncatedConversations,
+        externalAiTruncatedMessages: externalAiStats.truncatedMessages,
         promotionCandidates: profileCandidates + skillSignals,
       },
       entries: parsed.entries.map(toPublicEntry),
@@ -211,6 +228,7 @@ export class SmartMemoryImportService {
     const ts = now();
     const sourceName = input.fileName || 'pasted-text';
     const scope = input.scope ?? 'work';
+    const externalAiStats = summarizeExternalAiEntries(readyEntries);
     const batchSummary = {
       files: parsed.entries.length,
       readyFiles: readyEntries.length,
@@ -231,6 +249,10 @@ export class SmartMemoryImportService {
       externalAiConversations: readyEntries.filter(
         (entry) => entry.sourceKind === 'external_ai_history',
       ).length,
+      externalAiImportedMessages: externalAiStats.importedMessages,
+      externalAiTotalMessages: externalAiStats.totalMessages,
+      externalAiTruncatedConversations: externalAiStats.truncatedConversations,
+      externalAiTruncatedMessages: externalAiStats.truncatedMessages,
       parserVersion: PARSER_VERSION,
     };
 
@@ -355,7 +377,6 @@ export class SmartMemoryImportService {
     const allFileEntries = zip
       .getEntries()
       .filter((entry) => !entry.isDirectory);
-    const entries = allFileEntries.slice(0, MAX_ZIP_ENTRIES);
     assertSafeZipPaths(allFileEntries.map((entry) => entry.entryName));
 
     if (isBackupZip(allFileEntries)) {
@@ -390,11 +411,12 @@ export class SmartMemoryImportService {
       };
     }
 
-    const externalAiHistory = parseExternalAiZip(entries, sourceHash);
+    const externalAiHistory = parseExternalAiZip(allFileEntries, sourceHash);
     if (externalAiHistory) {
       return externalAiHistory;
     }
 
+    const entries = allFileEntries.slice(0, MAX_ZIP_ENTRIES);
     const parsedEntries: ParsedImportEntry[] = [];
     const warnings: string[] = [];
     for (const entry of entries) {
@@ -665,6 +687,45 @@ function toPublicEntry(entry: ParsedImportEntry): SmartMemoryImportEntry {
   return publicEntry;
 }
 
+function summarizeExternalAiEntries(
+  entries: ParsedImportEntry[],
+): ExternalAiImportStats {
+  const stats: ExternalAiImportStats = {
+    conversations: 0,
+    importedMessages: 0,
+    totalMessages: 0,
+    truncatedConversations: 0,
+    truncatedMessages: 0,
+  };
+
+  for (const entry of entries) {
+    if (entry.sourceKind !== 'external_ai_history') continue;
+    const totalMessages = readMetadataNumber(entry.metadata, 'totalMessages');
+    const importedMessages = readMetadataNumber(entry.metadata, 'importedMessages');
+    const truncatedMessages =
+      readMetadataNumber(entry.metadata, 'truncatedMessages') ??
+      Math.max(0, (totalMessages ?? 0) - (importedMessages ?? 0));
+
+    stats.conversations += 1;
+    stats.totalMessages += totalMessages ?? 0;
+    stats.importedMessages += importedMessages ?? totalMessages ?? 0;
+    stats.truncatedMessages += truncatedMessages;
+    if (truncatedMessages > 0) {
+      stats.truncatedConversations += 1;
+    }
+  }
+
+  return stats;
+}
+
+function readMetadataNumber(
+  metadata: Record<string, unknown> | undefined,
+  key: string,
+): number | null {
+  const value = metadata?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function makePreview(text: string): string {
   const normalized = normalizeText(text);
   if (normalized.length <= 420) {
@@ -893,6 +954,17 @@ function parseExternalAiZip(
     conversations.length > MAX_EXTERNAL_AI_CONVERSATIONS
       ? [`Only inspected the first ${MAX_EXTERNAL_AI_CONVERSATIONS} conversations.`]
       : [];
+  for (const entry of parsedEntries) {
+    const warning = buildExternalAiTruncationWarning(entry);
+    if (warning) {
+      warnings.push(warning);
+    }
+  }
+  if (entries.length > 1) {
+    warnings.push(
+      `Detected external AI history from ${conversationsEntry.entryName}; other archive files were ignored.`,
+    );
+  }
 
   return {
     detectedKind: 'external_ai_history',
@@ -914,6 +986,11 @@ function buildExternalAiConversationEntry(
   const provider = inferExternalAiProvider(conversation);
   const messages = extractExternalAiMessages(conversation);
   if (messages.length === 0) return null;
+  const importedMessages = Math.min(
+    messages.length,
+    MAX_EXTERNAL_AI_MESSAGES_PER_CONVERSATION,
+  );
+  const truncatedMessages = Math.max(0, messages.length - importedMessages);
 
   const body = [
     `# ${title}`,
@@ -934,8 +1011,19 @@ function buildExternalAiConversationEntry(
       sourcePath,
       originalTitle: title,
       totalMessages: messages.length,
+      importedMessages,
+      truncatedMessages,
+      messageLimit: MAX_EXTERNAL_AI_MESSAGES_PER_CONVERSATION,
     },
   );
+}
+
+function buildExternalAiTruncationWarning(entry: ParsedImportEntry): string | null {
+  const totalMessages = readMetadataNumber(entry.metadata, 'totalMessages');
+  const importedMessages = readMetadataNumber(entry.metadata, 'importedMessages');
+  const truncatedMessages = readMetadataNumber(entry.metadata, 'truncatedMessages');
+  if (!totalMessages || !importedMessages || !truncatedMessages) return null;
+  return `Conversation "${entry.title}" includes ${totalMessages} messages; only the first ${importedMessages} were included in this import preview.`;
 }
 
 function inferExternalAiProvider(conversation: any): string {
@@ -967,7 +1055,7 @@ function extractExternalAiMessages(
     return conversation.chat_messages
       .map((message: any) => ({
         role: String(message.sender || message.role || 'message'),
-        text: normalizeText(String(message.text || message.content || '')),
+        text: extractExternalAiMessageText(message.content ?? message.text),
       }))
       .filter((message: { text: string }) => message.text.length > 0);
   }
@@ -977,6 +1065,17 @@ function extractExternalAiMessages(
 
 function extractExternalAiMessageText(content: any): string {
   if (typeof content === 'string') return normalizeText(content);
+  if (Array.isArray(content)) {
+    return normalizeText(
+      content
+        .map((part: unknown) => {
+          if (typeof part === 'string') return part;
+          if (typeof (part as any)?.text === 'string') return (part as any).text;
+          return JSON.stringify(part);
+        })
+        .join('\n'),
+    );
+  }
   if (Array.isArray(content?.parts)) {
     return normalizeText(
       content.parts

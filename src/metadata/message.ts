@@ -1,5 +1,16 @@
 import { getIndexedDBData, getIndexedDBDataByIds } from '../storage';
 import { formatDate, uniqBy } from '../utils';
+import {
+  appendAttachmentSummaryToText,
+  buildFileItemsMap,
+  extractPostFileAttachments,
+  type MessageAttachment,
+} from './attachments';
+
+export type {
+  MessageAttachment,
+  MessageAttachmentCategory,
+} from './attachments';
 
 /**
  * Thread 结构定义
@@ -25,6 +36,7 @@ export interface MessagePost {
   time: string;
   type: 'message';
   contentType?: 'message' | 'event';
+  attachments?: MessageAttachment[];
   event?: {
     title: string;
     start?: string;
@@ -690,9 +702,10 @@ function fetchAllMessageData() {
       getIndexedDBData('Glip', 'person'),
       getIndexedDBData('Glip', 'post'),
       getIndexedDBData('Glip', 'replyPost'),
+      fetchOptionalIndexedDBData('Glip', 'fileItem'),
       fetchGlipEventData()
     ])
-    .then(([groupData, personData, postData, replyPostData, eventData]) => {
+    .then(([groupData, personData, postData, replyPostData, fileItemData, eventData]) => {
       // 缓存 person 和 group 数据
       cachedPersonsMap = new Map();
       personData.forEach((person: any) => {
@@ -715,6 +728,7 @@ function fetchAllMessageData() {
         person: personData,
         post: postData,
         replyPost: replyPostData,
+        fileItem: fileItemData,
         event: eventData
       };
     })
@@ -727,7 +741,12 @@ function fetchAllMessageData() {
 /**
  * 根据 post ID 获取父消息（用于获取不在时间窗口内的消息）
  */
-async function fetchMissingParentPosts(parentIds: (string | number)[], personsMap: Map<any, string>, groupsMap: Map<any, any>): Promise<Map<string | number, MessagePost>> {
+async function fetchMissingParentPosts(
+  parentIds: (string | number)[],
+  personsMap: Map<any, string>,
+  groupsMap: Map<any, any>,
+  fileItemsMap: Map<any, any>,
+): Promise<Map<string | number, MessagePost>> {
   const missingPosts = new Map<string | number, MessagePost>();
   
   if (parentIds.length === 0) return missingPosts;
@@ -745,7 +764,15 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
     const allPosts = [...postsFromMain, ...postsFromReply];
     
     for (const post of allPosts) {
-      const text = post ? extractPostText(post, personsMap) : '';
+      const attachments = post
+        ? extractPostFileAttachments(post, fileItemsMap)
+        : [];
+      const text = post
+        ? appendAttachmentSummaryToText(
+            extractPostText(post, personsMap),
+            attachments,
+          )
+        : '';
       if (post && text) {
         const groupId = extractPostGroupId(post);
         const groupInfo = resolveGroupInfo(groupsMap, groupId);
@@ -776,6 +803,7 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
           time: formatDate(extractPostCreatedAt(post).getTime()),
           type: 'message',
           contentType,
+          ...(attachments.length > 0 ? { attachments } : {}),
           ...(isEvent ? { event: buildEventDetails(post) } : {})
         });
       }
@@ -796,7 +824,8 @@ async function fetchMissingParentPosts(parentIds: (string | number)[], personsMa
 async function buildThreadStructure(
   posts: MessagePost[],
   personsMap: Map<any, string>,
-  groupsMap: Map<any, any>
+  groupsMap: Map<any, any>,
+  fileItemsMap: Map<any, any>,
 ): Promise<{ threads: ThreadStructure[]; standalone: MessagePost[] }> {
   const postsMap = new Map(posts.map(p => [String(p.id), p]));
   const repliesMap = new Map<string, MessagePost[]>(); // parentId -> replies[]
@@ -825,7 +854,12 @@ async function buildThreadStructure(
   
   // 第二步：获取不在时间窗口内的父消息
   const missingParentIds = [...new Set(orphanReplies.map(p => p.parentId!))];
-  const missingParentPosts = await fetchMissingParentPosts(missingParentIds, personsMap, groupsMap);
+  const missingParentPosts = await fetchMissingParentPosts(
+    missingParentIds,
+    personsMap,
+    groupsMap,
+    fileItemsMap,
+  );
   
   // 将获取到的父消息添加到 postsMap
   missingParentPosts.forEach((post, id) => {
@@ -894,7 +928,8 @@ async function buildThreadStructure(
 async function transformData2GroupWithThreads(
   data: MessagePost[],
   personsMap: Map<any, string>,
-  groupsMap: Map<any, any>
+  groupsMap: Map<any, any>,
+  fileItemsMap: Map<any, any>,
 ): Promise<MessageGroupWithThreads[]> {
   // 第一步：按群组分组
   const groupedData: Record<string, MessageGroupWithThreads> = {};
@@ -932,7 +967,12 @@ async function transformData2GroupWithThreads(
   const groups = Object.values(groupedData);
   
   for (const group of groups) {
-    const { threads, standalone } = await buildThreadStructure(group.posts, personsMap, groupsMap);
+    const { threads, standalone } = await buildThreadStructure(
+      group.posts,
+      personsMap,
+      groupsMap,
+      fileItemsMap,
+    );
     group.threads = threads;
     group.standalone = standalone;
   }
@@ -982,10 +1022,16 @@ export async function transformMessagePosts(
       return [];
     }
   
-    const transformPosts = (input: any[], persons: any[], groups: any[]): { 
-      posts: MessagePost[]; 
-      personsMap: Map<any, string>; 
+    const transformPosts = (
+      input: any[],
+      persons: any[],
+      groups: any[],
+      fileItems: any[] = [],
+    ): {
+      posts: MessagePost[];
+      personsMap: Map<any, string>;
       groupsMap: Map<any, any>;
+      fileItemsMap: Map<any, any>;
     } => {
       const personsMap = new Map<any, string>();
       const personIdentitiesMap = new Map<any, PersonIdentity>();
@@ -1007,15 +1053,26 @@ export async function transformMessagePosts(
         groupsMap.set(group.id, groupInfo);
         groupsMap.set(String(group.id), groupInfo);
       });
+      const fileItemsMap = buildFileItemsMap(fileItems);
   
       const filteredPosts = input
-        .map(post => ({
-          raw: post,
-          text: extractPostText(post, personsMap),
-          creator: extractPostCreator(post, personsMap),
-          creatorId: extractPostCreatorId(post),
-          creatorUsername: extractPostCreatorUsername(post, personIdentitiesMap)
-        }))
+        .map(post => {
+          const attachments = extractPostFileAttachments(post, fileItemsMap);
+          return {
+            raw: post,
+            text: appendAttachmentSummaryToText(
+              extractPostText(post, personsMap),
+              attachments,
+            ),
+            attachments,
+            creator: extractPostCreator(post, personsMap),
+            creatorId: extractPostCreatorId(post),
+            creatorUsername: extractPostCreatorUsername(
+              post,
+              personIdentitiesMap,
+            )
+          };
+        })
         .filter(item => item.text !== '');
 
       // 转换数据结构
@@ -1025,6 +1082,7 @@ export async function transformMessagePosts(
         creator,
         creatorId,
         creatorUsername,
+        attachments,
       }) => {
         const groupId = extractPostGroupId(post);
         const groupInfo = resolveGroupInfo(groupsMap, groupId);
@@ -1055,6 +1113,7 @@ export async function transformMessagePosts(
           ...authorMetadata,
           time: formatDate(extractPostCreatedAt(post).getTime()),
           contentType,
+          ...(attachments.length > 0 ? { attachments } : {}),
           ...(isEvent ? { event: buildEventDetails(post) } : {})
         };
       }).filter(item => item.text !== '' && item.creator !== '' && item.groupId !== 'unknown');
@@ -1062,7 +1121,7 @@ export async function transformMessagePosts(
       // 按时间排序
       transformedData.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
   
-      return { posts: transformedData, personsMap, groupsMap };
+      return { posts: transformedData, personsMap, groupsMap, fileItemsMap };
     };
   
     try {
@@ -1070,7 +1129,12 @@ export async function transformMessagePosts(
       const glipData = await fetchAllMessageData();
       const post = glipData.post.concat(glipData.replyPost, glipData.event);
       userinfo = resolvedUserinfo;
-      const { posts, personsMap, groupsMap } = transformPosts(post, glipData.person, glipData.group);
+      const { posts, personsMap, groupsMap, fileItemsMap } = transformPosts(
+        post,
+        glipData.person,
+        glipData.group,
+        glipData.fileItem,
+      );
       
       // 按时间和群组过滤
       const filteredPosts = posts
@@ -1086,7 +1150,12 @@ export async function transformMessagePosts(
       const uniquePosts = uniqBy(filteredPosts, 'id') as MessagePost[];
       
       // 使用新的异步版本构建 Thread 结构
-      const result = await transformData2GroupWithThreads(uniquePosts, personsMap, groupsMap);
+      const result = await transformData2GroupWithThreads(
+        uniquePosts,
+        personsMap,
+        groupsMap,
+        fileItemsMap,
+      );
       
       return result;
     } catch (error) {

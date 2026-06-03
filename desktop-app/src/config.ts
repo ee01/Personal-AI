@@ -11,6 +11,9 @@ export interface BridgeRuntimeSettings {
   stableMemoryIntervalMs: number;
   mobileBriefingIntervalMs: number;
   reminderSyncIntervalMs: number;
+  reminderDailyDigestEnabled: boolean;
+  reminderDailyDigestTime: string;
+  reminderDedupSameDay: boolean;
 }
 
 export interface BridgeConfig {
@@ -30,6 +33,9 @@ export interface BridgeConfig {
   stableMemoryIntervalMs: number;
   mobileBriefingIntervalMs: number;
   reminderSyncIntervalMs: number;
+  reminderDailyDigestEnabled: boolean;
+  reminderDailyDigestTime: string;
+  reminderDedupSameDay: boolean;
   defaultSettings: BridgeRuntimeSettings;
 }
 
@@ -129,6 +135,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
       ),
       15 * 60_000,
     ),
+    reminderDailyDigestEnabled: toBool(
+      env.DESKTOP_APP_REMINDER_DAILY_DIGEST_ENABLED,
+      true,
+    ),
+    reminderDailyDigestTime:
+      env.DESKTOP_APP_REMINDER_DAILY_DIGEST_TIME || '09:00',
+    reminderDedupSameDay: toBool(
+      env.DESKTOP_APP_REMINDER_DEDUP_SAME_DAY,
+      true,
+    ),
   };
 
   return {
@@ -161,6 +177,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     stableMemoryIntervalMs: defaultSettings.stableMemoryIntervalMs,
     mobileBriefingIntervalMs: defaultSettings.mobileBriefingIntervalMs,
     reminderSyncIntervalMs: defaultSettings.reminderSyncIntervalMs,
+    reminderDailyDigestEnabled: defaultSettings.reminderDailyDigestEnabled,
+    reminderDailyDigestTime: defaultSettings.reminderDailyDigestTime,
+    reminderDedupSameDay: defaultSettings.reminderDedupSameDay,
     defaultSettings,
   };
 }

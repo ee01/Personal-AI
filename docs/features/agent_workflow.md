@@ -1,6 +1,6 @@
 # Agent Workflow 智能工作流系统
 
-*最后更新: 2026-05-25*
+_最后更新: 2026-06-01_
 
 ## 功能概述
 
@@ -22,18 +22,20 @@ Agent Workflow 像一条消息处理流水线：一条消息进来后，先识�
 
 ## 当前运行流程
 
-| 阶段 | Agent | 优先级 | 主要工具 | 当前作用 |
-| --- | --- | ---: | --- | --- |
-| 1 | 实体识别 Agent | 100 | `entityExtraction` | 提取人物、项目、主题、资源、行动项等结构化信息 |
-| 2 | 通知判断 Agent | 95 | `concernedItemMatcher` | 使用关注项和运行时系统规则匹配消息，产出通知/存储决策 |
-| 3 | 关系分析 Agent | 90 | `relationshipAnalysis`, `historySearch` | 基于实体和历史消息补充人物关系上下文 |
-| 4 | 重要性判断 Agent | 80 | `relevanceJudgment`, `historySearch` | 判断消息是否重要、是否值得存储 |
-| 5 | 外部信息获取 Agent | 70 | `externalServiceQuery` | 预留 Jira/Wiki 类外部查询接口，目前仍是模拟实现 |
-| 6 | 回复建议 Agent | 60 | `replyAdviser` | 生成是否需要回复及建议文案 |
+| 阶段 | Agent              | 优先级 | 主要工具                                | 当前作用                                              |
+| ---- | ------------------ | -----: | --------------------------------------- | ----------------------------------------------------- |
+| 1    | 实体识别 Agent     |    100 | `entityExtraction`                      | 提取人物、项目、主题、资源、行动项等结构化信息        |
+| 2    | 通知判断 Agent     |     95 | `concernedItemMatcher`                  | 使用关注项和运行时系统规则匹配消息，产出通知/存储决策 |
+| 3    | 关系分析 Agent     |     90 | `relationshipAnalysis`, `historySearch` | 基于实体和历史消息补充人物关系上下文                  |
+| 4    | 重要性判断 Agent   |     80 | `relevanceJudgment`, `historySearch`    | 判断消息是否重要、是否值得存储                        |
+| 5    | 外部信息获取 Agent |     70 | `externalServiceQuery`                  | 预留 Jira/Wiki 类外部查询接口，目前仍是模拟实现       |
+| 6    | 回复建议 Agent     |     60 | `replyAdviser`                          | 生成是否需要回复及建议文案                            |
 
 `processNewMessage` 会规范化消息内容、时间和实体结果，避免不同入口传入 `message_content`、`content`、`text` 时造成后续 Agent 丢上下文。命中存储条件时，它通过 `MemoryServiceClient.ingest` 写入 Memory Service，并保留匹配规则、稳定摘要、实体、关系、回复建议、轻量执行 trace 和 `storageReview` 存储审计等元数据。关注项引用只有在能解析到当前手动关注项或运行时系统规则时才会进入 `matchedRuleRefs`；LLM 返回的过期/未知引用不会污染存储归因。
 
 写入 Memory Service metadata 的 `agentWorkflowTrace` 会做降敏处理：保留 Agent / 工具状态、耗时、跳过或失败信息，但省略输入摘要里的消息原文和 `historySearch` 查询文本。Options 页面里的“关注项测试”仍使用本次运行返回的实时 trace，方便调试当前配置；长期存储侧只保留足够审计的结构化摘要。若有旧自定义 Agent 引用已移除工具，跳过工具会计入 `storageReview.toolSkippedCount`，并把 `traceStatus` 标为 `partial`，避免长期审计误显示为完整链路。
+
+`externalServiceQuery` 在接入真实 Jira/Wiki adapter 前会把“不支持的服务或缺少参数”记录成 `placeholder` 工具状态，而不是成功。该状态会进入 `storageReview.toolPlaceholderCount`，并把 `traceStatus` 标为 `partial`；Options 的决策路径、运行就绪检查和存储审计会显示“占位工具”，提醒用户这次没有读取真实外部系统证据。即使某次测试结果没有 `storageReview`，保存样例和页面 Trace 状态也会把 `placeholder` 当作 `partial`，避免批量回归把外部查询占位误判成完整链路。
 
 低置信度手动关注项命中不会直接触发通知和规则自动化。当前阈值是 70%：低于阈值时，系统会把原始命中、置信度、阈值和复核原因写入 `notificationReview`，并保留到 Memory Service 审计元数据；`shouldNotify` 会降级为 false，消息入口也会暂停该命中规则的 `automationPrompt` 规划，避免误触发外部副作用。为了兼容不同模型输出，Agent Workflow 会把 `0.42`、`42`、`"42%"` 这类置信度统一归一化到 0-1 区间后再做通知门控、诊断和 UI 展示。
 
@@ -45,9 +47,9 @@ Agent Workflow 像一条消息处理流水线：一条消息进来后，先识�
 
 ## 配置体验
 
-Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数、启用工具数、首个执行阶段和记忆审计字段，并用按优先级排序的卡片展示每个 Agent 的阶段、状态、优先级和工具。页面会先做轻量配置检查，提示重复 Agent ID、启用但无工具、未注册工具、关系分析缺少前置实体，以及外部查询仍是占位实现等问题。运行时也会保护重复 Agent ID：同一个 ID 只保留配置列表中第一个启用 Agent，后续重复项会进入 skipped trace，并把 `storageReview.traceStatus` 标为 `partial`，避免旧自定义 Agent 覆盖默认阶段的存储、通知或重要性判断结果。
+Options 页面在选择“标准 Agent 工作流”后展示当前启用 Agent 数、启用工具数、首个执行阶段和记忆审计字段，并用按优先级排序的卡片展示每个 Agent 的阶段、状态、优先级和工具。页面会先做轻量配置检查，提示重复 Agent ID、启用但无工具、未注册工具、关系分析缺少前置实体，以及外部查询仍是占位实现等问题。运行时也会保护重复 Agent ID：同一个 ID 只保留配置列表中第一个启用 Agent，后续重复项会进入 skipped trace，并把 `storageReview.traceStatus` 标为 `partial`，避免旧自定义 Agent 覆盖默认阶段的存储、通知或重要性判断结果。
 
-页面提供“关注项测试”入口，可以手动输入消息，也可以从内置样例、最近 Memory Service 消息或本地保存样例中选择一条回放；默认会填入当前内置样例，用户第一次进入页面就能直接运行测试。回放会兼容 Memory Service 的秒级/毫秒级时间戳并保留群组 ID，最近消息标签会带上来源和相似度等上下文，方便选择真实样本。用户可以切换样例、手动编辑消息，也可以直接一键回放测试，预览存储、通知、置信度、复核状态、`storageReview` 存储原因、匹配规则、实体/关系摘要和每个 Agent/工具的执行 trace。当前输入可以保存到 `chrome.storage.local.agentWorkflowSavedScenarios`，若保存时已有测试结果，会同时记录存储、通知、复核、置信度、Trace 状态和匹配规则基线；再次运行同一保存样例时，结果区会显示基线对比，帮助发现规则或 Agent 配置变更后的行为漂移。保存样例支持一键批量回归：逐条运行当前样例集，汇总通过、变化、无基线和失败数量，并列出每个样例的漂移字段；单个保存样例跑出结果后，可以直接建立基线或接受当前结果为新基线；批量回归完成后，也可以一次性把变化项和无基线项的本次结果写回基线，避免预期变化长期停留在“变化”状态。每次测试会记录对应输入和 Agent 配置快照；如果用户在结果展示后改动消息、群组、时间或 Agent 配置，页面会提示当前看到的是上一次运行结果，并把主按钮切换为重新运行测试。测试结果会先展示“运行结论”，把本次运行压成就绪、复核、阻塞或无动作，并给出最应该处理的下一步；随后展示面向用户的决策路径，把关注项匹配、存储归因、通知复核和 trace 健康状态压缩成可读步骤；再给出“运行就绪检查”，把执行 trace、记忆写入、通知/自动化、规则动作、外部查询占位和慢 Agent/工具压成就绪/复核/阻塞/跳过的门禁结论；然后给出“下一步”动作，把低置信度复核、无动作规则命中、失败 Agent、工具错误、缺失通知归因、跳过工具、慢 Agent/工具、存储审计和通知/自动化确认转换为可执行提示；旁边仍保留运行诊断，集中提示低置信度复核、通知缺少规则归因、命中规则但没有后续动作、缺失 trace、失败 Agent、工具错误、跳过工具和慢 Agent/工具。存储审计区域会把失败 Agent、工具错误和跳过工具合并成一条异常摘要，方便用户先修旧配置再继续测试。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`，表单会校验 ID、工具选择并预览插入顺序；旧配置里没有 `enabled` 字段的自定义 Agent 会按启用处理，和 Options 的配置检查一致。
+页面提供“关注项测试”入口，可以手动输入消息，也可以从内置样例、最近 Memory Service 消息或本地保存样例中选择一条回放；默认会填入当前内置样例，用户第一次进入页面就能直接运行测试。回放会兼容 Memory Service 的秒级/毫秒级时间戳并保留群组 ID，最近消息标签会带上来源和相似度等上下文，方便选择真实样本。用户可以切换样例、手动编辑消息，也可以直接一键回放测试，预览存储、通知、置信度、复核状态、`storageReview` 存储原因、匹配规则、实体/关系摘要和每个 Agent/工具的执行 trace；如果模型或旧审计没有返回置信度，结果头会显示 `-`，不会把未知误显示成 `0%`。当前输入可以保存到 `chrome.storage.local.agentWorkflowSavedScenarios`，若保存时已有测试结果，会同时记录存储、通知、复核、置信度、Trace 状态和匹配规则基线；再次运行同一保存样例时，结果区会显示基线对比，帮助发现规则或 Agent 配置变更后的行为漂移。保存样例支持一键批量回归：逐条运行当前样例集，汇总通过、变化、无基线和失败数量，并列出每个样例的漂移字段；单个保存样例跑出结果后，可以直接建立基线或接受当前结果为新基线；批量回归完成后，可以导出 JSON 报告作为发布前检查材料，也可以一次性把变化项和无基线项的本次结果写回基线，避免预期变化长期停留在“变化”状态。每次测试会记录对应输入和 Agent 配置快照；如果用户在结果展示后改动消息、群组、时间或 Agent 配置，页面会提示当前看到的是上一次运行结果，并把主按钮切换为重新运行测试。测试结果会先展示“运行结论”，把本次运行压成就绪、复核、阻塞或无动作，并给出最应该处理的下一步；随后展示面向用户的决策路径，把关注项匹配、存储归因、通知复核和 trace 健康状态压缩成可读步骤；再给出“运行就绪检查”，把执行 trace、记忆写入、通知/自动化、规则动作、外部查询占位和慢 Agent/工具压成就绪/复核/阻塞/跳过的门禁结论；然后给出“下一步”动作，把低置信度复核、无动作规则命中、失败 Agent、工具错误、缺失通知归因、跳过工具、外部查询占位、慢 Agent/工具、存储审计和通知/自动化确认转换为可执行提示；旁边仍保留运行诊断，集中提示低置信度复核、通知缺少规则归因、命中规则但没有后续动作、缺失 trace、失败 Agent、工具错误、跳过工具、外部查询占位和慢 Agent/工具。若 `storageReview` 没有记录工具错误计数，但 trace 里已经有工具错误，运行诊断和下一步动作会直接使用 trace 的错误计数，避免用户只看到“部分异常”却没有修复入口。存储审计区域会把失败 Agent、工具错误和跳过工具合并成一条异常摘要，方便用户先修旧配置再继续测试。自定义 Agent 仍可通过同一页面添加并保存到 `chrome.storage.local.customAgents`，表单会校验 ID、工具选择并预览插入顺序；旧配置里没有 `enabled` 字段的自定义 Agent 会按启用处理，和 Options 的配置检查一致。
 
 ## 当前边界
 
@@ -73,10 +75,14 @@ Options 页面在选择“标准Agent工作流”后展示当前启用 Agent 数
 - [AgentTrace](https://arxiv.org/abs/2602.10133) 等 Agent observability 论文强调结构化 trace 对排障、风险分析和信任校准的价值；当前已把每条存储消息的存储原因和 trace 健康状态压缩进 `storageReview`，后续应保持轻量，避免把完整隐私上下文写入审计字段。
 - [Agentproof](https://arxiv.org/abs/2603.20356) 和 [Agent Workflow Optimization](https://arxiv.org/abs/2601.22037) 分别强调工作流拓扑校验和基于 trace 的冗余工具优化；当前系统是固定顺序编排，已经先做配置静态检查、决策路径、运行就绪检查、下一步动作以及慢 Agent/工具提示，后续再考虑自动重排 Agent。
 - [TRAIL](https://arxiv.org/abs/2505.08638) 指出复杂 Agent trace 的问题定位很难完全交给 LLM 自动完成；Agent Workflow 因此把诊断做成面向用户的结构化提示，而不是只生成一段自然语言解释。
+- 2026-05-28 复查 OpenAI Agents SDK tracing、LangSmith Observability、OpenTelemetry GenAI agent spans 和 TraceSIR / AgentTrace 论文后，本功能继续收敛在“结构化 trace -> 可操作排障动作”上：`externalServiceQuery` 这种占位工具不只出现在 readiness，也会进入运行诊断和下一步动作，提醒用户接入真实 Jira/Wiki adapter 后再复跑。
+- 2026-05-29 复查 LangGraph durable execution / persistence、OpenAI Agents SDK tracing、OpenTelemetry GenAI agent spans、TRAIL 和 AgentTrace 后，建设性方向仍是先把每个阶段的状态分类清楚，再考虑持久 checkpoint 或自动重排；因此本次把外部查询占位结果单独标为 `placeholder`，让发布前回归和真实消息审计都能看见“没查到外部证据”。
+- 2026-05-30 复查 OpenAI Agents SDK tracing、LangSmith Observability、OpenTelemetry GenAI workflow/agent spans 和 Testing Agentic Workflows with Structural Coverage Criteria 后，建设性方向仍是把工具调用、错误状态和结构覆盖直接变成可执行诊断；因此本次让工具错误从 trace 本身补足诊断/下一步动作，并把缺失置信度显示成未知而不是低置信。
+- 2026-06-01 复查 OpenAI Agents SDK tracing、LangGraph checkpoint/persistence、OpenTelemetry GenAI agent spans 和 AgentTrace / XAgen 论文后，建设性方向仍是把 trace 状态保持为机器可比对、人工可复核的字段；因此保存样例、批量回归和 Options 运行结果继续共用同一套 `complete/partial/missing` 口径，避免占位工具在某个入口被误记为通过。
 
 ## 下一步建议
 
 1. 把低置信度 `notificationReview` 接入一个真实复核队列，让用户可以确认、忽略并把反馈回流给关注项规则。
 2. 把 `externalServiceQuery` 拆成真实 Jira/Wiki adapter，并按工具能力在 UI 中标注“可执行外部副作用”。
-3. 为批量回归结果增加导出入口，方便把高价值样例纳入更长期的发布前检查。
+3. 把已导出的批量回归报告接入更长期的发布前检查或 `evals/` 套件。
 4. 把 Options 里的 trace / storageReview / 运行诊断明细扩展到通知或记忆记录详情，让用户能从真实结果追溯每个 Agent 的判断。

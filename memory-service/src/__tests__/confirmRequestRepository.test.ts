@@ -299,4 +299,38 @@ describe('ConfirmRequestRepository', () => {
     const expired = repo.getById('watch-expire');
     expect(expired?.state).toBe('expired');
   });
+
+  it('returns due snoozed decisions to pending and expires stale decisions', () => {
+    repo.createOrReusePending({
+      id: 'decision-due',
+      question: '是否允许继续查询生产部署状态？',
+      category: 'openclaw_delegation',
+      routing: 'decision',
+      state: 'snoozed',
+      createdAt: 100,
+      snoozeUntil: 150,
+      expiresAt: 1000,
+    });
+    repo.createOrReusePending({
+      id: 'decision-expire',
+      question: '是否继续保留旧的部署检查提醒？',
+      category: 'notification_center',
+      routing: 'decision',
+      state: 'snoozed',
+      createdAt: 100,
+      snoozeUntil: 150,
+      expiresAt: 180,
+    });
+
+    const result = repo.processDecisionSnoozeLifecycle(200);
+    expect(result.resumed).toBe(1);
+    expect(result.expired).toBe(1);
+
+    const resumed = repo.getById('decision-due');
+    expect(resumed?.state).toBe('pending');
+    expect(resumed?.snoozeUntil).toBeUndefined();
+
+    const expired = repo.getById('decision-expire');
+    expect(expired?.state).toBe('expired');
+  });
 });

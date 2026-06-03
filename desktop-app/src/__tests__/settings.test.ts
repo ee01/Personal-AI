@@ -97,6 +97,46 @@ test('BridgeSettingsStore preserves uiLanguage across reloads', async () => {
   assert.equal(reloaded.getPayload().user.uiLanguage, 'en-US');
 });
 
+test('BridgeSettingsStore defaults reminder delivery controls for old settings files', async () => {
+  const tempDir = await createTempDir('bridge-settings-reminder-defaults-');
+  const settingsFile = path.join(tempDir, 'bridge-settings.json');
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+  });
+  await fs.writeFile(settingsFile, JSON.stringify({ autoSync: true }), 'utf8');
+
+  const store = new BridgeSettingsStore(config, settingsFile);
+  await store.init();
+
+  assert.equal(store.get().reminderDailyDigestEnabled, true);
+  assert.equal(store.get().reminderDailyDigestTime, '09:00');
+  assert.equal(store.get().reminderDedupSameDay, true);
+});
+
+test('BridgeSettingsStore persists reminder delivery controls safely', async () => {
+  const tempDir = await createTempDir('bridge-settings-reminder-controls-');
+  const settingsFile = path.join(tempDir, 'bridge-settings.json');
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+  });
+
+  const store = new BridgeSettingsStore(config, settingsFile);
+  await store.init();
+  await store.update({
+    reminderDailyDigestEnabled: false,
+    reminderDailyDigestTime: '7:05',
+    reminderDedupSameDay: false,
+  });
+
+  const reloaded = new BridgeSettingsStore(config, settingsFile);
+  await reloaded.init();
+
+  assert.equal(reloaded.get().reminderDailyDigestEnabled, false);
+  assert.equal(reloaded.get().reminderDailyDigestTime, '07:05');
+  assert.equal(reloaded.get().reminderDedupSameDay, false);
+  assert.equal(reloaded.getPayload().user.reminderDailyDigestTime, '7:05');
+});
+
 test('BridgeSettingsStore persists explorer settings safely across reloads', async () => {
   const tempDir = await createTempDir('bridge-settings-explorer-');
   const settingsFile = path.join(tempDir, 'bridge-settings.json');
@@ -146,6 +186,33 @@ test('BridgeSettingsStore persists explorer settings safely across reloads', asy
       intervalMinutes: 90,
       defaultScope: 'work',
       transport: undefined,
+    },
+    codex_cli: {
+      enabled: false,
+      rootPaths: ['${CODEX_HOME:-~/.codex}/sessions'],
+      lookbackDays: 30,
+      intervalMinutes: 60,
+      maxSessions: 50,
+      includeSubagents: false,
+      defaultScope: 'work',
+    },
+    claude_code_cli: {
+      enabled: false,
+      rootPaths: ['~/.claude/projects', '~/.claude/transcripts'],
+      lookbackDays: 30,
+      intervalMinutes: 60,
+      maxSessions: 50,
+      includeSubagents: true,
+      defaultScope: 'work',
+    },
+    cursor_agent_cli: {
+      enabled: false,
+      rootPaths: ['~/.cursor/projects'],
+      lookbackDays: 30,
+      intervalMinutes: 60,
+      maxSessions: 50,
+      includeSubagents: true,
+      defaultScope: 'work',
     },
     autoClassify: false,
     askDefaultScope: 'work',

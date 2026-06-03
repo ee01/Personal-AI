@@ -28,6 +28,51 @@
       </div>
     </section>
 
+    <section class="meeting-filter-bar" aria-label="会议记录筛选">
+      <form class="meeting-search-form" @submit.prevent="applyArchiveFilters">
+        <input
+          v-model="searchInput"
+          class="meeting-search-input"
+          type="search"
+          aria-label="搜索会议记录"
+          placeholder="搜索标题、摘要、参会者、会议 ID 或转写片段"
+          :disabled="loading"
+        />
+        <button
+          class="meeting-secondary-action"
+          type="submit"
+          :disabled="loading"
+        >
+          搜索
+        </button>
+      </form>
+      <label class="meeting-status-filter">
+        <span>状态</span>
+        <select
+          v-model="statusFilter"
+          :disabled="loading"
+          @change="applyArchiveFilters"
+        >
+          <option
+            v-for="option in statusFilterOptions"
+            :key="option.value"
+            :value="option.value"
+          >
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <button
+        v-if="hasActiveFilters"
+        class="meeting-ghost-action"
+        type="button"
+        :disabled="loading"
+        @click="clearArchiveFilters"
+      >
+        清除筛选
+      </button>
+    </section>
+
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <span>正在加载会议记录…</span>
@@ -43,10 +88,15 @@
       v-else-if="sortedMeetings.length === 0"
       class="meeting-feedback-card"
     >
-      <div class="feedback-title">还没有会议记录</div>
+      <div class="feedback-title">
+        {{ hasActiveFilters ? '没有匹配的会议记录' : '还没有会议记录' }}
+      </div>
       <p>
-        Meeting Pilot 会在会议结束后把结构化结果归档到这里。下次完成一场会议后，
-        你就能从这个入口直接回看 Panorama 和 PDF 纪要。
+        {{
+          hasActiveFilters
+            ? `当前筛选：${activeFilterSummary}。可以清除筛选后回到完整会议归档。`
+            : 'Meeting Pilot 会在会议结束后把结构化结果归档到这里。下次完成一场会议后，你就能从这个入口直接回看 Panorama 和 PDF 纪要。'
+        }}
       </p>
     </section>
 
@@ -55,6 +105,9 @@
         <div>
           已显示 {{ meetings.length }} / {{ meetingTotal || meetings.length }}
           条会议
+          <span v-if="hasActiveFilters" class="meeting-filter-summary">
+            筛选：{{ activeFilterSummary }}
+          </span>
         </div>
         <button
           class="meeting-secondary-action"
@@ -184,6 +237,7 @@
 import { computed, onMounted, ref } from 'vue';
 import {
   getMemoryServiceClient,
+  type MeetingArchiveStatusFilter,
   type MeetingRecord,
   type MeetingRecordListResponse,
 } from '../../services/MemoryServiceClient';
@@ -208,6 +262,20 @@ const loading = ref(false);
 const loadingMore = ref(false);
 const error = ref('');
 const pageError = ref('');
+const searchInput = ref('');
+const appliedSearch = ref('');
+const statusFilter = ref<MeetingArchiveStatusFilter>('all');
+
+const statusFilterOptions: Array<{
+  value: MeetingArchiveStatusFilter;
+  label: string;
+}> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'ready', label: '可打开' },
+  { value: 'attention', label: '需处理' },
+  { value: 'processing', label: '生成中' },
+  { value: 'archived', label: '仅归档' },
+];
 
 const sortedMeetings = computed(() =>
   [...meetings.value].sort(
@@ -220,6 +288,23 @@ const sortedMeetings = computed(() =>
 const hasMoreMeetings = computed(
   () => meetingTotal.value > meetings.value.length,
 );
+
+const hasActiveFilters = computed(
+  () => Boolean(appliedSearch.value.trim()) || statusFilter.value !== 'all',
+);
+
+const activeFilterSummary = computed(() => {
+  const parts: string[] = [];
+  const query = appliedSearch.value.trim();
+  if (query) parts.push(`关键词“${query}”`);
+  const statusLabel = statusFilterOptions.find(
+    (option) => option.value === statusFilter.value,
+  )?.label;
+  if (statusFilter.value !== 'all' && statusLabel) {
+    parts.push(`状态 ${statusLabel}`);
+  }
+  return parts.join('，') || '全部会议';
+});
 
 onMounted(() => {
   void loadMeetings();
@@ -244,6 +329,18 @@ async function loadMeetings() {
   } finally {
     loading.value = false;
   }
+}
+
+function applyArchiveFilters() {
+  appliedSearch.value = searchInput.value.trim();
+  void loadMeetings();
+}
+
+function clearArchiveFilters() {
+  searchInput.value = '';
+  appliedSearch.value = '';
+  statusFilter.value = 'all';
+  void loadMeetings();
 }
 
 async function loadMoreMeetings() {
@@ -271,6 +368,8 @@ async function requestMeetingsPage(offset: number) {
       type: 'GET_MEETINGS',
       limit: MEETING_PAGE_SIZE,
       offset,
+      q: appliedSearch.value.trim(),
+      status: statusFilter.value,
     })) as MeetingResponseEnvelope;
 
     if (!response?.success) {
@@ -291,7 +390,10 @@ async function requestMeetingsPage(offset: number) {
 
   try {
     const client = getMemoryServiceClient();
-    const response = await client.getMeetings(MEETING_PAGE_SIZE, offset);
+    const response = await client.getMeetings(MEETING_PAGE_SIZE, offset, {
+      query: appliedSearch.value.trim(),
+      status: statusFilter.value,
+    });
     return {
       items: response.items || [],
       total: Number(response.total || response.items?.length || 0),
@@ -574,7 +676,8 @@ function openPdf(pdfUrl?: string) {
 
 .meeting-refresh-btn,
 .meeting-primary-action,
-.meeting-secondary-action {
+.meeting-secondary-action,
+.meeting-ghost-action {
   border: none;
   border-radius: 0.85rem;
   padding: 0.8rem 1.1rem;
@@ -607,16 +710,74 @@ function openPdf(pdfUrl?: string) {
   border: 1px solid rgba(148, 163, 184, 0.14);
 }
 
+.meeting-ghost-action {
+  background: transparent;
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
 .meeting-secondary-action:hover:not(:disabled) {
   background: rgba(148, 163, 184, 0.16);
 }
 
 .meeting-refresh-btn:disabled,
-.meeting-secondary-action:disabled {
+.meeting-secondary-action:disabled,
+.meeting-ghost-action:disabled {
   opacity: 0.55;
   cursor: not-allowed;
   box-shadow: none;
   transform: none;
+}
+
+.meeting-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem;
+  border-radius: 0.85rem;
+  background: rgba(15, 23, 42, 0.56);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.meeting-search-form {
+  display: flex;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.meeting-search-input,
+.meeting-status-filter select {
+  width: 100%;
+  min-height: 2.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(2, 6, 23, 0.42);
+  color: #e2e8f0;
+  font-size: 0.92rem;
+}
+
+.meeting-search-input {
+  min-width: 0;
+  padding: 0 0.9rem;
+}
+
+.meeting-search-input::placeholder {
+  color: #64748b;
+}
+
+.meeting-status-filter {
+  display: grid;
+  grid-template-columns: auto minmax(8.5rem, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+}
+
+.meeting-status-filter select {
+  padding: 0 0.75rem;
 }
 
 .meeting-feedback-card {
@@ -650,6 +811,12 @@ function openPdf(pdfUrl?: string) {
   margin-bottom: 1rem;
   color: #cbd5e1;
   font-size: 0.9rem;
+}
+
+.meeting-filter-summary {
+  display: inline-block;
+  margin-left: 0.5rem;
+  color: #94a3b8;
 }
 
 .meeting-card {
@@ -816,11 +983,21 @@ function openPdf(pdfUrl?: string) {
   .meeting-hero-side {
     align-items: stretch;
   }
+
+  .meeting-filter-bar {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
   .meeting-card-head,
   .meeting-card-footer {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .meeting-search-form,
+  .meeting-status-filter {
     grid-template-columns: 1fr;
     display: grid;
   }

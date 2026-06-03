@@ -11,7 +11,9 @@ import {
   getScheduleHealthRecoverySuggestions,
 } from '../scheduleHealth.js';
 
-function makeMessage(overrides: Partial<ScheduledMessage> = {}): ScheduledMessage {
+function makeMessage(
+  overrides: Partial<ScheduledMessage> = {},
+): ScheduledMessage {
   return {
     ID: 'msg-1',
     Topic: 'topic',
@@ -61,15 +63,18 @@ test('keeps explicit executor messages healthy through the final compensation mi
   );
 
   assert.equal(
-    getScheduleHealthIssue(makeMessage(), new Date('2026-05-04T10:01:00'))?.summary,
+    getScheduleHealthIssue(makeMessage(), new Date('2026-05-04T10:01:00'))
+      ?.summary,
     '已超过 30 分钟补偿窗口',
   );
 });
 
 test('flags invalid schedule times before calculating queue health', () => {
-  const issue = getScheduleHealthIssue(makeMessage({
-    Schedule_Time: '25:00',
-  }));
+  const issue = getScheduleHealthIssue(
+    makeMessage({
+      Schedule_Time: '25:00',
+    }),
+  );
 
   assert.deepEqual(issue, {
     code: 'invalid_time',
@@ -159,10 +164,13 @@ test('ignores repeating messages when the scheduler has a future occurrence', ()
 });
 
 test('summarizes multiple health issues for the top banner', () => {
-  const issues = getScheduleHealthIssues([
-    makeMessage({ ID: 'missed' }),
-    makeMessage({ ID: 'invalid', Schedule_Time: '99:00' }),
-  ], new Date('2026-05-04T10:01:00'));
+  const issues = getScheduleHealthIssues(
+    [
+      makeMessage({ ID: 'missed' }),
+      makeMessage({ ID: 'invalid', Schedule_Time: '99:00' }),
+    ],
+    new Date('2026-05-04T10:01:00'),
+  );
 
   assert.equal(
     formatScheduleHealthSummary(issues),
@@ -187,12 +195,15 @@ test('suggests the next minute for missed explicit executor messages', () => {
 });
 
 test('allocates batch explicit recovery suggestions without reusing the same minute', () => {
-  const suggestions = getScheduleHealthRecoverySuggestions([
-    makeMessage({ ID: 'missed-1', Topic: 'Missed 1' }),
-    makeMessage({ ID: 'missed-2', Topic: 'Missed 2' }),
-    makeMessage({ ID: 'healthy-future', Schedule_Time: '10:03' }),
-    makeMessage({ ID: 'missed-3', Topic: 'Missed 3' }),
-  ], new Date('2026-05-04T10:01:30'));
+  const suggestions = getScheduleHealthRecoverySuggestions(
+    [
+      makeMessage({ ID: 'missed-1', Topic: 'Missed 1' }),
+      makeMessage({ ID: 'missed-2', Topic: 'Missed 2' }),
+      makeMessage({ ID: 'healthy-future', Schedule_Time: '10:03' }),
+      makeMessage({ ID: 'missed-3', Topic: 'Missed 3' }),
+    ],
+    new Date('2026-05-04T10:01:30'),
+  );
 
   assert.equal(suggestions.get('missed-1')?.label, '2026-05-04 10:02');
   assert.equal(suggestions.get('missed-2')?.label, '2026-05-04 10:04');
@@ -211,8 +222,52 @@ test('suggests today executor queue for no-time executor rows whose date passed'
       timeStr: '',
       label: '2026-05-04 08:00 后',
       clearsScheduleTime: true,
-      reason: '改到今天的执行器默认队列，下一轮 Jira Automation 轮询会继续处理。',
+      reason:
+        '改到今天的执行器默认队列，下一轮 Jira Automation 轮询会继续处理。',
     },
+  );
+});
+
+test('suggests the next default queue day when today has no executor minute left', () => {
+  assert.deepEqual(
+    getScheduleHealthRecoverySuggestion(
+      makeMessage({ Schedule_Time: '', Schedule_Date: '2026-05-03' }),
+      new Date('2026-05-04T23:59:30'),
+    ),
+    {
+      dateStr: '2026-05-05',
+      timeStr: '',
+      label: '2026-05-05 08:00 后',
+      clearsScheduleTime: true,
+      reason: '今天默认队列已没有可执行分钟，改到下一个可用执行器默认队列日。',
+    },
+  );
+});
+
+test('allocates stale no-time executor recoveries without overfilling the last same-day slot', () => {
+  const suggestions = getScheduleHealthRecoverySuggestions(
+    [
+      makeMessage({
+        ID: 'stale-1',
+        Topic: 'Stale 1',
+        Schedule_Time: '',
+        Schedule_Date: '2026-05-03',
+      }),
+      makeMessage({
+        ID: 'stale-2',
+        Topic: 'Stale 2',
+        Schedule_Time: '',
+        Schedule_Date: '2026-05-03',
+      }),
+    ],
+    new Date('2026-05-04T23:58:30'),
+  );
+
+  assert.equal(suggestions.get('stale-1')?.label, '2026-05-04 08:00 后');
+  assert.equal(suggestions.get('stale-2')?.label, '2026-05-05 08:00 后');
+  assert.equal(
+    suggestions.get('stale-2')?.reason,
+    '今天默认队列已没有可执行分钟，改到下一个可用执行器默认队列日。',
   );
 });
 

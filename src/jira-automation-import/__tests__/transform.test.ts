@@ -67,8 +67,8 @@ test('buildJiraAutomationImportRule remaps project and imports disabled copy', (
   assert.equal(importRule.trigger.id, '__NEW__TRIGGER');
   assert.equal(importRule.components[0].id, '__NEW__COMPONENT__1777600000000');
   assert.equal(importRule.components[1].id, '__NEW__COMPONENT__1777600000001');
-  assert.ok(importRule.description?.includes('Personal AI import review'));
-  assert.ok(importRule.description?.includes('Imported as a disabled copy into 22222'));
+  assert.ok(importRule.description?.includes('Rule purpose: Notify release owner.'));
+  assert.ok(importRule.description?.includes('a scheduled trigger'));
 });
 
 test('buildJiraAutomationImportRule preserves chained rule triggers only when explicitly allowed', () => {
@@ -91,10 +91,11 @@ test('buildJiraAutomationImportRule can block chained rule triggers for safer UI
   });
 
   assert.equal(importRule.canOtherRuleTrigger, false);
-  assert.ok(importRule.description?.includes('Rule chaining: blocked in imported copy.'));
+  assert.ok(importRule.description?.includes('Rule purpose: Notify release owner.'));
+  assert.ok(!importRule.description?.includes('Personal AI import review'));
 });
 
-test('buildJiraAutomationImportRule preserves source description and appends review note', () => {
+test('buildJiraAutomationImportRule preserves source description without appending review note', () => {
   const importRule = buildJiraAutomationImportRule(
     {
       ...baseRule,
@@ -115,14 +116,7 @@ test('buildJiraAutomationImportRule preserves source description and appends rev
     },
   );
 
-  assert.ok(importRule.description?.startsWith('Existing business context for the release rule.'));
-  assert.ok(importRule.description?.includes('Personal AI import review'));
-  assert.ok(importRule.description?.includes('Imported as a disabled copy into TGT (22222).'));
-  assert.ok(importRule.description?.includes('custom field'));
-  assert.ok(importRule.description?.includes('Top detected bindings: JQL / filters (1): project = SRC AND customfield_12345 is not EMPTY'));
-  assert.ok(importRule.description?.includes('Activation plan: Keep the imported copy disabled'));
-  assert.ok(importRule.description?.includes('Map target-project search dependencies'));
-  assert.ok(importRule.description?.includes('Rule chaining: blocked in imported copy.'));
+  assert.equal(importRule.description, 'Existing business context for the release rule.');
 });
 
 test('buildJiraAutomationImportReviewNote records explicitly preserved rule chaining', () => {
@@ -342,6 +336,7 @@ test('summarizeJiraAutomationImportRule detects environment-bound references for
   assert.equal(summary.connectionReferenceCount, 1);
   assert.equal(summary.sourceProjectReferenceCount, 3);
   assert.equal(summary.smartValueReferenceCount, 1);
+  assert.equal(summary.customComponentCount, 0);
   assert.deepEqual(reviewSignals.jqlReferences, ['project = SRC AND status = Done AND customfield_12345 is not EMPTY AND filter = 98765']);
   assert.deepEqual(reviewSignals.hardcodedUrls, ['https://hooks.example.com/SRC/release']);
   assert.deepEqual(reviewSignals.emailReferences, ['release-owner@example.com']);
@@ -350,8 +345,50 @@ test('summarizeJiraAutomationImportRule detects environment-bound references for
   assert.deepEqual(reviewSignals.savedFilterReferences, ['filter = 98765', 'savedFilterId: 13579']);
   assert.deepEqual(reviewSignals.connectionReferences, ['connectionId: prod-webhook-connection']);
   assert.deepEqual(reviewSignals.smartValueReferences, ['{{issue.assignee.accountId}}']);
+  assert.deepEqual(reviewSignals.customComponentReferences, []);
   assert.ok(reviewSignals.sourceProjectReferences.some((reference) => reference.includes('project = SRC')));
   assert.ok(reviewSignals.sourceProjectReferences.some((reference) => reference.includes('projectId')));
+});
+
+test('summarizeJiraAutomationImportRule flags app-provided components for compatibility review', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'vendor.release.deployment.action',
+        value: {
+          deploymentTemplateId: 'release-gate',
+        },
+      },
+    ],
+  };
+
+  const summary = summarizeJiraAutomationImportRule(rule);
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const findings = buildJiraAutomationImportReviewFindings(rule);
+  const checklist = buildJiraAutomationImportReviewChecklist(rule);
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(rule);
+  const warnings = buildJiraAutomationImportWarnings(rule);
+  const note = buildJiraAutomationImportReviewNote(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+  const packet = buildJiraAutomationImportReviewPacket(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+
+  assert.equal(summary.customComponentCount, 1);
+  assert.deepEqual(reviewSignals.customComponentReferences, ['ACTION: vendor.release.deployment.action']);
+  assert.equal(findings.find((finding) => finding.id === 'custom-components')?.severity, 'high');
+  assert.ok(checklist.some((item) => item.id === 'custom-components' && item.severity === 'high'));
+  assert.ok(enablementPlan.some((step) => step.id === 'confirm-app-components' && step.severity === 'high'));
+  assert.ok(warnings.some((warning) => warning.includes('custom or app-provided component')));
+  assert.ok(note.includes('custom/app component'));
+  assert.ok(note.includes('Custom / app components (1): ACTION: vendor.release.deployment.action'));
+  assert.ok(packet.includes('[HIGH] Custom / app components'));
+  assert.ok(packet.includes('[HIGH] Confirm app-provided components are available'));
 });
 
 test('collectJiraAutomationImportReviewSignals redacts sensitive and masked values', () => {
@@ -423,15 +460,64 @@ test('collectJiraAutomationImportReviewSignals does not expose secret keyOrValue
   assert.equal(summary.hardcodedUrlCount, 0);
   assert.equal(summary.sourceProjectReferenceCount, 0);
   assert.equal(summary.smartValueReferenceCount, 0);
-  assert.deepEqual(reviewSignals.secretReferences, ['hidden secret value']);
+  assert.deepEqual(reviewSignals.secretReferences, ['Authorization: hidden secret value']);
   assert.deepEqual(reviewSignals.hardcodedUrls, []);
   assert.deepEqual(reviewSignals.sourceProjectReferences, []);
   assert.deepEqual(reviewSignals.smartValueReferences, []);
-  assert.ok(note.includes('Secrets (1): hidden secret value'));
+  assert.ok(note.includes('Secrets (1): Authorization: hidden secret value'));
   assert.ok(!note.includes('prod-token-should-not-leak'));
   assert.ok(!note.includes('hiddenSecretPath1234567890ABCD'));
   assert.ok(!note.includes('secret-owner@example.com'));
   assert.ok(!note.includes('{{issue.assignee.accountId}}'));
+});
+
+test('collectJiraAutomationImportReviewSignals gives hidden secrets safe re-entry labels', () => {
+  const rule = {
+    ...baseRule,
+    components: [
+      {
+        component: 'ACTION',
+        type: 'jira.issue.outgoing.webhook',
+        value: {
+          headers: [
+            {
+              name: 'Authorization',
+              value: {
+                secret: true,
+                keyOrValue: 'Bearer sk-prod-secret-should-not-leak',
+              },
+            },
+          ],
+          secretSlot: {
+            secret: true,
+            name: 'https://hooks.slack.com/services/T00000000/B00000000/xoxb123456789ABCDEFGHIJKLMNOP',
+            keyOrValue: 'xoxb123456789ABCDEFGHIJKLMNOP',
+          },
+        },
+      },
+    ],
+  };
+
+  const reviewSignals = collectJiraAutomationImportReviewSignals(rule);
+  const checklist = buildJiraAutomationImportReviewChecklist(rule);
+  const enablementPlan = buildJiraAutomationImportEnablementPlan(rule);
+  const warnings = buildJiraAutomationImportWarnings(rule);
+  const packet = buildJiraAutomationImportReviewPacket(rule, {
+    projectId: '22222',
+    projectKey: 'TGT',
+  });
+
+  assert.deepEqual(reviewSignals.secretReferences, [
+    'Authorization: hidden secret value',
+    'secretSlot: hidden secret value',
+  ]);
+  assert.ok(checklist.some((item) => item.detail.includes('Authorization: hidden secret value')));
+  assert.ok(enablementPlan.some((step) => step.detail.includes('secretSlot: hidden secret value')));
+  assert.ok(warnings.some((warning) => warning.includes('Jira export/import will not restore hidden values')));
+  assert.ok(packet.includes('Authorization: hidden secret value'));
+  assert.ok(!packet.includes('sk-prod-secret-should-not-leak'));
+  assert.ok(!packet.includes('xoxb123456789ABCDEFGHIJKLMNOP'));
+  assert.ok(!packet.includes('hooks.slack.com/services'));
 });
 
 test('buildJiraAutomationImportReviewPacket creates a sanitized enablement handoff', () => {
@@ -485,7 +571,7 @@ test('buildJiraAutomationImportReviewPacket creates a sanitized enablement hando
   assert.ok(packet.includes('[HIGH] JQL and filters'));
   assert.ok(packet.includes('[HIGH] External effects and credentials'));
   assert.ok(packet.includes('## Detected environment bindings'));
-  assert.ok(packet.includes('[HIGH] Secrets (2): release-webhook-token | hidden secret value'));
+  assert.ok(packet.includes('[HIGH] Secrets (2): release-webhook-token | Authorization: hidden secret value'));
   assert.ok(packet.includes('/SRC/release/REDACTED?apiToken=REDACTED'));
   assert.ok(packet.includes('## Activation plan'));
   assert.ok(packet.includes('[HIGH] Map target-project search dependencies'));

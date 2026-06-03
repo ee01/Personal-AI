@@ -8,7 +8,9 @@
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { RecallRelevancePatchService } from '../core/RecallRelevancePatchService.js';
 import { TruthMaintainer } from '../core/TruthMaintainer.js';
+import { isSceneScopedRecallFeedbackDetail } from '../utils/recallFeedback.js';
 import { now } from '../utils/time.js';
 
 // ---------------------------------------------------------------------------
@@ -18,7 +20,7 @@ import { now } from '../utils/time.js';
 interface FeedbackBody {
   type: 'recall_quality' | 'notification_useful' | 'entity_correction';
   targetId: string;
-  targetType?: 'message' | 'chunk' | 'entity';
+  targetType?: 'message' | 'chunk' | 'entity' | 'source_memory';
   action: 'positive' | 'negative' | 'clear';
   detail?: string;
 }
@@ -34,9 +36,23 @@ type RecallFeedbackTargetType = NonNullable<FeedbackBody['targetType']>;
 
 interface FeedbackEventRow {
   action: FeedbackBody['action'];
+  detail?: string | null;
 }
 
-function feedbackActionDelta(action: FeedbackBody['action'] | undefined): number {
+function normalizeRecallFeedbackTargetId(
+  targetType: RecallFeedbackTargetType,
+  targetId: string,
+): string {
+  const cleaned = String(targetId || '').trim();
+  if (targetType !== 'source_memory') return cleaned;
+  return cleaned.replace(/^source-memory:/, '');
+}
+
+function feedbackActionDelta(
+  action: FeedbackBody['action'] | undefined,
+  sceneScoped = false,
+): number {
+  if (sceneScoped && action === 'negative') return 0;
   if (action === 'positive') return SALIENCE_BOOST;
   if (action === 'negative') return SALIENCE_PENALTY;
   return 0;
@@ -47,15 +63,27 @@ function memoryTargetExists(
   targetType: RecallFeedbackTargetType,
   targetId: string,
 ): boolean {
+  const normalizedTargetId = normalizeRecallFeedbackTargetId(
+    targetType,
+    targetId,
+  );
+
+  if (targetType === 'source_memory') {
+    const row = db
+      .prepare('SELECT 1 FROM source_memory_capsules WHERE id = ? LIMIT 1')
+      .get(normalizedTargetId);
+    return Boolean(row);
+  }
+
   if (targetType === 'message') {
     const row = db
       .prepare('SELECT 1 FROM messages_raw WHERE id = ? LIMIT 1')
-      .get(targetId);
+      .get(normalizedTargetId);
     return Boolean(row);
   }
 
   if (targetType === 'chunk') {
-    const chunkId = Number(targetId);
+    const chunkId = Number(normalizedTargetId);
     if (!Number.isInteger(chunkId)) return false;
     const row = db
       .prepare('SELECT 1 FROM chunks WHERE chunk_id = ? LIMIT 1')
@@ -65,7 +93,7 @@ function memoryTargetExists(
 
   const row = db
     .prepare('SELECT 1 FROM entities WHERE id = ? LIMIT 1')
-    .get(targetId);
+    .get(normalizedTargetId);
   return Boolean(row);
 }
 
@@ -73,15 +101,24 @@ function resolveRecallFeedbackTargetType(
   db: BetterSqlite3.Database,
   targetId: string,
   requestedType?: RecallFeedbackTargetType,
-): { targetType?: RecallFeedbackTargetType; error?: string; statusCode?: number } {
+): {
+  targetType?: RecallFeedbackTargetType;
+  targetId?: string;
+  error?: string;
+  statusCode?: number;
+} {
   if (requestedType) {
+    const normalizedTargetId = normalizeRecallFeedbackTargetId(
+      requestedType,
+      targetId,
+    );
     if (!memoryTargetExists(db, requestedType, targetId)) {
       return {
         error: `Memory target "${requestedType}:${targetId}" not found`,
         statusCode: 404,
       };
     }
-    return { targetType: requestedType };
+    return { targetType: requestedType, targetId: normalizedTargetId };
   }
 
   const metadataTypes = db
@@ -92,22 +129,31 @@ function resolveRecallFeedbackTargetType(
     )
     .all(targetId) as Array<{ target_type: RecallFeedbackTargetType }>;
 
-  const existingTypes = new Set<RecallFeedbackTargetType>();
+  const existingTypes = new Map<RecallFeedbackTargetType, string>();
+  const addExistingType = (candidate: RecallFeedbackTargetType): void => {
+    const normalizedTargetId = normalizeRecallFeedbackTargetId(
+      candidate,
+      targetId,
+    );
+    if (memoryTargetExists(db, candidate, normalizedTargetId)) {
+      existingTypes.set(candidate, normalizedTargetId);
+    }
+  };
 
   for (const row of metadataTypes) {
     if (
       (row.target_type === 'message' ||
         row.target_type === 'chunk' ||
-        row.target_type === 'entity') &&
-      memoryTargetExists(db, row.target_type, targetId)
+        row.target_type === 'entity' ||
+        row.target_type === 'source_memory')
     ) {
-      existingTypes.add(row.target_type);
+      addExistingType(row.target_type);
     }
   }
 
-  for (const candidate of ['message', 'chunk', 'entity'] as const) {
-    if (memoryTargetExists(db, candidate, targetId)) {
-      existingTypes.add(candidate);
+  for (const candidate of ['message', 'chunk', 'entity', 'source_memory'] as const) {
+    if (!existingTypes.has(candidate)) {
+      addExistingType(candidate);
     }
   }
 
@@ -118,7 +164,7 @@ function resolveRecallFeedbackTargetType(
     };
   }
 
-  const [targetType] = Array.from(existingTypes);
+  const [[targetType, resolvedTargetId] = []] = Array.from(existingTypes);
   if (!targetType) {
     return {
       error: `Memory target "${targetId}" not found`,
@@ -126,7 +172,7 @@ function resolveRecallFeedbackTargetType(
     };
   }
 
-  return { targetType };
+  return { targetType, targetId: resolvedTargetId };
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +190,7 @@ const feedbackBodySchema = {
     targetId: { type: 'string' as const },
     targetType: {
       type: 'string' as const,
-      enum: ['message', 'chunk', 'entity'],
+      enum: ['message', 'chunk', 'entity', 'source_memory'],
     },
     action: {
       type: 'string' as const,
@@ -193,22 +239,33 @@ export async function feedbackRoutes(
               .send({ error: resolved.error ?? 'Invalid feedback target' });
           }
           const resolvedTargetType = resolved.targetType;
+          const resolvedTargetId = resolved.targetId ?? targetId;
 
           const transaction = db.transaction(() => {
             const existingFeedback = db
               .prepare(
-                `SELECT action
+                `SELECT action, detail
                  FROM memory_feedback_events
                  WHERE feedback_type = ? AND target_type = ? AND target_id = ?
                  LIMIT 1`,
               )
-              .get(type, resolvedTargetType, targetId) as
+              .get(type, resolvedTargetType, resolvedTargetId) as
               | FeedbackEventRow
               | undefined;
 
-            const nextActionScore = feedbackActionDelta(action);
+            const sceneScopedFeedback =
+              action === 'negative' &&
+              isSceneScopedRecallFeedbackDetail(detail);
+            const previousSceneScopedFeedback =
+              existingFeedback?.action === 'negative' &&
+              isSceneScopedRecallFeedbackDetail(existingFeedback.detail);
+            const nextActionScore = feedbackActionDelta(
+              action,
+              sceneScopedFeedback,
+            );
             const previousActionScore = feedbackActionDelta(
               existingFeedback?.action,
+              previousSceneScopedFeedback,
             );
             const appliedDelta = nextActionScore - previousActionScore;
 
@@ -218,7 +275,7 @@ export async function feedbackRoutes(
                  WHERE target_type = ? AND target_id = ?
                  LIMIT 1`,
               )
-              .get(resolvedTargetType, targetId) as
+              .get(resolvedTargetType, resolvedTargetId) as
               | { id: number; salience_score: number }
               | undefined;
 
@@ -229,18 +286,23 @@ export async function feedbackRoutes(
               );
               db.prepare(
                 `UPDATE memory_metadata
-                 SET salience_score = ?, updated_at = ?
+                 SET salience_score = ?,
+                     effective_salience = ?,
+                     updated_at = ?
                  WHERE id = ?`,
-              ).run(newScore, currentTime, existing.id);
-            } else if (!existing && action !== 'clear') {
+              ).run(newScore, newScore, currentTime, existing.id);
+            } else if (!existing && action !== 'clear' && !sceneScopedFeedback) {
               const baseScore = 0.5 + nextActionScore;
+              const normalizedScore = Math.max(0, Math.min(1, baseScore));
               db.prepare(
-                `INSERT INTO memory_metadata (target_type, target_id, salience_score, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?)`,
+                `INSERT INTO memory_metadata
+                   (target_type, target_id, salience_score, effective_salience, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
               ).run(
                 resolvedTargetType,
-                targetId,
-                Math.max(0, Math.min(1, baseScore)),
+                resolvedTargetId,
+                normalizedScore,
+                normalizedScore,
                 currentTime,
                 currentTime,
               );
@@ -250,7 +312,7 @@ export async function feedbackRoutes(
               db.prepare(
                 `DELETE FROM memory_feedback_events
                  WHERE feedback_type = ? AND target_type = ? AND target_id = ?`,
-              ).run(type, resolvedTargetType, targetId);
+              ).run(type, resolvedTargetType, resolvedTargetId);
             } else {
               db.prepare(
                 `INSERT INTO memory_feedback_events
@@ -263,7 +325,7 @@ export async function feedbackRoutes(
               ).run(
                 type,
                 resolvedTargetType,
-                targetId,
+                resolvedTargetId,
                 action,
                 detail ?? null,
                 currentTime,
@@ -278,12 +340,25 @@ export async function feedbackRoutes(
           });
 
           const result = transaction();
+          const relevancePatch = new RecallRelevancePatchService(
+            db,
+            request.userId,
+          ).recordFeedback({
+            userId: request.userId,
+            source: 'feedback_api',
+            targetType: resolvedTargetType,
+            targetId: resolvedTargetId,
+            action,
+            detail,
+          });
 
           return reply.status(200).send({
             status: 'ok',
             targetType: resolvedTargetType,
             previousAction: result.previousAction,
             appliedDelta: result.appliedDelta,
+            relevancePatch:
+              relevancePatch.status === 'ignored' ? undefined : relevancePatch,
           });
         }
 

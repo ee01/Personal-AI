@@ -266,8 +266,14 @@ test('DoubaoChatSource collects cached history and extracts pending chat', async
     );
     assert.deepEqual(fetchCalls[0]?.body, {
       source: 'doubao_chat',
+      sourceType: 'doubao_chat',
       scope: 'personal',
       autoClassify: true,
+      extractMode: 'chat',
+      conversationMeta: {
+        toolKey: 'doubao',
+        sessionId: 'conv-recent',
+      },
       segments: [
         {
           id: previewMessages[2]?.messageId,

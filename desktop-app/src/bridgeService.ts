@@ -353,10 +353,22 @@ export class DoubaoBridgeService {
     const existingRecord = this.findThreadRecord(existingBinding?.threadId);
     if (
       existingBinding?.threadUrl &&
-      looksLikeThreadUrl(existingBinding.threadUrl) &&
-      existingRecord
+      looksLikeThreadUrl(existingBinding.threadUrl)
     ) {
-      return existingRecord;
+      if (existingRecord) {
+        return existingRecord;
+      }
+
+      const binding = await this.bindThread('memory_sync', {
+        id: existingBinding.threadId,
+        threadUrl: existingBinding.threadUrl,
+        title: existingBinding.title || '长期记忆同步线程',
+      });
+      const restoredRecord = this.findThreadRecord(binding.threadId);
+      if (!restoredRecord) {
+        throw new Error('Unable to restore existing memory-sync thread record');
+      }
+      return restoredRecord;
     }
 
     const result = await this.browser.sendTranscript(MEMORY_SYNC_SEED_MESSAGE);

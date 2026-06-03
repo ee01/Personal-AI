@@ -18,6 +18,7 @@ scheduler:
 suites:
   - id: context-recall
     title: Context Recall Experience Eval
+    description: 评估统一 /context-recall 在真实网页或会话上下文中召回的记忆是否真正相关，是否适合展示给 Memory Lens、Meeting Pilot 等上游场景。
     enabled: true
     workflow: evals/workflows/context-recall/experience.md
     cases: evals/cases/context-recall/real-ringcentral-groups.jsonl
@@ -63,8 +64,137 @@ suites:
         - npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts
         - npm run verify:webpage-memory-detection
 
+  - id: scene-memory-autopilot
+    title: Scene Memory Autopilot Eval
+    description: 验证 /context-recall 展示前过滤层是否能静默弱语义、跨域噪音、低信息会议壳和同源重复，并让强相关 Lens 候选带可解释场景锚点。
+    enabled: true
+    workflow: evals/workflows/scene-memory-autopilot/experience.md
+    cases: evals/cases/scene-memory-autopilot/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/ContextRecallService.ts
+        - memory-service/src/types/index.ts
+        - memory-service/src/__tests__/api-context-recall.test.ts
+        - src/services/MemoryServiceClient.ts
+        - desktop-app/src/memoryServiceClient.ts
+        - tools/eval-scene-memory-autopilot.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts
+        - npm run eval:run -- --suite scene-memory-autopilot --no-repair
+
+  - id: ask-context-gap
+    title: Ask Context Gap Eval
+    description: 评估 Ask 在用户只给短问句、缺 ticket/sheet/slide 细节时，是否能自动补齐最近高频记忆上下文并用证据回答。
+    enabled: true
+    workflow: evals/workflows/ask-context-gap/experience.md
+    cases: evals/cases/ask-context-gap/cases.jsonl
+    runMode: manual
+    endpoint:
+      url: http://10.32.56.212:3210/api/v1/ask
+      userId: esone.qiu
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/ask-context-gap.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/ActiveRecallService.ts
+        - memory-service/src/core/MemoryContextMatchService.ts
+        - memory-service/src/core/RecallContextExpansionService.ts
+        - memory-service/src/core/QueryIntentParser.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/__tests__/**
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/api-ask.test.ts
+        - npm run eval:run -- --suite ask-context-gap --no-repair
+
+  - id: answer-memory-tracker
+    title: Ask Answer Memory Tracker Eval
+    description: 评估 Ask 是否能在用户重复询问同一 locked topic 时首问记录 observation、二问 promote 活答案、后续命中 prior，同时仍用本次 evidence 回答。
+    enabled: true
+    workflow: evals/workflows/answer-memory-tracker/experience.md
+    cases: evals/cases/answer-memory-tracker/cases.jsonl
+    runMode: manual
+    endpoint:
+      url: http://10.32.56.212:3210/api/v1/ask
+      userId: esone.qiu
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/ask-context-gap.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/AnswerMemoryService.ts
+        - memory-service/src/repositories/AnswerMemoryRepository.ts
+        - memory-service/src/repositories/ActionRepository.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - tools/eval-run.mjs
+        - evals/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/answerMemoryService.test.ts src/__tests__/api-ask.test.ts
+        - npm run eval:run -- --suite answer-memory-tracker --no-repair
+
+  - id: memory-lifecycle
+    title: Memory Lifecycle Experience Eval
+    description: 评估无感记忆遗忘层是否正确衰减、归档和降权旧记忆，并确保默认 Ask、Context Recall、Compose Assist 不再关联 archive_only 或 forgotten 记忆。
+    enabled: true
+    workflow: evals/workflows/memory-lifecycle/experience.md
+    cases: evals/cases/memory-lifecycle/cases.jsonl
+    runMode: scheduled
+    schedule:
+      enabled: true
+      cron: "30 9 * * 1"
+      every: 7d
+      timezone: Asia/Shanghai
+      action: report
+      repair: suggest
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/memory-lifecycle.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/MemoryLifecyclePolicy.ts
+        - memory-service/src/core/ForgettingEngine.ts
+        - memory-service/src/core/RecallEngine.ts
+        - memory-service/src/core/ContextRecallService.ts
+        - memory-service/src/routes/ask.ts
+        - memory-service/src/routes/recall.ts
+        - memory-service/src/routes/stats.ts
+        - memory-service/src/types/index.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - tools/eval-*.mjs
+        - tools/eval-memory-lifecycle.ts
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/memoryLifecyclePolicy.test.ts src/__tests__/forgetting.test.ts src/__tests__/recallLifecycle.test.ts src/__tests__/api-recall.test.ts src/__tests__/api-context-recall.test.ts src/__tests__/api-ask.test.ts
+        - npm run eval:run -- --suite memory-lifecycle --no-repair
+
   - id: meeting-pilot
     title: Meeting Pilot Experience Eval
+    description: 评估 Meeting Pilot 的会前记忆、会议中提示和行动建议是否贴合会议主题、参会人和实时讨论。
     enabled: true
     workflow: evals/workflows/meeting-pilot/experience.md
     cases: evals/cases/meeting-pilot/cases.jsonl
@@ -86,10 +216,14 @@ suites:
 
   - id: compose-assist
     title: Compose Assist Experience Eval
+    description: 评估 Compose Assist 的建议是否可直接发送、是否有正确记忆证据、是否越界替用户生成回复。
     enabled: true
     workflow: evals/workflows/compose-assist/experience.md
     cases: evals/cases/compose-assist/cases.jsonl
     runMode: manual
+    endpoint:
+      url: http://localhost:3210/api/v1/composer/assist
+      userId: demo
     judge:
       heuristic: true
       llm: true
@@ -99,12 +233,52 @@ suites:
       agent: codex
       allowedPaths:
         - src/composer-guard/**
+        - src/services/MemoryServiceClient.ts
+        - memory-service/src/core/ContextAssistService.ts
+        - memory-service/src/routes/composerAssist.ts
+        - memory-service/src/types/index.ts
+        - memory-service/src/__tests__/**
+        - tools/eval-*.mjs
+        - evals/**
         - docs/features/**
       validate:
-        - npm run verify:context-assist-meeting-prep
+        - npm --prefix memory-service test -- api-composer-assist
+        - npm run eval:run -- --suite compose-assist --no-repair --no-llm
+
+  - id: compose-style-memory
+    title: Compose Style Memory Eval
+    description: 验证多次相似 Compose diff 是否会沉淀为 USER_CORE 写作风格，并影响下一次同类 compose 的风格提示。
+    enabled: true
+    workflow: evals/workflows/compose-style-memory/experience.md
+    cases: evals/cases/compose-style-memory/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/compose-style-memory.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - src/composer-guard/**
+        - src/services/MemoryServiceClient.ts
+        - memory-service/src/core/UserWritingStyleMemoryService.ts
+        - memory-service/src/core/ContextAssistService.ts
+        - memory-service/src/core/ProfileManager.ts
+        - memory-service/src/routes/ambientCalibration.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/__tests__/**
+        - tools/eval-compose-style-memory.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/api-ambient-calibration.test.ts src/__tests__/api-composer-assist.test.ts
+        - npm run eval:run -- --suite compose-style-memory --no-repair
 
   - id: today-pilot
     title: Today Pilot Experience Eval
+    description: 评估 Today Pilot 的今日任务、会议准备和上下文包是否有行动价值，是否把重要事项排在前面。
     enabled: true
     workflow: evals/workflows/today-pilot/experience.md
     cases: evals/cases/today-pilot/cases.jsonl
@@ -124,6 +298,7 @@ suites:
 
   - id: memory-search
     title: Memory Search Experience Eval
+    description: 评估记忆搜索结果是否命中用户真实意图，标题和摘要是否足够让用户判断结果价值。
     enabled: true
     workflow: evals/workflows/memory-search/experience.md
     cases: evals/cases/memory-search/cases.jsonl
@@ -144,6 +319,7 @@ suites:
 
   - id: user-profile
     title: User Profile Experience Eval
+    description: 评估用户画像相关功能是否只使用已确认事实，避免把推测、敏感或未确认的信息当作上下文。
     enabled: true
     workflow: evals/workflows/user-profile/experience.md
     cases: evals/cases/user-profile/cases.jsonl

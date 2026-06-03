@@ -456,6 +456,12 @@ function showRingCentralNativeJoinFallback(
       if (statusMode !== 'handoff') {
         return;
       }
+      if (isRingCentralNativeJoinFallbackPageStillActive()) {
+        setFallbackStatus(
+          'Still on this page? RingCentral app may not have opened. Use Join in browser or Copy link.',
+        );
+        return;
+      }
       removeHost();
     }, RINGCENTRAL_NATIVE_JOIN_FALLBACK_AUTO_DISMISS_MS);
   };
@@ -671,6 +677,29 @@ function openBrowserFallbackWindow(browserUrl: string): Window | null {
     }
     return null;
   }
+}
+
+function isRingCentralNativeJoinFallbackPageStillActive(): boolean {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  if (
+    typeof document.visibilityState === 'string' &&
+    document.visibilityState !== 'visible'
+  ) {
+    return false;
+  }
+
+  if (typeof document.hasFocus === 'function') {
+    try {
+      return document.hasFocus();
+    } catch {
+      return true;
+    }
+  }
+
+  return true;
 }
 
 function buildRingCentralVideoBrowserJoinUrl(

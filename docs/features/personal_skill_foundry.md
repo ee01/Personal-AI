@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-05-25_
+_最后更新: 2026-05-31_
 
 ## 是什么
 
@@ -26,14 +26,14 @@ Personal Skill Foundry 先收集“这可能是一个可复用技能”的建议
 
 ## 核心概念
 
-| 概念 | 说明 |
-|---|---|
-| `suggestion` | 待用户决策的技能建议，可能来自 Flight Recorder、OpenClaw、本地 agent 平台或其他来源 |
-| `active` | 已确认入库的真源技能，会参与分享 URL 和平台同步 |
-| `dismissed` | 用户丢弃的建议，保留记录并用于冷却去重 |
-| Skill Version | 每次技能内容版本，包含 `SKILL.md`、package、workflow、evidence、sourceEpisodes、files、sha256 |
-| Platform Binding | 某个技能在某个平台的安装/同步状态 |
-| Share Link | 带 token 的只读 skill URL，用于外部 agent 拉取 `SKILL.md` 和资源 |
+| 概念             | 说明                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| `suggestion`     | 待用户决策的技能建议，可能来自 Flight Recorder、OpenClaw、本地 agent 平台或其他来源           |
+| `active`         | 已确认入库的真源技能，会参与分享 URL 和平台同步                                               |
+| `dismissed`      | 用户丢弃的建议，保留记录并用于冷却去重                                                        |
+| Skill Version    | 每次技能内容版本，包含 `SKILL.md`、package、workflow、evidence、sourceEpisodes、files、sha256 |
+| Platform Binding | 某个技能在某个平台的安装/同步状态                                                             |
+| Share Link       | 带 token 的只读 skill URL，用于外部 agent 拉取 `SKILL.md` 和资源                              |
 
 当前状态机只保留：
 
@@ -87,6 +87,17 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 - 需要审核的 suggestion 卡片会直接展示审核摘要：原因数量、前两条关键原因、来源/覆盖目标、版本和风险等级。
 - 点击 `查看风险` / `查看变更` 后，详情区的审核 gate 会显示 `证据已查看，可以确认`，并列出来源、版本、风险、证据数、工作流步骤和资源文件数量；用户能在同一屏判断是否继续 `确认使用` / `确认覆盖`。
 
+2026-05-28 状态：
+
+- `稍后审` 不再只是把建议从 Inbox 隐藏；页面会显示一个“稍后建议”队列，列出到期时间、来源和审核状态。
+- 用户可以从“稍后建议”里点 `现在审`，立即清除 `snoozed_until` 并把建议恢复到可决策 Inbox；仍然可以直接丢弃。
+- `GET /api/v1/skills/suggestions` 默认只返回当前可审建议；`view=snoozed` 返回未到期的稍后建议，供 UI 保留恢复路径。
+
+2026-05-29 状态：
+
+- 打开“稍后建议”详情时，页面只提供 `现在审` 和 `丢弃`；用户恢复到 Inbox 后才会看到 `使用` / `确认覆盖`，避免把暂缓状态误操作成最终决策。
+- 后端在 suggestion 被 `use`、`dismiss` 或外部变更应用时会清空 `snoozed_until`，终态记录不再保留过期的稍后审标记。
+
 ### 2. 管理在用技能
 
 左侧技能列表默认只显示 `active` 技能。
@@ -103,12 +114,12 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 
 右侧详情区包含四个 tab：
 
-| Tab | 内容 |
-|---|---|
-| 工作流 | trigger、not_use、来源、风险策略、步骤 |
-| 证据 | 来源证据、episode / 外部平台证据 |
-| 版本 | 当前版本、sha256、changelog、createdFrom |
-| 绑定 | share URL、平台安装状态、安装指引、平台同步状态 |
+| Tab    | 内容                                            |
+| ------ | ----------------------------------------------- |
+| 工作流 | trigger、not_use、来源、风险策略、步骤          |
+| 证据   | 来源证据、episode / 外部平台证据                |
+| 版本   | 当前版本、sha256、changelog、createdFrom        |
+| 绑定   | share URL、平台安装状态、安装指引、平台同步状态 |
 
 技能列表和详情区不使用内层纵向滚动，页面跟随 `memory-exploring` 外层主滚动条展开。
 
@@ -116,13 +127,13 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 
 Memory Service 通过迁移 `019_personal_skill_library.sql` 建表。
 
-| 表 | 用途 |
-|---|---|
-| `personal_skills` | 统一存 `suggestion / active / dismissed` 技能，包含 slug、title、summary、scope、risk、trigger、not_use、来源和决策 metadata |
-| `skill_versions` | 存技能版本、`SKILL.md`、package JSON、workflow、evidence、sourceEpisodes、files、sha256、changelog |
-| `skill_platform_bindings` | 存某技能在各平台的安装状态、版本、sha256、remoteMtime、lastSync/error |
-| `skill_platform_sync_settings` | 平台级自动同步设置，包含 capability 和 enabled |
-| `skill_share_links` | 存 token hash、skill/version 绑定和 revokedAt，用于安全暴露只读 URL |
+| 表                             | 用途                                                                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `personal_skills`              | 统一存 `suggestion / active / dismissed` 技能，包含 slug、title、summary、scope、risk、trigger、not_use、来源和决策 metadata |
+| `skill_versions`               | 存技能版本、`SKILL.md`、package JSON、workflow、evidence、sourceEpisodes、files、sha256、changelog                           |
+| `skill_platform_bindings`      | 存某技能在各平台的安装状态、版本、sha256、remoteMtime、lastSync/error                                                        |
+| `skill_platform_sync_settings` | 平台级自动同步设置，包含 capability 和 enabled                                                                               |
+| `skill_share_links`            | 存 token hash、skill/version 绑定和 revokedAt，用于安全暴露只读 URL                                                          |
 
 不建：
 
@@ -138,12 +149,12 @@ eval / run receipt 以后作为次级能力再加，不进入 MVP 主链路。
 
 支持端点：
 
-| 端点 | 说明 |
-|---|---|
-| `GET /skills/:slug@:version?token=...` | HTML 预览 |
-| `GET /skills/:slug@:version/SKILL.md?token=...` | 返回 `SKILL.md` |
-| `GET /skills/:slug@:version/package.json?token=...` | 返回完整 package |
-| `GET /skills/:slug@:version/files/*?token=...` | 返回 scripts/resources |
+| 端点                                                | 说明                   |
+| --------------------------------------------------- | ---------------------- |
+| `GET /skills/:slug@:version?token=...`              | HTML 预览              |
+| `GET /skills/:slug@:version/SKILL.md?token=...`     | 返回 `SKILL.md`        |
+| `GET /skills/:slug@:version/package.json?token=...` | 返回完整 package       |
+| `GET /skills/:slug@:version/files/*?token=...`      | 返回 scripts/resources |
 
 注意：
 
@@ -160,15 +171,15 @@ eval / run receipt 以后作为次级能力再加，不进入 MVP 主链路。
 
 开启某个平台后，会同步所有 `active` 技能。
 
-| 平台 | capability | 默认 | 说明 |
-|---|---|---|---|
-| Personal AI | `internal` | 开启且不可关闭 | 真源 |
-| OpenClaw remote | `api` | 开启 | 通过 OpenClaw remote API 双向同步 |
-| Codex CLI | `fs_via_desktop_app` | 关闭 | 需要 Desktop App 读写本机 skill 目录 |
-| Claude Code | `fs_via_desktop_app` | 关闭 | 目录可配置 |
-| Cursor | `fs_via_desktop_app` | 关闭 | 通过 Desktop App 读写本机目录 |
-| ChatGPT / GPTs | `manual_only` | 不可自动同步 | 只提供复制安装指引 |
-| Claude.ai Skills | `manual_only` | 不可自动同步 | 只提供复制安装指引 |
+| 平台             | capability           | 默认           | 说明                                 |
+| ---------------- | -------------------- | -------------- | ------------------------------------ |
+| Personal AI      | `internal`           | 开启且不可关闭 | 真源                                 |
+| OpenClaw remote  | `api`                | 开启           | 通过 OpenClaw remote API 双向同步    |
+| Codex CLI        | `fs_via_desktop_app` | 关闭           | 需要 Desktop App 读写本机 skill 目录 |
+| Claude Code      | `fs_via_desktop_app` | 关闭           | 目录可配置                           |
+| Cursor           | `fs_via_desktop_app` | 关闭           | 通过 Desktop App 读写本机目录        |
+| ChatGPT / GPTs   | `manual_only`        | 不可自动同步   | 只提供复制安装指引                   |
+| Claude.ai Skills | `manual_only`        | 不可自动同步   | 只提供复制安装指引                   |
 
 ### OpenClaw 同步
 
@@ -213,6 +224,16 @@ Codex CLI / Claude Code / Cursor 的 skill 目录在本机文件系统里，Chro
 - Desktop App 上报本机 skill 时会把 `root`、skill 目录、`SKILL.md` 路径、资源文件数量和资源字节数写入平台 binding metadata。
 - Foundry Inbox 和审核 gate 会展示本机来源目录与资源包规模；用户在确认使用/覆盖前能看到这条建议来自哪个 Codex CLI / Claude Code / Cursor 本机目录，而不是只看到平台名。
 
+2026-05-29 状态：
+
+- “平台级自动同步”弹窗会在每个平台行内显示当前可执行性：真源、自动同步已开启、同步未开启、需要 Desktop App、仅手动安装，和最近一次探测失败。
+- OpenClaw 同步失败后会立即刷新平台设置，把后端记录的 `lastError` 显示在对应平台行里，用户关掉临时提示后仍能看到为什么不能同步。
+- 同步弹窗的 active 技能数量独立读取真源列表，不受左侧“在用 / 全部 / 已丢弃”过滤器影响。
+
+2026-05-31 状态：
+
+- Memory Service 只接收本机 skill 包内的安全相对资源路径；绝对路径、越界路径和重复路径会被忽略，并在 binding metadata、审核原因和 Foundry 审核摘要中显示已忽略数量。只要发生过滤，导入后的 sha256 以清洗后的包重新计算，不再沿用 Desktop App 上报的原始包哈希。
+
 ### Manual-only 平台
 
 ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句安装指引。
@@ -228,20 +249,19 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 
 技能管理 API 挂在 `/api/v1/skills` 下。
 
-| API | 说明 |
-|---|---|
-| `GET /api/v1/skills?filter=active|all|dismissed&q=` | 主列表；默认不返回 suggestion |
-| `GET /api/v1/skills/suggestions` | Inbox Bar 建议列表 |
-| `POST /api/v1/skills/suggestions` | 创建 suggestion，供同步器或 miner 写入 |
-| `POST /api/v1/skills/suggestions/:id/use` | promote 为 active；需要审核的建议必须传 `reviewConfirmed`，成功后生成 share link 并触发已开启平台同步 |
-| `POST /api/v1/skills/suggestions/:id/dismiss` | 标记 dismissed，并记录冷却 key |
-| `POST /api/v1/skills/suggestions/:id/snooze` | 暂缓建议 |
-| `GET /api/v1/skills/:id` | 技能详情，返回 workflow / evidence / versions / bindings / share |
-| `GET /api/v1/skills/sync-settings` | 平台同步设置 |
-| `PUT /api/v1/skills/sync-settings/:platform` | 更新平台同步开关 |
-| `POST /api/v1/skills/bindings/:platform/probe` | 只读探测平台能力 |
-| `POST /api/v1/skills/sync/run` | Memory Service 主动触发 API 平台同步，目前主要用于 OpenClaw |
-| `POST /api/v1/skills/sync/local-platform` | Desktop App 上报本机平台 skill 列表并拉取待写入 package |
+- `GET /api/v1/skills?filter=active|all|dismissed&q=`：主列表；默认不返回 suggestion。
+- `GET /api/v1/skills/suggestions?view=ready|snoozed|all`：Inbox Bar 建议列表；默认 ready，snoozed 用于稍后建议队列。
+- `POST /api/v1/skills/suggestions`：创建 suggestion，供同步器或 miner 写入。
+- `POST /api/v1/skills/suggestions/:id/use`：promote 为 active；需要审核的建议必须传 `reviewConfirmed`，成功后生成 share link 并触发已开启平台同步。
+- `POST /api/v1/skills/suggestions/:id/dismiss`：标记 dismissed，并记录冷却 key。
+- `POST /api/v1/skills/suggestions/:id/snooze`：暂缓建议。
+- `POST /api/v1/skills/suggestions/:id/unsnooze`：立即恢复稍后建议。
+- `GET /api/v1/skills/:id`：技能详情，返回 workflow / evidence / versions / bindings / share。
+- `GET /api/v1/skills/sync-settings`：平台同步设置。
+- `PUT /api/v1/skills/sync-settings/:platform`：更新平台同步开关。
+- `POST /api/v1/skills/bindings/:platform/probe`：只读探测平台能力。
+- `POST /api/v1/skills/sync/run`：Memory Service 主动触发 API 平台同步，目前主要用于 OpenClaw。
+- `POST /api/v1/skills/sync/local-platform`：Desktop App 上报本机平台 skill 列表并拉取待写入 package。
 
 ## 关键安全边界
 
@@ -285,14 +305,19 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - 近期 skill registry / skill file attack 研究说明第三方 skill 供应链会成为攻击面；Foundry 对外部导入应保持审核默认开启，并把资源文件、工具调用、来源平台放在用户确认前。
 - 2026-05-22 再核对 Claude Code Skills、LangChain Deep Agents memory/skills 和 SKILL-INJECT 后，平台同步 UI 需要持续区分三类能力：可 API 同步、需 Desktop App 文件同步、仅复制安装指引；manual-only 平台不应显示伪安装状态。
 - 2026-05-25 再核对 Deep Agents skills、SKILL.md registry supply-chain 和 SkillOps 后，本机导入建议需要把“文件来自哪里、包有多大、是否带资源文件”作为审核事实，而不是只保存到后台 binding；这比一次性弹窗更接近可审计的 skill lifecycle。
+- 2026-05-28 再核对 Claude Skills / Claude Code Skills、SkillFoundry、SkillGen 和 Agentic Skills 生命周期综述后，`稍后审` 应被视为一个仍待治理的中间状态，而不是一次性隐藏动作。官方和论文都强调 skill 的来源、资源文件、工具权限、验证与更新需要持续可审计；因此 UI 保留“稍后建议”队列和 `现在审` 恢复路径，避免用户丢失外部导入或高风险 skill 的审核上下文。
+- 2026-05-29 再核对 OpenAI GPTs、Claude Skills、Microsoft Copilot Studio agent 发布/目录流程、SkillOps、Agentic Skills SoK 和 mixed-initiative feedback 研究后，建议状态机应把“恢复审核”和“最终使用/覆盖”拆开。用户控制有价值，但频繁反馈也可能降低信任；所以暂缓项详情可以被查看，但必须先恢复到 Inbox 才能做最终确认。
+- 2026-05-29 针对平台同步再核对 OpenAI GPTs Actions、Claude/Claude Code Skills、Cursor Rules、Custom GPT 漏洞分析和 agent skill 生命周期研究后，同步 UI 需要把“能否自动写入、最近为什么失败、是否只是复制安装”放到持久行内诊断里；跨平台 skill 分发不应只留下短暂同步结果。
 
 ## Reminders 反馈
 
-2026-05-25 自动化核对：本机 Reminders 可访问，但未发现名为 `Personal AI` 的列表。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
+2026-05-29 自动化核对：本机 Reminders 可访问，但未发现名为 `Personal AI` 的列表。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
 
 外部参考：
 
-- [Claude Skills](https://claude.com/docs/skills/overview)
+- [Claude Skills Help](https://support.claude.com/en/articles/12512180-use-skills-in-claude)
+- [OpenAI GPTs](https://help.openai.com/en/articles/8554407-gpts)
+- [Microsoft Copilot Studio agents](https://learn.microsoft.com/en-gb/microsoft-copilot-studio/microsoft-copilot-extend-copilot-extensions)
 - [Claude Code Skills](https://code.claude.com/docs/en/skills)
 - [LangChain Deep Agents long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory)
 - [Agent Skills open standard](https://agentskills.io/)
@@ -306,6 +331,8 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - [Under the Hood of SKILL.md: Semantic Supply-chain Attacks on AI Agent Skill Registry](https://arxiv.org/abs/2605.11418)
 - [SkillOps: Managing LLM Agent Skill Libraries as Self-Maintaining Software Ecosystems](https://arxiv.org/abs/2605.13716)
 - [SkillGen: Verified Inference-Time Agent Skill Synthesis](https://arxiv.org/abs/2605.10999)
+- [SoK: Agentic Skills -- Beyond Tool Use in LLM Agents](https://huggingface.co/papers/2602.20867)
+- [Soliciting Human-in-the-Loop User Feedback for Interactive Machine Learning Reduces User Trust and Impressions of Model Accuracy](https://arxiv.org/abs/2008.12735)
 - [Group of Skills: Group-Structured Skill Retrieval for Agent Skill Libraries](https://arxiv.org/abs/2605.06978)
 - [From Skill Text to Skill Structure: SSL Representation for Agent Skills](https://arxiv.org/abs/2604.24026)
 

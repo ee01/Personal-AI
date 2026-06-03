@@ -3,6 +3,25 @@ import type { FastifyInstance } from 'fastify';
 import { MessageRuleAutomationPlanner } from '../core/MessageRuleAutomationPlanner.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 
+const messageRuleAttachmentSchema = {
+  type: 'object' as const,
+  properties: {
+    id: {
+      anyOf: [{ type: 'string' as const }, { type: 'number' as const }],
+    },
+    name: { type: 'string' as const },
+    type: { type: 'string' as const },
+    mimeType: { type: 'string' as const },
+    category: { type: 'string' as const },
+    size: { type: 'number' as const },
+    sourceUrl: { type: 'string' as const },
+    messageUrl: { type: 'string' as const },
+    downloadUrl: { type: 'string' as const },
+    previewUrl: { type: 'string' as const },
+  },
+  additionalProperties: true,
+};
+
 const messageRulePlanBodySchema = {
   type: 'object' as const,
   required: ['ruleRef', 'automationPrompt', 'message'],
@@ -20,6 +39,12 @@ const messageRulePlanBodySchema = {
         groupId: { type: 'string' as const },
         groupName: { type: 'string' as const },
         content: { type: 'string' as const, minLength: 1 },
+        sourceUrl: { type: 'string' as const },
+        messageUrl: { type: 'string' as const },
+        attachments: {
+          type: 'array' as const,
+          items: messageRuleAttachmentSchema,
+        },
         timestamp: { type: 'number' as const },
         timezone: { type: 'string' as const },
         event: {
@@ -65,6 +90,20 @@ export async function messageRuleRoutes(app: FastifyInstance): Promise<void> {
         groupId?: string;
         groupName?: string;
         content: string;
+        sourceUrl?: string;
+        messageUrl?: string;
+        attachments?: Array<{
+          id?: string | number;
+          name?: string;
+          type?: string;
+          mimeType?: string;
+          category?: string;
+          size?: number;
+          sourceUrl?: string;
+          messageUrl?: string;
+          downloadUrl?: string;
+          previewUrl?: string;
+        }>;
         timestamp?: number;
         timezone?: string;
         event?: {
@@ -113,6 +152,20 @@ export async function messageRuleRoutes(app: FastifyInstance): Promise<void> {
         groupId?: string;
         groupName?: string;
         content: string;
+        sourceUrl?: string;
+        messageUrl?: string;
+        attachments?: Array<{
+          id?: string | number;
+          name?: string;
+          type?: string;
+          mimeType?: string;
+          category?: string;
+          size?: number;
+          sourceUrl?: string;
+          messageUrl?: string;
+          downloadUrl?: string;
+          previewUrl?: string;
+        }>;
         timestamp?: number;
         timezone?: string;
         event?: {

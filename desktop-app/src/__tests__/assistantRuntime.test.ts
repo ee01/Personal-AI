@@ -234,6 +234,53 @@ test('buildAssistantRuntimeSummary explains failed Doubao sync lane in status ca
   assert.equal(issue?.actionHint, '完成验证后重试');
 });
 
+test('buildAssistantRuntimeSummary does not promote cleared historical sync failures', () => {
+  const summary = buildAssistantRuntimeSummary({
+    status: createStatus({
+      syncState: {
+        timerActive: true,
+        running: false,
+        autoSyncEnabled: true,
+        memoryServiceConfigured: true,
+        pollIntervalMs: 300000,
+        recentAttempts: [
+          {
+            id: 'attempt-success-after-failure',
+            kind: 'reminder_sync',
+            trigger: 'manual',
+            status: 'succeeded',
+            startedAt: '2026-05-08T01:22:00.000Z',
+            completedAt: '2026-05-08T01:22:03.000Z',
+            durationMs: 3000,
+          },
+          {
+            id: 'attempt-old-failure',
+            kind: 'reminder_sync',
+            trigger: 'manual',
+            status: 'failed',
+            startedAt: '2026-05-08T01:19:20.000Z',
+            completedAt: '2026-05-08T01:19:27.852Z',
+            durationMs: 7852,
+            errorMessage:
+              'Doubao challenge detected before send (verify you are human)',
+          },
+        ],
+        tasks: {
+          stableMemory: { intervalMs: 1, due: false },
+          mobileBriefing: { intervalMs: 1, due: false },
+          reminderSync: { intervalMs: 1, due: false },
+        },
+      },
+    }),
+  });
+
+  assert.equal(
+    summary.items.some((item) => item.kind === 'sync_issue'),
+    false,
+  );
+  assert.equal(summary.topStatus?.kind, undefined);
+});
+
 test('buildAssistantRuntimeSummary labels outreach pending approvals distinctly', () => {
   const summary = buildAssistantRuntimeSummary({
     status: createStatus(),

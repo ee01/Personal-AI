@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -39,7 +48,9 @@ describe('Personal Skill Library API', () => {
     db.prepare('DELETE FROM skill_versions').run();
     db.prepare('DELETE FROM personal_skills').run();
     db.prepare('DELETE FROM skill_platform_sync_settings').run();
-    db.prepare("DELETE FROM notification_records WHERE type = 'skill_suggestion'").run();
+    db.prepare(
+      "DELETE FROM notification_records WHERE type = 'skill_suggestion'",
+    ).run();
     context.userDataManager.writeFile(
       'config.json',
       JSON.stringify({ openClawEnabled: false }),
@@ -61,7 +72,8 @@ describe('Personal Skill Library API', () => {
       payload: {
         slug: 'jira-headcount-trend-report',
         title: 'Jira Headcount Trend Report',
-        summary: 'Turn repeated Jira headcount analysis into a reusable workflow.',
+        summary:
+          'Turn repeated Jira headcount analysis into a reusable workflow.',
         scope: 'work',
         risk: 'medium',
         trigger: 'Jira headcount or assignee trend request',
@@ -69,8 +81,16 @@ describe('Personal Skill Library API', () => {
         sources: ['Jira', 'Codex'],
         repetition: '近 30 天 5 次相似任务',
         workflow: [
-          { title: 'Confirm scope', desc: 'Ask for project key and date range.', tools: ['ask_user'] },
-          { title: 'Normalize export', desc: 'Deduplicate assignees.', tools: ['python'] },
+          {
+            title: 'Confirm scope',
+            desc: 'Ask for project key and date range.',
+            tools: ['ask_user'],
+          },
+          {
+            title: 'Normalize export',
+            desc: 'Deduplicate assignees.',
+            tools: ['python'],
+          },
         ],
         evidence: [
           {
@@ -81,7 +101,9 @@ describe('Personal Skill Library API', () => {
             episodeId: 'ep-jira',
           },
         ],
-        sourceEpisodes: [{ id: 'ep-jira', title: 'Jira analysis', date: '2026-04-30' }],
+        sourceEpisodes: [
+          { id: 'ep-jira', title: 'Jira analysis', date: '2026-04-30' },
+        ],
         notify: true,
         ...overrides,
       },
@@ -94,7 +116,8 @@ describe('Personal Skill Library API', () => {
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ output_text: JSON.stringify(payload) }),
+      text: async () =>
+        JSON.stringify({ output_text: JSON.stringify(payload) }),
     };
   }
 
@@ -119,23 +142,33 @@ describe('Personal Skill Library API', () => {
 
   function localFilesystemSha(
     skillMd: string,
-    files: Array<{ path?: string; relativePath?: string; content: string; sha256?: string; byteSize?: number }> = [],
+    files: Array<{
+      path?: string;
+      relativePath?: string;
+      content: string;
+      sha256?: string;
+      byteSize?: number;
+    }> = [],
   ) {
     return createHash('sha256')
-      .update(JSON.stringify({
-        skillMd,
-        files: files
-          .map((file) => ({
-            path: file.relativePath || file.path || '',
-            content: file.content || '',
-            sha256:
-              file.sha256 ||
-              createHash('sha256').update(file.content || '').digest('hex'),
-            byteSize:
-              file.byteSize ?? Buffer.byteLength(file.content || '', 'utf8'),
-          }))
-          .sort((left, right) => left.path.localeCompare(right.path)),
-      }))
+      .update(
+        JSON.stringify({
+          skillMd,
+          files: files
+            .map((file) => ({
+              path: file.relativePath || file.path || '',
+              content: file.content || '',
+              sha256:
+                file.sha256 ||
+                createHash('sha256')
+                  .update(file.content || '')
+                  .digest('hex'),
+              byteSize:
+                file.byteSize ?? Buffer.byteLength(file.content || '', 'utf8'),
+            }))
+            .sort((left, right) => left.path.localeCompare(right.path)),
+        }),
+      )
       .digest('hex');
   }
 
@@ -174,7 +207,9 @@ describe('Personal Skill Library API', () => {
       headers: { 'x-user-id': USER_ID },
     });
     expect(activeAfter.json().total).toBe(1);
-    expect(activeAfter.json().items[0].bindings[0].platform).toBe('personal_ai');
+    expect(activeAfter.json().items[0].bindings[0].platform).toBe(
+      'personal_ai',
+    );
   });
 
   it('serves tokenized skill URLs with ETag support', async () => {
@@ -202,7 +237,9 @@ describe('Personal Skill Library API', () => {
     });
     expect(detailRes.statusCode).toBe(200);
     const detail = detailRes.json().skill;
-    expect(detail.share.urlPath).toContain('/skills/jira-headcount-trend-report%40v0.1');
+    expect(detail.share.urlPath).toContain(
+      '/skills/jira-headcount-trend-report%40v0.1',
+    );
     const [sharePath, shareQuery] = String(detail.share.urlPath).split('?');
     const skillMdPath = `${sharePath}/SKILL.md?${shareQuery}`;
     const packagePath = `${sharePath}/package.json?${shareQuery}`;
@@ -257,7 +294,9 @@ describe('Personal Skill Library API', () => {
       headers: { 'x-user-id': USER_ID },
     });
     expect(listRes.statusCode).toBe(200);
-    expect(listRes.json().items.some((item: any) => item.platform === 'openclaw')).toBe(true);
+    expect(
+      listRes.json().items.some((item: any) => item.platform === 'openclaw'),
+    ).toBe(true);
 
     const manualRes = await app.inject({
       method: 'PUT',
@@ -340,7 +379,8 @@ describe('Personal Skill Library API', () => {
             version: 'v0.2',
             sha256: 'quarter-package-sha',
             mtime: 1_010,
-            skillMd: '# Quarter Output Filters\n\nUse for quarterly output setup.',
+            skillMd:
+              '# Quarter Output Filters\n\nUse for quarterly output setup.',
             files: [
               {
                 path: 'scripts/run_quarter_output_filters.py',
@@ -527,7 +567,9 @@ describe('Personal Skill Library API', () => {
       }),
     );
     fetchMock
-      .mockResolvedValueOnce(openClawJsonResponse({ ok: true, total: 0, skills: [] }))
+      .mockResolvedValueOnce(
+        openClawJsonResponse({ ok: true, total: 0, skills: [] }),
+      )
       .mockResolvedValueOnce(
         openClawJsonResponse({
           ok: true,
@@ -644,7 +686,9 @@ describe('Personal Skill Library API', () => {
       headers: { 'x-user-id': USER_ID },
     });
     expect(unchangedDetail.json().skill.currentVersion).toBe('v1');
-    expect(unchangedDetail.json().skill.activeVersion.skillMd).toContain('Old weather workflow');
+    expect(unchangedDetail.json().skill.activeVersion.skillMd).toContain(
+      'Old weather workflow',
+    );
 
     const inbox = await app.inject({
       method: 'GET',
@@ -682,7 +726,9 @@ describe('Personal Skill Library API', () => {
       currentVersion: 'v2',
       currentSha256: 'remote-weather-v2-sha',
     });
-    expect(confirmedUse.json().skill.activeVersion.skillMd).toContain('New weather workflow');
+    expect(confirmedUse.json().skill.activeVersion.skillMd).toContain(
+      'New weather workflow',
+    );
 
     const dismissedList = await app.inject({
       method: 'GET',
@@ -792,6 +838,21 @@ describe('Personal Skill Library API', () => {
                 content: 'console.log("brief");\n',
                 byteSize: 22,
               },
+              {
+                path: '../outside.js',
+                content: 'console.log("outside");\n',
+                byteSize: 24,
+              },
+              {
+                path: '/tmp/leak.txt',
+                content: 'secret\n',
+                byteSize: 7,
+              },
+              {
+                path: 'scripts/brief.js',
+                content: 'console.log("duplicate");\n',
+                byteSize: 26,
+              },
             ],
           },
         ],
@@ -826,9 +887,27 @@ describe('Personal Skill Library API', () => {
       skillMdPath: meetingPrepSkillMdPath,
       fileCount: 1,
       totalByteSize: 22,
+      rejectedFileCount: 3,
+      rejectedFilePaths: [
+        '../outside.js',
+        '/tmp/leak.txt',
+        'scripts/brief.js',
+      ],
       externalChangeFor: expect.any(String),
       originalSlug: 'meeting-prep',
     });
+    expect(externalChange.reviewReasons).toEqual(
+      expect.arrayContaining([expect.stringMatching(/已忽略/)]),
+    );
+
+    const externalChangeDetail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/skills/${externalChange.id}`,
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(externalChangeDetail.json().skill.activeVersion.files).toEqual([
+      expect.objectContaining({ relativePath: 'scripts/brief.js' }),
+    ]);
 
     const applyRes = await app.inject({
       method: 'POST',
@@ -838,7 +917,10 @@ describe('Personal Skill Library API', () => {
     });
     expect(applyRes.statusCode).toBe(200);
     expect(applyRes.json().skill.currentVersion).toBe('v2');
-    expect(applyRes.json().skill.currentSha256).toBe('local-v2-sha');
+    expect(applyRes.json().skill.currentSha256).not.toBe('local-v2-sha');
+    expect(applyRes.json().skill.activeVersion.files).toEqual([
+      expect.objectContaining({ relativePath: 'scripts/brief.js' }),
+    ]);
   });
 
   it('reports malformed OpenClaw JSON as a sync failure', async () => {
@@ -852,7 +934,9 @@ describe('Personal Skill Library API', () => {
         openClawApiKey: 'test-openclaw-key',
       }),
     );
-    fetchMock.mockResolvedValueOnce(openClawTextResponse('I can list the skills, but not JSON.'));
+    fetchMock.mockResolvedValueOnce(
+      openClawTextResponse('I can list the skills, but not JSON.'),
+    );
 
     const syncRes = await app.inject({
       method: 'POST',
@@ -983,6 +1067,41 @@ describe('Personal Skill Library API', () => {
     expect(inboxAfterSnooze.statusCode).toBe(200);
     expect(inboxAfterSnooze.json().total).toBe(0);
 
+    const snoozedList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions?view=snoozed',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(snoozedList.statusCode).toBe(200);
+    expect(snoozedList.json().total).toBe(1);
+    expect(snoozedList.json().items[0]).toMatchObject({
+      id: suggestion.id,
+      status: 'suggestion',
+    });
+
+    const unsnoozeRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${suggestion.id}/unsnooze`,
+      headers: { 'x-user-id': USER_ID },
+      payload: {},
+    });
+    expect(unsnoozeRes.statusCode).toBe(200);
+    expect(unsnoozeRes.json().skill.snoozedUntil).toBeUndefined();
+
+    const inboxAfterUnsnooze = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(inboxAfterUnsnooze.json().total).toBe(1);
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${suggestion.id}/snooze`,
+      headers: { 'x-user-id': USER_ID },
+      payload: { days: 3 },
+    });
+
     const context = userContextManager.getContext(USER_ID);
     context.db
       .prepare('UPDATE personal_skills SET snoozed_until = ? WHERE id = ?')
@@ -1003,6 +1122,7 @@ describe('Personal Skill Library API', () => {
     expect(dismissRes.statusCode).toBe(200);
     expect(dismissRes.json().skill.status).toBe('dismissed');
     expect(dismissRes.json().skill.dismissReason).toBe('not_relevant');
+    expect(dismissRes.json().skill.snoozedUntil).toBeUndefined();
 
     const inboxAfterDismiss = await app.inject({
       method: 'GET',
@@ -1017,6 +1137,26 @@ describe('Personal Skill Library API', () => {
       headers: { 'x-user-id': USER_ID },
     });
     expect(dismissedList.json().total).toBe(1);
+
+    const directUseSuggestion = await createSuggestion({
+      slug: 'snoozed-direct-use',
+      title: 'Snoozed Direct Use',
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${directUseSuggestion.id}/snooze`,
+      headers: { 'x-user-id': USER_ID },
+      payload: { days: 3 },
+    });
+    const directUse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${directUseSuggestion.id}/use`,
+      headers: { 'x-user-id': USER_ID },
+      payload: {},
+    });
+    expect(directUse.statusCode).toBe(200);
+    expect(directUse.json().skill.status).toBe('active');
+    expect(directUse.json().skill.snoozedUntil).toBeUndefined();
 
     const activeSuggestion = await createSuggestion({
       slug: 'active-cannot-dismiss',
@@ -1108,7 +1248,9 @@ describe('Personal Skill Library API', () => {
 
     const oldDismissedAt = Math.floor(Date.now() / 1000) - 31 * 86400;
     context.db
-      .prepare('UPDATE personal_skills SET dismissed_at = ?, updated_at = ? WHERE id = ?')
+      .prepare(
+        'UPDATE personal_skills SET dismissed_at = ?, updated_at = ? WHERE id = ?',
+      )
       .run(oldDismissedAt, oldDismissedAt, first.id);
 
     const revivedRes = await app.inject({
@@ -1136,7 +1278,8 @@ describe('Personal Skill Library API', () => {
         slug: 'secret-skill',
         title: 'Secret Skill',
         summary: 'Should not be shareable.',
-        skillMd: 'Use apiKey = "abcdefghijklmnopqrstuvwxyz123456" for this workflow.',
+        skillMd:
+          'Use apiKey = "abcdefghijklmnopqrstuvwxyz123456" for this workflow.',
       },
     });
     const suggestion = res.json().skill;

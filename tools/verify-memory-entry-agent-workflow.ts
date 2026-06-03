@@ -39,6 +39,9 @@ const storage: Record<string, any> = {
 const ingests: any[] = [];
 const botMessages: any[] = [];
 const relationshipPrompts: string[] = [];
+const outreachBaselineAt = Math.floor(
+  Date.parse('2026-04-14T23:00:00.000Z') / 1000,
+);
 let runtimeStatusItems: any[] = [
   {
     template: {
@@ -49,8 +52,8 @@ let runtimeStatusItems: any[] = [
       targetRef: 'sdk-updates',
       enabled: true,
       syncState: 'synced',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: outreachBaselineAt,
+      updatedAt: outreachBaselineAt,
     },
     latestSession: {
       id: 'session-before-followup',
@@ -63,8 +66,8 @@ let runtimeStatusItems: any[] = [
       requiresApproval: false,
       followupCount: 0,
       maxFollowup: 2,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: outreachBaselineAt,
+      updatedAt: outreachBaselineAt,
     },
   },
 ];
@@ -172,6 +175,27 @@ function installFetchMock() {
 
     if (url.startsWith('http://mock-ollama/api/generate')) {
       if (prompt.includes('<message_group')) {
+        if (prompt.includes('digest only update should be summarized')) {
+          return new Response(
+            JSON.stringify({
+              response: JSON.stringify({
+                data: [
+                  {
+                    shouldNotify: true,
+                    shouldStore: true,
+                    matched_rule: '[RULE_REF:manual:digest-only]',
+                    matched_rule_refs: ['manual:digest-only'],
+                    matched_rule_ids: [],
+                    summary: 'digest-only rule matched without immediate alert',
+                    confidence: 0.91,
+                  },
+                ],
+              }),
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
         if (prompt.includes('low confidence blocker maybe mentioned')) {
           return new Response(
             JSON.stringify({
@@ -470,7 +494,16 @@ async function main() {
     ingests[0].metadata.storageReview.reasonSource,
     'relevanceJudgment',
   );
-  assert.equal(ingests[0].metadata.storageReview.traceStatus, 'complete');
+  assert.equal(ingests[0].metadata.storageReview.traceStatus, 'partial');
+  assert.equal(ingests[0].metadata.storageReview.toolPlaceholderCount, 1);
+  const relevanceExternalStep = relevanceOnlyResult.agentWorkflowTrace?.find(
+    (step) => step.agentId === 'externalInfoFetcher',
+  );
+  assert.equal(relevanceExternalStep?.tools?.[0]?.status, 'placeholder');
+  assert.match(
+    relevanceExternalStep?.tools?.[0]?.summary || '',
+    /success=false/,
+  );
 
   runtimeStatusItems = [];
   storage.concernedItems = [];
@@ -534,6 +567,47 @@ async function main() {
     ingests[0].metadata.summary,
     'architecture decision should be preserved',
   );
+
+  runtimeStatusItems = [];
+  storage.concernedItems = [
+    {
+      id: 'digest-only',
+      text: 'Summarize digest-worthy updates',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+      digestConfig: {
+        enabled: true,
+        frequency: 'daily',
+        preferredHour: 9,
+      },
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+  relationshipPrompts.length = 0;
+
+  const digestOnlyResult = await processNewMessage({
+    sender: 'Nina Park',
+    team_id: 'team-digest',
+    team_name: 'Digest Updates',
+    content: 'digest only update should be summarized',
+    datetime: '2026-04-15T00:18:00.000Z',
+  });
+
+  assert.equal(digestOnlyResult.shouldStore, true);
+  assert.equal(
+    digestOnlyResult.shouldNotify,
+    false,
+    'digest-only Agent Workflow matches must not be reported as immediate notifications',
+  );
+  assert.equal(digestOnlyResult.notificationReview, undefined);
+  assert.deepEqual(digestOnlyResult.matchedRuleRefs, ['manual:digest-only']);
+  assert.equal(ingests.length, 1);
+  assert.equal(
+    ingests[0].metadata.storageReview.notificationReviewRequired,
+    false,
+  );
+  assert.equal(botMessages.length, 0);
 
   runtimeStatusItems = [];
   storage.concernedItems = [
@@ -610,9 +684,11 @@ async function main() {
   assert.match(invalidToolStep?.outputSummary || '', /tool is not registered/);
   assert.equal(invalidToolResult.storageReview?.traceStatus, 'partial');
   assert.equal(invalidToolResult.storageReview?.toolSkippedCount, 1);
+  assert.equal(invalidToolResult.storageReview?.toolPlaceholderCount, 1);
   assert.equal(ingests.length, 1);
   assert.equal(ingests[0].metadata.storageReview.traceStatus, 'partial');
   assert.equal(ingests[0].metadata.storageReview.toolSkippedCount, 1);
+  assert.equal(ingests[0].metadata.storageReview.toolPlaceholderCount, 1);
 
   runtimeStatusItems = [];
   storage.concernedItems = [];
@@ -656,6 +732,7 @@ async function main() {
   );
   assert.equal(duplicateAgentResult.storageReview?.traceStatus, 'partial');
   assert.equal(duplicateAgentResult.storageReview?.toolSkippedCount, 1);
+  assert.equal(duplicateAgentResult.storageReview?.toolPlaceholderCount, 1);
   assert.equal(ingests.length, 1);
   assert.equal(
     ingests[0].metadata.storageReview.reasonSource,

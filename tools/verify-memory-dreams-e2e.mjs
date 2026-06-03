@@ -143,6 +143,12 @@ try {
   await projectCard.getByText('风险 1').waitFor({ timeout: 10000 });
   await projectCard.getByText('新关系 1').waitFor({ timeout: 10000 });
   await projectCard
+    .getByText('来源 dreams/project-orbit-2026-05-20.md')
+    .waitFor({ timeout: 10000 });
+  await projectCard
+    .getByText('低置信联想，需复核后使用')
+    .waitFor({ timeout: 10000 });
+  await projectCard
     .getByText('Budget risk has no owner.')
     .waitFor({ timeout: 10000 });
   await projectCard

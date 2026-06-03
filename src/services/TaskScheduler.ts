@@ -17,7 +17,10 @@ import {
 import { getEnvConfig } from '../utils';
 import { Logger } from '../utils/logger';
 import { digestQueueService } from './DigestQueueService';
-import type { DigestProcessResult } from '../types/digestQueue';
+import type {
+  DigestProcessResult,
+  DigestQueueStatusSummary,
+} from '../types/digestQueue';
 import { getMemoryServiceClient } from './MemoryServiceClient';
 import { concernedItemsSyncService } from './ConcernedItemsSyncService';
 import { TASK_DEFINITIONS } from './taskSchedulerDefinitions';
@@ -60,6 +63,7 @@ export interface ScheduledTaskStatus extends ScheduledTask {
     | 'repair_failed'
     | 'disabled';
   scheduleWarning?: string;
+  currentQueueSummary?: string;
 }
 
 export interface TaskExecutionResult {
@@ -117,7 +121,12 @@ export function summarizeDigestQueueProcessResults(
     (sum, result) => sum + result.itemsProcessed,
     0,
   );
+  const totalPending = results.reduce(
+    (sum, result) => sum + (result.itemsPending || 0),
+    0,
+  );
   const successCount = results.length - failedResults.length;
+  const nextReleaseAt = getEarliestDigestReleaseAt(results);
 
   if (failedResults.length > 0) {
     const failureSummary = failedResults
@@ -126,7 +135,18 @@ export function summarizeDigestQueueProcessResults(
     return {
       success: false,
       error: `摘要推送失败 ${failedResults.length}/${results.length}：${failureSummary}`,
-      summary: `${successCount} 个摘要任务成功，${failedResults.length} 个失败，队列已保留`,
+      summary: `${successCount} 个摘要任务成功，${
+        failedResults.length
+      } 个失败，队列已保留${totalPending > 0 ? ` ${totalPending} 条` : ''}`,
+    };
+  }
+
+  if (totalPending > 0) {
+    return {
+      success: true,
+      summary: `${successCount} 个摘要任务完成，等待 ${totalPending} 条${
+        nextReleaseAt ? `，最早 ${formatDigestReleaseTime(nextReleaseAt)}` : ''
+      }`,
     };
   }
 
@@ -137,6 +157,47 @@ export function summarizeDigestQueueProcessResults(
         ? `${successCount} 个摘要任务成功，推送 ${totalItems} 条`
         : `${successCount} 个摘要任务完成，无到期条目`,
   };
+}
+
+export function summarizeDigestQueueStatusSummary(
+  summary: DigestQueueStatusSummary,
+): string | undefined {
+  if (summary.totalItems <= 0) {
+    return undefined;
+  }
+
+  const dueText =
+    summary.dueItems > 0 ? `${summary.dueItems} 条已到期` : '暂无到期';
+  const nextRelease = summary.nextReleaseAt
+    ? `，最早 ${formatDigestReleaseTime(summary.nextReleaseAt)}`
+    : '';
+  return `本地摘要队列 ${summary.totalItems} 条，${dueText}${nextRelease}`;
+}
+
+function getEarliestDigestReleaseAt(
+  results: DigestProcessResult[],
+): string | undefined {
+  return results.reduce<string | undefined>((earliest, result) => {
+    if (!result.nextReleaseAt) return earliest;
+    if (!earliest) return result.nextReleaseAt;
+    return new Date(result.nextReleaseAt).getTime() <
+      new Date(earliest).getTime()
+      ? result.nextReleaseAt
+      : earliest;
+  }, undefined);
+}
+
+function formatDigestReleaseTime(isoString: string): string {
+  const date = new Date(isoString);
+  if (!Number.isFinite(date.getTime())) {
+    return '未知时间';
+  }
+  return date.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function isAlarmPersistenceFlagUnsupported(error: unknown): boolean {
@@ -452,7 +513,9 @@ export class TaskScheduler {
     });
   }
 
-  private getAlarmCreateInfo(task: ScheduledTask): chrome.alarms.AlarmCreateInfo {
+  private getAlarmCreateInfo(
+    task: ScheduledTask,
+  ): chrome.alarms.AlarmCreateInfo {
     const alarmInfo: chrome.alarms.AlarmCreateInfo = {
       delayInMinutes: task.intervalMinutes,
       periodInMinutes: task.intervalMinutes,
@@ -849,10 +912,13 @@ export class TaskScheduler {
       const success = taskResult?.success ?? true;
       const resultMessage = taskResult?.error;
       const resultSummary = taskResult?.summary;
+      const persistedResultSummary = resultSummary?.trim()
+        ? resultSummary
+        : undefined;
       task.lastCompletedAt = completedAt;
       task.lastSuccess = success;
       task.lastError = success ? undefined : resultMessage;
-      task.lastResultSummary = success ? resultSummary : undefined;
+      task.lastResultSummary = persistedResultSummary;
       if (wasSkipped) {
         task.lastSkippedAt = completedAt;
         task.lastSkipReason = resultMessage || '任务条件未满足，已跳过';
@@ -867,7 +933,7 @@ export class TaskScheduler {
         skipped: wasSkipped || undefined,
         trigger,
         error: wasSkipped || !success ? resultMessage : undefined,
-        summary: success ? resultSummary : undefined,
+        summary: persistedResultSummary,
       });
       console.log(
         `${success ? '✅' : '❌'} 任务 ${task.name}${
@@ -897,6 +963,7 @@ export class TaskScheduler {
         success,
         skipped: wasSkipped || undefined,
         error: resultMessage,
+        summary: persistedResultSummary,
       };
     } catch (error: any) {
       const duration = Date.now() - startTime;
@@ -1276,10 +1343,30 @@ export class TaskScheduler {
     }
 
     const status = this.buildTaskStatus(alarmByName);
+    await this.enrichDigestQueueStatus(status);
     if (options.persist !== false) {
       await this.saveTaskStates();
     }
     return status;
+  }
+
+  private async enrichDigestQueueStatus(
+    statuses: Array<ScheduledTaskStatus>,
+  ): Promise<void> {
+    const digestTask = statuses.find(
+      (task) => task.id === 'digest_queue_process',
+    );
+    if (!digestTask) {
+      return;
+    }
+
+    try {
+      const summary = await digestQueueService.getQueueStatusSummary();
+      digestTask.currentQueueSummary =
+        summarizeDigestQueueStatusSummary(summary);
+    } catch (error) {
+      console.warn('⚠️ 获取汇总推送队列状态失败:', error);
+    }
   }
 
   private buildTaskStatus(

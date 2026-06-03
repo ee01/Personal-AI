@@ -35,6 +35,17 @@
       </button>
     </div>
 
+    <div v-if="loadError" class="load-error">
+      <div>
+        <div class="load-error-title">自我反思线程暂时不可用</div>
+        <p>
+          {{ loadError }}
+          <span v-if="threads.length > 0">下方继续保留上次成功读取的线程。</span>
+        </p>
+      </div>
+      <button class="load-error-retry" @click="loadThreads">重试</button>
+    </div>
+
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <p>加载自我反思线程中...</p>
@@ -89,6 +100,7 @@ const router = useRouter();
 const client = getMemoryServiceClient();
 const loading = ref(true);
 const threads = ref<ReflectionThread[]>([]);
+const loadError = ref('');
 const statusFilter = ref<'active' | 'paused' | 'closed' | 'all'>('active');
 const searchText = ref('');
 const handoffSource = ref('');
@@ -151,9 +163,10 @@ async function loadThreads() {
       limit: 50,
     });
     threads.value = response.items;
+    loadError.value = '';
   } catch (error) {
     console.error('Failed to load reflection threads:', error);
-    threads.value = [];
+    loadError.value = errorMessage(error);
   } finally {
     loading.value = false;
   }
@@ -174,6 +187,12 @@ function statusLabel(status: string) {
 
 function displayThreadTitle(title: string) {
   return title.replace(/^思考反思:/, '自我反思:');
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error && error.message
+    ? error.message
+    : '无法连接 Memory Service，请稍后重试。';
 }
 
 function relativeTime(ts?: number) {
@@ -250,6 +269,47 @@ function relativeTime(ts?: number) {
 .handoff-clear-btn:hover {
   border-color: rgba(45, 212, 191, 0.42);
   color: #ccfbf1;
+}
+
+.load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  padding: 0.85rem 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.load-error-title {
+  color: #fecaca;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.load-error p {
+  color: #fca5a5;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.load-error-retry {
+  flex-shrink: 0;
+  border: 1px solid rgba(248, 113, 113, 0.36);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.7);
+  color: #fee2e2;
+  padding: 0.48rem 0.75rem;
+  cursor: pointer;
+}
+
+.load-error-retry:hover {
+  border-color: rgba(248, 113, 113, 0.58);
+  color: #fff1f2;
 }
 
 .header-controls {
@@ -406,6 +466,11 @@ function relativeTime(ts?: number) {
   }
 
   .handoff-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .load-error {
     align-items: flex-start;
     flex-direction: column;
   }

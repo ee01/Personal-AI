@@ -4,18 +4,23 @@ import test from 'node:test';
 import { BridgeSyncManager } from '../syncManager.js';
 import type { BridgeSyncAttemptLogEntry } from '../types.js';
 
-function createSettingsStore() {
+function createSettingsStore(overrides: Record<string, unknown> = {}) {
+  const settings = {
+    memoryServiceBaseUrl: 'http://127.0.0.1:3210',
+    memoryServiceUserId: 'tester',
+    autoSync: true,
+    pollIntervalMs: 300_000,
+    stableMemoryIntervalMs: 43_200_000,
+    mobileBriefingIntervalMs: 14_400_000,
+    reminderSyncIntervalMs: 900_000,
+    reminderDailyDigestEnabled: false,
+    reminderDailyDigestTime: '09:00',
+    reminderDedupSameDay: true,
+    ...overrides,
+  };
   return {
     subscribe: () => () => undefined,
-    getSettings: () => ({
-      memoryServiceBaseUrl: 'http://127.0.0.1:3210',
-      memoryServiceUserId: 'tester',
-      autoSync: true,
-      pollIntervalMs: 300_000,
-      stableMemoryIntervalMs: 43_200_000,
-      mobileBriefingIntervalMs: 14_400_000,
-      reminderSyncIntervalMs: 900_000,
-    }),
+    getSettings: () => settings,
   };
 }
 
@@ -161,6 +166,154 @@ test('runNow uses todo_sync and notice_sync when the backend supports them', asy
       error: undefined,
     },
   ]);
+});
+
+test('auto reminder sync renders only new todo items with incremental delivery mode', async () => {
+  const calls: string[] = [];
+  const memoryClient = {
+    isEnabled: () => true,
+    getProviderCapabilities: async () => ({
+      provider: 'doubao',
+      supportedScenarios: ['todo_sync', 'notice_sync', 'reminder_sync'],
+    }),
+    renderContextPackage: async ({
+      scenario,
+      deliveryMode,
+    }: {
+      scenario: string;
+      deliveryMode?: string;
+    }) => {
+      calls.push(`render:${scenario}:${deliveryMode ?? 'default'}`);
+      return {
+        provider: 'doubao',
+        scenario,
+        packages:
+          scenario === 'notice_sync'
+            ? []
+            : [
+                {
+                  title: 'Todo Digest',
+                  kind: 'todo_digest',
+                  bodyMd: '- 新待办',
+                  itemCount: 1,
+                  sourceRefs: ['proposed_action:new-action'],
+                },
+              ],
+      };
+    },
+    reportSyncJob: async () => undefined,
+    reportNotificationDelivery: async () => undefined,
+  };
+  const bridgeService = {
+    getStatus: async () => ({
+      authStatus: 'connected',
+      bindings: {
+        mobile_context: { threadId: 'mobile-thread' },
+      },
+    }),
+    syncTodosAsMemo: async () => {
+      calls.push('bridge:todo');
+      return { accepted: true, threadId: 'mobile-thread' };
+    },
+    syncNotices: async () => {
+      calls.push('bridge:notice');
+      return { accepted: true, threadId: 'mobile-thread' };
+    },
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+  (manager as any).syncState.mobileBriefing = Date.now();
+
+  await manager.tick();
+
+  assert.deepEqual(calls, [
+    'render:todo_sync:incremental',
+    'bridge:todo',
+    'render:notice_sync:default',
+  ]);
+  assert.equal(
+    manager.getSnapshot().recentAttempts[0].reminderDeliveryMode,
+    'new_items',
+  );
+});
+
+test('daily reminder digest sends the complete unfinished todo list without notices', async () => {
+  const calls: string[] = [];
+  const memoryClient = {
+    isEnabled: () => true,
+    getProviderCapabilities: async () => ({
+      provider: 'doubao',
+      supportedScenarios: ['todo_sync', 'notice_sync', 'reminder_sync'],
+    }),
+    renderContextPackage: async ({
+      scenario,
+      deliveryMode,
+    }: {
+      scenario: string;
+      deliveryMode?: string;
+    }) => {
+      calls.push(`render:${scenario}:${deliveryMode ?? 'default'}`);
+      return {
+        provider: 'doubao',
+        scenario,
+        packages: [
+          {
+            title: 'Daily Todo Digest',
+            kind: 'todo_digest',
+            bodyMd: '- 历史未完成待办',
+            itemCount: 1,
+            sourceRefs: ['proposed_action:old-action'],
+          },
+        ],
+      };
+    },
+    reportSyncJob: async () => undefined,
+    reportNotificationDelivery: async () => undefined,
+  };
+  const bridgeService = {
+    getStatus: async () => ({
+      authStatus: 'connected',
+      bindings: {
+        mobile_context: { threadId: 'mobile-thread' },
+      },
+    }),
+    syncTodosAsMemo: async () => {
+      calls.push('bridge:todo');
+      return { accepted: true, threadId: 'mobile-thread' };
+    },
+    syncNotices: async () => {
+      calls.push('bridge:notice');
+      return { accepted: true, threadId: 'mobile-thread' };
+    },
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore({
+      reminderDailyDigestEnabled: true,
+      reminderDailyDigestTime: '00:00',
+    }) as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+  (manager as any).syncState.mobileBriefing = Date.now();
+
+  await manager.tick();
+
+  assert.deepEqual(calls, ['render:todo_sync:daily_digest', 'bridge:todo']);
+  assert.equal(
+    manager.getSnapshot().recentAttempts[0].reminderDeliveryMode,
+    'daily_digest',
+  );
 });
 
 test('runNow keeps delivery provenance in recent sync attempts', async () => {
@@ -382,6 +535,7 @@ test('runNow skips placeholder todo and notice digests when itemCount is 0', asy
     packageKinds: ['todo_digest', 'notice_digest'],
     packageItemCount: 0,
     sourceRefCount: 0,
+    reminderDeliveryMode: 'manual',
   });
   assert.deepEqual(calls, ['render:todo_sync', 'render:notice_sync']);
   assert.deepEqual(
@@ -837,6 +991,82 @@ test('runNow skips mobile briefing metadata-only packages', async () => {
       },
     ],
   );
+});
+
+test('runNow deduplicates mobile briefing bullets before sending', async () => {
+  const calls: string[] = [];
+  let sentBullets: string[] | undefined;
+  const memoryClient = {
+    isEnabled: () => true,
+    renderContextPackage: async ({ scenario }: { scenario: string }) => {
+      calls.push(`render:${scenario}`);
+      return {
+        provider: 'doubao',
+        scenario,
+        packages: [
+          {
+            title: 'Active Focus Digest',
+            kind: 'active_focus_digest',
+            bodyMd: [
+              '- Project Alpha needs API review',
+              '- Project Alpha needs API review.',
+              '- 发布窗口需要今天确认',
+            ].join('\n'),
+            itemCount: 3,
+            sourceRefs: ['message:alpha-1', 'message:release-1'],
+          },
+          {
+            title: 'Recent Profile Signals',
+            kind: 'active_focus_digest',
+            bodyMd: [
+              '- project alpha needs api review',
+              '- 跟进 MTR-123 设计验收',
+            ].join('\n'),
+            itemCount: 2,
+            sourceRefs: ['message:alpha-2', 'message:mtr-123'],
+          },
+        ],
+        syncJob: {
+          id: `job-${scenario}`,
+          status: 'queued',
+        },
+      };
+    },
+    reportSyncJob: async () => undefined,
+  };
+  const bridgeService = {
+    syncMobileBriefing: async (payload: { bullets: string[] }) => {
+      calls.push('bridge:mobile-briefing');
+      sentBullets = payload.bullets;
+      return {
+        accepted: true,
+        kind: 'mobile_briefing',
+        targetBindingType: 'mobile_context',
+        threadId: 'mobile-thread',
+        transcript: '',
+        sentAt: new Date().toISOString(),
+      };
+    },
+  };
+
+  const manager = new BridgeSyncManager(
+    {
+      provider: 'doubao',
+    } as any,
+    createSettingsStore() as any,
+    memoryClient as any,
+    bridgeService as any,
+  );
+
+  const result = await manager.runNow('mobile_briefing');
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(sentBullets, [
+    'Project Alpha needs API review',
+    '发布窗口需要今天确认',
+    '跟进 MTR-123 设计验收',
+  ]);
+  assert.deepEqual(calls, ['render:mobile_briefing', 'bridge:mobile-briefing']);
 });
 
 test('runNow skips placeholder stable memory when itemCount is 0', async () => {

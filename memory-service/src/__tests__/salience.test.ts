@@ -198,3 +198,46 @@ describe('SalienceScorer.shouldIndex threshold', () => {
     expect(result.shouldIndex).toBe(false);
   });
 });
+
+describe('SalienceScorer.ensureMetadata()', () => {
+  it('persists salience components and initializes lifecycle salience when available', () => {
+    const targetId = `metadata-components-${Date.now()}`;
+    const components: SalienceInput = {
+      importance: 0.82,
+      frequency: 3,
+      recency: 0.91,
+      surprise: 0.44,
+      redundancy: 0.18,
+      userInterestBoost: 0.3,
+    };
+
+    scorer.ensureMetadata('message', targetId, 0.73, components);
+
+    const row = db
+      .prepare(
+        `SELECT salience_score, importance, frequency, recency_boost,
+                surprise_score, redundancy, effective_salience, retrieval_tier
+         FROM memory_metadata
+         WHERE target_type = 'message' AND target_id = ?`,
+      )
+      .get(targetId) as {
+      salience_score: number;
+      importance: number;
+      frequency: number;
+      recency_boost: number;
+      surprise_score: number;
+      redundancy: number;
+      effective_salience?: number;
+      retrieval_tier?: string;
+    };
+
+    expect(row.salience_score).toBeCloseTo(0.73);
+    expect(row.importance).toBeCloseTo(components.importance);
+    expect(row.frequency).toBeCloseTo(components.frequency);
+    expect(row.recency_boost).toBeCloseTo(components.recency);
+    expect(row.surprise_score).toBeCloseTo(components.surprise);
+    expect(row.redundancy).toBeCloseTo(components.redundancy);
+    expect(row.effective_salience).toBeCloseTo(0.73);
+    expect(row.retrieval_tier).toBe('active');
+  });
+});

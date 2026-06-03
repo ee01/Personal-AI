@@ -29,6 +29,10 @@ export interface ActionExecutionResult {
   error?: string;
 }
 
+export interface ActionExecutionOptions {
+  approve?: boolean;
+}
+
 interface DispatchOutcome {
   result: Record<string, unknown>;
   queueStatus?: Extract<ActionQueueStatus, 'failed' | 'dead_letter'>;
@@ -172,8 +176,11 @@ export class ActionExecutor {
     return results;
   }
 
-  async executeAction(actionId: string): Promise<ActionExecutionResult> {
-    const action = this.actionRepo.getById(actionId);
+  async executeAction(
+    actionId: string,
+    options: ActionExecutionOptions = {},
+  ): Promise<ActionExecutionResult> {
+    let action = this.actionRepo.getById(actionId);
     if (!action) {
       throw new Error(`Action "${actionId}" not found`);
     }
@@ -188,6 +195,19 @@ export class ActionExecutor {
         queueStatus: action.queueStatus,
         result: action.result,
       };
+    }
+
+    if (
+      action.requiresApproval &&
+      !action.approvedAt &&
+      action.executionMode !== 'auto'
+    ) {
+      if (options.approve !== true) {
+        throw new Error(
+          `Action "${action.id}" requires human approval before execution`,
+        );
+      }
+      action = this.actionRepo.markApproved(action.id) ?? action;
     }
 
     const attemptId = this.actionRepo.markRunning(action.id);
@@ -509,6 +529,10 @@ export class ActionExecutor {
       agentId:
         typeof params.agentId === 'string' && params.agentId.trim().length > 0
           ? params.agentId.trim()
+          : undefined,
+      timeoutMs:
+        typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs)
+          ? Math.max(1000, Math.floor(params.timeoutMs))
           : undefined,
       metadata:
         params.metadata &&

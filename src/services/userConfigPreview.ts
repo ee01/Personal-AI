@@ -77,6 +77,22 @@ export interface PreferenceInjectionReceipt {
   items: PreferenceInjectionReceiptItem[];
 }
 
+export interface UserContextScopeBreakdown {
+  scope: UserContextPreferenceScope;
+  baseSignalCount: number;
+  messageSignalCount: number;
+  projectSignalCount: number;
+  includedSignalCount: number;
+  excludedSignalCount: number;
+  excludedScopeLabels: string[];
+}
+
+interface UserContextSignalGroups {
+  base: string[];
+  message: string[];
+  project: string[];
+}
+
 const PROMPT_SCOPE_LABELS: Record<'message' | 'project', string> = {
   message: '消息分析',
   project: '项目分析',
@@ -293,12 +309,10 @@ export function isUserContextInjectionEnabled(config: any): boolean {
   return settings.enabled !== false && settings.userContextEnabled !== false;
 }
 
-export function buildUserContextPreferenceSection(
+function buildUserContextSignalGroups(
   userContextConfig: JsonRecord,
-  options: { scope?: UserContextPreferenceScope } = {},
-): string {
+): UserContextSignalGroups {
   const context = userContextConfig || {};
-  const scope = options.scope || 'all';
   const personalInfo = context.personalInfo || {};
   const stakeholders = context.stakeholders || {};
   const teamInfo = context.teamInfo || {};
@@ -308,21 +322,24 @@ export function buildUserContextPreferenceSection(
   const messageAnalysis = analysisPreferences.messageAnalysis || {};
   const projectAnalysis = analysisPreferences.projectAnalysis || {};
 
-  const lines: string[] = [];
-  pushIfPresent(lines, '用户姓名', personalInfo.name);
-  pushIfPresent(lines, '用户邮箱', personalInfo.email);
-  pushIfPresent(lines, '职位头衔', personalInfo.title);
-  pushIfPresent(lines, '所属部门', personalInfo.department);
-  pushIfPresent(lines, '工作地点', personalInfo.location);
-  pushIfPresent(lines, '个人时区', personalInfo.timezone, { skipDefault: true });
+  const base: string[] = [];
+  const message: string[] = [];
+  const project: string[] = [];
+
+  pushIfPresent(base, '用户姓名', personalInfo.name);
+  pushIfPresent(base, '用户邮箱', personalInfo.email);
+  pushIfPresent(base, '职位头衔', personalInfo.title);
+  pushIfPresent(base, '所属部门', personalInfo.department);
+  pushIfPresent(base, '工作地点', personalInfo.location);
+  pushIfPresent(base, '个人时区', personalInfo.timezone, { skipDefault: true });
   pushIfPresent(
-    lines,
+    base,
     '直接汇报经理',
     context.reportingInfo?.directManager?.name
       ? formatPerson(context.reportingInfo.directManager)
       : stakeholders.directManager,
   );
-  pushIfPresent(lines, '汇报频率', stakeholders.reportingFrequency, {
+  pushIfPresent(base, '汇报频率', stakeholders.reportingFrequency, {
     skipDefault: true,
   });
 
@@ -333,12 +350,12 @@ export function buildUserContextPreferenceSection(
     .map(formatPerson)
     .filter(Boolean);
   if (keyStakeholders.length > 0) {
-    lines.push(`关键干系人: ${keyStakeholders.join('; ')}`);
+    base.push(`关键干系人: ${keyStakeholders.join('; ')}`);
   }
 
-  pushIfPresent(lines, '团队名称', teamInfo.teamName);
-  pushIfPresent(lines, '团队使命', teamInfo.teamMission);
-  if (Number(teamInfo.teamSize) > 0) lines.push(`团队规模: ${teamInfo.teamSize}`);
+  pushIfPresent(base, '团队名称', teamInfo.teamName);
+  pushIfPresent(base, '团队使命', teamInfo.teamMission);
+  if (Number(teamInfo.teamSize) > 0) base.push(`团队规模: ${teamInfo.teamSize}`);
 
   const members = [
     ...toLooseArray(teamInfo.teamMembers),
@@ -352,46 +369,123 @@ export function buildUserContextPreferenceSection(
         .join(' / ');
     })
     .filter(Boolean);
-  if (members.length > 0) lines.push(`团队成员: ${members.join('; ')}`);
+  if (members.length > 0) base.push(`团队成员: ${members.join('; ')}`);
   pushIfPresent(
-    lines,
+    base,
     '团队工作时间',
     typeof teamInfo.workingHours === 'string'
       ? teamInfo.workingHours
       : teamInfo.workingHours?.hours,
   );
-  pushIfPresent(lines, '团队时区', teamInfo.timezone, { skipDefault: true });
+  pushIfPresent(base, '团队时区', teamInfo.timezone, { skipDefault: true });
 
-  pushListIfPresent(lines, '主要关注点', workFocus.primaryConcerns);
-  pushListIfPresent(lines, '业务领域', workFocus.businessDomains);
-  pushListIfPresent(lines, '关键指标', workFocus.keyMetrics);
-  pushIfPresent(lines, '风险承受度', workFocus.riskTolerance, {
+  pushListIfPresent(base, '主要关注点', workFocus.primaryConcerns);
+  pushListIfPresent(base, '业务领域', workFocus.businessDomains);
+  pushListIfPresent(base, '关键指标', workFocus.keyMetrics);
+  pushIfPresent(base, '风险承受度', workFocus.riskTolerance, {
     skipDefault: true,
   });
-  pushListIfPresent(lines, '受众类型', communicationContext.audienceType);
-  pushIfPresent(lines, '沟通风格', communicationContext.communicationStyle, {
+  pushListIfPresent(base, '受众类型', communicationContext.audienceType);
+  pushIfPresent(base, '沟通风格', communicationContext.communicationStyle, {
     skipDefault: true,
   });
-  pushIfPresent(lines, '文化背景', communicationContext.culturalContext);
-  pushIfPresent(lines, '语言偏好', communicationContext.languagePreference, {
+  pushIfPresent(base, '文化背景', communicationContext.culturalContext);
+  pushIfPresent(base, '语言偏好', communicationContext.languagePreference, {
     skipDefault: true,
   });
-  pushIfPresent(lines, '汇报格式', communicationContext.reportingFormat, {
+  pushIfPresent(base, '汇报格式', communicationContext.reportingFormat, {
     skipDefault: true,
   });
-  if (shouldIncludeUserContextScope(scope, 'message')) {
-    pushListIfPresent(lines, '消息分析关注', messageAnalysis.focusAreas);
-    pushListIfPresent(lines, '忽略话题', messageAnalysis.ignoredTopics);
-    pushListIfPresent(lines, '紧急关键词', messageAnalysis.urgencyKeywords);
+
+  pushListIfPresent(message, '消息分析关注', messageAnalysis.focusAreas);
+  pushListIfPresent(message, '忽略话题', messageAnalysis.ignoredTopics);
+  pushListIfPresent(message, '紧急关键词', messageAnalysis.urgencyKeywords);
+  pushListIfPresent(project, '项目风险因素', projectAnalysis.riskFactors);
+  pushListIfPresent(project, '项目成功标准', projectAnalysis.successCriteria);
+  pushIfPresent(project, '项目审查周期', projectAnalysis.reviewCycle, {
+    skipDefault: true,
+  });
+
+  return { base, message, project };
+}
+
+function getIncludedUserContextLines(
+  groups: UserContextSignalGroups,
+  scope: UserContextPreferenceScope,
+): string[] {
+  return [
+    ...groups.base,
+    ...(shouldIncludeUserContextScope(scope, 'message') ? groups.message : []),
+    ...(shouldIncludeUserContextScope(scope, 'project') ? groups.project : []),
+  ];
+}
+
+export function buildUserContextScopeBreakdown(
+  userContextConfig: JsonRecord,
+  options: { scope?: UserContextPreferenceScope } = {},
+): UserContextScopeBreakdown {
+  const scope = options.scope || 'all';
+  const groups = buildUserContextSignalGroups(userContextConfig);
+  const messageIncluded = shouldIncludeUserContextScope(scope, 'message');
+  const projectIncluded = shouldIncludeUserContextScope(scope, 'project');
+  const includedSignalCount =
+    groups.base.length +
+    (messageIncluded ? groups.message.length : 0) +
+    (projectIncluded ? groups.project.length : 0);
+  const excludedScopeLabels: string[] = [];
+  if (!messageIncluded && groups.message.length > 0) {
+    excludedScopeLabels.push(`消息 ${groups.message.length} 项`);
   }
-  if (shouldIncludeUserContextScope(scope, 'project')) {
-    pushListIfPresent(lines, '项目风险因素', projectAnalysis.riskFactors);
-    pushListIfPresent(lines, '项目成功标准', projectAnalysis.successCriteria);
-    pushIfPresent(lines, '项目审查周期', projectAnalysis.reviewCycle, {
-      skipDefault: true,
-    });
+  if (!projectIncluded && groups.project.length > 0) {
+    excludedScopeLabels.push(`项目 ${groups.project.length} 项`);
   }
 
+  return {
+    scope,
+    baseSignalCount: groups.base.length,
+    messageSignalCount: groups.message.length,
+    projectSignalCount: groups.project.length,
+    includedSignalCount,
+    excludedSignalCount:
+      (messageIncluded ? 0 : groups.message.length) +
+      (projectIncluded ? 0 : groups.project.length),
+    excludedScopeLabels,
+  };
+}
+
+function formatUserContextReceiptDetail(
+  breakdown: UserContextScopeBreakdown,
+): string {
+  const includedParts = [
+    breakdown.baseSignalCount > 0 ? `基础 ${breakdown.baseSignalCount}` : '',
+    shouldIncludeUserContextScope(breakdown.scope, 'message') &&
+    breakdown.messageSignalCount > 0
+      ? `消息 ${breakdown.messageSignalCount}`
+      : '',
+    shouldIncludeUserContextScope(breakdown.scope, 'project') &&
+    breakdown.projectSignalCount > 0
+      ? `项目 ${breakdown.projectSignalCount}`
+      : '',
+  ].filter(Boolean);
+  const includedSummary =
+    includedParts.length > 0 ? `（${includedParts.join(' · ')}）` : '';
+  const excludedSummary =
+    breakdown.excludedScopeLabels.length > 0
+      ? `；${breakdown.excludedScopeLabels.join('、')}未注入`
+      : '';
+
+  return `${breakdown.includedSignalCount} 项上下文信号${includedSummary}${excludedSummary}`;
+}
+
+export function buildUserContextPreferenceSection(
+  userContextConfig: JsonRecord,
+  options: { scope?: UserContextPreferenceScope } = {},
+): string {
+  const scope = options.scope || 'all';
+  const lines = getIncludedUserContextLines(
+    buildUserContextSignalGroups(userContextConfig || {}),
+    scope,
+  );
   return lines.length > 0 ? `# 用户上下文信息\n${lines.join('\n')}` : '';
 }
 
@@ -451,9 +545,9 @@ function countContextSignals(
   userContextConfig: JsonRecord,
   scope: UserContextPreferenceScope = 'all',
 ): number {
-  const preview = buildUserContextPreferenceSection(userContextConfig, { scope });
-  if (!preview) return 0;
-  return preview.split('\n').filter((line) => line && !line.startsWith('#')).length;
+  return buildUserContextScopeBreakdown(userContextConfig, {
+    scope,
+  }).includedSignalCount;
 }
 
 export function buildPreferenceInjectionReceipt(
@@ -467,9 +561,9 @@ export function buildPreferenceInjectionReceipt(
   const customPromptsInjectionEnabled =
     isCustomPromptsInjectionEnabled(sanitized);
   const userContextInjectionEnabled = isUserContextInjectionEnabled(sanitized);
-  const contextSignalCount = userContextInjectionEnabled
-    ? countContextSignals(sanitized.userContextConfig || {}, scope)
-    : 0;
+  const contextBreakdown = userContextInjectionEnabled
+    ? buildUserContextScopeBreakdown(sanitized.userContextConfig || {}, { scope })
+    : null;
 
   const items: PreferenceInjectionReceiptItem[] = [];
 
@@ -511,13 +605,21 @@ export function buildPreferenceInjectionReceipt(
       statusLabel: '暂停',
       detail: '用户上下文来源已暂停',
     });
-  } else if (contextSignalCount > 0) {
+  } else if (contextBreakdown && contextBreakdown.includedSignalCount > 0) {
     items.push({
       id: 'user-context',
       label: '用户上下文',
       status: 'included',
       statusLabel: '注入',
-      detail: `${contextSignalCount} 项上下文信号`,
+      detail: formatUserContextReceiptDetail(contextBreakdown),
+    });
+  } else if (contextBreakdown && contextBreakdown.excludedSignalCount > 0) {
+    items.push({
+      id: 'user-context',
+      label: '用户上下文',
+      status: 'excluded',
+      statusLabel: '不在范围',
+      detail: `${contextBreakdown.excludedScopeLabels.join('、')}不在${PREVIEW_SCOPE_LABELS[scope]}预览范围`,
     });
   } else {
     items.push({

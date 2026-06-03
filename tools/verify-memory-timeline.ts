@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 
 import {
+  ALL_TIMELINE_SOURCE_FILTER_KEY,
+  UNKNOWN_TIMELINE_SOURCE_FILTER_KEY,
+  buildTimelineSourceFilterOptions,
+  filterTimelineEventsBySource,
   formatTimelineClockTime,
   formatTimelineExactTime,
   formatTimelineTime,
@@ -98,6 +102,39 @@ assert.equal(events[0].content, 'Newer display text');
 assert.equal(events[0].sourceUrl, 'https://example.com/source');
 assert.deepEqual(events[0].channels, ['time', 'fts']);
 assert.equal(events[1].id, 'older');
+
+const sourceOptions = buildTimelineSourceFilterOptions([
+  ...events,
+  {
+    id: 'unknown-source',
+    resultKey: 'message:unknown-source',
+    type: 'message',
+    title: 'Unknown source',
+    content: 'No source metadata',
+    channels: ['time'],
+  },
+]);
+assert.equal(
+  sourceOptions.find((option) => option.key === 'Source title')?.count,
+  1,
+);
+assert.equal(sourceOptions.find((option) => option.key === 'manual')?.count, 1);
+assert.equal(
+  sourceOptions.find(
+    (option) => option.key === UNKNOWN_TIMELINE_SOURCE_FILTER_KEY,
+  )?.label,
+  '来源未知',
+);
+assert.deepEqual(
+  filterTimelineEventsBySource(events, ALL_TIMELINE_SOURCE_FILTER_KEY).map(
+    (event) => event.id,
+  ),
+  ['newer', 'older'],
+);
+assert.deepEqual(
+  filterTimelineEventsBySource(events, 'Source title').map((event) => event.id),
+  ['newer'],
+);
 
 assert.equal(
   formatTimelineTime(Math.floor(fixedNoon / 1000), fixedNoon),

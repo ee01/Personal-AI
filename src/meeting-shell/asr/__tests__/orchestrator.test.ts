@@ -156,6 +156,8 @@ test('orchestrator: fatal error triggers fallback to next tier', async () => {
   assert.equal(p2.startCalled, 1);
   const lastStatus = tierStatuses[tierStatuses.length - 1];
   assert.equal(lastStatus.badge, 'Cloud');
+  assert.match(lastStatus.lastTransitionReason || '', /fallback/);
+  assert.match(lastStatus.lastTransitionReason || '', /test error/);
 });
 
 test('orchestrator: no-overlap — p2.start called after p1.stop resolves', async () => {

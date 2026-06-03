@@ -6,7 +6,7 @@
         <p>未来场景预演记忆。主要在真实场景中提示，这里用于审计和修正。</p>
       </div>
       <div class="header-controls">
-        <select v-model="statusFilter" class="filter-select" @change="() => loadRehearsals()">
+        <select v-model="statusFilter" class="filter-select" @change="applyFilters">
           <option value="active">Active</option>
           <option value="candidate">Candidate</option>
           <option value="paused">Paused</option>
@@ -20,9 +20,9 @@
           v-model="searchText"
           class="search-input"
           placeholder="搜索标题 / 预演内容"
-          @keyup.enter="() => loadRehearsals()"
+          @keyup.enter="applyFilters"
         />
-        <button class="refresh-btn" @click="() => loadRehearsals()">刷新</button>
+        <button class="refresh-btn" @click="applyFilters">刷新</button>
       </div>
     </header>
 
@@ -247,7 +247,7 @@ const selectedNextStep = computed(() => {
 });
 
 onMounted(async () => {
-  await loadRehearsals(routeRehearsalId());
+  await loadRehearsals(routeRehearsalId(), { pinFocus: true });
 });
 
 watch(
@@ -255,7 +255,7 @@ watch(
   async () => {
     const focusId = routeRehearsalId();
     if (!focusId || focusId === selectedId.value) return;
-    await loadRehearsals(focusId);
+    await loadRehearsals(focusId, { pinFocus: true });
   },
 );
 
@@ -263,7 +263,10 @@ function routeRehearsalId() {
   return typeof route.query.rehearsalId === 'string' ? route.query.rehearsalId : '';
 }
 
-async function loadRehearsals(focusId = selectedId.value) {
+async function loadRehearsals(
+  focusId = selectedId.value,
+  options: { pinFocus?: boolean; syncRoute?: boolean } = {},
+) {
   loading.value = true;
   errorMessage.value = '';
   try {
@@ -277,16 +280,27 @@ async function loadRehearsals(focusId = selectedId.value) {
     focusedOutsideFilter.value = false;
 
     if (focusId) {
-      selectedId.value = focusId;
-      const detail = await loadDetail(focusId);
-      if (detail) {
-        focusedOutsideFilter.value = !response.items.some((item) => item.id === focusId);
-        return;
+      const focusInList = response.items.some((item) => item.id === focusId);
+      if (!focusInList && !options.pinFocus) {
+        selectedId.value = '';
+      } else {
+        selectedId.value = focusId;
+        const detail = await loadDetail(focusId);
+        if (detail) {
+          focusedOutsideFilter.value = !focusInList;
+          if (options.syncRoute) await replaceRouteRehearsalId(focusId);
+          return;
+        }
       }
     }
 
     selectedId.value = items.value[0]?.id || '';
-    if (selectedId.value) await loadDetail(selectedId.value);
+    if (selectedId.value) {
+      await loadDetail(selectedId.value);
+      if (options.syncRoute) await replaceRouteRehearsalId(selectedId.value);
+    } else if (options.syncRoute) {
+      await replaceRouteRehearsalId('');
+    }
   } catch (error) {
     console.error('Failed to load rehearsals:', error);
     errorMessage.value = 'Rehearsal 暂不可用，请确认 Memory Service 已启动。';
@@ -297,12 +311,26 @@ async function loadRehearsals(focusId = selectedId.value) {
   }
 }
 
+async function applyFilters() {
+  await loadRehearsals(selectedId.value, { pinFocus: false, syncRoute: true });
+}
+
 async function selectRehearsal(id: string) {
   selectedId.value = id;
   focusedOutsideFilter.value = false;
   actionMessage.value = '';
   await router.replace({ query: { ...route.query, rehearsalId: id } });
   await loadDetail(id);
+}
+
+async function replaceRouteRehearsalId(id: string) {
+  const query = { ...route.query };
+  if (id) {
+    query.rehearsalId = id;
+  } else {
+    delete query.rehearsalId;
+  }
+  await router.replace({ query });
 }
 
 async function loadDetail(id: string) {

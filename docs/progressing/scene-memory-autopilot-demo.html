@@ -1,0 +1,1137 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scene Memory Autopilot Demo</title>
+    <style>
+      :root {
+        --bg: #f4f6f3;
+        --surface: #ffffff;
+        --ink: #18212d;
+        --muted: #667085;
+        --line: #d8ded4;
+        --soft: #eef2ea;
+        --nav: #253024;
+        --green: #0d7662;
+        --green-soft: #e6f4ef;
+        --blue: #2f5fb8;
+        --blue-soft: #e8eefb;
+        --amber: #9a5b00;
+        --amber-soft: #fff1d6;
+        --red: #b42318;
+        --red-soft: #fee9e7;
+        --shadow: 0 20px 60px rgba(28, 42, 31, 0.18);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(244, 246, 243, 0.92)),
+          var(--bg);
+      }
+
+      button,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 74px minmax(0, 1fr);
+      }
+
+      .rail {
+        background: var(--nav);
+        padding: 16px 12px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        color: #fff;
+      }
+
+      .logo {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        background: #f8fbf5;
+        color: var(--nav);
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .rail-button {
+        width: 42px;
+        height: 42px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+        display: grid;
+        place-items: center;
+      }
+
+      .rail-button.active {
+        background: #f8fbf5;
+        color: var(--nav);
+      }
+
+      .workspace {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: 64px 1fr;
+      }
+
+      .topbar {
+        background: rgba(255, 255, 255, 0.92);
+        border-bottom: 1px solid var(--line);
+        padding: 0 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .title {
+        min-width: 0;
+      }
+
+      .title strong {
+        display: block;
+        font-size: 16px;
+        line-height: 1.25;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .title span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .tabs {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .tab {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--muted);
+        height: 36px;
+        padding: 0 12px;
+        border-radius: 8px;
+        white-space: nowrap;
+      }
+
+      .tab.active {
+        color: var(--green);
+        background: var(--green-soft);
+        border-color: #a8d8ca;
+      }
+
+      .content {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 18px;
+        padding: 18px;
+      }
+
+      .browser {
+        min-height: 0;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(28, 42, 31, 0.08);
+        display: grid;
+        grid-template-rows: 42px 1fr;
+      }
+
+      .browser-bar {
+        background: #f8faf7;
+        border-bottom: 1px solid var(--line);
+        padding: 0 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .dots {
+        display: flex;
+        gap: 6px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #c9d1c6;
+      }
+
+      .address {
+        height: 26px;
+        min-width: 0;
+        flex: 1;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 8px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        padding: 0 10px;
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .page {
+        min-height: 0;
+        overflow: auto;
+        padding: 22px;
+        position: relative;
+      }
+
+      .page-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 18px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 8px;
+        font-size: 24px;
+        line-height: 1.22;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin-bottom: 12px;
+        font-size: 18px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: 14px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      p {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        border: 1px solid var(--line);
+        background: var(--soft);
+        border-radius: 999px;
+        padding: 6px 9px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .pill.green {
+        color: var(--green);
+        border-color: #a8d8ca;
+        background: var(--green-soft);
+      }
+
+      .pill.blue {
+        color: var(--blue);
+        border-color: #bfd0f3;
+        background: var(--blue-soft);
+      }
+
+      .pill.amber {
+        color: var(--amber);
+        border-color: #f2c879;
+        background: var(--amber-soft);
+      }
+
+      .page-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .section {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 16px;
+      }
+
+      .section + .section {
+        margin-top: 14px;
+      }
+
+      .field-grid {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 10px 14px;
+        font-size: 13px;
+      }
+
+      .field-grid span {
+        color: var(--muted);
+      }
+
+      .field-grid strong {
+        font-weight: 650;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 12px;
+      }
+
+      .event {
+        display: grid;
+        grid-template-columns: 84px minmax(0, 1fr);
+        gap: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .event:last-child {
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+
+      .event time {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .event strong {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+
+      .chat-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .message {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr);
+        gap: 10px;
+      }
+
+      .avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: var(--soft);
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-weight: 700;
+        font-size: 12px;
+      }
+
+      .bubble {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #fff;
+      }
+
+      .bubble strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 13px;
+      }
+
+      .composer {
+        margin-top: 14px;
+        border: 1px solid #bfd0f3;
+        border-radius: 8px;
+        background: #fbfdff;
+        padding: 12px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 92px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        color: var(--ink);
+        resize: vertical;
+        background: #fff;
+      }
+
+      .prompt-box {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        background: #fbfdff;
+      }
+
+      .prompt-box textarea {
+        min-height: 160px;
+      }
+
+      .autopilot-chip {
+        position: sticky;
+        bottom: 18px;
+        margin: 28px 0 0 auto;
+        width: min(420px, 100%);
+        border: 1px solid #a8d8ca;
+        background: #f8fffb;
+        color: var(--ink);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .chip-main {
+        padding: 12px;
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .signal {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        color: var(--green);
+        background: var(--green-soft);
+        font-weight: 800;
+      }
+
+      .chip-main strong {
+        display: block;
+        font-size: 14px;
+        line-height: 1.25;
+      }
+
+      .chip-main span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.3;
+      }
+
+      .small-button,
+      .primary-button,
+      .ghost-button {
+        height: 34px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        padding: 0 11px;
+        background: #fff;
+        color: var(--ink);
+        white-space: nowrap;
+      }
+
+      .primary-button {
+        border-color: var(--green);
+        background: var(--green);
+        color: #fff;
+      }
+
+      .ghost-button {
+        background: transparent;
+      }
+
+      .side {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 12px;
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+      }
+
+      .panel-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .panel-header strong {
+        display: block;
+        font-size: 15px;
+        line-height: 1.25;
+      }
+
+      .panel-header span {
+        display: block;
+        color: var(--muted);
+        margin-top: 4px;
+        font-size: 12px;
+      }
+
+      .budget {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 6px;
+        margin: 12px 0 14px;
+      }
+
+      .budget i {
+        display: block;
+        height: 8px;
+        border-radius: 999px;
+        background: #dfe7db;
+      }
+
+      .budget i.on {
+        background: var(--green);
+      }
+
+      .moment-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .moment {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: #fff;
+      }
+
+      .moment.active {
+        border-color: #a8d8ca;
+        background: #f8fffb;
+      }
+
+      .moment.silent {
+        background: #faf8f2;
+        border-color: #efd49d;
+      }
+
+      .moment strong {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+
+      .moment p {
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+
+      .reason-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .reason {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .reason b {
+        width: 24px;
+        height: 24px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: var(--soft);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 18px;
+        transform: translateX(-50%) translateY(120px);
+        opacity: 0;
+        pointer-events: none;
+        padding: 10px 14px;
+        border-radius: 8px;
+        background: #1e2a22;
+        color: #fff;
+        font-size: 13px;
+        box-shadow: var(--shadow);
+        transition: transform 160ms ease, opacity 160ms ease;
+      }
+
+      .toast.show {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      @media (max-width: 980px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        .rail {
+          display: none;
+        }
+
+        .content {
+          grid-template-columns: 1fr;
+        }
+
+        .side {
+          order: -1;
+        }
+      }
+
+      @media (max-width: 680px) {
+        .topbar {
+          align-items: stretch;
+          height: auto;
+          padding: 12px;
+          flex-direction: column;
+        }
+
+        .tabs {
+          overflow-x: auto;
+          padding-bottom: 2px;
+        }
+
+        .content {
+          padding: 12px;
+        }
+
+        .page {
+          padding: 14px;
+        }
+
+        .page-header,
+        .page-grid {
+          grid-template-columns: 1fr;
+          display: grid;
+        }
+
+        .field-grid,
+        .event {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail" aria-label="Personal AI 导航">
+        <div class="logo">PA</div>
+        <button class="rail-button active" type="button" title="场景">场</button>
+        <button class="rail-button" type="button" title="记忆">记</button>
+        <button class="rail-button" type="button" title="设置">设</button>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="title">
+            <strong>Scene Memory Autopilot Demo</strong>
+            <span>模拟 Personal AI 嵌入 Jira、RingCentral 和外部 AI 输入框的低打扰记忆投放</span>
+          </div>
+          <nav class="tabs" aria-label="Demo 场景">
+            <button class="tab active" type="button" data-scene="jira">Jira 页面</button>
+            <button class="tab" type="button" data-scene="chat">RingCentral 输入</button>
+            <button class="tab" type="button" data-scene="ai">外部 AI Prompt</button>
+          </nav>
+        </header>
+
+        <section class="content">
+          <div class="browser" aria-label="模拟网页">
+            <div class="browser-bar">
+              <div class="dots" aria-hidden="true">
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="dot"></span>
+              </div>
+              <div class="address" id="address">https://jira.ringcentral.com/browse/MTR-148115</div>
+            </div>
+
+            <div class="page">
+              <section id="scene-jira">
+                <div class="page-header">
+                  <div>
+                    <h1>MTR-148115: Migrate AI Notes Update Flow from Fixed Interval Polling to Long Polling</h1>
+                    <p>用户正在阅读 Jira ticket。Autopilot 先保持安静，停留后只出现一条同 issue 的高信号记忆。</p>
+                    <div class="meta-row">
+                      <span class="pill green">同 issue 锚点</span>
+                      <span class="pill blue">近期网页捕获</span>
+                      <span class="pill">阅读中</span>
+                    </div>
+                  </div>
+                  <button class="ghost-button" type="button" data-action="copy">复制最小上下文</button>
+                </div>
+
+                <div class="page-grid">
+                  <div>
+                    <section class="section">
+                      <h2>Ticket fields</h2>
+                      <div class="field-grid">
+                        <span>Status</span><strong>In analysis</strong>
+                        <span>Owner</span><strong>Esone Qiu</strong>
+                        <span>Project</span><strong>mThor / AI Notes</strong>
+                        <span>Risk</span><strong>Polling -> Long polling migration may affect update latency</strong>
+                      </div>
+                    </section>
+
+                    <section class="section">
+                      <h2>Activity</h2>
+                      <div class="timeline">
+                        <div class="event">
+                          <time>2026-06-02</time>
+                          <div>
+                            <strong>Memory Capture saved this Jira page</strong>
+                            <p>页面包含 DEV Estimate Original、AI Notes Update Flow、Long Polling 等锚点。</p>
+                          </div>
+                        </div>
+                        <div class="event">
+                          <time>2026-05-13</time>
+                          <div>
+                            <strong>Comment mentioned migration approach</strong>
+                            <p>上下文可用于给 Codex 解释为什么要从 fixed interval polling 切换。</p>
+                          </div>
+                        </div>
+                        <div class="event">
+                          <time>Quieted</time>
+                          <div>
+                            <strong>7 条泛 AI Notes 记忆未自动出现</strong>
+                            <p>它们只命中泛主题，没有同 issue 或同 comment 证据。</p>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <aside class="section">
+                    <h2>Personal AI 判断</h2>
+                    <p>当前注意力预算为 chip。系统不展开大卡，只在页面底部给一个 Memory Moment。</p>
+                    <div class="meta-row">
+                      <span class="pill green">预算 2/5</span>
+                      <span class="pill amber">压住重复候选</span>
+                    </div>
+                  </aside>
+                </div>
+              </section>
+
+              <section id="scene-chat" class="hidden">
+                <div class="page-header">
+                  <div>
+                    <h1>[CN] Nova Core Team</h1>
+                    <p>用户准备发送 BE ready 相关消息。Autopilot 不在阅读时打扰，只在发送前出现 guard。</p>
+                    <div class="meta-row">
+                      <span class="pill amber">发送前检查</span>
+                      <span class="pill green">重复确认已合并</span>
+                      <span class="pill">RingCentral</span>
+                    </div>
+                  </div>
+                  <button class="ghost-button" type="button" data-action="dismiss">这个群少提醒</button>
+                </div>
+
+                <div class="section">
+                  <h2>Recent thread</h2>
+                  <div class="chat-list">
+                    <div class="message">
+                      <div class="avatar">SL</div>
+                      <div class="bubble">
+                        <strong>Sophia Lin</strong>
+                        <p>Need to double check whether BE is ready before we commit the plan.</p>
+                      </div>
+                    </div>
+                    <div class="message">
+                      <div class="avatar">EQ</div>
+                      <div class="bubble">
+                        <strong>Esone Qiu</strong>
+                        <p>I can check the previous design and Jira comments first.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="composer">
+                    <h3>Message draft</h3>
+                    <textarea id="draft">BE 看起来 ready 了，我准备按这个状态推进。</textarea>
+                    <div class="actions">
+                      <button class="primary-button" type="button" data-action="guard">发送前检查</button>
+                      <button class="ghost-button" type="button" data-action="insert">插入谨慎说法</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section id="scene-ai" class="hidden">
+                <div class="page-header">
+                  <div>
+                    <h1>ChatGPT / Codex prompt</h1>
+                    <p>用户要把当前任务交给外部 AI。Autopilot 生成最小 context pack，避免长上下文污染。</p>
+                    <div class="meta-row">
+                      <span class="pill green">外部 AI 输入框</span>
+                      <span class="pill blue">最小上下文包</span>
+                      <span class="pill amber">隐私 envelope</span>
+                    </div>
+                  </div>
+                  <button class="ghost-button" type="button" data-action="copy">复制 context pack</button>
+                </div>
+
+                <div class="prompt-box">
+                  <h2>Prompt draft</h2>
+                  <textarea>帮我看一下 AI Notes long polling 迁移方案，重点关注风险、测试点和可落地改动。</textarea>
+                  <div class="actions">
+                    <button class="primary-button" type="button" data-action="insert-pack">插入 3 条 Personal AI 记忆</button>
+                    <button class="ghost-button" type="button" data-action="privacy">查看隐私边界</button>
+                  </div>
+                </div>
+
+                <section class="section">
+                  <h2>Context pack preview</h2>
+                  <p>只包含当前 ticket、上次 comment 和测试风险，不包含完整聊天历史、无关 AI 工具公告或私人记忆。</p>
+                  <div class="field-grid">
+                    <span>Include</span><strong>MTR-148115 ticket summary, migration reason, DEV estimate clue</strong>
+                    <span>Exclude</span><strong>泛 AI Notes 旧会议、OpenRouter quota、Personal AI 内部反思</strong>
+                    <span>Format</span><strong>Evidence-backed brief for Codex</strong>
+                  </div>
+                </section>
+              </section>
+
+              <div class="autopilot-chip" id="chip">
+                <div class="chip-main">
+                  <div class="signal" id="chipIcon">1</div>
+                  <div>
+                    <strong id="chipTitle">这张 Jira 有 1 条待核实估算线索</strong>
+                    <span id="chipSub">同 issue + 近期网页捕获；7 条弱锚点记忆已保持安静</span>
+                  </div>
+                  <button class="small-button" type="button" id="openMoment">展开</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="side" aria-label="Memory Moment 面板">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <strong>Memory Moment</strong>
+                  <span id="momentLabel">whisper chip · bottom right</span>
+                </div>
+                <span class="pill green" id="modePill">自动驾驶</span>
+              </div>
+              <p id="momentSummary">Autopilot 判断当前只适合一条低打扰提示，不展开大卡。</p>
+              <div class="budget" aria-label="注意力预算">
+                <i class="on"></i>
+                <i class="on"></i>
+                <i id="budget3"></i>
+                <i id="budget4"></i>
+                <i id="budget5"></i>
+              </div>
+              <div class="actions">
+                <button class="primary-button" type="button" data-action="useful">有用</button>
+                <button class="ghost-button" type="button" data-action="too-much">太打扰</button>
+                <button class="ghost-button" type="button" data-action="wrong-project">不是这个项目</button>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <strong>出现与保持安静</strong>
+                  <span>展示为什么只出现这一条</span>
+                </div>
+              </div>
+              <div class="moment-list" id="momentList">
+                <div class="moment active">
+                  <strong>出现：MTR-148115 DEV estimate 线索</strong>
+                  <p>同 issue、近期网页捕获、用户停留超过 45 秒。</p>
+                  <div class="actions">
+                    <button class="small-button" type="button" data-action="open-source">打开来源</button>
+                    <button class="small-button" type="button" data-action="copy">复制给 Codex</button>
+                  </div>
+                </div>
+                <div class="moment silent">
+                  <strong>保持安静：泛 AI Notes 会议</strong>
+                  <p>只有主题词相同，没有同 issue / 同人 / 同 comment 锚点。</p>
+                </div>
+                <div class="moment silent">
+                  <strong>保持安静：OpenClaw 外部核实队列</strong>
+                  <p>当前只是阅读 Jira，不应弹出后台执行队列。</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <strong>Scene Frame</strong>
+                  <span>当前场景被压缩成这些信号</span>
+                </div>
+              </div>
+              <div class="reason-list" id="reasonList">
+                <div class="reason">
+                  <b>面</b>
+                  <span>Jira reading · jira.ringcentral.com · MTR-148115</span>
+                </div>
+                <div class="reason">
+                  <b>锚</b>
+                  <span>AI Notes、Long Polling、DEV Estimate、mThor</span>
+                </div>
+                <div class="reason">
+                  <b>算</b>
+                  <span>注意力预算 2/5；允许 chip，不允许自动大卡</span>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite">已记录</div>
+
+    <script>
+      const scenes = {
+        jira: {
+          address: "https://jira.ringcentral.com/browse/MTR-148115",
+          chipIcon: "1",
+          chipTitle: "这张 Jira 有 1 条待核实估算线索",
+          chipSub: "同 issue + 近期网页捕获；7 条弱锚点记忆已保持安静",
+          label: "whisper chip · bottom right",
+          summary: "Autopilot 判断当前只适合一条低打扰提示，不展开大卡。",
+          budget: 2,
+          mode: "自动驾驶",
+          moments: [
+            ["出现：MTR-148115 DEV estimate 线索", "同 issue、近期网页捕获、用户停留超过 45 秒。", "active"],
+            ["保持安静：泛 AI Notes 会议", "只有主题词相同，没有同 issue / 同人 / 同 comment 锚点。", "silent"],
+            ["保持安静：OpenClaw 外部核实队列", "当前只是阅读 Jira，不应弹出后台执行队列。", "silent"]
+          ],
+          reasons: [
+            ["面", "Jira reading · jira.ringcentral.com · MTR-148115"],
+            ["锚", "AI Notes、Long Polling、DEV Estimate、mThor"],
+            ["算", "注意力预算 2/5；允许 chip，不允许自动大卡"]
+          ]
+        },
+        chat: {
+          address: "https://app.ringcentral.com/messages/Nova-Core-Team",
+          chipIcon: "!",
+          chipTitle: "发送前提醒：BE 状态可能不稳",
+          chipSub: "15 条重复确认合并成 1 个 guard；仅在发送前出现",
+          label: "compose guard · near input",
+          summary: "用户正在输入可能外发的状态判断，Autopilot 升级为发送前 guard。",
+          budget: 4,
+          mode: "发送前",
+          moments: [
+            ["出现：BE not ready 合并提醒", "多条记忆都指向 not ready / waiting for new design。", "active"],
+            ["保持安静：旧会议低信息记录", "会议记录没有 decision 或 action item，不能作为状态证据。", "silent"],
+            ["保持安静：多条同义确认", "重复表达被合并，不逐条打扰用户。", "silent"]
+          ],
+          reasons: [
+            ["面", "RingCentral typing · [CN] Nova Core Team"],
+            ["锚", "BE ready、new design、Nova、发送前"],
+            ["算", "注意力预算 4/5；允许 guard，但不弹后台确认队列"]
+          ]
+        },
+        ai: {
+          address: "https://chat.openai.com/c/current-task",
+          chipIcon: "3",
+          chipTitle: "可附加 3 条 Personal AI 记忆",
+          chipSub: "最小 context pack：ticket 背景、上次 comment、测试风险",
+          label: "context pack · near prompt",
+          summary: "当前是外部 AI 输入框，Autopilot 推荐最小上下文包并过滤弱相关历史。",
+          budget: 3,
+          mode: "上下文包",
+          moments: [
+            ["出现：3 条 evidence-backed context", "只包含当前任务必要的 ticket、comment 和风险。", "active"],
+            ["保持安静：完整聊天历史", "长上下文会增加噪声，不默认塞入 prompt。", "silent"],
+            ["保持安静：私人/跨域记忆", "外部 AI 目标需要 privacy envelope。", "silent"]
+          ],
+          reasons: [
+            ["面", "Web AI asking · prompt draft"],
+            ["锚", "AI Notes、long polling、风险、测试点"],
+            ["算", "注意力预算 3/5；允许插入 context pack，需隐私检查"]
+          ]
+        }
+      };
+
+      const tabs = Array.from(document.querySelectorAll(".tab"));
+      const sceneNodes = {
+        jira: document.getElementById("scene-jira"),
+        chat: document.getElementById("scene-chat"),
+        ai: document.getElementById("scene-ai")
+      };
+      const address = document.getElementById("address");
+      const chipIcon = document.getElementById("chipIcon");
+      const chipTitle = document.getElementById("chipTitle");
+      const chipSub = document.getElementById("chipSub");
+      const momentLabel = document.getElementById("momentLabel");
+      const momentSummary = document.getElementById("momentSummary");
+      const modePill = document.getElementById("modePill");
+      const momentList = document.getElementById("momentList");
+      const reasonList = document.getElementById("reasonList");
+      const toast = document.getElementById("toast");
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("show");
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => {
+          toast.classList.remove("show");
+        }, 1600);
+      }
+
+      function renderBudget(count) {
+        for (let index = 1; index <= 5; index += 1) {
+          const item = document.querySelector(`.budget i:nth-child(${index})`);
+          item.classList.toggle("on", index <= count);
+        }
+      }
+
+      function renderList(scene) {
+        momentList.innerHTML = scene.moments
+          .map(
+            ([title, body, state]) => `
+              <div class="moment ${state}">
+                <strong>${title}</strong>
+                <p>${body}</p>
+                ${
+                  state === "active"
+                    ? `<div class="actions">
+                        <button class="small-button" type="button" data-action="open-source">打开来源</button>
+                        <button class="small-button" type="button" data-action="copy">复制上下文</button>
+                      </div>`
+                    : ""
+                }
+              </div>
+            `
+          )
+          .join("");
+
+        reasonList.innerHTML = scene.reasons
+          .map(
+            ([label, body]) => `
+              <div class="reason">
+                <b>${label}</b>
+                <span>${body}</span>
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      function activateScene(name) {
+        const scene = scenes[name];
+        tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.scene === name));
+        Object.entries(sceneNodes).forEach(([key, node]) => {
+          node.classList.toggle("hidden", key !== name);
+        });
+        address.textContent = scene.address;
+        chipIcon.textContent = scene.chipIcon;
+        chipTitle.textContent = scene.chipTitle;
+        chipSub.textContent = scene.chipSub;
+        momentLabel.textContent = scene.label;
+        momentSummary.textContent = scene.summary;
+        modePill.textContent = scene.mode;
+        renderBudget(scene.budget);
+        renderList(scene);
+      }
+
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => activateScene(tab.dataset.scene));
+      });
+
+      document.addEventListener("click", (event) => {
+        const target = event.target.closest("[data-action], #openMoment");
+        if (!target) return;
+        const action = target.dataset.action || "open";
+        const messages = {
+          open: "已展开 Memory Moment",
+          copy: "已生成最小上下文包",
+          dismiss: "已记录：这个群降低自动提示",
+          guard: "发送前 guard 已检查",
+          insert: "已插入更谨慎说法",
+          "insert-pack": "已插入 3 条 Personal AI 记忆",
+          privacy: "已打开隐私 envelope 预览",
+          useful: "已记录：这条提示有用",
+          "too-much": "已记录：降低此场景打扰预算",
+          "wrong-project": "已记录：强化项目锚点 gate",
+          "open-source": "已打开来源记忆"
+        };
+        showToast(messages[action] || "已记录");
+      });
+    </script>
+  </body>
+</html>

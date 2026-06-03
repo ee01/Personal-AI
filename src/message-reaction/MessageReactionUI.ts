@@ -62,7 +62,11 @@ import {
   buildSnoozeQuickMenuOptions,
   escapeSnoozeMenuText,
 } from './snoozeQuickMenuPresentation';
-import { getSnoozeSuccessToastActions } from './snoozeToastActions';
+import {
+  buildSnoozeManagerOpenRequestData,
+  buildSnoozeManagerPagePath,
+  getSnoozeSuccessToastActions,
+} from './snoozeToastActions';
 
 const SNOOZE_QUICK_MENU_ID = 'personal-ai-snooze-quick-menu';
 const FOLLOWUP_ASK_DEFAULT_INTERVAL_HOURS = 24;
@@ -266,6 +270,12 @@ function injectStyles() {
     .message-reaction-toolbar.visible {
       opacity: 1;
       pointer-events: auto;
+    }
+
+    .pai-message-reaction-focus-anchor:focus-visible {
+      outline: 2px solid rgba(33, 150, 243, 0.5);
+      outline-offset: 2px;
+      border-radius: 8px;
     }
     
     /* ===== 消息交互按钮通用样式 ===== */
@@ -1343,11 +1353,19 @@ async function isOwnMessage(
 }
 
 function inferFollowupTarget(messageInfo: MessageInfo): string {
-  const mention = messageInfo.content.match(/@([^\s@:,，：]{2,40}(?:\s+[^\s@:,，：]{1,40})?)/);
+  const conversationLabel =
+    messageInfo.groupName && messageInfo.groupName !== 'Unknown'
+      ? messageInfo.groupName
+      : messageInfo.groupId
+      ? `会话 ${messageInfo.groupId}`
+      : '当前会话';
+  const mention = messageInfo.content.match(
+    /@([^\s@:,，：]{2,40}(?:\s+[^\s@:,，：]{1,40})?)/,
+  );
   if (mention?.[1]) {
-    return mention[1].trim();
+    return `${conversationLabel}（提及 ${mention[1].trim()}）`;
   }
-  return messageInfo.groupName || messageInfo.groupId || '当前会话';
+  return conversationLabel;
 }
 
 function parseMessageTimestampSeconds(messageInfo: MessageInfo): number | undefined {
@@ -1394,13 +1412,12 @@ function parseBoundedInteger(
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
-async function openScheduledMessagesManager() {
+async function openScheduledMessagesManager(messageId?: string) {
+  const requestData = buildSnoozeManagerOpenRequestData(messageId);
   try {
     const response = await chrome.runtime.sendMessage({
       type: 'OPEN_SCHEDULED_MESSAGES',
-      data: {
-        category: 'Snooze',
-      },
+      data: requestData,
     });
     if (!response?.success) {
       throw new Error(response?.error || '打开定时消息管理失败');
@@ -1408,7 +1425,7 @@ async function openScheduledMessagesManager() {
   } catch (error) {
     console.warn('打开定时消息管理失败，回退到直接打开页面:', error);
     window.open(
-      chrome.runtime.getURL('scheduled-messages.html?category=Snooze'),
+      chrome.runtime.getURL(buildSnoozeManagerPagePath(messageId)),
       '_blank',
     );
   }
@@ -1452,7 +1469,7 @@ function showSnoozeCreatedToast(
 
       return {
         label: ui(action.label),
-        onClick: openScheduledMessagesManager,
+        onClick: () => openScheduledMessagesManager(messageId),
       };
     },
   );
@@ -1468,6 +1485,25 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
   return error instanceof Error && error.message
     ? error.message
     : fallbackMessage;
+}
+
+function normalizeFollowupGoalForDisplay(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
+}
+
+function buildFollowupAskToastMessage(response: any): string {
+  if (response?.created === false) {
+    const existingGoal = normalizeFollowupGoalForDisplay(
+      response?.session?.renderedContext,
+    );
+    return existingGoal
+      ? `这条消息已有跟进，未覆盖原目标：${existingGoal}`
+      : '这条消息已有跟进，未覆盖原目标';
+  }
+  return '已开始跟进';
 }
 
 function setToolbarButtonPending(button: HTMLElement, pending: boolean) {
@@ -1511,6 +1547,27 @@ function setToolbarVisible(toolbar: HTMLElement, visible: boolean) {
       .querySelector<HTMLElement>('.reaction-settings-btn')
       ?.classList.contains('visible') === true,
   );
+}
+
+function isNaturallyFocusableElement(element: HTMLElement): boolean {
+  const tagName = element.tagName.toLowerCase();
+  if (
+    ['button', 'input', 'select', 'textarea', 'summary'].includes(tagName)
+  ) {
+    return true;
+  }
+  if (tagName === 'a' && element.hasAttribute('href')) {
+    return true;
+  }
+  return element.hasAttribute('tabindex');
+}
+
+function ensureMessageReactionFocusAnchor(element: HTMLElement) {
+  if (!isNaturallyFocusableElement(element)) {
+    element.tabIndex = 0;
+  }
+  element.dataset.paiMessageReactionFocusAnchor = 'true';
+  element.classList.add('pai-message-reaction-focus-anchor');
 }
 
 async function runToolbarButtonAction(
@@ -1764,9 +1821,7 @@ function showFollowupAskDialog(messageInfo: MessageInfo): Promise<void> {
             ? response.session.id
             : undefined;
         showSuccessToast(
-          response?.created === false
-            ? '这条消息已有跟进，未重复创建'
-            : '已开始跟进',
+          buildFollowupAskToastMessage(response),
           getFollowupAskToastActions(sessionId),
         );
         resolve();
@@ -2587,6 +2642,7 @@ function processMessageElement(messageElement: HTMLElement) {
   if (computedStyle.position === 'static') {
     targetElement.style.position = 'relative';
   }
+  ensureMessageReactionFocusAnchor(targetElement);
 
   // 创建工具栏容器（按钮内容会在显示时动态更新）
   const iconUrl = chrome.runtime.getURL('icons/icon16.png');
@@ -2754,14 +2810,70 @@ function processMessageElement(messageElement: HTMLElement) {
 
   let showTriggerTimeout: ReturnType<typeof setTimeout> | null = null;
   let showSettingsBtnTimeout: ReturnType<typeof setTimeout> | null = null;
+  let toolbarRevealSeq = 0;
+  let suppressNextFocusReveal = false;
   let messageInfo: MessageInfo | null = null;
 
   // 监听消息卡片的悬浮事件
   const conversationCard =
     targetElement.closest('.conversation-card') || targetElement;
 
-  conversationCard.addEventListener('mouseenter', async () => {
+  const revealToolbar = async (
+    mode: 'hover' | 'focus',
+    seq: number,
+  ): Promise<void> => {
     currentMessageElement = targetElement;
+    cancelSnoozeHide();
+
+    await updateToolbarContent();
+
+    if (seq !== toolbarRevealSeq) {
+      return;
+    }
+
+    if (mode === 'focus' && !conversationCard.matches(':focus-within')) {
+      return;
+    }
+
+    // 如果当前消息没有可用按钮，不显示
+    if (toolbar.dataset.buttonCount === '0') {
+      return;
+    }
+
+    // 调整工具栏位置（PAI Toolbar Position Adjustment）
+    adjustToolbarPosition();
+
+    setToolbarVisible(toolbar, true);
+
+    // 绑定按钮事件（每次更新内容后需要重新绑定）
+    bindToolbarEvents(
+      toolbar,
+      targetElement,
+      () => messageInfo,
+      (info) => {
+        messageInfo = info;
+      },
+    );
+  };
+
+  const hideLocalToolbarIfInactive = () => {
+    if (isSnoozePickerOpen) return;
+    if (
+      conversationCard.matches(':focus-within') ||
+      toolbar.matches(':focus-within') ||
+      toolbar.matches(':hover') ||
+      isHoveringSnoozeMenu ||
+      isFocusWithinSnoozeMenu
+    ) {
+      return;
+    }
+    setSettingsButtonVisible(toolbar, false);
+    setToolbarVisible(toolbar, false);
+    hideSnoozeMenu();
+  };
+
+  conversationCard.addEventListener('mouseenter', async () => {
+    const revealSeq = ++toolbarRevealSeq;
 
     // 取消之前的隐藏计划
     cancelSnoozeHide();
@@ -2770,33 +2882,13 @@ function processMessageElement(messageElement: HTMLElement) {
     if (showTriggerTimeout) {
       clearTimeout(showTriggerTimeout);
     }
-    showTriggerTimeout = setTimeout(async () => {
-      // 实时获取配置并更新工具栏内容
-      await updateToolbarContent();
-
-      // 如果当前消息没有可用按钮，不显示
-      if (toolbar.dataset.buttonCount === '0') {
-        return;
-      }
-
-      // 调整工具栏位置（PAI Toolbar Position Adjustment）
-      adjustToolbarPosition();
-
-      setToolbarVisible(toolbar, true);
-
-      // 绑定按钮事件（每次更新内容后需要重新绑定）
-      bindToolbarEvents(
-        toolbar,
-        targetElement,
-        () => messageInfo,
-        (info) => {
-          messageInfo = info;
-        },
-      );
+    showTriggerTimeout = setTimeout(() => {
+      void revealToolbar('hover', revealSeq);
     }, MESSAGE_REACTION_SHOW_DELAY_MS);
   });
 
   conversationCard.addEventListener('mouseleave', (e: MouseEvent) => {
+    toolbarRevealSeq += 1;
     if (showTriggerTimeout) {
       clearTimeout(showTriggerTimeout);
       showTriggerTimeout = null;
@@ -2819,6 +2911,66 @@ function processMessageElement(messageElement: HTMLElement) {
     if (!isSnoozePickerOpen) {
       setToolbarVisible(toolbar, false);
       hideSnoozeMenu();
+    }
+  });
+
+  conversationCard.addEventListener('focusin', (e: FocusEvent) => {
+    if (suppressNextFocusReveal) {
+      suppressNextFocusReveal = false;
+      return;
+    }
+
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('.message-reaction-toolbar')) {
+      return;
+    }
+
+    const revealSeq = ++toolbarRevealSeq;
+    if (showTriggerTimeout) {
+      clearTimeout(showTriggerTimeout);
+      showTriggerTimeout = null;
+    }
+    void revealToolbar('focus', revealSeq);
+  });
+
+  conversationCard.addEventListener('focusout', (e: FocusEvent) => {
+    const relatedTarget = e.relatedTarget as HTMLElement | null;
+    if (
+      relatedTarget?.closest('.message-reaction-toolbar') ||
+      relatedTarget?.closest('.snooze-menu') ||
+      relatedTarget?.closest('.snooze-picker') ||
+      relatedTarget?.closest('.reaction-settings-popup') ||
+      (relatedTarget && conversationCard.contains(relatedTarget))
+    ) {
+      return;
+    }
+
+    setTimeout(hideLocalToolbarIfInactive, 120);
+  });
+
+  conversationCard.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !toolbar.classList.contains('visible')) {
+      return;
+    }
+
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest('.snooze-menu') ||
+      target?.closest('.snooze-picker') ||
+      target?.closest('.reaction-settings-popup')
+    ) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    invalidateSnoozeMenuRequests();
+    hideSnoozeMenu();
+    setSettingsButtonVisible(toolbar, false);
+    setToolbarVisible(toolbar, false);
+    if (target?.closest('.message-reaction-toolbar')) {
+      suppressNextFocusReveal = true;
+      targetElement.focus({ preventScroll: true });
     }
   });
 
@@ -3088,7 +3240,7 @@ function bindToolbarEvents(
                 groupId: messageInfo.groupId,
                 groupName: messageInfo.groupName,
                 content: messageInfo.content,
-                timestamp: messageInfo.timestamp,
+                messageTimestamp: messageInfo.timestamp,
                 messageLink: messageInfo.messageLink,
               },
             },

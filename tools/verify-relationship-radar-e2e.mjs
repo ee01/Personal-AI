@@ -74,7 +74,7 @@ const secondPerson = {
   ...person,
   id: 'person-bob-radar',
   name: 'Bob Radar',
-  aliases: ['Bob'],
+  aliases: ['Bob', 'bobby@example.com'],
   description: 'Research reviewer for Relationship Radar validation',
   score: 0.64,
   radarState: 'active',
@@ -296,17 +296,26 @@ try {
     const pathname = new URL(url).pathname;
 
     if (pathname.endsWith('/relationships/people')) {
+      const search = new URL(url).searchParams.get('search')?.trim().toLowerCase();
+      const allPeople = [
+        {
+          ...person,
+          reviewPendingCount: reviewItems.filter((item) => item.status === 'pending')
+            .length,
+        },
+        secondPerson,
+      ];
+      const items = search
+        ? allPeople.filter((item) =>
+            [item.name, item.description, ...(item.aliases || [])]
+              .filter(Boolean)
+              .some((value) => value.toLowerCase().includes(search)),
+          )
+        : allPeople;
       await route.fulfill(
         jsonResponse({
-          items: [
-            {
-              ...person,
-              reviewPendingCount: reviewItems.filter((item) => item.status === 'pending')
-                .length,
-            },
-            secondPerson,
-          ],
-          totalCandidates: 2,
+          items,
+          totalCandidates: items.length,
           threshold: {
             minimumInteractionCount: 6,
             minimumActiveDays: 3,
@@ -411,10 +420,26 @@ try {
             matchedAttendees: 1,
             unmatchedAttendees: 1,
             omittedAttendees: 1,
+            identityCheckAttendees: 1,
             attendeesWithEvidence: 1,
             attendeesWithOpenLoops: 1,
             evidenceRefs: 1,
-            coverageNote: '已分析前 2/3 位参会人，匹配 1 位；另有 1 位未展开，需要手动补充或分批生成。',
+            coverageNote: '已分析前 2/3 位参会人，匹配 1 位；另有 1 位未展开，需要手动补充或分批生成；1 位为弱匹配，使用上下文前需核对身份。',
+          },
+          readiness: {
+            status: 'attention',
+            summary: '1 位参会人未展开，1 位参会人未匹配人物记忆',
+            nextActions: [
+              '大型会议先按核心参会人分批生成，确认未展开名单是否需要单独准备。',
+              '为 External Reviewer 补充别名，或会中先确认角色和关注点。',
+              '优先确认 Alice Radar 的未闭环事项是否仍然有效。',
+            ],
+            successCriteria: [
+              '把 open loop 转成继续推进、改 owner / deadline、或明确关闭。',
+              '弱匹配参会人的姓名、邮箱或别名已经人工确认。',
+              '会前确认 1/3 位参会人的身份匹配是否可信。',
+              '会后把 owner、deadline 和变更结论写回记忆或行动队列。',
+            ],
           },
           attendees: [
             {
@@ -424,10 +449,12 @@ try {
               personName: person.name,
               radarState: 'core',
               dataQuality: 'generated',
-              matchedBy: 'email',
-              matchConfidence: 0.98,
-              matchReason: '按邮箱或邮箱别名匹配',
-              coverageState: 'ready',
+              matchedBy: 'email_local_part',
+              matchConfidence: 0.72,
+              matchReason: '按邮箱前缀匹配，建议会中确认身份',
+              identityCheckRequired: true,
+              identityCheckReason: '按邮箱前缀匹配，建议会中确认身份；先确认 Alice Radar 确实对应 Alice Radar，再使用历史上下文。',
+              coverageState: 'thin',
               summary: '18 次可见交互，覆盖 7 个活跃日',
               openLoops: contextCard.openLoops,
               suggestedQuestions: ['上次提到的 owner 现在进展怎样？'],
@@ -455,8 +482,8 @@ try {
               openLoop: 'Confirm owner before the next demo.',
               suggestedAsk: '上次提到的 owner 现在进展怎样？',
               evidenceCount: 1,
-              matchStatus: '按邮箱或邮箱别名匹配 · 98%',
-              coverageState: 'ready',
+              matchStatus: '按邮箱前缀匹配，建议会中确认身份 · 72%',
+              coverageState: 'thin',
             },
             {
               person: 'External Reviewer',
@@ -497,23 +524,76 @@ try {
   });
   await page.addInitScript(() => {
     window.__relationshipRadarOpenCalls = [];
+    window.__relationshipRadarClipboardWrites = [];
     window.open = (url, target, features) => {
       window.__relationshipRadarOpenCalls.push({ url, target, features });
       return null;
     };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          window.__relationshipRadarClipboardWrites.push(text);
+        },
+      },
+    });
   });
 
   await page.goto(`chrome-extension://${extensionId}/memory-exploring.html#/entity/Person`, {
     waitUntil: 'domcontentloaded',
   });
   await page.getByText('Relationship Memory Radar').waitFor({ timeout: 15000 });
+  await page.getByText('现在最该关注').waitFor({ timeout: 15000 });
+  const initialSpotlightTitle = await page.locator('.spotlight h2').innerText();
+  assert.match(
+    initialSpotlightTitle,
+    /Alice/,
+    'spotlight should be a fixed priority recommendation, not an empty or selected-person title',
+  );
+  await page.getByPlaceholder('搜索人物、别名或描述').fill('bobby@example.com');
+  await page.getByPlaceholder('搜索人物、别名或描述').press('Enter');
+  await page.getByText('搜索：bobby@example.com').waitFor({ timeout: 15000 });
+  await page.locator('.person-card').filter({ hasText: 'Bob Radar' }).waitFor({
+    timeout: 15000,
+  });
+  await expectNotVisible(page, 'Alice Radar · 后台整理');
+  await page.getByRole('button', { name: '清空筛选' }).click();
+  await page.locator('.person-card').filter({ hasText: 'Alice Radar' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('.person-card').filter({ hasText: 'Alice Radar' }).click();
+  await page.getByText('Alice 的沟通前 brief').waitFor({ timeout: 15000 });
   await page.getByText('已隐藏敏感上下文').waitFor({ timeout: 15000 });
   await page.getByText('6 条可能敏感的人物上下文默认未纳入').waitFor({
+    timeout: 15000,
+  });
+  await page.getByLabel('隐藏敏感上下文类型').getByText('别名 1').waitFor({
+    timeout: 15000,
+  });
+  await page.getByLabel('隐藏敏感上下文类型').getByText('事实 1').waitFor({
+    timeout: 15000,
+  });
+  await page.getByLabel('隐藏敏感上下文类型').getByText('证据 1').waitFor({
+    timeout: 15000,
+  });
+  await page.getByLabel('隐藏敏感上下文类型').getByText('跟进 1').waitFor({
+    timeout: 15000,
+  });
+  await page.getByLabel('隐藏敏感上下文类型').getByText('检索 2').waitFor({
     timeout: 15000,
   });
   await page.getByRole('button', { name: '临时包含敏感上下文' }).click();
   await page.getByText('已临时包含敏感上下文').waitFor({ timeout: 15000 });
   await page.getByText('private_email').waitFor({ timeout: 15000 });
+  await page.getByRole('button', { name: '复制含敏感上下文' }).click();
+  await page.getByText('已复制含敏感上下文，外发前请复核').waitFor({
+    timeout: 15000,
+  });
+  assert.deepEqual(
+    await page.evaluate(() => window.__relationshipRadarClipboardWrites.at(-1)),
+    sensitiveContextCard.contextMd,
+    'sensitive context copy should keep a visible warning path',
+  );
   await page.getByRole('button', { name: '恢复默认隐藏' }).click();
   await page.getByText('已隐藏敏感上下文').waitFor({ timeout: 15000 });
   await expectNotVisible(page, 'private_email');
@@ -551,7 +631,35 @@ try {
     'Alice Radar',
     'meeting brief attendees should seed from the selected person',
   );
+  const spotlightTitleBeforeBobClick = await page.locator('.spotlight h2').innerText();
   await page.locator('.person-card').filter({ hasText: 'Bob Radar' }).click();
+  await page.getByText('Bob 的沟通前 brief').waitFor({ timeout: 15000 });
+  await page.waitForFunction(() => {
+    const anchor = document.querySelector('.detail-anchor');
+    const container = document.querySelector('.main-content');
+    if (!anchor || !container) return false;
+    const anchorRect = anchor.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const offset = anchorRect.top - containerRect.top;
+    return offset >= 0 && offset < 220;
+  });
+  assert.equal(
+    await page.locator('.spotlight h2').innerText(),
+    spotlightTitleBeforeBobClick,
+    'selecting another person should not rewrite the first-viewport spotlight',
+  );
+  await page.waitForFunction(() => {
+    const button = [...document.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent?.trim() === '复制当前上下文',
+    );
+    return Boolean(button && !button.disabled);
+  });
+  await page.getByRole('button', { name: '复制当前上下文' }).click();
+  assert.deepEqual(
+    await page.evaluate(() => window.__relationshipRadarClipboardWrites.at(-1)),
+    secondContextCard.contextMd,
+    'selected non-spotlight person should have a direct copy path for their context card',
+  );
   await page
     .getByLabel('关系雷达详情')
     .getByRole('button', { name: '会议简报' })
@@ -570,11 +678,22 @@ try {
   await page.getByRole('button', { name: '生成会议人物简报' }).click();
 
   await page.getByText('已分析前 2/3 位参会人').waitFor({ timeout: 15000 });
+  await page.getByText('会前准备状态').waitFor({ timeout: 15000 });
+  await page.getByText('需要补齐').waitFor({ timeout: 15000 });
+  await page
+    .getByText('为 External Reviewer 补充别名，或会中先确认角色和关注点。')
+    .waitFor({ timeout: 15000 });
+  await page
+    .getByText('会后把 owner、deadline 和变更结论写回记忆或行动队列。')
+    .waitFor({ timeout: 15000 });
   await page.getByText('未展开参会人').waitFor({ timeout: 15000 });
   await page.getByText('Late Observer').waitFor({ timeout: 15000 });
-  await page.getByText('证据就绪').waitFor({ timeout: 15000 });
+  await page.getByText('身份待核对').first().waitFor({ timeout: 15000 });
+  await page
+    .getByText('先确认 Alice Radar 确实对应 Alice Radar')
+    .waitFor({ timeout: 15000 });
   await page.getByText('未匹配').first().waitFor({ timeout: 15000 });
-  await page.getByText('按邮箱或邮箱别名匹配', { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByText('按邮箱前缀匹配，建议会中确认身份', { exact: true }).waitFor({ timeout: 15000 });
   await page.getByText('没有找到与 external@example.com').waitFor({ timeout: 15000 });
   await page.getByRole('button', { name: '证据 message' }).waitFor({ timeout: 15000 });
 

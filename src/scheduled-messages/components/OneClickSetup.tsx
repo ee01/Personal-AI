@@ -114,7 +114,12 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
       const result = await initializer.completeInitialization(
         tempResult.sheetId,
         tempResult.scriptId,
-        tempResult.webAppUrl
+        tempResult.webAppUrl,
+        {
+          deploymentId: tempResult.deploymentId,
+          messagesSheetId: tempResult.messagesSheetId,
+          logsSheetId: tempResult.logsSheetId,
+        }
       );
       
       if (result.success) {
@@ -243,7 +248,9 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         if (pauseForManualBindDecision(minimalConfig, 'sync')) {
           return;
         }
-        await syncService.syncConfig(minimalConfig);
+        await syncService.syncConfig(minimalConfig, {
+          syncAction: 'manual_bind_minimal_config',
+        });
       } else {
         const needsMessagesSheetId = sheetConfig.messagesSheetId === undefined || sheetConfig.messagesSheetId === null;
         const needsLogsSheetId = sheetConfig.logsSheetId === undefined || sheetConfig.logsSheetId === null;
@@ -273,7 +280,9 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
 
         if (writeMode === 'sync') {
           setCurrentStep('正在把子表定位写回 Config...');
-          await syncService.syncConfig(recoveredConfig as SheetConfig);
+          await syncService.syncConfig(recoveredConfig as SheetConfig, {
+            syncAction: 'manual_bind_recovered_worksheet_ids',
+          });
         } else {
           // 保存从 Sheet 读取的完整配置到 Chrome Storage
           setCurrentStep('正在恢复本地配置...');
@@ -326,6 +335,8 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         ...manualBindDecision.localConfig,
         sheetId: manualBindDecision.sheetConfig.sheetId,
         sheetUrl: manualBindDecision.canonicalSheetUrl,
+      }, {
+        syncAction: 'manual_bind_keep_local',
       });
       completeManualBind();
     } catch (err: any) {
@@ -360,7 +371,9 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
 
       const syncService = new ConfigSyncService(token || '');
       if (manualBindDecision.writeMode === 'sync') {
-        await syncService.syncConfig(manualBindDecision.sheetConfig);
+        await syncService.syncConfig(manualBindDecision.sheetConfig, {
+          syncAction: 'manual_bind_use_sheet',
+        });
       } else {
         await syncService.saveConfigToStorage(manualBindDecision.sheetConfig);
       }
@@ -481,6 +494,22 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
           <div key={warning} style={styles.setupWarningItem}>{warning}</div>
         ))}
       </div>
+    );
+  };
+
+  const renderSetupReceiptDetails = (result: InitializationResult) => {
+    const worksheetText = result.messagesSheetId && result.logsSheetId
+      ? `Messages ${result.messagesSheetId} / Logs ${result.logsSheetId}`
+      : '授权后会再次确认 Messages / Logs 子表定位';
+    const deploymentText = result.deploymentId
+      ? `Deployment ${formatSheetIdForDisplay(result.deploymentId)}`
+      : '授权后会通过 Web App URL 继续完成触发器设置';
+
+    return (
+      <>
+        <p style={styles.infoItem}>子表定位: {worksheetText}</p>
+        <p style={styles.infoItem}>Web App 部署: {deploymentText}</p>
+      </>
     );
   };
   
@@ -606,6 +635,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
                     <p style={styles.infoTitle}>📋 初始化收据：</p>
                     <p style={styles.infoItem}>已创建维护表、Apps Script 项目和 Web App。</p>
                     <p style={styles.infoItem}>授权后将创建分钟触发器、写入测试消息并保存 Config。</p>
+                    {renderSetupReceiptDetails(tempResult)}
                     <p style={styles.infoItem}>Sheet ID: {tempResult.sheetId}</p>
                     <p style={styles.infoItem}>
                       <a href={tempResult.sheetUrl} target="_blank" rel="noopener noreferrer">

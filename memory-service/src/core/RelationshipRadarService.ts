@@ -11,6 +11,7 @@ type DataQuality = 'indexed' | 'generated' | 'confirmed' | 'stale';
 type ProjectionSource = 'lazy' | 'background' | 'user_confirmed';
 type AttendeeMatchKind = 'name' | 'alias' | 'email' | 'email_local_part' | 'none';
 type AttendeeCoverageState = 'ready' | 'thin' | 'missing';
+type MeetingReadinessStatus = 'ready' | 'partial' | 'attention' | 'empty';
 
 interface EntityRow {
   id: string;
@@ -274,10 +275,17 @@ export interface RelationshipMeetingBrief {
     matchedAttendees: number;
     unmatchedAttendees: number;
     omittedAttendees: number;
+    identityCheckAttendees: number;
     attendeesWithEvidence: number;
     attendeesWithOpenLoops: number;
     evidenceRefs: number;
     coverageNote: string;
+  };
+  readiness: {
+    status: MeetingReadinessStatus;
+    summary: string;
+    nextActions: string[];
+    successCriteria: string[];
   };
   attendees: Array<{
     displayName: string;
@@ -289,6 +297,8 @@ export interface RelationshipMeetingBrief {
     matchedBy: AttendeeMatchKind;
     matchConfidence: number;
     matchReason: string;
+    identityCheckRequired: boolean;
+    identityCheckReason?: string;
     coverageState: AttendeeCoverageState;
     summary: string;
     openLoops: RelationshipContextCard['openLoops'];
@@ -709,8 +719,18 @@ export class RelationshipRadarService {
         attendee.name || attendee.email,
         card,
       );
+      const identityCheckRequired = Boolean(
+        card &&
+          (match.matchedBy === 'email_local_part' ||
+            (match.matchedBy !== 'none' && match.confidence < 0.8)),
+      );
+      const identityCheckReason = identityCheckRequired
+        ? `${match.reason}；先确认 ${attendee.name || attendee.email || '该参会人'} 确实对应 ${card?.person.name}，再使用历史上下文。`
+        : undefined;
       const coverageState: AttendeeCoverageState = card
-        ? (card.evidenceRefs.length > 0 || openLoops.length > 0 ? 'ready' : 'thin')
+        ? (identityCheckRequired
+            ? 'thin'
+            : (card.evidenceRefs.length > 0 || openLoops.length > 0 ? 'ready' : 'thin'))
         : 'missing';
       return {
         displayName: attendee.name || attendee.email || 'Unknown attendee',
@@ -722,6 +742,8 @@ export class RelationshipRadarService {
         matchedBy: match.matchedBy,
         matchConfidence: match.confidence,
         matchReason: match.reason,
+        identityCheckRequired,
+        identityCheckReason,
         coverageState,
         summary: card
           ? card.bullets.slice(0, 2).join('；')
@@ -736,12 +758,14 @@ export class RelationshipRadarService {
       totalAttendees: attendees.length,
       omittedAttendees: omittedAttendees.length,
     });
+    const readiness = buildMeetingBriefReadiness(attendeeCards, coverage);
 
     return {
       generatedAt: now(),
       title,
       startAt,
       coverage,
+      readiness,
       attendees: attendeeCards,
       matrix: attendeeCards.map((item) => ({
         person: item.personName || item.displayName,
@@ -1290,11 +1314,15 @@ export class RelationshipRadarService {
            FROM entities
            WHERE type = 'Person'
              AND status = 'active'
-             AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')
+             AND (
+               name LIKE ? ESCAPE '\\'
+               OR description LIKE ? ESCAPE '\\'
+               OR aliases_json LIKE ? ESCAPE '\\'
+             )
            ORDER BY importance DESC, last_seen DESC
            LIMIT 200`,
         )
-        .all(pattern, pattern) as EntityRow[];
+        .all(pattern, pattern, pattern) as EntityRow[];
     }
 
     return this.db
@@ -2457,18 +2485,23 @@ function buildMeetingBriefCoverage(
   const totalAttendees = options.totalAttendees ?? processedAttendees;
   const omittedAttendees = options.omittedAttendees ?? Math.max(0, totalAttendees - processedAttendees);
   const matchedAttendees = attendees.filter((item) => item.personId).length;
+  const identityCheckAttendees = attendees.filter((item) => item.identityCheckRequired).length;
   const attendeesWithEvidence = attendees.filter((item) => item.evidenceRefs.length > 0).length;
   const attendeesWithOpenLoops = attendees.filter((item) => item.openLoops.length > 0).length;
   const evidenceRefs = attendees.reduce((total, item) => total + item.evidenceRefs.length, 0);
   const unmatchedAttendees = processedAttendees - matchedAttendees;
+  const identityCheckNote =
+    identityCheckAttendees > 0
+      ? `；${identityCheckAttendees} 位为弱匹配，使用上下文前需核对身份`
+      : '';
   const coverageNote =
     totalAttendees === 0
       ? '未提供参会人，会议简报只能给出通用准备问题。'
       : omittedAttendees > 0
-        ? `已分析前 ${processedAttendees}/${totalAttendees} 位参会人，匹配 ${matchedAttendees} 位；另有 ${omittedAttendees} 位未展开，需要手动补充或分批生成。`
+        ? `已分析前 ${processedAttendees}/${totalAttendees} 位参会人，匹配 ${matchedAttendees} 位；另有 ${omittedAttendees} 位未展开，需要手动补充或分批生成${identityCheckNote}。`
       : unmatchedAttendees === 0
-        ? `已匹配全部 ${totalAttendees} 位参会人，其中 ${attendeesWithEvidence} 位有可引用证据。`
-        : `已匹配 ${matchedAttendees}/${totalAttendees} 位参会人；${unmatchedAttendees} 位需要会中确认角色或补充人物别名。`;
+        ? `已匹配全部 ${totalAttendees} 位参会人，其中 ${attendeesWithEvidence} 位有可引用证据${identityCheckNote}。`
+        : `已匹配 ${matchedAttendees}/${totalAttendees} 位参会人；${unmatchedAttendees} 位需要会中确认角色或补充人物别名${identityCheckNote}。`;
 
   return {
     totalAttendees,
@@ -2476,10 +2509,96 @@ function buildMeetingBriefCoverage(
     matchedAttendees,
     unmatchedAttendees,
     omittedAttendees,
+    identityCheckAttendees,
     attendeesWithEvidence,
     attendeesWithOpenLoops,
     evidenceRefs,
     coverageNote,
+  };
+}
+
+function buildMeetingBriefReadiness(
+  attendees: RelationshipMeetingBrief['attendees'],
+  coverage: RelationshipMeetingBrief['coverage'],
+): RelationshipMeetingBrief['readiness'] {
+  const readyAttendees = attendees.filter((item) => item.coverageState === 'ready');
+  const thinAttendees = attendees.filter((item) => item.coverageState === 'thin');
+  const missingAttendees = attendees.filter((item) => item.coverageState === 'missing');
+  const identityCheckAttendees = attendees.filter((item) => item.identityCheckRequired);
+  const openLoopAttendees = attendees.filter((item) => item.openLoops.length > 0);
+  const nextActions: string[] = [];
+  const successCriteria: string[] = [];
+
+  let status: MeetingReadinessStatus;
+  let summary: string;
+
+  if (coverage.totalAttendees === 0) {
+    status = 'empty';
+    summary = '缺少参会人，当前简报只能给出通用会前问题。';
+    nextActions.push('补充日历参会人或逐行输入 name / email 后重新生成简报。');
+    successCriteria.push('至少确认 1 位核心参会人的姓名或邮箱。');
+  } else if (coverage.omittedAttendees > 0 || missingAttendees.length > 0) {
+    status = 'attention';
+    summary = [
+      coverage.omittedAttendees > 0
+        ? `${coverage.omittedAttendees} 位参会人未展开`
+        : '',
+      missingAttendees.length > 0
+        ? `${missingAttendees.length} 位参会人未匹配人物记忆`
+        : '',
+    ].filter(Boolean).join('，') || '参会人覆盖需要会前确认。';
+    if (coverage.omittedAttendees > 0) {
+      nextActions.push('大型会议先按核心参会人分批生成，确认未展开名单是否需要单独准备。');
+    }
+    if (missingAttendees.length > 0) {
+      nextActions.push(
+        `为 ${formatAttendeeNames(missingAttendees)} 补充别名，或会中先确认角色和关注点。`,
+      );
+    }
+  } else if (identityCheckAttendees.length > 0) {
+    status = 'partial';
+    summary = `${identityCheckAttendees.length} 位参会人为弱匹配，历史上下文可参考，但需要先核对身份。`;
+    nextActions.push(
+      `先确认 ${formatAttendeeNames(identityCheckAttendees)} 是否就是匹配到的人物，再使用历史上下文。`,
+    );
+  } else if (thinAttendees.length > 0 || readyAttendees.length === 0) {
+    status = 'partial';
+    summary = '参会人已匹配，但部分人物缺少可引用证据或未闭环事项。';
+    nextActions.push(
+      `先用低承诺问题确认 ${formatAttendeeNames(thinAttendees)} 的角色、目标和当前阻塞。`,
+    );
+  } else {
+    status = 'ready';
+    summary = `人物上下文已就绪：${coverage.attendeesWithEvidence} 位有证据，${coverage.attendeesWithOpenLoops} 位带 open loop。`;
+  }
+
+  if (openLoopAttendees.length > 0) {
+    nextActions.push(
+      `优先确认 ${formatAttendeeNames(openLoopAttendees)} 的未闭环事项是否仍然有效。`,
+    );
+    successCriteria.push('把 open loop 转成继续推进、改 owner / deadline、或明确关闭。');
+  }
+
+  if (identityCheckAttendees.length > 0) {
+    successCriteria.push('弱匹配参会人的姓名、邮箱或别名已经人工确认。');
+  }
+
+  if (coverage.evidenceRefs === 0 && coverage.totalAttendees > 0) {
+    nextActions.push('不要把匹配结果当事实外发；先在会议中确认身份和上下文来源。');
+  }
+
+  if (coverage.totalAttendees > 0) {
+    successCriteria.push(
+      `会前确认 ${coverage.matchedAttendees}/${coverage.totalAttendees} 位参会人的身份匹配是否可信。`,
+    );
+  }
+  successCriteria.push('会后把 owner、deadline 和变更结论写回记忆或行动队列。');
+
+  return {
+    status,
+    summary,
+    nextActions: uniqueStrings(nextActions).slice(0, 4),
+    successCriteria: uniqueStrings(successCriteria).slice(0, 4),
   };
 }
 
@@ -2491,6 +2610,15 @@ function formatOmittedMeetingAttendee(
     email: attendee.email,
     reason: `超过前 ${MEETING_BRIEF_ATTENDEE_LIMIT} 位分析上限，暂未展开人物上下文。`,
   };
+}
+
+function formatAttendeeNames(attendees: Array<{ displayName: string; personName?: string }>): string {
+  const names = attendees
+    .map((item) => item.personName || item.displayName)
+    .filter(Boolean)
+    .slice(0, 3);
+  if (names.length === 0) return '相关参会人';
+  return names.join('、');
 }
 
 function buildSuggestedQuestions(

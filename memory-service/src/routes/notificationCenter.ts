@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 
-import { NotificationCenterService } from '../core/NotificationCenterService.js';
+import {
+  NotificationCenterService,
+  type NotificationFeedDeliveryMode,
+} from '../core/NotificationCenterService.js';
 import type {
   DeliveryChannel,
   DeliveryLane,
@@ -11,6 +14,7 @@ interface FeedQuery {
   channel: DeliveryChannel;
   lanes?: string;
   limit?: string;
+  deliveryMode?: NotificationFeedDeliveryMode;
 }
 
 interface DeliveryBody {
@@ -21,6 +25,7 @@ interface DeliveryBody {
     status: DeliveryStatus;
     externalRef?: string;
     error?: string;
+    recordedAt?: number;
   }>;
 }
 
@@ -46,6 +51,7 @@ const deliveryBodySchema = {
           },
           externalRef: { type: 'string' as const },
           error: { type: 'string' as const },
+          recordedAt: { type: 'integer' as const, minimum: 0 },
         },
         additionalProperties: false,
       },
@@ -62,6 +68,10 @@ const feedQuerySchema = {
     channel: { type: 'string' as const, enum: ['chrome', 'doubao', 'glip'] },
     lanes: { type: 'string' as const },
     limit: { type: 'string' as const, pattern: '^\\d+$' },
+    deliveryMode: {
+      type: 'string' as const,
+      enum: ['retry_after_cooldown', 'incremental', 'daily_digest'],
+    },
   },
   additionalProperties: false,
 };
@@ -108,6 +118,7 @@ export async function notificationCenterRoutes(app: FastifyInstance): Promise<vo
         channel: request.query.channel,
         lanes: parsedLanes.lanes,
         limit: request.query.limit ? Number(request.query.limit) : undefined,
+        deliveryMode: request.query.deliveryMode,
       });
       return reply.status(200).send({
         items: feed,

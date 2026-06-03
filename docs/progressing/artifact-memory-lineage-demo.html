@@ -1,0 +1,1061 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Personal AI - 成果记忆链 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-2: #f9fafb;
+      --line: #d9e0ea;
+      --line-soft: #e9edf3;
+      --ink: #17202e;
+      --muted: #687589;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --green: #07825d;
+      --green-soft: #e6f6ef;
+      --amber: #aa6500;
+      --amber-soft: #fff3d6;
+      --rose: #b4234a;
+      --rose-soft: #ffe8ee;
+      --violet: #6d44c4;
+      --violet-soft: #f0eaff;
+      --shadow: 0 18px 60px rgba(32, 48, 71, 0.12);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      letter-spacing: 0;
+      overflow-x: hidden;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .browser-bar {
+      height: 54px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      background: #eef2f8;
+      border-bottom: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 7px;
+      flex: 0 0 auto;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      background: #c7ced9;
+    }
+
+    .dot:nth-child(1) { background: #f16d68; }
+    .dot:nth-child(2) { background: #f6c75a; }
+    .dot:nth-child(3) { background: #62c070; }
+
+    .url {
+      height: 32px;
+      min-width: 0;
+      max-width: 100%;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 13px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .workspace {
+      min-width: 0;
+      width: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+      gap: 18px;
+      padding: 18px;
+      overflow-x: hidden;
+    }
+
+    .doc-shell,
+    .lineage-panel {
+      min-width: 0;
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .doc-toolbar {
+      min-height: 78px;
+      padding: 14px 18px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      display: grid;
+      gap: 12px;
+      background: #fbfcff;
+    }
+
+    .doc-title-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .doc-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      background: #eaf1ff;
+      color: var(--blue);
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .doc-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .doc-title h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 750;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .doc-meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .share-button {
+      height: 34px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 18px;
+      background: #dceaff;
+      color: #0f4faa;
+      font-weight: 700;
+      flex: 0 0 auto;
+    }
+
+    .format-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .tool {
+      min-width: 34px;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: #3c4658;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .doc-body {
+      min-height: 680px;
+      padding: 36px 20px;
+      background: #edf1f7;
+      display: flex;
+      justify-content: center;
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .page {
+      width: min(820px, 100%);
+      min-width: 0;
+      min-height: 900px;
+      padding: clamp(28px, 5vw, 58px);
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      box-shadow: 0 10px 35px rgba(17, 24, 39, 0.12);
+      overflow: hidden;
+    }
+
+    .page h2 {
+      margin: 0 0 8px;
+      font-size: clamp(24px, 4vw, 34px);
+      line-height: 1.18;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .page .subtitle {
+      margin: 0 0 32px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .doc-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 22px 0;
+      font-size: 13px;
+      table-layout: fixed;
+    }
+
+    .doc-table th,
+    .doc-table td {
+      border: 1px solid #dfe5ee;
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .doc-table th {
+      background: #f4f7fb;
+      color: #46546a;
+      font-weight: 750;
+    }
+
+    .page-section {
+      margin-top: 28px;
+    }
+
+    .page-section h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .page-section p,
+    .page-section li {
+      color: #334155;
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .lineage-chip {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      width: min(100%, 360px);
+      margin-left: auto;
+      padding: 12px;
+      border: 1px solid #b9ccff;
+      border-radius: var(--radius);
+      background: #f8fbff;
+      box-shadow: 0 12px 35px rgba(37, 99, 235, 0.18);
+    }
+
+    .chip-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-weight: 800;
+      color: #1d3f86;
+      flex-wrap: wrap;
+    }
+
+    .chip-copy {
+      margin: 8px 0 0;
+      color: #405276;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .lineage-panel {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      height: calc(100vh - 90px);
+      position: sticky;
+      top: 18px;
+    }
+
+    .panel-header {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #fbfcff;
+    }
+
+    .panel-topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .panel-title {
+      min-width: 0;
+    }
+
+    .panel-title h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .panel-title p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .health {
+      min-width: 74px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      text-align: center;
+      font-size: 12px;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .summary-band {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      background: var(--surface);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      padding: 10px;
+      border-bottom: 1px solid var(--line-soft);
+      gap: 6px;
+      background: var(--surface);
+    }
+
+    .tab {
+      min-width: 0;
+      height: 34px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    .tab.active {
+      background: var(--blue-soft);
+      color: var(--blue);
+      border-color: #bed1ff;
+    }
+
+    .panel-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 16px 18px 18px;
+      background: var(--surface);
+    }
+
+    .section-title {
+      margin: 0 0 10px;
+      color: #334155;
+      font-size: 13px;
+      text-transform: uppercase;
+      font-weight: 850;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .source-item,
+    .assumption-item,
+    .impact-item,
+    .timeline-row {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+    }
+
+    .source-head,
+    .item-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .source-head strong,
+    .item-head strong {
+      min-width: 0;
+      font-size: 14px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .badge.primary { background: var(--green-soft); color: var(--green); }
+    .badge.supporting { background: var(--blue-soft); color: var(--blue); }
+    .badge.background { background: #eef2f7; color: #526173; }
+    .badge.conflict { background: var(--rose-soft); color: var(--rose); }
+    .badge.watch { background: var(--amber-soft); color: var(--amber); }
+    .badge.private { background: var(--violet-soft); color: var(--violet); }
+
+    .source-item p,
+    .assumption-item p,
+    .impact-item p,
+    .timeline-row p {
+      margin: 8px 0 0;
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+
+    .source-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .mini-button {
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: #344256;
+      font-size: 12px;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    .lineage-map {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .map-node {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      background: #fbfcff;
+    }
+
+    .node-dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: var(--blue);
+      color: white;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 850;
+    }
+
+    .map-node:nth-child(2) .node-dot { background: var(--green); }
+    .map-node:nth-child(3) .node-dot { background: var(--violet); }
+    .map-node:nth-child(4) .node-dot { background: var(--amber); }
+
+    .map-copy strong {
+      display: block;
+      font-size: 13px;
+    }
+
+    .map-copy span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .panel-footer {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-top: 1px solid var(--line-soft);
+      background: #fbfcff;
+    }
+
+    .primary-action {
+      min-height: 42px;
+      border: 0;
+      border-radius: 7px;
+      background: var(--ink);
+      color: white;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    .secondary-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .secondary-action {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      color: #344256;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(20px);
+      padding: 12px 16px;
+      border-radius: 8px;
+      background: #17202e;
+      color: white;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 10;
+      font-size: 13px;
+      text-align: center;
+      max-width: min(520px, calc(100vw - 32px));
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1100px) {
+      .workspace {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .lineage-panel {
+        position: static;
+        height: auto;
+        min-height: 620px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .browser-bar {
+        padding: 0 10px;
+        gap: 8px;
+      }
+
+      .workspace {
+        grid-template-columns: minmax(0, calc(100vw - 20px));
+        padding: 10px;
+        gap: 10px;
+      }
+
+      .doc-shell,
+      .lineage-panel {
+        max-width: calc(100vw - 20px);
+      }
+
+      .doc-toolbar {
+        padding: 12px;
+      }
+
+      .doc-title-row {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        align-items: flex-start;
+      }
+
+      .doc-title h1 {
+        font-size: 16px;
+      }
+
+      .doc-meta,
+      .page .subtitle,
+      .page-section p,
+      .page-section li {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .share-button {
+        display: none;
+      }
+
+      .doc-body {
+        padding: 16px 8px;
+      }
+
+      .page {
+        width: calc(100vw - 76px);
+        max-width: calc(100vw - 76px);
+        min-height: 680px;
+        padding: 24px 18px;
+      }
+
+      .page h2 {
+        font-size: 19px;
+      }
+
+      .doc-table {
+        font-size: 11px;
+      }
+
+      .doc-table th,
+      .doc-table td {
+        padding: 8px 6px;
+      }
+
+      .doc-table th:nth-child(4),
+      .doc-table td:nth-child(4) {
+        display: none;
+      }
+
+      .doc-table th:nth-child(3),
+      .doc-table td:nth-child(3) {
+        display: none;
+      }
+
+      .lineage-chip {
+        position: static;
+        width: 100%;
+        margin: 14px 0 0;
+      }
+
+      .summary-band {
+        grid-template-columns: 1fr;
+      }
+
+      .secondary-actions {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .page {
+        width: 300px;
+        max-width: 300px;
+        padding: 24px 14px;
+      }
+
+      .page h2 {
+        font-size: 18px;
+      }
+
+      .lineage-chip {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="browser-bar" aria-label="浏览器栏">
+      <div class="window-dots" aria-hidden="true">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </div>
+      <div class="url">https://docs.google.com/document/d/story-points-estimation-by-ai-service/edit</div>
+    </header>
+
+    <main class="workspace">
+      <section class="doc-shell" aria-label="Google Docs 模拟页面">
+        <div class="doc-toolbar">
+          <div class="doc-title-row">
+            <div class="doc-icon">D</div>
+            <div class="doc-title">
+              <h1>Story Points estimation by AI Service</h1>
+              <div class="doc-meta">Google Docs · 最近保存于 2026-05-26 17:40 · Owner: Esone Qiu</div>
+            </div>
+            <button class="share-button" type="button">Share</button>
+          </div>
+          <div class="format-row" aria-label="文档工具栏">
+            <button class="tool" type="button">B</button>
+            <button class="tool" type="button">I</button>
+            <button class="tool" type="button">H1</button>
+            <button class="tool" type="button">Link</button>
+            <button class="tool" type="button">Comment</button>
+            <button class="tool" type="button">Gemini</button>
+          </div>
+        </div>
+
+        <div class="doc-body">
+          <article class="page">
+            <h2>Story Points estimation by AI Service</h2>
+            <p class="subtitle">This document summarizes the Nova Epic estimate workflow, Jira field assumptions, and Q planning context for the AI-assisted estimation process.</p>
+
+            <table class="doc-table">
+              <thead>
+                <tr>
+                  <th>Epic</th>
+                  <th>Story Points</th>
+                  <th>Dev Estimate</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>NOVA-10893</td>
+                  <td>34</td>
+                  <td>Sum of child issues</td>
+                  <td>Jira customfield_10422</td>
+                </tr>
+                <tr>
+                  <td>MTR-145087</td>
+                  <td>0.1 derived estimate</td>
+                  <td>Manager restricted comment</td>
+                  <td>Jira AI writeback</td>
+                </tr>
+                <tr>
+                  <td>26Q3 planning</td>
+                  <td>New process</td>
+                  <td>Guideline pending</td>
+                  <td>Planning meeting</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <section class="page-section">
+              <h3>Assumptions</h3>
+              <ul>
+                <li>Story Points field is <code>customfield_10422</code>.</li>
+                <li>Dev estimate follows Epic child issue aggregation unless manually overridden.</li>
+                <li>Restricted Jira comments are summarized before reuse outside Jira.</li>
+              </ul>
+            </section>
+
+            <section class="page-section">
+              <h3>Next review</h3>
+              <p>Re-run the estimate when Story Points change, or when Q planning guidelines introduce a different aggregation rule.</p>
+            </section>
+
+            <aside class="lineage-chip" aria-label="Personal AI 成果记忆链入口">
+              <div class="chip-title">
+                <span>Personal AI 成果记忆链</span>
+                <span>8 sources</span>
+              </div>
+              <p class="chip-copy">主要来源已连接。1 个 Story Points 来源最近变化，2 个假设建议复核。</p>
+            </aside>
+          </article>
+        </div>
+      </section>
+
+      <aside class="lineage-panel" aria-label="成果记忆链面板">
+        <header class="panel-header">
+          <div class="panel-topline">
+            <div class="panel-title">
+              <h2>成果记忆链</h2>
+              <p>Story Points estimation by AI Service</p>
+            </div>
+            <div class="health">需复核</div>
+          </div>
+
+          <div class="summary-band">
+            <div class="metric">
+              <strong>8</strong>
+              <span>来源节点</span>
+            </div>
+            <div class="metric">
+              <strong>2</strong>
+              <span>假设待看</span>
+            </div>
+            <div class="metric">
+              <strong>1</strong>
+              <span>来源变化</span>
+            </div>
+          </div>
+        </header>
+
+        <nav class="tabs" aria-label="面板视图">
+          <button class="tab active" data-tab="sources" type="button">来源链</button>
+          <button class="tab" data-tab="assumptions" type="button">假设</button>
+          <button class="tab" data-tab="impact" type="button">影响</button>
+        </nav>
+
+        <div class="panel-body">
+          <section class="tab-view" id="sources">
+            <h3 class="section-title">主要来源</h3>
+            <div class="lineage-map" aria-label="来源链图">
+              <div class="map-node">
+                <span class="node-dot">1</span>
+                <div class="map-copy">
+                  <strong>用户意图</strong>
+                  <span>用 AI 先跑一遍 Nova Epic estimate，再给团队复核。</span>
+                </div>
+                <span class="badge primary">primary</span>
+              </div>
+              <div class="map-node">
+                <span class="node-dot">2</span>
+                <div class="map-copy">
+                  <strong>Jira 字段口径</strong>
+                  <span>customfield_10422 被确认是 Story Points 字段。</span>
+                </div>
+                <span class="badge primary">primary</span>
+              </div>
+              <div class="map-node">
+                <span class="node-dot">3</span>
+                <div class="map-copy">
+                  <strong>AI Service 输出</strong>
+                  <span>AI 写入估算结果并保留回读确认。</span>
+                </div>
+                <span class="badge supporting">supporting</span>
+              </div>
+              <div class="map-node">
+                <span class="node-dot">4</span>
+                <div class="map-copy">
+                  <strong>当前文档</strong>
+                  <span>Google Docs 成果物，含 estimate 规则和复核建议。</span>
+                </div>
+                <span class="badge watch">watch</span>
+              </div>
+            </div>
+
+            <div class="source-list">
+              <article class="source-item">
+                <div class="source-head">
+                  <strong>RingCentral · Sophia 确认 Story Points 字段</strong>
+                  <span class="badge primary">primary</span>
+                </div>
+                <p>直接影响本 doc 的字段口径：Story Points 使用 Jira <code>customfield_10422</code>。</p>
+                <div class="source-actions">
+                  <button class="mini-button" type="button" data-toast="将打开 RingCentral 原始消息">打开来源</button>
+                  <button class="mini-button" type="button" data-toast="已复制可审计引用">复制引用</button>
+                </div>
+              </article>
+
+              <article class="source-item">
+                <div class="source-head">
+                  <strong>Jira · MTR-145087 Dev estimate writeback</strong>
+                  <span class="badge private">restricted</span>
+                </div>
+                <p>AI 写回 Dev/QA estimate 的历史 comment。外发给其他 AI 时只保留摘要和 hash，不带 restricted 原文。</p>
+                <div class="source-actions">
+                  <button class="mini-button" type="button" data-toast="Restricted 来源仅打开本地安全链接">打开来源</button>
+                  <button class="mini-button" type="button" data-toast="已复制脱敏引用">复制脱敏引用</button>
+                </div>
+              </article>
+
+              <article class="source-item">
+                <div class="source-head">
+                  <strong>Calendar · Estimating projects for 26Q3</strong>
+                  <span class="badge supporting">supporting</span>
+                </div>
+                <p>解释为什么 26Q3 planning 流程发生变化。当前只作为背景和复核触发，不直接支撑具体数值。</p>
+                <div class="source-actions">
+                  <button class="mini-button" type="button" data-toast="将打开会议来源">打开来源</button>
+                  <button class="mini-button" type="button" data-toast="已标记为 supporting">确认分类</button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-view hidden" id="assumptions">
+            <h3 class="section-title">假设账本</h3>
+            <div class="source-list">
+              <article class="assumption-item">
+                <div class="item-head">
+                  <strong>Story Points 字段为 customfield_10422</strong>
+                  <span class="badge primary">仍有效</span>
+                </div>
+                <p>来源是 Sophia 与 AI Service 的确认消息，且 Jira 回读成功。当前可作为 primary assumption。</p>
+              </article>
+
+              <article class="assumption-item">
+                <div class="item-head">
+                  <strong>Dev estimate = Epic child issues sum</strong>
+                  <span class="badge watch">需复核</span>
+                </div>
+                <p>MTR-145087 曾按此规则写回，但后续 Story Points 发生变化。建议重新跑一遍 aggregation。</p>
+              </article>
+
+              <article class="assumption-item">
+                <div class="item-head">
+                  <strong>QA estimate 不再由 SDK 人月承载</strong>
+                  <span class="badge background">背景</span>
+                </div>
+                <p>来自 Video mobile 小房间讨论。它解释流程变化，但不能直接修改当前文档数值。</p>
+              </article>
+
+              <article class="assumption-item">
+                <div class="item-head">
+                  <strong>Restricted manager comment 可直接发给外部 AI</strong>
+                  <span class="badge conflict">不成立</span>
+                </div>
+                <p>Personal AI 只会输出脱敏摘要、来源标签和 hash，除非用户明确展开并复制原文。</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-view hidden" id="impact">
+            <h3 class="section-title">影响与后续</h3>
+            <div class="source-list">
+              <article class="impact-item">
+                <div class="item-head">
+                  <strong>Story Points 来源变化</strong>
+                  <span class="badge watch">high</span>
+                </div>
+                <p>NOVA/MTR 相关 Story Points 在 2026-05-25 后有变动迹象。受影响对象：当前 Google Doc、MTR-145087 Jira comment、一个 Context Pack。</p>
+              </article>
+
+              <article class="impact-item">
+                <div class="item-head">
+                  <strong>可生成 Codex 复查包</strong>
+                  <span class="badge supporting">ready</span>
+                </div>
+                <p>复查包包含字段口径、Jira issue 列表、变更风险和不可外发内容说明，不包含 restricted comment 原文。</p>
+              </article>
+
+              <article class="timeline-row">
+                <div class="item-head">
+                  <strong>2026-05-26 17:40 · 文档捕获</strong>
+                  <span class="badge background">receipt</span>
+                </div>
+                <p>Memory Capture 保存了当前 Docs 页面，并建立 artifact receipt。</p>
+              </article>
+
+              <article class="timeline-row">
+                <div class="item-head">
+                  <strong>2026-05-26 09:09 · Jira 写回</strong>
+                  <span class="badge private">restricted</span>
+                </div>
+                <p>AI comment 写回 Dev/QA estimate。当前只允许本地查看或脱敏导出。</p>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <footer class="panel-footer">
+          <button class="primary-action" type="button" data-toast="已生成给 Codex 的最小上下文包">复制给 Codex 复查</button>
+          <div class="secondary-actions">
+            <button class="secondary-action" type="button" data-toast="已打开 artifact 详情页">打开详情</button>
+            <button class="secondary-action" type="button" data-toast="已把当前文档加入来源变化关注">关注变化</button>
+          </div>
+        </footer>
+      </aside>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    const views = Array.from(document.querySelectorAll('.tab-view'));
+    const toast = document.getElementById('toast');
+    let toastTimer = null;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => {
+        toast.classList.remove('show');
+      }, 1800);
+    }
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.tab;
+        tabs.forEach((item) => item.classList.toggle('active', item === tab));
+        views.forEach((view) => view.classList.toggle('hidden', view.id !== target));
+      });
+    });
+
+    document.querySelectorAll('[data-toast]').forEach((button) => {
+      button.addEventListener('click', () => {
+        showToast(button.dataset.toast || '已处理');
+      });
+    });
+  </script>
+</body>
+</html>

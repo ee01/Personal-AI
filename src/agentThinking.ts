@@ -122,6 +122,15 @@ function normalizeRuleIds(value: unknown): number[] {
     : [];
 }
 
+function getAnalysisMessageDatetime(message: any): string {
+  return (
+    message?.datetime ||
+    message?.time ||
+    message?.messageContext?.datetime ||
+    new Date().toISOString()
+  );
+}
+
 function normalizeMatchedRules(value: unknown): string[] {
   return Array.isArray(value)
     ? value
@@ -388,6 +397,7 @@ export class IntelligentAgent {
         groupId: result.groupId || message?.groupId || context?.groupInfo?.id,
         groupName:
           result.groupName || message?.groupName || context?.groupInfo?.name,
+        datetime: getAnalysisMessageDatetime(message),
       },
     });
 
@@ -3390,12 +3400,14 @@ ${this.getToolSafetyPromptGuidance()}
         groupId: message.groupId || context?.groupInfo?.id,
         groupName: message.groupName || context?.groupInfo?.name,
         sender: message.sender || message.creator,
+        datetime: message.datetime || message.time,
       };
       if (Array.isArray(message.posts) && message.posts.length > 0) {
         return message.posts.map((post: any) => ({
           groupId: message.groupId || context?.groupInfo?.id,
           groupName: message.groupName || context?.groupInfo?.name,
           sender: post.sender || post.creator,
+          datetime: post.datetime || post.time,
         }));
       }
       return [groupContext];

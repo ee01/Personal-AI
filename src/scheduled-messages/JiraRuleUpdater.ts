@@ -450,7 +450,9 @@ export class JiraRuleUpdater {
       }
       
       const syncService = new ConfigSyncService(token);
-      await syncService.saveConfigToSheet(this.config!);
+      await syncService.saveConfigToSheet(this.config!, undefined, {
+        syncAction: 'jira_rule_update',
+      });
       console.log('✅ 配置已同步到 Google Sheet');
     } catch (error) {
       console.warn('同步配置到 Sheet 失败:', error);

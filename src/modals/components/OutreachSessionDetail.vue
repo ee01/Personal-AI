@@ -105,6 +105,14 @@
             class="page-link"
             >查看模板会话</router-link
           >
+          <a
+            v-if="messageReactionSourceUrl(detail)"
+            :href="messageReactionSourceUrl(detail)"
+            class="page-link"
+            target="_blank"
+            rel="noopener noreferrer"
+            >打开原消息</a
+          >
         </div>
       </section>
 
@@ -918,9 +926,28 @@ function statusLabel(status: string) {
 
 function originLabel(originKind?: string) {
   if (originKind === 'reflection_action') return '自我反思';
+  if (originKind === 'message_reaction') return '消息跟进';
   if (originKind === 'scheduled_template' || originKind === 'manual_action')
     return '手动/定时';
   return '未知来源';
+}
+
+function isMessageReactionSession(session: OutreachSession) {
+  return session.originKind === 'message_reaction';
+}
+
+function messageReactionSourceUrl(session: OutreachSession): string {
+  if (!isMessageReactionSession(session)) return '';
+  const raw = session.outcome?.messageUrl;
+  if (typeof raw !== 'string' || !raw.trim()) return '';
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.href
+      : '';
+  } catch {
+    return '';
+  }
 }
 
 function targetTypeLabel(targetType?: string) {
@@ -1120,7 +1147,9 @@ function sessionSummary(session: OutreachSession): string {
     return '等待人工审批。批准后系统才会正式发出询问。';
   if (session.status === 'scheduled') return '会话已创建，等待到达发送时间。';
   if (session.status === 'waiting_reply')
-    return '询问已发出，系统正在等待对方回复。';
+    return isMessageReactionSession(session)
+      ? '这条跟进来自原始消息。系统正在检查当前会话是否已有满足完成标准的回复；没有命中时才会继续追问。'
+      : '询问已发出，系统正在等待对方回复。';
   if (session.status === 'deferred') {
     return session.waitUntil
       ? `对方表示稍后回复，当前等待到 ${relativeTime(session.waitUntil)}。`

@@ -33,17 +33,46 @@ const MAX_PROFILE_ITEMS_FOR_PROMPT = 8;
 const MAX_USER_CORE_CHARS_FOR_PROMPT = 900;
 const WEB_AGENT_SOURCES: RecallSourceType[] = [
   'ai_chat',
+  'chatgpt',
   'doubao',
+  'doubao_chat',
+  'codex_cli',
+  'claude_code_cli',
+  'cursor_agent_cli',
   'glip',
   'jira',
   'meeting',
   'calendar',
   'web',
   'manual',
+  'source_memory',
   'system',
   'user_core',
   'markdown',
   'reflection',
+  'reflection_thread',
+  'rehearsal',
+];
+const AGENT_COMPOSE_SOURCES: RecallSourceType[] = [
+  'codex_cli',
+  'claude_code_cli',
+  'cursor_agent_cli',
+  'chatgpt',
+  'doubao_chat',
+  'ai_chat',
+  'doubao',
+  'jira',
+  'glip',
+  'meeting',
+  'calendar',
+  'web',
+  'manual',
+  'source_memory',
+  'system',
+  'user_core',
+  'markdown',
+  'reflection',
+  'reflection_thread',
   'rehearsal',
 ];
 const WORK_SOURCES: RecallSourceType[] = [
@@ -53,10 +82,12 @@ const WORK_SOURCES: RecallSourceType[] = [
   'calendar',
   'web',
   'manual',
+  'source_memory',
   'system',
   'user_core',
   'markdown',
   'reflection',
+  'reflection_thread',
   'rehearsal',
 ];
 const MEETING_PREP_SOURCES: RecallSourceType[] = [
@@ -70,8 +101,41 @@ const MEETING_PREP_SOURCES: RecallSourceType[] = [
   'user_core',
   'markdown',
   'reflection',
+  'reflection_thread',
   'rehearsal',
 ];
+
+type AgentComposeTaskKind =
+  | 'repo_bugfix'
+  | 'code_review'
+  | 'ui_demo'
+  | 'source_research'
+  | 'meeting_prep'
+  | 'jira_data_analysis'
+  | 'message_reply'
+  | 'policy_or_tool_decision'
+  | 'unknown';
+
+interface AgentComposeTaskFrame {
+  kind: AgentComposeTaskKind;
+  summary: string;
+  confidence: number;
+}
+
+interface TargetToolFit {
+  targetTool: string;
+  fit: 'good' | 'ok' | 'weak' | 'unknown';
+  reason: string;
+  betterTool?: string;
+}
+
+interface AgentComposeContext {
+  taskFrame: AgentComposeTaskFrame;
+  targetToolFit: TargetToolFit;
+  sourceMix: Record<string, number>;
+  egressRisk: 'low' | 'medium' | 'high';
+  relatedAgentSessions: string[];
+}
 
 export class ContextAssistService {
   private readonly recallService: ContextRecallService;
@@ -80,7 +144,7 @@ export class ContextAssistService {
     private readonly db: Database.Database,
     private readonly userId = 'default',
   ) {
-    this.recallService = new ContextRecallService(db);
+    this.recallService = new ContextRecallService(db, userId);
   }
 
   async assist(request: ContextAssistRequest): Promise<ContextAssistResponse> {
@@ -97,6 +161,30 @@ export class ContextAssistService {
   async assistComposer(
     request: ComposerAssistRequest,
   ): Promise<ComposerAssistResponse> {
+    const taskFrame = inferAgentComposeTaskFrame(request);
+    if (
+      isAgentContextPackRequest(request) &&
+      !hasAgentComposeTaskIntent(request, taskFrame)
+    ) {
+      return {
+        available: false,
+        suggestionType: 'none',
+        title: '暂无明确任务',
+        summary: '当前 AI 输入框还没有足够明确的任务意图，不展示跨 AI 上下文。',
+        evidence: [],
+        riskLevel: 'low',
+        previewRequired: false,
+        confidence: 0,
+        queryTimeMs: 0,
+        debug: request.debug
+          ? {
+              rejectedReason: 'agent_compose_task_intent_missing',
+              taskFrame,
+            }
+          : undefined,
+      };
+    }
+
     const ownerReplyState = getOwnerReplyState(request);
     if (ownerReplyState.state === 'complete') {
       return {
@@ -138,6 +226,7 @@ export class ContextAssistService {
           ? {
               recall: recall.debug,
               recallRequest,
+              taskFrame,
               rejectedReason: rawEvidence.length
                 ? 'composer_evidence_not_relevant_to_current_scene'
                 : undefined,
@@ -162,6 +251,7 @@ export class ContextAssistService {
           ? {
               recall: recall.debug,
               recallRequest,
+              taskFrame,
               rejectedReason: 'confidence_below_threshold',
             }
           : undefined,
@@ -170,11 +260,18 @@ export class ContextAssistService {
 
     const suggestionType = getComposerSuggestionType(request);
     const riskLevel = getComposerRiskLevel(request, evidence);
+    const agentContext = buildAgentComposeContext(
+      request,
+      evidence,
+      riskLevel,
+      taskFrame,
+    );
     const personalization = loadComposerPersonalization(this.db, request);
     const insertText = await buildComposerInsertText(
       request,
       evidence,
       personalization,
+      agentContext,
     );
 
     if (!insertText) {
@@ -192,6 +289,12 @@ export class ContextAssistService {
           ? {
               recall: recall.debug,
               recallRequest,
+              taskFrame,
+              targetToolFit: agentContext?.targetToolFit,
+              sourceMix: agentContext?.sourceMix,
+              egressRisk: agentContext?.egressRisk,
+              relatedAgentSessions: agentContext?.relatedAgentSessions,
+              personalization: summarizeComposerPersonalization(personalization),
               rejectedReason: 'composer_generation_unavailable',
             }
           : undefined,
@@ -207,13 +310,21 @@ export class ContextAssistService {
       evidence,
       riskLevel,
       previewRequired:
-        riskLevel !== 'low' || request.contextType === 'web_agent_prompt',
+        riskLevel !== 'low' ||
+        request.contextType === 'web_agent_prompt' ||
+        hasRehearsalEvidence(evidence),
       confidence,
       queryTimeMs: recall.queryTimeMs,
       debug: request.debug
         ? {
             recall: recall.debug,
             recallRequest,
+            taskFrame,
+            targetToolFit: agentContext?.targetToolFit,
+            sourceMix: agentContext?.sourceMix,
+            egressRisk: agentContext?.egressRisk,
+            relatedAgentSessions: agentContext?.relatedAgentSessions,
+            personalization: summarizeComposerPersonalization(personalization),
           }
         : undefined,
     };
@@ -472,19 +583,72 @@ function buildComposerEntityHints(
   return hints.length ? hints : undefined;
 }
 
+function isAllowedComposerSourceType(value: string): value is RecallSourceType {
+  return (
+    WEB_AGENT_SOURCES.includes(value as RecallSourceType) ||
+    AGENT_COMPOSE_SOURCES.includes(value as RecallSourceType) ||
+    WORK_SOURCES.includes(value as RecallSourceType)
+  );
+}
+
+function getAgentComposeDefaultSources(
+  request: ComposerAssistRequest,
+): RecallSourceType[] {
+  return getComposerScenario(request) === 'agent_compose'
+    ? AGENT_COMPOSE_SOURCES
+    : removeCurrentTargetSources(WEB_AGENT_SOURCES, request);
+}
+
+function removeCurrentTargetSources(
+  sourceTypes: RecallSourceType[],
+  request: ComposerAssistRequest,
+): RecallSourceType[] {
+  const current = getCurrentTargetSourceTypes(request);
+  if (current.size === 0) return sourceTypes;
+  return sourceTypes.filter((sourceType) => !current.has(sourceType));
+}
+
+function getCurrentTargetSourceTypes(
+  request: ComposerAssistRequest,
+): Set<RecallSourceType> {
+  const provider = (
+    request.identifiers?.provider ||
+    request.audience?.provider ||
+    request.surface
+  )
+    ?.trim()
+    .toLowerCase();
+  const values: RecallSourceType[] =
+    provider === 'chatgpt'
+      ? ['chatgpt']
+      : provider === 'doubao'
+      ? ['doubao', 'doubao_chat']
+      : provider === 'codex_cli'
+      ? ['codex_cli']
+      : provider === 'claude_code_cli'
+      ? ['claude_code_cli']
+      : provider === 'cursor_agent_cli'
+      ? ['cursor_agent_cli']
+      : [];
+  return new Set(values);
+}
+
 function normalizeComposerSourceTypes(
   request: ComposerAssistRequest,
 ): RecallSourceType[] {
   const defaults =
     request.contextType === 'web_agent_prompt'
-      ? WEB_AGENT_SOURCES
+      ? getAgentComposeDefaultSources(request)
       : WORK_SOURCES;
   const requested = request.sourceTypes?.length
     ? request.sourceTypes.filter((value): value is RecallSourceType =>
-        defaults.includes(value as RecallSourceType),
+        isAllowedComposerSourceType(value),
       )
     : defaults;
-  return requested.length ? requested : defaults;
+  const normalized = requested.length ? requested : defaults;
+  if (request.contextType !== 'web_agent_prompt') return normalized;
+  const adjusted = removeCurrentTargetSources(normalized, request);
+  return adjusted.length ? adjusted : defaults;
 }
 
 function normalizeMeetingPrepSourceTypes(
@@ -530,7 +694,7 @@ function getComposerSuggestionType(
 }
 
 function getComposerAssistTitle(request: ComposerAssistRequest): string {
-  if (request.contextType === 'web_agent_prompt') return 'AI context pack';
+  if (request.contextType === 'web_agent_prompt') return '跨 AI 上下文';
   if (request.contextType === 'jira_issue') return 'Jira 相关记忆';
   if (request.surface === 'ringcentral_thread') return 'Thread 回复上下文';
   return '消息回复上下文';
@@ -598,13 +762,300 @@ function getConfidence(evidence: ComposerAssistEvidence[]): number {
   return Number(confidence.toFixed(2));
 }
 
+function isAgentContextPackRequest(request: ComposerAssistRequest): boolean {
+  return request.contextType === 'web_agent_prompt';
+}
+
+function hasAgentComposeTaskIntent(
+  request: ComposerAssistRequest,
+  taskFrame: AgentComposeTaskFrame,
+): boolean {
+  if (!isAgentContextPackRequest(request)) return true;
+  const draft = normalizeComposerDraft(request.draftText);
+  if (taskFrame.kind !== 'unknown' && taskFrame.confidence >= 0.55) {
+    return true;
+  }
+  if (draft.length >= 12 && /[a-z\u4e00-\u9fff0-9]/i.test(draft)) {
+    return true;
+  }
+  return false;
+}
+
+function inferAgentComposeTaskFrame(
+  request: ComposerAssistRequest,
+): AgentComposeTaskFrame {
+  const text = [
+    request.draftText,
+    request.primaryText,
+    request.title,
+    ...(request.secondaryTexts ?? []),
+    ...(request.keywords ?? []),
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+  const fallbackSummary = summarizeIntent(request);
+
+  const rules: Array<{
+    kind: AgentComposeTaskKind;
+    confidence: number;
+    summary: string;
+    pattern: RegExp;
+  }> = [
+    {
+      kind: 'repo_bugfix',
+      confidence: 0.86,
+      summary: 'repo 内 bug 修复或可验证代码修改',
+      pattern:
+        /\b(bug|fix|regression|failing test|stack trace|exception|diff|patch|pr|branch|repo)\b|修复|报错|失败测试|补丁|代码库|分支/,
+    },
+    {
+      kind: 'code_review',
+      confidence: 0.78,
+      summary: '代码 review、风险检查或实现方案复核',
+      pattern: /\b(review|cr|code review|refactor|risk|lint)\b|代码评审|复审|重构|风险检查/,
+    },
+    {
+      kind: 'ui_demo',
+      confidence: 0.76,
+      summary: 'UI/demo/prototype 生成或调整',
+      pattern: /\b(ui|demo|prototype|mockup|html|css|figma)\b|原型|演示|页面|界面|交互/,
+    },
+    {
+      kind: 'jira_data_analysis',
+      confidence: 0.76,
+      summary: 'Jira issue、项目状态或数据分析',
+      pattern: /\b[A-Z][A-Z0-9]+-\d+\b|\bjira\b|\bissue\b|工单|需求|缺陷|状态|完成情况/,
+    },
+    {
+      kind: 'source_research',
+      confidence: 0.78,
+      summary: '基于资料来源的研究、综合或引用整理',
+      pattern:
+        /\b(research|source|citation|paper|doc|notebooklm|notebook|study|summarize)\b|资料|来源|引用|论文|文档|调研|整理/,
+    },
+    {
+      kind: 'meeting_prep',
+      confidence: 0.74,
+      summary: '会议准备、会前 brief 或议题梳理',
+      pattern: /\b(meeting|agenda|prep|brief|standup)\b|会议|会前|议程|同步会|准备/,
+    },
+    {
+      kind: 'message_reply',
+      confidence: 0.68,
+      summary: '消息回复或沟通表达',
+      pattern: /\b(reply|respond|message|email|comment)\b|回复|怎么说|消息|评论|邮件/,
+    },
+    {
+      kind: 'policy_or_tool_decision',
+      confidence: 0.72,
+      summary: '工具选型、政策判断或方案决策',
+      pattern:
+        /\b(choose|compare|decision|policy|tool|codex|claude|cursor|gemini|chatgpt|notebooklm)\b|选择|对比|决策|政策|工具|选型/,
+    },
+  ];
+
+  for (const rule of rules) {
+    if (rule.pattern.test(text)) {
+      return {
+        kind: rule.kind,
+        summary: rule.summary,
+        confidence: rule.confidence,
+      };
+    }
+  }
+
+  return {
+    kind: 'unknown',
+    summary: fallbackSummary || '继续当前 AI 会话',
+    confidence: fallbackSummary.length >= 12 ? 0.46 : 0.2,
+  };
+}
+
+function buildTargetToolFit(
+  request: ComposerAssistRequest,
+  taskFrame: AgentComposeTaskFrame,
+): TargetToolFit {
+  const targetTool = normalizeTargetTool(request);
+  const task = taskFrame.kind;
+  if (task === 'repo_bugfix' || task === 'ui_demo') {
+    if (targetTool === 'codex_cli') {
+      return {
+        targetTool,
+        fit: 'good',
+        reason: '这是可验证的 repo/代码任务，Codex 适合产出 diff 并运行检查。',
+      };
+    }
+    return {
+      targetTool,
+      fit: 'weak',
+      betterTool: 'codex_cli',
+      reason: '这是可验证的 repo/代码任务，更适合交给 Codex 生成 patch；当前 AI 可用于先梳理需求。',
+    };
+  }
+  if (task === 'code_review') {
+    if (targetTool === 'claude_code_cli' || targetTool === 'chatgpt') {
+      return {
+        targetTool,
+        fit: 'good',
+        reason: '当前任务偏 review 和推理，适合做风险检查与盲点复核。',
+      };
+    }
+    return {
+      targetTool,
+      fit: 'ok',
+      betterTool: 'claude_code_cli',
+      reason: '可以继续使用当前 AI，但 Claude Code 更适合长上下文代码 review。',
+    };
+  }
+  if (task === 'source_research') {
+    if (targetTool === 'gemini') {
+      return {
+        targetTool,
+        fit: 'good',
+        reason: '当前任务偏资料研究，Gemini/Notebook 类工具适合处理 source-grounded 上下文。',
+      };
+    }
+    return {
+      targetTool,
+      fit: 'ok',
+      betterTool: 'notebooklm',
+      reason: '可以继续讨论，但如果需要严格来源引用，更适合 NotebookLM/Gemini 这类资料空间。',
+    };
+  }
+  if (task === 'jira_data_analysis') {
+    if (isInteractiveAiTargetTool(targetTool)) {
+      return {
+        targetTool,
+        fit: 'ok',
+        betterTool: 'jira_or_project_dashboard',
+        reason:
+          '当前 AI 适合整理 Personal AI 带入的 Jira/项目上下文，但实时状态、owner 和 blocker 仍要回到 Jira 或 Personal AI 项目面板核对。',
+      };
+    }
+    return {
+      targetTool,
+      fit: 'weak',
+      betterTool: 'jira_or_project_dashboard',
+      reason:
+        '这是 Jira/项目状态判断，不是代码 patch；当前工具最多承接上下文整理，实时状态应由 Jira 或 Personal AI 项目面板确认。',
+    };
+  }
+  if (task === 'meeting_prep') {
+    if (isInteractiveAiTargetTool(targetTool)) {
+      return {
+        targetTool,
+        fit: 'ok',
+        betterTool: 'today_pilot_meeting_prep',
+        reason:
+          '当前 AI 可以帮助整理议程和表达，但日历、参会人和最近承诺应优先由 Today Pilot 会前准备核对。',
+      };
+    }
+    return {
+      targetTool,
+      fit: 'weak',
+      betterTool: 'today_pilot_meeting_prep',
+      reason:
+        '这是会前准备任务，最好使用 Today Pilot 的会议上下文；当前工具只能接收摘要后继续处理。',
+    };
+  }
+  if (task === 'message_reply' || task === 'policy_or_tool_decision') {
+    return {
+      targetTool,
+      fit: 'good',
+      reason: '当前任务以表达、方案或判断为主，聊天型 AI 可以继续承接。',
+    };
+  }
+  return {
+    targetTool,
+    fit: 'unknown',
+    reason: '任务类型还不够明确，仅提供相关上下文，不做工具适配判断。',
+  };
+}
+
+function isInteractiveAiTargetTool(targetTool: string): boolean {
+  return ['chatgpt', 'claude', 'gemini', 'doubao', 'generic_agent'].includes(
+    targetTool,
+  );
+}
+
+function buildAgentComposeContext(
+  request: ComposerAssistRequest,
+  evidence: ComposerAssistEvidence[],
+  riskLevel: ComposerAssistResponse['riskLevel'],
+  taskFrame: AgentComposeTaskFrame,
+): AgentComposeContext | undefined {
+  if (!isAgentContextPackRequest(request)) return undefined;
+  return {
+    taskFrame,
+    targetToolFit: buildTargetToolFit(request, taskFrame),
+    sourceMix: buildComposerSourceMix(evidence),
+    egressRisk: riskLevel,
+    relatedAgentSessions: getRelatedAgentSessionLabels(evidence),
+  };
+}
+
+function normalizeTargetTool(request: ComposerAssistRequest): string {
+  return (
+    request.identifiers?.provider ||
+    request.audience?.provider ||
+    request.surface ||
+    'unknown'
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function buildComposerSourceMix(
+  evidence: ComposerAssistEvidence[],
+): Record<string, number> {
+  const mix: Record<string, number> = {};
+  for (const item of evidence) {
+    const key = normalizeSourceLabel(
+      item.sourceLabel || item.sourceTitle || item.title || item.id,
+    );
+    mix[key] = (mix[key] ?? 0) + 1;
+  }
+  return mix;
+}
+
+function normalizeSourceLabel(value: string): string {
+  const lower = value.toLowerCase();
+  if (/codex/.test(lower)) return 'codex_cli';
+  if (/claude/.test(lower)) return 'claude_code_cli';
+  if (/cursor/.test(lower)) return 'cursor_agent_cli';
+  if (/doubao|豆包/.test(lower)) return 'doubao';
+  if (/chatgpt|openai/.test(lower)) return 'chatgpt';
+  if (/jira/.test(lower)) return 'jira';
+  if (/glip|ringcentral/.test(lower)) return 'glip';
+  return lower.replace(/[^a-z0-9_\u4e00-\u9fff]+/g, '_').slice(0, 40) || 'unknown';
+}
+
+function getRelatedAgentSessionLabels(
+  evidence: ComposerAssistEvidence[],
+): string[] {
+  const labels = new Set<string>();
+  for (const item of evidence) {
+    const label = [item.sourceLabel, item.sourceTitle, item.title]
+      .filter(Boolean)
+      .join(' ');
+    if (/codex|claude|cursor/i.test(label)) {
+      labels.add(label || item.id);
+    }
+  }
+  return Array.from(labels).slice(0, 6);
+}
+
 async function buildComposerInsertText(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
   personalization: ComposerPersonalization,
+  agentContext?: AgentComposeContext,
 ): Promise<string | null> {
   if (request.contextType === 'web_agent_prompt') {
-    return clipInsertText(renderWebAgentContextPack(request, evidence));
+    return clipInsertText(
+      renderWebAgentContextPack(request, evidence, agentContext),
+    );
   }
 
   const generated = await generateSendableComposerText(
@@ -626,11 +1077,16 @@ async function buildComposerInsertText(
 function renderWebAgentContextPack(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
+  agentContext?: AgentComposeContext,
 ): string {
   const intent = summarizeIntent(request);
+  const taskFrame = agentContext?.taskFrame ?? inferAgentComposeTaskFrame(request);
+  const targetToolFit =
+    agentContext?.targetToolFit ?? buildTargetToolFit(request, taskFrame);
+  const egressRisk = agentContext?.egressRisk ?? 'medium';
   const bullets = evidence.map(
     (item, index) =>
-      `${index + 1}. ${formatComposerEvidenceForPrompt(item)} [M${
+      `${index + 1}. ${formatComposerEvidenceForEgress(item, egressRisk)} [M${
         index + 1
       }]`,
   );
@@ -645,6 +1101,9 @@ function renderWebAgentContextPack(
     '请结合下面上下文回答：',
     '',
     `目标：${intent}`,
+    '',
+    `任务判断：${formatTaskFrame(taskFrame)}`,
+    `目标工具适配：${formatTargetToolFit(targetToolFit)}`,
     '',
     '相关记忆：',
     ...bullets,
@@ -661,6 +1120,33 @@ function renderWebAgentContextPack(
     '来源：',
     ...sources,
   ].join('\n');
+}
+
+function formatTaskFrame(taskFrame: AgentComposeTaskFrame): string {
+  const confidence = Math.round(taskFrame.confidence * 100);
+  return `${taskFrame.summary}（${taskFrame.kind}, ${confidence}%）`;
+}
+
+function formatTargetToolFit(targetToolFit: TargetToolFit): string {
+  const base = `${targetToolFit.targetTool}: ${targetToolFit.reason}`;
+  return targetToolFit.betterTool
+    ? `${base} 更适合的备选：${targetToolFit.betterTool}。`
+    : base;
+}
+
+function formatComposerEvidenceForEgress(
+  item: ComposerAssistEvidence,
+  egressRisk: AgentComposeContext['egressRisk'],
+): string {
+  const raw = formatComposerEvidenceForPrompt(item);
+  if (egressRisk !== 'high') return raw;
+  const redacted = raw
+    .replace(/https?:\/\/\S+/g, '[link]')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
+    .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '[phone]');
+  return redacted.length > 180
+    ? `${redacted.slice(0, 180).trimEnd()}...`
+    : redacted;
 }
 
 async function generateSendableComposerText(
@@ -694,7 +1180,7 @@ async function generateSendableComposerText(
   }
 }
 
-function buildComposerGenerationPrompt(
+export function buildComposerGenerationPrompt(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
   scenario: ComposerScenario,
@@ -756,7 +1242,7 @@ function buildComposerGenerationPrompt(
     .join('\n');
 }
 
-interface ComposerProfileRow {
+export interface ComposerProfileRow {
   item_type: string;
   item_key: string;
   item_value: string;
@@ -766,7 +1252,7 @@ interface ComposerProfileRow {
   updated_at: number | null;
 }
 
-interface ComposerPersonalization {
+export interface ComposerPersonalization {
   userCore?: string;
   confirmedFacts: ComposerProfileRow[];
   confirmedPreferences: ComposerProfileRow[];
@@ -775,7 +1261,7 @@ interface ComposerPersonalization {
   softStyleHints: ComposerProfileRow[];
 }
 
-function loadComposerPersonalization(
+export function loadComposerPersonalization(
   db: Database.Database,
   request: ComposerAssistRequest,
 ): ComposerPersonalization {
@@ -843,37 +1329,104 @@ function loadComposerStyleHints(
   request: ComposerAssistRequest,
   confirmedOnly: boolean,
 ): ComposerProfileRow[] {
-  const styleKeys = getComposerStyleKeys(request);
-  const keyPlaceholders = styleKeys.map(() => '?').join(', ');
   const confirmedClause = confirmedOnly
     ? "AND user_confirmed = 1 AND status = 'active'"
     : "AND user_confirmed = 0 AND status = 'pending_confirm'";
   try {
-    return db
+    const rows = db
       .prepare(
         `SELECT item_type, item_key, item_value, user_confirmed, status,
                 salience_score, updated_at
            FROM user_profile_items
-          WHERE item_key IN (${keyPlaceholders})
+          WHERE (
+              item_key LIKE 'writing_style.%'
+              OR item_key IN ('writing_style', 'response_style', 'communication_style')
+            )
             ${confirmedClause}
-          ORDER BY
-            CASE ${styleKeys
-              .map((key, index) => `WHEN item_key = ? THEN ${index}`)
-              .join(' ')}
-              ELSE ${styleKeys.length}
-            END,
-            salience_score DESC,
-            updated_at DESC
-          LIMIT ?`,
+          ORDER BY salience_score DESC, updated_at DESC
+          LIMIT 40`,
       )
-      .all(
-        ...styleKeys,
-        ...styleKeys,
-        MAX_PROFILE_ITEMS_FOR_PROMPT,
-      ) as ComposerProfileRow[];
+      .all() as ComposerProfileRow[];
+    return rows
+      .map((row) => ({
+        row,
+        score: scoreComposerStyleHint(row.item_key, request),
+      }))
+      .filter((item) => item.score > 0)
+      .sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score;
+        return (right.row.salience_score ?? 0) - (left.row.salience_score ?? 0);
+      })
+      .slice(0, MAX_PROFILE_ITEMS_FOR_PROMPT)
+      .map((item) => item.row);
   } catch {
     return [];
   }
+}
+
+function scoreComposerStyleHint(
+  itemKey: string,
+  request: ComposerAssistRequest,
+): number {
+  const key = itemKey.toLowerCase();
+  const scenario = getComposerScenario(request);
+  const surface = request.surface.toLowerCase();
+  const contextText = buildComposerContextText(request, {
+    includeAudience: true,
+    includeSender: true,
+    maxItems: 8,
+  });
+  let score = getComposerStyleKeys(request).includes(key) ? 3 : 0.3;
+
+  if (key === 'writing_style') score += 0.5;
+  if (key === 'response_style' || key === 'communication_style') score += 0.4;
+
+  if (key.includes('ringcentral')) {
+    score += surface.includes('ringcentral') ? 2 : -1.5;
+  }
+  if (key.includes('jira')) {
+    score += request.contextType === 'jira_issue' ? 2 : -1.5;
+  }
+  if (key.includes('ai_chat')) {
+    score += request.contextType === 'web_agent_prompt' ? 1.5 : -1;
+  }
+
+  if (key.includes('casual_reply')) {
+    score += scenario === 'instant_message_reply' ? 2 : -0.5;
+  }
+  if (key.includes('thread_reply')) {
+    score += scenario === 'thread_reply' ? 2 : -0.5;
+  }
+  if (key.includes('jira_comment')) {
+    score += scenario === 'jira_comment' ? 2 : -0.5;
+  }
+  if (key.includes('status_update')) {
+    score += /status|状态|进展|ready|blocker/i.test(contextText) ? 1.5 : 0;
+  }
+
+  if (key.includes('peer')) {
+    const relationshipHint = [
+      request.audience?.relationshipHint,
+      request.audience?.conversationTitle,
+      ...(request.audience?.people ?? []),
+    ]
+      .filter(Boolean)
+      .join(' ');
+    score +=
+      /peer|colleague|同事/i.test(relationshipHint) ||
+      surface.includes('ringcentral')
+        ? 1.2
+        : 0;
+  }
+
+  if (key.includes('.zh')) {
+    score += /[\u4e00-\u9fff]/.test(contextText) ? 1 : -0.3;
+  }
+  if (key.includes('.en')) {
+    score += /[a-z]{3,}/i.test(contextText) ? 0.6 : 0;
+  }
+
+  return score;
 }
 
 function getComposerStyleKeys(request: ComposerAssistRequest): string[] {
@@ -931,6 +1484,20 @@ function formatOwnerExpressionConstraints(
   ].filter(Boolean);
 
   return sections.length ? sections.join('\n') : '';
+}
+
+function summarizeComposerPersonalization(
+  personalization: ComposerPersonalization,
+): Record<string, unknown> {
+  return {
+    confirmedStyleHintKeys: personalization.confirmedStyleHints.map(
+      (row) => row.item_key,
+    ),
+    softStyleHintKeys: personalization.softStyleHints.map((row) => row.item_key),
+    confirmedPreferenceCount: personalization.confirmedPreferences.length,
+    confirmedConstraintCount: personalization.confirmedConstraints.length,
+    hasUserCore: Boolean(personalization.userCore?.trim()),
+  };
 }
 
 function formatProfileSection(label: string, body?: string): string {
@@ -1108,6 +1675,10 @@ function describeComposerScenario(scenario: ComposerScenario): string {
       return '在 Jira issue 里写 comment';
     case 'web_agent_prompt':
       return '给网页 AI/Agent 写 prompt';
+    case 'compose_to_ai':
+      return '给当前网页 AI 接力上下文';
+    case 'agent_compose':
+      return '给 coding agent 准备任务上下文';
     case 'document_note':
       return '整理文档或笔记';
     case 'instant_message_reply':
@@ -1165,6 +1736,10 @@ function filterComposerEvidence(
 
 function isRehearsalEvidence(item: ComposerAssistEvidence): boolean {
   return item.type === 'rehearsal';
+}
+
+function hasRehearsalEvidence(evidence: ComposerAssistEvidence[]): boolean {
+  return evidence.some(isRehearsalEvidence);
 }
 
 function isSceneCueRehearsalEvidence(item: ComposerAssistEvidence): boolean {

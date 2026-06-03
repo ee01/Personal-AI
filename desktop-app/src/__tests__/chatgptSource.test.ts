@@ -265,8 +265,14 @@ test('ChatGPTSource collects current-node messages, stores raw cache, and extrac
     );
     assert.deepEqual(fetchCalls[0]?.body, {
       source: 'chatgpt',
+      sourceType: 'chatgpt',
       scope: 'work',
       autoClassify: true,
+      extractMode: 'chat',
+      conversationMeta: {
+        toolKey: 'chatgpt',
+        sessionId: 'conv-1',
+      },
       segments: [
         {
           id: 'msg-1',

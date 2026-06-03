@@ -29,12 +29,11 @@ import {
   buildBackendNotificationId,
   buildBackendNotificationMessage,
   getBackendNotificationClosedDeliveryStatus,
-  getBackendNotificationSnoozeSeconds,
   getBackendNotificationMetaStorageKey,
-  getBackendNotificationSecondaryActionDeliveryStatus,
   getBackendTargetHash,
   inferLegacyLane,
   normalizeBackendNotificationMeta,
+  performBackendNotificationSecondaryAction,
   type BackendNotificationMeta,
 } from './backendNotifications';
 import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
@@ -57,12 +56,13 @@ import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
+import { hasRingCentralSenderCredentials } from './scheduled-messages/botAutomationConfig';
 import {
   formatLocalScheduleDateTime,
   normalizeLocalScheduleTime,
 } from './scheduled-messages/scheduleDateTime';
 import { calculateScheduledMessageNextExecution } from './scheduled-messages/scheduleNextExecution';
-import type { PushLog, ScheduledMessage } from './scheduled-messages/types';
+import type { CreateMessageFormData, PushLog, ScheduledMessage } from './scheduled-messages/types';
 import {
   getCurrentUser,
   getProjectByKey,
@@ -80,6 +80,7 @@ import {
   storeRelatedMessage,
   registerFollowThreadDigestTask,
 } from './message-reaction/FollowThreadHandler';
+import { buildPendingFollowThreadConfig } from './message-reaction/followThreadPendingConfig';
 import { buildPendingLinkedActionConfig } from './message-reaction/linkedActionEntry';
 import {
   doesSnoozeReminderMatchSchedule,
@@ -96,6 +97,7 @@ import {
   buildScheduledPushLogMarkers,
   buildScheduledSnoozeMarkers,
   mergeMarkerIndexes,
+  upsertGlipPendingScheduledMessage,
   writeGlipMessageMarkersCache,
 } from './services/GlipMessageMarkerService';
 import {
@@ -541,7 +543,14 @@ async function refreshGlipMessageMarkers(): Promise<unknown> {
       ),
     );
 
-    return writeGlipMessageMarkersCache(markersByChatId);
+    const deliveredScheduledMessageIds = scheduledSheetData.pushLogs
+      .filter((log) => log.Status === 'Success')
+      .map((log) => (typeof log.Message_ID === 'string' ? log.Message_ID : ''))
+      .filter(Boolean);
+
+    return writeGlipMessageMarkersCache(markersByChatId, {
+      deliveredScheduledMessageIds,
+    });
   })().finally(() => {
     glipMarkerRefreshInFlight = null;
   });
@@ -1380,7 +1389,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const targetId = String(feedback.targetId || '').trim();
         const targetType = feedback.targetType;
         const action = feedback.action === 'positive' ? 'positive' : 'negative';
-        const allowedTargetTypes = new Set(['message', 'chunk', 'entity', 'rehearsal']);
+        const allowedTargetTypes = new Set([
+          'message',
+          'chunk',
+          'entity',
+          'rehearsal',
+          'source_memory',
+        ]);
         if (!targetId || !allowedTargetTypes.has(targetType)) {
           sendResponse({ success: false, error: 'invalid_feedback_target' });
           return;
@@ -1388,7 +1403,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const detail =
           typeof feedback.detail === 'string'
-            ? feedback.detail.slice(0, 500)
+            ? feedback.detail.slice(0, 1200)
             : undefined;
         const client = getMemoryServiceClient();
         if (targetType === 'rehearsal') {
@@ -1535,6 +1550,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, result });
       } catch (err) {
         console.warn('[background] memory-capture dismiss failed:', err);
+        sendResponse({
+          success: false,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'MEMORY_CAPTURE_UPDATE_CAPSULE_NOTE') {
+    (async () => {
+      try {
+        const capsuleId = String(request.capsuleId || '').trim();
+        if (!capsuleId) {
+          sendResponse({ success: false, error: 'Missing capsule id' });
+          return;
+        }
+        const client = getMemoryServiceClient();
+        const result = await client.updateSourceMemoryCapsuleNote(
+          capsuleId,
+          String(request.note || ''),
+        );
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.warn('[background] memory-capture note update failed:', err);
         sendResponse({
           success: false,
           error: String((err as Error)?.message || err),
@@ -2311,6 +2351,143 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // 从 RingCentral 发送框创建定时消息
+  if (request.type === 'CREATE_GLIP_COMPOSE_SCHEDULED_MESSAGE') {
+    (async () => {
+      try {
+        const data = request.data || {};
+        const content = typeof data.content === 'string' ? data.content.trim() : '';
+        const topic = typeof data.topic === 'string' && data.topic.trim()
+          ? data.topic.trim()
+          : '定时发送消息';
+        const scheduledAt = new Date(String(data.scheduledAt || ''));
+        const targetType = data.targetType === 'group' ? 'group' : 'private';
+        const glipUserName =
+          typeof data.glipUserName === 'string' ? data.glipUserName.trim() : '';
+        const glipTeamId =
+          typeof data.glipTeamId === 'string' ? data.glipTeamId.trim() : '';
+        const chatId = typeof data.chatId === 'string' ? data.chatId.trim() : '';
+
+        if (!content) {
+          sendResponse({
+            success: false,
+            reason: 'empty_content',
+            error: '请先输入要定时发送的消息',
+          });
+          return;
+        }
+
+        if (Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+          sendResponse({
+            success: false,
+            reason: 'invalid_time',
+            error: '请选择未来时间',
+          });
+          return;
+        }
+
+        if (targetType === 'group' && !glipTeamId) {
+          sendResponse({
+            success: false,
+            reason: 'missing_target',
+            error: '无法识别当前群组目标',
+          });
+          return;
+        }
+
+        if (!chatId) {
+          sendResponse({
+            success: false,
+            reason: 'missing_chat',
+            error: '无法识别当前聊天会话',
+          });
+          return;
+        }
+
+        if (targetType === 'private' && !glipUserName) {
+          sendResponse({
+            success: false,
+            reason: 'missing_target',
+            error: '无法识别当前私聊目标',
+          });
+          return;
+        }
+
+        const result = await chrome.storage.local.get([
+          'scheduledMessagesConfig',
+        ]);
+        const config = result.scheduledMessagesConfig;
+        const ringCentralSenderConfigured = hasRingCentralSenderCredentials(config);
+
+        if (!config || !config.sheetId) {
+          sendResponse({
+            success: false,
+            reason: 'not_initialized',
+            error: '请先在设置中初始化定时消息系统',
+            ringCentralSenderConfigured,
+          });
+          return;
+        }
+
+        const token = await getGoogleAuthToken({
+          caller: 'background.createGlipComposeScheduledMessage',
+        });
+        if (!token) {
+          sendResponse({
+            success: false,
+            reason: 'auth_required',
+            error: '无法获取 Google 授权，请打开定时消息管理器重新授权',
+            ringCentralSenderConfigured,
+          });
+          return;
+        }
+
+        const { dateStr, timeStr } = formatLocalScheduleDateTime(scheduledAt);
+        const service = new ScheduledMessageService(token);
+        const formData: CreateMessageFormData = {
+          Topic: topic,
+          Content: content,
+          Schedule_Date: dateStr,
+          Schedule_Time: timeStr,
+          Push_Method: 'AsMe',
+          Target_Type: targetType,
+          Glip_User_Name: targetType === 'private' ? glipUserName : undefined,
+          Glip_Team_ID: targetType === 'group' ? glipTeamId : undefined,
+          Category: 'ComposeScheduled,定时发送',
+        };
+
+        const newMessage = await service.createMessage(formData);
+        await upsertGlipPendingScheduledMessage({
+          id: `compose-scheduled:${newMessage.ID || `${chatId}:${scheduledAt.toISOString()}`}`,
+          messageId: newMessage.ID,
+          chatId,
+          topic,
+          content,
+          scheduledAt: scheduledAt.toISOString(),
+          targetType,
+          targetLabel: targetType === 'group' ? glipTeamId : glipUserName,
+          sourceUrl: typeof data.sourceUrl === 'string' ? data.sourceUrl : undefined,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          warnings: data.warnings,
+        });
+        sendResponse({
+          success: true,
+          messageId: newMessage.ID,
+          ringCentralSenderConfigured,
+        });
+      } catch (error: any) {
+        console.error('❌ 从 Glip 发送框创建定时消息失败:', error);
+        sendResponse({
+          success: false,
+          reason: 'background_error',
+          error: error.message || '创建定时消息失败',
+        });
+      }
+    })();
+    return true;
+  }
+
   // 检查 Automation_Link 是否已存在于 Scheduled Messages 中
   if (request.type === 'CHECK_AUTOMATION_LINK_EXISTS') {
     (async () => {
@@ -2605,6 +2782,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         if (requestData.filterPendingReview === true) {
           params.set('filterPendingReview', 'true');
+        }
+
+        const targetMessageId =
+          typeof requestData.messageId === 'string'
+            ? requestData.messageId.trim()
+            : typeof requestData.targetMessageId === 'string'
+            ? requestData.targetMessageId.trim()
+            : '';
+        if (targetMessageId) {
+          params.set('messageId', targetMessageId);
+        }
+
+        if (requestData.configureRingCentralSender === true) {
+          params.set('configureRingCentralSender', 'true');
         }
 
         const query = params.toString();
@@ -3186,10 +3377,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
       try {
         await chrome.storage.local.set({
-          pendingFollowThreadConfig: {
-            ...request.data,
-            timestamp: Date.now(),
-          },
+          pendingFollowThreadConfig: buildPendingFollowThreadConfig(
+            request.data,
+          ),
         });
 
         // 打开 topic-modal
@@ -3359,31 +3549,14 @@ chrome.notifications.onButtonClicked.addListener(
             }
           }
         } else if (buttonIndex === 1 && meta?.sourceRef) {
-          await safeReportChromeDelivery([
-            {
-              sourceRef: meta.sourceRef,
-              lane: meta.lane,
-              status: getBackendNotificationSecondaryActionDeliveryStatus(meta),
-              externalRef: notificationId,
-            },
-          ]);
-          if (meta.sourceRef.startsWith('notification:')) {
-            const client = getMemoryServiceClient();
-            const notificationRecordId =
-              meta.notificationId ||
-              meta.sourceRef.slice('notification:'.length);
-            if (meta.sourceType === 'notification' && meta.lane === 'todo') {
-              await client.snoozeNotification(
-                notificationRecordId,
-                getBackendNotificationSnoozeSeconds(meta),
-              );
-            } else {
-              await client.dismissNotification(
-                notificationRecordId,
-                'chrome_notification_dismiss_button',
-              );
-            }
-          }
+          const client = getMemoryServiceClient();
+          await performBackendNotificationSecondaryAction(meta, notificationId, {
+            reportDelivery: safeReportChromeDelivery,
+            snoozeNotification: (id, delaySeconds) =>
+              client.snoozeNotification(id, delaySeconds),
+            dismissNotification: (id, detail) =>
+              client.dismissNotification(id, detail),
+          });
         }
       } catch (error) {
         console.error(

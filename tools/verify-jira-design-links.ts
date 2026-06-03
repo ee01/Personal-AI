@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 
 import {
   DesignDisplayItem,
+  chooseLatestDesignUpdatedAt,
   classifyDesignUrl,
   dedupeDesignData,
   escapeHtml,
   extractDesignLinks,
   formatDesignStatusLabel,
   formatDesignUpdatedDate,
+  formatDesignUpdatedDateTime,
   formatDesignUpdatedTooltip,
   getDesignAttentionLevel,
   getDesignDisplayLabel,
@@ -26,7 +28,10 @@ import {
   matchesProjectPattern,
   normalizeDesignUrl,
   normalizeFigmaUrl,
+  parseJiraIssueKeyFromBrowseUrl,
+  parseJiraIssueKeyFromIssueUrl,
   parseJiraIssueKeyFromText,
+  parseJiraIssueKeysFromText,
   parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
   sortDesignDisplayItems,
@@ -75,8 +80,17 @@ function verifyUrlNormalization() {
   assert.equal(classifyDesignUrl('https://www.figma.com/community/plugin/123-demo', true)?.label, 'Design link');
   assert.equal(parseJiraIssueKeyFromUrl('https://jira.example.com/browse/ux-123/?focusedCommentId=1'), 'UX-123');
   assert.equal(parseJiraIssueKeyFromUrl('/browse/UXDES-300/'), 'UXDES-300');
+  assert.equal(parseJiraIssueKeyFromUrl('/jira/software/c/projects/UX/issues/uxcloud-600'), 'UXCLOUD-600');
   assert.equal(parseJiraIssueKeyFromUrl('Issue UX-456 mentioned in text'), 'UX-456');
+  assert.equal(parseJiraIssueKeyFromBrowseUrl('https://wiki.example.com/pages/UX-123'), null);
+  assert.equal(parseJiraIssueKeyFromBrowseUrl('/browse/ux-123/?focusedCommentId=1'), 'UX-123');
+  assert.equal(parseJiraIssueKeyFromBrowseUrl('/jira/software/c/projects/UX/issues/uxcloud-600'), null);
+  assert.equal(parseJiraIssueKeyFromIssueUrl('/jira/software/c/projects/UX/issues/uxcloud-600'), 'UXCLOUD-600');
+  assert.equal(parseJiraIssueKeyFromIssueUrl('/projects/UX/issues/UX-601?selectedIssue=UX-601'), 'UX-601');
+  assert.equal(parseJiraIssueKeyFromIssueUrl('https://wiki.example.com/pages/UX-123'), null);
+  assert.deepEqual(parseJiraIssueKeysFromText('blocks ABC-123; design owner UXRAW-400, UX-200.'), ['ABC-123', 'UXRAW-400', 'UX-200']);
   assert.equal(parseJiraIssueKeyFromText('blocked by uxraw-400'), 'UXRAW-400');
+  assert.equal(parseJiraIssueKeyFromText('embed UX-123-alpha'), null);
   assert.equal(parseJiraIssueKeyFromText('No Jira key here'), null);
   assert.deepEqual(
     parseDesignDomainPatterns('https://prototype.internal/path, *.design.local; .handoff.example.com'),
@@ -121,11 +135,20 @@ function verifyEscaping() {
 
 function verifyDesignUpdatedDates() {
   assert.equal(formatDesignUpdatedDate('2026-05-18T10:20:00.000+0000'), '2026-05-18');
+  assert.equal(formatDesignUpdatedDateTime('2026-05-18T10:20:00.000+0000'), '2026-05-18 10:20 UTC');
   assert.equal(formatDesignUpdatedDate('Mon, 18 May 2026 10:20:00 GMT'), '2026-05-18');
   assert.equal(formatDesignUpdatedDate('not a date'), undefined);
   assert.equal(
     formatDesignUpdatedTooltip('2026-05-18T10:20:00.000+0000'),
-    'Design update reported 2026-05-18. Re-check the linked design if implementation started before this update.',
+    'Design update reported 2026-05-18 10:20 UTC. Re-check the linked design if implementation started before this update.',
+  );
+  assert.equal(
+    chooseLatestDesignUpdatedAt(
+      '2026-05-18T10:20:00.000+0000',
+      '2026-05-19T12:34:00.000+0000',
+      'not a date',
+    ),
+    '2026-05-19T12:34:00.000+0000',
   );
 }
 

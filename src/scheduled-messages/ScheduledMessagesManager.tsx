@@ -11,6 +11,8 @@ import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, Create
 import {
   AppScriptUpdater,
   APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR,
+  buildAppScriptProjectUrl,
+  buildAppScriptWebAppActionUrl,
   buildProjectHistoryUrl,
   type AppScriptVersionUsage,
 } from './AppScriptUpdater';
@@ -32,6 +34,7 @@ import {
   BotConfigDialogMode,
   BotConfigValidityStatus,
   getBotDialogModeForStatus,
+  getBotAutomationConfig,
   getExecutorRule,
   getJiraAutomationRuleUrl,
   getRingCentralSenderConfig,
@@ -132,6 +135,13 @@ import {
   formatExecutionRouteSummary,
   getScheduledMessageExecutionRoute,
 } from './executionRoute';
+import {
+  compareConfigSyncFreshness,
+  formatConfigSyncTimestamp,
+} from './configSyncFreshness';
+import { ConfigSyncService } from './ConfigSyncService';
+import { getManualBindConfigDiff } from './manualBindConfigDecision';
+import { getJiraScheduleRestoreTiming } from './jiraScheduleRestore';
 
 // react-select 选项类型
 interface SelectOption {
@@ -146,6 +156,15 @@ interface BotConfigWarningState {
   dialogMode: BotConfigDialogMode;
 }
 
+type ConfigSyncNoticeTone = 'success' | 'info' | 'warning' | 'error';
+
+interface ConfigSyncNotice {
+  tone: ConfigSyncNoticeTone;
+  title: string;
+  description: string;
+  details?: string[];
+}
+
 function formatAppScriptUpdateCheckedAt(isoValue: string): string {
   if (!isoValue) {
     return '';
@@ -157,6 +176,83 @@ function formatAppScriptUpdateCheckedAt(isoValue: string): string {
   }
 
   return date.toLocaleString();
+}
+
+function formatConfigSyncActionForDisplay(value?: string): string {
+  const action = value?.trim();
+  if (!action) {
+    return '未知';
+  }
+
+  const labels: Record<string, string> = {
+    one_click_setup: '一键初始化',
+    manual_bind_minimal_config: '手动绑定补齐基础 Config',
+    manual_bind_recovered_worksheet_ids: '手动绑定补齐子表定位',
+    manual_bind_keep_local: '手动绑定：保留本机',
+    manual_bind_use_sheet: '手动绑定：使用 Sheet',
+    manual_sync_recovered_worksheet_ids: '手动同步补齐子表定位',
+    app_script_metadata_update: 'App Script 元数据更新',
+    sheet_schema_update: 'Sheet schema 更新',
+    bot_config_update: 'Bot / Timeline 配置更新',
+    jira_rule_update: 'Jira Rule 更新',
+    partial_update: '局部配置更新',
+    config_sync: '配置同步',
+  };
+
+  return labels[action] || action;
+}
+
+function formatConfigSyncNoticeDetails(config: Partial<SheetConfig>): string[] {
+  return [
+    `Sheet: ${config.sheetId || '未知'}`,
+    `同步时间: ${formatConfigSyncTimestamp(config.last_sync_time)}`,
+    `最近动作: ${formatConfigSyncActionForDisplay(config.last_sync_action)}`,
+  ];
+}
+
+function mergeSheetConfigForRefresh(
+  localConfig: SheetConfig,
+  sheetConfig: Partial<SheetConfig>
+): SheetConfig {
+  const localBotAutomation = getBotAutomationConfig(localConfig);
+  const sheetBotAutomation = getBotAutomationConfig(sheetConfig);
+
+  return normalizeSheetConfig({
+    ...localConfig,
+    ...sheetConfig,
+    botAutomation: {
+      executorRule: sheetBotAutomation.executorRule || localBotAutomation.executorRule,
+      timelineSyncRule: sheetBotAutomation.timelineSyncRule || localBotAutomation.timelineSyncRule,
+    },
+  }) as SheetConfig;
+}
+
+function getConfigSyncNoticeIcon(tone: ConfigSyncNoticeTone): string {
+  switch (tone) {
+    case 'success':
+      return '✅';
+    case 'warning':
+      return '⚠️';
+    case 'error':
+      return '⛔';
+    case 'info':
+    default:
+      return 'ℹ️';
+  }
+}
+
+function getConfigSyncNoticeStyle(tone: ConfigSyncNoticeTone): React.CSSProperties {
+  const toneStyle: Record<ConfigSyncNoticeTone, React.CSSProperties> = {
+    success: styles.configSyncBannerSuccess,
+    info: styles.configSyncBannerInfo,
+    warning: styles.configSyncBannerWarning,
+    error: styles.configSyncBannerError,
+  };
+
+  return {
+    ...styles.configSyncBanner,
+    ...toneStyle[tone],
+  };
 }
 
 interface OutreachRuntimeState {
@@ -527,6 +623,9 @@ function formatQueueSlotRiskLabel(slot: ScheduleQueueSlotSummary): string {
       typeof slot.remainingSameDaySlots === 'number'
         ? `当天剩余约 ${slot.remainingSameDaySlots} 条`
         : '',
+      slot.reservedExplicitMinutes
+        ? `已避开 ${slot.reservedExplicitMinutes} 个明确时间分钟`
+        : '',
     ].filter(Boolean).join(' · ');
   }
 
@@ -795,6 +894,7 @@ const ScheduledMessagesManager: React.FC = () => {
   );
   const [currentUsername, setCurrentUsername] = useState<string>('');
   const targetMessageRowRef = useRef<HTMLTableRowElement | null>(null);
+  const ringCentralSenderConfigOpenedFromQueryRef = useRef(false);
   const [hoveredMessage, setHoveredMessage] = useState<ScheduledMessage | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const [isUpdating, setIsUpdating] = useState(false);
@@ -815,6 +915,7 @@ const ScheduledMessagesManager: React.FC = () => {
   const [queueSummaryNow, setQueueSummaryNow] = useState(() => new Date());
   const [showAllQueueSlots, setShowAllQueueSlots] = useState(false);
   const [showAllScheduleHealthIssues, setShowAllScheduleHealthIssues] = useState(false);
+  const [configSyncNotice, setConfigSyncNotice] = useState<ConfigSyncNotice | null>(null);
   const timelineSyncRuleUrl = useMemo(
     () => getJiraAutomationRuleUrl(getTimelineSyncRule(config)),
     [config],
@@ -1202,27 +1303,121 @@ const ScheduledMessagesManager: React.FC = () => {
       }, 2000);
     }
   };
+
+  const refreshConfigFromSheetForManualSync = async (
+    currentConfig: SheetConfig,
+    currentService: ScheduledMessageService
+  ): Promise<{
+    nextConfig: SheetConfig;
+    nextService: ScheduledMessageService;
+    token?: string;
+  }> => {
+    try {
+      const token = await getGoogleAuthToken({
+        caller: 'ScheduledMessagesManager.syncConfigFromSheet',
+      });
+      if (!token) {
+        setConfigSyncNotice({
+          tone: 'warning',
+          title: '未刷新 Config',
+          description: '没有取得 Google 授权，本次只会继续刷新 Messages 数据。',
+          details: formatConfigSyncNoticeDetails(currentConfig),
+        });
+        return { nextConfig: currentConfig, nextService: currentService };
+      }
+
+      const syncService = new ConfigSyncService(token);
+      const sheetConfig = await syncService.readConfigFromSheet(currentConfig.sheetId);
+      const mergedSheetConfig = mergeSheetConfigForRefresh(currentConfig, sheetConfig);
+      const freshness = compareConfigSyncFreshness(currentConfig, mergedSheetConfig);
+      const diffItems = getManualBindConfigDiff(currentConfig, mergedSheetConfig);
+
+      if (freshness === 'sheet-newer') {
+        await syncService.saveConfigToStorage(mergedSheetConfig);
+        const refreshedService = new ScheduledMessageService(token);
+        setConfig(mergedSheetConfig);
+        setService(refreshedService);
+        setBotConfigured(hasExecutorRule(mergedSheetConfig));
+        setTimelineBotConfigured(hasTimelineSyncRule(mergedSheetConfig));
+        setConfigSyncNotice({
+          tone: 'success',
+          title: '已从 Sheet Config 刷新本机配置',
+          description: '另一台设备或维护表里的较新配置已写入本机缓存，本次同步会使用刷新后的 Apps Script、Bot / Timeline 与子表定位。',
+          details: formatConfigSyncNoticeDetails(mergedSheetConfig),
+        });
+        return { nextConfig: mergedSheetConfig, nextService: refreshedService, token };
+      }
+
+      if (freshness === 'local-newer') {
+        setConfigSyncNotice({
+          tone: 'warning',
+          title: '保留本机较新 Config',
+          description: 'Sheet Config 比本机缓存更旧，本次同步没有覆盖本机配置；需要共享给其它设备时请使用会写回 Config 的配置操作。',
+          details: formatConfigSyncNoticeDetails(currentConfig),
+        });
+        return { nextConfig: currentConfig, nextService: currentService, token };
+      }
+
+      if (diffItems.length > 0) {
+        setConfigSyncNotice({
+          tone: 'warning',
+          title: 'Config 有差异，未自动覆盖',
+          description: `同步时间相同或无法判断，但发现 ${diffItems.length} 项关键配置不同。本次继续使用本机配置，避免误覆盖另一端。`,
+          details: [
+            ...formatConfigSyncNoticeDetails(currentConfig),
+            `差异示例: ${diffItems.slice(0, 3).map(item => item.label).join('、')}`,
+          ],
+        });
+        return { nextConfig: currentConfig, nextService: currentService, token };
+      }
+
+      setConfigSyncNotice({
+        tone: 'info',
+        title: 'Config 已是最新',
+        description: 'Sheet Config 与本机缓存一致，本次同步继续刷新 Messages / Logs 数据。',
+        details: formatConfigSyncNoticeDetails(currentConfig),
+      });
+      return { nextConfig: currentConfig, nextService: currentService, token };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || '未知错误');
+      console.warn('刷新 Sheet Config 失败，继续使用本机配置同步消息:', error);
+      setConfigSyncNotice({
+        tone: 'error',
+        title: 'Config 刷新失败',
+        description: `${message}。本次会继续使用本机缓存刷新 Messages 数据。`,
+        details: formatConfigSyncNoticeDetails(currentConfig),
+      });
+      return { nextConfig: currentConfig, nextService: currentService };
+    }
+  };
   
   const handleSync = async () => {
     if (!service || !config) return;
     
     setIsLoading(true);
     try {
-      await loadMessages(service);
+      const {
+        nextConfig,
+        nextService,
+        token: configSyncToken,
+      } = await refreshConfigFromSheetForManualSync(config, service);
+      const syncedMessages = await loadMessages(nextService);
+      void checkBotConfigValidity(nextConfig, syncedMessages);
       
       // 检查并补充 Messages / Logs 工作表 ID（如果缺失）
       if (
-        config.messagesSheetId === undefined ||
-        config.messagesSheetId === null ||
-        config.logsSheetId === undefined ||
-        config.logsSheetId === null
+        nextConfig.messagesSheetId === undefined ||
+        nextConfig.messagesSheetId === null ||
+        nextConfig.logsSheetId === undefined ||
+        nextConfig.logsSheetId === null
       ) {
         console.log('⏳ 同步时发现 Messages/Logs 工作表 ID 缺失，尝试获取...');
         try {
-          const token = await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.syncWorksheetIds' });
+          const token = configSyncToken ||
+            await getGoogleAuthToken({ caller: 'ScheduledMessagesManager.syncWorksheetIds' });
           if (token) {
-            const worksheetIds = await fetchScheduledWorksheetIds(token, config.sheetId);
-            const updatedConfig = { ...config };
+            const worksheetIds = await fetchScheduledWorksheetIds(token, nextConfig.sheetId);
+            const updatedConfig = { ...nextConfig };
             let hasWorksheetIdUpdates = false;
 
             if (
@@ -1242,9 +1437,19 @@ const ScheduledMessagesManager: React.FC = () => {
             }
 
             if (hasWorksheetIdUpdates) {
-              // 保存到配置
-              await chrome.storage.local.set({ scheduledMessagesConfig: updatedConfig });
-              setConfig(updatedConfig);
+              const syncService = new ConfigSyncService(token);
+              const syncedConfig = await syncService.syncConfig(updatedConfig, {
+                syncAction: 'manual_sync_recovered_worksheet_ids',
+              });
+              setConfig(syncedConfig);
+              const refreshedService = new ScheduledMessageService(token);
+              setService(refreshedService);
+              setConfigSyncNotice({
+                tone: 'success',
+                title: '已补齐子表定位并写回 Config',
+                description: 'Messages / Logs 子表 ID 已按 Sheet-first 顺序写回 Config，再更新本机缓存。',
+                details: formatConfigSyncNoticeDetails(syncedConfig),
+              });
               console.log('✅ 已补充 Messages/Logs 工作表 ID:', worksheetIds);
             }
           }
@@ -1499,6 +1704,12 @@ const ScheduledMessagesManager: React.FC = () => {
     : shouldSuggestAppScriptVersionCleanup
       ? `Project History 只剩 ${appScriptVersionUsage?.remaining} 个版本，建议先打开 Project History 清理旧版本，再执行升级。`
       : '升级前会重新确认线上版本、预检 deployment 是否匹配当前 Web App URL，并检查版本额度；提交更新后会确认 Web App URL 已返回新版本，确认失败会尝试回退到升级前 deployment 版本，已是最新则跳过脚本写入和版本创建。';
+  const appScriptVersionProbeUrl = config?.webAppUrl
+    ? buildAppScriptWebAppActionUrl(config.webAppUrl, 'getVersion')
+    : '';
+  const appScriptProjectUrl = config?.scriptId
+    ? buildAppScriptProjectUrl(config.scriptId)
+    : '';
 
   const handleOpenAppScriptProjectHistory = () => {
     const projectHistoryUrl = appScriptVersionUsage?.projectHistoryUrl
@@ -1507,6 +1718,20 @@ const ScheduledMessagesManager: React.FC = () => {
       window.open(projectHistoryUrl, '_blank');
     } else {
       alert('未找到 Script ID，无法打开 App Script Project History。');
+    }
+  };
+
+  const handleOpenAppScriptVersionProbe = () => {
+    if (appScriptVersionProbeUrl) {
+      window.open(appScriptVersionProbeUrl, '_blank');
+    }
+  };
+
+  const handleOpenAppScriptProject = () => {
+    if (appScriptProjectUrl) {
+      window.open(appScriptProjectUrl, '_blank');
+    } else {
+      alert('未找到 Script ID，无法打开 Apps Script 项目。');
     }
   };
   
@@ -1630,6 +1855,20 @@ const ScheduledMessagesManager: React.FC = () => {
     setBotConfigDialogMode(hasExecutorRule(config) ? 'repair' : 'create');
     setShowBotConfigDialog(true);
   };
+
+  useEffect(() => {
+    if (
+      !initialQueryFilters.configureRingCentralSender ||
+      ringCentralSenderConfigOpenedFromQueryRef.current ||
+      !isInitialized ||
+      !config
+    ) {
+      return;
+    }
+
+    ringCentralSenderConfigOpenedFromQueryRef.current = true;
+    openRingCentralSenderConfigDialog();
+  }, [initialQueryFilters.configureRingCentralSender, isInitialized, config]);
   
   const handleAddMessage = () => {
     setAddDialogMode('default');
@@ -1970,6 +2209,16 @@ const ScheduledMessagesManager: React.FC = () => {
     
     // 查找消息，检查是否是托管中的 JiraAutomation 消息
     const message = messages.find(m => m.ID === id);
+    const deleteAuditLines = message
+      ? [
+          `ID: ${message.ID}`,
+          `状态: ${message.Status}`,
+          `下次执行: ${formatNextExec(message)}`,
+          `频率: ${formatFrequency(message)}`,
+          `发给: ${formatRecipient(message)}`,
+        ]
+      : [`ID: ${id}`];
+    const deleteAuditSummary = deleteAuditLines.join('\n');
     const isManagedJiraAutomation = message && 
       message.Push_Method === 'JiraAutomation' && 
       message.Schedule_Date && 
@@ -1981,6 +2230,7 @@ const ScheduledMessagesManager: React.FC = () => {
       const confirmMessage = 
         `⚠️ 删除托管消息\n\n` +
         `消息: "${topic}"\n\n` +
+        `${deleteAuditSummary}\n\n` +
         `此消息正在由 Personal AI 托管，删除后将：\n` +
         `1. 将 Jira Rule 的 trigger 恢复为 Scheduled 模式\n` +
         `2. 从 Personal AI 中移除此消息\n\n` +
@@ -1994,65 +2244,75 @@ const ScheduledMessagesManager: React.FC = () => {
       try {
         // 先恢复 Jira Rule 的 trigger
         const linkInfo = parseAutomationLink(message.Automation_Link!);
-        if (linkInfo) {
-          const { jiraUrl, projectKey, ruleId } = linkInfo;
-          // 使用带缓存的版本
-          const projectId = await getProjectIdFromKeyWithCache(jiraUrl, projectKey);
-          
-          if (projectId) {
-            console.log('🔄 恢复 Jira Rule 的 scheduled trigger...');
-            
-            // 构建调度配置
-            // 解析 Repeat_Days：JS 格式 (0=周日, 1=周一...6=周六) 转换回 Jira 格式 (1=周日, 2=周一...7=周六)
-            let scheduleDaysOfWeek: number[] | undefined;
-            if (message.Repeat_Days && message.Repeat_Unit === 'Week') {
-              scheduleDaysOfWeek = message.Repeat_Days.split(',')
-                .map(d => parseInt(d.trim(), 10))
-                .filter(d => !isNaN(d))
-                .map(d => d + 1);  // JS格式 -> Jira格式
-              console.log('📅 恢复多星期配置:', { 
-                jsDays: message.Repeat_Days, 
-                jiraDays: scheduleDaysOfWeek 
-              });
-            }
-            
-            // 将本地时间转换为 UTC 时间（Jira Automation Server 使用 UTC）
-            // 本地时间是 UTC+8，所以需要减去 8 小时
-            const localTime = message.Schedule_Time || '09:00';
-            const [localHours, localMinutes] = localTime.split(':').map(Number);
-            const utcHours = (localHours - 8 + 24) % 24;
-            const utcTime = `${String(utcHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}`;
-            console.log('🕐 时间转换:', { localTime, utcTime, offset: -8 });
-            
-            const scheduleConfig = {
-              scheduleTime: utcTime,  // 使用 UTC 时间
-              repeatEvery: Number(message.Repeat_Every) || 1,  // 确保转换为数字
-              repeatUnit: (message.Repeat_Unit || 'Day') as 'Day' | 'Week' | 'Month',
-              scheduleDaysOfWeek
-            };
-            
-            const convertResult = await chrome.runtime.sendMessage({
-              type: 'CONVERT_WEBHOOK_TO_SCHEDULED',
-              data: {
-                ruleId,
-                projectId,
-                jiraUrl,
-                scheduleConfig
-              }
-            });
-            
-            if (!convertResult?.success) {
-              const errorMsg = convertResult?.error || '未知错误';
-              // 恢复失败，不删除消息
-              alert(
-                `❌ 恢复 Jira Rule 失败: ${errorMsg}\n\n` +
-                `为了数据安全，不会删除 Personal AI 中的消息记录。\n` +
-                `请先手动检查并修复 Jira Rule，然后再尝试删除。`
-              );
-              setIsLoading(false);
-              return;
-            }
+        if (!linkInfo) {
+          alert(
+            '❌ 无法解析 Jira Automation 链接。\n\n' +
+            '为了数据安全，不会删除 Personal AI 中的消息记录。\n' +
+            '请先手动检查 Automation_Link，然后再尝试删除。'
+          );
+          setIsLoading(false);
+          return;
+        }
+
+        const { jiraUrl, projectKey, ruleId } = linkInfo;
+        // 使用带缓存的版本
+        const projectId = await getProjectIdFromKeyWithCache(jiraUrl, projectKey);
+        if (!projectId) {
+          alert(
+            `❌ 无法获取 Jira 项目 ID: ${projectKey}\n\n` +
+            '为了数据安全，不会删除 Personal AI 中的消息记录。\n' +
+            '请先确认 Jira 登录状态和项目权限，然后再尝试删除。'
+          );
+          setIsLoading(false);
+          return;
+        }
+
+        console.log('🔄 恢复 Jira Rule 的 scheduled trigger...');
+
+        // 构建调度配置
+        // 解析 Repeat_Days：JS 格式 (0=周日, 1=周一...6=周六) 转换回 Jira 格式 (1=周日, 2=周一...7=周六)
+        let scheduleDaysOfWeek: number[] | undefined;
+        if (message.Repeat_Days && message.Repeat_Unit === 'Week') {
+          scheduleDaysOfWeek = message.Repeat_Days.split(',')
+            .map(d => parseInt(d.trim(), 10))
+            .filter(d => !isNaN(d))
+            .map(d => d + 1);  // JS格式 -> Jira格式
+          console.log('📅 恢复多星期配置:', {
+            jsDays: message.Repeat_Days,
+            jiraDays: scheduleDaysOfWeek
+          });
+        }
+
+        const restoreTiming = getJiraScheduleRestoreTiming(message);
+        console.log('🕐 时间转换:', restoreTiming);
+
+        const scheduleConfig = {
+          scheduleTime: restoreTiming.utcTime,  // Jira Automation Server 使用 UTC 时间
+          repeatEvery: Number(message.Repeat_Every) || 1,  // 确保转换为数字
+          repeatUnit: (message.Repeat_Unit || 'Day') as 'Day' | 'Week' | 'Month',
+          scheduleDaysOfWeek
+        };
+
+        const convertResult = await chrome.runtime.sendMessage({
+          type: 'CONVERT_WEBHOOK_TO_SCHEDULED',
+          data: {
+            ruleId,
+            projectId,
+            jiraUrl,
+            scheduleConfig
           }
+        });
+
+        if (!convertResult?.success) {
+          const errorMsg = convertResult?.error || '未知错误';
+          // 恢复失败，不删除消息
+          alert(
+            `❌ 恢复 Jira Rule 失败: ${errorMsg}\n\n` +
+            `为了数据安全，不会删除 Personal AI 中的消息记录。\n` +
+            `请先手动检查并修复 Jira Rule，然后再尝试删除。`
+          );
+          setIsLoading(false);
+          return;
         }
         
         // 只有在恢复成功后才删除消息
@@ -2061,10 +2321,13 @@ const ScheduledMessagesManager: React.FC = () => {
           await cancelOutreachTemplateMirror(message.ID);
         }
         await loadMessages(service);
+        if (id === targetMessageId) {
+          clearMessageFilters();
+        }
         
         alert(
           '✅ 消息已删除，Jira Rule 已恢复为 Scheduled 模式。\n\n' +
-          '请前往 Jira Automation 页面确认规则是否正常运作。'
+          '请前往 Jira Automation 页面确认规则是否正常运作；本页已返回完整列表。'
         );
         
       } catch (error: any) {
@@ -2076,7 +2339,7 @@ const ScheduledMessagesManager: React.FC = () => {
       
     } else {
       // 普通消息的删除流程
-      if (!confirm(`确定要删除消息 "${topic}" 吗？此操作无法撤销。`)) {
+      if (!confirm(`确定要删除消息 "${topic}" 吗？\n\n${deleteAuditSummary}\n\n此操作无法撤销。`)) {
         return;
       }
       
@@ -2087,7 +2350,10 @@ const ScheduledMessagesManager: React.FC = () => {
           await cancelOutreachTemplateMirror(message.ID);
         }
         await loadMessages(service);
-        alert('消息已删除');
+        if (id === targetMessageId) {
+          clearMessageFilters();
+        }
+        alert(id === targetMessageId ? '消息已删除，已返回完整列表。' : '消息已删除');
       } catch (error: any) {
         console.error('删除消息失败:', error);
         alert(`删除失败: ${error.message}`);
@@ -2238,10 +2504,12 @@ const ScheduledMessagesManager: React.FC = () => {
         await loadMessages(service, true);
         setShowAddDialog(false);
         setEditingMessage(null);
+        focusMessageById(savedMessage.ID);
+        const successReceipt = `消息更新成功，已定位到列表。${savedMessage.Next_Exec ? `\n下次执行：${savedMessage.Next_Exec}` : ''}`;
         if (outreachSyncError) {
-          alert(`消息更新成功，但主动询问同步到 memory service 失败：${outreachSyncError.message}`);
+          alert(`${successReceipt}\n\n但主动询问同步到 memory service 失败：${outreachSyncError.message}`);
         } else {
-          alert('消息更新成功！');
+          alert(successReceipt);
         }
       } else {
         // 新建模式：创建消息
@@ -2256,10 +2524,12 @@ const ScheduledMessagesManager: React.FC = () => {
         // 跳过 Jira 状态同步，因为新建的消息不需要同步
         await loadMessages(service, true);
         setShowAddDialog(false);
+        focusMessageById(savedMessage.ID);
+        const successReceipt = `消息创建成功，已定位到列表。${savedMessage.Next_Exec ? `\n下次执行：${savedMessage.Next_Exec}` : ''}`;
         if (outreachSyncError) {
-          alert(`消息创建成功，但主动询问同步到 memory service 失败：${outreachSyncError.message}`);
+          alert(`${successReceipt}\n\n但主动询问同步到 memory service 失败：${outreachSyncError.message}`);
         } else {
-          alert('消息创建成功！');
+          alert(successReceipt);
         }
       }
     } catch (error) {
@@ -2835,6 +3105,33 @@ const ScheduledMessagesManager: React.FC = () => {
         </div>
       </header>
 
+      {configSyncNotice && (
+        <div style={getConfigSyncNoticeStyle(configSyncNotice.tone)} role="status">
+          <div style={styles.warningContent}>
+            <span style={styles.warningIcon}>{getConfigSyncNoticeIcon(configSyncNotice.tone)}</span>
+            <div style={styles.warningText}>
+              <strong>{configSyncNotice.title}</strong>
+              <p style={styles.configSyncDescription}>{configSyncNotice.description}</p>
+              {configSyncNotice.details && configSyncNotice.details.length > 0 && (
+                <div style={styles.configSyncMetaRow}>
+                  {configSyncNotice.details.map((item) => (
+                    <span key={item} style={styles.configSyncMetaItem}>{item}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            style={styles.configSyncDismissButton}
+            onClick={() => setConfigSyncNotice(null)}
+            aria-label="关闭 Config 同步状态"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {updateCheckNeedsAuth && (
         <div style={styles.updateAuthBanner}>
           <div style={styles.warningContent}>
@@ -2863,17 +3160,37 @@ const ScheduledMessagesManager: React.FC = () => {
             <div style={styles.warningText}>
               <strong>无法确认 App Script 升级状态</strong>
               <p style={styles.updateErrorDescription}>
-                {updateCheckError} 当前脚本不会被自动改动；请修复后重试检查。
+                {updateCheckError} 当前脚本不会被自动改动；先打开版本端点确认是否返回 JSON version/lastUpdated，或进入 Apps Script 项目检查 Web App deployment 后重试。
               </p>
             </div>
           </div>
-          <button
-            style={styles.updateErrorButton}
-            onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
-            disabled={isCheckingUpdates || isUpdating}
-          >
-            {isCheckingUpdates ? '检查中...' : '重试检查'}
-          </button>
+          <div style={styles.updateBannerActions}>
+            {appScriptVersionProbeUrl && (
+              <button
+                style={styles.secondaryUpdateErrorButton}
+                onClick={handleOpenAppScriptVersionProbe}
+                disabled={isCheckingUpdates || isUpdating}
+              >
+                打开版本端点
+              </button>
+            )}
+            {appScriptProjectUrl && (
+              <button
+                style={styles.secondaryUpdateErrorButton}
+                onClick={handleOpenAppScriptProject}
+                disabled={isCheckingUpdates || isUpdating}
+              >
+                打开 Apps Script
+              </button>
+            )}
+            <button
+              style={styles.updateErrorButton}
+              onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
+              disabled={isCheckingUpdates || isUpdating}
+            >
+              {isCheckingUpdates ? '检查中...' : '重试检查'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -2917,10 +3234,20 @@ const ScheduledMessagesManager: React.FC = () => {
                 打开 Project History
               </button>
             )}
+            {(isAppScriptVersionLimitReached || shouldSuggestAppScriptVersionCleanup) && (
+              <button
+                style={styles.secondaryUpdateBannerButton}
+                onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
+                disabled={isCheckingUpdates || isUpdating}
+                title="清理 Project History 后重新读取版本额度"
+              >
+                {isCheckingUpdates ? '检查中...' : '重新检查'}
+              </button>
+            )}
             <button
               style={styles.updateBannerButton}
               onClick={isAppScriptVersionLimitReached ? handleOpenAppScriptProjectHistory : handleUpgradeVersion}
-              disabled={isUpdating}
+              disabled={isCheckingUpdates || isUpdating}
             >
               {isUpdating ? '升级中...' : isAppScriptVersionLimitReached ? '打开 Project History' : '升级调度系统'}
             </button>
@@ -3382,6 +3709,7 @@ const ScheduledMessagesManager: React.FC = () => {
                     return (
                       <tr 
                         key={message.ID} 
+                        data-message-id={message.ID}
                         ref={(element) => {
                           if (message.ID === targetMessageId) {
                             targetMessageRowRef.current = element;
@@ -3547,6 +3875,7 @@ const ScheduledMessagesManager: React.FC = () => {
                                     : 'none'
                                 }}
                                 onClick={() => handleEditMessage(message)}
+                                aria-label={`编辑 ${displayTitle}`}
                                 title={
                                   message.Push_Method === 'JiraAutomation' && 
                                   message.Automation_Link && 
@@ -3562,6 +3891,7 @@ const ScheduledMessagesManager: React.FC = () => {
                             <button 
                               style={styles.deleteButton}
                               onClick={() => handleDeleteMessage(message.ID, displayTitle)}
+                              aria-label={`删除 ${displayTitle}`}
                               title="删除消息"
                             >
                               🗑️
@@ -4103,9 +4433,7 @@ const TimelineCacheStatusPanel: React.FC<{
   error: string;
   onRefresh: () => void;
 }> = ({ usage, status, selectedProject, selectedMilestone, webAppUrl, timelineSyncRuleUrl, isLoading, error, onRefresh }) => {
-  const selectedStatus = selectedProject
-    ? status?.projects?.find(project => project.project === selectedProject)
-    : undefined;
+  const selectedStatus = getTimelineCacheProjectStatus(status, selectedProject);
   const hasStatus = Boolean(status);
   const selectedProjectMissingFromStatus = Boolean(selectedProject && status && !selectedStatus);
   const selectedMilestoneKeys = selectedStatus?.milestoneKeys;
@@ -7916,6 +8244,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '13px',
     fontWeight: 600,
   },
+  secondaryUpdateErrorButton: {
+    padding: '8px 14px',
+    backgroundColor: '#fff',
+    color: '#991b1b',
+    border: '1px solid #fecaca',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+  },
   queueInfoBanner: {
     backgroundColor: '#eef6ff',
     borderLeft: '4px solid #0d6efd',
@@ -7933,6 +8272,64 @@ const styles: { [key: string]: React.CSSProperties } = {
     alignItems: 'center',
     borderBottom: '1px solid #fed7aa',
     animation: 'slideDown 0.3s ease-out',
+  },
+  configSyncBanner: {
+    padding: '12px 20px',
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '12px',
+    borderBottom: '1px solid #e5e7eb',
+    animation: 'slideDown 0.3s ease-out',
+  },
+  configSyncBannerSuccess: {
+    backgroundColor: '#ecfdf5',
+    borderLeft: '4px solid #10b981',
+  },
+  configSyncBannerInfo: {
+    backgroundColor: '#eff6ff',
+    borderLeft: '4px solid #3b82f6',
+  },
+  configSyncBannerWarning: {
+    backgroundColor: '#fffbeb',
+    borderLeft: '4px solid #f59e0b',
+  },
+  configSyncBannerError: {
+    backgroundColor: '#fef2f2',
+    borderLeft: '4px solid #ef4444',
+  },
+  configSyncDescription: {
+    margin: '4px 0 0 0',
+    fontSize: '13px',
+    color: '#374151',
+    lineHeight: 1.45,
+  },
+  configSyncMetaRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px 10px',
+    marginTop: '8px',
+  },
+  configSyncMetaItem: {
+    padding: '3px 8px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    border: '1px solid rgba(148, 163, 184, 0.35)',
+    color: '#334155',
+    fontSize: '12px',
+    lineHeight: 1.35,
+  },
+  configSyncDismissButton: {
+    border: '1px solid rgba(100, 116, 139, 0.28)',
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    color: '#475569',
+    borderRadius: '6px',
+    width: '28px',
+    height: '28px',
+    cursor: 'pointer',
+    fontSize: '16px',
+    lineHeight: '20px',
+    flex: '0 0 auto',
   },
   warningContent: {
     display: 'flex',
@@ -8220,7 +8617,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '14px',
     fontWeight: 'bold',
     whiteSpace: 'nowrap',
-    marginLeft: '16px',
   },
   statusBar: {
     backgroundColor: '#fff',
@@ -8935,7 +9331,7 @@ const BotConfigDialog: React.FC<{
       const token = await getGoogleAuthToken({ caller: 'BotConfigDialog.handleSubmit' });
       const { ConfigSyncService } = await import('./ConfigSyncService');
       const syncService = new ConfigSyncService(token);
-      await syncService.syncConfig(updatedConfig);
+      await syncService.syncConfig(updatedConfig, { syncAction: 'bot_config_update' });
       
       onSuccess(updatedConfig);
       

@@ -14,6 +14,7 @@ import {
     isPastDueDate,
     isRiskSpotlightSuggestion,
 } from '../utils/slidesAnalyzerRisk';
+import type { JiraTicket } from '../types';
 
 interface AnalysisData {
     result: DisplaySlideAnalysisResult;
@@ -140,6 +141,43 @@ const addUniqueEvidenceItem = (items: string[], value: unknown): void => {
     items.push(trimmed);
 };
 
+const getSafeExternalUrl = (value: unknown): string | undefined => {
+    if (typeof value !== 'string' || !value.trim()) {
+        return undefined;
+    }
+
+    try {
+        const url = new URL(value);
+        return url.protocol === 'https:' || url.protocol === 'http:'
+            ? url.toString()
+            : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+const getJiraIssueUpdatedLabel = (issue: Pick<JiraTicket, 'updated'>): string => {
+    if (!issue.updated) {
+        return '';
+    }
+
+    return formatDisplayDate(issue.updated);
+};
+
+const getJiraIssueFreshnessItems = (jiraIssues: JiraTicket[]): string[] => {
+    return jiraIssues
+        .filter((issue) => Boolean(issue.key && issue.updated))
+        .sort((a, b) => {
+            const aTime = new Date(a.updated || '').getTime();
+            const bTime = new Date(b.updated || '').getTime();
+            const safeATime = Number.isNaN(aTime) ? 0 : aTime;
+            const safeBTime = Number.isNaN(bTime) ? 0 : bTime;
+            return safeBTime - safeATime;
+        })
+        .slice(0, 3)
+        .map((issue) => `${issue.key} ${getJiraIssueUpdatedLabel(issue)}`.trim());
+};
+
 const getFieldEvidenceItems = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string[] => {
     const items: string[] = [];
     const jiraIssues = suggestion.sourceInfo?.jiraIssues || [];
@@ -148,7 +186,13 @@ const getFieldEvidenceItems = (suggestion: ProjectUpdateSuggestion, field: Updat
     if (field === 'status') {
         addUniqueEvidenceItem(items, suggestion.suggestedStatusReason);
         jiraIssues.slice(0, 3).forEach((issue) => {
-            addUniqueEvidenceItem(items, issue.status ? `Jira ${issue.key}: ${issue.status}` : undefined);
+            const updatedLabel = getJiraIssueUpdatedLabel(issue);
+            addUniqueEvidenceItem(
+                items,
+                issue.status
+                    ? `Jira ${issue.key}: ${issue.status}${updatedLabel ? ` · 更新 ${updatedLabel}` : ''}`
+                    : undefined,
+            );
         });
     }
 
@@ -158,7 +202,11 @@ const getFieldEvidenceItems = (suggestion: ProjectUpdateSuggestion, field: Updat
         jiraIssues.slice(0, 3).forEach((issue) => {
             const assignee = normalizeComparableText(issue.assignee);
             if (suggestedOwner && assignee && assignee === suggestedOwner) {
-                addUniqueEvidenceItem(items, `Jira ${issue.key}: assignee ${issue.assignee}`);
+                const updatedLabel = getJiraIssueUpdatedLabel(issue);
+                addUniqueEvidenceItem(
+                    items,
+                    `Jira ${issue.key}: assignee ${issue.assignee}${updatedLabel ? ` · 更新 ${updatedLabel}` : ''}`,
+                );
             }
         });
     }
@@ -194,6 +242,10 @@ const getSuggestionEvidenceItems = (suggestion: ProjectUpdateSuggestion): string
                 ? `Jira: ${jiraKeys}${jiraIssues.length > 3 ? ` 等 ${jiraIssues.length} 个工单` : ''}`
                 : `Jira: ${jiraIssues.length} 个相关工单`,
         );
+        const freshnessItems = getJiraIssueFreshnessItems(jiraIssues);
+        if (freshnessItems.length > 0) {
+            addUniqueEvidenceItem(items, `Jira 最近更新: ${freshnessItems.join('；')}`);
+        }
     }
 
     if (chatHistory.length > 0) {
@@ -368,6 +420,59 @@ const formatApplySkippedHandoffChecklist = (items: ApplySkippedHandoffItem[]): s
         `   下一步: ${item.nextStep}`,
     ].join('\n')).join('\n\n')
 );
+
+const formatSelectedWritebackReviewPacket = (
+    items: SelectedFieldPreviewItem[],
+    presentationId: string,
+): string => {
+    if (items.length === 0) {
+        return '';
+    }
+
+    return [
+        'Google Slides 写回复核清单',
+        `Presentation: ${presentationId || 'unknown'}`,
+        `Selected fields: ${items.length}`,
+        '',
+        ...items.map((item, index) => [
+            `${index + 1}. ${item.projectLabel} · ${item.fieldLabel}`,
+            `   变更: ${item.previewText}`,
+            `   依据: ${item.evidenceText}`,
+            `   复核: ${item.reviewLabel}`,
+        ].join('\n')),
+    ].join('\n');
+};
+
+const copyTextToClipboard = async (text: string): Promise<boolean> => {
+    try {
+        const writeText = window.navigator.clipboard?.writeText?.bind(window.navigator.clipboard);
+        if (writeText) {
+            await writeText(text);
+            return true;
+        }
+    } catch (error) {
+        console.warn('Clipboard API copy failed:', error);
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    try {
+        return document.execCommand('copy');
+    } catch (error) {
+        console.warn('Fallback copy failed:', error);
+        return false;
+    } finally {
+        document.body.removeChild(textarea);
+    }
+};
 
 const getFieldCurrentValue = (suggestion: ProjectUpdateSuggestion, field: UpdateField): string | undefined => {
     if (field === 'status') {
@@ -979,6 +1084,21 @@ const SlidesAnalysis: React.FC = () => {
         );
     };
 
+    const handleCopySelectedWritebackReview = async () => {
+        const reviewPacket = formatSelectedWritebackReviewPacket(selectedFieldPreviewItems, presentationId);
+        if (!reviewPacket) {
+            showToast('没有已选字段可复制', 'warning');
+            return;
+        }
+
+        const copied = await copyTextToClipboard(reviewPacket);
+        if (copied) {
+            showToast(`已复制 ${selectedFieldPreviewItems.length} 个字段写回复核清单`, 'success');
+        } else {
+            showToast('无法复制复核清单，请直接查看写回预览', 'warning');
+        }
+    };
+
     const handleApplyUpdates = () => {
         try {
             debugLog('应用更新按钮被点击');
@@ -1085,16 +1205,10 @@ const SlidesAnalysis: React.FC = () => {
             return;
         }
 
-        try {
-            const writeText = window.navigator.clipboard?.writeText?.bind(window.navigator.clipboard);
-            if (!writeText) {
-                throw new Error('Clipboard API unavailable');
-            }
-
-            await writeText(checklist);
+        const copied = await copyTextToClipboard(checklist);
+        if (copied) {
             showToast('已复制跳过字段接管清单', 'success');
-        } catch (error) {
-            console.warn('复制跳过字段接管清单失败:', error);
+        } else {
             showToast('无法复制清单，请直接查看完成面板中的人工接管项', 'warning');
         }
     };
@@ -1647,6 +1761,8 @@ const SlidesAnalysis: React.FC = () => {
                                                 <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>相关Jira问题:</div>
                                                 {suggestion.sourceInfo.jiraIssues.map((issue, issueIndex) => {
                                                     const isOpenPastDue = isOpenJiraIssue(issue) && isPastDueDate(issue.duedate);
+                                                    const issueUrl = getSafeExternalUrl(issue.url);
+                                                    const updatedLabel = getJiraIssueUpdatedLabel(issue);
 
                                                     return (
                                                     <div key={issueIndex} className="jira-issue-item" style={{
@@ -1655,13 +1771,13 @@ const SlidesAnalysis: React.FC = () => {
                                                         borderLeft: '3px solid #0052CC'
                                                     }}>
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                            <a href={issue.url || '#'} target="_blank" rel="noreferrer" style={{
-                                                                color: '#0052CC', 
-                                                                fontWeight: 'bold', 
-                                                                textDecoration: 'none' 
-                                                            }}>
-                                                                {issue.key}
-                                                            </a>
+                                                            {issueUrl ? (
+                                                                <a href={issueUrl} target="_blank" rel="noreferrer" className="jira-issue-key-link">
+                                                                    {issue.key}
+                                                                </a>
+                                                            ) : (
+                                                                <span className="jira-issue-key-text">{issue.key}</span>
+                                                            )}
                                                             <div style={{ display: 'flex', alignItems: 'center' }}>
                                                                 {issue.priority && (
                                                                     <span className="jira-priority" style={{
@@ -1739,6 +1855,12 @@ const SlidesAnalysis: React.FC = () => {
                                                                     }}>
                                                                         {formatDate(issue.duedate)}
                                                                     </span>
+                                                                </div>
+                                                            )}
+                                                            {updatedLabel && (
+                                                                <div className="jira-updated-meta">
+                                                                    <span>最近更新:</span>
+                                                                    <span>{updatedLabel}</span>
                                                                 </div>
                                                             )}
                                                         </div>
@@ -1947,7 +2069,18 @@ const SlidesAnalysis: React.FC = () => {
                                     role="status"
                                     aria-label="已选写回字段预览"
                                 >
-                                    <div className="selected-writeback-preview-title">即将写回</div>
+                                    <div className="selected-writeback-preview-header">
+                                        <div className="selected-writeback-preview-title">即将写回</div>
+                                        <button
+                                            id="copy-selected-writeback-review"
+                                            type="button"
+                                            className="btn-quiet selected-writeback-copy-button"
+                                            onClick={handleCopySelectedWritebackReview}
+                                            disabled={isApplying}
+                                        >
+                                            复制复核清单
+                                        </button>
+                                    </div>
                                     <ul className="selected-writeback-preview-list">
                                         {selectedFieldPreviewVisibleItems.map((item) => (
                                             <li
@@ -2636,6 +2769,29 @@ const styles = `
         color: inherit;
     }
 
+    .jira-issue-key-link,
+    .jira-issue-key-text {
+        color: #0052cc;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+        text-decoration: none;
+    }
+
+    .jira-issue-key-text {
+        color: #172b4d;
+    }
+
+    .jira-updated-meta {
+        align-items: center;
+        display: flex;
+        gap: 3px;
+        margin-right: 10px;
+    }
+
+    .jira-updated-meta span:first-child {
+        color: #777;
+    }
+
     .project-blocked-note {
         background: #ffebe6;
         border-left: 3px solid #de350b;
@@ -2864,7 +3020,20 @@ const styles = `
     .selected-writeback-preview-title {
         color: #172b4d;
         font-weight: 700;
+    }
+
+    .selected-writeback-preview-header {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
         margin-bottom: 5px;
+    }
+
+    .selected-writeback-copy-button {
+        font-size: 12px;
+        min-height: 28px;
+        padding: 4px 8px;
     }
 
     .selected-writeback-preview-list {

@@ -3,6 +3,7 @@ import { normalizeLocalScheduleTime } from '../scheduled-messages/scheduleDateTi
 import type { MessageInfo } from './SnoozeManager';
 
 const CLOSED_SNOOZE_STATUSES = new Set(['Completed', 'Done']);
+const TEMP_MESSAGE_ID_PREFIX = 'temp_';
 
 export interface SnoozeReminderScheduleExpectation {
   scheduleDate?: string;
@@ -29,17 +30,39 @@ export function isOpenSnoozeReminder(
   );
 }
 
+export function isSpecificRingCentralMessageLink(messageLink?: string): boolean {
+  const trimmedLink = messageLink?.trim();
+  if (!trimmedLink) return false;
+
+  try {
+    const url = new URL(trimmedLink);
+    if (url.hostname !== 'app.ringcentral.com') return false;
+    const pathParts = url.pathname.split('/').filter(Boolean);
+    if (pathParts[0] !== 'messages') return false;
+
+    if (pathParts.length >= 3) {
+      return true;
+    }
+
+    return Boolean(
+      url.searchParams.get('messageId') || url.searchParams.get('postId'),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function getSnoozeReminderSourceKey(
   messageInfo: Pick<MessageInfo, 'groupId' | 'id' | 'messageLink'>,
 ): string {
   const sourceLink = messageInfo.messageLink?.trim();
-  if (sourceLink) {
+  if (isSpecificRingCentralMessageLink(sourceLink)) {
     return sourceLink;
   }
 
   const groupId = messageInfo.groupId?.trim();
   const messageId = messageInfo.id?.trim();
-  if (groupId && messageId) {
+  if (groupId && messageId && !messageId.startsWith(TEMP_MESSAGE_ID_PREFIX)) {
     return `${groupId}:${messageId}`;
   }
 
@@ -51,7 +74,7 @@ export function isOpenSnoozeReminderForMessage(
   messageInfo: Pick<MessageInfo, 'messageLink'>,
 ): boolean {
   const sourceLink = messageInfo.messageLink?.trim();
-  if (!sourceLink) {
+  if (!isSpecificRingCentralMessageLink(sourceLink)) {
     return false;
   }
 

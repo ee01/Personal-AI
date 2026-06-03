@@ -12,6 +12,9 @@ function createClient(baseUrl = 'http://127.0.0.1:3210') {
     stableMemoryIntervalMs: 43_200_000,
     mobileBriefingIntervalMs: 14_400_000,
     reminderSyncIntervalMs: 900_000,
+    reminderDailyDigestEnabled: true,
+    reminderDailyDigestTime: '09:00',
+    reminderDedupSameDay: true,
   }));
 }
 

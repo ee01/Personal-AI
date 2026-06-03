@@ -81,6 +81,12 @@
                     >新关系 {{ dream.relationships.length }}</span
                   >
                 </div>
+                <div class="dream-source-row">
+                  <span :title="`dreams/${dream.filename}`">
+                    来源 dreams/{{ dream.filename }}
+                  </span>
+                  <span>低置信联想，需复核后使用</span>
+                </div>
               </div>
               <span class="expand-indicator">{{
                 dream.expanded ? '收起' : '展开'
@@ -550,6 +556,20 @@ onMounted(loadDreams);
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.65rem;
+}
+
+.dream-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.dream-source-row span:first-child {
+  color: #cbd5e1;
 }
 
 .dream-badge {

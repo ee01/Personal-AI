@@ -11,3 +11,10 @@ Expected case inputs:
 - expected top missions
 - must-not-promote items
 - expected user action
+
+Report requirements:
+
+- Show the day snapshot and cues used to build the Today Pilot result.
+- Show expected top missions, must-not-promote items, and expected user action.
+- Show the actual missions/context packs/reminders returned by the system.
+- Show score, user-facing verdict, and concrete suggestions for ranking, suppression, or context-pack quality.

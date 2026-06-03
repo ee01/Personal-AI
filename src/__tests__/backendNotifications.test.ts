@@ -14,6 +14,7 @@ import {
   getBackendTargetHash,
   inferLegacyLane,
   normalizeBackendNotificationMeta,
+  performBackendNotificationSecondaryAction,
 } from '../backendNotifications.js';
 
 test('builds stable backend notification ids and storage keys', () => {
@@ -30,8 +31,16 @@ test('builds stable backend notification ids and storage keys', () => {
 
 test('routes backend notification clicks to the right memory surface', () => {
   assert.equal(
-    getBackendTargetHash('weekly_report', 'notification'),
-    '/dreams',
+    getBackendTargetHash('weekly_report', 'notification', 'notif-1', {
+      reportPath: 'reports/weekly-2026-05-27.md',
+    }),
+    '/reports?file=weekly-2026-05-27.md',
+  );
+  assert.equal(
+    getBackendTargetHash('weekly_report', 'notification', 'notif-1', {
+      reportPath: '../weekly-2026-05-27.md',
+    }),
+    '/reports',
   );
   assert.equal(getBackendTargetHash('dream_digest', 'notification'), '/dreams');
   assert.equal(
@@ -108,6 +117,13 @@ test('builds concise context labels with todo due time', () => {
       lastStatus: 'failed',
     }),
     '通知 · 普通 · 上次发送失败',
+  );
+  assert.equal(
+    buildBackendNotificationContextMessage('todo', 'high', undefined, {
+      reason: 'already_delivered_unfinished',
+      lastStatus: 'delivered',
+    }),
+    '待处理 · 高优先级 · 仍待处理',
   );
 });
 
@@ -214,6 +230,141 @@ test('keeps temporary todo hides retryable in notification center', () => {
   );
 });
 
+test('commits backend notification snooze before terminal delivery receipt', async () => {
+  const calls: string[] = [];
+
+  const result = await performBackendNotificationSecondaryAction(
+    {
+      sourceRef: 'notification:notif-1',
+      sourceType: 'notification',
+      lane: 'todo',
+      targetHash: '/decisions',
+    },
+    'backend-notif-1',
+    {
+      reportDelivery: async (events) => {
+        calls.push(
+          `delivery:${events[0].sourceRef}:${events[0].status}:${events[0].externalRef}`,
+        );
+      },
+      snoozeNotification: async (id, delaySeconds) => {
+        calls.push(`snooze:${id}:${delaySeconds}`);
+      },
+      dismissNotification: async (id) => {
+        calls.push(`dismiss:${id}`);
+      },
+    },
+  );
+
+  assert.deepEqual(calls, [
+    `snooze:notif-1:${DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS}`,
+    'delivery:notification:notif-1:dismissed:backend-notif-1',
+  ]);
+  assert.deepEqual(result, {
+    action: 'snoozed',
+    notificationId: 'notif-1',
+    delaySeconds: DEFAULT_BACKEND_NOTIFICATION_SNOOZE_SECONDS,
+    deliveryStatus: 'dismissed',
+  });
+});
+
+test('does not write terminal delivery receipt when backend snooze fails', async () => {
+  const calls: string[] = [];
+
+  await assert.rejects(
+    performBackendNotificationSecondaryAction(
+      {
+        sourceRef: 'notification:notif-2',
+        sourceType: 'notification',
+        lane: 'todo',
+        targetHash: '/decisions',
+      },
+      'backend-notif-2',
+      {
+        reportDelivery: async (events) => {
+          calls.push(`delivery:${events[0].status}`);
+        },
+        snoozeNotification: async (id) => {
+          calls.push(`snooze:${id}`);
+          throw new Error('backend_snooze_failed');
+        },
+        dismissNotification: async (id) => {
+          calls.push(`dismiss:${id}`);
+        },
+      },
+    ),
+    /backend_snooze_failed/,
+  );
+
+  assert.deepEqual(calls, ['snooze:notif-2']);
+});
+
+test('dismisses backend notice before writing terminal delivery receipt', async () => {
+  const calls: string[] = [];
+
+  const result = await performBackendNotificationSecondaryAction(
+    {
+      sourceRef: 'notification:notif-weekly',
+      sourceType: 'notification',
+      lane: 'notice',
+      targetHash: '/reports',
+    },
+    'backend-weekly',
+    {
+      reportDelivery: async (events) => {
+        calls.push(`delivery:${events[0].status}`);
+      },
+      snoozeNotification: async (id) => {
+        calls.push(`snooze:${id}`);
+      },
+      dismissNotification: async (id, detail) => {
+        calls.push(`dismiss:${id}:${detail}`);
+      },
+    },
+  );
+
+  assert.deepEqual(calls, [
+    'dismiss:notif-weekly:chrome_notification_dismiss_button',
+    'delivery:dismissed',
+  ]);
+  assert.deepEqual(result, {
+    action: 'dismissed',
+    notificationId: 'notif-weekly',
+    deliveryStatus: 'dismissed',
+  });
+});
+
+test('keeps proposed action secondary button as channel-only cooldown', async () => {
+  const calls: string[] = [];
+
+  const result = await performBackendNotificationSecondaryAction(
+    {
+      sourceRef: 'proposed_action:action-1',
+      sourceType: 'proposed_action',
+      lane: 'todo',
+      targetHash: '/actions?actionId=action-1',
+    },
+    'backend-action-1',
+    {
+      reportDelivery: async (events) => {
+        calls.push(`delivery:${events[0].status}`);
+      },
+      snoozeNotification: async (id) => {
+        calls.push(`snooze:${id}`);
+      },
+      dismissNotification: async (id) => {
+        calls.push(`dismiss:${id}`);
+      },
+    },
+  );
+
+  assert.deepEqual(calls, ['delivery:delivered']);
+  assert.deepEqual(result, {
+    action: 'channel_hidden',
+    deliveryStatus: 'delivered',
+  });
+});
+
 test('uses dream digest payload details for notification previews', () => {
   const message = buildBackendNotificationMessage({
     body: '2 dream(s) generated this period',
@@ -226,6 +377,22 @@ test('uses dream digest payload details for notification previews', () => {
 
   assert.match(message, /Rooms rollout alignment/);
   assert.match(message, /2 dream\(s\) generated/);
+});
+
+test('uses weekly report payload details for notification previews', () => {
+  const message = buildBackendNotificationMessage({
+    body: 'Your weekly report is ready',
+    type: 'weekly_report',
+    payload: {
+      reportSummary:
+        'Launch weekly summary: rollout is on track and deployment notes need review.',
+      reportPath: 'reports/weekly-2026-05-27.md',
+    },
+  });
+
+  assert.match(message, /Launch weekly summary/);
+  assert.match(message, /Your weekly report is ready/);
+  assert.doesNotMatch(message, /weekly-2026-05-27\.md/);
 });
 
 test('keeps legacy pending notification lanes compatible', () => {

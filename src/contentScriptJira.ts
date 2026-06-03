@@ -11,6 +11,7 @@ import {
 } from './jira';
 import { initContentScriptI18n, uiPhrase as ui } from './i18n/contentScript';
 import {
+  chooseLatestDesignUpdatedAt,
   DesignDisplayItem,
   DesignLinkCandidate,
   UXTicketReference,
@@ -34,7 +35,9 @@ import {
   mergeDesignSources,
   matchesProjectPattern,
   normalizeDesignUrl,
+  parseJiraIssueKeyFromIssueUrl,
   parseJiraIssueKeyFromText,
+  parseJiraIssueKeysFromText,
   parseJiraIssueKeyFromUrl,
   parseDesignDomainPatterns,
   sortDesignDisplayItems,
@@ -538,16 +541,29 @@ function getLinkedIssueHref(linkElement: Element): string {
   return nestedLink?.href || nestedLink?.getAttribute('href') || '';
 }
 
-function getLinkedIssueReference(linkElement: Element): { key: string; url: string } | null {
+function getLinkedIssueReference(linkElement: Element, projectPrefix?: string): { key: string; url: string } | null {
   const href = getLinkedIssueHref(linkElement).trim();
-  const key = parseJiraIssueKeyFromUrl(href)
-    || parseJiraIssueKeyFromText(linkElement.getAttribute('data-issue-key'))
-    || parseJiraIssueKeyFromText(linkElement.getAttribute('aria-label'))
-    || parseJiraIssueKeyFromText(linkElement.textContent);
+  const hrefKey = parseJiraIssueKeyFromIssueUrl(href);
+  const candidates = [
+    hrefKey,
+    ...parseJiraIssueKeysFromText(linkElement.getAttribute('data-issue-key')),
+    ...parseJiraIssueKeysFromText(linkElement.getAttribute('aria-label')),
+    ...parseJiraIssueKeysFromText(linkElement.textContent),
+  ].filter((key): key is string => Boolean(key));
+
+  const seenKeys = new Set<string>();
+  const uniqueCandidates = candidates.filter(key => {
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  });
+  const key = projectPrefix
+    ? uniqueCandidates.find(candidate => matchesProjectPattern(candidate, projectPrefix))
+    : uniqueCandidates[0];
   if (!key) return null;
 
   const fallbackUrl = `/browse/${key}`;
-  if (!href || parseJiraIssueKeyFromUrl(href) !== key) {
+  if (!href || hrefKey !== key) {
     return { key, url: fallbackUrl };
   }
 
@@ -573,7 +589,7 @@ function getUXTicketsFromLinkedIssues(projectPrefix = 'UX*'): { key: string; url
   issueLinkSections.forEach(section => {
     const links = section.querySelectorAll('.issue-link-key');
     links.forEach(linkElement => {
-      const reference = getLinkedIssueReference(linkElement);
+      const reference = getLinkedIssueReference(linkElement, projectPrefix);
       
       if (reference && matchesProjectPattern(reference.key, projectPrefix)) {
         // 尝试获取summary
@@ -785,7 +801,7 @@ function getRemoteDesignStatus(remoteLink: any): string | undefined {
 function getRemoteDesignUpdatedAt(remoteLink: any): string | undefined {
   const object = remoteLink?.object || {};
   const status = object?.status;
-  const candidates = [
+  return chooseLatestDesignUpdatedAt(
     object.updatedDate,
     object.updatedAt,
     object.lastUpdated,
@@ -793,14 +809,7 @@ function getRemoteDesignUpdatedAt(remoteLink: any): string | undefined {
     status?.updatedAt,
     remoteLink?.updatedDate,
     remoteLink?.updatedAt,
-  ];
-
-  for (const candidate of candidates) {
-    if (typeof candidate !== 'string') continue;
-    if (formatDesignUpdatedDate(candidate)) return candidate.trim();
-  }
-
-  return undefined;
+  );
 }
 
 // 获取 UX ticket 的 design link 和对应 UX Epic 状态
@@ -1033,8 +1042,9 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
         : '';
       const updatedDateLabel = formatDesignUpdatedDate(design.updatedAt);
       const updatedDateTooltip = formatDesignUpdatedTooltip(design.updatedAt);
+      const updatedDateAccessibleLabel = updatedDateTooltip || design.updatedAt || updatedDateLabel;
       const updatedTag = updatedDateLabel
-        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.updatedAt || updatedDateLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
+        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateAccessibleLabel)}" aria-label="${escapeAttribute(updatedDateAccessibleLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
         : '';
       linksHtml += `
         <div class="design-link-item" data-design-status-tone="${escapeAttribute(designStatusTone)}" data-design-attention="${escapeAttribute(designAttentionLevel)}" tabindex="-1">
@@ -1068,10 +1078,11 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
             ${escapeHtml(design.uxTicketKey)} <span class="external-link-icon">↗</span>
           </a>
         `;
+      const canonicalDesignStatus = design.linkProvided ? design.designStatus : 'Missing link';
       const designStatusText = design.linkProvided ? formatDesignStatusLabel(design.designStatus) : ui('缺少设计稿链接');
-      const designStatusHint = getDesignStatusActionHint(designStatusText);
+      const designStatusHint = getDesignStatusActionHint(canonicalDesignStatus);
       const designStatusTag = designStatusText
-        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(designStatusText)}" title="${escapeAttribute(designStatusHint || designStatusText)}">${escapeHtml(designStatusText)}</span>`
+        ? `<span class="design-status-tag design-status-tag--${getDesignStatusTone(canonicalDesignStatus)}" title="${escapeAttribute(designStatusHint || designStatusText)}">${escapeHtml(designStatusText)}</span>`
         : '';
       const statusTag = design.uxEpicStatus
         ? `
@@ -1090,8 +1101,9 @@ function displayDesignLinks(designData: DesignDisplayItem[]): void {
         : '';
       const updatedDateLabel = formatDesignUpdatedDate(design.designUpdatedAt);
       const updatedDateTooltip = formatDesignUpdatedTooltip(design.designUpdatedAt);
+      const updatedDateAccessibleLabel = updatedDateTooltip || design.designUpdatedAt || updatedDateLabel;
       const updatedTag = updatedDateLabel
-        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateTooltip || design.designUpdatedAt || updatedDateLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
+        ? `<span class="design-updated-tag" title="${escapeAttribute(updatedDateAccessibleLabel)}" aria-label="${escapeAttribute(updatedDateAccessibleLabel)}">${escapeHtml(ui('已更新'))} ${escapeHtml(updatedDateLabel)}</span>`
         : '';
 
       linksHtml += `
@@ -1481,7 +1493,7 @@ function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: str
   issueLinkSections.forEach(section => {
     const links = section.querySelectorAll('.issue-link-key');
     links.forEach(linkElement => {
-      const reference = getLinkedIssueReference(linkElement);
+      const reference = getLinkedIssueReference(linkElement, projectPrefix);
       
       if (reference && matchesProjectPattern(reference.key, projectPrefix)) {
         const summaryElement = linkElement.closest('.issue-link')?.querySelector('.issue-link-summary');

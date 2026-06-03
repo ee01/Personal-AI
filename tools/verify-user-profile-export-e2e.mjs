@@ -42,6 +42,31 @@ for (const item of profileItems) {
   });
 }
 
+const retractedProfileItems = [
+  {
+    id: 'profile-retracted-1',
+    itemType: 'interest',
+    itemKey: 'focus_project',
+    itemValue: 'Archived Project Alpha',
+    evidenceRefs: [{
+      sourceType: 'unit',
+      id: 'retracted-e-1',
+      sourceTitle: 'Retracted evidence',
+      sourceUrl: 'https://example.test/retracted/1',
+      snippet: 'This project was excluded by mistake.',
+    }],
+    sourceKind: 'explicit',
+    confidence: 0.7,
+    userConfirmed: true,
+    status: 'retracted',
+    salienceScore: 0.7,
+    mentionCount: 2,
+    lastSeen: Math.floor(Date.now() / 1000) - 10,
+  },
+];
+
+const allProfileItems = [...profileItems, ...retractedProfileItems];
+
 const profileItemRequests = [];
 const profileMutations = [];
 let phase = 'initial-load';
@@ -90,10 +115,15 @@ async function startMemoryFixtureServer() {
     if (url.pathname === '/api/v1/profile/items' && req.method === 'GET') {
       const limit = Number(url.searchParams.get('limit') || '50');
       const offset = Number(url.searchParams.get('offset') || '0');
-      const visibleProfileItems = profileItems.filter((item) =>
-        item.status === 'active' || item.status === 'pending_confirm'
-      );
-      profileItemRequests.push({ phase, limit, offset });
+      const statusFilter = url.searchParams.get('status');
+      const visibleProfileItems = statusFilter === 'all'
+        ? allProfileItems
+        : statusFilter
+        ? allProfileItems.filter((item) => item.status === statusFilter)
+        : allProfileItems.filter((item) =>
+          item.status === 'active' || item.status === 'pending_confirm'
+        );
+      profileItemRequests.push({ phase, limit, offset, status: statusFilter || undefined });
       sendJson(res, {
         items: visibleProfileItems.slice(offset, offset + limit),
         total: visibleProfileItems.length,
@@ -121,6 +151,7 @@ async function startMemoryFixtureServer() {
         lastSeen: Math.floor(Date.now() / 1000),
       };
       profileItems.unshift(created);
+      allProfileItems.unshift(created);
       sendJson(res, created);
       return;
     }
@@ -128,7 +159,7 @@ async function startMemoryFixtureServer() {
     const profileItemMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)$/);
     if (profileItemMatch && req.method === 'PUT') {
       const id = decodeURIComponent(profileItemMatch[1]);
-      const item = profileItems.find((candidate) => candidate.id === id);
+      const item = allProfileItems.find((candidate) => candidate.id === id);
       if (!item) {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'Profile item not found' }));
@@ -147,7 +178,7 @@ async function startMemoryFixtureServer() {
 
     if (profileItemMatch && req.method === 'DELETE') {
       const id = decodeURIComponent(profileItemMatch[1]);
-      const item = profileItems.find((candidate) => candidate.id === id);
+      const item = allProfileItems.find((candidate) => candidate.id === id);
       if (!item) {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'Profile item not found' }));
@@ -162,7 +193,7 @@ async function startMemoryFixtureServer() {
     const confirmMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)\/confirm$/);
     if (confirmMatch && req.method === 'POST') {
       const id = decodeURIComponent(confirmMatch[1]);
-      const item = profileItems.find((candidate) => candidate.id === id);
+      const item = allProfileItems.find((candidate) => candidate.id === id);
       if (!item) {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'Profile item not found' }));
@@ -178,7 +209,7 @@ async function startMemoryFixtureServer() {
     const restoreMatch = url.pathname.match(/^\/api\/v1\/profile\/items\/([^/]+)\/restore$/);
     if (restoreMatch && req.method === 'POST') {
       const id = decodeURIComponent(restoreMatch[1]);
-      const item = profileItems.find((candidate) => candidate.id === id);
+      const item = allProfileItems.find((candidate) => candidate.id === id);
       if (!item) {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'Profile item not found' }));
@@ -427,29 +458,36 @@ try {
   assert.ok(exportPath, 'export download should resolve to a local path');
   const exportJson = JSON.parse(await fs.readFile(exportPath, 'utf8'));
 
-  assert.equal(exportJson.userProfile.items.length, profileItems.length);
-  assert.equal(exportJson.userProfile.totalItems, profileItems.length);
+  assert.equal(exportJson.userProfile.items.length, allProfileItems.length);
+  assert.equal(exportJson.userProfile.currentItems.length, profileItems.length);
+  assert.equal(exportJson.userProfile.inactiveAuditItems.length, retractedProfileItems.length);
+  assert.equal(exportJson.userProfile.totalItems, allProfileItems.length);
+  assert.equal(exportJson.userProfile.currentTotalItems, profileItems.length);
   assert.equal(
     exportJson.exportInfo.pagination.exportedProfileItems,
-    profileItems.length,
+    allProfileItems.length,
   );
-  assert.equal(exportJson.exportInfo.pagination.totalProfileItems, profileItems.length);
+  assert.equal(exportJson.exportInfo.pagination.totalProfileItems, allProfileItems.length);
   assert.equal(exportJson.exportInfo.pagination.truncated, false);
+  assert.equal(exportJson.exportInfo.pagination.statusScope, 'all');
   assert.deepEqual(exportJson.exportInfo.warnings, []);
   assert.equal(exportJson.exportInfo.optionalSections.systemHealth.available, true);
   assert.equal(exportJson.exportInfo.optionalSections.entityStatistics.available, true);
-  assert.equal(exportJson.exportInfo.profileAudit.confirmedItems, 625);
+  assert.equal(exportJson.exportInfo.profileAudit.confirmedItems, 626);
   assert.equal(exportJson.exportInfo.profileAudit.pendingConfirmationItems, 625);
   assert.equal(exportJson.exportInfo.profileAudit.usableProfileItems, 625);
-  assert.equal(exportJson.exportInfo.profileAudit.heldForConfirmationItems, 625);
+  assert.equal(exportJson.exportInfo.profileAudit.heldForConfirmationItems, 626);
+  assert.equal(exportJson.exportInfo.profileAudit.retractedItems, 1);
+  assert.equal(exportJson.exportInfo.profileAudit.inactiveAuditItems, 1);
   assert.equal(exportJson.exportInfo.profileAudit.withoutEvidenceItems, 0);
   assert.equal(
     exportJson.exportInfo.profileAudit.personalizationBoundary.rule,
     'Only active profile items with userConfirmed=true are eligible for personalization and provider context.',
   );
   assert.equal(exportJson.exportSummary.profileCompleteness, '完整');
-  assert.equal(exportJson.exportSummary.exportedProfileItems, profileItems.length);
+  assert.equal(exportJson.exportSummary.exportedProfileItems, allProfileItems.length);
   assert.equal(exportJson.exportSummary.usableProfileItems, 625);
+  assert.equal(exportJson.exportSummary.retractedProfileItems, 1);
 
   const initialRequests = profileItemRequests.filter(
     (request) => request.phase === 'initial-load',
@@ -468,18 +506,23 @@ try {
     phase: 'load-all',
     limit: 200,
     offset: 1200,
+    status: undefined,
   });
   assert.deepEqual(exportRequests.at(-1), {
     phase: 'export',
     limit: 200,
     offset: 1200,
+    status: 'all',
   });
 
   await page.locator('.status-message.success', {
     hasText: '画像已导出',
   }).waitFor({ timeout: 10000 });
   await page.locator('.status-message.success', {
-    hasText: '1250/1250 条',
+    hasText: '1251/1251 条',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.status-message.success', {
+    hasText: '含 1 条已排除审计',
   }).waitFor({ timeout: 10000 });
 
   phase = 'export-partial-diagnostics';
@@ -490,7 +533,8 @@ try {
   const partialExportPath = await partialDownload.path();
   assert.ok(partialExportPath, 'partial export download should resolve to a local path');
   const partialExportJson = JSON.parse(await fs.readFile(partialExportPath, 'utf8'));
-  assert.equal(partialExportJson.userProfile.items.length, profileItems.length);
+  assert.equal(partialExportJson.userProfile.items.length, allProfileItems.length);
+  assert.equal(partialExportJson.exportInfo.profileAudit.retractedItems, 1);
   assert.equal(partialExportJson.exportInfo.pagination.truncated, false);
   assert.equal(partialExportJson.exportInfo.warnings.length, 2);
   assert.equal(partialExportJson.exportInfo.optionalSections.systemHealth.available, false);
@@ -569,6 +613,47 @@ try {
   });
   await page.locator('.profile-item-row', {
     hasText: 'Export Project 999',
+  }).waitFor({ timeout: 10000 });
+
+  phase = 'retracted-list';
+  await page.locator('button.retracted-items-toggle-btn', {
+    hasText: '查看已排除',
+  }).click();
+  await page.locator('.retracted-profile-section', {
+    hasText: 'Archived Project Alpha',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.retracted-profile-section', {
+    hasText: '已排除，不参与个性化',
+  }).waitFor({ timeout: 10000 });
+  await page.locator('.retracted-profile-section button.evidence-toggle-btn').click();
+  await page.locator('.retracted-profile-section .profile-evidence-panel', {
+    hasText: 'This project was excluded by mistake.',
+  }).waitFor({ timeout: 10000 });
+  const retractedRequests = profileItemRequests.filter(
+    (request) => request.phase === 'retracted-list',
+  );
+  assert.deepEqual(retractedRequests, [
+    {
+      phase: 'retracted-list',
+      limit: 200,
+      offset: 0,
+      status: 'retracted',
+    },
+  ]);
+
+  await page.locator('.retracted-profile-section button.secondary-action-btn', {
+    hasText: '恢复',
+  }).click();
+  await page.locator('.status-message.success', {
+    hasText: '已恢复“Archived Project Alpha”',
+  }).waitFor({ timeout: 10000 });
+  assert.deepEqual(profileMutations.at(-1), {
+    type: 'restore',
+    id: 'profile-retracted-1',
+    status: 'active',
+  });
+  await page.locator('.retracted-profile-section', {
+    hasText: '暂无已排除画像条目',
   }).waitFor({ timeout: 10000 });
 
   assert.deepEqual(pageErrors, [], `Page errors: ${pageErrors.join('; ')}`);

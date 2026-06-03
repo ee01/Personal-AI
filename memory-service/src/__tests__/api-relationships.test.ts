@@ -184,6 +184,19 @@ describe('Relationships API', () => {
     expect(alice.score).toBeGreaterThan(0.45);
   });
 
+  it('searches relationship people by aliases and email aliases', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/relationships/people?limit=10&search=${encodeURIComponent('alice@example.com')}`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    const alice = body.items.find((item: { id: string }) => item.id === personId);
+    expect(alice).toBeTruthy();
+    expect(body.totalCandidates).toBeGreaterThanOrEqual(1);
+  });
+
   it('builds a context card for a person', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -310,13 +323,45 @@ describe('Relationships API', () => {
     expect(brief.coverage.totalAttendees).toBe(2);
     expect(brief.coverage.matchedAttendees).toBe(1);
     expect(brief.coverage.unmatchedAttendees).toBe(1);
+    expect(brief.coverage.identityCheckAttendees).toBe(0);
     expect(brief.coverage.attendeesWithEvidence).toBe(1);
+    expect(brief.readiness.status).toBe('attention');
+    expect(brief.readiness.summary).toContain('1 位参会人未匹配人物记忆');
+    expect(brief.readiness.nextActions.join(' ')).toContain('External Reviewer');
+    expect(brief.readiness.successCriteria.join(' ')).toContain('1/2');
     expect(brief.attendees[0].personId).toBe(personId);
     expect(brief.attendees[0].matchedBy).toBe('email');
     expect(brief.attendees[0].coverageState).toBe('ready');
     expect(brief.attendees[1].matchedBy).toBe('none');
     expect(brief.attendees[1].coverageState).toBe('missing');
     expect(brief.matrix[1].matchStatus).toBe('未匹配');
+  });
+
+  it('marks weak meeting brief attendee matches as identity checks instead of ready', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/meeting-brief',
+      payload: {
+        title: 'Weak alias prep',
+        attendees: [{ email: 'alice@unknown.example' }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const brief = res.json();
+    expect(brief.coverage.totalAttendees).toBe(1);
+    expect(brief.coverage.matchedAttendees).toBe(1);
+    expect(brief.coverage.identityCheckAttendees).toBe(1);
+    expect(brief.coverage.coverageNote).toContain('弱匹配');
+    expect(brief.readiness.status).toBe('partial');
+    expect(brief.readiness.summary).toContain('弱匹配');
+    expect(brief.readiness.nextActions.join(' ')).toContain('先确认');
+    expect(brief.readiness.successCriteria.join(' ')).toContain('人工确认');
+    expect(brief.attendees[0].personId).toBe(personId);
+    expect(brief.attendees[0].matchedBy).toBe('email_local_part');
+    expect(brief.attendees[0].identityCheckRequired).toBe(true);
+    expect(brief.attendees[0].identityCheckReason).toContain('先确认');
+    expect(brief.attendees[0].coverageState).toBe('thin');
   });
 
   it('makes large meeting attendee truncation explicit', async () => {
@@ -345,6 +390,27 @@ describe('Relationships API', () => {
     expect(brief.omittedAttendees[0].displayName).toBe('Overflow Reviewer 16');
     expect(brief.omittedAttendees[0].reason).toContain('前 16 位分析上限');
     expect(brief.coverage.coverageNote).toContain('已分析前 16/18 位参会人');
+    expect(brief.readiness.status).toBe('attention');
+    expect(brief.readiness.nextActions.join(' ')).toContain('分批生成');
+  });
+
+  it('returns explicit readiness guidance when no attendees are provided', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/meeting-brief',
+      payload: {
+        title: 'No attendee prep',
+        attendees: [],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const brief = res.json();
+    expect(brief.coverage.totalAttendees).toBe(0);
+    expect(brief.readiness.status).toBe('empty');
+    expect(brief.readiness.summary).toContain('缺少参会人');
+    expect(brief.readiness.nextActions[0]).toContain('补充日历参会人');
+    expect(brief.readiness.successCriteria.join(' ')).toContain('核心参会人');
   });
 
   it('returns timeline and open loop evidence', async () => {

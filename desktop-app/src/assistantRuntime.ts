@@ -101,10 +101,19 @@ function compactErrorMessage(message: string, maxLength = 150): string {
   return `${compact.slice(0, maxLength - 1)}…`;
 }
 
-function latestFailedAttempt(status: BridgeStatus) {
-  return status.syncState?.recentAttempts?.find(
-    (attempt) => attempt.status === 'failed',
+function latestRelevantFailedAttempt(status: BridgeStatus) {
+  const attempts = status.syncState?.recentAttempts || [];
+  const latestAttempt = attempts[0];
+  if (latestAttempt?.status === 'failed') {
+    return latestAttempt;
+  }
+
+  const hasActiveSyncError = Boolean(
+    status.syncState?.lastErrorMessage || status.lastError,
   );
+  if (!hasActiveSyncError) return undefined;
+
+  return attempts.find((attempt) => attempt.status === 'failed');
 }
 
 function syncIssueActionHint(message: string): string {
@@ -190,7 +199,7 @@ function summarizeRuntimeIssue(
 function summarizeSyncIssue(
   status: BridgeStatus,
 ): BridgeAssistantStatusItem | undefined {
-  const failedAttempt = latestFailedAttempt(status);
+  const failedAttempt = latestRelevantFailedAttempt(status);
   const rawMessage =
     status.syncState?.lastErrorMessage ||
     failedAttempt?.errorMessage ||

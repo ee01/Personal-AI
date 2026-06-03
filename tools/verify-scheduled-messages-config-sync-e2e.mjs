@@ -12,6 +12,22 @@ const repoRoot = path.resolve(scriptDir, '..');
 const extensionPath = path.join(repoRoot, 'dist');
 const sheetId = '1AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPp';
 const oldSheetId = '1ZzYyXxWwVvUuTtSsRrQqPpOoNnMmLlKk';
+const headers = [
+  'ID',
+  'Topic',
+  'Content',
+  'Schedule_Date',
+  'Schedule_Time',
+  'Push_Method',
+  'Target_Type',
+  'Glip_User_Name',
+  'Glip_Team_ID',
+  'Status',
+  'Exec_Count',
+  'Exec_Log',
+  'Last_Exec',
+  'Next_Exec',
+];
 
 async function launchExtensionContext() {
   const userDataDir = await fs.mkdtemp(
@@ -57,6 +73,15 @@ async function expectDisabledButton(page, text) {
     timeout: 15000,
   });
   assert.equal(await button.isDisabled(), true, `${text} button should be disabled`);
+}
+
+function installAuthStub(page) {
+  return page.addInitScript(() => {
+    if (globalThis.chrome?.identity) {
+      chrome.identity.getAuthToken = (_details, callback) => callback('fake-token');
+      chrome.identity.removeCachedAuthToken = (_details, callback) => callback();
+    }
+  });
 }
 
 async function openSetupPage(launched, options = {}) {
@@ -182,6 +207,7 @@ await withLaunchedExtension(async (launched) => {
       ['script_id', 'sheet-script'],
       ['deployment_id', 'sheet-deployment'],
       ['app_script_version', '2.7.1'],
+      ['last_sync_action', 'manual_bind_use_sheet'],
       ['minute_trigger_id', 'sheet-minute-trigger'],
       ['daily_trigger_id', 'sheet-daily-trigger'],
       ['messages_sheet_id', '101'],
@@ -206,6 +232,7 @@ await withLaunchedExtension(async (launched) => {
         scriptId: 'local-script',
         deploymentId: 'local-deployment',
         appScriptVersion: '2.7.0',
+        last_sync_action: 'bot_config_update',
         minute_trigger_id: 'local-minute-trigger',
         daily_trigger_id: 'local-daily-trigger',
         messagesSheetId: 202,
@@ -236,10 +263,19 @@ await withLaunchedExtension(async (launched) => {
   await page.locator('text=配置差异').waitFor({
     timeout: 15000,
   });
+  await page.locator('text=最近同步动作').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=Bot / Timeline 配置更新').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=手动绑定：使用 Sheet').waitFor({
+    timeout: 15000,
+  });
   await page.locator('text=Web App URL').waitFor({
     timeout: 15000,
   });
-  await page.locator('button', { hasText: '查看全部 9 项差异' }).click();
+  await page.locator('button', { hasText: '查看全部 10 项差异' }).click();
   await page.locator('text=Messages 子表 ID').waitFor({
     timeout: 15000,
   });
@@ -310,6 +346,146 @@ await withLaunchedExtension(async (launched) => {
   assert.equal(afterContinue.scheduledMessagesConfig.sheetId, sheetId);
   assert.equal(afterContinue.scheduledMessagesConfig.messagesSheetId, 101);
   assert.equal(afterContinue.scheduledMessagesConfig.logsSheetId, 102);
+
+  assertNoPageErrors();
+});
+
+await withLaunchedExtension(async (launched) => {
+  const { context, extensionId, serviceWorker } = launched;
+  const remoteConfigRows = [
+    ['sheet_version', '2.7'],
+    ['created_by', 'Personal AI Extension'],
+    ['created_at', '2026-05-12T06:00:00.000Z'],
+    ['last_sync_time', '2026-05-12T09:30:00.000Z'],
+    ['last_sync_action', 'app_script_metadata_update'],
+    ['web_app_url', 'https://script.google.com/macros/s/remote/exec'],
+    ['script_id', 'remote-script'],
+    ['deployment_id', 'remote-deployment'],
+    ['app_script_version', '2.8.5'],
+    ['messages_sheet_id', '101'],
+    ['logs_sheet_id', '102'],
+  ];
+  let configReadCount = 0;
+
+  await serviceWorker.evaluate(async ({ targetSheetId }) => {
+    await chrome.storage.local.clear();
+    await chrome.storage.local.set({
+      scheduledMessagesConfig: {
+        sheetId: targetSheetId,
+        sheetUrl: `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit`,
+        sheet_version: '2.7',
+        created_by: 'Personal AI Extension',
+        created_at: '2026-05-12T06:00:00.000Z',
+        last_sync_time: '2026-05-12T08:00:00.000Z',
+        last_sync_action: 'bot_config_update',
+        webAppUrl: 'https://script.google.com/macros/s/local/exec',
+        scriptId: 'local-script',
+        deploymentId: 'local-deployment',
+        appScriptVersion: '2.7.0',
+      },
+    });
+  }, { targetSheetId: sheetId });
+
+  const page = await context.newPage();
+  const assertNoPageErrors = collectPageErrors(page);
+  await installAuthStub(page);
+
+  await page.route('http://localhost:3210/api/v1/config', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        outreachEnabled: false,
+        ringCentralClientSecretConfigured: false,
+        ringCentralJwtConfigured: false,
+      }),
+    });
+  });
+
+  await page.route('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ email: 'esone.qiu@example.com' }),
+    });
+  });
+
+  await page.route('https://sheets.googleapis.com/**', async (route) => {
+    const request = route.request();
+    const url = request.url();
+
+    if (request.method() === 'GET' && url.includes('/values/Config!A2:B')) {
+      configReadCount += 1;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ values: remoteConfigRows }),
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && url.includes('/values/Messages?valueRenderOption=FORMATTED_VALUE')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          values: [
+            headers,
+            [
+              'sync-row-1',
+              'Config refresh proof',
+              'Uses refreshed Config before loading messages',
+              '2026-05-12',
+              '09:45',
+              'AsMe',
+              'private',
+              'Esone Qiu',
+              '',
+              'Active',
+              '0',
+              '',
+              '',
+              '2026-05-12 09:45',
+            ],
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { message: `Unexpected initialized page Sheets API call: ${url}` } }),
+    });
+  });
+
+  await page.goto(`chrome-extension://${extensionId}/scheduled-messages.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await page.locator('h1', { hasText: '定时消息管理' }).waitFor({
+    timeout: 15000,
+  });
+  await page.locator('span[title="Config refresh proof"]').waitFor({
+    timeout: 15000,
+  });
+
+  await page.locator('button', { hasText: '同步' }).click();
+  await page.locator('text=已从 Sheet Config 刷新本机配置').waitFor({
+    timeout: 15000,
+  });
+  await page.locator('text=最近动作: App Script 元数据更新').waitFor({
+    timeout: 15000,
+  });
+
+  const storageAfterSync = await serviceWorker.evaluate(async () => {
+    return chrome.storage.local.get(['scheduledMessagesConfig']);
+  });
+  assert.equal(configReadCount, 1);
+  assert.equal(storageAfterSync.scheduledMessagesConfig.webAppUrl, 'https://script.google.com/macros/s/remote/exec');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.scriptId, 'remote-script');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.deploymentId, 'remote-deployment');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.appScriptVersion, '2.8.5');
+  assert.equal(storageAfterSync.scheduledMessagesConfig.messagesSheetId, 101);
+  assert.equal(storageAfterSync.scheduledMessagesConfig.logsSheetId, 102);
+  assert.equal(storageAfterSync.scheduledMessagesConfig.last_sync_time, '2026-05-12T09:30:00.000Z');
 
   assertNoPageErrors();
 });

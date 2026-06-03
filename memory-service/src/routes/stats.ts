@@ -27,6 +27,11 @@ interface LevelCountRow {
   count: number;
 }
 
+interface RetrievalTierCountRow {
+  retrieval_tier: string;
+  count: number;
+}
+
 // ---------------------------------------------------------------------------
 // Response type
 // ---------------------------------------------------------------------------
@@ -71,6 +76,7 @@ interface StatsResponse {
     core: number;
     forgotten: number;
     archived: number;
+    retrievalTiers?: Record<string, number>;
   };
 }
 
@@ -156,6 +162,10 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
                   core: { type: 'number' },
                   forgotten: { type: 'number' },
                   archived: { type: 'number' },
+                  retrievalTiers: {
+                    type: 'object',
+                    additionalProperties: { type: 'number' },
+                  },
                 },
               },
             },
@@ -275,25 +285,16 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
         memoryLevels[row.consolidation_level] = row.count;
       }
 
-      // Count "forgotten" as entities with status 'archived' in entities table
-      // (memory_metadata does not have a 'forgotten' level natively)
-      const forgottenCount = (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS count FROM entities WHERE status = 'archived'",
-          )
-          .get() as CountRow
-      ).count;
+      const retrievalTierRows = db
+        .prepare(
+          'SELECT retrieval_tier, COUNT(*) AS count FROM memory_metadata GROUP BY retrieval_tier',
+        )
+        .all() as RetrievalTierCountRow[];
 
-      // Count "archived" from memory_metadata where there is no recent access
-      // For Phase 4, we approximate "archived" as entities with status = 'merged'
-      const archivedCount = (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS count FROM entities WHERE status = 'merged'",
-          )
-          .get() as CountRow
-      ).count;
+      const retrievalTiers: Record<string, number> = {};
+      for (const row of retrievalTierRows) {
+        retrievalTiers[row.retrieval_tier] = row.count;
+      }
 
       const response: StatsResponse = {
         user: {
@@ -333,8 +334,9 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
           working: memoryLevels['working'] ?? 0,
           consolidated: memoryLevels['consolidated'] ?? 0,
           core: memoryLevels['core'] ?? 0,
-          forgotten: forgottenCount,
-          archived: archivedCount,
+          forgotten: memoryLevels['forgotten'] ?? 0,
+          archived: memoryLevels['archived'] ?? 0,
+          retrievalTiers,
         },
       };
 

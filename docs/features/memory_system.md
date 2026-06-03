@@ -1,10 +1,18 @@
 # Memory Service — 类人记忆系统架构
 
-_最后更新: 2026-05-26 (补充无感记忆校准层与 Memory Lens / Capture / Compose Assist 边界)_
+_最后更新: 2026-06-03 (Ask 细节已抽到独立文档，本页保留记忆系统总览与跳转；保留自我反思、Outreach、范围语义、摄入决策、抽取降级索引与备份导入边界)_
 
 ## 系统概述
 
 Memory Service 是一套独立部署的**类人记忆后端服务**，取代了原有的 Chrome Extension 内嵌记忆系统（memory.ts + ChromaDB + Chrome Storage）。它模拟人脑的记忆机制 —— 自动摄入、显著性评估、多通道召回、遗忘衰减、离线巩固、自我反思、未来场景预演（Rehearsal）与生成式重放（梦境重放），并提供双人格模型（用户画像 + AI 自我认知）。
+
+## 产品愿景
+
+Personal AI 是给用户私人使用的长期记忆系统。它要留存用户和 AI、消息、网页浏览、操作、用户偏好、用户沉淀或在其他平台沉淀的 skill、用户与其他 AI 的对话等记忆，并在聊天、会议、Jira、网页阅读、写作、以及用户去其他 AI 平台继续对话时提供关联提示。
+
+这套系统的方向不是把所有判断都变成用户的 review 队列。它应该像一个独立的人一样拥有内部记忆机制：自己观察、筛选、联想、反思、遗忘、巩固、回放和修正；用户只在高责任边界参与决策，例如对外发送、不可逆删除、跨隐私/范围外发、写入稳定用户画像、代表用户执行动作或系统明确低置信但影响很大的判断。
+
+因此，新能力默认应优先设计为**自主反思与无感校准机制**，而不是新增一个需要用户逐条维护的工作台。用户可检查、可撤销、可纠正，但不应该成为记忆系统日常运转的人工审核员。
 
 ## 大白话运行逻辑
 
@@ -18,39 +26,40 @@ Memory Service 是 Personal AI 的记忆后端：外部消息、网页、会议�
 4. 用户边界：`X-User-Id`、scope、已确认画像和权限边界决定哪些记忆能被读取或注入。
 5. 离线巩固：自我反思和梦境重放会把分散片段整理成更稳定的主题、行动项或洞察，但不应替代原始证据。
 6. 未来场景预演：Rehearsal 保存“未来遇到某场景该想起/说/做什么”，通过 `/context-recall` 在 Compose Assist、Today Pilot、Meeting Pilot、Memory Lens 等现场触发；它不是事实层。
+7. 写作风格学习：Compose Assist 会从用户真实改写和发送行为里提炼“怎么写才像用户本人”，重复证据足够后进入 `USER_CORE` 的 Writing Style，而不是保存用户最终发送原文。
 
 ## 记忆功能地图
 
 Memory Service 是底层记忆后端；用户真正感知到的是一组围绕“入库、整理、召回、提示、生成、复盘”的功能。详细交互规则仍以各功能文档为准，本节只做总览导航。
 
-| 功能 | 角色 | 一句话说明 |
-| ---- | ---- | ---------- |
-| Memory Ingestion | 入库基础层 | 消息、会议、Jira、AI 对话、手动记录等进入 `messages_raw`、`chunks`、实体和关系；显著性决定是否索引。 |
-| [Memory Capture](./memory_capture.md) / 记忆捕捉 | 资料入库层 | 写入新资料，决定“这段 / 这页 / 这次用户对外输入要不要记住”，并保存 source capsule、证据锚点和未来触发线索。 |
-| [Memory Lens](./memory_lens.md) | 场景提示层 | 读已有记忆，提示“当前页面、消息、Jira、会议或划词内容和你以前什么相关”，不写入、不生成回复。 |
-| [Compose Assist](./compose_assist.md) | 输入框生成层 | 用记忆生成可插入内容，帮助用户判断“我现在怎么回复 / 怎么问 AI”，只插入草稿，不自动发送。 |
-| `/recall` / `/ask` | 主动查询层 | 用户主动搜索或提问时，走 vector、FTS、graph、time 多通道召回，并带回证据和来源。 |
-| Memory Exploring | 记忆浏览层 | 展示搜索结果、时间轴、反思线程、决策中心、Rehearsal、动作队列等用户可检查的记忆视图。 |
-| [Memory Coverage Map](./memory_coverage_map.md) | 覆盖与导入层 | 告诉用户哪些来源已经接入、哪些记忆覆盖不足，并承接外部 AI 历史、备份 zip 等导入入口。 |
-| [User Profile](./user_profile_system.md) | 稳定画像层 | 保存已确认的用户事实、偏好、约束和写作风格；未经确认的资料或阅读行为不能直接变成画像事实。 |
-| [Rehearsal](./rehearsal.md) | 未来场景预演层 | 保存“未来遇到某人/项目/会议/issue 时该想起什么”，通过 `/context-recall` 被 Lens、Compose Assist、Today Pilot 等消费。 |
-| Reflection / Dream Replay | 离线整理层 | 把分散记忆复盘成主题、开放问题、动作和梦境重放洞察；整理结果必须保留原始证据链。 |
-| Confirm Requests / Notifications / Outreach | 主动推进层 | 当记忆系统缺用户判断、需要提醒或需要问外部人时，分别进入决策中心、通知链路或主动询问。 |
-| [Relationship Radar](./relationship_radar.md) | 人物关系层 | 从记忆中整理人物、关系、会议上下文和助手草稿证据，供会议、回复和人脉判断使用。 |
-| [Today Pilot](./today_pilot.md) | 今日场景层 | 把今天的会议、任务、Rehearsal、项目风险和记忆线索组织成可行动的 mission。 |
-| Meeting Pilot | 会议记忆层 | 捕捉和整理会议现场、转写、摘要、行动项，并把相关历史记忆和 Rehearsal 带入会议场景。 |
-| [Project Dashboard](./project_dashboard_usage_guide.md) | 项目记忆层 | 把项目相关记忆、Jira、会议、风险和里程碑组织成项目视图，便于复盘和跟进。 |
-| Ambient Calibration / 无感记忆校准层 | 横切反馈层 | 不做独立校准平台；从用户真实动作中记录 redacted trace，用于后续调权、诊断和学习。 |
+| 功能                                                    | 角色           | 一句话说明                                                                                                            |
+| ------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Memory Ingestion                                        | 入库基础层     | 消息、会议、Jira、AI 对话、手动记录等进入 `messages_raw`、`chunks`、实体和关系；显著性决定是否索引。                  |
+| [Memory Capture](./memory_capture.md) / 记忆捕捉        | 资料入库层     | 写入新资料，决定“这段 / 这页 / 这次用户对外输入要不要记住”，并保存 source capsule、证据锚点和未来触发线索。           |
+| [Memory Lens](./memory_lens.md)                         | 场景提示层     | 读已有记忆，提示“当前页面、消息、Jira、会议或划词内容和你以前什么相关”，不写入、不生成回复。                          |
+| [Compose Assist](./compose_assist.md)                   | 输入框生成层   | 用记忆生成可插入内容，帮助用户判断“我现在怎么回复 / 怎么问 AI”，只插入草稿，不自动发送。                              |
+| `/recall` / [Ask](./ask.md)                             | 主动查询层     | 用户主动搜索或提问时，先处理范围、话题锁定和活答案 prior，再走 vector、FTS、graph、time 多通道召回，并带回证据和来源。 |
+| Memory Exploring                                        | 记忆浏览层     | 展示搜索结果、时间轴、反思线程、决策中心、Rehearsal、动作队列等用户可检查的记忆视图。                                 |
+| [Memory Coverage Map](./memory_coverage_map.md)         | 覆盖与导入层   | 告诉用户哪些来源已经接入、哪些记忆覆盖不足，并承接外部 AI 历史、备份 zip 等导入入口。                                 |
+| [User Profile](./user_profile_system.md)                | 稳定画像层     | 保存已确认的用户事实、偏好、约束和写作风格；未经确认的资料或阅读行为不能直接变成画像事实。                            |
+| [Rehearsal](./rehearsal.md)                             | 未来场景预演层 | 保存“未来遇到某人/项目/会议/issue 时该想起什么”，通过 `/context-recall` 被 Lens、Compose Assist、Today Pilot 等消费。 |
+| Reflection / Dream Replay                               | 离线整理层     | 把分散记忆复盘成主题、开放问题、动作和梦境重放洞察；整理结果必须保留原始证据链。                                      |
+| Confirm Requests / Notifications / Outreach             | 主动推进层     | 当记忆系统缺用户判断、需要提醒或需要问外部人时，分别进入决策中心、通知链路或主动询问。                                |
+| [Relationship Radar](./relationship_radar.md)           | 人物关系层     | 从记忆中整理人物、关系、会议上下文和助手草稿证据，供会议、回复和人脉判断使用。                                        |
+| [Today Pilot](./today_pilot.md)                         | 今日场景层     | 把今天的会议、任务、Rehearsal、项目风险和记忆线索组织成可行动的 mission。                                             |
+| Meeting Pilot                                           | 会议记忆层     | 捕捉和整理会议现场、转写、摘要、行动项，并把相关历史记忆和 Rehearsal 带入会议场景。                                   |
+| [Project Dashboard](./project_dashboard_usage_guide.md) | 项目记忆层     | 把项目相关记忆、Jira、会议、风险和里程碑组织成项目视图，便于复盘和跟进。                                              |
+| Ambient Calibration / 无感记忆校准层                    | 横切反馈层     | 不做独立校准平台；从用户真实动作中记录 redacted trace，用于后续调权、诊断和写作风格学习。                             |
 
 ### 三个现场能力的边界
 
 这三个能力都使用当前页面或输入框上下文，但职责不同，不能合并成一个产品动作：
 
-| 能力 | 大白话 | 读/写方向 | 典型场景 | 不负责 |
-| ---- | ------ | --------- | -------- | ------ |
-| [Memory Lens](./memory_lens.md) | 读已有记忆，提示“这和你以前什么相关”。 | 读记忆 | 浏览网页、Jira、消息会话、会议上下文，或划词查旧记忆。 | 不写入网页，不生成回复，不插入输入框。 |
-| [Memory Capture](./memory_capture.md) | 写入新资料，决定“这段 / 这页 / 这次输入要不要记住”。 | 写记忆 | 选中文本点右侧半露出 `+ 入库`、复制/深读网页点页面 `+ 入库` 或高置信自动入库、Jira owner comment 自动捕捉。 | 不展示旧记忆，不把普通浏览史全量保存，不直接写 confirmed profile。 |
-| [Compose Assist](./compose_assist.md) | 用记忆生成可插入内容，帮助“我现在怎么回复 / 怎么问 AI”。 | 读记忆后生成草稿 | RingCentral 回复、Jira comment、ChatGPT/豆包/Claude/Gemini 输入框。 | 不自动发送，不做后台入库判断，不展开 Memory Lens 式来源卡片。 |
+| 能力                                  | 大白话                                                   | 读/写方向        | 典型场景                                                                                                    | 不负责                                                             |
+| ------------------------------------- | -------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [Memory Lens](./memory_lens.md)       | 读已有记忆，提示“这和你以前什么相关”。                   | 读记忆           | 浏览网页、Jira、消息会话、会议上下文，或划词查旧记忆。                                                      | 不写入网页，不生成回复，不插入输入框。                             |
+| [Memory Capture](./memory_capture.md) | 写入新资料，决定“这段 / 这页 / 这次输入要不要记住”。     | 写记忆           | 选中文本点右侧半露出 `+ 入库`、复制/深读网页点页面 `+ 入库` 或高置信自动入库、Jira owner comment 自动捕捉。 | 不展示旧记忆，不把普通浏览史全量保存，不直接写 confirmed profile。 |
+| [Compose Assist](./compose_assist.md) | 用记忆生成可插入内容，帮助“我现在怎么回复 / 怎么问 AI”。 | 读记忆后生成草稿 | RingCentral 回复、Jira comment、ChatGPT/豆包/Claude/Gemini 输入框。                                         | 不自动发送，不做后台入库判断，不展开 Memory Lens 式来源卡片。      |
 
 推荐文档结构是：`memory_system.md` 做总览，Lens / Capture / Compose Assist 保持独立子文档。原因是它们共享上下文和召回基础设施，但用户心智分别是“提示旧记忆 / 捕捉新资料 / 生成可插入内容”，权限边界和失败模式也不同。
 
@@ -64,6 +73,9 @@ Memory Service 是底层记忆后端；用户真正感知到的是一组围绕�
 - 用户插入建议后，在发送前改写措辞，点击原网页 Send / Submit / Reply 时，前端只生成 redacted diff summary，写入 `edited_before_send`、`sent_after_insert` 或 `deleted_before_send`。
 - 用户 hover 过建议但没有插入，随后自己发送回复，写入 `sent_without_insert`，用来区分“记忆匹配大致对但措辞不合适”和“这条记忆不该出现”。
 - 用户点 thumb-down，写入 `wrong`，用于明确降低相似场景下的召回权重。
+- 用户发送前的改写会被转成 `styleFeatureTags`，例如加了“哈哈”、句尾 `~`、同意图压短、删掉夸张热情或泛泛承诺；这些标签可以被聚合成写作风格记忆。
+- 如果其他入口传入对方后续反馈“AI 味”，可用 `downstream_reaction` + `ai_tone_called_out` 作为强修正信号。
+- 如果用户已经 thumb-down、取消复核或按 Escape 关闭当前建议，本次预览候选会被清掉，之后发送自己的回复不会再追加 `sent_without_insert`；这样显式拒绝不会被重复记成隐式负反馈。
 
 后端入口：
 
@@ -74,24 +86,39 @@ POST /api/v1/ambient-calibration/traces
 表结构：
 
 - `ambient_calibration_traces`: 保存 surface、scene key、行为类型、强度、正负/修正极性、证据 id、redacted diff、隐私等级和创建时间。
+- `user_writing_style_memories`: 保存由 Compose diff 聚合出的风格候选/稳定规则，包括 scope、正向规则、负向规则、证据、feature counts、confidence 和是否已晋升到画像。
+- `user_profile_items`: 当写作风格证据稳定后，保存 `writing_style.*` profile item，并由 `ProfileManager` 渲染进 `USER_CORE.md` 的 `## Writing Style` 区域。
 
 隐私默认值：
 
 - 不保存完整发送文本、完整建议文本或完整输入框内容。
 - Compose Assist 只上传 hash、长度、相似度、编辑距离分段、语义关系和 evidence id。
 - trace 默认 `privacyClass='sensitive_redacted'`；如果未来某 surface 只能本地学习，可用 `local_only`。
+- Ambient Calibration API 会递归拒绝 `redactedDiff` / `metadata` 里的原文字段（如 `rawText`、`finalText`、`suggestionText`、`composerText`），只允许 `rawTextStored:false` 这类脱敏证明字段。重复 trace id 的回执会返回 `stored=false`，让重试/重复上报在诊断里可见。
 
 其他 surface 的校准入口应复用同一张 trace 表，而不是新增校准平台：
 
-| Surface | 用户自然动作 | 校准含义 |
-| ------- | ------------ | -------- |
-| Memory Lens | hover、展开、打开来源、mute、wrong | 召回是否一眼相关、来源是否值得信任、站点/主题是否要降噪 |
-| Today Pilot | done、later、mute、wrong、copy context pack | 今日 mission 排序、任务粒度、提醒时机是否正确 |
-| Meeting Pilot | 确认、编辑、忽略、人工新增行动项 | 会议抽取、owner / deadline 解析、历史记忆提示是否准确 |
-| Memory Capture | save、ignore、open source、reference later | 哪类资料值得入库、source capsule 的触发线索是否稳定 |
-| Ask / Search | 打开结果、复制、继续追问、改写 query | 召回排序、拒答边界和 query expansion 是否需要修正 |
+| Surface        | 用户自然动作                                | 校准含义                                                |
+| -------------- | ------------------------------------------- | ------------------------------------------------------- |
+| Memory Lens    | hover、展开、打开来源、mute、wrong          | 召回是否一眼相关、来源是否值得信任、站点/主题是否要降噪 |
+| Today Pilot    | done、later、mute、wrong、copy context pack | 今日 mission 排序、任务粒度、提醒时机是否正确           |
+| Meeting Pilot  | 确认、编辑、忽略、人工新增行动项            | 会议抽取、owner / deadline 解析、历史记忆提示是否准确   |
+| Memory Capture | save、ignore、open source、reference later  | 哪类资料值得入库、source capsule 的触发线索是否稳定     |
+| Ask / Search   | 打开结果、复制、继续追问、改写 query        | 召回排序、拒答边界和 query expansion 是否需要修正       |
 
-这层机制不会直接把 trace 变成 confirmed profile，也不会覆盖原始记忆。它先作为排序、诊断和候选学习信号；只有经过明确确认或稳定证据支持的内容，才会进入画像、关系或长期事实层。
+这层机制不会把单条 trace 直接变成 confirmed profile，也不会覆盖原始记忆。它先作为排序、诊断和候选学习信号；只有经过明确确认或稳定证据支持的内容，才会进入画像、关系或长期事实层。
+
+#### Compose 写作风格沉淀
+
+写作风格是 Ambient Calibration 当前最明确的“学习型”输出。它不新建用户 review 队列，而是用重复、脱敏、同类的行为证据形成 scoped preference。
+
+关键逻辑：
+
+1. `edited_before_send`、`sent_without_insert`、`wrong` 和 `downstream_reaction` 都可以提供写作风格信号，但以发送前改写和对方明确“AI 味”反馈最强。
+2. 服务端只消费 tag、hash、长度、相似度和 evidence ref，不保存完整建议或最终发送文本。
+3. 风格记忆按 `writing_style.<surface>.<audience>.<task>.<language>[.<relationship>]` 建 key；例如 `writing_style.ringcentral.peer.casual_reply.zh`。
+4. 重复证据达到阈值后，候选从 `candidate` 变成 `active`，并同步成 `user_profile_items` 的 `preference`。
+5. Compose Assist 下一次生成时会读取匹配的 `writing_style.*`，作为表达约束进入 prompt。它只影响“怎么说”，不影响“事实是什么”。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -173,6 +200,7 @@ POST /api/v1/ambient-calibration/traces
 | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | **IngestionPipeline**                                              | 去重 → LLM 抽取实体/摘要 → 显著性 → 嵌入 → 写入                     |
 | **RecallEngine**                                                   | 4 通道并行召回 + MMR 重排序                                         |
+| **Scene Memory Autopilot**                                         | 被动场景展示前过滤：场景锚点、低信息、跨域噪音、重复来源和注意力预算 |
 | **SalienceScorer**                                                 | S = importance + frequency + recency + surprise − redundancy        |
 | **ForgettingEngine**                                               | 指数衰减，可配半衰期                                                |
 | **TruthMaintainer**                                                | 双时态属性 (valid_from/to + tx_start/end)，冲突确认队列             |
@@ -184,7 +212,9 @@ POST /api/v1/ambient-calibration/traces
 | **HeartbeatLoop**                                                  | 微巩固、通知检查、梦境报表检查、自我反思 planner、动作执行          |
 | **ProfileManager**                                                 | 双人格：用户画像 + AI 自我认知 (Identity/Soul/Policy)               |
 
-摄入接口会返回轻量 `decision`，说明本次内容是进入结构化索引、仅保存为原始消息、还是被判定为重复；其中包含 duplicate 原因、显著性分数、是否达到索引阈值和未索引原因。这样客户端日志和运维排查可以直接解释“为什么记住了但搜不到”或“为什么跳过重复”，不需要临时查 SQLite。
+摄入接口会返回轻量 `decision`，说明本次内容是进入结构化索引、仅保存为原始消息、还是被判定为重复；其中包含 duplicate 原因、显著性分数、显著性分项、抽取状态、是否达到索引阈值和未索引原因。这样客户端日志和运维排查可以直接解释“为什么记住了但搜不到”或“为什么跳过重复”，不需要临时查 SQLite。高显著性内容即使 LLM 实体抽取临时不可用，也会先写入 chunks、FTS 和 `memory_metadata`，只把实体/关系层降级，避免“已记住但搜索不到”的阻塞；如果索引本身失败，decision 会明确标成 `indexing_failed`。`/extractor/from-chat` 已经抽出的 conversation / agent-session artifact 会跳过第二次实体抽取，但仍按 artifact 类型做 salience scoring、写入 chunks 和 `memory_metadata`，并把同一份 decision 返回给调用方，避免外部 AI 历史或本地 agent 会话“入库成功但搜不到”。`/ingest`、`/ingest/batch` 与 extractor 共用同一份 source type 白名单，覆盖 RingCentral / Jira / Web / 手动记录 / 会议 / Calendar / 外部 AI 历史 / 豆包 / ChatGPT / 本地 Codex、Claude Code、Cursor agent 会话，避免 TypeScript 类型允许但运行时 schema 拒绝的入口不一致。
+
+2026-06-01 复查业内记忆产品和研究后，本层继续优先做三件事：第一，像 [ChatGPT Memory](https://help.openai.com/en/articles/8590148-memory-faq) 一样把“记住了什么、为什么置顶或降权、如何删除/恢复”保持可检查；第二，像 [Claude project memory](https://www.anthropic.com/news/memory) 和 [Microsoft 365 Copilot semantic index](https://learn.microsoft.com/en-gb/microsoftsearch/semantic-index-for-copilot) 一样让 scope、project、权限边界在入库和召回两端都生效；第三，参考 [Adaptive RAG Memory](https://arxiv.org/abs/2601.02428) 和 [Memory for Autonomous LLM Agents](https://arxiv.org/abs/2603.07670) 的方向，把写入过滤、选择性巩固、衰减、反馈和隐私治理做成可解释的 runtime 信号，而不是只扩充向量库容量。
 
 ---
 
@@ -213,6 +243,37 @@ POST /api/v1/ambient-calibration/traces
             Top-K Results
 ```
 
+### Scene Memory Autopilot
+
+Scene Memory Autopilot 是 `/context-recall` 的展示前过滤层，第一版主要服务 Memory Lens、Compose Assist、Meeting Pilot 和 Today Pilot。它不替代 RecallEngine，也不是新的用户 review 台；它接住 RecallEngine 的候选结果，再判断当前场景应该 `silent`、`chip`、`card` 还是 `context_pack`。
+
+```mermaid
+flowchart LR
+  A["当前场景\n网页 / RingCentral / Jira / 会议 / 输入框"] --> B["ContextRecallService\n规范化 query + sourceContext"]
+  B --> C["RecallContextExpansion\n短句/指代话题锁定"]
+  C --> D["RecallEngine\nVector + FTS / Graph / Time"]
+  D --> E["Merge + Dedup\nMMR + 新近度/显著性"]
+  E --> F["Scene Memory Autopilot\n场景锚点过滤 + 注意力预算"]
+  F -->|silent| G["不打扰\n记录 quietReasons"]
+  F -->|chip| H["低打扰入口\n可能相关"]
+  F -->|card| I["Memory Lens 卡片\n必须带 whyRelevant"]
+  F -->|context_pack| J["Compose/Meeting/Today\n作为上下文证据"]
+  H --> K["Ambient Calibration\nhover/展开/打开/反馈"]
+  I --> K
+  J --> K
+  K --> F
+```
+
+这一层重点做五件事：
+
+- 从 title、visible messages、sourceContext、conversation frame 和 entity hints 提取人物、项目、主题、来源锚点。
+- 压掉只有简单关键词或纯语义相似的结果，例如泛 `AI`、`RingCentral`、`meeting`、`time` 命中。
+- 压掉跨域噪音，例如 Codex/Cursor/额度场景里召回 AI Notes、虚拟背景、HR 通告或旅行记忆。
+- 合并同一会议、群组、会话或来源 URL 的重复 chunk，只把一个 source cluster 给 UI。
+- 返回 `autopilot` 摘要：候选数、展示数、强/弱相关数、静默数、hidden 数、低信息数、来源排除数、重复合并数、场景锚点和 quiet reasons。
+
+对用户来说，关键变化是：Lens 不再因为“AI notes 这种简单关键词匹配”就弹卡片；强提示必须能解释“同群 / 同项目 / 同工单 / 同主题 / 同人物”的具体关系。没有足够锚点时，正确行为是保持安静或仅在低打扰入口里标成“可能相关”。
+
 ### 范围语义
 
 召回请求默认只检索 `work` 范围，避免在工作场景里意外混入个人记忆。
@@ -226,13 +287,29 @@ POST /api/v1/ambient-calibration/traces
 
 记忆查询 UI 已提供“工作 / 个人 / 全部”范围选择，并在搜索结果里显示当前检索范围、命中结果范围标签、范围分布、来源、时间和命中通道。搜索结果页切换范围会立即重新执行当前搜索并同步 URL，避免按钮状态和实际结果范围脱节；在 `全部` 范围下，结果汇总会直接显示工作/个人命中数量，让用户先看见本次证据是否跨越生活域，再决定是否继续打开来源或引用结果。召回结果会保留标题、摘要、来源、时间、原始来源链接和 `exploreLink`，卡片点击优先跳到记忆定位页，避免把 message/chunk 误当实体详情打开。搜索结果标题和摘要会安全高亮当前查询词，帮助用户快速判断命中原因；高亮只渲染转义后的文本，不信任记忆内容里的原始 HTML。`/recall`、`/ask` 和来源记忆清理接口都接受 `scope=all`，避免客户端使用统一范围语义时被后端拒绝；旧链接里的 `scope=both` 会在客户端规范化为“全部”，保持按钮状态、请求参数和文案一致。默认范围搜不到结果时，搜索页会提供“搜索全部记忆”的直接入口，减少用户被默认工作范围卡住的情况。
 
+2026-05-28 范围可见性校准：当用户主动切到 `全部` 且结果里包含个人记忆时，搜索结果汇总会额外提示“已包含个人记忆”，提醒复制、引用或带到工作场景前先确认。这个改动不改变检索范围，只把跨工作/个人生活域的事实暴露出来。
+
+产品和研究侧都支持这个边界：[ChatGPT Memory](https://help.openai.com/en/articles/8590148-memory-faq) 把 saved memories、past chats、files、Gmail 等来源分开展示并允许用户管理或反馈；[Claude memory](https://www.anthropic.com/news/memory) 强调项目级记忆隔离；[Microsoft 365 Copilot](https://learn.microsoft.com/en-us/microsoft-365/copilot/microsoft-365-copilot-architecture) 和 [Notion Content Search](https://www.notion.com/help/admin-content-search) 都把权限、受众和可访问范围当成检索结果可信度的一部分；[Personal Information Management](https://arxiv.org/abs/2107.03291) 研究也把同一人的信息需求拆成工作和非工作角色。因此 `全部` 可以作为主动扩展范围，但界面必须明确说明个人证据已进入当前结果集，不能只靠卡片角标让用户自己发现。
+
 搜索结果卡片提供与时间轴一致的轻量反馈入口。用户可以把某条证据标记为“有用”或“不相关”，也可以撤销反馈；已有反馈会在搜索结果重新打开时恢复高亮。反馈提交时会携带 `message` / `chunk` / `entity` 目标类型，避免同 ID 的不同记忆类型串项。
 
 召回结果现在会返回 `channelDiagnostics`，稳定列出本次请求中 `vector` / `fts` / `graph` / `time` 各通道的命中、空结果、跳过或失败状态。搜索结果页会在摘要里展示这些通道状态和命中数；如果本地语义 embedding 不可用，用户会直接看到“语义未运行”，而不是把关键词、图谱或时间通道的结果误解为完整四通道结果。
 
+### Ask 主动问答
+
+[Ask](./ask.md) 是用户主动提问时的记忆问答入口。它会先尊重用户显式范围和 filters，再通过 `MemoryContextMatchService` 处理“那个 / 这个 / BE ready / 最近 MR”这类短问句，随后进入 Active Recall、证据缺口判断、答案生成和异步活答案沉淀。
+
+本总览只保留边界：
+
+- Ask 的完整查询优先级、可视化流程、活答案记忆和 `answerMemory` 诊断字段，以 [Ask](./ask.md) 为 source of truth。
+- `MemoryContextMatchService` 也被 `/context-recall` 使用；被动场景里的提示策略见 [Memory Lens](./memory_lens.md)。
+- 活答案 prior 只是“上次答案 + 已知缺口 + 改变条件 + 旧证据 refs”的召回提示，不能单独作为事实。
+- Ask 最终回答仍必须由本次召回或外部查证证据支撑；ambiguous topic 不写活答案 observation/thread。
+- `/ask/stream` 不新增可见 SSE 事件，只在最终结果中可选携带诊断字段。
+
 搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。结果跳转只接受当前记忆浏览器支持的内部路由（如 timeline / topic / person / project / entity），来源链接只允许 `http/https` 且会去掉 URL 里的用户名/密码；可打开的来源按钮会标明目标 host，异常内部路由或非 http(s) 来源会在卡片上显示“已隐藏”的原因，避免静默消失或把异常 URL 变成可点击入口。
 
-`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口和命中通道，避免全局范围按钮与实际请求范围脱节；列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天或全部范围的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞。时间轴与搜索结果共用同一套跳转安全呈现：合法来源显示目标 host，非法来源或不支持的内部 route 会显示隐藏原因，便于用户判断是没有来源还是被安全策略拦截。
+`memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口、来源筛选和命中通道，避免全局范围按钮与实际请求范围脱节；列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。加载后如果命中来自多个来源，页面会提供本地来源筛选下拉，不重新请求后端就能把同一时间窗口收窄到具体会议、网页、手动记录或其它 source。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天、全部范围或全部来源的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞。时间轴与搜索结果共用同一套跳转安全呈现：合法来源显示目标 host，非法来源或不支持的内部 route 会显示隐藏原因，便于用户判断是没有来源还是被安全策略拦截。
 
 召回排序继续使用 MMR，但不再用 query embedding 当候选向量占位。没有候选 embedding 时，会用候选文本相似度作为多样性惩罚，避免时间窗口或图谱召回被近重复内容挤占；候选去重、排序和搜索结果卡片都使用 `type:id` 作为稳定身份，避免 `message`、`chunk`、`entity` 碰巧同 ID 时被误合并或前端复用错卡片；召回后的访问强化也按真实结果类型写入 `message` / `chunk` / `entity` 元数据。
 
@@ -343,12 +420,18 @@ ReflectionResearcher      ReflectionWorker
 - **同步执行**：和本轮自我反思是一个事务性思考过程，不需要等待队列
 - **低副作用**：只是查询本地记忆，不会触发外部写操作
 - **结果直接并入当前证据**：研究命中的消息、记忆片段和实体线索会作为补充 evidence 进入同一轮 `ReflectionWorker`；线程详情页会保留这些研究证据，实体线索会展示实体名、类型和少量 active 真值属性，方便刷新后复核“本地已经查到了什么”
-- **过程可复核**：每条本地研究查询会记录目的、查询范围、状态、命中数、证据 refs 和错误摘要。单条查询失败不会中断整轮反思；用户在线程详情页能区分“没有计划查询”“查了但没命中”和“某条查询失败”。
+- **过程可复核**：每条本地研究查询会记录目的、查询范围、状态、命中数、证据 refs 和错误摘要。单条查询失败不会中断整轮反思；用户在线程详情页能区分“没有计划查询”“查了但没命中”“某条查询失败”和“有命中但召回通道部分失败”。如果 `RecallEngine` 返回 vector / FTS / graph / time 的通道失败诊断而没有任何命中，该研究记录会显示为查询失败，而不是伪装成空结果。
 
 因此，当前系统没有把“查本地消息”实现成 `query_memory action`。  
 这样做的好处是链路更短，模型可以在同一轮里“想到要查 -> 查到 -> 继续想”，不会把大量纯读查询挤进动作队列。
 
-业内产品上，[Slack AI search](https://slack.com/intl/en-us/help/articles/31739993134867-Search-with-Slack-AI) 和 [Notion Enterprise Search](https://www.notion.com/help/enterprise-search) 都强调按用户可访问数据检索，并把来源带回给用户复核；这里的本地研究补查也遵循同一方向，只查 Personal AI 本地可见记忆，并展示查询过程与命中证据。研究上，[Generative Agents](https://arxiv.org/abs/2304.03442) 的 observation / planning / reflection 架构和 [Reflexion](https://arxiv.org/abs/2303.11366) 的 verbal reflection loop 都支持“先把经验和证据整理进可复用记忆，再让下一轮推理读取”的设计，但实际产品需要额外暴露失败和空结果，否则用户只看到结论，无法判断反思是否真的查过本地证据。
+业内产品上，[Slack Enterprise Search](https://slack.com/help/articles/39044407124755-Set-up-and-manage-Slack-enterprise-search) 和 [Notion Enterprise Search security](https://www.notion.com/help/enterprise-search-security-and-privacy-practices) 都强调按用户可访问数据检索、查询时权限过滤和来源边界；这里的本地研究补查也遵循同一方向，只查 Personal AI 本地可见记忆，并展示查询过程、命中证据和通道故障。研究上，[Generative Agents](https://arxiv.org/abs/2304.03442) 的 observation / planning / reflection 架构和 [Reflexion](https://arxiv.org/abs/2303.11366) 的 verbal reflection loop 都支持“先把经验和证据整理进可复用记忆，再让下一轮推理读取”的设计，但实际产品需要额外暴露失败和空结果，否则用户只看到结论，无法判断反思是否真的查过本地证据。
+
+### 线程查看与降级可见性
+
+反思线程列表和详情页都不能把服务错误伪装成空状态。列表读取失败时会显示错误横幅和重试入口，并保留上次成功读取的线程；详情页的主线程、关联主动询问、动作队列、研究补查和证据是可独立降级的部分。关联主动询问加载失败时，主反思详情仍应可打开，页面只在该区块显示错误和重试；手动 revisit、暂停、恢复、关闭或动作执行失败时，也会在页内显示具体错误，而不是只在 console 里失败。
+
+这个边界和 agent observability 的方向一致：反思线程是用户复核 AI 长期推理的入口，任何子链路失败都要暴露“卡在哪里”，但不能阻断用户查看已经存在的总结、证据和研究过程。
 
 ### 典型产出
 
@@ -383,6 +466,8 @@ ReflectionResearcher      ReflectionWorker
 - `dead_letter`
 
 `memory-exploring` 的动作队列页会把当前筛选结果汇总成健康摘要：当前命中数量、需要处理的失败/到期/待审批/高风险动作、执行中动作、失败或 dead letter 数量。筛选为空时会说明是队列真正为空还是来源/状态/模式筛选没有命中；运行超过 30 分钟的动作会保留 running 状态并提示用户先检查服务日志、关联线程或外部系统，避免误以为页面刷新就是执行完成。
+
+需要人工确认的动作不会把“点执行”伪装成普通重试。前端按钮显示为“确认并执行”，后端 `POST /actions/:id/execute` 需要显式 `approve:true`，并在执行前写入 `approved_at`；未批准的手动动作会被拒绝执行，已批准动作的批准时间会留在卡片和审计记录里。
 
 ### 用户侧三条主要呈现链路
 
@@ -428,6 +513,13 @@ ReflectionResearcher      ReflectionWorker
   - 如果目标未解析或有多个候选，会停在 `pending_approval`
   - UI 里需要先确认目标，不能直接批准
 - 会话详情页支持发送前编辑目标/问题/时间、审批、取消和重试；重试会写入独立 `retried` 审计事件，时间线直接显示从哪个终态重置到下一轮处理状态，避免把重试误看成新建会话。
+- 主动询问列表加载失败时会显示明确的错误横幅和重试入口；如果之前已经成功加载过会话或计划，刷新失败不会把旧数据清空成“暂无会话”，而是继续展示上次成功数据并标明这是服务错误后的保留视图。
+
+2026-05-28 体验校准：
+
+- [RingCentral Team Messaging API](https://developers.ringcentral.com/team-messaging-api) 支持对个人、群组和团队发送消息并通过 bot / webhook 处理响应；因此 Personal AI 的 Outreach 核心风险不在“能不能发”，而在目标解析、发送前审批、回复归因和失败可见性。
+- [Microsoft 365 Copilot Workflows](https://support.microsoft.com/en-us/microsoft-365-copilot/get-started-with-workflows-in-microsoft-365-copilot) 和 [Slack Workflow Builder](https://slack.com/help/articles/17542172840595-Build-a-workflow--Create-a-workflow-in-Slack) 都把自动化拆成 trigger、action、等待输入/按钮和权限控制，说明主动推进类功能应该把“当前卡在哪一步”暴露给用户，而不是只给一个总状态。
+- 研究上，[Human-centered Proactive Conversational Agents](https://arxiv.org/abs/2404.12670) 提醒主动系统若缺乏克制和用户预期管理，很容易被感知为打扰；[Human-in-the-Loop AI 系统综述](https://www.mdpi.com/1099-4300/28/4/377) 也强调高影响动作要按风险与不确定性调整人工控制点。因此 Outreach 页面优先展示配置缺口、目标确认、等待/升级、错误和重试路径，不把 API 失败伪装成空列表。
 
 #### 2. 决策中心（Confirm Requests）
 
@@ -450,7 +542,14 @@ ReflectionResearcher      ReflectionWorker
 - UI：`memory-exploring` 的“决策中心”
 - 主队列只展示 `routing=decision` 且 `state=pending` 的确认项；`routing=watch` 的观察项独立折叠展示，不计入主标题数字
 - 决策卡会展示优先级、原因、来源、上下文、可选项和 `evidenceRefs` 摘要，并提供“复制审核包”用于把问题、上下文、可选项和原始证据引用带到外部复核
-- 当前决策项的主要动作仍是**回答**；观察项支持“立即查证 / 继续观察 / 结束追踪”，但决策项本身还没有 snooze 入口
+- 决策项支持“稍后再决定”：`pending` 决策会进入独立的“稍后决策”折叠区，不计入主标题数字；到期后由 Heartbeat 自动回到 `pending`，用户也可以手动“现在处理”或“不再追踪”
+- 观察项继续保持“立即查证 / 继续观察 / 结束追踪”的独立路径；“立即查证”会创建只读 OpenClaw 查证动作，而决策项的稍后/恢复只改变确认项状态，不自动创建外部动作
+- 决策中心按队列独立加载：如果稍后决策或待观察池临时失败，已加载的待拍板 decision 项仍可审批/稍后处理；页面会显示部分刷新失败并保留上次成功读取的数据，避免把辅助队列故障伪装成整个决策中心不可用
+
+2026-05-28 体验校准：
+
+- Zapier Human in the Loop、Microsoft Copilot Studio RFI/AI approvals 和 GitHub Copilot coding agent 都把“继续执行前的人类确认”做成可暂停、可审核、可恢复的控制点；Personal AI 的决策中心也按这个边界处理，不把用户还没准备好的判断伪装成已拒绝或已批准
+- 相关人机决策研究提醒：解释和证据本身不一定降低过度依赖，关键是让用户能低成本核对证据、保留自己的判断空间，并把最终执行权留给人；因此决策卡保留审核包复制和明确的稍后入口
 
 #### 3. 通知提醒（Notifications / 免打扰路径）
 
@@ -472,7 +571,9 @@ ReflectionResearcher      ReflectionWorker
 - 能力：`acknowledge` / `dismiss` / `snooze`
 - `snooze` 默认顺延 24 小时，也接受调用方提供 5 分钟到 7 天的延迟；已处理或已 snooze 的原通知不会再次复制，避免重复提醒
 - `snooze` 生成的未来通知会保留原 payload，并写入 `payload.snooze`（来源通知、root 通知、延后时间、到点时间和第几次稍后）；Chrome 通知到点弹回时会在上下文里显示“稍后提醒 / 第 N 次稍后提醒”，避免用户误以为是全新的系统打扰
+- Chrome 的“稍后提醒 / 不再提示”会先提交后端全局动作，再写渠道终止回执；如果后端 snooze 失败，原待办不会被 Chrome feed 提前隐藏
 - `GET /notifications?state=scheduled` 可以查看尚未到点的稍后提醒，`/notifications/stats` 会返回 `scheduled` 数量
+- `GET /notification-center/feed` 支持 `deliveryMode=retry_after_cooldown | incremental | daily_digest`：默认模式让未处理待办冷却后再次出现，`incremental` 只取从未成功送达的新待办，`daily_digest` 则把仍未完成的待办重新放进低打扰汇总
 - 当前没有独立“通知中心”页面，主要呈现方式是：
   - Chrome Extension 通知
   - Bot 推送
@@ -628,6 +729,8 @@ flowchart TD
 - 外部**写操作**默认必须人工审批后以 `manual` 方式执行
 - 若 OpenClaw 返回缺少能力、鉴权失败或需要人工判断，系统会派生通知或确认请求，而不是静默吞掉
 
+2026-05-31 体验校准：动作队列按“暂停、展示待执行内容、确认后恢复”的人机协作模型处理高风险动作。[OpenAI Agents SDK HITL](https://openai.github.io/openai-agents-python/human_in_the_loop/) 把敏感 tool call 暂停为 pending approval，[LangGraph HITL](https://docs.langchain.com/oss/python/langchain/frontend/human-in-the-loop) 要求用户 approve / reject / edit 后再 resume，[AutoGen HITL](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/human-in-the-loop.html) 也把用户反馈作为 agent 团队继续执行的控制点。研究上，[不确定性感知 HITL agent](https://arxiv.org/abs/2303.06710) 强调低置信或高风险时才请求专家，避免过度打扰；[Human-on-the-loop UI 研究](https://arxiv.org/abs/2109.02077) 提醒解释太多会过载，因此 Action Queue 只展示风险、模式、来源、结果 artifact 和 transcript 这些执行前判断必需信息。
+
 ### 结果回流
 
 外部动作成功后，结果不会只停留在 action 卡片里，而是会继续写回记忆系统：
@@ -673,8 +776,8 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 
 默认策略：
 
-- 新用户如果还没有自己的 `config.json`，自我反思默认是关闭的
-- 用户需要在 options 页显式开启，并保存后，后端才会对该用户开始运行自我反思
+- 新用户如果还没有自己的 `config.json`，自我反思默认开启
+- 用户可以在 Options 的 Memory Service 区域通过“启用自我反思（场景预演生产总开关）”关闭；保存后只影响当前用户的 Reflection 推进和 Reflection 生成新的场景预演候选
 
 这些配置都保存在**当前用户自己的** `data/users/{userId}/config.json` 中，通过 `X-User-Id` 隔离。  
 也就是说：
@@ -690,6 +793,16 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 Rehearsal 是 Memory Service 的**未来场景预演记忆层**。它保存的不是“已经发生了什么事实”，而是“如果未来遇到某个场景，我应该想起、说或做什么”。
 
 详细功能文档见 [`rehearsal.md`](./rehearsal.md)。
+
+### 产品边界
+
+Rehearsal 的范围是“未来可识别场景”，不是会议专用，也不是无边界联想。它可以服务聊天、会议、Jira、网页、写作、别人未来提问、项目讨论等场景，但每条预演都必须有清楚的触发线索和到时候要带入的内容。
+
+判断一条内容是否属于 Rehearsal，用人类语言看三点：
+
+- 是否指向未来：是“下次遇到 X 时该 Y”，不是“过去发生了 X”。
+- 是否能识别场景：有具体人、群组、会议、issue、项目、URL、主题、关键词或 surface；没有稳定线索就先留在 Reflection / Dream。
+- 是否能指导行动：到时候能帮助用户想起、开口、提问、避免错误或采用某个回答思路；只有事实或偏好就放在普通记忆、用户画像或技能里。
 
 ### 运行形态
 
@@ -766,6 +879,7 @@ Rehearsal 默认不物理删除：
 - Markdown 输出：`dreams/{topic}-{date}.md`
 - 数据表：`dream_runs`
 - 同时会把 dream run 关联回对应的反思线程，便于后续继续复盘
+- Dream recall 是离线巩固信号，不按普通用户访问自动强化；生成成功后才按召回结果自己的 `message` / `chunk` / `entity` 类型做一次显式强化，避免数字形消息 ID 被误归类成 chunk
 
 ### 典型产出
 
@@ -774,7 +888,7 @@ Rehearsal 默认不物理删除：
 - `risks`
 - 低置信度的新关系（来源标记为 dream / generative replay）
 
-前端的“梦境重放”页会把最近的 `dreams/*.md` 汇总成可扫读卡片，优先展示洞察数、待复核风险数和新关系数。单个梦境文件读取失败时，页面会保留可用结果并显示部分失败提示，避免把服务或文件错误误报成“暂无内容”。展开梦境时会提示这是生成式低置信度联想，用户应先进入自我反思或原始记忆复核，再把关系、风险或行动项当作确定事实使用；从梦境卡片进入复核时会带上当前主题并在反思线程页自动筛选，避免用户跳过去后丢失要核对的线索。
+前端的“梦境重放”页会把最近的 `dreams/*.md` 汇总成可扫读卡片，优先展示洞察数、待复核风险数、新关系数、来源文件和低置信提示。单个梦境文件读取失败时，页面会保留可用结果并显示部分失败提示，避免把服务或文件错误误报成“暂无内容”。展开梦境时会提示这是生成式低置信度联想，用户应先进入自我反思或原始记忆复核，再把关系、风险或行动项当作确定事实使用；从梦境卡片进入复核时会带上当前主题并在反思线程页自动筛选，避免用户跳过去后丢失要核对的线索。
 
 梦境报表只汇总当前 digest 周期内生成的 dream 文件。周一报表会覆盖上一周的梦境重放结果；旧文件和无法解析生成日期的历史文件仍可在梦境页查看，但不会被反复当成本周期内容推送。
 
@@ -825,6 +939,7 @@ data/
 ```
 
 - 认证：`X-User-Id` 请求头
+- 身份解析是 fail-closed：缺失或空白 header 的只读请求仍兼容回退到 `default`，但写操作必须显式提供用户；重复 header、非法字符、路径穿越式 user id 和 share-token 解析出的非法 user id 都会被拒绝，而不是误连到 `default` 或创建越界目录。
 - UserContextManager 按需加载、30 分钟空闲回收
 - 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略等运行时配置
 - 自我反思是**按用户开关**的；梦境重放是**全用户持续运行**的，只有报表推送是按用户控制的
@@ -874,52 +989,53 @@ Memory Service 可以给豆包等外部入口渲染不同类型的 context packa
 
 ## API 概览
 
-| 操作      | 端点                                   | 说明                                                                                                |
-| --------- | -------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| 摄入      | `POST /ingest`                         | 单条消息存储，返回 `decision` 解释重复/索引/仅保存原因                                              |
-| 批量摄入  | `POST /ingest/batch`                   | 批量写入，单条结果与 `/ingest` 保持一致                                                             |
-| 召回      | `POST /recall`                         | 多通道记忆检索                                                                                      |
-| 反馈      | `POST /feedback`                       | 记录召回质量、通知或实体修正反馈                                                                    |
-| 问答      | `POST /ask`                            | RAG 风格自然语言问答                                                                                |
-| 配置      | `GET /config` / `PUT /config`          | 按用户读取/写入运行时配置                                                                           |
-| 实体      | `GET /entities`                        | 知识图谱查询                                                                                        |
-| 用户画像  | `GET /profile/core`                    | 核心画像                                                                                            |
-| 通知      | `GET /notifications`                   | 主动通知列表，支持 `pending` / `scheduled` / `clicked` / `dismissed` 状态                           |
-| 自我反思  | `GET /reflection-threads`              | 查看自我反思线程列表                                                                                |
-| 自我反思  | `GET /reflection-threads/:id`          | 查看单个线程详情、runs、actions、action results                                                     |
-| 自我反思  | `POST /reflection-threads/:id/revisit` | 手动触发某个线程重新反思                                                                            |
-| Rehearsal | `GET /rehearsals`                      | 查看未来场景预演记忆，支持状态和关键词过滤                                                          |
-| Rehearsal | `POST /rehearsals`                     | 创建 candidate 或 active 预演记忆                                                                   |
-| Rehearsal | `GET /rehearsals/:id`                  | 查看预演详情和 activation history                                                                   |
-| Rehearsal | `PATCH /rehearsals/:id`                | 更新状态、内容、触发线索、有效期等                                                                  |
-| Rehearsal | `POST /rehearsals/:id/feedback`        | 记录 used、dismissed、irrelevant 等反馈                                                             |
-| 动作      | `GET /actions`                         | 查看动作队列                                                                                        |
-| 动作      | `POST /actions/:id/execute`            | 手动执行某个动作                                                                                    |
-| 动作      | `POST /actions/:id/retry`              | 重试失败动作                                                                                        |
-| 决策中心  | `GET /confirm-requests`                | 查看待确认项，支持 `queue=decision/watch/all` 与 `state` 过滤                                       |
-| 决策中心  | `POST /confirm-requests/:id/answer`    | 回答待确认项                                                                                        |
-| 决策中心  | `POST /confirm-requests/:id/state`     | 观察项在 `pending` / `snoozed` / `expired` 之间流转                                                 |
-| 主动询问  | `GET /outreach/sessions`               | 查看主动询问会话                                                                                    |
-| 主动询问  | `GET /outreach/sessions/:id`           | 查看单个主动询问详情                                                                                |
-| 主动询问  | `POST /outreach/sessions/:id/approve`  | 批准待发送询问                                                                                      |
-| 主动询问  | `POST /outreach/sessions/:id/update-draft` | 发送前调整目标、问题、信息目标和计划时间                                                            |
-| 主动询问  | `POST /outreach/sessions/:id/cancel`   | 取消主动询问会话                                                                                    |
-| 主动询问  | `POST /outreach/sessions/:id/retry`    | 将终态会话重置为待审批或已排程，并写入 `retried` 审计事件                                           |
-| 主动询问  | `GET /outreach/summary`                | 查看待发送、等待回复、待审批和升级数量                                                              |
-| 主动询问  | `GET /outreach/directory/status` / `POST /outreach/directory/sync` | 查看或刷新 RingCentral 目标目录缓存                                              |
-| 主动询问  | `GET /outreach/targets/search`         | 检索 RingCentral 用户/群组候选                                                                      |
-| 梦境报表  | `POST /dream-digest/push-now`          | 手动立即推送一次梦境报表                                                                            |
-| 巩固      | `POST /consolidate`                    | 手动触发巩固                                                                                        |
-| 导出      | `POST /export`                         | 生成可恢复的 backup ZIP，包含 `manifest.json`、用户 SQLite/config/Markdown 与只读 derived snapshots |
-| 导入      | `POST /import`                         | Multipart 上传 backup ZIP；支持 `mode=merge/replace` 与 `dryRun=true` 预检                          |
-| 健康      | `GET /health`                          | 服务状态                                                                                            |
+| 操作      | 端点                                                               | 说明                                                                                                |
+| --------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| 摄入      | `POST /ingest`                                                     | 单条消息存储，返回 `decision` 解释重复、抽取状态、索引、salience 分项或仅保存原因                   |
+| 批量摄入  | `POST /ingest/batch`                                               | 批量写入，source type 与单条摄入一致，单条结果与 `/ingest` 保持一致                                 |
+| 召回      | `POST /recall`                                                     | 多通道记忆检索                                                                                      |
+| 反馈      | `POST /feedback`                                                   | 记录召回质量、通知或实体修正反馈                                                                    |
+| 问答      | `POST /ask`                                                        | RAG 风格自然语言问答                                                                                |
+| 配置      | `GET /config` / `PUT /config`                                      | 按用户读取/写入运行时配置                                                                           |
+| 实体      | `GET /entities`                                                    | 知识图谱查询                                                                                        |
+| 用户画像  | `GET /profile/core`                                                | 核心画像                                                                                            |
+| 通知      | `GET /notifications`                                               | 主动通知列表，支持 `pending` / `scheduled` / `clicked` / `dismissed` 状态                           |
+| 自我反思  | `GET /reflection-threads`                                          | 查看自我反思线程列表                                                                                |
+| 自我反思  | `GET /reflection-threads/:id`                                      | 查看单个线程详情、runs、actions、action results                                                     |
+| 自我反思  | `POST /reflection-threads/:id/revisit`                             | 手动触发某个线程重新反思                                                                            |
+| Rehearsal | `GET /rehearsals`                                                  | 查看未来场景预演记忆，支持状态和关键词过滤                                                          |
+| Rehearsal | `POST /rehearsals`                                                 | 创建 candidate 或 active 预演记忆                                                                   |
+| Rehearsal | `GET /rehearsals/:id`                                              | 查看预演详情和 activation history                                                                   |
+| Rehearsal | `PATCH /rehearsals/:id`                                            | 更新状态、内容、触发线索、有效期等                                                                  |
+| Rehearsal | `POST /rehearsals/:id/feedback`                                    | 记录 used、dismissed、irrelevant 等反馈                                                             |
+| 动作      | `GET /actions`                                                     | 查看动作队列                                                                                        |
+| 动作      | `POST /actions/:id/execute`                                        | 手动执行某个动作                                                                                    |
+| 动作      | `POST /actions/:id/retry`                                          | 重试失败动作                                                                                        |
+| 决策中心  | `GET /confirm-requests`                                            | 查看待确认项，支持 `queue=decision/watch/all` 与 `state` 过滤                                       |
+| 决策中心  | `POST /confirm-requests/:id/answer`                                | 回答待确认项                                                                                        |
+| 决策中心  | `POST /confirm-requests/:id/state`                                 | 决策项可稍后/恢复/结束；观察项可查证/继续观察/结束                                                  |
+| 主动询问  | `GET /outreach/sessions`                                           | 查看主动询问会话                                                                                    |
+| 主动询问  | `GET /outreach/sessions/:id`                                       | 查看单个主动询问详情                                                                                |
+| 主动询问  | `POST /outreach/sessions/:id/approve`                              | 批准待发送询问                                                                                      |
+| 主动询问  | `POST /outreach/sessions/:id/update-draft`                         | 发送前调整目标、问题、信息目标和计划时间                                                            |
+| 主动询问  | `POST /outreach/sessions/:id/cancel`                               | 取消主动询问会话                                                                                    |
+| 主动询问  | `POST /outreach/sessions/:id/retry`                                | 将终态会话重置为待审批或已排程，并写入 `retried` 审计事件                                           |
+| 主动询问  | `GET /outreach/summary`                                            | 查看待发送、等待回复、待审批和升级数量                                                              |
+| 主动询问  | `GET /outreach/directory/status` / `POST /outreach/directory/sync` | 查看或刷新 RingCentral 目标目录缓存                                                                 |
+| 主动询问  | `GET /outreach/targets/search`                                     | 检索 RingCentral 用户/群组候选                                                                      |
+| 梦境报表  | `POST /dream-digest/push-now`                                      | 手动立即推送一次梦境报表                                                                            |
+| 巩固      | `POST /consolidate`                                                | 手动触发巩固                                                                                        |
+| 导出      | `POST /export`                                                     | 生成可恢复的 backup ZIP，包含 `manifest.json`、用户 SQLite/config/Markdown 与只读 derived snapshots |
+| 导入      | `POST /import`                                                     | Multipart 上传 backup ZIP；支持 `mode=merge/replace` 与 `dryRun=true` 预检                          |
+| 健康      | `GET /health`                                                      | 服务状态                                                                                            |
 
 ### 记忆导入 / 导出 / 备份
 
 - `/export` 默认返回 `backup_zip`，manifest 会列出 A 层 SQLite/config、B 层用户 Markdown 文件、C 层 derived 快照，并记录 size / sha256 用于导入校验。
+- B 层会包含核心 Markdown、daily / dreams / entities / reflections / reflection-threads / reports / projects / rehearsals / source-memory / skills / agent 目录下的 `.md` 文件，保证 Rehearsal 审计快照和 Source Memory 资料卡不会在备份恢复后丢失。
 - `/import` 的默认模式是 `merge`，会合并数据库行并覆盖备份内同名文件，保留备份外的本地文件；`mode=replace` 会用备份目录替换当前用户目录。
 - 导入前可以先用同一个 multipart 请求加 `dryRun=true`，服务只校验 ZIP、manifest 和数据库可读性，并返回将写入、覆盖、保留、删除的路径及数据库表行数预览，不会修改当前用户数据。
-- manifest 是导入的完整可信清单：ZIP 里除 `manifest.json` 外的每个文件都必须列在 manifest 中并通过 size/sha256 校验；额外夹带的未声明文件会在 dry-run 和正式导入前被拒绝。
+- manifest 是导入的完整可信清单，但它本身也必须符合 backup 合约：ZIP 里除 `manifest.json` 外的每个文件都必须列在 manifest 中并通过 size/sha256 校验；manifest 只能声明 `user/memory.db`、`user/config.json`、允许目录里的 Markdown 或 `derived/*` 快照，额外夹带或伪造的非备份文件会在 dry-run 和正式导入前被拒绝。
 - 导入结果和 dry-run 都会返回 warnings；例如备份来源用户与当前 `X-User-Id` 不一致时会显式提示，避免把迁移场景误当成同账号恢复。
 
 完整 API 文档：`http://localhost:3210/docs` (Swagger UI)

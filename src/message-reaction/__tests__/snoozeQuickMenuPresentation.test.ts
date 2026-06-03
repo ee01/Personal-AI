@@ -126,6 +126,30 @@ test('English workday Snooze options use localized relative labels', () => {
   );
 });
 
+test('Snooze options include next full hour when it differs from duration shortcuts', () => {
+  const midHour = new Date('2026-05-07T10:10:00+08:00');
+  const zhOptions = getQuickOptions(() => new Date(midHour));
+  const enOptions = getQuickOptions(() => new Date(midHour), 'en-US');
+
+  const zhNextFullHour = zhOptions.find(
+    (option) => option.label === '下个整点',
+  );
+  const enNextFullHour = enOptions.find(
+    (option) => option.label === 'Next full hour',
+  );
+
+  assert.ok(zhNextFullHour);
+  assert.ok(enNextFullHour);
+  assert.equal(
+    zhNextFullHour.getTime().toISOString(),
+    new Date('2026-05-07T11:00:00+08:00').toISOString(),
+  );
+  assert.equal(
+    enNextFullHour.getTime().toISOString(),
+    new Date('2026-05-07T11:00:00+08:00').toISOString(),
+  );
+});
+
 test('workday Snooze options include next Monday only when it is not a duplicate', () => {
   const thursday = new Date('2026-05-07T10:00:00+08:00');
   const options = getQuickOptions(() => new Date(thursday));

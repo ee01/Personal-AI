@@ -81,6 +81,8 @@ let lastRingCentralTranscriptProbeAt = 0;
 let lastRingCentralTranscriptServiceAvailable = false;
 let lastRingCentralTranscriptServiceEndpoint = '';
 let lastRingCentralTranscriptProbeError = '';
+let lastRingCentralCaptionTextSignature = '';
+let lastRingCentralCaptionWindowText = '';
 let ringCentralTranscriptWsBridgeInstalled = false;
 let runtimeConfig: MeetingPilotRuntimeConfig = {
   enabled: true,
@@ -1754,6 +1756,174 @@ function splitRingCentralTranscriptLines(root: Element): string[] {
     .filter(Boolean);
 }
 
+function isInsideRingCentralTranscriptPanel(element: Element): boolean {
+  try {
+    return Boolean(
+      element.closest(
+        [
+          '#transcript-tabpanel',
+          '[id*="transcript-tabpanel" i]',
+          '[data-at*="Transcript::list" i]',
+          '[data-at*="transcript" i]',
+          '[class*="Transcript"]',
+          '[class*="transcript"]',
+          '[class*="Transcription"]',
+          '[class*="transcription"]',
+        ].join(','),
+      ),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isRingCentralCaptionControlLine(value?: string | null): boolean {
+  const text = normalizeText(value);
+  return /^(closed captions?|captions?|show captions?|hide captions?|caption settings|language|translate|translation|turn on captions?|turn off captions?)$/i.test(
+    text,
+  );
+}
+
+function isRingCentralCaptionSettingsText(value?: string | null): boolean {
+  const text = normalizeText(value);
+  if (!text) return false;
+  return (
+    /spoken language/i.test(text) &&
+    /translate to/i.test(text) &&
+    /(small|medium|large)/i.test(text)
+  );
+}
+
+function getRingCentralClosedCaptionText(): string {
+  const selectors = [
+    '[aria-live]',
+    '[aria-label*="Closed Caption" i]',
+    '[aria-label*="caption" i]',
+    '[data-at*="closedCaption" i]',
+    '[data-at*="closed-caption" i]',
+    '[data-at*="caption" i]',
+    '[class*="ClosedCaption"]',
+    '[class*="closed-caption"]',
+    '[class*="Caption"]',
+    '[class*="caption"]',
+  ];
+  const candidates: Array<{ text: string; score: number }> = [];
+
+  getReadableDocuments().forEach((doc) => {
+    selectors.forEach((selector) => {
+      doc.querySelectorAll(selector).forEach((node) => {
+        if (!isElementVisible(node)) return;
+        if (isInsideRingCentralTranscriptPanel(node)) return;
+
+        const hint = [
+          node.id,
+          node.getAttribute('class'),
+          node.getAttribute('aria-label'),
+          node.getAttribute('data-at'),
+          node.getAttribute('role'),
+        ]
+          .filter(Boolean)
+          .join(' ');
+        const hasCaptionHint = /caption|subtitle|aria-live/i.test(hint);
+        if (!hasCaptionHint && selector !== '[aria-live]') return;
+
+        const lines = splitRingCentralTranscriptLines(node).filter(
+          (line) =>
+            shouldKeepRingCentralTranscriptText(line) &&
+            !isRingCentralCaptionControlLine(line) &&
+            !isRingCentralCaptionSettingsText(line),
+        );
+        if (!lines.length || lines.length > 6) return;
+
+        const text = collapseRepeatedTranscriptText(
+          collapseProgressiveTranscriptLines(lines).join(' '),
+        );
+        if (!shouldKeepRingCentralTranscriptText(text)) return;
+        if (isRingCentralCaptionSettingsText(text)) return;
+        if (text.length > 700) return;
+        candidates.push({
+          text,
+          score:
+            (hasCaptionHint ? 20 : 0) +
+            (selector === '[aria-live]' ? 5 : 0) +
+            Math.min(text.length, 200),
+        });
+      });
+    });
+  });
+
+  candidates.sort((left, right) => right.score - left.score);
+  return candidates[0]?.text || '';
+}
+
+function getCaptionWindowDelta(previous: string, current: string): string {
+  const prior = normalizeText(previous);
+  const next = normalizeText(current);
+  if (!next || next === prior) return '';
+  if (!prior) return next.length > 180 ? '' : next;
+  if (next.startsWith(prior)) {
+    return normalizeText(next.slice(prior.length));
+  }
+
+  const maxOverlap = Math.min(prior.length, next.length, 240);
+  for (let size = maxOverlap; size >= 24; size -= 1) {
+    if (prior.slice(-size) === next.slice(0, size)) {
+      return normalizeText(next.slice(size));
+    }
+  }
+
+  const priorWords = getTranscriptComparableWords(prior);
+  const nextWords = getTranscriptComparableWords(next);
+  const maxWordOverlap = Math.min(priorWords.length, nextWords.length, 24);
+  for (let size = maxWordOverlap; size >= 4; size -= 1) {
+    if (
+      priorWords.slice(-size).join(' ') === nextWords.slice(0, size).join(' ')
+    ) {
+      const originalWords = next.split(/\s+/);
+      return normalizeText(originalWords.slice(size).join(' '));
+    }
+  }
+
+  return next.length > 180 ? '' : next;
+}
+
+function splitCaptionDeltaIntoChunks(value: string): string[] {
+  const text = normalizeText(value);
+  if (!text) return [];
+  const sentenceParts = text
+    .split(/(?<=[。！？.!?])\s+/u)
+    .map((part) => normalizeText(part))
+    .filter(shouldKeepRingCentralTranscriptText);
+  const parts = sentenceParts.length ? sentenceParts : [text];
+  const chunks: string[] = [];
+
+  parts.forEach((part) => {
+    const words = part.split(/\s+/).filter(Boolean);
+    if (words.length <= 28) {
+      chunks.push(part);
+      return;
+    }
+    for (let index = 0; index < words.length; index += 24) {
+      const chunk = normalizeText(words.slice(index, index + 24).join(' '));
+      if (shouldKeepRingCentralTranscriptText(chunk)) chunks.push(chunk);
+    }
+  });
+
+  return chunks.slice(0, 4);
+}
+
+function buildCaptionPreviewText(value: string): string {
+  const text = normalizeText(value);
+  if (!text) return '';
+  const chunks = splitCaptionDeltaIntoChunks(text);
+  const preview = chunks.length ? chunks.slice(-2).join(' ') : text;
+  return preview.length > 360 ? `${preview.slice(-360)}` : preview;
+}
+
+function isRingCentralWsFinal(event: RingCentralTranscriptWsEvent): boolean {
+  return event.final === true;
+}
+
 function getReadableDocuments(): Document[] {
   const docs: Document[] = [document];
   document.querySelectorAll('iframe').forEach((frame) => {
@@ -2076,12 +2246,14 @@ async function emitRingCentralTranscriptFromDom(
   const probe = collectRingCentralTranscriptDomProbe(context.meetingId);
   const items = probe.items;
   const latest = items[items.length - 1];
+  const captionText = getRingCentralClosedCaptionText();
+  const captionTextSignature = captionText ? simpleTranscriptHash(captionText) : '';
   const hasTranscriptDomText =
     probe.rootCount > 0 && probe.timeLineCount > 0 && probe.textLineCount > 0;
   const serviceSignature = lastRingCentralTranscriptServiceAvailable
     ? `svc:${lastRingCentralTranscriptServiceEndpoint || 'available'}`
     : 'svc:none';
-  const signature = `${context.meetingId}:${items.length}:${latest?.id || ''}:${probe.rootCount}:${probe.timeLineCount}:${serviceSignature}`;
+  const signature = `${context.meetingId}:${items.length}:${latest?.id || ''}:${probe.rootCount}:${probe.timeLineCount}:${captionTextSignature}:${serviceSignature}`;
   const now = Date.now();
   const shouldSendStatus =
     signature !== lastRingCentralTranscriptSignature ||
@@ -2098,16 +2270,56 @@ async function emitRingCentralTranscriptFromDom(
         available:
           items.length > 0 ||
           hasTranscriptDomText ||
+          Boolean(captionText) ||
           lastRingCentralTranscriptServiceAvailable,
-        active: items.length > 0 || hasTranscriptDomText,
-        lastSeenAt: latest ? now : undefined,
-        latestChunkId: latest?.id,
+        active: items.length > 0 || hasTranscriptDomText || Boolean(captionText),
+        lastSeenAt: latest || captionText ? now : undefined,
+        latestChunkId:
+          latest?.id ||
+          (captionText
+            ? `rc-caption-${context.meetingId}-${captionTextSignature}`
+            : undefined),
         lastError:
-          !items.length && lastRingCentralTranscriptProbeError
+          !items.length && !captionText && lastRingCentralTranscriptProbeError
             ? lastRingCentralTranscriptProbeError
             : undefined,
       })
       .catch(() => undefined);
+  }
+
+  if (
+    captionText &&
+    captionTextSignature &&
+    captionTextSignature !== lastRingCentralCaptionTextSignature
+  ) {
+    const captionDelta = getCaptionWindowDelta(
+      lastRingCentralCaptionWindowText,
+      captionText,
+    );
+    lastRingCentralCaptionTextSignature = captionTextSignature;
+    lastRingCentralCaptionWindowText = captionText;
+    const previewText = buildCaptionPreviewText(captionDelta || captionText);
+    if (previewText) {
+      const chunkSignature = simpleTranscriptHash(previewText);
+      const id = `rc-caption-preview-${context.meetingId}`;
+      if (seenRingCentralTranscriptChunks.get(id) !== chunkSignature) {
+        seenRingCentralTranscriptChunks.set(id, chunkSignature);
+        await chrome.runtime
+          .sendMessage({
+            type: 'MEETING_PILOT_TRANSCRIPT_UPDATE',
+            tabId: 0,
+            transcriptChunk: {
+              id,
+              speaker: context.speakerLabel || '',
+              text: previewText,
+              ts: now,
+              source: 'ringcentral_transcript',
+              lowConfidence: true,
+            },
+          })
+          .catch(() => undefined);
+      }
+    }
   }
 
   for (const item of items.sort((left, right) => left.ts - right.ts)) {
@@ -2266,9 +2478,14 @@ async function emitRingCentralTranscriptFromWsEvent(
   if (!shouldKeepRingCentralTranscriptText(text)) return;
   const ts = Number.isFinite(event.ts) ? Number(event.ts) : Date.now();
   const speaker = normalizeTranscriptSpeaker(event.speaker || '');
-  const id = `rc-transcript-ws-${context.meetingId}-${ts}-${simpleTranscriptHash(
-    `${speaker}:${text}`,
-  )}`;
+  const final = isRingCentralWsFinal(event);
+  const id = final
+    ? `rc-transcript-ws-${context.meetingId}-${ts}-${simpleTranscriptHash(
+        `${speaker}:${text}`,
+      )}`
+    : `rc-transcript-ws-preview-${context.meetingId}-${
+        simpleTranscriptHash(speaker || 'unknown')
+      }`;
   const textSignature = simpleTranscriptHash(text);
   if (seenRingCentralTranscriptChunks.get(id) === textSignature) return;
   seenRingCentralTranscriptChunks.set(id, textSignature);
@@ -2295,7 +2512,7 @@ async function emitRingCentralTranscriptFromWsEvent(
         text,
         ts,
         source: 'ringcentral_transcript',
-        lowConfidence: event.final === false,
+        lowConfidence: !final,
       },
     })
     .catch(() => undefined);

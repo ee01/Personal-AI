@@ -11,6 +11,11 @@ import type {
 } from '../types/index.js';
 import { now } from '../utils/time.js';
 import { toSlug } from '../utils/slug.js';
+import {
+  MemoryContextMatchService,
+  type MemoryContextMatchResult,
+  type MemoryContextTopicCandidate,
+} from './MemoryContextMatchService.js';
 
 export interface RecallContextExpansionInput {
   query: string;
@@ -37,6 +42,7 @@ export interface RecallContextExpansion {
     state: 'none' | 'ambiguous';
     candidates: Array<{ label: string; score: number; reason?: string }>;
   };
+  contextMatch?: MemoryContextMatchResult;
 }
 
 export interface ContextFrameIngestInput {
@@ -139,6 +145,8 @@ const ROLE_TERM_PATTERNS: Array<[string, RegExp]> = [
 ];
 const DEICTIC_PATTERN =
   /那个|这个|这块|那块|这边|那边|刚才|上面|前面|它|ready\s*了吗|搞定了吗|完成了吗|\bthat\b|\bthis\b|\bit\b|\bready\b/i;
+const STATUS_INTENT_PATTERN =
+  /ready|done|complete|completed|pending|blocked?|waiting?|status|progress|merge|merged|ship|shipped|定了|确定|搞定|完成|就绪|状态|进展|阻塞|等待|合了|上线|发布|方案|设计|design/i;
 const ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/g;
 const ISSUE_KEY_SINGLE_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const URL_PATTERN = /https?:\/\/[^\s)）]+/g;
@@ -311,23 +319,46 @@ export class RecallContextExpansionService {
     const contextRoles = extractRoleTerms(contextText);
     const roleTerms = uniq([...queryRoles, ...contextRoles]);
     const deictic = DEICTIC_PATTERN.test(originalQuery);
+    const statusIntent = STATUS_INTENT_PATTERN.test(originalQuery);
     const queryTokens = extractTokens([originalQuery, contextText].join(' '));
+    const shouldRunContextMatch =
+      deictic ||
+      statusIntent ||
+      roleTerms.length > 0 ||
+      ISSUE_KEY_SINGLE_PATTERN.test(originalQuery) ||
+      Boolean(input.currentContext?.sourceAnchorHints?.length);
+    const contextMatch: MemoryContextMatchResult = shouldRunContextMatch
+      ? new MemoryContextMatchService(this.db).match(input)
+      : {
+          state: 'none',
+          candidates: [],
+          userFacingSummary: '当前问题不属于短指代或状态型缺上下文查询，未执行记忆话题锁定。',
+        };
+    const contextMatchCandidate =
+      contextMatch.state === 'locked' && contextMatch.selectedTopic
+        ? this.toExpansionCandidate(contextMatch.selectedTopic)
+        : undefined;
     const candidates = this.collectCandidates(input, contextText, queryTokens, roleTerms)
       .filter((candidate) => candidate.score > 0)
       .sort((a, b) => b.score - a.score || b.confidence - a.confidence);
 
-    const top = candidates[0];
-    const second = candidates[1];
+    const top = contextMatchCandidate ?? candidates[0];
+    const second = contextMatchCandidate ? undefined : candidates[1];
     const ambiguous =
-      top &&
-      second &&
-      second.score >= 1.0 &&
-      top.score - second.score < 0.75 &&
-      second.score / Math.max(top.score, 0.1) >= 0.75;
+      contextMatch.state === 'ambiguous'
+        ? true
+        : Boolean(
+            top &&
+              second &&
+              second.score >= 1.0 &&
+              top.score - second.score < 0.75 &&
+              second.score / Math.max(top.score, 0.1) >= 0.75,
+          );
     const canResolve =
-      top &&
+      contextMatchCandidate ||
+      (top &&
       !ambiguous &&
-      (top.score >= 2.2 || (deictic && top.score >= 1.6) || roleTerms.length > 0);
+      (top.score >= 2.2 || (deictic && top.score >= 1.6) || roleTerms.length > 0));
 
     const selected = canResolve ? top : undefined;
     const sourceAnchors = uniq([
@@ -366,16 +397,24 @@ export class RecallContextExpansionService {
       ambiguity: ambiguous
         ? {
             state: 'ambiguous',
-            candidates: candidates.slice(0, 3).map((candidate) => ({
-              label: candidate.label,
-              score: Number(candidate.score.toFixed(2)),
-              reason: candidate.reason,
-            })),
+            candidates:
+              contextMatch.state === 'ambiguous'
+                ? contextMatch.candidates.slice(0, 3).map((candidate) => ({
+                    label: candidate.label,
+                    score: Number(candidate.score.toFixed(2)),
+                    reason: candidate.reasons.join(', '),
+                  }))
+                : candidates.slice(0, 3).map((candidate) => ({
+                    label: candidate.label,
+                    score: Number(candidate.score.toFixed(2)),
+                    reason: candidate.reason,
+                  })),
           }
         : { state: 'none', candidates: [] },
+      contextMatch,
     };
 
-    return hasUsefulExpansion(expansion)
+    return hasUsefulExpansion(expansion) || contextMatch.state !== 'none'
       ? expansion
       : {
           originalQuery,
@@ -384,7 +423,23 @@ export class RecallContextExpansionService {
           entityHints: [],
           sourceAnchors: [],
           ambiguity: { state: 'none', candidates: [] },
+          contextMatch,
         };
+  }
+
+  private toExpansionCandidate(candidate: MemoryContextTopicCandidate): ExpansionCandidate {
+    return {
+      id: candidate.id,
+      label: candidate.label,
+      projects: [candidate.label],
+      topics: candidate.aliases,
+      roleTerms: candidate.roleTerms,
+      sourceAnchors: candidate.anchors,
+      sourceIds: candidate.sourceIds,
+      score: candidate.score * 5,
+      confidence: candidate.confidence,
+      reason: candidate.reasons.join(', ') || 'memory context match',
+    };
   }
 
   upsertFrameFromMessage(input: ContextFrameIngestInput): void {
@@ -587,16 +642,29 @@ export class RecallContextExpansionService {
       ['issue_key', sourceIds.issueKey],
     ] as const) {
       if (!value) continue;
-      addRows(
-        this.db
-          .prepare(
-            `SELECT * FROM conversation_context_frames
-             WHERE ${column} = ?
-             ORDER BY updated_at DESC
-             LIMIT 12`,
-          )
-          .all(value) as ContextFrameRow[],
-      );
+      if (column === 'issue_key') {
+        addRows(
+          this.db
+            .prepare(
+              `SELECT * FROM conversation_context_frames
+               WHERE issue_key = ? OR source_anchors_json LIKE ?
+               ORDER BY updated_at DESC
+               LIMIT 12`,
+            )
+            .all(value, `%${value}%`) as ContextFrameRow[],
+        );
+      } else {
+        addRows(
+          this.db
+            .prepare(
+              `SELECT * FROM conversation_context_frames
+               WHERE ${column} = ?
+               ORDER BY updated_at DESC
+               LIMIT 12`,
+            )
+            .all(value) as ContextFrameRow[],
+        );
+      }
     }
 
     if (rows.length < 12 && queryTokens.length > 0) {
@@ -607,7 +675,7 @@ export class RecallContextExpansionService {
       if (likeTerms.length > 0) {
         const clauses = likeTerms.map(
           () =>
-            `(dominant_projects_json LIKE ? OR topics_json LIKE ? OR title LIKE ? OR summary LIKE ?)`,
+            `(dominant_projects_json LIKE ? OR topics_json LIKE ? OR source_anchors_json LIKE ? OR title LIKE ? OR summary LIKE ?)`,
         );
         addRows(
           this.db
@@ -617,7 +685,7 @@ export class RecallContextExpansionService {
                ORDER BY updated_at DESC
                LIMIT 20`,
             )
-            .all(...likeTerms.flatMap((term) => [term, term, term, term])) as ContextFrameRow[],
+            .all(...likeTerms.flatMap((term) => [term, term, term, term, term])) as ContextFrameRow[],
         );
       }
     }
@@ -640,11 +708,20 @@ export class RecallContextExpansionService {
       const topics = parseJsonStringArray(row.topics_json);
       const frameRoles = parseJsonStringArray(row.role_terms_json);
       const sourceAnchors = parseJsonStringArray(row.source_anchors_json);
+      const sourceAnchorMatch = Boolean(
+        sourceIds.issueKey &&
+          sourceAnchors.some(
+            (anchor) =>
+              normalizeComparable(anchor) ===
+              normalizeComparable(sourceIds.issueKey!),
+          ),
+      );
       const sourceMatch = [
         sourceIds.groupId && row.group_id === sourceIds.groupId,
         sourceIds.conversationId && row.conversation_id === sourceIds.conversationId,
         sourceIds.meetingId && row.meeting_id === sourceIds.meetingId,
         sourceIds.issueKey && row.issue_key === sourceIds.issueKey,
+        sourceAnchorMatch,
       ].some(Boolean);
       const candidateText = [
         row.title,

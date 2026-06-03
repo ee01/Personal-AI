@@ -11,3 +11,10 @@ Expected case inputs:
 - expected anchor terms
 - banned topics
 - expected top result behavior
+
+Report requirements:
+
+- Show the query, scope, and expected intent anchors.
+- Show the returned search results with title, summary, source, and evidence snippets.
+- Show whether the top result satisfies the user intent and whether noisy/banned topics were returned.
+- Show score, user-facing verdict, and concrete suggestions for search ranking or title/summary quality.

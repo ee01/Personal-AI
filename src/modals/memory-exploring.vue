@@ -120,6 +120,17 @@
           </router-link>
 
           <router-link
+            to="/reports"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">📄</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.reports') }}
+            </div>
+          </router-link>
+
+          <router-link
             to="/reflection-threads"
             class="entity-type"
             active-class="router-link-active"
@@ -160,6 +171,22 @@
             </div>
             <div v-if="pendingDecisionCount > 0" class="entity-count">
               {{ pendingDecisionCount }}
+            </div>
+          </router-link>
+
+          <router-link
+            to="/storylines"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">🧵</div>
+            <div class="entity-labels">
+              <div class="entity-name">
+                {{ t('memoryExplorer.nav.storylines') }}
+              </div>
+              <div class="entity-subnote">
+                {{ t('memoryExplorer.nav.storylinesSubnote') }}
+              </div>
             </div>
           </router-link>
 
@@ -665,6 +692,9 @@ onMounted(async () => {
 const handleSearchInput = () => {
   // 今日领航搜索：不在输入时触发搜索，避免频繁调用 ask()
   // 用户需要按 Enter 或点击搜索按钮才触发
+  if (router.currentRoute.value.path.startsWith('/entity/')) {
+    store.searchQuery = searchQuery.value;
+  }
 };
 
 const handleSearch = () => {

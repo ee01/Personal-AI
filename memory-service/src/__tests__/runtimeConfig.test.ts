@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
+import { getConfig } from '../config.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 
 describe('getUserRuntimeConfig', () => {
   it('falls back to app defaults when no user config exists', () => {
     const config = getUserRuntimeConfig();
+    const appConfig = getConfig();
 
-    expect(config.reflectionEnabled).toBe(false);
+    expect(config.reflectionEnabled).toBe(true);
     expect(config.reflectionHeartbeatMinutes).toBeGreaterThanOrEqual(1);
     expect(config.dreamDigestEnabled).toBe(true);
-    expect(config.openClawEnabled).toBe(false);
+    expect(config.openClawEnabled).toBe(appConfig.openClawEnabled);
     expect(config.openClawBaseUrl).toBeDefined();
     expect(config.openClawTimeoutMs).toBe(600000);
     expect(config.outreachResultPushTarget).toBe('me');

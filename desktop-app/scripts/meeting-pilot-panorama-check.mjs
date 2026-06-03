@@ -95,6 +95,13 @@ try {
   assert.match(state.actionStat, /3\s*待复核\s*·\s*0\s*已确认\s*·\s*1\s*已完成/);
   assert.equal(state.actionCount, 4);
 
+  log('验证页面链接复制反馈');
+  await page.locator('.header-btn', { hasText: '复制页面链接' }).click();
+  await page.waitForFunction(
+    () => /页面链接已复制/.test(document.querySelector('.header-copy-state')?.textContent || ''),
+    { timeout: 5000 },
+  );
+
   log('验证跟进清单复制反馈');
   await page.locator('.followup-copy').click();
   await page.waitForFunction(
@@ -102,6 +109,37 @@ try {
     { timeout: 5000 },
   );
   await saveScreenshot(page, 'panorama-followup-readiness.png');
+
+  log('验证 PDF-only 归档不会把 PDF 当成录制回放');
+  const archivedPage = await context.newPage();
+  archivedPage.on('pageerror', (error) => {
+    pageErrors.push(error instanceof Error ? error.stack || error.message : String(error));
+  });
+  const archivedParams = new URLSearchParams({
+    history: '1',
+    meetingId: 'archive-pdf-only',
+    title: 'PDF only recap',
+    date: String(Date.now()),
+    digestStatus: 'completed',
+    pdfUrl: 'https://example.com/meeting-pilot/minutes.pdf',
+  });
+  await archivedPage.goto(
+    `chrome-extension://${extensionId}/meeting-panorama.html?${archivedParams.toString()}`,
+    { waitUntil: 'load', timeout: 30000 },
+  );
+  await archivedPage.waitForSelector('.page-header', { timeout: 15000 });
+  const pdfOnlyReplayState = await archivedPage.evaluate(() => {
+    const replayButton = Array.from(document.querySelectorAll('.header-btn.primary')).find((button) =>
+      /回放录制/.test(button.textContent || ''),
+    );
+    return {
+      disabled: replayButton?.hasAttribute('disabled') || false,
+      title: replayButton?.getAttribute('title') || '',
+    };
+  });
+  assert.equal(pdfOnlyReplayState.disabled, true);
+  assert.match(pdfOnlyReplayState.title, /没有可回放的录制素材/);
+  await archivedPage.close();
 
   assert.deepEqual(pageErrors, [], `页面脚本异常: ${pageErrors.join('\n\n')}`);
   log(`Panorama 跟进状态 E2E 验证通过，截图目录: ${screenshotDir}`);

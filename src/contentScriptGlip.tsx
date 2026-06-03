@@ -14,6 +14,7 @@ import {
   uiPhrase as ui,
 } from './i18n/contentScript';
 import { initMessageReaction, MessageReactionConfig } from './message-reaction';
+import { initGlipComposeScheduler } from './glipComposeScheduler';
 import {
   GLIP_MESSAGE_MARKERS_KEY,
   type GlipMessageMarkerCache,
@@ -37,6 +38,7 @@ import {
 
 initContentScriptI18n(() => {
   void decorateFollowThreadMessages();
+  void renderGlipPendingScheduledMessages();
 });
 
 // =====================================================
@@ -2282,12 +2284,14 @@ if (document.readyState === 'loading') {
     setTimeout(initJiraLinkProcessor, 1000);
     setTimeout(initGlipLinkProcessor, 1200);
     setTimeout(setupMessageReaction, 1500); // 初始化消息交互功能
+    setTimeout(initGlipComposeScheduler, 1700); // 初始化发送框定时发送功能
     setTimeout(initFollowThreadVisuals, 2000); // 初始化关注后续视觉标识
   });
 } else {
   setTimeout(initJiraLinkProcessor, 1000);
   setTimeout(initGlipLinkProcessor, 1200);
   setTimeout(setupMessageReaction, 1500); // 初始化消息交互功能
+  setTimeout(initGlipComposeScheduler, 1700); // 初始化发送框定时发送功能
   setTimeout(initFollowThreadVisuals, 2000); // 初始化关注后续视觉标识
 }
 
@@ -2938,11 +2942,14 @@ function injectFollowThreadStyles() {
       right: 80px;
       display: inline-flex;
       align-items: center;
+      gap: 4px;
+      border: 0;
       padding: 3px 8px;
       border-radius: 12px;
       font-size: 10px;
       line-height: 1.2;
       font-weight: 600;
+      font-family: inherit;
       color: white;
       cursor: help;
       z-index: 10;
@@ -2950,6 +2957,25 @@ function injectFollowThreadStyles() {
       background: #0ea5e9;
       box-shadow: 0 2px 4px rgba(14, 165, 233, 0.3);
       transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .glip-ai-marker-badge:focus-visible {
+      outline: 2px solid #0369a1;
+      outline-offset: 2px;
+      transform: scale(1.05);
+      box-shadow: 0 4px 8px rgba(14, 165, 233, 0.4);
+    }
+
+    .glip-ai-marker-count {
+      display: inline-flex;
+      align-items: center;
+      min-width: 14px;
+      height: 14px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.24);
+      font-size: 9px;
+      line-height: 1;
     }
 
     .glip-ai-marker-badge.outreach-initial-ask {
@@ -3010,6 +3036,7 @@ function injectFollowThreadStyles() {
     }
 
     .glip-ai-marker-badge:hover + .glip-ai-marker-tooltip,
+    .glip-ai-marker-badge:focus + .glip-ai-marker-tooltip,
     .glip-ai-marker-tooltip:hover {
       opacity: 1;
       pointer-events: auto;
@@ -3026,6 +3053,105 @@ function injectFollowThreadStyles() {
       color: #4b5563;
       line-height: 1.4;
       margin-top: 4px;
+    }
+
+    .pai-glip-pending-scheduled-list {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 8px 20px 12px;
+      box-sizing: border-box;
+      width: 100%;
+      clear: both;
+    }
+
+    .pai-glip-pending-scheduled-item {
+      max-width: min(520px, 74%);
+      color: #374151;
+      font-family: inherit;
+      animation: pai-glip-pending-enter 240ms ease-out;
+    }
+
+    .pai-glip-pending-scheduled-meta {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 6px;
+      margin: 0 10px 4px 0;
+      color: #6b7280;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .pai-glip-pending-scheduled-icon {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.96);
+      flex: 0 0 auto;
+    }
+
+    .pai-glip-pending-scheduled-bubble {
+      position: relative;
+      border: 2px dashed rgba(75, 85, 99, 0.72);
+      border-radius: 18px 18px 5px 18px;
+      background: rgba(249, 250, 251, 0.92);
+      color: #374151;
+      padding: 9px 12px;
+      line-height: 1.45;
+      font-size: 14px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      box-shadow: 0 3px 12px rgba(15, 23, 42, 0.08);
+    }
+
+    .pai-glip-pending-scheduled-bubble::after {
+      content: "";
+      position: absolute;
+      right: -5px;
+      bottom: -2px;
+      width: 10px;
+      height: 10px;
+      border-right: 2px dashed rgba(75, 85, 99, 0.72);
+      border-bottom: 2px dashed rgba(75, 85, 99, 0.72);
+      border-bottom-right-radius: 10px;
+      background: rgba(249, 250, 251, 0.92);
+      transform: rotate(-8deg);
+    }
+
+    .pai-glip-pending-scheduled-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 4px;
+    }
+
+    .pai-glip-pending-scheduled-manage {
+      border: 0;
+      background: transparent;
+      color: #2563eb;
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 10px;
+    }
+
+    .pai-glip-pending-scheduled-manage:hover {
+      color: #1d4ed8;
+      text-decoration: underline;
+    }
+
+    @keyframes pai-glip-pending-enter {
+      from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
     }
   `;
   document.head.appendChild(style);
@@ -3105,6 +3231,146 @@ function getChatIdForMessageCard(card: Element): string {
   if (groupId) return groupId;
   const urlMatch = window.location.href.match(/\/messages\/(\d+)/);
   return urlMatch ? urlMatch[1] : '';
+}
+
+type GlipMessageMarkerRecord =
+  GlipMessageMarkerCache['markersByChatId'][string][string][number];
+type GlipPendingScheduledRecord =
+  NonNullable<GlipMessageMarkerCache['pendingScheduledByChatId']>[string][number];
+
+function getGlipAiMarkerLine(marker: GlipMessageMarkerRecord): string {
+  const tooltip = marker.tooltip ? `：${truncateText(marker.tooltip, 90)}` : '';
+  return `${marker.label}${tooltip}`;
+}
+
+function getGlipAiMarkerAriaLabel(
+  markers: GlipMessageMarkerRecord[],
+): string {
+  const markerLines = markers.map(getGlipAiMarkerLine);
+  if (markerLines.length <= 1) {
+    return `AI 标注：${markerLines[0] || ''}`;
+  }
+  return `AI 标注，共 ${markerLines.length} 项：${markerLines.join('；')}`;
+}
+
+function getCurrentGlipChatId(): string {
+  const match = window.location.pathname.match(/^\/(?:l\/)?messages\/([^/]+)/);
+  return match?.[1] || '';
+}
+
+function formatPendingScheduledTime(scheduledAt: string): string {
+  const date = new Date(scheduledAt);
+  if (Number.isNaN(date.getTime())) {
+    return '待发送';
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function getPendingScheduledContainer(): HTMLElement | null {
+  const existingCards = Array.from(
+    document.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'),
+  );
+  const lastCard = existingCards[existingCards.length - 1];
+  const fromLastCard =
+    lastCard?.closest<HTMLElement>(
+      '.conversation-list-content, .conversation-list, [class*="conversation-list"], [class*="ConversationList"]',
+    ) || lastCard?.closest<HTMLElement>('main, section, [role="main"]');
+  const fallback = document.querySelector<HTMLElement>(
+    '.conversation-list-content, .conversation-list, [class*="conversation-list"], [class*="ConversationList"], main, [role="main"]',
+  );
+  return fromLastCard || fallback;
+}
+
+function insertPendingScheduledListAtBottom(
+  container: HTMLElement,
+  list: HTMLElement,
+): void {
+  const composer = container.querySelector<HTMLElement>(
+    '[data-test-automation-id="message-compose"], [data-test-automation-id="message-input"], .message-input-main',
+  );
+  if (composer) {
+    container.insertBefore(list, composer);
+    return;
+  }
+  container.appendChild(list);
+}
+
+function openScheduledMessageFromPending(message: GlipPendingScheduledRecord): void {
+  chrome.runtime
+    .sendMessage({
+      type: 'OPEN_SCHEDULED_MESSAGES',
+      data: {
+        category: 'ComposeScheduled',
+        messageId: message.messageId,
+      },
+    })
+    .catch((error) => {
+      console.warn('打开待发送定时消息失败:', error);
+    });
+}
+
+async function renderGlipPendingScheduledMessages(): Promise<void> {
+  document
+    .querySelectorAll('.pai-glip-pending-scheduled-list')
+    .forEach((element) => element.remove());
+
+  const chatId = getCurrentGlipChatId();
+  if (!chatId) return;
+
+  const markerCache = await getGlipMessageMarkerCache();
+  const pendingMessages =
+    markerCache?.pendingScheduledByChatId?.[chatId]?.filter(Boolean) || [];
+  if (pendingMessages.length === 0) return;
+
+  const container = getPendingScheduledContainer();
+  if (!container) return;
+
+  const list = document.createElement('div');
+  list.className = 'pai-glip-pending-scheduled-list';
+  list.setAttribute('aria-label', '待发送定时消息');
+
+  pendingMessages.forEach((message) => {
+    const item = document.createElement('div');
+    item.className = 'pai-glip-pending-scheduled-item';
+
+    const meta = document.createElement('div');
+    meta.className = 'pai-glip-pending-scheduled-meta';
+
+    const icon = document.createElement('img');
+    icon.className = 'pai-glip-pending-scheduled-icon';
+    icon.alt = '';
+    icon.src = chrome.runtime.getURL('icons/icon48.png');
+    meta.appendChild(icon);
+
+    const metaText = document.createElement('span');
+    metaText.textContent = `待发送 · ${formatPendingScheduledTime(message.scheduledAt)}`;
+    meta.appendChild(metaText);
+    item.appendChild(meta);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'pai-glip-pending-scheduled-bubble';
+    bubble.textContent = truncateText(message.content, 500);
+    item.appendChild(bubble);
+
+    const actions = document.createElement('div');
+    actions.className = 'pai-glip-pending-scheduled-actions';
+    const manageButton = document.createElement('button');
+    manageButton.type = 'button';
+    manageButton.className = 'pai-glip-pending-scheduled-manage';
+    manageButton.textContent = '管理';
+    manageButton.addEventListener('click', () => openScheduledMessageFromPending(message));
+    actions.appendChild(manageButton);
+    item.appendChild(actions);
+
+    list.appendChild(item);
+  });
+
+  insertPendingScheduledListAtBottom(container, list);
 }
 
 /**
@@ -3271,10 +3537,23 @@ async function decorateFollowThreadMessages() {
 
     card.classList.add('glip-ai-marker');
     const rightOffset = calculateTimeElementWidth(card);
-    const badge = document.createElement('div');
+    const badge = document.createElement('button');
+    badge.type = 'button';
     badge.className = `glip-ai-marker-badge ${primaryMarker.type.replace(/_/g, '-')}`;
     badge.style.right = `${rightOffset}px`;
-    badge.textContent = primaryMarker.label;
+    badge.setAttribute('aria-label', getGlipAiMarkerAriaLabel(markers));
+    badge.title = getGlipAiMarkerAriaLabel(markers);
+    const badgeLabel = document.createElement('span');
+    badgeLabel.className = 'glip-ai-marker-label';
+    badgeLabel.textContent = primaryMarker.label;
+    badge.appendChild(badgeLabel);
+    if (markers.length > 1) {
+      const count = document.createElement('span');
+      count.className = 'glip-ai-marker-count';
+      count.setAttribute('aria-hidden', 'true');
+      count.textContent = `+${markers.length - 1}`;
+      badge.appendChild(count);
+    }
     card.appendChild(badge);
 
     const tooltip = document.createElement('div');
@@ -3309,7 +3588,10 @@ export function initFollowThreadVisuals() {
     .catch(() => {
       // 后台刷新失败时仍使用已有本地缓存装饰。
     });
-  setTimeout(() => decorateFollowThreadMessages(), 2000);
+  setTimeout(() => {
+    void decorateFollowThreadMessages();
+    void renderGlipPendingScheduledMessages();
+  }, 2000);
 
   // 3. 防抖函数，避免频繁执行
   let decorateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3318,7 +3600,8 @@ export function initFollowThreadVisuals() {
       clearTimeout(decorateDebounceTimer);
     }
     decorateDebounceTimer = setTimeout(() => {
-      decorateFollowThreadMessages();
+      void decorateFollowThreadMessages();
+      void renderGlipPendingScheduledMessages();
       decorateDebounceTimer = null;
     }, delay);
   };

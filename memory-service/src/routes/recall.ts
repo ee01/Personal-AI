@@ -86,6 +86,17 @@ const recallBodySchema = {
         'dashboard',
       ],
     },
+    lifecycleMode: {
+      type: 'string' as const,
+      enum: [
+        'active_default',
+        'passive_surface',
+        'composer_surface',
+        'historical',
+        'explicit_search',
+        'audit',
+      ],
+    },
     previewMaxLength: { type: 'number' as const, minimum: 16, maximum: 280 },
     analysisMode: {
       type: 'string' as const,

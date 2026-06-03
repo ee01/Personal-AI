@@ -17,6 +17,7 @@ const userDataDir = await fs.mkdtemp(
   path.join(os.tmpdir(), 'personal-ai-action-queue-'),
 );
 const nowSeconds = Math.floor(Date.now() / 1000);
+let approvalExecuteRequest = null;
 
 function jsonResponse(body, status = 200) {
   return {
@@ -241,6 +242,21 @@ try {
     const parsed = new URL(requestUrl);
     const pathname = parsed.pathname;
 
+    if (
+      pathname.endsWith('/actions/action-approval-high/execute') &&
+      route.request().method() === 'POST'
+    ) {
+      approvalExecuteRequest = route.request().postDataJSON();
+      await route.fulfill(
+        jsonResponse({
+          actionId: 'action-approval-high',
+          actionType: 'delegate_openclaw',
+          queueStatus: 'running',
+        }),
+      );
+      return;
+    }
+
     if (pathname.endsWith('/actions') && route.request().method() === 'GET') {
       await route.fulfill(jsonResponse(actionsForRequest(parsed)));
       return;
@@ -289,6 +305,19 @@ try {
   await page.locator('.queue-stat', { hasText: '需要处理' }).locator('strong', { hasText: '3' }).waitFor();
   await page.locator('.queue-stat', { hasText: '执行中' }).locator('strong', { hasText: '1' }).waitFor();
   await page.locator('.queue-stat', { hasText: '失败/死信' }).locator('strong', { hasText: '1' }).waitFor();
+  await page.getByText('执行前需要确认高风险动作').waitFor({ timeout: 10000 });
+  await page.getByText('点击“确认并执行”会先写入批准时间').waitFor({ timeout: 10000 });
+  const executeResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/actions/action-approval-high/execute') &&
+      response.request().method() === 'POST',
+  );
+  await page
+    .locator('.action-card', { hasText: '复核生产部署状态' })
+    .getByRole('button', { name: '确认并执行' })
+    .click();
+  await executeResponse;
+  assert.equal(approvalExecuteRequest?.approve, true);
   await page.getByText('有动作运行时间过长').waitFor({ timeout: 10000 });
   await page.getByText('动作已运行超过 30 分钟').waitFor({ timeout: 10000 });
   await page.getByText('确认 Jira 发布状态').waitFor({ timeout: 10000 });

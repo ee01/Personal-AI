@@ -30,6 +30,7 @@ import {
     pruneContextSiteAllowRecord,
     pruneContextSiteBlockRecord,
     pruneContextSiteMuteRecord,
+    removeContextSiteRecordConflicts,
     sanitizeContextExternalUrl,
     sanitizeExploreRoute,
 } from './web-intelligence/contextRecallGuards';
@@ -145,6 +146,84 @@ interface ContextToastOptions {
     detailMessage?: string;
 }
 
+type ContextRecallFeedbackResultHandler = (success: boolean, error?: string) => void;
+type ContextRecallNegativeFeedbackReason =
+    | 'generic_topic_overlap'
+    | 'wrong_group_or_project'
+    | 'empty_meeting_shell';
+
+interface ContextRecallFeedbackDetailOptions {
+    reason?: ContextRecallNegativeFeedbackReason;
+    note?: string;
+    surface?: string;
+    selectedText?: string;
+    interaction?: 'context_recall_feedback' | 'memory_relevance_trainer';
+    autoApplied?: boolean;
+    restoreBubbleOptions?: ContextBubbleOptions;
+}
+
+const CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS: Array<{
+    value: ContextRecallNegativeFeedbackReason;
+    label: string;
+    detail: string;
+}> = [
+    {
+        value: 'generic_topic_overlap',
+        label: '只是主题相似',
+        detail: '不要只因工具、产品或宽泛关键词就提示',
+    },
+    {
+        value: 'wrong_group_or_project',
+        label: '群组或项目不对',
+        detail: '当前场景和这条记忆的归属不一致',
+    },
+    {
+        value: 'empty_meeting_shell',
+        label: '空页面误触发',
+        detail: '页面缺少具体人物、工单、行动或结论',
+    },
+];
+
+const CONTEXT_THUMB_UP_ICON_HTML = `
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7 10v12"></path>
+        <path d="M15 5.9 14 10h5.8a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 18.4 21H9a2 2 0 0 1-2-2v-8a2 2 0 0 1 .6-1.4L13 4.7a1.4 1.4 0 0 1 2 .1c.4.4.5 1 .4 1.5Z"></path>
+        <path d="M3 10h4"></path>
+    </svg>
+`;
+
+const CONTEXT_THUMB_DOWN_ICON_HTML = `
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7 14V2"></path>
+        <path d="M15 18.1 14 14h5.8a2 2 0 0 0 2-2.4l-1.4-7A2 2 0 0 0 18.4 3H9a2 2 0 0 0-2 2v8a2 2 0 0 0 .6 1.4L13 19.3a1.4 1.4 0 0 0 2-.1c.4-.4.5-1 .4-1.5Z"></path>
+        <path d="M3 14h4"></path>
+    </svg>
+`;
+
+function getContextRecallNegativeFeedbackReasonLabel(
+    reason?: ContextRecallNegativeFeedbackReason,
+): string | undefined {
+    return CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS.find((item) => item.value === reason)?.label;
+}
+
+function buildSourceMemoryDetailToastAction(capsuleId?: unknown): ContextToastAction | undefined {
+    const normalizedId = normalizeText(
+        typeof capsuleId === 'string' ? capsuleId : String(capsuleId || ''),
+    );
+    if (!normalizedId) return undefined;
+
+    return {
+        label: '查看',
+        ariaLabel: '查看资料记忆详情',
+        onClick: () => {
+            const url = chrome.runtime.getURL(
+                `memory-exploring.html#/source-memory/${encodeURIComponent(normalizedId)}`,
+            );
+            window.open(url, '_blank', 'noopener');
+        },
+    };
+}
+
 type ContextBubbleMode = 'lens' | 'selectionSearch';
 
 interface ContextBubbleOptions {
@@ -159,6 +238,23 @@ interface MemoryCaptureCandidateResult {
     reasons?: string[];
     blockedReason?: string;
     captureMode?: 'auto' | 'suggested' | 'manual';
+}
+
+interface VisualMemoryCandidate {
+    kind: 'chart' | 'canvas' | 'image' | 'table' | 'figure';
+    tagName: string;
+    label: string;
+    previewText: string;
+    nearbyText: string;
+    source?: string;
+    selectorHint: string;
+    rect: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    score: number;
 }
 
 interface ContextMatchViewCopy {
@@ -229,6 +325,124 @@ function getContextRehearsalActivationId(match: ContextRecallMatch): string | un
     return typeof activationId === 'string' && activationId.trim()
         ? activationId.trim()
         : undefined;
+}
+
+function clipContextFeedbackDetailValue(value?: string | null, maxLength = 160): string | undefined {
+    const normalized = normalizeText(value);
+    if (!normalized) return undefined;
+    return normalized.length > maxLength
+        ? `${normalized.slice(0, maxLength).trimEnd()}…`
+        : normalized;
+}
+
+function stringifyContextRecallFeedbackDetail(
+    detail: Record<string, string | undefined>,
+    maxLength = 1100,
+): string {
+    const compact = Object.fromEntries(
+        Object.entries(detail).filter(([, value]) => Boolean(value)),
+    ) as Record<string, string>;
+    let serialized = JSON.stringify(compact);
+    if (serialized.length <= maxLength) return serialized;
+
+    const shorten: Array<[string, number]> = [
+        ['feedback_note', 90],
+        ['selected_text', 90],
+        ['source_url', 120],
+        ['current_url', 120],
+        ['scene_anchor_signature', 120],
+        ['source_title', 90],
+        ['sender', 80],
+    ];
+    for (const [key, limit] of shorten) {
+        if (!compact[key]) continue;
+        compact[key] = clipContextFeedbackDetailValue(compact[key], limit) || compact[key];
+        serialized = JSON.stringify(compact);
+        if (serialized.length <= maxLength) return serialized;
+    }
+
+    for (const key of ['selected_text', 'source_url', 'current_url', 'feedback_note']) {
+        delete compact[key];
+        serialized = JSON.stringify(compact);
+        if (serialized.length <= maxLength) return serialized;
+    }
+
+    return JSON.stringify({
+        version: compact.version,
+        surface: compact.surface,
+        interaction: compact.interaction,
+        action: compact.action,
+        feedback_reason: compact.feedback_reason,
+        scene_anchor_signature: compact.scene_anchor_signature,
+        target_type: compact.target_type,
+        source_label: compact.source_label,
+        group_id: compact.group_id,
+    });
+}
+
+function getContextRecallFeedbackTargetId(match: ContextRecallMatch): string {
+    if (match.type === 'source_memory') {
+        const metadataId = getContextMatchMetadataText(match, 'sourceMemoryCapsuleId');
+        if (metadataId) return metadataId;
+        return normalizeText(match.id).replace(/^source-memory:/, '');
+    }
+    return String(match.id || '').trim();
+}
+
+function buildContextRecallFeedbackDetail(
+    match: ContextRecallMatch,
+    action: 'positive' | 'negative',
+    contextKey: string | null | undefined,
+    host: string,
+    options: ContextRecallFeedbackDetailOptions = {},
+): string {
+    const detail: Record<string, string | undefined> = {
+        version: '1',
+        surface: clipContextFeedbackDetailValue(
+            options.surface ||
+            (normalizeText(contextKey).startsWith('selected_text:') ? 'selection_memory_search_card' : 'web_passive_bubble'),
+            80,
+        ),
+        interaction: options.interaction ||
+            (options.reason ? 'memory_relevance_trainer' : 'context_recall_feedback'),
+        host: clipContextFeedbackDetailValue(host, 80),
+        action,
+        scene_anchor_signature: clipContextFeedbackDetailValue(contextKey, 180),
+        feedback_reason: clipContextFeedbackDetailValue(options.reason, 80),
+        feedback_reason_label: clipContextFeedbackDetailValue(
+            getContextRecallNegativeFeedbackReasonLabel(options.reason),
+            80,
+        ),
+        feedback_note: clipContextFeedbackDetailValue(options.note, 260),
+        auto_applied: options.autoApplied ? 'true' : undefined,
+        target_type: clipContextFeedbackDetailValue(match.type, 40),
+        reason_type: clipContextFeedbackDetailValue(match.reasonType, 60),
+        evidence_role: clipContextFeedbackDetailValue(match.evidenceRole, 60),
+        display_priority: clipContextFeedbackDetailValue(match.displayPriority, 20),
+        source_label: clipContextFeedbackDetailValue(match.sourceLabel, 80),
+        source_title: clipContextFeedbackDetailValue(match.sourceTitle, 120),
+        source_url: clipContextFeedbackDetailValue(match.sourceUrl, 180),
+        current_url: clipContextFeedbackDetailValue(window.location.href, 180),
+        current_title: clipContextFeedbackDetailValue(document.title, 120),
+        selected_text: clipContextFeedbackDetailValue(options.selectedText, 160),
+        source_memory_capsule_id: clipContextFeedbackDetailValue(
+            getContextMatchMetadataText(match, 'sourceMemoryCapsuleId'),
+            120,
+        ),
+        group_id: clipContextFeedbackDetailValue(
+            getContextMatchMetadataText(match, 'groupId') ||
+            getContextMatchMetadataText(match, 'group_id'),
+            80,
+        ),
+        sender: clipContextFeedbackDetailValue(
+            getContextMatchMetadataText(match, 'sender') ||
+            getContextMatchMetadataText(match, 'senderName') ||
+            getContextMatchMetadataText(match, 'author'),
+            120,
+        ),
+    };
+
+    return stringifyContextRecallFeedbackDetail(detail);
 }
 
 function getContextMatchMetadataLayers(match: ContextRecallMatch): Record<string, unknown>[] {
@@ -426,6 +640,11 @@ function selectContextRecallMatches(
 
 function hasContextWhyRelevant(match: ContextRecallMatch): boolean {
     return Array.isArray(match.whyRelevant) && match.whyRelevant.some((item) => normalizeText(item));
+}
+
+function isExplainablePassiveContextMatch(match: ContextRecallMatch): boolean {
+    if (!hasContextWhyRelevant(match)) return false;
+    return match.displayPriority === 'p1' || match.displayPriority === 'p2';
 }
 
 function getContextStrengthClass(match: ContextRecallMatch): string {
@@ -653,6 +872,33 @@ function formatContextMatchDate(timestamp?: number): string {
     });
 }
 
+function buildContextRecallSourceLinks(
+    match: ContextRecallMatch,
+    baseUrl: string,
+    sourceLabel: string,
+): Array<{ label: string; url: string }> {
+    const links: Array<{ label: string; url: string }> = [];
+    const seenUrls = new Set<string>();
+    const addLink = (rawLabel?: string | null, rawUrl?: string | null): void => {
+        const url = sanitizeContextExternalUrl(rawUrl, baseUrl);
+        if (!url || seenUrls.has(url)) return;
+
+        const label = clipContextLensTitle(rawLabel || '');
+        seenUrls.add(url);
+        links.push({
+            label: label && label !== '记忆来源' ? label : '打开来源',
+            url,
+        });
+    };
+
+    addLink(match.sourceTitle || sourceLabel, match.sourceUrl);
+    for (const link of Array.isArray(match.links) ? match.links : []) {
+        addLink(link.label, link.url);
+    }
+
+    return links.slice(0, 3);
+}
+
 function isMeetingPilotPage(): boolean {
     return (
         window.location.hostname === 'v.ringcentral.com' &&
@@ -679,6 +925,8 @@ const PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS = 90_000;
 const PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS = 240_000;
 const PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS = 480_000;
 const PAGE_MEMORY_CAPTURE_AUTO_RECHECK_MS = 30_000;
+const PAGE_VISUAL_MEMORY_MIN_AREA = 28_000;
+const PAGE_VISUAL_MEMORY_MIN_TEXT_CHARS = 16;
 const COMPOSER_GUARD_ROOT_SELECTOR = '#pai-composer-guard-root';
 const COMPOSER_GUARD_ICON_SELECTOR =
     '#pai-composer-guard-root .pai-composer-guard-icon-button';
@@ -697,6 +945,8 @@ const CONTEXT_UI_EXCLUDE_SELECTOR = [
     '.pai-context-peek',
     '.pai-context-selection-trigger',
     '.pai-memory-capture-selection-dock',
+    '.pai-memory-capture-note-panel',
+    '.pai-visual-memory-preview-panel',
     '.pai-memory-capture-page-chip',
     '.pai-context-toast',
     '#pai-context-bubble-styles',
@@ -741,10 +991,12 @@ class WebIntelligenceContentScript {
     private peekHideTimer: number | null = null;
     private selectionTriggerElement: HTMLElement | null = null;
     private selectionCaptureDockElement: HTMLElement | null = null;
+    private selectionCaptureReviewElement: HTMLElement | null = null;
     private selectionTriggerTimer: number | null = null;
     private selectedTextPendingContextKey: string | null = null;
     private selectedTextRequestId = 0;
     private pageCaptureChipElement: HTMLElement | null = null;
+    private visualMemoryPreviewElement: HTMLElement | null = null;
     private pageCaptureTimer: number | null = null;
     private pageCaptureRequestId = 0;
     private pageCapturePendingContextKey: string | null = null;
@@ -1038,10 +1290,11 @@ class WebIntelligenceContentScript {
             node.classList.contains('pai-context-peek') ||
             node.classList.contains('pai-context-selection-trigger') ||
             node.classList.contains('pai-memory-capture-selection-dock') ||
+            node.classList.contains('pai-memory-capture-note-panel') ||
             node.classList.contains('pai-memory-capture-page-chip') ||
             node.classList.contains('pai-context-toast') ||
             node.id === 'pai-context-bubble-styles' ||
-            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-page-chip, .pai-context-toast')
+            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast')
         );
     }
 
@@ -1313,6 +1566,271 @@ class WebIntelligenceContentScript {
         return normalizeText(clone.textContent);
     }
 
+    private findVisualMemoryCandidate(): VisualMemoryCandidate | null {
+        if (!document.body) {
+            return null;
+        }
+
+        let elements: Element[] = [];
+        try {
+            elements = Array.from(new Set(document.querySelectorAll([
+                'svg',
+                'canvas',
+                'img',
+                'table',
+                'figure',
+                '[role="img"]',
+                '[role="figure"]',
+                '[class*="chart" i]',
+                '[id*="chart" i]',
+                '[class*="graph" i]',
+                '[id*="graph" i]',
+                '[class*="plot" i]',
+                '[id*="plot" i]',
+                '[class*="dashboard" i]',
+                '[id*="dashboard" i]',
+            ].join(', '))));
+        } catch (_error) {
+            elements = Array.from(new Set(document.querySelectorAll('svg, canvas, img, table, figure, [role="img"], [role="figure"]')));
+        }
+
+        const candidates = elements
+            .map((element) => this.buildVisualMemoryCandidate(element))
+            .filter((candidate): candidate is VisualMemoryCandidate => Boolean(candidate))
+            .sort((a, b) => b.score - a.score);
+
+        return candidates[0] || null;
+    }
+
+    private buildVisualMemoryCandidate(element: Element): VisualMemoryCandidate | null {
+        if (
+            element === document.body ||
+            element === document.documentElement ||
+            element.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast')
+        ) {
+            return null;
+        }
+
+        const rect = element.getBoundingClientRect();
+        if (!this.isVisibleVisualMemoryElement(element, rect)) {
+            return null;
+        }
+
+        const area = rect.width * rect.height;
+        const kind = this.inferVisualMemoryKind(element);
+        const previewText = this.extractVisualMemoryText(element);
+        const nearbyText = this.extractVisualMemoryNearbyText(element, previewText);
+        const source = this.extractVisualMemorySource(element);
+        const label = this.selectVisualMemoryLabel(element, kind, previewText, nearbyText);
+        const signalText = normalizeText([label, previewText, nearbyText, source].filter(Boolean).join(' '));
+        if (area < PAGE_VISUAL_MEMORY_MIN_AREA && signalText.length < PAGE_VISUAL_MEMORY_MIN_TEXT_CHARS) {
+            return null;
+        }
+        if (signalText.length < PAGE_VISUAL_MEMORY_MIN_TEXT_CHARS && kind !== 'canvas') {
+            return null;
+        }
+
+        let score = Math.min(0.32, area / 320000);
+        if (kind === 'chart' || kind === 'table') score += 0.28;
+        if (kind === 'canvas') score += 0.16;
+        if (previewText.length >= PAGE_VISUAL_MEMORY_MIN_TEXT_CHARS) score += 0.24;
+        if (nearbyText.length >= 48) score += 0.12;
+        if (source) score += 0.06;
+
+        return {
+            kind,
+            tagName: element.tagName.toLowerCase(),
+            label,
+            previewText: previewText.slice(0, 900),
+            nearbyText: nearbyText.slice(0, 900),
+            source,
+            selectorHint: this.buildVisualMemorySelectorHint(element),
+            rect: {
+                x: Math.round(rect.left + window.scrollX),
+                y: Math.round(rect.top + window.scrollY),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+            },
+            score: Math.round(Math.min(1, score) * 100) / 100,
+        };
+    }
+
+    private isVisibleVisualMemoryElement(element: Element, rect: DOMRect): boolean {
+        if (rect.width < 120 || rect.height < 72) {
+            return false;
+        }
+        if (rect.bottom < 0 || rect.top > window.innerHeight) {
+            return false;
+        }
+        const style = window.getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') {
+            return false;
+        }
+        const opacity = Number(style.opacity || '1');
+        return Number.isNaN(opacity) || opacity > 0.05;
+    }
+
+    private inferVisualMemoryKind(element: Element): VisualMemoryCandidate['kind'] {
+        const tagName = element.tagName.toLowerCase();
+        if (tagName === 'canvas') return 'canvas';
+        if (tagName === 'table') return 'table';
+        if (tagName === 'img' || element instanceof HTMLImageElement) return 'image';
+        const descriptor = normalizeText([
+            tagName,
+            (element as HTMLElement).id,
+            this.getElementClassName(element),
+            element.getAttribute('role'),
+            element.getAttribute('aria-label'),
+        ].join(' ')).toLowerCase();
+        if (/chart|graph|plot|histogram|recharts|echarts|highcharts|vega|d3|数据|图表/.test(descriptor)) {
+            return 'chart';
+        }
+        if (element.querySelector('svg, canvas, table')) {
+            return 'chart';
+        }
+        return 'figure';
+    }
+
+    private extractVisualMemoryText(element: Element): string {
+        const parts: string[] = [];
+        const push = (value?: string | null, maxLength = 700) => {
+            const text = normalizeText(value).slice(0, maxLength);
+            if (!text) return;
+            if (parts.some((part) => part === text || part.includes(text))) return;
+            parts.push(text);
+        };
+
+        push(element.getAttribute('aria-label'));
+        push(element.getAttribute('title'));
+        if (element instanceof HTMLImageElement) {
+            push(element.alt);
+        }
+        const firstImage = element.querySelector('img');
+        if (firstImage instanceof HTMLImageElement) {
+            push(firstImage.alt);
+            push(firstImage.title);
+        }
+
+        const figure = element.closest('figure');
+        push(figure?.querySelector('figcaption')?.textContent, 420);
+
+        const tagName = element.tagName.toLowerCase();
+        if (tagName === 'svg' || tagName === 'table' || tagName === 'figure' || element.getAttribute('role') === 'figure') {
+            push(this.getContextTextContent(element), tagName === 'table' ? 900 : 640);
+        }
+        if (tagName !== 'img' && tagName !== 'canvas') {
+            for (const item of Array.from(element.querySelectorAll('text, title, desc, caption')).slice(0, 36)) {
+                push(item.textContent, 300);
+            }
+        }
+
+        return normalizeText(parts.join(' · '));
+    }
+
+    private extractVisualMemoryNearbyText(element: Element, previewText: string): string {
+        const scope =
+            element.closest('figure, section, article, aside, main, [role="main"], [role="figure"]') ||
+            element.parentElement;
+        const scopedText = scope && scope !== document.body && scope !== document.documentElement
+            ? this.getContextTextContent(scope)
+            : '';
+        const siblingText = [
+            element.previousElementSibling ? this.getContextTextContent(element.previousElementSibling) : '',
+            element.nextElementSibling ? this.getContextTextContent(element.nextElementSibling) : '',
+            element.parentElement ? this.getContextTextContent(element.parentElement) : '',
+        ].filter(Boolean).join(' ');
+        const text = normalizeText(scopedText || siblingText);
+        if (!text || text === previewText) {
+            return '';
+        }
+        return text.slice(0, 900);
+    }
+
+    private extractVisualMemorySource(element: Element): string | undefined {
+        const image = element instanceof HTMLImageElement
+            ? element
+            : element.querySelector('img');
+        const src = image instanceof HTMLImageElement
+            ? normalizeText(image.currentSrc || image.src)
+            : '';
+        return src ? src.slice(0, 500) : undefined;
+    }
+
+    private selectVisualMemoryLabel(
+        element: Element,
+        kind: VisualMemoryCandidate['kind'],
+        previewText: string,
+        nearbyText: string,
+    ): string {
+        const candidates = [
+            element.getAttribute('aria-label'),
+            element.getAttribute('title'),
+            element.closest('figure')?.querySelector('figcaption')?.textContent,
+            previewText,
+            nearbyText,
+            this.formatVisualMemoryKind(kind),
+        ];
+        for (const candidate of candidates) {
+            const text = normalizeText(candidate).slice(0, 96);
+            if (text) return text;
+        }
+        return this.formatVisualMemoryKind(kind);
+    }
+
+    private buildVisualMemoryEvidenceText(
+        pageTitle: string,
+        candidate: VisualMemoryCandidate,
+    ): string {
+        const title = normalizeText(pageTitle) || '当前网页';
+        const kindLabel = this.formatVisualMemoryKind(candidate.kind);
+        return [
+            `视觉证据：${candidate.label || kindLabel}`,
+            `类型：${kindLabel} · ${candidate.tagName}`,
+            `页面：${title}`,
+            candidate.previewText ? `可读文本：${candidate.previewText}` : '',
+            candidate.nearbyText ? `附近上下文：${candidate.nearbyText}` : '',
+            candidate.source ? `图片来源：${candidate.source}` : '',
+            `区域：${candidate.rect.width}x${candidate.rect.height}px，位置 ${candidate.rect.x},${candidate.rect.y}`,
+        ].filter(Boolean).join('\n');
+    }
+
+    private buildVisualMemorySelectorHint(element: Element): string {
+        const tagName = element.tagName.toLowerCase();
+        const id = normalizeText((element as HTMLElement).id);
+        if (id) return `${tagName}#${id.slice(0, 80)}`;
+        const classes = this.getElementClassName(element)
+            .split(/\s+/)
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .slice(0, 3);
+        return classes.length ? `${tagName}.${classes.join('.')}` : tagName;
+    }
+
+    private getElementClassName(element: Element): string {
+        const rawClassName = (element as HTMLElement | SVGElement).className;
+        if (typeof rawClassName === 'string') {
+            return rawClassName;
+        }
+        const animatedClassName = rawClassName as SVGAnimatedString | undefined;
+        return typeof animatedClassName?.baseVal === 'string' ? animatedClassName.baseVal : '';
+    }
+
+    private formatVisualMemoryKind(kind: VisualMemoryCandidate['kind']): string {
+        switch (kind) {
+            case 'chart':
+                return '图表';
+            case 'canvas':
+                return '画布图表';
+            case 'image':
+                return '图片';
+            case 'table':
+                return '表格';
+            case 'figure':
+            default:
+                return '视觉区域';
+        }
+    }
+
     private countWords(text: string): number {
         const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
         const englishWords = text.replace(/[\u4e00-\u9fff]/g, '').split(/\s+/).filter(word => word.length > 0).length;
@@ -1511,10 +2029,13 @@ class WebIntelligenceContentScript {
 
         if (cached && now - cached.ts < CONTEXT_MATCH_CACHE_TTL_MS) {
             if (cached.match) {
+                const shouldAnimateCachedMatch =
+                    cached.match.displayPriority === 'p1' &&
+                    this.activeBubbleContextKey !== payload.contextKey;
                 this.showContextBubble(
                     cached.matches.length ? cached.matches : [cached.match],
                     payload.contextKey,
-                    this.activeBubbleContextKey !== payload.contextKey,
+                    shouldAnimateCachedMatch,
                 );
             } else {
                 this.clearContextBubble();
@@ -1583,13 +2104,18 @@ class WebIntelligenceContentScript {
                 return;
             }
 
-            const matches = selectContextRecallMatches(response, { requireStrong: true });
+            const matches = selectContextRecallMatches(response)
+                .filter(isExplainablePassiveContextMatch);
             const match = matches[0] || null;
             contextMatchCache.set(payload.contextKey, { match, matches, ts: Date.now() });
             pruneContextMatchCache();
 
             if (match) {
-                this.showContextBubble(matches, payload.contextKey, true);
+                this.showContextBubble(
+                    matches,
+                    payload.contextKey,
+                    match.displayPriority === 'p1',
+                );
             } else {
                 this.clearContextBubble();
             }
@@ -1792,11 +2318,17 @@ class WebIntelligenceContentScript {
     }
 
     private handleSelectedTextSelectionChanged(delayMs = SELECTED_TEXT_TRIGGER_DELAY_MS): void {
+        const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        if (activeElement && this.isOwnedContextUiNode(activeElement)) {
+            return;
+        }
+
         const payload = this.buildSelectedTextPayload();
         const nextContextKey = payload?.contextKey || null;
         const visibleContextKey =
             this.selectionTriggerElement?.dataset.contextKey ||
             this.selectionCaptureDockElement?.dataset.contextKey ||
+            this.selectionCaptureReviewElement?.dataset.contextKey ||
             null;
 
         if (!nextContextKey) {
@@ -1826,6 +2358,11 @@ class WebIntelligenceContentScript {
     }
 
     private refreshSelectedTextTrigger(): void {
+        const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        if (activeElement && this.isOwnedContextUiNode(activeElement)) {
+            return;
+        }
+
         const payload = this.buildSelectedTextPayload();
         if (!payload) {
             this.clearSelectedTextTrigger();
@@ -1834,7 +2371,8 @@ class WebIntelligenceContentScript {
 
         const existingKey =
             this.selectionTriggerElement?.dataset.contextKey ||
-            this.selectionCaptureDockElement?.dataset.contextKey;
+            this.selectionCaptureDockElement?.dataset.contextKey ||
+            this.selectionCaptureReviewElement?.dataset.contextKey;
         if (existingKey === payload.contextKey) {
             if (this.selectionTriggerElement) {
                 this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
@@ -1941,7 +2479,7 @@ class WebIntelligenceContentScript {
         const nodes = [selection.anchorNode, selection.focusNode].filter(Boolean);
         return nodes.some((node) => {
             const element = node instanceof Element ? node : node?.parentElement;
-            return !!element?.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-page-chip, .pai-context-toast');
+            return !!element?.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast');
         });
     }
 
@@ -1973,11 +2511,17 @@ class WebIntelligenceContentScript {
         this.selectionTriggerElement?.remove();
         this.selectionTriggerElement = null;
         this.clearSelectionMemoryCaptureDock();
+        this.clearSelectionMemoryCaptureReview();
     }
 
     private clearSelectionMemoryCaptureDock(): void {
         this.selectionCaptureDockElement?.remove();
         this.selectionCaptureDockElement = null;
+    }
+
+    private clearSelectionMemoryCaptureReview(): void {
+        this.selectionCaptureReviewElement?.remove();
+        this.selectionCaptureReviewElement = null;
     }
 
     private showSelectedTextTrigger(
@@ -2120,7 +2664,7 @@ class WebIntelligenceContentScript {
         dock.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            this.saveSelectedTextCapture(payload);
+            this.showSelectedTextCaptureReview(payload, candidate);
         });
 
         document.body.appendChild(dock);
@@ -2134,6 +2678,109 @@ class WebIntelligenceContentScript {
             Math.min(window.innerHeight - 24, rect.top + rect.height / 2),
         );
         dock.style.top = `${Math.round(top)}px`;
+    }
+
+    private showSelectedTextCaptureReview(
+        payload: SelectedTextContextPayload,
+        candidate: MemoryCaptureCandidateResult,
+    ): void {
+        this.ensureContextBubbleStyles();
+        if (!document.body) {
+            return;
+        }
+
+        if (this.selectionCaptureReviewElement?.dataset.contextKey === payload.contextKey) {
+            const textarea = this.selectionCaptureReviewElement.querySelector('textarea');
+            textarea?.focus();
+            return;
+        }
+
+        if (this.selectionTriggerTimer !== null) {
+            window.clearTimeout(this.selectionTriggerTimer);
+            this.selectionTriggerTimer = null;
+        }
+        this.clearSelectionMemoryCaptureReview();
+
+        const panel = document.createElement('form');
+        panel.className = 'pai-memory-capture-note-panel';
+        panel.dataset.contextKey = payload.contextKey;
+        panel.setAttribute('aria-label', '保存选中资料');
+        panel.addEventListener('mousedown', (event) => {
+            event.stopPropagation();
+        });
+        panel.addEventListener('submit', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const note = noteInput.value.trim();
+            this.submitSelectedTextCapture(payload, note, panel);
+        });
+
+        const title = document.createElement('div');
+        title.className = 'pai-memory-capture-note-title';
+        title.textContent = '保存这段资料';
+        panel.appendChild(title);
+
+        const preview = document.createElement('div');
+        preview.className = 'pai-memory-capture-note-preview';
+        preview.textContent = normalizeText(payload.snippet).slice(0, 180);
+        panel.appendChild(preview);
+
+        if (candidate.reasons?.length) {
+            const reasons = document.createElement('div');
+            reasons.className = 'pai-memory-capture-note-reasons';
+            reasons.textContent = candidate.reasons.slice(0, 2).join('，');
+            panel.appendChild(reasons);
+        }
+
+        const noteInput = document.createElement('textarea');
+        noteInput.className = 'pai-memory-capture-note-input';
+        noteInput.name = 'note';
+        noteInput.rows = 3;
+        noteInput.maxLength = 800;
+        noteInput.placeholder = '备注（可选）';
+        panel.appendChild(noteInput);
+
+        const error = document.createElement('div');
+        error.className = 'pai-memory-capture-note-error';
+        error.setAttribute('role', 'alert');
+        error.hidden = true;
+        panel.appendChild(error);
+
+        const actions = document.createElement('div');
+        actions.className = 'pai-memory-capture-note-actions';
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'pai-memory-capture-note-button pai-memory-capture-note-cancel';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.clearSelectionMemoryCaptureReview();
+            this.selectionCaptureDockElement?.focus();
+        });
+        actions.appendChild(cancel);
+
+        const save = document.createElement('button');
+        save.type = 'submit';
+        save.className = 'pai-memory-capture-note-button pai-memory-capture-note-save';
+        save.textContent = '保存';
+        actions.appendChild(save);
+        panel.appendChild(actions);
+
+        document.body.appendChild(panel);
+        this.selectionCaptureReviewElement = panel;
+        this.placeSelectionMemoryCaptureReview(panel, payload.rect);
+        window.requestAnimationFrame(() => noteInput.focus());
+    }
+
+    private placeSelectionMemoryCaptureReview(panel: HTMLElement, rect: DOMRect): void {
+        const panelHeight = Math.max(180, panel.offsetHeight || 180);
+        const top = Math.max(
+            16,
+            Math.min(window.innerHeight - panelHeight - 16, rect.top + rect.height / 2 - 88),
+        );
+        panel.style.top = `${Math.round(top)}px`;
     }
 
     private requestSelectedTextTrigger(payload: SelectedTextContextPayload): void {
@@ -2255,11 +2902,32 @@ class WebIntelligenceContentScript {
         };
     }
 
-    private saveSelectedTextCapture(payload: SelectedTextContextPayload): void {
-        const note = window.prompt('给这段资料加个备注（可选）', '');
-        if (note === null) {
-            this.showContextToast('已取消保存资料记忆');
+    private submitSelectedTextCapture(
+        payload: SelectedTextContextPayload,
+        note: string,
+        panel: HTMLElement,
+    ): void {
+        const error = panel.querySelector<HTMLElement>('.pai-memory-capture-note-error');
+        const saveButton = panel.querySelector<HTMLButtonElement>('.pai-memory-capture-note-save');
+        if (
+            normalizeContextPageUrl(window.location.href) !== payload.url ||
+            this.isSensitiveContextPage() ||
+            this.isContextDismissed(payload.contextKey)
+        ) {
+            if (error) {
+                error.textContent = '当前页面上下文已变化，未保存。';
+                error.hidden = false;
+            }
             return;
+        }
+
+        if (error) {
+            error.textContent = '';
+            error.hidden = true;
+        }
+        if (saveButton) {
+            saveButton.disabled = true;
+            saveButton.textContent = '保存中...';
         }
 
         chrome.runtime.sendMessage({
@@ -2268,18 +2936,31 @@ class WebIntelligenceContentScript {
                 ...this.buildMemoryCaptureSelectionRequest(payload),
                 captureMode: 'manual',
                 captureReason: '用户点击右侧半露出 + 入库按钮',
-                note: note.trim(),
+                note,
             },
         }, (response) => {
             if (chrome.runtime.lastError || !response?.success) {
                 const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
-                this.showContextToast(`资料记忆保存失败：${message}`);
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.textContent = '保存';
+                }
+                if (error) {
+                    error.textContent = `资料记忆保存失败：${message}`;
+                    error.hidden = false;
+                } else {
+                    this.showContextToast(`资料记忆保存失败：${message}`);
+                }
                 return;
             }
 
             this.clearSelectedTextTrigger();
             const duplicate = Boolean(response.result?.capsule?.duplicate);
-            this.showContextToast(duplicate ? '这段资料已在记忆中' : '已保存为资料记忆');
+            this.showContextToast(
+                duplicate ? '这段资料已在记忆中' : '已保存为资料记忆',
+                buildSourceMemoryDetailToastAction(response.result?.capsule?.id),
+                { durationMs: 5000 },
+            );
         });
     }
 
@@ -2289,6 +2970,7 @@ class WebIntelligenceContentScript {
         this.pageCaptureCopiedText = false;
         this.pageCaptureShownContextKey = null;
         this.pageCaptureStoredContextKey = null;
+        this.clearVisualMemoryPreview();
         this.invalidatePageMemoryCaptureRequest();
     }
 
@@ -2384,16 +3066,69 @@ class WebIntelligenceContentScript {
         }
 
         const pageContent = this.extractPageContent();
-        if (!pageContent || pageContent.wordCount < PAGE_MEMORY_CAPTURE_MIN_WORDS) {
+        const visualCandidate = this.findVisualMemoryCandidate();
+        if (
+            (!pageContent || pageContent.wordCount < PAGE_MEMORY_CAPTURE_MIN_WORDS) &&
+            !visualCandidate
+        ) {
             return null;
         }
 
-        const sourceUrl = normalizeContextPageUrl(pageContent.url);
+        const sourceUrl = normalizeContextPageUrl(pageContent?.url || window.location.href);
         if (!sourceUrl) {
             return null;
         }
 
         const snapshot = buildPassiveContextSnapshot(document, window.location);
+        const sourceTitle = normalizeText(pageContent?.title) || normalizeText(document.title) || sourceUrl;
+        if (visualCandidate) {
+            const visualText = this.buildVisualMemoryEvidenceText(sourceTitle, visualCandidate);
+            const contextKey = [
+                'visual-capture',
+                sourceUrl,
+                this.createContextSignature(`${sourceTitle}:${visualCandidate.selectorHint}:${visualText.slice(0, 600)}`),
+            ].join(':');
+
+            return {
+                contextKey,
+                request: {
+                    sourceKind: 'visual_memory',
+                    sourceUrl,
+                    sourceTitle,
+                    text: visualText,
+                    entityHints: snapshot ? this.toPassiveRecallEntityHints(snapshot) : undefined,
+                    scope: 'work',
+                    interactions: {
+                        dwellMs,
+                        activeMs: dwellMs,
+                        scrollDepth: this.pageCaptureMaxScrollDepth,
+                        copiedText: this.pageCaptureCopiedText,
+                    },
+                    metadata: {
+                        contextType: 'webpage_visual',
+                        host: window.location.hostname,
+                        wordCount: this.countWords(visualText),
+                        visualMemory: {
+                            kind: visualCandidate.kind,
+                            tagName: visualCandidate.tagName,
+                            label: visualCandidate.label,
+                            selectorHint: visualCandidate.selectorHint,
+                            rect: visualCandidate.rect,
+                            score: visualCandidate.score,
+                            source: visualCandidate.source,
+                            previewText: visualCandidate.previewText,
+                            nearbyText: visualCandidate.nearbyText,
+                            detection: 'dom_visual_candidate',
+                        },
+                    },
+                },
+            };
+        }
+
+        if (!pageContent) {
+            return null;
+        }
+
         const contextKey = [
             'page-capture',
             sourceUrl,
@@ -2405,7 +3140,7 @@ class WebIntelligenceContentScript {
             request: {
                 sourceKind: 'webpage',
                 sourceUrl,
-                sourceTitle: normalizeText(pageContent.title) || sourceUrl,
+                sourceTitle,
                 text: pageContent.mainContent,
                 entityHints: snapshot ? this.toPassiveRecallEntityHints(snapshot) : undefined,
                 scope: 'work',
@@ -2430,6 +3165,9 @@ class WebIntelligenceContentScript {
     ): { shouldAutoSave: boolean; reason: string } {
         const interactions = (request.interactions || {}) as Record<string, unknown>;
         const metadata = (request.metadata || {}) as Record<string, unknown>;
+        if (request.sourceKind === 'visual_memory') {
+            return { shouldAutoSave: false, reason: '' };
+        }
         const dwellMs = Number(interactions.dwellMs || 0);
         const scrollDepth = Number(interactions.scrollDepth || 0);
         const copiedText = Boolean(interactions.copiedText);
@@ -2444,7 +3182,7 @@ class WebIntelligenceContentScript {
             copiedText &&
             dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_COPY_DWELL_MS &&
             scrollDepth >= 0.85 &&
-            score >= 0.7
+            score >= 0.78
         ) {
             return {
                 shouldAutoSave: true,
@@ -2452,14 +3190,14 @@ class WebIntelligenceContentScript {
             };
         }
 
-        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS && scrollDepth >= 0.9 && score >= 0.58) {
+        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_DEEP_READ_MS && scrollDepth >= 0.9 && score >= 0.78) {
             return {
                 shouldAutoSave: true,
                 reason: '浏览时间很久且阅读到页面深处',
             };
         }
 
-        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS && scrollDepth >= 0.75 && score >= 0.58) {
+        if (dwellMs >= PAGE_MEMORY_CAPTURE_AUTO_LONG_READ_MS && scrollDepth >= 0.75 && score >= 0.78) {
             return {
                 shouldAutoSave: true,
                 reason: '在当前页面停留非常久',
@@ -2472,6 +3210,9 @@ class WebIntelligenceContentScript {
     private schedulePageMemoryCaptureAutoRecheck(request: Record<string, unknown>): void {
         const interactions = (request.interactions || {}) as Record<string, unknown>;
         const metadata = (request.metadata || {}) as Record<string, unknown>;
+        if (request.sourceKind === 'visual_memory') {
+            return;
+        }
         const dwellMs = Number(interactions.dwellMs || 0);
         const wordCount = Number(metadata.wordCount || 0);
         if (wordCount < PAGE_MEMORY_CAPTURE_AUTO_MIN_WORDS) {
@@ -2508,12 +3249,15 @@ class WebIntelligenceContentScript {
         }
 
         this.clearPageMemoryCaptureChip();
+        const isVisualCapture = payload.request.sourceKind === 'visual_memory';
         const chip = document.createElement('button');
         chip.type = 'button';
-        chip.className = 'pai-memory-capture-page-chip';
+        chip.className = isVisualCapture
+            ? 'pai-memory-capture-page-chip pai-memory-capture-page-chip--visual'
+            : 'pai-memory-capture-page-chip';
         chip.dataset.contextKey = payload.contextKey;
-        chip.setAttribute('aria-label', '入库当前页面资料');
-        chip.title = `入库当前页面资料${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
+        chip.setAttribute('aria-label', isVisualCapture ? '保存当前网页视觉证据' : '入库当前页面资料');
+        chip.title = `${isVisualCapture ? '保存当前网页视觉证据' : '入库当前页面资料'}${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
 
         const plus = document.createElement('span');
         plus.className = 'pai-memory-capture-selection-dock-plus';
@@ -2522,7 +3266,7 @@ class WebIntelligenceContentScript {
 
         const label = document.createElement('span');
         label.className = 'pai-memory-capture-selection-dock-label';
-        label.textContent = '入库';
+        label.textContent = isVisualCapture ? '视觉' : '入库';
         chip.appendChild(label);
 
         const logo = document.createElement('img');
@@ -2551,6 +3295,11 @@ class WebIntelligenceContentScript {
     private clearPageMemoryCaptureChip(): void {
         this.pageCaptureChipElement?.remove();
         this.pageCaptureChipElement = null;
+    }
+
+    private clearVisualMemoryPreview(): void {
+        this.visualMemoryPreviewElement?.remove();
+        this.visualMemoryPreviewElement = null;
     }
 
     private placePageMemoryCaptureDock(dock: HTMLElement): void {
@@ -2587,7 +3336,11 @@ class WebIntelligenceContentScript {
             const capsuleId = response.result?.capsule?.id;
             const duplicate = Boolean(response.result?.capsule?.duplicate);
             if (duplicate) {
-                this.showContextToast('当前页面已在记忆中', undefined, { durationMs: 5000 });
+                this.showContextToast(
+                    '当前页面已在记忆中',
+                    buildSourceMemoryDetailToastAction(capsuleId),
+                    { durationMs: 5000 },
+                );
                 return;
             }
 
@@ -2629,7 +3382,296 @@ class WebIntelligenceContentScript {
         });
     }
 
+    private saveVisualMemoryCapture(payload: { contextKey: string; request: Record<string, unknown> }): void {
+        if (this.pageCaptureStoredContextKey === payload.contextKey) {
+            return;
+        }
+
+        const chip = this.pageCaptureChipElement instanceof HTMLButtonElement
+            ? this.pageCaptureChipElement
+            : null;
+        if (chip) {
+            chip.disabled = true;
+            chip.setAttribute('aria-busy', 'true');
+            chip.title = '正在保存视觉证据...';
+        }
+
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_SAVE_PAGE',
+            request: {
+                ...payload.request,
+                captureMode: 'manual',
+                captureReason: '用户点击网页 + 入库保存视觉证据',
+                note: '',
+            },
+        }, (response) => {
+            if (chrome.runtime.lastError || !response?.success) {
+                const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
+                if (chip) {
+                    chip.disabled = false;
+                    chip.removeAttribute('aria-busy');
+                    chip.title = '保存当前网页视觉证据';
+                }
+                this.showContextToast(`视觉证据保存失败：${message}`);
+                return;
+            }
+
+            this.clearPageMemoryCaptureChip();
+            this.pageCaptureStoredContextKey = payload.contextKey;
+            const result = asPlainObject(response.result);
+            const capsule = asPlainObject(result?.capsule);
+            const capsuleId = typeof capsule?.id === 'string' ? capsule.id : '';
+            const duplicate = Boolean(capsule?.duplicate);
+            this.showContextToast(
+                duplicate ? '这条视觉证据已在记忆中' : '已保存视觉证据',
+                capsuleId
+                    ? {
+                        label: '预览',
+                        ariaLabel: '预览已入库视觉证据并补充备注',
+                        onClick: () => this.showVisualMemorySavedPreview(payload, capsule),
+                    }
+                    : undefined,
+                { durationMs: 6500 },
+            );
+        });
+    }
+
+    private showVisualMemorySavedPreview(
+        payload: { contextKey: string; request: Record<string, unknown> },
+        capsule: Record<string, unknown> | null,
+    ): void {
+        this.ensureContextBubbleStyles();
+        if (!document.body) {
+            return;
+        }
+
+        this.clearVisualMemoryPreview();
+
+        const capsuleId = typeof capsule?.id === 'string' ? capsule.id : '';
+        const metadata = asPlainObject(payload.request.metadata);
+        const visualMemory = asPlainObject(metadata?.visualMemory);
+        const rect = asPlainObject(visualMemory?.rect);
+        const visualKind = normalizeText(
+            typeof visualMemory?.kind === 'string'
+                ? this.formatVisualMemoryKind(visualMemory.kind as VisualMemoryCandidate['kind'])
+                : '视觉证据',
+        );
+        const tagName = normalizeText(typeof visualMemory?.tagName === 'string' ? visualMemory.tagName : '');
+        const titleText = normalizeText(
+            typeof payload.request.sourceTitle === 'string' ? payload.request.sourceTitle : document.title,
+        ) || '当前网页';
+        const sourceUrl = normalizeText(
+            typeof payload.request.sourceUrl === 'string' ? payload.request.sourceUrl : window.location.href,
+        );
+        const previewText = normalizeText(
+            typeof capsule?.contentPreview === 'string'
+                ? capsule.contentPreview
+                : typeof payload.request.text === 'string'
+                    ? payload.request.text
+                    : '',
+        );
+        const summaryText = normalizeText(typeof capsule?.summary === 'string' ? capsule.summary : '');
+        const sizeText = rect
+            ? `${Math.round(Number(rect.width || 0))}x${Math.round(Number(rect.height || 0))} px`
+            : '';
+
+        const panel = document.createElement('form');
+        panel.className = 'pai-memory-capture-note-panel pai-visual-memory-preview-panel';
+        panel.dataset.contextKey = payload.contextKey;
+        panel.setAttribute('aria-label', '已保存视觉证据');
+        panel.addEventListener('mousedown', (event) => {
+            event.stopPropagation();
+        });
+        panel.addEventListener('submit', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.submitVisualMemoryNote(capsuleId, noteInput.value.trim(), panel);
+        });
+
+        const header = document.createElement('div');
+        header.className = 'pai-visual-memory-preview-header';
+        const heading = document.createElement('div');
+        heading.className = 'pai-memory-capture-note-title';
+        heading.textContent = '已入库：视觉证据';
+        header.appendChild(heading);
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'pai-visual-memory-preview-close';
+        close.setAttribute('aria-label', '关闭视觉证据预览');
+        close.textContent = '×';
+        close.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.clearVisualMemoryPreview();
+        });
+        header.appendChild(close);
+        panel.appendChild(header);
+
+        const source = document.createElement('div');
+        source.className = 'pai-visual-memory-preview-source';
+        source.textContent = sourceUrl ? `${titleText} · ${sourceUrl}` : titleText;
+        panel.appendChild(source);
+
+        const visualCard = document.createElement('div');
+        visualCard.className = 'pai-visual-memory-preview-card';
+        const visualBadge = document.createElement('div');
+        visualBadge.className = 'pai-visual-memory-preview-badge';
+        visualBadge.textContent = visualKind;
+        visualCard.appendChild(visualBadge);
+        const visualMeta = document.createElement('div');
+        visualMeta.className = 'pai-visual-memory-preview-meta';
+        visualMeta.textContent = [tagName, sizeText].filter(Boolean).join(' · ') || '网页视觉区域';
+        visualCard.appendChild(visualMeta);
+        panel.appendChild(visualCard);
+
+        const preview = document.createElement('div');
+        preview.className = 'pai-memory-capture-note-preview pai-visual-memory-preview-text';
+        preview.textContent = previewText || summaryText || '已保存当前网页中的视觉证据。';
+        panel.appendChild(preview);
+
+        if (summaryText && summaryText !== previewText) {
+            const summary = document.createElement('div');
+            summary.className = 'pai-visual-memory-preview-summary';
+            summary.textContent = `当前摘要：${summaryText}`;
+            panel.appendChild(summary);
+        }
+
+        const noteInput = document.createElement('textarea');
+        noteInput.className = 'pai-memory-capture-note-input';
+        noteInput.name = 'note';
+        noteInput.rows = 3;
+        noteInput.maxLength = 800;
+        noteInput.placeholder = '给这条视觉证据补充备注（可选）';
+        panel.appendChild(noteInput);
+
+        const error = document.createElement('div');
+        error.className = 'pai-memory-capture-note-error';
+        error.setAttribute('role', 'alert');
+        error.hidden = true;
+        panel.appendChild(error);
+
+        const status = document.createElement('div');
+        status.className = 'pai-visual-memory-preview-status';
+        status.hidden = true;
+        panel.appendChild(status);
+
+        const actions = document.createElement('div');
+        actions.className = 'pai-memory-capture-note-actions';
+
+        const detail = document.createElement('button');
+        detail.type = 'button';
+        detail.className = 'pai-memory-capture-note-button';
+        detail.textContent = '查看详情';
+        detail.disabled = !capsuleId;
+        detail.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!capsuleId) return;
+            const url = chrome.runtime.getURL(
+                `memory-exploring.html#/source-memory/${encodeURIComponent(capsuleId)}`,
+            );
+            window.open(url, '_blank', 'noopener');
+        });
+        actions.appendChild(detail);
+
+        const save = document.createElement('button');
+        save.type = 'submit';
+        save.className = 'pai-memory-capture-note-button pai-memory-capture-note-save';
+        save.textContent = '保存备注';
+        save.disabled = !capsuleId;
+        actions.appendChild(save);
+        panel.appendChild(actions);
+
+        document.body.appendChild(panel);
+        this.visualMemoryPreviewElement = panel;
+        this.placeVisualMemoryPreview(panel);
+        window.requestAnimationFrame(() => noteInput.focus());
+    }
+
+    private submitVisualMemoryNote(capsuleId: string, note: string, panel: HTMLElement): void {
+        const error = panel.querySelector<HTMLElement>('.pai-memory-capture-note-error');
+        const status = panel.querySelector<HTMLElement>('.pai-visual-memory-preview-status');
+        const saveButton = panel.querySelector<HTMLButtonElement>('.pai-memory-capture-note-save');
+        if (!capsuleId) {
+            if (error) {
+                error.textContent = '缺少入库记录 ID，暂时无法保存备注。';
+                error.hidden = false;
+            }
+            return;
+        }
+        if (!note) {
+            if (error) {
+                error.textContent = '备注为空；可以直接关闭预览，或输入备注后保存。';
+                error.hidden = false;
+            }
+            return;
+        }
+
+        if (error) {
+            error.textContent = '';
+            error.hidden = true;
+        }
+        if (status) {
+            status.textContent = '';
+            status.hidden = true;
+        }
+        if (saveButton) {
+            saveButton.disabled = true;
+            saveButton.textContent = '保存中...';
+        }
+
+        chrome.runtime.sendMessage({
+            type: 'MEMORY_CAPTURE_UPDATE_CAPSULE_NOTE',
+            capsuleId,
+            note,
+        }, (response) => {
+            if (chrome.runtime.lastError || !response?.success) {
+                const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.textContent = '保存备注';
+                }
+                if (error) {
+                    error.textContent = `备注保存失败：${message}`;
+                    error.hidden = false;
+                } else {
+                    this.showContextToast(`备注保存失败：${message}`);
+                }
+                return;
+            }
+
+            if (saveButton) {
+                saveButton.disabled = false;
+                saveButton.textContent = '已保存';
+            }
+            if (status) {
+                status.textContent = '备注已写入这条视觉证据，后续检索会带上这条说明。';
+                status.hidden = false;
+            }
+            this.showContextToast('视觉证据备注已保存');
+            window.setTimeout(() => {
+                if (saveButton && this.visualMemoryPreviewElement === panel) {
+                    saveButton.textContent = '保存备注';
+                }
+            }, 1200);
+        });
+    }
+
+    private placeVisualMemoryPreview(panel: HTMLElement): void {
+        const panelHeight = Math.max(260, panel.offsetHeight || 260);
+        const top = Math.max(
+            72,
+            Math.min(window.innerHeight - panelHeight - 16, 92),
+        );
+        panel.style.top = `${Math.round(top)}px`;
+    }
+
     private savePageMemoryCapture(payload: { contextKey: string; request: Record<string, unknown> }): void {
+        if (payload.request.sourceKind === 'visual_memory') {
+            this.saveVisualMemoryCapture(payload);
+            return;
+        }
+
         const note = window.prompt('给当前页面资料加个备注（可选）', '');
         if (note === null) {
             this.showContextToast('已取消保存当前页面资料');
@@ -2654,7 +3696,11 @@ class WebIntelligenceContentScript {
             this.clearPageMemoryCaptureChip();
             this.pageCaptureStoredContextKey = payload.contextKey;
             const duplicate = Boolean(response.result?.capsule?.duplicate);
-            this.showContextToast(duplicate ? '当前页面已在记忆中' : '已保存当前页面资料');
+            this.showContextToast(
+                duplicate ? '当前页面已在记忆中' : '已保存当前页面资料',
+                buildSourceMemoryDetailToastAction(response.result?.capsule?.id),
+                { durationMs: 5000 },
+            );
         });
     }
 
@@ -3270,6 +4316,33 @@ class WebIntelligenceContentScript {
         this.clearContextBubble();
     }
 
+    private siteMapToRecord(map: Map<string, number>): Record<string, number> {
+        return Object.fromEntries(map.entries());
+    }
+
+    private collectSiteEntries(
+        map: Map<string, number>,
+        hosts: string[],
+    ): Map<string, number> {
+        const entries = new Map<string, number>();
+        for (const host of hosts) {
+            const value = map.get(host);
+            if (value !== undefined) {
+                entries.set(host, value);
+            }
+        }
+        return entries;
+    }
+
+    private restoreSiteEntries(
+        map: Map<string, number>,
+        entries: Map<string, number>,
+    ): void {
+        for (const [host, value] of entries.entries()) {
+            map.set(host, value);
+        }
+    }
+
     private muteCurrentSite(): void {
         const host = this.getCurrentSiteMuteHost();
         const previousMutedAt = this.mutedSiteHosts.get(host);
@@ -3297,32 +4370,50 @@ class WebIntelligenceContentScript {
 
     private blockCurrentSite(): void {
         const host = this.getCurrentSiteMuteHost();
-        const previousBlockedAt = this.blockedSiteHosts.get(host);
-        const hadPreviousBlock = previousBlockedAt !== undefined;
-        const previousMutedAt = this.mutedSiteHosts.get(host);
-        const hadPreviousMute = previousMutedAt !== undefined;
+        const blockConflicts = removeContextSiteRecordConflicts(
+            host,
+            this.siteMapToRecord(this.blockedSiteHosts),
+        );
+        const previousBlockedEntries = this.collectSiteEntries(
+            this.blockedSiteHosts,
+            blockConflicts.removedHosts,
+        );
+        const muteConflicts = removeContextSiteRecordConflicts(
+            host,
+            this.siteMapToRecord(this.mutedSiteHosts),
+        );
+        const previousMutedEntries = this.collectSiteEntries(
+            this.mutedSiteHosts,
+            muteConflicts.removedHosts,
+        );
+        const allowConflicts = removeContextSiteRecordConflicts(
+            host,
+            this.siteMapToRecord(this.allowedSiteHosts),
+        );
+        const previousAllowedEntries = this.collectSiteEntries(
+            this.allowedSiteHosts,
+            allowConflicts.removedHosts,
+        );
 
+        this.blockedSiteHosts = new Map(Object.entries(blockConflicts.record));
+        this.mutedSiteHosts = new Map(Object.entries(muteConflicts.record));
+        this.allowedSiteHosts = new Map(Object.entries(allowConflicts.record));
         this.blockedSiteHosts.set(host, Date.now());
-        this.mutedSiteHosts.delete(host);
         this.saveSiteBlocks();
         this.saveSiteMutes();
+        this.saveSiteAllowlist();
         this.clearContextBubble();
         this.showContextToast('已永久关闭此网站记忆提示', {
             label: '撤销',
             ariaLabel: '撤销永久不提示此站点',
             onClick: () => {
-                if (hadPreviousBlock && previousBlockedAt !== undefined) {
-                    this.blockedSiteHosts.set(host, previousBlockedAt);
-                } else {
-                    this.blockedSiteHosts.delete(host);
-                }
-                if (hadPreviousMute && previousMutedAt !== undefined) {
-                    this.mutedSiteHosts.set(host, previousMutedAt);
-                } else {
-                    this.mutedSiteHosts.delete(host);
-                }
+                this.blockedSiteHosts.delete(host);
+                this.restoreSiteEntries(this.blockedSiteHosts, previousBlockedEntries);
+                this.restoreSiteEntries(this.mutedSiteHosts, previousMutedEntries);
+                this.restoreSiteEntries(this.allowedSiteHosts, previousAllowedEntries);
                 this.saveSiteBlocks();
                 this.saveSiteMutes();
+                this.saveSiteAllowlist();
                 this.showContextToast('已恢复此网站记忆提示');
                 this.scheduleContextMatch(0);
             },
@@ -3368,19 +4459,37 @@ class WebIntelligenceContentScript {
         const previousAllowlistMode = this.siteAllowlistMode;
         const previousAllowedAt = this.allowedSiteHosts.get(host);
         const hadPreviousAllow = previousAllowedAt !== undefined;
-        const previousBlockedAt = this.blockedSiteHosts.get(host);
-        const hadPreviousBlock = previousBlockedAt !== undefined;
-        const previousMutedAt = this.mutedSiteHosts.get(host);
-        const hadPreviousMute = previousMutedAt !== undefined;
+        const blockConflicts = removeContextSiteRecordConflicts(
+            host,
+            this.siteMapToRecord(this.blockedSiteHosts),
+        );
+        const previousBlockedEntries = this.collectSiteEntries(
+            this.blockedSiteHosts,
+            blockConflicts.removedHosts,
+        );
+        const muteConflicts = removeContextSiteRecordConflicts(
+            host,
+            this.siteMapToRecord(this.mutedSiteHosts),
+        );
+        const previousMutedEntries = this.collectSiteEntries(
+            this.mutedSiteHosts,
+            muteConflicts.removedHosts,
+        );
 
         this.allowedSiteHosts.set(host, Date.now());
         this.siteAllowlistMode = true;
-        this.blockedSiteHosts.delete(host);
-        this.mutedSiteHosts.delete(host);
+        this.blockedSiteHosts = new Map(Object.entries(blockConflicts.record));
+        this.mutedSiteHosts = new Map(Object.entries(muteConflicts.record));
         this.saveSiteAllowlist();
         this.saveSiteBlocks();
         this.saveSiteMutes();
-        this.showContextToast('已开启白名单并允许此网站', {
+        const removedConflictCount =
+            blockConflicts.removedHosts.length + muteConflicts.removedHosts.length;
+        this.showContextToast(
+            removedConflictCount > 0
+                ? `已开启白名单并允许此网站，已移除 ${removedConflictCount} 条覆盖规则`
+                : '已开启白名单并允许此网站',
+            {
             label: '撤销',
             ariaLabel: '撤销此站点白名单快捷设置',
             onClick: () => {
@@ -3390,23 +4499,16 @@ class WebIntelligenceContentScript {
                 } else {
                     this.allowedSiteHosts.delete(host);
                 }
-                if (hadPreviousBlock && previousBlockedAt !== undefined) {
-                    this.blockedSiteHosts.set(host, previousBlockedAt);
-                } else {
-                    this.blockedSiteHosts.delete(host);
-                }
-                if (hadPreviousMute && previousMutedAt !== undefined) {
-                    this.mutedSiteHosts.set(host, previousMutedAt);
-                } else {
-                    this.mutedSiteHosts.delete(host);
-                }
+                this.restoreSiteEntries(this.blockedSiteHosts, previousBlockedEntries);
+                this.restoreSiteEntries(this.mutedSiteHosts, previousMutedEntries);
                 this.saveSiteAllowlist();
                 this.saveSiteBlocks();
                 this.saveSiteMutes();
                 this.showContextToast('已恢复白名单设置');
                 this.scheduleContextMatch(0);
             },
-        });
+            },
+        );
     }
 
     private pruneMutedSiteHosts(): void {
@@ -3459,7 +4561,15 @@ class WebIntelligenceContentScript {
         });
     }
 
-    private markContextMatchIrrelevant(match: ContextRecallMatch, contextKey: string): void {
+    private markContextMatchIrrelevant(
+        match: ContextRecallMatch,
+        contextKey: string,
+        detailOptions: ContextRecallFeedbackDetailOptions = {},
+    ): void {
+        const previousDismissedAt = this.dismissedContextKeys.get(contextKey);
+        const hadPreviousDismissal = previousDismissedAt !== undefined;
+        const previousCachedMatch = contextMatchCache.get(contextKey);
+
         this.dismissedContextKeys.set(contextKey, Date.now());
         this.pruneDismissedContextKeys();
         contextMatchCache.set(contextKey, { match: null, matches: [], ts: Date.now() });
@@ -3471,45 +4581,100 @@ class WebIntelligenceContentScript {
                 : '已记录为不相关，后续会减少类似提示',
         );
 
-        this.submitContextRecallFeedback(match, 'negative');
+        this.submitContextRecallFeedback(match, 'negative', contextKey, detailOptions, (success) => {
+            if (success) return;
+
+            this.showContextToast('反馈记录失败，已仅在本页隐藏 30 分钟', {
+                label: '重新显示',
+                ariaLabel: '重新显示这条记忆提示',
+                onClick: () => {
+                    if (hadPreviousDismissal && previousDismissedAt !== undefined) {
+                        this.dismissedContextKeys.set(contextKey, previousDismissedAt);
+                    } else {
+                        this.dismissedContextKeys.delete(contextKey);
+                    }
+                    if (previousCachedMatch) {
+                        contextMatchCache.set(contextKey, previousCachedMatch);
+                    } else {
+                        contextMatchCache.delete(contextKey);
+                    }
+                    pruneContextMatchCache();
+                    this.showContextBubble(
+                        [match],
+                        contextKey,
+                        false,
+                        true,
+                        detailOptions.restoreBubbleOptions || {},
+                    );
+                },
+            }, { durationMs: 7000 });
+        });
     }
 
-    private markContextMatchRelevant(match: ContextRecallMatch): void {
+    private markContextMatchRelevant(
+        match: ContextRecallMatch,
+        contextKey: string,
+        onResult?: ContextRecallFeedbackResultHandler,
+        detailOptions: ContextRecallFeedbackDetailOptions = {},
+    ): void {
         this.showContextToast(
             isContextRehearsalMatch(match)
                 ? '已记录为预演提醒有用，后续会优先保留类似提示'
                 : '已记录为有用，后续会优先保留类似提示',
         );
-        this.submitContextRecallFeedback(match, 'positive');
+        this.submitContextRecallFeedback(match, 'positive', contextKey, detailOptions, (success, error) => {
+            if (!success) {
+                this.showContextToast(
+                    `反馈记录失败：${error || '请稍后再试'}`,
+                    undefined,
+                    { durationMs: 5000 },
+                );
+            }
+            onResult?.(success, error);
+        });
     }
 
     private submitContextRecallFeedback(
         match: ContextRecallMatch,
         action: 'positive' | 'negative',
+        contextKey?: string,
+        detailOptions: ContextRecallFeedbackDetailOptions = {},
+        onResult?: ContextRecallFeedbackResultHandler,
     ): void {
         chrome.runtime.sendMessage(
             {
                 type: 'CONTEXT_RECALL_FEEDBACK',
                 feedback: {
                     type: 'recall_quality',
-                    targetId: String(match.id || ''),
+                    targetId: getContextRecallFeedbackTargetId(match),
                     targetType: match.type,
                     action,
-                    detail: `web_passive_bubble:${this.getCurrentSiteMuteHost()}`,
+                    detail: buildContextRecallFeedbackDetail(
+                        match,
+                        action,
+                        contextKey || this.activeBubbleContextKey,
+                        this.getCurrentSiteMuteHost(),
+                        detailOptions,
+                    ),
                     rehearsalActivationId: getContextRehearsalActivationId(match),
                 },
             },
             (response) => {
                 if (chrome.runtime.lastError) {
+                    const error = chrome.runtime.lastError.message || 'runtime_error';
                     console.warn(
                         'Context recall feedback failed:',
-                        chrome.runtime.lastError.message,
+                        error,
                     );
+                    onResult?.(false, error);
                     return;
                 }
                 if (response?.success === false) {
                     console.warn('Context recall feedback rejected:', response.error);
+                    onResult?.(false, String(response.error || 'feedback_rejected'));
+                    return;
                 }
+                onResult?.(true);
             },
         );
     }
@@ -3876,6 +5041,18 @@ class WebIntelligenceContentScript {
                 background: #eff6ff;
             }
 
+            .pai-memory-capture-page-chip--visual {
+                border-color: rgba(14, 116, 144, 0.34);
+                color: #0e7490;
+            }
+
+            .pai-memory-capture-page-chip--visual:hover,
+            .pai-memory-capture-page-chip--visual:focus-visible {
+                width: 104px;
+                border-color: rgba(14, 116, 144, 0.58);
+                background: #ecfeff;
+            }
+
             .pai-memory-capture-selection-dock-plus {
                 flex: 0 0 14px;
                 width: 14px;
@@ -3919,6 +5096,179 @@ class WebIntelligenceContentScript {
                 transform: scale(1);
             }
 
+            .pai-memory-capture-note-panel {
+                position: fixed;
+                right: max(14px, env(safe-area-inset-right));
+                width: min(340px, calc(100vw - 28px));
+                box-sizing: border-box;
+                z-index: 2147483646;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                padding: 12px;
+                border-radius: 14px;
+                border: 1px solid rgba(37, 99, 235, 0.22);
+                background: rgba(255, 255, 255, 0.99);
+                box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+                color: #172033;
+                font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                letter-spacing: 0;
+                backdrop-filter: blur(12px);
+            }
+
+            .pai-memory-capture-note-title {
+                font-weight: 800;
+                color: #0f172a;
+            }
+
+            .pai-memory-capture-note-preview {
+                max-height: 64px;
+                overflow: auto;
+                padding: 8px;
+                border-radius: 10px;
+                background: #f8fafc;
+                color: #334155;
+                border: 1px solid rgba(226, 232, 240, 0.9);
+            }
+
+            .pai-memory-capture-note-reasons {
+                color: #475569;
+                font-size: 12px;
+            }
+
+            .pai-visual-memory-preview-panel {
+                border-color: rgba(14, 116, 144, 0.26);
+                max-height: min(560px, calc(100vh - 104px));
+                overflow-y: auto;
+            }
+
+            .pai-visual-memory-preview-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+            }
+
+            .pai-visual-memory-preview-close {
+                width: 26px;
+                height: 26px;
+                border: 1px solid rgba(148, 163, 184, 0.72);
+                border-radius: 8px;
+                background: #ffffff;
+                color: #334155;
+                cursor: pointer;
+                font: 800 16px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                padding: 0;
+            }
+
+            .pai-visual-memory-preview-source {
+                color: #475569;
+                font-size: 12px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .pai-visual-memory-preview-card {
+                min-height: 86px;
+                border-radius: 10px;
+                border: 1px solid rgba(14, 116, 144, 0.24);
+                background:
+                    linear-gradient(135deg, rgba(236, 254, 255, 0.96), rgba(248, 250, 252, 0.98));
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                gap: 7px;
+                padding: 12px;
+                box-sizing: border-box;
+            }
+
+            .pai-visual-memory-preview-badge {
+                width: fit-content;
+                max-width: 100%;
+                border-radius: 999px;
+                border: 1px solid rgba(14, 116, 144, 0.24);
+                background: rgba(14, 116, 144, 0.1);
+                color: #155e75;
+                padding: 4px 9px;
+                font-weight: 800;
+                font-size: 12px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .pai-visual-memory-preview-meta,
+            .pai-visual-memory-preview-summary,
+            .pai-visual-memory-preview-status {
+                color: #475569;
+                font-size: 12px;
+            }
+
+            .pai-visual-memory-preview-text {
+                max-height: 108px;
+            }
+
+            .pai-visual-memory-preview-status {
+                color: #0f766e;
+            }
+
+            .pai-memory-capture-note-input {
+                width: 100%;
+                min-height: 72px;
+                resize: vertical;
+                box-sizing: border-box;
+                border: 1px solid rgba(148, 163, 184, 0.82);
+                border-radius: 10px;
+                padding: 8px;
+                color: #0f172a;
+                background: #ffffff;
+                font: inherit;
+            }
+
+            .pai-memory-capture-note-input:focus {
+                outline: 2px solid rgba(37, 99, 235, 0.32);
+                border-color: rgba(37, 99, 235, 0.62);
+            }
+
+            .pai-memory-capture-note-error {
+                color: #b91c1c;
+                font-size: 12px;
+            }
+
+            .pai-memory-capture-note-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 8px;
+            }
+
+            .pai-memory-capture-note-button {
+                border: 1px solid rgba(148, 163, 184, 0.7);
+                border-radius: 999px;
+                padding: 6px 12px;
+                cursor: pointer;
+                color: #172033;
+                background: #ffffff;
+                font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                letter-spacing: 0;
+            }
+
+            .pai-memory-capture-note-save {
+                color: #ffffff;
+                background: #2563eb;
+                border-color: #2563eb;
+            }
+
+            .pai-memory-capture-note-button:hover,
+            .pai-memory-capture-note-button:focus-visible {
+                box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+            }
+
+            .pai-memory-capture-note-button:disabled {
+                cursor: progress;
+                opacity: 0.72;
+            }
+
             .pai-context-selection-action:hover,
             .pai-context-selection-action:focus-visible {
                 background: rgba(37, 99, 235, 0.08);
@@ -3940,6 +5290,8 @@ class WebIntelligenceContentScript {
             .pai-context-selection-action:focus-visible,
             .pai-context-selection-trigger:focus-visible,
             .pai-memory-capture-selection-dock:focus-visible,
+            .pai-memory-capture-note-button:focus-visible,
+            .pai-visual-memory-preview-close:focus-visible,
             .pai-memory-capture-page-chip:focus-visible,
             .pai-context-bubble:focus-visible {
                 outline: 2px solid #2563eb;
@@ -4025,6 +5377,12 @@ class WebIntelligenceContentScript {
                 border-color: rgba(177, 153, 125, 0.36);
                 color: #8c7a66;
                 cursor: default;
+            }
+
+            .pai-context-action-button svg {
+                width: 16px;
+                height: 16px;
+                pointer-events: none;
             }
 
             .pai-context-section-label {
@@ -4149,6 +5507,155 @@ class WebIntelligenceContentScript {
                 display: flex;
                 align-items: center;
                 gap: 7px;
+            }
+
+            .pai-context-feedback-layer {
+                position: absolute;
+                inset: 0;
+                z-index: 4;
+                pointer-events: none;
+            }
+
+            .pai-context-feedback-scrim {
+                position: absolute;
+                inset: 0;
+                border: 0;
+                padding: 0;
+                border-radius: 16px;
+                background: rgba(23, 32, 51, 0.08);
+                cursor: default;
+                pointer-events: auto;
+            }
+
+            .pai-context-feedback-sheet {
+                position: absolute;
+                left: 10px;
+                right: 10px;
+                bottom: 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                box-sizing: border-box;
+                padding: 11px;
+                border-radius: 12px;
+                border: 1px solid rgba(177, 153, 125, 0.46);
+                background: rgba(255, 253, 248, 0.99);
+                box-shadow: 0 16px 42px rgba(52, 32, 19, 0.24);
+                pointer-events: auto;
+            }
+
+            .pai-context-feedback-sheet-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+            }
+
+            .pai-context-feedback-sheet-title {
+                margin: 0;
+                color: #172033;
+                font-size: 13px;
+                font-weight: 800;
+                line-height: 1.3;
+            }
+
+            .pai-context-feedback-sheet-subtitle {
+                color: #6b5a49;
+                font-size: 11px;
+                line-height: 1.35;
+            }
+
+            .pai-context-feedback-close {
+                flex: 0 0 26px;
+                width: 26px;
+                height: 26px;
+                border: 1px solid rgba(177, 153, 125, 0.62);
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.74);
+                color: #5f4a38;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                line-height: 1;
+            }
+
+            .pai-context-feedback-reasons {
+                display: grid;
+                gap: 6px;
+            }
+
+            .pai-context-feedback-reason {
+                width: 100%;
+                min-height: 38px;
+                box-sizing: border-box;
+                border: 1px solid rgba(177, 153, 125, 0.38);
+                border-radius: 9px;
+                background: rgba(255, 255, 255, 0.78);
+                color: #172033;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                padding: 7px 9px;
+                text-align: left;
+            }
+
+            .pai-context-feedback-reason:hover,
+            .pai-context-feedback-reason:focus-visible {
+                background: #ffffff;
+                border-color: rgba(45, 112, 100, 0.36);
+                box-shadow: 0 0 0 3px rgba(45, 112, 100, 0.1);
+            }
+
+            .pai-context-feedback-reason-label {
+                font-size: 12px;
+                font-weight: 800;
+                line-height: 1.25;
+            }
+
+            .pai-context-feedback-reason-detail {
+                color: #6b7280;
+                font-size: 11px;
+                line-height: 1.28;
+            }
+
+            .pai-context-feedback-reason-icon {
+                color: #2d7064;
+                font-weight: 900;
+            }
+
+            .pai-context-feedback-note-toggle {
+                width: fit-content;
+                border: 0;
+                background: transparent;
+                color: #2d7064;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 800;
+                padding: 0;
+            }
+
+            .pai-context-feedback-note {
+                width: 100%;
+                min-height: 58px;
+                resize: vertical;
+                box-sizing: border-box;
+                border: 1px solid rgba(148, 163, 184, 0.78);
+                border-radius: 9px;
+                padding: 7px 8px;
+                color: #172033;
+                background: #ffffff;
+                font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                letter-spacing: 0;
+            }
+
+            .pai-context-feedback-status {
+                color: #7a6654;
+                font-size: 11px;
+                line-height: 1.35;
             }
 
             .pai-context-pager {
@@ -4386,6 +5893,8 @@ class WebIntelligenceContentScript {
                 .pai-memory-capture-selection-dock,
                 .pai-memory-capture-selection-dock-label,
                 .pai-memory-capture-selection-dock-logo,
+                .pai-memory-capture-note-panel,
+                .pai-visual-memory-preview-panel,
                 .pai-memory-capture-page-chip,
                 .pai-context-toast {
                     animation: none !important;
@@ -4605,6 +6114,10 @@ class WebIntelligenceContentScript {
         let currentIndex = 0;
         let moreMenuOpen = false;
         let positiveLockedMatchId: string | null = null;
+        let negativeFeedbackMatchId: string | null = null;
+        let negativeFeedbackNoteExpanded = false;
+        let negativeFeedbackNote = '';
+        const feedbackSurface = isSelectionSearch ? 'selection_memory_search_card' : 'web_passive_bubble';
 
         const getViewCopy = (match: ContextRecallMatch): ContextMatchViewCopy => {
             if (isSelectionSearch) {
@@ -4670,12 +6183,11 @@ class WebIntelligenceContentScript {
                 : '';
             const compactMetaItems = buildContextRecallCompactMetaItems(match)
                 .filter((item) => !/^记忆类型：/.test(item));
-            const sourceLinks = (match.links || [])
-                .map((link) => ({
-                    label: normalizeText(link.label) || '来源',
-                    url: sanitizeContextExternalUrl(link.url, window.location.href),
-                }))
-                .filter((link): link is { label: string; url: string } => !!link.url);
+            const sourceLinks = buildContextRecallSourceLinks(
+                match,
+                window.location.href,
+                sourceLabel,
+            );
 
             return {
                 copy: getViewCopy(match),
@@ -4705,6 +6217,48 @@ class WebIntelligenceContentScript {
                 <div class="pai-context-why-row" aria-label="${escapeHtmlAttribute(copy.whySectionLabel)}">
                     <span class="pai-context-why-label">${escapeHtml(copy.whyRowLabel)}</span>
                     ${chips.map((chip) => `<span class="pai-context-chip">${escapeHtml(chip)}</span>`).join('')}
+                </div>
+            `;
+        };
+
+        const renderNegativeFeedbackLayer = (
+            match: ContextRecallMatch,
+            view: ReturnType<typeof buildMatchView>,
+        ): string => {
+            if (negativeFeedbackMatchId !== match.id) return '';
+            const clippedTitle = clipContextLensTitle(view.titleText);
+            const reasonButtonsHtml = CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS
+                .map((reason) => `
+                    <button type="button" class="pai-context-feedback-reason" data-feedback-reason="${escapeHtmlAttribute(reason.value)}">
+                        <span>
+                            <span class="pai-context-feedback-reason-label">${escapeHtml(reason.label)}</span>
+                            <span class="pai-context-feedback-reason-detail">${escapeHtml(reason.detail)}</span>
+                        </span>
+                        <span class="pai-context-feedback-reason-icon" aria-hidden="true">›</span>
+                    </button>
+                `)
+                .join('');
+            return `
+                <div class="pai-context-feedback-layer" role="dialog" aria-label="这条记忆哪里不对">
+                    <button type="button" class="pai-context-feedback-scrim" aria-label="关闭反馈原因选择"></button>
+                    <div class="pai-context-feedback-sheet">
+                        <div class="pai-context-feedback-sheet-head">
+                            <div>
+                                <h4 class="pai-context-feedback-sheet-title">这条哪里不对</h4>
+                                <div class="pai-context-feedback-sheet-subtitle">${escapeHtml(clippedTitle || view.sourceLabel || '当前提示')}</div>
+                            </div>
+                            <button type="button" class="pai-context-feedback-close" aria-label="关闭反馈原因选择">×</button>
+                        </div>
+                        <div class="pai-context-feedback-reasons">
+                            ${reasonButtonsHtml}
+                        </div>
+                        ${negativeFeedbackNoteExpanded ? `
+                            <textarea class="pai-context-feedback-note" maxlength="260" placeholder="补充一句原因">${escapeHtml(negativeFeedbackNote)}</textarea>
+                        ` : `
+                            <button type="button" class="pai-context-feedback-note-toggle">补充原因</button>
+                        `}
+                        <div class="pai-context-feedback-status">选择后自动记录。</div>
+                    </div>
                 </div>
             `;
         };
@@ -4749,6 +6303,17 @@ class WebIntelligenceContentScript {
                     <div class="pai-context-selected-text">${escapeHtml(selectedText)}</div>
                 `
                 : '';
+            const moreMenuHtml = isSelectionSearch
+                ? `
+                    <button type="button" class="pai-context-menu-item pai-context-selection-close" role="menuitem">关闭本次划词结果</button>
+                `
+                : `
+                    <button type="button" class="pai-context-menu-item pai-context-dismiss" role="menuitem">隐藏此条记忆 30 分钟</button>
+                    <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem" ${siteAllowActionDisabled ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(siteAllowActionLabel)}</button>
+                    <button type="button" class="pai-context-menu-item pai-context-site-mute" role="menuitem">此网站今天不提示</button>
+                    <button type="button" class="pai-context-menu-item pai-context-page-block" role="menuitem">此页面永久不提示</button>
+                    <button type="button" class="pai-context-menu-item pai-context-menu-item--danger pai-context-site-block" role="menuitem">永久不提示此站点</button>
+                `;
 
             card.innerHTML = `
                 <div class="pai-context-card-scroll">
@@ -4763,11 +6328,7 @@ class WebIntelligenceContentScript {
                             <div class="pai-context-more-wrap">
                                 <button type="button" class="pai-context-icon-button pai-context-more" aria-label="更多控制" title="更多控制" aria-haspopup="menu" aria-expanded="${String(moreMenuOpen)}">⋯</button>
                                 <div class="pai-context-more-menu" role="menu" ${moreMenuOpen ? '' : 'hidden'}>
-                                    <button type="button" class="pai-context-menu-item pai-context-dismiss" role="menuitem">隐藏此条记忆 30 分钟</button>
-                                    <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem" ${siteAllowActionDisabled ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(siteAllowActionLabel)}</button>
-                                    <button type="button" class="pai-context-menu-item pai-context-site-mute" role="menuitem">此网站今天不提示</button>
-                                    <button type="button" class="pai-context-menu-item pai-context-page-block" role="menuitem">此页面永久不提示</button>
-                                    <button type="button" class="pai-context-menu-item pai-context-menu-item--danger pai-context-site-block" role="menuitem">永久不提示此站点</button>
+                                    ${moreMenuHtml}
                                 </div>
                             </div>
                         </div>
@@ -4796,12 +6357,13 @@ class WebIntelligenceContentScript {
                     <div class="pai-context-section-label pai-context-section-label--footer">${escapeHtml(view.copy.footerSectionLabel)}</div>
                     <div class="pai-context-footer">
                         <div class="pai-context-feedback" aria-label="反馈">
-                            <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="${isPositiveLocked ? '已标记有用' : escapeHtmlAttribute(view.copy.positiveAriaLabel)}" title="${isPositiveLocked ? '已标记有用' : '这条有用'}" ${isPositiveLocked ? 'disabled' : ''}>✓<span class="pai-sr-only">这条有用</span></button>
-                            <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="${escapeHtmlAttribute(view.copy.negativeAriaLabel)}" title="这条不相关" ${isPositiveLocked ? 'disabled' : ''}>×<span class="pai-sr-only">这条不相关</span></button>
+                            <button type="button" class="pai-context-action-button pai-context-recall-positive" aria-label="${isPositiveLocked ? '已标记有用' : escapeHtmlAttribute(view.copy.positiveAriaLabel)}" title="${isPositiveLocked ? '已标记有用' : '这条有用'}" ${isPositiveLocked ? 'disabled' : ''}>${CONTEXT_THUMB_UP_ICON_HTML}<span class="pai-sr-only">这条有用</span></button>
+                            <button type="button" class="pai-context-action-button pai-context-recall-negative" aria-label="${escapeHtmlAttribute(view.copy.negativeAriaLabel)}" title="不是这个意思" ${isPositiveLocked ? 'disabled' : ''}>${CONTEXT_THUMB_DOWN_ICON_HTML}<span class="pai-sr-only">不是这个意思</span></button>
                         </div>
                         ${pagerHtml}
                     </div>
                 </div>
+                ${renderNegativeFeedbackLayer(match, view)}
             `;
         };
 
@@ -4846,6 +6408,11 @@ class WebIntelligenceContentScript {
             }
             expanded = nextExpanded;
             moreMenuOpen = false;
+            if (!expanded) {
+                negativeFeedbackMatchId = null;
+                negativeFeedbackNoteExpanded = false;
+                negativeFeedbackNote = '';
+            }
             renderCard();
             setPeekVisible(false);
             card.style.display = expanded ? 'flex' : 'none';
@@ -4898,9 +6465,59 @@ class WebIntelligenceContentScript {
 
             if (target.closest('.pai-context-more')) {
                 event.preventDefault();
+                negativeFeedbackMatchId = null;
+                negativeFeedbackNoteExpanded = false;
+                negativeFeedbackNote = '';
                 moreMenuOpen = !moreMenuOpen;
                 renderCard();
                 card.querySelector<HTMLButtonElement>('.pai-context-more')?.focus();
+                return;
+            }
+
+            if (
+                target.closest('.pai-context-feedback-scrim') ||
+                target.closest('.pai-context-feedback-close')
+            ) {
+                event.preventDefault();
+                negativeFeedbackMatchId = null;
+                negativeFeedbackNoteExpanded = false;
+                negativeFeedbackNote = '';
+                renderCard();
+                card.querySelector<HTMLButtonElement>('.pai-context-recall-negative')?.focus();
+                return;
+            }
+
+            if (target.closest('.pai-context-feedback-note-toggle')) {
+                event.preventDefault();
+                negativeFeedbackNoteExpanded = true;
+                renderCard();
+                window.setTimeout(() => {
+                    card.querySelector<HTMLTextAreaElement>('.pai-context-feedback-note')?.focus();
+                }, 0);
+                return;
+            }
+
+            const feedbackReasonButton = target.closest<HTMLButtonElement>('.pai-context-feedback-reason');
+            if (feedbackReasonButton) {
+                event.preventDefault();
+                const feedbackReason = CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS.find(
+                    (reason) => reason.value === feedbackReasonButton.dataset.feedbackReason,
+                )?.value;
+                if (!feedbackReason) return;
+                const currentMatch = matches[currentIndex];
+                const note = clipContextFeedbackDetailValue(negativeFeedbackNote, 260);
+                negativeFeedbackMatchId = null;
+                negativeFeedbackNoteExpanded = false;
+                negativeFeedbackNote = '';
+                this.markContextMatchIrrelevant(currentMatch, contextKey, {
+                    reason: feedbackReason,
+                    note,
+                    surface: feedbackSurface,
+                    selectedText,
+                    interaction: 'memory_relevance_trainer',
+                    autoApplied: true,
+                    restoreBubbleOptions: { mode, selectedText },
+                });
                 return;
             }
 
@@ -4909,6 +6526,9 @@ class WebIntelligenceContentScript {
                 if (currentIndex > 0) {
                     currentIndex -= 1;
                     moreMenuOpen = false;
+                    negativeFeedbackMatchId = null;
+                    negativeFeedbackNoteExpanded = false;
+                    negativeFeedbackNote = '';
                     renderPeek();
                     renderCard();
                     card.querySelector<HTMLButtonElement>('.pai-context-prev')?.focus();
@@ -4921,6 +6541,9 @@ class WebIntelligenceContentScript {
                 if (currentIndex < matches.length - 1) {
                     currentIndex += 1;
                     moreMenuOpen = false;
+                    negativeFeedbackMatchId = null;
+                    negativeFeedbackNoteExpanded = false;
+                    negativeFeedbackNote = '';
                     renderPeek();
                     renderCard();
                     card.querySelector<HTMLButtonElement>('.pai-context-next')?.focus();
@@ -4934,19 +6557,46 @@ class WebIntelligenceContentScript {
                 return;
             }
 
+            if (target.closest('.pai-context-selection-close')) {
+                event.preventDefault();
+                this.clearContextBubble();
+                return;
+            }
+
             if (target.closest('.pai-context-recall-positive')) {
                 event.preventDefault();
                 const currentMatch = matches[currentIndex];
+                const previousLockedMatchId = positiveLockedMatchId;
                 positiveLockedMatchId = currentMatch.id;
                 moreMenuOpen = false;
+                negativeFeedbackMatchId = null;
+                negativeFeedbackNoteExpanded = false;
+                negativeFeedbackNote = '';
                 renderCard();
-                this.markContextMatchRelevant(currentMatch);
+                this.markContextMatchRelevant(currentMatch, contextKey, (success) => {
+                    if (success || positiveLockedMatchId !== currentMatch.id) return;
+                    positiveLockedMatchId = previousLockedMatchId;
+                    renderCard();
+                }, {
+                    surface: feedbackSurface,
+                    selectedText,
+                    interaction: 'context_recall_feedback',
+                    restoreBubbleOptions: { mode, selectedText },
+                });
                 return;
             }
 
             if (target.closest('.pai-context-recall-negative')) {
                 event.preventDefault();
-                this.markContextMatchIrrelevant(matches[currentIndex], contextKey);
+                const currentMatch = matches[currentIndex];
+                negativeFeedbackMatchId = currentMatch.id;
+                negativeFeedbackNoteExpanded = false;
+                negativeFeedbackNote = '';
+                moreMenuOpen = false;
+                renderCard();
+                window.setTimeout(() => {
+                    card.querySelector<HTMLButtonElement>('.pai-context-feedback-reason')?.focus();
+                }, 0);
                 return;
             }
 
@@ -4973,11 +6623,25 @@ class WebIntelligenceContentScript {
                 this.blockCurrentSite();
             }
         });
+        card.addEventListener('input', (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLTextAreaElement)) return;
+            if (!target.matches('.pai-context-feedback-note')) return;
+            negativeFeedbackNote = target.value.slice(0, 260);
+        });
         card.addEventListener('keydown', (event) => {
             if (event.key !== 'Escape') {
                 return;
             }
             event.preventDefault();
+            if (negativeFeedbackMatchId) {
+                negativeFeedbackMatchId = null;
+                negativeFeedbackNoteExpanded = false;
+                negativeFeedbackNote = '';
+                renderCard();
+                card.querySelector<HTMLButtonElement>('.pai-context-recall-negative')?.focus();
+                return;
+            }
             if (isSelectionSearch) {
                 this.clearContextBubble();
             } else {

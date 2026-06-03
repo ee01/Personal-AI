@@ -319,9 +319,9 @@ try {
   await page.getByRole('heading', { name: /新增定时消息/ }).waitFor({ timeout: 15000 });
   await page.locator('text=执行引擎').first().waitFor({ timeout: 15000 });
   await page.locator('text=AppScript · Mail fallback').first().waitFor({ timeout: 15000 });
-  await page.getByRole('button', { name: /Bot/ }).click();
+  await page.getByRole('button', { name: '🤖 Bot（机器人）' }).click();
   await page.locator('text=Jira Automation · Bot API').first().waitFor({ timeout: 15000 });
-  await page.getByRole('button', { name: /AI Report/ }).click();
+  await page.getByRole('button', { name: '🤖 AI Report' }).click();
   await page.locator('text=Jira Automation · AI/API').first().waitFor({ timeout: 15000 });
   await page.getByRole('button', { name: '取消' }).click();
 

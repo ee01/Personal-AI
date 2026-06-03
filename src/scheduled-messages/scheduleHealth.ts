@@ -12,6 +12,7 @@ import {
   getDefaultScheduleTimeLabel,
   isExecutorDrivenSchedule,
 } from './scheduleNextExecution.js';
+import { getScheduleQueuePressure } from './scheduleQueuePressure.js';
 
 const EXECUTOR_COMPENSATION_WINDOW_MINUTES = 30;
 const APPS_SCRIPT_GRACE_WINDOW_MINUTES = 1;
@@ -55,11 +56,15 @@ type ScheduleHealthMessage = Pick<
   | 'Exec_Log'
 >;
 
-function hasExplicitScheduleTime(message: Pick<ScheduledMessage, 'Schedule_Time'>): boolean {
+function hasExplicitScheduleTime(
+  message: Pick<ScheduledMessage, 'Schedule_Time'>,
+): boolean {
   return hasLocalScheduleTime(message.Schedule_Time);
 }
 
-function isTimelineTriggeredMessage(message: Pick<ScheduledMessage, 'Schedule_Date' | 'Timeline_Milestone'>): boolean {
+function isTimelineTriggeredMessage(
+  message: Pick<ScheduledMessage, 'Schedule_Date' | 'Timeline_Milestone'>,
+): boolean {
   return Boolean(!message.Schedule_Date && message.Timeline_Milestone);
 }
 
@@ -89,10 +94,16 @@ function parseScheduleDateTime(value: string): Date | null {
   return date;
 }
 
-function hasMissedMinuteWindow(scheduledAt: Date, now: Date, allowedLagMinutes: number): boolean {
+function hasMissedMinuteWindow(
+  scheduledAt: Date,
+  now: Date,
+  allowedLagMinutes: number,
+): boolean {
   const lastAllowedMinute = new Date(scheduledAt);
   lastAllowedMinute.setSeconds(0, 0);
-  lastAllowedMinute.setMinutes(lastAllowedMinute.getMinutes() + allowedLagMinutes);
+  lastAllowedMinute.setMinutes(
+    lastAllowedMinute.getMinutes() + allowedLagMinutes,
+  );
 
   const currentMinute = new Date(now);
   currentMinute.setSeconds(0, 0);
@@ -114,13 +125,18 @@ function isTerminalExecutionForDate(
   }
 
   const execLog = message.Exec_Log || '';
-  return execLog.includes('✅') ||
+  return (
+    execLog.includes('✅') ||
     execLog.includes('成功') ||
     execLog.includes('❌') ||
-    execLog.includes('失败');
+    execLog.includes('失败')
+  );
 }
 
-function getMissedExecutionAction(message: ScheduleHealthMessage, isExecutorDriven: boolean): string {
+function getMissedExecutionAction(
+  message: ScheduleHealthMessage,
+  isExecutorDriven: boolean,
+): string {
   if (!hasExplicitScheduleTime(message) && isExecutorDriven) {
     return '改成今天或未来日期，或填写明确时间。';
   }
@@ -139,7 +155,10 @@ function getNextCandidateMinute(now: Date): Date {
   return date;
 }
 
-function buildExplicitRecoverySuggestion(now: Date, reason: string): ScheduleHealthRecoverySuggestion {
+function buildExplicitRecoverySuggestion(
+  now: Date,
+  reason: string,
+): ScheduleHealthRecoverySuggestion {
   return buildExplicitRecoverySuggestionAt(getNextCandidateMinute(now), reason);
 }
 
@@ -159,6 +178,12 @@ function buildExplicitRecoverySuggestionAt(
 
 function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60000);
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function getMinuteKey(date: Date): number {
@@ -224,13 +249,99 @@ function getNextDefaultScheduleDate(
   message: ScheduleHealthMessage,
   now: Date,
 ): string {
-  const { hours, minutes } = parseLocalScheduleTime(getDefaultScheduleTime(message));
+  const { hours, minutes } = parseLocalScheduleTime(
+    getDefaultScheduleTime(message),
+  );
   const nextDefault = new Date(now);
   nextDefault.setHours(hours, minutes, 0, 0);
   if (nextDefault.getTime() <= now.getTime()) {
     nextDefault.setDate(nextDefault.getDate() + 1);
   }
   return formatLocalScheduleDate(nextDefault);
+}
+
+function hasNoTimeExecutorRunWindow(
+  message: ScheduleHealthMessage,
+  dateStr: string,
+  now: Date,
+): boolean {
+  const candidateMessage: ScheduleHealthMessage = {
+    ...message,
+    Schedule_Date: dateStr,
+    Schedule_Time: '',
+  };
+  const nextExecution = calculateScheduledMessageNextExecution(
+    candidateMessage,
+    now,
+  );
+  const slotTime = parseScheduleDateTime(nextExecution);
+  if (!slotTime) {
+    return false;
+  }
+
+  const queueStart = new Date(
+    Math.max(slotTime.getTime(), getNextCandidateMinute(now).getTime()),
+  );
+  const executionDayEnd = new Date(slotTime);
+  executionDayEnd.setHours(23, 59, 0, 0);
+  return queueStart.getTime() <= executionDayEnd.getTime();
+}
+
+function getAvailableNoTimeExecutorRecoveryDate(
+  message: ScheduleHealthMessage,
+  messages: ScheduleHealthMessage[],
+  now: Date,
+): string {
+  const searchStart = new Date(now);
+  searchStart.setHours(0, 0, 0, 0);
+
+  for (let dayOffset = 0; dayOffset <= 14; dayOffset++) {
+    const candidateDate = addDays(searchStart, dayOffset);
+    const dateStr = formatLocalScheduleDate(candidateDate);
+    if (!hasNoTimeExecutorRunWindow(message, dateStr, now)) {
+      continue;
+    }
+
+    const candidateMessage: ScheduleHealthMessage = {
+      ...message,
+      Schedule_Date: dateStr,
+      Schedule_Time: '',
+    };
+    const pressure = getScheduleQueuePressure(
+      messages as ScheduledMessage[],
+      candidateMessage as ScheduledMessage,
+      now,
+    );
+
+    if (!pressure?.exceedsExecutionWindow) {
+      return dateStr;
+    }
+  }
+
+  return formatLocalScheduleDate(addDays(searchStart, 1));
+}
+
+function buildNoTimeExecutorRecoverySuggestion(
+  message: ScheduleHealthMessage,
+  messages: ScheduleHealthMessage[],
+  now: Date,
+): ScheduleHealthRecoverySuggestion {
+  const dateStr = getAvailableNoTimeExecutorRecoveryDate(
+    message,
+    messages,
+    now,
+  );
+  const today = formatLocalScheduleDate(now);
+  return {
+    dateStr,
+    timeStr: '',
+    label: `${dateStr} ${getDefaultScheduleTimeLabel(message)}`,
+    clearsScheduleTime: true,
+    reason:
+      dateStr === today
+        ? '改到今天的执行器默认队列，下一轮 Jira Automation 轮询会继续处理。'
+        : '今天默认队列已没有可执行分钟，改到下一个可用执行器默认队列日。',
+  };
 }
 
 export function getScheduleHealthIssue(
@@ -316,9 +427,7 @@ export function getScheduleHealthIssue(
     topic: message.Topic || message.ID,
     nextExecution,
     isExecutorDriven,
-    summary: isExecutorDriven
-      ? '已超过 30 分钟补偿窗口'
-      : '执行时间已过',
+    summary: isExecutorDriven ? '已超过 30 分钟补偿窗口' : '执行时间已过',
     action: getMissedExecutionAction(message, isExecutorDriven),
   };
 }
@@ -328,7 +437,7 @@ export function getScheduleHealthIssues(
   now = new Date(),
 ): ScheduleHealthIssue[] {
   return messages
-    .map(message => getScheduleHealthIssue(message, now))
+    .map((message) => getScheduleHealthIssue(message, now))
     .filter((issue): issue is ScheduleHealthIssue => Boolean(issue));
 }
 
@@ -356,14 +465,7 @@ export function getScheduleHealthRecoverySuggestion(
   });
 
   if (isExecutorDriven) {
-    const dateStr = formatLocalScheduleDate(now);
-    return {
-      dateStr,
-      timeStr: '',
-      label: `${dateStr} ${getDefaultScheduleTimeLabel(message)}`,
-      clearsScheduleTime: true,
-      reason: '改到今天的执行器默认队列，下一轮 Jira Automation 轮询会继续处理。',
-    };
+    return buildNoTimeExecutorRecoverySuggestion(message, [message], now);
   }
 
   const dateStr = getNextDefaultScheduleDate(message, now);
@@ -381,10 +483,17 @@ export function getScheduleHealthRecoverySuggestions(
   now = new Date(),
 ): Map<string, ScheduleHealthRecoverySuggestion> {
   const issues = getScheduleHealthIssues(messages, now);
-  const issueIds = new Set(issues.map(issue => issue.messageId));
-  const messagesById = new Map(messages.map(message => [message.ID, message]));
+  const issueIds = new Set(issues.map((issue) => issue.messageId));
+  const messagesById = new Map(
+    messages.map((message) => [message.ID, message]),
+  );
   const suggestions = new Map<string, ScheduleHealthRecoverySuggestion>();
-  const reservedExplicitMinutes = getFutureExplicitReservationKeys(messages, issueIds, now);
+  const reservedExplicitMinutes = getFutureExplicitReservationKeys(
+    messages,
+    issueIds,
+    now,
+  );
+  const workingMessages = messages.map((message) => ({ ...message }));
   let explicitCursor = getNextCandidateMinute(now);
 
   for (const issue of issues) {
@@ -400,16 +509,40 @@ export function getScheduleHealthRecoverySuggestions(
 
       suggestions.set(
         issue.messageId,
-        buildExplicitRecoverySuggestionAt(explicitCursor, getExplicitRecoveryReason(issue)),
+        buildExplicitRecoverySuggestionAt(
+          explicitCursor,
+          getExplicitRecoveryReason(issue),
+        ),
       );
       reservedExplicitMinutes.add(getMinuteKey(explicitCursor));
+      const workingMessage = workingMessages.find(
+        (candidate) => candidate.ID === issue.messageId,
+      );
+      if (workingMessage) {
+        const { dateStr, timeStr } = suggestions.get(issue.messageId)!;
+        workingMessage.Schedule_Date = dateStr;
+        workingMessage.Schedule_Time = timeStr;
+      }
       explicitCursor = addMinutes(explicitCursor, 1);
       continue;
     }
 
-    const suggestion = getScheduleHealthRecoverySuggestion(message, now);
+    const isExecutorDriven = isExecutorDrivenSchedule({
+      Push_Method: message.Push_Method,
+      AI_Endpoint: message.AI_Endpoint,
+    });
+    const suggestion = isExecutorDriven
+      ? buildNoTimeExecutorRecoverySuggestion(message, workingMessages, now)
+      : getScheduleHealthRecoverySuggestion(message, now);
     if (suggestion) {
       suggestions.set(issue.messageId, suggestion);
+      const workingMessage = workingMessages.find(
+        (candidate) => candidate.ID === issue.messageId,
+      );
+      if (workingMessage) {
+        workingMessage.Schedule_Date = suggestion.dateStr;
+        workingMessage.Schedule_Time = suggestion.timeStr;
+      }
     }
   }
 
@@ -421,9 +554,15 @@ export function formatScheduleHealthIssue(issue: ScheduleHealthIssue): string {
   return `${nextLabel}${issue.summary}，${issue.action}`;
 }
 
-export function formatScheduleHealthSummary(issues: ScheduleHealthIssue[]): string {
-  const invalidCount = issues.filter(issue => issue.code === 'invalid_time').length;
-  const missedCount = issues.filter(issue => issue.code === 'missed_execution').length;
+export function formatScheduleHealthSummary(
+  issues: ScheduleHealthIssue[],
+): string {
+  const invalidCount = issues.filter(
+    (issue) => issue.code === 'invalid_time',
+  ).length;
+  const missedCount = issues.filter(
+    (issue) => issue.code === 'missed_execution',
+  ).length;
   const parts = [`${issues.length} 条 Active 定时消息需要处理`];
 
   if (missedCount > 0) {

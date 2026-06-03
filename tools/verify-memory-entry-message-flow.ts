@@ -55,6 +55,9 @@ const storage: StorageMap = {
 
 const ingests: any[] = [];
 const botMessages: any[] = [];
+const outreachBaselineAt = Math.floor(
+  Date.parse('2026-04-14T23:00:00.000Z') / 1000,
+);
 
 function installChromeMock() {
   const local = {
@@ -173,6 +176,38 @@ function installFetchMock() {
         );
       }
 
+      if (prompt.includes('multi delivery regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              data: [
+                {
+                  team_name: 'Ops Triage',
+                  team_id: 'ops-triage',
+                  sender: 'Morgan Lee',
+                  message_content:
+                    'multi delivery regression should hit summary and alert',
+                  summary: '同一条消息同时命中摘要规则和即时通知规则',
+                  datetime: '2026-04-15T02:00:00.000Z',
+                  post_id: 'post-multi-delivery-1',
+                  matched_rule:
+                    '[RULE_REF:manual:digest-only] Summary digest; [RULE_REF:manual:immediate-alert] Immediate alert',
+                  matched_rule_refs: [
+                    'manual:digest-only',
+                    'manual:immediate-alert',
+                  ],
+                  matched_rule_ids: [],
+                  reply_advice: '',
+                  user_relation_type: 'general_interest',
+                  contextMessages: [],
+                },
+              ],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       return new Response(
         JSON.stringify({
           response: JSON.stringify({
@@ -212,7 +247,7 @@ function installFetchMock() {
         'http://mock-memory/api/v1/outreach/templates/runtime-status',
       )
     ) {
-      const now = Date.now();
+      const now = outreachBaselineAt;
       return new Response(
         JSON.stringify({
           items: [
@@ -366,6 +401,67 @@ async function main() {
     botMessages.length,
     0,
     'out-of-scope hallucinated rule refs must not notify',
+  );
+
+  storage.concernedItems = [
+    {
+      id: 'digest-only',
+      text: 'Summary digest',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+      digestConfig: {
+        enabled: true,
+        frequency: 'daily',
+        preferredHour: 9,
+      },
+    },
+    {
+      id: 'immediate-alert',
+      text: 'Immediate alert',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+    },
+  ];
+  delete storage.digestQueues;
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Ops Triage',
+        groupId: 'ops-triage',
+        standalone: [
+          {
+            creator: 'Morgan Lee',
+            time: '2026-04-15T02:00:00.000Z',
+            id: 'post-multi-delivery-1',
+            text: 'multi delivery regression should hit summary and alert',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  );
+
+  assert.equal(ingests.length, 1, 'multi-rule match should still ingest once');
+  assert.equal(
+    botMessages.length,
+    1,
+    'digest-only first match must not suppress a later immediate notification rule',
+  );
+  const digestItems = storage.digestQueues?.concerned_items_daily?.items || [];
+  assert.equal(
+    digestItems.length,
+    1,
+    'multi-rule match should enqueue the digest-enabled rule once',
+  );
+  assert.equal(digestItems[0]?.data?.ruleId, 'digest-only');
+  assert.equal(
+    digestItems[0]?.id,
+    'concerned_digest-only_post-multi-delivery-1',
   );
 
   console.log('verify-memory-entry-message-flow: ok');

@@ -79,6 +79,14 @@ const exportedRule = {
         body: '{{issue.assignee.accountId}}',
       },
     },
+    {
+      id: 'source-component-2',
+      component: 'ACTION',
+      type: 'vendor.release.deployment.action',
+      value: {
+        deploymentTemplateId: 'release-gate',
+      },
+    },
   ],
   projects: [{ projectId: '11111', projectKey: 'SRC', projectTypeKey: 'software' }],
   labels: ['release'],
@@ -199,15 +207,19 @@ try {
   assert.match(previewText, /Imported name/);
   assert.match(previewText, /\(Imported by Personal AI\) Notify release owner \(2\)/);
   assert.match(previewText, /Detected environment bindings/);
+  assert.match(previewText, /Custom\/app components/);
+  assert.match(previewText, /ACTION: vendor\.release\.deployment\.action/);
   assert.match(previewText, /Enablement checks/);
   assert.match(previewText, /Review note/);
   assert.match(previewText, /Activation plan/);
   assert.match(previewText, /Map target-project search dependencies/);
   assert.match(previewText, /Reconnect external effects and credentials/);
+  assert.match(previewText, /Confirm app-provided components are available/);
   assert.match(previewText, /Test dynamic trigger behavior/);
   assert.match(previewText, /Enablement review packet/);
   assert.match(previewText, /Copy review packet/);
   assert.match(previewText, /Secrets/);
+  assert.match(previewText, /Authorization: hidden secret value/);
   assert.match(previewText, /Custom fields/);
   assert.match(previewText, /Connections/);
   assert.match(previewText, /Sensitive values/);
@@ -220,6 +232,9 @@ try {
   assert.match(previewText, /\/SRC\/release\/REDACTED\?apiToken=REDACTED/);
   assert.match(previewText, /Smart values/);
   assert.match(previewText, /I reviewed the high-risk bindings before creating this disabled copy/);
+  assert.match(previewText, /6 high-risk item\(s\): Target project scope, JQL and filters, Source project references, External effects and credentials, 2 more/);
+  assert.match(previewText, /Next: Map target-project search dependencies/);
+  assert.match(previewText, /Confirm these before Jira creates the disabled copy/);
 
   await frame.getByRole('button', { name: 'Copy review packet' }).click();
   await frame.getByText('Review packet copied.').waitFor({ timeout: 5000 });
@@ -264,8 +279,10 @@ try {
   assert.match(createPayload.description, /Top detected bindings: .*JQL \/ filters \(1\): project = SRC/);
   assert.match(createPayload.description, /Activation plan: .*Map target-project search dependencies/);
   assert.match(createPayload.description, /Reconnect external effects and credentials/);
+  assert.match(createPayload.description, /Confirm app-provided components are available/);
   assert.match(createPayload.description, /Test dynamic trigger behavior/);
-  assert.match(createPayload.description, /Secrets \(2\): release-webhook-token \| hidden secret value/);
+  assert.match(createPayload.description, /Custom \/ app components \(1\): ACTION: vendor\.release\.deployment\.action/);
+  assert.match(createPayload.description, /Secrets \(2\): release-webhook-token \| Authorization: hidden secret value/);
   assert.match(createPayload.description, /Connections \(1\): connectionId: prod-webhook-connection/);
   assert.match(createPayload.description, /Sensitive \/ hidden values \(5\): URL query apiToken: sensitive value present \| URL path segment: sensitive value present, 3 more/);
   assert.doesNotMatch(createPayload.description, /prod-api-token-123/);

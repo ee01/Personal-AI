@@ -691,7 +691,7 @@ export function getTimelineCacheProjectStatus(
     return undefined;
   }
 
-  return status.projects.find(item => item.project === project);
+  return status.projects.find(item => item.project === project || item.paramKey === project);
 }
 
 export function getTimelineCacheReadinessBlockText(input: {

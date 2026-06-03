@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance } from 'fastify';
 
+import { UserWritingStyleMemoryService } from '../core/UserWritingStyleMemoryService.js';
+import type { UserContext } from '../core/UserContextManager.js';
+import { now } from '../utils/time.js';
+
 type AmbientCalibrationSurface =
   | 'compose_assist'
   | 'memory_lens'
@@ -31,7 +35,8 @@ type AmbientCalibrationAction =
   | 'confirmed'
   | 'edited'
   | 'ignored'
-  | 'manual_added';
+  | 'manual_added'
+  | 'downstream_reaction';
 
 type AmbientCalibrationStrength = 'weak' | 'medium' | 'strong';
 type AmbientCalibrationPolarity =
@@ -124,6 +129,7 @@ const ambientCalibrationTraceBodySchema = {
         'edited',
         'ignored',
         'manual_added',
+        'downstream_reaction',
       ],
     },
     strength: {
@@ -161,8 +167,60 @@ const ambientCalibrationTraceBodySchema = {
   additionalProperties: false,
 };
 
+const forbiddenRawTextKeys = new Set([
+  'rawtext',
+  'rawfinaltext',
+  'finaltext',
+  'suggestiontext',
+  'composertext',
+  'rawsuggestiontext',
+  'rawcomposertext',
+  'senttext',
+  'fulltext',
+  'messagetext',
+]);
+
 function nowMs(): number {
   return Date.now();
+}
+
+function normalizePayloadKey(key: string): string {
+  return key.replace(/[\s_-]+/g, '').toLowerCase();
+}
+
+function findForbiddenRawTextField(
+  value: unknown,
+  path = 'payload',
+): string | null {
+  if (!value || typeof value !== 'object') return null;
+
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const nested = findForbiddenRawTextField(
+        value[index],
+        `${path}[${index}]`,
+      );
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  for (const [key, nestedValue] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    const normalizedKey = normalizePayloadKey(key);
+    if (
+      normalizedKey !== 'rawtextstored' &&
+      forbiddenRawTextKeys.has(normalizedKey)
+    ) {
+      return `${path}.${key}`;
+    }
+
+    const nested = findForbiddenRawTextField(nestedValue, `${path}.${key}`);
+    if (nested) return nested;
+  }
+
+  return null;
 }
 
 export async function ambientCalibrationRoutes(
@@ -192,13 +250,22 @@ export async function ambientCalibrationRoutes(
           });
         }
       }
+      const forbiddenNestedField = findForbiddenRawTextField({
+        redactedDiff: trace.redactedDiff,
+        metadata: trace.metadata,
+      });
+      if (forbiddenNestedField) {
+        return reply.code(400).send({
+          error: `${forbiddenNestedField} is not allowed in ambient calibration traces`,
+        });
+      }
       const id = trace.id || randomUUID();
       const createdAt =
         Number.isFinite(trace.createdAt) && trace.createdAt
           ? Math.floor(trace.createdAt)
           : nowMs();
 
-      request.userContext.db
+      const result = request.userContext.db
         .prepare(
           `INSERT OR IGNORE INTO ambient_calibration_traces
             (
@@ -232,11 +299,81 @@ export async function ambientCalibrationRoutes(
           createdAt,
         );
 
+      let writingStyleMemory:
+        | {
+            processed: boolean;
+            memoryIds: string[];
+            promotedProfileItemIds: string[];
+          }
+        | undefined;
+      if (result.changes > 0 && trace.surface === 'compose_assist') {
+        const service = new UserWritingStyleMemoryService(
+          request.userContext.db,
+          request.userId,
+        );
+        writingStyleMemory = service.processAmbientTrace({
+          id,
+          userId: request.userId,
+          surface: trace.surface,
+          sceneKey: trace.sceneKey,
+          action: trace.action,
+          strength: trace.strength,
+          polarity: trace.polarity,
+          evidenceRefs: trace.evidenceRefs,
+          redactedDiff: trace.redactedDiff,
+          metadata: trace.metadata,
+          createdAt,
+        });
+        request.userContext.db
+          .prepare(
+            `UPDATE ambient_calibration_traces
+                SET processed_at = ?
+              WHERE id = ?`,
+          )
+          .run(now(), id);
+        if (writingStyleMemory.promotedProfileItemIds.length) {
+          await refreshUserCoreSnapshot(request.userContext);
+        }
+      }
+
       return reply.send({
         status: 'ok',
         traceId: id,
-        stored: true,
+        stored: result.changes > 0,
+        writingStyleMemory,
       });
     },
   );
+}
+
+async function refreshUserCoreSnapshot(
+  userContext: UserContext,
+): Promise<void> {
+  try {
+    const currentTime = now();
+    const content = userContext.profileManager.renderUserCore(50);
+
+    if (userContext.userDataManager?.isInitialized) {
+      userContext.userDataManager.writeFile('USER_CORE.md', content);
+      const { MarkdownManager } = await import('../core/MarkdownManager.js');
+      const markdownManager = new MarkdownManager(
+        userContext.db,
+        userContext.userDataManager.rootDir,
+      );
+      await markdownManager.reindexFile('USER_CORE.md');
+    }
+
+    userContext.db
+      .prepare(
+        `UPDATE profile_sync_state
+           SET profile_dirty = 0, last_snapshot_at = ?
+         WHERE id = 'singleton'`,
+      )
+      .run(currentTime);
+  } catch (error) {
+    console.warn(
+      '[ambientCalibrationRoutes] Failed to refresh USER_CORE snapshot:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }

@@ -125,6 +125,21 @@ describe('WeeklyReporter push targets', () => {
       .prepare("SELECT COUNT(*) AS cnt FROM notification_records WHERE type = 'weekly_report'")
       .get() as { cnt: number };
     expect(row.cnt).toBe(1);
+    const notification = db
+      .prepare(
+        "SELECT payload_json FROM notification_records WHERE type = 'weekly_report' LIMIT 1",
+      )
+      .get() as { payload_json: string };
+    const payload = JSON.parse(notification.payload_json) as {
+      reportSummary?: string;
+      reportExcerpt?: string;
+      messageCount?: number;
+      reflectionCount?: number;
+    };
+    expect(payload.messageCount).toBe(1);
+    expect(payload.reflectionCount).toBe(0);
+    expect(payload.reportSummary).toContain('Project launch is on track');
+    expect(payload.reportExcerpt).toContain('Review rollout notes');
   });
 });
 

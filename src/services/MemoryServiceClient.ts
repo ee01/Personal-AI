@@ -6,10 +6,7 @@
  * using the standard fetch API and chrome.storage.local for configuration.
  */
 
-import {
-  DEFAULT_UI_LANGUAGE,
-  readExtensionUiPreferences,
-} from '../i18n';
+import { DEFAULT_UI_LANGUAGE, readExtensionUiPreferences } from '../i18n';
 
 // ============================================================================
 // Configuration
@@ -41,7 +38,12 @@ export interface IngestPayload {
     | 'meeting'
     | 'calendar'
     | 'ai_chat'
-    | 'doubao';
+    | 'doubao'
+    | 'chatgpt'
+    | 'doubao_chat'
+    | 'codex_cli'
+    | 'claude_code_cli'
+    | 'cursor_agent_cli';
   scope?: 'work' | 'personal';
   source?: string;
   sender?: string;
@@ -63,8 +65,18 @@ export interface IngestDecision {
     | 'extraction_unavailable'
     | 'duplicate_post_id'
     | 'duplicate_content_source_sender'
+    | 'indexing_failed'
     | 'insert_failed';
   salienceScore?: number;
+  salienceComponents?: {
+    importance: number;
+    frequency: number;
+    recency: number;
+    surprise: number;
+    redundancy: number;
+    userInterestBoost?: number;
+  };
+  extractionStatus?: 'extracted' | 'skipped' | 'unavailable';
   shouldIndex?: boolean;
   indexed?: boolean;
   duplicateOf?: string;
@@ -104,6 +116,13 @@ export type RecallPresentationHint =
   | 'meeting_pilot'
   | 'research'
   | 'dashboard';
+export type RecallLifecycleMode =
+  | 'active_default'
+  | 'passive_surface'
+  | 'composer_surface'
+  | 'historical'
+  | 'explicit_search'
+  | 'audit';
 export type RecallScope = 'work' | 'personal' | 'both' | 'all';
 export type RecallChannelName = 'vector' | 'fts' | 'graph' | 'time';
 export type RecallChannelStatus = 'hit' | 'empty' | 'skipped' | 'failed';
@@ -128,6 +147,7 @@ export interface RecallOptions {
   minImportance?: number;
   sourceTypes?: string[];
   presentationHint?: RecallPresentationHint;
+  lifecycleMode?: RecallLifecycleMode;
   previewMaxLength?: number;
   scope?: RecallScope;
   analysisMode?: RecallAnalysisMode;
@@ -174,7 +194,11 @@ export interface RecallItem {
   };
 }
 
-export type MemoryFeedbackTargetType = 'message' | 'chunk' | 'entity';
+export type MemoryFeedbackTargetType =
+  | 'message'
+  | 'chunk'
+  | 'entity'
+  | 'source_memory';
 export type MemoryFeedbackAction = 'positive' | 'negative' | 'clear';
 export type MemoryFeedbackType =
   | 'recall_quality'
@@ -189,11 +213,63 @@ export interface MemoryFeedbackPayload {
   detail?: string;
 }
 
+export interface RecallPatchReplay {
+  id: string;
+  patchId: string;
+  before: Array<Record<string, unknown>>;
+  after: Array<Record<string, unknown>>;
+  changed: boolean;
+  warnings: string[];
+  createdAt: number;
+}
+
+export interface RecallRelevancePatch {
+  id: string;
+  userId: string;
+  status: 'active' | 'pending_confirm' | 'paused' | 'deleted';
+  source: string;
+  sceneSignature: string;
+  scene: Record<string, unknown>;
+  targetType: MemoryFeedbackTargetType | 'rehearsal';
+  targetId: string;
+  reason: string;
+  action: 'hide_for_scene' | 'demote_for_scene';
+  scope: 'scene_only' | 'same_group' | 'same_project';
+  autoApplied: boolean;
+  userNote?: string;
+  evidence: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number;
+}
+
+export interface RecallRelevanceRecordResult {
+  status: 'patched' | 'cleared' | 'ignored';
+  patch?: RecallRelevancePatch;
+  replay?: RecallPatchReplay;
+  trainingCaseId?: string;
+  clearedPatchIds?: string[];
+}
+
+export interface RecallRelevanceFeedbackPayload {
+  targetType: MemoryFeedbackTargetType | 'rehearsal';
+  targetId: string;
+  action?: MemoryFeedbackAction;
+  reason?: string;
+  surface?: string;
+  scope?: string;
+  detail?: string | Record<string, unknown>;
+  scene?: Record<string, unknown>;
+  autoApplied?: boolean;
+  userNote?: string;
+}
+
 export interface MemoryFeedbackResult {
   status: 'ok';
   targetType?: MemoryFeedbackTargetType;
   previousAction?: MemoryFeedbackAction;
   appliedDelta?: number;
+  relevancePatch?: RecallRelevanceRecordResult;
 }
 
 // ---------- Active recall blocks ----------
@@ -431,15 +507,47 @@ export interface ContextRecallMatch {
   timestamp?: number;
 }
 
+export interface ContextRecallSceneSummary {
+  people?: string[];
+  topics?: string[];
+  projects?: string[];
+  source?: string[];
+}
+
+export interface ContextRecallAutopilotQuietReason {
+  reason: string;
+  label: string;
+  count: number;
+}
+
+export interface ContextRecallAutopilotDecision {
+  mode: 'silent' | 'chip' | 'card' | 'context_pack';
+  summary: string;
+  candidateCount: number;
+  shownCount: number;
+  strongCount: number;
+  possibleCount: number;
+  quietedCount: number;
+  hiddenCount: number;
+  lowInformationCount: number;
+  sourceExcludedCount: number;
+  duplicateMergedCount: number;
+  quietReasons: ContextRecallAutopilotQuietReason[];
+  sceneAnchors?: ContextRecallSceneSummary;
+  gates: string[];
+}
+
 export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch: ContextRecallMatch | null;
   queryTimeMs: number;
+  autopilot?: ContextRecallAutopilotDecision;
   debug?: {
     normalizedQuery: string;
     channelsHit: string[];
     rejectedReason?: string;
     suppressionReasons?: string[];
+    autopilot?: ContextRecallAutopilotDecision;
   };
 }
 
@@ -553,6 +661,9 @@ export type ComposerSurface =
   | 'doubao'
   | 'claude'
   | 'gemini'
+  | 'codex_cli'
+  | 'claude_code_cli'
+  | 'cursor_agent_cli'
   | 'generic_agent';
 
 export type ComposerContextType =
@@ -565,6 +676,8 @@ export type ComposerScenario =
   | 'thread_reply'
   | 'jira_comment'
   | 'web_agent_prompt'
+  | 'compose_to_ai'
+  | 'agent_compose'
   | 'document_note';
 
 export type ComposerContextItemType =
@@ -634,7 +747,7 @@ export interface ComposerAssistRequest {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   title?: string;
   snippet: string;
   sourceLabel?: string;
@@ -690,7 +803,8 @@ export type AmbientCalibrationAction =
   | 'confirmed'
   | 'edited'
   | 'ignored'
-  | 'manual_added';
+  | 'manual_added'
+  | 'downstream_reaction';
 
 export type AmbientCalibrationStrength = 'weak' | 'medium' | 'strong';
 export type AmbientCalibrationPolarity =
@@ -788,6 +902,7 @@ export interface StorylineDraftResponse {
   audience: string;
   targetArtifact: StorylineSuggestedArtifact;
   segments: StorylineDraftSegment[];
+  evidence?: ComposerAssistEvidence[];
   gaps: string[];
   riskNotes: string[];
   artifactText: string;
@@ -927,6 +1042,18 @@ export interface MeetingRecord {
   decisionCount?: number;
 }
 
+export type MeetingArchiveStatusFilter =
+  | 'all'
+  | 'ready'
+  | 'attention'
+  | 'processing'
+  | 'archived';
+
+export interface MeetingArchiveFilters {
+  query?: string;
+  status?: MeetingArchiveStatusFilter;
+}
+
 export interface MeetingRecordDetail extends MeetingRecord {
   summary?: string;
   latestObservationText?: string;
@@ -973,6 +1100,8 @@ export interface MeetingRecordListResponse {
   total: number;
   limit: number;
   offset: number;
+  q?: string;
+  status?: MeetingArchiveStatusFilter;
 }
 
 export interface AskResponse {
@@ -980,6 +1109,12 @@ export interface AskResponse {
   evidence?: RecallItem[];
   queryTimeMs: number;
   channelDiagnostics?: RecallChannelDiagnostic[];
+  answerMemory?: {
+    state: 'priorHit' | 'observed' | 'promoted' | 'updated' | 'skipped';
+    threadId?: string;
+    canonicalKey?: string;
+    skipReason?: string;
+  };
   resolutionState?: 'complete' | 'partial' | 'insufficient' | 'deferred';
   missingInfo?: string[];
   followUpActions?: RuntimeAction[];
@@ -1295,10 +1430,17 @@ export interface RelationshipMeetingBrief {
     matchedAttendees: number;
     unmatchedAttendees: number;
     omittedAttendees: number;
+    identityCheckAttendees: number;
     attendeesWithEvidence: number;
     attendeesWithOpenLoops: number;
     evidenceRefs: number;
     coverageNote: string;
+  };
+  readiness: {
+    status: 'ready' | 'partial' | 'attention' | 'empty';
+    summary: string;
+    nextActions: string[];
+    successCriteria: string[];
   };
   attendees: Array<{
     displayName: string;
@@ -1310,6 +1452,8 @@ export interface RelationshipMeetingBrief {
     matchedBy: 'name' | 'alias' | 'email' | 'email_local_part' | 'none';
     matchConfidence: number;
     matchReason: string;
+    identityCheckRequired: boolean;
+    identityCheckReason?: string;
     coverageState: 'ready' | 'thin' | 'missing';
     summary: string;
     openLoops: RelationshipContextCard['openLoops'];
@@ -1433,7 +1577,11 @@ export interface NotificationCenterEnvelope {
 
 export interface NotificationCenterDeliveryContext {
   channel: 'chrome' | 'doubao' | 'glip';
-  reason: 'new' | 'retry_after_cooldown' | 'previous_delivery_failed';
+  reason:
+    | 'new'
+    | 'retry_after_cooldown'
+    | 'previous_delivery_failed'
+    | 'already_delivered_unfinished';
   lastStatus?: 'delivered' | 'failed' | 'clicked' | 'dismissed';
   effectiveStatus?: 'delivered' | 'failed' | 'clicked' | 'dismissed';
   hasSuccessfulDelivery: boolean;
@@ -1446,6 +1594,11 @@ export interface NotificationCenterFeedResponse {
   items: NotificationCenterEnvelope[];
   total: number;
 }
+
+export type NotificationCenterFeedDeliveryMode =
+  | 'retry_after_cooldown'
+  | 'incremental'
+  | 'daily_digest';
 
 export interface NotificationCenterDeliveryRecord {
   sourceRef: string;
@@ -1655,6 +1808,19 @@ export interface RuntimeActionListResponse {
   offset: number;
 }
 
+export interface MessageRuleAutomationAttachment {
+  id?: string | number;
+  name?: string;
+  type?: string;
+  mimeType?: string;
+  category?: string;
+  size?: number;
+  sourceUrl?: string;
+  messageUrl?: string;
+  downloadUrl?: string;
+  previewUrl?: string;
+}
+
 export interface MessageRuleAutomationPlanRequest {
   ruleRef: string;
   ruleText?: string;
@@ -1666,6 +1832,9 @@ export interface MessageRuleAutomationPlanRequest {
     groupId?: string;
     groupName?: string;
     content: string;
+    sourceUrl?: string;
+    messageUrl?: string;
+    attachments?: MessageRuleAutomationAttachment[];
     timestamp?: number;
     timezone?: string;
     event?: {
@@ -2045,6 +2214,8 @@ export interface PersonalSkillListResponse {
   total: number;
 }
 
+export type SkillSuggestionView = 'ready' | 'snoozed' | 'all';
+
 export interface PersonalSkillDetailResponse {
   skill: PersonalSkillDetail;
 }
@@ -2233,6 +2404,7 @@ export interface StatsResponse {
     core: number;
     forgotten: number;
     archived: number;
+    retrievalTiers?: Record<string, number>;
   };
 }
 
@@ -2335,6 +2507,7 @@ export interface MemoryCoverageMapResponse {
 
 export type SourceMemorySourceKind =
   | 'webpage'
+  | 'visual_memory'
   | 'selection'
   | 'jira_comment'
   | 'message_reply'
@@ -2369,6 +2542,7 @@ export interface SourceMemoryCandidateRequest {
   entityHints?: Array<{ kind: string; value: string }>;
   interactions?: SourceMemoryInteractionSignals;
   scope?: 'work' | 'personal';
+  metadata?: Record<string, unknown>;
 }
 
 export interface SourceMemoryCandidateResponse {
@@ -2380,7 +2554,8 @@ export interface SourceMemoryCandidateResponse {
   captureMode: SourceMemoryCaptureMode;
 }
 
-export interface SourceMemoryCreateRequest extends SourceMemoryCandidateRequest {
+export interface SourceMemoryCreateRequest
+  extends SourceMemoryCandidateRequest {
   captureMode?: SourceMemoryCaptureMode;
   captureReason?: string;
   note?: string;
@@ -2751,6 +2926,10 @@ export interface SmartMemoryImportInspectResponse {
     unsupported: number;
     backup: boolean;
     externalAiConversations?: number;
+    externalAiImportedMessages?: number;
+    externalAiTotalMessages?: number;
+    externalAiTruncatedConversations?: number;
+    externalAiTruncatedMessages?: number;
     promotionCandidates?: number;
   };
   entries: SmartMemoryImportEntry[];
@@ -3431,6 +3610,37 @@ export class MemoryServiceClient {
     return this.request<MemoryFeedbackResult>('POST', '/feedback', payload);
   }
 
+  async submitRecallRelevanceFeedback(
+    payload: RecallRelevanceFeedbackPayload,
+  ): Promise<{ ok: true; result: RecallRelevanceRecordResult }> {
+    return this.request<{ ok: true; result: RecallRelevanceRecordResult }>(
+      'POST',
+      '/recall/relevance-feedback',
+      payload,
+    );
+  }
+
+  async listRecallRelevancePatches(
+    status?: RecallRelevancePatch['status'],
+  ): Promise<{ items: RecallRelevancePatch[] }> {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    return this.request<{ items: RecallRelevancePatch[] }>(
+      'GET',
+      `/recall/relevance-patches${query}`,
+    );
+  }
+
+  async updateRecallRelevancePatchStatus(
+    id: string,
+    status: 'active' | 'paused' | 'deleted',
+  ): Promise<{ status: 'ok'; patch: RecallRelevancePatch }> {
+    return this.request<{ status: 'ok'; patch: RecallRelevancePatch }>(
+      'PATCH',
+      `/recall/relevance-patches/${encodeURIComponent(id)}`,
+      { status },
+    );
+  }
+
   /**
    * Passive associative recall — fast, structured, with stable jump links into
    * memory-exploring (Vue UI). Designed for surface-attached "you've seen this
@@ -3587,15 +3797,21 @@ export class MemoryServiceClient {
   async getMeetings(
     limit?: number,
     offset?: number,
+    filters: MeetingArchiveFilters = {},
   ): Promise<MeetingRecordListResponse> {
     const params = new URLSearchParams();
     if (limit !== undefined) params.set('limit', String(limit));
     if (offset !== undefined) params.set('offset', String(offset));
+    const query = filters.query?.trim();
+    if (query) params.set('q', query);
+    if (filters.status && filters.status !== 'all') {
+      params.set('status', filters.status);
+    }
 
-    const query = params.toString();
+    const searchParams = params.toString();
     return this.request<MeetingRecordListResponse>(
       'GET',
-      `/meetings${query ? `?${query}` : ''}`,
+      `/meetings${searchParams ? `?${searchParams}` : ''}`,
     );
   }
 
@@ -3962,6 +4178,7 @@ export class MemoryServiceClient {
     channel: 'chrome' | 'doubao' | 'glip',
     lanes: Array<'todo' | 'notice'> = ['todo', 'notice'],
     limit?: number,
+    deliveryMode?: NotificationCenterFeedDeliveryMode,
   ): Promise<NotificationCenterFeedResponse> {
     const params = new URLSearchParams();
     params.set('channel', channel);
@@ -3970,6 +4187,9 @@ export class MemoryServiceClient {
     }
     if (limit !== undefined) {
       params.set('limit', String(limit));
+    }
+    if (deliveryMode) {
+      params.set('deliveryMode', deliveryMode);
     }
     return this.request<NotificationCenterFeedResponse>(
       'GET',
@@ -4358,14 +4578,21 @@ export class MemoryServiceClient {
     });
   }
 
-  async executeAction(id: string): Promise<{
+  async executeAction(
+    id: string,
+    options?: { approve?: boolean },
+  ): Promise<{
     actionId: string;
     actionType: string;
     queueStatus: string;
     result?: Record<string, any>;
     error?: string;
   }> {
-    return this.request('POST', `/actions/${encodeURIComponent(id)}/execute`);
+    return this.request(
+      'POST',
+      `/actions/${encodeURIComponent(id)}/execute`,
+      options,
+    );
   }
 
   async planMessageRuleAutomation(
@@ -4465,14 +4692,12 @@ export class MemoryServiceClient {
   async createOutreachSessionFromMessage(
     body: CreateOutreachSessionFromMessageRequest,
   ): Promise<CreateOutreachSessionFromMessageResponse> {
-    return this.request(
-      'POST',
-      '/outreach/sessions/from-message',
-      body,
-    );
+    return this.request('POST', '/outreach/sessions/from-message', body);
   }
 
-  async getGlipMessageMarkers(limit = 500): Promise<GlipMessageMarkersSnapshot> {
+  async getGlipMessageMarkers(
+    limit = 500,
+  ): Promise<GlipMessageMarkersSnapshot> {
     const params = new URLSearchParams();
     params.set('limit', String(limit));
     return this.request<GlipMessageMarkersSnapshot>(
@@ -4889,7 +5114,11 @@ export class MemoryServiceClient {
     options?: { scope?: 'work' | 'personal' },
   ): Promise<SmartMemoryImportInspectResponse> {
     const formData = new FormData();
-    formData.append('file', file, getUploadFileName(file, 'memory-import-source'));
+    formData.append(
+      'file',
+      file,
+      getUploadFileName(file, 'memory-import-source'),
+    );
     if (options?.scope) {
       formData.append('scope', options.scope);
     }
@@ -4920,7 +5149,11 @@ export class MemoryServiceClient {
     options?: { scope?: 'work' | 'personal' },
   ): Promise<SmartMemoryImportCommitResponse> {
     const formData = new FormData();
-    formData.append('file', file, getUploadFileName(file, 'memory-import-source'));
+    formData.append(
+      'file',
+      file,
+      getUploadFileName(file, 'memory-import-source'),
+    );
     if (options?.scope) {
       formData.append('scope', options.scope);
     }
@@ -4979,6 +5212,17 @@ export class MemoryServiceClient {
     return this.request<SourceMemoryCapsuleResponse>(
       'GET',
       `/source-memory/capsules/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async updateSourceMemoryCapsuleNote(
+    id: string,
+    note: string,
+  ): Promise<SourceMemoryCapsuleResponse> {
+    return this.request<SourceMemoryCapsuleResponse>(
+      'POST',
+      `/source-memory/capsules/${encodeURIComponent(id)}/note`,
+      { note },
     );
   }
 
@@ -5158,10 +5402,15 @@ export class MemoryServiceClient {
     );
   }
 
-  async getSkillSuggestions(): Promise<PersonalSkillListResponse> {
+  async getSkillSuggestions(filters?: {
+    view?: SkillSuggestionView;
+  }): Promise<PersonalSkillListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.view) params.set('view', filters.view);
+    const qs = params.toString();
     return this.request<PersonalSkillListResponse>(
       'GET',
-      '/skills/suggestions',
+      `/skills/suggestions${qs ? `?${qs}` : ''}`,
     );
   }
 
@@ -5202,6 +5451,16 @@ export class MemoryServiceClient {
       'POST',
       `/skills/suggestions/${encodeURIComponent(id)}/snooze`,
       { days },
+    );
+  }
+
+  async unsnoozeSkillSuggestion(
+    id: string,
+  ): Promise<PersonalSkillDetailResponse> {
+    return this.request<PersonalSkillDetailResponse>(
+      'POST',
+      `/skills/suggestions/${encodeURIComponent(id)}/unsnooze`,
+      {},
     );
   }
 

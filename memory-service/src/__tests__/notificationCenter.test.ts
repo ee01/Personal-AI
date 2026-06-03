@@ -96,6 +96,109 @@ describe('NotificationCenterService', () => {
     );
   });
 
+  it('separates incremental todo pushes from daily unfinished todo digests', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 9)`,
+    ).run(
+      'action-old',
+      'Already delivered unfinished todo',
+      'Keep it visible in the daily digest',
+      now - 86_400,
+    );
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 8)`,
+    ).run(
+      'action-new',
+      'Fresh todo',
+      'Only this belongs in the 15 minute stream',
+      now,
+    );
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+    ).run(
+      'notif-delivered-notice',
+      'Delivered notice',
+      'Daily todo digests should not replay delivered notices',
+      now,
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    service.recordDelivery([
+      {
+        sourceRef: 'proposed_action:action-old',
+        channel: 'doubao',
+        lane: 'todo',
+        status: 'delivered',
+        recordedAt: now - 3_600,
+      },
+      {
+        sourceRef: 'notification:notif-delivered-notice',
+        channel: 'doubao',
+        lane: 'notice',
+        status: 'delivered',
+        recordedAt: now - 3_600,
+      },
+    ]);
+
+    const mixedDailyFeed = service.listFeed({
+      channel: 'doubao',
+      lanes: ['todo', 'notice'],
+      deliveryMode: 'daily_digest',
+    });
+    expect(mixedDailyFeed.map((item) => item.sourceRef)).not.toContain(
+      'notification:notif-delivered-notice',
+    );
+
+    const incrementalFeed = service.listFeed({
+      channel: 'doubao',
+      lanes: ['todo'],
+      deliveryMode: 'incremental',
+    });
+    const dailyFeed = service.listFeed({
+      channel: 'doubao',
+      lanes: ['todo'],
+      deliveryMode: 'daily_digest',
+    });
+
+    expect(incrementalFeed.map((item) => item.sourceRef)).toEqual([
+      'proposed_action:action-new',
+    ]);
+    expect(dailyFeed.map((item) => item.sourceRef)).toEqual([
+      'proposed_action:action-new',
+      'proposed_action:action-old',
+    ]);
+    expect(dailyFeed[0].deliveryContext).toMatchObject({
+      channel: 'doubao',
+      reason: 'new',
+      hasSuccessfulDelivery: false,
+    });
+    expect(dailyFeed[1].deliveryContext).toMatchObject({
+      channel: 'doubao',
+      reason: 'already_delivered_unfinished',
+      lastStatus: 'delivered',
+      effectiveStatus: 'delivered',
+      hasSuccessfulDelivery: true,
+    });
+
+    const renderedDailyDigest = service.formatTodoDigest('doubao', 500, {
+      deliveryMode: 'daily_digest',
+    });
+    expect(renderedDailyDigest.bodyMd).toContain('# 每日待办摘要');
+    expect(renderedDailyDigest.bodyMd).toContain('## 未完成待办');
+    expect(renderedDailyDigest.bodyMd).toContain('已提醒过，仍待处理');
+  });
+
   it('keeps successful delivery receipts sticky after a later failure', () => {
     const now = Math.floor(Date.now() / 1000);
 
@@ -144,6 +247,90 @@ describe('NotificationCenterService', () => {
 
     expect(feed.map((item) => item.sourceRef)).not.toContain(
       'notification:notif-sticky',
+    );
+  });
+
+  it('preserves receipt event time and ignores older delayed callbacks for latest status', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+    ).run(
+      'notif-late-receipt',
+      'Weekly Report Ready',
+      'A delayed provider callback should not rewrite latest status',
+      now,
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    const deliveredAt = now - 900;
+    const failedAt = now - 60;
+    const olderDeliveredAt = now - 1_200;
+
+    service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-late-receipt',
+        channel: 'chrome',
+        lane: 'notice',
+        status: 'delivered',
+        externalRef: 'provider-delivered-current',
+        recordedAt: deliveredAt,
+      },
+    ]);
+
+    const failedRecord = service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-late-receipt',
+        channel: 'chrome',
+        lane: 'notice',
+        status: 'failed',
+        error: 'network_later',
+        recordedAt: failedAt,
+      },
+    ])[0];
+
+    expect(failedRecord).toMatchObject({
+      sourceRef: 'notification:notif-late-receipt',
+      status: 'failed',
+      effectiveStatus: 'delivered',
+      lastError: 'network_later',
+      firstDeliveredAt: deliveredAt,
+      lastDeliveredAt: deliveredAt,
+      updatedAt: failedAt,
+    });
+
+    const lateRecord = service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-late-receipt',
+        channel: 'chrome',
+        lane: 'notice',
+        status: 'delivered',
+        externalRef: 'provider-delivered-late',
+        recordedAt: olderDeliveredAt,
+      },
+    ])[0];
+
+    expect(lateRecord).toMatchObject({
+      sourceRef: 'notification:notif-late-receipt',
+      status: 'failed',
+      effectiveStatus: 'delivered',
+      lastError: 'network_later',
+      firstDeliveredAt: olderDeliveredAt,
+      lastDeliveredAt: deliveredAt,
+      updatedAt: failedAt,
+    });
+
+    const feed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['notice'],
+      limit: 10,
+    });
+
+    expect(feed.map((item) => item.sourceRef)).not.toContain(
+      'notification:notif-late-receipt',
     );
   });
 
@@ -425,12 +612,33 @@ describe('NotificationCenterService', () => {
       now,
     );
 
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, payload_json, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?, ?)`,
+    ).run(
+      'notif-weekly-detail',
+      'Weekly Report Ready',
+      'Your weekly report is ready',
+      JSON.stringify({
+        reportSummary: 'Launch weekly summary: rollout is on track.',
+        reportExcerpt:
+          'Highlights\n- Launch weekly summary: rollout is on track.\n\nAction Items\n- Review deployment notes before Friday.',
+      }),
+      now - 1,
+      now - 1,
+    );
+
     const service = new NotificationCenterService(db);
     const rendered = service.formatNoticeDigest('doubao', 500);
 
+    expect(rendered.bodyMd).toContain('# 通知摘要');
+    expect(rendered.bodyMd).toContain('## 更新');
     expect(rendered.bodyMd).toContain('2 dream(s) generated this period');
     expect(rendered.bodyMd).toContain('Rooms rollout alignment');
     expect(rendered.bodyMd).toContain('Doubao bridge fix');
+    expect(rendered.bodyMd).toContain('Launch weekly summary');
+    expect(rendered.bodyMd).toContain('Review deployment notes');
   });
 
   it('exposes feed and delivery routes', async () => {
@@ -463,6 +671,7 @@ describe('NotificationCenterService', () => {
       hasSuccessfulDelivery: false,
     });
 
+    const deliveredAt = now - 30;
     const deliveryRes = await app.inject({
       method: 'POST',
       url: '/api/v1/notification-center/delivery',
@@ -474,6 +683,7 @@ describe('NotificationCenterService', () => {
             lane: 'notice',
             status: 'delivered',
             externalRef: 'backend-notif-weekly-route',
+            recordedAt: deliveredAt,
           },
         ],
       },
@@ -488,6 +698,9 @@ describe('NotificationCenterService', () => {
       status: 'delivered',
       effectiveStatus: 'delivered',
       hasSuccessfulDelivery: true,
+      firstDeliveredAt: deliveredAt,
+      lastDeliveredAt: deliveredAt,
+      updatedAt: deliveredAt,
     });
 
     const feedAfterDelivery = await app.inject({
@@ -497,6 +710,80 @@ describe('NotificationCenterService', () => {
 
     expect(feedAfterDelivery.statusCode).toBe(200);
     expect(feedAfterDelivery.json().total).toBe(0);
+  });
+
+  it('exposes deliveryMode on the feed route', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 9)`,
+    ).run(
+      'action-delivered-route',
+      'Already delivered unfinished todo',
+      'Keep this in the daily digest only',
+      now - 86_400,
+    );
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 8)`,
+    ).run(
+      'action-fresh-route',
+      'Fresh todo',
+      'This should appear in every todo feed mode',
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    service.recordDelivery([
+      {
+        sourceRef: 'proposed_action:action-delivered-route',
+        channel: 'doubao',
+        lane: 'todo',
+        status: 'delivered',
+        recordedAt: now - 3_600,
+      },
+    ]);
+
+    const incrementalRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=doubao&lanes=todo&deliveryMode=incremental',
+    });
+    expect(incrementalRes.statusCode).toBe(200);
+    expect(
+      incrementalRes
+        .json()
+        .items.map((item: { sourceRef: string }) => item.sourceRef),
+    ).toEqual(['proposed_action:action-fresh-route']);
+
+    const dailyDigestRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=doubao&lanes=todo&deliveryMode=daily_digest',
+    });
+    expect(dailyDigestRes.statusCode).toBe(200);
+    expect(
+      dailyDigestRes
+        .json()
+        .items.map((item: { sourceRef: string }) => item.sourceRef),
+    ).toEqual([
+      'proposed_action:action-fresh-route',
+      'proposed_action:action-delivered-route',
+    ]);
+    expect(dailyDigestRes.json().items[0].deliveryContext).toMatchObject({
+      channel: 'doubao',
+      reason: 'new',
+      hasSuccessfulDelivery: false,
+    });
+    expect(dailyDigestRes.json().items[1].deliveryContext).toMatchObject({
+      channel: 'doubao',
+      reason: 'already_delivered_unfinished',
+      lastStatus: 'delivered',
+      effectiveStatus: 'delivered',
+      hasSuccessfulDelivery: true,
+    });
   });
 
   it('snoozes notifications with a caller-provided delay', async () => {
@@ -614,6 +901,12 @@ describe('NotificationCenterService', () => {
     });
     expect(invalidLane.statusCode).toBe(400);
     expect(invalidLane.json().error).toBe('invalid_lanes');
+
+    const invalidDeliveryMode = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=chrome&deliveryMode=quiet_hours',
+    });
+    expect(invalidDeliveryMode.statusCode).toBe(400);
 
     const invalidNotificationState = await app.inject({
       method: 'GET',

@@ -106,6 +106,9 @@ try {
   await page.locator('.flow-node.tool.approval .node-result.approval', {
     hasText: '待确认',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.tool.approval .node-step-index', {
+    hasText: '#6',
+  }).waitFor({ timeout: 12000 });
   assert.equal(
     await page.locator('.flow-node.decision', { hasText: '最终决策' }).count(),
     0,
@@ -117,6 +120,28 @@ try {
   await page.locator('.agent-run-review.warning', {
     hasText: '工具被阻断',
   }).waitFor({ timeout: 12000 });
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error('forced clipboard failure');
+        },
+      },
+    });
+    document.execCommand = () => false;
+  });
+  await page.locator('.agent-run-diagnostic-copy', {
+    hasText: '复制诊断包',
+  }).click();
+  await page.locator('.agent-run-diagnostic-copy-status', {
+    hasText: '复制失败，请手动选择诊断包',
+  }).waitFor({ timeout: 3000 });
+  const diagnosticManualCopy = page.locator('.agent-run-diagnostic-manual-copy');
+  await diagnosticManualCopy.waitFor({ timeout: 3000 });
+  const diagnosticPacketText = await diagnosticManualCopy.inputValue();
+  assert.match(diagnosticPacketText, /"type": "agent_thinking_run_diagnostics"/);
+  assert.doesNotMatch(diagnosticPacketText, /approval-tail-token-visible-in-ui/);
   await page.locator('.agent-run-review-item.warning', {
     hasText: '需要人工确认',
   }).waitFor({ timeout: 12000 });
@@ -172,8 +197,16 @@ try {
     hasText: '复制审核包',
   }).click();
   await page.locator('.agent-approval-copy-status', {
-    hasText: /已复制审核包|复制失败，请手动选择审核包/,
+    hasText: '复制失败，请手动选择审核包',
   }).waitFor({ timeout: 3000 });
+  const approvalManualCopy = page
+    .locator('.agent-approval-item', { hasText: 'messageNotification' })
+    .locator('.agent-approval-manual-copy');
+  await approvalManualCopy.waitFor({ timeout: 3000 });
+  assert.match(
+    await approvalManualCopy.inputValue(),
+    /"type": "agent_tool_approval_review"/,
+  );
   await page.locator('.agent-approval-copy', {
     hasText: '复制重跑配置',
   }).click();
@@ -204,6 +237,12 @@ try {
   await page.locator('.thought-step .step-summary', {
     hasText: 'historySearch 已执行，但没有返回可用证据。',
   }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.tool.approval', {
+    hasText: 'messageNotification',
+  }).click();
+  await page.locator('.thought-step.expanded', {
+    hasText: 'messageNotification',
+  }).waitFor({ timeout: 3000 });
 
   const blockedHeader = page
     .locator('.thought-step', { hasText: 'orgStructure' })
@@ -252,10 +291,12 @@ try {
   await page.locator('.thought-step .step-summary', {
     hasText: 'messageNotification 需要人工确认，当前未执行。',
   }).waitFor({ timeout: 3000 });
-  await approvalHeader.click();
   const approvalStep = page.locator('.thought-step.expanded', {
     hasText: 'messageNotification',
   });
+  if ((await approvalStep.count()) === 0) {
+    await approvalHeader.click();
+  }
   await approvalStep.locator('.diagnostic-content', {
     hasText: 'approval-tail-token-visible-in-ui',
   }).waitFor({ timeout: 3000 });
@@ -274,6 +315,9 @@ try {
   }).waitFor({ timeout: 12000 });
   await page.locator('.flow-node.decision', {
     hasText: '预算耗尽',
+  }).waitFor({ timeout: 12000 });
+  await page.locator('.flow-node.decision .node-step-index', {
+    hasText: '#7',
   }).waitFor({ timeout: 12000 });
   await page.locator('.flow-node.decision .node-detail', {
     hasText: /预算用完时仍有待确认 1 个步骤、被阻断 1 个步骤、证据不足 1 个步骤/,

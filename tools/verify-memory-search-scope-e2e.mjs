@@ -156,6 +156,7 @@ try {
   assert.equal(askRequests.at(-1)?.scope, 'work');
   await page.getByText('范围: 工作记忆').waitFor({ timeout: 10000 });
   await page.getByText('命中范围: 工作 1').waitFor({ timeout: 10000 });
+  assert.equal(await page.getByText('已包含 1 条个人记忆').count(), 0);
   await page.getByText('语义 未运行').waitFor({ timeout: 10000 });
   await page.getByText('关键词 命中 1').waitFor({ timeout: 10000 });
   await page.getByText('图谱 无命中').waitFor({ timeout: 10000 });
@@ -176,6 +177,9 @@ try {
   assert.ok(page.url().includes('scope=all'));
   await page.getByText('范围: 全部记忆').waitFor({ timeout: 10000 });
   await page.getByText('命中范围: 工作 1 · 个人 1').waitFor({ timeout: 10000 });
+  await page
+    .getByText('已包含 1 条个人记忆；复制或引用前先确认是否适合当前工作场景。')
+    .waitFor({ timeout: 10000 });
 
   await page.goto(
     `chrome-extension://${extensionId}/memory-exploring.html#/search?q=legacy%20scope%20query&scope=both`,
@@ -190,6 +194,9 @@ try {
     'true',
   );
   await page.getByText('范围: 全部记忆').waitFor({ timeout: 10000 });
+  await page
+    .getByText('已包含 1 条个人记忆；复制或引用前先确认是否适合当前工作场景。')
+    .waitFor({ timeout: 10000 });
 
   assert.deepEqual(
     askRequests.map((request) => request.scope),

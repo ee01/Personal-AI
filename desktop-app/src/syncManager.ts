@@ -20,7 +20,10 @@ interface SyncState {
   stableMemory?: number;
   mobileBriefing?: number;
   reminderSync?: number;
+  reminderDailyDigest?: number;
 }
+
+type ReminderDeliveryMode = 'new_items' | 'daily_digest' | 'manual';
 
 export type SyncAttemptStatus = BridgeSyncAttemptStatus;
 
@@ -38,6 +41,7 @@ export interface SyncAttemptResult {
   messageVisible?: boolean;
   challengeDetected?: boolean;
   telemetryError?: string;
+  reminderDeliveryMode?: ReminderDeliveryMode;
 }
 
 export interface SyncTaskSnapshot {
@@ -155,6 +159,26 @@ function extractBullets(pkg: ProviderMemoryProduct, limit = 6): string[] {
   return fallback;
 }
 
+function normalizeTextForDedupe(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .replace(/[.,;:，。；：]+$/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function uniqueTextItems(items: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const item of items) {
+    const key = normalizeTextForDedupe(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique;
+}
+
 function packageHasItems(pkg: ProviderMemoryProduct): boolean {
   if (typeof pkg.itemCount === 'number') {
     return pkg.itemCount > 0;
@@ -226,6 +250,62 @@ function syncResultToAttempt(result: {
 
 function shouldAdvanceSyncState(result: SyncAttemptResult): boolean {
   return result.status !== 'failed';
+}
+
+function parseTimeOfDay(value: string | undefined): {
+  hours: number;
+  minutes: number;
+} {
+  const match = (value || '09:00').match(/^(\d{1,2}):(\d{2})$/);
+  const hours = match ? Number(match[1]) : 9;
+  const minutes = match ? Number(match[2]) : 0;
+  if (
+    Number.isInteger(hours) &&
+    Number.isInteger(minutes) &&
+    hours >= 0 &&
+    hours <= 23 &&
+    minutes >= 0 &&
+    minutes <= 59
+  ) {
+    return { hours, minutes };
+  }
+  return { hours: 9, minutes: 0 };
+}
+
+function todayAtMs(timeOfDay: string | undefined): number {
+  const { hours, minutes } = parseTimeOfDay(timeOfDay);
+  const target = new Date();
+  target.setHours(hours, minutes, 0, 0);
+  return target.getTime();
+}
+
+function shouldRunDailyReminderDigest(input: {
+  enabled?: boolean;
+  timeOfDay?: string;
+  lastRunAt?: number;
+}): boolean {
+  if (input.enabled === false) return false;
+  const targetMs = todayAtMs(input.timeOfDay);
+  const nowMs = Date.now();
+  if (nowMs < targetMs) return false;
+  return !input.lastRunAt || input.lastRunAt < targetMs;
+}
+
+function latestReminderDailyDigestRun(
+  attempts: BridgeSyncAttemptLogEntry[],
+): number | undefined {
+  for (const attempt of attempts) {
+    if (
+      attempt.kind !== 'reminder_sync' ||
+      attempt.reminderDeliveryMode !== 'daily_digest' ||
+      attempt.status === 'failed'
+    ) {
+      continue;
+    }
+    const completedAt = Date.parse(attempt.completedAt);
+    if (Number.isFinite(completedAt)) return completedAt;
+  }
+  return undefined;
 }
 
 type SyncAttemptMetadata = Omit<
@@ -305,6 +385,13 @@ function cleanAttemptMetadata(
   if (metadata.telemetryError) {
     cleaned.telemetryError = metadata.telemetryError;
   }
+  if (
+    metadata.reminderDeliveryMode === 'new_items' ||
+    metadata.reminderDeliveryMode === 'daily_digest' ||
+    metadata.reminderDeliveryMode === 'manual'
+  ) {
+    cleaned.reminderDeliveryMode = metadata.reminderDeliveryMode;
+  }
   return cleaned;
 }
 
@@ -377,6 +464,9 @@ function mergeAttemptMetadata(
   const telemetryError = mergeTelemetryErrors(
     ...results.map((result) => result.telemetryError),
   );
+  const reminderModes = Array.from(
+    new Set(results.map((result) => result.reminderDeliveryMode).filter(Boolean)),
+  ) as ReminderDeliveryMode[];
 
   return cleanAttemptMetadata({
     packageKinds,
@@ -402,6 +492,8 @@ function mergeAttemptMetadata(
         ? challengeValues.some((value) => value)
         : undefined,
     telemetryError,
+    reminderDeliveryMode:
+      reminderModes.length === 1 ? reminderModes[0] : undefined,
   });
 }
 
@@ -426,6 +518,9 @@ export class BridgeSyncManager {
     options: BridgeSyncManagerOptions = {},
   ) {
     this.recentAttempts = normalizeRecentAttempts(options.initialAttempts);
+    this.syncState.reminderDailyDigest = latestReminderDailyDigestRun(
+      this.recentAttempts,
+    );
     this.onRecentAttemptsChanged = options.onRecentAttemptsChanged;
   }
 
@@ -580,6 +675,7 @@ export class BridgeSyncManager {
     messageVisible?: boolean;
     challengeDetected?: boolean;
     telemetryError?: string;
+    reminderDeliveryMode?: ReminderDeliveryMode;
   }): void {
     this.attemptSequence += 1;
     const metadata = cleanAttemptMetadata(input);
@@ -640,6 +736,7 @@ export class BridgeSyncManager {
         messageVisible: result.messageVisible,
         challengeDetected: result.challengeDetected,
         telemetryError: result.telemetryError,
+        reminderDeliveryMode: result.reminderDeliveryMode,
       });
       return result;
     } catch (error) {
@@ -754,15 +851,43 @@ export class BridgeSyncManager {
           }
         }
 
-        // 待办 / 通知同步
+        // 待办 / 通知同步。15 分钟间隔只负责新待办；历史未完成待办走每日完整摘要。
         if (
+          status.bindings.mobile_context &&
+          shouldRunDailyReminderDigest({
+            enabled: settings.reminderDailyDigestEnabled,
+            timeOfDay: settings.reminderDailyDigestTime,
+            lastRunAt: this.syncState.reminderDailyDigest,
+          })
+        ) {
+          const result = await this.trackSyncAttempt(
+            'reminder_sync',
+            'auto',
+            () =>
+              this.syncReminderChannels({
+                deliveryMode: 'daily_digest',
+                includeNotices: false,
+              }),
+          );
+          attemptedSync = true;
+          if (result.status === 'failed' && !failedAttempt) {
+            failedAttempt = result;
+          }
+          if (shouldAdvanceSyncState(result)) {
+            this.syncState.reminderDailyDigest = Date.now();
+          }
+        } else if (
           status.bindings.mobile_context &&
           this.due(this.syncState.reminderSync, settings.reminderSyncIntervalMs)
         ) {
           const result = await this.trackSyncAttempt(
             'reminder_sync',
             'auto',
-            () => this.syncReminderChannels(),
+            () =>
+              this.syncReminderChannels({
+                deliveryMode: 'new_items',
+                includeNotices: true,
+              }),
           );
           attemptedSync = true;
           if (result.status === 'failed' && !failedAttempt) {
@@ -815,7 +940,10 @@ export class BridgeSyncManager {
       }
 
       result = await this.trackSyncAttempt(kind, 'manual', () =>
-        this.syncReminderChannels(),
+        this.syncReminderChannels({
+          deliveryMode: 'manual',
+          includeNotices: true,
+        }),
       );
       this.assertSyncAttemptSucceeded(kind, result);
       this.syncState.reminderSync = Date.now();
@@ -897,9 +1025,9 @@ export class BridgeSyncManager {
       );
     }
 
-    const bullets = packages
-      .flatMap((pkg) => extractBullets(pkg, 5))
-      .slice(0, 12);
+    const bullets = uniqueTextItems(
+      packages.flatMap((pkg) => extractBullets(pkg, 5)),
+    ).slice(0, 12);
     if (bullets.length === 0) {
       const reason = 'No mobile briefing bullets extracted';
       const telemetryError = await this.reportSkipped(
@@ -1007,10 +1135,17 @@ export class BridgeSyncManager {
     return syncResultToAttempt(result, { ...metadata, telemetryError });
   }
 
-  private async syncReminderChannels(): Promise<SyncAttemptResult> {
+  private async syncReminderChannels(
+    options: {
+      deliveryMode: ReminderDeliveryMode;
+      includeNotices: boolean;
+    } = { deliveryMode: 'manual', includeNotices: true },
+  ): Promise<SyncAttemptResult> {
     const results: SyncAttemptResult[] = [];
 
-    const todoResult = await this.syncTodosAsMemo();
+    const todoResult = await this.syncTodosAsMemo({
+      deliveryMode: options.deliveryMode,
+    });
     results.push(todoResult);
     if (todoResult.status === 'failed') {
       const metadata = mergeAttemptMetadata(results);
@@ -1021,7 +1156,9 @@ export class BridgeSyncManager {
       };
     }
 
-    results.push(await this.syncNotices());
+    if (options.includeNotices) {
+      results.push(await this.syncNotices());
+    }
     const metadata = mergeAttemptMetadata(results);
     const failed = results.find((result) => result.status === 'failed');
     if (failed) {
@@ -1038,14 +1175,23 @@ export class BridgeSyncManager {
       errorMessage:
         skippedReasons.join(' / ') || 'No pending todos or notices to sync',
       ...metadata,
+      reminderDeliveryMode: options.deliveryMode,
     };
   }
 
-  async syncTodosAsMemo(): Promise<SyncAttemptResult> {
+  async syncTodosAsMemo(
+    options: { deliveryMode?: ReminderDeliveryMode } = {},
+  ): Promise<SyncAttemptResult> {
     const startedAt = Date.now();
-    const rendered = await this.renderTodoPackage();
+    const deliveryMode = options.deliveryMode ?? 'manual';
+    const settings = this.settingsStore.getSettings();
+    const rendered = await this.renderTodoPackage(
+      deliveryMode,
+      deliveryMode !== 'new_items' || settings.reminderDedupSameDay !== false,
+    );
     const packages = actionablePackages(rendered);
     const metadata = packageMetadata(rendered);
+    const reminderDeliveryMode = { reminderDeliveryMode: deliveryMode };
     if (packages.length === 0) {
       const reason = 'No pending todos to sync';
       const telemetryError = await this.reportSkipped(
@@ -1054,14 +1200,20 @@ export class BridgeSyncManager {
         reason,
       );
       return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
+        {
+          status: 'skipped',
+          errorMessage: reason,
+          ...metadata,
+          ...reminderDeliveryMode,
+        },
         telemetryError,
       );
     }
 
+    const reminderLimit = deliveryMode === 'daily_digest' ? 50 : 8;
     const reminders = packages
-      .flatMap((pkg) => extractReminders(pkg))
-      .slice(0, 8);
+      .flatMap((pkg) => extractReminders(pkg, reminderLimit))
+      .slice(0, reminderLimit);
     if (reminders.length === 0) {
       const reason = 'No todo titles extracted';
       const telemetryError = await this.reportSkipped(
@@ -1070,7 +1222,12 @@ export class BridgeSyncManager {
         reason,
       );
       return withTelemetryError(
-        { status: 'skipped', errorMessage: reason, ...metadata },
+        {
+          status: 'skipped',
+          errorMessage: reason,
+          ...metadata,
+          ...reminderDeliveryMode,
+        },
         telemetryError,
       );
     }
@@ -1079,7 +1236,10 @@ export class BridgeSyncManager {
       reminders,
     });
 
-    const attempt = syncResultToAttempt(result, metadata);
+    const attempt = syncResultToAttempt(result, {
+      ...metadata,
+      ...reminderDeliveryMode,
+    });
     const deliveryTelemetryError = await this.reportDelivery(
       rendered,
       'todo',
@@ -1103,7 +1263,7 @@ export class BridgeSyncManager {
   }
 
   async syncRemindersAsMemo(): Promise<SyncAttemptResult> {
-    return this.syncTodosAsMemo();
+    return this.syncTodosAsMemo({ deliveryMode: 'manual' });
   }
 
   async syncNotices(): Promise<SyncAttemptResult> {
@@ -1180,12 +1340,21 @@ export class BridgeSyncManager {
     );
   }
 
-  private async renderTodoPackage(): Promise<RenderContextPackageResponse> {
+  private async renderTodoPackage(
+    deliveryMode: ReminderDeliveryMode,
+    dedupeNewItems: boolean,
+  ): Promise<RenderContextPackageResponse> {
     const supported = await this.supportsScenario('todo_sync');
     return this.memoryClient.renderContextPackage({
       provider: this.config.provider,
       scenario: supported ? 'todo_sync' : 'reminder_sync',
       deviceContext: 'doubao_bridge_daemon',
+      deliveryMode:
+        deliveryMode === 'daily_digest' || deliveryMode === 'manual'
+          ? 'daily_digest'
+          : dedupeNewItems
+            ? 'incremental'
+            : undefined,
     });
   }
 

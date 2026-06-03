@@ -37,6 +37,8 @@ export interface FallbackChatGPTClientOptions {
 export interface FallbackOutcome {
   mode: 'playwright' | 'webpage_mcp' | 'unknown';
   fallbackReason?: string;
+  /** ISO timestamp when webpage-mcp will be retried. */
+  fallbackCooldownUntil?: string;
   /** True if webpage-mcp was preferred but we silently fell back to Playwright. */
   fellBackFromWebpageMcp: boolean;
 }
@@ -149,9 +151,14 @@ export class FallbackChatGPTClient implements ChatGPTApiClient {
   }
 
   getClientStatus(): ChatGPTClientStatus {
+    const fallbackCooldownUntil = this.isInCooldown()
+      ? new Date(this.webpageMcpCooldownUntil).toISOString()
+      : undefined;
     return {
       mode: this.lastOutcome.mode,
       fallbackReason: this.lastOutcome.fallbackReason,
+      fallbackCooldownUntil:
+        this.lastOutcome.fallbackCooldownUntil ?? fallbackCooldownUntil,
     };
   }
 
@@ -181,21 +188,44 @@ export class FallbackChatGPTClient implements ChatGPTApiClient {
         this.webpageMcpCooldownUntil = Date.now() + FALLBACK_COOLDOWN_MS;
         try {
           const result = await operation(this.options.playwrightClient);
+          const fallbackCooldownUntil = new Date(
+            this.webpageMcpCooldownUntil,
+          ).toISOString();
           this.lastOutcome = {
             mode: 'playwright',
             fellBackFromWebpageMcp: true,
             fallbackReason: reason,
+            fallbackCooldownUntil,
           };
           return result;
         } catch (fallbackError) {
+          const fallbackCooldownUntil = new Date(
+            this.webpageMcpCooldownUntil,
+          ).toISOString();
           this.lastOutcome = {
             mode: 'playwright',
             fellBackFromWebpageMcp: true,
             fallbackReason: `${reason}; Playwright fallback also failed: ${formatError(fallbackError)}`,
+            fallbackCooldownUntil,
           };
           throw fallbackError;
         }
       }
+    }
+
+    if (transport === 'webpage_mcp' && this.isInCooldown()) {
+      const result = await operation(this.options.playwrightClient);
+      this.lastOutcome = {
+        mode: 'playwright',
+        fellBackFromWebpageMcp: true,
+        fallbackReason:
+          this.lastOutcome.fallbackReason ??
+          'webpage-mcp transport is cooling down after a recent failure',
+        fallbackCooldownUntil: new Date(
+          this.webpageMcpCooldownUntil,
+        ).toISOString(),
+      };
+      return result;
     }
 
     const result = await operation(this.options.playwrightClient);

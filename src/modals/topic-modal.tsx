@@ -41,6 +41,11 @@ import {
   shouldAutoRequestLinkedActionSuggestion,
 } from './linkedActionHelpers';
 import {
+  getPendingFollowThreadOriginalDatetime,
+  isPendingFollowThreadConfigFresh,
+  type PendingFollowThreadConfig,
+} from '../message-reaction/followThreadPendingConfig';
+import {
   getRuleActionSummaryItems,
   getRuleSafetySummary,
 } from './topic-rule-safety';
@@ -474,6 +479,8 @@ const TopicModal = () => {
     useState(false);
   const [editingAutomationPreview, setEditingAutomationPreview] =
     useState<AutomationPreviewState>({ status: 'idle' });
+  const [isEditingAutomationExpanded, setIsEditingAutomationExpanded] =
+    useState(false);
   const [pendingRuleImprovement, setPendingRuleImprovement] =
     useState<PendingMessageRuleImprovement | null>(null);
 
@@ -686,9 +693,9 @@ const TopicModal = () => {
         'pendingFollowThreadConfig',
       );
       if (result.pendingFollowThreadConfig) {
-        const config = result.pendingFollowThreadConfig;
-        // 检查是否是最近5分钟内的请求
-        if (Date.now() - config.timestamp < 5 * 60 * 1000) {
+        const config =
+          result.pendingFollowThreadConfig as PendingFollowThreadConfig;
+        if (isPendingFollowThreadConfigFresh(config)) {
           console.log('👁 检测到关注后续配置请求:', config);
           resetNewRuleForm('followThread');
 
@@ -710,7 +717,7 @@ const TopicModal = () => {
               teamName: config.groupName,
               sender: config.sender,
               content: config.content,
-              datetime: config.timestamp,
+              datetime: getPendingFollowThreadOriginalDatetime(config),
               messageUrl: config.messageLink,
             },
             createdAt: new Date().toISOString(),
@@ -800,6 +807,7 @@ const TopicModal = () => {
           if (topic) {
             setPendingRuleImprovement(config);
             setEditingAutomationPreview({ status: 'idle' });
+            setIsEditingAutomationExpanded(true);
             setEditingTopic({
               ...topic,
               automationPrompt: config.proposedPrompt,
@@ -986,6 +994,7 @@ const TopicModal = () => {
 
   const handleEdit = (topic: TopicItem) => {
     setEditingAutomationPreview({ status: 'idle' });
+    setIsEditingAutomationExpanded(false);
     setEditingTopic(topic);
   };
 
@@ -1024,6 +1033,7 @@ const TopicModal = () => {
     }
     setEditingTopic(null);
     setEditingAutomationPreview({ status: 'idle' });
+    setIsEditingAutomationExpanded(false);
 
     promptEnableSilentAnalysisAfterRuleSave('这条记忆入口规则');
   };
@@ -1990,6 +2000,13 @@ const TopicModal = () => {
     );
   };
 
+  const openOutreachEvidencePage = () => {
+    const baseUrl = chrome?.runtime?.getURL
+      ? chrome.runtime.getURL('memory-exploring.html')
+      : 'memory-exploring.html';
+    window.open(`${baseUrl}#/outreach`, '_blank');
+  };
+
   const getLocalTimeZone = () => {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -2211,6 +2228,21 @@ const TopicModal = () => {
                   </div>
                 </div>
               ))}
+            </div>
+            <div className="system-observation-footer">
+              <span>
+                {snapshot.total > snapshot.samples.length
+                  ? `这里只读展示前 ${snapshot.samples.length} 条内部观察`
+                  : `这里只读展示全部 ${snapshot.samples.length} 条内部观察`}
+                ；证据、状态变化和追问记录在主动询问页审计。
+              </span>
+              <button
+                type="button"
+                className="system-observation-link-btn"
+                onClick={openOutreachEvidencePage}
+              >
+                查看主动询问证据
+              </button>
             </div>
           </>
         )}
@@ -2749,117 +2781,164 @@ const TopicModal = () => {
                   </div>
                 )}
 
-                <div className="automation-config">
-                  <div className="config-section">
-                    <div className="config-title-row">
-                      <div className="config-title">联动操作（OpenClaw）</div>
-                      <div
-                        className="config-icon-actions"
-                        aria-label="联动操作快捷操作"
-                      >
-                        <button
-                          type="button"
-                          className="icon-action-btn"
-                          onClick={() => void requestAutomationPreview('edit')}
-                          disabled={
-                            !editingTopic.automationPrompt?.trim() ||
-                            editingAutomationPreview.status === 'loading'
-                          }
-                          title={
-                            editingAutomationPreview.status === 'loading'
-                              ? '正在预演联动操作'
-                              : '预演并改进'
-                          }
-                          aria-label={
-                            editingAutomationPreview.status === 'loading'
-                              ? '正在预演联动操作'
-                              : '预演并改进'
-                          }
-                        >
-                          {editingAutomationPreview.status === 'loading' ? (
-                            <span
-                              className="icon-button-spinner"
-                              aria-hidden="true"
-                            />
-                          ) : (
-                            <PlayIcon />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="automation-input-shell">
-                      <textarea
-                        className="reply-content-input"
-                        placeholder="例如：从消息里提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续操作。"
-                        value={editingTopic.automationPrompt || ''}
-                        onChange={(e) => {
-                          setEditingTopic({
-                            ...editingTopic,
-                            automationPrompt: e.target.value || undefined,
-                          });
-                          setEditingAutomationPreview({ status: 'idle' });
-                        }}
-                        rows={4}
-                      />
-                    </div>
-                    {renderOpenClawDraftNotice()}
-                    <label className="checkbox-container">
-                      <input
-                        type="checkbox"
-                        checked={
-                          editingTopic.automationRequiresApproval !== true
-                        }
-                        onChange={(e) =>
-                          setEditingTopic({
-                            ...editingTopic,
-                            automationRequiresApproval: !e.target.checked,
-                          })
-                        }
-                        disabled={!editingTopic.automationPrompt?.trim()}
-                      />
-                      操作无需批准
-                    </label>
-                    <div className="hint-text">
-                      这里填写的是你定义的自然语言联动操作。命中后消息仍默认写入记忆；后续动作会由
-                      RuntimeAction / OpenClaw 能力消费。
-                    </div>
-                    {pendingRuleImprovement?.ruleRef ===
-                      getRuleRef(editingTopic) && (
-                      <div className="supporting-panel automation-preview-panel">
-                        <div className="supporting-title">
-                          来自决策中心的改进建议
-                        </div>
-                        <div className="supporting-text">
-                          {pendingRuleImprovement.reason}
-                        </div>
-                        <div className="hint-text">
-                          保存后会更新原规则，并把对应确认项标记为已应用。
-                        </div>
-                      </div>
-                    )}
-                    {renderAutomationPreview(
-                      editingAutomationPreview,
-                      (suggestedPrompt) => {
-                        setEditingTopic({
-                          ...editingTopic,
-                          automationPrompt: suggestedPrompt,
-                        });
-                        setEditingAutomationPreview({ status: 'idle' });
-                      },
-                    )}
-                    {editingTopic.automationPrompt?.trim() && (
-                      <div className="automation-status-row">
+                <div
+                  className={`automation-config compact-disclosure ${
+                    isEditingAutomationExpanded ? 'expanded' : 'collapsed'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="automation-disclosure-btn"
+                    onClick={() =>
+                      setIsEditingAutomationExpanded(
+                        !isEditingAutomationExpanded,
+                      )
+                    }
+                    aria-expanded={isEditingAutomationExpanded}
+                  >
+                    <span className="automation-disclosure-copy">
+                      <span className="config-title">
+                        联动操作（OpenClaw）
+                      </span>
+                      <span className="hint-text">
+                        {editingTopic.automationPrompt?.trim()
+                          ? '已填写，命中后会生成 RuntimeAction'
+                          : '可选，需要外部执行时再展开填写'}
+                      </span>
+                    </span>
+                    <span className="automation-disclosure-state">
+                      {editingTopic.automationPrompt?.trim() ? (
                         <span
-                          className={`rule-badge ${openClawConfigured ? 'info' : 'warn'}`}
+                          className={`rule-badge ${
+                            openClawConfigured ? 'info' : 'warn'
+                          }`}
                         >
                           {openClawConfigured ? '已激活' : '待激活'}
                         </span>
-                        <span className="hint-text">
-                          {getAutomationStatusText(editingTopic)}
-                        </span>
+                      ) : (
+                        <span className="rule-badge muted">未启用</span>
+                      )}
+                      <span className="disclosure-chevron" aria-hidden="true">
+                        {isEditingAutomationExpanded ? '收起' : '展开'}
+                      </span>
+                    </span>
+                  </button>
+                  {isEditingAutomationExpanded && (
+                    <div className="config-section automation-config-body">
+                      <div className="config-title-row automation-body-head">
+                        <div className="hint-text">自然语言动作描述</div>
+                        <div
+                          className="config-icon-actions"
+                          aria-label="联动操作快捷操作"
+                        >
+                          <button
+                            type="button"
+                            className="icon-action-btn"
+                            onClick={() =>
+                              void requestAutomationPreview('edit')
+                            }
+                            disabled={
+                              !editingTopic.automationPrompt?.trim() ||
+                              editingAutomationPreview.status === 'loading'
+                            }
+                            title={
+                              editingAutomationPreview.status === 'loading'
+                                ? '正在预演联动操作'
+                                : '预演并改进'
+                            }
+                            aria-label={
+                              editingAutomationPreview.status === 'loading'
+                                ? '正在预演联动操作'
+                                : '预演并改进'
+                            }
+                          >
+                            {editingAutomationPreview.status === 'loading' ? (
+                              <span
+                                className="icon-button-spinner"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <PlayIcon />
+                            )}
+                          </button>
+                        </div>
                       </div>
-                    )}
-                  </div>
+                      <div className="automation-input-shell">
+                        <textarea
+                          className="reply-content-input"
+                          placeholder="例如：从消息里提取日期和对象，生成一个 future RuntimeAction，在指定时间执行后续操作。"
+                          value={editingTopic.automationPrompt || ''}
+                          onChange={(e) => {
+                            setEditingTopic({
+                              ...editingTopic,
+                              automationPrompt: e.target.value || undefined,
+                            });
+                            setEditingAutomationPreview({ status: 'idle' });
+                          }}
+                          rows={4}
+                        />
+                      </div>
+                      {renderOpenClawDraftNotice()}
+                      <label className="checkbox-container">
+                        <input
+                          type="checkbox"
+                          checked={
+                            editingTopic.automationRequiresApproval !== true
+                          }
+                          onChange={(e) =>
+                            setEditingTopic({
+                              ...editingTopic,
+                              automationRequiresApproval: !e.target.checked,
+                            })
+                          }
+                          disabled={!editingTopic.automationPrompt?.trim()}
+                        />
+                        操作无需批准
+                      </label>
+                      <div className="hint-text">
+                        这里填写的是你定义的自然语言联动操作。命中后消息仍默认写入记忆；后续动作会由
+                        RuntimeAction / OpenClaw 能力消费。
+                      </div>
+                      {pendingRuleImprovement?.ruleRef ===
+                        getRuleRef(editingTopic) && (
+                        <div className="supporting-panel automation-preview-panel">
+                          <div className="supporting-title">
+                            来自决策中心的改进建议
+                          </div>
+                          <div className="supporting-text">
+                            {pendingRuleImprovement.reason}
+                          </div>
+                          <div className="hint-text">
+                            保存后会更新原规则，并把对应确认项标记为已应用。
+                          </div>
+                        </div>
+                      )}
+                      {renderAutomationPreview(
+                        editingAutomationPreview,
+                        (suggestedPrompt) => {
+                          setEditingTopic({
+                            ...editingTopic,
+                            automationPrompt: suggestedPrompt,
+                          });
+                          setEditingAutomationPreview({ status: 'idle' });
+                        },
+                      )}
+                      {editingTopic.automationPrompt?.trim() && (
+                        <div className="automation-status-row">
+                          <span
+                            className={`rule-badge ${
+                              openClawConfigured ? 'info' : 'warn'
+                            }`}
+                          >
+                            {openClawConfigured ? '已激活' : '待激活'}
+                          </span>
+                          <span className="hint-text">
+                            {getAutomationStatusText(editingTopic)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* 编辑时的摘要配置区域 */}
@@ -3235,23 +3314,10 @@ const TopicModal = () => {
                   </div>
                 )}
 
-                <div
-                  className="rule-path-preview edit-preview"
-                  aria-label="编辑规则触发与动作预览"
-                >
-                  <div className="rule-path-step">
-                    <span className="rule-path-label">当</span>
-                    <strong>{editingTopic.text.trim() || '未填写消息模式'}</strong>
-                    <p>
-                      {getScopeSummaryText({
-                        filterSender: editingTopic.filterSender,
-                        filterGroup: editingTopic.filterGroup,
-                      })}
-                    </p>
-                  </div>
-                  <div className="rule-path-step then">
-                    <span className="rule-path-label">则</span>
-                    <div className="rule-action-chip-row">
+                <div className="new-rule-receipt" aria-label="编辑规则保存摘要">
+                  <div className="new-rule-receipt-main">
+                    <span className="rule-path-label then">则</span>
+                    <div className="rule-action-chip-row compact">
                       {getTopicActionSummaryItems(editingTopic).map((item) => (
                         <span className="rule-badge muted" key={item}>
                           {item}
@@ -3259,15 +3325,26 @@ const TopicModal = () => {
                       ))}
                     </div>
                   </div>
-                  <div
-                    className={`rule-safety-strip ${getTopicSafetySummary(editingTopic).tone}`}
-                  >
-                    <span
-                      className={`rule-badge safety-${getTopicSafetySummary(editingTopic).tone}`}
-                    >
-                      {getTopicSafetySummary(editingTopic).label}
-                    </span>
+                  <div className="new-rule-receipt-meta">
                     <span>
+                      范围：
+                      {getScopeSummaryText({
+                        filterSender: editingTopic.filterSender,
+                        filterGroup: editingTopic.filterGroup,
+                      })}
+                    </span>
+                    <span
+                      className={`rule-safety-inline ${
+                        getTopicSafetySummary(editingTopic).tone
+                      }`}
+                    >
+                      <span
+                        className={`rule-badge safety-${
+                          getTopicSafetySummary(editingTopic).tone
+                        }`}
+                      >
+                        {getTopicSafetySummary(editingTopic).label}
+                      </span>
                       {getTopicSafetySummary(editingTopic).reasons.join(' / ')}
                     </span>
                   </div>
@@ -3279,6 +3356,7 @@ const TopicModal = () => {
                     onClick={() => {
                       setEditingTopic(null);
                       setEditingAutomationPreview({ status: 'idle' });
+                      setIsEditingAutomationExpanded(false);
                       setPendingRuleImprovement(null);
                     }}
                   >
@@ -5140,6 +5218,38 @@ const TopicModal = () => {
                     line-height: 1.45;
                 }
 
+                .system-observation-footer {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 10px;
+                    color: #bfdbfe;
+                    font-size: 12px;
+                    line-height: 1.45;
+                }
+
+                .system-observation-link-btn {
+                    flex: 0 0 auto;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    min-height: 30px;
+                    padding: 6px 10px;
+                    border: 1px solid rgba(125, 211, 252, 0.32);
+                    border-radius: 8px;
+                    background: rgba(14, 165, 233, 0.12);
+                    color: #e0f2fe;
+                    font-size: 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    white-space: nowrap;
+                }
+
+                .system-observation-link-btn:hover {
+                    border-color: rgba(125, 211, 252, 0.58);
+                    background: rgba(14, 165, 233, 0.2);
+                }
+
                 .warning-banner {
                     background: rgba(245, 158, 11, 0.14);
                     border: 1px solid rgba(245, 158, 11, 0.32);
@@ -5845,6 +5955,15 @@ const TopicModal = () => {
 
 	                    .system-observation-status {
 	                        white-space: normal;
+	                    }
+
+	                    .system-observation-footer {
+	                        flex-direction: column;
+	                        align-items: flex-start;
+	                    }
+
+	                    .system-observation-link-btn {
+	                        width: 100%;
 	                    }
 
 	                    .system-observation-item {

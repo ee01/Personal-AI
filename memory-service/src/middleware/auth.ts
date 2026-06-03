@@ -1,16 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { UserContextManager } from '../core/UserContextManager.js';
-
-/**
- * Only alphanumeric characters, dots, hyphens, and underscores are allowed
- * in a user ID. This prevents path-traversal attacks and keeps directory
- * names filesystem-safe.
- */
-export const USER_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
-
-export function isValidUserId(userId: string): boolean {
-  return USER_ID_PATTERN.test(userId);
-}
+import { resolveUserIdHeader } from '../utils/userIdentity.js';
 
 /**
  * Create a Fastify `onRequest` hook that resolves the caller's identity
@@ -34,22 +24,14 @@ export function createAuthMiddleware(ucm: UserContextManager) {
       return;
     }
 
-    const rawUserId = request.headers['x-user-id'];
-    let userId: string;
-
-    if (!rawUserId || typeof rawUserId !== 'string') {
-      // Backward compatibility: no header = default user
-      userId = 'default';
-    } else {
-      if (!isValidUserId(rawUserId)) {
-        return reply.code(400).send({
-          error:
-            'Invalid X-User-Id format. Only a-z, 0-9, dots, hyphens, underscores allowed.',
-        });
-      }
-      userId = rawUserId;
+    const resolvedUserId = resolveUserIdHeader(
+      request.headers['x-user-id'],
+    );
+    if (resolvedUserId.error) {
+      return reply.code(400).send({ error: resolvedUserId.error });
     }
 
+    const userId = resolvedUserId.userId ?? 'default';
     request.userId = userId;
     request.userContext = ucm.getContext(userId);
   };

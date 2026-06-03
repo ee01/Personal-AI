@@ -6,6 +6,9 @@ export type ComposerSurface =
   | 'doubao'
   | 'claude'
   | 'gemini'
+  | 'codex_cli'
+  | 'claude_code_cli'
+  | 'cursor_agent_cli'
   | 'generic_agent';
 
 export type ComposerContextType =
@@ -18,6 +21,8 @@ export type ComposerScenario =
   | 'thread_reply'
   | 'jira_comment'
   | 'web_agent_prompt'
+  | 'compose_to_ai'
+  | 'agent_compose'
   | 'document_note';
 
 export type ComposerContextItemType =
@@ -110,7 +115,7 @@ export interface SiteContextAdapter {
 
 export interface ComposerAssistEvidence {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   title?: string;
   snippet: string;
   sourceLabel?: string;

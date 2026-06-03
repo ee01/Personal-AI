@@ -143,6 +143,7 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
   rawStore.replaceConversationArtifacts({
     source: 'doubao',
     conversationId: 'conv-1',
+    scope: 'personal',
     extractedAt: '2026-04-17T10:05:00.000Z',
     artifacts: [
       {
@@ -216,7 +217,9 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
             messageCount: number;
             pendingExtractCount: number;
             artifactCount: number;
+            revokedArtifactCount: number;
           };
+          revokePreview: { activeArtifactCount: number };
           settings: { defaultScope: string };
         };
         chatgpt: {
@@ -225,7 +228,9 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
             messageCount: number;
             pendingExtractCount: number;
             artifactCount: number;
+            revokedArtifactCount: number;
           };
+          revokePreview: { activeArtifactCount: number };
           settings: { defaultScope: string };
         };
       };
@@ -235,6 +240,8 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
     assert.equal(statusBody.sources.doubao.cache.messageCount, 1);
     assert.equal(statusBody.sources.doubao.cache.pendingExtractCount, 1);
     assert.equal(statusBody.sources.doubao.cache.artifactCount, 1);
+    assert.equal(statusBody.sources.doubao.cache.revokedArtifactCount, 0);
+    assert.equal(statusBody.sources.doubao.revokePreview.activeArtifactCount, 1);
     assert.equal(statusBody.sources.doubao.settings.defaultScope, 'personal');
     assert.equal(statusBody.sources.chatgpt.authStatus, 'unsupported');
     assert.equal(statusBody.sources.chatgpt.cache.pendingExtractCount, 1);
@@ -296,6 +303,7 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
         pendingMessageCount: number;
         extractedMessageCount: number;
         artifactCount: number;
+        revokedArtifactCount: number;
         latestMessagePreview?: string;
       }>;
       messages: Array<{
@@ -320,6 +328,7 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
         pendingMessageCount: 1,
         extractedMessageCount: 0,
         artifactCount: 1,
+        revokedArtifactCount: 0,
         latestMessagePreview: 'from doubao',
       },
     ]);
@@ -350,6 +359,7 @@ test('explorer endpoints expose cache status and stubbed source actions', async 
         source: 'doubao',
         conversationId: 'conv-1',
         extractedAt: '2026-04-17T10:05:00.000Z',
+        scope: 'personal',
         kind: 'fact',
         text: 'from extracted artifact',
         sourceQuote: 'from doubao',
@@ -454,6 +464,13 @@ test('ExplorerManager tick schedules only enabled sources by interval', async ()
         pendingExtractCount: 0,
         conversationCount: 0,
         artifactCount: 0,
+        revokedArtifactCount: 0,
+      }),
+      getRevokePreview: (_source: string, scope: 'work' | 'personal') => ({
+        scope,
+        activeArtifactCount: 0,
+        legacyUnscopedArtifactCount: 0,
+        revokedArtifactCount: 0,
       }),
       close: () => undefined,
     } as any,
@@ -535,6 +552,13 @@ test('ExplorerManager status does not probe disabled source auth', async () => {
         pendingExtractCount: 0,
         conversationCount: 0,
         artifactCount: 0,
+        revokedArtifactCount: 0,
+      }),
+      getRevokePreview: (_source: string, scope: 'work' | 'personal') => ({
+        scope,
+        activeArtifactCount: 0,
+        legacyUnscopedArtifactCount: 0,
+        revokedArtifactCount: 0,
       }),
       close: () => undefined,
     } as any,
@@ -610,6 +634,13 @@ test('ExplorerManager status reports Doubao transport fallback', async () => {
         pendingExtractCount: 0,
         conversationCount: 0,
         artifactCount: 0,
+        revokedArtifactCount: 0,
+      }),
+      getRevokePreview: (_source: string, scope: 'work' | 'personal') => ({
+        scope,
+        activeArtifactCount: 0,
+        legacyUnscopedArtifactCount: 0,
+        revokedArtifactCount: 0,
       }),
       close: () => undefined,
     } as any,
@@ -676,6 +707,19 @@ test('explorer revoke endpoint proxies memory deletion by source and scope', asy
   const rawStore = new RawMessageStore(
     path.join(tempDir, 'explorer', 'raw-messages.sqlite'),
   );
+  rawStore.replaceConversationArtifacts({
+    source: 'chatgpt',
+    conversationId: 'conv-personal',
+    scope: 'personal',
+    artifacts: [
+      {
+        kind: 'fact',
+        text: 'personal chatgpt artifact',
+        sourceQuote: 'remember this',
+        conversationRef: 'conv-personal',
+      },
+    ],
+  });
   const cursorStore = new CursorStore(
     path.join(tempDir, 'explorer', 'cursors.json'),
   );
@@ -715,7 +759,11 @@ test('explorer revoke endpoint proxies memory deletion by source and scope', asy
       scope: 'personal',
       deletedMessages: 2,
       deletedChunks: 5,
+      localArtifactsRevoked: 1,
+      localLegacyArtifactsRevoked: 0,
     });
+    assert.equal(rawStore.getStats('chatgpt').artifactCount, 0);
+    assert.equal(rawStore.getStats('chatgpt').revokedArtifactCount, 1);
     assert.deepEqual(deleteCalls, [{ source: 'chatgpt', scope: 'personal' }]);
   } finally {
     syncManager.stop();

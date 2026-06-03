@@ -29,6 +29,7 @@ import {
   formatAgentWorkflowSavedScenarioLabel,
   formatAgentWorkflowReplayLabel,
   formatAgentWorkflowDatetimeInputValue,
+  getAgentWorkflowTraceStatus,
   normalizeAgentWorkflowSavedScenarios,
   normalizeAgentWorkflowInputDatetime,
   type AgentWorkflowSavedExpectation,
@@ -66,6 +67,7 @@ import {
   pruneContextSiteAllowRecord,
   pruneContextSiteBlockRecord,
   pruneContextSiteMuteRecord,
+  removeContextSiteRecordConflicts,
 } from './web-intelligence/contextRecallGuards';
 import { useExtensionUiLanguage, useStaticDomI18n } from './i18n/react';
 import type { UiLanguage } from './i18n';
@@ -439,22 +441,78 @@ function ChromeOnDeviceASRPanel({ enabled }: { enabled: boolean }) {
   );
 }
 
+interface DesktopASREngineStatus {
+  ready?: boolean;
+  modelReady?: boolean;
+  reason?: string;
+  name?: string;
+  whisperBinaryAvailable?: boolean;
+  whisperBinaryInstallInProgress?: boolean;
+}
+
+interface DesktopASRStatus {
+  ok: boolean;
+  ready?: boolean;
+  liveReady?: boolean;
+  finalReady?: boolean;
+  modelRoot?: string;
+  engines?: {
+    appleSpeech?: DesktopASREngineStatus;
+    sherpaStreaming?: DesktopASREngineStatus;
+    funasrFinal?: DesktopASREngineStatus;
+    whisperFallback?: DesktopASREngineStatus;
+  };
+  activeSessionId?: string | null;
+  activeSessions?: unknown[];
+  downloadInProgress?: boolean;
+  downloadProgress?: number;
+  downloadTarget?: string;
+  lastDownloadError?: string;
+  error?: string;
+}
+
+function isDesktopASRLiveReady(status: DesktopASRStatus): boolean {
+  return (
+    status.liveReady ??
+    Boolean(
+      status.engines?.appleSpeech?.ready ||
+        status.engines?.sherpaStreaming?.modelReady,
+    )
+  );
+}
+
+function isDesktopASRFinalReady(status: DesktopASRStatus): boolean {
+  return (
+    status.finalReady ??
+    Boolean(
+      status.engines?.funasrFinal?.modelReady ||
+        status.engines?.whisperFallback?.ready,
+    )
+  );
+}
+
+function getDesktopASRLiveSummary(status: DesktopASRStatus): string {
+  if (status.engines?.appleSpeech?.ready) return 'Apple Speech ready';
+  if (status.engines?.sherpaStreaming?.modelReady) {
+    return 'sherpa streaming ready';
+  }
+  const reason =
+    status.engines?.appleSpeech?.reason ||
+    status.engines?.sherpaStreaming?.reason;
+  return reason ? `No live engine (${reason})` : 'No live engine';
+}
+
+function getDesktopASRFinalSummary(status: DesktopASRStatus): string {
+  if (status.engines?.funasrFinal?.modelReady) return 'FunASR final ready';
+  if (status.engines?.whisperFallback?.ready) return 'Whisper fallback ready';
+  const reason =
+    status.engines?.funasrFinal?.reason ||
+    status.engines?.whisperFallback?.reason;
+  return reason ? `No final engine (${reason})` : 'No final engine';
+}
+
 function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
-  const [status, setStatus] = React.useState<{
-    ok: boolean;
-    modelName?: string;
-    modelPath?: string;
-    modelReady?: boolean;
-    whisperBinaryAvailable?: boolean;
-    whisperBinaryPath?: string;
-    whisperBinaryInstallInProgress?: boolean;
-    whisperBinaryInstallProgress?: number;
-    whisperBinaryInstallError?: string;
-    downloadInProgress?: boolean;
-    downloadProgress?: number;
-    engineLoaded?: boolean;
-    error?: string;
-  } | null>(null);
+  const [status, setStatus] = React.useState<DesktopASRStatus | null>(null);
   const isMac =
     typeof navigator !== 'undefined' &&
     navigator.platform?.toLowerCase().includes('mac');
@@ -499,59 +557,41 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
     return (await response.json()) as T;
   };
 
-  const requestDesktopStatusDirectly = async (): Promise<{
-    ok: boolean;
-    modelName?: string;
-    modelPath?: string;
-    modelReady?: boolean;
-    whisperBinaryAvailable?: boolean;
-    whisperBinaryPath?: string;
-    whisperBinaryInstallInProgress?: boolean;
-    whisperBinaryInstallProgress?: number;
-    whisperBinaryInstallError?: string;
-    downloadInProgress?: boolean;
-    downloadProgress?: number;
-    engineLoaded?: boolean;
-    error?: string;
-  }> => {
+  const requestDesktopStatusDirectly = async (): Promise<DesktopASRStatus> => {
     return requestDesktopDirectly({
       method: 'GET',
-      path: '/whisper/status',
+      path: '/asr/status',
     });
   };
 
-  const ensureModelDirectly = async (): Promise<void> => {
+  const ensureModelsDirectly = async (): Promise<void> => {
     const result = await requestDesktopDirectly<{
       ok?: boolean;
       error?: string;
     }>({
       method: 'POST',
-      path: '/whisper/model/ensure',
+      path: '/asr/model/ensure',
       body: {},
     });
     if (result.ok === false) {
-      throw new Error(result.error || 'Desktop app model ensure failed');
+      throw new Error(result.error || 'Desktop app ASR model ensure failed');
     }
   };
 
-  const maybeAutoEnsureModel = (
-    nextStatus: {
-      ok: boolean;
-      modelReady?: boolean;
-      downloadInProgress?: boolean;
-    },
-    ensureModel: () => Promise<void>,
+  const maybeAutoEnsureModels = (
+    nextStatus: DesktopASRStatus,
+    ensureModels: () => Promise<void>,
   ) => {
     if (
       !nextStatus.ok ||
-      nextStatus.modelReady ||
+      (isDesktopASRLiveReady(nextStatus) && isDesktopASRFinalReady(nextStatus)) ||
       nextStatus.downloadInProgress ||
       autoEnsureModelRequestedRef.current
     ) {
       return;
     }
     autoEnsureModelRequestedRef.current = true;
-    void ensureModel().catch(() => {
+    void ensureModels().catch(() => {
       autoEnsureModelRequestedRef.current = false;
     });
   };
@@ -584,32 +624,30 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
       try {
         const res = await sendWhisperRequest<{
           ok: boolean;
-          modelName?: string;
-          modelPath?: string;
-          modelReady?: boolean;
-          whisperBinaryAvailable?: boolean;
-          whisperBinaryPath?: string;
-          whisperBinaryInstallInProgress?: boolean;
-          whisperBinaryInstallProgress?: number;
-          whisperBinaryInstallError?: string;
+          ready?: boolean;
+          liveReady?: boolean;
+          finalReady?: boolean;
+          engines?: DesktopASRStatus['engines'];
+          activeSessionId?: string | null;
+          activeSessions?: unknown[];
           downloadInProgress?: boolean;
           downloadProgress?: number;
-          engineLoaded?: boolean;
+          downloadTarget?: string;
+          lastDownloadError?: string;
           error?: string;
         }>({
           method: 'GET',
-          path: '/whisper/status',
+          path: '/asr/status',
         });
+        if (res.ok === false) {
+          throw new Error(res.error || 'Desktop app not running');
+        }
         if (!cancelled) {
-          setStatus(
-            res.ok
-              ? res
-              : { ok: false, error: res.error || 'Desktop app not running' },
-          );
-          maybeAutoEnsureModel(res, async () => {
+          setStatus(res);
+          maybeAutoEnsureModels(res, async () => {
             await sendWhisperRequest({
               method: 'POST',
-              path: '/whisper/model/ensure',
+              path: '/asr/model/ensure',
               body: {},
             });
           });
@@ -619,7 +657,7 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
           const directStatus = await requestDesktopStatusDirectly();
           if (!cancelled) {
             setStatus(directStatus);
-            maybeAutoEnsureModel(directStatus, ensureModelDirectly);
+            maybeAutoEnsureModels(directStatus, ensureModelsDirectly);
           }
         } catch {
           if (!cancelled) {
@@ -708,43 +746,65 @@ function DesktopASRStatusPanel({ enabled }: { enabled: boolean }) {
         </div>
       ) : (
         <div>
-          <small style={{ color: status.modelReady ? '#16a34a' : '#d97706' }}>
-            Model:{' '}
-            {status.modelName ? `${status.modelName} · ` : ''}
-            {status.modelReady
-              ? 'Ready'
+          <small
+            style={{
+              color: isDesktopASRFinalReady(status) ? '#16a34a' : '#d97706',
+            }}
+          >
+            {isDesktopASRFinalReady(status)
+              ? 'Local ASR can transcribe now'
               : status.downloadInProgress
-                ? `Downloading ${status.downloadProgress ?? 0}%`
-                : 'Not downloaded'}
+                ? `Preparing local ASR models ${status.downloadProgress ?? 0}%`
+                : 'Local ASR final model is not ready'}
+          </small>
+          <small style={{ color: '#4b5563', display: 'block', marginTop: 4 }}>
+            Live: {getDesktopASRLiveSummary(status)}
+            {!isDesktopASRLiveReady(status) && isDesktopASRFinalReady(status)
+              ? ' · final-only transcripts may appear after silence or stop'
+              : ''}
+          </small>
+          <small style={{ color: '#4b5563', display: 'block', marginTop: 4 }}>
+            Final: {getDesktopASRFinalSummary(status)}
           </small>
           <small
             style={{
-              color: status.whisperBinaryAvailable ? '#16a34a' : '#dc2626',
+              color: status.engines?.whisperFallback?.whisperBinaryAvailable
+                ? '#16a34a'
+                : '#d97706',
               display: 'block',
               marginTop: 4,
             }}
           >
-          Whisper binary:{' '}
-          {status.whisperBinaryAvailable
-            ? status.whisperBinaryPath || 'Found'
-            : status.whisperBinaryInstallInProgress
-              ? `Installing ${status.whisperBinaryInstallProgress ?? 0}%`
-              : 'Missing'}
-        </small>
+            Whisper fallback:{' '}
+            {status.engines?.whisperFallback?.whisperBinaryAvailable
+              ? 'binary ready'
+              : status.engines?.whisperFallback?.whisperBinaryInstallInProgress
+                ? 'installing binary'
+                : status.engines?.whisperFallback?.modelReady
+                  ? 'model ready, binary missing'
+                  : 'not ready'}
+          </small>
           <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
             Desktop app connected
-            {status.engineLoaded ? ' · Whisper engine loaded' : ''}
+            {status.activeSessionId
+              ? ` · active session ${status.activeSessionId}`
+              : ''}
           </small>
-          {status.whisperBinaryInstallError ? (
-            <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
-              Whisper binary install failed: {status.whisperBinaryInstallError}
+          {status.downloadInProgress ? (
+            <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
+              Downloading {status.downloadTarget || 'ASR model'} ·{' '}
+              {status.downloadProgress ?? 0}%
             </small>
           ) : null}
-          {!status.whisperBinaryAvailable &&
-          !status.whisperBinaryInstallInProgress ? (
+          {status.lastDownloadError ? (
+            <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
+              Local ASR model install failed: {status.lastDownloadError}
+            </small>
+          ) : null}
+          {!isDesktopASRFinalReady(status) && !status.downloadInProgress ? (
             <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
-              Desktop app 会自动安装本地 Whisper binary。安装完成后 Local
-              Whisper 才会真正转录。
+              Desktop app 会自动安装本地 ASR 模型。至少需要一个 final
+              engine；Whisper fallback ready 时即使 live engine 缺失也可转写。
             </small>
           ) : null}
         </div>
@@ -1067,19 +1127,31 @@ function ContextSiteMuteSettings() {
         readBlockedSiteRecord(),
         readAllowedSiteRecord(),
       ]);
-      delete muteRecord[host];
-      delete blockRecord[host];
+      const nextMuteRecord = removeContextSiteRecordConflicts(
+        host,
+        muteRecord,
+      );
+      const nextBlockRecord = removeContextSiteRecordConflicts(
+        host,
+        blockRecord,
+      );
       allowRecord[host] = Date.now();
       await chrome.storage.local.set({
-        [CONTEXT_SITE_MUTE_STORAGE_KEY]: muteRecord,
-        [CONTEXT_SITE_BLOCK_STORAGE_KEY]: blockRecord,
+        [CONTEXT_SITE_MUTE_STORAGE_KEY]: nextMuteRecord.record,
+        [CONTEXT_SITE_BLOCK_STORAGE_KEY]: nextBlockRecord.record,
         [CONTEXT_SITE_ALLOW_STORAGE_KEY]: allowRecord,
       });
-      setMutedSites(toMutedSiteViews(muteRecord));
-      setBlockedSites(toBlockedSiteViews(blockRecord));
+      setMutedSites(toMutedSiteViews(nextMuteRecord.record));
+      setBlockedSites(toBlockedSiteViews(nextBlockRecord.record));
       setAllowedSites(toAllowedSiteViews(allowRecord));
       setAllowHostInput('');
-      setMessage(`已允许 ${host} 显示网页记忆提示`);
+      const removedConflictCount =
+        nextMuteRecord.removedHosts.length + nextBlockRecord.removedHosts.length;
+      setMessage(
+        removedConflictCount > 0
+          ? `已允许 ${host} 显示网页记忆提示，并移除 ${removedConflictCount} 条覆盖它的静默/屏蔽规则`
+          : `已允许 ${host} 显示网页记忆提示`,
+      );
     } catch (error) {
       console.warn('Failed to allow context site:', error);
       setMessage('添加允许站点失败');
@@ -1138,16 +1210,32 @@ function ContextSiteMuteSettings() {
         readMutedSiteRecord(),
         readBlockedSiteRecord(),
       ]);
-      delete muteRecord[host];
+      const allowRecord = await readAllowedSiteRecord();
+      const nextMuteRecord = removeContextSiteRecordConflicts(
+        host,
+        muteRecord,
+      );
+      const nextAllowRecord = removeContextSiteRecordConflicts(
+        host,
+        allowRecord,
+      );
       blockRecord[host] = Date.now();
       await chrome.storage.local.set({
-        [CONTEXT_SITE_MUTE_STORAGE_KEY]: muteRecord,
+        [CONTEXT_SITE_MUTE_STORAGE_KEY]: nextMuteRecord.record,
         [CONTEXT_SITE_BLOCK_STORAGE_KEY]: blockRecord,
+        [CONTEXT_SITE_ALLOW_STORAGE_KEY]: nextAllowRecord.record,
       });
-      setMutedSites(toMutedSiteViews(muteRecord));
+      setMutedSites(toMutedSiteViews(nextMuteRecord.record));
       setBlockedSites(toBlockedSiteViews(blockRecord));
+      setAllowedSites(toAllowedSiteViews(nextAllowRecord.record));
       setBlockHostInput('');
-      setMessage(`已永久关闭 ${host} 的网页记忆提示`);
+      const removedConflictCount =
+        nextMuteRecord.removedHosts.length + nextAllowRecord.removedHosts.length;
+      setMessage(
+        removedConflictCount > 0
+          ? `已永久关闭 ${host} 的网页记忆提示，并移除 ${removedConflictCount} 条允许/静默冲突规则`
+          : `已永久关闭 ${host} 的网页记忆提示`,
+      );
     } catch (error) {
       console.warn('Failed to block context site:', error);
       setMessage('永久关闭站点失败');
@@ -2761,6 +2849,14 @@ const Options = () => {
     downloadJson(config, 'personal-ai-config.json');
   };
 
+  const openPromptConfigPage = () => {
+    const promptConfigUrl =
+      typeof chrome !== 'undefined' && chrome.runtime?.getURL
+        ? chrome.runtime.getURL('prompt-config.html')
+        : 'prompt-config.html';
+    window.open(promptConfigUrl, '_blank');
+  };
+
   const renderPushTargetFields = (
     label: string,
     targetKey: PushTargetField,
@@ -2839,6 +2935,23 @@ const Options = () => {
           >
             {t('options.language.description')}
           </small>
+        </div>
+      </div>
+
+      <div className="form-section prompt-config-entry-section">
+        <h2>{t('options.sections.promptConfig')}</h2>
+        <small className="prompt-config-entry-copy">
+          {t('options.promptConfig.description')}
+        </small>
+        <div className="prompt-config-entry-actions">
+          <button
+            type="button"
+            className="prompt-config-open-btn"
+            onClick={openPromptConfigPage}
+          >
+            {t('options.promptConfig.open')}
+          </button>
+          <span>{t('options.promptConfig.receipt')}</span>
         </div>
       </div>
 
@@ -3173,13 +3286,14 @@ const Options = () => {
             对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
           </small>
         </div>
+        <h3 style={{ margin: '16px 0 10px' }}>自我反思 / 场景预演生产</h3>
         <ToggleField
           id="SELF_REFLECTION_ENABLED"
           name="SELF_REFLECTION_ENABLED"
           checked={config.SELF_REFLECTION_ENABLED !== false}
           onChange={handleInputChange}
-          label="启用自我反思"
-          description="每个用户可以单独关闭自我反思；关闭后不会影响梦境重放的持续生成。"
+          label="启用自我反思（场景预演生产总开关）"
+          description="默认开启。关闭后不会自动推进 Reflection，也不会从 Reflection 生成新的场景预演候选；已存在的场景预演和梦境重放不受影响。"
         />
         <div className="form-group">
           <label htmlFor="SELF_REFLECTION_HEARTBEAT_MINUTES">
@@ -4470,6 +4584,26 @@ interface WorkflowSavedRegressionSummary {
   results: WorkflowSavedRegressionResult[];
 }
 
+interface WorkflowSavedRegressionReport {
+  type: 'agent-workflow.saved-regression-report';
+  generatedAt: string;
+  summary: {
+    total: number;
+    same: number;
+    changed: number;
+    noBaseline: number;
+    failed: number;
+  };
+  results: Array<{
+    id: string;
+    label: string;
+    status: WorkflowSavedRegressionStatus;
+    summary: string;
+    detail?: string;
+    actual?: AgentWorkflowSavedExpectation;
+  }>;
+}
+
 const formatWorkflowBoolean = (value: boolean): string => (value ? '是' : '否');
 
 const formatWorkflowConfidence = (value: number | null): string =>
@@ -4560,6 +4694,47 @@ const buildWorkflowSavedRegressionSummary = (
   failed: results.filter((item) => item.status === 'error').length,
   results,
 });
+
+const buildWorkflowSavedRegressionReport = (
+  summary: WorkflowSavedRegressionSummary,
+  generatedAt: string,
+): WorkflowSavedRegressionReport => ({
+  type: 'agent-workflow.saved-regression-report',
+  generatedAt,
+  summary: {
+    total: summary.total,
+    same: summary.same,
+    changed: summary.changed,
+    noBaseline: summary.noBaseline,
+    failed: summary.failed,
+  },
+  results: summary.results.map((item) => ({
+    id: item.id,
+    label: item.label,
+    status: item.status,
+    summary: item.summary,
+    detail: item.detail,
+    actual: item.actual,
+  })),
+});
+
+const downloadWorkflowSavedRegressionReport = (
+  summary: WorkflowSavedRegressionSummary,
+): string => {
+  const generatedAt = new Date().toISOString();
+  const report = buildWorkflowSavedRegressionReport(summary, generatedAt);
+  const filename = `agent-workflow-regression-${generatedAt.replace(/[:.]/g, '-')}.json`;
+  const blob = new Blob([JSON.stringify(report, null, 2)], {
+    type: 'application/json;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  return filename;
+};
 
 const AgentSettings = () => {
   const [agents, setAgents] = useState<any[]>([]);
@@ -5209,6 +5384,20 @@ const AgentSettings = () => {
     );
   };
 
+  const handleExportWorkflowRegressionReport = () => {
+    if (!workflowSavedRegressionSummary) {
+      setWorkflowSavedScenarioError('请先完成一次批量回归再导出报告');
+      setWorkflowSavedScenarioStatus('');
+      return;
+    }
+
+    const filename = downloadWorkflowSavedRegressionReport(
+      workflowSavedRegressionSummary,
+    );
+    setWorkflowSavedScenarioError('');
+    setWorkflowSavedScenarioStatus(`已导出批量回归报告：${filename}`);
+  };
+
   const handleDeleteWorkflowSavedScenario = async () => {
     const scenario = getSelectedWorkflowSavedScenario();
     if (!scenario) return;
@@ -5354,8 +5543,7 @@ const AgentSettings = () => {
   const workflowTestStorageReview = workflowTestResult?.storageReview;
   const workflowTestConfidence =
     normalizeAgentWorkflowConfidence(workflowTestResult?.confidence) ??
-    normalizeAgentWorkflowConfidence(workflowTestStorageReview?.confidence) ??
-    0;
+    normalizeAgentWorkflowConfidence(workflowTestStorageReview?.confidence);
   const workflowTestNotificationLabel = workflowTestResult?.notificationReview
     ?.required
     ? '待复核'
@@ -5373,18 +5561,12 @@ const AgentSettings = () => {
   const workflowToolStatusLabels: Record<string, string> = {
     success: '成功',
     skipped: '跳过',
+    placeholder: '占位',
     error: '失败',
   };
   const workflowTestTraceStatus =
     workflowTestStorageReview?.traceStatus ||
-    (workflowTestTrace.length === 0
-      ? 'missing'
-      : workflowTestTrace.some((step: any) => step.status === 'error') ||
-          workflowTestTrace.some((step: any) =>
-            (step.tools || []).some((tool: any) => tool.status === 'skipped'),
-          )
-        ? 'partial'
-        : 'complete');
+    getAgentWorkflowTraceStatus(workflowTestResult);
   const workflowConfigDiagnostics = buildAgentWorkflowConfigDiagnostics(
     sortedAgents,
     availableTools,
@@ -5557,6 +5739,9 @@ const AgentSettings = () => {
                 : '',
               workflowTestStorageReview.toolSkippedCount
                 ? `跳过工具 ${workflowTestStorageReview.toolSkippedCount}`
+                : '',
+              workflowTestStorageReview.toolPlaceholderCount
+                ? `占位工具 ${workflowTestStorageReview.toolPlaceholderCount}`
                 : '',
             ]
               .filter(Boolean)
@@ -5851,15 +6036,24 @@ const AgentSettings = () => {
                   </small>
                 )}
               </div>
-              {workflowSavedRegressionAcceptableCount > 0 && (
+              <div className="agent-workflow-regression-actions">
                 <button
                   type="button"
-                  onClick={handleAcceptWorkflowRegressionBaselines}
+                  onClick={handleExportWorkflowRegressionReport}
                   disabled={workflowExecutionBusy}
                 >
-                  接受 {workflowSavedRegressionAcceptableCount} 个结果为基线
+                  导出报告
                 </button>
-              )}
+                {workflowSavedRegressionAcceptableCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleAcceptWorkflowRegressionBaselines}
+                    disabled={workflowExecutionBusy}
+                  >
+                    接受 {workflowSavedRegressionAcceptableCount} 个结果为基线
+                  </button>
+                )}
+              </div>
             </div>
             <div className="agent-workflow-regression-metrics">
               <span>总数 {workflowSavedRegressionSummary.total}</span>
@@ -5968,7 +6162,7 @@ const AgentSettings = () => {
                 通知 {workflowTestNotificationLabel}
               </span>
               <span className="agent-test-decision">
-                置信度 {Math.round(workflowTestConfidence * 100)}%
+                置信度 {formatWorkflowConfidence(workflowTestConfidence)}
               </span>
             </div>
             {workflowSavedBaselineRows.length > 0 && (

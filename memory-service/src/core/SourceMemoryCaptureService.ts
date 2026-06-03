@@ -9,6 +9,7 @@ import { now, formatDate } from '../utils/time.js';
 
 export type SourceMemorySourceKind =
   | 'webpage'
+  | 'visual_memory'
   | 'selection'
   | 'jira_comment'
   | 'message_reply'
@@ -128,6 +129,7 @@ interface SourceMemoryRow {
   summary: string | null;
   content_preview: string | null;
   message_id: string | null;
+  metadata_json: string | null;
   created_at: number;
   updated_at: number;
   saved_at: number | null;
@@ -366,22 +368,49 @@ export class SourceMemoryCaptureService {
     const existing = this.findCapsuleByFingerprint(sourceFingerprint);
     if (existing) {
       if (existing.status === 'dismissed') {
+        const messageId = existing.message_id || uuidv4();
         const transaction = this.db.transaction(() => {
           this.db
             .prepare(
               `UPDATE source_memory_capsules
-               SET status = 'saved',
+               SET source_kind = ?,
+                   source_url = ?,
+                   source_title = ?,
+                   source_host = ?,
+                   status = 'saved',
                    capture_mode = ?,
                    capture_reason = ?,
+                   scope = ?,
+                   privacy_level = ?,
+                   summary = ?,
+                   content_preview = ?,
+                   message_id = ?,
+                   metadata_json = ?,
                    updated_at = ?,
                    saved_at = ?,
                    dismissed_at = NULL
                WHERE id = ?`,
             )
-            .run(captureMode, captureReason, ts, ts, existing.id);
+            .run(
+              sourceKind,
+              sourceUrl,
+              sourceTitle,
+              sourceHost,
+              captureMode,
+              captureReason,
+              scope,
+              privacyLevel,
+              summary,
+              contentPreview,
+              messageId,
+              JSON.stringify(metadata),
+              ts,
+              ts,
+              existing.id,
+            );
           this.removeLinkedMemorySignal(existing.message_id);
           this.insertMessageAndChunks({
-            messageId: existing.message_id || uuidv4(),
+            messageId,
             capsuleId: existing.id,
             content: fullContent,
             summary,
@@ -411,6 +440,11 @@ export class SourceMemoryCaptureService {
     const capsuleId = uuidv4();
     const anchorId = uuidv4();
     const messageId = uuidv4();
+    const anchorKind = sourceKind === 'visual_memory'
+      ? 'visual_region'
+      : input.selectedText
+        ? 'text_selection'
+        : 'page_excerpt';
     const takeaways = buildTakeaways(text, anchorId);
     const triggers = buildTriggers(sourceTitle, sourceUrl, input.entityHints);
 
@@ -454,7 +488,7 @@ export class SourceMemoryCaptureService {
         .run(
           anchorId,
           capsuleId,
-          input.selectedText ? 'text_selection' : 'page_excerpt',
+          anchorKind,
           sourceUrl,
           contentPreview,
           privacyLevel === 'needs_review' ? 'internal' : 'normal',
@@ -523,6 +557,80 @@ export class SourceMemoryCaptureService {
     this.writeMarkdownSnapshot(capsuleId, fullContent, ts);
 
     return this.getCapsule(capsuleId);
+  }
+
+  updateCapsuleNote(id: string, note?: string): SourceMemoryCapsule {
+    const existing = this.findCapsule(id);
+    if (!existing) {
+      throw new SourceMemoryCaptureValidationError('Source memory capsule not found.', 404);
+    }
+    if (existing.status !== 'saved') {
+      throw new SourceMemoryCaptureValidationError('Only saved source memory capsules can be annotated.');
+    }
+
+    const ts = now();
+    const normalizedNote = normalizeText(note).slice(0, 800);
+    const existingMessage = existing.message_id
+      ? (this.db
+          .prepare(`SELECT content FROM messages_raw WHERE id = ?`)
+          .get(existing.message_id) as { content: string } | undefined)
+      : undefined;
+    const text = clipText(
+      extractStoredEvidenceText(existingMessage?.content) ||
+        existing.content_preview ||
+        existing.source_title,
+      MAX_CAPTURE_TEXT_CHARS,
+    );
+    const summary = normalizedNote || summarizeText(text, existing.source_title);
+    const metadata = {
+      ...parseObject(existing.metadata_json ?? '{}'),
+      userNote: normalizedNote || undefined,
+      noteUpdatedAt: ts,
+    };
+    const sourceUrl = existing.source_url ?? undefined;
+    const fullContent = buildStoredContent({
+      sourceTitle: existing.source_title,
+      note: normalizedNote,
+      summary,
+      text,
+      sourceUrl,
+    });
+    const messageId = existing.message_id || uuidv4();
+
+    const transaction = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE source_memory_capsules
+           SET summary = ?,
+               message_id = ?,
+               metadata_json = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(summary, messageId, JSON.stringify(metadata), ts, id);
+
+      this.removeLinkedMemorySignal(existing.message_id);
+      this.insertMessageAndChunks({
+        messageId,
+        capsuleId: id,
+        content: fullContent,
+        summary,
+        scope: existing.scope,
+        sourceUrl,
+        sourceTitle: existing.source_title,
+        sourceHost: existing.source_host,
+        captureMode: existing.capture_mode,
+        metadata,
+        ts,
+      });
+      this.insertEvent(id, 'note_updated', 'medium', sourceUrl, {
+        hasNote: Boolean(normalizedNote),
+      });
+    });
+
+    transaction();
+    this.writeMarkdownSnapshot(id, fullContent, ts);
+    return this.getCapsule(id);
   }
 
   dismissCapsule(id: string, reason?: string): SourceMemoryCapsule {
@@ -803,8 +911,8 @@ export class SourceMemoryCaptureService {
         .prepare(
           `SELECT id, source_kind, source_url, source_title, source_host,
                   capture_mode, capture_reason, status, scope, privacy_level,
-                  summary, content_preview, message_id, created_at, updated_at,
-                  saved_at
+                  summary, content_preview, message_id, metadata_json,
+                  created_at, updated_at, saved_at
            FROM source_memory_capsules
            WHERE id = ?`,
         )
@@ -818,8 +926,8 @@ export class SourceMemoryCaptureService {
         .prepare(
           `SELECT id, source_kind, source_url, source_title, source_host,
                   capture_mode, capture_reason, status, scope, privacy_level,
-                  summary, content_preview, message_id, created_at, updated_at,
-                  saved_at
+                  summary, content_preview, message_id, metadata_json,
+                  created_at, updated_at, saved_at
            FROM source_memory_capsules
            WHERE source_fingerprint = ?`,
         )
@@ -844,6 +952,16 @@ function buildStoredContent(input: {
   }
   lines.push('', '## Evidence', '', input.text);
   return lines.join('\n');
+}
+
+function extractStoredEvidenceText(content?: string | null): string {
+  const raw = content || '';
+  const marker = '\n## Evidence\n';
+  const markerIndex = raw.indexOf(marker);
+  if (markerIndex < 0) {
+    return normalizeText(raw);
+  }
+  return raw.slice(markerIndex + marker.length).trim();
 }
 
 function buildTakeaways(text: string, anchorId: string): SourceMemoryTakeaway[] {

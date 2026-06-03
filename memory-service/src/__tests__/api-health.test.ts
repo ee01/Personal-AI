@@ -13,6 +13,7 @@ import { buildApp } from '../server.js';
 import { getTestDb, cleanupTestDb } from './setup.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { UserContextManager } from '../core/UserContextManager.js';
+import { resolveUserIdHeader } from '../utils/userIdentity.js';
 
 describe('Health & Stats API', () => {
   let app: FastifyInstance;
@@ -74,6 +75,28 @@ describe('Health & Stats API', () => {
     expect(body).toHaveProperty('notifications');
     expect(body).toHaveProperty('confirmRequests');
     expect(body).toHaveProperty('memory');
+  });
+
+  it('GET /api/v1/stats reports memory lifecycle counts from memory_metadata', async () => {
+    const ts = Math.floor(Date.now() / 1000);
+    db.prepare('DELETE FROM memory_metadata').run();
+    db.prepare(
+      `INSERT INTO memory_metadata
+        (target_type, target_id, salience_score, effective_salience,
+         retrieval_tier, consolidation_level, created_at, updated_at)
+       VALUES
+        ('message', 'stats-archived-memory', 0.1, 0.1, 'archive_only', 'archived', ?, ?),
+        ('message', 'stats-forgotten-memory', 0.01, 0.01, 'forgotten', 'forgotten', ?, ?)`,
+    ).run(ts, ts, ts, ts);
+
+    const res = await app.inject({ method: 'GET', url: '/api/v1/stats' });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.memory.archived).toBe(1);
+    expect(body.memory.forgotten).toBe(1);
+    expect(body.memory.retrievalTiers.archive_only).toBe(1);
+    expect(body.memory.retrievalTiers.forgotten).toBe(1);
   });
 
   // -------------------------------------------------------------------
@@ -142,5 +165,69 @@ describe('Stats user isolation metadata', () => {
       storageKey: 'data/users/default/memory.db',
       fallbackToDefault: true,
     });
+  });
+
+  it('GET /api/v1/stats rejects duplicate user identity headers without fallback', async () => {
+    expect(resolveUserIdHeader(['owner.alpha', 'other.user']).error).toContain(
+      'Provide exactly one X-User-Id',
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/stats',
+      headers: {
+        'x-user-id': ['owner.alpha', 'other.user'] as any,
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('Invalid X-User-Id format');
+  });
+
+  it('write routes require an explicit non-ambiguous user identity', async () => {
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      payload: {
+        content: 'write guard should stop this before validation',
+        sourceType: 'manual',
+      },
+    });
+    expect(missing.statusCode).toBe(403);
+    expect(missing.json().error).toContain('X-User-Id header is required');
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      headers: {
+        'x-user-id': ['owner.alpha', 'other.user'] as any,
+      },
+      payload: {
+        content: 'duplicate identity should stop this before mutation',
+        sourceType: 'manual',
+      },
+    });
+    expect(duplicate.statusCode).toBe(400);
+    expect(duplicate.json().error).toContain('Invalid X-User-Id format');
+  });
+
+  it('UserContextManager rejects unsafe direct user ids before creating storage', () => {
+    expect(() => userContextManager.getContext('../owner')).toThrow(
+      /Invalid userId format/,
+    );
+    expect(fs.existsSync(path.join(dataDir, 'owner'))).toBe(false);
+  });
+
+  it('public skill share tokens cannot select unsafe user directories', async () => {
+    const unsafeToken = `${Buffer.from('../shared-owner').toString(
+      'base64url',
+    )}.not-a-real-token`;
+    const res = await app.inject({
+      method: 'GET',
+      url: `/skills/demo@1.0.0?token=${encodeURIComponent(unsafeToken)}`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(fs.existsSync(path.join(dataDir, 'shared-owner'))).toBe(false);
   });
 });

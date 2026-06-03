@@ -29,6 +29,16 @@ export interface ExplorerChatgptSettings {
   transport?: ExplorerTransport;
 }
 
+export interface ExplorerLocalAgentSettings {
+  enabled: boolean;
+  rootPaths: string[];
+  lookbackDays: number;
+  intervalMinutes: number;
+  maxSessions: number;
+  includeSubagents: boolean;
+  defaultScope: Exclude<BridgeAskScope, 'both'>;
+}
+
 export interface ExplorerDoubaoTransportSettings {
   /** Browser transport to use for Doubao exploration. Defaults to 'playwright'. */
   transport?: ExplorerTransport;
@@ -39,13 +49,16 @@ export interface ExplorerDoubaoTransportSettings {
 export interface ExplorerSettings {
   doubao: ExplorerDoubaoSettings;
   chatgpt: ExplorerChatgptSettings;
+  codex_cli: ExplorerLocalAgentSettings;
+  claude_code_cli: ExplorerLocalAgentSettings;
+  cursor_agent_cli: ExplorerLocalAgentSettings;
   autoClassify: boolean;
   askDefaultScope: BridgeAskScope;
 }
 
 export interface BridgeSettingsPayload {
   defaults: BridgeUserSettings;
-  user: Partial<BridgeUserSettings>;
+  user: BridgeUserSettingsPatch;
   effective: BridgeUserSettings;
 }
 
@@ -59,7 +72,15 @@ export interface BridgeUserSettings {
   stableMemoryIntervalMs: number;
   mobileBriefingIntervalMs: number;
   reminderSyncIntervalMs: number;
+  reminderDailyDigestEnabled: boolean;
+  reminderDailyDigestTime: string;
+  reminderDedupSameDay: boolean;
   explorer: ExplorerSettings;
+}
+
+export interface BridgeUserSettingsPatch
+  extends Partial<Omit<BridgeUserSettings, 'explorer'>> {
+  explorer?: Partial<ExplorerSettings>;
 }
 
 type SettingsListener = (settings: BridgeUserSettings) => void;
@@ -87,6 +108,59 @@ function nonNegativeOrFallback(
     : fallback;
 }
 
+function stringArrayOrFallback(
+  value: unknown,
+  fallback: string[],
+): string[] {
+  if (!Array.isArray(value)) return fallback;
+  const normalized = Array.from(
+    new Set(
+      value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean),
+    ),
+  );
+  return normalized.length ? normalized : fallback;
+}
+
+function normalizeDefaultScope(
+  value: unknown,
+  fallback: Exclude<BridgeAskScope, 'both'>,
+): Exclude<BridgeAskScope, 'both'> {
+  return value === 'work' || value === 'personal' ? value : fallback;
+}
+
+function normalizeLocalAgentExplorerSettings(
+  input: Partial<ExplorerLocalAgentSettings> | undefined,
+  defaults: ExplorerLocalAgentSettings,
+): ExplorerLocalAgentSettings {
+  return {
+    enabled:
+      typeof input?.enabled === 'boolean' ? input.enabled : defaults.enabled,
+    rootPaths: stringArrayOrFallback(input?.rootPaths, defaults.rootPaths),
+    lookbackDays: nonNegativeOrFallback(
+      input?.lookbackDays,
+      defaults.lookbackDays,
+    ),
+    intervalMinutes: positiveOrFallback(
+      input?.intervalMinutes,
+      defaults.intervalMinutes,
+    ),
+    maxSessions: nonNegativeOrFallback(
+      input?.maxSessions,
+      defaults.maxSessions,
+    ),
+    includeSubagents:
+      typeof input?.includeSubagents === 'boolean'
+        ? input.includeSubagents
+        : defaults.includeSubagents,
+    defaultScope: normalizeDefaultScope(
+      input?.defaultScope,
+      defaults.defaultScope,
+    ),
+  };
+}
+
 function normalizeUiLanguage(value: unknown, fallback: UiLanguage): UiLanguage {
   if (value === 'en-US' || value === 'en') return 'en-US';
   if (value === 'zh-CN' || value === 'zh_CN' || value === 'zh') {
@@ -98,6 +172,25 @@ function normalizeUiLanguage(value: unknown, fallback: UiLanguage): UiLanguage {
     if (normalized.startsWith('zh')) return 'zh-CN';
   }
   return fallback;
+}
+
+function normalizeTimeOfDay(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return fallback;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return fallback;
+  }
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
 function normalizeExplorerSettings(
@@ -162,6 +255,18 @@ function normalizeExplorerSettings(
           ? input.chatgpt.transport
           : defaults.chatgpt.transport,
     },
+    codex_cli: normalizeLocalAgentExplorerSettings(
+      input?.codex_cli,
+      defaults.codex_cli,
+    ),
+    claude_code_cli: normalizeLocalAgentExplorerSettings(
+      input?.claude_code_cli,
+      defaults.claude_code_cli,
+    ),
+    cursor_agent_cli: normalizeLocalAgentExplorerSettings(
+      input?.cursor_agent_cli,
+      defaults.cursor_agent_cli,
+    ),
     autoClassify:
       typeof input?.autoClassify === 'boolean'
         ? input.autoClassify
@@ -176,7 +281,7 @@ function normalizeExplorerSettings(
 }
 
 function normalizeSettings(
-  input: Partial<BridgeUserSettings>,
+  input: BridgeUserSettingsPatch,
   defaults: BridgeUserSettings,
 ): BridgeUserSettings {
   return {
@@ -212,6 +317,18 @@ function normalizeSettings(
       input.reminderSyncIntervalMs,
       defaults.reminderSyncIntervalMs,
     ),
+    reminderDailyDigestEnabled:
+      typeof input.reminderDailyDigestEnabled === 'boolean'
+        ? input.reminderDailyDigestEnabled
+        : defaults.reminderDailyDigestEnabled,
+    reminderDailyDigestTime: normalizeTimeOfDay(
+      input.reminderDailyDigestTime,
+      defaults.reminderDailyDigestTime,
+    ),
+    reminderDedupSameDay:
+      typeof input.reminderDedupSameDay === 'boolean'
+        ? input.reminderDedupSameDay
+        : defaults.reminderDedupSameDay,
     explorer: normalizeExplorerSettings(input.explorer, defaults.explorer),
   };
 }
@@ -229,6 +346,12 @@ export function createDefaultBridgeUserSettings(
     stableMemoryIntervalMs: config.stableMemoryIntervalMs,
     mobileBriefingIntervalMs: config.mobileBriefingIntervalMs,
     reminderSyncIntervalMs: config.reminderSyncIntervalMs,
+    reminderDailyDigestEnabled: config.reminderDailyDigestEnabled,
+    reminderDailyDigestTime: normalizeTimeOfDay(
+      config.reminderDailyDigestTime,
+      '09:00',
+    ),
+    reminderDedupSameDay: config.reminderDedupSameDay,
     explorer: {
       doubao: {
         enabled: false,
@@ -241,6 +364,33 @@ export function createDefaultBridgeUserSettings(
         maxConversations: 0,
         lookbackDays: 0,
         intervalMinutes: 60,
+        defaultScope: 'work',
+      },
+      codex_cli: {
+        enabled: false,
+        rootPaths: ['${CODEX_HOME:-~/.codex}/sessions'],
+        lookbackDays: 30,
+        intervalMinutes: 60,
+        maxSessions: 50,
+        includeSubagents: false,
+        defaultScope: 'work',
+      },
+      claude_code_cli: {
+        enabled: false,
+        rootPaths: ['~/.claude/projects', '~/.claude/transcripts'],
+        lookbackDays: 30,
+        intervalMinutes: 60,
+        maxSessions: 50,
+        includeSubagents: true,
+        defaultScope: 'work',
+      },
+      cursor_agent_cli: {
+        enabled: false,
+        rootPaths: ['~/.cursor/projects'],
+        lookbackDays: 30,
+        intervalMinutes: 60,
+        maxSessions: 50,
+        includeSubagents: true,
         defaultScope: 'work',
       },
       autoClassify: false,
@@ -261,11 +411,14 @@ export function applyBridgeSettingsToConfig(
   config.stableMemoryIntervalMs = settings.stableMemoryIntervalMs;
   config.mobileBriefingIntervalMs = settings.mobileBriefingIntervalMs;
   config.reminderSyncIntervalMs = settings.reminderSyncIntervalMs;
+  config.reminderDailyDigestEnabled = settings.reminderDailyDigestEnabled;
+  config.reminderDailyDigestTime = settings.reminderDailyDigestTime;
+  config.reminderDedupSameDay = settings.reminderDedupSameDay;
 }
 
 export class BridgeSettingsStore {
   private current: BridgeUserSettings;
-  private userOverrides: Partial<BridgeUserSettings> = {};
+  private userOverrides: BridgeUserSettingsPatch = {};
   private readonly listeners = new Set<SettingsListener>();
   private readonly defaults: BridgeUserSettings;
 
@@ -289,11 +442,11 @@ export class BridgeSettingsStore {
 
   async load(): Promise<{
     effective: BridgeUserSettings;
-    user: Partial<BridgeUserSettings>;
+    user: BridgeUserSettingsPatch;
   }> {
     try {
       const raw = await fs.readFile(this.settingsFile, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<BridgeUserSettings>;
+      const parsed = JSON.parse(raw) as BridgeUserSettingsPatch;
       return {
         effective: normalizeSettings(parsed, this.defaults),
         user: parsed,
@@ -326,7 +479,7 @@ export class BridgeSettingsStore {
     };
   }
 
-  async save(next: Partial<BridgeUserSettings>): Promise<void> {
+  async save(next: BridgeUserSettingsPatch): Promise<void> {
     this.userOverrides = structuredClone(next);
     this.current = normalizeSettings(this.userOverrides, this.defaults);
     await this.ensureDir();
@@ -339,9 +492,18 @@ export class BridgeSettingsStore {
   }
 
   async update(
-    patch: Partial<BridgeUserSettings>,
+    patch: BridgeUserSettingsPatch,
   ): Promise<BridgeSettingsPayload> {
-    const next = { ...this.userOverrides, ...patch };
+    const next: BridgeUserSettingsPatch = {
+      ...this.userOverrides,
+      ...patch,
+      explorer: patch.explorer
+        ? {
+            ...(this.userOverrides.explorer ?? {}),
+            ...patch.explorer,
+          }
+        : this.userOverrides.explorer,
+    };
     await this.save(next);
     return this.getPayload();
   }

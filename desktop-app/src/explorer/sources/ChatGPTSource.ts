@@ -72,6 +72,8 @@ export interface ChatGPTClientStatus {
   mode: ChatGPTClientMode;
   /** Human-readable reason explaining a fallback or failure, if any. */
   fallbackReason?: string;
+  /** ISO timestamp when the temporary webpage-mcp fallback cooldown ends. */
+  fallbackCooldownUntil?: string;
 }
 
 export interface ChatGPTApiClient {
@@ -529,6 +531,7 @@ export class ChatGPTSource {
     return {
       mode: status.mode,
       fallbackReason: status.fallbackReason,
+      fallbackCooldownUntil: status.fallbackCooldownUntil,
     };
   }
 

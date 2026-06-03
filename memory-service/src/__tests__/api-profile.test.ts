@@ -169,6 +169,62 @@ describe('Profile API', () => {
     ]);
   });
 
+  it('lists retracted profile items when the status filter is explicit', async () => {
+    const context = userContextManager.getContext(userId);
+    const currentTime = now();
+    context.db
+      .prepare(
+        `INSERT INTO user_profile_items
+          (id, item_type, item_key, item_value, evidence_refs, source_kind,
+           confidence, user_confirmed, status, salience_score, mention_count,
+           last_seen, created_at, updated_at, fingerprint)
+         VALUES
+          ('visible-profile', 'interest', 'focus_project', 'Visible Project',
+           NULL, 'explicit', 0.9, 1, 'active', 0.9, 1, ?, ?, ?, ?),
+          ('retracted-profile', 'interest', 'focus_project', 'Retracted Project',
+           NULL, 'explicit', 0.9, 1, 'retracted', 0.9, 1, ?, ?, ?, ?)`,
+      )
+      .run(
+        currentTime,
+        currentTime,
+        currentTime,
+        contentHash('focus_project:visible project'),
+        currentTime,
+        currentTime,
+        currentTime,
+        contentHash('focus_project:retracted project'),
+      );
+
+    const defaultRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/profile/items',
+      headers: { 'x-user-id': userId },
+    });
+    expect(defaultRes.statusCode).toBe(200);
+    expect(defaultRes.json().items.map((item: any) => item.id)).toEqual(['visible-profile']);
+
+    const retractedRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/profile/items?status=retracted',
+      headers: { 'x-user-id': userId },
+    });
+    expect(retractedRes.statusCode).toBe(200);
+    expect(retractedRes.json().items.map((item: any) => item.id)).toEqual([
+      'retracted-profile',
+    ]);
+
+    const allRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/profile/items?status=all',
+      headers: { 'x-user-id': userId },
+    });
+    expect(allRes.statusCode).toBe(200);
+    expect(allRes.json().items.map((item: any) => item.id).sort()).toEqual([
+      'retracted-profile',
+      'visible-profile',
+    ]);
+  });
+
   it('records inferred profile candidates as pending and reinforces repeats', async () => {
     const firstRes = await app.inject({
       method: 'POST',

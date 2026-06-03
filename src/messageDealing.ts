@@ -35,10 +35,14 @@ import {
 import { buildMessageFilterSystemPrompt } from './prompts';
 import { enqueueConcernedItemDigest } from './services/DigestQueueService';
 import {
+  getDigestDeliveryItems,
+  getImmediateNotificationItem,
+  shouldQueueRuleDigest,
+} from './messageAnalysisDelivery';
+import {
   extractRuleIdsFromMatchedRule,
   filterWatchRulesForMessageContext,
   filterWatchRulesForMessageGroups,
-  getFirstManualItemFromMatchedRules,
   getManualItemsFromMatchedRules,
   isManualConcernedItem,
   loadRuntimeWatchRules,
@@ -175,6 +179,105 @@ function extractEventPayload(sourcePost: any): MessageRuleAutomationEvent | unde
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeHttpUrl(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    return '';
+  }
+
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.toString()
+      : '';
+  } catch {
+    return '';
+  }
+}
+
+function buildRingCentralMessageUrl(groupId: unknown, postId: unknown): string {
+  const normalizedGroupId = String(groupId || '').trim();
+  const normalizedPostId = String(postId || '').trim();
+  if (!normalizedGroupId) {
+    return '';
+  }
+
+  return normalizedPostId
+    ? `https://app.ringcentral.com/messages/${encodeURIComponent(normalizedGroupId)}/${encodeURIComponent(normalizedPostId)}`
+    : `https://app.ringcentral.com/messages/${encodeURIComponent(normalizedGroupId)}`;
+}
+
+function normalizeAutomationAttachment(
+  attachment: any,
+): NonNullable<MessageRuleAutomationMessage['attachments']>[number] | null {
+  if (!attachment || typeof attachment !== 'object') {
+    return null;
+  }
+
+  const normalized: NonNullable<MessageRuleAutomationMessage['attachments']>[number] =
+    {};
+  const id = attachment.id ?? attachment.fileId ?? attachment.file_id;
+  if (id !== null && id !== undefined && id !== '') {
+    normalized.id = id;
+  }
+  for (const key of ['name', 'type', 'mimeType', 'category'] as const) {
+    if (typeof attachment[key] === 'string' && attachment[key].trim()) {
+      normalized[key] = attachment[key].trim();
+    }
+  }
+  if (typeof attachment.mime_type === 'string' && attachment.mime_type.trim()) {
+    normalized.mimeType = attachment.mime_type.trim();
+  }
+  const size = Number(attachment.size ?? attachment.__size);
+  if (Number.isFinite(size)) {
+    normalized.size = size;
+  }
+  for (const key of [
+    'sourceUrl',
+    'messageUrl',
+    'downloadUrl',
+    'previewUrl',
+  ] as const) {
+    const url =
+      normalizeHttpUrl(attachment[key]) ||
+      normalizeHttpUrl(attachment[key.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`)]);
+    if (url) {
+      normalized[key] = url;
+    }
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function extractAutomationAttachments(
+  ...sources: any[]
+): MessageRuleAutomationMessage['attachments'] {
+  const attachments: NonNullable<MessageRuleAutomationMessage['attachments']> = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    const sourceAttachments = Array.isArray(source?.attachments)
+      ? source.attachments
+      : [];
+    for (const attachment of sourceAttachments) {
+      const normalized = normalizeAutomationAttachment(attachment);
+      if (!normalized) continue;
+      const dedupeKey = String(
+        normalized.id ||
+          normalized.sourceUrl ||
+          normalized.messageUrl ||
+          normalized.downloadUrl ||
+          normalized.name ||
+          '',
+      );
+      if (dedupeKey && seen.has(dedupeKey)) continue;
+      if (dedupeKey) seen.add(dedupeKey);
+      attachments.push(normalized);
+    }
+  }
+
+  return attachments.length > 0 ? attachments : undefined;
+}
+
 function mergeMatchedRuleIds(...sources: Array<number[] | undefined>): number[] {
   return Array.from(
     new Set(
@@ -224,6 +327,43 @@ function buildSourcePostIndex(messageGroups: any[]): Map<string, any> {
   return index;
 }
 
+function addPostTimeCandidates(candidates: unknown[], post: any) {
+  if (!post) return;
+  const sourcePost = post?.raw ?? post;
+  candidates.push(
+    post?.time,
+    post?.datetime,
+    post?.timestamp,
+    post?.createdAt,
+    sourcePost?.time,
+    sourcePost?.datetime,
+    sourcePost?.timestamp,
+    sourcePost?.createdAt,
+  );
+}
+
+function getMessageGroupRuleContext(group: any) {
+  const timestamps: unknown[] = [];
+  for (const post of group?.posts || []) {
+    addPostTimeCandidates(timestamps, post);
+  }
+  for (const post of group?.standalone || []) {
+    addPostTimeCandidates(timestamps, post);
+  }
+  for (const thread of group?.threads || []) {
+    addPostTimeCandidates(timestamps, thread?.rootPost);
+    for (const reply of thread?.replies || []) {
+      addPostTimeCandidates(timestamps, reply);
+    }
+  }
+
+  return {
+    groupId: group?.groupId,
+    groupName: group?.groupName,
+    timestamps,
+  };
+}
+
 function normalizeAgentWorkflowPost(post: any) {
   if (!post) return null;
   const sourcePost = post?.raw ?? post;
@@ -254,12 +394,18 @@ function normalizeAgentWorkflowPost(post: any) {
     sourcePost?.text ??
     sourcePost?.content ??
     '';
+  const attachments = Array.isArray(post?.attachments)
+    ? post.attachments
+    : Array.isArray(sourcePost?.attachments)
+      ? sourcePost.attachments
+      : [];
 
   return {
     id,
     creator,
     time,
     text,
+    attachments,
     raw: sourcePost,
   };
 }
@@ -270,6 +416,7 @@ function getAgentWorkflowPostsForGroup(group: any) {
     creator: string;
     time: string;
     text: string;
+    attachments?: any[];
     raw: any;
   }> = [];
   const seen = new Set<string>();
@@ -451,14 +598,6 @@ async function queueMatchedRuleAutomations(params: {
   }
 }
 
-function shouldQueueRuleDigest(
-  item?: TopicItemWithAutoReply,
-): item is TopicItemWithAutoReply & {
-  digestConfig: NonNullable<TopicItemWithAutoReply['digestConfig']>;
-} {
-  return Boolean(item && item.digestConfig?.enabled && !item.followThread);
-}
-
 async function queueMatchedRuleDigest(params: {
   item?: TopicItemWithAutoReply;
   matchedRule?: string;
@@ -487,6 +626,33 @@ async function queueMatchedRuleDigest(params: {
     digestConfig: params.item.digestConfig,
   });
   console.log('📥 消息已加入摘要队列（非即时推送）');
+  return true;
+}
+
+async function queueMatchedRuleDigests(params: {
+  items: TopicItemWithAutoReply[];
+  matchedRule?: string;
+  sender?: string;
+  teamName?: string;
+  teamId?: string;
+  messageContent?: string;
+  summary?: string;
+  datetime?: string;
+  postId?: string;
+}): Promise<boolean> {
+  const digestItems = getDigestDeliveryItems(params.items);
+  if (digestItems.length === 0) {
+    return false;
+  }
+
+  await Promise.all(
+    digestItems.map((item) =>
+      queueMatchedRuleDigest({
+        ...params,
+        item,
+      }),
+    ),
+  );
   return true;
 }
 
@@ -709,6 +875,7 @@ export async function analyzeMessagesInBackground(
           post_id: post.id || '',
           parent_id: (post.raw as any)?.parentId || (post.raw as any)?.parent_id || undefined,
           content: post.text,
+          attachments: post.attachments || [],
           raw: post.raw,
         })),
         // 新增：Thread 结构化数据
@@ -900,20 +1067,22 @@ export async function analyzeMessagesInBackground(
             sender: originalMessage.sender || '',
             groupId: originalMessage.groupId || '',
             groupName: originalMessage.groupName || '',
+            datetime: originalMessage.datetime || '',
           },
         });
         const matchedManualItems = getManualItemsFromMatchedRules(
           resolvedMatchedRules.watchRules,
         );
-        const matchedConcernedItem =
-          followThreadItem ||
-          getFirstManualItemFromMatchedRules(resolvedMatchedRules.watchRules);
+        const matchedConcernedItem = getImmediateNotificationItem({
+          manualItems: matchedManualItems,
+          followThreadItem,
+        });
 
         // 获取通知方式
         const notifyMethod = matchedConcernedItem?.notifyMethod || '';
         const shouldMention = matchedConcernedItem?.mentionMe || false;
-        const digestQueued = await queueMatchedRuleDigest({
-          item: matchedConcernedItem,
+        await queueMatchedRuleDigests({
+          items: matchedManualItems,
           matchedRule: result.matchedRule,
           sender: originalMessage.sender || '',
           teamName: originalMessage.groupName || '',
@@ -926,68 +1095,64 @@ export async function analyzeMessagesInBackground(
 
         // 如果需要通知且有配置通知方式，则发送通知
         if ((result.shouldNotify || followThreadItem) && notifyMethod) {
-          if (!digestQueued) {
-            // 构建自动答复信息（如果有）
-            const autoReplyInfo =
-              autoReplyResult.handled && autoReplyResult.replyInfo
-                ? {
-                    hasAutoReply: true,
-                    replyContent: autoReplyResult.replyInfo.content,
-                    scheduleTime: formatAutoReplyTime(
-                      autoReplyResult.replyInfo.scheduleTime,
-                    ),
-                    messageId: autoReplyResult.replyInfo.messageId,
-                  }
-                : undefined;
+          // 构建自动答复信息（如果有）
+          const autoReplyInfo =
+            autoReplyResult.handled && autoReplyResult.replyInfo
+              ? {
+                  hasAutoReply: true,
+                  replyContent: autoReplyResult.replyInfo.content,
+                  scheduleTime: formatAutoReplyTime(
+                    autoReplyResult.replyInfo.scheduleTime,
+                  ),
+                  messageId: autoReplyResult.replyInfo.messageId,
+                }
+              : undefined;
 
-            // 构建通知数据
-            const notificationData: NotificationData = {
-              teamId: originalMessage.groupId || '',
-              teamName: originalMessage.groupName || '',
-              sender: originalMessage.sender || '',
-              messageContent: originalMessage.messageContent || '',
-              summary: result.summary || '',
-              datetime: originalMessage.datetime || '',
-              postId,
-              matchedRule:
-                result.matchedRule ||
-                (followThreadItem
-                  ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...`
-                  : ''),
-              replyAdvice: result.replyAdvice || '',
-              mention: shouldMention,
-              pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
-              autoReplyInfo,
-              // 如果是关注后续，添加原消息信息
-              originalMessageInfo: followThreadItem?.followConfig
-                ? {
-                    sender:
-                      followThreadItem.followConfig.originalMessage.sender,
-                    content:
-                      followThreadItem.followConfig.originalMessage.content,
-                    datetime: String(
-                      followThreadItem.followConfig.originalMessage.datetime,
-                    ),
-                    messageUrl:
-                      followThreadItem.followConfig.originalMessage.messageUrl,
-                  }
-                : undefined,
-            };
+          // 构建通知数据
+          const notificationData: NotificationData = {
+            teamId: originalMessage.groupId || '',
+            teamName: originalMessage.groupName || '',
+            sender: originalMessage.sender || '',
+            messageContent: originalMessage.messageContent || '',
+            summary: result.summary || '',
+            datetime: originalMessage.datetime || '',
+            postId,
+            matchedRule:
+              result.matchedRule ||
+              (followThreadItem
+                ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...`
+                : ''),
+            replyAdvice: result.replyAdvice || '',
+            mention: shouldMention,
+            pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
+            autoReplyInfo,
+            // 如果是关注后续，添加原消息信息
+            originalMessageInfo: followThreadItem?.followConfig
+              ? {
+                  sender: followThreadItem.followConfig.originalMessage.sender,
+                  content: followThreadItem.followConfig.originalMessage.content,
+                  datetime: String(
+                    followThreadItem.followConfig.originalMessage.datetime,
+                  ),
+                  messageUrl:
+                    followThreadItem.followConfig.originalMessage.messageUrl,
+                }
+              : undefined,
+          };
 
-            // 使用 NotificationService 发送通知
-            await notificationService
-              .sendNotification(
-                notificationData,
-                { notifyMethod },
-                // LLM 审核配置（只对 bot 通知生效）
-                {
-                  enabled: hasNotifyMethod(notifyMethod, 'bot'),
-                  userName: userinfo.fullName,
-                  concernedItems: concernedItems,
-                },
-              )
-              .catch(console.error);
-          }
+          // 使用 NotificationService 发送通知
+          await notificationService
+            .sendNotification(
+              notificationData,
+              { notifyMethod },
+              // LLM 审核配置（只对 bot 通知生效）
+              {
+                enabled: hasNotifyMethod(notifyMethod, 'bot'),
+                userName: userinfo.fullName,
+                concernedItems: concernedItems,
+              },
+            )
+            .catch(console.error);
         }
 
         // 3️⃣ 处理 shouldStore 标志 - 使用统一存储接口（后于自动答复）
@@ -1053,6 +1218,10 @@ export async function analyzeMessagesInBackground(
 
         if (matchedManualItems.length > 0) {
           const sourcePost = sourcePostIndex.get(String(postId));
+          const messageUrl = buildRingCentralMessageUrl(
+            originalMessage.groupId,
+            postId,
+          );
           await queueMatchedRuleAutomations({
             manualItems: matchedManualItems,
             matchedRule: result.matchedRule,
@@ -1067,6 +1236,12 @@ export async function analyzeMessagesInBackground(
               groupId: originalMessage.groupId || '',
               groupName: originalMessage.groupName || '',
               content: originalMessage.messageContent || '',
+              sourceUrl: messageUrl,
+              messageUrl,
+              attachments: extractAutomationAttachments(
+                sourcePost,
+                originalMessage,
+              ),
               timestamp:
                 new Date(originalMessage.datetime).getTime() || Date.now(),
               timezone: getLocalTimeZone(),
@@ -1135,6 +1310,7 @@ export async function analyzeMessagesInBackground(
           team_id: item.groupId,
           team_name: item.groupName,
           message_content: post.text,
+          attachments: post.attachments || [],
           sender: post.creator,
           datetime: post.time,
           username: username, // 传递用户名用于匹配关注项
@@ -1158,16 +1334,17 @@ export async function analyzeMessagesInBackground(
             groupId: processResult.messageContext?.groupId || item.groupId || '',
             groupName:
               processResult.messageContext?.groupName || item.groupName || '',
+            datetime: processResult.messageContext?.datetime || post.time || '',
           },
         });
         const matchedManualItems = getManualItemsFromMatchedRules(
           resolvedMatchedRules.watchRules,
         );
-        const matchedConcernedItem = getFirstManualItemFromMatchedRules(
-          resolvedMatchedRules.watchRules,
-        );
-        const digestQueued = await queueMatchedRuleDigest({
-          item: matchedConcernedItem,
+        const matchedConcernedItem = getImmediateNotificationItem({
+          manualItems: matchedManualItems,
+        });
+        await queueMatchedRuleDigests({
+          items: matchedManualItems,
           matchedRule: processResult.matchedRule,
           sender: processResult.messageContext?.sender || '',
           teamName: processResult.messageContext?.groupName || '',
@@ -1186,39 +1363,45 @@ export async function analyzeMessagesInBackground(
 
           // 如果有配置通知方式，则发送通知
           if (notifyMethod) {
-            if (!digestQueued) {
-              const notificationData: NotificationData = {
-                teamId: processResult.messageContext?.groupId || '',
-                teamName: processResult.messageContext?.groupName || '',
-                sender: processResult.messageContext?.sender || '',
-                messageContent:
-                  processResult.messageContext?.messageContent || '',
-                summary: processResult.summary || '',
-                datetime: processResult.messageContext?.datetime || '',
-                postId: post.id || '',
-                matchedRule: processResult.matchedRule || '',
-                replyAdvice: processResult.replyAdvice || '',
-                mention: shouldMention,
-                pushScenario: 'message_analysis',
-              };
+            const notificationData: NotificationData = {
+              teamId: processResult.messageContext?.groupId || '',
+              teamName: processResult.messageContext?.groupName || '',
+              sender: processResult.messageContext?.sender || '',
+              messageContent:
+                processResult.messageContext?.messageContent || '',
+              summary: processResult.summary || '',
+              datetime: processResult.messageContext?.datetime || '',
+              postId: post.id || '',
+              matchedRule: processResult.matchedRule || '',
+              replyAdvice: processResult.replyAdvice || '',
+              mention: shouldMention,
+              pushScenario: 'message_analysis',
+            };
 
-              await notificationService
-                .sendNotification(
-                  notificationData,
-                  { notifyMethod },
-                  {
-                    enabled: hasNotifyMethod(notifyMethod, 'bot'),
-                    userName: userinfo.fullName,
-                    concernedItems: concernedItems,
-                  },
-              )
-                .catch(console.error);
-            }
+            await notificationService
+              .sendNotification(
+                notificationData,
+                { notifyMethod },
+                {
+                  enabled: hasNotifyMethod(notifyMethod, 'bot'),
+                  userName: userinfo.fullName,
+                  concernedItems: concernedItems,
+                },
+            )
+              .catch(console.error);
           }
         }
 
         if (matchedManualItems.length > 0) {
           const sourcePost = post.raw ?? post;
+          const automationGroupId =
+            processResult.messageContext?.groupId || item.groupId || '';
+          const automationGroupName =
+            processResult.messageContext?.groupName || item.groupName || '';
+          const messageUrl = buildRingCentralMessageUrl(
+            automationGroupId,
+            post.id,
+          );
           await queueMatchedRuleAutomations({
             manualItems: matchedManualItems,
             matchedRule: processResult.matchedRule,
@@ -1234,9 +1417,12 @@ export async function analyzeMessagesInBackground(
             message: {
               postId: post.id || '',
               sender: processResult.messageContext?.sender || '',
-              groupId: processResult.messageContext?.groupId || '',
-              groupName: processResult.messageContext?.groupName || '',
+              groupId: automationGroupId,
+              groupName: automationGroupName,
               content: processResult.messageContext?.messageContent || '',
+              sourceUrl: messageUrl,
+              messageUrl,
+              attachments: extractAutomationAttachments(sourcePost, post),
               timestamp:
                 new Date(processResult.messageContext?.datetime || '').getTime() ||
                 Date.now(),
@@ -1315,10 +1501,7 @@ async function processMessageFilterByConcernedItems(
       const message = formatMessageGroupWithThreads(item);
       const scopedWatchRules = filterWatchRulesForMessageContext(
         runtimeWatchRules,
-        {
-          groupId: item.groupId,
-          groupName: item.groupName,
-        },
+        getMessageGroupRuleContext(item),
       );
       const system_prompt = buildMessageFilterSystemPrompt({
         concernedItems: scopedWatchRules,
@@ -1365,10 +1548,7 @@ ${message}
       '\n</messages>';
     const scopedWatchRules = filterWatchRulesForMessageGroups(
       runtimeWatchRules,
-      data.map((item) => ({
-        groupId: item.groupId,
-        groupName: item.groupName,
-      })),
+      data.map((item) => getMessageGroupRuleContext(item)),
     );
     const system_prompt = buildMessageFilterSystemPrompt({
       concernedItems: scopedWatchRules,
@@ -1451,6 +1631,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
           groupName: body.messageData
             ? body.messageData.groupName
             : json.team_name,
+          datetime: json.datetime,
         };
         const resolvedMatchedRules = resolveMatchedWatchRules({
           watchRules: runtimeWatchRules,
@@ -1651,15 +1832,16 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 
         // 2️⃣ 统一通知推送（合并关注后续和普通推送）
         // 查找匹配的关注项
-        const matchedConcernedItem =
-          followThreadItem ||
-          getFirstManualItemFromMatchedRules(resolvedMatchedRules.watchRules);
+        const matchedConcernedItem = getImmediateNotificationItem({
+          manualItems: matchedManualItems,
+          followThreadItem,
+        });
 
         // 获取通知方式
         const notifyMethod = matchedConcernedItem?.notifyMethod || '';
         const shouldMention = matchedConcernedItem?.mentionMe || false;
-        const digestQueued = await queueMatchedRuleDigest({
-          item: matchedConcernedItem,
+        await queueMatchedRuleDigests({
+          items: matchedManualItems,
           matchedRule: matched_rule,
           sender: json.sender,
           teamName: body.messageData ? body.messageData.groupName : json.team_name,
@@ -1672,76 +1854,80 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
 
         // 如果有配置通知方式，则发送通知
         if (notifyMethod) {
-          if (!digestQueued) {
-            // 构建自动答复信息（如果有）
-            const autoReplyInfo =
-              autoReplyResult.handled && autoReplyResult.replyInfo
-                ? {
-                    hasAutoReply: true,
-                    replyContent: autoReplyResult.replyInfo.content,
-                    scheduleTime: formatAutoReplyTime(
-                      autoReplyResult.replyInfo.scheduleTime,
-                    ),
-                    messageId: autoReplyResult.replyInfo.messageId,
-                  }
-                : undefined;
+          // 构建自动答复信息（如果有）
+          const autoReplyInfo =
+            autoReplyResult.handled && autoReplyResult.replyInfo
+              ? {
+                  hasAutoReply: true,
+                  replyContent: autoReplyResult.replyInfo.content,
+                  scheduleTime: formatAutoReplyTime(
+                    autoReplyResult.replyInfo.scheduleTime,
+                  ),
+                  messageId: autoReplyResult.replyInfo.messageId,
+                }
+              : undefined;
 
-            // 构建通知数据
-            const notificationData: NotificationData = {
-              teamId: body.messageData
-                ? body.messageData.groupId
-                : json.team_id,
-              teamName: body.messageData
-                ? body.messageData.groupName
-                : json.team_name,
-              sender: json.sender,
-              messageContent: json.message_content,
-              summary: json.summary || '',
-              datetime: json.datetime,
-              postId: json.post_id,
-              matchedRule:
-                matched_rule ||
-                (followThreadItem
-                  ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...`
-                  : ''),
-              replyAdvice: json.reply_advice,
-              mention: shouldMention,
-              pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
-              autoReplyInfo,
-              // 如果是关注后续，添加原消息信息
-              originalMessageInfo: followThreadItem?.followConfig
-                ? {
-                    sender:
-                      followThreadItem.followConfig.originalMessage.sender,
-                    content:
-                      followThreadItem.followConfig.originalMessage.content,
-                    datetime: String(
-                      followThreadItem.followConfig.originalMessage.datetime,
-                    ),
-                    messageUrl:
-                      followThreadItem.followConfig.originalMessage.messageUrl,
-                  }
-                : undefined,
-            };
+          // 构建通知数据
+          const notificationData: NotificationData = {
+            teamId: body.messageData ? body.messageData.groupId : json.team_id,
+            teamName: body.messageData
+              ? body.messageData.groupName
+              : json.team_name,
+            sender: json.sender,
+            messageContent: json.message_content,
+            summary: json.summary || '',
+            datetime: json.datetime,
+            postId: json.post_id,
+            matchedRule:
+              matched_rule ||
+              (followThreadItem
+                ? `关注后续：${followThreadItem.followConfig?.originalMessage.content?.substring(0, 50)}...`
+                : ''),
+            replyAdvice: json.reply_advice,
+            mention: shouldMention,
+            pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
+            autoReplyInfo,
+            // 如果是关注后续，添加原消息信息
+            originalMessageInfo: followThreadItem?.followConfig
+              ? {
+                  sender: followThreadItem.followConfig.originalMessage.sender,
+                  content: followThreadItem.followConfig.originalMessage.content,
+                  datetime: String(
+                    followThreadItem.followConfig.originalMessage.datetime,
+                  ),
+                  messageUrl:
+                    followThreadItem.followConfig.originalMessage.messageUrl,
+                }
+              : undefined,
+          };
 
-            // 使用 NotificationService 发送通知
-            await notificationService
-              .sendNotification(
-                notificationData,
-                { notifyMethod },
-                // LLM 审核配置（只对 bot 通知生效）
-                {
-                  enabled: hasNotifyMethod(notifyMethod, 'bot'),
-                  userName: userinfo.fullName,
-                  concernedItems: concernedItems,
-                },
-              )
-              .catch(console.error);
-          }
+          // 使用 NotificationService 发送通知
+          await notificationService
+            .sendNotification(
+              notificationData,
+              { notifyMethod },
+              // LLM 审核配置（只对 bot 通知生效）
+              {
+                enabled: hasNotifyMethod(notifyMethod, 'bot'),
+                userName: userinfo.fullName,
+                concernedItems: concernedItems,
+              },
+            )
+            .catch(console.error);
         }
 
         if (matchedManualItems.length > 0) {
           const sourcePost = sourcePostIndex.get(String(json.post_id));
+          const automationGroupId = body.messageData
+            ? body.messageData.groupId
+            : json.team_id;
+          const automationGroupName = body.messageData
+            ? body.messageData.groupName
+            : json.team_name;
+          const messageUrl = buildRingCentralMessageUrl(
+            automationGroupId,
+            json.post_id,
+          );
           await queueMatchedRuleAutomations({
             manualItems: matchedManualItems,
             matchedRule: matched_rule,
@@ -1751,11 +1937,16 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             message: {
               postId: json.post_id,
               sender: json.sender,
-              groupId: body.messageData ? body.messageData.groupId : json.team_id,
-              groupName: body.messageData
-                ? body.messageData.groupName
-                : json.team_name,
+              groupId: automationGroupId,
+              groupName: automationGroupName,
               content: json.message_content,
+              sourceUrl: messageUrl,
+              messageUrl,
+              attachments: extractAutomationAttachments(
+                sourcePost,
+                json,
+                body.messageData,
+              ),
               timestamp: new Date(json.datetime).getTime() || Date.now(),
               timezone: getLocalTimeZone(),
               event: extractEventPayload(sourcePost),

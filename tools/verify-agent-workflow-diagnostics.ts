@@ -551,6 +551,50 @@ assert.deepEqual(
   ['fix-tool-errors', 'verify-storage'],
 );
 
+const partialTraceToolErrorFromTraceOnly = {
+  shouldStore: true,
+  shouldNotify: false,
+  storageReview: {
+    primaryReason: 'Important architecture decision',
+    reasonSource: 'relevanceJudgment',
+    traceStatus: 'partial',
+  },
+  agentWorkflowTrace: [
+    {
+      agentId: 'relationshipAnalyzer',
+      agentName: '关系分析Agent',
+      status: 'success',
+      durationMs: 120,
+      tools: [
+        {
+          name: 'historySearch',
+          displayName: '历史消息搜索工具',
+          status: 'error',
+          durationMs: 90,
+          error: 'memory service unavailable',
+        },
+      ],
+    },
+  ],
+};
+assert.deepEqual(
+  buildAgentWorkflowResultDiagnostics(partialTraceToolErrorFromTraceOnly).map(
+    (item) => `${item.id}:${item.message}`,
+  ),
+  ['partial-trace:工具错误 1'],
+);
+assert.match(
+  buildAgentWorkflowReadinessChecks(partialTraceToolErrorFromTraceOnly)[0]
+    .summary,
+  /工具错误 1/,
+);
+assert.deepEqual(
+  buildAgentWorkflowRecommendedActions(partialTraceToolErrorFromTraceOnly).map(
+    (item) => item.id,
+  ),
+  ['fix-tool-errors', 'verify-storage'],
+);
+
 const reviewVerdict = buildAgentWorkflowRunVerdict({
   shouldStore: true,
   shouldNotify: false,
@@ -585,7 +629,7 @@ const reviewVerdict = buildAgentWorkflowRunVerdict({
 assert.equal(reviewVerdict?.status, 'review');
 assert.match(reviewVerdict?.summary || '', /通知\/自动化/);
 
-const externalPlaceholderChecks = buildAgentWorkflowReadinessChecks({
+const externalPlaceholderResult = {
   shouldStore: false,
   shouldNotify: false,
   agentWorkflowTrace: [
@@ -598,23 +642,39 @@ const externalPlaceholderChecks = buildAgentWorkflowReadinessChecks({
         {
           name: 'externalServiceQuery',
           displayName: '外部服务查询工具',
-          status: 'success',
+          status: 'placeholder',
           durationMs: 20,
           summary: 'success=false, message=不支持的服务或缺少参数',
         },
       ],
     },
   ],
-});
+};
+const externalPlaceholderChecks = buildAgentWorkflowReadinessChecks(
+  externalPlaceholderResult,
+);
+assert.deepEqual(
+  buildAgentWorkflowResultDiagnostics(externalPlaceholderResult).map(
+    (item) => item.id,
+  ),
+  ['external-query-placeholder-runtime'],
+);
+assert.deepEqual(
+  buildAgentWorkflowRecommendedActions(externalPlaceholderResult).map(
+    (item) => item.id,
+  ),
+  ['connect-external-query-adapter'],
+);
 assert.deepEqual(
   externalPlaceholderChecks.map((item) => `${item.id}:${item.status}`),
   [
-    'trace:ready',
+    'trace:review',
     'storage:skipped',
     'notification:skipped',
     'external-info:review',
   ],
 );
+assert.match(externalPlaceholderChecks[0].summary, /占位结果/);
 assert.match(externalPlaceholderChecks[3].detail || '', /Jira\/Wiki/);
 
 const slowToolOnlyChecks = buildAgentWorkflowReadinessChecks({

@@ -213,7 +213,16 @@ async function main() {
     await installChromeStub(page);
 
     await loadFixture(page);
-    await page.locator('.pai-composer-guard-icon-button').click();
+    await page
+      .locator('.pai-composer-guard-icon-button')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page.locator('[data-action="confirm-insert"]').waitFor({
+      state: 'visible',
+      timeout: 3000,
+    });
+    await page
+      .locator('[data-action="confirm-insert"]')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
     await page.locator('#prompt-textarea').fill(
       'Factory AI security 已过；我这里先只追 RingCentral email login 的 production blocker。',
     );
@@ -267,6 +276,41 @@ async function main() {
     assert.equal(hoverTrace.surface, 'compose_assist');
     assert.equal(hoverTrace.redactedDiff.interaction, 'hover_no_insert');
     assert.equal(hoverTrace.evidenceRefs[0].role, 'ignored');
+
+    await loadFixture(page);
+    await page.evaluate(() => {
+      window.__paiAmbientCalibrationTraces = [];
+    });
+    await page.locator('.pai-composer-guard-icon-button').hover();
+    await page
+      .locator('[data-action="reject"]')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page.waitForFunction(
+      () =>
+        window.__paiAmbientCalibrationTraces?.some(
+          (trace) => trace.action === 'wrong',
+        ),
+      null,
+      { timeout: 3000 },
+    );
+    await page.locator('#prompt-textarea').fill(
+      '我先自己回：当前只确认 production blocker，不引用这条建议。',
+    );
+    await page.locator('#send-button').click();
+    await page.waitForTimeout(250);
+
+    const rejectionTraces = await page.evaluate(
+      () => window.__paiAmbientCalibrationTraces,
+    );
+    assert.ok(
+      rejectionTraces.some((trace) => trace.action === 'wrong'),
+      'explicit thumb-down should still write the strong wrong trace',
+    );
+    assert.equal(
+      rejectionTraces.some((trace) => trace.action === 'sent_without_insert'),
+      false,
+      'explicit thumb-down should not be double-counted as passive hover no-insert feedback',
+    );
 
     console.log('Compose Assist ambient calibration E2E passed.');
   } finally {

@@ -46,10 +46,20 @@ const STATUS_HINTS = {
   queued_action: '帮我总结这些排队中的动作，哪些值得先处理。',
 };
 
+const STATUS_SOURCE_LABELS = {
+  setup_blocker: 'Desktop App 设置',
+  runtime_issue: 'Memory Service 状态',
+  sync_issue: '本机同步流水',
+  confirm_request: 'Memory Service 确认请求',
+  running_action: 'Action Queue',
+  waiting_reply: 'Outreach 运行态',
+  queued_action: 'Action Queue',
+};
+
 const HEIGHTS = {
   /** Keep equal to `ASK_WINDOW_COMPACT_HEIGHT` in `app/main.mjs`. */
-  compact: 258,
-  compactWithBanner: 302,
+  compact: 140,
+  compactWithBanner: 188,
   voice: 214,
   /** Expanded heights (~+50%) so answer area is less cramped. */
   streaming: 714,
@@ -72,6 +82,15 @@ const REMEMBER_INTENT_PATTERNS = [
   /^以后(?:请|帮我|麻烦你)?\s*(?:记住|记下|记录)(?!了吗|吗|没|没有|哪些|什么)[：:\s]*/i,
   /^(?:please\s+)?(?:remember|save|note)(?:\s+(?:that|this))?(?:[\s:：]|$)/i,
 ];
+
+const DEICTIC_ASK_PATTERN =
+  /那个|这个|这块|那块|刚才|上面|前面|ready\s*了吗|搞定了吗|完成了吗|\bthat\b|\bthis\b|\bit\b|\bready\b/i;
+const ROLE_ONLY_TERM_PATTERN =
+  /^(?:BE|FE|backend|back\s*end|frontend|front\s*end|后端|服务端|前端|客户端|ready)$/i;
+const RINGCENTRAL_HOST_PATTERN = /(?:^|\.)ringcentral\.com$/i;
+const RINGCENTRAL_CHAT_TITLE_PATTERN =
+  /\b[A-Z][A-Z0-9]+-\d+\s*[:：]\s*[^\n|]{2,96}/;
+const ACTIVE_CONTEXT_VISIBLE_TEXT_LIMIT = 1200;
 
 const state = {
   uiState: 'idle-compact',
@@ -96,6 +115,8 @@ const state = {
   askScope: 'work',
   autoScrollPinned: true,
   loadingHistory: false,
+  savedConversationScrollTop: 0,
+  savedConversationScrollHeight: 0,
 };
 
 const scopeButtons = [
@@ -183,6 +204,171 @@ function buildAskContext() {
     segments.shift();
     context = segments.join('\n\n');
   }
+  return context.slice(-4000);
+}
+
+function normalizeInlineText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function clipText(value, limit) {
+  const text = normalizeInlineText(value);
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 1)).trim()}…`;
+}
+
+function formatSnapshotRelative(fetchedAt) {
+  const time = Date.parse(fetchedAt || '');
+  if (!Number.isFinite(time)) return '时间未知';
+  const diffMs = Math.max(0, Date.now() - time);
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  if (diffMs < minuteMs) return '刚刚刷新';
+  if (diffMs < hourMs) return `${Math.floor(diffMs / minuteMs)} 分钟前`;
+  if (diffMs < dayMs) return `${Math.floor(diffMs / hourMs)} 小时前`;
+  return `${Math.floor(diffMs / dayMs)} 天前`;
+}
+
+function formatRuntimeSnapshotMeta(runtime) {
+  const itemCount = Array.isArray(runtime?.items) ? runtime.items.length : 0;
+  const countLabel = itemCount > 0 ? `${itemCount} 项状态` : '暂无状态项';
+  return `快照：${formatSnapshotRelative(runtime?.fetchedAt)} · ${countLabel}`;
+}
+
+function getStatusSourceLabel(kind) {
+  return STATUS_SOURCE_LABELS[kind] || '运行态汇总';
+}
+
+function getUrlHost(value) {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function extractQueryAnchors(query) {
+  const anchors = [];
+  const text = String(query || '');
+  for (const issueKey of text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) || []) {
+    anchors.push(issueKey);
+  }
+  for (const phrase of text.match(/\b[A-Z][A-Z0-9]{1,9}(?:\s+[A-Z][A-Z0-9]{1,9})+\b/g) || []) {
+    if (!phrase.split(/\s+/).every((term) => ROLE_ONLY_TERM_PATTERN.test(term))) {
+      anchors.push(phrase);
+    }
+  }
+  for (const token of text.match(/[A-Za-z0-9][A-Za-z0-9._-]{1,}|[\u3400-\u9fff]{2,}/g) || []) {
+    if (ROLE_ONLY_TERM_PATTERN.test(token)) continue;
+    if (/^(?:那个|这个|了吗|如何|什么|是否|the|this|that|ready)$/i.test(token)) continue;
+    anchors.push(token);
+  }
+  const seen = new Set();
+  return anchors.filter((anchor) => {
+    const key = anchor.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return key.length >= 2;
+  });
+}
+
+function textContainsAnyAnchor(text, anchors) {
+  const haystack = normalizeInlineText(text).toLowerCase();
+  return anchors.some((anchor) => haystack.includes(anchor.toLowerCase()));
+}
+
+function extractRingCentralChatTitle(activeContext) {
+  const candidates = [
+    activeContext?.title,
+    activeContext?.selectionText,
+    activeContext?.visibleText,
+  ];
+  for (const candidate of candidates) {
+    const match = String(candidate || '').match(RINGCENTRAL_CHAT_TITLE_PATTERN);
+    if (match?.[0]) {
+      return clipText(match[0].replace(/\s+/g, ' '), 120);
+    }
+  }
+  const title = normalizeInlineText(activeContext?.title);
+  if (title && !/^RingCentral$/i.test(title)) {
+    return clipText(title, 120);
+  }
+  return '';
+}
+
+function shouldUseActiveBrowserContext(query, activeContext) {
+  if (!activeContext?.available) return false;
+  const host = getUrlHost(activeContext.url);
+  const combined = [
+    activeContext.title,
+    activeContext.url,
+    activeContext.selectionText,
+    activeContext.visibleText,
+  ].join(' ');
+  const anchors = extractQueryAnchors(query);
+  const isRingCentral = RINGCENTRAL_HOST_PATTERN.test(host);
+  if (isRingCentral) return true;
+  if (activeContext.selectionText && textContainsAnyAnchor(activeContext.selectionText, anchors)) {
+    return true;
+  }
+  if (DEICTIC_ASK_PATTERN.test(query)) {
+    return false;
+  }
+  return anchors.length > 0 && textContainsAnyAnchor(combined, anchors);
+}
+
+function formatActiveBrowserContext(query, activeContext) {
+  if (!shouldUseActiveBrowserContext(query, activeContext)) return '';
+  const host = getUrlHost(activeContext.url);
+  const isRingCentral = RINGCENTRAL_HOST_PATTERN.test(host);
+  const ringCentralChatTitle = isRingCentral
+    ? extractRingCentralChatTitle(activeContext)
+    : '';
+  const surface = isRingCentral
+    ? ringCentralChatTitle
+      ? 'RingCentral chat'
+      : 'RingCentral page'
+    : host
+      ? `Browser page (${host})`
+      : 'Browser page';
+  const lines = [`Surface: ${surface}.`];
+  if (ringCentralChatTitle) {
+    lines.push(`Current chat title: ${ringCentralChatTitle}.`);
+  } else if (activeContext.title) {
+    lines.push(`Current page title: ${clipText(activeContext.title, 140)}.`);
+  }
+  if (activeContext.url) {
+    lines.push(`Current URL: ${clipText(activeContext.url, 220)}`);
+  }
+  if (activeContext.selectionText) {
+    lines.push(`Selected text: ${clipText(activeContext.selectionText, 500)}`);
+  }
+  if (activeContext.visibleText) {
+    lines.push(
+      `Visible page text: ${clipText(
+        activeContext.visibleText,
+        ACTIVE_CONTEXT_VISIBLE_TEXT_LIMIT,
+      )}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+async function buildEnrichedAskContext(query) {
+  const segments = [buildAskContext()];
+  if (typeof quickAsk.getActiveBrowserContext === 'function') {
+    try {
+      const activeContext = await quickAsk.getActiveBrowserContext();
+      const activeContextText = formatActiveBrowserContext(query, activeContext);
+      if (activeContextText) {
+        segments.push(activeContextText);
+      }
+    } catch {
+      // Active browser context is opportunistic; ask should still work without it.
+    }
+  }
+  let context = segments.filter(Boolean).join('\n\n');
   return context.slice(-4000);
 }
 
@@ -519,9 +705,29 @@ function scrollConversationToBottom() {
     elements.conversationPanel.scrollHeight;
 }
 
-function syncConversationScroll({ preserveTop, keepBottom } = {}) {
+function saveConversationScrollState() {
+  if (!isExpandedState()) return;
+  state.savedConversationScrollTop = elements.conversationPanel.scrollTop;
+  state.savedConversationScrollHeight = elements.conversationPanel.scrollHeight;
+  state.autoScrollPinned = isConversationPinnedToBottom();
+}
+
+function syncConversationScroll({ preserveTop, keepBottom, restoreScrollTop } = {}) {
   window.requestAnimationFrame(() => {
     if (!isExpandedState()) return;
+
+    if (typeof restoreScrollTop === 'number' && Number.isFinite(restoreScrollTop)) {
+      const maxScrollTop = Math.max(
+        0,
+        elements.conversationPanel.scrollHeight -
+          elements.conversationPanel.clientHeight,
+      );
+      elements.conversationPanel.scrollTop = Math.min(
+        Math.max(0, restoreScrollTop),
+        maxScrollTop,
+      );
+      return;
+    }
 
     if (preserveTop) {
       if (preserveTop.kind === 'prepend') {
@@ -617,7 +823,285 @@ function renderStructuredAnswer(structuredAnswer) {
   return sections.join('');
 }
 
-function renderEvidence(evidence) {
+function decodeHtmlEntities(text) {
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = String(text || '');
+  return textarea.value;
+}
+
+function stripEvidenceHtml(text) {
+  return decodeHtmlEntities(
+    String(text || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(?:p|div|li|section|article|h[1-6])>/gi, '\n')
+      .replace(/<[^>]+>/g, ' '),
+  );
+}
+
+function removeCaptureChrome(text) {
+  return text
+    .replace(
+      /CloseLearn more|Join chat|Restore this version|Ask Gemini|FileEditViewInsertFormatToolsExtensionsHelp|Tab in My Drive|Page setup|Print preview|Create a new doc|Show non-printing characters/gi,
+      ' ',
+    )
+    .replace(/\b(?:English|Deutsch|Italiano|Português|Română|Русский|Українська|中文|日本語|한국어){2,}\b/gi, ' ');
+}
+
+function cleanEvidenceText(text) {
+  return normalizeInlineText(removeCaptureChrome(stripEvidenceHtml(text)));
+}
+
+function isNoisyWebEvidence(item, cleanedText) {
+  const metadata =
+    item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const source = String(item?.source || '').toLowerCase();
+  const sender = String(metadata.sender || '').toLowerCase();
+  return (
+    source === 'web' &&
+    (sender === 'memory capture' ||
+      metadata.captureLayer === 'memory_capture' ||
+      /Google Docs|docs\.google\.com/i.test(
+        [metadata.sourceTitle, metadata.sourceUrl, cleanedText].join(' '),
+      )) &&
+    /CloseLearn more|Restore this version|Ask Gemini|FileEditViewInsert|Create a new doc|Page setup/i.test(
+      String(item?.content || ''),
+    )
+  );
+}
+
+function getEvidenceSourceLabel(item) {
+  const source = String(item?.source || item?.type || '').toLowerCase();
+  if (source === 'glip' || source === 'ringcentral') return 'RingCentral';
+  if (source === 'meeting') return '会议';
+  if (source === 'web') return '网页';
+  if (source === 'reflection_thread') return '反思';
+  if (source === 'manual') return '手动记忆';
+  if (source === 'entity') return '实体';
+  return item?.source || item?.type || '记忆';
+}
+
+function getEvidenceMetadata(item) {
+  return item?.metadata &&
+    typeof item.metadata === 'object' &&
+    !Array.isArray(item.metadata)
+    ? item.metadata
+    : {};
+}
+
+function getEvidenceTitle(item) {
+  const metadata = getEvidenceMetadata(item);
+  return (
+    metadata.sourceTitle ||
+    metadata.groupName ||
+    metadata.group_name ||
+    item?.sourceTitle ||
+    item?.displayTitle ||
+    item?.source ||
+    item?.type ||
+    '记忆片段'
+  );
+}
+
+function getEvidenceHost(item) {
+  const metadata = getEvidenceMetadata(item);
+  const url = item?.sourceUrl || metadata.sourceUrl || metadata.groupUrl;
+  return getUrlHost(url);
+}
+
+function formatEvidenceTime(timestamp) {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return '';
+  const millis = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
+  return new Date(millis).toLocaleString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getEvidenceReason(item, weak) {
+  const metadata = getEvidenceMetadata(item);
+  const reasons = [];
+  const channels = Array.isArray(metadata.channels) ? metadata.channels : [];
+  if (channels.includes('context_anchor')) reasons.push('上下文锚点');
+  if (metadata.implicitBackendContext) reasons.push('近期 BE 讨论');
+  if (weak) reasons.push('网页快照已折叠');
+  const host = getEvidenceHost(item);
+  if (host) reasons.push(host);
+  return reasons.join(' · ');
+}
+
+function getHighlightTerms(query) {
+  const terms = extractQueryAnchors(query);
+  for (const term of String(query || '').match(/\bBE\b|\bFE\b|ready\b/gi) || []) {
+    terms.push(term);
+  }
+  const seen = new Set();
+  return terms
+    .map((term) => normalizeInlineText(term))
+    .filter((term) => {
+      const key = term.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return term.length >= 2;
+    })
+    .slice(0, 8);
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function renderHighlightedEvidenceText(text, query) {
+  const terms = getHighlightTerms(query);
+  if (!terms.length) return escapeHtml(text);
+  const pattern = new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'gi');
+  return escapeHtml(text).replace(pattern, '<mark>$1</mark>');
+}
+
+function renderHighlightedLineText(text, query) {
+  return renderHighlightedEvidenceText(text, query).replace(/\r?\n/g, '<br>');
+}
+
+function isSafeExternalUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function trimRenderedBreaks(html) {
+  return String(html || '').replace(/(?:\s*<br\s*\/?>)+\s*$/i, '');
+}
+
+function renderTextWithBareLinks(text, query) {
+  const value = String(text || '');
+  const urlPattern = /https?:\/\/[^\s<>()]+/g;
+  let html = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = urlPattern.exec(value))) {
+    const url = match[0];
+    html += renderHighlightedLineText(value.slice(lastIndex, match.index), query);
+    if (isSafeExternalUrl(url)) {
+      html += `<a href="${escapeHtml(url)}" data-external-link="${escapeHtml(url)}">${escapeHtml(url)}</a>`;
+    } else {
+      html += renderHighlightedLineText(url, query);
+    }
+    lastIndex = match.index + url.length;
+  }
+
+  html += renderHighlightedLineText(value.slice(lastIndex), query);
+  return html;
+}
+
+function renderPlainEvidenceText(text, query) {
+  const value = decodeHtmlEntities(String(text || '')).replace(/\r\n?/g, '\n');
+  const markdownLinkPattern = /\[([^\]\n]{1,160})\]\((https?:\/\/[^)\s]+)\)/g;
+  let html = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = markdownLinkPattern.exec(value))) {
+    const [raw, label, url] = match;
+    html += renderTextWithBareLinks(value.slice(lastIndex, match.index), query);
+    if (isSafeExternalUrl(url)) {
+      html += `<a href="${escapeHtml(url)}" data-external-link="${escapeHtml(url)}">${renderHighlightedLineText(label, query)}</a>`;
+    } else {
+      html += renderHighlightedLineText(raw, query);
+    }
+    lastIndex = match.index + raw.length;
+  }
+
+  html += renderTextWithBareLinks(value.slice(lastIndex), query);
+  return html;
+}
+
+const EVIDENCE_BLOCK_TAGS = new Set([
+  'address',
+  'article',
+  'blockquote',
+  'div',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'li',
+  'p',
+  'section',
+]);
+
+const EVIDENCE_INLINE_TAGS = new Set(['b', 'code', 'em', 'i', 'strong']);
+
+function renderEvidenceHtmlChildren(node, query) {
+  return Array.from(node.childNodes || [])
+    .map((child) => renderEvidenceHtmlNode(child, query))
+    .join('');
+}
+
+function renderEvidenceHtmlNode(node, query) {
+  if (!node) return '';
+  if (node.nodeType === 3) {
+    return renderPlainEvidenceText(node.nodeValue || '', query);
+  }
+  if (node.nodeType !== 1) return '';
+
+  const tagName = String(node.tagName || '').toLowerCase();
+  if (tagName === 'br') return '<br>';
+
+  const childHtml = renderEvidenceHtmlChildren(node, query);
+  if (tagName === 'a') {
+    const href = node.getAttribute('href') || '';
+    if (isSafeExternalUrl(href)) {
+      return `<a href="${escapeHtml(href)}" data-external-link="${escapeHtml(href)}">${childHtml || escapeHtml(href)}</a>`;
+    }
+    return `<span class="evidence-mention">${childHtml || renderHighlightedLineText(node.textContent || '', query)}</span>`;
+  }
+
+  if (EVIDENCE_INLINE_TAGS.has(tagName)) {
+    const safeTag = tagName === 'b' ? 'strong' : tagName === 'i' ? 'em' : tagName;
+    return `<${safeTag}>${childHtml}</${safeTag}>`;
+  }
+
+  if (EVIDENCE_BLOCK_TAGS.has(tagName)) {
+    return childHtml ? `${trimRenderedBreaks(childHtml)}<br>` : '';
+  }
+
+  return childHtml;
+}
+
+function looksLikeHtml(text) {
+  return /<\s*\/?[a-z][^>]*>/i.test(String(text || ''));
+}
+
+function renderRichEvidenceText(text, query) {
+  const value = String(text || '');
+  if (!value.trim()) return '';
+
+  if (looksLikeHtml(value) && typeof DOMParser !== 'undefined') {
+    const parsed = new DOMParser().parseFromString(value, 'text/html');
+    const html = trimRenderedBreaks(renderEvidenceHtmlChildren(parsed.body, query));
+    if (html.trim()) return html;
+  }
+
+  return renderPlainEvidenceText(value, query);
+}
+
+function shouldRenderRawEvidence(item, snippet) {
+  const content = String(item?.content || '');
+  return (
+    cleanEvidenceText(content) !== snippet ||
+    looksLikeHtml(content) ||
+    /\r?\n|\[[^\]\n]{1,160}\]\(https?:\/\/[^)\s]+\)/.test(content)
+  );
+}
+
+function renderEvidence(evidence, queryText = '') {
   if (!Array.isArray(evidence) || evidence.length === 0) return '';
   const displayItems = evidence.slice(0, 3);
   return `
@@ -625,32 +1109,43 @@ function renderEvidence(evidence) {
       <h4>证据</h4>
       <div class="evidence-list">
         ${displayItems
-          .map((item) => {
-            const metadata =
-              item.metadata &&
-              typeof item.metadata === 'object' &&
-              !Array.isArray(item.metadata)
-                ? item.metadata
-                : null;
-            const source = item.source || item.type || '记忆片段';
-            const sender =
-              typeof metadata?.sender === 'string' && metadata.sender.trim()
-                ? metadata.sender.trim()
+          .map((item, index) => {
+            const cleaned = cleanEvidenceText(item.content || '');
+            const weak = isNoisyWebEvidence(item, cleaned);
+            const title = getEvidenceTitle(item);
+            const sourceLabel = getEvidenceSourceLabel(item);
+            const timeLabel = formatEvidenceTime(item.timestamp);
+            const scoreLabel =
+              typeof item.score === 'number' && Number.isFinite(item.score)
+                ? `${Math.round(item.score * 100)}%`
                 : '';
-            const groupName =
-              typeof metadata?.groupName === 'string' &&
-              metadata.groupName.trim()
-                ? metadata.groupName.trim()
-                : typeof metadata?.group_name === 'string' &&
-                    metadata.group_name.trim()
-                  ? metadata.group_name.trim()
-                  : '';
-            const title = sender ? `${source} · ${sender}` : source;
+            const reason = getEvidenceReason(item, weak);
+            const snippet = weak
+              ? clipText(`${title}。${cleaned}`, 220)
+              : clipText(cleaned, 260);
+            const raw = renderRichEvidenceText(
+              String(item.content || '').slice(0, 1800),
+              queryText,
+            );
             return `
-              <div class="evidence-item">
-                <strong>${escapeHtml(title)}</strong>
-                ${groupName ? `<div class="evidence-meta">${escapeHtml(groupName)}</div>` : ''}
-                <div class="evidence-copy">${escapeHtml(item.content || '')}</div>
+              <div class="evidence-item ${weak ? 'weak' : ''}">
+                <div class="evidence-head">
+                  <span class="evidence-rank">${index + 1}</span>
+                  <span class="evidence-source">${escapeHtml(sourceLabel)}</span>
+                  <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
+                </div>
+                <div class="evidence-meta-row">
+                  ${timeLabel ? `<span>${escapeHtml(timeLabel)}</span>` : ''}
+                  ${scoreLabel ? `<span>${escapeHtml(scoreLabel)}</span>` : ''}
+                  ${weak ? '<span>弱相关网页快照</span>' : ''}
+                </div>
+                <p class="evidence-copy">${renderHighlightedEvidenceText(snippet, queryText)}</p>
+                ${reason ? `<div class="evidence-reason">${escapeHtml(reason)}</div>` : ''}
+                ${
+                  raw && shouldRenderRawEvidence(item, snippet)
+                    ? `<details class="evidence-raw"><summary>查看原文片段</summary><div class="evidence-raw-body">${raw}</div></details>`
+                    : ''
+                }
               </div>
             `;
           })
@@ -777,7 +1272,7 @@ function renderAssistantMessage(message) {
       ${renderMemoryBadge(message.memorySaveResult)}
       ${bodyHtml}
       ${message.htmlReady ? renderStructuredAnswer(message.structuredAnswer) : ''}
-      ${message.htmlReady ? renderEvidence(message.evidence) : ''}
+      ${message.htmlReady ? renderEvidence(message.evidence, message.queryText) : ''}
       ${message.htmlReady ? renderMobileContextAction(message) : ''}
       ${message.htmlReady ? renderLowMemoryTail(message.runtime?.memoryGrowth) : ''}
     </div>
@@ -788,55 +1283,78 @@ function renderUserMessage(message) {
   return `<div class="message-card user-card"><p>${escapeHtml(message.text)}</p></div>`;
 }
 
+function renderStatusItem(item) {
+  const detailLines = Array.isArray(item.detailLines)
+    ? item.detailLines.filter(Boolean).slice(0, 4)
+    : [];
+  return `
+    <button
+      class="status-item"
+      type="button"
+      data-status-kind="${escapeHtml(item.kind)}"
+      data-status-title="${escapeHtml(item.title)}"
+      data-status-summary="${escapeHtml(item.summary)}"
+      data-status-details="${escapeHtml(detailLines.join('；'))}"
+      data-status-action="${escapeHtml(item.actionHint || '')}"
+    >
+      <span class="status-item-main">
+        <span class="status-item-title">${escapeHtml(item.title)}</span>
+        <span class="status-item-summary">${escapeHtml(item.summary)}</span>
+        ${
+          detailLines.length
+            ? `<span class="status-item-details">${detailLines
+                .map((line) => `<span>${escapeHtml(String(line))}</span>`)
+                .join('')}</span>`
+            : ''
+        }
+      </span>
+      <span class="status-item-meta">
+        <span class="status-item-source">${escapeHtml(getStatusSourceLabel(item.kind))}</span>
+        ${
+          item.badgeLabel
+            ? `<span class="status-item-badge">${escapeHtml(item.badgeLabel)}</span>`
+            : ''
+        }
+        <span class="status-item-hint">${escapeHtml(item.actionHint || '继续追问')}</span>
+      </span>
+    </button>
+  `;
+}
+
 function renderStatusMessage(message) {
   const runtime = message.runtime || { items: [] };
+  const items = Array.isArray(runtime.items) ? runtime.items : [];
+  const refreshLabel = message.statusRefreshing ? '读取中...' : '重新读取';
   return `
     <div class="message-card status-card-wrap">
       <div class="status-card">
-        <div>
-          <h4>当前状态</h4>
-          <p class="status-card-copy">这些状态会先留在 chat 里说明清楚。你可以点其中一项继续追问，或打开对应位置处理。</p>
+        <div class="status-card-head">
+          <div>
+            <h4>当前状态</h4>
+            <p class="status-card-copy">需要关注的运行态会集中显示在这里。你可以点其中一项继续追问，或打开对应位置处理。</p>
+          </div>
+          <button
+            class="status-card-refresh"
+            type="button"
+            data-status-refresh="true"
+            data-message-id="${escapeHtml(message.id)}"
+            ${message.statusRefreshing ? 'disabled' : ''}
+          >
+            ${escapeHtml(refreshLabel)}
+          </button>
         </div>
+        <div class="status-card-meta">${escapeHtml(formatRuntimeSnapshotMeta(runtime))}</div>
+        ${
+          message.statusRefreshNotice
+            ? `<div class="status-refresh-note">${escapeHtml(message.statusRefreshNotice)}</div>`
+            : ''
+        }
         <div class="status-item-list">
-          ${runtime.items
-            .map(
-              (item) => {
-                const detailLines = Array.isArray(item.detailLines)
-                  ? item.detailLines.filter(Boolean).slice(0, 4)
-                  : [];
-                return `
-                <button
-                  class="status-item"
-                  type="button"
-                  data-status-kind="${escapeHtml(item.kind)}"
-                  data-status-title="${escapeHtml(item.title)}"
-                  data-status-summary="${escapeHtml(item.summary)}"
-                  data-status-details="${escapeHtml(detailLines.join('；'))}"
-                  data-status-action="${escapeHtml(item.actionHint || '')}"
-                >
-                  <span class="status-item-main">
-                    <span class="status-item-title">${escapeHtml(item.title)}</span>
-                    <span class="status-item-summary">${escapeHtml(item.summary)}</span>
-                    ${
-                      detailLines.length
-                        ? `<span class="status-item-details">${detailLines
-                            .map(
-                              (line) =>
-                                `<span>${escapeHtml(String(line))}</span>`,
-                            )
-                            .join('')}</span>`
-                        : ''
-                    }
-                  </span>
-                  <span class="status-item-meta">
-                    ${item.badgeLabel ? `<span class="status-item-badge">${escapeHtml(item.badgeLabel)}</span>` : ''}
-                    <span class="status-item-hint">${escapeHtml(item.actionHint || '继续追问')}</span>
-                  </span>
-                </button>
-              `;
-              },
-            )
-            .join('')}
+          ${
+            items.length
+              ? items.map((item) => renderStatusItem(item)).join('')
+              : '<div class="status-empty">刚刚重新读取过，目前没有需要关注的运行态。</div>'
+          }
         </div>
       </div>
     </div>
@@ -892,6 +1410,7 @@ function renderMessages(renderOptions = {}) {
   syncConversationScroll({
     keepBottom: state.autoScrollPinned,
     preserveTop,
+    restoreScrollTop: renderOptions.restoreScrollTop,
   });
 }
 
@@ -1029,6 +1548,38 @@ async function refreshRuntimeSummary() {
   }
 }
 
+async function refreshStatusCard(messageId) {
+  const message = findMessageById(messageId);
+  if (!message || message.role !== 'status' || message.statusRefreshing) return;
+
+  updateMessage(messageId, {
+    statusRefreshing: true,
+    statusRefreshNotice: '正在重新读取运行态...',
+  });
+
+  try {
+    const runtime = await quickAsk.getRuntimeSummary();
+    setRuntime(runtime || null);
+    const itemCount = Array.isArray(runtime?.items) ? runtime.items.length : 0;
+    updateMessage(messageId, {
+      runtime: runtime || { items: [], fetchedAt: new Date().toISOString() },
+      statusRefreshing: false,
+      statusRefreshNotice:
+        itemCount > 0
+          ? '已重新读取状态快照。'
+          : '已重新读取：暂无需要关注的状态。',
+    });
+  } catch (error) {
+    updateMessage(messageId, {
+      statusRefreshing: false,
+      statusRefreshNotice: `重新读取失败：${clipText(
+        error instanceof Error ? error.message : String(error),
+        120,
+      )}`,
+    });
+  }
+}
+
 function pushMessage(message) {
   const timestamp =
     typeof message?.createdAt === 'number' && Number.isFinite(message.createdAt)
@@ -1092,25 +1643,53 @@ function queueStreamDelta(delta) {
   }, STREAM_FLUSH_MS);
 }
 
+function findCurrentSessionStatusIndex() {
+  return state.currentSessionMessages.findIndex(
+    (message) => message.role === 'status' && message.sessionRuntimeStatus,
+  );
+}
+
 function insertStatusCard(runtime = state.runtime, manual = false) {
-  if (!runtime?.items?.length) return;
-  if (!manual) {
-    const trailingStatus =
-      state.currentSessionMessages[state.currentSessionMessages.length - 1];
-    if (trailingStatus?.role === 'status' && trailingStatus.autoRuntime) {
-      trailingStatus.runtime = runtime;
+  const hasRuntimeItems = Array.isArray(runtime?.items) && runtime.items.length > 0;
+  const existingIndex = findCurrentSessionStatusIndex();
+
+  if (!hasRuntimeItems) {
+    if (!manual && existingIndex >= 0) {
+      state.currentSessionMessages.splice(existingIndex, 1);
       touchCurrentSession();
       renderMessages();
-      return;
     }
+    return;
   }
 
-  pushMessage({
+  if (existingIndex >= 0) {
+    const existingStatus = state.currentSessionMessages[existingIndex];
+    existingStatus.runtime = runtime;
+    existingStatus.autoRuntime = existingStatus.autoRuntime && !manual;
+    touchCurrentSession();
+    renderMessages();
+    return;
+  }
+
+  const timestamp = Date.now();
+  ensureCurrentSession();
+  const firstNonStatusIndex = state.currentSessionMessages.findIndex(
+    (message) => message.role !== 'status',
+  );
+  const insertIndex =
+    firstNonStatusIndex >= 0
+      ? firstNonStatusIndex
+      : state.currentSessionMessages.length;
+  state.currentSessionMessages.splice(insertIndex, 0, {
     id: createId('status'),
     role: 'status',
     runtime,
     autoRuntime: !manual,
+    sessionRuntimeStatus: true,
+    createdAt: timestamp,
   });
+  touchCurrentSession(timestamp);
+  renderMessages();
 }
 
 async function rememberAck(text) {
@@ -1429,16 +2008,22 @@ function resetSession() {
 
 function handleWindowShown(payload = {}) {
   expireCurrentSessionIfNeeded();
-  state.loadedHistoryCount = 0;
-  state.autoScrollPinned = true;
 
   if (hasCurrentSessionMessages()) {
+    const restoreScrollTop = state.autoScrollPinned
+      ? null
+      : state.savedConversationScrollTop;
     setUiState(resolveExpandedState());
+    renderMessages({
+      restoreScrollTop,
+    });
   } else {
+    state.loadedHistoryCount = 0;
+    state.autoScrollPinned = true;
     setUiState('idle-compact');
+    renderMessages();
   }
 
-  renderMessages();
   if (payload.focusInput !== false && !isVoiceState()) {
     focusComposer();
   }
@@ -1470,7 +2055,7 @@ async function submitQuery(rawInput, options = {}) {
   if (!input || state.requestActive) return;
 
   expireCurrentSessionIfNeeded();
-  const askContext = buildAskContext();
+  const askContext = await buildEnrichedAskContext(input);
 
   const rememberRequested = hasExplicitRememberIntent(input);
   const standaloneRemember =
@@ -1716,9 +2301,13 @@ for (const [scope, button] of scopeButtons) {
 
 elements.statusPill.addEventListener('click', async () => {
   expireCurrentSessionIfNeeded();
-  state.autoScrollPinned = true;
+  state.autoScrollPinned = false;
   setUiState('enriched');
   insertStatusCard(state.runtime, true);
+  window.requestAnimationFrame(() => {
+    elements.conversationPanel.scrollTop = 0;
+    state.savedConversationScrollTop = 0;
+  });
 });
 
 elements.voiceButton.addEventListener('click', async () => {
@@ -1768,6 +2357,13 @@ elements.voiceRecovery.addEventListener('click', async () => {
 });
 
 elements.conversationPanel.addEventListener('click', async (event) => {
+  const statusRefreshButton = event.target.closest('[data-status-refresh]');
+  if (statusRefreshButton) {
+    event.preventDefault();
+    await refreshStatusCard(statusRefreshButton.dataset.messageId);
+    return;
+  }
+
   const mobileSyncButton = event.target.closest('.quick-ask-sync-mobile');
   if (mobileSyncButton) {
     event.preventDefault();
@@ -1808,6 +2404,8 @@ elements.conversationPanel.addEventListener('scroll', () => {
   if (!isExpandedState()) return;
 
   state.autoScrollPinned = isConversationPinnedToBottom();
+  state.savedConversationScrollTop = elements.conversationPanel.scrollTop;
+  state.savedConversationScrollHeight = elements.conversationPanel.scrollHeight;
   if (elements.conversationPanel.scrollTop <= HISTORY_LOAD_THRESHOLD_PX) {
     loadOlderSession();
   }
@@ -1843,15 +2441,26 @@ quickAsk.onWindowShown((payload) => {
 });
 
 quickAsk.onPrepareHide(() => {
+  saveConversationScrollState();
   if (isVoiceState()) {
     void voiceController.cancelToText().then(() => {
-      setUiState('idle-compact');
+      setUiState(
+        hasCurrentSessionMessages() ? resolveExpandedState() : 'idle-compact',
+      );
       renderMessages();
     });
     return;
   }
   if (state.draft) {
     setDraft(state.draft);
+  }
+  if (hasCurrentSessionMessages()) {
+    renderMessages({
+      restoreScrollTop: state.autoScrollPinned
+        ? null
+        : state.savedConversationScrollTop,
+    });
+    return;
   }
   setUiState('idle-compact');
   renderMessages();

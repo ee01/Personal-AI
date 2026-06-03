@@ -76,6 +76,12 @@ function getNextMondayMorning(now: Date): Date {
   return target;
 }
 
+function getNextFullHourTime(now: Date): Date {
+  const target = cloneDate(now);
+  target.setHours(target.getHours() + 1, 0, 0, 0);
+  return target;
+}
+
 export function formatWorkdayQuickLabel(
   target: Date,
   now: Date,
@@ -182,6 +188,14 @@ export function getQuickOptions(
       },
     },
     addMinutes(now, 180),
+  );
+  addOption(
+    {
+      label: language === 'en-US' ? 'Next full hour' : '下个整点',
+      icon: '🕛',
+      getTime: () => getNextFullHourTime(clock()),
+    },
+    getNextFullHourTime(now),
   );
   addOption(
     {

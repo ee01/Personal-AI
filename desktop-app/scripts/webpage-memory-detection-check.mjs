@@ -73,11 +73,31 @@ async function waitForCapturedSourceMemoryCount(server, expectedCount, timeoutMs
   );
 }
 
+function parseFeedbackDetail(detail) {
+  assert.equal(typeof detail, 'string', '反馈 detail 应以字符串发送');
+  try {
+    return JSON.parse(detail);
+  } catch (error) {
+    throw new Error(`反馈 detail 应为 JSON 字符串: ${detail}`);
+  }
+}
+
 async function openContextMoreMenu(page) {
   await page.locator('.pai-context-more').click();
   await page.waitForSelector('.pai-context-more-menu:not([hidden])', {
     timeout: 5000,
   });
+}
+
+async function chooseNegativeFeedbackReason(page, reason = 'generic_topic_overlap') {
+  await page.locator('.pai-context-recall-negative').click();
+  await page.waitForSelector('.pai-context-feedback-sheet', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await page
+    .locator(`.pai-context-feedback-reason[data-feedback-reason="${reason}"]`)
+    .click();
 }
 
 async function startHarnessServer() {
@@ -220,6 +240,116 @@ async function startHarnessServer() {
             JSON.stringify({
               matches: [rawTitleMatch],
               topMatch: rawTitleMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/source-url-only')) {
+          const sourceUrlOnlyMatch = {
+            id: 'source-memory:web-memory-source-url-only',
+            type: 'source_memory',
+            score: 0.9,
+            displayPriority: 'p1',
+            title: 'Falcon source-only handoff note',
+            uiSummary: 'The source URL is present even though links[] is empty.',
+            snippet: 'Source-only Falcon note records the migration owner handoff.',
+            sourceLabel: 'source_memory',
+            sourceUrl: 'https://source-only.example.com/falcon/handoff?ticket=PAI-123',
+            sourceTitle: 'Falcon source-only evidence',
+            exploreLink: '#/timeline?focus=web-memory-source-url-only',
+            links: [],
+            whyMatched: '来源 URL 命中 Falcon handoff',
+            whyRelevant: ['项目：Falcon', '主题：owner handoff'],
+            matchedAnchors: {
+              projects: ['Falcon'],
+              topics: ['owner handoff'],
+            },
+            reasonType: 'source_match',
+            evidenceRole: 'artifact',
+            metadata: {
+              sourceMemoryCapsuleId: 'web-memory-source-url-only',
+              sourceKind: 'webpage',
+              captureMode: 'manual',
+              groupId: 'source-memory-feedback-group',
+              sender: 'Source Memory Owner',
+            },
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [sourceUrlOnlyMatch],
+              topMatch: sourceUrlOnlyMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        if (typeof body.url === 'string' && body.url.includes('/feedback-failure')) {
+          const feedbackFailureMatch = {
+            id: 'web-memory-feedback-failure',
+            type: 'message',
+            score: 0.91,
+            displayPriority: 'p1',
+            title: 'Falcon feedback failure fixture',
+            uiSummary: 'This card verifies failed feedback writes are disclosed to the user.',
+            snippet: 'Feedback failures should not look like successfully stored learning signals.',
+            sourceLabel: 'glip',
+            sourceTitle: 'Falcon feedback room',
+            sourceUrl: 'https://source.example.com/falcon/feedback-failure',
+            exploreLink: '#/timeline?focus=web-memory-feedback-failure',
+            links: [],
+            whyMatched: '关键词命中 Falcon feedback',
+            whyRelevant: ['项目：Falcon', '主题：feedback failure'],
+            matchedAnchors: {
+              projects: ['Falcon'],
+              topics: ['feedback failure'],
+            },
+            reasonType: 'keyword_overlap',
+            evidenceRole: 'supporting',
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [feedbackFailureMatch],
+              topMatch: feedbackFailureMatch,
+              queryTimeMs: 3,
+            }),
+          );
+          return;
+        }
+        if (
+          typeof body.url === 'string' &&
+          (body.url.includes('/possible-related') || body.url.includes('/possible-no-why'))
+        ) {
+          const possibleMatch = {
+            id: 'web-memory-possible',
+            type: 'message',
+            score: 0.72,
+            displayPriority: 'p2',
+            title: 'Falcon migration follow-up',
+            uiSummary: 'Falcon migration has a related follow-up note, but the page only overlaps on the project context.',
+            snippet: 'Falcon migration follow-up note from the release coordination channel.',
+            sourceLabel: 'glip',
+            sourceTitle: 'Falcon release room',
+            exploreLink: '#/timeline?focus=web-memory-possible',
+            links: [],
+            whyMatched: '项目上下文弱匹配',
+            whyRelevant: body.url.includes('/possible-no-why') ? [] : ['项目：Falcon'],
+            matchedAnchors: {
+              projects: ['Falcon'],
+            },
+            reasonType: 'semantic_match',
+            evidenceRole: 'supporting',
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              matches: [possibleMatch],
+              topMatch: possibleMatch,
               queryTimeMs: 3,
             }),
           );
@@ -381,6 +511,15 @@ async function startHarnessServer() {
         const rawBody = await readRequestBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
         feedbackRequests.push(body);
+        if (body.targetId === 'web-memory-feedback-failure') {
+          res.writeHead(503, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: 'fixture_feedback_write_failed',
+            }),
+          );
+          return;
+        }
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -504,6 +643,54 @@ async function startHarnessServer() {
               <section>
                 Falcon launch owner handoff is ready for review. Sophia asked Esone
                 to confirm the checklist, deadline, and ownership before Friday.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/source-url-only')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Falcon source URL provenance</title></head>
+            <body>
+              <section>
+                Falcon source URL provenance should stay visible even when the
+                recall payload only carries sourceUrl and does not repeat it in links.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.startsWith('/feedback-failure')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Falcon feedback failure disclosure</title></head>
+            <body>
+              <section>
+                Falcon feedback failure disclosure should keep the user informed
+                when a relevance vote only hides locally and cannot reach memory-service.
+              </section>
+            </body>
+          </html>`);
+        return;
+      }
+
+      if (
+        req.method === 'GET' &&
+        (req.url?.startsWith('/possible-related') || req.url?.startsWith('/possible-no-why'))
+      ) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html>
+          <html>
+            <head><title>Falcon possible match context</title></head>
+            <body>
+              <section>
+                Falcon project context mentions the migration release, but the current
+                page does not include enough anchors for a strong memory interruption.
               </section>
             </body>
           </html>`);
@@ -877,11 +1064,13 @@ async function verifyRehearsalLensPresentation(server, context) {
     startRehearsalFeedbackCount + 1,
     'Rehearsal 正向反馈应调用 /rehearsals/:id/feedback',
   );
-  assert.deepEqual(server.rehearsalFeedbackRequests.at(-1), {
-    outcome: 'accepted',
-    activationId: 'activation-memory-lens-1',
-    note: 'web_passive_bubble:127.0.0.1',
-  });
+  const rehearsalFeedback = server.rehearsalFeedbackRequests.at(-1);
+  assert.equal(rehearsalFeedback.outcome, 'accepted');
+  assert.equal(rehearsalFeedback.activationId, 'activation-memory-lens-1');
+  const rehearsalFeedbackDetail = parseFeedbackDetail(rehearsalFeedback.note);
+  assert.equal(rehearsalFeedbackDetail.surface, 'web_passive_bubble');
+  assert.equal(rehearsalFeedbackDetail.host, '127.0.0.1');
+  assert.equal(rehearsalFeedbackDetail.target_type, 'rehearsal');
   assert.equal(
     server.feedbackRequests.length,
     startFeedbackCount,
@@ -1181,13 +1370,26 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
     startFeedbackCount + 1,
     5000,
   );
-  assert.deepEqual(server.feedbackRequests[startFeedbackCount], {
-    type: 'recall_quality',
-    targetId: 'web-memory-1',
-    targetType: 'message',
-    action: 'positive',
-    detail: 'web_passive_bubble:127.0.0.1',
-  });
+  assert.deepEqual(
+    {
+      type: server.feedbackRequests[startFeedbackCount].type,
+      targetId: server.feedbackRequests[startFeedbackCount].targetId,
+      targetType: server.feedbackRequests[startFeedbackCount].targetType,
+      action: server.feedbackRequests[startFeedbackCount].action,
+    },
+    {
+      type: 'recall_quality',
+      targetId: 'web-memory-1',
+      targetType: 'message',
+      action: 'positive',
+    },
+  );
+  const positiveFeedbackDetail = parseFeedbackDetail(
+    server.feedbackRequests[startFeedbackCount].detail,
+  );
+  assert.equal(positiveFeedbackDetail.surface, 'web_passive_bubble');
+  assert.equal(positiveFeedbackDetail.host, '127.0.0.1');
+  assert.equal(positiveFeedbackDetail.target_type, 'message');
   assert.equal(
     await page.locator('.pai-context-recall-positive').getAttribute('aria-label'),
     '已标记有用',
@@ -1388,6 +1590,111 @@ async function verifyNormalPage(server, context, serviceWorker, extensionId) {
   await page.close();
 }
 
+async function verifyPossibleHoverPeek(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'possible-related');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(`${server.origin}/possible-related`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `possible-related bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  const bubble = page.locator('.pai-context-bubble');
+  assert.equal(
+    await bubble.evaluate((element) => element.classList.contains('pai-context-bubble--fresh')),
+    false,
+    '可能相关 p2 不应使用强相关 fresh 动效',
+  );
+  await bubble.hover();
+  await page.waitForSelector('.pai-context-peek.pai-context-peek--visible', {
+    timeout: 5000,
+  });
+  const peekText = await page.locator('.pai-context-peek').innerText();
+  assert.match(peekText, /Memory Lens/);
+  assert.match(peekText, /可能相关/);
+  assert.match(peekText, /项目：Falcon/);
+  assert.match(peekText, /Falcon migration follow-up/);
+  assert.doesNotMatch(peekText, /\b\d{1,3}%\b/);
+
+  await bubble.click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  const cardText = await page.locator('.pai-context-card').innerText();
+  assert.match(cardText, /可能相关/);
+  assert.match(cardText, /为什么相关/);
+  assert.match(cardText, /Falcon migration has a related follow-up note/);
+
+  const requestsBeforeHashRefresh = server.contextRecallRequests.length;
+  await page.evaluate(() => {
+    window.location.hash = '#same-page-refresh';
+  });
+  await page.waitForFunction(
+    () => !document.querySelector('.pai-context-bubble'),
+    { timeout: 5000 },
+  );
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  assert.equal(
+    server.contextRecallRequests.length,
+    requestsBeforeHashRefresh,
+    '同页 hash 刷新后应复用缓存的可能相关结果，不应重新请求召回',
+  );
+  assert.equal(
+    await page.locator('.pai-context-bubble').evaluate((element) =>
+      element.classList.contains('pai-context-bubble--fresh'),
+    ),
+    false,
+    '缓存恢复的 p2 可能相关不应升级成强相关 fresh 动效',
+  );
+  await page.close();
+
+  const noWhyPage = await context.newPage();
+  const noWhyDiagnostics = attachPageDiagnostics(noWhyPage, 'possible-no-why');
+  const noWhyStartCount = server.contextRecallRequests.length;
+  await noWhyPage.goto(`${server.origin}/possible-no-why`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  await noWhyPage.waitForTimeout(3500);
+  assert.equal(
+    server.contextRecallRequests.length,
+    noWhyStartCount + 1,
+    '缺少 whyRelevant 的 p2 仍应完成召回请求以供前端过滤',
+  );
+  assert.equal(
+    await noWhyPage.locator('.pai-context-bubble').count(),
+    0,
+    '缺少可解释锚点的 p2 不应展示 Hover Peek 入口',
+  );
+  if (noWhyDiagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of noWhyDiagnostics) {
+      log(entry);
+    }
+    throw new Error('possible-no-why 页面出现脚本异常');
+  }
+  await noWhyPage.close();
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('possible-related 页面出现脚本异常');
+  }
+}
+
 async function verifyMetadataSummaryPresentation(server, context) {
   const page = await context.newPage();
   const diagnostics = attachPageDiagnostics(page, 'metadata-summary');
@@ -1459,6 +1766,92 @@ async function verifyMetadataSummaryPresentation(server, context) {
       log(entry);
     }
     throw new Error('metadata summary 展示页面出现脚本异常');
+  }
+  await page.close();
+}
+
+async function verifySourceUrlOnlyProvenance(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'source-url-only');
+  const startCount = server.contextRecallRequests.length;
+  const startFeedbackCount = server.feedbackRequests.length;
+  await page.goto(`${server.origin}/source-url-only`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `source URL only bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    'sourceUrl-only 页面应触发一次被动召回',
+  );
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+
+  const visibleLinks = await page.$$eval('.pai-context-card a', (anchors) =>
+    anchors.map((anchor) => ({
+      text: anchor.textContent || '',
+      href: anchor.href,
+    })),
+  );
+  assert.ok(
+    visibleLinks.some(
+      (link) =>
+        link.text.includes('Falcon source-only evidence') &&
+        link.href === 'https://source-only.example.com/falcon/handoff?ticket=PAI-123',
+    ),
+    `sourceUrl 应在 Expanded Card 中作为可点击来源展示: ${JSON.stringify(visibleLinks)}`,
+  );
+  assert.equal(
+    visibleLinks.filter((link) => link.href.includes('source-only.example.com')).length,
+    1,
+    'sourceUrl-only 来源链接不应重复渲染',
+  );
+
+  await page.locator('.pai-context-recall-positive').click();
+  await waitForRequestCount(
+    { contextRecallRequests: server.feedbackRequests },
+    startFeedbackCount + 1,
+    5000,
+  );
+  const feedback = server.feedbackRequests[startFeedbackCount];
+  assert.equal(feedback.type, 'recall_quality');
+  assert.equal(feedback.targetType, 'source_memory');
+  assert.equal(feedback.targetId, 'web-memory-source-url-only');
+  assert.equal(feedback.action, 'positive');
+  const feedbackDetail = parseFeedbackDetail(feedback.detail);
+  assert.equal(feedbackDetail.surface, 'web_passive_bubble');
+  assert.equal(feedbackDetail.host, '127.0.0.1');
+  assert.equal(feedbackDetail.target_type, 'source_memory');
+  assert.equal(feedbackDetail.source_memory_capsule_id, 'web-memory-source-url-only');
+  assert.equal(feedbackDetail.group_id, 'source-memory-feedback-group');
+  assert.equal(feedbackDetail.sender, 'Source Memory Owner');
+  assert.match(
+    feedbackDetail.scene_anchor_signature,
+    /web_passive|source-url-only/,
+    'source memory 反馈应携带当前场景锚点，便于后续降权',
+  );
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('sourceUrl-only 来源展示页面出现脚本异常');
   }
   await page.close();
 }
@@ -1568,6 +1961,116 @@ async function verifyAllowlistMode(server, context, serviceWorker, extensionId) 
       });
     },
     {
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+}
+
+async function verifyAllowSiteClearsCoveredControls(
+  server,
+  context,
+  serviceWorker,
+  extensionId,
+) {
+  await serviceWorker.evaluate(
+    async ({
+      muteStorageKey,
+      blockStorageKey,
+      allowStorageKey,
+      allowlistModeKey,
+    }) => {
+      await chrome.storage.local.set({
+        [muteStorageKey]: { 'lvh.me': Date.now() },
+        [blockStorageKey]: { 'lvh.me': Date.now() },
+        [allowStorageKey]: {},
+        [allowlistModeKey]: true,
+      });
+    },
+    {
+      muteStorageKey: siteMuteStorageKey,
+      blockStorageKey: siteBlockStorageKey,
+      allowStorageKey: siteAllowStorageKey,
+      allowlistModeKey: siteAllowlistModeStorageKey,
+    },
+  );
+
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`, {
+    waitUntil: 'load',
+    timeout: 15000,
+  });
+  await optionsPage.waitForSelector('text=lvh.me', { timeout: 5000 });
+  await optionsPage.getByLabel('添加允许站点').fill('docs.lvh.me');
+  await optionsPage.getByRole('button', { name: '允许', exact: true }).click();
+  await optionsPage.waitForSelector(
+    'text=已允许 docs.lvh.me 显示网页记忆提示，并移除 2 条覆盖它的静默/屏蔽规则',
+    { timeout: 5000 },
+  );
+  await optionsPage.close();
+
+  const stored = await serviceWorker.evaluate(
+    async ({ muteStorageKey, blockStorageKey, allowStorageKey }) =>
+      chrome.storage.local.get([muteStorageKey, blockStorageKey, allowStorageKey]),
+    {
+      muteStorageKey: siteMuteStorageKey,
+      blockStorageKey: siteBlockStorageKey,
+      allowStorageKey: siteAllowStorageKey,
+    },
+  );
+  assert.equal(
+    stored[siteMuteStorageKey]?.['lvh.me'],
+    undefined,
+    '允许子域名时应移除覆盖它的父域临时静默',
+  );
+  assert.equal(
+    stored[siteBlockStorageKey]?.['lvh.me'],
+    undefined,
+    '允许子域名时应移除覆盖它的父域永久屏蔽',
+  );
+  assert.equal(
+    typeof stored[siteAllowStorageKey]?.['docs.lvh.me'],
+    'number',
+    '允许子域名应写入 allowlist storage',
+  );
+
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'allow-conflict-resolution');
+  const startCount = server.contextRecallRequests.length;
+  await page.goto(
+    `${server.origin.replace('127.0.0.1', 'docs.lvh.me')}/normal?allow-conflict=resolved`,
+    {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    },
+  );
+  await waitForRequestCount(server, startCount + 1, 12000);
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  assert.equal(
+    server.contextRecallRequests.length,
+    startCount + 1,
+    '允许子域名后不应继续被父域静默/屏蔽规则压住',
+  );
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('允许站点冲突消解页面出现脚本异常');
+  }
+  await page.close();
+
+  await serviceWorker.evaluate(
+    async ({ muteStorageKey, blockStorageKey, allowStorageKey, allowlistModeKey }) => {
+      await chrome.storage.local.set({
+        [muteStorageKey]: {},
+        [blockStorageKey]: {},
+        [allowStorageKey]: {},
+        [allowlistModeKey]: false,
+      });
+    },
+    {
+      muteStorageKey: siteMuteStorageKey,
+      blockStorageKey: siteBlockStorageKey,
       allowStorageKey: siteAllowStorageKey,
       allowlistModeKey: siteAllowlistModeStorageKey,
     },
@@ -1875,7 +2378,7 @@ async function verifyIrrelevantFeedback(server, context) {
     state: 'visible',
     timeout: 5000,
   });
-  await page.locator('.pai-context-recall-negative').click();
+  await chooseNegativeFeedbackReason(page, 'wrong_group_or_project');
   await page.waitForSelector('.pai-context-toast', {
     state: 'visible',
     timeout: 5000,
@@ -1895,13 +2398,29 @@ async function verifyIrrelevantFeedback(server, context) {
     startFeedbackCount + 1,
     5000,
   );
-  assert.deepEqual(server.feedbackRequests[startFeedbackCount], {
-    type: 'recall_quality',
-    targetId: 'web-memory-1',
-    targetType: 'message',
-    action: 'negative',
-    detail: 'web_passive_bubble:127.0.0.1',
-  });
+  assert.deepEqual(
+    {
+      type: server.feedbackRequests[startFeedbackCount].type,
+      targetId: server.feedbackRequests[startFeedbackCount].targetId,
+      targetType: server.feedbackRequests[startFeedbackCount].targetType,
+      action: server.feedbackRequests[startFeedbackCount].action,
+    },
+    {
+      type: 'recall_quality',
+      targetId: 'web-memory-1',
+      targetType: 'message',
+      action: 'negative',
+    },
+  );
+  const negativeFeedbackDetail = parseFeedbackDetail(
+    server.feedbackRequests[startFeedbackCount].detail,
+  );
+  assert.equal(negativeFeedbackDetail.surface, 'web_passive_bubble');
+  assert.equal(negativeFeedbackDetail.host, '127.0.0.1');
+  assert.equal(negativeFeedbackDetail.target_type, 'message');
+  assert.equal(negativeFeedbackDetail.interaction, 'memory_relevance_trainer');
+  assert.equal(negativeFeedbackDetail.feedback_reason, 'wrong_group_or_project');
+  assert.equal(negativeFeedbackDetail.auto_applied, 'true');
 
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForTimeout(1200);
@@ -1915,6 +2434,95 @@ async function verifyIrrelevantFeedback(server, context) {
       log(entry);
     }
     throw new Error('不相关反馈页面出现脚本异常');
+  }
+  await page.close();
+}
+
+async function verifyFeedbackFailureDisclosure(server, context) {
+  const page = await context.newPage();
+  const diagnostics = attachPageDiagnostics(page, 'feedback-failure');
+  const startRecallCount = server.contextRecallRequests.length;
+  const startFeedbackCount = server.feedbackRequests.length;
+  await page.goto(`${server.origin}/feedback-failure`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  try {
+    await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  } catch (error) {
+    log(
+      `feedback failure bubble wait failed; context-recall requests=${server.contextRecallRequests.length - startRecallCount}`,
+    );
+    for (const entry of diagnostics.slice(-20)) {
+      log(entry);
+    }
+    throw error;
+  }
+
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await chooseNegativeFeedbackReason(page, 'generic_topic_overlap');
+  await waitForRequestCount(
+    { contextRecallRequests: server.feedbackRequests },
+    startFeedbackCount + 1,
+    5000,
+  );
+  assert.equal(
+    server.feedbackRequests[startFeedbackCount].targetId,
+    'web-memory-feedback-failure',
+    '失败夹具应先尝试写入真实 feedback endpoint',
+  );
+  const feedbackFailureDetail = parseFeedbackDetail(
+    server.feedbackRequests[startFeedbackCount].detail,
+  );
+  assert.equal(feedbackFailureDetail.interaction, 'memory_relevance_trainer');
+  assert.equal(feedbackFailureDetail.feedback_reason, 'generic_topic_overlap');
+  assert.equal(feedbackFailureDetail.auto_applied, 'true');
+  await page.waitForFunction(
+    () =>
+      /反馈记录失败，已仅在本页隐藏 30 分钟/.test(
+        document.querySelector('.pai-context-toast')?.textContent || '',
+      ),
+    { timeout: 5000 },
+  );
+  assert.equal(
+    await page.locator('.pai-context-bubble').count(),
+    0,
+    '反馈写入失败后仍应保持本地隐藏，避免继续打扰当前页面',
+  );
+  assert.equal(
+    await page.locator('.pai-context-card').count(),
+    0,
+    '反馈写入失败后卡片应保持关闭，直到用户主动恢复',
+  );
+
+  await page
+    .getByRole('button', { name: '重新显示这条记忆提示' })
+    .click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  assert.match(
+    await page.locator('.pai-context-card').innerText(),
+    /Falcon feedback failure fixture/,
+    '失败 toast 的恢复操作应重新打开刚才被本地隐藏的卡片',
+  );
+  assert.equal(
+    await page.locator('.pai-context-recall-negative').isDisabled(),
+    false,
+    '恢复后的卡片反馈按钮不应被永久锁死',
+  );
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('反馈失败披露页面出现脚本异常');
   }
   await page.close();
 }
@@ -2177,6 +2785,20 @@ async function verifySelectedTextTrigger(server, context) {
     0,
     '点击划词入口后轻量 icon 应消失',
   );
+  await openContextMoreMenu(page);
+  const selectionMenuText = await page.locator('.pai-context-more-menu').innerText();
+  assert.match(
+    selectionMenuText,
+    /关闭本次划词结果/,
+    '划词结果卡片应提供关闭本次主动查询的控制',
+  );
+  assert.doesNotMatch(
+    selectionMenuText,
+    /此网站今天不提示|永久不提示此站点|开启白名单|允许此站点|此页面永久不提示/,
+    '划词结果卡片不应展示被动站点静默/屏蔽/白名单控制',
+  );
+  await page.locator('.pai-context-selection-close').click();
+  await page.waitForSelector('.pai-context-card', { state: 'detached', timeout: 5000 });
   if (diagnostics.some((entry) => entry.includes('pageerror'))) {
     for (const entry of diagnostics) {
       log(entry);
@@ -2214,7 +2836,7 @@ async function verifySelectedTextTrigger(server, context) {
     'selected_text',
     '无命中划词也应先完成 selected_text 匹配',
   );
-  await emptyPage.waitForSelector('.pai-context-selection-trigger', {
+  await emptyPage.waitForSelector('.pai-memory-capture-selection-dock', {
     timeout: 5000,
   });
   assert.equal(
@@ -2223,37 +2845,44 @@ async function verifySelectedTextTrigger(server, context) {
     'selected_text 没有高相关记忆时不应显示查记忆按钮',
   );
   assert.equal(
-    await emptyPage.locator('.pai-context-selection-capture').count(),
+    await emptyPage.locator('.pai-memory-capture-selection-dock').count(),
     1,
     'selected_text 没有高相关记忆但有保存候选时应显示只保存的 + 入口',
   );
   const createStartCount = server.sourceMemoryCreateRequests.length;
-  emptyPage.once('dialog', async (dialog) => {
-    assert.match(dialog.message(), /备注/);
-    await dialog.dismiss();
+  await emptyPage.locator('.pai-memory-capture-selection-dock').click();
+  await emptyPage.waitForSelector('.pai-memory-capture-note-panel', {
+    timeout: 5000,
   });
-  await emptyPage.locator('.pai-context-selection-capture').click();
-  await emptyPage.waitForSelector('.pai-context-toast', { timeout: 5000 });
   assert.match(
-    await emptyPage.locator('.pai-context-toast').innerText(),
-    /已取消保存资料记忆/,
+    await emptyPage.locator('.pai-memory-capture-note-preview').innerText(),
+    /Unmatched launch phrase/,
+    '入库确认面板应显示选中文本预览',
+  );
+  await emptyPage.getByRole('button', { name: '取消' }).click();
+  await emptyPage.waitForSelector('.pai-memory-capture-note-panel', {
+    state: 'detached',
+    timeout: 5000,
+  });
+  assert.equal(
+    await emptyPage.locator('.pai-memory-capture-note-panel').count(),
+    0,
+    '取消后应关闭入库确认面板',
   );
   assert.equal(
     server.sourceMemoryCreateRequests.length,
     createStartCount,
-    '用户取消备注框时不应保存 source memory capsule',
+    '用户取消入库确认面板时不应保存 source memory capsule',
   );
   assert.equal(
-    await emptyPage.locator('.pai-context-selection-capture').count(),
+    await emptyPage.locator('.pai-memory-capture-selection-dock').count(),
     1,
     '取消保存后应保留 + 入口，方便用户再次确认',
   );
 
-  emptyPage.once('dialog', async (dialog) => {
-    assert.match(dialog.message(), /备注/);
-    await dialog.accept('用于后续整理');
-  });
-  await emptyPage.locator('.pai-context-selection-capture').click();
+  await emptyPage.locator('.pai-memory-capture-selection-dock').click();
+  await emptyPage.locator('.pai-memory-capture-note-input').fill('用于后续整理');
+  await emptyPage.getByRole('button', { name: '保存' }).click();
   await waitForCapturedSourceMemoryCount(server, createStartCount + 1, 5000);
   const savedSourceMemory = server.sourceMemoryCreateRequests.at(-1);
   assert.equal(savedSourceMemory.sourceKind, 'selection');
@@ -2274,6 +2903,23 @@ async function verifySelectedTextTrigger(server, context) {
     /已保存为资料记忆/,
     '确认保存后应给出保存成功回执',
   );
+  const viewSavedSourceMemory = emptyPage.getByRole('button', {
+    name: '查看资料记忆详情',
+  });
+  await viewSavedSourceMemory.waitFor({ timeout: 5000 });
+  const [detailPage] = await Promise.all([
+    context.waitForEvent('page', { timeout: 5000 }),
+    viewSavedSourceMemory.click(),
+  ]);
+  await detailPage.waitForURL(/memory-exploring\.html#\/source-memory\/source-memory-capsule-\d+/, {
+    timeout: 5000,
+  });
+  assert.match(
+    detailPage.url(),
+    /memory-exploring\.html#\/source-memory\/source-memory-capsule-\d+/,
+    '保存成功 toast 应能直接打开资料记忆详情页',
+  );
+  await detailPage.close();
   if (emptyDiagnostics.some((entry) => entry.includes('pageerror'))) {
     for (const entry of emptyDiagnostics) {
       log(entry);
@@ -2847,10 +3493,19 @@ try {
   await verifyUnsafeExploreRoute(server, context);
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
   await verifyIrrelevantFeedback(server, context);
+  await verifyFeedbackFailureDisclosure(server, context);
   await verifyAllowlistMode(server, context, launch.serviceWorker, launch.extensionId);
+  await verifyAllowSiteClearsCoveredControls(
+    server,
+    context,
+    launch.serviceWorker,
+    launch.extensionId,
+  );
   await verifyLiveSiteControlStorageSync(server, context, launch.serviceWorker);
   await verifyNormalPage(server, context, launch.serviceWorker, launch.extensionId);
+  await verifyPossibleHoverPeek(server, context);
   await verifyMetadataSummaryPresentation(server, context);
+  await verifySourceUrlOnlyProvenance(server, context);
   await verifyPagePathBlock(server, context, launch.serviceWorker, launch.extensionId);
   await verifySensitivePage(server, context);
   log('browser checks passed');

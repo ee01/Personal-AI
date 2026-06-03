@@ -5,7 +5,7 @@ alwaysApply: false
 ---
 # Jira 设计链接显示功能
 
-*最后更新: 2026-05-25*
+*最后更新: 2026-05-29*
 
 ## 功能概述
 
@@ -73,7 +73,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 - 识别 Jira Designs/Figma 集成、Web Links 或其他工具同步进来的设计链接
 - 如果 remote link 提供状态标题，会作为短标签展示
 - 远程状态会兼容 `icon.title`、`status/name/value` 和 `ready_for_development` 这类机器值，避免 Jira Designs 状态落到 Neutral
-- 如果 Jira/Figma 同步元数据包含更新时间，会展示短日期标签，帮助判断是否可能基于旧设计开工
+- 如果 Jira/Figma 同步元数据包含更新时间，会展示短日期标签；当同一 remote link 同时给出 object/status/link 多个更新时间时取最新有效时间，tooltip 和无障碍标签会保留标准化 UTC 时间与复查提示
 - Jira/Figma 集成返回的 URL 可能包含 encoded `node-id` 或一次性分享参数；合并时会按 Figma 文件 key 和节点 identity 归并，点击时仍保留原始可打开链接
 
 ### 3. Jira 原生 Designs 区块扫描
@@ -82,7 +82,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 
 ### 4. Linked Issues 分析
 - 从DOM中直接提取Issue Links部分
-- 筛选UX开头的相关tickets；如果 Jira DOM 只暴露 issue key 文本或 `data-issue-key` 而没有可点击 href，也会用 `/browse/KEY` 作为回退链接继续展示
+- 筛选UX开头的相关tickets；如果 Jira DOM 只暴露 issue key 文本、`aria-label`、`data-issue-key`，或新版 Jira issue URL（例如 `/jira/.../issues/KEY`）而没有标准 `/browse/KEY` href，也会按配置的 UX 项目优先选择正确 key，并用 `/browse/KEY` 作为回退链接继续展示
 - 获取对应的summary信息
 
 ### 5. Epic 层级分析
@@ -173,7 +173,7 @@ interface FigmaLink {
 - 面板 hover 使用与 Backend ETA 卡片一致的轻微浮动和 footer 展开效果，不挤压页面内容。
 - 面板不做顶部开工判定、状态摘要或主行动推荐，因为真实设计入口可能分布在多个 UX ticket 中；用户直接扫描每一条 ticket/link 自行判断。
 - 每个链接项包含 Personal AI 图标、设计入口、UX ticket、设计状态、UX Epic 状态、ETA 和来源标签；缺失设计链接时只展示 UX ticket key 和 `Missing link` 状态，避免设计 ticket 标题占据扫描空间。
-- Remote link 提供更新时间时额外显示 `Updated YYYY-MM-DD`，同等行动状态下最近更新的设计会排在更前；日期 hover 会说明“如果实现已经开始，需要重新检查设计”，但不做强提醒或阻塞。
+- Remote link 提供更新时间时额外显示 `Updated YYYY-MM-DD`，同等行动状态下最近更新的设计会排在更前；日期 hover 和屏幕阅读器标签会说明“如果实现已经开始，需要重新检查设计”，并保留标准化 UTC 时间，但不做强提醒或阻塞。
 - 每行会按状态添加轻量视觉扫描线：Ready、Updated、Missing/Not ready/Blocked、Review 使用不同边线和浅底色，普通链接保持中性样式。
 - Jira/Figma 的设计状态会按 tone 展示：Ready for dev、Design updated、Missing link、Not ready、Blocked、Review、Done、Neutral；Ready/Updated/Missing/Not ready 等更需要处理的入口会排在普通 description 链接前面。状态标签 hover 会说明它对开发者意味着什么，例如设计已变更时提示重新检查链接设计。
 - 重复链接合并时会优先保留 Jira remote link / Designs 提供的结构化标题和状态，UX ticket 行也会优先展示具体设计名，避免 description 或工具默认名覆盖真正可行动的设计状态。
@@ -332,6 +332,9 @@ const PAGE_CHANGE_DELAY = 1000;
 33. 合并后的行内来源 tag 会按来源权威性排序，并使用人类可读 hover 文案，帮助用户确认状态来自 Jira remote link、Jira Designs、UX ticket 还是 description
 34. 同等状态优先级下，带有更新时间的设计行会先按最新更新时间排序；更新时间标签 hover 会把原始日期转成复查提示，避免用户只看到一个孤立日期
 35. Linked issue 解析支持没有 href 的纯文本 issue key；当 Jira 或插件只渲染 `UX-123` 文本时，相关 UX ticket 仍会进入设计上下文并显示 `Missing link`
+36. 混合文本里同时出现当前开发票和 UX 票时，解析会按配置的设计项目选择 UX key，不会被第一个非目标 issue key 抢走
+37. Remote link 同时提供 object/status/link 多级更新时间时，会展示最新有效时间；短标签保持 `Updated YYYY-MM-DD`，tooltip 和 `aria-label` 包含 UTC 时间与复查含义
+38. Linked issue href 不是 `/browse/KEY`、而是 Jira Cloud 新视图的 `/jira/.../issues/KEY` 或 `/projects/.../issues/KEY` 时，也会保留目标 UX ticket，避免可见文本只有 “Open dependency” 时漏掉缺失设计链接提醒
 
 ### 未来增强计划 🔄
 1. 在权限允许时展示轻量预览或缩略图，减少打开外部工具的次数。
@@ -343,8 +346,10 @@ const PAGE_CHANGE_DELAY = 1000;
 - Figma for Jira 已把设计更新时间、`Ready for dev` 和 `Design updated` 放在 Jira 内作为核心状态信号；当前功能继续保留这些信号，并避免额外强提醒。
 - Atlassian Automation 暴露的 design URL 可能是 encoded URL，当前功能把 encoded URL 与页面可读 URL 归并，优先解决重复行和状态丢失，而不是额外做自动提醒。
 - Zeplin for Jira 支持把 screens、sections、projects 等设计资源挂到 Jira；当前功能只做路径级标签细分，不尝试推断具体屏幕状态或替代 Zeplin 预览。
+- Jira issue linking 的核心对象仍是明确 issue key；当前功能在非标准 DOM 中保留 raw-text fallback，并支持 Jira 新旧 issue URL 形态，但只把匹配设计项目配置的 key 纳入设计上下文，避免普通说明文字把面板带偏。
 - Atlassian Automation 支持设计链接创建、更新和状态变化触发；后续如果要做提醒或批量处理，应优先基于这些状态事件，而不是在当前面板里加入需要用户决策的自动改票。
 - Figma Dev Mode 把 `Changed` 视为已标记 Ready/Completed 的设计被修改后的状态；当前面板把这类状态归一为 `Design updated`，比直接显示 `Changed` 更贴近开发者下一步动作。
+- Figma/Jira 与 Atlassian Automation 都把设计更新、设计状态变化视为独立事件；当前面板在多个更新时间字段并存时取最新有效值，避免旧 object 时间掩盖较新的状态更新时间。
 - 软件 artifact traceability 研究强调不同工程 artifact 之间的路径要能被角色快速理解；当前面板用按权威性排序的逐行 source tag 加 footer 来源摘要，保持低噪音同时让用户知道结果来自 description、Jira Designs、remote links 还是 UX ticket。
 - Jira issue link 可视化研究强调大项目里缺失或未知 issue links 会破坏依赖总览；因此当前功能在 linked issue 只有纯文本 key 时也保留 `Missing link` 提醒，而不是因为 DOM 不是标准链接就静默忽略。
 - Relay 设计交付研究强调开发者容易丢失设计意图；当前阶段更适合提高设计入口和状态的可追溯性，暂不把缩略图或模型化意图解释做成默认阻塞流程。
@@ -353,6 +358,8 @@ const PAGE_CHANGE_DELAY = 1000;
 
 - [Jira REST API v2文档](https://developer.atlassian.com/cloud/jira/platform/rest/v2/)
 - [Jira Remote Issue Links REST API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-remote-links/)
+- [Atlassian: identify Jira issue ID/key in Cloud](https://support.atlassian.com/jira/kb/how-to-identify-the-jira-issue-id-in-cloud/)
+- [Atlassian Developer Community: Jira issue URL format](https://community.developer.atlassian.com/t/getting-issue-url-from-jira-cloud/62268)
 - [Atlassian + Figma integration](https://www.atlassian.com/partnerships/figma)
 - [Atlassian Jira automation design triggers](https://support.atlassian.com/cloud-automation/docs/jira-automation-triggers/)
 - [Figma Jira integration help](https://help.figma.com/hc/en-us/articles/360039827834-Jira-and-Figma)

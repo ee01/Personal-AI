@@ -23,6 +23,28 @@ const recallRequests = [];
 const focusRequests = [];
 const feedbackRequests = [];
 
+function assertFeedbackRequest(index, expected, expectedDetail = {}) {
+  const request = feedbackRequests[index];
+  const { detail, ...base } = request;
+  assert.deepEqual(base, expected);
+  assert.equal(typeof detail, 'string', 'feedback detail should be serialized');
+  const parsedDetail = JSON.parse(detail);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(expectedDetail).map(([key, value]) => [
+        key,
+        parsedDetail[key],
+      ]),
+    ),
+    expectedDetail,
+  );
+  assert.equal(
+    typeof parsedDetail.scene_anchor_signature,
+    'string',
+    'feedback detail should include scene signature',
+  );
+}
+
 const context = await chromium.launchPersistentContext(userDataDir, {
   channel: 'chromium',
   headless: true,
@@ -137,7 +159,7 @@ try {
 
   await page.getByText('今日记忆时间轴').waitFor({ timeout: 10000 });
   await page
-    .getByText('全部记忆 · 今天 · 时间通道')
+    .getByText('全部记忆 · 今天 · 全部来源 · 时间通道')
     .waitFor({ timeout: 10000 });
   assert.equal(
     await page
@@ -226,6 +248,32 @@ try {
     'unsupported internal route should not expose a memory-jump button',
   );
 
+  const recallCountBeforeSourceFilter = recallRequests.length;
+  const sourceFilter = page.getByLabel('按来源筛选时间轴');
+  await sourceFilter.selectOption({ label: 'Timeline source（1）' });
+  await page
+    .getByText('全部记忆 · 今天 · Timeline source · 时间通道')
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    recallRequests.length,
+    recallCountBeforeSourceFilter,
+    'source filtering should refine the loaded timeline without another recall request',
+  );
+  assert.equal(
+    await page
+      .locator('article', { hasText: 'Safe timeline memory all' })
+      .count(),
+    1,
+    'selected source should keep matching timeline rows visible',
+  );
+  assert.equal(
+    await page.locator('article', { hasText: 'Unsafe source memory' }).count(),
+    0,
+    'selected source should hide non-matching timeline rows',
+  );
+  await sourceFilter.selectOption({ label: '全部来源' });
+  await page.getByText('Unsafe source memory').waitFor({ timeout: 10000 });
+
   const safeTimelineCard = page.locator('article', {
     hasText: 'Safe timeline memory all',
   });
@@ -247,30 +295,61 @@ try {
       .getAttribute('aria-pressed'),
     'true',
   );
-  assert.deepEqual(feedbackRequests[0], {
-    type: 'recall_quality',
-    targetId: 'safe-all',
-    targetType: 'message',
-    action: 'positive',
-  });
+  assertFeedbackRequest(
+    0,
+    {
+      type: 'recall_quality',
+      targetId: 'safe-all',
+      targetType: 'message',
+      action: 'positive',
+    },
+    {
+      interaction: 'context_recall_feedback',
+      surface: 'memory_timeline',
+      action: 'positive',
+      range: 'today',
+      scope: 'all',
+      target_type: 'message',
+    },
+  );
   await safeTimelineCard.getByRole('button', { name: '不相关' }).click();
   await safeTimelineCard
     .getByText('已记录为不相关')
     .waitFor({ timeout: 10000 });
-  assert.deepEqual(feedbackRequests[1], {
-    type: 'recall_quality',
-    targetId: 'safe-all',
-    targetType: 'message',
-    action: 'negative',
-  });
+  assertFeedbackRequest(
+    1,
+    {
+      type: 'recall_quality',
+      targetId: 'safe-all',
+      targetType: 'message',
+      action: 'negative',
+    },
+    {
+      interaction: 'memory_relevance_trainer',
+      surface: 'memory_timeline',
+      action: 'negative',
+      feedback_reason: 'timeline_context_mismatch',
+      auto_applied: 'true',
+      target_type: 'message',
+    },
+  );
   await safeTimelineCard.getByRole('button', { name: '撤销反馈' }).click();
   await safeTimelineCard.getByText('已撤销反馈').waitFor({ timeout: 10000 });
-  assert.deepEqual(feedbackRequests[2], {
-    type: 'recall_quality',
-    targetId: 'safe-all',
-    targetType: 'message',
-    action: 'clear',
-  });
+  assertFeedbackRequest(
+    2,
+    {
+      type: 'recall_quality',
+      targetId: 'safe-all',
+      targetType: 'message',
+      action: 'clear',
+    },
+    {
+      interaction: 'context_recall_feedback',
+      surface: 'memory_timeline',
+      action: 'clear',
+      target_type: 'message',
+    },
+  );
   assert.equal(
     await safeTimelineCard
       .getByRole('button', { name: '不相关' })

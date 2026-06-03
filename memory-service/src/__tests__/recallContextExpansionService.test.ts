@@ -115,4 +115,44 @@ describe('RecallContextExpansionService', () => {
     expect(expansion.resolvedRole).toBe('backend');
     expect(expansion.expandedQuery).toContain('AI-Generated VBGs');
   });
+
+  it('treats source anchor matches in context frames as current-source matches', () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, title, summary, dominant_projects_json,
+         topics_json, role_terms_json, source_anchors_json, confidence,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'glip:mtr-141852',
+      'ringcentral',
+      'glip',
+      'MTR-141852: AI Custom VBG',
+      'Discussion about AI VBG backend readiness and RCV BE new design.',
+      JSON.stringify(['AI VBG']),
+      JSON.stringify(['AI Custom VBG', 'new design']),
+      JSON.stringify(['backend']),
+      JSON.stringify(['MTR-141852']),
+      0.7,
+      currentTime - 600,
+      currentTime - 600,
+    );
+
+    const expansion = service.expand({
+      query: '那个 BE ready 了吗',
+      title: 'MTR-141852: AI Custom VBG',
+      currentContext: {
+        title: 'MTR-141852: AI Custom VBG',
+        issueKey: 'MTR-141852',
+        sourceAnchorHints: ['MTR-141852'],
+      },
+    });
+
+    expect(expansion.resolvedProject).toBe('AI VBG');
+    expect(expansion.resolvedRole).toBe('backend');
+    expect(expansion.expandedQuery).toContain('AI VBG');
+    expect(expansion.expandedQuery).toContain('MTR-141852');
+    expect(expansion.ambiguity?.state).toBe('none');
+  });
 });

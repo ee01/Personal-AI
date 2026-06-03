@@ -1,9 +1,12 @@
-import type { BridgeSettingsStore } from '../settings.js';
+import type { BridgeSettingsStore, ExplorerSettings } from '../settings.js';
 import type { BridgeAuthStatus } from '../types.js';
 import type { BridgeMemoryServiceClient } from '../memoryServiceClient.js';
 import { RawMessageStore } from './cache/RawMessageStore.js';
 import { CursorStore } from './CursorStore.js';
-import { toExplorerIngestSourceId } from './sourceIds.js';
+import {
+  EXPLORER_SOURCE_IDS,
+  toExplorerIngestSourceId,
+} from './sourceIds.js';
 import type {
   ExplorerPreviewResult,
   ExplorerRunSummary,
@@ -41,16 +44,17 @@ interface ExplorerManagerOptions {
   sourceAdapters?: Partial<Record<SourceId, ExplorerSourceAdapter>>;
 }
 
-const SOURCE_IDS: SourceId[] = ['doubao', 'chatgpt'];
-
 export class ExplorerManager {
   private readonly sourceAdapters: Partial<
     Record<SourceId, ExplorerSourceAdapter>
   >;
-  private readonly runState: Record<SourceId, ExplorerRunState> = {
-    doubao: { running: false, lastRunOutcome: 'idle' },
-    chatgpt: { running: false, lastRunOutcome: 'idle' },
-  };
+  private readonly runState: Record<SourceId, ExplorerRunState> =
+    Object.fromEntries(
+      EXPLORER_SOURCE_IDS.map((source) => [
+        source,
+        { running: false, lastRunOutcome: 'idle' },
+      ]),
+    ) as Record<SourceId, ExplorerRunState>;
 
   constructor(private readonly options: ExplorerManagerOptions) {
     this.sourceAdapters = options.sourceAdapters ?? {};
@@ -58,46 +62,49 @@ export class ExplorerManager {
 
   async getStatus(): Promise<ExplorerStatusSnapshot> {
     const settings = this.options.settingsStore.getSettings();
-    const doubaoAuthStatus = await this.getAuthStatus(
-      'doubao',
-      settings.explorer.doubao.enabled,
-    );
-    const chatgptAuthStatus = await this.getAuthStatus(
-      'chatgpt',
-      settings.explorer.chatgpt.enabled,
+    const sourceStatuses = await Promise.all(
+      EXPLORER_SOURCE_IDS.map(async (source) => {
+        const sourceSettings = getExplorerSourceSettings(
+          settings.explorer,
+          source,
+        );
+        const defaultScope = normalizeExplorerDefaultScope(
+          source,
+          sourceSettings.defaultScope,
+        );
+        const authStatus = await this.getAuthStatus(
+          source,
+          sourceSettings.enabled,
+        );
+        return [
+          source,
+          {
+            source,
+            enabled: sourceSettings.enabled,
+            settings: sourceSettings,
+            authStatus,
+            running: this.runState[source].running,
+            lastRunAt: this.runState[source].lastRunAt,
+            lastRunOutcome: this.runState[source].lastRunOutcome,
+            lastError: this.runState[source].lastError,
+            lastRunSummary: this.runState[source].lastRunSummary,
+            cache: this.options.rawStore.getStats(source),
+            revokePreview: this.options.rawStore.getRevokePreview(
+              source,
+              defaultScope,
+            ),
+            transport: this.sourceAdapters[source]?.getTransportStatus?.(),
+          },
+        ] as const;
+      }),
     );
 
     return {
       updatedAt: new Date().toISOString(),
       askDefaultScope: settings.explorer.askDefaultScope,
-      sources: {
-        doubao: {
-          source: 'doubao',
-          enabled: settings.explorer.doubao.enabled,
-          settings: settings.explorer.doubao,
-          authStatus: doubaoAuthStatus,
-          running: this.runState.doubao.running,
-          lastRunAt: this.runState.doubao.lastRunAt,
-          lastRunOutcome: this.runState.doubao.lastRunOutcome,
-          lastError: this.runState.doubao.lastError,
-          lastRunSummary: this.runState.doubao.lastRunSummary,
-          cache: this.options.rawStore.getStats('doubao'),
-          transport: this.sourceAdapters.doubao?.getTransportStatus?.(),
-        },
-        chatgpt: {
-          source: 'chatgpt',
-          enabled: settings.explorer.chatgpt.enabled,
-          settings: settings.explorer.chatgpt,
-          authStatus: chatgptAuthStatus,
-          running: this.runState.chatgpt.running,
-          lastRunAt: this.runState.chatgpt.lastRunAt,
-          lastRunOutcome: this.runState.chatgpt.lastRunOutcome,
-          lastError: this.runState.chatgpt.lastError,
-          lastRunSummary: this.runState.chatgpt.lastRunSummary,
-          cache: this.options.rawStore.getStats('chatgpt'),
-          transport: this.sourceAdapters.chatgpt?.getTransportStatus?.(),
-        },
-      },
+      sources: Object.fromEntries(
+        sourceStatuses,
+      ) as unknown as ExplorerStatusSnapshot['sources'],
     };
   }
 
@@ -180,8 +187,11 @@ export class ExplorerManager {
   async tick(): Promise<void> {
     const explorerSettings = this.options.settingsStore.getSettings().explorer;
 
-    for (const source of SOURCE_IDS) {
-      const sourceSettings = explorerSettings[source];
+    for (const source of EXPLORER_SOURCE_IDS) {
+      const sourceSettings = getExplorerSourceSettings(
+        explorerSettings,
+        source,
+      );
       const state = this.runState[source];
       const intervalMs = sourceSettings.intervalMinutes * 60_000;
 
@@ -211,13 +221,18 @@ export class ExplorerManager {
     source: SourceId;
     conversationId?: string;
     deletedMessages: number;
+    deletedCursors: number;
   }> {
     const deletedMessages = this.options.rawStore.reset(source, conversationId);
-    await this.options.cursorStore.reset(source, conversationId);
+    const deletedCursors = await this.options.cursorStore.reset(
+      source,
+      conversationId,
+    );
     return {
       source,
       conversationId,
       deletedMessages,
+      deletedCursors,
     };
   }
 
@@ -321,14 +336,26 @@ export class ExplorerManager {
     scope: 'work' | 'personal';
     deletedMessages: number;
     deletedChunks: number;
+    localArtifactsRevoked: number;
+    localLegacyArtifactsRevoked: number;
   }> {
+    const previewBefore = this.options.rawStore.getRevokePreview(source, scope);
     const result = await this.options.memoryClient.deleteMemoriesBySourceScope(
       toExplorerIngestSourceId(source),
+      scope,
+    );
+    const localArtifactsRevoked = this.options.rawStore.markArtifactsRevoked(
+      source,
       scope,
     );
     return {
       ...result,
       source,
+      localArtifactsRevoked,
+      localLegacyArtifactsRevoked: Math.min(
+        previewBefore.legacyUnscopedArtifactCount,
+        localArtifactsRevoked,
+      ),
     };
   }
 
@@ -394,5 +421,37 @@ function normalizeExplorerRunSummary(
     extractedMessageCount: Number(result?.extractedMessageCount ?? 0),
     artifactCount: Number(result?.artifactCount ?? 0),
     skippedConversationCount: Number(result?.skippedConversationCount ?? 0),
+  };
+}
+
+function normalizeExplorerDefaultScope(
+  source: SourceId,
+  scope: unknown,
+): 'work' | 'personal' {
+  if (scope === 'work' || scope === 'personal') return scope;
+  return source === 'doubao' ? 'personal' : 'work';
+}
+
+function getExplorerSourceSettings(
+  explorerSettings: ExplorerSettings | Partial<Record<SourceId, unknown>>,
+  source: SourceId,
+): {
+  enabled: boolean;
+  intervalMinutes: number;
+  defaultScope?: 'work' | 'personal';
+} & Record<string, unknown> {
+  const settings = explorerSettings[source] as
+    | ({ enabled?: boolean; intervalMinutes?: number } & Record<
+        string,
+        unknown
+      >)
+    | undefined;
+  return {
+    enabled: settings?.enabled === true,
+    intervalMinutes:
+      typeof settings?.intervalMinutes === 'number' && settings.intervalMinutes > 0
+        ? settings.intervalMinutes
+        : 60,
+    ...(settings ?? {}),
   };
 }

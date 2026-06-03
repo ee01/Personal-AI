@@ -177,9 +177,14 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   'API 密钥（可选）': 'API key (optional)',
   '后端配置 API_KEY 时填写': 'Fill this when the backend has API_KEY configured',
   '请求超时（毫秒）': 'Request timeout (ms)',
+  '自我反思 / 场景预演生产': 'Self Reflection / Rehearsal production',
   '启用自我反思': 'Enable self reflection',
+  '启用自我反思（场景预演生产总开关）':
+    'Enable self reflection (Rehearsal production master switch)',
   '每个用户可以单独关闭自我反思；关闭后不会影响梦境重放的持续生成。':
     'Each user can disable self reflection independently. Disabling it does not stop Dream Replay generation.',
+  '默认开启。关闭后不会自动推进 Reflection，也不会从 Reflection 生成新的场景预演候选；已存在的场景预演和梦境重放不受影响。':
+    'On by default. Disabling it stops automatic Reflection progress and new Rehearsal candidates from Reflection; existing Rehearsals and Dream Replay are not affected.',
   '用于冲突/待确认类的决策中心提醒。默认推送给 Me。':
     'Used for Decision Center reminders about conflicts and pending confirmations. Defaults to Me.',
   '梦境重放会持续运行；这里仅控制报表推送到 Me、自定义群组，或完全不推送。':

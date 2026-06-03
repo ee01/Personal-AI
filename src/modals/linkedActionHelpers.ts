@@ -95,6 +95,15 @@ export const LINKED_ACTION_SAMPLE_CATALOG: LinkedActionSample[] = [
       '从当前消息提取时间和行动项，创建日程或提醒；如果时间不明确，就先生成一条待确认提醒而不是立即执行。',
     matchKeywords: ['提醒', 'remind', 'schedule', 'meeting', '明天', '下周'],
   },
+  {
+    sampleId: 'openclaw-file-delegation',
+    actionFamily: 'openclaw_delegation',
+    targetSystem: 'OpenClaw / Google Drive',
+    canSchedule: false,
+    examplePrompt:
+      '把当前消息里的附件或视频按要求下载、重命名并上传到指定目标；完成后把可访问链接单独发给我。如果缺少附件链接、权限或目标目录访问能力，就停止并报告具体 blocker。',
+    matchKeywords: ['附件', '视频', '文件', '下载', '上传', 'drive', 'link'],
+  },
 ];
 
 export const normalizeLinkedActionSnippet = (value?: string) =>

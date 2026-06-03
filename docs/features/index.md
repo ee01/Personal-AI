@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-05-26*
+*最后更新: 2026-06-03*
 
 这份索引只负责导航和规划。各功能的真实行为仍以对应功能文档为准。
 
@@ -32,6 +32,9 @@
 |---|---|---|---|
 | 记忆摄入、去重、显著性评估 | Memory Service | [memory_system.md](./memory_system.md) | `IngestionPipeline` / `SalienceScorer` |
 | 四通道召回 | Memory Service | [memory_system.md](./memory_system.md) | Vector / FTS / Graph / Time |
+| Ask 主动问答 | Memory Service | [ask.md](./ask.md) | 主动问答入口，覆盖话题锁定、召回优先级、证据缺口和活答案沉淀 |
+| Ask 短问句话题锁定 | Memory Service | [ask.md](./ask.md) | Ask 前置匹配当前话题、角色词、source anchors 和高频互动记忆 |
+| Ask 活答案记忆 | Memory Service | [ask.md](./ask.md) | 重复 locked topic 问题首问 observation、二问 promote、后续 priorHit / updated |
 | 工作/个人/全部范围语义 | Memory Service | [memory_system.md](./memory_system.md) | `/recall`、`/ask`、被动召回共用 |
 | 记忆搜索结果页 | Memory Exploring | [memory_system.md](./memory_system.md) | `SearchResultPage.vue` |
 | 搜索结果有用/不相关反馈 | Memory Exploring | [memory_system.md](./memory_system.md) | `/feedback`，按 target type 记录 |
@@ -57,7 +60,8 @@
 | 用户上下文注入 | Prompt Config | [custom_prompts.md](./custom_prompts.md) | 用户偏好/上下文预览与开关 |
 | 自我反思线程 | Memory Service | [memory_system.md](./memory_system.md) | `ReflectionThreadService` 与 UI 线程页 |
 | 反思本地研究补查 | Memory Service | [memory_system.md](./memory_system.md) | 反思 run 内查询本地记忆 |
-| 未来场景预演记忆 | Rehearsal | [rehearsal.md](./rehearsal.md) | `rehearsals` / `rehearsal_activations`，通过 `/context-recall` 场景触发 |
+| 未来场景预演记忆 | Rehearsal | [rehearsal.md](./rehearsal.md) | 以后遇到某个可识别场景时，提醒用户该想起、说或做什么；不是事实层或弱联想 |
+| 场景预演边界 | Rehearsal | [rehearsal.md](./rehearsal.md) | 场景类型开放，但每条都要有未来触发线索、到时要带入的内容，以及何时不打扰 |
 | Rehearsal 管理页 | Memory Exploring | [rehearsal.md](./rehearsal.md) | `memory-exploring.html#/rehearsals`，用于审计和修正 |
 | 动作队列 | Memory Service | [memory_system.md](./memory_system.md) | `ActionQueue.vue` / `proposed_actions` |
 | OpenClaw 外部委派 | Memory Service | [memory_system.md](./memory_system.md) | `delegate_openclaw` action |
@@ -110,6 +114,9 @@
 | 今天排序与噪声控制 | Today Pilot | [today_pilot.md](./today_pilot.md) | `DayPilotService` |
 | 今日预演提示 | Today Pilot | [rehearsal.md](./rehearsal.md) | active/stale Rehearsal 进入今日和会前 cue |
 | 会前准备 | Today Pilot | [today_pilot.md](./today_pilot.md) | calendar events / meeting prep |
+| Storyline 会前提示 | Today Pilot / Memory Storyline Builder | [today_pilot.md](./today_pilot.md) / [memory_storyline_builder.md](./memory_storyline_builder.md) | meeting prep LLM 判定后在摘要和 cue cards 之间提示 |
+| Storyline Draft 页面 | Memory Storyline Builder | [memory_storyline_builder.md](./memory_storyline_builder.md) | `memory-exploring.html#/storylines/draft`，复核段落、证据、风险和可复制 artifact |
+| Storyline Draft API | Memory Storyline Builder | [memory_storyline_builder.md](./memory_storyline_builder.md) | `POST /api/v1/storylines/draft`，基于 meeting prep 生成草稿 |
 | Meeting Pilot handoff | Today Pilot | [today_pilot.md](./today_pilot.md) | 从今日简报进入会议能力 |
 | Popup Top 3 | Today Pilot | [today_pilot.md](./today_pilot.md) | Chrome popup 今日摘要 |
 | Context Pack | Today Pilot | [today_pilot.md](./today_pilot.md) | 可复制的上下文包 |
@@ -142,7 +149,7 @@
 | 会后 Panorama | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | 会议时间线、行动项、决策 |
 | 会议历史归档 | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | `MeetingHistoryPage.vue` |
 | 分层 ASR | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | Web Speech / cloud / desktop local |
-| Desktop Local Whisper | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | desktop app / whisper server |
+| Desktop Local ASR / Whisper fallback | Meeting Pilot | [meeting_pilot.md](./meeting_pilot.md) | desktop app local ASR chain；Whisper 可作为 final fallback |
 | NC 加会 | Native Join | [meeting_native_join.md](./meeting_native_join.md) | Web meeting 链接转 native app |
 | NC 加会浏览器回退 | Native Join | [meeting_native_join.md](./meeting_native_join.md) | 默认浏览器、复制链接、fallback UI |
 | Google Slides 项目分析器 | Google Slides Analyzer | [google_slides_analyzer.md](./google_slides_analyzer.md) | Slides 分析与建议 |

@@ -265,6 +265,7 @@ export class ProfileManager {
         `SELECT * FROM user_profile_items
          WHERE status = 'active'
            AND user_confirmed = 1
+           AND salience_score >= 0.1
            AND item_type = 'fact'
            AND item_key IN (${placeholders})
          ORDER BY salience_score DESC
@@ -287,7 +288,10 @@ export class ProfileManager {
         `SELECT * FROM user_profile_items
          WHERE status = 'active'
            AND user_confirmed = 1
+           AND salience_score >= 0.1
            AND last_seen >= ?
+           AND item_key NOT LIKE 'writing_style.%'
+           AND item_key NOT IN ('writing_style', 'response_style', 'communication_style')
          ORDER BY salience_score DESC
          LIMIT 5`,
       )
@@ -307,6 +311,7 @@ export class ProfileManager {
         `SELECT * FROM user_profile_items
          WHERE status = 'active'
            AND user_confirmed = 1
+           AND salience_score >= 0.1
            AND item_type = 'interest'
          ORDER BY salience_score DESC
          LIMIT 10`,
@@ -342,11 +347,41 @@ export class ProfileManager {
       sections.push('');
     }
 
+    // --- Writing Style (confirmed transferable owner voice) ---
+    const writingStyleRows = this.db
+      .prepare(
+        `SELECT * FROM user_profile_items
+         WHERE status = 'active'
+           AND item_type = 'preference'
+           AND user_confirmed = 1
+           AND salience_score >= 0.1
+           AND (
+             item_key LIKE 'writing_style.%'
+             OR item_key IN ('writing_style', 'response_style', 'communication_style')
+           )
+         ORDER BY salience_score DESC
+         LIMIT ?`,
+      )
+      .all(topK) as ProfileItemRow[];
+
+    if (writingStyleRows.length > 0) {
+      sections.push('## Writing Style\n');
+      for (const row of writingStyleRows) {
+        sections.push(`- **${row.item_key}**: ${row.item_value}`);
+      }
+      sections.push('');
+    }
+
     // --- Preferences (item_type='preference' and user_confirmed=1) ---
     const prefRows = this.db
       .prepare(
         `SELECT * FROM user_profile_items
-         WHERE status = 'active' AND item_type = 'preference' AND user_confirmed = 1
+         WHERE status = 'active'
+           AND item_type = 'preference'
+           AND user_confirmed = 1
+           AND salience_score >= 0.1
+           AND item_key NOT LIKE 'writing_style.%'
+           AND item_key NOT IN ('writing_style', 'response_style', 'communication_style')
          ORDER BY salience_score DESC
          LIMIT ?`,
       )

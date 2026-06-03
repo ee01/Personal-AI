@@ -180,6 +180,37 @@ targetDate = getTimelineTargetDate({ Timeline_Project: 'mThor', Timeline_Milesto
   assert.equal(context.targetDate.getDate(), 6);
 });
 
+test('Apps Script accepts Timeline project param keys from legacy sheet rows', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    Logger: { log: () => undefined },
+    releaseInfo: {
+      'Jupiter web': {
+        currentRelease: '26.2',
+        currentPhase: 'Regression',
+        releaseInfo: {
+          FF: '05/06/2026',
+        },
+      },
+    },
+    replaced: null as any,
+    targetDate: null as any,
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+const projectInfo = getTimelineProjectInfo(releaseInfo, 'jupiterWeb');
+replaced = replaceProjectVariablesInText('Release {currentRelease} is in {currentPhase}', projectInfo);
+targetDate = getTimelineTargetDate({ Timeline_Project: 'jupiterWeb', Timeline_Milestone: 'FF', Timeline_Offset: '0' }, releaseInfo);`,
+    context,
+  );
+
+  assert.equal(context.replaced, 'Release 26.2 is in Regression');
+  assert.equal(context.targetDate.getFullYear(), 2026);
+  assert.equal(context.targetDate.getMonth(), 4);
+  assert.equal(context.targetDate.getDate(), 6);
+});
+
 test('Apps Script parses form-decoded Jira urlEncode releaseInfo with spaces and literal plus', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
   const releaseInfo =

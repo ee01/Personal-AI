@@ -61,8 +61,15 @@ describe('Composer Assist API (POST /composer/assist)', () => {
 
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
+    db.prepare('DELETE FROM source_memory_events').run();
+    db.prepare('DELETE FROM source_memory_links').run();
+    db.prepare('DELETE FROM source_memory_triggers').run();
+    db.prepare('DELETE FROM source_memory_takeaways').run();
+    db.prepare('DELETE FROM source_memory_anchors').run();
+    db.prepare('DELETE FROM source_memory_capsules').run();
     db.prepare('DELETE FROM rehearsal_activations').run();
     db.prepare('DELETE FROM rehearsals').run();
+    db.prepare('DELETE FROM user_writing_style_memories').run();
     db.prepare('DELETE FROM user_profile_items').run();
     db.prepare('DELETE FROM watched_projects').run();
     db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
@@ -167,6 +174,140 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).toContain('请结合下面上下文回答');
     expect(body.insertText).toContain('不要直接暴露不必要的私人细节');
     expect(body.evidence.length).toBeGreaterThan(0);
+  });
+
+  it('adds task framing and target-tool fit for compose-to-AI prompts', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    insertChunk({
+      id: 9221,
+      content:
+        'Codex CLI session result: user asked to fix the Personal AI Composer Guard repo bug, Codex changed ContextAssistService and ran composer-assist tests.',
+      sourceType: 'codex_cli',
+      source: 'codex_cli',
+      scope: 'work',
+      createdAt: now - 10,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        scenario: 'compose_to_ai',
+        title: 'ChatGPT',
+        draftText:
+          'Help me fix the repo bug in Personal AI Composer Guard and run tests',
+        primaryText: 'Current AI chat is about a repo bug fix',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['codex_cli', 'chatgpt', 'doubao_chat'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.insertText).toContain('任务判断');
+    expect(body.insertText).toContain('目标工具适配');
+    expect(body.insertText).toContain('更适合的备选：codex_cli');
+    expect(body.debug.taskFrame.kind).toBe('repo_bugfix');
+    expect(body.debug.targetToolFit.betterTool).toBe('codex_cli');
+    expect(body.debug.sourceMix.codex_cli).toBeGreaterThan(0);
+  });
+
+  it('keeps Jira status prompts source-aware when composing to another AI', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    insertChunk({
+      id: 9222,
+      content:
+        'Jira RCV-148412 status: backend is ready for review, FE owner is still tracking blockers, and release timing must be verified in Jira.',
+      sourceType: 'jira',
+      source: 'jira',
+      scope: 'work',
+      createdAt: now - 10,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        scenario: 'compose_to_ai',
+        title: 'ChatGPT',
+        draftText:
+          'Summarize RCV-148412 status and current blockers before I reply',
+        primaryText: 'Current AI chat is about Jira project status',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['jira', 'chatgpt'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.insertText).toContain('任务判断');
+    expect(body.insertText).toContain('Jira/项目上下文');
+    expect(body.insertText).toContain('更适合的备选：jira_or_project_dashboard');
+    expect(body.debug.taskFrame.kind).toBe('jira_data_analysis');
+    expect(body.debug.targetToolFit.betterTool).toBe(
+      'jira_or_project_dashboard',
+    );
+    expect(body.debug.recallRequest.sourceTypes).toContain('jira');
+    expect(body.debug.recallRequest.sourceTypes).not.toContain('chatgpt');
+  });
+
+  it('allows saved source-memory capsules in compose-to-AI context packs', async () => {
+    const saveRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload: {
+        sourceKind: 'webpage',
+        sourceUrl: 'https://example.com/artifact-lineage',
+        sourceTitle: 'Artifact lineage checklist',
+        text: 'Artifact lineage checklist source memory: preserve browser evidence, original source URL, and generated artifact revisions before asking another AI to continue the workflow.',
+        captureMode: 'manual',
+        interactions: {
+          copiedText: true,
+          manualClick: true,
+        },
+      },
+    });
+    expect(saveRes.statusCode).toBe(200);
+    const capsuleId = saveRes.json().capsule.id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'chatgpt',
+        contextType: 'web_agent_prompt',
+        scenario: 'compose_to_ai',
+        title: 'ChatGPT',
+        draftText:
+          'Use the artifact lineage checklist before this workflow continues',
+        primaryText: 'Current AI prompt is about artifact lineage handoff',
+        identifiers: { provider: 'chatgpt' },
+        sourceTypes: ['source_memory', 'chatgpt'],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.insertText).toContain('Artifact lineage checklist');
+    expect(
+      body.evidence.some(
+        (item: any) =>
+          item.type === 'source_memory' &&
+          item.metadata?.sourceMemoryCapsuleId === capsuleId,
+      ),
+    ).toBe(true);
+    expect(body.debug.recallRequest.sourceTypes).toContain('source_memory');
+    expect(body.debug.recallRequest.sourceTypes).not.toContain('chatgpt');
   });
 
   it('uses Web AI draft text as the context-enrichment recall signal', async () => {
@@ -321,8 +462,92 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.evidence[0].whyRelevant).toEqual(
       expect.arrayContaining(['人物：Colin Liu', '同群聊']),
     );
+    expect(body.previewRequired).toBe(true);
+    expect(body.riskLevel).toBe('low');
     expect(llmGenerateMock).toHaveBeenCalledTimes(1);
     expect(llmGenerateMock.mock.calls[0][0]).toContain('预演提醒');
+  });
+
+  it('uses transferable writing style memory for peer RingCentral replies', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, evidence_refs, source_kind,
+         confidence, user_confirmed, status, salience_score, mention_count,
+         last_seen, valid_from, valid_to, created_at, updated_at, fingerprint)
+       VALUES (?, 'preference', ?, ?, ?, 'system', 0.84, 1, 'active', 0.84, 3,
+               ?, null, null, ?, ?, ?)`,
+    ).run(
+      'profile-writing-style-peer-zh',
+      'writing_style.ringcentral.peer.casual_reply.zh',
+      '中文 RingCentral peer 同事轻松回复：可采用：可以用“哈哈”和轻微“~”。避免：不要写“我最喜欢聊了”、泛泛未来承诺或“咱们一起捣鼓下”这类 AI 式热情套话。',
+      JSON.stringify([{ traceId: 'ambient-style-peer-1' }]),
+      now,
+      now,
+      now,
+      'fingerprint-writing-style-peer-zh',
+    );
+    insertChunk({
+      id: 9240,
+      content:
+        'Esther 下午要单独找 Esone 请教 Jira PAT token 怎么用；PAT setup 在 Jira personal access token 页面创建 token。',
+      sourceType: 'glip',
+      source: 'glip',
+      scope: 'work',
+      createdAt: now - 5,
+    });
+    llmGenerateMock.mockImplementation(async (prompt: string) => {
+      expect(prompt).toContain(
+        'writing_style.ringcentral.peer.casual_reply.zh',
+      );
+      expect(prompt).toContain('我最喜欢聊了');
+      expect(prompt).toContain('咱们一起捣鼓下');
+      return {
+        content: '哈哈可以，下午你直接找我，我给你过一下 PAT 怎么用~',
+      };
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        title: 'Chat with Esther',
+        primaryText:
+          'Esther 问下午能不能单独找个时间请教 Jira PAT token 怎么用。',
+        identifiers: {
+          conversationId: 'esther-dm',
+          groupId: 'esther-dm',
+        },
+        audience: {
+          conversationTitle: 'Esther (Xiying) Pan',
+          conversationId: 'esther-dm',
+          groupId: 'esther-dm',
+          people: ['Esther (Xiying) Pan'],
+          relationshipHint: 'peer colleague',
+        },
+        visibleMessages: [
+          {
+            sender: 'Esther (Xiying) Pan',
+            text: '下午单独找个时间跟你请教，哈哈哈',
+          },
+        ],
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.insertText).toBe(
+      '哈哈可以，下午你直接找我，我给你过一下 PAT 怎么用~',
+    );
+    expect(body.insertText).not.toContain('我最喜欢聊了');
+    expect(body.insertText).not.toContain('咱们一起捣鼓下');
+    expect(body.debug.personalization.confirmedStyleHintKeys).toContain(
+      'writing_style.ringcentral.peer.casual_reply.zh',
+    );
   });
 
   it('filters weak composer memories that do not match the current scene', async () => {

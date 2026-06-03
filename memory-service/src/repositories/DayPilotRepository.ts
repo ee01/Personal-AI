@@ -3,6 +3,8 @@ import type Database from 'better-sqlite3';
 
 import { now } from '../utils/time.js';
 
+const OPEN_ACTION_STATUSES = new Set(['queued', 'failed']);
+
 export type DayPilotPriority = 'critical' | 'high' | 'medium' | 'low';
 export type DayPilotState = 'prepare' | 'now' | 'waiting' | 'done' | 'muted';
 export type DayPilotCardType =
@@ -605,6 +607,7 @@ export class DayPilotRepository {
     currentTime: number,
   ): boolean {
     if (card.state === 'done' || card.state === 'muted') return false;
+    if (!this.areActionEvidenceRefsStillOpen(card)) return false;
     for (const feedback of feedbackRows) {
       const sameCard = feedback.card_id === card.id;
       const sameMission =
@@ -624,6 +627,25 @@ export class DayPilotRepository {
       }
     }
     return true;
+  }
+
+  private areActionEvidenceRefsStillOpen(card: DayPilotCard): boolean {
+    const actionRefs = card.evidenceRefs.filter(
+      (ref) => ref.sourceKind === 'action' && ref.sourceId,
+    );
+    if (actionRefs.length === 0) return true;
+
+    return actionRefs.some((ref) => {
+      const row = this.db
+        .prepare(
+          `SELECT queue_status
+           FROM proposed_actions
+           WHERE id = ?
+           LIMIT 1`,
+        )
+        .get(ref.sourceId) as { queue_status: string | null } | undefined;
+      return OPEN_ACTION_STATUSES.has(row?.queue_status ?? '');
+    });
   }
 
   private rowToMission(row: DayMissionRow): DayPilotMission {

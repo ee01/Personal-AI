@@ -11,6 +11,7 @@ const MAX_CHUNK_BYTES = 900 * 1024;
 const DESKTOP_ASR_BASE_URL = 'http://127.0.0.1:46321';
 const IDLE_FLUSH_DELAY_MS = 900;
 const MAX_CLIENT_TRAILING_SILENCE_MS = 900;
+const MAX_CONSECUTIVE_CHUNK_FAILURES = 3;
 
 type LocalLiveEngine = 'apple_speech' | 'sherpa_streaming' | 'none';
 type LocalFinalEngine = 'funasr_nano' | 'whisper_cpp' | 'none';
@@ -20,6 +21,8 @@ interface AsrStatusResponse {
   ok: boolean;
   error?: string;
   ready?: boolean;
+  liveReady?: boolean;
+  finalReady?: boolean;
   engines?: {
     appleSpeech?: { ready?: boolean; reason?: string };
     sherpaStreaming?: { modelReady?: boolean; reason?: string };
@@ -158,6 +161,8 @@ export class DesktopLocalAsrProvider implements ASRProvider {
   private channel: LocalAsrChannel;
   private clientHasSpeech = false;
   private clientTrailingSilenceMs = 0;
+  private consecutiveChunkFailures = 0;
+  private fatalChunkFailureEmitted = false;
 
   constructor(
     language: MeetingTranscribeLanguage | string = 'auto',
@@ -184,13 +189,14 @@ export class DesktopLocalAsrProvider implements ASRProvider {
         return { ok: false, reason: status.error || 'desktop_app_unavailable' };
       }
 
-      const hasLive =
-        Boolean(status.engines?.appleSpeech?.ready) ||
-        Boolean(status.engines?.sherpaStreaming?.modelReady);
       const hasFinal =
-        Boolean(status.engines?.funasrFinal?.modelReady) ||
-        Boolean(status.engines?.whisperFallback?.ready);
-      if (!status.engines?.sherpaStreaming?.modelReady || !status.engines?.funasrFinal?.modelReady) {
+        status.finalReady ??
+        (Boolean(status.engines?.funasrFinal?.modelReady) ||
+          Boolean(status.engines?.whisperFallback?.ready));
+      if (
+        !status.engines?.sherpaStreaming?.modelReady ||
+        !status.engines?.funasrFinal?.modelReady
+      ) {
         void this._triggerModelDownload();
       }
       if (!hasFinal) {
@@ -199,14 +205,6 @@ export class DesktopLocalAsrProvider implements ASRProvider {
           reason: status.downloadInProgress
             ? 'asr_model_downloading'
             : 'final_model_not_ready',
-        };
-      }
-      if (!hasLive) {
-        return {
-          ok: false,
-          reason: status.downloadInProgress
-            ? 'asr_model_downloading'
-            : 'live_model_not_ready',
         };
       }
       return { ok: true };
@@ -222,6 +220,8 @@ export class DesktopLocalAsrProvider implements ASRProvider {
     this.chunkSendQueue = Promise.resolve();
     this.clientHasSpeech = false;
     this.clientTrailingSilenceMs = 0;
+    this.consecutiveChunkFailures = 0;
+    this.fatalChunkFailureEmitted = false;
     const track =
       audio instanceof MediaStreamTrack ? audio : audio.getAudioTracks()[0];
     if (!track) {
@@ -384,6 +384,11 @@ export class DesktopLocalAsrProvider implements ASRProvider {
           pcmBase64: arrayBufferToBase64(buffer),
         },
       });
+      if (result?.error && !result.partial && !result.final) {
+        this._recordChunkFailure(result.error);
+        return;
+      }
+      this._clearChunkFailures();
       const previousChainLabel = this.lastChainLabel;
       this.liveEngine = result?.liveEngine || this.liveEngine;
       this.finalEngine = result?.finalEngine || this.finalEngine;
@@ -409,9 +414,38 @@ export class DesktopLocalAsrProvider implements ASRProvider {
       } else {
         this._scheduleIdleFlush();
       }
-    } catch {
-      // chunk errors are non-fatal
+    } catch (error) {
+      this._recordChunkFailure(error);
     }
+  }
+
+  private _clearChunkFailures(): void {
+    this.consecutiveChunkFailures = 0;
+  }
+
+  private _recordChunkFailure(error: unknown): void {
+    this.consecutiveChunkFailures += 1;
+    const message = String((error as Error)?.message || error || 'unknown');
+    this.emitter.emit('status', {
+      tier: 'desktop_whisper',
+      state: 'running',
+      ts: Date.now(),
+      detail: `Local ASR stream warning (${this.consecutiveChunkFailures}/${MAX_CONSECUTIVE_CHUNK_FAILURES}): ${message}`,
+    });
+    if (
+      this.consecutiveChunkFailures < MAX_CONSECUTIVE_CHUNK_FAILURES ||
+      this.fatalChunkFailureEmitted
+    ) {
+      return;
+    }
+    this.fatalChunkFailureEmitted = true;
+    this.emitter.emit('error', {
+      tier: 'desktop_whisper',
+      code: 'network',
+      message: `Local ASR stream failed after ${MAX_CONSECUTIVE_CHUNK_FAILURES} chunk attempts: ${message}`,
+      ts: Date.now(),
+      fatal: true,
+    });
   }
 
   private _emitPartial(

@@ -8,10 +8,15 @@ import { buildRuleText } from '../src/utils/ruleTextBuilder.ts';
 import {
   buildRuntimeWatchRules,
   filterWatchRulesForMessageContext,
+  filterWatchRulesForMessageGroups,
   getFirstManualItemFromMatchedRules,
   isManualConcernedItem,
   resolveMatchedWatchRules,
 } from '../src/watchRules.ts';
+import {
+  getDigestDeliveryItems,
+  getImmediateNotificationItem,
+} from '../src/messageAnalysisDelivery.ts';
 import type { OutreachSession } from '../src/services/MemoryServiceClient.ts';
 
 const manualRules: TopicItemWithAutoReply[] = [
@@ -107,6 +112,10 @@ const outreachSessions: OutreachSession[] = [
   },
 ];
 
+const observationBaselineSeconds = Math.floor(
+  Date.parse('2026-04-15T00:00:00.000Z') / 1000,
+);
+
 function main() {
   assert.equal(isManualConcernedItem(manualRules[0]), true);
   assert.equal(isManualConcernedItem(manualRules[3]), false);
@@ -132,11 +141,10 @@ function main() {
     groupId: 'release-chat',
     sender: 'Morgan Lee',
   });
-  assert.deepEqual(releaseRules.map((rule) => rule.ruleRef), [
-    'manual:manual-1',
-    'manual:manual-follow-1',
-    'manual:manual-multi-scope',
-  ]);
+  assert.deepEqual(
+    releaseRules.map((rule) => rule.ruleRef),
+    ['manual:manual-1', 'manual:manual-follow-1', 'manual:manual-multi-scope'],
+  );
 
   const sdkAliceRules = filterWatchRulesForMessageContext(runtimeRules, {
     groupName: 'SDK Updates',
@@ -164,10 +172,74 @@ function main() {
     groupId: 'sdk-updates',
     sender: 'James Lee',
   });
-  assert.deepEqual(sdkRules.map((rule) => rule.ruleRef), [
-    'manual:manual-follow-1',
-    'outreach:session-before-followup',
-  ]);
+  assert.deepEqual(
+    sdkRules.map((rule) => rule.ruleRef),
+    ['manual:manual-follow-1', 'outreach:session-before-followup'],
+  );
+
+  const baselineRules = buildRuntimeWatchRules({
+    manualItems: [],
+    outreachSessions: [
+      {
+        id: 'session-with-baseline',
+        targetType: 'group',
+        targetRef: 'sdk-updates',
+        targetResolvedChatId: 'sdk-updates',
+        renderedQuestion: 'migration guide 发布了吗？',
+        status: 'waiting_reply',
+        requiresApproval: false,
+        followupCount: 0,
+        maxFollowup: 2,
+        createdAt: observationBaselineSeconds,
+        updatedAt: observationBaselineSeconds,
+      },
+    ],
+  });
+  assert.deepEqual(
+    filterWatchRulesForMessageContext(baselineRules, {
+      groupName: 'SDK Updates',
+      groupId: 'sdk-updates',
+      datetime: '2026-04-14T23:59:00.000Z',
+    }).map((rule) => rule.ruleRef),
+    [],
+    'system observation rules must not match evidence older than their baseline',
+  );
+  assert.deepEqual(
+    filterWatchRulesForMessageContext(baselineRules, {
+      groupName: 'SDK Updates',
+      groupId: 'sdk-updates',
+      datetime: '2026-04-15T00:01:00.000Z',
+    }).map((rule) => rule.ruleRef),
+    ['outreach:session-with-baseline'],
+    'system observation rules should still match fresh target-channel evidence',
+  );
+  assert.deepEqual(
+    filterWatchRulesForMessageGroups(baselineRules, [
+      {
+        groupName: 'SDK Updates',
+        groupId: 'sdk-updates',
+        timestamps: [
+          '2026-04-14T23:59:00.000Z',
+          '2026-04-15T00:02:00.000Z',
+        ],
+      },
+    ]).map((rule) => rule.ruleRef),
+    ['outreach:session-with-baseline'],
+    'group-level prefilter should keep a system rule when any message is inside the observation window',
+  );
+  assert.deepEqual(
+    resolveMatchedWatchRules({
+      watchRules: baselineRules,
+      matchedRuleRefs: ['outreach:session-with-baseline'],
+      messageContext: {
+        groupName: 'SDK Updates',
+        groupId: 'sdk-updates',
+        datetime: '2026-04-14T23:59:00.000Z',
+      },
+    }).watchRules,
+    [],
+    'final resolution must reject stale system-rule refs hallucinated by the model',
+  );
 
   const aiResearchRules = filterWatchRulesForMessageContext(runtimeRules, {
     groupName: 'AI Research',
@@ -175,7 +247,9 @@ function main() {
     sender: 'Priya',
   });
   assert.ok(
-    aiResearchRules.some((rule) => rule.ruleRef === 'manual:manual-ai-short-scope'),
+    aiResearchRules.some(
+      (rule) => rule.ruleRef === 'manual:manual-ai-short-scope',
+    ),
     'short scope token should match a full group token',
   );
 
@@ -185,7 +259,9 @@ function main() {
     sender: 'Priya',
   });
   assert.equal(
-    dailyStandupRules.some((rule) => rule.ruleRef === 'manual:manual-ai-short-scope'),
+    dailyStandupRules.some(
+      (rule) => rule.ruleRef === 'manual:manual-ai-short-scope',
+    ),
     false,
     'short scope token must not match inside an unrelated word',
   );
@@ -255,9 +331,7 @@ function main() {
       sender: 'Morgan',
     },
   });
-  assert.deepEqual(stableMatch.matchedRuleRefs, [
-    'manual:manual-1',
-  ]);
+  assert.deepEqual(stableMatch.matchedRuleRefs, ['manual:manual-1']);
   assert.equal(
     getFirstManualItemFromMatchedRules(stableMatch.watchRules)?.id,
     'manual-1',
@@ -280,7 +354,9 @@ function main() {
 
   const multiScopePromptText = buildRuleText(manualRules[5], true, 4);
   assert.ok(
-    multiScopePromptText.includes('在任一群组（Release Chat 或 SDK Updates）中'),
+    multiScopePromptText.includes(
+      '在任一群组（Release Chat 或 SDK Updates）中',
+    ),
     'LLM prompt should describe multiple groups as OR candidates',
   );
   assert.ok(
@@ -290,6 +366,53 @@ function main() {
   assert.ok(
     multiScopePromptText.includes('[RULE_ID:4]'),
     'LLM prompt should keep stable legacy rule id hints',
+  );
+
+  const digestOnlyRule: TopicItemWithAutoReply = {
+    id: 'manual-digest-only',
+    text: 'Daily summary only',
+    expiredAt: 0,
+    notifyMethod: 'bot',
+    digestConfig: {
+      enabled: true,
+      frequency: 'daily',
+      preferredHour: 9,
+    },
+  };
+  const immediateRule: TopicItemWithAutoReply = {
+    id: 'manual-immediate',
+    text: 'Immediate alert',
+    expiredAt: 0,
+    notifyMethod: 'bot',
+  };
+  const passiveRule: TopicItemWithAutoReply = {
+    id: 'manual-passive',
+    text: 'Store only',
+    expiredAt: 0,
+    notifyMethod: '',
+  };
+
+  assert.deepEqual(
+    getDigestDeliveryItems([digestOnlyRule, immediateRule]).map(
+      (item) => item.id,
+    ),
+    ['manual-digest-only'],
+    'digest delivery should include every summary-enabled matched rule',
+  );
+  assert.equal(
+    getImmediateNotificationItem({
+      manualItems: [digestOnlyRule, passiveRule, immediateRule],
+    })?.id,
+    'manual-immediate',
+    'digest-only or passive matched rules must not suppress a later immediate notification rule',
+  );
+  assert.equal(
+    getImmediateNotificationItem({
+      manualItems: [digestOnlyRule, immediateRule],
+      followThreadItem: manualRules[1],
+    })?.id,
+    'manual-follow-1',
+    'follow-thread notification should keep priority over ordinary immediate rules',
   );
 
   console.log('verify-memory-entry-runtime: ok');

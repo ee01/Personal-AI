@@ -198,11 +198,34 @@ describe('ReflectionThreadService', () => {
         purpose: '确认 Atlas 本地证据',
         sourceTypes: ['manual'],
       },
+      {
+        query: 'Atlas degraded local lookup',
+        topK: 2,
+        purpose: '确认通道失败不会伪装成空结果',
+        sourceTypes: ['manual'],
+      },
     ]);
     vi.spyOn(RecallEngine.prototype, 'recall').mockImplementation(
       async (input) => {
         if (input.query === 'broken local lookup') {
           throw new Error('recall index temporarily unavailable');
+        }
+        if (input.query === 'Atlas degraded local lookup') {
+          return {
+            items: [],
+            totalFound: 0,
+            queryTimeMs: 1,
+            channels: [],
+            channelDiagnostics: [
+              {
+                channel: 'vector',
+                status: 'failed',
+                candidateCount: 0,
+                reason: 'embedding timeout',
+              },
+              { channel: 'fts', status: 'empty', candidateCount: 0 },
+            ],
+          };
         }
         return {
           items: [],
@@ -234,7 +257,7 @@ describe('ReflectionThreadService', () => {
 
     const detail = new ReflectionThreadService(db).getThreadDetail(thread.id);
     expect(result.run.summary).toContain('Atlas 本轮反思完成');
-    expect(detail?.researchAttempts).toHaveLength(2);
+    expect(detail?.researchAttempts).toHaveLength(3);
     const attemptsByQuery = new Map(
       detail?.researchAttempts.map((attempt) => [attempt.query, attempt]) ?? [],
     );
@@ -242,12 +265,18 @@ describe('ReflectionThreadService', () => {
       'empty',
     );
     expect(attemptsByQuery.get('broken local lookup')?.status).toBe('failed');
+    expect(attemptsByQuery.get('Atlas degraded local lookup')?.status).toBe(
+      'failed',
+    );
     expect(attemptsByQuery.get('Atlas local conclusion')?.runId).toBe(
       result.run.id,
     );
     expect(attemptsByQuery.get('broken local lookup')?.errorMessage).toContain(
       'recall index temporarily unavailable',
     );
+    expect(
+      attemptsByQuery.get('Atlas degraded local lookup')?.errorMessage,
+    ).toContain('vector(embedding timeout)');
   });
 
   it('persists worker-generated rehearsal candidates from reflection runs', async () => {

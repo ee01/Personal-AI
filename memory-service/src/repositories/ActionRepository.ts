@@ -192,6 +192,11 @@ export class ActionRepository {
   }
 
   create(input: CreateQueuedActionInput): QueuedActionRecord {
+    if (input.idempotencyKey) {
+      const existing = this.findReusableByIdempotencyKey(input.idempotencyKey);
+      if (existing) return existing;
+    }
+
     const id = input.id ?? randomUUID();
     const createdAt = input.createdAt ?? now();
 
@@ -234,6 +239,41 @@ export class ActionRepository {
       );
 
     return this.getById(id)!;
+  }
+
+  findReusableByIdempotencyKey(
+    idempotencyKey: string,
+  ): QueuedActionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT *
+         FROM proposed_actions
+         WHERE idempotency_key = ?
+           AND queue_status IN ('queued', 'running', 'failed')
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(idempotencyKey) as ActionRow | undefined;
+    return row ? this.rowToAction(row) : null;
+  }
+
+  linkActionsToThread(
+    actionIds: string[],
+    threadId: string,
+    idempotencyKey?: string,
+  ): number {
+    const ids = uniqStrings(actionIds);
+    if (ids.length === 0) return 0;
+    const placeholders = ids.map(() => '?').join(', ');
+    const result = this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET thread_id = COALESCE(thread_id, ?),
+             idempotency_key = COALESCE(idempotency_key, ?)
+         WHERE id IN (${placeholders})`,
+      )
+      .run(threadId, idempotencyKey ?? null, ...ids);
+    return result.changes;
   }
 
   list(filters: ActionListFilters = {}): {
@@ -346,6 +386,21 @@ export class ActionRepository {
       .run(attemptId, id, currentTime);
 
     return attemptId;
+  }
+
+  markApproved(id: string, approvedAt = now()): QueuedActionRecord | null {
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET state = 'approved',
+             approved_at = ?
+         WHERE id = ?
+           AND requires_approval = 1
+           AND approved_at IS NULL`,
+      )
+      .run(approvedAt, id);
+
+    return this.getById(id);
   }
 
   markSucceeded(id: string, attemptId: string, result?: Record<string, unknown>): QueuedActionRecord | null {

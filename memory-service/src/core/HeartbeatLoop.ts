@@ -200,6 +200,16 @@ export class HeartbeatLoop {
 
       // 2. Check pending truth conflicts
       const confirmRepo = new ConfirmRequestRepository(this.db);
+      const decisionSnoozeLifecycle =
+        confirmRepo.processDecisionSnoozeLifecycle(checkedAt);
+      if (
+        decisionSnoozeLifecycle.resumed > 0 ||
+        decisionSnoozeLifecycle.expired > 0
+      ) {
+        actions.push(
+          `decision snooze lifecycle resumed ${decisionSnoozeLifecycle.resumed}, expired ${decisionSnoozeLifecycle.expired}`,
+        );
+      }
       const watchLifecycle = confirmRepo.processWatchLifecycle(checkedAt);
       if (watchLifecycle.resnoozed > 0 || watchLifecycle.expired > 0) {
         actions.push(

@@ -5,8 +5,15 @@ import {
   DEFAULT_TIMELINE_PROJECT,
   getTimelineSyncDryRunHelp,
   getTimelineSyncPayloadHelp,
+  normalizeTimelineProjectValue,
   resolveTimelineProjectForSave,
 } from '../timelineProjects.js';
+
+test('Timeline project normalization accepts display names and Jira param keys', () => {
+  assert.equal(normalizeTimelineProjectValue('Jupiter web'), 'Jupiter web');
+  assert.equal(normalizeTimelineProjectValue('jupiterWeb'), 'Jupiter web');
+  assert.equal(normalizeTimelineProjectValue('Unknown'), undefined);
+});
 
 test('Timeline trigger saves the selected project only when it is valid', () => {
   assert.equal(
@@ -17,6 +24,16 @@ test('Timeline trigger saves the selected project only when it is valid', () => 
       timelineProject: 'Nova',
     }),
     'Nova',
+  );
+
+  assert.equal(
+    resolveTimelineProjectForSave({
+      isTimelineTrigger: true,
+      pushMethod: 'Bot',
+      hasProjectVariables: false,
+      timelineProject: 'jupiterWeb',
+    }),
+    'Jupiter web',
   );
 
   assert.equal(
@@ -37,6 +54,16 @@ test('Bot and AI project variables persist a project even for time-triggered mes
       pushMethod: 'AI',
       hasProjectVariables: true,
       timelineProject: 'Jupiter web',
+    }),
+    'Jupiter web',
+  );
+
+  assert.equal(
+    resolveTimelineProjectForSave({
+      isTimelineTrigger: false,
+      pushMethod: 'Bot',
+      hasProjectVariables: true,
+      timelineProject: 'jupiterWeb',
     }),
     'Jupiter web',
   );

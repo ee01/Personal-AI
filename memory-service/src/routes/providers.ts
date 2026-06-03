@@ -22,6 +22,7 @@ interface RenderContextPackageBody {
   includeKinds?: string[];
   deviceContext?: string;
   bindingType?: string;
+  deliveryMode?: string;
   createSyncJob?: boolean;
 }
 
@@ -65,6 +66,10 @@ const renderContextPackageBodySchema = {
     },
     deviceContext: { type: 'string' as const },
     bindingType: { type: 'string' as const },
+    deliveryMode: {
+      type: 'string' as const,
+      enum: ['incremental', 'daily_digest'],
+    },
     createSyncJob: { type: 'boolean' as const },
   },
   additionalProperties: false,
@@ -147,6 +152,7 @@ export async function providerRoutes(app: FastifyInstance): Promise<void> {
         includeKinds: request.body.includeKinds as any,
         deviceContext: request.body.deviceContext,
         bindingType: request.body.bindingType,
+        deliveryMode: request.body.deliveryMode as any,
         createSyncJob: request.body.createSyncJob,
       });
 

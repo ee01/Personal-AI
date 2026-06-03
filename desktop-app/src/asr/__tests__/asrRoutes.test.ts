@@ -133,6 +133,13 @@ test('GET /asr/status returns local ASR engine statuses', async () => {
   const body = response.json();
   assert.equal(body.ok, true);
   assert.equal(typeof body.ready, 'boolean');
+  assert.equal(typeof body.liveReady, 'boolean');
+  assert.equal(typeof body.finalReady, 'boolean');
+  assert.equal(
+    body.ready,
+    body.liveReady && body.finalReady,
+    'ready should still mean full live + final ASR readiness',
+  );
   assert.equal(typeof body.engines.sherpaStreaming.modelReady, 'boolean');
   assert.equal(typeof body.engines.funasrFinal.modelReady, 'boolean');
   assert.equal(typeof body.engines.whisperFallback.ready, 'boolean');

@@ -71,6 +71,7 @@ function threadDetailFixture() {
       currentHypothesis: 'Orbit owner should be Platform Team.',
       openQuestions: ['Orbit 的 owner 是否已经稳定？'],
       latestSummary: '本轮反思确认需要先看本地证据再决定是否问人。',
+      continueReason: 'waiting_for_outreach',
       nextReflectionAt: nowSeconds + 3600,
       lastReflectedAt: nowSeconds - 900,
       reflectionCount: 3,
@@ -124,6 +125,21 @@ function threadDetailFixture() {
         createdAt: nowSeconds - 90,
       },
       {
+        id: 'research-degraded-hit',
+        threadId: 'thread-1',
+        runId: 'run-1',
+        query: 'Orbit PM decision',
+        purpose: '确认 PM 决策是否已有本地证据',
+        status: 'hit',
+        resultCount: 1,
+        sourceTypes: ['glip', 'jira'],
+        senderFilter: [],
+        groupFilter: [],
+        errorMessage: '部分召回通道失败，命中可能不完整：vector(embedding timeout)',
+        evidenceRefs: ['message:msg-2'],
+        createdAt: nowSeconds - 75,
+      },
+      {
         id: 'research-failed',
         threadId: 'thread-1',
         runId: 'run-1',
@@ -169,12 +185,28 @@ const context = await chromium.launchPersistentContext(userDataDir, {
 });
 
 try {
+  let failReflectionList = false;
+
   await context.route('http://localhost:3210/api/v1/**', async (route) => {
     const requestUrl = route.request().url();
     const pathname = decodeURIComponent(new URL(requestUrl).pathname);
 
     if (pathname.endsWith('/reflection-threads/thread-1')) {
       await route.fulfill(jsonResponse(threadDetailFixture()));
+      return;
+    }
+
+    if (pathname.endsWith('/reflection-threads') && failReflectionList) {
+      await route.fulfill(
+        jsonResponse({ error: 'reflection list unavailable' }, 503),
+      );
+      return;
+    }
+
+    if (pathname.endsWith('/outreach/sessions')) {
+      await route.fulfill(
+        jsonResponse({ error: 'outreach service unavailable' }, 503),
+      );
       return;
     }
 
@@ -195,11 +227,19 @@ try {
   );
 
   await page.getByText('项目反思: Orbit').waitFor({ timeout: 10000 });
+  await page.getByText('继续原因').waitFor({ timeout: 10000 });
+  await page.getByText('等待关联主动询问回复').waitFor({ timeout: 10000 });
+  await page
+    .getByText(/关联主动询问加载失败：.*outreach service unavailable/)
+    .waitFor({ timeout: 10000 });
   await page.getByText('研究补查过程').waitFor({ timeout: 10000 });
   await page.getByText('确认 Orbit owner 是否已有本地证据').waitFor({
     timeout: 10000,
   });
-  await page.getByText('已命中').waitFor({ timeout: 10000 });
+  const ownerResearchCard = page.locator('.research-trace-card', {
+    hasText: '确认 Orbit owner 是否已有本地证据',
+  });
+  await ownerResearchCard.getByText('已命中').waitFor({ timeout: 10000 });
   await page.getByText('命中 2').waitFor({ timeout: 10000 });
   await page.getByText('glip / manual').waitFor({ timeout: 10000 });
   await page.getByText('证据 message:msg-1 · entity:entity-orbit').waitFor({
@@ -208,6 +248,12 @@ try {
   await page.getByText('无结果').waitFor({ timeout: 10000 });
   await page
     .getByText('本地没有找到可加入本轮反思的证据。')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('确认 PM 决策是否已有本地证据')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('部分召回通道失败，命中可能不完整：vector(embedding timeout)')
     .waitFor({ timeout: 10000 });
   await page.getByText('查询失败').waitFor({ timeout: 10000 });
   await page
@@ -222,6 +268,18 @@ try {
     .waitFor({ timeout: 10000 });
   await researchEvidencePanel
     .getByText(/owner=Platform Team/)
+    .waitFor({ timeout: 10000 });
+
+  failReflectionList = true;
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/reflection-threads`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await page
+    .getByText('自我反思线程暂时不可用')
+    .waitFor({ timeout: 10000 });
+  await page
+    .getByText('reflection list unavailable')
     .waitFor({ timeout: 10000 });
 
   console.log('verify-reflection-research-e2e: ok');

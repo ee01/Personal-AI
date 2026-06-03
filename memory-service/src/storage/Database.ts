@@ -194,8 +194,33 @@ export class Database {
   private ensureSchemaCompatibility(): void {
     this.ensureColumn(
       'relationship_radar_people',
+      'data_quality',
+      "TEXT NOT NULL DEFAULT 'indexed'",
+    );
+    this.ensureColumn(
+      'relationship_radar_people',
+      'projection_source',
+      "TEXT NOT NULL DEFAULT 'lazy'",
+    );
+    this.ensureColumn(
+      'relationship_radar_people',
+      'evidence_refs_json',
+      "TEXT NOT NULL DEFAULT '[]'",
+    );
+    this.ensureColumn(
+      'relationship_radar_people',
       'summary',
       'TEXT',
+    );
+    this.ensureColumn(
+      'relationship_radar_people',
+      'dirty_since',
+      'INTEGER',
+    );
+    this.ensureColumn(
+      'relationship_radar_people',
+      'last_consolidated_at',
+      'INTEGER',
     );
   }
 

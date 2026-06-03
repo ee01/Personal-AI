@@ -42,7 +42,11 @@ import type { UserDataManager } from '../storage/UserDataManager.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { RecallEngine } from './RecallEngine.js';
 import { resolveDelegateOpenClawPolicy } from './actions/delegateOpenClawPolicy.js';
-import type { Rehearsal, RehearsalActivationCues } from '../types/index.js';
+import type {
+  RecallChannelDiagnostic,
+  Rehearsal,
+  RehearsalActivationCues,
+} from '../types/index.js';
 
 interface MessageSignalRow {
   id: string;
@@ -124,6 +128,22 @@ function toPriorityFromLabel(label: string | undefined): number {
 function clampSalience(value: number | undefined): number {
   if (!Number.isFinite(value)) return 0.5;
   return Math.max(0, Math.min(value!, 1));
+}
+
+function summarizeFailedRecallChannels(
+  diagnostics: RecallChannelDiagnostic[] | undefined,
+): string | undefined {
+  const failed = (diagnostics ?? []).filter(
+    (diagnostic) => diagnostic.status === 'failed',
+  );
+  if (failed.length === 0) return undefined;
+  return failed
+    .map((diagnostic) =>
+      diagnostic.reason
+        ? `${diagnostic.channel}(${diagnostic.reason})`
+        : diagnostic.channel,
+    )
+    .join(', ');
 }
 
 export class ReflectionThreadService {
@@ -1069,6 +1089,9 @@ export class ReflectionThreadService {
           sourceTypes: query.sourceTypes,
         });
         const evidenceRefs: string[] = [];
+        const failedChannelSummary = summarizeFailedRecallChannels(
+          result.channelDiagnostics,
+        );
 
         for (const item of result.items) {
           const sourceKind =
@@ -1106,17 +1129,23 @@ export class ReflectionThreadService {
           });
         }
 
+        const hasHits = result.items.length > 0;
         this.repo.recordResearchAttempt({
           threadId: thread.id,
           runId,
           query: query.query,
           purpose: query.purpose,
-          status: result.items.length > 0 ? 'hit' : 'empty',
+          status: hasHits ? 'hit' : failedChannelSummary ? 'failed' : 'empty',
           resultCount: result.items.length,
           sourceTypes: query.sourceTypes,
           projectFilter: query.projectFilter,
           senderFilter: query.senderFilter,
           groupFilter: query.groupFilter,
+          errorMessage: failedChannelSummary
+            ? hasHits
+              ? `部分召回通道失败，命中可能不完整：${failedChannelSummary}`
+              : `本地研究查询未完成：${failedChannelSummary}`
+            : undefined,
           evidenceRefs,
         });
       } catch (error) {

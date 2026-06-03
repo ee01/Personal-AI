@@ -98,14 +98,62 @@ export class ChannelDeliveryRepository {
          created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source_ref, channel, lane) DO UPDATE SET
-         status = excluded.status,
-         external_ref = COALESCE(excluded.external_ref, channel_delivery_records.external_ref),
-         last_error = excluded.last_error,
-         first_delivered_at = COALESCE(channel_delivery_records.first_delivered_at, excluded.first_delivered_at),
-         last_delivered_at = COALESCE(excluded.last_delivered_at, channel_delivery_records.last_delivered_at),
-         seen_at = COALESCE(excluded.seen_at, channel_delivery_records.seen_at),
-         dismissed_at = COALESCE(excluded.dismissed_at, channel_delivery_records.dismissed_at),
-         updated_at = excluded.updated_at`,
+         status = CASE
+           WHEN excluded.updated_at >= channel_delivery_records.updated_at
+             THEN excluded.status
+           ELSE channel_delivery_records.status
+         END,
+         external_ref = CASE
+           WHEN excluded.updated_at >= channel_delivery_records.updated_at
+             THEN COALESCE(excluded.external_ref, channel_delivery_records.external_ref)
+           ELSE COALESCE(channel_delivery_records.external_ref, excluded.external_ref)
+         END,
+         last_error = CASE
+           WHEN excluded.updated_at >= channel_delivery_records.updated_at
+             THEN excluded.last_error
+           ELSE channel_delivery_records.last_error
+         END,
+         first_delivered_at = CASE
+           WHEN excluded.first_delivered_at IS NULL
+             THEN channel_delivery_records.first_delivered_at
+           WHEN channel_delivery_records.first_delivered_at IS NULL
+             THEN excluded.first_delivered_at
+           WHEN excluded.first_delivered_at < channel_delivery_records.first_delivered_at
+             THEN excluded.first_delivered_at
+           ELSE channel_delivery_records.first_delivered_at
+         END,
+         last_delivered_at = CASE
+           WHEN excluded.last_delivered_at IS NULL
+             THEN channel_delivery_records.last_delivered_at
+           WHEN channel_delivery_records.last_delivered_at IS NULL
+             THEN excluded.last_delivered_at
+           WHEN excluded.last_delivered_at > channel_delivery_records.last_delivered_at
+             THEN excluded.last_delivered_at
+           ELSE channel_delivery_records.last_delivered_at
+         END,
+         seen_at = CASE
+           WHEN excluded.seen_at IS NULL
+             THEN channel_delivery_records.seen_at
+           WHEN channel_delivery_records.seen_at IS NULL
+             THEN excluded.seen_at
+           WHEN excluded.seen_at < channel_delivery_records.seen_at
+             THEN excluded.seen_at
+           ELSE channel_delivery_records.seen_at
+         END,
+         dismissed_at = CASE
+           WHEN excluded.dismissed_at IS NULL
+             THEN channel_delivery_records.dismissed_at
+           WHEN channel_delivery_records.dismissed_at IS NULL
+             THEN excluded.dismissed_at
+           WHEN excluded.dismissed_at < channel_delivery_records.dismissed_at
+             THEN excluded.dismissed_at
+           ELSE channel_delivery_records.dismissed_at
+         END,
+         updated_at = CASE
+           WHEN excluded.updated_at > channel_delivery_records.updated_at
+             THEN excluded.updated_at
+           ELSE channel_delivery_records.updated_at
+         END`,
     );
 
     const select = this.db.prepare(

@@ -257,6 +257,88 @@ describe('Storyline draft API', () => {
     expect(body.segments[0].evidenceIds).toContain('calendar:event-ai-notes');
     expect(body.segments[1].evidenceIds).not.toContain('made-up-id');
     expect(body.artifactText).toContain('Speaker Notes');
+    expect(body.artifactText).toContain('Evidence refs:');
+    expect(body.artifactText).toContain('## Evidence key');
+    expect(body.artifactText).toContain('calendar:event-ai-notes:');
+    expect(
+      body.artifactText
+        .split('\n')
+        .filter((line: string) =>
+          line.startsWith('- calendar:event-ai-notes:'),
+        ),
+    ).toHaveLength(1);
+  });
+
+  it('keeps the requested target artifact even when the model suggests another format', async () => {
+    const prepId = await createMeetingPrep();
+    mockGenerateJSON.mockResolvedValueOnce({
+      ...buildDraftResponse(),
+      targetArtifact: 'slides_outline',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/storylines/draft',
+      payload: {
+        sourceKind: 'today_meeting_prep',
+        prepId,
+        targetArtifact: 'docs_brief',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.targetArtifact).toBe('docs_brief');
+    expect(body.artifactText).toContain('# Docs Brief');
+    expect(body.artifactText).not.toContain('# Slides Outline');
+  });
+
+  it('does not copy ungrounded model artifact text when segment evidence is invalid', async () => {
+    const prepId = await createMeetingPrep();
+    mockGenerateJSON.mockResolvedValueOnce({
+      title: 'AI Notes external update',
+      audience: 'Partner team',
+      targetArtifact: 'docs_brief',
+      segments: [
+        {
+          title: 'Fabricated impact',
+          intent: 'Make the story sound stronger.',
+          narrative:
+            'A fabricated customer quote says the rollout already doubled adoption.',
+          evidenceIds: ['made-up-source'],
+        },
+      ],
+      gaps: ['确认可对外分享的 owner。'],
+      riskNotes: [],
+      artifactText:
+        '# Docs Brief\n\nA fabricated customer quote says adoption doubled.',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/storylines/draft',
+      payload: {
+        sourceKind: 'today_meeting_prep',
+        prepId,
+        targetArtifact: 'docs_brief',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.targetArtifact).toBe('docs_brief');
+    expect(body.title).not.toBe('AI Notes external update');
+    expect(body.segments).toHaveLength(3);
+    expect(body.artifactText).toContain('Docs Brief');
+    expect(body.artifactText).toContain('Evidence refs:');
+    expect(body.artifactText).toContain('## Evidence key');
+    const artifactText = String(body.artifactText).toLowerCase();
+    expect(artifactText).not.toContain('ai notes external update');
+    expect(artifactText).not.toContain('fabricated customer quote');
+    expect(artifactText).not.toContain('adoption doubled');
+    expect(body.riskNotes).toContain(
+      '原始模型输出缺少足够证据引用，已用会前准备证据重新生成可复制草稿。',
+    );
   });
 
   it('returns 404 when the source prep does not exist', async () => {

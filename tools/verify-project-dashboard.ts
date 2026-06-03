@@ -22,6 +22,7 @@ import {
   buildProjectStatusUpdateDraft,
   buildProjectTaskSourceSummary,
   buildProjectTaskRiskSummary,
+  buildProjectVisualizationSummary,
   compareProjectsByDashboardPriority,
   filterProjectsByDashboardView,
   getProjectDashboardViewFilter,
@@ -688,6 +689,78 @@ function verifyProjectDataQualitySummary() {
   assert.match(draft, /\[证据不足\] 0% 覆盖：1 个缺 ETA，1 个缺来源/);
 }
 
+function verifyProjectVisualizationSummary() {
+  const now = new Date('2026-05-01T12:00:00+08:00');
+  const summary = buildProjectVisualizationSummary({
+    id: 'visual-project',
+    name: 'Visual Project',
+    milestones: [
+      { id: 'alpha', label: 'Alpha', date: '2026-05-05' },
+      { id: 'ga', label: 'GA', date: '2026-06-01' },
+    ],
+    tasks: [
+      {
+        id: 'done',
+        type: 'task',
+        title: 'Closed setup',
+        status: 'closed',
+        eta: '2026-04-28',
+        jira: [{ key: 'VIS-1', title: 'Closed setup' }],
+      },
+      {
+        id: 'dep-blocked',
+        type: 'dep',
+        title: 'Resolve SDK dependency',
+        status: 'blocked',
+        eta: '2026-05-03',
+      },
+      {
+        id: 'active-missing-eta',
+        type: 'task',
+        title: 'Add launch checklist',
+        status: 'progress',
+        jira: [{ key: 'VIS-2', title: 'Add launch checklist' }],
+      },
+    ],
+  } as any, { now });
+
+  assert.match(summary.headline, /2 个图表需要先处理风险或数据缺口/);
+  assert.equal(summary.panels.length, 3);
+
+  const gantt = summary.panels.find((panel) => panel.id === 'gantt');
+  assert.equal(gantt?.state, 'partial');
+  assert.match(gantt?.headline || '', /可画 1\/2 个活动任务/);
+  assert.equal(gantt?.action?.taskId, 'active-missing-eta');
+  assert.equal(gantt?.action?.evidenceFocus, 'eta');
+  assert.equal(gantt?.markers?.[0]?.label, 'Resolve SDK dependency');
+  assert.equal(gantt?.drivers?.some((driver) => driver.title === 'Resolve SDK dependency' && driver.label === 'ETA 2026-05-03'), true);
+  assert.equal(gantt?.drivers?.some((driver) => driver.title === 'Add launch checklist' && driver.action?.evidenceFocus === 'eta'), true);
+
+  const dependency = summary.panels.find((panel) => panel.id === 'dependencies');
+  assert.equal(dependency?.state, 'attention');
+  assert.match(dependency?.headline || '', /1 个依赖被阻塞/);
+  assert.equal(dependency?.action?.taskId, 'dep-blocked');
+  assert.equal(dependency?.action?.evidenceFocus, 'source');
+  assert.equal(dependency?.drivers?.some((driver) => driver.title === 'Resolve SDK dependency' && driver.label === '阻塞' && driver.action?.evidenceFocus === 'source'), true);
+
+  const burndown = summary.panels.find((panel) => panel.id === 'burndown');
+  assert.equal(burndown?.state, 'attention');
+  assert.equal(burndown?.progressPercent, 33);
+  assert.match(burndown?.headline || '', /33% 完成/);
+  assert.equal(burndown?.drivers?.some((driver) => driver.title === 'Resolve SDK dependency' && driver.label === '阻塞'), true);
+
+  const empty = buildProjectVisualizationSummary({
+    id: 'empty-visual-project',
+    name: 'Empty Visual Project',
+    milestones: [],
+    tasks: [],
+  } as any, { now });
+
+  assert.equal(empty.panels.find((panel) => panel.id === 'gantt')?.state, 'empty');
+  assert.equal(empty.panels.find((panel) => panel.id === 'dependencies')?.state, 'empty');
+  assert.equal(empty.panels.find((panel) => panel.id === 'burndown')?.state, 'empty');
+}
+
 function verifyProjectEvidenceGapSummary() {
   const summary = buildProjectEvidenceGapSummary(
     [
@@ -1032,7 +1105,35 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
         name: 'Existing Local',
         description: 'Already tracked locally',
         milestones: [],
-        tasks: [],
+        tasks: [
+          {
+            id: 'with-jira',
+            type: 'task',
+            title: 'Has Jira source',
+            status: 'progress',
+            eta: '2026-06-01',
+            jira: [{ key: 'LOCAL-1', title: 'Has Jira source' }],
+          },
+          {
+            id: 'missing-source',
+            type: 'task',
+            title: 'Needs Jira source',
+            status: 'testing',
+            eta: '2026-06-02',
+          },
+          {
+            id: 'missing-both',
+            type: 'task',
+            title: 'Needs both',
+            status: 'progress',
+          },
+          {
+            id: 'done',
+            type: 'task',
+            title: 'Closed local work',
+            status: 'closed',
+          },
+        ],
       },
     ],
   };
@@ -1099,6 +1200,14 @@ async function verifySyncReadinessIsExplicitAboutLocalData() {
       '新增：Memory Service Project',
       '已匹配：Existing Local',
     ]);
+    assert.deepEqual(result.sources[0].diagnostics, [
+      '本地工作台：2 个项目，3 个活动任务',
+      'ETA 覆盖 67%，来源覆盖 33%',
+    ]);
+    assert.match(result.sources[1].diagnostics?.join('\n') || '', /1\/3 个活动任务有 Jira key/);
+    assert.match(result.sources[1].diagnostics?.join('\n') || '', /缺来源任务：Needs Jira source、Needs both/);
+    assert.match(result.sources[2].diagnostics?.join('\n') || '', /未配置项目仓库映射/);
+    assert.match(result.sources[3].diagnostics?.join('\n') || '', /未配置空间\/页面映射/);
     assert.match(result.sources[0].boundaries?.join('\n') || '', /不反写 Memory Service/);
     assert.match(result.sources[1].boundaries?.join('\n') || '', /不会读取 Jira/);
     assert.match(result.sources[0].detail, /新增：Memory Service Project/);
@@ -1153,6 +1262,10 @@ async function verifySyncReadinessReportsMemoryFailure() {
     assert.equal(memorySource.status, 'unavailable');
     assert.equal(memorySource.badge, '暂不可用');
     assert.match(memorySource.detail, /memory offline/);
+    assert.deepEqual(memorySource.diagnostics, [
+      '本地工作台：0 个项目，0 个活动任务',
+      'ETA 覆盖 0%，来源覆盖 0%',
+    ]);
     assert.match(memorySource.boundaries?.join('\n') || '', /不会清空或覆盖项目/);
     assert.equal(memorySource.highlights, undefined);
   } finally {
@@ -1272,6 +1385,7 @@ async function main() {
   verifyProjectDecisionSummary();
   verifyProjectTaskRiskSummary();
   verifyProjectDataQualitySummary();
+  verifyProjectVisualizationSummary();
   verifyProjectEvidenceGapSummary();
   verifyProjectDashboardDecisionBrief();
   verifyProjectFreshnessSummary();

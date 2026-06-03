@@ -340,7 +340,7 @@ try {
   assertNoPageErrors();
   await page.close();
 
-  messageRows = Array.from({ length: 10 }, (_, index) => [
+  messageRows = Array.from({ length: 9 }, (_, index) => [
     `late-${index + 1}`,
     `Late ${index + 1}`,
     'content',
@@ -353,6 +353,20 @@ try {
     '待执行',
     '',
     '2026-05-04 08:00',
+  ]);
+  messageRows.push([
+    'explicit-2355',
+    'Explicit 23:55',
+    'content',
+    '2026-05-04',
+    '23:55',
+    'Bot',
+    'group',
+    'Active',
+    '0',
+    '待执行',
+    '',
+    '2026-05-04 23:55',
   ]);
   appliedUpdate = null;
 
@@ -373,10 +387,13 @@ try {
   await noTimePage.locator('text=执行器队列可能延迟').waitFor({
     timeout: 15000,
   });
-  await noTimePage.locator('text=建议处理：Late 10（第 10/10 个）').waitFor({
+  await noTimePage.locator('text=建议处理：Late 9（第 9/9 个）').waitFor({
     timeout: 15000,
   });
-  await noTimePage.locator('text=前面 9 条会先执行').waitFor({
+  await noTimePage.locator('text=前面 8 条会先执行').waitFor({
+    timeout: 15000,
+  });
+  await noTimePage.locator('text=已避开 1 个明确时间分钟').waitFor({
     timeout: 15000,
   });
   await noTimePage.locator('text=建议改到 2026-05-05 08:00 后队列').waitFor({
@@ -385,18 +402,18 @@ try {
 
   const noTimeDialogPromise = noTimePage.waitForEvent('dialog', { timeout: 15000 });
   await noTimePage.getByRole('button', {
-    name: '将Late 10改到建议时间2026-05-05 08:00 后队列',
+    name: '将Late 9改到建议时间2026-05-05 08:00 后队列',
   }).click();
   const noTimeDialog = await noTimeDialogPromise;
-  assert.match(noTimeDialog.message(), /已将「Late 10」改到 2026-05-05 08:00 后队列/);
+  assert.match(noTimeDialog.message(), /已将「Late 9」改到 2026-05-05 08:00 后队列/);
   await noTimeDialog.accept();
 
   assert.deepEqual(appliedUpdate, {
-    id: 'late-10',
+    id: 'late-9',
     date: '2026-05-05',
     time: '',
   });
-  await noTimePage.waitForURL(/messageId=late-10/, { timeout: 15000 });
+  await noTimePage.waitForURL(/messageId=late-9/, { timeout: 15000 });
 
   assertNoTimePageErrors();
   await noTimePage.close();

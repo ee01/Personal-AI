@@ -156,6 +156,72 @@ function createZipWithUnmanifestedUserFile(
   zip.writeZip(targetZipPath);
 }
 
+function createZipWithInvalidManifest(targetZipPath: string): void {
+  const zip = new AdmZip();
+  zip.addFile('manifest.json', Buffer.from('{ this is not json'));
+  zip.writeZip(targetZipPath);
+}
+
+function createZipWithUnsupportedManifestPath(targetZipPath: string): void {
+  const zip = new AdmZip();
+  const now = Date.now();
+  const unsupportedContent = Buffer.from('console.log("not a backup markdown file");\n');
+  const memoryDbContent = Buffer.from('not a sqlite database');
+  const configContent = Buffer.from('{}\n');
+  const manifest = {
+    format: 'personal-ai-memory-backup',
+    formatVersion: 1,
+    transport: 'zip',
+    exportedAt: new Date(now).toISOString(),
+    userId: 'verify-user',
+    includes: [
+      {
+        path: 'user/memory.db',
+        layer: 'A',
+        sizeBytes: memoryDbContent.byteLength,
+        modifiedAt: now,
+        sha256: sha256(memoryDbContent),
+        required: true,
+      },
+      {
+        path: 'user/config.json',
+        layer: 'A',
+        sizeBytes: configContent.byteLength,
+        modifiedAt: now,
+        sha256: sha256(configContent),
+        required: true,
+      },
+      {
+        path: 'user/agent/payload.js',
+        layer: 'B',
+        sizeBytes: unsupportedContent.byteLength,
+        modifiedAt: now,
+        sha256: sha256(unsupportedContent),
+        required: false,
+      },
+    ],
+    layers: {
+      A: {
+        paths: ['user/memory.db', 'user/config.json'],
+      },
+      B: {
+        paths: ['user/agent/payload.js'],
+      },
+      C: {
+        generated: [],
+        failed: [],
+        skipped: [],
+      },
+    },
+  };
+
+  zip.addFile('manifest.json', Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`));
+  zip.addFile('user/memory.db', memoryDbContent);
+  zip.addFile('user/config.json', configContent);
+  zip.addFile('user/agent/payload.js', unsupportedContent);
+  zip.writeZip(targetZipPath);
+}
+
 async function ensureOkResponse(response: Response, label: string): Promise<void> {
   if (response.ok) {
     return;
@@ -214,6 +280,14 @@ async function main(): Promise<void> {
     initialContext.userDataManager.writeFile(
       'skills/react.md',
       '# React\n\nSkill note markdown.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'rehearsals/reh-alpha.md',
+      '# Rehearsal Alpha\n\nRemember this during restore validation.\n',
+    );
+    initialContext.userDataManager.writeFile(
+      'source-memory/capsule-alpha.md',
+      '# Source Memory Alpha\n\nSaved source capsule markdown.\n',
     );
     initialContext.userDataManager.writeFile(
       'USER_CORE.md',
@@ -306,6 +380,8 @@ async function main(): Promise<void> {
     assert(await pathExists(path.join(extractedDir, 'user', 'projects', 'project-alpha.md')), 'Backup zip is missing exported markdown');
     assert(await pathExists(path.join(extractedDir, 'user', 'entities', 'people', 'john-doe.md')), 'Backup zip is missing entity markdown');
     assert(await pathExists(path.join(extractedDir, 'user', 'skills', 'react.md')), 'Backup zip is missing skill markdown');
+    assert(await pathExists(path.join(extractedDir, 'user', 'rehearsals', 'reh-alpha.md')), 'Backup zip is missing rehearsal markdown');
+    assert(await pathExists(path.join(extractedDir, 'user', 'source-memory', 'capsule-alpha.md')), 'Backup zip is missing source-memory markdown');
     assert(await pathExists(path.join(extractedDir, 'user', 'USER_CORE.md')), 'Backup zip is missing root markdown');
 
     for (const relativePath of EXPECTED_DERIVED_PATHS) {
@@ -315,6 +391,14 @@ async function main(): Promise<void> {
         `Manifest is missing derived snapshot ${relativePath}`,
       );
     }
+    assert(
+      manifest.includes.some((entry) => entry.path === 'user/rehearsals/reh-alpha.md' && entry.layer === 'B'),
+      'Manifest is missing rehearsal markdown as a layer B file',
+    );
+    assert(
+      manifest.includes.some((entry) => entry.path === 'user/source-memory/capsule-alpha.md' && entry.layer === 'B'),
+      'Manifest is missing source-memory markdown as a layer B file',
+    );
 
     const messagesOverview = await fs.readFile(
       path.join(extractedDir, 'derived/messages/messages-overview.md'),
@@ -450,6 +534,60 @@ async function main(): Promise<void> {
       'Unmanifested file response should explain the manifest mismatch',
     );
 
+    const invalidManifestZipPath = path.join(exportDir, 'invalid-manifest.zip');
+    createZipWithInvalidManifest(invalidManifestZipPath);
+    const invalidManifestBuffer = await fs.readFile(invalidManifestZipPath);
+    const invalidManifestForm = new FormData();
+    invalidManifestForm.append(
+      'file',
+      new Blob([invalidManifestBuffer], { type: 'application/zip' }),
+      'invalid-manifest.zip',
+    );
+    invalidManifestForm.append('dryRun', 'true');
+
+    const invalidManifestResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: invalidManifestForm,
+    });
+    const invalidManifestBody = await invalidManifestResponse.text();
+
+    assert(
+      invalidManifestResponse.status === 400,
+      'Import dry-run should reject invalid manifest JSON with a 400',
+    );
+    assert(
+      invalidManifestBody.includes('Backup manifest is not valid JSON'),
+      'Invalid manifest response should explain the JSON parse failure',
+    );
+
+    const unsupportedManifestPathZipPath = path.join(exportDir, 'unsupported-manifest-path.zip');
+    createZipWithUnsupportedManifestPath(unsupportedManifestPathZipPath);
+    const unsupportedManifestPathBuffer = await fs.readFile(unsupportedManifestPathZipPath);
+    const unsupportedManifestPathForm = new FormData();
+    unsupportedManifestPathForm.append(
+      'file',
+      new Blob([unsupportedManifestPathBuffer], { type: 'application/zip' }),
+      'unsupported-manifest-path.zip',
+    );
+    unsupportedManifestPathForm.append('dryRun', 'true');
+
+    const unsupportedManifestPathResponse = await fetch(`${baseUrl}/import`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: unsupportedManifestPathForm,
+    });
+    const unsupportedManifestPathBody = await unsupportedManifestPathResponse.text();
+
+    assert(
+      unsupportedManifestPathResponse.status === 400,
+      'Import dry-run should reject manifest-listed files outside the backup contract',
+    );
+    assert(
+      unsupportedManifestPathBody.includes('Backup manifest contains unsupported user file: user/agent/payload.js'),
+      'Unsupported path response should explain the backup contract mismatch',
+    );
+
     const mergeForm = new FormData();
     mergeForm.append(
       'file',
@@ -492,6 +630,18 @@ async function main(): Promise<void> {
         .readFile('skills/react.md')
         ?.includes('Skill note markdown'),
       'Merge should restore skill markdown files from the backup',
+    );
+    assert(
+      mergeContext.userDataManager
+        .readFile('rehearsals/reh-alpha.md')
+        ?.includes('Remember this during restore validation'),
+      'Merge should restore rehearsal markdown files from the backup',
+    );
+    assert(
+      mergeContext.userDataManager
+        .readFile('source-memory/capsule-alpha.md')
+        ?.includes('Saved source capsule markdown'),
+      'Merge should restore source-memory markdown files from the backup',
     );
     assert(mergeResult.files.preserved >= 1, 'Merge should report preserved files');
     assert(
@@ -617,6 +767,18 @@ async function main(): Promise<void> {
         .readFile('skills/react.md')
         ?.includes('Skill note markdown'),
       'Replace should restore skill markdown files from the backup',
+    );
+    assert(
+      replaceContext.userDataManager
+        .readFile('rehearsals/reh-alpha.md')
+        ?.includes('Remember this during restore validation'),
+      'Replace should restore rehearsal markdown files from the backup',
+    );
+    assert(
+      replaceContext.userDataManager
+        .readFile('source-memory/capsule-alpha.md')
+        ?.includes('Saved source capsule markdown'),
+      'Replace should restore source-memory markdown files from the backup',
     );
     assert(replaceResult.files.deleted >= 1, 'Replace should report deleted files');
     assert(

@@ -114,6 +114,7 @@ function installChromeStub(page) {
                     type: 'rehearsal',
                     snippet:
                       'Factory AI passed security approval, but production still needs RingCentral email login.',
+                    sourceLabel: 'jira',
                     sourceTitle: 'Factory AI rollout rehearsal',
                     sourceUrl: 'https://example.com/factory-ai-rollout',
                     exploreLink: '#/thread/factory-ai?focus=memory-1',
@@ -223,6 +224,8 @@ async function main() {
     assert.ok(requests[0].sourceTypes.includes('user_core'));
     assert.ok(requests[0].sourceTypes.includes('markdown'));
     assert.ok(requests[0].sourceTypes.includes('reflection'));
+    assert.ok(requests[0].sourceTypes.includes('reflection_thread'));
+    assert.ok(requests[0].sourceTypes.includes('source_memory'));
 
     const controlsBeforeClick = await page.evaluate(() => ({
       copyButtons: document.querySelectorAll('[data-action="copy"]').length,
@@ -230,27 +233,67 @@ async function main() {
       confirmInsertButtons: document.querySelectorAll(
         '[data-action="confirm-insert"]',
       ).length,
+      labelText:
+        document.querySelector('.pai-composer-guard-label')?.textContent || '',
       cueLabels: document.querySelectorAll('.pai-composer-guard-cue').length,
       cueText:
         document.querySelector('.pai-composer-guard-cue')?.textContent || '',
+      reviewNoteText:
+        document.querySelector('.pai-composer-guard-review-note')?.textContent ||
+        '',
       provenanceBlocks: document.querySelectorAll(
         '.pai-composer-guard-provenance',
+      ).length,
+      reviewEvidenceBlocks: document.querySelectorAll(
+        '.pai-composer-guard-review-evidence',
       ).length,
     }));
     assert.deepEqual(controlsBeforeClick, {
       copyButtons: 0,
       dismissButtons: 0,
       confirmInsertButtons: 0,
+      labelText: 'Jira / 项目上下文',
       cueLabels: 1,
       cueText: '预演提醒 · 线索：Factory AI / 同会话',
+      reviewNoteText:
+        '预演提醒：确认这个未来场景提示仍适合当前回复，再插入草稿。',
       provenanceBlocks: 0,
+      reviewEvidenceBlocks: 0,
     });
     assert.equal(
       await page.evaluate(() => window.__paiContextRecallFeedbacks.length),
       0,
     );
 
-    await page.locator('.pai-composer-guard-icon-button').click();
+    await page
+      .locator('.pai-composer-guard-icon-button')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page.locator('[data-action="confirm-insert"]').waitFor({
+      state: 'visible',
+      timeout: 3000,
+    });
+    assert.equal(
+      await page.locator('.pai-composer-guard-review-note').innerText(),
+      '预演提醒：确认这个未来场景提示仍适合当前回复，再插入草稿。',
+    );
+    const reviewEvidenceText = await page
+      .locator('.pai-composer-guard-review-evidence')
+      .innerText();
+    assert.match(reviewEvidenceText, /建议依据/);
+    assert.match(reviewEvidenceText, /M1 · 预演提醒/);
+    assert.match(reviewEvidenceText, /Factory AI rollout rehearsal/);
+    assert.match(reviewEvidenceText, /90%/);
+    const composerTextBeforeConfirm = await page
+      .locator('#prompt-textarea')
+      .innerText();
+    assert.equal(
+      composerTextBeforeConfirm.trim(),
+      '',
+      'preview-required suggestions must not mutate the draft on the first click',
+    );
+    await page
+      .locator('[data-action="confirm-insert"]')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
     const composerText = await page.locator('#prompt-textarea').innerText();
     assert.match(composerText, /Factory AI passed security approval/);
     await page.locator('.pai-composer-guard-undo-button').waitFor({
@@ -288,7 +331,16 @@ async function main() {
       selection?.removeAllRanges();
       selection?.addRange(range);
     });
-    await page.locator('.pai-composer-guard-icon-button').click();
+    await page
+      .locator('.pai-composer-guard-icon-button')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
+    await page.locator('[data-action="confirm-insert"]').waitFor({
+      state: 'visible',
+      timeout: 3000,
+    });
+    await page
+      .locator('[data-action="confirm-insert"]')
+      .dispatchEvent('pointerdown', { bubbles: true, cancelable: true });
     const replacedComposerText = await page
       .locator('#prompt-textarea')
       .innerText();

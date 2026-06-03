@@ -61,6 +61,10 @@ export interface WatchRuleMessageContext {
   teamName?: string;
   groupId?: string;
   teamId?: string;
+  timestamp?: number | string;
+  datetime?: string;
+  time?: string;
+  timestamps?: Array<number | string | undefined | null>;
 }
 
 export interface ConcernedItemsPartition {
@@ -217,6 +221,52 @@ function hasScopeValues(values: unknown[]): boolean {
   return values.some((value) => normalizeScopeValue(value).length > 0);
 }
 
+function normalizeEpochToMillis(value: unknown): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    return value > 1_000_000_000_000 ? value : value * 1000;
+  }
+
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && /^[+-]?\d+(\.\d+)?$/.test(trimmed)) {
+    return normalizeEpochToMillis(numeric);
+  }
+
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getContextMessageTimes(context?: WatchRuleMessageContext): number[] {
+  if (!context) return [];
+
+  return [
+    context.timestamp,
+    context.datetime,
+    context.time,
+    ...(context.timestamps || []),
+  ]
+    .map(normalizeEpochToMillis)
+    .filter((value): value is number => value !== null);
+}
+
+function isOutreachRuleInsideObservationWindow(
+  rule: OutreachWatchRule,
+  context?: WatchRuleMessageContext,
+): boolean {
+  const baselineAt = normalizeEpochToMillis(rule.baselineAt);
+  if (baselineAt === null) return true;
+
+  const messageTimes = getContextMessageTimes(context);
+  if (messageTimes.length === 0) return true;
+
+  return messageTimes.some((messageTime) => messageTime >= baselineAt);
+}
+
 export function isWatchRuleEligibleForMessage(
   rule: WatchRule,
   context?: WatchRuleMessageContext,
@@ -243,6 +293,10 @@ export function isWatchRuleEligibleForMessage(
     }
 
     return true;
+  }
+
+  if (!isOutreachRuleInsideObservationWindow(rule, context)) {
+    return false;
   }
 
   const contextGroupIds = [context.groupId, context.teamId]

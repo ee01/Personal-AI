@@ -1,6 +1,6 @@
 /**
  * DigestQueueService 类型定义
- * 
+ *
  * 通用定时汇总推送队列服务的类型系统。
  * 支持多种场景：关注后续合并通知、concernedItems 每日摘要、Jira 周报等。
  */
@@ -18,8 +18,8 @@ import type { BotPushScenario } from '../utils';
  */
 export type DigestFrequency =
   | { type: 'hourly' }
-  | { type: 'daily'; hour: number }           // hour: 0-23
-  | { type: 'weekly'; dayOfWeek: number; hour: number }  // dayOfWeek: 0(Sun)-6(Sat)
+  | { type: 'daily'; hour: number } // hour: 0-23
+  | { type: 'weekly'; dayOfWeek: number; hour: number } // dayOfWeek: 0(Sun)-6(Sat)
   | { type: 'custom'; intervalMinutes: number };
 
 /**
@@ -143,8 +143,28 @@ export interface DigestProcessResult {
   success: boolean;
   /** 处理的条目数 */
   itemsProcessed: number;
+  /** 执行后仍留在本地队列里的条目数 */
+  itemsPending?: number;
+  /** 当前已经到释放时间但尚未推送的条目数 */
+  itemsDue?: number;
+  /** 未到期条目的下一次释放时间 ISO string */
+  nextReleaseAt?: string;
   /** 错误信息（如有） */
   error?: string;
+}
+
+export interface DigestQueueTaskSnapshot {
+  taskId: string;
+  totalItems: number;
+  dueItems: number;
+  nextReleaseAt?: string;
+}
+
+export interface DigestQueueStatusSummary {
+  totalItems: number;
+  dueItems: number;
+  nextReleaseAt?: string;
+  tasks: DigestQueueTaskSnapshot[];
 }
 
 // ==================== ConcernedItems 扩展 ====================

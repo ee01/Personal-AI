@@ -26,11 +26,20 @@ export interface TimelineDayGroup {
   events: MemoryTimelineEvent[];
 }
 
+export interface TimelineSourceFilterOption {
+  key: string;
+  label: string;
+  count: number;
+}
+
 export interface ParsedTimelineFocus {
   id: string;
   type?: TimelineFocusType;
   isLegacyTypedFocus: boolean;
 }
+
+export const ALL_TIMELINE_SOURCE_FILTER_KEY = 'all';
+export const UNKNOWN_TIMELINE_SOURCE_FILTER_KEY = '__unknown_source__';
 
 const MAX_TIMELINE_TEXT_LENGTH = 220;
 const UNKNOWN_TIMELINE_DAY_KEY = 'unknown';
@@ -206,6 +215,55 @@ function buildTimelineGroupSummary(events: MemoryTimelineEvent[]): string {
         }`
       : '';
   return `${events.length} 条记忆${sourceSummary}`;
+}
+
+export function getTimelineSourceFilterKey(
+  event: Pick<MemoryTimelineEvent, 'source' | 'sourceTitle'>,
+): string {
+  const source = (event.sourceTitle || event.source || '').trim();
+  return source || UNKNOWN_TIMELINE_SOURCE_FILTER_KEY;
+}
+
+function getTimelineSourceFilterLabel(key: string): string {
+  return key === UNKNOWN_TIMELINE_SOURCE_FILTER_KEY ? '来源未知' : key;
+}
+
+export function buildTimelineSourceFilterOptions(
+  events: MemoryTimelineEvent[],
+): TimelineSourceFilterOption[] {
+  const counts = new Map<string, number>();
+
+  for (const event of events) {
+    const key = getTimelineSourceFilterKey(event);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([key, count]) => ({
+      key,
+      label: getTimelineSourceFilterLabel(key),
+      count,
+    }))
+    .sort(
+      (left, right) =>
+        right.count - left.count || left.label.localeCompare(right.label),
+    );
+}
+
+export function filterTimelineEventsBySource(
+  events: MemoryTimelineEvent[],
+  sourceFilterKey: string,
+): MemoryTimelineEvent[] {
+  if (
+    !sourceFilterKey ||
+    sourceFilterKey === ALL_TIMELINE_SOURCE_FILTER_KEY
+  ) {
+    return events;
+  }
+
+  return events.filter(
+    (event) => getTimelineSourceFilterKey(event) === sourceFilterKey,
+  );
 }
 
 function truncateTimelineText(value: string): string {

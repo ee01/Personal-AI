@@ -21,6 +21,7 @@ vi.mock('../llm/EmbeddingClient.js', () => ({
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
 
@@ -110,6 +111,64 @@ describe('Recall API', () => {
     expect(body.items[0].previewText.length).toBeGreaterThan(0);
   });
 
+  it('allows archive-only memories through explicit search lifecycle mode', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, sender, group_id, group_name, timestamp,
+         importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, 'meeting', 'meeting-pilot', 'meeting-memory-1',
+         'Q2 Planning Review', ?, 0.8, 'neutral', '{}', ?)`,
+    ).run(
+      'archived-meeting-memory',
+      'Archived Q2 planning review note about Meeting Pilot ownership.',
+      now - 240,
+      now - 240,
+    );
+    db.prepare(
+      `INSERT INTO memory_metadata
+        (target_type, target_id, salience_score, effective_salience,
+         retrieval_tier, consolidation_level, created_at, updated_at)
+       VALUES ('message', 'archived-meeting-memory', 0.1, 0.1,
+         'archive_only', 'archived', ?, ?)`,
+    ).run(now, now);
+
+    const basePayload = {
+      query: 'Q2 planning review ownership',
+      topK: 10,
+      channels: ['time'],
+      timeRange: {
+        start: now - 3600,
+        end: now + 60,
+      },
+      sourceTypes: ['meeting'],
+      includeMetadata: true,
+    };
+
+    const defaultRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: basePayload,
+    });
+    const explicitRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        ...basePayload,
+        lifecycleMode: 'explicit_search',
+      },
+    });
+
+    expect(defaultRes.statusCode).toBe(200);
+    expect(explicitRes.statusCode).toBe(200);
+    expect(defaultRes.json().items.map((item: any) => item.id)).not.toContain(
+      'archived-meeting-memory',
+    );
+    expect(explicitRes.json().items.map((item: any) => item.id)).toContain(
+      'archived-meeting-memory',
+    );
+  });
+
   it('reports stable channel diagnostics for hybrid recall coverage', async () => {
     const now = Math.floor(Date.now() / 1000);
     const res = await app.inject({
@@ -140,6 +199,47 @@ describe('Recall API', () => {
       { channel: 'graph', status: 'empty', candidateCount: 0 },
       { channel: 'time', status: 'hit', candidateCount: 1 },
     ]);
+  });
+
+  it('skips vector recall when embedding loading exceeds the recall timeout', async () => {
+    const previousTimeout = process.env.RECALL_EMBEDDING_TIMEOUT_MS;
+    process.env.RECALL_EMBEDDING_TIMEOUT_MS = '100';
+    vi.mocked(EmbeddingClient.getInstance).mockImplementationOnce(
+      () => new Promise(() => undefined) as Promise<any>,
+    );
+
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/recall',
+        payload: {
+          query: 'Q2 planning review',
+          topK: 5,
+          timeRange: {
+            start: now - 3600,
+            end: now + 60,
+          },
+          includeMetadata: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.channelDiagnostics[0]).toEqual({
+        channel: 'vector',
+        status: 'skipped',
+        candidateCount: 0,
+        reason: 'embedding_unavailable',
+      });
+      expect(body.items[0].id).toBe('meeting-memory-1');
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.RECALL_EMBEDDING_TIMEOUT_MS;
+      } else {
+        process.env.RECALL_EMBEDDING_TIMEOUT_MS = previousTimeout;
+      }
+    }
   });
 
   it('includes persisted recall feedback when metadata is requested', async () => {
@@ -400,6 +500,102 @@ describe('Recall API', () => {
     expect(allRes.json().items.map((item: any) => item.id)).toContain(
       'entity-private-trip',
     );
+  });
+
+  it('does not expand short graph tokens as arbitrary substrings when specific terms exist', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const insertEntity = db.prepare(
+      `INSERT INTO entities
+        (id, type, name, description, importance, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertEntity.run(
+      'entity-raisa',
+      'Person',
+      'Raisa',
+      'Person whose name contains ai as a substring.',
+      0.9,
+      'active',
+      now,
+    );
+    insertEntity.run(
+      'entity-albert',
+      'Person',
+      'Albert',
+      'Person whose name contains be as a substring.',
+      0.9,
+      'active',
+      now,
+    );
+    insertEntity.run(
+      'entity-ai-vbg',
+      'Project',
+      'AI VBG',
+      'Virtual background generation project.',
+      0.7,
+      'active',
+      now,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'AI VBG 的 BE 部分完成情况如何',
+        topK: 10,
+        channels: ['graph'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const ids = res.json().items.map((item: any) => item.id);
+    expect(ids).toContain('entity-ai-vbg');
+    expect(ids).not.toContain('entity-raisa');
+    expect(ids).not.toContain('entity-albert');
+  });
+
+  it('matches low-specificity graph tokens only as exact tokens', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const insertEntity = db.prepare(
+      `INSERT INTO entities
+        (id, type, name, description, importance, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertEntity.run(
+      'entity-personal-ai',
+      'Project',
+      'Personal AI',
+      'Private assistant memory project.',
+      0.8,
+      'active',
+      now,
+    );
+    insertEntity.run(
+      'entity-raisa',
+      'Person',
+      'Raisa',
+      'Person whose name contains ai as a substring.',
+      0.9,
+      'active',
+      now,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'AI',
+        topK: 10,
+        channels: ['graph'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const ids = res.json().items.map((item: any) => item.id);
+    expect(ids).toContain('entity-personal-ai');
+    expect(ids).not.toContain('entity-raisa');
   });
 
   it('applies scope filtering to chunk recall and returns both only when explicitly requested', async () => {

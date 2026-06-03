@@ -39,6 +39,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'common.save': '保存',
 
     'options.sections.language': '语言 / Language',
+    'options.sections.promptConfig': '自定义提示词与上下文',
     'options.sections.demo': '功能 Demo',
     'options.sections.messageAnalysis': '消息分析推送',
     'options.sections.messageInteraction': '消息交互功能',
@@ -60,6 +61,10 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'options.sections.importExport': '配置导入/导出',
     'options.language.description':
       '界面语言会立即保存到 Chrome 本地存储，不依赖下方保存配置按钮。',
+    'options.promptConfig.description':
+      '集中管理会进入消息分析、项目分析和会前上下文的长期偏好，并查看本轮实际注入回执。',
+    'options.promptConfig.open': '打开自定义提示词',
+    'options.promptConfig.receipt': '保存后会按开关、作用域和安全提示进入分析注入。',
 
     'popup.memoryExplorer': '实体记忆查询',
     'popup.scheduledMessages': '定时消息管理',
@@ -80,9 +85,12 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.today.later': '稍后',
     'popup.today.copy': '复制',
     'popup.today.copying': '复制中',
+    'popup.today.reviewExternal': '去处理',
     'popup.today.handling': '处理中',
     'popup.today.doneTitle': '今天不再显示这张 mission',
     'popup.today.laterTitle': '6 小时内不再显示',
+    'popup.today.externalExecutionTitle':
+      'OpenClaw 外部执行需要在处理页确认',
 
     'memoryExplorer.title': '记忆查询系统',
     'memoryExplorer.sidebarNote':
@@ -98,10 +106,13 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.nav.followThreads': '关注后续',
     'memoryExplorer.nav.followThreadsSubnote': '仅统计手动规则',
     'memoryExplorer.nav.dreams': '梦境重放',
+    'memoryExplorer.nav.reports': '周报报告',
     'memoryExplorer.nav.reflection': '自我反思',
     'memoryExplorer.nav.rehearsal': 'Rehearsal',
     'memoryExplorer.nav.rehearsalSubnote': '未来场景预演',
     'memoryExplorer.nav.decisions': '决策中心',
+    'memoryExplorer.nav.storylines': '故事线',
+    'memoryExplorer.nav.storylinesSubnote': '分享 / 汇报草稿',
     'memoryExplorer.nav.actions': '动作队列',
     'memoryExplorer.nav.outreach': '主动询问',
     'memoryExplorer.nav.outreachSubnote': '系统证据在这里看',
@@ -186,6 +197,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'common.save': 'Save',
 
     'options.sections.language': 'Language',
+    'options.sections.promptConfig': 'Custom Prompts and Context',
     'options.sections.demo': 'Feature Demos',
     'options.sections.messageAnalysis': 'Message Analysis Delivery',
     'options.sections.messageInteraction': 'Message Reaction',
@@ -207,6 +219,11 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'options.sections.importExport': 'Import / Export Config',
     'options.language.description':
       'The UI language is saved to Chrome local storage immediately and does not depend on the config save button below.',
+    'options.promptConfig.description':
+      'Manage long-term preferences used by message analysis, project analysis, and meeting context, with receipts for what is actually injected.',
+    'options.promptConfig.open': 'Open Custom Prompts',
+    'options.promptConfig.receipt':
+      'Saved preferences are injected according to source toggles, scope, and safety hints.',
 
     'popup.memoryExplorer': 'Memory Explorer',
     'popup.scheduledMessages': 'Scheduled Messages',
@@ -227,9 +244,12 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'popup.today.later': 'Later',
     'popup.today.copy': 'Copy',
     'popup.today.copying': 'Copying',
+    'popup.today.reviewExternal': 'Review',
     'popup.today.handling': 'Working',
     'popup.today.doneTitle': 'Hide this mission for today',
     'popup.today.laterTitle': 'Hide for 6 hours',
+    'popup.today.externalExecutionTitle':
+      'OpenClaw execution needs confirmation in the handling page',
 
     'memoryExplorer.title': 'Memory Explorer',
     'memoryExplorer.sidebarNote':
@@ -245,10 +265,13 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.nav.followThreads': 'Follow Threads',
     'memoryExplorer.nav.followThreadsSubnote': 'Manual rules only',
     'memoryExplorer.nav.dreams': 'Dream Replay',
+    'memoryExplorer.nav.reports': 'Reports',
     'memoryExplorer.nav.reflection': 'Self Reflection',
     'memoryExplorer.nav.rehearsal': 'Rehearsal',
     'memoryExplorer.nav.rehearsalSubnote': 'Future scene rehearsal',
     'memoryExplorer.nav.decisions': 'Decision Center',
+    'memoryExplorer.nav.storylines': 'Storylines',
+    'memoryExplorer.nav.storylinesSubnote': 'Sharing and report drafts',
     'memoryExplorer.nav.actions': 'Action Queue',
     'memoryExplorer.nav.outreach': 'Outreach',
     'memoryExplorer.nav.outreachSubnote': 'System evidence lives here',

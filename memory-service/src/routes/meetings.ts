@@ -31,7 +31,16 @@ interface MeetingRow {
   first_timestamp: number | null;
   last_event_at: number | null;
   metadata_json: string | null;
+  latest_content?: string | null;
+  search_content?: string | null;
 }
+
+type MeetingArchiveStatusFilter =
+  | 'all'
+  | 'ready'
+  | 'attention'
+  | 'processing'
+  | 'archived';
 
 function safeJsonParse<T>(value: string | null): T | undefined {
   if (!value) return undefined;
@@ -61,6 +70,82 @@ function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
   return normalized || undefined;
+}
+
+function normalizeSearchQuery(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().replace(/\s+/g, ' ').slice(0, 120);
+  return normalized || undefined;
+}
+
+function normalizeArchiveStatusFilter(
+  value: unknown,
+): MeetingArchiveStatusFilter {
+  return value === 'ready' ||
+    value === 'attention' ||
+    value === 'processing' ||
+    value === 'archived'
+    ? value
+    : 'all';
+}
+
+function hasSafeOpenableUrl(value?: string): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function getArchiveStatus(
+  meeting: MeetingListItem,
+): Exclude<MeetingArchiveStatusFilter, 'all'> {
+  const hasPdf = hasSafeOpenableUrl(meeting.pdfUrl);
+  if (meeting.digestStatus === 'failed') return 'attention';
+  if (meeting.digestStatus === 'completed' && !hasPdf) return 'attention';
+  if (hasPdf || meeting.digestStatus === 'completed') return 'ready';
+  if (
+    meeting.digestStatus === 'uploading' ||
+    meeting.digestStatus === 'processing' ||
+    meeting.digestId
+  ) {
+    return 'processing';
+  }
+  return 'archived';
+}
+
+function meetingMatchesSearch(
+  meeting: MeetingListItem,
+  row: MeetingRow,
+  query?: string,
+): boolean {
+  if (!query) return true;
+  const haystack = [
+    meeting.meetingId,
+    meeting.title,
+    meeting.summary,
+    meeting.digestErrorCode,
+    row.latest_content,
+    row.search_content,
+    ...(meeting.participants || []),
+  ]
+    .filter((item): item is string => typeof item === 'string' && item !== '')
+    .join('\n')
+    .toLocaleLowerCase();
+  return query
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => haystack.includes(term));
+}
+
+function meetingMatchesStatus(
+  meeting: MeetingListItem,
+  status: MeetingArchiveStatusFilter,
+): boolean {
+  return status === 'all' || getArchiveStatus(meeting) === status;
 }
 
 function rowToMeeting(row: MeetingRow): MeetingListItem | null {
@@ -142,7 +227,14 @@ function rowToMeetingDetail(
 }
 
 export async function meetingRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Querystring: { limit?: number; offset?: number } }>(
+  app.get<{
+    Querystring: {
+      limit?: number;
+      offset?: number;
+      q?: string;
+      status?: MeetingArchiveStatusFilter;
+    };
+  }>(
     '/meetings',
     {
       schema: {
@@ -152,6 +244,11 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
           properties: {
             limit: { type: 'number', minimum: 1, maximum: 200 },
             offset: { type: 'number', minimum: 0 },
+            q: { type: 'string', maxLength: 120 },
+            status: {
+              type: 'string',
+              enum: ['all', 'ready', 'attention', 'processing', 'archived'],
+            },
           },
         },
         response: {
@@ -182,6 +279,8 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
               total: { type: 'number' },
               limit: { type: 'number' },
               offset: { type: 'number' },
+              q: { type: 'string' },
+              status: { type: 'string' },
             },
           },
         },
@@ -194,14 +293,13 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
         200,
       );
       const offset = Math.max(Number(request.query.offset ?? 0), 0);
-
-      const totalRow = db
-        .prepare(
-          `SELECT COUNT(DISTINCT group_id) AS count
-         FROM messages_raw
-         WHERE source_type = 'meeting' AND group_id IS NOT NULL AND group_id != ''`,
-        )
-        .get() as { count: number };
+      const searchQuery = normalizeSearchQuery(request.query.q);
+      const status = normalizeArchiveStatusFilter(request.query.status);
+      const searchContentProjection = searchQuery
+        ? `,
+                GROUP_CONCAT(COALESCE(m.content, ''), '\n') AS search_content`
+        : `,
+                NULL AS search_content`;
 
       const rows = db
         .prepare(
@@ -209,7 +307,8 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
                 COALESCE(latest.group_name, latest.source_title, m.group_id) AS title,
                 MIN(COALESCE(m.timestamp, m.created_at)) AS first_timestamp,
                 MAX(COALESCE(m.timestamp, m.created_at)) AS last_event_at,
-                latest.metadata_json AS metadata_json
+                latest.metadata_json AS metadata_json,
+                latest.content AS latest_content${searchContentProjection}
          FROM messages_raw m
          LEFT JOIN messages_raw latest
            ON latest.id = (
@@ -221,21 +320,26 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
              LIMIT 1
            )
          WHERE m.source_type = 'meeting' AND m.group_id IS NOT NULL AND m.group_id != ''
-         GROUP BY m.group_id, latest.group_name, latest.source_title, latest.metadata_json
-         ORDER BY last_event_at DESC
-         LIMIT ? OFFSET ?`,
+         GROUP BY m.group_id, latest.group_name, latest.source_title, latest.metadata_json, latest.content
+         ORDER BY last_event_at DESC`,
         )
-        .all(limit, offset) as MeetingRow[];
+        .all() as MeetingRow[];
 
-      const items = rows
-        .map(rowToMeeting)
-        .filter((item): item is MeetingListItem => item !== null);
+      const filteredItems = rows.flatMap((row) => {
+        const meeting = rowToMeeting(row);
+        if (!meeting) return [];
+        if (!meetingMatchesSearch(meeting, row, searchQuery)) return [];
+        if (!meetingMatchesStatus(meeting, status)) return [];
+        return [meeting];
+      });
 
       return reply.status(200).send({
-        items,
-        total: totalRow.count,
+        items: filteredItems.slice(offset, offset + limit),
+        total: filteredItems.length,
         limit,
         offset,
+        q: searchQuery,
+        status,
       });
     },
   );

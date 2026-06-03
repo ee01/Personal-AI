@@ -147,7 +147,7 @@ const ASK_WINDOW_WIDTH = 540;
 /**
  * Must stay in sync with `HEIGHTS.compact` in `app/quick-ask.js` (anchor math uses this).
  */
-const ASK_WINDOW_COMPACT_HEIGHT = 258;
+const ASK_WINDOW_COMPACT_HEIGHT = 140;
 const ASK_WINDOW_VOICE_HEIGHT = 214;
 const ASK_WINDOW_MIN_EXPANDED_HEIGHT = 428;
 const ASK_WINDOW_DEFAULT_EXPANDED_HEIGHT = 500;

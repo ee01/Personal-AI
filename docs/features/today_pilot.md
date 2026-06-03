@@ -1,6 +1,6 @@
 # Today Pilot / 今日领航
 
-_最后更新: 2026-05-26_
+_最后更新: 2026-05-30_
 
 ## 是什么
 
@@ -44,6 +44,10 @@ Today Pilot 只做日级引导，不替代 Decision Center、Action Queue、Topi
 
 展开态再展示证据、建议动作、待确认问题、context pack 和反馈按钮。
 
+外部执行确认卡有单独边界：如果证据来自 `delegate_openclaw` / `openclaw_delegation`，Today Pilot 首页不会展示 Codex、ChatGPT、Claude、豆包等 context pack 目标选择器，因为这些按钮容易被误读成“选择谁来执行”。这类卡片只展示 `OpenClaw 外部执行` 通道说明和跳转按钮；批准、拒绝或拍板必须回到动作队列 / 决策中心完成，真正的外部执行也只由 OpenClaw 接管。
+
+如果 mission 的证据来自动作队列，首页返回缓存 brief 时也会重新核对源 action 的当前状态。只有 `queued` / `failed` 的 action 仍会展示；源 action 已 `succeeded`、`cancelled`、`dead_letter`、`running` 或已不存在时，即使当天 brief 没有重新生成，这张 card 也会从首页结果中消失。这样用户在动作队列完成处理后，不需要等隔天才从 Today Pilot 清理掉。
+
 ### 1.1 Mission 质量标准
 
 Today Pilot 的 mission 必须是“事情”，不是“分类”或“系统事件”。可进入主列表的 card 需要满足：
@@ -63,6 +67,7 @@ Today Pilot 的 mission 必须是“事情”，不是“分类”或“系统�
 - 超过近期窗口且没有 `truth_conflict`、deadline、reminder、approval、decision 等强动作语义的旧通知。
 - 超过 14 天的旧 `事实跟进` reflection/action，除非已经被新的真实证据重新激活。
 - 已经过期超过 14 天、且不需要审批的旧 queued action。
+- 已在动作队列完成、取消、进入 dead letter、运行中或已经不存在的 action 派生 card。
 - 无法生成具体 `nextBestAction` 的聚类。
 - 只描述 Jira 字段变更的消息，例如 `fixVersion` 或 sprint 被更新，但没有 owner/risk/decision/confirm 等动作语义。
 - 只有“互动频率高 / 关系上下文值得保留”的 Relationship Radar 记录；关系类 card 必须带明确 follow-up、承诺、待回复、变冷风险、owner/ETA 或会前准备语义，才可作为独立 mission。普通关系历史只作为 meeting prep/context pack 的证据使用。
@@ -96,74 +101,18 @@ RingCentral Video Home 只是 Today Pilot 会前准备的消费面：用户打�
 
 #### 2.1 Storyline 生成提示
 
-部分会议不是只需要会前摘要，而是可能需要用户准备一段可讲述材料，例如分享、汇报、复盘、培训、workshop、项目 review 或对外解释。Today Pilot 可以在生成 meeting prep 的同一轮 LLM 判断里，附带产出一个轻量 `storylineOpportunity`，用于决定是否在会前准备卡片里展示 `生成故事线草稿` 按钮。
+部分会议不是只需要会前摘要，而是可能需要用户准备一段可讲述材料，例如分享、汇报、复盘、培训、workshop、项目 review 或对外解释。Today Pilot 在生成 meeting prep 的同一轮 LLM 判断里附带产出 typed `storylineOpportunity`，用于决定是否在会前准备卡片里展示 `生成故事线草稿` 按钮。
 
-这个判断不应是独立的关键词匹配规则。关键词可以作为成本控制的弱 prefilter，但不能作为最终展示依据。最终是否展示提示，必须由 LLM 基于以下结构化上下文判断：
+Today Pilot 只负责“要不要在会前准备里提示”。完整 Storyline 生成、Draft API、页面结构和边界由 [memory_storyline_builder.md](./memory_storyline_builder.md) 维护。
 
-- 日历事件：标题、描述、时间、组织者、参会人、链接类型和是否重复会议。
-- 召回证据：相关消息、会议、Jira、资料记忆、AI 对话、skill、Rehearsal、关系上下文。
-- 输出意图：这场会是否需要对别人表达、讲述、培训、同步进展、解释方案或复盘经验。
-- 素材规模：是否有足够证据形成至少 3 个 story segment，而不是只有一条 cue 或一个待办。
-- 受众范围：是否面向小组、社区、项目干系人或多人 review；普通 1:1 / daily sync 默认不展示，除非证据显示用户要做明确分享或复盘。
-- 风险边界：证据是否主要来自私聊、内部 Jira、meeting URL 或未确认推断；如果风险过高，只显示内部版/需打码提示，或者不展示按钮。
+会前准备侧的落地规则：
 
-`storylineOpportunity` 只决定是否显示按钮，不自动生成完整 Storyline。按钮文案需要让用户知道“点击后才生成”，例如：
-
-- `生成 8 分钟分享故事线`
-- `整理复盘故事线`
-- `生成 Slides 提纲`
-
-展示时应同时显示一个很短的 reason，例如：
-
-> 这场会有 4 类可讲素材：Cursor workshop、Codex/Jira 自动化、NotebookLM 资料理解、OpenClaw skill。
-
-如果 LLM 判断没有足够素材，或这只是普通同步会，Today Pilot 不显示 Storyline 入口，只保留普通 meeting prep。
-
-推荐的结构字段：
-
-```ts
-interface StorylineOpportunity {
-  available: boolean;
-  confidence: number;
-  storyType?:
-    | 'sharing'
-    | 'status_report'
-    | 'retro'
-    | 'training'
-    | 'proposal'
-    | 'weekly_update';
-  buttonLabel?: string;
-  oneLineReason?: string;
-  audienceHint?: string;
-  estimatedLengthMinutes?: number;
-  evidenceClusters?: Array<{
-    label: string;
-    sourceKinds: string[];
-    evidenceCount: number;
-  }>;
-  blockedReasons?: string[];
-  suggestedArtifact?:
-    | 'speaker_notes'
-    | 'slides_outline'
-    | 'ringcentral_post'
-    | 'docs_brief';
-}
-```
-
-会前准备 UI 中的注入位置建议：
-
-1. 放在 meeting prep 摘要和 cue cards 之间，作为一个小条幅，而不是新的大卡片。
-2. 折叠态只显示 `为什么值得生成`、`素材数`、`生成按钮`、`不需要`。
-3. 点击 `生成` 后打开 `memory-exploring.html#/storylines/draft?source=today_meeting_prep&prepId=...&target=...`，由 Storyline draft 页面调用 `POST /api/v1/storylines/draft` 生成草稿。
-4. 用户点 `不需要` 后，Video Home 先写入本地 `chrome.storage.local.storylineOpportunityDismissals`，key 由 `prepId + sourceHash + eventExternalId` 组成，默认 30 天不再展示同一条提示。P0 不复用 Day Pilot card feedback，因为这里不是 mission/card 级反馈。
-5. Storyline draft P0 不持久化、不自动写回 Slides / Docs / RingCentral，只提供可人工复核和复制的 speaker notes、Slides 提纲、Docs 简报或分享帖草稿。
-
-当前 P0 的实现边界：
-
-- `storylineOpportunity` 存在于 `today_meeting_preps.llm_usage_json.storylineOpportunity`，并在 `TodayPilotMeetingPrepRecord` 与 `ContextAssistResponse` 中以 typed field 暴露。
-- `POST /api/v1/storylines/draft` 只支持 `sourceKind='today_meeting_prep'`，根据已存在的 meeting prep、evidence refs 和 context pack 生成 3-6 段 Storyline。
-- `memory-exploring` 的 `/storylines/draft` 是深链页面，不是独立 Storyline 管理中心；刷新同一页面时用 `sessionStorage` 缓存当前 `prepId/sourceHash/target` 的草稿，避免重复生成。
-- Compose Assist、Slides Analyzer、Memory Lens 暂不显示 Storyline 入口，等 Today Pilot 入口验证后再扩展同一 `StorylineOpportunity` 判定模型。
+1. 判断不是独立关键词匹配；最终展示必须由 meeting prep LLM 基于会议目标、召回证据规模、表达意图、受众和风险边界判断。
+2. 条幅放在 meeting prep 摘要和 cue cards 之间，作为小型提示，不新增大型独立卡片。
+3. `storylineOpportunity.available=true`、本地未 dismiss、prep 仍有效时才展示。
+4. 点击 `生成` 后打开 `memory-exploring.html#/storylines/draft?source=today_meeting_prep&prepId=...&target=...`，点击后才调用 draft API。
+5. 用户点 `不需要` 后写入 `chrome.storage.local.storylineOpportunityDismissals`，key 由 `prepId + sourceHash + eventExternalId` 组成，默认 30 天不再展示同一条提示。
+6. P0 不复用 Day Pilot card feedback，不自动生成 Storyline，不自动写回 Slides / Docs / RingCentral。
 
 ### 3. Meeting Pilot Handoff
 
@@ -187,6 +136,8 @@ Today Pilot 会扫描 active Rehearsal，把今天可能要带入的预演提示
 
 过期或长期未触发的 Rehearsal 默认不主动弹出；只有精确人/会议/issue 命中时作为弱提示保留。面对面场景目前没有实时投射能力，因此 Today Pilot 只能提前提醒，不承诺现场触发。
 
+如果 `SCENE_REHEARSAL_DISPLAY_ENABLED=false` 或 Context Assist 被关闭，Today Pilot 首页会把 `rehearsal_prompt` 当作不可见卡片处理：不展示卡片，不把它计入顶部 mission 数、预演来源标签、筛选摘要或提醒预算。这样用户不会看到“0 件事”却同时出现“1 mission / 1 个计划打断”的幽灵统计。
+
 ### 4. Chrome Popup Top 3
 
 扩展 popup 会展示 Today Pilot 当前最重要的 3 个 mission。
@@ -200,11 +151,15 @@ Today Pilot 会扫描 active Rehearsal，把今天可能要带入的预演提示
 
 首页顶部会展示一条轻量 `筛选口径`：候选信号总量、通过行动性筛选的数量、被降噪的低行动/重复信号数量，以及本次会不会占用提醒预算。用户不用展开每张卡也能知道 Today Pilot 不是把所有同步结果都推上首页。
 
+首页 API 不可用时必须显示 degraded 状态和重试入口，不能把请求失败展示成“今天没有高优先级事项”；Today Pilot 派生的处理计数也要清零，避免旧 brief 让用户误以为仍有当前待办。
+
 ### 5. Context Pack
 
 每个 mission 可以生成 context pack，用于带到 Codex、ChatGPT、Claude、豆包或通用 AI 工具。
 
 P0/P1 阶段 context pack 只基于真实证据 deterministic 拼装，不自动把私有内容发送给外部 AI。
+
+Context Pack 是“给外部 AI 阅读的上下文”，不是执行授权。涉及 `delegate_openclaw` / `openclaw_delegation` 或 OpenClaw action 证据的执行确认卡，首页和 popup 都不显示 context pack 目标平台选择器，也不提供一键复制 context pack；popup 只给出进入处理页的动作，避免用户误以为 Codex / ChatGPT / Claude / 豆包会接手外部系统操作。
 
 如果 context pack 生成失败，首页不会把卡片摘要伪装成完整上下文包并提示复制成功；用户会看到失败提示并可以稍后重试。
 

@@ -79,7 +79,15 @@ interface ComposerGuardFeedbackContext {
 
 interface RehearsalFeedbackTarget {
   id: string;
+  type: ComposerAssistResponse['evidence'][number]['type'];
   activationId?: string;
+  title?: string;
+  sourceLabel?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  displayPriority?: string;
+  evidenceRole?: string;
+  reasonType?: string;
 }
 
 interface PendingInsertionUndo {
@@ -111,7 +119,8 @@ interface AmbientDiffSummary {
     | 'edited_before_send'
     | 'deleted_before_send'
     | 'inserted'
-    | 'wrong';
+    | 'wrong'
+    | 'downstream_reaction';
   polarity: 'positive' | 'negative' | 'correction' | 'neutral';
   strength: 'weak' | 'medium' | 'strong';
   redactedDiff: Record<string, unknown>;
@@ -163,6 +172,132 @@ function getRehearsalCueLabel(assist: ComposerAssistResponse): string | null {
   const reasons = rehearsal.whyRelevant?.filter(Boolean).slice(0, 2) ?? [];
   const suffix = reasons.length ? ` · ${reasons.join(' / ')}` : '';
   return `预演提醒${suffix}`;
+}
+
+function getComposerGuardAssistLabel(
+  assist: ComposerAssistResponse,
+  snapshot: SiteContextSnapshot,
+): { label: string; title: string } {
+  if (snapshot.contextType === 'web_agent_prompt') {
+    if (hasComposerEvidenceSource(assist, 'agent')) {
+      return { label: 'Agent 历史上下文', title: '插入 agent 上下文' };
+    }
+    if (hasComposerEvidenceSource(assist, 'jira')) {
+      return { label: 'Jira / 项目上下文', title: '插入项目上下文' };
+    }
+    if (hasComposerEvidenceSource(assist, 'meeting')) {
+      return { label: '会议上下文', title: '插入会议上下文' };
+    }
+    if (hasComposerEvidenceSource(assist, 'ai')) {
+      return { label: '跨 AI 上下文', title: '插入跨 AI 上下文' };
+    }
+    return { label: '跨 AI 上下文', title: '插入跨 AI 上下文' };
+  }
+  return { label: '建议内容', title: '插入建议内容' };
+}
+
+function hasComposerEvidenceSource(
+  assist: ComposerAssistResponse,
+  kind: 'agent' | 'jira' | 'meeting' | 'ai',
+): boolean {
+  return assist.evidence.some((item) => {
+    const labels = [
+      item.sourceLabel,
+      item.sourceTitle,
+      item.title,
+      String(item.metadata?.sourceType || ''),
+      String(item.metadata?.source_type || ''),
+      String((item.metadata?.importSourceMetadata as any)?.provider || ''),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    if (kind === 'agent') {
+      return /\b(codex_cli|claude_code_cli|cursor_agent_cli)\b/.test(labels);
+    }
+    if (kind === 'jira') {
+      return /\bjira\b|[A-Z][A-Z0-9]+-\d+/i.test(labels);
+    }
+    if (kind === 'meeting') {
+      return /\b(meeting|calendar)\b|会议|会前/.test(labels);
+    }
+    return /\b(ai_chat|chatgpt|doubao|doubao_chat|claude|gemini)\b/.test(
+      labels,
+    );
+  });
+}
+
+function shouldReviewComposerAssistBeforeInsert(
+  assist: ComposerAssistResponse,
+): boolean {
+  return assist.previewRequired || assist.riskLevel === 'high';
+}
+
+function hasRehearsalEvidence(assist: ComposerAssistResponse): boolean {
+  return assist.evidence.some((item) => item.type === 'rehearsal');
+}
+
+function getComposerGuardReviewNote(assist: ComposerAssistResponse): string {
+  if (assist.riskLevel === 'high') {
+    return '高风险建议：插入前请先核对事实、语气和敏感信息。';
+  }
+  if (hasRehearsalEvidence(assist)) {
+    return '预演提醒：确认这个未来场景提示仍适合当前回复，再插入草稿。';
+  }
+  return '建议先预览：确认上下文适合后再插入草稿。';
+}
+
+function getComposerEvidenceTypeLabel(
+  item: ComposerAssistResponse['evidence'][number],
+): string {
+  if (item.type === 'rehearsal') return '预演提醒';
+  if (item.type === 'source_memory') return '资料记忆';
+  if (item.type === 'message') return '消息记忆';
+  if (item.type === 'entity') return '人物/实体';
+  return '记忆片段';
+}
+
+function clipReviewEvidencePart(value?: string, maxLength = 54): string {
+  const normalized = (value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trimEnd()}...`;
+}
+
+function getComposerGuardReviewEvidenceLines(
+  assist: ComposerAssistResponse,
+): string[] {
+  return assist.evidence.slice(0, 3).map((item, index) => {
+    const sourceLabel = clipReviewEvidencePart(
+      item.sourceLabel ||
+        String(item.metadata?.sourceType || item.metadata?.source_type || ''),
+      32,
+    );
+    const title =
+      assist.riskLevel === 'high'
+        ? ''
+        : clipReviewEvidencePart(item.sourceTitle || item.title, 54);
+    const reason =
+      assist.riskLevel === 'high'
+        ? ''
+        : clipReviewEvidencePart(
+            item.whyRelevant?.[0] || item.whyMatched || '',
+            64,
+          );
+    const score =
+      typeof item.score === 'number' && Number.isFinite(item.score)
+        ? `${Math.round(item.score * 100)}%`
+        : '';
+    const parts = [
+      `M${index + 1}`,
+      getComposerEvidenceTypeLabel(item),
+      sourceLabel,
+      title,
+      score,
+      reason,
+    ].filter(Boolean);
+    return parts.join(' · ');
+  });
 }
 
 function isSensitiveEditableElement(element: HTMLElement): boolean {
@@ -244,6 +379,74 @@ function getAmbientEditDistanceBand(score: number): string {
   return 'replacement';
 }
 
+function hasCasualHaha(text: string): boolean {
+  return /(^|\s|[，。！？!?])哈[哈啊]*|haha/i.test(text);
+}
+
+function hasTildeSuffix(text: string): boolean {
+  return /[~～]\s*$/.test(text.trim());
+}
+
+function hasOverEnthusiasticClaim(text: string): boolean {
+  return /最喜欢聊|最爱聊|特别喜欢聊|love to talk/i.test(text);
+}
+
+function hasGenericFuturePromise(text: string): boolean {
+  return /到时候看你具体|具体想了解哪块|看你想了解哪块|when you want to know/i.test(
+    text,
+  );
+}
+
+function hasPerformativeCollaborationPhrase(text: string): boolean {
+  return /一起捣鼓|一起搞一下|咱们一起|we can figure it out together/i.test(text);
+}
+
+function buildAmbientStyleFeatureTags(
+  suggestion: string,
+  final: string,
+  similarity: number,
+): string[] {
+  const tags = new Set<string>();
+  if (hasCasualHaha(final)) tags.add('casual_opening_haha');
+  if (hasTildeSuffix(final)) tags.add('tilde_suffix');
+  if (similarity >= 0.35 && final.length < suggestion.length * 0.72) {
+    tags.add('same_intent_shorter_form');
+    tags.add('more_direct');
+  }
+  if (
+    /^我这边先补充几个相关点|^我补充一下相关背景|^我理解当前/.test(
+      suggestion.trim(),
+    ) &&
+    !/^我这边先补充几个相关点|^我补充一下相关背景|^我理解当前/.test(
+      final.trim(),
+    )
+  ) {
+    tags.add('removed_preamble');
+  }
+  if (hasOverEnthusiasticClaim(suggestion)) {
+    tags.add(
+      hasOverEnthusiasticClaim(final)
+        ? 'over_enthusiastic_claim'
+        : 'removed_over_enthusiastic_claim',
+    );
+  }
+  if (hasGenericFuturePromise(suggestion)) {
+    tags.add(
+      hasGenericFuturePromise(final)
+        ? 'generic_future_promise'
+        : 'removed_generic_future_promise',
+    );
+  }
+  if (hasPerformativeCollaborationPhrase(suggestion)) {
+    tags.add(
+      hasPerformativeCollaborationPhrase(final)
+        ? 'performative_collaboration_phrase'
+        : 'removed_performative_collaboration_phrase',
+    );
+  }
+  return Array.from(tags);
+}
+
 function buildAmbientDiffSummary(
   suggestionText: string,
   finalText: string,
@@ -260,6 +463,11 @@ function buildAmbientDiffSummary(
     normalizedFinal.includes(normalizedSuggestion);
   const lengthRatio =
     suggestion.length > 0 ? final.length / Math.max(1, suggestion.length) : 0;
+  const styleFeatureTags = buildAmbientStyleFeatureTags(
+    suggestion,
+    final,
+    similarity,
+  );
   const redactedDiff = {
     rawTextStored: false,
     suggestionHash: hashAmbientText(suggestion),
@@ -276,6 +484,7 @@ function buildAmbientDiffSummary(
         : similarity >= 0.35
           ? 'partially_rewritten'
           : 'different_intent',
+    styleFeatureTags,
   };
 
   if (!final) {
@@ -380,45 +589,137 @@ function asPlainObject(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function getRehearsalFeedbackTargets(
+function getStructuredEvidenceFeedbackTargets(
   assist: ComposerAssistResponse | null,
 ): RehearsalFeedbackTarget[] {
   if (!assist?.evidence?.length) return [];
   const targets = new Map<string, RehearsalFeedbackTarget>();
 
   for (const item of assist.evidence) {
-    if (item.type !== 'rehearsal') continue;
+    const targetId = getEvidenceFeedbackTargetId(item);
+    if (!targetId) continue;
+    const key = `${item.type}:${targetId}`;
+    if (targets.has(key)) continue;
+
+    const rehearsalMeta = asPlainObject(item.metadata?.rehearsal);
+    const activationId =
+      item.type === 'rehearsal' &&
+      typeof rehearsalMeta?.activationId === 'string' &&
+      rehearsalMeta.activationId.trim()
+        ? rehearsalMeta.activationId.trim()
+        : undefined;
+    targets.set(key, {
+      id: targetId,
+      type: item.type,
+      activationId,
+      title: item.title,
+      sourceLabel: item.sourceLabel,
+      sourceUrl: item.sourceUrl,
+      sourceTitle: item.sourceTitle,
+      displayPriority: item.displayPriority,
+      evidenceRole: item.evidenceRole,
+      reasonType: item.reasonType,
+    });
+  }
+
+  return Array.from(targets.values()).slice(0, 5);
+}
+
+function getEvidenceFeedbackTargetId(
+  item: ComposerAssistResponse['evidence'][number],
+): string {
+  if (item.type === 'source_memory') {
+    const sourceMemoryId = item.metadata?.sourceMemoryCapsuleId;
+    const id =
+      typeof sourceMemoryId === 'string' && sourceMemoryId.trim()
+        ? sourceMemoryId.trim()
+        : item.id.trim();
+    return id.replace(/^source-memory:/, '');
+  }
+
+  if (item.type === 'rehearsal') {
     const rehearsalMeta = asPlainObject(item.metadata?.rehearsal);
     const id =
       typeof rehearsalMeta?.id === 'string' && rehearsalMeta.id.trim()
         ? rehearsalMeta.id.trim()
         : item.id.trim();
-    if (!id || targets.has(id)) continue;
-
-    const activationId =
-      typeof rehearsalMeta?.activationId === 'string' &&
-      rehearsalMeta.activationId.trim()
-        ? rehearsalMeta.activationId.trim()
-        : undefined;
-    targets.set(id, { id, activationId });
+    return id;
   }
 
-  return Array.from(targets.values()).slice(0, 3);
+  return item.id.trim();
 }
 
 function buildStructuredFeedbackDetail(
   kind: AssistFeedbackKind,
   snapshot?: SiteContextSnapshot,
+  contextKey?: string,
+  target?: RehearsalFeedbackTarget,
 ): string {
-  const action =
-    kind === 'accepted'
-      ? 'Compose Assist suggestion inserted without undo.'
-      : 'Compose Assist suggestion rejected from hover preview.';
-  const surface = snapshot?.surface ? ` surface=${snapshot.surface}` : '';
-  const contextType = snapshot?.contextType
-    ? ` contextType=${snapshot.contextType}`
-    : '';
-  return `${action}${surface}${contextType}`;
+  const action = kind === 'accepted' ? 'positive' : 'negative';
+  const detail = {
+    version: '1',
+    interaction:
+      kind === 'rejected'
+        ? 'memory_relevance_trainer'
+        : 'context_recall_feedback',
+    surface: 'compose_assist',
+    action,
+    auto_applied: kind === 'rejected' ? 'true' : undefined,
+    feedback_reason:
+      kind === 'rejected' ? 'should_not_use_for_reply' : undefined,
+    scene_anchor_signature:
+      compactStructuredFeedbackDetailValue(contextKey || snapshot?.contextKey, 220),
+    compose_surface: compactStructuredFeedbackDetailValue(snapshot?.surface, 80),
+    context_type: compactStructuredFeedbackDetailValue(snapshot?.contextType, 80),
+    scenario: compactStructuredFeedbackDetailValue(snapshot?.scenario, 80),
+    group_id: compactStructuredFeedbackDetailValue(
+      snapshot?.identifiers?.groupId || snapshot?.audience?.groupId,
+      120,
+    ),
+    conversation_id: compactStructuredFeedbackDetailValue(
+      snapshot?.identifiers?.conversationId ||
+        snapshot?.audience?.conversationId,
+      120,
+    ),
+    issue_key: compactStructuredFeedbackDetailValue(
+      snapshot?.identifiers?.issueKey || snapshot?.audience?.issueKey,
+      80,
+    ),
+    current_title: compactStructuredFeedbackDetailValue(snapshot?.title, 140),
+    current_url: compactStructuredFeedbackDetailValue(snapshot?.url, 220),
+    target_type: target?.type,
+    source_label: compactStructuredFeedbackDetailValue(target?.sourceLabel, 100),
+    source_title: compactStructuredFeedbackDetailValue(target?.sourceTitle, 140),
+    source_url: compactStructuredFeedbackDetailValue(target?.sourceUrl, 220),
+    display_priority: compactStructuredFeedbackDetailValue(
+      target?.displayPriority,
+      40,
+    ),
+    evidence_role: compactStructuredFeedbackDetailValue(target?.evidenceRole, 80),
+    reason_type: compactStructuredFeedbackDetailValue(target?.reasonType, 80),
+  };
+
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(detail).filter(([, value]) => Boolean(value)),
+    ),
+  );
+}
+
+function compactStructuredFeedbackDetailValue(
+  value: unknown,
+  maxLength = 160,
+): string | undefined {
+  const normalized =
+    typeof value === 'string'
+      ? value.replace(/\s+/g, ' ').trim()
+      : value == null
+      ? ''
+      : String(value).replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength).trimEnd()}...`
+    : normalized;
 }
 
 function isUsableViewportRect(rect: DOMRect): boolean {
@@ -473,6 +774,7 @@ export class ComposerGuardController {
   private acceptedInsertionDraft: AmbientAssistDraft | null = null;
   private previewedAssistDraft: AmbientAssistDraft | null = null;
   private restoringSnapshot = false;
+  private reviewMode = false;
 
   start(): void {
     if (hasSensitiveUrlSignal(window.location.href)) {
@@ -641,6 +943,7 @@ export class ComposerGuardController {
 
     if (contextChanged) {
       this.latestAssist = null;
+      this.reviewMode = false;
       this.removeAffordance();
     } else {
       this.renderIfUseful();
@@ -806,6 +1109,7 @@ export class ComposerGuardController {
       console.warn('[ComposerGuard] assist request failed:', error);
       if (requestSeq === this.requestSeq) {
         this.latestAssist = null;
+        this.reviewMode = false;
         this.removeAffordance();
       }
     }
@@ -874,20 +1178,35 @@ export class ComposerGuardController {
     this.clearInsertionUndo(true);
 
     const root = this.ensureRoot();
-    root.className = 'pai-composer-guard';
-    root.dataset.state = state;
     const assist = this.latestAssist;
+    const reviewRequired = shouldReviewComposerAssistBeforeInsert(assist);
+    const reviewOpen = this.reviewMode && reviewRequired;
+    root.className = `pai-composer-guard${
+      reviewOpen ? ' pai-composer-guard--review' : ''
+    }`;
+    root.dataset.state = reviewOpen ? 'review' : state;
     const iconUrl = chrome.runtime.getURL('icons/icon48.png');
-    const preview = this.buildSuggestionPreview(assist);
+    const preview = this.buildSuggestionPreview(assist, reviewOpen);
     const cueLabel = getRehearsalCueLabel(assist);
+    const assistLabel = getComposerGuardAssistLabel(
+      assist,
+      this.activeSession.snapshot,
+    );
+    const reviewEvidenceLines = reviewOpen
+      ? getComposerGuardReviewEvidenceLines(assist)
+      : [];
 
     root.innerHTML = `
-      <button class="pai-composer-guard-icon-button" data-action="insert" type="button" title="插入建议内容">
+      <button class="pai-composer-guard-icon-button" data-action="insert" type="button" title="${escapeHtml(
+        reviewRequired && !reviewOpen ? '先预览建议内容' : assistLabel.title,
+      )}" aria-expanded="${reviewOpen ? 'true' : 'false'}">
         <img src="${iconUrl}" alt="Personal AI" />
       </button>
-      <div class="pai-composer-guard-popover" aria-hidden="true">
+      <div class="pai-composer-guard-popover" aria-hidden="${reviewOpen ? 'false' : 'true'}">
         <div class="pai-composer-guard-header">
-          <div class="pai-composer-guard-label">建议内容</div>
+          <div class="pai-composer-guard-label">${escapeHtml(
+            assistLabel.label,
+          )}</div>
           <button class="pai-composer-guard-feedback-button" data-action="reject" type="button" title="减少这类建议" aria-label="减少这类建议">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M10 15.5v3.1c0 .8.7 1.4 1.5 1.4.5 0 .9-.2 1.2-.6l4.2-5.4c.4-.5.6-1.1.6-1.8V5.6c0-1-.8-1.8-1.8-1.8H7.1c-.7 0-1.4.4-1.7 1L2.7 11c-.5 1.2.4 2.5 1.7 2.5H10Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
@@ -900,7 +1219,34 @@ export class ComposerGuardController {
             ? `<div class="pai-composer-guard-cue">${escapeHtml(cueLabel)}</div>`
             : ''
         }
+        ${
+          reviewRequired
+            ? `<div class="pai-composer-guard-review-note">${escapeHtml(
+                getComposerGuardReviewNote(assist),
+              )}</div>`
+            : ''
+        }
         <div class="pai-composer-guard-text">${escapeHtml(preview)}</div>
+        ${
+          reviewEvidenceLines.length
+            ? `<div class="pai-composer-guard-review-evidence" aria-label="建议依据">
+                <div class="pai-composer-guard-review-evidence-title">建议依据</div>
+                <ul>
+                  ${reviewEvidenceLines
+                    .map((line) => `<li>${escapeHtml(line)}</li>`)
+                    .join('')}
+                </ul>
+              </div>`
+            : ''
+        }
+        ${
+          reviewOpen
+            ? `<div class="pai-composer-guard-actions">
+                <button class="pai-composer-guard-secondary-action" data-action="close-review" type="button">取消</button>
+                <button class="pai-composer-guard-primary-action" data-action="confirm-insert" type="button">插入</button>
+              </div>`
+            : ''
+        }
       </div>
     `;
 
@@ -912,13 +1258,41 @@ export class ComposerGuardController {
     insertButton?.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.insertLatestAssist();
+      this.handleInsertAction();
     });
     insertButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       if ((event as MouseEvent).detail === 0) {
+        this.handleInsertAction();
+      }
+    });
+    const confirmInsertButton = root.querySelector(
+      '[data-action="confirm-insert"]',
+    );
+    confirmInsertButton?.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.insertLatestAssist();
+    });
+    confirmInsertButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if ((event as MouseEvent).detail === 0) {
         this.insertLatestAssist();
+      }
+    });
+    const closeReviewButton = root.querySelector('[data-action="close-review"]');
+    closeReviewButton?.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.dismissCurrentContext();
+    });
+    closeReviewButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if ((event as MouseEvent).detail === 0) {
+        this.dismissCurrentContext();
       }
     });
     const rejectButton = root.querySelector('[data-action="reject"]');
@@ -941,10 +1315,27 @@ export class ComposerGuardController {
     this.positionRoot();
   }
 
-  private buildSuggestionPreview(assist: ComposerAssistResponse): string {
+  private buildSuggestionPreview(
+    assist: ComposerAssistResponse,
+    forceFull = false,
+  ): string {
     return getComposerAssistPreviewText(assist.insertText, {
-      forceFull: false,
+      forceFull,
     });
+  }
+
+  private handleInsertAction(): void {
+    if (!this.latestAssist) return;
+    if (
+      shouldReviewComposerAssistBeforeInsert(this.latestAssist) &&
+      !this.reviewMode
+    ) {
+      this.reviewMode = true;
+      this.rememberPreviewedAssist();
+      this.render('ready');
+      return;
+    }
+    this.insertLatestAssist();
   }
 
   private insertLatestAssist(): void {
@@ -1031,6 +1422,12 @@ export class ComposerGuardController {
       sendTraceRecorded: undo.sendTraceRecorded,
     };
     if (this.previewedAssistDraft?.contextKey === undo.contextKey) {
+      this.previewedAssistDraft = null;
+    }
+  }
+
+  private clearPreviewedAssistDraft(contextKey?: string): void {
+    if (!contextKey || this.previewedAssistDraft?.contextKey === contextKey) {
       this.previewedAssistDraft = null;
     }
   }
@@ -1176,6 +1573,7 @@ export class ComposerGuardController {
         'thumb_down',
       ),
     );
+    this.clearPreviewedAssistDraft(feedbackContext.contextKey);
   }
 
   private getAmbientInsertionDraftForSend(
@@ -1323,21 +1721,23 @@ export class ComposerGuardController {
     kind: AssistFeedbackKind,
     feedbackContext: ComposerGuardFeedbackContext,
   ): Promise<void> {
-    const targets = getRehearsalFeedbackTargets(feedbackContext.assist);
+    const targets = getStructuredEvidenceFeedbackTargets(feedbackContext.assist);
     if (targets.length === 0) return;
 
-    const detail = buildStructuredFeedbackDetail(
-      kind,
-      feedbackContext.snapshot,
-    );
     await Promise.all(
       targets.map(async (target) => {
         try {
+          const detail = buildStructuredFeedbackDetail(
+            kind,
+            feedbackContext.snapshot,
+            feedbackContext.contextKey,
+            target,
+          );
           await sendRuntimeMessage({
             type: 'CONTEXT_RECALL_FEEDBACK',
             feedback: {
               targetId: target.id,
-              targetType: 'rehearsal',
+              targetType: target.type,
               action: kind === 'accepted' ? 'positive' : 'negative',
               rehearsalActivationId: target.activationId,
               detail,
@@ -1345,7 +1745,7 @@ export class ComposerGuardController {
           });
         } catch (error) {
           console.warn(
-            '[ComposerGuard] rehearsal feedback failed:',
+            '[ComposerGuard] evidence feedback failed:',
             error,
           );
         }
@@ -1364,9 +1764,11 @@ export class ComposerGuardController {
   }
 
   private dismissCurrentContext(): void {
+    const contextKey = this.activeSession?.contextKey;
     if (this.activeSession) {
       this.dismissedContexts.set(this.activeSession.contextKey, Date.now());
     }
+    this.clearPreviewedAssistDraft(contextKey);
     this.clear();
   }
 
@@ -1385,6 +1787,7 @@ export class ComposerGuardController {
       window.clearTimeout(this.requestTimer);
       this.requestTimer = null;
     }
+    this.reviewMode = false;
     this.clearInsertionUndo(true);
     this.setTargetGlow(false);
     this.activeSession = null;
@@ -1394,6 +1797,7 @@ export class ComposerGuardController {
   }
 
   private removeAffordance(): void {
+    this.reviewMode = false;
     this.clearInsertionUndo(true);
     this.setTargetGlow(false);
     this.root?.remove();
@@ -1691,6 +2095,12 @@ export class ComposerGuardController {
         transform: translateX(0) scale(1);
         pointer-events: auto;
       }
+      .pai-composer-guard:focus-within .pai-composer-guard-popover,
+      .pai-composer-guard--review .pai-composer-guard-popover {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+        pointer-events: auto;
+      }
       .pai-composer-guard--near-left .pai-composer-guard-popover {
         right: auto;
         left: ${ICON_SIZE + POPOVER_GAP}px;
@@ -1698,6 +2108,10 @@ export class ComposerGuardController {
         transform-origin: left top;
       }
       .pai-composer-guard--near-left:hover .pai-composer-guard-popover {
+        transform: translateX(0) scale(1);
+      }
+      .pai-composer-guard--near-left:focus-within .pai-composer-guard-popover,
+      .pai-composer-guard--near-left.pai-composer-guard--review .pai-composer-guard-popover {
         transform: translateX(0) scale(1);
       }
       .pai-composer-guard--above .pai-composer-guard-popover {
@@ -1758,6 +2172,71 @@ export class ComposerGuardController {
         white-space: pre-wrap;
         word-break: break-word;
         font-size: 12px;
+      }
+      .pai-composer-guard-review-note {
+        margin: 0 0 7px;
+        padding: 6px 7px;
+        border-radius: 6px;
+        background: rgba(180, 83, 9, 0.08);
+        color: #92400e;
+        font-size: 11px;
+        font-weight: 650;
+        overflow-wrap: anywhere;
+      }
+      .pai-composer-guard-review-evidence {
+        margin-top: 9px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(17, 24, 39, 0.08);
+        color: #4b5563;
+      }
+      .pai-composer-guard-review-evidence-title {
+        margin-bottom: 4px;
+        color: #6b7280;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .pai-composer-guard-review-evidence ul {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .pai-composer-guard-review-evidence li {
+        font-size: 11px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+      .pai-composer-guard-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .pai-composer-guard-primary-action,
+      .pai-composer-guard-secondary-action {
+        margin: 0;
+        border-radius: 6px;
+        padding: 4px 9px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .pai-composer-guard-primary-action {
+        border: 1px solid rgba(198, 40, 40, 0.22);
+        background: #c62828;
+        color: #fff;
+      }
+      .pai-composer-guard-primary-action:hover {
+        background: #a92323;
+      }
+      .pai-composer-guard-secondary-action {
+        border: 1px solid rgba(17, 24, 39, 0.12);
+        background: rgba(255, 255, 255, 0.88);
+        color: #4b5563;
+      }
+      .pai-composer-guard-secondary-action:hover {
+        background: rgba(17, 24, 39, 0.05);
       }
       .pai-composer-guard-target-glow {
         outline: 1px solid rgba(218, 48, 48, 0.54) !important;

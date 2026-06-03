@@ -443,6 +443,58 @@ test('createMemorySyncThread creates a real chat-style binding', async () => {
   assert.equal(status.bindings.memory_sync?.threadUrl, thread.url);
 });
 
+test('createMemorySyncThread restores a usable binding when the thread record is missing', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'doubao-bridge-test-thread-restore-'),
+  );
+  const stateFile = path.join(tempDir, 'bridge-state.json');
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(stateFile);
+  await store.save({
+    paired: true,
+    authStatus: 'connected',
+    bindings: {
+      memory_sync: {
+        bindingType: 'memory_sync',
+        threadId: 'existing-thread',
+        threadUrl: 'https://www.doubao.com/chat/existing-thread',
+        title: '旧长期记忆线程',
+        updatedAt: '2026-05-08T00:00:00.000Z',
+      },
+    },
+    threads: [],
+    syncAttempts: [],
+  });
+
+  const browser = new FakeBrowser();
+  let sendCalls = 0;
+  browser.sendTranscriptImpl = async () => {
+    sendCalls += 1;
+    throw new Error('should not create a replacement memory-sync thread');
+  };
+  const service = new DoubaoBridgeService(config, store, browser);
+  await service.init();
+
+  const thread = await service.createMemorySyncThread();
+  assert.equal(sendCalls, 0);
+  assert.equal(thread.id, 'existing-thread');
+  assert.equal(thread.url, 'https://www.doubao.com/chat/existing-thread');
+  assert.equal(thread.title, '旧长期记忆线程');
+
+  const status = await service.getStatus();
+  assert.equal(status.threads.length, 1);
+  assert.equal(status.bindings.memory_sync?.threadId, 'existing-thread');
+  assert.equal(
+    status.bindings.memory_sync?.threadUrl,
+    'https://www.doubao.com/chat/existing-thread',
+  );
+});
+
 test('createMemorySyncThread refuses non-Doubao chat-shaped results', async () => {
   const tempDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'doubao-bridge-test-spoof-thread-'),

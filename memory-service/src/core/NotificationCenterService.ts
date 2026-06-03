@@ -10,6 +10,10 @@ import { getBotSender, type BotSendResult } from '../utils/botSender.js';
 import { formatDateTime, now } from '../utils/time.js';
 
 export type NotificationPriority = 'high' | 'normal';
+export type NotificationFeedDeliveryMode =
+  | 'retry_after_cooldown'
+  | 'incremental'
+  | 'daily_digest';
 
 export const TODO_DELIVERY_RETRY_COOLDOWN_SECONDS = 6 * 60 * 60;
 
@@ -31,7 +35,11 @@ export interface NotificationEnvelope {
 
 export interface NotificationDeliveryContext {
   channel: DeliveryChannel;
-  reason: 'new' | 'retry_after_cooldown' | 'previous_delivery_failed';
+  reason:
+    | 'new'
+    | 'retry_after_cooldown'
+    | 'previous_delivery_failed'
+    | 'already_delivered_unfinished';
   lastStatus?: DeliveryStatus;
   effectiveStatus?: DeliveryStatus;
   hasSuccessfulDelivery: boolean;
@@ -150,10 +158,13 @@ function formatDeliveryContextHint(
 ): string {
   if (!deliveryContext) return '';
   if (deliveryContext.reason === 'retry_after_cooldown') {
-    return ' [retry: unhandled after cooldown]';
+    return ' [再次提醒：冷却后仍未处理]';
   }
   if (deliveryContext.reason === 'previous_delivery_failed') {
-    return ' [retry: previous delivery failed]';
+    return ' [重试：上次发送失败]';
+  }
+  if (deliveryContext.reason === 'already_delivered_unfinished') {
+    return ' [已提醒过，仍待处理]';
   }
   return '';
 }
@@ -200,6 +211,7 @@ export class NotificationCenterService {
     channel: DeliveryChannel;
     lanes: DeliveryLane[];
     limit?: number;
+    deliveryMode?: NotificationFeedDeliveryMode;
   }): NotificationEnvelope[] {
     const lanes = Array.from(new Set(input.lanes)).filter(
       (lane): lane is DeliveryLane => lane === 'todo' || lane === 'notice',
@@ -208,7 +220,19 @@ export class NotificationCenterService {
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
     const currentTime = now();
+    const deliveryMode = input.deliveryMode ?? 'retry_after_cooldown';
+    const includeDeliveredTodos = deliveryMode === 'daily_digest';
     const deliveredAfter = currentTime - TODO_DELIVERY_RETRY_COOLDOWN_SECONDS;
+    const todoSuccessfulDeliverySql =
+      deliveryMode === 'incremental'
+        ? `(
+            c.status = 'delivered'
+            OR c.first_delivered_at IS NOT NULL
+            OR c.last_delivered_at IS NOT NULL
+          )`
+        : 'COALESCE(c.last_delivered_at, c.first_delivered_at) > ?';
+    const successfulDeliveryParams =
+      deliveryMode === 'incremental' ? [] : [deliveredAfter];
     const successfulDeliverySql = `(
       c.status IN ('clicked', 'dismissed')
       OR c.seen_at IS NOT NULL
@@ -223,7 +247,7 @@ export class NotificationCenterService {
       )
       OR (
         c.lane = 'todo'
-        AND COALESCE(c.last_delivered_at, c.first_delivered_at) > ?
+        AND ${todoSuccessfulDeliverySql}
       )
     )`;
     const notificationLaneSql = `CASE n.type
@@ -244,6 +268,31 @@ export class NotificationCenterService {
     END`;
     const lanePlaceholders = lanes.map(() => '?').join(', ');
 
+    const notificationDeliveryFilterSql = includeDeliveredTodos
+      ? `AND (
+              ${notificationLaneSql} = 'todo'
+              OR NOT EXISTS (
+                SELECT 1
+                  FROM channel_delivery_records c
+                 WHERE c.source_ref = ('notification:' || n.id)
+                   AND c.channel = ?
+                   AND c.lane = ${notificationLaneSql}
+                   AND ${successfulDeliverySql}
+              )
+            )`
+      : `AND NOT EXISTS (
+              SELECT 1
+                FROM channel_delivery_records c
+               WHERE c.source_ref = ('notification:' || n.id)
+                 AND c.channel = ?
+                 AND c.lane = ${notificationLaneSql}
+                 AND ${successfulDeliverySql}
+            )`;
+    const notificationDeliveryFilterParams = [
+      input.channel,
+      ...successfulDeliveryParams,
+    ];
+
     const notificationRows = this.db
       .prepare(
         `SELECT n.id, n.type, n.title, n.body, n.payload_json, n.sent_at, n.created_at
@@ -252,22 +301,14 @@ export class NotificationCenterService {
             AND n.dismissed_at IS NULL
             AND (n.sent_at IS NULL OR n.sent_at <= ?)
             AND ${notificationLaneSql} IN (${lanePlaceholders})
-            AND NOT EXISTS (
-              SELECT 1
-                FROM channel_delivery_records c
-               WHERE c.source_ref = ('notification:' || n.id)
-                 AND c.channel = ?
-                 AND c.lane = ${notificationLaneSql}
-                 AND ${successfulDeliverySql}
-            )
+            ${notificationDeliveryFilterSql}
           ORDER BY ${notificationPrioritySql} ASC, COALESCE(n.sent_at, n.created_at) DESC
           LIMIT ?`,
       )
       .all(
         currentTime,
         ...lanes,
-        input.channel,
-        deliveredAfter,
+        ...notificationDeliveryFilterParams,
         limit,
       ) as NotificationFeedRow[];
 
@@ -294,9 +335,24 @@ export class NotificationCenterService {
           channel: input.channel,
           lane: routing.lane,
           deliveredAfter,
+          includeDeliveredTodos,
         }),
       };
     });
+
+    const actionDeliveryFilterSql = includeDeliveredTodos
+      ? ''
+      : `AND NOT EXISTS (
+                  SELECT 1
+                    FROM channel_delivery_records c
+                   WHERE c.source_ref = ('proposed_action:' || a.id)
+                     AND c.channel = ?
+                     AND c.lane = 'todo'
+                     AND ${successfulDeliverySql}
+                )`;
+    const actionDeliveryFilterParams = includeDeliveredTodos
+      ? []
+      : [input.channel, ...successfulDeliveryParams];
 
     const actionEnvelopes = lanes.includes('todo')
       ? (
@@ -307,21 +363,13 @@ export class NotificationCenterService {
               WHERE state = 'pending'
                 AND queue_status IN ('queued', 'running')
                 AND (expires_at IS NULL OR expires_at > ?)
-                AND NOT EXISTS (
-                  SELECT 1
-                    FROM channel_delivery_records c
-                   WHERE c.source_ref = ('proposed_action:' || a.id)
-                     AND c.channel = ?
-                     AND c.lane = 'todo'
-                     AND ${successfulDeliverySql}
-                )
+                ${actionDeliveryFilterSql}
               ORDER BY priority DESC, created_at DESC
               LIMIT ?`,
             )
             .all(
               currentTime,
-              input.channel,
-              deliveredAfter,
+              ...actionDeliveryFilterParams,
               limit,
             ) as ProposedActionRow[]
         ).map<NotificationEnvelope>((action) => {
@@ -346,6 +394,7 @@ export class NotificationCenterService {
               channel: input.channel,
               lane: 'todo',
               deliveredAfter,
+              includeDeliveredTodos,
             }),
           };
         })
@@ -368,6 +417,7 @@ export class NotificationCenterService {
     channel: DeliveryChannel;
     lane: DeliveryLane;
     deliveredAfter: number;
+    includeDeliveredTodos?: boolean;
   }): NotificationDeliveryContext {
     const record = this.channelDeliveryRepository.getRecord(
       input.sourceRef,
@@ -387,14 +437,24 @@ export class NotificationCenterService {
     }
 
     const lastDeliveredAt = record.lastDeliveredAt ?? record.firstDeliveredAt;
-    const reason: NotificationDeliveryContext['reason'] =
-      record.status === 'failed'
-        ? 'previous_delivery_failed'
-        : input.lane === 'todo' &&
-            lastDeliveredAt !== undefined &&
-            lastDeliveredAt <= input.deliveredAfter
-          ? 'retry_after_cooldown'
-          : 'new';
+    let reason: NotificationDeliveryContext['reason'] = 'new';
+    if (record.status === 'failed' && !record.hasSuccessfulDelivery) {
+      reason = 'previous_delivery_failed';
+    } else if (
+      input.includeDeliveredTodos &&
+      input.lane === 'todo' &&
+      record.hasSuccessfulDelivery
+    ) {
+      reason = 'already_delivered_unfinished';
+    } else if (
+      input.lane === 'todo' &&
+      lastDeliveredAt !== undefined &&
+      lastDeliveredAt <= input.deliveredAfter
+    ) {
+      reason = 'retry_after_cooldown';
+    } else if (record.status === 'failed') {
+      reason = 'previous_delivery_failed';
+    }
 
     return {
       channel: input.channel,
@@ -419,12 +479,14 @@ export class NotificationCenterService {
       status: DeliveryStatus;
       externalRef?: string;
       error?: string;
+      recordedAt?: number;
     }>,
   ) {
+    const recordedAt = now();
     return this.channelDeliveryRepository.upsertEvents(
       events.map((event) => ({
         ...event,
-        recordedAt: now(),
+        recordedAt: event.recordedAt ?? recordedAt,
       })),
     );
   }
@@ -478,16 +540,22 @@ export class NotificationCenterService {
   formatTodoDigest(
     provider: string,
     tokenBudget: number,
+    options: {
+      deliveryMode?: NotificationFeedDeliveryMode;
+      limit?: number;
+    } = {},
   ): {
     bodyMd: string;
     sourceRefs: string[];
     dedupeSuffix: string;
     itemCount: number;
   } {
+    const deliveryMode = options.deliveryMode ?? 'retry_after_cooldown';
     const items = this.listFeed({
       channel: provider === 'doubao' ? 'doubao' : 'chrome',
       lanes: ['todo'],
-      limit: 8,
+      limit: options.limit ?? (deliveryMode === 'daily_digest' ? 50 : 8),
+      deliveryMode,
     });
 
     const lines = items.map((item) => {
@@ -502,13 +570,21 @@ export class NotificationCenterService {
     });
 
     const bodyMd = [
-      '# Todo Digest',
-      '> Rolling todo context for short-term action sync.',
+      deliveryMode === 'daily_digest' ? '# 每日待办摘要' : '# 待办摘要',
+      deliveryMode === 'daily_digest'
+        ? '> 每日低打扰汇总：列出仍未完成的待办。'
+        : deliveryMode === 'incremental'
+          ? '> 新待办同步：只列出还没有成功提醒过的事项。'
+          : '> 滚动待办同步：列出当前需要处理或重新提醒的事项。',
       '',
-      '## Pending Todos',
+      deliveryMode === 'daily_digest'
+        ? '## 未完成待办'
+        : deliveryMode === 'incremental'
+          ? '## 新待办'
+          : '## 待处理事项',
       lines.length > 0
         ? lines.map((line) => `- ${line}`).join('\n')
-        : '- No pending todos.',
+        : '- 暂无待处理事项。',
     ].join('\n');
 
     return {
@@ -540,13 +616,13 @@ export class NotificationCenterService {
     const lines = items.map(formatNoticeDigestItem);
 
     const bodyMd = [
-      '# Notice Digest',
-      '> Informational updates for the mobile context; do not turn these into todos.',
+      '# 通知摘要',
+      '> 信息类更新：用于同步近况，不要把它们转成待办。',
       '',
-      '## Updates',
+      '## 更新',
       lines.length > 0
         ? lines.join('\n')
-        : '- No new notices.',
+        : '- 暂无新通知。',
     ].join('\n');
 
     return {

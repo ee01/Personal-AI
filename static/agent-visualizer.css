@@ -116,6 +116,84 @@
   color: #cf222e;
 }
 
+.agent-run-review-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.agent-run-diagnostic-copy {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid #0969da;
+  border-radius: 4px;
+  color: #0969da;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-run-diagnostic-copy:hover {
+  background: #ddf4ff;
+}
+
+.agent-run-diagnostic-copy:disabled {
+  border-color: #d0d7de;
+  color: #8c959f;
+  background: #f6f8fa;
+  cursor: not-allowed;
+}
+
+.agent-run-diagnostic-copy:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+.agent-run-diagnostic-copy-status {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-run-diagnostic-copy-status.copied {
+  color: #1a7f37;
+}
+
+.agent-run-diagnostic-copy-status.failed {
+  color: #cf222e;
+}
+
+.agent-run-diagnostic-manual-copy,
+.agent-approval-manual-copy {
+  display: block;
+  width: 100%;
+  min-height: 108px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #f6f8fa;
+  color: #24292f;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono",
+    Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  resize: vertical;
+  white-space: pre;
+  overflow: auto;
+}
+
+.agent-run-diagnostic-manual-copy:focus,
+.agent-approval-manual-copy:focus {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
 .agent-run-review-list {
   display: grid;
   gap: 8px;
@@ -697,6 +775,7 @@
   display: flex;
   align-items: center;
   background-color: white;
+  border: 0;
   border-radius: 24px;
   padding: 10px 15px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -704,6 +783,21 @@
   width: min(100%, 520px);
   box-sizing: border-box;
   position: relative;
+  color: inherit;
+  text-align: left;
+}
+
+.flow-node.jumpable {
+  cursor: pointer;
+}
+
+.flow-node.jumpable:hover {
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.18), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.flow-node.jumpable:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 3px;
 }
 
 .flow-node.analysis {
@@ -817,6 +911,7 @@
 
 .node-main {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -835,6 +930,18 @@
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.node-step-index {
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #0969da;
+  background: #ddf4ff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .node-result {

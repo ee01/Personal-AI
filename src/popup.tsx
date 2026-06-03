@@ -86,6 +86,7 @@ interface TaskSchedulerTask {
     | 'repair_failed'
     | 'disabled';
   scheduleWarning?: string;
+  currentQueueSummary?: string;
   runHistory?: TaskSchedulerRunRecord[];
 }
 
@@ -165,6 +166,20 @@ function formatTaskRefreshTime(value: number): string {
   });
 }
 
+function appendTaskResultSummary(detail: string, summary?: string): string {
+  const normalizedDetail = detail.trim();
+  const normalizedSummary = summary?.trim();
+  if (!normalizedSummary) return normalizedDetail;
+  if (!normalizedDetail) return normalizedSummary;
+  if (
+    normalizedDetail.includes(normalizedSummary) ||
+    normalizedSummary.includes(normalizedDetail)
+  ) {
+    return normalizedDetail;
+  }
+  return `${normalizedDetail} · ${normalizedSummary}`;
+}
+
 function getLocalTaskTimeZoneLabel(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || '本机时区';
 }
@@ -181,10 +196,14 @@ function formatTaskResult(task: TaskSchedulerTask): string {
     return '尚未执行';
   }
   if (task.lastSuccess === false) {
+    const failureDetail = appendTaskResultSummary(
+      task.lastError || '查看后台日志',
+      task.lastResultSummary,
+    );
     if (failureStreak > 1) {
-      return `连续失败 ${failureStreak} 次 · ${task.lastError || '查看后台日志'}`;
+      return `连续失败 ${failureStreak} 次 · ${failureDetail}`;
     }
-    return `上次失败 · ${task.lastError || '查看后台日志'}`;
+    return `上次失败 · ${failureDetail}`;
   }
   if (task.lastResultSummary) {
     return `上次成功 · ${task.lastResultSummary}`;
@@ -238,7 +257,7 @@ function getTaskLatestRunSummary(task: TaskSchedulerTask):
     ? latestRun.error || '已有执行中任务'
     : latestRun.success
     ? latestRun.summary || ''
-    : latestRun.error || '未知错误';
+    : appendTaskResultSummary(latestRun.error || '未知错误', latestRun.summary);
   const parts = [
     '最近一次',
     `${formatTaskRunTrigger(latestRun.trigger)}${resultLabel}`,
@@ -288,7 +307,10 @@ function formatTaskRunHistoryTitle(task: TaskSchedulerTask): string {
         ? run.summary
           ? `成功: ${run.summary}`
           : '成功'
-        : `失败: ${run.error || '未知错误'}`;
+        : `失败: ${appendTaskResultSummary(
+            run.error || '未知错误',
+            run.summary,
+          )}`;
       return `${formatTaskTime(run.completedAt)} · ${formatTaskRunTrigger(
         run.trigger,
       )} · ${result} · ${run.durationMs}ms`;
@@ -619,6 +641,40 @@ function formatTodayPilotContextPackReceipt(
     details.push('已按预算截断');
   }
   return `已复制${provider}上下文包（${details.join('，')}）`;
+}
+
+function isTodayPilotExternalExecutionCard(card: DayPilotCard): boolean {
+  if (card.cardType !== 'decision_check') return false;
+
+  const evidenceText = card.evidenceRefs
+    .map((item) =>
+      [item.sourceKind, item.sourceId, item.title, item.snippet]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .join(' ');
+  if (/delegate[_-]?openclaw|openclaw_delegation/i.test(evidenceText)) {
+    return true;
+  }
+
+  return card.evidenceRefs.some((item) => {
+    if (item.sourceKind !== 'action') return false;
+    return /openclaw|ringclaw/i.test(
+      [item.sourceId, item.title, item.snippet].filter(Boolean).join(' '),
+    );
+  });
+}
+
+function getTodayPilotProcessingPath(card: DayPilotCard): string {
+  const actionRef = card.evidenceRefs.find(
+    (item) => item.sourceKind === 'action' && item.sourceId,
+  );
+  if (actionRef) {
+    return `memory-exploring.html#/actions?actionId=${encodeURIComponent(
+      actionRef.sourceId,
+    )}`;
+  }
+  return 'memory-exploring.html#/';
 }
 
 function topTodayPilotCards(cards: DayPilotCard[]): DayPilotCard[] {
@@ -1171,6 +1227,13 @@ const Popup = () => {
   const openTodayPilotHome = () => {
     chrome.tabs.create({
       url: chrome.runtime.getURL('memory-exploring.html#/'),
+      active: true,
+    });
+  };
+
+  const openTodayPilotProcessingTarget = (card: DayPilotCard) => {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL(getTodayPilotProcessingPath(card)),
       active: true,
     });
   };
@@ -1812,12 +1875,27 @@ const Popup = () => {
                     }`}
                     title={
                       task.scheduleWarning ||
-                      (hasRecentSkip ? task.lastSkipReason : task.lastError) ||
+                      (hasRecentSkip
+                        ? task.lastSkipReason
+                        : task.lastSuccess === false
+                        ? appendTaskResultSummary(
+                            task.lastError || '查看后台日志',
+                            task.lastResultSummary,
+                          )
+                        : task.lastError) ||
                       ''
                     }
                   >
                     {formatTaskResult(task)}
                   </div>
+                  {task.currentQueueSummary && (
+                    <div
+                      className="task-queue-summary"
+                      title={task.currentQueueSummary}
+                    >
+                      {task.currentQueueSummary}
+                    </div>
+                  )}
                   {latestRunSummary && (
                     <div
                       className={`task-latest-run ${latestRunSummary.className}`}
@@ -1906,37 +1984,73 @@ const Popup = () => {
         </div>
       </details>
 
-      {isGoogleSheets && (
-        <>
-          <button onClick={openJiraQueryDialog} className="jira-button">
-            抓取 Jira Tickets 到 Sheet
-          </button>
-          <button
-            onClick={expandEpicTickets}
-            className="jira-button expand-button"
-            disabled={isExpandingEpic}
-          >
-            {isExpandingEpic ? (
-              <span className="loading-text">正在查找 Epic 子任务...</span>
-            ) : (
-              '展开 Epic 下面所有的 tickets'
-            )}
-          </button>
-        </>
-      )}
-
-      {isGoogleSlides && (
-        <button
-          onClick={analyzeSlidesProjects}
-          className="slides-button main-button"
-          disabled={isAnalyzingSlides}
-        >
-          {isAnalyzingSlides ? (
-            <span className="loading-text">正在分析 Slide 项目信息...</span>
-          ) : (
-            '分析 Slide 项目信息并更新'
+      {(isRingCentralMeeting || isGoogleSheets || isGoogleSlides) && (
+        <div className="page-actions-card">
+          <div className="page-actions-title">针对当前页面</div>
+          {isRingCentralMeeting && (
+            <>
+              <button
+                onClick={handleOpenRadar}
+                className="radar-button"
+                disabled={isMeetingPilotBusy}
+              >
+                {isMeetingPilotBusy
+                  ? t('popup.meetingPilot.processing')
+                  : isMeetingPilotCaptureActive(meetingPilotSession)
+                  ? t('popup.meetingPilot.open')
+                  : isMeetingPilotTranscriptPilotActive(meetingPilotSession)
+                  ? t('popup.meetingPilot.enableVision')
+                  : t('popup.meetingPilot.start')}
+              </button>
+              {meetingPilotNotice ? (
+                <div
+                  className={`meeting-pilot-notice ${meetingPilotNotice.tone}`}
+                  role={
+                    meetingPilotNotice.tone === 'error' ? 'alert' : 'status'
+                  }
+                >
+                  <span>{meetingPilotNotice.message}</span>
+                  {meetingPilotNotice.action === 'options' ? (
+                    <button type="button" onClick={openMeetingPilotOptions}>
+                      {t('popup.meetingPilot.openOptions')}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
           )}
-        </button>
+          {isGoogleSheets && (
+            <>
+              <button onClick={openJiraQueryDialog} className="jira-button">
+                抓取 Jira Tickets 到 Sheet
+              </button>
+              <button
+                onClick={expandEpicTickets}
+                className="jira-button expand-button"
+                disabled={isExpandingEpic}
+              >
+                {isExpandingEpic ? (
+                  <span className="loading-text">正在查找 Epic 子任务...</span>
+                ) : (
+                  '展开 Epic 下面所有的 tickets'
+                )}
+              </button>
+            </>
+          )}
+          {isGoogleSlides && (
+            <button
+              onClick={analyzeSlidesProjects}
+              className="slides-button main-button"
+              disabled={isAnalyzingSlides}
+            >
+              {isAnalyzingSlides ? (
+                <span className="loading-text">正在分析 Slide 项目信息...</span>
+              ) : (
+                '分析 Slide 项目信息并更新'
+              )}
+            </button>
+          )}
+        </div>
       )}
 
       <button onClick={openMemoryInterface} className="memory-button">
@@ -1957,37 +2071,6 @@ const Popup = () => {
       <button onClick={openTopicWindow} className="message-button">
         📋 {t('popup.manageMemoryEntries')}
       </button>
-
-      {isRingCentralMeeting && (
-        <>
-          <button
-            onClick={handleOpenRadar}
-            className="radar-button"
-            disabled={isMeetingPilotBusy}
-          >
-            {isMeetingPilotBusy
-              ? t('popup.meetingPilot.processing')
-              : isMeetingPilotCaptureActive(meetingPilotSession)
-              ? t('popup.meetingPilot.open')
-              : isMeetingPilotTranscriptPilotActive(meetingPilotSession)
-              ? t('popup.meetingPilot.enableVision')
-              : t('popup.meetingPilot.start')}
-          </button>
-          {meetingPilotNotice ? (
-            <div
-              className={`meeting-pilot-notice ${meetingPilotNotice.tone}`}
-              role={meetingPilotNotice.tone === 'error' ? 'alert' : 'status'}
-            >
-              <span>{meetingPilotNotice.message}</span>
-              {meetingPilotNotice.action === 'options' ? (
-                <button type="button" onClick={openMeetingPilotOptions}>
-                  {t('popup.meetingPilot.openOptions')}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </>
-      )}
 
       <section className="today-pilot-panel">
         <div className="today-pilot-head">
@@ -2020,6 +2103,8 @@ const Popup = () => {
           ) : (
             todayPilotCards.map((card) => {
               const isMeeting = isTodayPilotMeetingCard(card);
+              const externalExecution =
+                isTodayPilotExternalExecutionCard(card);
               const copying = todayPilotCopyingMissionId === card.missionId;
               const doneKey = `${card.id}:done`;
               const laterKey = `${card.id}:later`;
@@ -2082,10 +2167,21 @@ const Popup = () => {
                         : t('popup.today.later')}
                     </button>
                     <button
-                      onClick={() => void copyTodayPilotContextPack(card)}
-                      disabled={copying}
+                      onClick={() =>
+                        externalExecution
+                          ? openTodayPilotProcessingTarget(card)
+                          : void copyTodayPilotContextPack(card)
+                      }
+                      disabled={!externalExecution && copying}
+                      title={
+                        externalExecution
+                          ? t('popup.today.externalExecutionTitle')
+                          : undefined
+                      }
                     >
-                      {copying
+                      {externalExecution
+                        ? t('popup.today.reviewExternal')
+                        : copying
                         ? t('popup.today.copying')
                         : t('popup.today.copy')}
                     </button>
@@ -2747,6 +2843,17 @@ const Popup = () => {
                     color: #475569;
                 }
 
+                .task-queue-summary {
+                    margin-top: 4px;
+                    padding: 4px 6px;
+                    border-radius: 6px;
+                    background: #eef6ff;
+                    color: #0f4f7a;
+                    font-size: 10px;
+                    font-weight: 700;
+                    line-height: 1.35;
+                }
+
                 .task-latest-run {
                     margin-top: 2px;
                     overflow: hidden;
@@ -3090,6 +3197,37 @@ const Popup = () => {
 	                    transform: translateY(-1px);
 	                    box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
 	                 }
+
+	                 .page-actions-card {
+	                    margin: 8px 8px 0;
+	                    padding: 8px;
+	                    border: 1px solid #e2e8f0;
+	                    border-radius: 8px;
+	                    background: #f8fafc;
+	                    display: flex;
+	                    flex-direction: column;
+	                    gap: 8px;
+	                }
+
+	                .page-actions-title {
+	                    margin: 0 0 2px;
+	                    padding: 0 2px;
+	                    color: #475569;
+	                    font-size: 10px;
+	                    font-weight: 800;
+	                    letter-spacing: 0.04em;
+	                    text-transform: uppercase;
+	                }
+
+	                .page-actions-card button {
+	                    width: 100%;
+	                    margin: 0;
+	                }
+
+	                .page-actions-card .meeting-pilot-notice {
+	                    width: 100%;
+	                    margin: 0;
+	                }
 
 	                 .meeting-pilot-notice {
 	                    width: calc(100% - 16px);

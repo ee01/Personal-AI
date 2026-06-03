@@ -135,6 +135,20 @@ function seedCoverageData(db: BetterSqlite3.Database): void {
        platform, enabled, capability, mode, config_json, last_probe_at, last_error, updated_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run('codex', 0, 'fs_via_desktop_app', 'push', '{}', null, null, ts);
+  db.prepare(
+    `INSERT INTO skill_platform_sync_settings (
+       platform, enabled, capability, mode, config_json, last_probe_at, last_error, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    'claude_code',
+    1,
+    'fs_via_desktop_app',
+    'push',
+    '{}',
+    ts,
+    'probe failed',
+    ts,
+  );
 
   db.prepare(
     `INSERT INTO provider_sync_jobs (
@@ -294,6 +308,27 @@ describe('Coverage API', () => {
 
     const codex = body.platforms.find((item: any) => item.id === 'codex');
     expect(codex.state).toBe('blocked');
+    expect(codex.repairActions[0]).toMatchObject({
+      id: 'codex:enable',
+      severity: 'info',
+    });
+    expect(codex.repairActions[0].description).toContain('不算当前覆盖故障');
+
+    const claudeCode = body.platforms.find((item: any) => item.id === 'claude_code');
+    expect(claudeCode.state).toBe('failing');
+    expect(claudeCode.repairActions[0]).toMatchObject({
+      id: 'claude_code:enable',
+      severity: 'warning',
+    });
+    expect(claudeCode.repairActions[0].description).toContain('probe failed');
+
+    const nonInfoRepairActions = body.repairActions.filter(
+      (item: any) => item.severity !== 'info',
+    );
+    expect(body.summary.coverageGaps).toBe(nonInfoRepairActions.length);
+    expect(
+      nonInfoRepairActions.some((item: any) => item.platformId === 'codex'),
+    ).toBe(false);
   });
 
   it('GET /api/v1/coverage/* exposes P0 aggregate slices', async () => {

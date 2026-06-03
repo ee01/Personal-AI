@@ -50,8 +50,26 @@ function createStatus() {
     paired: true,
     authStatus: 'needs_login',
     browserRunning: false,
-    bindings: {},
-    threads: [],
+    bindings: {
+      memory_sync: {
+        bindingType: 'memory_sync',
+        threadId: 'memory-thread-abcdef123456',
+        threadUrl: 'https://www.doubao.com/chat/memory-thread-abcdef123456',
+        title: '旧长期记忆线程',
+        updatedAt: now,
+      },
+    },
+    threads: [
+      {
+        id: 'memory-thread-abcdef123456',
+        kind: 'memory_sync',
+        title: '旧长期记忆线程',
+        url: 'https://www.doubao.com/chat/memory-thread-abcdef123456',
+        bindingType: 'memory_sync',
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
     blockingReasons: [
       {
         code: 'memory_service_not_configured',
@@ -64,7 +82,7 @@ function createStatus() {
       memoryServiceConfigured: false,
       autoSyncEnabled: true,
       doubaoConnected: false,
-      memorySyncBound: false,
+      memorySyncBound: true,
       mobileContextBound: false,
     },
     syncState: {
@@ -74,6 +92,25 @@ function createStatus() {
       memoryServiceConfigured: false,
       pollIntervalMs: 300_000,
       recentAttempts: [
+        {
+          id: 'attempt-stable-failed',
+          kind: 'stable_memory',
+          trigger: 'auto',
+          status: 'failed',
+          startedAt: now,
+          completedAt: now,
+          durationMs: 1500,
+          errorMessage: 'No editable element found on the current Doubao page',
+          externalThreadId: 'memory-thread-abcdef123456',
+          packageKinds: ['persona_core'],
+          packageItemCount: 2,
+          sourceRefCount: 2,
+          transportUsed: 'dom',
+          transportMode: 'webpage_mcp',
+          verified: false,
+          messageVisible: false,
+          challengeDetected: false,
+        },
         {
           id: 'attempt-mobile-1',
           kind: 'mobile_briefing',
@@ -105,12 +142,31 @@ function createStatus() {
           packageKinds: ['todo_digest'],
           packageItemCount: 1,
           sourceRefCount: 1,
+          reminderDeliveryMode: 'new_items',
           transportUsed: 'dom',
           transportMode: 'playwright',
           transportFallbackReason: 'No existing doubao.com tab found in Chrome',
           verified: false,
           messageVisible: false,
           challengeDetected: true,
+        },
+        {
+          id: 'attempt-reminder-digest',
+          kind: 'reminder_sync',
+          trigger: 'auto',
+          status: 'succeeded',
+          startedAt: now,
+          completedAt: now,
+          durationMs: 1100,
+          packageKinds: ['todo_digest'],
+          packageItemCount: 3,
+          sourceRefCount: 3,
+          reminderDeliveryMode: 'daily_digest',
+          transportUsed: 'dom',
+          transportMode: 'playwright',
+          verified: true,
+          messageVisible: true,
+          challengeDetected: false,
         },
         {
           id: 'attempt-reminder-skipped',
@@ -125,12 +181,15 @@ function createStatus() {
           packageKinds: ['todo_digest'],
           packageItemCount: 0,
           sourceRefCount: 0,
+          reminderDeliveryMode: 'manual',
         },
       ],
       tasks: {
         stableMemory: {
           intervalMs: 43_200_000,
           due: true,
+          lastRunAt: now,
+          nextDueAt: '2026-05-11T21:00:00.000Z',
         },
         mobileBriefing: {
           intervalMs: 14_400_000,
@@ -160,6 +219,13 @@ function createExplorerStatus() {
           conversationCount: 3,
           pendingExtractCount: 4,
           artifactCount: 8,
+          revokedArtifactCount: 1,
+        },
+        revokePreview: {
+          scope: 'personal',
+          activeArtifactCount: 8,
+          legacyUnscopedArtifactCount: 2,
+          revokedArtifactCount: 1,
         },
         settings: createEffectiveSettings().explorer.doubao,
         transport: {
@@ -176,6 +242,13 @@ function createExplorerStatus() {
           conversationCount: 2,
           pendingExtractCount: 1,
           artifactCount: 3,
+          revokedArtifactCount: 0,
+        },
+        revokePreview: {
+          scope: 'work',
+          activeArtifactCount: 3,
+          legacyUnscopedArtifactCount: 0,
+          revokedArtifactCount: 0,
         },
         settings: createEffectiveSettings().explorer.chatgpt,
         transport: {
@@ -259,6 +332,8 @@ async function main() {
       window.__lastUpdateSettings = null;
       window.__lastRevokeMemory = null;
       window.__lastExplorerRunNow = null;
+      window.__lastExplorerPreview = null;
+      window.__lastExplorerResetCache = null;
       window.__actionSequence = [];
       window.__effectiveSettings = settings;
       window.__status = status;
@@ -334,6 +409,91 @@ async function main() {
             scope,
             deletedMessages: 2,
             deletedChunks: 3,
+            localArtifactsRevoked: 8,
+            localLegacyArtifactsRevoked: 2,
+          };
+        },
+        preview: async ({ source, conversationId, limit } = {}) => {
+          window.__lastExplorerPreview = { source, conversationId, limit };
+          return {
+            source,
+            conversationId: conversationId || `${source}-conv-1`,
+            limit,
+            cache: window.__explorerStatus.sources[source].cache,
+            conversations: [
+              {
+                source,
+                conversationId: `${source}-conv-1`,
+                latestTs: '2026-05-11T08:58:00.000Z',
+                messageCount: 3,
+                pendingMessageCount: 1,
+                extractedMessageCount: 2,
+                artifactCount: 1,
+                latestMessagePreview: 'hello cached prompt',
+              },
+            ],
+            cleanedMessages: [
+              {
+                source,
+                conversationId: `${source}-conv-1`,
+                messageId: 'msg-1',
+                role: 'user',
+                ts: '2026-05-11T08:57:00.000Z',
+                content: 'hello cached prompt',
+                extracted: true,
+              },
+              {
+                source,
+                conversationId: `${source}-conv-1`,
+                messageId: 'msg-2',
+                role: 'assistant',
+                ts: '2026-05-11T08:58:00.000Z',
+                content: 'assistant cached answer',
+                extracted: false,
+              },
+            ],
+            artifacts: [
+              {
+                source,
+                conversationId: `${source}-conv-1`,
+                extractedAt: '2026-05-11T08:59:00.000Z',
+                kind: 'fact',
+                text: 'Follow up extracted memory',
+                sourceQuote: 'hello cached prompt',
+                conversationRef: `${source}-conv-1`,
+              },
+            ],
+            cursor: {
+              source,
+              conversationId: `${source}-conv-1`,
+              lastMessageId: 'msg-2',
+              lastProcessedUpdateTime: '2026-05-11T08:58:00.000Z',
+              processedMessageIds: ['msg-1', 'msg-2'],
+            },
+          };
+        },
+        resetCache: async (source, conversationId) => {
+          window.__lastExplorerResetCache = { source, conversationId };
+          window.__explorerStatus = {
+            ...window.__explorerStatus,
+            sources: {
+              ...window.__explorerStatus.sources,
+              [source]: {
+                ...window.__explorerStatus.sources[source],
+                cache: {
+                  messageCount: 0,
+                  conversationCount: 0,
+                  pendingExtractCount: 0,
+                  artifactCount: 0,
+                },
+              },
+            },
+          };
+          return {
+            source,
+            conversationId,
+            deletedMessages: 12,
+            deletedCursors: 2,
           };
         },
       };
@@ -404,7 +564,12 @@ async function main() {
     assert.match(statusText || '', /Memory Service/);
     await expectText(page, '#doubao-source-run-state', /最近失败/);
     await expectText(page, '#doubao-source-pending-count', /^4$/);
-    await expectText(page, '#doubao-source-artifact-count', /^8$/);
+    await expectText(page, '#doubao-source-artifact-count', /8（已撤回 1）/);
+    await expectText(
+      page,
+      '#doubao-source-revoke-scope',
+      /个人 · 可撤回 8 条本地 artifact · 含旧审计 2 · 已撤回 1/,
+    );
     await expectText(page, '#chatgpt-source-pending-count', /^1$/);
     await expectText(page, '#chatgpt-source-artifact-count', /^3$/);
     await expectText(
@@ -422,10 +587,55 @@ async function main() {
       '#chatgpt-source-status-message',
       /ChatGPT 自动读取已开启，但还没有可用登录态/,
     );
+    await expectText(page, '#memory-thread-detail', /长期记忆线程需要检查/);
+    await expectText(page, '#memory-thread-detail', /旧长期记忆线程/);
+    await expectText(
+      page,
+      '#memory-thread-detail',
+      /最近长期记忆同步：失败 · 自动/,
+    );
+    await expectText(
+      page,
+      '#memory-thread-detail',
+      /No editable element found on the current Doubao page/,
+    );
+    await expectText(page, '#memory-thread-detail', /修复长期记忆线程/);
+    await expectText(page, '#memory-thread-detail', /重试长期记忆/);
 
     assert.equal(await page.evaluate(() => window.__paiInjected), false);
     assert.equal(await page.locator('#blocking-reasons img').count(), 0);
     assert.equal(await page.locator('#doubao-source-revoke-button').isDisabled(), true);
+    assert.equal(await page.locator('#doubao-source-preview-button').isDisabled(), false);
+    assert.equal(await page.locator('#doubao-source-reset-button').isDisabled(), false);
+
+    await page.locator('#doubao-source-preview-button').click();
+    await page.waitForFunction(
+      () => window.__lastExplorerPreview?.source === 'doubao',
+    );
+    const previewPayload = await page.evaluate(() => window.__lastExplorerPreview);
+    assert.deepEqual(previewPayload, {
+      source: 'doubao',
+      conversationId: undefined,
+      limit: 6,
+    });
+    await expectText(page, '#doubao-source-preview-panel', /豆包 本地缓存预览/);
+    await expectText(page, '#doubao-source-preview-panel', /hello cached prompt/);
+    await expectText(page, '#doubao-source-preview-panel', /Follow up extracted memory/);
+    await expectText(page, '#doubao-source-preview-panel', /lastMessageId=msg-2/);
+
+    await page.locator('#doubao-source-reset-button').click();
+    await page.waitForFunction(
+      () => window.__lastExplorerResetCache?.source === 'doubao',
+    );
+    const resetPayload = await page.evaluate(() => window.__lastExplorerResetCache);
+    assert.deepEqual(resetPayload, {
+      source: 'doubao',
+      conversationId: undefined,
+    });
+    await expectText(page, '#doubao-source-message', /已重置 豆包 本地缓存/);
+    await expectText(page, '#doubao-source-message', /清理 12 条缓存消息/);
+    assert.equal(await page.locator('#doubao-source-preview-panel').isHidden(), true);
+    await expectText(page, '#doubao-source-cache-count', /^0$/);
     await expectText(page, '#sync-audit-list', /近期记忆重点/);
     await expectText(page, '#sync-audit-list', /包：近期重点包/);
     await expectText(page, '#sync-audit-list', /内容条目：2/);
@@ -435,13 +645,17 @@ async function main() {
     await expectText(page, '#sync-audit-list', /状态回写异常：Sync job report failed/);
     await expectText(page, '#sync-audit-list', /待办 \/ 通知/);
     await expectText(page, '#sync-audit-list', /内容条目：1/);
+    await expectText(page, '#sync-audit-list', /待办模式：新待办短轮询/);
     await expectText(page, '#sync-audit-list', /Doubao challenge detected before send/);
     await expectText(page, '#sync-audit-list', /传输：内置 Chromium/);
     await expectText(page, '#sync-audit-list', /回退原因：No existing doubao\.com tab found in Chrome/);
     await expectText(page, '#sync-audit-list', /打开豆包检查/);
     await expectText(page, '#sync-audit-list', /重新绑定手机对话/);
     await expectText(page, '#sync-audit-list', /重试待办 \/ 通知/);
+    await expectText(page, '#sync-audit-list', /内容条目：3/);
+    await expectText(page, '#sync-audit-list', /待办模式：每日完整摘要/);
     await expectText(page, '#sync-audit-list', /内容条目：0/);
+    await expectText(page, '#sync-audit-list', /待办模式：手动完整推送/);
     await expectText(page, '#sync-audit-list', /本次没有可推送的待办/);
     await expectText(page, '#sync-audit-list', /当前 Memory Service 暂不支持通知同步/);
 
@@ -579,6 +793,87 @@ async function main() {
     await expectText(page, '#doubao-source-transport-banner', /登录来源.*立即重新尝试/);
 
     await page.evaluate(() => {
+      const fallbackCooldownUntil = new Date(
+        Date.now() + 9 * 60_000,
+      ).toISOString();
+      const nextChatgptSettings = {
+        ...window.__effectiveSettings.explorer.chatgpt,
+        transport: 'webpage_mcp',
+      };
+      window.__effectiveSettings = {
+        ...window.__effectiveSettings,
+        explorer: {
+          ...window.__effectiveSettings.explorer,
+          chatgpt: nextChatgptSettings,
+        },
+      };
+      window.__explorerStatus = {
+        ...window.__explorerStatus,
+        sources: {
+          ...window.__explorerStatus.sources,
+          chatgpt: {
+            ...window.__explorerStatus.sources.chatgpt,
+            authStatus: 'connected',
+            settings: nextChatgptSettings,
+            transport: {
+              mode: 'playwright',
+              fallbackReason: 'No existing chatgpt.com tab found in Chrome',
+              fallbackCooldownUntil,
+            },
+          },
+        },
+      };
+    });
+    await page.locator('#refresh-button').click();
+    await expectText(
+      page,
+      '#chatgpt-source-transport-banner',
+      /当前传输：已临时回退到内置 Chromium/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-transport-banner',
+      /No existing chatgpt\.com tab found in Chrome/,
+    );
+    await expectText(
+      page,
+      '#chatgpt-source-transport-banner',
+      /约 \d+ 分钟后自动重试日常浏览器/,
+    );
+
+    await page.evaluate(() => {
+      window.__savedExplorerStatus = window.__explorerStatus;
+      window.__explorerStatus = {
+        ...window.__explorerStatus,
+        sources: {
+          ...window.__explorerStatus.sources,
+        },
+      };
+      delete window.__explorerStatus.sources.doubao;
+    });
+    await page.locator('#refresh-button').click();
+    await expectText(page, '#doubao-source-run-state', /Explorer 未响应/);
+    await expectText(
+      page,
+      '#doubao-source-status-message',
+      /Explorer 状态暂不可用/,
+    );
+    assert.equal(
+      await page.locator('#doubao-source-transport-banner').isHidden(),
+      true,
+    );
+    assert.equal(
+      await page.locator('#doubao-source-transport-banner').textContent(),
+      '',
+    );
+
+    await page.evaluate(() => {
+      window.__explorerStatus = window.__savedExplorerStatus;
+      delete window.__savedExplorerStatus;
+    });
+    await page.locator('#refresh-button').click();
+
+    await page.evaluate(() => {
       window.__status = {
         ...window.__status,
         blockingReasons: [],
@@ -601,7 +896,8 @@ async function main() {
       source: 'doubao',
       scope: 'personal',
     });
-    await expectText(page, '#doubao-source-message', /已撤回 豆包/);
+    await expectText(page, '#doubao-source-message', /本地 8 条 artifact/);
+    await expectText(page, '#doubao-source-message', /旧审计 2 条/);
 
     assert.deepEqual(diagnostics, []);
     console.log('[doubao-source-toggle-gating] ok');

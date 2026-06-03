@@ -719,6 +719,8 @@ export class EvidenceResolutionPlanner {
       const parsed = await llm.generateJSON<PlannerLlmResponse>(prompt, {
         temperature: 0.1,
         maxTokens: 1200,
+        timeoutMs: 2500,
+        retryCount: 0,
       });
       return this.normalizePlan(input, parsed, heuristic);
     } catch {

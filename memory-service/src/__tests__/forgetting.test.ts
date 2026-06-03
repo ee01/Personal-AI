@@ -298,9 +298,10 @@ describe('ForgettingEngine.runForgettingCycle()', () => {
     expect(result.forgotten).toBeGreaterThanOrEqual(1);
 
     const row = db
-      .prepare("SELECT consolidation_level FROM memory_metadata WHERE target_id = 'forget-me'")
+      .prepare("SELECT consolidation_level, retrieval_tier FROM memory_metadata WHERE target_id = 'forget-me'")
       .get() as any;
     expect(row.consolidation_level).toBe('forgotten');
+    expect(row.retrieval_tier).toBe('forgotten');
   });
 
   it('does not touch permanent records', async () => {
@@ -334,12 +335,33 @@ describe('ForgettingEngine.runForgettingCycle()', () => {
     const result = await engine.runForgettingCycle();
 
     const row = db
-      .prepare("SELECT consolidation_level FROM memory_metadata WHERE target_id = 'archive-me'")
+      .prepare("SELECT consolidation_level, retrieval_tier FROM memory_metadata WHERE target_id = 'archive-me'")
       .get() as any;
     // Very old with 0.15 salience -> will decay well below 0.05 -> forgotten
     // or archived depending on exact decay
     expect(['archived', 'forgotten']).toContain(row.consolidation_level);
+    expect(['archive_only', 'forgotten']).toContain(row.retrieval_tier);
     expect(result.totalProcessed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('marks old low-salience non-archived records as historical', async () => {
+    const oldTime = now() - 220 * 86400;
+    insertMeta({
+      targetId: 'historical-me',
+      salienceScore: 0.3,
+      lastAccessed: oldTime,
+      createdAt: oldTime,
+      decayRate: 10,
+      halfLifeDays: 365,
+      consolidationLevel: 'working',
+    });
+
+    await engine.runForgettingCycle();
+
+    const row = db
+      .prepare("SELECT retrieval_tier FROM memory_metadata WHERE target_id = 'historical-me'")
+      .get() as any;
+    expect(row.retrieval_tier).toBe('historical');
   });
 
   it('returns correct totalProcessed count', async () => {

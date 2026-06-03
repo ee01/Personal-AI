@@ -17,6 +17,18 @@
     </div>
 
     <div
+      v-if="topicDeferredUndo"
+      class="topic-undo-toast topic-defer-undo-toast"
+      role="status"
+    >
+      <span>
+        已将「{{ topicDeferredUndo.topicName }}」稍后到
+        {{ formatDeferredUntil(topicDeferredUndo.until) }}
+      </span>
+      <button type="button" @click="handleUndoTopicDefer">恢复</button>
+    </div>
+
+    <div
       v-if="topicMuteUndo"
       class="topic-undo-toast topic-mute-undo-toast"
       role="status"
@@ -266,9 +278,7 @@
           <div v-if="getTopicMutedState(entity.id)" class="topic-muted-note">
             🔕 已静音：{{
               formatMutedReason(getTopicMutedState(entity.id)?.reason)
-            }}{{
-              formatMutedUntil(getTopicMutedState(entity.id)?.until)
-            }}
+            }}{{ formatMutedUntil(getTopicMutedState(entity.id)?.until) }}
           </div>
 
           <!-- 未读讨论预览 -->
@@ -497,7 +507,11 @@
                     class="topic-defer-option topic-mute-option"
                     role="menuitem"
                     @click.stop="
-                      handleMuteTopic(entity.id, option.until, selectedMuteReason)
+                      handleMuteTopic(
+                        entity.id,
+                        option.until,
+                        selectedMuteReason,
+                      )
                     "
                   >
                     <span>{{ option.label }}</span>
@@ -831,10 +845,8 @@ import {
   type TopicMuteReasonKey,
 } from '../memory-store';
 import { getSafeExternalUrl } from '../topic-link-safety';
-import {
-  getTopicTriagePriority,
-  sortTopicsForTriage,
-} from '../topic-triage';
+import { topicMatchesListQuery } from '../topic-list-search';
+import { getTopicTriagePriority, sortTopicsForTriage } from '../topic-triage';
 import {
   getTopicUnreadPreviewCount,
   getTopicUnreadPreviewMeta,
@@ -864,6 +876,11 @@ const topicSortMode = ref('triage'); // 'triage' | 'time' | 'importance' | 'unre
 const topicLaterCount = computed(() => store.getDeferredTopics().length);
 const topicMutedCount = computed(() => store.getMutedTopics().length);
 const topicReadUndo = computed(() => store.topicReadUndo);
+const topicDeferredUndo = ref<{
+  topicId: string;
+  topicName: string;
+  until: number;
+} | null>(null);
 const activeDeferTopicId = ref<string | null>(null);
 const activeMuteTopicId = ref<string | null>(null);
 const topicDeferOptions = ref(getTopicDeferPresetOptions());
@@ -877,6 +894,9 @@ const topicMuteUndo = ref<{
   reason?: TopicMuteReasonKey;
 } | null>(null);
 let topicMuteUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
+let topicDeferredUndoTimer: ReturnType<typeof window.setTimeout> | null = null;
+let topicDeferredReleaseTimer: ReturnType<typeof window.setTimeout> | null =
+  null;
 const formatDateTimeLocal = (timestamp = Date.now() + 60 * 60 * 1000) => {
   const date = new Date(timestamp);
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -892,6 +912,12 @@ const customDeferTimestamp = computed(() => {
     ? timestamp
     : null;
 });
+const deferredReleaseScheduleKey = computed(() =>
+  Object.entries(store.deferredTopics || {})
+    .map(([topicId, state]) => `${topicId}:${Number(state?.until || 0)}`)
+    .sort()
+    .join('|'),
+);
 
 // AI 分析状态
 const isAnalyzing = ref(false);
@@ -946,15 +972,23 @@ const filteredEntities = computed(() => {
 
   // 文本搜索过滤（使用顶部搜索框的搜索词）
   if (searchQuery.value.trim()) {
-    const query = searchQuery.value.toLowerCase();
-    filtered = filtered.filter(
-      (entity) =>
-        entity.name.toLowerCase().includes(query) ||
+    const query = searchQuery.value;
+    filtered = filtered.filter((entity) => {
+      if (entityType.value === 'Topic') {
+        return topicMatchesListQuery(entity, query);
+      }
+
+      const normalizedQuery = query.toLowerCase();
+      return (
+        entity.name.toLowerCase().includes(normalizedQuery) ||
         (entity.description &&
-          entity.description.toLowerCase().includes(query)) ||
+          entity.description.toLowerCase().includes(normalizedQuery)) ||
         (entity.tags &&
-          entity.tags.some((tag) => tag.toLowerCase().includes(query))),
-    );
+          entity.tags.some((tag) =>
+            tag.toLowerCase().includes(normalizedQuery),
+          ))
+      );
+    });
   }
 
   // 主题排序
@@ -1311,6 +1345,7 @@ const toggleTopicMuteMenu = (topicId: string) => {
 
 const handleDeferTopicForLater = async (topicId: string, until?: number) => {
   activeDeferTopicId.value = null;
+  const topic = entities.value.find((entity) => entity.id === topicId);
   const cardElement = document.querySelector(
     `[data-topic-id="${topicId}"]`,
   ) as HTMLElement;
@@ -1321,6 +1356,14 @@ const handleDeferTopicForLater = async (topicId: string, until?: number) => {
   }
 
   await store.deferTopicForLater(topicId, until);
+  const deferredState = store.getTopicDeferredState(topicId) as {
+    until: number;
+  } | null;
+  showTopicDeferredUndo({
+    topicId,
+    topicName: String(topic?.name || topicId),
+    until: deferredState?.until || Number(until) || Date.now(),
+  });
 };
 
 const handleMuteTopic = async (
@@ -1340,9 +1383,10 @@ const handleMuteTopic = async (
   }
 
   await store.muteTopic(topicId, until, reason);
-  const mutedState = store.getTopicMutedState(topicId) as
-    | { until: number | null; reason?: TopicMuteReasonKey }
-    | null;
+  const mutedState = store.getTopicMutedState(topicId) as {
+    until: number | null;
+    reason?: TopicMuteReasonKey;
+  } | null;
   showTopicMuteUndo({
     topicId,
     topicName: String(topic?.name || topicId),
@@ -1359,6 +1403,9 @@ const handleCustomDefer = async (topicId: string) => {
 const handleRestoreDeferredTopic = (topicId: string) => {
   activeDeferTopicId.value = null;
   store.restoreDeferredTopic(topicId);
+  if (topicDeferredUndo.value?.topicId === topicId) {
+    clearTopicDeferredUndo();
+  }
 };
 
 const handleRestoreMutedTopic = (topicId: string) => {
@@ -1370,6 +1417,33 @@ const handleUndoTopicRead = async () => {
   await store.undoLastTopicRead();
 };
 
+const clearTopicDeferredUndo = () => {
+  topicDeferredUndo.value = null;
+  if (topicDeferredUndoTimer !== null) {
+    window.clearTimeout(topicDeferredUndoTimer);
+    topicDeferredUndoTimer = null;
+  }
+};
+
+const showTopicDeferredUndo = (
+  undoState: NonNullable<typeof topicDeferredUndo.value>,
+) => {
+  clearTopicDeferredUndo();
+  topicDeferredUndo.value = undoState;
+  topicDeferredUndoTimer = window.setTimeout(clearTopicDeferredUndo, 10_000);
+};
+
+const handleUndoTopicDefer = () => {
+  const undoState = topicDeferredUndo.value;
+  if (!undoState) return;
+
+  store.restoreDeferredTopic(undoState.topicId);
+  clearTopicDeferredUndo();
+  if (entityType.value === 'Topic' && topicViewMode.value === 'later') {
+    topicViewMode.value = 'unread';
+  }
+};
+
 const clearTopicMuteUndo = () => {
   topicMuteUndo.value = null;
   if (topicMuteUndoTimer !== null) {
@@ -1378,7 +1452,33 @@ const clearTopicMuteUndo = () => {
   }
 };
 
-const showTopicMuteUndo = (undoState: NonNullable<typeof topicMuteUndo.value>) => {
+const clearTopicDeferredReleaseTimer = () => {
+  if (topicDeferredReleaseTimer !== null) {
+    window.clearTimeout(topicDeferredReleaseTimer);
+    topicDeferredReleaseTimer = null;
+  }
+};
+
+const scheduleTopicDeferredReleaseRefresh = () => {
+  clearTopicDeferredReleaseTimer();
+  if (entityType.value !== 'Topic') return;
+
+  const nextReleaseAt = store.getNextDeferredTopicReleaseAt();
+  if (!nextReleaseAt) return;
+
+  const delay = Math.min(
+    Math.max(nextReleaseAt - Date.now() + 250, 250),
+    2_147_483_647,
+  );
+  topicDeferredReleaseTimer = window.setTimeout(() => {
+    store.refreshDeferredTopics();
+    scheduleTopicDeferredReleaseRefresh();
+  }, delay);
+};
+
+const showTopicMuteUndo = (
+  undoState: NonNullable<typeof topicMuteUndo.value>,
+) => {
   clearTopicMuteUndo();
   topicMuteUndo.value = undoState;
   topicMuteUndoTimer = window.setTimeout(clearTopicMuteUndo, 10_000);
@@ -1395,7 +1495,11 @@ const handleUndoTopicMute = () => {
   }
 };
 
-onBeforeUnmount(clearTopicMuteUndo);
+onBeforeUnmount(() => {
+  clearTopicDeferredUndo();
+  clearTopicMuteUndo();
+  clearTopicDeferredReleaseTimer();
+});
 
 watch(
   entityType,
@@ -1406,6 +1510,12 @@ watch(
       store.loadEntitiesByType(newType);
     }
   },
+  { immediate: true },
+);
+
+watch(
+  [entityType, deferredReleaseScheduleKey],
+  scheduleTopicDeferredReleaseRefresh,
   { immediate: true },
 );
 </script>

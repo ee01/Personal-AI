@@ -129,8 +129,11 @@ Notification Center 不会把“已经发给某个渠道”直接视为“用户
 - `status`: 最近一次该 channel/source/lane 收到的回执事件
 - `effectiveStatus`: 对用户和调试更有意义的当前有效状态；如果此前已经送达、点击或忽略，后续一次失败不会把有效状态倒退成“从未送达”
 - `hasSuccessfulDelivery`: 是否曾经有过送达、点击或忽略类成功回执
+- `firstDeliveredAt` / `lastDeliveredAt` / `updatedAt`: 按回执事件时间记录，而不是按服务端收到请求的时间猜测；`POST /notification-center/delivery` 可以带 `recordedAt`
 
 这避免了一个常见误读：例如 Doubao 或 Chrome 曾经成功展示过通知，但后面一次网络重试写入了 `failed`。此时 `status=failed` 说明最后一次尝试失败，`effectiveStatus=delivered` 才说明这条 source 对该渠道已经有过可用送达。
+
+回执写入按事件时间处理乱序回调：更早发生但更晚到达的 provider 回调可以补齐 `firstDeliveredAt`，但不会覆盖较新的 `status` / `lastError` / `updatedAt`。这样失败排障和 todo 冷却不会被延迟回调改写。
 
 ### 1.6 API
 
@@ -152,7 +155,8 @@ Notification Center 对外主要暴露两个接口：
 - 对 `todo` 来说，`delivered` 只是 6 小时短期冷却；如果用户没有点击或明确忽略，冷却后会重新进入 feed
 - `clicked` / `dismissed` 是终止性的用户处理回执，不会因为冷却时间过去而重新进入 feed
 - feed 会先排除该 channel 已成功投递的 source，再做 `limit` 截断，避免旧的未投递通知被新的已投递记录挡住
-- 每个 feed item 会带 `deliveryContext`，说明它是全新通知、上次投递失败后重试，还是待办冷却结束后的再次提醒；Chrome 通知和 Provider digest 会把这个原因展示出来，避免用户误以为重复出现的待办是全新事件
+- 每个 feed item 会带 `deliveryContext`，说明它是全新通知、上次投递失败后重试、待办冷却结束后的再次提醒，还是每日摘要里“已提醒但仍未完成”的待办；Chrome 通知和 Provider digest 会把这个原因展示出来，避免用户误以为重复出现的待办是全新事件
+- `feed` 可以通过 `deliveryMode` 选择打扰策略：`retry_after_cooldown` 是默认实时提醒，`incremental` 只返回从未成功送达的新待办，`daily_digest` 返回仍未完成的待办用于低打扰汇总。`daily_digest` 只放宽 `todo` 的已投递过滤，`notice` 仍然保持送达后不重复进入 feed
 
 `delivery` 的语义是：
 
@@ -189,6 +193,7 @@ Notification Center 对外主要暴露两个接口：
 - `notice_digest` 是新的通知输出
 - `reminder_digest` 只是 `todo_digest` 的兼容别名
 - 周报和 `dream_digest` 的推送目标以 memory-service runtime config 为准：`me` 发给当前用户，`group` 发给配置的群组，`none` 不创建通知也不发 Bot；Options 里的“立即推送”会把当前选择带到后端，手动触发不会绕过这个门控
+- 周报 notice payload 会保存 `reportSummary` / `reportExcerpt` 和消息、反思计数；Provider digest、Doubao 同步和 Chrome 预览优先展示这段可读摘要，旧数据没有摘录时才退回报告路径
 
 对应实现：
 
@@ -230,16 +235,20 @@ Chrome extension 优先从 `notification-center/feed` 拉取消息。
 - 用户直接关闭系统通知时，不自动改全局通知状态；todo 写回 `delivered` 进入短期冷却，notice 写回 `dismissed` 不再重复打扰
 - 通知弹窗会用 `contextMessage` 标出“待处理/通知”、优先级和待办截止时间，降低用户判断成本
 - `dream_digest` 这类通知的系统弹窗预览会优先用 payload 摘要片段，而不是只展示计数型 body
-- `proposed_action:*` 的“查看待办”会打开动作队列并定位对应 action；`project_update` / `property_change` 这类 notice 会打开时间轴；周报和 dream digest 仍进入梦境重放
+- `weekly_report` 通知的系统弹窗预览会优先使用周报摘要摘录，而不是只展示“周报已生成”或报告文件路径
+- `proposed_action:*` 的“查看待办”会打开动作队列并定位对应 action；`project_update` / `property_change` 这类 notice 会打开时间轴；`weekly_report` 会打开 `memory-exploring.html#/reports?file=...` 并定位报告正文；`dream_digest` 仍进入梦境重放
 - 带 `payload.confirmRequestId` 的 `truth_conflict` / `notify_user` 等通知会打开决策中心的具体确认项，页面会置顶并高亮该卡片；如果确认项已处理或不在当前队列，会显示明确落空说明
 - Chrome 通知的来源元数据会同时保存在 `chrome.storage.local`，避免 MV3 service worker 被回收后点击 / 忽略操作无法回写通知中心
 - 对 `notification:*` 的待办类系统通知，第二按钮是“稍后提醒”；没有截止时间时默认延后 24 小时，有截止时间时会尽量在截止前再次提醒，避免把待办直接延到过期后。notice 使用“不再提示”，`proposed_action:*` 使用“暂不提醒”且只记录渠道事件
+- Chrome 二级按钮会先把后端全局动作提交成功，再写 `dismissed` / `delivered` 这类渠道回执；如果 snooze 或 dismiss API 失败，不会先把原通知从 Chrome feed 里终止隐藏，避免用户以为“稍后提醒”已设置但未来提醒丢失
 
 对应实现：
 
 - `src/background.ts`
 - `src/backendNotifications.ts`
 - `src/services/MemoryServiceClient.ts`
+- `src/modals/components/ReportsPage.vue`
+- `tools/verify-weekly-report-notification-e2e.mjs`
 - `memory-service/src/routes/notifications.ts`
 
 ### 2.4 Glip
@@ -304,7 +313,11 @@ DigestQueueService 的处理流程是：
 6. 通过 `notificationService.sendNotification()` 推送
 7. 成功后从本地队列删除已处理条目
 
-如果任一内置 digest 推送失败，队列条目会保留，`digest_queue_process` 后台任务会被标成失败，并在 popup 的后台任务面板显示失败原因。这样用户不会看到“后台任务成功”但摘要实际没有发出去的假状态。
+`processAll()` 会稳定遍历当前注册的本地 digest 任务；如果任务已注册且到达自己的检查频率，就必须进入对应的 `processTask()`，不能只刷新后台任务状态却不处理队列。
+
+如果任一内置 digest 推送失败，队列条目会保留，`digest_queue_process` 后台任务会被标成失败，并在 popup 的后台任务面板同时显示失败原因和“队列已保留 N 条”这类恢复摘要。这样用户不会看到“后台任务成功”但摘要实际没有发出去的假状态，也不会只看到网络错误却不知道摘要是否还在队列里。
+
+popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送队列处理` 行显示本地摘要队列的实时状态：总共等待多少条、其中多少条已经到释放时间、最早下一次释放时间是什么。这样“上次成功 / 无到期摘要”不会掩盖其实还有摘要正在等待用户设定的时间。
 
 本地 digest 不是某一条 RingCentral 原消息，所以 Bot 文案不会再生成空群组 mention 或 `app.ringcentral.com/messages/` 这类无效原消息链接；摘要正文会作为可读内容直接展示。
 
@@ -369,6 +382,7 @@ DigestQueueService 的处理流程是：
 - Firebase Cloud Messaging 的 BigQuery delivery export 支持按 message / instance 追踪 accepted、delivered 和 latency，说明回执数据要能用于事后诊断。
 - Teams read receipts 明确把“在通知/banner 看到”排除在 read receipt 之外，和 Personal AI 里“渠道送达不等于用户已处理”的原则一致。
 - 通知系统研究强调错误时机和过多打断会损害体验，因此回执必须为冷却、重试和处理状态提供可靠信号。当前 feed 已把这些信号整理成 `deliveryContext.reason`，用于给用户显示“再次提醒”或“上次发送失败”。
+- 本轮继续补齐回执事件时间：状态回调和设备确认类系统经常异步、延迟或乱序到达，所以 `recordedAt` 必须代表渠道事件发生时间；旧事件可以补足首次/末次送达证据，但不能把较新的失败或处理状态倒回去。
 
 本轮对通知点击落点补了确认项深链：
 
@@ -379,11 +393,16 @@ DigestQueueService 的处理流程是：
 
 - Slack Activity 和 Teams Activity feed 都强调把通知放在可筛选、可处理的队列里，而不是只发一次系统提示；Apple 的 Scheduled Summary 也把低紧急通知合并到用户指定时间。因此 Personal AI 的本地摘要继续保持“延迟汇总”定位，但后台任务必须明确说明上次是无到期摘要、已推送 N 条，还是发送失败且队列已保留。
 - 通知 batching 研究支持减少打断，但也提醒 batching 只在符合工作期待时有效。对本地摘要来说，失败不能被吞掉，digest 文案也必须自包含，不能带空群组和无效原消息链接，否则用户无法判断这条摘要到底从哪里来、是否需要补救。
+- 本轮进一步把“当前队列里还等着什么”直接显示到 popup 后台任务行。Apple Scheduled Summary 的核心是用户选择哪些通知进入摘要以及接收时间；Slack Activity 则强调 feed 可以筛选、扫读和清理；bounded deferral / notification batching 研究也说明延迟要在“可预期”范围内才不破坏 awareness。因此 Personal AI 不能只说“上次无到期摘要”，还要告诉用户是否有本地摘要正在等待下一次释放。
+- 本轮还补齐了失败恢复文案：当本地摘要发送失败时，后台任务状态和最近运行记录都会保留“队列已保留 N 条”的摘要。对低打扰通知来说，失败后的可恢复性和延迟本身同样重要，用户需要明确知道这些摘要没有丢失。
+- 本轮对 Notification Center feed 的 `daily_digest` 语义做了边界收紧：每日摘要可以重新列出已提醒但仍未完成的 `todo`，并用 `already_delivered_unfinished` 标明它不是新待办；但已送达的 `notice` 不会因为调用 daily digest 又重复出现。这样符合“摘要用于处理未完成事项、notice 用于一次性同步”的用户心智。
 
 本轮对周报 / Dream Digest 的投递目标做了语义对齐：
 
 - Microsoft Viva Digest 把个人 digest 明确做成可 opt out 的个人洞察入口；Apple Scheduled Summary 也强调由用户选择哪些通知进入摘要和何时展示；Slack Activity 则把通知、提醒和 saved views 放在可过滤队列里。对应到 Personal AI，`不推送`、`推送给 Me`、`自定义群组` 必须是后端真实行为，而不能只改变 Options 页文案。
 - 研究上，email batching / interruption 相关工作支持“低打扰摘要”但也提醒 batching 只有在符合工作响应预期时才有效。因此周报和 Dream Digest 不能在用户选择 `none` 时仍暗中投递，也不能在选择群组时退回个人私聊；目标错投会破坏用户对摘要节奏和可见范围的信任。
+- 本轮进一步把周报正文摘录写入 Notification Center payload，使 Provider digest、Doubao 同步和 Chrome 系统通知都能给出“这份周报讲了什么”。这个改动和 Apple Scheduled Summary / Viva Digest 的产品取向一致：摘要通知应该帮助用户判断是否现在进入详情，而不是只告诉用户“有一份报告”。
+- 本轮还把周报点击落点从梦境重放拆到 `/reports`：Slack AI / Teams Recap 的共同模式是“摘要先帮用户判断价值，点击后进入对应内容或行动项”，而不是进入相邻但语义不同的汇总页。Dream Digest 仍然进入 `/dreams`，因为它的正文是低置信梦境回放线索；周报则优先进入 `reports/` 里的具体 Markdown。
 
 参考：
 
@@ -400,6 +419,11 @@ DigestQueueService 的处理流程是：
 - [Microsoft Teams read receipts](https://support.microsoft.com/en-us/office/use-read-receipts-for-messages-in-microsoft-teams-533f2334-32ef-424b-8d56-ed30e019f856)
 - [A State Transition Model for Mobile Notifications via Survival Analysis](https://arxiv.org/abs/2207.03099)
 - [Apple Scheduled Summary](https://support.apple.com/guide/iphone/change-notification-settings-iph7c3d96bab/ios)
+- [Slack AI features](https://slack.com/help/articles/25076892548883-Guide-to-AI-features-in-Slack)
+- [Microsoft Teams Recap](https://support.microsoft.com/en-us/office/recap-in-microsoft-teams-c2e3a0fe-504f-4b2c-bf85-504938f110ef)
+- [Email Duration, Batching and Self-interruption](https://www.microsoft.com/en-us/research/publication/email-duration-batching-and-self-interruption-patterns-of-email-use-on-productivity-and-stress/)
+- [Batching smartphone notifications can improve well-being](https://www.sciencedirect.com/science/article/abs/pii/S0747563219302596)
+- [Balancing Awareness and Interruption](https://www.microsoft.com/en-us/research/publication/balancing-awareness-interruption-investigation-notification-deferral-policies/)
 - [Email message batching study](https://www.sciencedirect.com/science/article/pii/S221478292200001X)
 
 ---

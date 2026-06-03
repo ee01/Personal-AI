@@ -12,6 +12,7 @@ import type {
   RecallAnalysis,
   RecallBlock,
   RecallChannelDiagnostic,
+  ContextRecallCurrentContext,
   RecallItem,
   RecallScope,
 } from '../types/index.js';
@@ -21,6 +22,12 @@ import {
   RecallContextExpansionService,
   type RecallContextExpansion,
 } from '../core/RecallContextExpansionService.js';
+import {
+  AnswerMemoryService,
+  type AnswerMemoryDiagnostic,
+  type AnswerMemoryPrior,
+} from '../core/AnswerMemoryService.js';
+import type { MemoryContextMatchResult } from '../core/MemoryContextMatchService.js';
 import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
 import { OnlineReflection } from '../core/OnlineReflection.js';
@@ -72,6 +79,21 @@ interface StructuredRelatedEntity {
   relevance: string;
 }
 
+interface AskContextMessageRow {
+  id: string;
+  content: string;
+  scope: 'work' | 'personal' | null;
+  source_type: string;
+  source_url: string | null;
+  source_title: string | null;
+  sender: string | null;
+  group_id: string | null;
+  group_name: string | null;
+  timestamp: number;
+  importance: number | null;
+  metadata_json: string | null;
+}
+
 interface StructuredAskAnswer {
   timeline?: StructuredTimelineItem[];
   keyFindings?: string[];
@@ -84,6 +106,8 @@ interface AskResponse {
   answer: string;
   evidence?: RecallItem[];
   queryTimeMs: number;
+  contextMatch?: MemoryContextMatchResult;
+  answerMemory?: AnswerMemoryDiagnostic;
   structuredAnswer?: StructuredAskAnswer;
   /** Structured UI blocks (timeline, evidence_list, media, summary). */
   blocks?: AskBlock[];
@@ -112,6 +136,10 @@ interface PreparedAskContext {
   recallBlocks?: AskBlock[];
   recallAnalysis?: RecallAnalysis;
   recallChannelDiagnostics?: RecallChannelDiagnostic[];
+  contextMatch?: MemoryContextMatchResult;
+  answerMemoryPrior?: AnswerMemoryPrior;
+  answerMemoryDiagnostic?: AnswerMemoryDiagnostic;
+  parsedIntent?: ParsedQueryIntent;
   intentContext: string;
   combinedMemoryContext: string;
   actionOutcome: {
@@ -123,6 +151,10 @@ interface PreparedAskContext {
 }
 
 type AskStatusReporter = (message: string) => void | Promise<void>;
+type AskPhaseReporter = (
+  phase: string,
+  details?: Record<string, unknown>,
+) => void;
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -175,6 +207,87 @@ Respond in concise markdown only.
 Do not return JSON.
 Do not wrap the answer in code fences.`;
 
+const ASK_STREAM_ANSWER_LLM_TIMEOUT_MS = 12000;
+const ASK_STRUCTURING_LLM_TIMEOUT_MS = 3000;
+const ASK_SYNC_EXTERNAL_TIMEOUT_MS = 2000;
+const ASK_ANSWER_LLM_MAX_TOKENS = readPositiveIntegerEnv(
+  'ASK_ANSWER_LLM_MAX_TOKENS',
+  900,
+  300,
+);
+const ASK_ANSWER_LLM_TIMEOUT_MS = readPositiveIntegerEnv(
+  'ASK_ANSWER_LLM_TIMEOUT_MS',
+  9000,
+  1000,
+);
+const ASK_CONTEXT_ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/;
+const ASK_CONTEXT_ROLE_TERM_PATTERN =
+  /^(?:BE|FE|backend|back\s*end|frontend|front\s*end|后端|服务端|前端|客户端)$/i;
+const ASK_CONTEXT_ACRONYM_PATTERN = /\b[A-Z][A-Z0-9]{2,9}\b/g;
+const ASK_CONTEXT_ACRONYM_PHRASE_PATTERN =
+  /\b[A-Z][A-Z0-9]{1,9}(?:\s+[A-Z][A-Z0-9]{1,9})+\b/g;
+const ASK_STATUS_EVIDENCE_PATTERN =
+  /ready|done|complete|completed|pending|blocked?|waiting?|status|progress|merge|merged|ship|shipped|no target date|not ready|定了|确定|搞定|完成|未完成|还没有|就绪|状态|进展|阻塞|等待|合了|上线|发布|方案|设计|需要等|不明确|design/i;
+const ASK_LOW_SIGNAL_SOURCE_PATTERN =
+  /docs\.google\.com|google docs|calendar|participant list|transcript controls|fileeditview|accessibility|print preview|personal room/i;
+
+function readPositiveIntegerEnv(
+  name: string,
+  fallback: number,
+  min = 1,
+): number {
+  const raw = Number.parseInt(process.env[name] ?? '', 10);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(min, raw);
+}
+
+function extractAskContextTitle(userContext?: string): string | undefined {
+  if (!userContext) return undefined;
+  const match = userContext.match(
+    /(?:current\s+(?:chat\s+)?title|chat\s+title|title)\s*:\s*([^\n.。]+)/i,
+  );
+  const title = match?.[1]?.trim();
+  return title || undefined;
+}
+
+function inferAskContextSurface(
+  userContext?: string,
+): 'ringcentral_chat' | undefined {
+  if (!userContext) return undefined;
+  return /\b(?:ringcentral|glip)\b[^.\n。]*(?:chat|conversation|thread|group)/iu.test(
+    userContext,
+  )
+    ? 'ringcentral_chat'
+    : undefined;
+}
+
+function buildAskExpansionContext(
+  userContext?: string,
+): {
+  title?: string;
+  currentContext?: ContextRecallCurrentContext;
+  secondaryTexts?: string[];
+  surface?: 'ringcentral_chat';
+} {
+  const title = extractAskContextTitle(userContext);
+  const issueKey = userContext?.match(ASK_CONTEXT_ISSUE_KEY_PATTERN)?.[0];
+  const surface = inferAskContextSurface(userContext);
+  const currentContext: ContextRecallCurrentContext | undefined =
+    title || issueKey
+      ? {
+          title,
+          issueKey,
+          sourceAnchorHints: issueKey ? [issueKey] : undefined,
+        }
+      : undefined;
+  return {
+    title,
+    currentContext,
+    secondaryTexts: userContext ? [userContext] : undefined,
+    surface,
+  };
+}
+
 /**
  * Load the USER_CORE.md file via the per-user UserDataManager.
  * Returns the file content, or an empty string if the file does not exist.
@@ -219,7 +332,10 @@ function loadUserPreferences(db: Database.Database): string {
       .prepare(
         `SELECT item_key, item_value
          FROM user_profile_items
-         WHERE item_type = 'preference' AND status = 'active'
+         WHERE item_type = 'preference'
+           AND status = 'active'
+           AND user_confirmed = 1
+           AND salience_score >= 0.1
          ORDER BY salience_score DESC
          LIMIT 10`,
       )
@@ -255,11 +371,34 @@ function formatRecalledContext(items: RecallItem[]): string {
         parts.push(`[${date}]`);
       }
 
-      parts.push(item.content.slice(0, 500)); // Truncate very long content
+      const title = compactText(getRecallTitle(item), 120);
+      if (title) {
+        parts.push(`[title: ${title}]`);
+      }
+
+      parts.push(compactText(item.content, 500));
 
       return `- ${parts.join(' ')}`;
     })
     .join('\n');
+}
+
+function isHistoricalRecallIntent(
+  query: string,
+  parsedIntent: ParsedQueryIntent,
+): boolean {
+  const explicitHistoricalText =
+    /\b(previously|previous|historical|history|earlier|before|back then|last year|years ago|old)\b|以前|之前|当时|过去|历史|去年|前年|早些时候|当初/u.test(
+      query.toLowerCase(),
+    );
+  if (explicitHistoricalText) return true;
+
+  const range = parsedIntent.filters.timeRange;
+  if (!range) return false;
+
+  const currentTime = Math.floor(Date.now() / 1000);
+  const thirtyDaysAgo = currentTime - 30 * 86400;
+  return range.end < thirtyDaysAgo;
 }
 
 function formatIntentContext(
@@ -268,6 +407,18 @@ function formatIntentContext(
 ): string {
   const parts: string[] = [];
 
+  if (expansion?.contextMatch?.state === 'locked' && expansion.contextMatch.selectedTopic) {
+    parts.push(
+      `- memory context match: locked to ${expansion.contextMatch.selectedTopic.label} (${expansion.contextMatch.selectedTopic.reasons.join(', ')})`,
+    );
+  } else if (expansion?.contextMatch?.state === 'ambiguous') {
+    parts.push(
+      `- memory context match: ambiguous between ${expansion.contextMatch.candidates
+        .slice(0, 3)
+        .map((candidate) => candidate.label)
+        .join(', ')}`,
+    );
+  }
   if (expansion?.addedTerms.length) {
     parts.push(`- expanded context: ${expansion.addedTerms.join(', ')}`);
   }
@@ -416,6 +567,203 @@ function structuredAnswerToAnalysis(
   return analysis;
 }
 
+function cleanDisplayText(value: string | undefined | null): string {
+  return String(value ?? '')
+    .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/giu, '$1')
+    .replace(/<[^>]+>/gu, ' ')
+    .replace(/&nbsp;/giu, ' ')
+    .replace(/&amp;/giu, '&')
+    .replace(/&lt;/giu, '<')
+    .replace(/&gt;/giu, '>');
+}
+
+function compactText(value: string | undefined | null, maxLength: number): string {
+  const compacted = cleanDisplayText(value).replace(/\s+/g, ' ').trim();
+  if (compacted.length <= maxLength) return compacted;
+  return compacted.slice(0, Math.max(0, maxLength - 1)).trimEnd() + '...';
+}
+
+function getRecallTitle(item: RecallItem): string {
+  return (
+    item.sourceTitle ||
+    item.displayTitle ||
+    item.metadata?.sourceTitle ||
+    item.metadata?.groupName ||
+    item.source ||
+    item.id
+  );
+}
+
+function getRecallSnippet(item: RecallItem, maxLength = 220): string {
+  return compactText(item.previewText || item.displayText || item.content, maxLength);
+}
+
+function isAskStatusQuestion(query: string): boolean {
+  return /ready|status|progress|done|complete|completion|完成|进展|进度|情况|状态|搞定|部署|上线|了吗|如何/iu.test(
+    query,
+  );
+}
+
+function hasPendingSignal(value: string): boolean {
+  return /pending|not\s+ready|not\s+done|not\s+complete|waiting|wait\s+for|blocked|blocker|no\s+target\s+date|still\s+has|need\s+to\s+wait|needs?\s+.*design|需要等|等待|还没有|未完成|没完成|没有\s*target|不能确认|不明确|待确认|待完成|阻塞/iu.test(
+    value,
+  );
+}
+
+function hasReadySignal(value: string): boolean {
+  return /ready|done|complete|completed|deployed|released|live|上线|已完成|完成了|已部署|已发布|可用|搞定/iu.test(
+    value,
+  );
+}
+
+function buildDeterministicAskSynthesis(
+  query: string,
+  topItems: RecallItem[],
+): {
+  answer: string;
+  keyFindings: string[];
+  summary: string;
+  confidence: number;
+} {
+  if (topItems.length === 0) {
+    return {
+      answer: [
+        '本地记忆没有检索到足够证据。',
+        '',
+        `问题：${query}`,
+        '',
+        '现在不能可靠判断完成状态。',
+      ].join('\n'),
+      keyFindings: [],
+      summary: '没有可用候选证据。',
+      confidence: 0.1,
+    };
+  }
+
+  const evidenceLines = topItems.map((item, index) => {
+    const title = compactText(getRecallTitle(item), 96);
+    return `${index + 1}. ${title}: ${getRecallSnippet(item)}`;
+  });
+  const statusQuestion = isAskStatusQuestion(query);
+  const pendingItems = topItems.filter((item) =>
+    hasPendingSignal([item.content, item.previewText, item.displayText].join(' ')),
+  );
+  const readyItems = topItems.filter((item) =>
+    hasReadySignal([item.content, item.previewText, item.displayText].join(' ')),
+  );
+
+  let conclusion: string;
+  let confidence = 0.38;
+  if (statusQuestion && pendingItems.length > 0 && readyItems.length === 0) {
+    conclusion =
+      '现有证据更支持“还不能确认已 ready / 已完成”：相关记忆里仍有 pending、等待设计或时间未定的信号。';
+    confidence = 0.58;
+  } else if (statusQuestion && pendingItems.length > 0 && readyItems.length > 0) {
+    conclusion =
+      '现有证据显示有进展，但同时存在 pending/等待项；不能直接判断为已完成。';
+    confidence = 0.52;
+  } else if (statusQuestion && readyItems.length > 0) {
+    conclusion =
+      '现有证据出现 ready/已完成/已部署信号，但仍需要用最新事实确认最终状态。';
+    confidence = 0.5;
+  } else if (statusQuestion) {
+    conclusion =
+      '检索到了相关上下文，但没有足够明确的完成/ready 信号；需要进一步确认最新状态。';
+  } else {
+    conclusion =
+      '检索到了可能相关的记忆；以下是按证据直接整理的摘要。';
+  }
+
+  const answer = [
+    `基于已检索到的记忆，${conclusion}`,
+    '',
+    `问题：${query}`,
+    '',
+    '关键证据：',
+    ...evidenceLines,
+    '',
+    '说明：LLM 综合生成超时，以上是按检索证据生成的保守摘要；不会把完成状态当作已确认事实。',
+  ].join('\n');
+
+  const keyFindings = topItems
+    .slice(0, 3)
+    .map((item) => getRecallSnippet(item, 160))
+    .filter(Boolean);
+
+  return {
+    answer,
+    keyFindings,
+    summary: conclusion,
+    confidence,
+  };
+}
+
+function buildAskGenerationFallbackResponse(params: {
+  query: string;
+  recalledItems: RecallItem[];
+  recallBlocks?: AskBlock[];
+  recallChannelDiagnostics?: RecallChannelDiagnostic[];
+  contextMatch?: MemoryContextMatchResult;
+  actionOutcome: PreparedAskContext['actionOutcome'];
+  includeEvidence?: boolean;
+  queryTimeMs: number;
+}): AskResponse {
+  const {
+    query,
+    recalledItems,
+    recallBlocks,
+    recallChannelDiagnostics,
+    contextMatch,
+    actionOutcome,
+    includeEvidence,
+    queryTimeMs,
+  } = params;
+  const topItems = recalledItems.slice(0, 5);
+  const synthesis = buildDeterministicAskSynthesis(query, topItems);
+  const structuredAnswer: StructuredAskAnswer = {
+    confidence: synthesis.confidence,
+  };
+  if (synthesis.keyFindings.length > 0) {
+    structuredAnswer.keyFindings = synthesis.keyFindings;
+  }
+
+  const response: AskResponse = {
+    answer: synthesis.answer,
+    queryTimeMs,
+    structuredAnswer,
+    blocks: recallBlocks,
+    analysis: {
+      summary: synthesis.summary,
+      keyFindings: synthesis.keyFindings,
+      openQuestions: [
+        'LLM 综合生成超时；当前回答是确定性证据摘要。',
+        ...actionOutcome.missingInfo,
+      ],
+      confidence: structuredAnswer.confidence,
+    },
+    channelDiagnostics: recallChannelDiagnostics,
+    contextMatch,
+    resolutionState:
+      topItems.length > 0 ? actionOutcome.finalResolutionState : 'insufficient',
+    missingInfo: [
+      ...actionOutcome.missingInfo,
+      'LLM 综合生成超时，当前回答为确定性证据摘要。',
+    ],
+  };
+
+  if (includeEvidence) {
+    response.evidence = recalledItems;
+  }
+  if (actionOutcome.followUpActions.length > 0) {
+    response.followUpActions = actionOutcome.followUpActions;
+  }
+  if (actionOutcome.externalEvidence.length > 0) {
+    response.externalEvidence = actionOutcome.externalEvidence;
+  }
+
+  return response;
+}
+
 function buildAugmentedSystemPrompt(
   db: Database.Database,
   profileManager: ProfileManager,
@@ -461,6 +809,7 @@ function buildPromptEnvelope(
 async function recallForAsk(
   db: Database.Database,
   query: string,
+  userContext?: string,
   includeEvidence?: boolean,
   scope?: RecallScope,
 ): Promise<{
@@ -470,25 +819,61 @@ async function recallForAsk(
   recallChannelDiagnostics?: RecallChannelDiagnostic[];
   memoryContext: string;
   intentContext: string;
+  contextMatch?: MemoryContextMatchResult;
+  answerMemoryPrior?: AnswerMemoryPrior;
+  answerMemoryDiagnostic?: AnswerMemoryDiagnostic;
 }> {
-  const expansion = new RecallContextExpansionService(db).expand({ query });
+  const expansionContext = buildAskExpansionContext(userContext);
+  const expansion = new RecallContextExpansionService(db).expand({
+    query,
+    ...expansionContext,
+  });
+  const contextMatch = expansion.contextMatch;
   const expandedQuery = expansion.expandedQuery || query;
   const parser = new QueryIntentParser(db);
   const parsedIntent = parser.parse(expandedQuery);
-  const recallQueryText = parsedIntent.cleanedQuery || expandedQuery;
+  if (contextMatch?.state === 'ambiguous') {
+    return {
+      parsedIntent,
+      recalledItems: [],
+      recallBlocks: undefined,
+      recallChannelDiagnostics: [],
+      memoryContext: `(Memory context ambiguous) ${contextMatch.userFacingSummary}`,
+      intentContext: formatIntentContext(parsedIntent, expansion),
+      contextMatch,
+      answerMemoryDiagnostic: {
+        state: 'skipped',
+        skipReason: 'context_ambiguous',
+      },
+    };
+  }
+  const answerMemoryService = new AnswerMemoryService(db);
+  const answerMemoryLookup = answerMemoryService.findPrior({
+    query,
+    contextMatch,
+    parsedIntent,
+  });
+  const answerMemoryPrior = answerMemoryLookup.prior;
+  const baseRecallQueryText = parsedIntent.cleanedQuery || expandedQuery;
+  const priorRecallHint =
+    answerMemoryService.buildRecallHintText(answerMemoryPrior);
+  const recallQueryText = [baseRecallQueryText, priorRecallHint]
+    .filter(Boolean)
+    .join('\n');
   // /ask runs its own LLM pass for the prose answer, so we ask
   // ActiveRecallService for deterministic blocks only and skip its analysis
   // pass to avoid double LLM cost.
   const activeRecall = new ActiveRecallService(db);
   const recallScope = scope ?? 'work';
+  const askTopK =
+    parsedIntent.intent === 'profile' ||
+    Object.keys(parsedIntent.filters).length > 0
+      ? 15
+      : 10;
   const recallResult = await activeRecall.recall(
     {
       query: recallQueryText,
-      topK:
-        parsedIntent.intent === 'profile' ||
-        Object.keys(parsedIntent.filters).length > 0
-          ? 15
-          : 10,
+      topK: askTopK,
       includeMetadata: true,
       scope: recallScope,
       timeRange: parsedIntent.filters.timeRange,
@@ -498,18 +883,38 @@ async function recallForAsk(
       minImportance: parsedIntent.filters.minImportance,
       sourceTypes: parsedIntent.filters.sourceTypes,
       blockTypes: ['evidence_list', 'timeline', 'media'],
+      lifecycleMode: isHistoricalRecallIntent(query, parsedIntent)
+        ? 'historical'
+        : 'active_default',
     },
     { skipAnalysis: true },
   );
 
-  const recalledItems = recallResult.items;
+  const contextAnchorItems = loadAskContextAnchorItems(
+    db,
+    expansion,
+    expansionContext,
+    scope,
+    query,
+  );
+  const recalledItems = mergeRecallItems(
+    contextAnchorItems,
+    recallResult.items,
+  ).slice(0, askTopK);
+  const answerMemoryContext =
+    answerMemoryService.formatPriorForPrompt(answerMemoryPrior);
   return {
     parsedIntent,
     recalledItems,
     recallBlocks: recallResult.blocks,
     recallChannelDiagnostics: recallResult.channelDiagnostics,
-    memoryContext: formatRecalledContext(recalledItems),
+    memoryContext: [answerMemoryContext, formatRecalledContext(recalledItems)]
+      .filter(Boolean)
+      .join('\n\n'),
     intentContext: formatIntentContext(parsedIntent, expansion),
+    contextMatch,
+    answerMemoryPrior,
+    answerMemoryDiagnostic: answerMemoryLookup.diagnostic,
   };
 }
 
@@ -528,7 +933,111 @@ function buildAskResolutionPolicy(query: string): EvidenceResolutionPolicy {
     externalWrite: explicitActionIntent ? 'approval_required' : 'disabled',
     allowAskExternalUser: false,
     allowCreateConfirmRequest: true,
-    syncExecutionBudgetMs: 15_000,
+    syncExecutionBudgetMs: ASK_SYNC_EXTERNAL_TIMEOUT_MS,
+  };
+}
+
+function hasUsefulLocalContextEvidence(
+  recalledItems: RecallItem[],
+  contextMatch: MemoryContextMatchResult | undefined,
+): boolean {
+  const topItem = recalledItems[0];
+  if (!topItem || topItem.score < 0.78) return false;
+  if (contextMatch?.state !== 'locked') return false;
+  const combined = [
+    topItem.content,
+    topItem.previewText,
+    topItem.displayText,
+    topItem.sourceTitle,
+    topItem.displayTitle,
+    topItem.metadata?.sourceTitle,
+    topItem.metadata?.groupName,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const selected = contextMatch.selectedTopic;
+  const anchors = [
+    selected?.label,
+    ...(selected?.aliases ?? []),
+    ...(selected?.anchors ?? []),
+  ].filter(Boolean) as string[];
+  return anchors.some((anchor) =>
+    combined.toLowerCase().includes(anchor.toLowerCase()),
+  );
+}
+
+function keepLocalContextMatchAnswerInsideAsk(
+  recalledItems: RecallItem[],
+  contextMatch: MemoryContextMatchResult | undefined,
+  plan: EvidenceResolutionPlan,
+): EvidenceResolutionPlan {
+  if (!hasUsefulLocalContextEvidence(recalledItems, contextMatch)) return plan;
+  if (plan.recommendedAction === 'none' && plan.remainingQuestions.length === 0) {
+    return plan;
+  }
+  return {
+    ...plan,
+    resolutionState: plan.directFindings.length > 0 ? plan.resolutionState : 'complete',
+    remainingQuestions: [],
+    recommendedAction: 'none',
+    actionParams: undefined,
+    goalGaps: [],
+    goalSatisfied: plan.goalSatisfied ?? true,
+    summary:
+      plan.resolvedConclusion ??
+      plan.summary ??
+      '本地高优先级证据已能回答当前问题。',
+    reason: 'locked_memory_context_with_local_evidence',
+  };
+}
+
+function buildContextMatchAnswerLead(
+  contextMatch: MemoryContextMatchResult | undefined,
+): string | undefined {
+  if (contextMatch?.state !== 'locked' || !contextMatch.selectedTopic) {
+    return undefined;
+  }
+  const topic = contextMatch.selectedTopic;
+  const reasons = topic.reasons.slice(0, 3).join('、') || '最近记忆匹配度最高';
+  return `Memory service 先把这个问题锁定到：${topic.label}。原因：${reasons}。`;
+}
+
+function applyContextMatchAnswerLead(
+  contextMatch: MemoryContextMatchResult | undefined,
+  answer: string,
+): string {
+  const lead = buildContextMatchAnswerLead(contextMatch);
+  if (!lead) return answer;
+  const normalizedAnswer = answer.trim();
+  if (normalizedAnswer.includes(lead)) return normalizedAnswer;
+  return `${lead}\n\n${normalizedAnswer}`;
+}
+
+function buildAskAmbiguousContextResponse(params: {
+  query: string;
+  contextMatch: MemoryContextMatchResult;
+  queryTimeMs: number;
+}): AskResponse {
+  const candidates = params.contextMatch.candidates.slice(0, 5);
+  const answer = [
+    params.contextMatch.userFacingSummary,
+    '',
+    '候选话题：',
+    ...candidates.map((candidate, index) => {
+      const reasons = candidate.reasons.slice(0, 2).join('、') || '近期相关';
+      return `${index + 1}. ${candidate.label} (${reasons})`;
+    }),
+    '',
+    '请补一句你指的是哪个话题，我再继续查证状态和证据。',
+  ].join('\n');
+  return {
+    answer,
+    queryTimeMs: params.queryTimeMs,
+    contextMatch: params.contextMatch,
+    resolutionState: 'insufficient',
+    missingInfo: [
+      `需要确认“${params.query}”指的是哪个近期话题。`,
+    ],
   };
 }
 
@@ -542,6 +1051,334 @@ function buildAskEvidenceItems(items: RecallItem[]) {
     createdAt: item.timestamp,
     metadata: item.metadata,
   }));
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function normalizeAskStoredScope(
+  scope: 'work' | 'personal' | null | undefined,
+): 'work' | 'personal' {
+  return scope === 'personal' ? 'personal' : 'work';
+}
+
+function matchesAskScope(
+  storedScope: 'work' | 'personal' | null | undefined,
+  requestedScope: RecallScope | undefined,
+): boolean {
+  if (requestedScope === 'all' || requestedScope === 'both') return true;
+  return normalizeAskStoredScope(storedScope) === (requestedScope ?? 'work');
+}
+
+function hasExplicitAskProjectAnchor(query?: string): boolean {
+  const text = query || '';
+  if (ASK_CONTEXT_ISSUE_KEY_PATTERN.test(text)) return true;
+  for (const phrase of text.match(ASK_CONTEXT_ACRONYM_PHRASE_PATTERN) ?? []) {
+    const roleOnly = phrase
+      .split(/\s+/)
+      .every((term) => ASK_CONTEXT_ROLE_TERM_PATTERN.test(term));
+    if (!roleOnly) return true;
+  }
+  const acronyms = text.match(ASK_CONTEXT_ACRONYM_PATTERN) ?? [];
+  return acronyms.some(
+    (term) => !ASK_CONTEXT_ROLE_TERM_PATTERN.test(term) && term !== 'API',
+  );
+}
+
+function isAskMessageSource(row: AskContextMessageRow): boolean {
+  return row.source_type === 'glip' || row.source_type === 'ringcentral';
+}
+
+function isLowSignalAskContextRow(row: AskContextMessageRow): boolean {
+  return ASK_LOW_SIGNAL_SOURCE_PATTERN.test(
+    [row.content, row.source_title, row.group_name, row.source_url]
+      .filter(Boolean)
+      .join(' '),
+  );
+}
+
+function rowMatchesRoleTerms(row: AskContextMessageRow, roleTerms: string[]): boolean {
+  if (roleTerms.length === 0) return true;
+  const text = [row.content, row.source_title, row.group_name].filter(Boolean).join(' ');
+  return roleTerms.some((role) => {
+    if (role === 'backend') {
+      return /\bBE\b|\bback[-\s]?end\b|\bserver[-\s]?side\b|后端|服务端/i.test(text);
+    }
+    if (role === 'frontend') {
+      return /\bFE\b|\bfront[-\s]?end\b|\bclient[-\s]?side\b|前端|客户端/i.test(text);
+    }
+    return text.toLowerCase().includes(role.toLowerCase());
+  });
+}
+
+function scoreAskAnchorMessage(
+  row: AskContextMessageRow,
+  anchors: string[],
+  title?: string,
+  roleTerms: string[] = [],
+  statusQuestion = false,
+  contextMatch?: MemoryContextMatchResult,
+): number {
+  const text = [row.content, row.source_title, row.group_name]
+    .filter(Boolean)
+    .join(' ');
+  const comparable = text.toLowerCase();
+  const titleMatch = Boolean(
+    title &&
+      (row.group_name === title ||
+        row.source_title === title ||
+        row.content.includes(title)),
+  );
+  let score = 0.68 + (row.importance ?? 0.5) * 0.1;
+  if (titleMatch) {
+    score += 0.12;
+  }
+  for (const anchor of anchors) {
+    if (comparable.includes(anchor.toLowerCase())) {
+      score += anchor.length >= 8 ? 0.08 : 0.03;
+    }
+  }
+  if (rowMatchesRoleTerms(row, roleTerms)) {
+    score += roleTerms.length ? 0.12 : 0;
+  } else if (roleTerms.length) {
+    score = Math.min(0.82, score - 0.14);
+  }
+  if (statusQuestion && ASK_STATUS_EVIDENCE_PATTERN.test(text)) {
+    score += 0.1;
+  }
+  const selected = contextMatch?.selectedTopic;
+  if (selected?.evidenceIds.includes(row.id)) {
+    score += 0.18;
+  }
+  if (
+    selected?.sourceIds.some((sourceId) =>
+      sourceId === `group:${row.group_id}` ||
+      sourceId === `conversation:${row.group_id}`,
+    )
+  ) {
+    score += 0.08;
+  }
+  if (title && !titleMatch) {
+    score = Math.min(score, 0.9);
+  }
+  if (isLowSignalAskContextRow(row)) {
+    score = Math.min(score, 0.42);
+  }
+  return Math.max(0, Math.min(0.99, score));
+}
+
+function askContextRowToRecallItem(
+  row: AskContextMessageRow,
+  score: number,
+  metadataPatch: Record<string, unknown> = {},
+): RecallItem {
+  let metadata: Record<string, unknown> = {};
+  if (row.metadata_json) {
+    try {
+      metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
+    } catch {
+      metadata = {};
+    }
+  }
+  return {
+    id: row.id,
+    type: 'message' as const,
+    content: row.content,
+    scope: normalizeAskStoredScope(row.scope),
+    displayTitle: row.group_name || row.source_title || row.source_type,
+    displayText: row.content,
+    previewText: row.content.slice(0, 220),
+    score,
+    source: row.source_type,
+    sourceUrl: row.source_url ?? undefined,
+    sourceTitle: row.source_title ?? row.group_name ?? undefined,
+    timestamp: row.timestamp,
+    metadata: {
+      ...metadata,
+      sourceUrl: row.source_url ?? undefined,
+      sourceTitle: row.source_title ?? row.group_name ?? undefined,
+      channels: ['context_anchor'],
+      sender: row.sender ?? undefined,
+      groupId: row.group_id ?? undefined,
+      groupName: row.group_name ?? undefined,
+      ...metadataPatch,
+    },
+  };
+}
+
+function loadAskContextAnchorItems(
+  db: Database.Database,
+  expansion: RecallContextExpansion,
+  expansionContext: ReturnType<typeof buildAskExpansionContext>,
+  scope?: RecallScope,
+  query?: string,
+): RecallItem[] {
+  const contextMatch = expansion.contextMatch;
+  const selectedTopic = contextMatch?.selectedTopic;
+  const title = expansionContext.currentContext?.title ?? expansionContext.title;
+  const explicitIssueKey = expansionContext.currentContext?.issueKey;
+  const sourceAnchorTerms = expansion.sourceAnchors.filter((anchor) => {
+    if (ASK_CONTEXT_ISSUE_KEY_PATTERN.test(anchor)) return true;
+    return explicitIssueKey ? anchor.includes(explicitIssueKey) : false;
+  });
+  const hasExplicitSurfaceContext = Boolean(
+    expansionContext.currentContext?.title ||
+      expansionContext.currentContext?.issueKey ||
+      expansionContext.title,
+  );
+  const topicalAnchorTerms = buildAskTopicalAnchorTerms(query ?? '', expansion);
+  const hasImplicitContextAnchor = Boolean(
+    contextMatch?.state === 'locked' &&
+      (selectedTopic ||
+        sourceAnchorTerms.length > 0 ||
+        topicalAnchorTerms.length > 0) &&
+      (expansion.resolvedProject ||
+        sourceAnchorTerms.length > 0 ||
+        topicalAnchorTerms.length > 0),
+  );
+  if (!hasExplicitSurfaceContext && !hasImplicitContextAnchor) return [];
+
+  const projectAnchor = title ? undefined : expansion.resolvedProject;
+  const anchors = uniqStringValues([
+    title,
+    explicitIssueKey,
+    projectAnchor,
+    selectedTopic?.label,
+    ...(selectedTopic?.aliases ?? []),
+    ...(selectedTopic?.anchors ?? []),
+    ...sourceAnchorTerms,
+    ...(title ? [] : topicalAnchorTerms),
+    ...expansion.addedTerms.filter((term) => /^[A-Z][A-Z0-9]+-\d+$/.test(term)),
+  ]).filter((term) => term.length >= 3);
+  if (anchors.length === 0) return [];
+
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (title) {
+    clauses.push('(group_name = ? OR source_title = ?)');
+    params.push(title, title);
+  }
+  for (const sourceId of selectedTopic?.sourceIds ?? []) {
+    const [kind, value] = sourceId.split(':', 2);
+    if (!value) continue;
+    if (kind === 'group') {
+      clauses.push('group_id = ?');
+      params.push(value);
+    }
+  }
+  for (const anchor of anchors.slice(0, 6)) {
+    const like = `%${escapeLikePattern(anchor)}%`;
+    clauses.push(
+      `(content LIKE ? ESCAPE '\\' OR source_title LIKE ? ESCAPE '\\' OR group_name LIKE ? ESCAPE '\\')`,
+    );
+    params.push(like, like, like);
+  }
+  if (clauses.length === 0) return [];
+
+  try {
+    const filters: string[] = [`(${clauses.join(' OR ')})`];
+    if (expansionContext.surface === 'ringcentral_chat') {
+      filters.push(`source_type IN ('glip', 'ringcentral')`);
+    }
+    const rows = db
+      .prepare(
+        `SELECT id, content, scope, source_type, source_url, source_title,
+                sender, group_id, group_name, timestamp, importance, metadata_json
+         FROM messages_raw
+         WHERE ${filters.join(' AND ')}
+         ORDER BY timestamp DESC
+         LIMIT 80`,
+      )
+      .all(...params) as AskContextMessageRow[];
+
+    return rows
+      .filter((row) => matchesAskScope(row.scope, scope))
+      .filter(
+        (row) =>
+          hasExplicitSurfaceContext ||
+          hasExplicitAskProjectAnchor(query) ||
+          contextMatch?.state === 'locked' ||
+          isAskMessageSource(row),
+      )
+      .filter((row) => !isLowSignalAskContextRow(row))
+      .filter((row) => rowMatchesRoleTerms(row, selectedTopic?.roleTerms ?? []))
+      .map((row) =>
+        askContextRowToRecallItem(
+          row,
+          scoreAskAnchorMessage(
+            row,
+            anchors,
+            title,
+            selectedTopic?.roleTerms ?? [],
+            isAskStatusQuestion(query ?? ''),
+            contextMatch,
+          ),
+          {
+            contextAnchorReason:
+              contextMatch?.state === 'locked'
+                ? 'locked_memory_context_match'
+                : 'explicit_context_anchor',
+            contextMatchLabel: selectedTopic?.label,
+          },
+        ),
+      )
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+  } catch {
+    return [];
+  }
+}
+
+function buildAskTopicalAnchorTerms(
+  query: string,
+  expansion: RecallContextExpansion,
+): string[] {
+  const terms: string[] = [];
+  for (const phrase of query.match(ASK_CONTEXT_ACRONYM_PHRASE_PATTERN) ?? []) {
+    terms.push(phrase);
+  }
+  for (const acronym of query.match(ASK_CONTEXT_ACRONYM_PATTERN) ?? []) {
+    terms.push(acronym);
+  }
+  for (const term of [expansion.resolvedProject, ...expansion.addedTerms]) {
+    if (!term || ASK_CONTEXT_ISSUE_KEY_PATTERN.test(term)) continue;
+    if (ASK_CONTEXT_ROLE_TERM_PATTERN.test(term.trim())) continue;
+    if (term.length > 96) continue;
+    terms.push(term);
+  }
+  return uniqStringValues(terms).filter((term) => {
+    const normalized = term.trim();
+    if (ASK_CONTEXT_ROLE_TERM_PATTERN.test(normalized)) return false;
+    if (/^AI$/i.test(normalized)) return false;
+    return normalized.length >= 3;
+  });
+}
+
+function mergeRecallItems(primary: RecallItem[], secondary: RecallItem[]): RecallItem[] {
+  const seen = new Set<string>();
+  const merged: RecallItem[] = [];
+  for (const item of [...primary, ...secondary]) {
+    const key = `${item.type}:${item.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function uniqStringValues(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(normalized);
+  }
+  return output;
 }
 
 function formatExternalEvidenceContext(
@@ -587,8 +1424,10 @@ async function executeAskResolutionAction(
   userId: string | undefined,
   requestId: string,
   query: string,
+  policy: EvidenceResolutionPolicy,
   plan: EvidenceResolutionPlan,
   reportStatus?: AskStatusReporter,
+  answerMemoryPrior?: AnswerMemoryPrior,
 ): Promise<{
   followUpActions: NonNullable<AskResponse['followUpActions']>;
   externalEvidence: CandidateArtifact[];
@@ -620,6 +1459,10 @@ async function executeAskResolutionAction(
 
   const repo = new ActionRepository(db);
   const executor = new ActionExecutor(db, userDataManager ?? undefined, userId);
+  const answerMemoryService = new AnswerMemoryService(db);
+  const answerThreadId = answerMemoryPrior?.threadId;
+  const answerVerificationKey =
+    answerMemoryService.verificationIdempotencyKey(answerMemoryPrior);
   const baseParams =
     plan.actionParams &&
     typeof plan.actionParams === 'object' &&
@@ -631,6 +1474,17 @@ async function executeAskResolutionAction(
     typeof baseParams.sourceAnchor !== 'string'
   ) {
     baseParams.sourceAnchor = `ask:${requestId}`;
+  }
+  if (
+    plan.recommendedAction === 'delegate_openclaw' &&
+    typeof baseParams.timeoutMs !== 'number' &&
+    typeof policy.syncExecutionBudgetMs === 'number' &&
+    Number.isFinite(policy.syncExecutionBudgetMs)
+  ) {
+    baseParams.timeoutMs = Math.max(
+      1000,
+      Math.floor(policy.syncExecutionBudgetMs),
+    );
   }
   const delegatePolicy =
     plan.recommendedAction === 'delegate_openclaw'
@@ -649,13 +1503,15 @@ async function executeAskResolutionAction(
     description: plan.summary,
     params: {
       ...baseParams,
-      metadata: {
-        ...(baseParams.metadata &&
+        metadata: {
+          ...(baseParams.metadata &&
         typeof baseParams.metadata === 'object' &&
         !Array.isArray(baseParams.metadata)
           ? (baseParams.metadata as Record<string, unknown>)
           : {}),
         askRequestId: requestId,
+        answerThreadId,
+        answerMemoryCanonicalKey: answerMemoryPrior?.canonicalKey,
         suppressRecoveryNotifications: true,
       },
     },
@@ -666,10 +1522,13 @@ async function executeAskResolutionAction(
     confidence: plan.confidence,
     sourceKind: 'ask_request',
     sourceRefId: requestId,
+    threadId: answerThreadId,
+    idempotencyKey: answerVerificationKey,
   });
 
   const shouldExecuteSync =
     action.executionMode === 'auto' &&
+    action.queueStatus === 'queued' &&
     (plan.recommendedAction === 'delegate_openclaw' ||
       plan.recommendedAction === 'create_confirm_request');
   if (!shouldExecuteSync) {
@@ -744,22 +1603,67 @@ async function prepareAskContext(
   includeEvidence: boolean | undefined,
   scope: RecallScope | undefined,
   reportStatus?: AskStatusReporter,
+  reportPhase?: AskPhaseReporter,
 ): Promise<PreparedAskContext> {
   await reportStatus?.('正在检索相关记忆...');
+  reportPhase?.('recall_start');
   const {
+    parsedIntent,
     recalledItems,
     recallBlocks,
     recallChannelDiagnostics,
     memoryContext,
     intentContext,
-  } = await recallForAsk(db, query, includeEvidence, scope);
+    contextMatch,
+    answerMemoryPrior,
+    answerMemoryDiagnostic,
+  } = await recallForAsk(db, query, userContext, includeEvidence, scope);
+  reportPhase?.('recall_done', {
+    itemCount: recalledItems.length,
+    channels: recallChannelDiagnostics
+      ?.filter((item) => item.status === 'hit')
+      .map((item) => item.channel),
+  });
   await reportStatus?.('正在分析已知信息...');
+  if (contextMatch?.state === 'ambiguous') {
+    return {
+      recalledItems,
+      recallBlocks,
+      recallChannelDiagnostics,
+      contextMatch,
+      parsedIntent,
+      answerMemoryPrior,
+      answerMemoryDiagnostic,
+      intentContext,
+      combinedMemoryContext: memoryContext,
+      actionOutcome: {
+        followUpActions: [],
+        externalEvidence: [],
+        finalResolutionState: 'insufficient',
+        missingInfo: [`需要确认“${query}”指的是哪个近期话题。`],
+      },
+    };
+  }
   const resolutionPlanner = new EvidenceResolutionPlanner();
+  const resolutionPolicy = buildAskResolutionPolicy(query);
+  reportPhase?.('resolution_planner_start');
   const initialPlan = await resolutionPlanner.resolve({
     question: query,
     context: userContext,
     evidence: buildAskEvidenceItems(recalledItems),
-    policy: buildAskResolutionPolicy(query),
+    policy: resolutionPolicy,
+  });
+  const resolutionPlan = keepLocalContextMatchAnswerInsideAsk(
+    recalledItems,
+    contextMatch,
+    initialPlan,
+  );
+  reportPhase?.('resolution_planner_done', {
+    resolutionState: resolutionPlan.resolutionState,
+    recommendedAction: resolutionPlan.recommendedAction,
+  });
+  reportPhase?.('resolution_action_start', {
+    recommendedAction: resolutionPlan.recommendedAction,
   });
   const actionOutcome = await executeAskResolutionAction(
     db,
@@ -767,9 +1671,16 @@ async function prepareAskContext(
     userId,
     requestId,
     query,
-    initialPlan,
+    resolutionPolicy,
+    resolutionPlan,
     reportStatus,
+    answerMemoryPrior,
   );
+  reportPhase?.('resolution_action_done', {
+    followUpActionCount: actionOutcome.followUpActions.length,
+    externalEvidenceCount: actionOutcome.externalEvidence.length,
+    finalResolutionState: actionOutcome.finalResolutionState,
+  });
   const externalContext = formatExternalEvidenceContext(
     actionOutcome.externalEvidence,
   );
@@ -792,6 +1703,10 @@ async function prepareAskContext(
     recalledItems,
     recallBlocks: askBlocks.length > 0 ? askBlocks : undefined,
     recallChannelDiagnostics,
+    contextMatch,
+    parsedIntent,
+    answerMemoryPrior,
+    answerMemoryDiagnostic,
     intentContext,
     combinedMemoryContext,
     actionOutcome,
@@ -815,6 +1730,63 @@ function writeSseEvent(
   };
   reply.raw.write(`event: ${event}\n`);
   reply.raw.write(`data: ${JSON.stringify(enrichedPayload)}\n\n`);
+}
+
+function mergeAnswerMemoryDiagnostic(
+  priorDiagnostic: AnswerMemoryDiagnostic | undefined,
+  observedDiagnostic: AnswerMemoryDiagnostic | undefined,
+): AnswerMemoryDiagnostic | undefined {
+  if (!observedDiagnostic) return priorDiagnostic;
+  if (
+    observedDiagnostic.state === 'skipped' &&
+    priorDiagnostic?.state === 'priorHit'
+  ) {
+    return priorDiagnostic;
+  }
+  return observedDiagnostic;
+}
+
+function observeAskAnswerMemory(input: {
+  db: Database.Database;
+  requestId: string;
+  query: string;
+  answer: string;
+  contextMatch?: MemoryContextMatchResult;
+  parsedIntent?: ParsedQueryIntent;
+  recalledItems: RecallItem[];
+  recallChannelDiagnostics?: RecallChannelDiagnostic[];
+  actionOutcome: PreparedAskContext['actionOutcome'];
+  structuredAnswer?: StructuredAskAnswer;
+  priorDiagnostic?: AnswerMemoryDiagnostic;
+}): AnswerMemoryDiagnostic | undefined {
+  const service = new AnswerMemoryService(input.db);
+  const observedDiagnostic = service.observeAskOutcome({
+    requestId: input.requestId,
+    query: input.query,
+    answer: input.answer,
+    contextMatch: input.contextMatch,
+    parsedIntent: input.parsedIntent,
+    recalledItems: input.recalledItems,
+    channelDiagnostics: input.recallChannelDiagnostics,
+    followUpActions: input.actionOutcome.followUpActions,
+    missingInfo: input.actionOutcome.missingInfo,
+    confidence: input.structuredAnswer?.confidence,
+  });
+  const diagnostic = mergeAnswerMemoryDiagnostic(
+    input.priorDiagnostic,
+    observedDiagnostic,
+  );
+  if (
+    diagnostic?.threadId &&
+    input.actionOutcome.followUpActions.length > 0
+  ) {
+    new ActionRepository(input.db).linkActionsToThread(
+      input.actionOutcome.followUpActions.map((action) => action.id),
+      diagnostic.threadId,
+      `answer_thread:${diagnostic.threadId}:verification`,
+    );
+  }
+  return diagnostic;
 }
 
 // ---------------------------------------------------------------------------
@@ -853,6 +1825,39 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
                 },
               },
               queryTimeMs: { type: 'number' },
+              contextMatch: {
+                type: 'object',
+                nullable: true,
+                additionalProperties: true,
+                properties: {
+                  state: { type: 'string' },
+                  userFacingSummary: { type: 'string' },
+                  expandedQuery: { type: 'string' },
+                  selectedTopic: {
+                    type: 'object',
+                    nullable: true,
+                    additionalProperties: true,
+                  },
+                  candidates: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      additionalProperties: true,
+                    },
+                  },
+                },
+              },
+              answerMemory: {
+                type: 'object',
+                nullable: true,
+                additionalProperties: true,
+                properties: {
+                  state: { type: 'string' },
+                  threadId: { type: 'string' },
+                  canonicalKey: { type: 'string' },
+                  skipReason: { type: 'string' },
+                },
+              },
               channelDiagnostics: {
                 type: 'array',
                 nullable: true,
@@ -978,12 +1983,26 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
       const uiLanguage = getUiLanguageFromHeaders(
         request.headers as Record<string, unknown>,
       );
+      const reportPhase: AskPhaseReporter = (phase, details = {}) => {
+        request.log.info(
+          {
+            askRequestId: requestId,
+            phase,
+            elapsedMs: Date.now() - startMs,
+            ...details,
+          },
+          'Ask phase',
+        );
+      };
 
       try {
         const {
+          parsedIntent,
           recalledItems,
           recallBlocks,
           recallChannelDiagnostics,
+          contextMatch,
+          answerMemoryDiagnostic,
           intentContext,
           combinedMemoryContext,
           actionOutcome,
@@ -996,13 +2015,32 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           userContext,
           includeEvidence,
           scope,
+          undefined,
+          reportPhase,
         );
+        if (contextMatch?.state === 'ambiguous') {
+          return reply.status(200).send(
+            buildAskAmbiguousContextResponse({
+              query,
+              contextMatch,
+              queryTimeMs: Date.now() - startMs,
+            }),
+          );
+        }
         const fullPrompt = buildPromptEnvelope(
           query,
           combinedMemoryContext,
           userContext,
           intentContext,
-          'Return JSON only. Required key: "answer". Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence". Do not wrap the JSON in prose.',
+          [
+            'Return JSON only.',
+            'Required key: "answer".',
+            'Optional keys: "timeline", "keyFindings", "insights", "relatedEntities", "confidence".',
+            'Evidence is ranked. Prioritize evidence [1]-[3] over reflection or daily summaries.',
+            'For status/readiness questions, explicitly state pending/ready/unknown using concrete phrases from the top evidence such as pending work, 需要等, waiting, no target date, or deployed.',
+            'If top evidence shows pending/waiting, do not answer only that there is no direct evidence.',
+            'Do not wrap the JSON in prose.',
+          ].join('\n'),
         );
         const systemPrompt = buildAugmentedSystemPrompt(
           db,
@@ -1011,47 +2049,98 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           SYSTEM_PROMPT,
         );
 
-        const llmResponse = await llmClient.generate(fullPrompt, {
-          systemPrompt,
-          temperature: 0.3,
-          maxTokens: 1800,
-        });
+        try {
+          const llmResponse = await llmClient.generate(fullPrompt, {
+            systemPrompt,
+            temperature: 0.3,
+            maxTokens: ASK_ANSWER_LLM_MAX_TOKENS,
+            timeoutMs: ASK_ANSWER_LLM_TIMEOUT_MS,
+            retryCount: 0,
+          });
 
-        // Step 4: Build the response
-        const queryTimeMs = Date.now() - startMs;
-        const parsedAnswer = parseStructuredAnswer(llmResponse.content);
+          // Step 4: Build the response
+          const queryTimeMs = Date.now() - startMs;
+          const parsedAnswer = parseStructuredAnswer(llmResponse.content);
+          const finalAnswer = applyContextMatchAnswerLead(
+            contextMatch,
+            parsedAnswer.answer,
+          );
 
-        const response: AskResponse = {
-          answer: parsedAnswer.answer,
-          queryTimeMs,
-          structuredAnswer: parsedAnswer.structuredAnswer,
-          blocks: recallBlocks,
-          analysis: structuredAnswerToAnalysis(parsedAnswer.structuredAnswer),
-          channelDiagnostics: recallChannelDiagnostics,
-          resolutionState: actionOutcome.finalResolutionState,
-          missingInfo: actionOutcome.missingInfo,
-        };
+          const response: AskResponse = {
+            answer: finalAnswer,
+            queryTimeMs,
+            contextMatch,
+            structuredAnswer: parsedAnswer.structuredAnswer,
+            blocks: recallBlocks,
+            analysis: structuredAnswerToAnalysis(parsedAnswer.structuredAnswer),
+            channelDiagnostics: recallChannelDiagnostics,
+            resolutionState: actionOutcome.finalResolutionState,
+            missingInfo: actionOutcome.missingInfo,
+          };
 
-        if (includeEvidence) {
-          response.evidence = recalledItems;
+          response.answerMemory = observeAskAnswerMemory({
+            db,
+            requestId,
+            query,
+            answer: finalAnswer,
+            contextMatch,
+            parsedIntent,
+            recalledItems,
+            recallChannelDiagnostics,
+            actionOutcome,
+            structuredAnswer: parsedAnswer.structuredAnswer,
+            priorDiagnostic: answerMemoryDiagnostic,
+          });
+
+          if (includeEvidence) {
+            response.evidence = recalledItems;
+          }
+          if (actionOutcome.followUpActions.length > 0) {
+            response.followUpActions = actionOutcome.followUpActions;
+          }
+          if (actionOutcome.externalEvidence.length > 0) {
+            response.externalEvidence = actionOutcome.externalEvidence;
+          }
+
+          const usedItemIds = recalledItems.slice(0, 5).map((item) => item.id);
+          const onlineReflection = new OnlineReflection(db, userDataManager);
+          void onlineReflection.reflect({
+            query,
+            recalledItems,
+            llmResponse: finalAnswer,
+            usedItemIds,
+          });
+
+          return reply.status(200).send(response);
+        } catch (generationError) {
+          request.log.warn(
+            generationError,
+            'Ask generation failed; returning recalled evidence fallback',
+          );
+          const fallbackResponse = buildAskGenerationFallbackResponse({
+            query,
+            recalledItems,
+            recallBlocks,
+            recallChannelDiagnostics,
+            contextMatch,
+            actionOutcome,
+            includeEvidence,
+            queryTimeMs: Date.now() - startMs,
+          });
+          fallbackResponse.answerMemory = observeAskAnswerMemory({
+            db,
+            requestId,
+            query,
+            answer: fallbackResponse.answer,
+            contextMatch,
+            parsedIntent,
+            recalledItems,
+            recallChannelDiagnostics,
+            actionOutcome,
+            priorDiagnostic: answerMemoryDiagnostic,
+          });
+          return reply.status(200).send(fallbackResponse);
         }
-        if (actionOutcome.followUpActions.length > 0) {
-          response.followUpActions = actionOutcome.followUpActions;
-        }
-        if (actionOutcome.externalEvidence.length > 0) {
-          response.externalEvidence = actionOutcome.externalEvidence;
-        }
-
-        const usedItemIds = recalledItems.slice(0, 5).map((item) => item.id);
-        const onlineReflection = new OnlineReflection(db, userDataManager);
-        void onlineReflection.reflect({
-          query,
-          recalledItems,
-          llmResponse: parsedAnswer.answer,
-          usedItemIds,
-        });
-
-        return reply.status(200).send(response);
       } catch (err) {
         request.log.error(err, 'Ask endpoint failed');
 
@@ -1085,6 +2174,17 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
       const uiLanguage = getUiLanguageFromHeaders(
         request.headers as Record<string, unknown>,
       );
+      const reportPhase: AskPhaseReporter = (phase, details = {}) => {
+        request.log.info(
+          {
+            askRequestId: requestId,
+            phase,
+            elapsedMs: Date.now() - startMs,
+            ...details,
+          },
+          'Ask stream phase',
+        );
+      };
 
       reply.hijack();
       reply.raw.writeHead?.(200, {
@@ -1099,9 +2199,12 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         writeSseEvent(reply, 'start', { requestId });
 
         const {
+          parsedIntent,
           recalledItems,
           recallBlocks,
           recallChannelDiagnostics,
+          contextMatch,
+          answerMemoryDiagnostic,
           intentContext,
           combinedMemoryContext,
           actionOutcome,
@@ -1118,6 +2221,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
             writeSseEvent(reply, 'status', {
               message: localizeUiText(message, uiLanguage),
             }),
+          reportPhase,
         );
 
         // Emit recall_done so the UI can render evidence/timeline/media blocks
@@ -1126,6 +2230,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           itemsCount: recalledItems.length,
           channelDiagnostics: recallChannelDiagnostics ?? [],
           blocks: recallBlocks ?? [],
+          contextMatch,
           evidence: includeEvidence
             ? recalledItems
             : recalledItems.slice(0, 5).map((item) => ({
@@ -1156,30 +2261,97 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           combinedMemoryContext,
           userContext,
           intentContext,
-          'Answer the question in markdown only. Do not return JSON.',
+          [
+            'Answer the question in markdown only. Do not return JSON.',
+            'Evidence is ranked. Prioritize evidence [1]-[3] over reflection or daily summaries.',
+            'For status/readiness questions, explicitly state pending/ready/unknown using concrete phrases from the top evidence.',
+          ].join('\n'),
         );
         writeSseEvent(reply, 'status', {
           message: uiT('ask.status.generating', uiLanguage),
         });
 
         let streamedAnswer = '';
-        const answerResponse = await llmClient.generateStream(
-          answerPrompt,
-          {
-            systemPrompt: answerSystemPrompt,
-            temperature: 0.3,
-            maxTokens: 1400,
-          },
-          async (delta) => {
-            if (!delta) return;
-            streamedAnswer += delta;
-            writeSseEvent(reply, 'delta', { text: delta });
-          },
-        );
+        let finalAnswer = '';
+        if (contextMatch?.state === 'ambiguous') {
+          const ambiguousResponse = buildAskAmbiguousContextResponse({
+            query,
+            contextMatch,
+            queryTimeMs: Date.now() - startMs,
+          });
+          writeSseEvent(reply, 'answer_done', { answer: ambiguousResponse.answer });
+          writeSseEvent(
+            reply,
+            'result',
+            ambiguousResponse as unknown as Record<string, unknown>,
+          );
+          reply.raw.end();
+          return;
+        }
+        const contextMatchLead = buildContextMatchAnswerLead(contextMatch);
+        if (contextMatchLead) {
+          streamedAnswer += `${contextMatchLead}\n\n`;
+          writeSseEvent(reply, 'delta', { text: `${contextMatchLead}\n\n` });
+        }
+        try {
+          const answerResponse = await llmClient.generateStream(
+            answerPrompt,
+            {
+              systemPrompt: answerSystemPrompt,
+              temperature: 0.3,
+              maxTokens: 1400,
+              timeoutMs: ASK_STREAM_ANSWER_LLM_TIMEOUT_MS,
+              retryCount: 0,
+            },
+            async (delta) => {
+              if (!delta) return;
+              streamedAnswer += delta;
+              writeSseEvent(reply, 'delta', { text: delta });
+            },
+          );
 
-        const finalAnswer =
-          (answerResponse.content || streamedAnswer).trim() ||
-          streamedAnswer.trim();
+          finalAnswer =
+            (answerResponse.content || streamedAnswer).trim() ||
+            streamedAnswer.trim();
+          finalAnswer = applyContextMatchAnswerLead(contextMatch, finalAnswer);
+        } catch (generationError) {
+          request.log.warn(
+            generationError,
+            'Ask stream generation failed; returning recalled evidence fallback',
+          );
+          const fallbackResponse = buildAskGenerationFallbackResponse({
+            query,
+            recalledItems,
+            recallBlocks,
+            recallChannelDiagnostics,
+            contextMatch,
+            actionOutcome,
+            includeEvidence,
+            queryTimeMs: Date.now() - startMs,
+          });
+          fallbackResponse.answerMemory = observeAskAnswerMemory({
+            db,
+            requestId,
+            query,
+            answer: fallbackResponse.answer,
+            contextMatch,
+            parsedIntent,
+            recalledItems,
+            recallChannelDiagnostics,
+            actionOutcome,
+            priorDiagnostic: answerMemoryDiagnostic,
+          });
+          writeSseEvent(reply, 'answer_done', {
+            answer: fallbackResponse.answer,
+          });
+          writeSseEvent(
+            reply,
+            'result',
+            fallbackResponse as unknown as Record<string, unknown>,
+          );
+          reply.raw.end();
+          return;
+        }
         writeSseEvent(reply, 'answer_done', { answer: finalAnswer });
 
         let structuredAnswer: StructuredAskAnswer | undefined;
@@ -1206,6 +2378,8 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
               systemPrompt: enrichmentSystemPrompt,
               temperature: 0.2,
               maxTokens: 1200,
+              timeoutMs: ASK_STRUCTURING_LLM_TIMEOUT_MS,
+              retryCount: 0,
             },
           );
           structuredAnswer = parseStructuredAnswer(
@@ -1218,6 +2392,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
         const result: AskResponse = {
           answer: finalAnswer,
           queryTimeMs: Date.now() - startMs,
+          contextMatch,
           structuredAnswer,
           blocks: recallBlocks,
           analysis: structuredAnswerToAnalysis(structuredAnswer),
@@ -1225,6 +2400,19 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           resolutionState: actionOutcome.finalResolutionState,
           missingInfo: actionOutcome.missingInfo,
         };
+        result.answerMemory = observeAskAnswerMemory({
+          db,
+          requestId,
+          query,
+          answer: finalAnswer,
+          contextMatch,
+          parsedIntent,
+          recalledItems,
+          recallChannelDiagnostics,
+          actionOutcome,
+          structuredAnswer,
+          priorDiagnostic: answerMemoryDiagnostic,
+        });
         if (includeEvidence) {
           result.evidence = recalledItems;
         }

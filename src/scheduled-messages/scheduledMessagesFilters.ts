@@ -5,6 +5,7 @@ export interface ScheduledMessagesQueryFilters {
   filterPendingReview: boolean;
   filterSelfOnly: boolean;
   targetMessageId?: string;
+  configureRingCentralSender: boolean;
 }
 
 export interface ScheduledMessagesViewFilters {
@@ -123,6 +124,7 @@ export function parseScheduledMessagesQueryFilters(
     categories: Array.from(new Set(categories)),
     filterPendingReview: parseBooleanParam(params.get('filterPendingReview')),
     filterSelfOnly: parseBooleanParam(params.get('filterSelfOnly')),
+    configureRingCentralSender: parseBooleanParam(params.get('configureRingCentralSender')),
     ...(targetMessageId ? { targetMessageId } : {}),
   };
 }

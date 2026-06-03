@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
 import { now } from '../utils/time.js';
+import { normalizeUserId } from '../utils/userIdentity.js';
 
 export type SkillStatus = 'suggestion' | 'active' | 'dismissed';
 export type SkillRisk = 'low' | 'medium' | 'high';
@@ -118,6 +119,8 @@ export interface SkillListItem {
   createdAt: number;
   updatedAt: number;
 }
+
+export type SkillSuggestionView = 'ready' | 'snoozed' | 'all';
 
 export interface SkillDetail extends SkillListItem {
   versions: SkillVersionRecord[];
@@ -284,8 +287,18 @@ const DEFAULT_SYNC_SETTINGS: Array<{
   capability: SkillPlatformCapability;
   mode: string;
 }> = [
-  { platform: 'personal_ai', enabled: true, capability: 'internal', mode: 'internal' },
-  { platform: 'openclaw', enabled: true, capability: 'api', mode: 'API direct' },
+  {
+    platform: 'personal_ai',
+    enabled: true,
+    capability: 'internal',
+    mode: 'internal',
+  },
+  {
+    platform: 'openclaw',
+    enabled: true,
+    capability: 'api',
+    mode: 'API direct',
+  },
   {
     platform: 'codex',
     enabled: false,
@@ -389,7 +402,10 @@ function normalizeVersion(value?: string): string {
   return (value || 'v0.1').trim().replace(/\s*\(.+\)\s*$/, '') || 'v0.1';
 }
 
-export function compareSkillVersionStrings(left?: string, right?: string): number {
+export function compareSkillVersionStrings(
+  left?: string,
+  right?: string,
+): number {
   const normalize = (value?: string) =>
     String(value || '')
       .replace(/^v/i, '')
@@ -406,7 +422,8 @@ export function compareSkillVersionStrings(left?: string, right?: string): numbe
 }
 
 function validateStatus(value: string): SkillStatus {
-  if (value === 'suggestion' || value === 'active' || value === 'dismissed') return value;
+  if (value === 'suggestion' || value === 'active' || value === 'dismissed')
+    return value;
   return 'suggestion';
 }
 
@@ -464,9 +481,15 @@ function buildSkillMd(input: CreateSkillSuggestionInput, slug: string): string {
     input.notUse || 'Do not use when required inputs are missing.',
     '',
     '## Workflow',
-    ...(input.workflow || []).map((step, index) => `${index + 1}. ${step.title}${step.desc ? ` — ${step.desc}` : ''}`),
+    ...(input.workflow || []).map(
+      (step, index) =>
+        `${index + 1}. ${step.title}${step.desc ? ` — ${step.desc}` : ''}`,
+    ),
   ];
-  return lines.filter((line) => line !== undefined).join('\n').trim();
+  return lines
+    .filter((line) => line !== undefined)
+    .join('\n')
+    .trim();
 }
 
 function firstMarkdownHeading(markdown: string): string | undefined {
@@ -484,7 +507,10 @@ function toVersionRecord(row: VersionRow): SkillVersionRecord {
     packageJson: safeJsonParse<Record<string, unknown>>(row.package_json, {}),
     workflow: safeJsonParse<SkillWorkflowStep[]>(row.workflow_json, []),
     evidence: safeJsonParse<SkillEvidenceRef[]>(row.evidence_json, []),
-    sourceEpisodes: safeJsonParse<SkillSourceEpisode[]>(row.source_episodes_json, []),
+    sourceEpisodes: safeJsonParse<SkillSourceEpisode[]>(
+      row.source_episodes_json,
+      [],
+    ),
     files: safeJsonParse<SkillPackageFile[]>(row.files_json, []),
     sha256: row.sha256,
     changelog: row.changelog ?? undefined,
@@ -523,6 +549,7 @@ function skillReviewReasons(input: {
   sources: string[];
   suggestedFrom?: string;
   activeVersion?: SkillVersionRecord;
+  bindings?: SkillBindingRecord[];
 }): string[] {
   if (input.status !== 'suggestion') return [];
 
@@ -539,6 +566,24 @@ function skillReviewReasons(input: {
   }
   if (isExternalAgentSource) {
     reasons.push('外部 agent 平台导入的技能需要先确认来源内容');
+  }
+  const rejectedLocalFileCount = (input.bindings || []).reduce(
+    (sum, binding) => {
+      if (
+        !externalPlatformIds.includes(binding.platform) ||
+        binding.metadata?.source !== 'desktop_app_fs'
+      ) {
+        return sum;
+      }
+      const count = binding.metadata?.rejectedFileCount;
+      return sum + (typeof count === 'number' && count > 0 ? count : 0);
+    },
+    0,
+  );
+  if (rejectedLocalFileCount > 0) {
+    reasons.push(
+      `本机 skill 包含 ${rejectedLocalFileCount} 个已忽略的越界或重复资源路径`,
+    );
   }
 
   const version = input.activeVersion;
@@ -591,6 +636,7 @@ function toSkillListItem(
     sources,
     suggestedFrom: row.suggested_from ?? undefined,
     activeVersion,
+    bindings,
   });
   return {
     id: row.id,
@@ -668,13 +714,19 @@ export class SkillLibraryService {
     return rows.map(toSyncSettingRecord);
   }
 
-  updateSyncSetting(platform: string, enabled: boolean): SkillSyncSettingRecord {
+  updateSyncSetting(
+    platform: string,
+    enabled: boolean,
+  ): SkillSyncSettingRecord {
     this.ensureDefaultSyncSettings();
     const current = this.getSyncSetting(platform);
     if (!current) {
       throw new Error(`Unknown platform: ${platform}`);
     }
-    if (current.capability === 'internal' || current.capability === 'manual_only') {
+    if (
+      current.capability === 'internal' ||
+      current.capability === 'manual_only'
+    ) {
       enabled = current.enabled;
     }
     const ts = now();
@@ -688,7 +740,10 @@ export class SkillLibraryService {
     return this.getSyncSetting(platform)!;
   }
 
-  recordSyncProbe(platform: string, input: { ok: boolean; error?: string }): SkillSyncSettingRecord | null {
+  recordSyncProbe(
+    platform: string,
+    input: { ok: boolean; error?: string },
+  ): SkillSyncSettingRecord | null {
     this.ensureDefaultSyncSettings();
     const ts = now();
     this.db
@@ -727,7 +782,9 @@ export class SkillLibraryService {
 
     const q = input?.q?.trim();
     if (q) {
-      conditions.push('(LOWER(s.title) LIKE ? OR LOWER(s.summary) LIKE ? OR LOWER(s.slug) LIKE ?)');
+      conditions.push(
+        '(LOWER(s.title) LIKE ? OR LOWER(s.summary) LIKE ? OR LOWER(s.slug) LIKE ?)',
+      );
       const like = `%${q.toLowerCase()}%`;
       params.push(like, like, like);
     }
@@ -746,13 +803,30 @@ export class SkillLibraryService {
       )
       .all(...params) as SkillRow[];
 
-    const items = rows.map((row) => toSkillListItem(row, this.listBindings(row.id)));
+    const items = rows.map((row) =>
+      toSkillListItem(row, this.listBindings(row.id)),
+    );
     return { items, total: items.length };
   }
 
-  listSuggestions(): { items: SkillListItem[]; total: number } {
+  listSuggestions(input?: { view?: SkillSuggestionView }): {
+    items: SkillListItem[];
+    total: number;
+  } {
     this.ensureDefaultSyncSettings();
     const ts = now();
+    const view = input?.view || 'ready';
+    const conditions = ["s.status = 'suggestion'"];
+    const params: unknown[] = [];
+
+    if (view === 'snoozed') {
+      conditions.push('s.snoozed_until IS NOT NULL AND s.snoozed_until > ?');
+      params.push(ts);
+    } else if (view !== 'all') {
+      conditions.push('(s.snoozed_until IS NULL OR s.snoozed_until <= ?)');
+      params.push(ts);
+    }
+
     const rows = this.db
       .prepare(
         `SELECT s.*,
@@ -760,16 +834,16 @@ export class SkillLibraryService {
                 v.sha256 AS current_sha256
            FROM personal_skills s
       LEFT JOIN skill_versions v ON v.skill_id = s.id AND v.is_active = 1
-          WHERE s.status = 'suggestion'
-            AND (s.snoozed_until IS NULL OR s.snoozed_until <= ?)
+          WHERE ${conditions.join(' AND ')}
           ORDER BY COALESCE(s.snoozed_until, 0) ASC,
                    s.updated_at DESC,
                    s.created_at DESC`,
       )
-      .all(ts) as SkillRow[];
+      .all(...params) as SkillRow[];
     const items = rows.map((row) => {
       const versions = this.listVersions(row.id);
-      const activeVersion = versions.find((version) => version.isActive) || versions[0];
+      const activeVersion =
+        versions.find((version) => version.isActive) || versions[0];
       return toSkillListItem(row, this.listBindings(row.id), activeVersion);
     });
     return { items, total: items.length };
@@ -791,7 +865,8 @@ export class SkillLibraryService {
     if (!row) return null;
 
     const versions = this.listVersions(row.id);
-    const activeVersion = versions.find((version) => version.isActive) || versions[0];
+    const activeVersion =
+      versions.find((version) => version.isActive) || versions[0];
     const base = toSkillListItem(row, this.listBindings(row.id), activeVersion);
     let share: SkillShareInfo | undefined;
     let shareError: string | undefined;
@@ -835,8 +910,8 @@ export class SkillLibraryService {
   }
 
   listActiveSyncPackages(): SkillSyncPackage[] {
-    return this.listSkills({ filter: 'active' }).items
-      .map((item) => this.getSkill(item.id))
+    return this.listSkills({ filter: 'active' })
+      .items.map((item) => this.getSkill(item.id))
       .filter((skill): skill is SkillDetail => Boolean(skill?.activeVersion))
       .map((skill) => this.toSyncPackage(skill));
   }
@@ -865,7 +940,10 @@ export class SkillLibraryService {
     remote: { version?: string; sha256?: string; mtime?: number },
   ): boolean {
     if (remote.sha256 && remote.sha256 === skill.currentSha256) return false;
-    const versionDelta = compareSkillVersionStrings(remote.version, skill.currentVersion);
+    const versionDelta = compareSkillVersionStrings(
+      remote.version,
+      skill.currentVersion,
+    );
     if (versionDelta > 0) return true;
     if (versionDelta < 0) return false;
     return Boolean(remote.mtime && remote.mtime > skill.updatedAt);
@@ -893,12 +971,18 @@ export class SkillLibraryService {
     });
   }
 
-  platformBindingMatchesSha(skillId: string, platform: string, sha256?: string): boolean {
+  platformBindingMatchesSha(
+    skillId: string,
+    platform: string,
+    sha256?: string,
+  ): boolean {
     if (!sha256) return false;
     return this.getBinding(skillId, platform)?.installedSha256 === sha256;
   }
 
-  updateActiveSkillFromExternal(input: ImportedExternalSkillPackage): SkillImportResult {
+  updateActiveSkillFromExternal(
+    input: ImportedExternalSkillPackage,
+  ): SkillImportResult {
     this.ensureDefaultSyncSettings();
     const platform = input.platform.trim();
     if (!platform) throw new Error('External skill platform is required.');
@@ -916,15 +1000,20 @@ export class SkillLibraryService {
 
     const version = normalizeVersion(input.version);
     const skillMd = input.skillMd.trim();
-    if (!skillMd) throw new Error(`External skill '${slug}' did not include SKILL.md content.`);
+    if (!skillMd)
+      throw new Error(
+        `External skill '${slug}' did not include SKILL.md content.`,
+      );
     const files = (input.files || [])
       .filter((file) => file.relativePath !== 'SKILL.md')
       .map((file) => ({
         ...file,
         sha256: file.sha256 || hashContent(file.content || ''),
-        byteSize: file.byteSize ?? Buffer.byteLength(file.content || '', 'utf8'),
+        byteSize:
+          file.byteSize ?? Buffer.byteLength(file.content || '', 'utf8'),
       }));
-    const title = input.title?.trim() || firstMarkdownHeading(skillMd) || detail.title;
+    const title =
+      input.title?.trim() || firstMarkdownHeading(skillMd) || detail.title;
     const summary = input.summary?.trim() || detail.summary;
     const pkg = this.buildPackage({
       slug,
@@ -956,10 +1045,15 @@ export class SkillLibraryService {
         remoteMtime: input.remoteMtime,
         metadata: input.metadata,
       });
-      return { status: 'updated_binding', skill: this.getSkill(detail.id) ?? undefined };
+      return {
+        status: 'updated_binding',
+        skill: this.getSkill(detail.id) ?? undefined,
+      };
     }
 
-    const nextSources = Array.from(new Set([...(detail.sources || []), platform]));
+    const nextSources = Array.from(
+      new Set([...(detail.sources || []), platform]),
+    );
     const update = this.db.transaction(() => {
       this.db
         .prepare(
@@ -1014,10 +1108,15 @@ export class SkillLibraryService {
     });
 
     update();
-    return { status: 'updated_active', skill: this.getSkill(detail.id) ?? undefined };
+    return {
+      status: 'updated_active',
+      skill: this.getSkill(detail.id) ?? undefined,
+    };
   }
 
-  importExternalSkillPackage(input: ImportedExternalSkillPackage): SkillImportResult {
+  importExternalSkillPackage(
+    input: ImportedExternalSkillPackage,
+  ): SkillImportResult {
     this.ensureDefaultSyncSettings();
     const platform = input.platform.trim();
     if (!platform) throw new Error('External skill platform is required.');
@@ -1025,14 +1124,18 @@ export class SkillLibraryService {
     const slug = normalizeSlug(input.slug);
     const version = normalizeVersion(input.version);
     const skillMd = input.skillMd.trim();
-    if (!skillMd) throw new Error(`External skill '${slug}' did not include SKILL.md content.`);
+    if (!skillMd)
+      throw new Error(
+        `External skill '${slug}' did not include SKILL.md content.`,
+      );
 
     const files = (input.files || [])
       .filter((file) => file.relativePath !== 'SKILL.md')
       .map((file) => ({
         ...file,
         sha256: file.sha256 || hashContent(file.content || ''),
-        byteSize: file.byteSize ?? Buffer.byteLength(file.content || '', 'utf8'),
+        byteSize:
+          file.byteSize ?? Buffer.byteLength(file.content || '', 'utf8'),
       }));
     const title = input.title?.trim() || firstMarkdownHeading(skillMd) || slug;
     const summary =
@@ -1081,7 +1184,8 @@ export class SkillLibraryService {
 
     const existingDetail = this.getSkill(existing.id);
     const bindingState =
-      existingDetail?.currentSha256 && existingDetail.currentSha256 !== packageSha
+      existingDetail?.currentSha256 &&
+      existingDetail.currentSha256 !== packageSha
         ? 'outdated'
         : 'installed';
     this.upsertBinding(existing.id, {
@@ -1163,14 +1267,20 @@ export class SkillLibraryService {
     const existingByCluster = clusterKey
       ? this.findSkillRowByClusterKey(clusterKey)
       : null;
-    if (existingByCluster && this.shouldReuseSuggestionCandidate(existingByCluster, ts)) {
+    if (
+      existingByCluster &&
+      this.shouldReuseSuggestionCandidate(existingByCluster, ts)
+    ) {
       return this.getSkill(existingByCluster.id)!;
     }
 
     let slug = normalizeSlug(input.slug || input.title);
     const existingBySlug = this.findSkillRowBySlug(slug);
     if (existingBySlug) {
-      if (!clusterKey || this.shouldReuseSuggestionCandidate(existingBySlug, ts)) {
+      if (
+        !clusterKey ||
+        this.shouldReuseSuggestionCandidate(existingBySlug, ts)
+      ) {
         return this.getSkill(existingBySlug.id)!;
       }
       slug = this.generateUniqueSlug(slug);
@@ -1263,13 +1373,19 @@ export class SkillLibraryService {
     return this.getSkill(id)!;
   }
 
-  useSuggestion(id: string, options?: { reviewConfirmed?: boolean }): SkillDetail {
+  useSuggestion(
+    id: string,
+    options?: { reviewConfirmed?: boolean },
+  ): SkillDetail {
     const skill = this.getSkill(id);
     if (!skill) throw new Error('Skill suggestion not found');
-    if (skill.status !== 'suggestion') throw new Error('Only suggestions can be promoted');
+    if (skill.status !== 'suggestion')
+      throw new Error('Only suggestions can be promoted');
     if (skill.reviewRequired && !options?.reviewConfirmed) {
       throw new Error(
-        `Review required before promoting this skill: ${skill.reviewReasons.join('; ')}`,
+        `Review required before promoting this skill: ${skill.reviewReasons.join(
+          '; ',
+        )}`,
       );
     }
     const externalChangeBinding = this.getExternalChangeBinding(skill);
@@ -1283,6 +1399,7 @@ export class SkillLibraryService {
             SET status = 'active',
                 dismissed_at = NULL,
                 dismiss_reason = NULL,
+                snoozed_until = NULL,
                 updated_at = ?
           WHERE id = ?`,
       )
@@ -1305,7 +1422,8 @@ export class SkillLibraryService {
   dismissSuggestion(id: string, reason?: string): SkillDetail {
     const skill = this.getSkill(id);
     if (!skill) throw new Error('Skill suggestion not found');
-    if (skill.status !== 'suggestion') throw new Error('Only suggestions can be dismissed');
+    if (skill.status !== 'suggestion')
+      throw new Error('Only suggestions can be dismissed');
     const ts = now();
     this.db
       .prepare(
@@ -1313,6 +1431,7 @@ export class SkillLibraryService {
             SET status = 'dismissed',
                 dismissed_at = ?,
                 dismiss_reason = ?,
+                snoozed_until = NULL,
                 updated_at = ?
           WHERE id = ?`,
       )
@@ -1323,7 +1442,8 @@ export class SkillLibraryService {
   snoozeSuggestion(id: string, days = 7): SkillDetail {
     const skill = this.getSkill(id);
     if (!skill) throw new Error('Skill suggestion not found');
-    if (skill.status !== 'suggestion') throw new Error('Only suggestions can be snoozed');
+    if (skill.status !== 'suggestion')
+      throw new Error('Only suggestions can be snoozed');
     const ts = now();
     const until = ts + Math.max(1, Math.min(days, 30)) * 86400;
     this.db
@@ -1334,6 +1454,23 @@ export class SkillLibraryService {
           WHERE id = ?`,
       )
       .run(until, ts, id);
+    return this.getSkill(id)!;
+  }
+
+  unsnoozeSuggestion(id: string): SkillDetail {
+    const skill = this.getSkill(id);
+    if (!skill) throw new Error('Skill suggestion not found');
+    if (skill.status !== 'suggestion')
+      throw new Error('Only suggestions can be unsnoozed');
+    const ts = now();
+    this.db
+      .prepare(
+        `UPDATE personal_skills
+            SET snoozed_until = NULL,
+                updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(ts, id);
     return this.getSkill(id)!;
   }
 
@@ -1368,12 +1505,17 @@ export class SkillLibraryService {
     return rows.map(toVersionRecord);
   }
 
-  ensureShareLink(skill: Pick<SkillListItem, 'id' | 'slug'>, version: SkillVersionRecord): SkillShareInfo {
+  ensureShareLink(
+    skill: Pick<SkillListItem, 'id' | 'slug'>,
+    version: SkillVersionRecord,
+  ): SkillShareInfo {
     this.assertNoSecrets(version);
     // Tokens are stored as hashes only, so an existing URL cannot be recovered
     // for UI copy. Generate an additional live token on each detail fetch;
     // existing copied URLs stay valid until explicitly revoked.
-    const rawToken = `${Buffer.from(this.userId).toString('base64url')}.${randomBytes(24).toString('base64url')}`;
+    const rawToken = `${Buffer.from(this.userId).toString(
+      'base64url',
+    )}.${randomBytes(24).toString('base64url')}`;
     const ts = now();
     this.db
       .prepare(
@@ -1414,10 +1556,12 @@ export class SkillLibraryService {
   }
 
   extractUserIdFromShareToken(token: string): string | null {
-    const [encoded] = token.split('.');
-    if (!encoded) return null;
-    try {
-      return Buffer.from(encoded, 'base64url').toString('utf8') || null;
+  const [encoded] = token.split('.');
+  if (!encoded) return null;
+  try {
+      return normalizeUserId(
+        Buffer.from(encoded, 'base64url').toString('utf8'),
+      );
     } catch {
       return null;
     }
@@ -1492,14 +1636,20 @@ export class SkillLibraryService {
     return row ?? null;
   }
 
-  private shouldReuseSuggestionCandidate(row: SkillRow, timestamp: number): boolean {
+  private shouldReuseSuggestionCandidate(
+    row: SkillRow,
+    timestamp: number,
+  ): boolean {
     const status = validateStatus(row.status);
     if (status !== 'dismissed') return true;
     if (!row.dismissed_at) return true;
     return timestamp - row.dismissed_at <= SUGGESTION_DISMISS_COOLDOWN_SECONDS;
   }
 
-  private getBinding(skillId: string, platform: string): SkillBindingRecord | null {
+  private getBinding(
+    skillId: string,
+    platform: string,
+  ): SkillBindingRecord | null {
     const row = this.db
       .prepare(
         `SELECT *
@@ -1512,7 +1662,9 @@ export class SkillLibraryService {
     return row ? toBindingRecord(row) : null;
   }
 
-  private getExternalChangeBinding(skill: SkillDetail): SkillBindingRecord | null {
+  private getExternalChangeBinding(
+    skill: SkillDetail,
+  ): SkillBindingRecord | null {
     return (
       skill.bindings.find((binding) => {
         const targetId = binding.metadata?.externalChangeFor;
@@ -1535,7 +1687,9 @@ export class SkillLibraryService {
       throw new Error('External change target skill is no longer active');
     }
     if (!skill.activeVersion) {
-      throw new Error('External change suggestion does not have a version to apply');
+      throw new Error(
+        'External change suggestion does not have a version to apply',
+      );
     }
 
     const packageJson = skill.activeVersion.packageJson as {
@@ -1574,6 +1728,7 @@ export class SkillLibraryService {
             SET status = 'dismissed',
                 dismissed_at = ?,
                 dismiss_reason = 'applied_external_change',
+                snoozed_until = NULL,
                 updated_at = ?
           WHERE id = ?`,
       )
@@ -1634,7 +1789,8 @@ export class SkillLibraryService {
           input.platform,
           ts,
           ts,
-          input.suggestionClusterKey ?? `${input.platform}:${input.slug}:import`,
+          input.suggestionClusterKey ??
+            `${input.platform}:${input.slug}:import`,
           ts,
           ts,
         );
@@ -1693,7 +1849,9 @@ export class SkillLibraryService {
     timestamp: number;
   }): void {
     if (input.isActive) {
-      this.db.prepare('UPDATE skill_versions SET is_active = 0 WHERE skill_id = ?').run(input.skillId);
+      this.db
+        .prepare('UPDATE skill_versions SET is_active = 0 WHERE skill_id = ?')
+        .run(input.skillId);
     }
     this.db
       .prepare(
@@ -1767,7 +1925,9 @@ export class SkillLibraryService {
         ts,
       );
     const row = this.db
-      .prepare('SELECT * FROM skill_platform_bindings WHERE skill_id = ? AND platform = ?')
+      .prepare(
+        'SELECT * FROM skill_platform_bindings WHERE skill_id = ? AND platform = ?',
+      )
       .get(skillId, input.platform) as BindingRow;
     return toBindingRecord(row);
   }
@@ -1805,7 +1965,9 @@ export class SkillLibraryService {
     ];
     for (const part of parts) {
       if (SECRET_PATTERNS.some((pattern) => pattern.test(part))) {
-        throw new Error('Skill contains a value that looks like a secret. Remove or redact it before sharing.');
+        throw new Error(
+          'Skill contains a value that looks like a secret. Remove or redact it before sharing.',
+        );
       }
     }
   }

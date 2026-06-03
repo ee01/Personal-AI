@@ -174,17 +174,48 @@ export function formatDesignUpdatedDate(value?: string | null): string | undefin
   return new Date(time).toISOString().slice(0, 10);
 }
 
+export function formatDesignUpdatedDateTime(value?: string | null): string | undefined {
+  const time = getDesignTimestampMs(value);
+  if (time === null) return undefined;
+
+  return `${new Date(time).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
 export function formatDesignUpdatedTooltip(value?: string | null): string | undefined {
   const dateLabel = formatDesignUpdatedDate(value);
   if (!dateLabel) return undefined;
 
-  return `Design update reported ${dateLabel}. Re-check the linked design if implementation started before this update.`;
+  const dateTimeLabel = formatDesignUpdatedDateTime(value);
+  return `Design update reported ${dateTimeLabel || dateLabel}. Re-check the linked design if implementation started before this update.`;
+}
+
+export function chooseLatestDesignUpdatedAt(...values: Array<string | undefined | null>): string | undefined {
+  let selectedValue: string | undefined;
+  let selectedTime: number | null = null;
+
+  for (const value of values) {
+    const trimmedValue = value?.trim();
+    if (!trimmedValue) continue;
+
+    const time = getDesignTimestampMs(trimmedValue);
+    if (time === null) continue;
+
+    if (!selectedValue || selectedTime === null || time > selectedTime) {
+      selectedValue = trimmedValue;
+      selectedTime = time;
+    }
+  }
+
+  return selectedValue;
 }
 
 function chooseDesignUpdatedAt(
   currentValue: string | undefined,
   nextValue: string | undefined,
 ): string | undefined {
+  const latestValue = chooseLatestDesignUpdatedAt(currentValue, nextValue);
+  if (latestValue) return latestValue;
+
   const trimmedCurrent = currentValue?.trim();
   const trimmedNext = nextValue?.trim();
   if (!trimmedNext) return trimmedCurrent;
@@ -374,9 +405,63 @@ export function matchesProjectPattern(ticketKey: string, pattern: string): boole
   return projectPart === normalizedPattern;
 }
 
+export function parseJiraIssueKeysFromText(value?: string | null): string[] {
+  if (!value) return [];
+
+  const keys: string[] = [];
+  const seenKeys = new Set<string>();
+  const pattern = /(^|[^A-Z0-9])([A-Z][A-Z0-9]+-\d+)(?=$|[^A-Z0-9-])/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value)) !== null) {
+    const key = match[2]?.toUpperCase();
+    if (key && !seenKeys.has(key)) {
+      seenKeys.add(key);
+      keys.push(key);
+    }
+  }
+
+  return keys;
+}
+
 export function parseJiraIssueKeyFromText(value?: string | null): string | null {
-  const match = value?.match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
-  return match?.[1]?.toUpperCase() || null;
+  return parseJiraIssueKeysFromText(value)[0] || null;
+}
+
+export function parseJiraIssueKeyFromBrowseUrl(rawUrl?: string | null): string | null {
+  const trimmedUrl = rawUrl?.trim();
+  if (!trimmedUrl) return null;
+
+  try {
+    const url = new URL(trimmedUrl, 'https://jira.local');
+    const pathMatch = url.pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i);
+    return pathMatch?.[1]?.toUpperCase() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseJiraIssueKeyFromIssueUrl(rawUrl?: string | null): string | null {
+  const trimmedUrl = rawUrl?.trim();
+  if (!trimmedUrl) return null;
+
+  try {
+    const url = new URL(trimmedUrl, 'https://jira.local');
+    const pathPatterns = [
+      /\/browse\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i,
+      /\/issues\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i,
+      /\/issue\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i,
+    ];
+
+    for (const pattern of pathPatterns) {
+      const match = url.pathname.match(pattern);
+      if (match?.[1]) return match[1].toUpperCase();
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 export function parseJiraIssueKeyFromUrl(rawUrl?: string | null): string | null {
@@ -385,8 +470,9 @@ export function parseJiraIssueKeyFromUrl(rawUrl?: string | null): string | null 
 
   try {
     const url = new URL(trimmedUrl, 'https://jira.local');
-    const pathMatch = url.pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/i);
-    return pathMatch?.[1]?.toUpperCase() || parseJiraIssueKeyFromText(trimmedUrl) || parseJiraIssueKeyFromText(url.pathname);
+    return parseJiraIssueKeyFromIssueUrl(trimmedUrl)
+      || parseJiraIssueKeyFromText(trimmedUrl)
+      || parseJiraIssueKeyFromText(url.pathname);
   } catch {
     return parseJiraIssueKeyFromText(trimmedUrl);
   }

@@ -10,6 +10,7 @@ describe('OpenClawDelegationService', () => {
   const fetchMock = vi.fn();
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -404,6 +405,52 @@ describe('OpenClawDelegationService', () => {
       expect.arrayContaining(['date', 'time', 'title', 'relevant']),
     );
     expect(outcome.artifacts[0].content).toContain('RCV project review');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('honors a shorter per-request timeout for synchronous delegation', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 600000,
+      }),
+    );
+
+    fetchMock.mockImplementation((_url, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcomePromise = service.delegate({
+      actionId: 'action-1',
+      threadId: 'thread-1',
+      sessionKey: 'thread-1',
+      task: '请检查 MTR-144628 的标题',
+      mode: 'read',
+      targetSystem: 'jira',
+      timeoutMs: 1200,
+    });
+    await vi.advanceTimersByTimeAsync(1200);
+
+    const outcome = await outcomePromise;
+    expect(outcome.status).toBe('timeout');
+    expect(outcome.summary).toBe('OpenClaw 委派超时。');
 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

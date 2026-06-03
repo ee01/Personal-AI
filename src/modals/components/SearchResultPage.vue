@@ -172,6 +172,13 @@
           <span v-if="scopeBreakdownLabel" class="results-scope-breakdown">
             命中范围: {{ scopeBreakdownLabel }}
           </span>
+          <span
+            v-if="scopeExposureNotice"
+            class="scope-exposure-notice"
+            role="note"
+          >
+            {{ scopeExposureNotice }}
+          </span>
           <div
             v-if="recallChannelDiagnostics.length"
             class="channel-diagnostics"
@@ -382,6 +389,7 @@ import type {
 import {
   MEMORY_RESULT_TYPE_CONFIG,
   formatScopeBreakdownLabel,
+  formatScopeExposureNotice,
   formatRecallChannelDiagnostics,
   getRecallChannelLabel,
   getResultChannels,
@@ -464,6 +472,10 @@ const currentScopeLabel = computed(() =>
 
 const scopeBreakdownLabel = computed(() =>
   formatScopeBreakdownLabel(entities.value),
+);
+
+const scopeExposureNotice = computed(() =>
+  formatScopeExposureNotice(entities.value, currentScopeValue.value),
 );
 
 const recallChannelDiagnostics = computed(() =>
@@ -559,7 +571,8 @@ function getFeedbackTargetType(
   if (
     recallType === 'message' ||
     recallType === 'chunk' ||
-    recallType === 'entity'
+    recallType === 'entity' ||
+    recallType === 'source_memory'
   ) {
     return recallType;
   }
@@ -576,13 +589,105 @@ function getFeedbackTargetType(
   return undefined;
 }
 
+function getFeedbackTargetId(
+  entity: any,
+  targetType: MemoryFeedbackTargetType,
+): string {
+  const rawId =
+    targetType === 'source_memory'
+      ? entity?.sourceMemoryCapsuleId || entity?.source_memory_capsule_id || entity?.id
+      : entity?.id;
+  const id = String(rawId || '').trim();
+  return targetType === 'source_memory'
+    ? id.replace(/^source-memory:/, '')
+    : id;
+}
+
+function compactFeedbackDetailValue(
+  value: unknown,
+  maxLength = 160,
+): string | undefined {
+  const normalized =
+    typeof value === 'string'
+      ? value.replace(/\s+/g, ' ').trim()
+      : value == null
+      ? ''
+      : String(value).replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength).trimEnd()}...`
+    : normalized;
+}
+
+function buildSearchResultFeedbackDetail(
+  entity: any,
+  targetType: MemoryFeedbackTargetType,
+  action: MemoryFeedbackAction,
+): string {
+  const surface =
+    searchContext.value.mode === 'overview'
+      ? 'ask_evidence'
+      : 'memory_search';
+  const query = compactFeedbackDetailValue(
+    searchQuery.value || searchContext.value.query,
+    180,
+  );
+  const scope = compactFeedbackDetailValue(currentScopeValue.value, 40);
+  const mode = compactFeedbackDetailValue(searchContext.value.mode, 60);
+  const signature = [
+    'memory-exploring',
+    surface,
+    mode,
+    scope,
+    query,
+  ]
+    .filter(Boolean)
+    .join(':');
+  const detail = {
+    version: '1',
+    interaction:
+      action === 'negative'
+        ? 'memory_relevance_trainer'
+        : 'context_recall_feedback',
+    surface,
+    action,
+    auto_applied: action === 'negative' ? 'true' : undefined,
+    feedback_reason:
+      action === 'negative'
+        ? surface === 'ask_evidence'
+          ? 'ask_evidence_mismatch'
+          : 'search_context_mismatch'
+        : undefined,
+    scene_anchor_signature: compactFeedbackDetailValue(signature, 240),
+    query,
+    scope,
+    mode,
+    target_type: targetType,
+    result_key: compactFeedbackDetailValue(getSearchResultKey(entity), 180),
+    source_label: compactFeedbackDetailValue(
+      entity?.sourceLabel || entity?.source,
+      100,
+    ),
+    source_title: compactFeedbackDetailValue(entity?.sourceTitle, 140),
+    source_url: compactFeedbackDetailValue(entity?.sourceUrl, 220),
+    current_title: compactFeedbackDetailValue(document.title, 120),
+  };
+
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(detail).filter(([, value]) => Boolean(value)),
+    ),
+  );
+}
+
 function getInitialFeedbackAction(entity: any): SearchFeedbackChoice | undefined {
   const value = entity?.feedbackAction || entity?.recallFeedback;
   return value === 'positive' || value === 'negative' ? value : undefined;
 }
 
 function canSubmitResultFeedback(entity: any): boolean {
-  return Boolean(entity?.id && getFeedbackTargetType(entity));
+  const targetType = getFeedbackTargetType(entity);
+  return Boolean(targetType && getFeedbackTargetId(entity, targetType));
 }
 
 function setFeedbackState(
@@ -652,7 +757,9 @@ async function submitResultFeedback(
   action: MemoryFeedbackAction,
 ) {
   const targetType = getFeedbackTargetType(entity);
-  const targetId = String(entity?.id || '').trim();
+  const targetId = targetType
+    ? getFeedbackTargetId(entity, targetType)
+    : '';
   if (!targetType || !targetId) return;
 
   const previousState = feedbackByResultKey.value[getFeedbackKey(entity)];
@@ -673,6 +780,7 @@ async function submitResultFeedback(
       targetId,
       targetType,
       action,
+      detail: buildSearchResultFeedbackDetail(entity, targetType, action),
     })) as any;
 
     if (!response?.success) {
@@ -1182,6 +1290,15 @@ const handleResultClick = (entity: any) => {
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 0.45rem;
   background: rgba(15, 23, 42, 0.38);
+}
+
+.scope-exposure-notice {
+  color: #fde68a;
+  font-size: 0.875rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 0.45rem;
+  background: rgba(120, 53, 15, 0.32);
 }
 
 .channel-diagnostics {

@@ -76,12 +76,40 @@ describe('Ingest API', () => {
     expect(body).toHaveProperty('status');
     expect(body.status).toBe('created');
     expect(body.decision).toMatchObject({
-      storage: 'stored_unindexed',
-      reason: 'extraction_unavailable',
+      storage: 'indexed',
+      reason: 'salience_indexed',
+      extractionStatus: 'unavailable',
       shouldIndex: true,
-      indexed: false,
+      indexed: true,
     });
     expect(typeof body.decision.salienceScore).toBe('number');
+    expect(body.decision.salienceComponents).toMatchObject({
+      importance: expect.any(Number),
+      frequency: expect.any(Number),
+      recency: expect.any(Number),
+      surprise: expect.any(Number),
+      redundancy: expect.any(Number),
+    });
+
+    const indexedChunk = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunks
+         WHERE related_entity_id = ?`,
+      )
+      .get(body.id) as { count: number };
+    expect(indexedChunk.count).toBeGreaterThan(0);
+
+    const metadata = db
+      .prepare(
+        `SELECT salience_score
+         FROM memory_metadata
+         WHERE target_type = 'message' AND target_id = ?`,
+      )
+      .get(body.id) as { salience_score: number } | undefined;
+    expect(metadata?.salience_score).toBeCloseTo(
+      body.decision.salienceScore,
+    );
   });
 
   it('defaults scope to work and keeps source separate from sourceType during ingest', async () => {
@@ -92,7 +120,11 @@ describe('Ingest API', () => {
         content: `Scoped ingest message ${Date.now()}`,
         sourceType: 'glip',
         source: 'chat-sync',
+        sourceUrl: 'https://example.test/rooms/123/posts/456',
+        sourceTitle: 'Release readiness thread',
         sender: 'test-user',
+        groupId: 'release-room',
+        groupName: 'Release Room',
         timestamp: Math.floor(Date.now() / 1000),
       },
     });
@@ -103,7 +135,8 @@ describe('Ingest API', () => {
 
     const stored = db
       .prepare(
-        `SELECT scope, source, source_type
+        `SELECT scope, source, source_type, source_url, source_title,
+                sender, group_id, group_name
          FROM messages_raw
          WHERE id = ?`,
       )
@@ -111,11 +144,21 @@ describe('Ingest API', () => {
       scope: string;
       source: string | null;
       source_type: string;
+      source_url: string | null;
+      source_title: string | null;
+      sender: string | null;
+      group_id: string | null;
+      group_name: string | null;
     };
 
     expect(stored.scope).toBe('work');
     expect(stored.source).toBe('chat-sync');
     expect(stored.source_type).toBe('glip');
+    expect(stored.source_url).toBe('https://example.test/rooms/123/posts/456');
+    expect(stored.source_title).toBe('Release readiness thread');
+    expect(stored.sender).toBe('test-user');
+    expect(stored.group_id).toBe('release-room');
+    expect(stored.group_name).toBe('Release Room');
   });
 
   // -------------------------------------------------------------------
@@ -223,6 +266,32 @@ describe('Ingest API', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json().status).toBe('created');
+  });
+
+  it('POST /api/v1/ingest accepts external AI and local agent source types', async () => {
+    const sourceTypes = [
+      'chatgpt',
+      'doubao_chat',
+      'codex_cli',
+      'claude_code_cli',
+      'cursor_agent_cli',
+    ];
+
+    for (const sourceType of sourceTypes) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/ingest',
+        payload: {
+          content: `Source type parity ${sourceType} ${Date.now()}`,
+          sourceType,
+          sender: 'test-user',
+          timestamp: Math.floor(Date.now() / 1000),
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe('created');
+    }
   });
 
   // -------------------------------------------------------------------
@@ -342,14 +411,21 @@ describe('Ingest API', () => {
             sender: 'batch-user',
             timestamp: Math.floor(ts / 1000),
           },
+          {
+            content: `Batch local agent source parity ${ts}`,
+            sourceType: 'codex_cli',
+            sender: 'batch-user',
+            timestamp: Math.floor(ts / 1000),
+          },
         ],
       },
     });
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.totalCreated).toBe(2);
+    expect(body.totalCreated).toBe(3);
     expect(body.results.map((result: any) => result.status)).toEqual([
+      'created',
       'created',
       'created',
     ]);

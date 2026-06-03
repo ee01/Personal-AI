@@ -157,6 +157,8 @@ try {
         ? [staleRehearsal, activeRehearsal]
         : status === 'active'
           ? [activeRehearsal]
+          : status === 'stale'
+            ? [staleRehearsal]
           : [];
       await route.fulfill(
         jsonResponse({
@@ -260,6 +262,29 @@ try {
   );
   assert.deepEqual(listStatuses.slice(0, 2), ['active', 'all']);
 
+  await page.getByRole('button', { name: /Active launch prep/ }).click();
+  await detailPanel
+    .getByRole('heading', { name: 'Active launch prep' })
+    .waitFor({ timeout: 10000 });
+  await page.locator('.filter-select').selectOption('stale');
+  await detailPanel
+    .getByRole('heading', { name: 'Stale Colin follow-up' })
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.locator('.focus-notice').count(),
+    0,
+    'user-applied status filters should not pin the previous rehearsal outside the filter',
+  );
+  const staleFilterFirstCardText = await page.locator('.rehearsal-card').first().innerText();
+  assert.ok(
+    staleFilterFirstCardText.includes('Stale Colin follow-up'),
+    'stale filter should select an in-filter rehearsal instead of preserving the old active selection',
+  );
+  assert.ok(
+    page.url().includes(`rehearsalId=${staleRehearsal.id}`),
+    'user-applied filters should update the focused rehearsal id in the route',
+  );
+
   await detailPanel.getByRole('button', { name: '重新激活' }).click();
   await detailPanel.getByText('已清除过期时间并恢复为 Active。').waitFor({
     timeout: 10000,
@@ -291,7 +316,7 @@ try {
     activeDetailRequestCount + 1,
     'same-page rehearsalId route changes should refetch and focus the requested rehearsal',
   );
-  assert.deepEqual(listStatuses.slice(0, 3), ['active', 'all', 'all']);
+  assert.deepEqual(listStatuses.slice(0, 3), ['active', 'all', 'stale']);
 
   console.log('verify-rehearsals-page-e2e: ok');
 } finally {
