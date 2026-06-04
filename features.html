@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Personal AI 功能按捕捉、召回、写作辅助、会议准备、项目上下文、人脉记忆和覆盖控制组织。">
+    <title>功能介绍 - Personal AI</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <canvas id="particles-canvas"></canvas>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="logo">Personal AI</a>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html">首页</a></li>
+                <li><a href="features.html" class="active">功能</a></li>
+                <li><a href="install.html">安装</a></li>
+                <li><a href="privacy.html">隐私</a></li>
+                <li><a href="terms.html">服务条款</a></li>
+                <li><a href="features-en.html" class="lang-switch">EN</a></li>
+                <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-primary" target="_blank">立即安装</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <section class="page-header">
+        <div class="container">
+            <h1 class="gradient-text">功能结构</h1>
+            <p>围绕真正需要上下文的现场组织私人记忆能力。</p>
+        </div>
+    </section>
+
+    <section class="features-detail">
+        <div class="container feature-detail-grid">
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>记忆核心</h2>
+                        <p class="feature-badge">基础层</p>
+                    </div>
+                </div>
+                <p class="feature-description">Memory Service 把消息、会议、网页资料、实体关系、用户画像和 source capsule 组织成私人长期记忆层。</p>
+                <ul class="feature-list">
+                    <li>语义、关键词、图谱和时间四通道召回</li>
+                    <li>显著性评分、衰减、巩固、反思和原始证据保留</li>
+                    <li>按用户隔离，并尊重工作、个人、全部等范围语义</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 5v14M5 12h14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>记忆捕捉</h2>
+                        <p class="feature-badge">入库</p>
+                    </div>
+                </div>
+                <p class="feature-description">以低打扰方式保存真正重要的资料，同时避免把普通浏览历史变成噪音。</p>
+                <ul class="feature-list">
+                    <li>保存选中文本、整页网页、表格、SVG/视觉区域和 Jira owner comment</li>
+                    <li>保存来源、原因、证据锚点、takeaways、future triggers 和可撤销事件</li>
+                    <li>用建议入库和自动入库门槛控制误捕捉</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>记忆提示</h2>
+                        <p class="feature-badge">召回</p>
+                    </div>
+                </div>
+                <p class="feature-description">在当前网页、消息、Jira、会议或划词现场，把真正相关的旧记忆带回来。</p>
+                <ul class="feature-list">
+                    <li>右下角轻提示、hover peek 和展开卡片三层交互</li>
+                    <li>划词记忆检索支持用户主动查询选中文本</li>
+                    <li>展示来源链接、匹配原因、反馈、站点静默和敏感页面拦截</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>回复助手</h2>
+                        <p class="feature-badge">写作</p>
+                    </div>
+                </div>
+                <p class="feature-description">用记忆在原生输入框旁生成可插入文本，但不替用户发送。</p>
+                <ul class="feature-list">
+                    <li>支持 RingCentral 回复、Jira comment 和 Web AI 输入框</li>
+                    <li>生成回复草稿或 context pack，并按风险要求预览确认</li>
+                    <li>从脱敏改写 trace 学习写作风格，而不是保存最终发送原文</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>今天与会议</h2>
+                        <p class="feature-badge">准备</p>
+                    </div>
+                </div>
+                <p class="feature-description">把每天和每场会议压缩成少量有证据、有下一步的提示。</p>
+                <ul class="feature-list">
+                    <li>今日 Mission 来自会议、提醒、动作、人脉信号和项目风险</li>
+                    <li>会前准备可以交接到 RingCentral 会议捕获和侧边面板</li>
+                    <li>会中行动项、决议、时间线、摘要和会后 Panorama 可复盘</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.74V17h8v-2.26A7 7 0 0012 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Ask 与探索</h2>
+                        <p class="feature-badge">查询</p>
+                    </div>
+                </div>
+                <p class="feature-description">主动向自己的记忆提问，并能回看答案背后的证据链。</p>
+                <ul class="feature-list">
+                    <li>短问题会先做话题锁定，例如“那个 BE ready 了吗”</li>
+                    <li>答案基于本次证据，证据不足时保留 unknown 或转外部查证</li>
+                    <li>搜索结果、时间轴、资料详情、动作队列和决策中心可追溯</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 19V5m0 14h16M8 16V9m4 7V7m4 9v-5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>项目与人脉</h2>
+                        <p class="feature-badge">工作上下文</p>
+                    </div>
+                </div>
+                <p class="feature-description">整理长期项目和人物上下文，同时不把推断信号伪装成已确认事实。</p>
+                <ul class="feature-list">
+                    <li>项目面板显示本地计划、证据覆盖、风险线索和 Memory Service 关注项目同步</li>
+                    <li>人脉雷达整理最近互动、未闭环事项、context card 和 meeting brief</li>
+                    <li>敏感或推断关系事实保留安全链接和确认 / 驳回路径</li>
+                </ul>
+                <div class="demo-links">
+                    <a href="demo/实体记忆查询界面.html" class="btn-demo" target="_blank">记忆演示</a>
+                    <a href="demo/项目进展图-新版.html" class="btn-demo" target="_blank">项目演示</a>
+                </div>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>覆盖与控制</h2>
+                        <p class="feature-badge">信任</p>
+                    </div>
+                </div>
+                <p class="feature-description">看清 Personal AI 当前看得见什么、哪些来源变旧、哪些动作需要用户明确控制。</p>
+                <ul class="feature-list">
+                    <li>Memory Coverage Map 展示平台健康、质量分、修复队列和资料录入</li>
+                    <li>备份恢复、隐私控制、来源链接和站点级静默 / 屏蔽列表</li>
+                    <li>只在对外发送、不可逆删除、稳定画像等高责任边界要求用户确认</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>从记忆开始，而不是再加一个 inbox</h2>
+            <p>安装 Personal AI，让浏览器在你的工作工具之间带着正确上下文前进。</p>
+            <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">安装到 Chrome</a>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3 class="logo">Personal AI</h3>
+                    <p>Chrome 私人记忆副驾</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>产品</h4>
+                        <ul>
+                            <li><a href="features.html">功能介绍</a></li>
+                            <li><a href="install.html">安装指南</a></li>
+                            <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" target="_blank">Chrome 商店</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>资源</h4>
+                        <ul>
+                            <li><a href="https://github.com/ee01/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">文档</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>法律</h4>
+                        <ul>
+                            <li><a href="privacy.html">隐私政策</a></li>
+                            <li><a href="terms.html">服务条款</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Personal AI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <button id="back-to-top" class="back-to-top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <script src="js/particles.js"></script>
+    <script src="js/animations.js"></script>
+</body>
+</html>

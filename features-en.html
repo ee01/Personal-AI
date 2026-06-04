@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Personal AI features organized around capture, recall, writing assistance, meeting preparation, project context, relationship memory, and memory coverage.">
+    <title>Features - Personal AI</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/lang-switch.css">
+</head>
+<body>
+    <canvas id="particles-canvas"></canvas>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index-en.html" class="logo">Personal AI</a>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index-en.html">Home</a></li>
+                <li><a href="features-en.html" class="active">Features</a></li>
+                <li><a href="install-en.html">Install</a></li>
+                <li><a href="privacy-en.html">Privacy</a></li>
+                <li><a href="terms-en.html">Terms</a></li>
+                <li><a href="features.html" class="lang-switch">中文</a></li>
+                <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-primary" target="_blank">Install Now</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <section class="page-header">
+        <div class="container">
+            <h1 class="gradient-text">Features</h1>
+            <p>A private memory system organized around the moments where context matters.</p>
+        </div>
+    </section>
+
+    <section class="features-detail">
+        <div class="container feature-detail-grid">
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Memory Core</h2>
+                        <p class="feature-badge">Foundation</p>
+                    </div>
+                </div>
+                <p class="feature-description">The Memory Service stores messages, meetings, web sources, entities, relationships, profile items, and source capsules in a private long-term memory layer.</p>
+                <ul class="feature-list">
+                    <li>Multi-channel recall across semantic, keyword, graph, and time signals</li>
+                    <li>Salience scoring, decay, consolidation, reflection, and evidence retention</li>
+                    <li>Per-user memory boundaries and explicit scope handling</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 5v14M5 12h14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Memory Capture</h2>
+                        <p class="feature-badge">Capture</p>
+                    </div>
+                </div>
+                <p class="feature-description">Save meaningful sources with low friction while keeping ordinary browsing quiet.</p>
+                <ul class="feature-list">
+                    <li>Save selected text, whole pages, tables, SVG/visual regions, and Jira owner comments</li>
+                    <li>Store source, reason, anchors, takeaways, future triggers, and undoable events</li>
+                    <li>Use suggestion and auto-save gates to avoid turning browsing history into memory noise</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Memory Lens</h2>
+                        <p class="feature-badge">Recall</p>
+                    </div>
+                </div>
+                <p class="feature-description">Bring relevant existing memories into the page, message, issue, meeting, or selected text you are looking at now.</p>
+                <ul class="feature-list">
+                    <li>Quiet context recall with rest, hover peek, and expanded card states</li>
+                    <li>Selection Memory Search for user-initiated text lookup</li>
+                    <li>Source links, why chips, feedback, site mute, and privacy-sensitive blocking</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Compose Assist</h2>
+                        <p class="feature-badge">Writing</p>
+                    </div>
+                </div>
+                <p class="feature-description">Use memory to draft insertable text beside native input boxes without taking over the send action.</p>
+                <ul class="feature-list">
+                    <li>Works with RingCentral replies, Jira comments, and Web AI input boxes</li>
+                    <li>Creates reply drafts or context packs with preview and confirm gates</li>
+                    <li>Learns writing style from redacted edit traces instead of storing final messages</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Today & Meeting Pilot</h2>
+                        <p class="feature-badge">Preparation</p>
+                    </div>
+                </div>
+                <p class="feature-description">Turn the day and each meeting into a small set of actionable, evidence-backed cues.</p>
+                <ul class="feature-list">
+                    <li>Today missions from meetings, reminders, actions, relationship signals, and project risks</li>
+                    <li>Meeting prep handoff into RingCentral meeting capture and side panel</li>
+                    <li>Action items, decisions, timelines, summaries, and post-meeting panorama</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.74V17h8v-2.26A7 7 0 0012 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Ask & Explore</h2>
+                        <p class="feature-badge">Search</p>
+                    </div>
+                </div>
+                <p class="feature-description">Ask your own memory questions and inspect the evidence trail behind answers.</p>
+                <ul class="feature-list">
+                    <li>Topic locking for short questions such as "is that BE ready?"</li>
+                    <li>Evidence-backed answers with unknowns, prior answers, and external-check handoff when needed</li>
+                    <li>Search results, timeline, source memory detail, action queue, and decision center</li>
+                </ul>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M4 19V5m0 14h16M8 16V9m4 7V7m4 9v-5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Projects & Relationships</h2>
+                        <p class="feature-badge">Work Context</p>
+                    </div>
+                </div>
+                <p class="feature-description">Organize long-running work and people context without pretending every derived signal is a confirmed fact.</p>
+                <ul class="feature-list">
+                    <li>Project dashboard with local plans, evidence coverage, risk cues, and Memory Service watched-project sync</li>
+                    <li>Relationship Radar for recent interactions, open loops, context cards, and meeting briefs</li>
+                    <li>Safe evidence links and confirm/reject paths for sensitive or inferred relationship facts</li>
+                </ul>
+                <div class="demo-links">
+                    <a href="demo/实体记忆查询界面.html" class="btn-demo" target="_blank">Memory Demo</a>
+                    <a href="demo/项目进展图-新版.html" class="btn-demo" target="_blank">Project Demo</a>
+                </div>
+            </div>
+
+            <div class="feature-detail-card">
+                <div class="feature-detail-header">
+                    <div class="feature-detail-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Coverage & Control</h2>
+                        <p class="feature-badge">Trust</p>
+                    </div>
+                </div>
+                <p class="feature-description">See what Personal AI can access, where coverage is stale, and what needs explicit user control.</p>
+                <ul class="feature-list">
+                    <li>Memory Coverage Map with platform health, quality score, repair queue, and import drawer</li>
+                    <li>Backup, restore, privacy controls, source-level links, and site-level mute/block lists</li>
+                    <li>Human confirmation only for high-responsibility boundaries such as external sending, irreversible deletion, or stable profile facts</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>Start with memory, not another inbox</h2>
+            <p>Install Personal AI and let your browser carry the right context across your work tools.</p>
+            <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">Install to Chrome</a>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3 class="logo">Personal AI</h3>
+                    <p>Private memory copilot for Chrome</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>Product</h4>
+                        <ul>
+                            <li><a href="features-en.html">Features</a></li>
+                            <li><a href="install-en.html">Installation Guide</a></li>
+                            <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" target="_blank">Chrome Store</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>Resources</h4>
+                        <ul>
+                            <li><a href="https://github.com/ee01/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">Documentation</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>Legal</h4>
+                        <ul>
+                            <li><a href="privacy-en.html">Privacy Policy</a></li>
+                            <li><a href="terms-en.html">Terms of Service</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Personal AI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <button id="back-to-top" class="back-to-top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <script src="js/particles.js"></script>
+    <script src="js/animations.js"></script>
+</body>
+</html>

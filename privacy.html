@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Personal AI 隐私政策 - 保护您的数据安全">
+    <title>隐私政策 - Personal AI</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 粒子背景 -->
+    <canvas id="particles-canvas"></canvas>
+
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="logo">Personal AI</a>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <ul class="nav-menu">
+                <li><a href="index.html">首页</a></li>
+                <li><a href="features.html">功能</a></li>
+                <li><a href="install.html">安装</a></li>
+                <li><a href="privacy.html" class="active">隐私</a></li>
+                <li><a href="terms.html">服务条款</a></li>
+                <li><a href="privacy-en.html" class="lang-switch">EN</a></li>
+                <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-primary" target="_blank">立即安装</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- 页面标题 -->
+    <section class="page-header">
+        <div class="container">
+            <h1 class="gradient-text">隐私政策</h1>
+            <p>我们重视并保护您的隐私</p>
+            <p class="update-date">最后更新：2025年5月</p>
+        </div>
+    </section>
+
+    <!-- 隐私政策内容 -->
+    <section class="privacy-section">
+        <div class="container">
+            
+            <!-- 重要声明 -->
+            <div class="privacy-highlight">
+                <h2>重要声明</h2>
+                <p><strong>Google Workspace APIs 不用于开发、改进或训练通用 AI 和/或 ML 模型。</strong></p>
+                <p>Personal AI 严格遵守 Google API 服务用户数据政策和限制使用要求。</p>
+            </div>
+
+            <!-- 我们收集的数据 -->
+            <div class="privacy-card">
+                <h2>1. 我们收集的数据</h2>
+                <p>Personal AI 收集以下类型的数据以提供服务：</p>
+                
+                <h3>1.1 用户提供的数据</h3>
+                <ul>
+                    <li><strong>配置信息：</strong>API 密钥、服务端点和您设置的其他配置项</li>
+                    <li><strong>聊天消息：</strong>您通过扩展程序分析的消息及相关元数据</li>
+                    <li><strong>工作数据：</strong>Jira 工单、Google Slides、Sheet 数据和其他工作相关信息</li>
+                    <li><strong>记忆实体：</strong>您选择保存的人员、项目、主题和其他实体</li>
+                </ul>
+
+                <h3>1.2 自动收集的数据</h3>
+                <ul>
+                    <li><strong>使用统计：</strong>功能使用频率、错误日志（不包含具体内容）</li>
+                    <li><strong>浏览器信息：</strong>浏览器类型、版本、语言设置</li>
+                    <li><strong>扩展版本：</strong>已安装的 Personal AI 版本号</li>
+                </ul>
+            </div>
+
+            <!-- 如何使用数据 -->
+            <div class="privacy-card">
+                <h2>2. 如何使用您的数据</h2>
+                <p>您的数据仅用于以下目的：</p>
+                
+                <h3>2.1 提供服务</h3>
+                <ul>
+                    <li>处理和分析消息，提取重要信息</li>
+                    <li>存储和检索记忆实体，提供智能推荐</li>
+                    <li>同步工作数据，生成项目进度报告</li>
+                    <li>执行定时消息、自动化任务</li>
+                </ul>
+
+                <h3>2.2 改进服务</h3>
+                <ul>
+                    <li>分析使用模式，优化功能设计</li>
+                    <li>修复错误，提高稳定性</li>
+                    <li>开发新功能，增强用户体验</li>
+                </ul>
+
+                <h3>2.3 我们不会做的事</h3>
+                <ul class="privacy-not-list">
+                    <li>❌ 不向任何第三方出售您的数据</li>
+                    <li>❌ 不使用您的数据训练通用 AI 模型</li>
+                    <li>❌ 不与广告商共享您的数据</li>
+                    <li>❌ 不将您的数据用于无关目的</li>
+                </ul>
+            </div>
+
+            <!-- 数据存储和安全 -->
+            <div class="privacy-card">
+                <h2>3. 数据存储和安全</h2>
+                
+                <h3>3.1 本地存储</h3>
+                <p>大部分数据存储在您的设备本地：</p>
+                <ul>
+                    <li><strong>记忆数据库：</strong>存储在本地 Chrome 存储中，仅您可访问</li>
+                    <li><strong>配置信息：</strong>本地存储在扩展程序中</li>
+                    <li><strong>聊天历史：</strong>本地存储，不上传到服务器</li>
+                </ul>
+
+                <h3>3.2 云端存储</h3>
+                <p>部分数据需要云端存储：</p>
+                <ul>
+                    <li><strong>Google Sheets 数据：</strong>存储在您的 Google Drive 中，由您控制</li>
+                    <li><strong>Jira 数据：</strong>存储在您公司的 Jira 实例中</li>
+                    <li><strong>API 调用：</strong>仅调用您配置的服务（OpenAI、Claude 等）</li>
+                </ul>
+
+                <h3>3.3 安全措施</h3>
+                <ul>
+                    <li>所有网络通信使用 HTTPS 加密</li>
+                    <li>API 密钥加密存储在本地 Chrome 存储中</li>
+                    <li>无中央服务器，无单点数据泄露风险</li>
+                    <li>定期安全审计和漏洞修复</li>
+                </ul>
+            </div>
+
+            <!-- 第三方服务 -->
+            <div class="privacy-card">
+                <h2>4. 第三方服务</h2>
+                <p>Personal AI 可能调用以下第三方服务（仅在您配置和授权时）：</p>
+                
+                <h3>4.1 AI 服务</h3>
+                <ul>
+                    <li><strong>OpenAI API：</strong>用于消息分析、文本生成等</li>
+                    <li><strong>Anthropic Claude API：</strong>用于高级分析任务</li>
+                    <li><strong>Google Gemini API：</strong>替代 AI 服务</li>
+                </ul>
+                <p class="privacy-note">注意：使用这些服务时，您的数据将发送到相应的服务提供商。请阅读他们的隐私政策。</p>
+
+                <h3>4.2 工作平台</h3>
+                <ul>
+                    <li><strong>Google Workspace：</strong>访问 Sheets、Slides 等（需要 OAuth 授权）</li>
+                    <li><strong>Atlassian Jira：</strong>读写工单数据（需要 API 令牌）</li>
+                    <li><strong>RingCentral：</strong>聊天消息访问（需要登录）</li>
+                </ul>
+                <p class="privacy-note">注意：Personal AI 仅访问您明确授权的数据，并严格遵守各平台的 API 使用政策。</p>
+            </div>
+
+            <!-- Google API 服务 -->
+            <div class="privacy-card">
+                <h2>5. Google API 服务数据使用</h2>
+                <p>Personal AI 对从 Google APIs 接收的信息的使用和传输遵守 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank">Google API 服务用户数据政策</a>，包括限制使用要求。</p>
+                
+                <h3>5.1 我们访问的 Google 用户数据</h3>
+                <p>Personal AI 通过 Google Workspace APIs 访问以下 Google 用户数据（仅在您通过 OAuth 2.0 明确授权时）：</p>
+                
+                <h4>Google Sheets API</h4>
+                <ul>
+                    <li><strong>访问的数据：</strong>您授权的电子表格内容、单元格值、公式、格式和元数据</li>
+                    <li><strong>权限：</strong>读写访问权限，用于创建、更新和管理电子表格</li>
+                    <li><strong>用途：</strong>
+                        <ul>
+                            <li>将 Jira 工单数据同步到 Google Sheets 以进行跟踪和报告</li>
+                            <li>创建和管理定时消息数据表</li>
+                            <li>部署 Google Apps Script 以实现自动化消息调度</li>
+                        </ul>
+                    </li>
+                </ul>
+
+                <h4>Google Slides API</h4>
+                <ul>
+                    <li><strong>访问的数据：</strong>您授权的演示文稿中的幻灯片内容、文本、图像和演示结构</li>
+                    <li><strong>权限：</strong>只读访问权限，用于分析幻灯片内容</li>
+                    <li><strong>用途：</strong>
+                        <ul>
+                            <li>从演示文稿幻灯片中分析项目进度信息</li>
+                            <li>提取和整理内容以帮助您创建摘要</li>
+                            <li>协助内容组织和信息检索</li>
+                        </ul>
+                    </li>
+                </ul>
+
+                <h4>Google Drive API</h4>
+                <ul>
+                    <li><strong>访问的数据：</strong>您明确授权的 Sheets 和 Slides 文件的文件元数据和内容</li>
+                    <li><strong>权限：</strong>仅限访问应用程序创建或与之共享的文件</li>
+                    <li><strong>用途：</strong>
+                        <ul>
+                            <li>存储和检索为定时消息创建的电子表格</li>
+                            <li>访问您选择分析的演示文稿</li>
+                        </ul>
+                    </li>
+                </ul>
+
+                <p class="privacy-note"><strong>重要：</strong>Personal AI 不会访问您的 Gmail、Google Calendar、Google Contacts、Google Photos 或上述未明确列出的任何其他 Google 服务。</p>
+
+                <h3>5.2 如何使用 Google 用户数据</h3>
+                <p>Google 用户数据仅用于提供和改进您请求的面向用户的功能：</p>
+                <ul>
+                    <li><strong>Jira 同步：</strong>读取 Jira 数据并写入您的 Google Sheets 以进行项目跟踪</li>
+                    <li><strong>定时消息：</strong>创建和管理带有 Apps Script 的 Google Sheets 以自动化消息传递</li>
+                    <li><strong>内容分析：</strong>读取 Google Slides 内容以帮助您组织和总结信息</li>
+                    <li><strong>数据可视化：</strong>在扩展程序界面中显示同步的数据</li>
+                </ul>
+
+                <p><strong>所有数据处理都在以下情况下进行：</strong></p>
+                <ul>
+                    <li>仅当您明确请求某个功能时</li>
+                    <li>在您发起的特定任务范围内</li>
+                    <li>符合 Google 的限制使用要求</li>
+                </ul>
+
+                <h3>5.3 如何共享 Google 用户数据</h3>
+                <p><strong>Personal AI 不会与任何第三方共享、出售或传输您的 Google 用户数据。</strong></p>
+                
+                <p>您的 Google 数据仅在以下有限情况下传输：</p>
+                <ul>
+                    <li><strong>到 Google 服务：</strong>仅在提供功能所需时将数据发送回 Google APIs（例如，将数据写入您的 Google Sheets）</li>
+                    <li><strong>到 AI 服务（可选）：</strong>如果您配置了 AI 分析功能，文本内容可能会发送到您明确配置的 AI 提供商（OpenAI、Claude、Gemini）。这是可选的，需要您单独配置 API 密钥。</li>
+                    <li><strong>无其他第三方：</strong>我们不会将数据传输给广告商、数据经纪人或任何其他外部实体</li>
+                </ul>
+
+                <h3>5.4 如何保护 Google 用户数据</h3>
+                <p>我们实施行业标准的安全措施来保护您的 Google 用户数据：</p>
+                <ul>
+                    <li><strong>传输加密：</strong>Personal AI 和 Google APIs 之间的所有数据传输都使用 HTTPS/TLS 加密</li>
+                    <li><strong>安全认证：</strong>OAuth 2.0 令牌经过加密并安全存储在 Chrome 的本地存储中</li>
+                    <li><strong>最小数据保留：</strong>我们仅在本地存储中临时缓存数据以提高性能；不会在远程服务器上存储数据</li>
+                    <li><strong>访问控制：</strong>扩展程序仅访问您通过 OAuth 同意屏幕明确授权的数据</li>
+                    <li><strong>无中央数据库：</strong>Personal AI 不维护任何存储您的 Google 数据的中央服务器或数据库</li>
+                </ul>
+
+                <h3>5.5 数据保留和删除</h3>
+                <p><strong>我们保留 Google 用户数据的时长：</strong></p>
+                <ul>
+                    <li><strong>OAuth 令牌：</strong>本地存储，直到您撤销访问权限或卸载扩展程序</li>
+                    <li><strong>缓存数据：</strong>临时存储在本地浏览器存储中，当您关闭浏览器或清除浏览数据时自动清除</li>
+                    <li><strong>创建的电子表格：</strong>保留在您的 Google Drive 中，由您控制，直到您删除它们</li>
+                </ul>
+
+                <p><strong>如何删除您的数据：</strong></p>
+                <ol>
+                    <li><strong>撤销访问：</strong>访问 <a href="https://myaccount.google.com/permissions" target="_blank">Google 账户权限</a> → 找到"Personal AI" → 点击"移除访问权限"。所有 OAuth 令牌将立即失效。</li>
+                    <li><strong>清除本地数据：</strong>卸载扩展程序或清除 Chrome 浏览数据以删除所有本地缓存的信息</li>
+                    <li><strong>删除电子表格：</strong>从您的 Google Drive 中删除 Personal AI 创建的任何电子表格</li>
+                    <li><strong>联系我们：</strong>发送电子邮件至 privacy@personal-ai.example.com 请求完全删除数据</li>
+                </ol>
+
+                <h3>5.6 您的控制权</h3>
+                <p>您对您的 Google 数据拥有完全控制权：</p>
+                <ul>
+                    <li><strong>细粒度权限：</strong>选择授权哪些特定文件和文件夹</li>
+                    <li><strong>随时撤销：</strong>随时通过 Google 账户设置撤销访问权限</li>
+                    <li><strong>审计访问：</strong>在您的 Google 账户活动日志中查看所有访问历史</li>
+                    <li><strong>删除数据：</strong>从您的 Google Drive 中删除 Personal AI 创建的任何数据</li>
+                </ul>
+            </div>
+
+            <!-- 您的权利 -->
+            <div class="privacy-card">
+                <h2>6. 您的权利</h2>
+                <p>您对您的数据拥有以下权利：</p>
+                
+                <h3>6.1 访问和导出</h3>
+                <ul>
+                    <li>查看扩展程序中本地存储的所有数据</li>
+                    <li>导出记忆数据库（JSON 格式）</li>
+                    <li>导出配置信息</li>
+                </ul>
+
+                <h3>6.2 修改和删除</h3>
+                <ul>
+                    <li>修改或删除任何记忆实体</li>
+                    <li>清除所有本地数据</li>
+                    <li>卸载扩展程序，所有数据将被完全删除</li>
+                </ul>
+
+                <h3>6.3 控制和授权</h3>
+                <ul>
+                    <li>选择启用哪些功能</li>
+                    <li>选择集成哪些第三方服务</li>
+                    <li>随时撤销任何先前授予的授权</li>
+                </ul>
+            </div>
+
+            <!-- 数据保留 -->
+            <div class="privacy-card">
+                <h2>7. 数据保留</h2>
+                
+                <h3>7.1 本地数据</h3>
+                <p>本地存储，直到：</p>
+                <ul>
+                    <li>您手动删除</li>
+                    <li>智能遗忘机制自动清理</li>
+                    <li>您卸载扩展程序</li>
+                    <li>您清除浏览器数据</li>
+                </ul>
+
+                <h3>7.2 云端数据</h3>
+                <p>保留期限由各自的服务决定：</p>
+                <ul>
+                    <li>Google Sheets 数据：直到您从 Google Drive 中删除</li>
+                    <li>Jira 数据：根据您公司的 Jira 保留政策</li>
+                    <li>API 调用日志：根据相应服务提供商的政策</li>
+                </ul>
+            </div>
+
+            <!-- 儿童隐私 -->
+            <div class="privacy-card">
+                <h2>8. 儿童隐私</h2>
+                <p>Personal AI 专为商业用户设计，不适用于 13 岁以下的儿童。我们不会故意收集 13 岁以下儿童的信息。如果您是家长或监护人，并认为您的孩子向我们提供了个人信息，请联系我们。</p>
+            </div>
+
+            <!-- 隐私政策更新 -->
+            <div class="privacy-card">
+                <h2>9. 隐私政策更新</h2>
+                <p>我们可能会不时更新本隐私政策，以反映我们的做法或法律要求的变化。当我们进行重大更改时：</p>
+                <ul>
+                    <li>更新本页面顶部的"最后更新"日期</li>
+                    <li>通过扩展程序通知您（对于重大更改）</li>
+                    <li>请求您重新授权（对于需要额外权限的更改）</li>
+                </ul>
+                <p>在政策更新后继续使用 Personal AI 表示您接受更新后的政策。</p>
+            </div>
+
+            <!-- 联系我们 -->
+            <div class="privacy-card">
+                <h2>10. 联系我们</h2>
+                <p>如果您对本隐私政策或数据处理有任何疑问或顾虑，请通过以下方式联系我们：</p>
+                <ul>
+                    <li><strong>电子邮件：</strong>privacy@personal-ai.example.com</li>
+                    <li><strong>GitHub Issues：</strong><a href="https://github.com/your-repo/personal-ai/issues" target="_blank">提交问题</a></li>
+                    <li><strong>文档：</strong><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">查看完整文档</a></li>
+                </ul>
+            </div>
+
+            <!-- 合规性 -->
+            <div class="privacy-card">
+                <h2>11. 法规合规</h2>
+                <p>Personal AI 遵守以下数据保护法规和标准：</p>
+                <ul>
+                    <li><strong>GDPR：</strong>欧盟通用数据保护条例</li>
+                    <li><strong>CCPA：</strong>加州消费者隐私法</li>
+                    <li><strong>Google API 服务用户数据政策：</strong>包括限制使用要求</li>
+                    <li><strong>Chrome Web Store 开发者计划政策</strong></li>
+                </ul>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section">
+        <div class="container">
+            <h2>对隐私有疑问？</h2>
+            <p>阅读我们的完整文档或联系我们</p>
+            <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+                <a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" class="btn-secondary" target="_blank">
+                    <span>查看文档</span>
+                </a>
+                <a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" class="btn-hero" target="_blank">
+                    <span>免费安装到 Chrome</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M14 5l7 7m0 0l-7 7m7-7H3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- 底部 -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3 class="logo">Personal AI</h3>
+                    <p>你的私人智能助理</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>产品</h4>
+                        <ul>
+                            <li><a href="features.html">功能介绍</a></li>
+                            <li><a href="install.html">安装指南</a></li>
+                            <li><a href="https://chromewebstore.google.com/detail/kefnadjndpllbibeklhajjddgmlbafel" target="_blank">Chrome 商店</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>资源</h4>
+                        <ul>
+                            <li><a href="https://github.com/your-repo/personal-ai" target="_blank">GitHub</a></li>
+                            <li><a href="https://wiki.ringcentral.com/display/XTO/Personal+AI+-+Tools" target="_blank">文档</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-column">
+                        <h4>法律</h4>
+                        <ul>
+                            <li><a href="privacy.html">隐私政策</a></li>
+                            <li><a href="terms.html">服务条款</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Personal AI. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- 返回顶部按钮 -->
+    <button id="back-to-top" class="back-to-top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <script src="js/particles.js"></script>
+    <script src="js/animations.js"></script>
+</body>
+</html>
+
