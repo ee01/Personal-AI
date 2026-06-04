@@ -1361,6 +1361,13 @@ export interface RelationshipContextCard {
     timestamp: number;
     evidenceRef: RelationshipEvidenceRef;
   }>;
+  actionSuggestions?: Array<{
+    title: string;
+    body: string;
+    tone: 'hot' | 'warn' | 'ok' | 'muted';
+    reason: string;
+    evidenceRef?: RelationshipEvidenceRef;
+  }>;
   doNotAssume: string[];
   evidenceRefs: RelationshipEvidenceRef[];
   retrievalHints: {
@@ -2604,6 +2611,7 @@ export interface SourceMemoryCapsule {
   summary: string;
   contentPreview: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
   savedAt?: number;
@@ -2708,14 +2716,18 @@ export interface DayPilotBrief {
     boardOnlyCardIds?: string[];
   };
   sourceStats: {
-    messages: { scanned: number; totalRecent: number };
-    calendar: { scanned: number; upcoming: number };
-    notifications: { scanned: number; pending: number };
-    actions: { scanned: number; queued: number };
-    reflections: { scanned: number; active: number };
-    rehearsals: { scanned: number; active: number };
-    skills: { scanned: number; suggestions: number };
-    relationships: { scanned: number; highFrequencyPeople: number };
+    messages: { scanned: number; totalRecent: number; selected?: number };
+    calendar: { scanned: number; upcoming: number; selected?: number };
+    notifications: { scanned: number; pending: number; selected?: number };
+    actions: { scanned: number; queued: number; selected?: number };
+    reflections: { scanned: number; active: number; selected?: number };
+    rehearsals: { scanned: number; active: number; selected?: number };
+    skills: { scanned: number; suggestions: number; selected?: number };
+    relationships: {
+      scanned: number;
+      highFrequencyPeople: number;
+      selected?: number;
+    };
   };
   cards: DayPilotCard[];
   missions: DayPilotMission[];
@@ -2740,6 +2752,17 @@ export interface DayPilotContextPackResponse {
     label: string;
     defaultTokenBudget: number;
     style: 'implementation' | 'conversation' | 'analysis' | 'chinese' | 'plain';
+  };
+  usageIntent: {
+    kind: 'external_ai_context';
+    boundary: 'context_only_not_execution';
+    defaultSensitiveHandling: 'redacted_by_default' | 'included_sensitive';
+  };
+  sourceSummary: {
+    evidenceCount: number;
+    sourceKinds: Record<string, number>;
+    redactionApplied: boolean;
+    truncated: boolean;
   };
   bodyMd: string;
   evidenceRefs: DayPilotEvidenceRef[];

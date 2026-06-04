@@ -1,6 +1,6 @@
 # Agent Thinking 功能概览
 
-最后更新: 2026-05-31
+最后更新: 2026-06-04
 
 ## 功能定位
 
@@ -160,6 +160,13 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - 这让预算耗尽、工具失败、阻断、证据不足等普通问题也能被带出页面复核，而不是只能逐步展开 trace 或复制完整调试详情。
 - 当浏览器拒绝剪贴板写入或备用复制失败时，诊断包、审核包和重跑配置会显示只读手动复制框，避免“请手动选择”但页面上没有可选择内容。
 
+2026-06-04 状态:
+
+- 诊断包新增 `traceSpans`，把同一轮运行拆成 root run、step、`execute_tool` 和 terminal decision 四类结构化 span，方便后续 eval、排障或观测系统消费。
+- 工具 span 会保留 `gen_ai.operation.name=execute_tool`、`gen_ai.tool.name`、工具状态、证据状态、审批状态、风险和效果等可计算字段；不会写入原始工具结果、工具参数或批准 key。
+- Options 运行检查会显示本轮 trace span 数量；复制诊断包失败时仍用只读手动复制框兜底，用户不需要从完整时间线里手工整理问题。
+- 这只是本地结构化诊断包，不等于 OpenTelemetry/LangSmith/Langfuse 标准导出，也不等于可跨刷新恢复的 checkpoint。
+
 ## 处理流程
 
 1. 检测输入类型和消息格式。
@@ -177,7 +184,7 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - 当前已能复制批准后的最小重跑配置，并在 UI 中说明 approve/reject/edit 三类处理；但尚未持久化被暂停的 run state，刷新页面或 service worker 中断后仍需要调用方重新发起分析并带上批准 key。
 - 思考过程已有摘要化主路径；待确认批准 key 会完整展示，工具返回仍在本地 UI 可展开，后续需要按权限/环境进一步分层。
 - 当前工具 guardrail 已覆盖注册表、必填参数和基础人审阻断；完整的可恢复审批队列、权限分组和敏感数据脱敏仍需后续分层。
-- Options 流程图现在能定位到同页时间线步骤，并能复制隐私保守的诊断包；但尚未输出可导入 OpenTelemetry / LangSmith / Langfuse 的标准 span/trace 图。
+- Options 流程图现在能定位到同页时间线步骤，并能复制隐私保守的结构化 trace 诊断包；但尚未接入 OpenTelemetry / LangSmith / Langfuse 的标准 exporter。
 
 ## 建设性改进方向
 
@@ -193,7 +200,7 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 - 参考 AgentTrace 对 operational/cognitive/contextual 三类 telemetry 的划分，后续可以把工具状态、决策摘要和上下文快照拆成结构化 trace 字段，而不是只依赖 UI 文案。
 - 参考 AgentOps、Langfuse 和 AgentTrace 的 observability 思路，trace UI 应继续从“可查看日志”走向“可定位问题并给出处理路径”，尤其要把失败/阻断/预算耗尽这些信号前置到运行级摘要。
 - 参考 OpenTelemetry GenAI agent spans，后续如果输出结构化 trace，应把工具执行 span、证据数量、失败状态和用户可见诊断作为可计算字段，而不是只依赖中文展示文案。
-- 参考 LangSmith、OpenTelemetry 和 AgentTrace，本轮先补轻量诊断包；下一步可以把同一结构映射成标准 trace/span 字段，尤其是 workflow status、tool status、evidence quality、pending approval 和 step transition reason。
+- 参考 LangSmith、OpenTelemetry 和 AgentTrace，当前已先补本地 `traceSpans` 诊断结构；下一步才是把这些字段接入标准 exporter，尤其是 workflow status、tool status、evidence quality、pending approval 和 step transition reason。
 - 参考 LangGraph/OpenAI human-in-the-loop 的风险分级策略，后续可以把 `requiresHumanApproval` 升级为可恢复审批流，例如高风险工具允许 approve/edit/reject，中风险工具只允许 approve/reject，只读工具不打断。
 - 参考 OpenAI Agents SDK 和 LangChain HITL middleware 的 interrupt payload 设计，审批 UI 应持续展示完整 action request 与允许的 decision types，而不是只暴露一个批准 token。
 - 当前轻量实现已把 decision types 前置到待确认动作队列；下一步才是把这些选择接到真正可恢复的 run state，而不是继续堆叠复制按钮。
@@ -244,6 +251,8 @@ Agent Thinking 像一个“先看材料、再决定要不要查工具、最后�
 
 2026-05-31 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking 诊断包体验的开放提醒，也没有 Reminder 项目需要标记完成。
 
+2026-06-04 本轮通过 Reminders AppleScript 查询本机可见列表，仍未找到名为 `Personal AI` 的列表；因此没有可纳入 Agent Thinking trace 导出体验的开放提醒，也没有 Reminder 项目需要标记完成。
+
 ## 验证
 
 相关回归脚本:
@@ -263,6 +272,7 @@ node tools/verify-agent-thinking-options-e2e.mjs
 - 未注册工具和缺少必填参数的工具调用会被阻断，且不会触发真实工具请求。
 - 单条消息的 `content`/`message_content` 会进入提示词，不会显示为“无内容”。
 - 可视化状态分类会正确区分“已阻断”“部分跳过”“失败”等状态。
+- 诊断包会输出隐私保守的 `traceSpans`，覆盖 root run、step、`execute_tool` 和 terminal decision，不包含原始工具结果、工具参数或批准 key。
 - Options 演示页能在扩展环境中显示工具目录、流程图状态标签，并支持键盘展开被阻断步骤。
 
 本轮额外验证:
@@ -365,3 +375,10 @@ node tools/verify-agent-thinking-options-e2e.mjs
 - `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖 `buildAgentRunDiagnosticPacket` 会输出状态、严重度、步骤编号、工具问题计数、待确认摘要和流程节点，并确认不会把审批 key 写入诊断包。
 - `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
 - `node tools/verify-agent-thinking-options-e2e.mjs` 通过，覆盖 Options 演示页“复制诊断包”入口、强制剪贴板失败时的手动复制框，以及审核包手动复制兜底。
+
+2026-06-04 验证覆盖:
+
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-thinking.ts` 通过，覆盖 `traceSpans` 的 root run、step、`execute_tool`、terminal decision 结构和隐私字段排除。
+- `npm start` 首次 webpack dev 编译成功后已停止 watch，确认 Agent Thinking、Options 和静态样式能进入 `dist/`。
+- `node tools/verify-agent-thinking-options-e2e.mjs` 通过，覆盖 Options 演示页诊断包手动复制框里包含 `traceSpans` / `execute_tool` / `gen_ai.tool.name`，且不会泄露审批 key 尾部。
+- `git diff --check` 通过。

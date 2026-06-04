@@ -532,3 +532,12 @@ export function formatAgentWorkflowReplayLabel(
     contextParts.length > 0 ? ` (${contextParts.join(' / ')})` : '';
   return `${timeLabel} | ${message.sender} @ ${message.teamName}${contextLabel} | ${snippet}`;
 }
+
+export function formatAgentWorkflowRegressionFailureDetail(
+  errorMessage?: string,
+): string {
+  const normalizedError = normalizeText(errorMessage);
+  return `失败原因：${
+    normalizedError || '该样例未产出可对比结果，请单独重跑确认。'
+  }`;
+}

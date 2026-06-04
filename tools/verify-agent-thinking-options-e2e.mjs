@@ -141,7 +141,13 @@ try {
   await diagnosticManualCopy.waitFor({ timeout: 3000 });
   const diagnosticPacketText = await diagnosticManualCopy.inputValue();
   assert.match(diagnosticPacketText, /"type": "agent_thinking_run_diagnostics"/);
+  assert.match(diagnosticPacketText, /"traceSpans": \[/);
+  assert.match(diagnosticPacketText, /"operationName": "execute_tool"/);
+  assert.match(diagnosticPacketText, /"gen_ai.tool.name": "messageNotification"/);
   assert.doesNotMatch(diagnosticPacketText, /approval-tail-token-visible-in-ui/);
+  await page.locator('.agent-run-trace-span-count', {
+    hasText: /Trace spans \d+/,
+  }).waitFor({ timeout: 3000 });
   await page.locator('.agent-run-review-item.warning', {
     hasText: '需要人工确认',
   }).waitFor({ timeout: 12000 });

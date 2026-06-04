@@ -12,7 +12,7 @@ Relationship Radar 是 Personal AI 的人物关系上下文能力，入口位于
 
 ## 大白话运行逻辑
 
-Relationship Radar 会把“和某个人有关的记忆”整理成人物上下文卡：最近互动、未闭环事项、已确认事实、关系提示和证据。它的重点不是联系方式管理，而是帮助用户在沟通前知道哪些话题、承诺或边界要注意。
+Relationship Radar 会把“和某个人有关的记忆”整理成人物上下文卡：最近互动、未闭环事项、已确认事实、关系提示、当前建议和证据。它的重点不是联系方式管理，而是帮助用户在沟通前知道哪些话题、承诺或边界要注意，以及下一步最应该先确认什么。
 
 这个功能保持独立文档，而不是并入 `memory_system.md`。原因是它已经是一组完整的人物关系能力：有自己的 UI、API、后台整理、存储表、人工确认队列、会议简报和回复助手；`memory_system.md` 只负责解释它在整个记忆系统里的位置，并链接到本文。
 
@@ -75,7 +75,9 @@ Relationship Radar 不是等用户点开页面才“凭空生成”。它采用 
 - 支持按 `personId` 或 `personName` 查找。
 - 支持 `surface` 和 `tokenBudget`。
 - 默认不包含敏感信息，除非调用方显式传入 `includeSensitive`；默认卡片会过滤邮箱/电话/密钥类别名、事实、证据、open loop 和检索 boost，并返回 `privacySummary` 说明隐藏数量。
-- 输出 `contextMd`、bullets、known facts、relationship hints、open loops、do-not-assume 和 evidence refs。
+- 输出 `contextMd`、bullets、action suggestions、known facts、relationship hints、open loops、do-not-assume 和 evidence refs。
+
+`actionSuggestions` 是 Context Card 的总结层，不只是证据重排。它会把 open loop、关系边、已确认/待确认事实压成“现在建议”，例如先闭环某个 owner / next step、沟通前确认关联对象边界、或先把推断升级成可用事实。每条建议都带 `tone`、`reason` 和可选 `evidenceRef`；UI 会把这块放在事实和关系证据之前，复制出去的 `contextMd` 也会包含 `## 现在建议`。如果读取到旧的 stored context card 没有该字段，service / UI 都会用现有 open loops、关系边和事实即时补齐兜底建议。
 
 Context Card 适合被 Meeting Pilot、Compose Assist、Quick Ask 或外部 AI context package 复用。UI 默认显示“敏感上下文未纳入”的状态，并只展示隐藏类型计数（例如别名、事实、证据、跟进、检索），让用户不必揭开敏感内容也能判断是否需要临时包含。用户需要显式点“临时包含敏感上下文”才会重新拉取可外发前复核的完整卡片；此时复制按钮会标成“复制含敏感上下文”，复制成功提示也会提醒外发前复核。详情 brief 里的“复制当前上下文”始终复制当前选中人物的 context card；即使首屏 spotlight 仍然指向另一个更高优先级人物，用户也能把正在查看的人物上下文直接交给外部 AI 或聊天草稿使用。
 

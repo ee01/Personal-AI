@@ -183,6 +183,58 @@ describe('ActionExecutor', () => {
     expect(updatedThread?.continueReason).toBe('new action result available');
   });
 
+  it('moves stale running OpenClaw actions to dead letter before due auto execution', async () => {
+    const action = actionRepo.create({
+      actionType: 'delegate_openclaw',
+      title: '上传视频到 Drive',
+      description: '外部写操作如果卡住，不能自动重跑。',
+      params: {
+        task: '下载视频并上传到 Google Drive。',
+        mode: 'write',
+        targetSystem: 'google_drive',
+      },
+      executionMode: 'auto',
+      requiresApproval: false,
+      queueStatus: 'queued',
+    });
+    actionRepo.markRunning(action.id);
+    const staleStartedAt = Math.floor(Date.now() / 1000) - 400;
+    db.prepare('UPDATE proposed_actions SET started_at = ? WHERE id = ?').run(
+      staleStartedAt,
+      action.id,
+    );
+    db.prepare(
+      'UPDATE proposed_action_attempts SET started_at = ? WHERE action_id = ?',
+    ).run(staleStartedAt, action.id);
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const results = await executor.runDueActions();
+
+    expect(results).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const updated = actionRepo.getById(action.id);
+    expect(updated?.queueStatus).toBe('dead_letter');
+    expect(updated?.state).toBe('expired');
+    expect(updated?.retryCount).toBe(1);
+    expect(updated?.lastError).toContain('stale running timeout');
+
+    const attempt = db
+      .prepare(
+        `SELECT status, error_message, finished_at
+         FROM proposed_action_attempts
+         WHERE action_id = ?`,
+      )
+      .get(action.id) as {
+      status: string;
+      error_message: string;
+      finished_at: number | null;
+    };
+    expect(attempt.status).toBe('dead_letter');
+    expect(attempt.error_message).toContain('avoid duplicate writes');
+    expect(attempt.finished_at).toEqual(expect.any(Number));
+  });
+
   it('records explicit approval before executing approval-required manual actions', async () => {
     const action = actionRepo.create({
       actionType: 'delegate_openclaw',

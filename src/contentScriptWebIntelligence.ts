@@ -248,6 +248,8 @@ interface VisualMemoryCandidate {
     nearbyText: string;
     source?: string;
     selectorHint: string;
+    table?: VisualMemoryTableSnapshot;
+    svg?: VisualMemorySvgSnapshot;
     rect: {
         x: number;
         y: number;
@@ -255,6 +257,20 @@ interface VisualMemoryCandidate {
         height: number;
     };
     score: number;
+}
+
+interface VisualMemorySvgSnapshot {
+    markup: string;
+    width: number;
+    height: number;
+}
+
+interface VisualMemoryTableSnapshot {
+    headers: string[];
+    rows: string[][];
+    rowCount: number;
+    columnCount: number;
+    truncated: boolean;
 }
 
 interface ContextMatchViewCopy {
@@ -943,6 +959,7 @@ const CONTEXT_UI_EXCLUDE_SELECTOR = [
     '.pai-context-bubble',
     '.pai-context-card',
     '.pai-context-peek',
+    '.pai-context-feedback-layer',
     '.pai-context-selection-trigger',
     '.pai-memory-capture-selection-dock',
     '.pai-memory-capture-note-panel',
@@ -987,6 +1004,8 @@ class WebIntelligenceContentScript {
     private bubbleElement: HTMLDivElement | null = null;
     private cardElement: HTMLDivElement | null = null;
     private peekElement: HTMLDivElement | null = null;
+    private feedbackDrawerElement: HTMLDivElement | null = null;
+    private feedbackDrawerKeydownListener: ((event: KeyboardEvent) => void) | null = null;
     private peekShowTimer: number | null = null;
     private peekHideTimer: number | null = null;
     private selectionTriggerElement: HTMLElement | null = null;
@@ -1288,13 +1307,14 @@ class WebIntelligenceContentScript {
             node.classList.contains('pai-context-bubble') ||
             node.classList.contains('pai-context-card') ||
             node.classList.contains('pai-context-peek') ||
+            node.classList.contains('pai-context-feedback-layer') ||
             node.classList.contains('pai-context-selection-trigger') ||
             node.classList.contains('pai-memory-capture-selection-dock') ||
             node.classList.contains('pai-memory-capture-note-panel') ||
             node.classList.contains('pai-memory-capture-page-chip') ||
             node.classList.contains('pai-context-toast') ||
             node.id === 'pai-context-bubble-styles' ||
-            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast')
+            !!node.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-feedback-layer, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast')
         );
     }
 
@@ -1606,7 +1626,7 @@ class WebIntelligenceContentScript {
         if (
             element === document.body ||
             element === document.documentElement ||
-            element.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast')
+            element.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-feedback-layer, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast')
         ) {
             return null;
         }
@@ -1618,7 +1638,11 @@ class WebIntelligenceContentScript {
 
         const area = rect.width * rect.height;
         const kind = this.inferVisualMemoryKind(element);
-        const previewText = this.extractVisualMemoryText(element);
+        const table = kind === 'table' ? this.extractVisualMemoryTable(element) : undefined;
+        const svg = this.extractVisualMemorySvg(element, rect);
+        const previewText = table
+            ? this.formatVisualMemoryTableText(table)
+            : this.extractVisualMemoryText(element);
         const nearbyText = this.extractVisualMemoryNearbyText(element, previewText);
         const source = this.extractVisualMemorySource(element);
         const label = this.selectVisualMemoryLabel(element, kind, previewText, nearbyText);
@@ -1645,6 +1669,8 @@ class WebIntelligenceContentScript {
             nearbyText: nearbyText.slice(0, 900),
             source,
             selectorHint: this.buildVisualMemorySelectorHint(element),
+            table,
+            svg,
             rect: {
                 x: Math.round(rect.left + window.scrollX),
                 y: Math.round(rect.top + window.scrollY),
@@ -1754,6 +1780,189 @@ class WebIntelligenceContentScript {
             ? normalizeText(image.currentSrc || image.src)
             : '';
         return src ? src.slice(0, 500) : undefined;
+    }
+
+    private extractVisualMemorySvg(element: Element, rect: DOMRect): VisualMemorySvgSnapshot | undefined {
+        const svg = element instanceof SVGSVGElement
+            ? element
+            : element.querySelector('svg');
+        if (!(svg instanceof SVGSVGElement)) {
+            return undefined;
+        }
+
+        const clone = svg.cloneNode(true) as SVGSVGElement;
+        clone.querySelectorAll('script, foreignObject, iframe, object, embed').forEach((node) => node.remove());
+
+        for (const node of Array.from(clone.querySelectorAll('*'))) {
+            for (const attr of Array.from(node.attributes)) {
+                const name = attr.name.toLowerCase();
+                const value = attr.value.trim();
+                const lowerValue = value.toLowerCase();
+                if (name.startsWith('on') || lowerValue.includes('javascript:')) {
+                    node.removeAttribute(attr.name);
+                    continue;
+                }
+                if (name === 'style') {
+                    const safeStyle = sanitizeVisualMemorySvgStyleValue(value);
+                    if (safeStyle) {
+                        node.setAttribute(attr.name, safeStyle);
+                    } else {
+                        node.removeAttribute(attr.name);
+                    }
+                }
+            }
+        }
+
+        for (const attr of Array.from(clone.attributes)) {
+            const name = attr.name.toLowerCase();
+            const value = attr.value.trim();
+            const lowerValue = value.toLowerCase();
+            if (name.startsWith('on') || lowerValue.includes('javascript:')) {
+                clone.removeAttribute(attr.name);
+                continue;
+            }
+            if (name === 'style') {
+                const safeStyle = sanitizeVisualMemorySvgStyleValue(value);
+                if (safeStyle) {
+                    clone.setAttribute(attr.name, safeStyle);
+                } else {
+                    clone.removeAttribute(attr.name);
+                }
+            }
+        }
+
+        if (!clone.getAttribute('xmlns')) {
+            clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        }
+
+        const width = Math.max(1, Math.round(rect.width));
+        const height = Math.max(1, Math.round(rect.height));
+        if (!clone.getAttribute('width')) {
+            clone.setAttribute('width', String(width));
+        }
+        if (!clone.getAttribute('height')) {
+            clone.setAttribute('height', String(height));
+        }
+        if (!clone.getAttribute('viewBox')) {
+            clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        }
+
+        const markup = new XMLSerializer().serializeToString(clone);
+        if (!markup) {
+            return undefined;
+        }
+        if (markup.length > 300000) {
+            return this.extractCompactVisualMemorySvg(svg, width, height);
+        }
+
+        return {
+            markup,
+            width,
+            height,
+        };
+    }
+
+    private extractCompactVisualMemorySvg(
+        svg: SVGSVGElement,
+        width: number,
+        height: number,
+    ): VisualMemorySvgSnapshot | undefined {
+        const previewHeight = Math.min(height, 1200);
+        const compact = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        compact.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        compact.setAttribute('width', String(width));
+        compact.setAttribute('height', String(previewHeight));
+        compact.setAttribute('viewBox', `0 0 ${width} ${previewHeight}`);
+
+        for (const child of Array.from(svg.childNodes)) {
+            const cloned = this.cloneSvgNodeWithinBounds(child, previewHeight);
+            if (cloned) {
+                compact.appendChild(cloned);
+            }
+        }
+
+        const markup = new XMLSerializer().serializeToString(compact);
+        if (!markup || markup.length > 300000 || compact.childNodes.length === 0) {
+            return undefined;
+        }
+
+        return {
+            markup,
+            width,
+            height: previewHeight,
+        };
+    }
+
+    private cloneSvgNodeWithinBounds(node: Node, maxBottom: number): Node | null {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = normalizeText(node.textContent);
+            return text ? document.createTextNode(text) : null;
+        }
+        if (!(node instanceof SVGElement)) {
+            return null;
+        }
+
+        const originalTagName = node.tagName;
+        const tagName = originalTagName.toLowerCase();
+        if (tagName === 'script' || tagName === 'foreignobject' || tagName === 'iframe' || tagName === 'object' || tagName === 'embed') {
+            return null;
+        }
+
+        const isContainer = tagName === 'g' || tagName === 'svg' || tagName === 'defs' || tagName === 'style' || tagName === 'clippath' || tagName === 'lineargradient' || tagName === 'radialgradient' || tagName === 'pattern' || tagName === 'mask';
+        if (!isContainer && !this.svgElementIntersectsTopRegion(node, maxBottom)) {
+            return null;
+        }
+
+        const clone = document.createElementNS('http://www.w3.org/2000/svg', originalTagName);
+        for (const attr of Array.from(node.attributes)) {
+            const name = attr.name;
+            const lowerName = name.toLowerCase();
+            const value = attr.value;
+            const lowerValue = value.trim().toLowerCase();
+            if (lowerName.startsWith('on') || lowerValue.includes('javascript:')) {
+                continue;
+            }
+            if (lowerName === 'style') {
+                const safeStyle = sanitizeVisualMemorySvgStyleValue(value);
+                if (safeStyle) {
+                    clone.setAttribute(name, safeStyle);
+                }
+                continue;
+            }
+            clone.setAttribute(name, value);
+        }
+
+        if (tagName === 'style') {
+            clone.textContent = sanitizeVisualMemorySvgStyleText(node.textContent || '');
+            return clone.textContent ? clone : null;
+        }
+
+        for (const child of Array.from(node.childNodes)) {
+            const clonedChild = this.cloneSvgNodeWithinBounds(child, maxBottom);
+            if (clonedChild) {
+                clone.appendChild(clonedChild);
+            }
+        }
+
+        if (clone.childNodes.length === 0 && isContainer) {
+            return null;
+        }
+        return clone;
+    }
+
+    private svgElementIntersectsTopRegion(element: SVGElement, maxBottom: number): boolean {
+        try {
+            if (element instanceof SVGGraphicsElement) {
+                const box = element.getBBox();
+                if (!Number.isFinite(box.y) || !Number.isFinite(box.height)) {
+                    return true;
+                }
+                return box.y < maxBottom && box.y + box.height >= 0;
+            }
+        } catch (_error) {
+            return true;
+        }
+        return true;
     }
 
     private selectVisualMemoryLabel(
@@ -2479,7 +2688,7 @@ class WebIntelligenceContentScript {
         const nodes = [selection.anchorNode, selection.focusNode].filter(Boolean);
         return nodes.some((node) => {
             const element = node instanceof Element ? node : node?.parentElement;
-            return !!element?.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast');
+            return !!element?.closest('.pai-context-bubble, .pai-context-card, .pai-context-peek, .pai-context-feedback-layer, .pai-context-selection-trigger, .pai-memory-capture-selection-dock, .pai-memory-capture-note-panel, .pai-visual-memory-preview-panel, .pai-memory-capture-page-chip, .pai-context-toast');
         });
     }
 
@@ -2902,6 +3111,54 @@ class WebIntelligenceContentScript {
         };
     }
 
+    private extractVisualMemoryTable(element: Element): VisualMemoryTableSnapshot | undefined {
+        const table = element.tagName.toLowerCase() === 'table'
+            ? element
+            : element.querySelector('table');
+        if (!table) {
+            return undefined;
+        }
+
+        const rawRows = Array.from(table.querySelectorAll('tr'))
+            .map((row) => Array.from(row.querySelectorAll('th, td'))
+                .map((cell) => normalizeText(cell.textContent).slice(0, 220)))
+            .filter((row) => row.some(Boolean));
+        if (rawRows.length === 0) {
+            return undefined;
+        }
+
+        const headerRow = table.querySelector('tr');
+        const hasHeaderCells = Boolean(headerRow?.querySelector('th'));
+        const headers = hasHeaderCells ? rawRows[0] : [];
+        const rows = (hasHeaderCells ? rawRows.slice(1) : rawRows).slice(0, 20);
+        const columnCount = Math.max(
+            headers.length,
+            ...rows.map((row) => row.length),
+        );
+
+        return {
+            headers,
+            rows: rows.map((row) => row.slice(0, 12)),
+            rowCount: rawRows.length - (hasHeaderCells ? 1 : 0),
+            columnCount: Math.min(columnCount, 12),
+            truncated: rawRows.length - (hasHeaderCells ? 1 : 0) > rows.length || columnCount > 12,
+        };
+    }
+
+    private formatVisualMemoryTableText(table: VisualMemoryTableSnapshot): string {
+        const lines: string[] = [];
+        if (table.headers.length) {
+            lines.push(table.headers.join(' | '));
+        }
+        for (const row of table.rows) {
+            lines.push(row.join(' | '));
+        }
+        if (table.truncated) {
+            lines.push(`... 共 ${table.rowCount} 行，${table.columnCount} 列，已截取前 ${table.rows.length} 行`);
+        }
+        return normalizeText(lines.join('\n'));
+    }
+
     private submitSelectedTextCapture(
         payload: SelectedTextContextPayload,
         note: string,
@@ -3118,6 +3375,8 @@ class WebIntelligenceContentScript {
                             source: visualCandidate.source,
                             previewText: visualCandidate.previewText,
                             nearbyText: visualCandidate.nearbyText,
+                            table: visualCandidate.table,
+                            svg: visualCandidate.svg,
                             detection: 'dom_visual_candidate',
                         },
                     },
@@ -3252,12 +3511,11 @@ class WebIntelligenceContentScript {
         const isVisualCapture = payload.request.sourceKind === 'visual_memory';
         const chip = document.createElement('button');
         chip.type = 'button';
-        chip.className = isVisualCapture
-            ? 'pai-memory-capture-page-chip pai-memory-capture-page-chip--visual'
-            : 'pai-memory-capture-page-chip';
+        chip.className = 'pai-memory-capture-page-chip';
         chip.dataset.contextKey = payload.contextKey;
-        chip.setAttribute('aria-label', isVisualCapture ? '保存当前网页视觉证据' : '入库当前页面资料');
-        chip.title = `${isVisualCapture ? '保存当前网页视觉证据' : '入库当前页面资料'}${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
+        chip.dataset.captureKind = isVisualCapture ? 'visual' : 'webpage';
+        chip.setAttribute('aria-label', '入库当前页面资料');
+        chip.title = `入库当前页面资料${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
 
         const plus = document.createElement('span');
         plus.className = 'pai-memory-capture-selection-dock-plus';
@@ -3266,7 +3524,7 @@ class WebIntelligenceContentScript {
 
         const label = document.createElement('span');
         label.className = 'pai-memory-capture-selection-dock-label';
-        label.textContent = isVisualCapture ? '视觉' : '入库';
+        label.textContent = '入库';
         chip.appendChild(label);
 
         const logo = document.createElement('img');
@@ -3410,7 +3668,7 @@ class WebIntelligenceContentScript {
                 if (chip) {
                     chip.disabled = false;
                     chip.removeAttribute('aria-busy');
-                    chip.title = '保存当前网页视觉证据';
+                    chip.title = '入库当前页面资料';
                 }
                 this.showContextToast(`视觉证据保存失败：${message}`);
                 return;
@@ -5510,10 +5768,16 @@ class WebIntelligenceContentScript {
             }
 
             .pai-context-feedback-layer {
-                position: absolute;
+                position: fixed;
                 inset: 0;
-                z-index: 4;
-                pointer-events: none;
+                z-index: 2147483647;
+                display: flex;
+                justify-content: flex-end;
+                background: rgba(23, 32, 51, 0.16);
+                pointer-events: auto;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                color: #172033;
+                line-height: 1.5;
             }
 
             .pai-context-feedback-scrim {
@@ -5521,54 +5785,82 @@ class WebIntelligenceContentScript {
                 inset: 0;
                 border: 0;
                 padding: 0;
-                border-radius: 16px;
-                background: rgba(23, 32, 51, 0.08);
+                background: transparent;
                 cursor: default;
                 pointer-events: auto;
             }
 
             .pai-context-feedback-sheet {
-                position: absolute;
-                left: 10px;
-                right: 10px;
-                bottom: 10px;
+                position: relative;
+                z-index: 1;
+                width: 410px;
+                max-width: calc(100vw - 56px);
+                height: 100vh;
+                height: 100dvh;
                 display: flex;
                 flex-direction: column;
-                gap: 8px;
+                gap: 12px;
                 box-sizing: border-box;
-                padding: 11px;
-                border-radius: 12px;
-                border: 1px solid rgba(177, 153, 125, 0.46);
+                padding: 16px;
+                border-left: 1px solid rgba(177, 153, 125, 0.42);
                 background: rgba(255, 253, 248, 0.99);
-                box-shadow: 0 16px 42px rgba(52, 32, 19, 0.24);
+                box-shadow: -18px 0 54px rgba(23, 32, 51, 0.18);
                 pointer-events: auto;
+                overflow-y: auto;
+                backdrop-filter: blur(14px);
             }
 
             .pai-context-feedback-sheet-head {
                 display: flex;
-                align-items: center;
+                align-items: flex-start;
                 justify-content: space-between;
-                gap: 10px;
+                gap: 12px;
+                padding-bottom: 11px;
+                border-bottom: 1px solid rgba(222, 204, 178, 0.72);
             }
 
             .pai-context-feedback-sheet-title {
                 margin: 0;
                 color: #172033;
-                font-size: 13px;
+                font-size: 15px;
                 font-weight: 800;
                 line-height: 1.3;
             }
 
             .pai-context-feedback-sheet-subtitle {
+                margin-top: 4px;
                 color: #6b5a49;
+                font-size: 12px;
+                line-height: 1.45;
+                overflow-wrap: anywhere;
+            }
+
+            .pai-context-feedback-scene {
+                display: grid;
+                gap: 6px;
+                padding: 11px;
+                border-radius: 10px;
+                border: 1px solid rgba(222, 204, 178, 0.74);
+                background: rgba(255, 249, 240, 0.82);
+            }
+
+            .pai-context-feedback-scene-label {
+                color: #8a6b52;
                 font-size: 11px;
-                line-height: 1.35;
+                font-weight: 800;
+            }
+
+            .pai-context-feedback-scene-text {
+                color: #334155;
+                font-size: 12px;
+                line-height: 1.45;
+                overflow-wrap: anywhere;
             }
 
             .pai-context-feedback-close {
-                flex: 0 0 26px;
-                width: 26px;
-                height: 26px;
+                flex: 0 0 30px;
+                width: 30px;
+                height: 30px;
                 border: 1px solid rgba(177, 153, 125, 0.62);
                 border-radius: 8px;
                 background: rgba(255, 255, 255, 0.74);
@@ -5583,12 +5875,12 @@ class WebIntelligenceContentScript {
 
             .pai-context-feedback-reasons {
                 display: grid;
-                gap: 6px;
+                gap: 8px;
             }
 
             .pai-context-feedback-reason {
                 width: 100%;
-                min-height: 38px;
+                min-height: 48px;
                 box-sizing: border-box;
                 border: 1px solid rgba(177, 153, 125, 0.38);
                 border-radius: 9px;
@@ -5599,7 +5891,7 @@ class WebIntelligenceContentScript {
                 align-items: center;
                 justify-content: space-between;
                 gap: 8px;
-                padding: 7px 9px;
+                padding: 9px 10px;
                 text-align: left;
             }
 
@@ -5640,12 +5932,12 @@ class WebIntelligenceContentScript {
 
             .pai-context-feedback-note {
                 width: 100%;
-                min-height: 58px;
+                min-height: 74px;
                 resize: vertical;
                 box-sizing: border-box;
                 border: 1px solid rgba(148, 163, 184, 0.78);
                 border-radius: 9px;
-                padding: 7px 8px;
+                padding: 8px 9px;
                 color: #172033;
                 background: #ffffff;
                 font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -5842,6 +6134,26 @@ class WebIntelligenceContentScript {
                 background: rgba(255, 255, 255, 0.2);
             }
 
+            @media (max-width: 640px) {
+                .pai-context-feedback-layer {
+                    align-items: flex-end;
+                    justify-content: center;
+                    background: rgba(23, 32, 51, 0.22);
+                }
+
+                .pai-context-feedback-sheet {
+                    width: 100%;
+                    max-width: none;
+                    height: min(80vh, 720px);
+                    height: min(80dvh, 720px);
+                    border-left: 0;
+                    border-top: 1px solid rgba(177, 153, 125, 0.42);
+                    border-radius: 14px 14px 0 0;
+                    box-shadow: 0 -18px 48px rgba(23, 32, 51, 0.22);
+                    padding: 14px;
+                }
+            }
+
             @keyframes pai-context-bubble-enter {
                 from {
                     opacity: 0;
@@ -5896,6 +6208,8 @@ class WebIntelligenceContentScript {
                 .pai-memory-capture-note-panel,
                 .pai-visual-memory-preview-panel,
                 .pai-memory-capture-page-chip,
+                .pai-context-feedback-layer,
+                .pai-context-feedback-sheet,
                 .pai-context-toast {
                     animation: none !important;
                     transition: none !important;
@@ -6018,11 +6332,21 @@ class WebIntelligenceContentScript {
         scheduleToastClear();
     }
 
+    private clearContextFeedbackDrawer(): void {
+        if (this.feedbackDrawerKeydownListener) {
+            document.removeEventListener('keydown', this.feedbackDrawerKeydownListener, true);
+            this.feedbackDrawerKeydownListener = null;
+        }
+        this.feedbackDrawerElement?.remove();
+        this.feedbackDrawerElement = null;
+    }
+
     private clearContextBubble(): void {
         if (this.outsideClickListener) {
             document.removeEventListener('click', this.outsideClickListener, true);
             this.outsideClickListener = null;
         }
+        this.clearContextFeedbackDrawer();
         if (this.peekShowTimer !== null) {
             window.clearTimeout(this.peekShowTimer);
             this.peekShowTimer = null;
@@ -6221,12 +6545,47 @@ class WebIntelligenceContentScript {
             `;
         };
 
-        const renderNegativeFeedbackLayer = (
+        const closeNegativeFeedbackDrawer = (focusTrigger = true): void => {
+            this.clearContextFeedbackDrawer();
+            negativeFeedbackMatchId = null;
+            negativeFeedbackNoteExpanded = false;
+            negativeFeedbackNote = '';
+            if (focusTrigger && this.cardElement === card) {
+                window.setTimeout(() => {
+                    card.querySelector<HTMLButtonElement>('.pai-context-recall-negative')?.focus();
+                }, 0);
+            }
+        };
+
+        const openNegativeFeedbackDrawer = (
             match: ContextRecallMatch,
             view: ReturnType<typeof buildMatchView>,
-        ): string => {
-            if (negativeFeedbackMatchId !== match.id) return '';
+        ): void => {
+            negativeFeedbackMatchId = match.id;
+            negativeFeedbackNoteExpanded = false;
+            negativeFeedbackNote = '';
+            moreMenuOpen = false;
+            renderCard();
+
+            const renderDrawer = (): void => {
+                this.clearContextFeedbackDrawer();
+                if (!document.body) return;
+
+                const drawer = document.createElement('div');
+                drawer.className = 'pai-context-feedback-layer';
+                drawer.setAttribute('role', 'dialog');
+                drawer.setAttribute('aria-label', '这条记忆哪里不对');
+                drawer.setAttribute('aria-modal', 'false');
+
             const clippedTitle = clipContextLensTitle(view.titleText);
+                const sceneText = clipContextFeedbackDetailValue(
+                    [
+                        document.title,
+                        window.location.hostname,
+                        isSelectionSearch ? '划词检索' : 'Memory Lens',
+                    ].map((item) => normalizeText(item)).filter(Boolean).join(' · '),
+                    180,
+                );
             const reasonButtonsHtml = CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS
                 .map((reason) => `
                     <button type="button" class="pai-context-feedback-reason" data-feedback-reason="${escapeHtmlAttribute(reason.value)}">
@@ -6238,29 +6597,105 @@ class WebIntelligenceContentScript {
                     </button>
                 `)
                 .join('');
-            return `
-                <div class="pai-context-feedback-layer" role="dialog" aria-label="这条记忆哪里不对">
+
+                drawer.innerHTML = `
                     <button type="button" class="pai-context-feedback-scrim" aria-label="关闭反馈原因选择"></button>
-                    <div class="pai-context-feedback-sheet">
+                    <aside class="pai-context-feedback-sheet" tabindex="-1">
                         <div class="pai-context-feedback-sheet-head">
                             <div>
-                                <h4 class="pai-context-feedback-sheet-title">这条哪里不对</h4>
-                                <div class="pai-context-feedback-sheet-subtitle">${escapeHtml(clippedTitle || view.sourceLabel || '当前提示')}</div>
+                                <h4 class="pai-context-feedback-sheet-title">这条记忆不是这个意思</h4>
+                                <div class="pai-context-feedback-sheet-subtitle">选一个原因就会记录，不需要提交。</div>
                             </div>
                             <button type="button" class="pai-context-feedback-close" aria-label="关闭反馈原因选择">×</button>
+                        </div>
+                        <div class="pai-context-feedback-scene">
+                            <div class="pai-context-feedback-scene-label">当前场景</div>
+                            <div class="pai-context-feedback-scene-text">${escapeHtml(sceneText || '当前页面')}</div>
+                            <div class="pai-context-feedback-scene-label">误触发的记忆</div>
+                            <div class="pai-context-feedback-scene-text">${escapeHtml(clippedTitle || view.sourceLabel || '当前提示')}</div>
                         </div>
                         <div class="pai-context-feedback-reasons">
                             ${reasonButtonsHtml}
                         </div>
                         ${negativeFeedbackNoteExpanded ? `
-                            <textarea class="pai-context-feedback-note" maxlength="260" placeholder="补充一句原因">${escapeHtml(negativeFeedbackNote)}</textarea>
+                            <textarea class="pai-context-feedback-note" maxlength="260" placeholder="补充原因（可选，不填也会生效）">${escapeHtml(negativeFeedbackNote)}</textarea>
                         ` : `
-                            <button type="button" class="pai-context-feedback-note-toggle">补充原因</button>
+                            <button type="button" class="pai-context-feedback-note-toggle">补充一句原因（可选）</button>
                         `}
-                        <div class="pai-context-feedback-status">选择后自动记录。</div>
-                    </div>
-                </div>
-            `;
+                        <div class="pai-context-feedback-status">选择后会生成场景级修正；点旁边空白或按 Esc 可关闭。</div>
+                    </aside>
+                `;
+
+                drawer.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    const target = event.target instanceof Element ? event.target : null;
+                    if (!target) return;
+
+                    if (
+                        target.closest('.pai-context-feedback-scrim') ||
+                        target.closest('.pai-context-feedback-close')
+                    ) {
+                        event.preventDefault();
+                        closeNegativeFeedbackDrawer();
+                        return;
+                    }
+
+                    if (target.closest('.pai-context-feedback-note-toggle')) {
+                        event.preventDefault();
+                        negativeFeedbackNoteExpanded = true;
+                        renderDrawer();
+                        window.setTimeout(() => {
+                            this.feedbackDrawerElement
+                                ?.querySelector<HTMLTextAreaElement>('.pai-context-feedback-note')
+                                ?.focus();
+                        }, 0);
+                        return;
+                    }
+
+                    const feedbackReasonButton = target.closest<HTMLButtonElement>('.pai-context-feedback-reason');
+                    if (feedbackReasonButton) {
+                        event.preventDefault();
+                        const feedbackReason = CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS.find(
+                            (reason) => reason.value === feedbackReasonButton.dataset.feedbackReason,
+                        )?.value;
+                        if (!feedbackReason) return;
+                        const note = clipContextFeedbackDetailValue(negativeFeedbackNote, 260);
+                        closeNegativeFeedbackDrawer(false);
+                        this.markContextMatchIrrelevant(match, contextKey, {
+                            reason: feedbackReason,
+                            note,
+                            surface: feedbackSurface,
+                            selectedText,
+                            interaction: 'memory_relevance_trainer',
+                            autoApplied: true,
+                            restoreBubbleOptions: { mode, selectedText },
+                        });
+                    }
+                });
+
+                drawer.addEventListener('input', (event) => {
+                    const target = event.target;
+                    if (!(target instanceof HTMLTextAreaElement)) return;
+                    if (!target.matches('.pai-context-feedback-note')) return;
+                    negativeFeedbackNote = target.value.slice(0, 260);
+                });
+
+                this.feedbackDrawerKeydownListener = (event: KeyboardEvent) => {
+                    if (this.feedbackDrawerElement !== drawer) return;
+                    if (event.key !== 'Escape') return;
+                    event.preventDefault();
+                    closeNegativeFeedbackDrawer();
+                };
+                document.addEventListener('keydown', this.feedbackDrawerKeydownListener, true);
+
+                document.body.appendChild(drawer);
+                this.feedbackDrawerElement = drawer;
+                window.setTimeout(() => {
+                    drawer.querySelector<HTMLButtonElement>('.pai-context-feedback-reason')?.focus();
+                }, 0);
+            };
+
+            renderDrawer();
         };
 
         const renderPeek = (): void => {
@@ -6363,7 +6798,6 @@ class WebIntelligenceContentScript {
                         ${pagerHtml}
                     </div>
                 </div>
-                ${renderNegativeFeedbackLayer(match, view)}
             `;
         };
 
@@ -6409,6 +6843,7 @@ class WebIntelligenceContentScript {
             expanded = nextExpanded;
             moreMenuOpen = false;
             if (!expanded) {
+                this.clearContextFeedbackDrawer();
                 negativeFeedbackMatchId = null;
                 negativeFeedbackNoteExpanded = false;
                 negativeFeedbackNote = '';
@@ -6474,58 +6909,12 @@ class WebIntelligenceContentScript {
                 return;
             }
 
-            if (
-                target.closest('.pai-context-feedback-scrim') ||
-                target.closest('.pai-context-feedback-close')
-            ) {
-                event.preventDefault();
-                negativeFeedbackMatchId = null;
-                negativeFeedbackNoteExpanded = false;
-                negativeFeedbackNote = '';
-                renderCard();
-                card.querySelector<HTMLButtonElement>('.pai-context-recall-negative')?.focus();
-                return;
-            }
-
-            if (target.closest('.pai-context-feedback-note-toggle')) {
-                event.preventDefault();
-                negativeFeedbackNoteExpanded = true;
-                renderCard();
-                window.setTimeout(() => {
-                    card.querySelector<HTMLTextAreaElement>('.pai-context-feedback-note')?.focus();
-                }, 0);
-                return;
-            }
-
-            const feedbackReasonButton = target.closest<HTMLButtonElement>('.pai-context-feedback-reason');
-            if (feedbackReasonButton) {
-                event.preventDefault();
-                const feedbackReason = CONTEXT_RECALL_NEGATIVE_FEEDBACK_REASONS.find(
-                    (reason) => reason.value === feedbackReasonButton.dataset.feedbackReason,
-                )?.value;
-                if (!feedbackReason) return;
-                const currentMatch = matches[currentIndex];
-                const note = clipContextFeedbackDetailValue(negativeFeedbackNote, 260);
-                negativeFeedbackMatchId = null;
-                negativeFeedbackNoteExpanded = false;
-                negativeFeedbackNote = '';
-                this.markContextMatchIrrelevant(currentMatch, contextKey, {
-                    reason: feedbackReason,
-                    note,
-                    surface: feedbackSurface,
-                    selectedText,
-                    interaction: 'memory_relevance_trainer',
-                    autoApplied: true,
-                    restoreBubbleOptions: { mode, selectedText },
-                });
-                return;
-            }
-
             if (target.closest('.pai-context-prev')) {
                 event.preventDefault();
                 if (currentIndex > 0) {
                     currentIndex -= 1;
                     moreMenuOpen = false;
+                    this.clearContextFeedbackDrawer();
                     negativeFeedbackMatchId = null;
                     negativeFeedbackNoteExpanded = false;
                     negativeFeedbackNote = '';
@@ -6541,6 +6930,7 @@ class WebIntelligenceContentScript {
                 if (currentIndex < matches.length - 1) {
                     currentIndex += 1;
                     moreMenuOpen = false;
+                    this.clearContextFeedbackDrawer();
                     negativeFeedbackMatchId = null;
                     negativeFeedbackNoteExpanded = false;
                     negativeFeedbackNote = '';
@@ -6569,6 +6959,7 @@ class WebIntelligenceContentScript {
                 const previousLockedMatchId = positiveLockedMatchId;
                 positiveLockedMatchId = currentMatch.id;
                 moreMenuOpen = false;
+                this.clearContextFeedbackDrawer();
                 negativeFeedbackMatchId = null;
                 negativeFeedbackNoteExpanded = false;
                 negativeFeedbackNote = '';
@@ -6589,14 +6980,7 @@ class WebIntelligenceContentScript {
             if (target.closest('.pai-context-recall-negative')) {
                 event.preventDefault();
                 const currentMatch = matches[currentIndex];
-                negativeFeedbackMatchId = currentMatch.id;
-                negativeFeedbackNoteExpanded = false;
-                negativeFeedbackNote = '';
-                moreMenuOpen = false;
-                renderCard();
-                window.setTimeout(() => {
-                    card.querySelector<HTMLButtonElement>('.pai-context-feedback-reason')?.focus();
-                }, 0);
+                openNegativeFeedbackDrawer(currentMatch, buildMatchView(currentMatch));
                 return;
             }
 
@@ -6623,23 +7007,13 @@ class WebIntelligenceContentScript {
                 this.blockCurrentSite();
             }
         });
-        card.addEventListener('input', (event) => {
-            const target = event.target;
-            if (!(target instanceof HTMLTextAreaElement)) return;
-            if (!target.matches('.pai-context-feedback-note')) return;
-            negativeFeedbackNote = target.value.slice(0, 260);
-        });
         card.addEventListener('keydown', (event) => {
             if (event.key !== 'Escape') {
                 return;
             }
             event.preventDefault();
-            if (negativeFeedbackMatchId) {
-                negativeFeedbackMatchId = null;
-                negativeFeedbackNoteExpanded = false;
-                negativeFeedbackNote = '';
-                renderCard();
-                card.querySelector<HTMLButtonElement>('.pai-context-recall-negative')?.focus();
+            if (this.feedbackDrawerElement || negativeFeedbackMatchId) {
+                closeNegativeFeedbackDrawer();
                 return;
             }
             if (isSelectionSearch) {
@@ -6657,6 +7031,7 @@ class WebIntelligenceContentScript {
                 bubble.contains(target) ||
                 peek.contains(target) ||
                 card.contains(target) ||
+                Boolean(this.feedbackDrawerElement?.contains(target)) ||
                 this.toastElement?.contains(target)
             ) {
                 return;
@@ -6749,6 +7124,89 @@ class WebIntelligenceContentScript {
             }
         }, 6000);
     }
+}
+
+function sanitizeVisualMemorySvgStyleValue(value: string): string {
+    const safeDeclarations = value
+        .split(';')
+        .map((declaration) => declaration.trim())
+        .filter((declaration) => {
+            if (!declaration || declaration.toLowerCase().includes('javascript:')) {
+                return false;
+            }
+            const property = declaration.split(':')[0]?.trim().toLowerCase();
+            return property ? !isBlockedVisualMemorySvgStyleProperty(property) : false;
+        });
+    return safeDeclarations.join('; ');
+}
+
+function sanitizeVisualMemorySvgStyleText(value: string): string {
+    if (!value || value.toLowerCase().includes('javascript:')) {
+        return '';
+    }
+    let sanitized = value;
+    const blockedProperties = [
+        'position',
+        'inset',
+        'inset-block',
+        'inset-block-start',
+        'inset-block-end',
+        'inset-inline',
+        'inset-inline-start',
+        'inset-inline-end',
+        'top',
+        'right',
+        'bottom',
+        'left',
+        'z-index',
+        'float',
+        'clear',
+        'transform',
+        'translate',
+        'scale',
+        'rotate',
+        'margin',
+        'margin-top',
+        'margin-right',
+        'margin-bottom',
+        'margin-left',
+    ];
+    for (const property of blockedProperties) {
+        sanitized = sanitized.replace(
+            new RegExp(`${property.replace(/-/g, '\\-')}\\s*:[^;{}]+;?`, 'gi'),
+            '',
+        );
+    }
+    return sanitized.trim();
+}
+
+function isBlockedVisualMemorySvgStyleProperty(property: string): boolean {
+    return (
+        property === 'position' ||
+        property === 'inset' ||
+        property === 'inset-block' ||
+        property === 'inset-block-start' ||
+        property === 'inset-block-end' ||
+        property === 'inset-inline' ||
+        property === 'inset-inline-start' ||
+        property === 'inset-inline-end' ||
+        property === 'top' ||
+        property === 'right' ||
+        property === 'bottom' ||
+        property === 'left' ||
+        property === 'z-index' ||
+        property === 'float' ||
+        property === 'clear' ||
+        property === 'transform' ||
+        property === 'translate' ||
+        property === 'scale' ||
+        property === 'rotate' ||
+        property === 'margin' ||
+        property === 'margin-top' ||
+        property === 'margin-right' ||
+        property === 'margin-bottom' ||
+        property === 'margin-left'
+    );
 }
 
 try {

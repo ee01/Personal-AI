@@ -81,6 +81,16 @@ function verifyDayPilotStructure() {
   );
   assertContains(
     overviewSource,
+    /记忆统计暂不可用/,
+    'stats degraded source tag copy',
+  );
+  assertContains(
+    overviewSource,
+    /loadStats\(\)/,
+    'stats refresh alongside Today Pilot load',
+  );
+  assertContains(
+    overviewSource,
     /resetDayPilotDerivedCounts/,
     'failed Today Pilot load resets derived counters',
   );
@@ -215,6 +225,21 @@ function verifyBackendDayPilotApi() {
     dayPilotServiceSource,
     /truncated: clamped\.truncated/,
     'context pack truncation metadata',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /usageIntent/,
+    'context pack usage intent metadata',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /context_only_not_execution/,
+    'context pack execution boundary metadata',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /Handoff Boundary/,
+    'context pack body handoff boundary',
   );
   assertContains(
     clientSource,
@@ -355,8 +380,33 @@ function verifyMissionCardsAreConcreteItems() {
   );
   assertContains(
     overviewSource,
+    /submitAmbientCalibrationTrace/,
+    'Today Pilot context pack copy calibration trace',
+  );
+  assertContains(
+    overviewSource,
+    /action: 'copied_context'/,
+    'Today Pilot context copy action trace',
+  );
+  assertContains(
+    overviewSource,
+    /rawTextStored: false/,
+    'Today Pilot copy trace redacts raw context body',
+  );
+  assertContains(
+    overviewSource,
     /rankingSummary/,
     'ranking and noise-control summary',
+  );
+  assertContains(
+    overviewSource,
+    /countSelectedDayPilotSourceRefs/,
+    'selected mission evidence fallback counter',
+  );
+  assertContains(
+    overviewSource,
+    /selectedSourceCount/,
+    'selected source-stat reader',
   );
   assertContains(
     overviewSource,
@@ -375,8 +425,33 @@ function verifyMissionCardsAreConcreteItems() {
   );
   assertContains(
     overviewSource,
-    /低行动\/重复信号未进首页/,
-    'visible filtered-signal count',
+    /条信号进入候选池/,
+    'visible candidate-pool count',
+  );
+  assertContains(
+    overviewSource,
+    /条证据进入首页 mission/,
+    'visible final selected-evidence count',
+  );
+  assertContains(
+    overviewSource,
+    /低行动\/重复\/未入选信号未进首页/,
+    'visible suppressed-signal count',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /sourceStatsWithSelectedCounts/,
+    'backend selected source stats',
+  );
+  assertContains(
+    dayPilotServiceSource,
+    /selected: selected\.messages/,
+    'message selected source stats',
+  );
+  assertContains(
+    clientSource,
+    /selected\?: number/,
+    'client selected source stats type',
   );
   assertContains(
     overviewSource,
@@ -442,6 +517,16 @@ function verifyPopupTopThree() {
     popupSource,
     /formatTodayPilotContextPackReceipt/,
     'popup context pack receipt',
+  );
+  assertContains(
+    popupSource,
+    /submitTodayPilotContextCopyTrace/,
+    'popup context pack copy calibration trace',
+  );
+  assertContains(
+    popupSource,
+    /action: 'copied_context'/,
+    'popup context copy action trace',
   );
   assertContains(
     popupSource,

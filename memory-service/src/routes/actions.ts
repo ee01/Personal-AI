@@ -1,6 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 
-import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import {
+  ActionExecutor,
+  buildOpenClawStaleRunningError,
+  getOpenClawStaleRunningAfterSeconds,
+} from '../core/actions/ActionExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 
@@ -17,8 +21,15 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
       offset?: string;
     };
   }>('/actions', async (request, reply) => {
-    const { db } = request.userContext;
+    const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
+    const staleAfterSeconds =
+      getOpenClawStaleRunningAfterSeconds(userDataManager);
+    repo.recoverStaleRunningActions({
+      actionType: 'delegate_openclaw',
+      staleAfterSeconds,
+      errorMessage: buildOpenClawStaleRunningError(staleAfterSeconds),
+    });
     const result = repo.list({
       queueStatus: request.query.queueStatus ?? 'all',
       executionMode: request.query.executionMode,

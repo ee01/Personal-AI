@@ -61,6 +61,16 @@
 
 写作风格可以由稳定行为证据自动晋升为 active preference，因为用户最终发送行为本身就是强确认信号；但它仍保留 evidence、confidence、scope 和状态，后续可以被校准、降权或排除。
 
+### 语言偏好条目
+
+`language_preference` 是画像系统里的正式用户偏好键，用来告诉后台生成型能力应该使用哪种面向用户的输出语言。
+
+- 来源：Options 页的界面语言下拉框会立即保存到 `chrome.storage.local.personalAiUiPreferences.language`，同时通过 `/profile/items` 写入或更新 active `preference` 条目。
+- 中文值：`回复和生成面向用户的内容时使用中文`。
+- 英文值：`Reply and generate user-facing content in English.`。
+- 影响范围：Reflection 自动生成的 Rehearsal、后续需要后台自主生成用户可读内容的能力，都应优先读取这个画像项；它不是普通 UI 翻译开关，也不改变人名、项目名、URL、Jira key 等原文。
+- 更新规则：用户修改 Options 语言选项时同步更新同一个 `language_preference` 条目，不创建多条并列偏好。
+
 ## 用户可控路径
 
 - 画像总览: 展示当前项目、人员、主题关注点。

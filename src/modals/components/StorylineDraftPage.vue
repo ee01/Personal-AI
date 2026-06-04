@@ -185,6 +185,21 @@
                 readonly
                 aria-label="当前段落讲稿"
               ></textarea>
+              <div
+                :class="['grounding-summary', selectedGroundingState.tone]"
+                role="status"
+              >
+                <div class="grounding-head">
+                  <span>Grounding</span>
+                  <strong>{{ selectedGroundingState.label }}</strong>
+                </div>
+                <p>{{ selectedGroundingState.detail }}</p>
+                <div class="grounding-chips">
+                  <span>{{ selectedEvidenceIds.length }} refs</span>
+                  <span>{{ selectedEvidenceDetailCount }} 个详情</span>
+                  <span>{{ selectedEvidenceSourceSummary }}</span>
+                </div>
+              </div>
             </section>
 
             <section class="inspector-section">
@@ -324,6 +339,7 @@ import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getMemoryServiceClient,
+  MemoryServiceError,
   type ComposerAssistEvidence,
   type StorylineDraftResponse,
   type StorylineSuggestedArtifact,
@@ -422,6 +438,19 @@ const prepShortId = computed(() => shortEvidenceId(prepId.value));
 const selectedSegment = computed(
   () => draft.value?.segments[selectedIndex.value] ?? null,
 );
+const selectedEvidenceIds = computed(() => {
+  const segment = selectedSegment.value;
+  if (!segment) return [];
+  const seen = new Set<string>();
+  return segment.evidenceIds
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+});
 const evidenceById = computed(() => {
   const map = new Map<string, ComposerAssistEvidence>();
   for (const item of draft.value?.evidence ?? []) {
@@ -432,7 +461,7 @@ const evidenceById = computed(() => {
 const selectedEvidence = computed(() => {
   const segment = selectedSegment.value;
   if (!segment) return [];
-  return segment.evidenceIds.map((id) => {
+  return selectedEvidenceIds.value.map((id) => {
     return (
       evidenceById.value.get(id) || {
         id,
@@ -442,6 +471,87 @@ const selectedEvidence = computed(() => {
       }
     );
   });
+});
+const selectedEvidenceDetailCount = computed(
+  () =>
+    selectedEvidenceIds.value.filter((id) => evidenceById.value.has(id)).length,
+);
+const selectedEvidenceMissingCount = computed(
+  () => selectedEvidenceIds.value.length - selectedEvidenceDetailCount.value,
+);
+const selectedEvidenceSourceLabels = computed(() => {
+  const labels = selectedEvidenceIds.value.map((id) => {
+    const item = evidenceById.value.get(id);
+    return item ? item.sourceLabel || item.type || 'memory' : '仅 ref';
+  });
+  return Array.from(new Set(labels.filter(Boolean))).slice(0, 4);
+});
+const selectedEvidenceSourceSummary = computed(() => {
+  const labels = selectedEvidenceSourceLabels.value;
+  if (labels.length === 0) return '无来源';
+  if (labels.length <= 2) return labels.join(' / ');
+  return `${labels.slice(0, 2).join(' / ')} +${labels.length - 2}`;
+});
+const selectedGroundingState = computed<{
+  tone: 'ok' | 'warn' | 'risk';
+  label: string;
+  detail: string;
+}>(() => {
+  if (!selectedSegment.value) {
+    return {
+      tone: 'risk',
+      label: '未选择段落',
+      detail: '请选择一个故事线段落后再复核证据。',
+    };
+  }
+
+  const refCount = selectedEvidenceIds.value.length;
+  const detailCount = selectedEvidenceDetailCount.value;
+  const missingCount = selectedEvidenceMissingCount.value;
+  const sourceCount = selectedEvidenceSourceLabels.value.filter(
+    (label) => label !== '仅 ref',
+  ).length;
+
+  if (refCount === 0) {
+    return {
+      tone: 'risk',
+      label: '未绑定证据',
+      detail: '当前段落没有 evidence ref，不应作为可外发内容。',
+    };
+  }
+  if (detailCount === 0) {
+    return {
+      tone: 'warn',
+      label: '只有 ref id',
+      detail: '复制文本会保留 ref id，但页面缺少可点开的证据详情。',
+    };
+  }
+  if (missingCount > 0) {
+    return {
+      tone: 'warn',
+      label: '证据详情不完整',
+      detail: `${missingCount} 条 ref 缺少详情，复制前需要回到 Evidence key 核查。`,
+    };
+  }
+  if (refCount >= 2 && sourceCount >= 2) {
+    return {
+      tone: 'ok',
+      label: '多源支持',
+      detail: `当前段落引用 ${refCount} 条 ref，覆盖 ${sourceCount} 类来源。`,
+    };
+  }
+  if (refCount >= 2) {
+    return {
+      tone: 'ok',
+      label: '多条证据',
+      detail: `当前段落引用 ${refCount} 条 ref，来源集中在 ${selectedEvidenceSourceSummary.value}。`,
+    };
+  }
+  return {
+    tone: 'warn',
+    label: '单条证据',
+    detail: '当前段落只有 1 条 ref，适合内部草稿，外发前重点复核。',
+  };
 });
 const evidenceCount = computed(() => {
   if (draft.value?.evidence?.length) return draft.value.evidence.length;
@@ -695,14 +805,27 @@ async function loadDraft(options: { force?: boolean } = {}): Promise<void> {
     loadError.value =
       error instanceof Error && error.message === 'storyline_target_mismatch'
         ? '服务端返回的输出格式与当前选择不一致，请重新生成。'
-        : error instanceof Error
-        ? error.message
-        : 'storyline_draft_failed';
+        : formatDraftError(error);
   } finally {
     if (loadToken === draftLoadToken) {
       loading.value = false;
     }
   }
+}
+
+function formatDraftError(error: unknown): string {
+  if (error instanceof MemoryServiceError) {
+    const code = String(error.body?.error || '').trim();
+    if (code === 'storyline_source_has_no_usable_evidence') {
+      return '这份会前准备没有可追溯的 evidence refs，暂时不能生成故事线草稿。';
+    }
+    if (error.status === 404) {
+      return '这份会前准备已过期或不存在，请回到 Today Pilot 重新生成会前准备。';
+    }
+    const detail = String(error.body?.detail || '').trim();
+    return detail || error.message;
+  }
+  return error instanceof Error ? error.message : 'storyline_draft_failed';
 }
 
 function reloadDraft(): void {
@@ -1325,6 +1448,73 @@ watch(
   padding: 10px;
   font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   resize: vertical;
+}
+
+.grounding-summary {
+  margin-top: 10px;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  border-radius: 8px;
+  background: rgba(96, 165, 250, 0.08);
+  padding: 9px;
+}
+
+.grounding-summary.warn {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.grounding-summary.risk {
+  border-color: rgba(251, 113, 133, 0.34);
+  background: rgba(251, 113, 133, 0.08);
+}
+
+.grounding-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.grounding-head strong {
+  color: var(--green);
+  letter-spacing: 0;
+}
+
+.grounding-summary.warn .grounding-head strong {
+  color: var(--amber);
+}
+
+.grounding-summary.risk .grounding-head strong {
+  color: var(--red);
+}
+
+.grounding-summary p {
+  margin: 6px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.grounding-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.grounding-chips span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.24);
+  color: var(--muted);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .empty-note,

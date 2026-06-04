@@ -146,6 +146,16 @@ const contextCard = {
       evidenceRef,
     },
   ],
+  actionSuggestions: [
+    {
+      title: '先确认 demo owner',
+      body:
+        '推进 Relationship Radar demo 前先确认 owner 与下一步；这条 follow-up 已经出现，适合在下次同步前先发一句澄清。',
+      tone: 'hot',
+      reason: '来自最近的未闭环消息',
+      evidenceRef,
+    },
+  ],
   doNotAssume: [],
   evidenceRefs: [evidenceRef],
   retrievalHints: {
@@ -175,6 +185,14 @@ const secondContextCard = {
   bullets: ['9 次可见交互，覆盖 4 个活跃日'],
   knownFacts: [],
   openLoops: [],
+  actionSuggestions: [
+    {
+      title: '先确认研究评审议程',
+      body: 'Bob 的上下文还比较薄，适合先确认这次 review 关注点，再决定是否写入人物画像。',
+      tone: 'warn',
+      reason: '缺少明确 open loop',
+    },
+  ],
   evidenceRefs: [],
   retrievalHints: {
     entityIds: [secondPerson.id],
@@ -563,6 +581,14 @@ try {
   });
   await page.locator('.person-card').filter({ hasText: 'Alice Radar' }).click();
   await page.getByText('Alice 的沟通前 brief').waitFor({ timeout: 15000 });
+  await page.getByText('现在建议').waitFor({ timeout: 15000 });
+  await page.locator('.action-card').getByText('先确认 demo owner', { exact: true }).waitFor({
+    timeout: 15000,
+  });
+  await page
+    .locator('.action-card')
+    .getByText('推进 Relationship Radar demo 前先确认 owner 与下一步')
+    .waitFor({ timeout: 15000 });
   await page.getByText('已隐藏敏感上下文').waitFor({ timeout: 15000 });
   await page.getByText('6 条可能敏感的人物上下文默认未纳入').waitFor({
     timeout: 15000,

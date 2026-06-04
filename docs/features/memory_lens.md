@@ -231,6 +231,7 @@ Options 页提供“网页记忆提示控制”管理入口，用于恢复临时
 - `npm run verify:webpage-memory-detection`
 - `npm run verify:webpage-memory-detection:e2e`
 - `npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts`
+- `npm run eval:run -- --suite scene-memory-autopilot --no-repair`
 - `npm start` 到首次 successful compile 后停止
 
 重点回归场景：
@@ -255,6 +256,7 @@ Options 页提供“网页记忆提示控制”管理入口，用于恢复临时
 - Hackathon/Codex/MCP/setup 上下文不召回 Gary travel itinerary。
 - 空 RingCentral meeting shell 不召回 Colin/AVA 或其他 glip 记忆。
 - 有具体工单、动作、决策、风险的 RingCentral Video/meeting 记忆仍可召回。
+- Scene Memory Autopilot eval 覆盖 compose 群聊、Google Doc/web 文档、工具额度噪音、空会议壳和重复会议 chunk；报告应展示样本来源 provenance、`autopilot.mode`、`quietReasons`、`duplicateMergedCount` 和 top match 解释。
 - 命中 Rehearsal 时展示“预演提醒”与 `prospective_cue` why chips，不插入回复、不自动生成文本。
 - HR Open Day / Everyone AI Campaign 广播通告等跨群无锚点记忆，在 `overlapAudit` 后降为 `hidden`，不进入自动弹出候选。
 - 跨群无重叠的候选即使 score=1.00 也不展示 Rest icon 红点；仅在用户主动点击 icon 后以 `可能相关` 出现。

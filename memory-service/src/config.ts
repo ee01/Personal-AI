@@ -11,6 +11,8 @@ export interface Config {
   host: string;
   dataDir: string;
   logLevel: string;
+  sqliteJournalMode: SqliteJournalMode;
+  sqliteSynchronous: SqliteSynchronousMode;
 
   // LLM
   llmProvider: string;
@@ -92,7 +94,47 @@ export interface Config {
   ringCentralJwt: string;
 }
 
+export type SqliteJournalMode =
+  | 'DELETE'
+  | 'TRUNCATE'
+  | 'PERSIST'
+  | 'MEMORY'
+  | 'WAL'
+  | 'OFF';
+
+export type SqliteSynchronousMode = 'OFF' | 'NORMAL' | 'FULL' | 'EXTRA';
+
 let _config: Readonly<Config> | null = null;
+
+function parseSqliteJournalMode(raw: string | undefined): SqliteJournalMode {
+  const normalized = (raw || 'WAL').trim().toUpperCase();
+  if (
+    normalized === 'DELETE' ||
+    normalized === 'TRUNCATE' ||
+    normalized === 'PERSIST' ||
+    normalized === 'MEMORY' ||
+    normalized === 'WAL' ||
+    normalized === 'OFF'
+  ) {
+    return normalized;
+  }
+  return 'WAL';
+}
+
+function parseSqliteSynchronousMode(
+  raw: string | undefined,
+): SqliteSynchronousMode {
+  const normalized = (raw || 'NORMAL').trim().toUpperCase();
+  if (
+    normalized === 'OFF' ||
+    normalized === 'NORMAL' ||
+    normalized === 'FULL' ||
+    normalized === 'EXTRA'
+  ) {
+    return normalized;
+  }
+  return 'NORMAL';
+}
 
 export function getConfig(): Readonly<Config> {
   if (_config) {
@@ -133,6 +175,10 @@ export function getConfig(): Readonly<Config> {
     host: process.env.HOST || '0.0.0.0',
     dataDir,
     logLevel: process.env.LOG_LEVEL || 'info',
+    sqliteJournalMode: parseSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
+    sqliteSynchronous: parseSqliteSynchronousMode(
+      process.env.SQLITE_SYNCHRONOUS,
+    ),
 
     // LLM
     llmProvider: process.env.LLM_PROVIDER || 'openai',

@@ -226,6 +226,13 @@ describe('Memory Capture source memory API', () => {
             kind: 'chart',
             tagName: 'svg',
             rect: { width: 640, height: 320 },
+            table: {
+              headers: ['Quarter', 'Retention'],
+              rows: [['Q4', '82%']],
+              rowCount: 1,
+              columnCount: 2,
+              truncated: false,
+            },
           },
         },
       },
@@ -236,6 +243,7 @@ describe('Memory Capture source memory API', () => {
     expect(capsule.sourceKind).toBe('visual_memory');
     expect(capsule.anchors[0].anchorKind).toBe('visual_region');
     expect(capsule.contentPreview).toMatch(/Q4 82%/);
+    expect(capsule.metadata.visualMemory.table.rows[0]).toEqual(['Q4', '82%']);
 
     const messageBefore = db
       .prepare(
@@ -280,6 +288,68 @@ describe('Memory Capture source memory API', () => {
       )
       .get(capsule.messageId) as { content: string };
     expect(chunk.content).toMatch(/后续写 QBR/);
+  });
+
+  it('refreshes duplicate visual capsules when new metadata adds an SVG snapshot', async () => {
+    const payload = {
+      sourceKind: 'visual_memory',
+      sourceUrl: 'https://example.com/slides#svg',
+      sourceTitle: 'SVG chart deck',
+      text:
+        '视觉证据：SVG chart。类型：图表 · svg。可读文本：SVG chart preview for roadmap.',
+      captureMode: 'manual',
+      captureReason: '用户点击网页 + 入库保存视觉证据',
+      interactions: {
+        dwellMs: 60000,
+        manualClick: true,
+      },
+      metadata: {
+        contextType: 'webpage_visual',
+        visualMemory: {
+          kind: 'chart',
+          tagName: 'svg',
+          selectorHint: 'svg.chart',
+          rect: { width: 320, height: 180 },
+        },
+      },
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().capsule.metadata.visualMemory.svg).toBeUndefined();
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload: {
+        ...payload,
+        metadata: {
+          contextType: 'webpage_visual',
+          visualMemory: {
+            kind: 'chart',
+            tagName: 'svg',
+            selectorHint: 'svg.chart',
+            rect: { width: 320, height: 180 },
+            svg: {
+              width: 320,
+              height: 180,
+              markup:
+                '<svg xmlns="http://www.w3.org/2000/svg"><text>SVG OK</text></svg>',
+            },
+          },
+        },
+      },
+    });
+
+    expect(second.statusCode).toBe(200);
+    const capsule = second.json().capsule;
+    expect(capsule.duplicate).toBe(true);
+    expect(capsule.id).toBe(first.json().capsule.id);
+    expect(capsule.metadata.visualMemory.svg.markup).toContain('SVG OK');
   });
 
   it('stores automatic page capture with lower weight and supports undo dismiss', async () => {

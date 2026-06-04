@@ -340,6 +340,10 @@ export class TodayPilotMeetingPrepRepository {
       row.llm_usage_json,
       {},
     );
+    const evidenceRefs = safeJsonParse<ComposerAssistEvidence[]>(
+      row.evidence_refs_json,
+      [],
+    );
     return {
       id: row.id,
       userId: row.user_id,
@@ -357,15 +361,13 @@ export class TodayPilotMeetingPrepRepository {
       summaryMd: row.summary_md,
       cueCards: safeJsonParse<ContextAssistCueCard[]>(row.cue_cards_json, []),
       questions: safeJsonParse<string[]>(row.questions_json, []),
-      evidenceRefs: safeJsonParse<ComposerAssistEvidence[]>(
-        row.evidence_refs_json,
-        [],
-      ),
+      evidenceRefs,
       contextPackMd: row.context_pack_md,
       redaction: safeJsonParse<Record<string, unknown>>(row.redaction_json, {}),
       llmUsage,
       storylineOpportunity: normalizeStorylineOpportunity(
         llmUsage.storylineOpportunity,
+        { evidenceRefs },
       ),
       sourceHash: row.source_hash,
       generatedAt: row.generated_at,

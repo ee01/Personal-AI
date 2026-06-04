@@ -427,6 +427,7 @@ import { useRouter } from 'vue-router';
 import { useMemoryStore } from '../memory-store';
 import {
   getMemoryServiceClient,
+  type AmbientCalibrationEvidenceRef,
   type ConfirmRequest,
   type DayPilotBrief,
   type DayPilotCard,
@@ -495,6 +496,8 @@ const loading = ref(false);
 const loadError = ref('');
 const dayBrief = ref<DayPilotBrief | null>(null);
 const stats = ref<StatsResponse | null>(null);
+const statsLoading = ref(false);
+const statsLoadError = ref('');
 const _decisionRequests = ref<ConfirmRequest[]>([]);
 const decisionTotal = ref(0);
 const _watchRequests = ref<ConfirmRequest[]>([]);
@@ -589,9 +592,16 @@ const sourceTags = computed(() => {
     });
     return tags;
   }
-  const current = stats.value;
-  if (!current)
+  if (statsLoading.value) {
     return [{ key: 'loading', label: '记忆统计加载中', warn: true }];
+  }
+  if (statsLoadError.value) {
+    return [{ key: 'unavailable', label: '记忆统计暂不可用', warn: true }];
+  }
+  const current = stats.value;
+  if (!current) {
+    return [{ key: 'empty', label: '记忆统计暂不可用', warn: true }];
+  }
   return [
     { key: 'messages', label: `${current.messages.total} 消息`, warn: false },
     { key: 'chunks', label: `${current.chunks.total} 片段`, warn: false },
@@ -659,6 +669,74 @@ function contextPackCopyReceipt(pack: DayPilotContextPackResponse) {
   )}）。`;
 }
 
+function hashContextPackBody(body: string) {
+  let hash = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    hash = ((hash << 5) - hash + body.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function contextPackEvidenceTraceRefs(
+  pack: DayPilotContextPackResponse,
+): AmbientCalibrationEvidenceRef[] {
+  return pack.evidenceRefs.slice(0, 12).map((ref) => ({
+    id: `${ref.sourceKind}:${ref.sourceId}`,
+    type: ref.sourceKind,
+    title: ref.title,
+    sourceLabel: ref.sourceKind,
+    role: 'used',
+  }));
+}
+
+function recordContextPackCopyTrace(
+  card: MissionCard,
+  pack: DayPilotContextPackResponse,
+) {
+  void client
+    .submitAmbientCalibrationTrace({
+      surface: 'today_pilot',
+      sceneKey: `today_pilot:${dayBrief.value?.localDate || 'unknown'}:${
+        card.missionId || card.id
+      }`,
+      sourceRequestId: `context-pack:${card.missionId || card.id}:${
+        pack.targetProvider
+      }`,
+      action: 'copied_context',
+      strength: 'strong',
+      polarity: 'positive',
+      evidenceRefs: contextPackEvidenceTraceRefs(pack),
+      redactedDiff: {
+        rawTextStored: false,
+        bodyHash: hashContextPackBody(pack.bodyMd),
+        bodyLength: pack.bodyMd.length,
+        evidenceCount: pack.evidenceRefs.length,
+        redactionApplied: pack.redactionApplied,
+        truncated: pack.truncated,
+      },
+      privacyClass:
+        pack.redactionApplied || pack.redactionPreview.length > 0
+          ? 'sensitive_redacted'
+          : 'normal',
+      metadata: {
+        nativeSurface: 'today_pilot_home',
+        cardId: card.id,
+        missionId: card.missionId,
+        cardType: card.cardType,
+        targetProvider: pack.targetProvider,
+        providerProfile: pack.providerProfile.id,
+        includeSensitive: includeSensitiveContext.value,
+        usageIntent: pack.usageIntent?.kind || 'external_ai_context',
+        contextBoundary:
+          pack.usageIntent?.boundary || 'context_only_not_execution',
+      },
+      createdAt: Date.now(),
+    })
+    .catch((error) => {
+      console.warn('Today Pilot context pack copy trace failed:', error);
+    });
+}
+
 const attentionBudget = computed(() => ({
   max: dayBrief.value?.attentionBudget.maxInterruptions ?? 3,
   used: displayAttentionBudgetUsed.value,
@@ -700,25 +778,82 @@ const rankingSummary = computed<RankingSummaryItem[]>(() => {
   const sourceStats = displaySourceStats.value;
   if (!sourceStats) return [];
 
+  const selectedFallback = countSelectedDayPilotSourceRefs(
+    visibleDayPilotCards.value,
+  );
   const sourcePairs = [
-    [sourceStats.messages.totalRecent, sourceStats.messages.scanned],
-    [sourceStats.calendar.upcoming, sourceStats.calendar.scanned],
-    [sourceStats.notifications.pending, sourceStats.notifications.scanned],
-    [sourceStats.actions.queued, sourceStats.actions.scanned],
-    [sourceStats.reflections.active, sourceStats.reflections.scanned],
-    [
-      sourceStats.rehearsals?.active || 0,
-      sourceStats.rehearsals?.scanned || 0,
-    ],
-    [sourceStats.skills.suggestions, sourceStats.skills.scanned],
-    [
-      sourceStats.relationships.highFrequencyPeople,
-      sourceStats.relationships.scanned,
-    ],
+    {
+      total: sourceStats.messages.totalRecent,
+      candidate: sourceStats.messages.scanned,
+      selected: selectedSourceCount(
+        sourceStats.messages,
+        selectedFallback.messages,
+      ),
+    },
+    {
+      total: sourceStats.calendar.upcoming,
+      candidate: sourceStats.calendar.scanned,
+      selected: selectedSourceCount(
+        sourceStats.calendar,
+        selectedFallback.calendar,
+      ),
+    },
+    {
+      total: sourceStats.notifications.pending,
+      candidate: sourceStats.notifications.scanned,
+      selected: selectedSourceCount(
+        sourceStats.notifications,
+        selectedFallback.notifications,
+      ),
+    },
+    {
+      total: sourceStats.actions.queued,
+      candidate: sourceStats.actions.scanned,
+      selected: selectedSourceCount(
+        sourceStats.actions,
+        selectedFallback.actions,
+      ),
+    },
+    {
+      total: sourceStats.reflections.active,
+      candidate: sourceStats.reflections.scanned,
+      selected: selectedSourceCount(
+        sourceStats.reflections,
+        selectedFallback.reflections,
+      ),
+    },
+    {
+      total: sourceStats.rehearsals?.active || 0,
+      candidate: sourceStats.rehearsals?.scanned || 0,
+      selected: selectedSourceCount(
+        sourceStats.rehearsals || {},
+        selectedFallback.rehearsals,
+      ),
+    },
+    {
+      total: sourceStats.skills.suggestions,
+      candidate: sourceStats.skills.scanned,
+      selected: selectedSourceCount(
+        sourceStats.skills,
+        selectedFallback.skills,
+      ),
+    },
+    {
+      total: sourceStats.relationships.highFrequencyPeople,
+      candidate: sourceStats.relationships.scanned,
+      selected: selectedSourceCount(
+        sourceStats.relationships,
+        selectedFallback.relationships,
+      ),
+    },
   ];
-  const scanned = sourcePairs.reduce((sum, [, passed]) => sum + passed, 0);
-  const total = sourcePairs.reduce((sum, [available]) => sum + available, 0);
-  const filtered = Math.max(0, total - scanned);
+  const candidates = sourcePairs.reduce(
+    (sum, item) => sum + item.candidate,
+    0,
+  );
+  const selected = sourcePairs.reduce((sum, item) => sum + item.selected, 0);
+  const total = sourcePairs.reduce((sum, item) => sum + item.total, 0);
+  const filtered = Math.max(0, total - selected);
   const boardOnly =
     dayBrief.value?.attentionBudget.boardOnlyCardIds?.filter((cardId) =>
       visibleDayPilotCardIds.value.has(cardId),
@@ -726,15 +861,21 @@ const rankingSummary = computed<RankingSummaryItem[]>(() => {
 
   return [
     {
-      key: 'passed',
-      value: `${scanned}/${total}`,
-      label: '条候选通过行动性筛选',
-      tone: filtered > 0 ? 'normal' : 'quiet',
+      key: 'candidates',
+      value: `${candidates}/${total}`,
+      label: '条信号进入候选池',
+      tone: candidates > 0 ? 'normal' : 'quiet',
+    },
+    {
+      key: 'selected',
+      value: String(selected),
+      label: '条证据进入首页 mission',
+      tone: selected > 0 ? 'normal' : 'quiet',
     },
     {
       key: 'filtered',
       value: String(filtered),
-      label: '条低行动/重复信号未进首页',
+      label: '条低行动/重复/未入选信号未进首页',
       tone: filtered > 0 ? 'quiet' : 'normal',
     },
     {
@@ -767,6 +908,66 @@ const missionEmptyMessage = computed(() => {
 const showMissionRetry = computed(() => Boolean(loadError.value && !loading.value));
 
 const MISSION_LIMIT = 7;
+type DayPilotSourceStats = DayPilotBrief['sourceStats'];
+type DayPilotSourceBucketKey = keyof DayPilotSourceStats;
+
+function emptySelectedSourceCounts(): Record<DayPilotSourceBucketKey, number> {
+  return {
+    messages: 0,
+    calendar: 0,
+    notifications: 0,
+    actions: 0,
+    reflections: 0,
+    rehearsals: 0,
+    skills: 0,
+    relationships: 0,
+  };
+}
+
+function dayPilotSourceBucketForEvidence(
+  ref: DayPilotCard['evidenceRefs'][number],
+): DayPilotSourceBucketKey {
+  switch (ref.sourceKind) {
+    case 'calendar':
+      return 'calendar';
+    case 'notification':
+      return 'notifications';
+    case 'action':
+      return 'actions';
+    case 'reflection':
+      return 'reflections';
+    case 'rehearsal':
+      return 'rehearsals';
+    case 'skill':
+      return 'skills';
+    case 'relationship':
+      return 'relationships';
+    case 'message':
+    default:
+      return 'messages';
+  }
+}
+
+function countSelectedDayPilotSourceRefs(cards: DayPilotCard[]) {
+  const counts = emptySelectedSourceCounts();
+  const seen = new Set<string>();
+  for (const card of cards) {
+    for (const ref of card.evidenceRefs || []) {
+      const key = `${ref.sourceKind}:${ref.sourceId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      counts[dayPilotSourceBucketForEvidence(ref)] += 1;
+    }
+  }
+  return counts;
+}
+
+function selectedSourceCount(
+  bucket: { selected?: number },
+  fallback: number,
+) {
+  return Number.isFinite(bucket.selected) ? Number(bucket.selected) : fallback;
+}
 
 const displaySourceStats = computed<DayPilotBrief['sourceStats'] | null>(() => {
   const sourceStats = dayBrief.value?.sourceStats;
@@ -861,6 +1062,7 @@ const timelineItems = computed(() =>
 async function loadDayPilot() {
   loading.value = true;
   loadError.value = '';
+  void loadStats();
   try {
     const envConfig = await getEnvConfig();
     sceneRehearsalDisplayEnabled.value =
@@ -890,6 +1092,20 @@ async function loadDayPilot() {
       '今日领航后端暂时不可用，无法从原始记忆生成今日 mission。请稍后刷新。';
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadStats() {
+  statsLoading.value = true;
+  statsLoadError.value = '';
+  try {
+    stats.value = await client.getStats();
+  } catch (error) {
+    console.error('加载记忆统计失败:', error);
+    stats.value = null;
+    statsLoadError.value = '记忆统计暂不可用';
+  } finally {
+    statsLoading.value = false;
   }
 }
 
@@ -1246,6 +1462,7 @@ async function copyContextPack(card: MissionCard) {
       return;
     }
     await navigator.clipboard.writeText(pack.bodyMd);
+    recordContextPackCopyTrace(card, pack);
     showToast(contextPackCopyReceipt(pack));
   } catch (error) {
     console.error('复制上下文包失败:', error);

@@ -18,6 +18,7 @@ import {
   type UpdateRuntimeConfigPayload,
   type CalendarEventsSyncResponse,
 } from './services/MemoryServiceClient';
+import { syncUserLanguagePreferenceProfileItem } from './services/UserLanguagePreferenceSync';
 import { agentCoordinator } from './agentWorkflow';
 import {
   AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
@@ -29,6 +30,7 @@ import {
   formatAgentWorkflowSavedScenarioLabel,
   formatAgentWorkflowReplayLabel,
   formatAgentWorkflowDatetimeInputValue,
+  formatAgentWorkflowRegressionFailureDetail,
   getAgentWorkflowTraceStatus,
   normalizeAgentWorkflowSavedScenarios,
   normalizeAgentWorkflowInputDatetime,
@@ -2074,6 +2076,24 @@ const Options = () => {
     });
   };
 
+  const handleUiLanguageChange = async (nextLanguage: UiLanguage) => {
+    await setUiLanguage(nextLanguage);
+    try {
+      const client = await createMemoryServiceClient(config);
+      await syncUserLanguagePreferenceProfileItem(nextLanguage, client);
+      setStatus({
+        message: '语言偏好已同步到用户画像',
+        type: 'success',
+      });
+    } catch (error) {
+      console.warn('Failed to sync UI language into user profile:', error);
+      setStatus({
+        message: '界面语言已保存，但同步用户画像失败，请检查 memory-service 设置',
+        type: 'error',
+      });
+    }
+  };
+
   const getRuntimeConfigFromBackend = async (
     targetConfig: EnvConfigType,
   ): Promise<RuntimeConfigResponse | null> => {
@@ -2924,7 +2944,7 @@ const Options = () => {
             id="ui-language"
             value={uiLanguage}
             onChange={(event) => {
-              void setUiLanguage(event.target.value as UiLanguage);
+              void handleUiLanguageChange(event.target.value as UiLanguage);
             }}
           >
             <option value="zh-CN">{t('language.zhCN')}</option>
@@ -4799,6 +4819,7 @@ const AgentSettings = () => {
     useState(false);
   const [workflowSavedRegressionSummary, setWorkflowSavedRegressionSummary] =
     useState<WorkflowSavedRegressionSummary | null>(null);
+  const workflowLastRunErrorRef = useRef('');
 
   // 获取可用工具列表
   const availableTools = [
@@ -4969,7 +4990,9 @@ const AgentSettings = () => {
   const runWorkflowTest = async (input: AgentWorkflowTestInput) => {
     const messageContent = input.content.trim();
     if (!messageContent) {
-      setWorkflowTestError('请输入测试消息');
+      const errorMessage = '请输入测试消息';
+      workflowLastRunErrorRef.current = errorMessage;
+      setWorkflowTestError(errorMessage);
       setWorkflowTestResult(null);
       setWorkflowTestResultInput(null);
       setWorkflowTestResultConfigKey('');
@@ -4979,6 +5002,7 @@ const AgentSettings = () => {
     let resultConfigKey = buildWorkflowAgentConfigComparisonKey(agents);
     setWorkflowTestRunning(true);
     setWorkflowTestError('');
+    workflowLastRunErrorRef.current = '';
     setWorkflowTestResult(null);
     setWorkflowTestResultInput(null);
     setWorkflowTestResultConfigKey('');
@@ -4998,12 +5022,14 @@ const AgentSettings = () => {
       setWorkflowTestResult(result);
       setWorkflowTestResultInput(input);
       setWorkflowTestResultConfigKey(resultConfigKey);
+      workflowLastRunErrorRef.current = '';
       return result;
     } catch (error) {
       console.error('Agent Workflow 测试失败:', error);
-      setWorkflowTestError(
-        error instanceof Error ? error.message : 'Agent Workflow 测试失败',
-      );
+      const errorMessage =
+        error instanceof Error ? error.message : 'Agent Workflow 测试失败';
+      workflowLastRunErrorRef.current = errorMessage;
+      setWorkflowTestError(errorMessage);
       setWorkflowTestResultInput(null);
       setWorkflowTestResultConfigKey('');
       return null;
@@ -5269,60 +5295,76 @@ const AgentSettings = () => {
           `正在批量回归 ${index + 1}/${workflowSavedScenarios.length}：${scenario.label}`,
         );
 
-        const result = await runWorkflowTest(scenario.input);
-        const actual = buildAgentWorkflowResultExpectation(result);
+        try {
+          const result = await runWorkflowTest(scenario.input);
+          const actual = buildAgentWorkflowResultExpectation(result);
 
-        if (!result || !actual) {
+          if (!result || !actual) {
+            results.push({
+              id: scenario.id,
+              label: scenario.label,
+              status: 'error',
+              summary: '运行失败',
+              detail: formatAgentWorkflowRegressionFailureDetail(
+                workflowLastRunErrorRef.current,
+              ),
+            });
+            continue;
+          }
+
+          if (!scenario.expectedResult) {
+            results.push({
+              id: scenario.id,
+              label: scenario.label,
+              status: 'no-baseline',
+              summary: '没有保存基线',
+              detail:
+                '本次已能运行；可直接接受本次批量结果，建立后续对比基线。',
+              actual,
+            });
+            continue;
+          }
+
+          const baselineRows = buildWorkflowSavedBaselineRows(
+            scenario.expectedResult,
+            actual,
+          );
+          const changedRows = baselineRows.filter(
+            (row) => row.status === 'changed',
+          );
+
+          results.push({
+            id: scenario.id,
+            label: scenario.label,
+            status: changedRows.length > 0 ? 'changed' : 'same',
+            summary:
+              changedRows.length > 0
+                ? `${changedRows.length} 项变化`
+                : '基线一致',
+            detail:
+              changedRows.length > 0
+                ? changedRows
+                    .map(
+                      (row) =>
+                        `${row.label}: ${row.expected} -> ${row.actual}`,
+                    )
+                    .join('；')
+                : '存储、通知、复核、Trace、规则和置信度都未漂移。',
+            actual,
+          });
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : 'Agent Workflow 测试失败';
+          workflowLastRunErrorRef.current = errorMessage;
+          setWorkflowTestError(errorMessage);
           results.push({
             id: scenario.id,
             label: scenario.label,
             status: 'error',
             summary: '运行失败',
-            detail: '该样例未产出可对比结果，请查看下方错误并单独重跑。',
+            detail: formatAgentWorkflowRegressionFailureDetail(errorMessage),
           });
-          continue;
         }
-
-        if (!scenario.expectedResult) {
-          results.push({
-            id: scenario.id,
-            label: scenario.label,
-            status: 'no-baseline',
-            summary: '没有保存基线',
-            detail:
-              '本次已能运行；可直接接受本次批量结果，建立后续对比基线。',
-            actual,
-          });
-          continue;
-        }
-
-        const baselineRows = buildWorkflowSavedBaselineRows(
-          scenario.expectedResult,
-          actual,
-        );
-        const changedRows = baselineRows.filter(
-          (row) => row.status === 'changed',
-        );
-
-        results.push({
-          id: scenario.id,
-          label: scenario.label,
-          status: changedRows.length > 0 ? 'changed' : 'same',
-          summary:
-            changedRows.length > 0
-              ? `${changedRows.length} 项变化`
-              : '基线一致',
-          detail:
-            changedRows.length > 0
-              ? changedRows
-                  .map(
-                    (row) =>
-                      `${row.label}: ${row.expected} -> ${row.actual}`,
-                  )
-                  .join('；')
-              : '存储、通知、复核、Trace、规则和置信度都未漂移。',
-          actual,
-        });
       }
 
       const summary = buildWorkflowSavedRegressionSummary(results);

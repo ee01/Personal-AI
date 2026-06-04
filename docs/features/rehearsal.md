@@ -79,6 +79,20 @@ Rehearsal 自身是“保存、管理、匹配、反馈”的场景预演层，�
 
 Reflection 自动候选的去重规则：同一 reflection thread 下，场景类型和触发线索相同的候选会复用同一个 `source_ref_id`，再次生成时更新现有 Rehearsal，而不是重复创建。高置信且有稳定触发线索的候选会自动成为 `active`；否则保留为 `candidate`。
 
+### 产出语言
+
+Rehearsal 的标题、摘要和预演内容是面向用户消费的内容，不能因为内部 prompt 是英文就默认产出英文。
+
+生成语言的优先级：
+
+- 先看用户画像里的明确语言偏好，例如 `user_profile_items.language_preference` 写着“回复和生成面向用户的内容时使用中文”。
+- 再看用户资料 Markdown，例如 `user.md`、`USER.md`、`USER_CORE.md`、`CORE_MEMORY.md` 或 agent identity 中是否明确写了输出语言。
+- 如果没有明确配置，再按本轮 Reflection 证据的主语言兜底。
+
+模糊策略不会被当成明确偏好，例如 `Match user's language (Chinese/English)` 只说明“跟随用户”，但没有告诉后台心跳在没有当前对话语言时该用中文还是英文。
+
+推荐线上稳定配置：在用户画像中保存一条高置信、用户确认的偏好，例如 `item_key=language_preference`、`item_value=回复和生成面向用户的内容时使用中文`。这样由 Reflection 自动生成的 Rehearsal 会稳定使用中文，同时保留人名、项目名、URL、Jira key、群组名等原文。
+
 ## 数据模型
 
 ### `rehearsals`

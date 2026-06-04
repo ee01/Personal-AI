@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { SheetInitializer } from '../src/scheduled-messages/SheetInitializer';
+import {
+  buildScheduledMessagesSetupReceipt,
+  buildScheduledMessagesSetupReceiptNotice,
+} from '../src/scheduled-messages/setupReceipt';
 
 type CapturedRequest = {
   url: string;
@@ -222,6 +226,46 @@ try {
   assert.equal(storedConfig.deploymentId, 'deployment-123');
   assert.equal(storedConfig.messagesSheetId, 101);
   assert.equal(storedConfig.logsSheetId, 103);
+
+  const combinedSetupResult = {
+    ...completed,
+    setupWarnings: [
+      ...(result.setupWarnings || []),
+      ...(completed.setupWarnings || []),
+    ],
+  };
+  const receipt = buildScheduledMessagesSetupReceipt(
+    combinedSetupResult,
+    '2026-06-04T00:00:00.000Z',
+  );
+  const receiptNotice = buildScheduledMessagesSetupReceiptNotice(receipt, storedConfig);
+
+  assert.equal(receiptNotice.tone, 'warning');
+  assert.equal(receiptNotice.title, '定时消息系统已初始化');
+  assert.ok(
+    receiptNotice.description.includes('维护表、App Script、触发器、测试消息和 Config 已完成'),
+    'Receipt should summarize the completed setup path',
+  );
+  assert.ok(
+    receiptNotice.details.some((detail) => detail.includes('Sheet: sheet-123')),
+    'Receipt should expose the created Sheet ID',
+  );
+  assert.ok(
+    receiptNotice.details.some((detail) => detail.includes('Messages 101 / Logs 103')),
+    'Receipt should expose worksheet positioning',
+  );
+  assert.ok(
+    receiptNotice.details.some((detail) => detail.includes('Deployment: deployment-123')),
+    'Receipt should expose the Web App deployment ID',
+  );
+  assert.ok(
+    receiptNotice.details.some((detail) => detail.includes('分钟 / 每日触发器已写入 Config')),
+    'Receipt should confirm trigger metadata from Config',
+  );
+  assert.ok(
+    receiptNotice.details.some((detail) => detail.includes('仅创建者可编辑')),
+    'Receipt should carry setup warnings into the initialized page notice',
+  );
 
   console.log('Scheduled Messages one-click setup safety verifier passed');
 } finally {

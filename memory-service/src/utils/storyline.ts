@@ -1,4 +1,5 @@
 import type {
+  ComposerAssistEvidence,
   StorylineOpportunity,
   StorylineSuggestedArtifact,
   StorylineType,
@@ -52,6 +53,21 @@ function clampConfidence(value: unknown): number {
   return Math.round(numeric * 100) / 100;
 }
 
+export interface NormalizeStorylineOpportunityOptions {
+  evidenceRefs?: ComposerAssistEvidence[];
+  minStoryEvidenceCount?: number;
+  minNonCalendarEvidenceCount?: number;
+}
+
+function appendReason(reasons: string[], reason: string): string[] {
+  return reasons.includes(reason) ? reasons : [...reasons, reason];
+}
+
+function isCalendarEvidence(item: ComposerAssistEvidence): boolean {
+  const sourceLabel = String(item.sourceLabel || '').toLowerCase();
+  return item.id.startsWith('calendar:') || sourceLabel === 'calendar';
+}
+
 export function normalizeStorylineType(
   value: unknown,
 ): StorylineType | undefined {
@@ -84,6 +100,7 @@ export function defaultStorylineButtonLabel(
 
 export function normalizeStorylineOpportunity(
   value: unknown,
+  options: NormalizeStorylineOpportunityOptions = {},
 ): StorylineOpportunity | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
@@ -95,7 +112,7 @@ export function normalizeStorylineOpportunity(
   );
   const oneLineReason = compactText(record.oneLineReason, 180);
   const audienceHint = compactText(record.audienceHint, 100);
-  const blockedReasons = normalizeStringArray(record.blockedReasons, 6);
+  let blockedReasons = normalizeStringArray(record.blockedReasons, 6);
   const estimatedLengthMinutesValue = Number(record.estimatedLengthMinutes);
   const estimatedLengthMinutes =
     Number.isFinite(estimatedLengthMinutesValue) &&
@@ -131,11 +148,40 @@ export function normalizeStorylineOpportunity(
         .slice(0, 6)
     : [];
 
+  const clusterEvidenceCount = evidenceClusters.reduce(
+    (sum, cluster) => sum + cluster.evidenceCount,
+    0,
+  );
+  const minStoryEvidenceCount = options.minStoryEvidenceCount ?? 3;
+  const minNonCalendarEvidenceCount = options.minNonCalendarEvidenceCount ?? 1;
+  if (
+    record.available === true &&
+    clusterEvidenceCount > 0 &&
+    clusterEvidenceCount < minStoryEvidenceCount
+  ) {
+    blockedReasons = appendReason(
+      blockedReasons,
+      `素材不足：至少需要 ${minStoryEvidenceCount} 条可讲述证据。`,
+    );
+  }
+  if (record.available === true && options.evidenceRefs?.length) {
+    const nonCalendarEvidenceCount =
+      options.evidenceRefs.filter((item) => !isCalendarEvidence(item)).length;
+    if (nonCalendarEvidenceCount < minNonCalendarEvidenceCount) {
+      blockedReasons = appendReason(
+        blockedReasons,
+        '素材不足：不能只基于日历标题或会议描述生成故事线。',
+      );
+    }
+  }
+
   const isAvailable =
     record.available === true &&
     confidence >= 0.55 &&
     Boolean(oneLineReason) &&
-    evidenceClusters.length > 0;
+    evidenceClusters.length > 0 &&
+    clusterEvidenceCount >= minStoryEvidenceCount &&
+    blockedReasons.length === 0;
   const buttonLabel = isAvailable
     ? compactText(record.buttonLabel, 40) ||
       defaultStorylineButtonLabel(

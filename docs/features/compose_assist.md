@@ -17,7 +17,7 @@ Compose Assist 是 Personal AI 的输入框辅助层。它只负责“用户正�
 - ChatGPT / 豆包 / Claude / Gemini 等 Web AI 输入框。
 - 文档或笔记输入。
 
-Codex Desktop、Claude Code、Cursor 等桌面 agent 暂不属于 Phase 1，因为 Chrome Extension 无法可靠探测桌面输入框。
+Phase 1 不在终端、IDE 或桌面 agent 输入框里做 OS 级浮层，因为 Chrome Extension 无法可靠探测这些输入框。但 Desktop App 可以把 Codex CLI、Claude Code、Cursor Agent 的历史会话作为高质量上下文来源，供 Web AI `compose_to_ai` 和后续 `agent_compose` 使用。
 
 ## 边界
 
@@ -45,7 +45,7 @@ Compose Assist 不做：
 
 - 用户 focus 到支持的输入框。
 - 页面上下文切换，例如 RingCentral 切换 group/thread，或 Jira issue 变化。
-- 当前实现不会把用户每次输入的 draft 当作主召回信号；draft 只作为生成时的辅助上下文。
+- RingCentral/Jira 不把用户每次输入的 draft 当作主召回信号；Web AI `compose_to_ai` 会把 draft 当作短 prompt 补上下文的 enrichment signal，并进入 context key，避免同一页面里不同 prompt 被同一次 dismiss 吞掉。
 
 展示条件：
 
@@ -59,8 +59,8 @@ UI 行为：
 - 只有 `CONTEXT_ASSIST_ENABLED` 和 `COMPOSE_ASSIST_ENABLED` 都不是 `false` 时才启动；任一开关关闭时，前端清理 icon/glow，background 也会拒绝新的 assist 请求。
 - 输入框右上角吸附 `static/icons/icon48.png`。
 - hover icon 时，左侧展开“建议内容”预览。
-- 有建议时，当前输入框显示同色红色 glow。
-- 切换输入框或焦点离开可支持输入框时，旧输入框的 glow 会被清理，避免误导用户还有可插入建议。
+- 非 Web AI 场景可以用轻量 glow 标识当前输入框；ChatGPT/Gemini/Claude/豆包等 Web AI 输入框只在右上角显示 Personal AI icon/popover，不把输入框变成红色发光状态。
+- 切换输入框或焦点离开可支持输入框时，旧输入框的 glow/icon 会被清理，避免误导用户还有可插入建议。
 - 点击 icon 只执行一个动作：把建议内容直接插入当前输入框；不发送、不提交。textarea/input 会按当前光标或选区插入；contenteditable 输入框也会优先尊重当前光标/选区，选中文本时替换选区，没有可用选区时才追加到末尾。
 - 插入成功后会短暂显示 `撤销`，用于误点或发现建议不合适时恢复插入前草稿；撤销后同一建议不会立刻再次弹出，避免把用户拉进重复插入循环。
 - 悬浮预览只展示待插入正文，不展示“记忆关联”、来源卡片、复制/取消/插入按钮，也不把用户带到记忆详情页。
@@ -74,6 +74,18 @@ UI 行为：
 - 如果建议包含 Rehearsal 预演提醒，thumb-down 会同时把对应 activation 标记为 `irrelevant`，插入且未撤销会标记为 `accepted`，避免同一条错误预演在相同场景里反复出现。
 - `Escape` 或 thumb-down 会 dismiss 当前 context，一段时间内不再重复展示同一条。
 - Web AI 输入框里的 dismiss 会把当前草稿也纳入 context key；拒绝“第一个 prompt”的建议后，在同一个 ChatGPT / 豆包 / Claude / Gemini 页面改写成另一个 prompt，仍可重新触发来源适配和 context pack。
+
+### Web AI / Agent Compose 关键逻辑
+
+这部分是 Compose Assist 里的“跨 AI/agent 上下文接力”，不是独立 AI Tool Compass，也不会自动调度外部 agent。
+
+- `compose_to_ai`：ChatGPT、Gemini、Claude、豆包等 Web AI 输入框。用户已经准备问外部 AI 时，Personal AI 在输入框旁提供可插入 context pack。
+- `agent_compose`：预留给后续 Codex、Claude Code、Cursor 等 agent 入口。v1 先把这些 CLI agent 当作上下文来源，不在终端或 IDE 输入框里做浮层。
+- 触发必须同时满足三点：当前输入框或会话能识别明确任务意图；其他 AI/agent/记忆中有高相关证据；生成内容不会直接外发高风险私密原文。
+- context pack 默认包含 `任务判断`、`目标工具适配`、`相关上下文`、`约束`、`仍需确认`、`来源`。来源保留 evidence 索引，方便用户知道哪些内容来自本地记忆。
+- 目标工具适配只是轻判断：当前 AI 是否够用，如果不完全适合，提示一个更适合的备选，例如 Codex、NotebookLM、Claude Code 或 Jira/项目面板。它不做完整工具排名，也不替用户切换工具。
+- Web AI context pack 默认 `riskLevel=medium`、`previewRequired=true`。命中 personal/private/user_core/1:1/内部会议等内容时升为 high，高风险内容默认摘要化，不插入原文。
+- 低置信、弱相关、无明确任务时保持安静；有建议时只显示 Personal AI icon，不自动发送 prompt。
 
 ## 自适应阈值与反馈
 
@@ -219,8 +231,32 @@ Thread 回复框：
 
 - 覆盖 ChatGPT、豆包、Claude、Gemini 的网页输入框。
 - 读取当前页面可见的最近 conversation turns，默认不 live 抓取完整外部平台历史。
-- 召回来源可以包含已沉淀的 `ai_chat`、`doubao`、网页记忆、Source Memory 资料胶囊、用户画像、Markdown 沉淀、reflection/skill 记忆和 Rehearsal 预演提醒。
+- 召回来源可以包含已沉淀的 `ai_chat`、`chatgpt`、`doubao`、`doubao_chat`、`codex_cli`、`claude_code_cli`、`cursor_agent_cli`、`glip`、`jira`、`meeting`、`calendar`、`web`、`manual`、`source_memory`、`system`、`user_core`、`markdown`、`reflection`、`reflection_thread`、`rehearsal`。
+- 当前目标 provider 自己的 source 会在后端移除，例如 ChatGPT 页面默认不把 `chatgpt` 历史作为“跨 AI”证据。
 - 输出是可插入到 prompt 输入框的 context pack，不自动提交。
+
+### CLI agent 会话作为上下文来源
+
+Desktop App Explorer 不把 Codex/Claude Code/Cursor 入口当作网页输入框，而是把它们的会话记录抽成可召回记忆。
+
+本地 adapter 默认路径：
+
+- `codex_cli`: `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl`
+- `claude_code_cli`: `~/.claude/projects/**/*.jsonl`、`~/.claude/transcripts/**/*.jsonl`
+- `cursor_agent_cli`: `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`
+
+这些 source 默认 disabled，需要用户在 Desktop App 设置里启用；配置项包括 `rootPaths`、`lookbackDays`、`intervalMinutes`、`maxSessions`、`includeSubagents`、`defaultScope`。
+
+agent 会话不能按普通聊天全文入库。`agent_session` 抽取模式会先过滤大段代码、diff 和 tool output，只保留：
+
+- 用户想让 agent 做什么。
+- agent 做出的结果。
+- 修改过的关键文件或生成的 artifact。
+- 测试、构建、验证信号。
+- 失败、阻塞和下一步。
+- `tool_fit_signal` / `tool_usage_outcome`，例如这个工具是否适合该任务、是否失败、是否切换到别的工具。
+
+入库时 `source_type` 使用规范来源：`codex_cli`、`claude_code_cli`、`cursor_agent_cli`。metadata 里记录 `toolKey`、`sessionId`、`projectPath`、`taskKind`、`producedArtifacts`、`verificationSignals`。
 
 ## 上下文来源与权重
 
@@ -232,7 +268,7 @@ Thread 回复框：
 2. 同会话/同 issue/同 thread 的锚点很强：conversationId、groupId、threadRootPostId、issueKey 命中时，相关记忆更容易通过过滤。
 3. 具体主题词比泛词更重要：Codex、MCP、某个 Jira key、预算/额度/上线风险这类具体词，会比“AI”“会议”“消息”更能影响召回。
 4. 最近、常用、被正向反馈过的记忆会加分：recency、salience、用户点击插入等信号会让相关记忆更容易排前。
-5. 用户草稿影响较弱：draft 不作为主召回 query，主要用于避免重复或 Web AI context pack 的目标描述。
+5. 用户草稿按场景区分：RingCentral/Jira 里影响较弱，主要用于避免重复或承接语气；Web AI `compose_to_ai` 里影响更强，会作为短 prompt enrichment signal 帮系统判断用户要把什么问题带给外部 AI。
 6. 用户画像主要影响表达方式：已确认偏好、约束、写作风格会影响语气和格式，但不应把未经确认的画像当事实写进回复。
 
 ### 当前场景上下文
@@ -246,7 +282,7 @@ Thread 回复框：
 | `secondaryTexts` | 召回辅助文本，主要补 thread root、status、最近 turns 或旧字段。 | 后端从 context items 取最多 8 条文本，再叠加请求里的 `secondaryTexts`，总数最多 10；进入 `ContextRecallService` 时最多保留 8 条，每条最多 160 chars。 |
 | `audience` | 生成 prompt 里的“对象”，用于语气/对象判断；conversation/group/issue/provider 也会转成 entity hints。 | 不直接拼进 recall `primaryText`，但会通过 `entityHints` 影响 recall anchor；生成 prompt 中以一行“对象”出现。 |
 | `identifiers` | conversationId、groupId、threadRootPostId、issueKey、provider。 | 转成 recall `entityHints`，并在 evidence 过滤时作为 source anchor；不是百分比权重，而是强相关锚点。 |
-| `draftText` | 用户当前草稿。 | 不作为主召回 query。当前实现里 Web AI context pack 会优先把 draft 作为“目标”摘要；RingCentral/Jira 的 sendable reply 生成不直接把 draft 放进 prompt，避免草稿里的无关关键词污染召回。 |
+| `draftText` | 用户当前草稿。 | RingCentral/Jira 不作为主召回 query，主要用于避免重复或承接语气；Web AI `compose_to_ai` 会作为短 prompt enrichment signal 进入 recall query、目标摘要和 context key。 |
 
 ### 允许召回的历史记忆来源
 
@@ -256,7 +292,7 @@ Thread 回复框：
 | --- | --- | --- |
 | RingCentral 主会话/thread | `glip`, `manual`, `source_memory`, `markdown`, `web`, `jira`, `system`, `rehearsal` | 以当前聊天上下文为主，允许补充手动沉淀、资料胶囊、文档、网页、Jira、系统类记忆和预演提醒；当前前端没有把 `meeting/calendar/user_core/reflection` 放进 RingCentral allowlist。 |
 | Jira comment | `jira`, `glip`, `meeting`, `web`, `manual`, `source_memory`, `system`, `rehearsal` | 以 issue 本身为主，允许关联 Jira 历史、聊天、会议、网页、手动沉淀、资料胶囊和预演提醒。 |
-| Web AI prompt | `ai_chat`, `chatgpt`, `doubao`, `doubao_chat`, `codex_cli`, `claude_code_cli`, `cursor_agent_cli`, `glip`, `jira`, `meeting`, `web`, `manual`, `source_memory`, `system`, `user_core`, `markdown`, `reflection`, `reflection_thread`, `rehearsal` | 允许更广的 Personal AI 记忆进入 context pack，但仍只插入到输入框，不自动提交；当前目标 AI 自己的来源会被后端剔除。 |
+| Web AI prompt | `ai_chat`, `chatgpt`, `doubao`, `doubao_chat`, `codex_cli`, `claude_code_cli`, `cursor_agent_cli`, `glip`, `jira`, `meeting`, `calendar`, `web`, `manual`, `source_memory`, `system`, `user_core`, `markdown`, `reflection`, `reflection_thread`, `rehearsal` | 允许更广的 Personal AI 记忆进入 context pack，但仍只插入到输入框，不自动提交；当前目标 AI 自己的来源会被后端剔除。 |
 | 旧调用或未传 `sourceTypes` | 非 Web AI 默认 `WORK_SOURCES`；Web AI 默认 `WEB_AGENT_SOURCES`。 | 这是后端 fallback。若前端已传 allowlist，后端会在对应默认集合中再过滤。 |
 
 ### Recall 与 rerank 权重
@@ -286,7 +322,7 @@ Recall 返回后，RingCentral/Jira 还会再做一层场景相关性过滤：
 - 非 Web AI 场景必须有当前上下文 tokens，否则不展示。
 - evidence 与当前场景 token overlap `>= 2` 才直接保留。
 - 如果只 overlap `>= 1`，还必须和 source anchor overlap `>= 1`，例如同 conversation、同 group、同 thread root 或同 issue key。
-- Web AI context pack 当前不做这层 strict evidence filter，依赖 Web AI allowlist、recall/rerank 和生成约束控制。
+- Web AI context pack 当前不做 RingCentral/Jira 这层 strict evidence filter，但必须经过任务意图 gate、高相关 evidence gate、目标 provider 自回声剔除和 privacy/egress gate；弱相关或无明确任务时保持安静。
 - 通过过滤后，后端 confidence 取 top evidence score，clamp 到 `0.20-0.92`；如果 top score 低于 `0.58` 但有 keyword/FTS 命中，会提升到 `0.62`。后端 `available` 门槛是 `0.58`，前端最终展示门槛默认是自适应 `0.78`。
 
 ### 生成 prompt 的内容优先级
@@ -316,7 +352,7 @@ POST /api/v1/composer/assist
 - `contextType`: `message_thread | jira_issue | web_agent_prompt`
 - `scenario`: `instant_message_reply | thread_reply | jira_comment | web_agent_prompt | compose_to_ai | agent_compose | document_note`
 - `title`, `url`
-- `draftText`: 用户当前输入草稿。它不是主召回 query，只用于生成时避免重复或承接语气。
+- `draftText`: 用户当前输入草稿。RingCentral/Jira 不是主召回 query；Web AI `compose_to_ai` 是短 prompt enrichment signal。
 - `audience`: 会话标题、conversation/group id、issue key、visible people、provider 等对象线索。
 - `identifiers`: conversation id、group id、thread root post id、issue key、provider。
 - `contextItems`: 结构化上下文数组，优先使用。
@@ -333,6 +369,7 @@ POST /api/v1/composer/assist
 - `previewRequired`: 后端风险提示字段。前端会把它作为 review gate：先展开预览，用户确认后才插入。
 - `confidence`: 后端建议置信度。前端还会套用自适应展示阈值。
 - `queryTimeMs`
+- `debug`: 调试信息。Web AI / agent compose 重点看 `taskFrame`、`targetToolFit`、`sourceMix`、`egressRisk`、`relatedAgentSessions`、`recall.contextExpansion`。
 
 ## API
 
@@ -358,6 +395,20 @@ POST /api/v1/context-assist
 
 `surface='meeting_prep'` 不再属于 Compose Assist；兼容期内由 Context Assist 兼容层委托到 Today Pilot meeting prep。
 
+Desktop App 会话抽取入口：
+
+```http
+POST /api/v1/extractor/from-chat
+```
+
+关键新增字段：
+
+- `sourceType`: `chatgpt | doubao_chat | codex_cli | claude_code_cli | cursor_agent_cli | ...`
+- `extractMode`: `chat | agent_session`
+- `conversationMeta`: provider、session id、project path、tool key、scope 等结构化信息。
+
+`agent_session` 模式用于 CLI agent 会话。它的目标不是保存完整 transcript，而是把“任务意图、执行结果、验证信号、失败阻塞、下一步”抽成后续可被 `compose_to_ai` / `agent_compose` 召回的 compact memory。
+
 ## 后端流程
 
 `/composer/assist` 当前由 `ComposeAssistService` 处理，旧类名 `ComposerAssistService` 只作为兼容 wrapper 保留。
@@ -371,11 +422,12 @@ POST /api/v1/context-assist
 5. 后端可用阈值仍保留低门槛 `0.58`，用于避免完全无关召回进入生成；最终是否展示由前端自适应阈值控制。
 6. 用低温短输出生成可发送文本；LLM 超时或不可用时返回 `available=false`，不退化成生硬 bullet 摘录。
 7. Web AI context pack 会附带轻量任务判断和目标工具适配，例如 repo bugfix 更适合 Codex、Jira 状态需回到 Jira/项目面板核对、会前准备优先走 Today Pilot。
-8. 对生成文本做 sendable 校验和清理。
+8. Web AI / agent compose metadata 会记录 `taskFrame`、`targetToolFit`、`sourceMix`、`egressRisk` 和 `relatedAgentSessions`，用于 eval 和调试。
+9. 对生成文本做 sendable 校验和清理。
 
 ## Web AI draft-driven context enrichment
 
-这部分专门覆盖“外发到豆包 / ChatGPT / Claude / Gemini 前帮用户补上下文”，不放进 Ask / Context Recall 的核心召回流程。
+这部分专门覆盖“外发到豆包 / ChatGPT / Claude / Gemini 前帮用户补上下文”，主要对应 `compose_to_ai`。它不放进 Ask / Context Recall 的核心召回流程，也不升级成独立 AI Tool Compass。
 
 目标场景：
 
@@ -387,6 +439,7 @@ POST /api/v1/context-assist
 
 - `draftText` 在 Web AI 场景提升为 enrichment signal，和页面可见 AI 对话、provider、当前 URL 一起进入 `/composer/assist` 的 recall query；RingCentral/Jira 仍不让 draft 污染主召回。
 - 输出仍然是 preview / insert only，不自动提交给外部 AI。
+- Web AI 输入框只显示 Personal AI icon/popover，不使用红色发光输入框标识，避免让 ChatGPT/Gemini/Claude/豆包的原生输入体验显得异常。
 - context pack 会说明任务类型、当前目标工具是否合适，以及是否有更合适的核对入口；这只是插入前提示，不会替用户切换工具或自动打开外部系统。
 - context pack 必须保留证据边界：列出引用的本地记忆、source anchor、仍缺的信息，以及不应让外部 AI 当事实的推断。
 - 复用 `ContextRecallService` 内部的 `RecallContextExpansionService` 做短 prompt 扩写；`debug=true` 时可在 `debug.recall.contextExpansion` 看到 `expandedQuery`、`ambiguity`、`sourceAnchors`。
@@ -442,6 +495,24 @@ node tools/verify-compose-assist-ambient-calibration-e2e.mjs
 
 等待首次 webpack dev compile 成功后停止 watch。
 
+Context pack eval：
+
+```bash
+npm run eval:run -- --case compose-assist-web-ai-context-pack-project-orbit --live --no-llm --no-repair
+npm run eval:report
+```
+
+这条 eval 用于验证“打开的 Web AI/Codex 会话 + Personal AI 记忆 -> 生成 compose context pack -> 判断是否合理”。`--live` 会优先通过 webpage-mcp/mcporter 查找已打开的相关 Web AI 或 Codex 页面；如果没有匹配 tab，可以回退到 snapshot，但 report 必须显式写出 `collectionMode=snapshot_after_live_failed` 和 live 失败原因。
+
+report 必须能看见：
+
+- 实际使用的 chat/tab 或 snapshot 内容。
+- 当前 draft/prompt。
+- 请求里的 `surface`、`scenario`、`sourceTypes`。
+- 召回到的 evidence、来源 mix 和 debug 信息。
+- 最终 `insertText` context pack。
+- judge 分数、通过/警告/失败原因，以及缺失的关键上下文。
+
 建议保留的回归场景：
 
 - RingCentral 开发小群讨论 Codex/computer use/skills 时，不返回 flight、泛 meeting、假期公告。
@@ -452,8 +523,11 @@ node tools/verify-compose-assist-ambient-calibration-e2e.mjs
 - 同一事实面向老板、开发小群、Jira comment 时语气不同。
 - RingCentral/Jira 用户 draft 里的无关关键词不污染主召回。
 - Web AI 短 prompt（例如 “AI VBG 的 BE 部分完成情况如何”）能通过 draft 召回并扩写到本地项目上下文。
+- ChatGPT/Gemini/Claude/豆包输入框 focus 后只显示 Personal AI icon，不给输入框加红色 glow。
 - Web AI Jira/status prompt 应显示 Jira/项目来源标签，并在 context pack 里提示实时状态要回到 Jira 或 Personal AI 项目面板核对。
 - 保存过的 Source Memory 资料胶囊能进入 Web AI context pack；当前目标 AI 自己的历史来源仍应被剔除。
+- Codex CLI / Claude Code / Cursor Agent fixture JSONL 能被 Desktop App adapter 解析，且 `agent_session` 抽取结果不包含大段代码/diff/tool output。
+- `agent_session` 入库 metadata 应保留 `toolKey`、`sessionId`、`projectPath`、`taskKind`、`producedArtifacts`、`verificationSignals`。
 - 用户在旧建议请求未返回前继续输入时，不渲染也不能插入旧草稿版本的建议；输入停下后只展示基于最新 draft 的建议。
 - `previewRequired=true` 或 `riskLevel=high` 时，第一次点击 icon 只展开锁定预览；未点击 `插入` 前不能改写草稿，点击 `取消` 只关闭当前建议。
 - 含 Rehearsal 预演提醒的建议即使风险为 low，也必须走一次锁定预览，避免未来场景脚本被误点直接插入。

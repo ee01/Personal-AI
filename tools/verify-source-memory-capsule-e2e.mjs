@@ -88,6 +88,48 @@ function capsuleFixture(status = 'saved') {
   };
 }
 
+function svgCapsuleFixture() {
+  return {
+    capsule: {
+      id: 'capsule-svg-source',
+      sourceKind: 'visual_memory',
+      sourceUrl: 'https://source.example.com/slides/biweekly',
+      sourceTitle: 'Video mobile biweekly updates - Google Slides',
+      sourceHost: 'docs.google.com',
+      captureMode: 'manual',
+      captureReason: '用户点击网页 + 入库保存视觉证据',
+      status: 'saved',
+      scope: 'work',
+      privacyLevel: 'work',
+      summary: '视觉证据：Video mobile biweekly updates 类型：图表 · svg',
+      contentPreview: '视觉证据：Video mobile biweekly updates',
+      messageId: 'source-memory-message-svg',
+      createdAt: nowSeconds - 900,
+      updatedAt: nowSeconds - 900,
+      savedAt: nowSeconds - 900,
+      metadata: {
+        visualMemory: {
+          kind: 'chart',
+          tagName: 'svg',
+          label: 'Video mobile biweekly updates',
+          selectorHint: 'svg.punch-filmstrip-thumbnails',
+          rect: { x: 12, y: 24, width: 320, height: 180 },
+          score: 0.96,
+          svg: {
+            width: 320,
+            height: 180,
+            markup:
+              '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" width="320" height="180" style="position:absolute;left:0;bottom:0"><rect width="320" height="180" fill="#eff6ff"/><circle cx="96" cy="92" r="44" fill="#2563eb"/><text x="160" y="98" style="fill:#111827;font-size:24px;position:absolute;left:0">SVG OK</text></svg>',
+          },
+        },
+      },
+      anchors: [],
+      takeaways: [],
+      triggers: [],
+    },
+  };
+}
+
 function apiFallback(url) {
   const pathname = new URL(url).pathname;
   if (pathname.endsWith('/stats')) {
@@ -143,6 +185,13 @@ try {
       pathname.endsWith('/source-memory/capsules/capsule-falcon-source')
     ) {
       await route.fulfill(jsonResponse(capsuleFixture()));
+      return;
+    }
+    if (
+      request.method() === 'GET' &&
+      pathname.endsWith('/source-memory/capsules/capsule-svg-source')
+    ) {
+      await route.fulfill(jsonResponse(svgCapsuleFixture()));
       return;
     }
     if (
@@ -226,6 +275,51 @@ try {
     0,
     'dismissed source memory should not keep the destructive action visible',
   );
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/source-memory/capsule-svg-source`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  await page
+    .getByRole('heading', {
+      name: 'Video mobile biweekly updates - Google Slides',
+    })
+    .waitFor({ timeout: 10000 });
+  await page.locator('.visual-svg-stage svg').waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.locator('.visual-svg-stage svg').textContent(),
+    'SVG OK',
+  );
+  assert.equal(
+    await page.locator('.visual-svg-stage svg').getAttribute('style'),
+    null,
+    'stored SVG preview should strip page-level positioning styles',
+  );
+  assert.equal(
+    await page.locator('.visual-svg-stage svg').evaluate((node) => getComputedStyle(node).position),
+    'static',
+    'stored SVG preview should stay in the preview stage flow',
+  );
+  assert.equal(
+    await page.locator('.visual-svg-stage svg').evaluate((node) => Math.round(node.getBoundingClientRect().width)),
+    await page.locator('.visual-svg-stage').evaluate((node) => {
+      const style = getComputedStyle(node);
+      return Math.round(
+        node.clientWidth -
+          Number.parseFloat(style.paddingLeft || '0') -
+          Number.parseFloat(style.paddingRight || '0'),
+      );
+    }),
+    'stored SVG preview should fill the preview stage width',
+  );
+  assert.equal(
+    await page.locator('.visual-svg-stage svg text').getAttribute('style'),
+    'fill:#111827; font-size:24px',
+    'stored SVG preview should keep safe visual text styles',
+  );
+  await page
+    .getByText('已保存 SVG 图形快照，原始尺寸 320 × 180 px。')
+    .waitFor({ timeout: 10000 });
 
   console.log('verify-source-memory-capsule-e2e: ok');
 } finally {

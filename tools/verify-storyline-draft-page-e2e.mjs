@@ -57,6 +57,19 @@ async function installMocks(page) {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         const targetArtifact = body.targetArtifact || 'speaker_notes';
         window.__storylineDraftRequests.push(targetArtifact);
+        if (body.prepId === 'prep-empty') {
+          return new Response(
+            JSON.stringify({
+              error: 'storyline_source_has_no_usable_evidence',
+              detail:
+                'Storyline draft requires at least one usable evidence ref from the source meeting prep.',
+            }),
+            {
+              status: 422,
+              headers: { 'content-type': 'application/json' },
+            },
+          );
+        }
         if (targetArtifact === 'speaker_notes') {
           await new Promise((resolve) => setTimeout(resolve, 180));
         }
@@ -194,6 +207,8 @@ async function main() {
     assert(bodyText?.includes('Slides 提纲'), 'artifact label missing');
     assert(bodyText?.includes('确认哪些素材可以对外分享'), 'gap text missing');
     assert(bodyText?.includes('复制前去掉内部链接'), 'risk note missing');
+    assert(bodyText?.includes('单条证据'), 'segment grounding state missing');
+    assert(bodyText?.includes('1 个详情'), 'segment grounding detail count missing');
     assert(
       bodyText?.includes('已复核 1 个待确认和 1 条边界提醒'),
       'pre-copy review gate missing',
@@ -257,6 +272,19 @@ async function main() {
     assert(
       copiedValue.includes('# Slides Outline'),
       'copy fallback did not select generated artifact text',
+    );
+    await page.goto(
+      `${pathToFileURL(memoryExploringHtml).href}#/storylines/draft?source=today_meeting_prep&prepId=prep-empty&target=speaker_notes`,
+    );
+    await page.waitForFunction(() =>
+      document.body.textContent?.includes(
+        '这份会前准备没有可追溯的 evidence refs',
+      ),
+    );
+    const emptyPrepText = await page.textContent('body');
+    assert(
+      emptyPrepText?.includes('生成失败'),
+      'empty-evidence prep should render a failure state',
     );
     console.log('Storyline draft page E2E verified.');
   } finally {

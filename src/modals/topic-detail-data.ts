@@ -15,19 +15,42 @@ const firstUsefulArray = (...values: any[]): any[] => {
   return values.find((value) => Array.isArray(value)) || [];
 };
 
+const MESSAGE_ID_KEYS = [
+  'id',
+  'messageId',
+  'message_id',
+  'conversationId',
+  'conversation_id',
+  'sourceMessageId',
+  'source_message_id',
+  'externalMessageId',
+  'external_message_id',
+] as const;
+
 const getMessageIds = (message: any): string[] => {
-  return [
-    message?.id,
-    message?.messageId,
-    message?.conversationId,
-    message?.sourceMessageId,
-  ]
+  return MESSAGE_ID_KEYS.map((key) => message?.[key])
     .filter((value) => value !== undefined && value !== null)
-    .map((value) => String(value));
+    .map((value) => String(value).trim())
+    .filter(Boolean);
 };
 
 export const getTopicConversationPrimaryId = (conversation: any): string => {
   return getMessageIds(conversation)[0] || '';
+};
+
+export const getTopicConversationReadSyncId = (conversation: any): string => {
+  const primaryId = getTopicConversationPrimaryId(conversation);
+  if (primaryId) return primaryId;
+
+  const contextMessages = Array.isArray(conversation?.contextMessages)
+    ? conversation.contextMessages
+    : [];
+  for (const contextMessage of contextMessages) {
+    const contextMessageId = getMessageIds(contextMessage)[0];
+    if (contextMessageId) return contextMessageId;
+  }
+
+  return '';
 };
 
 export type TopicConversationReadFilter = 'all' | 'unread' | 'read';

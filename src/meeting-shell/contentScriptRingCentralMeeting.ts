@@ -82,7 +82,7 @@ let lastRingCentralTranscriptServiceAvailable = false;
 let lastRingCentralTranscriptServiceEndpoint = '';
 let lastRingCentralTranscriptProbeError = '';
 let lastRingCentralCaptionTextSignature = '';
-let lastRingCentralCaptionWindowText = '';
+const lastRingCentralCaptionBySpeaker = new Map<string, string>();
 let ringCentralTranscriptWsBridgeInstalled = false;
 let runtimeConfig: MeetingPilotRuntimeConfig = {
   enabled: true,
@@ -1568,6 +1568,11 @@ interface RingCentralTranscriptDomProbe {
   textLineCount: number;
 }
 
+interface RingCentralCaptionDomItem {
+  speaker: string;
+  text: string;
+}
+
 interface RingCentralTranscriptWsEvent {
   text: string;
   speaker?: string;
@@ -1856,6 +1861,41 @@ function getRingCentralClosedCaptionText(): string {
   return candidates[0]?.text || '';
 }
 
+function getRingCentralClosedCaptionItems(): RingCentralCaptionDomItem[] {
+  const items: RingCentralCaptionDomItem[] = [];
+  getReadableDocuments().forEach((doc) => {
+    doc.querySelectorAll('.ClosedCaption__wrapper').forEach((node) => {
+      if (!isElementVisible(node)) return;
+      if (isInsideRingCentralTranscriptPanel(node)) return;
+
+      const speaker = normalizeTranscriptSpeaker(
+        node.querySelector<HTMLElement>('.ClosedCaption__username')?.innerText ||
+          '',
+      );
+      const text = collapseRepeatedTranscriptText(
+        Array.from(node.querySelectorAll<HTMLElement>('.ClosedCaption__text'))
+          .map((line) => normalizeText(line.innerText || line.textContent))
+          .filter(
+            (line) =>
+              shouldKeepRingCentralTranscriptText(line) &&
+              !isRingCentralCaptionControlLine(line) &&
+              !isRingCentralCaptionSettingsText(line) &&
+              normalizeTranscriptSpeaker(line) !== speaker,
+          )
+          .join(' '),
+      );
+
+      if (!shouldKeepRingCentralTranscriptText(text)) return;
+      if (isRingCentralCaptionSettingsText(text)) return;
+      items.push({ speaker, text });
+    });
+  });
+
+  if (items.length) return items;
+  const fallbackText = getRingCentralClosedCaptionText();
+  return fallbackText ? [{ speaker: '', text: fallbackText }] : [];
+}
+
 function getCaptionWindowDelta(previous: string, current: string): string {
   const prior = normalizeText(previous);
   const next = normalizeText(current);
@@ -1946,6 +1986,12 @@ function isElementVisible(element: Element): boolean {
   const style = element.ownerDocument.defaultView?.getComputedStyle?.(html);
   if (!style) return true;
   return style.display !== 'none' && style.visibility !== 'hidden';
+}
+
+function waitForMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function getRingCentralTranscriptRoots(): Element[] {
@@ -2181,6 +2227,113 @@ function getStoredRingCentralTranscriptEndpoint(): string {
   ).trim();
 }
 
+function isRingCentralClosedCaptionActive(): boolean {
+  const closedCaptions = parseJsonStorage('closedCaptions_');
+  return closedCaptions?.active === true;
+}
+
+function getVisibleButtonCandidates(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>('button, [role="button"]'),
+  ).filter((node) => isElementVisible(node) && !isInsideMeetingPilotOverlay(node));
+}
+
+function getButtonSearchText(node: HTMLElement): string {
+  return normalizeText(
+    [
+      node.innerText,
+      node.textContent,
+      node.getAttribute('aria-label'),
+      node.getAttribute('title'),
+      node.getAttribute('data-at'),
+      node.getAttribute('data-testid'),
+      node.getAttribute('data-test-id'),
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+}
+
+function clickElementLikeUser(node: HTMLElement): void {
+  node.scrollIntoView?.({ block: 'center', inline: 'center' });
+  node.focus?.();
+  node.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+  node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  node.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+  node.click();
+}
+
+function findRingCentralMoreButton(): HTMLElement | undefined {
+  const buttons = getVisibleButtonCandidates();
+  const exactMore = buttons.find((node) => {
+    const text = getButtonSearchText(node);
+    return /\bmore\b/i.test(text);
+  });
+  if (exactMore) return exactMore;
+  return buttons.find((node) => {
+    const text = getButtonSearchText(node);
+    return /settings,\s*help\s*&\s*feedback/i.test(text) ||
+      /help\s*&\s*feedback/i.test(text);
+  });
+}
+
+function findRingCentralEnableCaptionButton(): HTMLElement | undefined {
+  const buttons = getVisibleButtonCandidates();
+  return buttons.find((node) => {
+    const text = getButtonSearchText(node);
+    return (
+      /(enable|turn on|show|start).{0,32}(closed captions?|captions?|subtitles?)/i.test(
+        text,
+      ) ||
+      /(closed captions?|captions?|subtitles?).{0,32}(enable|turn on|show|start)/i.test(
+        text,
+      )
+    );
+  });
+}
+
+async function enableRingCentralClosedCaptionsFromDom(): Promise<{
+  success: boolean;
+  status: string;
+  error?: string;
+}> {
+  if (isRingCentralClosedCaptionActive()) {
+    return { success: true, status: 'already_active' };
+  }
+
+  const clickCaptionButton = findRingCentralEnableCaptionButton();
+  if (clickCaptionButton) {
+    clickElementLikeUser(clickCaptionButton);
+    await waitForMs(500);
+    return {
+      success: isRingCentralClosedCaptionActive(),
+      status: isRingCentralClosedCaptionActive() ? 'enabled' : 'clicked',
+    };
+  }
+
+  const moreButton = findRingCentralMoreButton();
+  if (!moreButton) {
+    return { success: false, status: 'more_not_found' };
+  }
+
+  clickElementLikeUser(moreButton);
+  await waitForMs(700);
+
+  const menuCaptionButton = findRingCentralEnableCaptionButton();
+  if (!menuCaptionButton) {
+    return { success: false, status: 'caption_item_not_found' };
+  }
+
+  clickElementLikeUser(menuCaptionButton);
+  await waitForMs(700);
+  const active = isRingCentralClosedCaptionActive();
+  return {
+    success: active,
+    status: active ? 'enabled' : 'clicked',
+  };
+}
+
 async function probeRingCentralTranscriptService(
   meetingId: string,
 ): Promise<void> {
@@ -2246,7 +2399,10 @@ async function emitRingCentralTranscriptFromDom(
   const probe = collectRingCentralTranscriptDomProbe(context.meetingId);
   const items = probe.items;
   const latest = items[items.length - 1];
-  const captionText = getRingCentralClosedCaptionText();
+  const captionItems = getRingCentralClosedCaptionItems();
+  const captionText = captionItems
+    .map((item) => `${item.speaker}:${item.text}`)
+    .join('\n');
   const captionTextSignature = captionText ? simpleTranscriptHash(captionText) : '';
   const hasTranscriptDomText =
     probe.rootCount > 0 && probe.timeLineCount > 0 && probe.textLineCount > 0;
@@ -2288,20 +2444,25 @@ async function emitRingCentralTranscriptFromDom(
   }
 
   if (
-    captionText &&
+    captionItems.length > 0 &&
     captionTextSignature &&
     captionTextSignature !== lastRingCentralCaptionTextSignature
   ) {
-    const captionDelta = getCaptionWindowDelta(
-      lastRingCentralCaptionWindowText,
-      captionText,
-    );
     lastRingCentralCaptionTextSignature = captionTextSignature;
-    lastRingCentralCaptionWindowText = captionText;
-    const previewText = buildCaptionPreviewText(captionDelta || captionText);
-    if (previewText) {
+    for (const item of captionItems) {
+      const speakerKey = normalizeTranscriptComparable(
+        item.speaker || context.speakerLabel || 'unknown',
+      );
+      const previousText = lastRingCentralCaptionBySpeaker.get(speakerKey) || '';
+      const captionDelta = getCaptionWindowDelta(previousText, item.text);
+      lastRingCentralCaptionBySpeaker.set(speakerKey, item.text);
+      const previewText = buildCaptionPreviewText(captionDelta);
+      if (!previewText) continue;
+
       const chunkSignature = simpleTranscriptHash(previewText);
-      const id = `rc-caption-preview-${context.meetingId}`;
+      const id = `rc-caption-preview-${context.meetingId}-${simpleTranscriptHash(
+        speakerKey,
+      )}`;
       if (seenRingCentralTranscriptChunks.get(id) !== chunkSignature) {
         seenRingCentralTranscriptChunks.set(id, chunkSignature);
         await chrome.runtime
@@ -2310,7 +2471,7 @@ async function emitRingCentralTranscriptFromDom(
             tabId: 0,
             transcriptChunk: {
               id,
-              speaker: context.speakerLabel || '',
+              speaker: item.speaker || context.speakerLabel || '',
               text: previewText,
               ts: now,
               source: 'ringcentral_transcript',
@@ -4358,6 +4519,20 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.type === 'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE') {
     setCoachmarkOpen(true);
     sendResponse({ success: true });
+    return true;
+  }
+  if (request.type === 'MEETING_PILOT_ENABLE_RINGCENTRAL_CC') {
+    void enableRingCentralClosedCaptionsFromDom()
+      .then((response) => {
+        sendResponse(response);
+      })
+      .catch((error) => {
+        sendResponse({
+          success: false,
+          status: 'failed',
+          error: String((error as Error)?.message || error || 'failed'),
+        });
+      });
     return true;
   }
   if (request.type === 'MEETING_PILOT_FOCUS_PARTICIPANT') {

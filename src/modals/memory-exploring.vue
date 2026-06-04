@@ -337,6 +337,7 @@ import { useMemoryStore } from './memory-store';
 import AISearchAnimation from './components/AISearchAnimation.vue';
 import {
   getMemoryServiceClient,
+  MemoryServiceError,
   type OutreachTemplateRuntimeStatusItem,
   type RecallScope,
 } from '../services/MemoryServiceClient';
@@ -546,8 +547,28 @@ async function loadMemoryUserIdentity() {
       id: client.getUserId(),
       fallbackToDefault: client.getUserId() === 'default',
     };
-    memoryUserIdentityError.value = '无法确认服务端身份边界。';
+    memoryUserIdentityError.value = describeMemoryUserIdentityError(error);
   }
+}
+
+function describeMemoryUserIdentityError(error: unknown) {
+  if (error instanceof MemoryServiceError) {
+    const errorCode = String(error.body?.code || '');
+    const errorMessage = String(error.body?.message || error.message || '');
+    if (error.status === 404) {
+      return '服务端未提供身份校验接口，当前按本机用户访问。';
+    }
+    if (
+      error.status >= 500 &&
+      /SQLITE_CORRUPT|database disk image is malformed/i.test(
+        `${errorCode} ${errorMessage}`,
+      )
+    ) {
+      return '服务端记忆库当前异常，身份边界暂时无法校验。';
+    }
+    return `服务端暂时无法确认身份边界（${error.status}）。`;
+  }
+  return '无法确认服务端身份边界。';
 }
 
 function handleStorageChange(

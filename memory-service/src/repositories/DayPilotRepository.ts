@@ -50,14 +50,18 @@ export interface DayPilotAttentionBudget {
 }
 
 export interface DayPilotSourceStats {
-  messages: { scanned: number; totalRecent: number };
-  calendar: { scanned: number; upcoming: number };
-  notifications: { scanned: number; pending: number };
-  actions: { scanned: number; queued: number };
-  reflections: { scanned: number; active: number };
-  rehearsals: { scanned: number; active: number };
-  skills: { scanned: number; suggestions: number };
-  relationships: { scanned: number; highFrequencyPeople: number };
+  messages: { scanned: number; totalRecent: number; selected?: number };
+  calendar: { scanned: number; upcoming: number; selected?: number };
+  notifications: { scanned: number; pending: number; selected?: number };
+  actions: { scanned: number; queued: number; selected?: number };
+  reflections: { scanned: number; active: number; selected?: number };
+  rehearsals: { scanned: number; active: number; selected?: number };
+  skills: { scanned: number; suggestions: number; selected?: number };
+  relationships: {
+    scanned: number;
+    highFrequencyPeople: number;
+    selected?: number;
+  };
 }
 
 export interface DayPilotMission {

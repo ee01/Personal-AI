@@ -1482,6 +1482,7 @@ const handledMeetingPilotTypes = new Set([
   'MEETING_PILOT_CLOSE_SIDE_PANEL',
   'MEETING_PILOT_SET_SIDE_PANEL_PIN',
   'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL',
+  'MEETING_PILOT_ENABLE_RINGCENTRAL_CC',
   'MEETING_PILOT_SHOW_CAPTURE_AUTH_GUIDE',
   'MEETING_PILOT_OPEN_LIVE_MAP',
   'MEETING_PILOT_START_CAPTURE',
@@ -3681,6 +3682,33 @@ async function handleMeetingPilotMessage(
       const resolvedTabId = Number(request.tabId || tabId || 0);
       const success = await showCaptureAuthGuide(resolvedTabId);
       sendResponse({ success });
+      return;
+    }
+    case 'MEETING_PILOT_ENABLE_RINGCENTRAL_CC': {
+      await ensureInitialized();
+      const resolvedTabId = Number(request.tabId || tabId || 0);
+      try {
+        const response = (await chrome.tabs.sendMessage(resolvedTabId, {
+          type: 'MEETING_PILOT_ENABLE_RINGCENTRAL_CC',
+        })) as
+          | {
+              success?: boolean;
+              status?: string;
+              error?: string;
+            }
+          | undefined;
+        sendResponse({
+          success: Boolean(response?.success),
+          status: response?.status || 'unknown',
+          error: response?.error,
+        });
+      } catch (error) {
+        sendResponse({
+          success: false,
+          status: 'failed',
+          error: String((error as Error)?.message || error || 'send_failed'),
+        });
+      }
       return;
     }
     case 'MEETING_PILOT_ENABLE_CAPTURE_AND_OPEN_PANEL': {

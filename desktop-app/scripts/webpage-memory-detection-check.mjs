@@ -89,12 +89,92 @@ async function openContextMoreMenu(page) {
   });
 }
 
+async function assertFeedbackDrawerLayout(page) {
+  const layout = await page.locator('.pai-context-feedback-layer').evaluate((layer) => {
+    const sheet = layer.querySelector('.pai-context-feedback-sheet');
+    const card = document.querySelector('.pai-context-card');
+    const layerRect = layer.getBoundingClientRect();
+    const sheetRect = sheet?.getBoundingClientRect();
+    const cardRect = card?.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    return {
+      parentTag: layer.parentElement?.tagName,
+      position: getComputedStyle(layer).position,
+      cardContainsLayer: Boolean(card?.contains(layer)),
+      layerRect: {
+        x: layerRect.x,
+        y: layerRect.y,
+        width: layerRect.width,
+        height: layerRect.height,
+      },
+      sheetRect: sheetRect
+        ? {
+            x: sheetRect.x,
+            y: sheetRect.y,
+            right: sheetRect.right,
+            width: sheetRect.width,
+            height: sheetRect.height,
+          }
+        : null,
+      cardRect: cardRect
+        ? {
+            width: cardRect.width,
+            height: cardRect.height,
+          }
+        : null,
+      viewportWidth,
+      viewportHeight,
+    };
+  });
+
+  assert.equal(layout.parentTag, 'BODY', '反馈 drawer 应挂在页面 body 下');
+  assert.equal(layout.position, 'fixed', '反馈 drawer overlay 应覆盖整个 viewport');
+  assert.equal(layout.cardContainsLayer, false, '反馈 drawer 不应渲染在 Memory Lens 卡片内部');
+  assert.equal(layout.layerRect.x, 0, '反馈 drawer overlay 应从 viewport 左侧开始');
+  assert.equal(layout.layerRect.y, 0, '反馈 drawer overlay 应从 viewport 顶部开始');
+  assert.ok(
+    layout.layerRect.width >= layout.viewportWidth - 1 &&
+      layout.layerRect.height >= layout.viewportHeight - 1,
+    '反馈 drawer overlay 应覆盖整个 viewport',
+  );
+  assert.ok(layout.sheetRect, '反馈 drawer sheet 应存在');
+  if (layout.viewportWidth <= 640) {
+    assert.ok(
+      layout.sheetRect.width >= layout.viewportWidth - 2,
+      '移动端 bottom sheet 应接近占满 viewport 宽度',
+    );
+    assert.ok(
+      layout.sheetRect.y + layout.sheetRect.height >= layout.viewportHeight - 2,
+      '移动端 bottom sheet 应贴在 viewport 底部',
+    );
+    assert.ok(
+      layout.sheetRect.height <= layout.viewportHeight * 0.82,
+      '移动端 bottom sheet 高度不应超过约 80vh',
+    );
+  } else {
+    assert.ok(
+      layout.sheetRect.right >= layout.viewportWidth - 2,
+      '桌面端 drawer 应贴在 viewport 右侧',
+    );
+    assert.ok(
+      layout.sheetRect.height >= layout.viewportHeight - 2,
+      '桌面端 drawer 应接近全高，而不是 Lens 卡片内的小弹窗',
+    );
+    assert.ok(
+      !layout.cardRect || layout.sheetRect.height > layout.cardRect.height,
+      '反馈 drawer 高度应大于 Memory Lens 卡片高度',
+    );
+  }
+}
+
 async function chooseNegativeFeedbackReason(page, reason = 'generic_topic_overlap') {
   await page.locator('.pai-context-recall-negative').click();
   await page.waitForSelector('.pai-context-feedback-sheet', {
     state: 'visible',
     timeout: 5000,
   });
+  await assertFeedbackDrawerLayout(page);
   await page
     .locator(`.pai-context-feedback-reason[data-feedback-reason="${reason}"]`)
     .click();
@@ -2438,6 +2518,45 @@ async function verifyIrrelevantFeedback(server, context) {
   await page.close();
 }
 
+async function verifyFeedbackDrawerMobileSheet(server, context) {
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 390, height: 720 });
+  const diagnostics = attachPageDiagnostics(page, 'feedback-mobile-sheet');
+  const startFeedbackCount = server.feedbackRequests.length;
+  await page.goto(`${server.origin}/normal?feedback=mobile`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+
+  await page.waitForSelector('.pai-context-bubble', { timeout: 12000 });
+  await page.locator('.pai-context-bubble').click();
+  await page.waitForSelector('.pai-context-card', {
+    state: 'visible',
+    timeout: 5000,
+  });
+  await chooseNegativeFeedbackReason(page, 'empty_meeting_shell');
+  await waitForRequestCount(
+    { contextRecallRequests: server.feedbackRequests },
+    startFeedbackCount + 1,
+    5000,
+  );
+
+  const feedbackDetail = parseFeedbackDetail(
+    server.feedbackRequests[startFeedbackCount].detail,
+  );
+  assert.equal(feedbackDetail.interaction, 'memory_relevance_trainer');
+  assert.equal(feedbackDetail.feedback_reason, 'empty_meeting_shell');
+  assert.equal(feedbackDetail.auto_applied, 'true');
+
+  if (diagnostics.some((entry) => entry.includes('pageerror'))) {
+    for (const entry of diagnostics) {
+      log(entry);
+    }
+    throw new Error('移动端反馈 bottom sheet 页面出现脚本异常');
+  }
+  await page.close();
+}
+
 async function verifyFeedbackFailureDisclosure(server, context) {
   const page = await context.newPage();
   const diagnostics = attachPageDiagnostics(page, 'feedback-failure');
@@ -3493,6 +3612,7 @@ try {
   await verifyUnsafeExploreRoute(server, context);
   await verifyDisplayedBubbleClearsOnSensitiveAttributeChange(server, context);
   await verifyIrrelevantFeedback(server, context);
+  await verifyFeedbackDrawerMobileSheet(server, context);
   await verifyFeedbackFailureDisclosure(server, context);
   await verifyAllowlistMode(server, context, launch.serviceWorker, launch.extensionId);
   await verifyAllowSiteClearsCoveredControls(

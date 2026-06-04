@@ -577,6 +577,7 @@ import {
   getTopicConversationUnreadMessageCount,
   getTopicConversationUnreadCount,
   getTopicConversationPrimaryId,
+  getTopicConversationReadSyncId,
   getTopicDetailRecentData,
   getTopicDetailUnreadCount,
   isTopicMessageExplicitlyUnread,
@@ -690,6 +691,20 @@ const conversationEmptyText = computed(() => {
 
 const getConversationRenderId = (conversation: any, index = 0): string => {
   return getTopicConversationPrimaryId(conversation) || `conversation-${index}`;
+};
+
+const getConversationFocusRenderId = (conversation: any): string => {
+  if (!conversation) return '';
+  const sortedConversations = sortTopicConversationsForTriage(
+    topicConversations.value,
+  );
+  const sortedIndex = sortedConversations.findIndex(
+    (candidate) => candidate === conversation,
+  );
+  return getConversationRenderId(
+    conversation,
+    sortedIndex >= 0 ? sortedIndex : 0,
+  );
 };
 
 const shouldKeepConversationForReadFilter = (
@@ -814,7 +829,7 @@ const toggleConversationExpand = (conversation: any, index = 0) => {
     const wasUnread = isConversationUnread(conversation);
     newExpanded.clear();
     newExpanded.add(conversationId);
-    const messageId = getTopicConversationPrimaryId(conversation);
+    const messageId = getTopicConversationReadSyncId(conversation);
     if (convReadFilter.value === 'unread' && wasUnread) {
       rememberStickyUnreadConversation(conversationId);
     }
@@ -1028,8 +1043,13 @@ const getTopicMessageIds = (message: any): string[] => {
   return [
     message?.id,
     message?.messageId,
+    message?.message_id,
     message?.conversationId,
+    message?.conversation_id,
     message?.sourceMessageId,
+    message?.source_message_id,
+    message?.externalMessageId,
+    message?.external_message_id,
   ]
     .filter((value) => value !== undefined && value !== null)
     .map((value) => String(value).trim())
@@ -1076,8 +1096,7 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
     topicData.value,
     messageId,
   );
-  const targetConversationId =
-    getTopicConversationPrimaryId(targetConversation);
+  const targetConversationId = getConversationFocusRenderId(targetConversation);
   if (!targetConversationId) {
     activeTab.value = 'conversations';
     convFilter.value = 'all';
@@ -1099,16 +1118,7 @@ const focusConversationFromQuery = async (messageIdValue: unknown) => {
   activeTab.value = 'conversations';
   convFilter.value = 'all';
   convReadFilter.value = 'all';
-
-  if (
-    convSearchQuery.value &&
-    !filteredConversations.value.some(
-      (conversation: any) =>
-        getTopicConversationPrimaryId(conversation) === targetConversationId,
-    )
-  ) {
-    convSearchQuery.value = '';
-  }
+  convSearchQuery.value = '';
 
   expandedConversations.value = new Set([targetConversationId]);
   highlightedConversationId.value = targetConversationId;

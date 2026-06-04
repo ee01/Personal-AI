@@ -50,6 +50,12 @@ export interface DraftRehearsalCandidate {
   evidenceRefs?: string[];
 }
 
+export interface ReflectionOutputLanguagePreference {
+  code: 'zh-CN' | 'en-US';
+  label: string;
+  source: string;
+}
+
 export interface GeneratedReflection {
   summary: string;
   hypothesisAfter?: string;
@@ -81,6 +87,20 @@ function uniqStrings(values: Array<string | undefined | null>): string[] {
         .map((value) => value.trim()),
     ),
   );
+}
+
+function renderOutputLanguageInstruction(
+  preference: ReflectionOutputLanguagePreference | undefined,
+): string {
+  if (!preference) {
+    return '- No explicit user language preference was resolved. Follow the dominant language of the evidence for user-facing prose.';
+  }
+  return [
+    `- Write all user-facing prose in ${preference.label}.`,
+    '- This especially applies to rehearsalCandidates.title, rehearsalCandidates.summary, and rehearsalCandidates.content.',
+    '- Preserve names, product names, group names, URLs, IDs, Jira keys, and quoted source terms in their original language.',
+    `- Language preference source: ${preference.source}.`,
+  ].join('\n');
 }
 
 function isSelfOrUnknownOutreachTarget(targetRef: unknown): boolean {
@@ -131,13 +151,19 @@ export class ReflectionWorker {
     thread: ReflectionThreadRecord,
     evidence: ReflectionEvidenceItem[],
     triggerType: string,
+    outputLanguage?: ReflectionOutputLanguagePreference,
   ): Promise<GeneratedReflection> {
     if (process.env.REFLECTION_FORCE_FALLBACK === 'true') {
       return this.generateFallback(thread, evidence, triggerType);
     }
 
     try {
-      return await this.generateWithLlm(thread, evidence, triggerType);
+      return await this.generateWithLlm(
+        thread,
+        evidence,
+        triggerType,
+        outputLanguage,
+      );
     } catch (err) {
       console.warn(
         '[ReflectionWorker] Falling back to heuristic reflection:',
@@ -151,6 +177,7 @@ export class ReflectionWorker {
     thread: ReflectionThreadRecord,
     evidence: ReflectionEvidenceItem[],
     triggerType: string,
+    outputLanguage?: ReflectionOutputLanguagePreference,
   ): Promise<GeneratedReflection> {
     const llm = getLLMClient();
     const evidenceText =
@@ -176,6 +203,9 @@ Trigger type: ${triggerType}
 
 Evidence:
 ${evidenceText}
+
+Output language:
+${renderOutputLanguageInstruction(outputLanguage)}
 
 Return JSON only:
 {

@@ -434,6 +434,21 @@ assert.match(
 );
 assert.match(
   contentScriptSource,
+  /\.pai-context-feedback-layer\s*\{[\s\S]*?position:\s*fixed/,
+  'relevance trainer drawer should be a viewport-level overlay',
+);
+assert.match(
+  contentScriptSource,
+  /document\.body\.appendChild\(drawer\)/,
+  'relevance trainer drawer should be mounted at page level',
+);
+assert.doesNotMatch(
+  contentScriptSource,
+  /\$\{renderNegativeFeedbackLayer\(match,\s*view\)\}/,
+  'relevance trainer drawer should not be rendered inside the Lens card',
+);
+assert.match(
+  contentScriptSource,
   /generic_topic_overlap/,
   'relevance trainer should keep the generic-topic-overlap reason',
 );

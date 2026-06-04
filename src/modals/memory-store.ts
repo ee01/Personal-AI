@@ -357,11 +357,17 @@ const getMessageIdentityValues = (message: any): string[] => {
   return [
     message?.id,
     message?.messageId,
+    message?.message_id,
     message?.conversationId,
+    message?.conversation_id,
     message?.sourceMessageId,
+    message?.source_message_id,
+    message?.externalMessageId,
+    message?.external_message_id,
   ]
     .filter((value) => value !== undefined && value !== null)
-    .map((value) => String(value));
+    .map((value) => String(value).trim())
+    .filter(Boolean);
 };
 
 const getConversationIdentitySet = (conversation: any): Set<string> => {
@@ -560,12 +566,9 @@ const hasUnreadDiscussionMatch = (
 
   const matchingIds = getTopicConversationMatchingIds(topic, conversationId);
   return topic.unreadDiscussions.some((discussion: any) => {
-    const discussionId =
-      discussion?.id ||
-      discussion?.conversationId ||
-      discussion?.messageId ||
-      discussion?.sourceMessageId;
-    return discussionId ? matchingIds.has(String(discussionId)) : false;
+    return getMessageIdentityValues(discussion).some((discussionId) =>
+      matchingIds.has(discussionId),
+    );
   });
 };
 
@@ -595,12 +598,11 @@ const pruneReadDiscussion = (topic: any, conversationId: string): number => {
   const previousLength = topic.unreadDiscussions.length;
   topic.unreadDiscussions = topic.unreadDiscussions.filter(
     (discussion: any) => {
-      const discussionId =
-        discussion?.id ||
-        discussion?.conversationId ||
-        discussion?.messageId ||
-        discussion?.sourceMessageId;
-      return discussionId ? !matchingIds.has(String(discussionId)) : true;
+      const discussionIds = getMessageIdentityValues(discussion);
+      return (
+        discussionIds.length === 0 ||
+        !discussionIds.some((discussionId) => matchingIds.has(discussionId))
+      );
     },
   );
   return previousLength - topic.unreadDiscussions.length;

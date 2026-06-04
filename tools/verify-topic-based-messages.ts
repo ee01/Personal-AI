@@ -15,6 +15,7 @@ import {
   filterTopicConversationsByReadState,
   findTopicConversationByMessageId,
   getTopicConversationPrimaryId,
+  getTopicConversationReadSyncId,
   getTopicConversationUnreadMessageCount,
   getTopicConversationUnreadCount,
   getTopicDetailRecentData,
@@ -769,6 +770,100 @@ function verifyTopicDetailUnreadCountFallsBackToKnownMessages() {
   );
 }
 
+function verifyTopicDeepLinkSupportsLegacyContextIdentity() {
+  const topic = {
+    id: 'topic-legacy-context',
+    unreadDiscussions: [{ message_id: 'legacy-context-id', text: 'Legacy' }],
+    recentDataDetails: {
+      conversations: [
+        {
+          summary: 'Parent has no stable id',
+          isRead: true,
+          contextMessages: [
+            {
+              message_id: 'legacy-context-id',
+              isRead: false,
+              content: 'Legacy context message',
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  const conversation = findTopicConversationByMessageId(
+    topic,
+    'legacy-context-id',
+  );
+  assert.ok(
+    conversation,
+    'messageId lookup should find a parent through a snake_case context id',
+  );
+  assert.equal(
+    getTopicConversationPrimaryId(conversation),
+    '',
+    'legacy fixture should cover parents without stable conversation ids',
+  );
+  assert.equal(
+    getTopicConversationReadSyncId(conversation),
+    'legacy-context-id',
+    'read sync should fall back to the targeted context message id',
+  );
+  assert.equal(
+    getUnreadDiscussionMessageId(topic.unreadDiscussions[0]),
+    'legacy-context-id',
+    'unread previews should create direct links from snake_case message ids',
+  );
+}
+
+async function verifyConversationReadSyncsLegacyContextIdentity() {
+  const store = createStore();
+  const topic = {
+    id: 'topic-legacy-context',
+    name: 'Legacy Context Topic',
+    type: 'Topic',
+    readStatus: {
+      isRead: false,
+      unreadCount: 1,
+      lastReadTime: null,
+      lastUpdateTime: 1000,
+    },
+    unreadDiscussions: [
+      { message_id: 'legacy-context-id', text: 'Legacy context unread' },
+    ],
+    recentDataDetails: {
+      conversations: [
+        {
+          summary: 'Parent has no stable id',
+          isRead: true,
+          contextMessages: [
+            {
+              message_id: 'legacy-context-id',
+              isRead: false,
+              content: 'Legacy context message',
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  store.topicDetailData = topic as any;
+
+  const didSync = await store.markConversationAsRead(
+    'topic-legacy-context',
+    'legacy-context-id',
+  );
+
+  assert.equal(didSync, true);
+  assert.equal(topic.readStatus.unreadCount, 0);
+  assert.deepEqual(topic.unreadDiscussions, []);
+  assert.equal(
+    topic.recentDataDetails.conversations[0].contextMessages[0].isRead,
+    true,
+  );
+}
+
 function verifyTopicDetailHighlightEscapesHtml() {
   const rendered = renderHighlightedText(
     '<img src=x onerror=alert(1)> AI & data',
@@ -1434,6 +1529,8 @@ async function main() {
   await verifyTopLevelConversationReadState();
   verifyTopicDetailLegacyDataFallback();
   verifyTopicDetailUnreadCountFallsBackToKnownMessages();
+  verifyTopicDeepLinkSupportsLegacyContextIdentity();
+  await verifyConversationReadSyncsLegacyContextIdentity();
   verifyTopicDetailHighlightEscapesHtml();
   verifyTopicConversationSearchCoversContextAndSource();
   verifyTopicListSearchCoversUnreadContextAndReferences();

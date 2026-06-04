@@ -21,6 +21,8 @@ import { ReflectionThreadService } from '../ReflectionThreadService.js';
 import { OutreachEngine } from '../OutreachEngine.js';
 import type { UserDataManager } from '../../storage/UserDataManager.js';
 
+const OPENCLAW_STALE_RUNNING_GRACE_SECONDS = 60;
+
 export interface ActionExecutionResult {
   actionId: string;
   actionType: string;
@@ -137,6 +139,25 @@ function isSelfDirectedOutreach(
   );
 }
 
+export function getOpenClawStaleRunningAfterSeconds(
+  userDataManager?: UserDataManager,
+): number {
+  const config = getUserRuntimeConfig(userDataManager);
+  return (
+    Math.ceil(config.openClawTimeoutMs / 1000) +
+    OPENCLAW_STALE_RUNNING_GRACE_SECONDS
+  );
+}
+
+export function buildOpenClawStaleRunningError(
+  staleAfterSeconds: number,
+): string {
+  return (
+    `OpenClaw action exceeded stale running timeout (${staleAfterSeconds}s). ` +
+    'The external operation may have completed without returning to Memory Service; review before retrying to avoid duplicate writes.'
+  );
+}
+
 export class ActionExecutor {
   private readonly actionRepo: ActionRepository;
   private readonly actionResultRepo: ActionResultRepository;
@@ -166,6 +187,15 @@ export class ActionExecutor {
   }
 
   async runDueActions(limit = 10): Promise<ActionExecutionResult[]> {
+    const staleAfterSeconds = getOpenClawStaleRunningAfterSeconds(
+      this.userDataManager,
+    );
+    this.actionRepo.recoverStaleRunningActions({
+      actionType: 'delegate_openclaw',
+      staleAfterSeconds,
+      errorMessage: buildOpenClawStaleRunningError(staleAfterSeconds),
+    });
+
     const dueActions = this.actionRepo.listDueAutoActions(limit);
     const results: ActionExecutionResult[] = [];
 

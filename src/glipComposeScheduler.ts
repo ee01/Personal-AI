@@ -1174,6 +1174,39 @@ function clearComposerDraft(composer: HTMLElement): void {
   dispatchComposerEditEvent(composer, 'change');
 }
 
+function getComposerAnimationRect(composer: HTMLElement): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const rect = composer.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function notifyPendingScheduledMessageCreated(params: {
+  request: ComposeScheduleRequest;
+  response: CreateComposeScheduleResponse;
+  composerRect: ReturnType<typeof getComposerAnimationRect>;
+}): void {
+  window.dispatchEvent(
+    new CustomEvent('pai-glip-compose-scheduled-created', {
+      detail: {
+        chatId: params.request.chatId,
+        content: params.request.content,
+        scheduledAt: params.request.scheduledAt,
+        messageId: params.response.messageId,
+        composerRect: params.composerRect,
+      },
+    }),
+  );
+}
+
 function closePopover(): void {
   currentPopover?.remove();
   currentPopover = null;
@@ -1275,8 +1308,14 @@ async function submitSchedule(
       return;
     }
 
+    const composerRect = getComposerAnimationRect(composer);
     closePopover();
     clearComposerDraft(composer);
+    notifyPendingScheduledMessageCreated({
+      request,
+      response,
+      composerRect,
+    });
     showToast(getSuccessToastMessage(response, request.warnings), 'success', [
       {
         label: '管理',

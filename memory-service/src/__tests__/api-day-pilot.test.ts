@@ -320,7 +320,9 @@ describe('Day Pilot API', () => {
       expect(card.whyNow).toBeTruthy();
     }
     expect(body.brief.sourceStats.messages.scanned).toBeGreaterThan(0);
+    expect(body.brief.sourceStats.messages.selected).toBeGreaterThan(0);
     expect(body.brief.sourceStats.calendar.upcoming).toBeGreaterThan(0);
+    expect(body.brief.sourceStats.calendar.selected).toBeGreaterThan(0);
     expect(body.brief.attentionBudget.maxInterruptions).toBe(3);
     expect(
       body.brief.attentionBudget.plannedInterruptions.length,
@@ -365,6 +367,7 @@ describe('Day Pilot API', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.brief.sourceStats.messages.scanned).toBe(1);
+    expect(body.brief.sourceStats.messages.selected).toBe(0);
     expect(body.brief.cards).toHaveLength(0);
     expect(body.brief.summary).toContain('暂未发现');
   });
@@ -414,6 +417,7 @@ describe('Day Pilot API', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.brief.sourceStats.messages.scanned).toBe(2);
+    expect(body.brief.sourceStats.messages.selected).toBe(1);
     const titles = body.brief.cards.map((card: any) => card.title).join('\n');
     expect(titles).toContain('Could you confirm the owner and risk');
     expect(titles).not.toContain('Casual weekend check-in');
@@ -1230,11 +1234,26 @@ describe('Day Pilot API', () => {
     expect(body.bodyMd).toContain('Codex Brief');
     expect(body.bodyMd).toContain('Webpage-MCP');
     expect(body.bodyMd).toContain('Next Best Action');
+    expect(body.bodyMd).toContain('Handoff Boundary');
+    expect(body.bodyMd).toContain('not permission to execute external actions');
     expect(body.evidenceRefs.length).toBeGreaterThan(0);
     expect(body.warnings.length).toBeGreaterThan(0);
     expect(body.redactionApplied).toBe(true);
     expect(body.redactionPreview.length).toBeGreaterThan(0);
     expect(body.evidenceRefs.every((ref: any) => !ref.sourceUrl)).toBe(true);
+    expect(body.usageIntent).toEqual({
+      kind: 'external_ai_context',
+      boundary: 'context_only_not_execution',
+      defaultSensitiveHandling: 'redacted_by_default',
+    });
+    expect(body.sourceSummary.evidenceCount).toBe(body.evidenceRefs.length);
+    expect(
+      Object.values(body.sourceSummary.sourceKinds).reduce(
+        (sum: number, count: any) => sum + Number(count || 0),
+        0,
+      ),
+    ).toBe(body.evidenceRefs.length);
+    expect(body.sourceSummary.redactionApplied).toBe(true);
     expect(body.truncated).toBe(false);
     expect(body.maxChars).toBe(3600);
   });

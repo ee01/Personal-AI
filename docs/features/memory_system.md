@@ -1,6 +1,6 @@
 # Memory Service — 类人记忆系统架构
 
-_最后更新: 2026-06-03 (Ask 细节已抽到独立文档，本页保留记忆系统总览与跳转；保留自我反思、Outreach、范围语义、摄入决策、抽取降级索引与备份导入边界)_
+_最后更新: 2026-06-04 (Ask 细节已抽到独立文档，本页保留记忆系统总览与跳转；补充 source-memory 与 timeline 跳转边界；保留自我反思、Outreach、范围语义、摄入决策、抽取降级索引与备份导入边界)_
 
 ## 系统概述
 
@@ -274,6 +274,8 @@ flowchart LR
 
 对用户来说，关键变化是：Lens 不再因为“AI notes 这种简单关键词匹配”就弹卡片；强提示必须能解释“同群 / 同项目 / 同工单 / 同主题 / 同人物”的具体关系。没有足够锚点时，正确行为是保持安静或仅在低打扰入口里标成“可能相关”。
 
+关键回归验证是 `scene-memory-autopilot` eval suite：它用 compose 群聊样本、可读网页/文档样本、工具额度噪音、空会议壳和重复会议 chunk 检查 Autopilot 是否能正确命中、静默、合并并返回 `whyRelevant` / `quietReasons`。
+
 ### 范围语义
 
 召回请求默认只检索 `work` 范围，避免在工作场景里意外混入个人记忆。
@@ -308,6 +310,8 @@ flowchart LR
 - `/ask/stream` 不新增可见 SSE 事件，只在最终结果中可选携带诊断字段。
 
 搜索结果页会在新搜索后自动清理已经不可用的类型筛选，避免旧筛选把新结果全部隐藏。直接打开 `#/search?q=...&scope=...` 时，页面会同步范围并补跑一次智能搜索。结果跳转只接受当前记忆浏览器支持的内部路由（如 timeline / topic / person / project / entity），来源链接只允许 `http/https` 且会去掉 URL 里的用户名/密码；可打开的来源按钮会标明目标 host，异常内部路由或非 http(s) 来源会在卡片上显示“已隐藏”的原因，避免静默消失或把异常 URL 变成可点击入口。
+
+Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`source-memory` 是用户主动保存的资料证据 capsule，适合网页、选区、视觉证据、表格证据和 Jira 页面资料，重点是来源、保存原因、证据锚点、备注和未来触发线索；`timeline` 是普通原始记忆的时间线定位，适合 message、chunk、meeting、Glip、Jira 活动等，重点是发生时间、附近消息和上下文回放。召回结果如果引用“用户保存过的资料证据”，优先跳 `#/source-memory/:id`；如果引用“当时发生的消息/会议/上下文”，优先跳 `#/timeline?...focus=...`。完整例子和路由规则见 [Memory Capture](./memory_capture.md#source-memory-与-timeline-的边界)。
 
 `memory-exploring` 的记忆时间轴不再展示硬编码示例，而是通过 `GET_RECENT_TIMELINE` 调用 `/recall` 的 `time` 通道，并显式传入时间窗口、`scope`、来源元数据和安全跳转链接。时间轴默认显示今天的全部范围，也可切到近 7 天、近 30 天，以及工作或个人范围；顶部会明确展示当前范围、时间窗口、来源筛选和命中通道，避免全局范围按钮与实际请求范围脱节；列表按日期分组，组头展示当天记忆数量和主要来源，卡片同时显示相对时间与当天具体时刻，减少长列表里只看“几天前”时的时间语境丢失。加载后如果命中来自多个来源，页面会提供本地来源筛选下拉，不重新请求后端就能把同一时间窗口收窄到具体会议、网页、手动记录或其它 source。空态会按当前时间范围说明暂无可展示记忆，并提供扩大到近 7 天、全部范围或全部来源的入口，而不是示例数据或静态占位。搜索结果、Relationship Radar 或被动提示里的 `#/timeline?type=...&focus=...` 链接会通过只读精确记忆接口补取目标 message/chunk；前端也兼容旧的 `focus=message:<id>` / `focus=chunk:<id>` 链接，避免历史证据链跳转后找不到目标。如果目标不在当前时间范围内，时间轴会把它置顶并高亮，避免“跳到时间轴但找不到目标”的阻塞。时间轴与搜索结果共用同一套跳转安全呈现：合法来源显示目标 host，非法来源或不支持的内部 route 会显示隐藏原因，便于用户判断是没有来源还是被安全策略拦截。
 
@@ -763,9 +767,11 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 - 结果标记为 `timeout`
 - action 队列状态进入 `failed`
 - 重试次数继续累计，超过阈值后进入 `dead_letter`
+- 如果 Memory Service 在等待 OpenClaw 时被重启、网络连接断开，或外部任务已经完成但结果没有回流，Action Queue 可能只剩下 `running` 状态；系统会按 `openClawTimeoutMs + 60 秒` 判断 stale running，并把 `delegate_openclaw` 落为 `dead_letter`，同时写入 `lastError` 提醒先确认外部副作用
+- stale running 不会自动重试，特别是上传文件、发送消息、写 Drive / Jira 这类外部写操作，必须由用户确认外部结果后再决定是否手动重试
 
 这意味着如果外部系统很慢，系统不会卡死，但也可能出现“外部真实还没跑完，本地先超时”的情况。  
-对于耗时较长的外部系统，应当按用户或环境把 `openClawTimeoutMs` 调大。
+对于耗时较长的外部系统，应当按用户或环境把 `openClawTimeoutMs` 调大；但如果问题是外部已经完成、Memory Service 没拿到最终返回，单纯调大超时只会延后恢复，不能代替 stale running 保护。
 
 ### 用户级配置
 

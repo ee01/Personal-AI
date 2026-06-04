@@ -703,9 +703,10 @@ function fetchAllMessageData() {
       getIndexedDBData('Glip', 'post'),
       getIndexedDBData('Glip', 'replyPost'),
       fetchOptionalIndexedDBData('Glip', 'fileItem'),
+      fetchOptionalIndexedDBData('Glip', 'item'),
       fetchGlipEventData()
     ])
-    .then(([groupData, personData, postData, replyPostData, fileItemData, eventData]) => {
+    .then(([groupData, personData, postData, replyPostData, fileItemData, itemData, eventData]) => {
       // 缓存 person 和 group 数据
       cachedPersonsMap = new Map();
       personData.forEach((person: any) => {
@@ -728,7 +729,7 @@ function fetchAllMessageData() {
         person: personData,
         post: postData,
         replyPost: replyPostData,
-        fileItem: fileItemData,
+        fileItem: fileItemData.concat(itemData),
         event: eventData
       };
     })

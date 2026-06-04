@@ -1,6 +1,6 @@
 # Today Pilot / 今日领航
 
-_最后更新: 2026-05-30_
+_最后更新: 2026-06-04_
 
 ## 是什么
 
@@ -114,6 +114,8 @@ Today Pilot 只负责“要不要在会前准备里提示”。完整 Storyline 
 5. 用户点 `不需要` 后写入 `chrome.storage.local.storylineOpportunityDismissals`，key 由 `prepId + sourceHash + eventExternalId` 组成，默认 30 天不再展示同一条提示。
 6. P0 不复用 Day Pilot card feedback，不自动生成 Storyline，不自动写回 Slides / Docs / RingCentral。
 
+服务端会在 LLM 输出后再做一次轻量校验：素材 cluster 少于 3 条、或会前准备只有日历标题/描述这类单一来源时，会把 `storylineOpportunity` 降级为不可展示并保留 `blockedReasons`。这样普通会议不会因为模型过度乐观而出现生成按钮。
+
 ### 3. Meeting Pilot Handoff
 
 当 Video Home 命中预生成 meeting prep 后，会自动写入本地 handoff。
@@ -149,7 +151,7 @@ Today Pilot 会扫描 active Rehearsal，把今天可能要带入的预演提示
 - popup 可直接把 card 标记完成、稍后 6 小时或复制 context pack；反馈失败时必须恢复卡片并提示。
 - API 不可用时显示 degraded empty state，不回退假数据。
 
-首页顶部会展示一条轻量 `筛选口径`：候选信号总量、通过行动性筛选的数量、被降噪的低行动/重复信号数量，以及本次会不会占用提醒预算。用户不用展开每张卡也能知道 Today Pilot 不是把所有同步结果都推上首页。
+首页顶部会展示一条轻量 `筛选口径`：原始信号总量、进入候选池的数量、最终进入首页 mission 的证据数量、被降噪或未入选的低行动/重复信号数量，以及本次会不会占用提醒预算。用户不用展开每张卡也能知道 Today Pilot 不是把所有同步结果都推上首页。
 
 首页 API 不可用时必须显示 degraded 状态和重试入口，不能把请求失败展示成“今天没有高优先级事项”；Today Pilot 派生的处理计数也要清零，避免旧 brief 让用户误以为仍有当前待办。
 
@@ -165,6 +167,10 @@ Context Pack 是“给外部 AI 阅读的上下文”，不是执行授权。涉
 
 复制成功时，首页和 popup 会给出一条简短 receipt，说明目标 AI、证据条数、是否默认脱敏，以及正文是否因 token 预算被截断。被截断的 context pack 仍可复制，但 UI 和 API 都必须明确提示用户它不是完整证据全文。
 
+复制成功还会写入一条 `today_pilot / copied_context` 无感校准 trace：只记录 mission、目标 provider、证据引用、正文 hash/长度、脱敏和截断状态，不保存 context pack 正文。这个信号用于后续判断哪些 mission/context handoff 真正有用，不新增用户审核队列。
+
+Context Pack 正文必须明确写出交接边界：它是给外部 AI 阅读的背景，不是授权 Codex、ChatGPT、Claude、豆包或其他工具执行外部动作。外部发送、审批、破坏性修改和 OpenClaw 执行仍必须回到对应处理路径。
+
 ## 业内参考
 
 当前设计参考了几个相近方向，但保留 Personal AI 的本地记忆、显式证据和低打扰边界：
@@ -174,6 +180,7 @@ Context Pack 是“给外部 AI 阅读的上下文”，不是执行授权。涉
 - Gemini Daily Brief：把 Gmail、Calendar 和 Gemini chats 组织成早晨一次性的优先级快照，并要求用户在 Personal Intelligence / Memory 范围内启用来源；这支持 Today Pilot 保留来源开关、证据入口和每日低频刷新。
 - Microsoft Research Viva Daily Briefing 研究：AI reminder 更适合提醒协作承诺、请求和未闭环事项，而不是把所有信息流都推给用户。
 - 通知 batching / adaptive notification 研究：低打扰和可预测投递比即时打断更符合注意力管理，因此 Today Pilot 保留提醒预算、静默和稍后路径。
+- RAG / context engineering 研究：外部 AI handoff 不应只堆文本；需要目标、边界、证据列表、未知问题、截断提示和来源摘要，降低错误使用或把上下文误读成授权的概率。
 
 ## 数据来源
 
@@ -199,7 +206,7 @@ P0/P1 生成逻辑以 deterministic rules 为主，不依赖 LLM 聚类。当前
 3. 过滤低可操作性信号：heartbeat/fact follow-up 噪音、过期普通通知、无 follow-up 语义的关系雷达、无法生成具体动作的聚类；stale Rehearsal 只有精确命中今天的人、会议、issue 或项目时才保留为弱提示。
 4. 对 mission 打分：urgency、open-loop pressure、user relevance、source importance、source diversity、evidence confidence、novelty、recurring noise、feedback fatigue、privacy risk、staleness。问号本身只是语言形态，不是 open-loop pressure；必须和具体行动词或阻塞语义一起出现。
 5. 生成 3-7 张首页 card。
-6. 把 sourceStats 和 attentionBudget 展示成可扫描的筛选摘要，说明多少候选通过、多少被降噪、哪些会打断。
+6. 把 sourceStats 和 attentionBudget 展示成可扫描的筛选摘要，区分原始总量、候选池、最终入选 mission 的证据和会打断的 mission。
 7. 每张 card 提供 context pack，但只从真实证据 deterministic 拼装。
 
 生成后用户反馈会影响下一次排序：
@@ -223,6 +230,7 @@ Canonical API：
 
 - `GET /api/v1/today-pilot/today`
 - `POST /api/v1/today-pilot/refresh`
+- `POST /api/v1/today-pilot/missions/:id/context-pack`
 - `POST /api/v1/today-pilot/meeting-prep/prepare`
 - `POST /api/v1/today-pilot/meeting-prep/resolve`
 

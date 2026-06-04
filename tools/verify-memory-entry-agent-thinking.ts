@@ -476,6 +476,7 @@ async function main() {
   assert.ok(agentVisualizerSource.includes('node-step-index'));
   assert.ok(agentVisualizerSource.includes('跳到时间线步骤'));
   assert.ok(agentVisualizerSource.includes('复制诊断包'));
+  assert.ok(agentVisualizerSource.includes('agent-run-trace-span-count'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择 key'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择审核包'));
   assert.ok(agentVisualizerSource.includes('复制失败，请手动选择重跑配置'));
@@ -503,8 +504,11 @@ async function main() {
   assert.ok(agentVisualizerPresentationSource.includes('stepIndex?: number'));
   assert.ok(agentVisualizerPresentationSource.includes('buildAgentRunDiagnosticPacket'));
   assert.ok(agentVisualizerPresentationSource.includes('agent_thinking_run_diagnostics'));
+  assert.ok(agentVisualizerPresentationSource.includes('traceSpans'));
+  assert.ok(agentVisualizerPresentationSource.includes('gen_ai.operation.name'));
   const agentVisualizerCss = readFileSync('static/agent-visualizer.css', 'utf8');
   assert.ok(agentVisualizerCss.includes('.flow-node.tool.blocked'));
+  assert.ok(agentVisualizerCss.includes('.agent-run-trace-span-count'));
   assert.ok(agentVisualizerCss.includes('.flow-node.jumpable'));
   assert.ok(agentVisualizerCss.includes('.node-result.blocked'));
   assert.ok(agentVisualizerCss.includes('.node-detail'));
@@ -1091,10 +1095,45 @@ async function main() {
       retryConfigAvailable: true,
     },
   ]);
+  assert.equal(diagnosticPacket.traceSpans[0].operationName, 'agent.run');
+  assert.equal(diagnosticPacket.traceSpans[0].status.code, 'max_actions_reached');
+  assert.equal(diagnosticPacket.traceSpans.length, 8);
+  assert.deepEqual(
+    diagnosticPacket.traceSpans
+      .filter((span) => span.operationName === 'execute_tool')
+      .map((span) => [
+        span.attributes['gen_ai.operation.name'],
+        span.attributes['gen_ai.tool.name'],
+        span.status.code,
+      ]),
+    [
+      ['execute_tool', 'approvalWriteTest', 'approval_required'],
+      ['execute_tool', 'orgStructure', 'blocked'],
+      ['execute_tool', 'historySearch', 'empty_evidence'],
+    ],
+  );
+  assert.deepEqual(
+    diagnosticPacket.traceSpans
+      .filter((span) => span.operationName === 'agent.step')
+      .map((span) => [span.stepNumber, span.attributes['agent.evidence.status']]),
+    [
+      [1, 'pending_approval'],
+      [2, 'blocked'],
+      [3, 'empty'],
+    ],
+  );
+  assert.deepEqual(
+    diagnosticPacket.traceSpans
+      .filter((span) => span.operationName === 'agent.decision')
+      .map((span) => [span.stepNumber, span.status.code]),
+    [[4, 'max_actions_reached']],
+  );
   const serializedDiagnosticPacket = JSON.stringify(diagnosticPacket);
   assert.ok(!serializedDiagnosticPacket.includes('approval-tail-token-visible-in-ui'));
   assert.ok(!serializedDiagnosticPacket.includes('approvalWriteTest:{'));
+  assert.ok(!serializedDiagnosticPacket.includes(JSON.stringify(approvalParams)));
   assert.match(diagnosticPacket.privacyNote, /omits raw tool results/);
+  assert.match(diagnosticPacket.privacyNote, /traceSpans/);
   const flowStepsWithDetails = buildAgentFlowSteps(
     [
       {

@@ -84,6 +84,9 @@ export class StorylineDraftService {
     if (!prep || prep.userId !== this.userId) {
       throw new Error('storyline source prep not found');
     }
+    if (prep.evidenceRefs.length === 0) {
+      throw new Error('storyline_source_has_no_usable_evidence');
+    }
 
     const targetArtifact =
       normalizeStorylineArtifactTarget(request.targetArtifact) ||

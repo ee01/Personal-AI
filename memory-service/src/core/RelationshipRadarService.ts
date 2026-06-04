@@ -236,6 +236,13 @@ export interface RelationshipContextCard {
     timestamp: number;
     evidenceRef: RelationshipEvidenceRef;
   }>;
+  actionSuggestions: Array<{
+    title: string;
+    body: string;
+    tone: 'hot' | 'warn' | 'ok' | 'muted';
+    reason: string;
+    evidenceRef?: RelationshipEvidenceRef;
+  }>;
   doNotAssume: string[];
   evidenceRefs: RelationshipEvidenceRef[];
   retrievalHints: {
@@ -594,6 +601,12 @@ export class RelationshipRadarService {
     }));
 
     const bullets = buildContextBullets(person, knownFacts, relationshipHints);
+    const actionSuggestions = buildActionSuggestions(
+      person,
+      knownFacts,
+      relationshipHints,
+      visibleOpenLoops,
+    );
     const doNotAssume = buildDoNotAssume(person, knownFacts);
     const retrievalHints = {
       entityIds: [inputEntity.id, ...relationshipHints.map((item) => item.targetId)].slice(0, 12),
@@ -631,6 +644,7 @@ export class RelationshipRadarService {
         bullets,
         knownFacts,
         visibleOpenLoops,
+        actionSuggestions,
         tokenBudget,
         privacySummary,
         doNotAssume,
@@ -639,6 +653,7 @@ export class RelationshipRadarService {
       knownFacts,
       relationshipHints,
       openLoops: visibleOpenLoops,
+      actionSuggestions,
       doNotAssume,
       evidenceRefs,
       retrievalHints: safeRetrievalHints,
@@ -1903,13 +1918,33 @@ function applyContextPrivacy(
   includeSensitive: boolean,
 ): RelationshipContextCard {
   if (includeSensitive) {
+    const actionSuggestions = card.actionSuggestions ?? buildActionSuggestions(
+      card.person,
+      card.knownFacts,
+      card.relationshipHints,
+      card.openLoops,
+    );
+    const privacySummary = {
+      ...(card.privacySummary ?? emptyContextPrivacySummary(true)),
+      sensitiveIncluded: true,
+      redactionNote: undefined,
+    };
     return {
       ...card,
-      privacySummary: {
-        ...(card.privacySummary ?? emptyContextPrivacySummary(true)),
-        sensitiveIncluded: true,
-        redactionNote: undefined,
-      },
+      actionSuggestions,
+      privacySummary,
+      contextMd: card.actionSuggestions
+        ? card.contextMd
+        : renderContextMarkdown(
+          card.person,
+          card.bullets,
+          card.knownFacts,
+          card.openLoops,
+          actionSuggestions,
+          card.tokenBudget,
+          privacySummary,
+          card.doNotAssume,
+        ),
     };
   }
 
@@ -1918,6 +1953,12 @@ function applyContextPrivacy(
   const relationshipHints = card.relationshipHints.filter((hint) => !isSensitiveHint(hint));
   const evidenceRefs = card.evidenceRefs.filter((ref) => !isSensitiveEvidenceRef(ref));
   const openLoops = card.openLoops.filter((loop) => !isSensitiveOpenLoop(loop));
+  const actionSuggestions = (card.actionSuggestions ?? buildActionSuggestions(
+    card.person,
+    card.knownFacts,
+    card.relationshipHints,
+    card.openLoops,
+  )).filter((suggestion) => !suggestion.evidenceRef || !isSensitiveEvidenceRef(suggestion.evidenceRef));
   const retrievalHints = redactSensitiveRetrievalHints(card.retrievalHints);
   const previousSummary = card.privacySummary?.sensitiveIncluded === false
     ? card.privacySummary
@@ -1956,6 +1997,7 @@ function applyContextPrivacy(
     relationshipHints,
     evidenceRefs,
     openLoops,
+    actionSuggestions,
     retrievalHints,
     privacySummary,
     contextMd: renderContextMarkdown(
@@ -1963,6 +2005,7 @@ function applyContextPrivacy(
       card.bullets,
       knownFacts,
       openLoops,
+      actionSuggestions,
       card.tokenBudget,
       privacySummary,
       card.doNotAssume,
@@ -2178,6 +2221,96 @@ function buildContextBullets(
   return bullets.slice(0, 8);
 }
 
+function buildActionSuggestions(
+  person: RelationshipPersonSummary,
+  knownFacts: RelationshipContextCard['knownFacts'],
+  relationships: RelationshipContextCard['relationshipHints'],
+  openLoops: RelationshipContextCard['openLoops'],
+): RelationshipContextCard['actionSuggestions'] {
+  const suggestions: RelationshipContextCard['actionSuggestions'] = [];
+  const firstOpenLoop = openLoops[0];
+  const primaryRelationships = relationships
+    .filter((relationship) => relationship.strength >= 0.45)
+    .slice(0, 3);
+  const unconfirmedFacts = knownFacts.filter((fact) => !fact.confirmed);
+  const confirmedFacts = knownFacts.filter((fact) => fact.confirmed);
+
+  if (firstOpenLoop) {
+    suggestions.push({
+      title: `先闭环：${compactSuggestionTitle(firstOpenLoop.title)}`,
+      body:
+        `${compactSuggestionBody(firstOpenLoop.snippet)}。沟通前先确认 owner、下一步或是否已经关闭，避免把旧 open loop 带进新对话。`,
+      tone: 'hot',
+      reason: `来自 ${formatDay(firstOpenLoop.timestamp)} 的未闭环线索`,
+      evidenceRef: firstOpenLoop.evidenceRef,
+    });
+  }
+
+  if (primaryRelationships.length > 0) {
+    const names = primaryRelationships.map((relationship) => relationship.targetName).join('、');
+    suggestions.push({
+      title: '带着关联对象一起判断',
+      body:
+        `${person.name} 的上下文经常和 ${names} 一起出现。推进相关事项前，先确认这些对象的 owner、边界或依赖是否仍成立。`,
+      tone: firstOpenLoop ? 'warn' : 'hot',
+      reason: `关系图谱中有 ${primaryRelationships.length} 条较强关联边`,
+      evidenceRef: firstOpenLoop?.evidenceRef,
+    });
+  }
+
+  if (unconfirmedFacts.length > 0) {
+    const fact = unconfirmedFacts[0];
+    suggestions.push({
+      title: '把推断升级成可用事实',
+      body:
+        `系统推断了「${compactSuggestionBody(`${fact.key}: ${fact.value}`)}」，但还没有确认。建议在下一次沟通或人工确认队列里核对后再用于强个性化检索。`,
+      tone: 'warn',
+      reason: `${unconfirmedFacts.length} 条人物事实仍待确认`,
+    });
+  } else if (confirmedFacts.length > 0) {
+    suggestions.push({
+      title: '可直接用于沟通前准备',
+      body:
+        `已有 ${confirmedFacts.length} 条确认事实。生成回复或会议 brief 时，可以优先带入这些事实，但仍要保留证据入口。`,
+      tone: 'ok',
+      reason: '存在用户确认过的人物画像信息',
+    });
+  }
+
+  if (suggestions.length === 0) {
+    const activeText = person.radarState === 'dormant'
+      ? '近期互动偏少，先看最新证据再恢复上下文。'
+      : '当前主要是交互统计，还缺少明确事项。下一次沟通先确认对方当前关注点，再决定是否写入画像。';
+    suggestions.push({
+      title: '先轻量确认，不要过度个性化',
+      body: activeText,
+      tone: person.radarState === 'dormant' ? 'muted' : 'warn',
+      reason: '缺少明确 open loop 或已确认事实',
+    });
+  }
+
+  if (person.radarState === 'core' && suggestions.length < 4) {
+    suggestions.push({
+      title: '高频关系要维护上下文连续性',
+      body:
+        `${person.name} 是高频人物。每次重要沟通前建议先扫 30 秒 brief，把最近未闭环、不要假设和确认事实都带上。`,
+      tone: 'ok',
+      reason: `${person.interactionCount} 次交互，覆盖 ${person.activeDays} 个活跃日`,
+    });
+  }
+
+  return suggestions.slice(0, 4);
+}
+
+function compactSuggestionTitle(text: string): string {
+  return cleanText(text).slice(0, 36) || '未闭环事项';
+}
+
+function compactSuggestionBody(text: string): string {
+  const normalized = cleanText(text);
+  return normalized.length > 96 ? `${normalized.slice(0, 95)}…` : normalized;
+}
+
 function buildDoNotAssume(
   person: RelationshipPersonSummary,
   facts: RelationshipContextCard['knownFacts'],
@@ -2213,6 +2346,7 @@ function renderContextMarkdown(
   bullets: string[],
   facts: RelationshipContextCard['knownFacts'],
   openLoops: RelationshipContextCard['openLoops'],
+  actionSuggestions: RelationshipContextCard['actionSuggestions'],
   tokenBudget: number,
   privacySummary?: RelationshipContextCard['privacySummary'],
   doNotAssume: string[] = [],
@@ -2225,6 +2359,13 @@ function renderContextMarkdown(
     '## 使用提示',
     ...bullets.map((bullet) => `- ${bullet}`),
   ];
+
+  if (actionSuggestions.length > 0) {
+    lines.push('', '## 现在建议');
+    for (const suggestion of actionSuggestions.slice(0, 4)) {
+      lines.push(`- ${suggestion.title}: ${suggestion.body}（依据：${suggestion.reason}）`);
+    }
+  }
 
   if (facts.length > 0) {
     lines.push('', '## 已知事实');

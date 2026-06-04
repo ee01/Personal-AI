@@ -10,6 +10,7 @@ import {
   ReflectionWorker,
   type DraftRehearsalCandidate,
   type ReflectionEvidenceItem,
+  type ReflectionOutputLanguagePreference,
 } from './ReflectionWorker.js';
 import {
   ReflectionResearcher,
@@ -146,6 +147,69 @@ function summarizeFailedRecallChannels(
     .join(', ');
 }
 
+function parseOutputLanguagePreference(
+  text: string | undefined | null,
+  source: string,
+): ReflectionOutputLanguagePreference | undefined {
+  if (!text?.trim()) return undefined;
+  const value = text.trim();
+  const lower = value.toLowerCase();
+  if (
+    /match user'?s language|follow user'?s language|same language as/i.test(
+      value,
+    ) ||
+    /跟随用户|匹配用户|使用用户当前语言/.test(value)
+  ) {
+    return undefined;
+  }
+
+  const chinesePattern =
+    /(preferred[_ -]?language|response[_ -]?language|output[_ -]?language|language[_ -]?preference|语言|回复|输出|回答).{0,80}(中文|简体中文|chinese|zh-cn|zh_cn|zh\b)|^(中文|简体中文|chinese|zh-cn|zh_cn)$/i;
+  const englishPattern =
+    /(preferred[_ -]?language|response[_ -]?language|output[_ -]?language|language[_ -]?preference|语言|回复|输出|回答).{0,80}(english|英文|en-us|en_us|en\b)|^(english|英文|en-us|en_us)$/i;
+
+  if (chinesePattern.test(value)) {
+    return { code: 'zh-CN', label: 'Simplified Chinese', source };
+  }
+  if (englishPattern.test(value)) {
+    return { code: 'en-US', label: 'English', source };
+  }
+  if (/^zh[-_]/i.test(lower) || /简体中文|中文/.test(value)) {
+    return { code: 'zh-CN', label: 'Simplified Chinese', source };
+  }
+  if (/^en[-_]/i.test(lower) || /\benglish\b/i.test(value)) {
+    return { code: 'en-US', label: 'English', source };
+  }
+  return undefined;
+}
+
+function inferOutputLanguageFromEvidence(
+  evidence: ReflectionEvidenceItem[],
+): ReflectionOutputLanguagePreference | undefined {
+  const text = evidence
+    .slice(0, 20)
+    .map((item) => `${item.title}\n${item.snippet}`)
+    .join('\n');
+  if (!text.trim()) return undefined;
+  const chineseChars = text.match(/[\u4e00-\u9fff]/g)?.length ?? 0;
+  const englishWords = text.match(/\b[a-z][a-z'-]{2,}\b/gi)?.length ?? 0;
+  if (chineseChars >= 8 && chineseChars * 2 >= englishWords) {
+    return {
+      code: 'zh-CN',
+      label: 'Simplified Chinese',
+      source: 'dominant evidence language',
+    };
+  }
+  if (englishWords >= 25 && chineseChars < 8) {
+    return {
+      code: 'en-US',
+      label: 'English',
+      source: 'dominant evidence language',
+    };
+  }
+  return undefined;
+}
+
 export class ReflectionThreadService {
   private readonly repo: ReflectionThreadRepository;
   private readonly actionRepo: ActionRepository;
@@ -247,6 +311,78 @@ export class ReflectionThreadService {
     return (
       getUserRuntimeConfig(this.userDataManager).reflectionHeartbeatMinutes * 60
     );
+  }
+
+  private resolveReflectionOutputLanguage(
+    evidence: ReflectionEvidenceItem[],
+  ): ReflectionOutputLanguagePreference | undefined {
+    const fromProfile = this.resolveLanguageFromProfileItems();
+    if (fromProfile) return fromProfile;
+
+    const fromMarkdown = this.resolveLanguageFromUserMarkdown();
+    if (fromMarkdown) return fromMarkdown;
+
+    return inferOutputLanguageFromEvidence(evidence);
+  }
+
+  private resolveLanguageFromProfileItems():
+    | ReflectionOutputLanguagePreference
+    | undefined {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT item_key, item_value
+           FROM user_profile_items
+           WHERE status = 'active'
+             AND (
+               lower(item_key) LIKE '%language%'
+               OR item_key LIKE '%语言%'
+               OR lower(item_key) LIKE '%locale%'
+               OR lower(item_key) LIKE '%response_style%'
+               OR lower(item_key) LIKE '%communication_style%'
+               OR lower(item_key) LIKE '%writing_style%'
+             )
+           ORDER BY user_confirmed DESC, salience_score DESC, updated_at DESC
+           LIMIT 20`,
+        )
+        .all() as Array<{ item_key: string; item_value: string }>;
+      for (const row of rows) {
+        const parsed = parseOutputLanguagePreference(
+          `${row.item_key}: ${row.item_value}`,
+          `user_profile_items.${row.item_key}`,
+        );
+        if (parsed) return parsed;
+      }
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  private resolveLanguageFromUserMarkdown():
+    | ReflectionOutputLanguagePreference
+    | undefined {
+    if (!this.userDataManager?.isInitialized) return undefined;
+    const candidatePaths = [
+      'user.md',
+      'USER.md',
+      'USER_CORE.md',
+      'CORE_MEMORY.md',
+      'agent/IDENTITY.md',
+    ];
+    for (const candidatePath of candidatePaths) {
+      try {
+        const content = this.userDataManager.readFile(candidatePath);
+        const parsed = parseOutputLanguagePreference(
+          content,
+          candidatePath,
+        );
+        if (parsed) return parsed;
+      } catch {
+        // Optional profile files should never block a reflection heartbeat.
+      }
+    }
+    return undefined;
   }
 
   listActionResults(threadId: string, limit = 20): ActionResultRecord[] {
@@ -616,10 +752,13 @@ export class ReflectionThreadService {
       runId,
     );
     const combinedEvidence = this.mergeEvidence(evidence, researchEvidence);
+    const outputLanguage =
+      this.resolveReflectionOutputLanguage(combinedEvidence);
     const generated = await this.worker.generate(
       thread,
       combinedEvidence,
       triggerType,
+      outputLanguage,
     );
 
     const threadPath =

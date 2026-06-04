@@ -378,6 +378,42 @@
               <div class="quote-body">{{ contextQuote }}</div>
             </div>
 
+            <section class="action-suggestions">
+              <div class="action-head">
+                <div>
+                  <span>现在建议</span>
+                  <strong>先看结论，再看证据</strong>
+                </div>
+                <span>{{ contextActionSuggestions.length }} 条</span>
+              </div>
+              <div class="action-grid">
+                <article
+                  v-for="suggestion in contextActionSuggestions"
+                  :key="`${suggestion.title}:${suggestion.reason}`"
+                  :class="['action-card', suggestion.tone]"
+                >
+                  <div class="action-card-title">
+                    <span :class="['chip', suggestionTone(suggestion.tone)]">
+                      {{ suggestionToneLabel(suggestion.tone) }}
+                    </span>
+                    <strong>{{ suggestion.title }}</strong>
+                  </div>
+                  <p>{{ suggestion.body }}</p>
+                  <div class="action-card-foot">
+                    <span>{{ suggestion.reason }}</span>
+                    <button
+                      v-if="suggestion.evidenceRef"
+                      type="button"
+                      class="tiny-btn"
+                      @click="openEvidence(suggestion.evidenceRef)"
+                    >
+                      查看依据
+                    </button>
+                  </div>
+                </article>
+              </div>
+            </section>
+
             <div :class="['privacy-strip', contextCard.privacySummary.sensitiveIncluded ? 'warn' : '']">
               <div>
                 <strong>{{ contextPrivacyTitle }}</strong>
@@ -1013,6 +1049,9 @@ import { useMemoryStore } from '../memory-store';
 type RadarStateFilter = RelationshipRadarState | 'all';
 type ReviewStatusFilter = RelationshipReviewStatus | 'all';
 type DetailTab = 'context' | 'meeting' | 'assistant' | 'graph' | 'review';
+type ContextActionSuggestion = NonNullable<
+  RelationshipContextCard['actionSuggestions']
+>[number];
 
 const client = getMemoryServiceClient();
 const router = useRouter();
@@ -1141,9 +1180,19 @@ const selectedBriefSummary = computed(() => {
     180,
   );
 });
+const contextActionSuggestions = computed<ContextActionSuggestion[]>(() => {
+  const card = contextCard.value;
+  if (!card) return [];
+  if (card.actionSuggestions && card.actionSuggestions.length > 0) {
+    return card.actionSuggestions.slice(0, 4);
+  }
+  return buildFallbackActionSuggestions(card);
+});
 const contextQuote = computed(() =>
   compactText(
-    contextCard.value?.bullets[0] ||
+    contextActionSuggestions.value[0]
+      ? `${contextActionSuggestions.value[0].title}：${contextActionSuggestions.value[0].body}`
+      : contextCard.value?.bullets[0] ||
       selectedPerson.value?.reason ||
       selectedPerson.value?.description ||
       '上下文卡正在整理，稍后会补齐可追溯证据。',
@@ -1719,6 +1768,26 @@ function qualityTone(quality: RelationshipDataQuality | undefined) {
   return 'muted';
 }
 
+function suggestionTone(tone: ContextActionSuggestion['tone']) {
+  const tones: Record<ContextActionSuggestion['tone'], string> = {
+    hot: 'hot',
+    warn: 'warn',
+    ok: 'ok',
+    muted: 'muted',
+  };
+  return tones[tone];
+}
+
+function suggestionToneLabel(tone: ContextActionSuggestion['tone']) {
+  const labels: Record<ContextActionSuggestion['tone'], string> = {
+    hot: '优先',
+    warn: '确认',
+    ok: '可用',
+    muted: '轻量',
+  };
+  return labels[tone];
+}
+
 function reviewTone(status: RelationshipReviewStatus) {
   const tones: Record<RelationshipReviewStatus, string> = {
     pending: 'warn',
@@ -1814,6 +1883,84 @@ function spotlightTopicForPerson(person: RelationshipPersonSummary | null) {
   }
   if (person.radarState === 'core') return '高频协作上下文';
   return '近期协作上下文';
+}
+
+function buildFallbackActionSuggestions(
+  card: RelationshipContextCard,
+): ContextActionSuggestion[] {
+  const suggestions: ContextActionSuggestion[] = [];
+  const firstOpenLoop = card.openLoops[0];
+  const strongRelationships = card.relationshipHints
+    .filter((hint) => hint.strength >= 0.45)
+    .slice(0, 3);
+  const unconfirmedFacts = card.knownFacts.filter((fact) => !fact.confirmed);
+  const confirmedFacts = card.knownFacts.filter((fact) => fact.confirmed);
+
+  if (firstOpenLoop) {
+    suggestions.push({
+      title: `先闭环：${compactText(firstOpenLoop.title, 34)}`,
+      body:
+        `${compactText(firstOpenLoop.snippet, 96)}。沟通前先确认 owner、下一步或是否已经关闭，避免把旧 open loop 带进新对话。`,
+      tone: 'hot',
+      reason: `来自 ${formatDate(firstOpenLoop.timestamp)} 的未闭环线索`,
+      evidenceRef: firstOpenLoop.evidenceRef,
+    });
+  }
+
+  if (strongRelationships.length > 0) {
+    const names = strongRelationships.map((hint) => hint.targetName).join('、');
+    suggestions.push({
+      title: '带着关联对象一起判断',
+      body:
+        `${card.person.name} 的上下文经常和 ${names} 一起出现。推进相关事项前，先确认这些对象的 owner、边界或依赖是否仍成立。`,
+      tone: firstOpenLoop ? 'warn' : 'hot',
+      reason: `关系图谱中有 ${strongRelationships.length} 条较强关联边`,
+      evidenceRef: firstOpenLoop?.evidenceRef,
+    });
+  }
+
+  if (unconfirmedFacts.length > 0) {
+    const fact = unconfirmedFacts[0];
+    suggestions.push({
+      title: '把推断升级成可用事实',
+      body:
+        `系统推断了「${compactText(`${fact.key}: ${fact.value}`, 96)}」，但还没有确认。建议先核对后再用于强个性化检索。`,
+      tone: 'warn',
+      reason: `${unconfirmedFacts.length} 条人物事实仍待确认`,
+    });
+  } else if (confirmedFacts.length > 0) {
+    suggestions.push({
+      title: '可直接用于沟通前准备',
+      body:
+        `已有 ${confirmedFacts.length} 条确认事实。生成回复或会议 brief 时，可以优先带入这些事实，但仍要保留证据入口。`,
+      tone: 'ok',
+      reason: '存在用户确认过的人物画像信息',
+    });
+  }
+
+  if (suggestions.length === 0) {
+    suggestions.push({
+      title: '先轻量确认，不要过度个性化',
+      body:
+        card.person.radarState === 'dormant'
+          ? '近期互动偏少，先看最新证据再恢复上下文。'
+          : '当前主要是交互统计，还缺少明确事项。下一次沟通先确认对方当前关注点，再决定是否写入画像。',
+      tone: card.person.radarState === 'dormant' ? 'muted' : 'warn',
+      reason: '缺少明确 open loop 或已确认事实',
+    });
+  }
+
+  if (card.person.radarState === 'core' && suggestions.length < 4) {
+    suggestions.push({
+      title: '高频关系要维护上下文连续性',
+      body:
+        `${card.person.name} 是高频人物。每次重要沟通前建议先扫 30 秒 brief，把最近未闭环、不要假设和确认事实都带上。`,
+      tone: 'ok',
+      reason: `${card.person.interactionCount} 次交互，覆盖 ${card.person.activeDays} 个活跃日`,
+    });
+  }
+
+  return suggestions.slice(0, 4);
 }
 
 function evidenceLabel(evidence: RelationshipEvidenceRef) {
@@ -2856,6 +3003,118 @@ button {
 
 .quote-body {
   padding-left: 24px;
+}
+
+.action-suggestions {
+  margin-bottom: 18px;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 14px;
+  background:
+    radial-gradient(420px 180px at 8% 0%, rgba(96, 165, 250, 0.12), transparent 66%),
+    rgba(15, 23, 42, 0.5);
+  overflow: hidden;
+}
+
+.action-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(15, 23, 42, 0.42);
+  padding: 12px 14px;
+}
+
+.action-head span {
+  display: block;
+  color: var(--ink-low);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.action-head strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15.5rem, 1fr));
+  gap: 12px;
+  padding: 14px;
+}
+
+.action-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(8, 14, 32, 0.46);
+  padding: 14px;
+  overflow: hidden;
+}
+
+.action-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--ink-low);
+  opacity: 0.45;
+}
+
+.action-card.hot::before {
+  background: var(--danger);
+  opacity: 1;
+}
+
+.action-card.warn::before {
+  background: var(--warn);
+  opacity: 1;
+}
+
+.action-card.ok::before {
+  background: var(--ok);
+  opacity: 0.9;
+}
+
+.action-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.action-card-title strong {
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+
+.action-card p {
+  color: var(--ink-mid);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.action-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+
+.action-card-foot span {
+  color: var(--ink-low);
+  font-size: 11.5px;
 }
 
 .privacy-strip {

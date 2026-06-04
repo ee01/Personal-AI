@@ -81,6 +81,58 @@ test('appendAttachmentSummaryToText keeps file-only messages visible to filterin
   assert.match(formatMessageAttachment(attachments[0]), /Document/);
 });
 
+test('extractPostFileAttachments builds direct RingCentral download URLs from full item versions', () => {
+  const attachments = extractPostFileAttachments(
+    {
+      id: 80439921582084,
+      group_id: 1463750737922,
+      item_ids: [4103941627914],
+      items: [{ id: 4103941627914, type_id: 10, company_id: 44466177 }],
+    },
+    buildFileItemsMap([
+      {
+        id: 4103941627914,
+        name: 'az_recorder_20260527_092549.mp4',
+        type: 'mp4',
+        __size: 14033215,
+        __latest_post_id: 80439921582084,
+      },
+      {
+        id: 4103941627914,
+        name: 'az_recorder_20260527_092549.mp4',
+        type: 'mp4',
+        company_id: 44466177,
+        versions: [
+          {
+            stored_file_id: 7090862645260,
+            size: 14033215,
+          },
+        ],
+      },
+    ]),
+  );
+
+  assert.equal(attachments[0].category, 'video');
+  assert.equal(attachments[0].storedFileId, 7090862645260);
+  assert.equal(
+    attachments[0].messageUrl,
+    'https://app.ringcentral.com/messages/1463750737922/80439921582084',
+  );
+  assert.equal(
+    attachments[0].downloadUrl,
+    'https://dl.mvp.ringcentral.com/company/44466177/file/4103941627914?stored_file_id=7090862645260&contentDisposition=Attachment',
+  );
+  assert.equal(attachments[0].sourceUrl, attachments[0].downloadUrl);
+  assert.equal(
+    attachments[0].previewUrl,
+    'https://dl.mvp.ringcentral.com/company/44466177/file/4103941627914?stored_file_id=7090862645260&contentDisposition=Inline',
+  );
+  assert.match(
+    formatMessageAttachment(attachments[0]),
+    /link=https:\/\/dl\.mvp\.ringcentral\.com\/company\/44466177\/file\/4103941627914/,
+  );
+});
+
 test('unknown file item refs are retained only when RingCentral marks them as file attachments', () => {
   const attachments = extractPostFileAttachments(
     {

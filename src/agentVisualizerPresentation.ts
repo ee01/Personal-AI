@@ -105,7 +105,51 @@ export interface AgentRunDiagnosticPacket {
     stepNumber?: number;
     time: string;
   }>;
+  traceSpans: AgentDiagnosticTraceSpan[];
   privacyNote: string;
+}
+
+export type AgentDiagnosticSpanOperation =
+  | 'agent.run'
+  | 'agent.step'
+  | 'agent.decision'
+  | 'execute_tool';
+
+export type AgentDiagnosticSpanStatus =
+  | 'ok'
+  | 'running'
+  | 'error'
+  | 'approval_required'
+  | 'blocked'
+  | 'empty_evidence'
+  | 'skipped'
+  | 'max_actions_reached'
+  | 'stopped'
+  | 'missing_terminal';
+
+export type AgentDiagnosticSpanAttributeValue =
+  | string
+  | number
+  | boolean
+  | string[]
+  | number[]
+  | undefined;
+
+export interface AgentDiagnosticTraceSpan {
+  spanId: string;
+  parentSpanId?: string;
+  operationName: AgentDiagnosticSpanOperation;
+  name: string;
+  status: {
+    code: AgentDiagnosticSpanStatus;
+    message?: string;
+  };
+  severity: AgentRunReviewSeverity;
+  stepNumber?: number;
+  startedAt: string;
+  endedAt: string;
+  summary?: string;
+  attributes: Record<string, AgentDiagnosticSpanAttributeValue>;
 }
 
 export const normalizeToolResult = (result: any) => {
@@ -904,6 +948,267 @@ export function buildAgentFlowSteps(
 const redactApprovalKeyText = (text: string) =>
   text.replace(/批准 key[:：][\s\S]*$/i, '批准 key: [omitted]');
 
+const toIsoTimestamp = (timestamp: number | undefined, fallback: string) =>
+  Number.isFinite(timestamp) ? new Date(timestamp as number).toISOString() : fallback;
+
+const splitToolNames = (toolUsed?: string) =>
+  String(toolUsed || '')
+    .split(',')
+    .map((toolId) => toolId.trim())
+    .filter(Boolean);
+
+const sanitizeSpanAttributes = (
+  attributes: Record<string, AgentDiagnosticSpanAttributeValue>,
+) =>
+  Object.fromEntries(
+    Object.entries(attributes).filter(([, value]) => value !== undefined),
+  );
+
+const getStepSpanStatus = (step: ThoughtStep): AgentDiagnosticSpanStatus => {
+  if (step.action === 'max_actions_reached') return 'max_actions_reached';
+  if (step.action === 'stopped') return 'stopped';
+  if (stepHasToolError(step)) return 'error';
+  if (stepHasToolApprovalRequired(step)) return 'approval_required';
+  if (stepHasToolBlocked(step)) return 'blocked';
+  if (stepHasEmptyToolEvidence(step)) return 'empty_evidence';
+  if (stepWasSkipped(step)) return 'skipped';
+  return 'ok';
+};
+
+const getSpanSeverityForStatus = (
+  status: AgentDiagnosticSpanStatus,
+): AgentRunReviewSeverity => {
+  if (status === 'error') return 'critical';
+  if (
+    [
+      'approval_required',
+      'blocked',
+      'empty_evidence',
+      'max_actions_reached',
+      'missing_terminal',
+    ].includes(status)
+  ) {
+    return 'warning';
+  }
+  if (status === 'running' || status === 'skipped' || status === 'stopped') {
+    return 'info';
+  }
+  return 'ok';
+};
+
+const getEvidenceStatus = (step: ThoughtStep) => {
+  if (!step.toolUsed) return undefined;
+  if (stepHasEmptyToolEvidence(step)) return 'empty';
+  if (stepHasToolError(step)) return 'error';
+  if (stepHasToolApprovalRequired(step)) return 'pending_approval';
+  if (stepHasToolBlocked(step)) return 'blocked';
+  if (stepWasSkipped(step)) return 'skipped';
+  return 'available';
+};
+
+const getToolResultEntries = (step: ThoughtStep): Array<[string, any, number]> => {
+  const result = getToolResultObject(step);
+  if (!result || typeof result !== 'object') return [];
+  if (Array.isArray(result)) {
+    return result.map((value, index) => [step.toolUsed || 'tool', value, index]);
+  }
+  return Object.entries(result).flatMap(([toolId, value]) => {
+    if (Array.isArray(value)) {
+      return value.map((item, index) => [toolId, item, index] as [string, any, number]);
+    }
+    return [[toolId, value, 0] as [string, any, number]];
+  });
+};
+
+const getToolValueStatus = (value: any): AgentDiagnosticSpanStatus => {
+  if (!value || typeof value !== 'object') return 'ok';
+  if (value.error || value.success === false || value.result?.success === false) {
+    return 'error';
+  }
+  if (value.approvalRequired || value.reason === 'approval_required') {
+    return 'approval_required';
+  }
+  if (value.blocked) return 'blocked';
+  if (value.skipped) return 'skipped';
+  if (isEmptyEvidenceValue(value)) return 'empty_evidence';
+  return 'ok';
+};
+
+const getToolValueSummary = (value: any, fallback: string) => {
+  if (!value || typeof value !== 'object') return fallback;
+  if (typeof value.message === 'string' && value.message.trim()) {
+    return clipText(redactApprovalKeyText(value.message), 180);
+  }
+  if (typeof value.error === 'string' && value.error.trim()) {
+    return clipText(value.error, 180);
+  }
+  return fallback;
+};
+
+function buildDiagnosticTraceSpans(
+  thoughtProcess: ThoughtStep[],
+  params: {
+    generatedAt: string;
+    status: AgentRunDiagnosticStatus;
+    severity: AgentRunReviewSeverity;
+    summary: AgentRunDiagnosticPacket['summary'];
+  },
+): AgentDiagnosticTraceSpan[] {
+  if (thoughtProcess.length === 0) {
+    return [
+      {
+        spanId: 'run',
+        operationName: 'agent.run',
+        name: 'Agent Thinking run',
+        status: {
+          code: params.status === 'running' ? 'running' : 'missing_terminal',
+          message: 'No trace steps were recorded.',
+        },
+        severity: params.severity,
+        startedAt: params.generatedAt,
+        endedAt: params.generatedAt,
+        summary: 'No Agent Thinking steps were recorded.',
+        attributes: sanitizeSpanAttributes({
+          'agent.name': 'Personal AI Agent Thinking',
+          'agent.status': params.status,
+          'agent.step.count': 0,
+        }),
+      },
+    ];
+  }
+
+  const runStartedAt = toIsoTimestamp(thoughtProcess[0]?.timestamp, params.generatedAt);
+  const runEndedAt = toIsoTimestamp(
+    thoughtProcess[thoughtProcess.length - 1]?.timestamp,
+    params.generatedAt,
+  );
+  const rootStatus: AgentDiagnosticSpanStatus =
+    params.status === 'finished'
+      ? 'ok'
+      : params.status === 'empty'
+        ? 'missing_terminal'
+        : params.status;
+  const spans: AgentDiagnosticTraceSpan[] = [
+    {
+      spanId: 'run',
+      operationName: 'agent.run',
+      name: 'Agent Thinking run',
+      status: {
+        code: rootStatus,
+        message:
+          params.status === 'missing_terminal'
+            ? 'Trace has no finish, stopped, or max_actions_reached step.'
+            : undefined,
+      },
+      severity: params.severity,
+      startedAt: runStartedAt,
+      endedAt: runEndedAt,
+      summary: `Agent Thinking run ${params.status}`,
+      attributes: sanitizeSpanAttributes({
+        'agent.name': 'Personal AI Agent Thinking',
+        'agent.status': params.status,
+        'agent.step.count': params.summary.stepCount,
+        'agent.terminal.step_number': params.summary.terminalStepNumber,
+        'agent.terminal.action': params.summary.terminalAction,
+        'agent.tool.error.count': params.summary.toolErrorCount,
+        'agent.tool.blocked.count': params.summary.blockedCount,
+        'agent.tool.empty_evidence.count': params.summary.emptyEvidenceCount,
+        'agent.approval.pending.count': params.summary.pendingApprovalCount,
+        'agent.tools': params.summary.toolsInvolved,
+      }),
+    },
+  ];
+
+  thoughtProcess.forEach((step, index) => {
+    const stepNumber = index + 1;
+    const stepStatus = getStepSpanStatus(step);
+    const stepTimestamp = toIsoTimestamp(step.timestamp, params.generatedAt);
+    const toolNames = splitToolNames(step.toolUsed);
+    const isTerminalStep = ['finish', 'max_actions_reached', 'stopped'].includes(
+      step.action,
+    );
+    const stepSpanId = `step-${stepNumber}`;
+    const visibleSummary = getStepVisibleSummary(step);
+
+    spans.push({
+      spanId: stepSpanId,
+      parentSpanId: 'run',
+      operationName: isTerminalStep ? 'agent.decision' : 'agent.step',
+      name: isTerminalStep
+        ? `decision ${step.action}`
+        : step.toolUsed
+          ? `step ${stepNumber} tool ${step.toolUsed}`
+          : `step ${stepNumber} ${step.action || 'analysis'}`,
+      status: {
+        code: stepStatus,
+        message: getStepDiagnosticSummary(step)
+          ? redactApprovalKeyText(getStepDiagnosticSummary(step))
+          : undefined,
+      },
+      severity: getSpanSeverityForStatus(stepStatus),
+      stepNumber,
+      startedAt: stepTimestamp,
+      endedAt: stepTimestamp,
+      summary: visibleSummary,
+      attributes: sanitizeSpanAttributes({
+        'agent.step.number': stepNumber,
+        'agent.step.action': step.action,
+        'agent.step.kind': getStepKind(step),
+        'agent.step.summary': visibleSummary,
+        'agent.tool.names': toolNames.length > 0 ? toolNames : undefined,
+        'agent.evidence.status': getEvidenceStatus(step),
+        'agent.approval.required': stepHasToolApprovalRequired(step) || undefined,
+      }),
+    });
+
+    getToolResultEntries(step).forEach(([toolId, value, resultIndex]) => {
+      const toolStatus = getToolValueStatus(value);
+      const toolTimestamp = stepTimestamp;
+      const resultSuffix = resultIndex > 0 ? `-${resultIndex + 1}` : '';
+      spans.push({
+        spanId: `step-${stepNumber}-tool-${toolId}${resultSuffix}`,
+        parentSpanId: stepSpanId,
+        operationName: 'execute_tool',
+        name: `execute_tool ${toolId}`,
+        status: {
+          code: toolStatus,
+          message: getToolValueSummary(value, getStepSummary(step)),
+        },
+        severity: getSpanSeverityForStatus(toolStatus),
+        stepNumber,
+        startedAt: toolTimestamp,
+        endedAt: toolTimestamp,
+        summary: getToolValueSummary(value, getStepSummary(step)),
+        attributes: sanitizeSpanAttributes({
+          'gen_ai.operation.name': 'execute_tool',
+          'gen_ai.tool.name': toolId,
+          'gen_ai.tool.type': 'function',
+          'agent.step.number': stepNumber,
+          'agent.tool.status': toolStatus,
+          'agent.tool.blocked': Boolean(value?.blocked) || undefined,
+          'agent.tool.skipped': Boolean(value?.skipped) || undefined,
+          'agent.tool.error': Boolean(
+            value?.error || value?.success === false || value?.result?.success === false,
+          ) || undefined,
+          'agent.approval.required':
+            Boolean(value?.approvalRequired || value?.reason === 'approval_required') ||
+            undefined,
+          'agent.evidence.status': isEmptyEvidenceValue(value)
+            ? 'empty'
+            : toolStatus === 'ok'
+              ? 'available'
+              : toolStatus,
+          'agent.tool.effect': typeof value?.effect === 'string' ? value.effect : undefined,
+          'agent.tool.risk_level':
+            typeof value?.riskLevel === 'string' ? value.riskLevel : undefined,
+        }),
+      });
+    });
+  });
+
+  return spans;
+}
+
 export function buildAgentRunDiagnosticPacket(
   thoughtProcess: ThoughtStep[],
   options: { isProcessing?: boolean; generatedAt?: string } = {},
@@ -947,25 +1252,29 @@ export function buildAgentRunDiagnosticPacket(
     ),
   ).sort();
 
+  const summary = {
+    stepCount: thoughtProcess.length,
+    terminalStepNumber:
+      terminalStepIndex >= 0 ? terminalStepIndex + 1 : undefined,
+    terminalAction: terminalStep?.action,
+    toolErrorCount: toolIssueCounts.toolErrorCount,
+    approvalRequiredCount: toolIssueCounts.approvalRequiredCount,
+    blockedCount: toolIssueCounts.blockedCount,
+    emptyEvidenceCount: toolIssueCounts.emptyEvidenceCount,
+    skippedCount,
+    pendingApprovalCount: pendingApprovals.length,
+    toolsInvolved,
+  };
+  const severity = getAgentRunReviewSeverity(reviewItems);
+  const generatedAt = options.generatedAt || new Date().toISOString();
+
   return {
     type: 'agent_thinking_run_diagnostics',
     version: 1,
-    generatedAt: options.generatedAt || new Date().toISOString(),
+    generatedAt,
     status,
-    severity: getAgentRunReviewSeverity(reviewItems),
-    summary: {
-      stepCount: thoughtProcess.length,
-      terminalStepNumber:
-        terminalStepIndex >= 0 ? terminalStepIndex + 1 : undefined,
-      terminalAction: terminalStep?.action,
-      toolErrorCount: toolIssueCounts.toolErrorCount,
-      approvalRequiredCount: toolIssueCounts.approvalRequiredCount,
-      blockedCount: toolIssueCounts.blockedCount,
-      emptyEvidenceCount: toolIssueCounts.emptyEvidenceCount,
-      skippedCount,
-      pendingApprovalCount: pendingApprovals.length,
-      toolsInvolved,
-    },
+    severity,
+    summary,
     reviewItems: reviewItems.map((item) => ({
       severity: item.severity,
       title: item.title,
@@ -996,7 +1305,13 @@ export function buildAgentRunDiagnosticPacket(
           : undefined,
       time: step.time,
     })),
+    traceSpans: buildDiagnosticTraceSpans(thoughtProcess, {
+      generatedAt,
+      status,
+      severity,
+      summary,
+    }),
     privacyNote:
-      'This packet omits raw tool results, approval keys, and tool parameters. Use the approval review packet for action-specific approval context.',
+      'This packet omits raw tool results, approval keys, and tool parameters. traceSpans are structured for diagnostics/evals, not a full OpenTelemetry export. Use the approval review packet for action-specific approval context.',
   };
 }

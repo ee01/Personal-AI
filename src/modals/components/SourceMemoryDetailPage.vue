@@ -54,6 +54,72 @@
         }}</span>
       </div>
 
+      <section v-if="isVisualMemory" class="visual-panel">
+        <div class="visual-head">
+          <div>
+            <p class="eyebrow">视觉证据</p>
+            <h2>{{ visualKindLabel }}</h2>
+          </div>
+          <span class="visual-badge">{{ visualTagLabel }}</span>
+        </div>
+        <p v-if="visualLabel" class="visual-caption">{{ visualLabel }}</p>
+        <dl class="visual-meta-list">
+          <div v-if="visualSelectorHint">
+            <dt>网页区域</dt>
+            <dd>{{ visualSelectorHint }}</dd>
+          </div>
+          <div v-if="visualRectText">
+            <dt>捕获尺寸</dt>
+            <dd>{{ visualRectText }}</dd>
+          </div>
+          <div v-if="visualScoreText">
+            <dt>识别置信</dt>
+            <dd>{{ visualScoreText }}</dd>
+          </div>
+        </dl>
+
+        <div v-if="visualSvgMarkup" class="visual-svg-preview">
+          <div class="visual-svg-stage" v-html="visualSvgMarkup"></div>
+          <p v-if="visualSvgSizeText" class="visual-preview-note">
+            已保存 SVG 图形快照，原始尺寸 {{ visualSvgSizeText }}。
+          </p>
+        </div>
+
+        <div v-else-if="visualTableRows.length" class="visual-table-wrap">
+          <table class="visual-table">
+            <thead v-if="visualTableHeaders.length">
+              <tr>
+                <th
+                  v-for="(header, index) in visualTableHeaders"
+                  :key="`h-${index}`"
+                >
+                  {{ header || `列 ${index + 1}` }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, rowIndex) in visualTableRows" :key="rowIndex">
+                <td
+                  v-for="columnIndex in visualTableColumnCount"
+                  :key="columnIndex"
+                >
+                  {{ row[columnIndex - 1] || '' }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="visualTableTruncated" class="visual-table-note">
+            表格较大，当前只展示入库时保存的前 {{ visualTableRows.length }} 行。
+          </p>
+        </div>
+        <p v-else-if="isVisualTable" class="empty-note">
+          这条表格证据是旧记录，只保存了表格文本，没有结构化行列；重新入库后可显示表格。
+        </p>
+        <p v-else-if="isSvgVisual" class="empty-note">
+          这条 SVG 证据是旧记录，只保存了 SVG 的文字和区域信息，没有保存图形快照；重新入库后可显示 SVG 预览。
+        </p>
+      </section>
+
       <section class="detail-grid">
         <div class="detail-panel">
           <h2>为什么保存</h2>
@@ -179,6 +245,76 @@ const dismissing = ref(false);
 const errorMessage = ref('');
 
 const capsuleId = computed(() => String(route.params.id || '').trim());
+const capsuleMetadata = computed(() => asRecord(capsule.value?.metadata) || {});
+const visualMemory = computed(() => asRecord(capsuleMetadata.value.visualMemory) || {});
+const isVisualMemory = computed(
+  () => capsule.value?.sourceKind === 'visual_memory' || Boolean(visualMemory.value.kind),
+);
+const visualKind = computed(() => {
+  const kind = String(visualMemory.value.kind || '').trim();
+  if (kind) return kind;
+  const text = [
+    capsule.value?.summary,
+    capsule.value?.contentPreview,
+    capsule.value?.anchors?.[0]?.quoteOrPreview,
+  ].join(' ');
+  if (/类型：表格|table/i.test(text)) return 'table';
+  if (/类型：图表|chart/i.test(text)) return 'chart';
+  if (/类型：图片|image/i.test(text)) return 'image';
+  return '';
+});
+const isVisualTable = computed(() => visualKind.value === 'table');
+const visualKindLabel = computed(() => visualKindDisplayLabel(visualKind.value));
+const visualTagLabel = computed(() => {
+  const tagName = String(visualMemory.value.tagName || '').trim();
+  return tagName ? tagName.toUpperCase() : 'VISUAL';
+});
+const isSvgVisual = computed(
+  () =>
+    String(visualMemory.value.tagName || '').toLowerCase() === 'svg' ||
+    String(visualMemory.value.selectorHint || '').toLowerCase().startsWith('svg'),
+);
+const visualLabel = computed(
+  () =>
+    String(visualMemory.value.label || '').trim() ||
+    String(capsule.value?.summary || '').trim(),
+);
+const visualSelectorHint = computed(() =>
+  String(visualMemory.value.selectorHint || '').trim(),
+);
+const visualRectText = computed(() => {
+  const rect = asRecord(visualMemory.value.rect);
+  const width = Number(rect?.width || 0);
+  const height = Number(rect?.height || 0);
+  if (!width || !height) return '';
+  return `${Math.round(width)} × ${Math.round(height)} px`;
+});
+const visualScoreText = computed(() => {
+  const score = Number(visualMemory.value.score);
+  if (!Number.isFinite(score) || score <= 0) return '';
+  return `${Math.round(score * 100)}%`;
+});
+const visualSvg = computed(() => asRecord(visualMemory.value.svg));
+const visualSvgMarkup = computed(() => sanitizeStoredSvgMarkup(visualSvg.value?.markup));
+const visualSvgSizeText = computed(() => {
+  const width = Number(visualSvg.value?.width || 0);
+  const height = Number(visualSvg.value?.height || 0);
+  if (!width || !height) return '';
+  return `${Math.round(width)} × ${Math.round(height)} px`;
+});
+const visualTable = computed(() => asRecord(visualMemory.value.table));
+const visualTableHeaders = computed(() =>
+  toStringArray(visualTable.value?.headers),
+);
+const visualTableRows = computed(() => toStringRows(visualTable.value?.rows));
+const visualTableColumnCount = computed(() => {
+  const rowColumnCount = visualTableRows.value.reduce(
+    (max, row) => Math.max(max, row.length),
+    0,
+  );
+  return Math.max(visualTableHeaders.value.length, rowColumnCount, 1);
+});
+const visualTableTruncated = computed(() => Boolean(visualTable.value?.truncated));
 const safeSourceUrl = computed(() => {
   const value = capsule.value?.sourceUrl?.trim();
   if (!value) return '';
@@ -270,6 +406,7 @@ function statusLabel(value: string) {
 function sourceKindLabel(value: string) {
   const labels: Record<string, string> = {
     webpage: '整页资料',
+    visual_memory: '视觉证据',
     selection: '选中文本',
     jira_comment: 'Jira 评论',
     message_reply: '消息回复',
@@ -305,6 +442,7 @@ function privacyLabel(value: SourceMemoryPrivacyLevel) {
 function anchorKindLabel(value: string) {
   if (value === 'text_selection') return '选区证据';
   if (value === 'page_excerpt') return '页面摘录';
+  if (value === 'visual_region') return '视觉区域';
   return value || '证据';
 }
 
@@ -319,6 +457,131 @@ function triggerKindLabel(value: string) {
   if (value === 'entity') return '实体';
   if (value === 'title') return '标题';
   return value || '线索';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || '').trim())
+    : [];
+}
+
+function toStringRows(value: unknown): string[][] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((row): row is unknown[] => Array.isArray(row))
+    .map((row) => row.map((cell) => String(cell || '').trim()));
+}
+
+function sanitizeStoredSvgMarkup(value: unknown): string {
+  const markup = String(value || '').trim();
+  if (!markup || markup.length > 300000 || !/^<svg[\s>]/i.test(markup)) {
+    return '';
+  }
+  if (/<(?:script|foreignObject|iframe|object|embed)\b/i.test(markup)) {
+    return '';
+  }
+  if (/\son[a-z]+\s*=/i.test(markup) || /javascript:/i.test(markup)) {
+    return '';
+  }
+  const parser = new DOMParser();
+  const document = parser.parseFromString(markup, 'image/svg+xml');
+  if (document.querySelector('parsererror')) {
+    return '';
+  }
+  const svg = document.documentElement;
+  if (!svg || svg.tagName.toLowerCase() !== 'svg') {
+    return '';
+  }
+
+  svg
+    .querySelectorAll('script, foreignObject, iframe, object, embed')
+    .forEach((node) => node.remove());
+
+  for (const node of Array.from(svg.querySelectorAll('*'))) {
+    sanitizeStoredSvgElement(node);
+  }
+  sanitizeStoredSvgElement(svg);
+
+  return new XMLSerializer().serializeToString(svg);
+}
+
+function sanitizeStoredSvgElement(node: Element) {
+  for (const attr of Array.from(node.attributes)) {
+    const name = attr.name;
+    const lowerName = name.toLowerCase();
+    const value = attr.value.trim();
+    const lowerValue = value.toLowerCase();
+    if (lowerName.startsWith('on') || lowerValue.includes('javascript:')) {
+      node.removeAttribute(name);
+      continue;
+    }
+    if (lowerName === 'style') {
+      const safeStyle = sanitizeStoredSvgStyleValue(value);
+      if (safeStyle) {
+        node.setAttribute(name, safeStyle);
+      } else {
+        node.removeAttribute(name);
+      }
+    }
+  }
+}
+
+function sanitizeStoredSvgStyleValue(value: string): string {
+  const blockedProperties = new Set([
+    'position',
+    'inset',
+    'inset-block',
+    'inset-block-start',
+    'inset-block-end',
+    'inset-inline',
+    'inset-inline-start',
+    'inset-inline-end',
+    'top',
+    'right',
+    'bottom',
+    'left',
+    'z-index',
+    'float',
+    'clear',
+    'transform',
+    'translate',
+    'scale',
+    'rotate',
+    'margin',
+    'margin-top',
+    'margin-right',
+    'margin-bottom',
+    'margin-left',
+  ]);
+  const safeDeclarations = value
+    .split(';')
+    .map((declaration) => declaration.trim())
+    .filter((declaration) => {
+      if (!declaration || declaration.toLowerCase().includes('javascript:')) {
+        return false;
+      }
+      const property = declaration.split(':')[0]?.trim().toLowerCase();
+      return property ? !blockedProperties.has(property) : false;
+    });
+  return safeDeclarations.join('; ');
+}
+
+function visualKindDisplayLabel(value: string) {
+  const labels: Record<string, string> = {
+    chart: '图表',
+    canvas: '画布图表',
+    image: '图片',
+    table: '表格',
+    figure: '视觉区域',
+  };
+  return labels[value] || '视觉证据';
 }
 
 watch(capsuleId, () => {
@@ -473,6 +736,156 @@ onMounted(() => {
   border-color: #fecaca;
   background: #fff1f2;
   color: #be123c;
+}
+
+.visual-panel {
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  background: #f0f9ff;
+  padding: 16px;
+}
+
+.visual-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.visual-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.visual-badge {
+  border: 1px solid #67e8f9;
+  border-radius: 999px;
+  background: #ecfeff;
+  color: #0e7490;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-caption {
+  margin: 10px 0 0;
+  color: #334155;
+  overflow-wrap: anywhere;
+}
+
+.visual-meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+
+.visual-meta-list div {
+  min-width: 140px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+}
+
+.visual-meta-list dt {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-meta-list dd {
+  margin: 4px 0 0;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.visual-svg-preview {
+  margin-top: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.visual-svg-stage {
+  position: relative;
+  isolation: isolate;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.visual-svg-stage :deep(svg) {
+  position: static !important;
+  inset: auto !important;
+  display: block;
+  width: 100% !important;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
+}
+
+.visual-svg-stage :deep(svg *) {
+  position: static !important;
+  inset: auto !important;
+}
+
+.visual-preview-note {
+  margin: 0;
+  border-top: 1px solid #dbeafe;
+  padding: 9px 10px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.visual-table-wrap {
+  margin-top: 14px;
+  overflow-x: auto;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.visual-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.visual-table th,
+.visual-table td {
+  border-bottom: 1px solid #e5e7eb;
+  border-right: 1px solid #e5e7eb;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  color: #1f2937;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.visual-table th:last-child,
+.visual-table td:last-child {
+  border-right: 0;
+}
+
+.visual-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.visual-table th {
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-weight: 800;
+}
+
+.visual-table-note {
+  margin: 0;
+  border-top: 1px solid #dbeafe;
+  padding: 9px 10px;
+  color: #475569;
+  font-size: 12px;
 }
 
 .detail-grid {

@@ -79,6 +79,7 @@ export interface SourceMemoryCapsule {
   summary: string;
   contentPreview: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
   savedAt?: number;
@@ -429,6 +430,17 @@ export class SourceMemoryCaptureService {
         });
         transaction();
       } else {
+        const existingMetadata = parseObject(existing.metadata_json ?? '{}');
+        if (hasVisualMetadataUpgrade(existingMetadata, metadata)) {
+          this.db
+            .prepare(
+              `UPDATE source_memory_capsules
+               SET metadata_json = ?,
+                   updated_at = ?
+               WHERE id = ?`,
+            )
+            .run(JSON.stringify(metadata), ts, existing.id);
+        }
         this.insertEvent(existing.id, 'duplicate_save', 'medium', sourceUrl, {
           captureMode,
           captureReason,
@@ -703,6 +715,7 @@ export class SourceMemoryCaptureService {
       summary: row.summary ?? '',
       contentPreview: row.content_preview ?? '',
       messageId: row.message_id ?? undefined,
+      metadata: parseObject(row.metadata_json ?? '{}'),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       savedAt: row.saved_at ?? undefined,
@@ -1103,4 +1116,39 @@ function parseObject(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function hasVisualMetadataUpgrade(
+  existingMetadata: Record<string, unknown>,
+  nextMetadata: Record<string, unknown>,
+): boolean {
+  const existingVisual = asRecord(existingMetadata.visualMemory);
+  const nextVisual = asRecord(nextMetadata.visualMemory);
+  if (!Object.keys(nextVisual).length) {
+    return false;
+  }
+
+  const existingSvg = asRecord(existingVisual.svg);
+  const nextSvg = asRecord(nextVisual.svg);
+  if (!existingSvg.markup && typeof nextSvg.markup === 'string' && nextSvg.markup.trim()) {
+    return true;
+  }
+
+  const existingTable = asRecord(existingVisual.table);
+  const nextTable = asRecord(nextVisual.table);
+  if (
+    !Array.isArray(existingTable.rows) &&
+    Array.isArray(nextTable.rows) &&
+    nextTable.rows.length > 0
+  ) {
+    return true;
+  }
+
+  return false;
 }

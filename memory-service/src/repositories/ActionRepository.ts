@@ -150,6 +150,13 @@ export interface ActionListFilters {
   offset?: number;
 }
 
+export interface RecoverStaleRunningActionsOptions {
+  actionType: string;
+  staleAfterSeconds: number;
+  currentTime?: number;
+  errorMessage?: string;
+}
+
 export class ActionRepository {
   constructor(private readonly db: Database.Database) {}
 
@@ -494,5 +501,62 @@ export class ActionRepository {
       .run(currentTime, reason ?? null, id);
 
     return this.getById(id);
+  }
+
+  recoverStaleRunningActions(
+    options: RecoverStaleRunningActionsOptions,
+  ): QueuedActionRecord[] {
+    const currentTime = options.currentTime ?? now();
+    const staleAfterSeconds = Math.max(
+      1,
+      Math.floor(options.staleAfterSeconds),
+    );
+    const cutoff = currentTime - staleAfterSeconds;
+    const errorMessage =
+      options.errorMessage ??
+      `Action execution exceeded stale running timeout (${staleAfterSeconds}s). External side effects may have completed; review before retrying.`;
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM proposed_actions
+         WHERE queue_status = 'running'
+           AND (action_type = ? OR type = ?)
+           AND started_at IS NOT NULL
+           AND started_at <= ?
+         ORDER BY started_at ASC`,
+      )
+      .all(options.actionType, options.actionType, cutoff) as ActionRow[];
+
+    if (rows.length === 0) return [];
+
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => '?').join(', ');
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'dead_letter',
+             state = 'expired',
+             finished_at = ?,
+             last_error = ?,
+             retry_count = retry_count + 1
+         WHERE id IN (${placeholders})
+           AND queue_status = 'running'`,
+      )
+      .run(currentTime, errorMessage, ...ids);
+
+    this.db
+      .prepare(
+        `UPDATE proposed_action_attempts
+         SET status = 'dead_letter',
+             error_message = ?,
+             finished_at = ?
+         WHERE action_id IN (${placeholders})
+           AND status = 'running'`,
+      )
+      .run(errorMessage, currentTime, ...ids);
+
+    return ids
+      .map((id) => this.getById(id))
+      .filter((action): action is QueuedActionRecord => Boolean(action));
   }
 }

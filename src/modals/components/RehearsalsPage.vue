@@ -1,12 +1,21 @@
 <template>
   <div class="rehearsals-page">
-    <header class="page-header">
-      <div>
-        <h2>Rehearsal</h2>
-        <p>未来场景预演记忆。主要在真实场景中提示，这里用于审计和修正。</p>
+    <header class="rehearsal-hero">
+      <div class="hero-copy">
+        <div class="eyebrow">场景预演 | Rehearsal</div>
+        <h2>未来场景触发的提示脚本</h2>
+        <p>
+          这些内容主要给 context-recall、会前准备、Meeting Pilot、Compose Assist
+          等真实场景消费；本页只用于审计、修正和处理误命中。
+        </p>
       </div>
       <div class="header-controls">
-        <select v-model="statusFilter" class="filter-select" @change="applyFilters">
+        <select
+          v-model="statusFilter"
+          class="filter-select"
+          aria-label="按状态筛选场景预演"
+          @change="applyFilters"
+        >
           <option value="active">Active</option>
           <option value="candidate">Candidate</option>
           <option value="paused">Paused</option>
@@ -26,14 +35,33 @@
       </div>
     </header>
 
-    <div v-if="loading" class="loading-state">加载 Rehearsal 中...</div>
+    <section class="usage-strip" aria-label="场景预演使用方式">
+      <div>
+        <span>主要消费</span>
+        <strong>Context Recall / 会前准备 / Meeting Pilot / Compose Assist</strong>
+      </div>
+      <div>
+        <span>本页用途</span>
+        <strong>审计来源、修正触发线索、暂停或归档误命中</strong>
+      </div>
+      <div>
+        <span>不会直接做</span>
+        <strong>自动发送、替代事实记忆、要求用户日常逐条阅读</strong>
+      </div>
+    </section>
+
+    <div v-if="loading" class="loading-state">加载场景预演中...</div>
     <div v-else-if="errorMessage" class="empty-state">{{ errorMessage }}</div>
     <div v-else-if="items.length === 0" class="empty-state">
-      暂无符合条件的 Rehearsal
+      暂无符合条件的场景预演
     </div>
 
     <div v-else class="rehearsal-layout">
-      <section class="rehearsal-list" aria-label="Rehearsal 列表">
+      <section class="rehearsal-list" aria-label="场景预演列表">
+        <div class="list-summary">
+          <strong>{{ items.length }}</strong>
+          <span>{{ currentFilterLabel() }}</span>
+        </div>
         <button
           v-for="item in items"
           :key="item.id"
@@ -49,20 +77,17 @@
           <h3>{{ item.title }}</h3>
           <p>{{ item.summary || item.content }}</p>
           <div class="card-meta">
-            <span>{{ item.scenarioType }}</span>
+            <span>{{ scenarioLabel(item.scenarioType) }}</span>
             <span>触发 {{ item.activationCount }}</span>
             <span v-if="item.validUntil">到期 {{ formatDate(item.validUntil) }}</span>
           </div>
         </button>
       </section>
 
-      <section v-if="selected" class="detail-panel" aria-label="Rehearsal 详情">
+      <section v-if="selected" class="detail-panel" aria-label="场景预演详情">
         <div v-if="focusNotice" class="focus-notice" role="status">
           <span>{{ focusNotice }}</span>
           <button type="button" @click="showAllForSelected">查看全部</button>
-        </div>
-        <div class="action-guidance" role="status">
-          <span>{{ selectedNextStep }}</span>
         </div>
         <div v-if="actionMessage" class="action-message" role="status">
           {{ actionMessage }}
@@ -74,6 +99,7 @@
               {{ statusLabel(selected.status) }}
             </span>
             <h3>{{ selected.title }}</h3>
+            <p>{{ selected.summary || '这条预演会在匹配到下方触发线索时进入场景提示。' }}</p>
           </div>
           <div class="detail-actions">
             <button v-if="canReactivateSelected" @click="reactivateSelected">
@@ -91,64 +117,106 @@
           </div>
         </div>
 
-        <div class="section">
-          <h4>预演内容</h4>
-          <p>{{ selected.content }}</p>
+        <div class="next-step-banner" role="status">
+          {{ selectedNextStep }}
         </div>
 
-        <div class="section">
-          <h4>触发线索</h4>
-          <div class="cue-grid">
-            <div v-for="cue in cueRows(selected.activationCues)" :key="cue.label" class="cue-row">
+        <section class="script-panel">
+          <div class="section-title">
+            <span>预演脚本</span>
+            <small>真实场景命中时给用户看的核心提醒</small>
+          </div>
+          <p>{{ selected.content }}</p>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-title">
+            <span>触发条件</span>
+            <small>只有命中这些人物、项目、会议、页面或主题时才应该提示</small>
+          </div>
+          <div class="cue-columns">
+            <div
+              v-for="cue in cueRows(selected.activationCues)"
+              :key="cue.label"
+              class="cue-row"
+            >
               <span>{{ cue.label }}</span>
               <strong>{{ cue.value }}</strong>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div class="section meta-grid">
+        <section class="detail-section two-column">
           <div>
-            <span>来源</span>
-            <strong>{{ selected.sourceKind }}{{ selected.sourceRefId ? `:${selected.sourceRefId}` : '' }}</strong>
-          </div>
-          <div>
-            <span>优先级</span>
-            <strong>{{ selected.priority }}</strong>
-          </div>
-          <div>
-            <span>使用</span>
-            <strong>{{ selected.usedCount }}</strong>
-          </div>
-          <div>
-            <span>忽略</span>
-            <strong>{{ selected.dismissedCount }}</strong>
-          </div>
-          <div v-if="selected.staleReason">
-            <span>降权原因</span>
-            <strong>{{ selected.staleReason }}</strong>
-          </div>
-        </div>
-
-        <div class="section">
-          <h4>来源证据</h4>
-          <div v-if="selectedEvidenceRows.length" class="evidence-list">
-            <div
-              v-for="evidence in selectedEvidenceRows"
-              :key="evidence.raw"
-              class="evidence-row"
-              :title="evidence.raw"
-            >
-              <span>{{ evidence.label }}</span>
-              <strong>{{ evidence.value }}</strong>
+            <div class="section-title">
+              <span>生命周期</span>
+              <small>决定是否进入现场提示</small>
             </div>
+            <div class="fact-grid">
+              <div>
+                <span>状态</span>
+                <strong>{{ statusLabel(selected.status) }}</strong>
+              </div>
+              <div>
+                <span>优先级</span>
+                <strong>{{ selected.priority }}</strong>
+              </div>
+              <div>
+                <span>使用次数</span>
+                <strong>{{ selected.usedCount }}</strong>
+              </div>
+              <div>
+                <span>忽略次数</span>
+                <strong>{{ selected.dismissedCount }}</strong>
+              </div>
+              <div>
+                <span>来源</span>
+                <strong>{{ selected.sourceKind }}</strong>
+              </div>
+              <div>
+                <span>场景类型</span>
+                <strong>{{ scenarioLabel(selected.scenarioType) }}</strong>
+              </div>
+            </div>
+            <p v-if="selected.staleReason" class="stale-reason">
+              降权原因：{{ selected.staleReason }}
+            </p>
+            <p v-if="selected.sourceRefId" class="source-ref">
+              {{ selected.sourceRefId }}
+            </p>
           </div>
-          <div v-else class="muted">暂无来源证据记录</div>
-        </div>
 
-        <div class="section">
-          <h4>最近触发</h4>
+          <div>
+            <div class="section-title">
+              <span>来源证据</span>
+              <small>用于判断这条预演是否仍可信</small>
+            </div>
+            <div v-if="selectedEvidenceRows.length" class="evidence-list">
+              <div
+                v-for="evidence in selectedEvidenceRows"
+                :key="evidence.raw"
+                class="evidence-row"
+                :title="evidence.raw"
+              >
+                <span>{{ evidence.label }}</span>
+                <strong>{{ evidence.value }}</strong>
+              </div>
+            </div>
+            <div v-else class="muted">暂无来源证据记录</div>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-title">
+            <span>最近触发</span>
+            <small>用来排查它为什么出现、是否误命中</small>
+          </div>
           <div v-if="activations.length === 0" class="muted">暂无触发记录</div>
-          <div v-for="activation in activations" :key="activation.id" class="activation-row">
+          <div
+            v-for="activation in activations"
+            :key="activation.id"
+            class="activation-row"
+          >
             <div class="activation-main">
               <span>{{ activation.surface }} / {{ activation.contextType || '-' }}</span>
               <strong>{{ activation.displayPriority }} · {{ activation.score.toFixed(2) }}</strong>
@@ -162,7 +230,7 @@
               <span v-else>未记录具体命中线索</span>
             </div>
           </div>
-        </div>
+        </section>
       </section>
     </div>
   </div>
@@ -247,6 +315,7 @@ const selectedNextStep = computed(() => {
 });
 
 onMounted(async () => {
+  document.title = '场景预演 | Rehearsal · Personal AI';
   await loadRehearsals(routeRehearsalId(), { pinFocus: true });
 });
 
@@ -448,6 +517,17 @@ function statusLabel(status: string) {
   return labels[status] || status;
 }
 
+function scenarioLabel(scenario: string) {
+  const labels: Record<string, string> = {
+    chat: '聊天',
+    meeting: '会议',
+    issue: '工单',
+    writing: '写作',
+    general: '通用',
+  };
+  return labels[scenario] || scenario || '通用';
+}
+
 function activationOutcomeLabel(outcome: string) {
   const labels: Record<string, string> = {
     matched: '已匹配',
@@ -550,33 +630,49 @@ function isExpired(rehearsal: Rehearsal) {
 
 <style scoped>
 .rehearsals-page {
-  animation: fadeInUp 0.45s ease-out;
+  animation: fadeInUp 0.35s ease-out;
+  color: #e2e8f0;
 }
 
-.page-header,
-.detail-header {
+.rehearsal-hero {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 1rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1rem;
 }
 
-.page-header h2,
-.detail-header h3 {
-  margin: 0 0 0.35rem;
+.hero-copy {
+  max-width: 720px;
 }
 
-.page-header p {
+.eyebrow {
+  margin-bottom: 0.35rem;
+  color: #93c5fd;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.rehearsal-hero h2 {
+  margin: 0 0 0.45rem;
+  font-size: 1.55rem;
+}
+
+.rehearsal-hero p {
+  margin: 0;
   color: #94a3b8;
-  font-size: 0.9rem;
+  font-size: 0.94rem;
+  line-height: 1.6;
 }
 
-.header-controls,
-.detail-actions {
+.header-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0.7rem;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  max-width: 520px;
 }
 
 .filter-select,
@@ -588,6 +684,10 @@ function isExpired(rehearsal: Rehearsal) {
   padding: 0.7rem 0.9rem;
 }
 
+.search-input {
+  min-width: min(100%, 300px);
+}
+
 .refresh-btn,
 .detail-actions button,
 .focus-notice button {
@@ -597,6 +697,40 @@ function isExpired(rehearsal: Rehearsal) {
   background: rgba(37, 99, 235, 0.18);
   color: #dbeafe;
   cursor: pointer;
+}
+
+.usage-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 1.2rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.usage-strip div {
+  min-width: 0;
+}
+
+.usage-strip span,
+.list-summary span,
+.section-title small,
+.fact-grid span,
+.cue-row span,
+.evidence-row span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.usage-strip strong {
+  display: block;
+  margin-top: 0.18rem;
+  color: #e2e8f0;
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .detail-actions .danger {
@@ -624,7 +758,7 @@ function isExpired(rehearsal: Rehearsal) {
   padding: 0.5rem 0.7rem;
 }
 
-.action-guidance,
+.next-step-banner,
 .action-message {
   margin-bottom: 0.85rem;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -652,14 +786,27 @@ function isExpired(rehearsal: Rehearsal) {
 
 .rehearsal-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
-  gap: 1rem;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 1.05rem;
+  align-items: start;
 }
 
 .rehearsal-list {
   display: grid;
   gap: 0.8rem;
   align-content: start;
+}
+
+.list-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #cbd5e1;
+}
+
+.list-summary strong {
+  font-size: 1.35rem;
 }
 
 .rehearsal-card {
@@ -680,10 +827,13 @@ function isExpired(rehearsal: Rehearsal) {
 .rehearsal-card h3 {
   margin: 0.7rem 0 0.45rem;
   font-size: 1rem;
+  line-height: 1.25;
 }
 
 .rehearsal-card p {
   color: #cbd5e1;
+  margin: 0 0 0.65rem;
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -741,32 +891,83 @@ function isExpired(rehearsal: Rehearsal) {
   padding: 1.1rem;
 }
 
-.section {
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.detail-header h3 {
+  margin: 0.45rem 0 0.35rem;
+  font-size: 1.3rem;
+  line-height: 1.3;
+}
+
+.detail-header p,
+.script-panel p,
+.muted,
+.source-ref,
+.stale-reason {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+.detail-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  min-width: 260px;
+}
+
+.script-panel,
+.detail-section {
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid rgba(148, 163, 184, 0.14);
 }
 
-.section h4 {
-  margin: 0 0 0.6rem;
+.script-panel {
+  padding: 1rem;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  border-radius: 8px;
+  background: rgba(30, 64, 175, 0.12);
 }
 
-.section p,
-.muted {
-  color: #cbd5e1;
+.section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.7rem;
 }
 
-.cue-grid,
-.meta-grid,
+.section-title span {
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.cue-columns,
+.fact-grid,
 .evidence-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.7rem;
 }
 
+.two-column {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.95fr) minmax(260px, 1.05fr);
+  gap: 1rem;
+}
+
 .cue-row,
-.meta-grid > div,
 .evidence-row,
+.fact-grid > div,
 .activation-row {
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 8px;
@@ -793,6 +994,21 @@ function isExpired(rehearsal: Rehearsal) {
   color: #cbd5e1;
 }
 
+.source-ref,
+.stale-reason {
+  margin-top: 0.7rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+  background: rgba(15, 23, 42, 0.28);
+  font-size: 0.82rem;
+}
+
+.stale-reason {
+  color: #fde68a;
+}
+
 .outcome-badge {
   border-radius: 999px;
   padding: 0.16rem 0.48rem;
@@ -800,31 +1016,34 @@ function isExpired(rehearsal: Rehearsal) {
   color: #e2e8f0;
 }
 
-.cue-row span,
-.meta-grid span,
-.evidence-row span {
-  display: block;
-  color: #94a3b8;
-  font-size: 0.75rem;
-  margin-bottom: 0.25rem;
-}
-
 .cue-row strong,
-.meta-grid strong,
+.fact-grid strong,
 .evidence-row strong {
+  display: block;
+  margin-top: 0.25rem;
   color: #e2e8f0;
   font-size: 0.9rem;
   overflow-wrap: anywhere;
 }
 
 @media (max-width: 900px) {
-  .page-header,
+  .rehearsal-hero,
   .detail-header {
     flex-direction: column;
   }
 
+  .usage-strip,
   .rehearsal-layout {
     grid-template-columns: 1fr;
+  }
+
+  .two-column {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-actions {
+    min-width: 0;
+    justify-content: flex-start;
   }
 }
 </style>

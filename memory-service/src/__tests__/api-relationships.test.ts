@@ -222,6 +222,13 @@ describe('Relationships API', () => {
     expect(body.privacySummary.redactionNote).toContain('默认未纳入');
     expect(body.retrievalHints.entityIds).toContain(personId);
     expect(body.evidenceRefs.length).toBeGreaterThan(0);
+    expect(body.actionSuggestions.length).toBeGreaterThan(0);
+    expect(
+      body.actionSuggestions.some((item: { title: string }) =>
+        item.title.includes('先闭环'),
+      ),
+    ).toBe(true);
+    expect(body.contextMd).toContain('## 现在建议');
     expect(
       body.evidenceRefs.some((ref: { exploreLink?: string }) =>
         ref.exploreLink?.startsWith(
@@ -269,6 +276,7 @@ describe('Relationships API', () => {
       .get(personId) as { data_quality: string; context_md: string } | undefined;
     expect(storedCard?.data_quality).toBe('generated');
     expect(storedCard?.context_md).toContain('Alice Radar');
+    expect(storedCard?.context_md).toContain('## 现在建议');
   });
 
   it('builds meeting people brief, assistant draft, and relationship graph', async () => {

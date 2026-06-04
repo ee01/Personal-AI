@@ -1,6 +1,6 @@
 # Memory Capture / 记忆捕捉
 
-_最后更新: 2026-05-30_
+_最后更新: 2026-06-04_
 
 ## 是什么
 
@@ -18,6 +18,7 @@ Memory Capture 是 Personal AI 的低打扰资料入库层。它负责把用户�
 - 划词关联记忆的 Personal AI icon 仍留在选区旁，只负责打开 Memory Lens 结果；入库入口与它分离，避免两个能力在同一个 button bar 里互相抢注意力。
 - 点击 `+ 入库` 后打开页内复核面板，显示选中文本预览、候选原因和可选备注；确认后保存为 `source_memory_capsule`。如果在复核面板按取消，不会保存，入口会保留。保存成功或发现重复保存时，toast 提供 `查看`，直接进入该 capsule 的详情页。
 - 页面有复制、深度滚动或足够停留等用户意图信号时，页面接近右上角显示同样的右侧半露出 `+ 入库`，点击后保存整页正文为 `webpage` capsule。
+- 页面中识别到图表、表格、canvas、SVG、figure 或高信息量 DOM 区域时，不新增独立“视觉记忆”入口，仍复用当前网页右侧 `+ 入库`。点击后先保存为 `sourceKind='visual_memory'` 的 source-memory capsule，再在成功提示里提供 `预览`；用户打开预览后可以在同一右侧窗体查看已入库信息并补备注。表格会在 `metadata.visualMemory.table` 中保存 headers、rows、rowCount、columnCount 和 truncated 状态；SVG 会在安全净化后保存 `metadata.visualMemory.svg.markup` 作为图形快照；source-memory 详情页负责按结构化表格或 SVG 预览展示。
 - 当整页候选达到更高置信度时会自动入库：例如复制页面内容且阅读到较深位置、浏览时间较久且阅读较深、或浏览时间非常久。自动入库不弹确认框，只在右上角显示 5 秒轻提示；默认只显示 Personal AI logo 和 `已存入记忆`，hover / focus 后展开显示原因和 `撤销` 按钮。用户 hover / focus 在提示上时暂停消失计时，移开或失焦后重新开始 5 秒倒计时。
 - 已有 Jira owner-authored learning 信号会继续写入原 ingest，同时自动生成 `jira_comment` capsule，作为用户对外输入的资料记忆。
 - 后端同时写入 `messages_raw.source_type='web'` 和 `chunks.source_type='web'`，让 Coverage Map、搜索和后续召回能看见这条网页记忆信号。
@@ -38,6 +39,32 @@ Memory Capture 不负责：
 - 不把普通浏览历史全量保存。
 - 不把“看过网页”直接推断成用户偏好或 confirmed profile。
 - 不做校准平台。保存、忽略、打开、引用等行为可以被 Ambient Calibration 消费，但校准层是横切反馈层。
+
+## Source Memory 与 Timeline 的边界
+
+`source-memory` 和 `timeline` 不是按“网页 / 消息”分，也不是互相替代关系。它们的边界是：这条来源是不是用户主动保存成一份资料证据。
+
+`source-memory` 是用户主动保存的资料证据 capsule。它强调“这份资料从哪里来、为什么保存、保存了哪段证据、以后什么场景应该想起”。典型对象包括网页全文、选区、视觉证据、表格证据、Jira 页面资料、用户明确保存的外部 AI 资料等。详情页应展示来源 URL、页面标题、capture reason、备注、证据锚点、视觉/表格预览、takeaways 和 future triggers。
+
+`timeline` 是普通原始记忆的时间线定位和上下文回放。它强调“这件事什么时候发生、前后还有什么、当时谁说了什么或系统记录了什么”。典型对象包括 `messages_raw`、`chunks`、meeting 转写片段、Glip 消息、Jira 活动、普通网页记忆信号等。时间轴适合查看附近消息、会议上下文和同一时间窗口内的其他记忆。
+
+跳转规则：
+
+- 如果召回结果引用的是用户主动保存过的资料证据，优先跳 `memory-exploring.html#/source-memory/:id`。
+- 如果召回结果引用的是普通 message / chunk / meeting / glip / jira 等原始记忆，优先跳 `memory-exploring.html#/timeline?...focus=...`。
+- 如果一个 source-memory capsule 同时写入了兼容搜索用的 `web` 记忆信号，source-memory 详情页可以展示“关联 timeline 记忆信号”，但主入口仍是 capsule 详情页。
+- 如果用户问“这份资料原文是什么、来源在哪、当时为什么保存”，走 source-memory；如果用户问“当时发生了什么、前后上下文是什么”，走 timeline。
+
+例子：
+
+| 场景 | 应该打开 | 原因 |
+| --- | --- | --- |
+| 用户在 RingCentral wiki 的 China ScrumMasters Org 页面点 `+ 入库` 保存表格 | `#/source-memory/:id` | 这是用户主动保存的表格证据，需要展示来源、保存原因、表格预览和备注 |
+| 用户在 Glip 里收到“明天 scrum master meeting 改到 3 点” | `#/timeline?...focus=message:<id>` | 这是普通消息记忆，用户更需要查看前后聊天上下文 |
+| 会议转写里有人说 “Nova Native Channel 现在 7.5 人” | `#/timeline?...focus=chunk:<id>` | 这是会议原始片段，重点是当时谁说、前后讨论了什么 |
+| 用户在 Jira issue 页面点 `+ 入库` 保存需求描述 | `#/source-memory/:id` | Jira 页面被用户主动保存成资料证据，详情页应保留 issue 来源和证据锚点 |
+| AI 回答引用“你之前保存过 China ScrumMasters Org 表格” | `#/source-memory/:id` | 用户要核对的是被保存的资料证据，而不是某个时间点附近的普通记忆 |
+| AI 回答引用“你上周和某人聊过这个” | `#/timeline?...focus=...` | 用户要回看的是当时的消息或会议上下文 |
 
 ## 授权分层
 
@@ -79,6 +106,7 @@ Memory Capture 不负责：
 - `source_memory_events.metadata_json.captureMode` 记录每次 save / resave / duplicate / dismiss 事件的来源模式。
 - 主动入库的 `messages_raw.importance` / `memory_metadata.importance` 高于自动入库。当前权重：`manual = 0.72`，`suggested = 0.64`，`auto = 0.58`；chunk 权重在 message 权重基础上略低。
 - 如果用户撤销自动入库后又手动保存同一资料，系统沿用原 capsule，但会刷新 summary、content preview、capture mode、metadata 和对应 `web` 记忆信号，避免详情页继续展示撤销前的旧备注。
+- 视觉证据当前走同一套 `source_memory_capsules` / `messages_raw` / `chunks` 写入链路，不单独创建 `visual_memory_*` 表或独立 API。视觉识别结果保存在 capsule metadata；source-memory 详情页读取 metadata 展示视觉区域信息、结构化表格预览和已保存的 SVG 图形快照。这样保存、备注、撤销、重复保存、搜索和 source 跳转都沿用现有 Memory Capture 语义。
 
 候选评分会参考：
 

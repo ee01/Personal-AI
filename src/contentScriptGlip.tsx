@@ -38,7 +38,7 @@ import {
 
 initContentScriptI18n(() => {
   void decorateFollowThreadMessages();
-  void renderGlipPendingScheduledMessages();
+  scheduleRenderGlipPendingScheduledMessages();
 });
 
 // =====================================================
@@ -3056,102 +3056,205 @@ function injectFollowThreadStyles() {
     }
 
     .pai-glip-pending-scheduled-list {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 8px;
-      padding: 8px 20px 12px;
+      display: block;
       box-sizing: border-box;
       width: 100%;
+      padding: 20px 18px 4px;
       clear: both;
+      font-family: inherit;
     }
 
     .pai-glip-pending-scheduled-item {
-      max-width: min(520px, 74%);
-      color: #374151;
-      font-family: inherit;
-      animation: pai-glip-pending-enter 240ms ease-out;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 9px;
+      width: 100%;
+      color: #1d2733;
+      transition: opacity 0.34s ease, transform 0.46s cubic-bezier(0.2, 0.9, 0.2, 1);
     }
 
-    .pai-glip-pending-scheduled-meta {
+    .pai-glip-pending-scheduled-item.is-arriving {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+
+    .pai-glip-pending-scheduled-item.is-arriving.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .pai-glip-pending-scheduled-avatar {
+      position: relative;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #fff6e6;
+      flex: 0 0 auto;
+      align-self: start;
+    }
+
+    .pai-glip-pending-scheduled-avatar::after {
+      content: "";
+      position: absolute;
+      inset: -2px;
+      border-radius: 50%;
+      border: 1px dashed rgba(96, 105, 120, 0.38);
+      pointer-events: none;
+    }
+
+    .pai-glip-pending-scheduled-avatar img {
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
+      display: block;
+      object-fit: cover;
+    }
+
+    .pai-glip-pending-scheduled-avatar.is-user-avatar {
+      background: #eef2f7;
+    }
+
+    .pai-glip-pending-scheduled-avatar.is-user-avatar img {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+    }
+
+    .pai-glip-pending-scheduled-body {
+      min-width: 0;
+    }
+
+    .pai-glip-pending-scheduled-head {
       display: flex;
-      justify-content: flex-end;
       align-items: center;
       gap: 6px;
-      margin: 0 10px 4px 0;
-      color: #6b7280;
-      font-size: 11px;
-      line-height: 1.2;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .pai-glip-pending-scheduled-sender {
+      color: #1a212e;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    .pai-glip-pending-scheduled-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 1px 7px;
+      border: 1px solid #f3d79b;
+      border-radius: 999px;
+      background: #fff6e6;
+      color: #b76e00;
+      font-size: 11.5px;
+      font-weight: 700;
+      line-height: 1.3;
       white-space: nowrap;
     }
 
-    .pai-glip-pending-scheduled-icon {
+    .pai-glip-pending-scheduled-tag svg {
       width: 12px;
       height: 12px;
-      border-radius: 3px;
-      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.96);
-      flex: 0 0 auto;
     }
 
     .pai-glip-pending-scheduled-bubble {
       position: relative;
-      border: 2px dashed rgba(75, 85, 99, 0.72);
-      border-radius: 18px 18px 5px 18px;
-      background: rgba(249, 250, 251, 0.92);
-      color: #374151;
-      padding: 9px 12px;
-      line-height: 1.45;
+      display: inline-flex;
+      align-items: flex-start;
+      justify-content: flex-start;
+      box-sizing: border-box;
+      width: auto;
+      max-width: min(360px, calc(100% - 8px));
+      min-width: 0 !important;
+      min-height: 0 !important;
+      height: auto !important;
+      margin-top: 4px;
+      border: 1.5px dashed rgba(96, 105, 120, 0.48);
+      border-radius: 8px;
+      background: rgba(249, 250, 252, 0.78);
+      color: #3b4759;
+      padding: 6px 10px;
+      line-height: 1.35;
       font-size: 14px;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      box-shadow: 0 3px 12px rgba(15, 23, 42, 0.08);
     }
 
-    .pai-glip-pending-scheduled-bubble::after {
-      content: "";
+    .pai-glip-pending-scheduled-content {
+      position: relative;
+      z-index: 1;
+      display: block;
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+    }
+
+    .pai-glip-pending-scheduled-ants {
       position: absolute;
-      right: -5px;
-      bottom: -2px;
-      width: 10px;
-      height: 10px;
-      border-right: 2px dashed rgba(75, 85, 99, 0.72);
-      border-bottom: 2px dashed rgba(75, 85, 99, 0.72);
-      border-bottom-right-radius: 10px;
-      background: rgba(249, 250, 251, 0.92);
-      transform: rotate(-8deg);
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .pai-glip-pending-scheduled-ants rect {
+      fill: none;
+      stroke: rgba(96, 105, 120, 0.48);
+      stroke-width: 1.5;
+      stroke-dasharray: 5 5;
+      animation: pai-glip-pending-ants 14s linear infinite;
+    }
+
+    @keyframes pai-glip-pending-ants {
+      to {
+        stroke-dashoffset: -520;
+      }
     }
 
     .pai-glip-pending-scheduled-actions {
       display: flex;
-      justify-content: flex-end;
-      margin-top: 4px;
+      gap: 4px;
+      margin-top: 3px;
     }
 
     .pai-glip-pending-scheduled-manage {
       border: 0;
+      border-radius: 6px;
       background: transparent;
-      color: #2563eb;
+      color: #0b6bcb;
       cursor: pointer;
       font: inherit;
-      font-size: 11px;
-      font-weight: 600;
-      padding: 2px 10px;
+      font-size: 12.5px;
+      font-weight: 700;
+      padding: 2px 6px;
     }
 
     .pai-glip-pending-scheduled-manage:hover {
-      color: #1d4ed8;
-      text-decoration: underline;
+      background: #eef4fd;
     }
 
-    @keyframes pai-glip-pending-enter {
-      from {
-        opacity: 0;
-        transform: translateY(12px) scale(0.98);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
+    .pai-glip-pending-scheduled-flight {
+      position: fixed;
+      z-index: 2147483646;
+      pointer-events: none;
+      padding: 7px 10px;
+      border-radius: 10px;
+      background: #fff;
+      color: #3b4759;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.42;
+      box-shadow: 0 18px 40px rgba(20, 31, 56, 0.22);
+      border: 1.5px dashed rgba(96, 105, 120, 0.45);
+      transform-origin: top left;
+      will-change: transform, opacity;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
   `;
   document.head.appendChild(style);
@@ -3237,6 +3340,28 @@ type GlipMessageMarkerRecord =
   GlipMessageMarkerCache['markersByChatId'][string][string][number];
 type GlipPendingScheduledRecord =
   NonNullable<GlipMessageMarkerCache['pendingScheduledByChatId']>[string][number];
+interface PendingScheduledAnimationDetail {
+  chatId?: string;
+  content?: string;
+  messageId?: string;
+  scheduledAt?: string;
+  composerRect?: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  };
+}
+
+interface PendingScheduledIdentity {
+  senderLabel: string;
+  avatarUrl?: string;
+}
+
+let pendingScheduledVisualsAttached = false;
+let pendingScheduledRenderRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingScheduledRenderInFlight = false;
+let pendingScheduledScrollSyncFrame: number | null = null;
 
 function getGlipAiMarkerLine(marker: GlipMessageMarkerRecord): string {
   const tooltip = marker.tooltip ? `：${truncateText(marker.tooltip, 90)}` : '';
@@ -3271,33 +3396,319 @@ function formatPendingScheduledTime(scheduledAt: string): string {
   }).format(date);
 }
 
-function getPendingScheduledContainer(): HTMLElement | null {
+function normalizePendingScheduledIdentityText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim();
+  if (!normalized || normalized === 'radar-poc') return '';
+  return normalized;
+}
+
+function getEmailLocalPart(value: unknown): string {
+  const normalized = normalizePendingScheduledIdentityText(value);
+  if (!normalized || !normalized.includes('@')) return '';
+  return normalized.split('@')[0]?.trim() || '';
+}
+
+function getPendingScheduledAvatarUrlFromDom(): string | undefined {
+  const roots = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '.topBarAvatar, [class*="topBarAvatar"], [data-test-automation-id*="avatar"], [data-name="avatar"]',
+    ),
+  );
+
+  for (const root of roots) {
+    const img = root.matches('img')
+      ? (root as HTMLImageElement)
+      : root.querySelector<HTMLImageElement>('img');
+    const src = img?.currentSrc || img?.src || img?.getAttribute('src') || '';
+    if (src.trim()) {
+      return src.trim();
+    }
+
+    const canvas = root.matches('canvas')
+      ? (root as HTMLCanvasElement)
+      : root.querySelector<HTMLCanvasElement>('canvas');
+    if (canvas?.width && canvas.height) {
+      try {
+        return canvas.toDataURL('image/png');
+      } catch {
+        // Cross-origin image backed canvases cannot be exported; keep looking.
+      }
+    }
+
+    const backgroundImage = window.getComputedStyle(root).backgroundImage;
+    const match = backgroundImage.match(/url\((['"]?)(.*?)\1\)/);
+    if (match?.[2]) {
+      return match[2].trim();
+    }
+  }
+
+  return undefined;
+}
+
+function getPendingScheduledSenderLabelFromLocalStorage(): string {
+  try {
+    const userInfo = getCurrentUserInfo();
+    return normalizePendingScheduledIdentityText(userInfo?.username);
+  } catch {
+    return '';
+  }
+}
+
+async function getPendingScheduledIdentity(): Promise<PendingScheduledIdentity> {
+  const avatarUrl = getPendingScheduledAvatarUrlFromDom();
+  const labelCandidates: unknown[] = [];
+
+  try {
+    const result = await chrome.storage.local.get(['userinfo', 'envConfig']);
+    const userinfo = result.userinfo || {};
+    const envConfig = (result.envConfig || {}) as Record<string, unknown>;
+    labelCandidates.push(
+      userinfo.fullName,
+      userinfo.name,
+      userinfo.displayName,
+      userinfo.username,
+      userinfo.userEmail,
+      getEmailLocalPart(userinfo.userEmail),
+      userinfo.email,
+      getEmailLocalPart(userinfo.email),
+      envConfig.USER_FULL_NAME,
+      envConfig.USER_DISPLAY_NAME,
+      envConfig.USER_NAME,
+      envConfig.USERNAME,
+      envConfig.CURRENT_USER_NAME,
+      envConfig.CURRENT_USERNAME,
+      envConfig.RINGCENTRAL_USER_NAME,
+      envConfig.RINGCENTRAL_USERNAME,
+      envConfig.OWNER_NAME,
+      envConfig.OWNER_USERNAME,
+    );
+  } catch (error) {
+    console.warn('读取待发送消息用户身份失败:', error);
+  }
+
+  labelCandidates.push(getPendingScheduledSenderLabelFromLocalStorage());
+
+  const senderLabel =
+    labelCandidates
+      .map(normalizePendingScheduledIdentityText)
+      .find(Boolean) || '我';
+
+  return {
+    senderLabel,
+    avatarUrl,
+  };
+}
+
+function getClockTinyIconSvg(): string {
+  return `
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="13" r="8"></circle>
+      <path d="M12 9v4l3 2"></path>
+      <path d="M9 2h6"></path>
+    </svg>
+  `;
+}
+
+function findPendingScrollContainer(element: HTMLElement): HTMLElement | null {
+  let current = element.parentElement;
+  while (current && current !== document.body) {
+    const style = window.getComputedStyle(current);
+    if (
+      current.scrollHeight > current.clientHeight + 8 &&
+      /(auto|scroll|hidden|overlay)/.test(style.overflowY)
+    ) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function getPendingMessageListContainer(lastCard: HTMLElement | undefined): HTMLElement | null {
+  const activeListbox = lastCard?.closest<HTMLElement>('[role="listbox"]');
+  if (activeListbox) {
+    return activeListbox;
+  }
+
+  const streamListbox = document.querySelector<HTMLElement>(
+    '#message-chat-stream-wrapper [role="listbox"]',
+  );
+  if (streamListbox) {
+    return streamListbox;
+  }
+
+  return null;
+}
+
+function getPendingScheduledTarget(): {
+  container: HTMLElement;
+  scrollContainer: HTMLElement | null;
+  mode: 'message-list' | 'before-composer' | 'fallback';
+} | null {
   const existingCards = Array.from(
     document.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'),
   );
   const lastCard = existingCards[existingCards.length - 1];
-  const fromLastCard =
-    lastCard?.closest<HTMLElement>(
-      '.conversation-list-content, .conversation-list, [class*="conversation-list"], [class*="ConversationList"]',
-    ) || lastCard?.closest<HTMLElement>('main, section, [role="main"]');
-  const fallback = document.querySelector<HTMLElement>(
-    '.conversation-list-content, .conversation-list, [class*="conversation-list"], [class*="ConversationList"], main, [role="main"]',
+
+  const messageList = getPendingMessageListContainer(lastCard);
+  if (messageList) {
+    return {
+      container: messageList,
+      scrollContainer: findPendingScrollContainer(messageList),
+      mode: 'message-list',
+    };
+  }
+
+  const composer = document.querySelector<HTMLElement>(
+    '[data-test-automation-id="message-compose"], [data-test-automation-id="message-input"], .message-input-main',
   );
-  return fromLastCard || fallback;
+  const composerParent = composer?.parentElement;
+  if (composerParent) {
+    return {
+      container: composerParent,
+      scrollContainer: findPendingScrollContainer(composerParent),
+      mode: 'before-composer',
+    };
+  }
+
+  const main = lastCard?.closest<HTMLElement>('main, section, [role="main"]') ||
+    document.querySelector<HTMLElement>('main, [role="main"]');
+  return main
+    ? {
+        container: main,
+        scrollContainer: findPendingScrollContainer(main),
+        mode: 'fallback',
+      }
+    : null;
 }
 
 function insertPendingScheduledListAtBottom(
-  container: HTMLElement,
+  target: NonNullable<ReturnType<typeof getPendingScheduledTarget>>,
   list: HTMLElement,
 ): void {
-  const composer = container.querySelector<HTMLElement>(
-    '[data-test-automation-id="message-compose"], [data-test-automation-id="message-input"], .message-input-main',
-  );
-  if (composer) {
-    container.insertBefore(list, composer);
+  if (target.mode === 'before-composer') {
+    const composer = target.container.querySelector<HTMLElement>(
+      '[data-test-automation-id="message-compose"], [data-test-automation-id="message-input"], .message-input-main',
+    );
+    if (composer) {
+      target.container.insertBefore(list, composer);
+      return;
+    }
+  }
+  target.container.appendChild(list);
+}
+
+function sizePendingScheduledAnts(root: ParentNode = document): void {
+  root
+    .querySelectorAll<SVGRectElement>('.pai-glip-pending-scheduled-ants rect')
+    .forEach((rect) => {
+      const bubble = rect.closest<HTMLElement>('.pai-glip-pending-scheduled-bubble');
+      if (!bubble) return;
+      const bounds = bubble.getBoundingClientRect();
+      rect.setAttribute('width', String(Math.max(0, bounds.width - 2)));
+      rect.setAttribute('height', String(Math.max(0, bounds.height - 2)));
+    });
+}
+
+function scrollPendingScheduledTargetToBottom(
+  target: NonNullable<ReturnType<typeof getPendingScheduledTarget>>,
+): void {
+  const scrollContainer = target.scrollContainer;
+  if (scrollContainer) {
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
     return;
   }
-  container.appendChild(list);
+  const stream = document.querySelector<HTMLElement>('#message-chat-stream-wrapper');
+  if (stream) {
+    stream.scrollTop = stream.scrollHeight;
+  }
+}
+
+function isPendingScheduledOwnNode(node: Node): boolean {
+  if (!(node instanceof HTMLElement)) return false;
+  return Boolean(
+    node.classList.contains('pai-glip-pending-scheduled-list') ||
+      node.classList.contains('pai-glip-pending-scheduled-flight') ||
+      node.closest('.pai-glip-pending-scheduled-list') ||
+      node.querySelector('.pai-glip-pending-scheduled-list'),
+  );
+}
+
+function isPendingScheduledTargetNearBottom(
+  target: NonNullable<ReturnType<typeof getPendingScheduledTarget>>,
+): boolean {
+  const scrollContainer = target.scrollContainer;
+  if (scrollContainer) {
+    return (
+      scrollContainer.scrollHeight -
+        scrollContainer.scrollTop -
+        scrollContainer.clientHeight <
+      160
+    );
+  }
+  const stream = document.querySelector<HTMLElement>('#message-chat-stream-wrapper');
+  if (!stream) return true;
+  return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 160;
+}
+
+function getPendingScheduledRenderSignature(
+  chatId: string,
+  messages: GlipPendingScheduledRecord[],
+): string {
+  return JSON.stringify({
+    chatId,
+    messages: messages.map((message) => ({
+      id: message.id,
+      messageId: message.messageId,
+      content: message.content,
+      scheduledAt: message.scheduledAt,
+      updatedAt: message.updatedAt,
+    })),
+  });
+}
+
+function setPendingScheduledListBottomVisibility(
+  list: HTMLElement,
+  target: NonNullable<ReturnType<typeof getPendingScheduledTarget>>,
+  forceVisible = false,
+): boolean {
+  const shouldShow = forceVisible || isPendingScheduledTargetNearBottom(target);
+  if (shouldShow && target.container.lastElementChild !== list) {
+    target.container.appendChild(list);
+  }
+  list.hidden = !shouldShow;
+  list.style.display = shouldShow ? '' : 'none';
+  return shouldShow;
+}
+
+function syncPendingScheduledListBottomVisibility(): void {
+  const lists = Array.from(
+    document.querySelectorAll<HTMLElement>('.pai-glip-pending-scheduled-list'),
+  );
+  if (lists.length === 0) return;
+
+  const target = getPendingScheduledTarget();
+  if (!target) {
+    lists.forEach((list) => {
+      list.hidden = true;
+      list.style.display = 'none';
+    });
+    return;
+  }
+
+  lists.forEach((list) => {
+    if (!target.container.contains(list)) return;
+    setPendingScheduledListBottomVisibility(list, target);
+  });
+}
+
+function schedulePendingScheduledScrollSync(): void {
+  if (pendingScheduledScrollSyncFrame !== null) return;
+  pendingScheduledScrollSyncFrame = window.requestAnimationFrame(() => {
+    pendingScheduledScrollSyncFrame = null;
+    syncPendingScheduledListBottomVisibility();
+  });
 }
 
 function openScheduledMessageFromPending(message: GlipPendingScheduledRecord): void {
@@ -3314,63 +3725,228 @@ function openScheduledMessageFromPending(message: GlipPendingScheduledRecord): v
     });
 }
 
-async function renderGlipPendingScheduledMessages(): Promise<void> {
+function shouldAnimatePendingMessage(
+  message: GlipPendingScheduledRecord,
+  animation?: PendingScheduledAnimationDetail,
+): boolean {
+  if (!animation) return false;
+  if (animation.messageId && message.messageId === animation.messageId) return true;
+  if (animation.scheduledAt && message.scheduledAt === animation.scheduledAt) {
+    return true;
+  }
+  return Boolean(animation.content && message.content === animation.content);
+}
+
+function animatePendingScheduledFlight(
+  animation: PendingScheduledAnimationDetail,
+  targetItem: HTMLElement,
+): void {
+  const source = animation.composerRect;
+  const targetBubble = targetItem.querySelector<HTMLElement>(
+    '.pai-glip-pending-scheduled-bubble',
+  );
+  if (!source || !targetBubble || !animation.content) return;
+
+  const targetRect = targetBubble.getBoundingClientRect();
+  if (targetRect.width <= 0 || targetRect.height <= 0) return;
+
   document
-    .querySelectorAll('.pai-glip-pending-scheduled-list')
+    .querySelectorAll('.pai-glip-pending-scheduled-flight')
     .forEach((element) => element.remove());
 
-  const chatId = getCurrentGlipChatId();
-  if (!chatId) return;
+  const flight = document.createElement('div');
+  flight.className = 'pai-glip-pending-scheduled-flight';
+  flight.textContent = truncateText(animation.content, 500);
+  flight.style.left = `${source.left}px`;
+  flight.style.top = `${source.top}px`;
+  flight.style.width = `${Math.min(source.width, 460)}px`;
+  document.body.appendChild(flight);
 
-  const markerCache = await getGlipMessageMarkerCache();
-  const pendingMessages =
-    markerCache?.pendingScheduledByChatId?.[chatId]?.filter(Boolean) || [];
-  if (pendingMessages.length === 0) return;
+  const dx = targetRect.left - source.left;
+  const dy = targetRect.top - source.top;
+  const animationPlayer = flight.animate(
+    [
+      { transform: 'translate(0px, 0px) scale(1)', opacity: 1, offset: 0 },
+      {
+        transform: `translate(${dx * 0.55}px, ${dy * 0.32}px) scale(0.99)`,
+        opacity: 1,
+        offset: 0.55,
+      },
+      {
+        transform: `translate(${dx}px, ${dy}px) scale(0.985)`,
+        opacity: 0,
+        offset: 1,
+      },
+    ],
+    {
+      duration: 620,
+      easing: 'cubic-bezier(0.22, 0.8, 0.2, 1)',
+      fill: 'forwards',
+    },
+  );
 
-  const container = getPendingScheduledContainer();
-  if (!container) return;
+  window.setTimeout(() => targetItem.classList.add('show'), 430);
+  animationPlayer.finished.finally(() => flight.remove()).catch(() => flight.remove());
+}
 
-  const list = document.createElement('div');
-  list.className = 'pai-glip-pending-scheduled-list';
-  list.setAttribute('aria-label', '待发送定时消息');
+async function renderGlipPendingScheduledMessages(
+  animation?: PendingScheduledAnimationDetail,
+): Promise<boolean> {
+  if (pendingScheduledRenderInFlight) {
+    return true;
+  }
+  pendingScheduledRenderInFlight = true;
 
-  pendingMessages.forEach((message) => {
-    const item = document.createElement('div');
-    item.className = 'pai-glip-pending-scheduled-item';
+  try {
+    const existingLists = Array.from(
+      document.querySelectorAll<HTMLElement>('.pai-glip-pending-scheduled-list'),
+    );
+    const chatId = getCurrentGlipChatId();
+    if (!chatId) {
+      existingLists.forEach((element) => element.remove());
+      return true;
+    }
 
-    const meta = document.createElement('div');
-    meta.className = 'pai-glip-pending-scheduled-meta';
+    const markerCache = await getGlipMessageMarkerCache();
+    const pendingMessages =
+      markerCache?.pendingScheduledByChatId?.[chatId]?.filter(Boolean) || [];
+    if (pendingMessages.length === 0) {
+      existingLists.forEach((element) => element.remove());
+      return true;
+    }
 
-    const icon = document.createElement('img');
-    icon.className = 'pai-glip-pending-scheduled-icon';
-    icon.alt = '';
-    icon.src = chrome.runtime.getURL('icons/icon48.png');
-    meta.appendChild(icon);
+    const target = getPendingScheduledTarget();
+    if (!target) return false;
 
-    const metaText = document.createElement('span');
-    metaText.textContent = `待发送 · ${formatPendingScheduledTime(message.scheduledAt)}`;
-    meta.appendChild(metaText);
-    item.appendChild(meta);
+    const signature = getPendingScheduledRenderSignature(chatId, pendingMessages);
+    const reusableList = existingLists.find(
+      (element) =>
+        element.dataset.pendingScheduledSignature === signature &&
+        target.container.contains(element),
+    );
+    if (reusableList && !animation) {
+      setPendingScheduledListBottomVisibility(reusableList, target);
+      return true;
+    }
 
-    const bubble = document.createElement('div');
-    bubble.className = 'pai-glip-pending-scheduled-bubble';
-    bubble.textContent = truncateText(message.content, 500);
-    item.appendChild(bubble);
+    const shouldScrollAfterRender =
+      Boolean(animation) || isPendingScheduledTargetNearBottom(target);
 
-    const actions = document.createElement('div');
-    actions.className = 'pai-glip-pending-scheduled-actions';
-    const manageButton = document.createElement('button');
-    manageButton.type = 'button';
-    manageButton.className = 'pai-glip-pending-scheduled-manage';
-    manageButton.textContent = '管理';
-    manageButton.addEventListener('click', () => openScheduledMessageFromPending(message));
-    actions.appendChild(manageButton);
-    item.appendChild(actions);
+    existingLists.forEach((element) => element.remove());
 
-    list.appendChild(item);
+    const list = document.createElement('div');
+    list.className = 'pai-glip-pending-scheduled-list';
+    list.dataset.pendingScheduledSignature = signature;
+    list.setAttribute('aria-label', '待发送定时消息');
+    const identity = await getPendingScheduledIdentity();
+    let animatedItem: HTMLElement | null = null;
+
+    pendingMessages.forEach((message) => {
+      const item = document.createElement('div');
+      item.className = 'pai-glip-pending-scheduled-item';
+      if (shouldAnimatePendingMessage(message, animation)) {
+        item.classList.add('is-arriving');
+        animatedItem = item;
+      }
+
+      const avatar = document.createElement('div');
+      avatar.className = 'pai-glip-pending-scheduled-avatar';
+      if (identity.avatarUrl) {
+        avatar.classList.add('is-user-avatar');
+      }
+      const icon = document.createElement('img');
+      icon.alt = '';
+      icon.src = identity.avatarUrl || chrome.runtime.getURL('icons/icon48.png');
+      avatar.appendChild(icon);
+      item.appendChild(avatar);
+
+      const body = document.createElement('div');
+      body.className = 'pai-glip-pending-scheduled-body';
+
+      const head = document.createElement('div');
+      head.className = 'pai-glip-pending-scheduled-head';
+      const sender = document.createElement('span');
+      sender.className = 'pai-glip-pending-scheduled-sender';
+      sender.textContent = identity.senderLabel;
+      head.appendChild(sender);
+
+      const tag = document.createElement('span');
+      tag.className = 'pai-glip-pending-scheduled-tag';
+      tag.innerHTML = `${getClockTinyIconSvg()}<span>定时 · ${escapeHtml(formatPendingScheduledTime(message.scheduledAt))} 发送</span>`;
+      head.appendChild(tag);
+      body.appendChild(head);
+
+      const bubble = document.createElement('div');
+      bubble.className = 'pai-glip-pending-scheduled-bubble';
+      bubble.innerHTML = `
+        <span class="pai-glip-pending-scheduled-content">${escapeHtml(truncateText(message.content, 500))}</span>
+      `;
+      body.appendChild(bubble);
+
+      const actions = document.createElement('div');
+      actions.className = 'pai-glip-pending-scheduled-actions';
+      const manageButton = document.createElement('button');
+      manageButton.type = 'button';
+      manageButton.className = 'pai-glip-pending-scheduled-manage';
+      manageButton.textContent = '管理';
+      manageButton.addEventListener('click', () => openScheduledMessageFromPending(message));
+      actions.appendChild(manageButton);
+      body.appendChild(actions);
+
+      item.appendChild(body);
+      list.appendChild(item);
+    });
+
+    insertPendingScheduledListAtBottom(target, list);
+    const isListVisible = setPendingScheduledListBottomVisibility(
+      list,
+      target,
+      Boolean(animation),
+    );
+    requestAnimationFrame(() => {
+      sizePendingScheduledAnts(list);
+      if (shouldScrollAfterRender && isListVisible) {
+        scrollPendingScheduledTargetToBottom(target);
+      }
+      if (animation && animatedItem) {
+        animatePendingScheduledFlight(animation, animatedItem);
+      }
+    });
+    return true;
+  } finally {
+    pendingScheduledRenderInFlight = false;
+  }
+}
+
+function scheduleRenderGlipPendingScheduledMessages(
+  animation?: PendingScheduledAnimationDetail,
+  retries = 6,
+): void {
+  if (pendingScheduledRenderRetryTimer) {
+    clearTimeout(pendingScheduledRenderRetryTimer);
+    pendingScheduledRenderRetryTimer = null;
+  }
+
+  void renderGlipPendingScheduledMessages(animation).then((rendered) => {
+    if (rendered || retries <= 0) return;
+    pendingScheduledRenderRetryTimer = setTimeout(() => {
+      scheduleRenderGlipPendingScheduledMessages(animation, retries - 1);
+    }, 450);
   });
+}
 
-  insertPendingScheduledListAtBottom(container, list);
+function attachPendingScheduledVisualListeners(): void {
+  if (pendingScheduledVisualsAttached) return;
+  pendingScheduledVisualsAttached = true;
+  window.addEventListener('resize', () => sizePendingScheduledAnts());
+  window.addEventListener('scroll', schedulePendingScheduledScrollSync, {
+    capture: true,
+    passive: true,
+  });
+  window.addEventListener('pai-glip-compose-scheduled-created', (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : undefined;
+    scheduleRenderGlipPendingScheduledMessages(detail as PendingScheduledAnimationDetail);
+  });
 }
 
 /**
@@ -3580,6 +4156,7 @@ export function initFollowThreadVisuals() {
 
   // 1. 注入样式
   injectFollowThreadStyles();
+  attachPendingScheduledVisualListeners();
 
   // 2. 初次装饰消息
   // eslint-disable-next-line no-undef
@@ -3590,7 +4167,7 @@ export function initFollowThreadVisuals() {
     });
   setTimeout(() => {
     void decorateFollowThreadMessages();
-    void renderGlipPendingScheduledMessages();
+    scheduleRenderGlipPendingScheduledMessages();
   }, 2000);
 
   // 3. 防抖函数，避免频繁执行
@@ -3601,7 +4178,7 @@ export function initFollowThreadVisuals() {
     }
     decorateDebounceTimer = setTimeout(() => {
       void decorateFollowThreadMessages();
-      void renderGlipPendingScheduledMessages();
+      scheduleRenderGlipPendingScheduledMessages();
       decorateDebounceTimer = null;
     }, delay);
   };
@@ -3613,6 +4190,9 @@ export function initFollowThreadVisuals() {
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
         for (const node of Array.from(mutation.addedNodes)) {
+          if (isPendingScheduledOwnNode(node)) {
+            continue;
+          }
           if (node instanceof HTMLElement) {
             // 检测新消息卡片
             if (
@@ -3672,6 +4252,9 @@ export function initFollowThreadVisuals() {
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
         for (const node of Array.from(mutation.addedNodes)) {
+          if (isPendingScheduledOwnNode(node)) {
+            continue;
+          }
           if (node instanceof HTMLElement) {
             // 检测主要内容区域被替换
             if (

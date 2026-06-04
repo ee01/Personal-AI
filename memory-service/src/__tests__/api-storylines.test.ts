@@ -341,6 +341,29 @@ describe('Storyline draft API', () => {
     );
   });
 
+  it('blocks draft generation when the source prep has no usable evidence refs', async () => {
+    const prepId = await createMeetingPrep();
+    db.prepare(
+      `UPDATE today_meeting_preps
+       SET evidence_refs_json = '[]'
+       WHERE id = ?`,
+    ).run(prepId);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/storylines/draft',
+      payload: {
+        sourceKind: 'today_meeting_prep',
+        prepId,
+        targetArtifact: 'speaker_notes',
+      },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('storyline_source_has_no_usable_evidence');
+    expect(mockGenerateJSON).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 404 when the source prep does not exist', async () => {
     const res = await app.inject({
       method: 'POST',

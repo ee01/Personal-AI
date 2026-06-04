@@ -1805,9 +1805,13 @@ export class ComposerGuardController {
   }
 
   private setTargetGlow(enabled: boolean): void {
-    this.activeSession?.target.element.classList.toggle(
+    const targetElement = this.activeSession?.target.element;
+    if (!targetElement) return;
+    const shouldHighlightTarget =
+      enabled && this.activeSession?.snapshot.contextType !== 'web_agent_prompt';
+    targetElement.classList.toggle(
       'pai-composer-guard-target-glow',
-      enabled,
+      shouldHighlightTarget,
     );
   }
 

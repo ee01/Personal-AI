@@ -23,7 +23,7 @@ export interface MigrationRecord {
 
 /**
  * Database wrapper around better-sqlite3 with migration support,
- * WAL mode, and optional sqlite-vec extension loading.
+ * configurable journal mode, and optional sqlite-vec extension loading.
  */
 export class Database {
   private db: SQLiteDatabase;
@@ -44,8 +44,10 @@ export class Database {
     // Open the database
     this.db = new BetterSqlite3(this.dbPath);
 
-    // Enable WAL mode for better concurrent read performance
-    this.db.pragma('journal_mode = WAL');
+    // WAL is the default for local/dev read concurrency. Some bind-mounted
+    // production filesystems are safer with DELETE + FULL.
+    this.db.pragma(`journal_mode = ${appConfig.sqliteJournalMode}`);
+    this.db.pragma(`synchronous = ${appConfig.sqliteSynchronous}`);
 
     // Enable foreign key enforcement
     this.db.pragma('foreign_keys = ON');

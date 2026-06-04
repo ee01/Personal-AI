@@ -1,16 +1,27 @@
-# Scene Memory Autopilot Findings
+# Scheduled Messages One-Click Init Findings
 
-## 2026-06-03 Initial Findings
+## 2026-06-04 Initial Findings
 
-- `docs/features/memory_system.md` already documents the 4-channel RecallEngine flow: vector, FTS, graph, time -> merge/dedup -> MMR rerank -> Top-K.
-- The same doc has a system-level reflection/action/confirm/notification flow. Autopilot should not replace it; it should consume pressure signals only when a current user scene needs them.
-- The right insertion point for the first slice is after `RecallEngine.recall(...)` returns candidates and before `ContextRecallService` returns displayable matches to Lens/Compose/Meeting/Today.
-- Existing Memory Lens doc already acknowledges a serious issue: backend marks high semantic candidates as `displayPriority=p1`, and a client `overlapAudit` was used as a stopgap because real RingCentral tests showed about 60% weak-overlap noise.
-- Implementation should move the stopgap direction into backend diagnostics: stronger scene anchor gates, duplicate/noise suppression, and explicit quiet reasons.
+- Randomly selected feature from `docs/features/index.md`: `定时消息一键初始化`.
+- Feature owner/capability: Scheduled Messages.
+- Source document: `docs/features/scheduled_messages_manager.md`.
+- Local Reminders list scan returned: `We`, `Next actions`, `Moives`, `Shopping List`, `家庭`, `人名记忆`, `宝宝需要办理`, `吃吃看`, `出门前检查`, `装修待办`, `Reading`, `菜头`, `Tasks`.
+- No visible Reminders list named `Personal AI`; there are no local Reminder items to incorporate or complete for this feature in this run.
+- The worktree has many unrelated dirty files from prior work. Treat all pre-existing changes as user/automation-owned and avoid reverting them.
 
-## 2026-06-03 Implementation Findings
+## Code And UX Findings
 
-- Current `ContextRecallService` already had substantial scene-aware ranking logic in the worktree: signal extraction, anchor overlap, suppression reasons, `displayPriority=hidden`, and source cluster merge. The implementation formalized this as a visible `autopilot` response contract instead of duplicating ranking logic.
-- The right user-facing contract is not only "top match is relevant"; it is "the service can explain why it did or did not interrupt." The response now reports `mode`, scene anchors, quiet reasons, shown/quieted/hidden counts, low-information count, source-excluded count, and duplicate merges.
-- The Lens UI does not need a new entry for this first slice. Reusing the current Rest/Hover/Card shell is correct as long as strong candidates must carry `whyRelevant`, and frontend filtering remains a final safety net.
-- The deterministic eval should run local `ContextRecallService` against synthetic cases so it validates the current worktree, while the existing `context-recall` suite continues to validate real RingCentral samples against a configured service endpoint.
+- `docs/features/scheduled_messages_manager.md` is current for the one-click setup behavior: it describes Sheet/App Script/Web App creation, authorization handoff, owner-only fallback when domain sharing fails, setup receipt metadata, and Config sync.
+- Current code path: `OneClickSetup` calls `SheetInitializer.createScheduledMessagesSheet()`, pauses for Apps Script authorization when needed, then calls `completeInitialization()` with `deploymentId`, `messagesSheetId`, and `logsSheetId` metadata.
+- Existing verifier coverage: `tools/verify-scheduled-messages-one-click-setup.ts` asserts no `anyone` sharing fallback, setup warnings, and Config persistence; `tools/verify-scheduled-messages-one-click-setup-e2e.mjs` checks the initial uninitialized setup screen.
+- UX gap: after successful phase-two initialization, `ScheduledMessagesManager.handleInitializationComplete()` only reloads after 2 seconds. The initialized page does not surface a durable post-reload setup receipt, even though the setup flow already has useful Sheet/script/deployment/trigger/warning metadata.
+- Low-decision implementation slice: store a compact one-time setup receipt in `chrome.storage.local` before reload, then show it through the existing `configSyncNotice` banner after the initialized manager loads.
+
+## External Reference Findings
+
+- Google Apps Script installable triggers run under the creator account and can be time-driven as frequently as every minute, but trigger timing can be randomized within a window. This supports keeping setup receipts clear about trigger ownership and avoiding exact-time guarantees.
+- Google Apps Script `ClockTriggerBuilder.nearMinute()` is approximate and uses a random minute if omitted; queue/compensation UI should keep explaining timing tolerance.
+- Google Drive permission docs model sharing as explicit `type` and `role`; the current code's domain-writer-only attempt and owner-only fallback are aligned with privacy-sensitive Sheets.
+- Twilio scheduled messaging exposes scheduled/canceled status and send-time failures, supporting visible post-setup and run-state receipts rather than treating creation success as delivery success.
+- Zapier and Airtable automation docs emphasize run history/status and per-step troubleshooting; this supports showing the user what setup steps were completed and what remains actionable.
+- Trigger-action programming papers report that end users misinterpret rule behavior and benefit from simulation/foreseeability/debug cues; a concise setup receipt is a small but direct improvement to the mental model.

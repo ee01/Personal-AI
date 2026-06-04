@@ -1,6 +1,6 @@
 # 定时消息统一管理功能
 
-*最后更新: 2026-05-30*
+*最后更新: 2026-06-04*
 
 ## 功能概述
 
@@ -28,6 +28,7 @@
 - 授权完成后设置分钟触发器、添加示例消息并保存 Config
 - 维护表默认不会静默开放为“知道链接的任何人可编辑”；域内共享失败时保持仅创建者可编辑，并在初始化收据里提示用户手动分享给指定成员、群组或目标受众
 - 初始化收据会保留并展示维护表子表定位和 Web App deployment；授权后保存 Config 时使用同一批元数据，避免新建表后还要靠后续同步修复 Messages / Logs 链接或 App Script 升级目标
+- 授权后完成初始化并刷新到管理页时，会显示一次性完成收据，概括 Sheet、子表定位、Deployment、Script、触发器状态和共享/权限注意事项；关闭后不再重复打扰
 - 通常 10-15 秒完成自动步骤；如果需要开启 Apps Script API 或完成授权，会停在可恢复的下一步
 
 ### 2. 统一数据模型
@@ -162,7 +163,7 @@
 3. 点击"🚀 一键生成维护表"按钮
 4. 等待系统创建维护表、Apps Script 项目和 Web App；页面会显示初始化收据，包括 Messages / Logs 子表定位和 Web App deployment
 5. 打开授权页面并授权 Apps Script，然后回到管理页继续初始化
-6. 初始化完成后，分钟触发器、示例消息和 Config 会写入维护表；如果组织内共享失败，维护表仍保持仅创建者可编辑
+6. 初始化完成后，分钟触发器、示例消息和 Config 会写入维护表；刷新到管理页后会显示一次性完成收据，如果组织内共享失败，维护表仍保持仅创建者可编辑
 7. 一分钟后，您将收到测试消息
 
 ### 创建定时消息
@@ -705,6 +706,7 @@ A:
 - 2026-05-30：App Script 自动更新在 Project History 已满或接近上限时增加“重新检查”，清理版本后无需刷新管理页即可恢复升级判断。
 - 2026-05-31：管理页“同步”现在先刷新 Sheet Config，再加载 Messages；当 Sheet Config 比本机更新时会自动应用到本机缓存并展示同步来源，避免跨设备更新后的 App Script / Bot / Timeline 配置继续被旧缓存遮蔽。该调整参考 Airtable Sync 的源/字段/故障排查、Zapier 连接测试/重连，以及 trigger-action programming 研究中对心智模型和可调试性的要求。
 - 2026-05-31：删除确认补充消息 ID、状态、目标和执行时间，托管 JiraAutomation 删除恢复 trigger 时改为按本机时区换算 UTC，并在恢复前置检查失败时保留本地行，而不是假设固定 UTC+8 或删除后再补救。这个调整参考 Slack / Gmail / Twilio 对已排程消息的取消、删除和状态边界，以及 end-user debugging 研究中“操作前看清对象和后果”的要求。
+- 2026-06-04：一键初始化完成后会把授权前后的 Sheet / Script / Deployment / 子表 / 触发器信息压成一次性完成收据，在刷新后的管理页展示；这延续了 Zapier / Airtable 对自动化运行状态和排障路径的可见性，也避免用户只看到页面刷新而不知道哪些步骤已经成功。
 
 ## 未来规划
 
@@ -750,6 +752,8 @@ A:
 - [Quartz misfire instructions](https://www.quartz-scheduler.net/documentation/quartz-4.x/tutorial/more-about-triggers.html)：成熟调度器会显式建模 missed fire，补偿策略应可见而不是靠用户猜
 - [Twilio Message Scheduling](https://www.twilio.com/docs/messaging/features/message-scheduling)：排程消息需要明确状态、可取消标识和发送前校验，说明恢复路径要暴露目标时间和后续状态
 - [Zapier troubleshooting](https://help.zapier.com/hc/en-us/articles/8496037690637-How-to-troubleshoot-errors-in-Zaps)：成熟自动化产品会区分 errored / on hold / scheduled retry 等运行状态，并提供 replay / recovery 路径，支持把队列健康提示做成可直接处理的恢复入口
+- [Zapier Zap history](https://help.zapier.com/hc/en-us/articles/8496291148685-View-and-manage-your-Zap-history)：自动化平台会让用户按状态和步骤查看 run 结果，支持一键初始化后用简短收据保留完成证据
+- [Airtable automation troubleshooting](https://support.airtable.com/docs/troubleshooting-airtable-automations)：自动化调试应能回到 trigger / action 测试和 run history 状态，支持把初始化拆成可解释步骤
 - [Slack scheduled messages API](https://docs.slack.dev/messaging/sending-and-scheduling-messages/)：已排程消息需要可列出、删除，更新时可用删除后重建策略
 - [Slack send and read messages](https://slack.com/help/articles/201457107-Send-and-read-messages-in-Slack)：Drafts/Scheduled 集中入口支持编辑、改期、发送、取消或删除
 - [Slack recurring messages workflow](https://slack.com/help/articles/23814859584659-Automations--Schedule-recurring-messages-in-a-channel)：周期消息应把开始时间、频率、发送目标和正文配置放在同一个可编辑 workflow 中
@@ -758,6 +762,7 @@ A:
 - [Google Chat schedule messages](https://support.google.com/chat/answer/16059642?co=GENIE.Platform%3DDesktop&hl=en)：Drafts 入口集中管理待发送消息，并显示发送人与接收人时区
 - [Analyzing and Predicting Task Reminders](https://www.microsoft.com/en-us/research/publication/analyzing-predicting-task-reminder/)：提醒时间会受创建时间和文本内容影响，调度系统要让用户能明确控制实际触发日历
 - [Intelligent Notification Systems survey](https://arxiv.org/abs/1711.10171)：通知系统应结合时间、上下文和偏好提高接收时机的可接受度
+- [Empowering End Users in Debugging Trigger-Action Rules](https://iris.polito.it/retrieve/handle/11583/2724318/231604/euddebug.pdf)：非程序员容易误解 trigger-action 规则，调试线索和运行前/运行后可见性有助于建立正确心智模型
 - [Snooze! Investigating the User-Defined Deferral of Mobile Notifications](https://doi.org/10.1145/3229434.3229436)：用户常把人和事件相关通知推迟到当天稍后或次日早上，说明“默认队列”和清晰改期入口比隐藏失败更符合实际使用
 - [Iqbal & Bailey CHI 2007 interruption timing](https://www.interruptions.net/literature/Iqbal-CHI07.pdf)：不合适的通知时机会增加恢复成本，调度工具应让发送时间和上下文更可预期
 - [The Update Framework specification](https://theupdateframework.github.io/specification/v1.0.17/)：自动更新系统需要明确目标、完整性和信任边界；本功能用版本端点、deployment 匹配和项目归属预检降低误更新风险

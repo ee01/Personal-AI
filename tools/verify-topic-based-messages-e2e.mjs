@@ -202,6 +202,67 @@ function createUnreadStickyTopicDetail() {
   };
 }
 
+function createLegacyContextDeepLinkTopic() {
+  return {
+    id: 'topic-legacy-context-link',
+    type: 'Topic',
+    name: 'Legacy Context Deep Link Topic',
+    description: 'Imported context message can be targeted without a parent id.',
+    importance: 0.78,
+    accessCount: 0,
+    mentionCount: 1,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    properties: [],
+    statistic: {
+      conversations: 1,
+      projects: 0,
+      participants: 2,
+      resources: 0,
+    },
+    readStatus: {
+      isRead: false,
+      unreadCount: 1,
+      lastReadTime: null,
+      lastUpdateTime: now - 30_000,
+    },
+    unreadDiscussions: [
+      {
+        message_id: 'legacy-context-snake',
+        text: 'Legacy snake case context needs review',
+      },
+    ],
+    recentDataDetails: {
+      conversations: [
+        {
+          isRead: true,
+          sender: 'Ada',
+          groupName: 'Imported Archive',
+          datetime: now - 30_000,
+          summary: 'Parent discussion has no stable id',
+          contextMessages: [
+            {
+              message_id: 'legacy-context-snake',
+              isRead: false,
+              sender: 'Ben',
+              content: 'Legacy snake case context needs review',
+              datetime: now - 45_000,
+            },
+          ],
+        },
+      ],
+      webpages: [],
+      resources: [],
+      projects: [],
+      people: [],
+      topics: [],
+      jiraTickets: [],
+      cooccurringEntities: [],
+    },
+  };
+}
+
 function createMuteReasonTopic() {
   return {
     id: 'topic-mute-reason',
@@ -455,6 +516,11 @@ try {
       return;
     }
 
+    if (pathname.endsWith('/entities/topic-legacy-context-link')) {
+      await route.fulfill(jsonResponse(createLegacyContextDeepLinkTopic()));
+      return;
+    }
+
     if (
       pathname.endsWith('/entities') &&
       new URL(url).searchParams.get('type') === 'Topic'
@@ -585,6 +651,51 @@ try {
       .count(),
     0,
     'unsafe-only candidates should never render a clickable source link',
+  );
+
+  await page.goto(
+    `chrome-extension://${extensionId}/memory-exploring.html#/topic/topic-legacy-context-link?readFilter=unread&messageId=legacy-context-snake`,
+    { waitUntil: 'domcontentloaded', timeout: 15000 },
+  );
+
+  await page
+    .getByText('Legacy Context Deep Link Topic')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('.conversation-summary', {
+      hasText: 'Parent discussion has no stable id',
+    })
+    .waitFor({ timeout: 10000 });
+  const legacyContextItem = page.locator(
+    '[data-conversation-id="conversation-0"] .context-item',
+    {
+      hasText: 'Legacy snake case context needs review',
+    },
+  );
+  await legacyContextItem
+    .locator('.targeted-message-badge', {
+      hasText: '链接定位',
+    })
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await legacyContextItem.evaluate((node) =>
+      node.classList.contains('targeted'),
+    ),
+    true,
+    'messageId deep links should use a render-id fallback when the parent discussion has no id',
+  );
+  await page
+    .locator('.message-focus-notice', {
+      hasText: '已定位到链接里的上下文消息，并同步为已读。',
+    })
+    .waitFor({ timeout: 10000 });
+  await page.waitForFunction(
+    () =>
+      !document
+        .querySelector('[data-conversation-id="conversation-0"] .context-item')
+        ?.classList.contains('unread'),
+    null,
+    { timeout: 10000 },
   );
 
   await page.goto(

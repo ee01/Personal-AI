@@ -74,6 +74,14 @@ type TabId =
   | 'capture-log';
 
 type PanelSurfaceMode = 'embedded' | 'side-panel' | 'window';
+type RingCentralCcEnableFeedback =
+  | 'idle'
+  | 'enabling'
+  | 'enabled'
+  | 'already-active'
+  | 'clicked'
+  | 'not-found'
+  | 'failed';
 type ActionReviewFilter =
   | 'open'
   | 'needs-info'
@@ -1117,6 +1125,62 @@ const shellStyle = `
     padding: 12px 16px 14px;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
+  }
+
+  .rc-cc-card {
+    margin: 8px 12px 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(64, 192, 255, 0.28);
+    background: rgba(64, 192, 255, 0.09);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .rc-cc-card-copy {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .rc-cc-card-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .rc-cc-card-body {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--text-dim);
+  }
+
+  .rc-cc-card button {
+    flex: 0 0 auto;
+    border: 1px solid rgba(64, 192, 255, 0.36);
+    background: rgba(64, 192, 255, 0.14);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .rc-cc-card button:disabled {
+    cursor: default;
+    opacity: 0.68;
+  }
+
+  .rc-cc-feedback {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--accent-light);
+  }
+
+  .rc-cc-feedback.warn {
+    color: #ffd43b;
   }
 
   .catchup-btn {
@@ -2544,6 +2608,8 @@ function MeetingSidePanel() {
   const [captureGuideFeedback, setCaptureGuideFeedback] = useState<
     'shown' | 'failed' | null
   >(null);
+  const [ringCentralCcFeedback, setRingCentralCcFeedback] =
+    useState<RingCentralCcEnableFeedback>('idle');
   const [meetingPrepHandoff, setMeetingPrepHandoff] =
     useState<MeetingPrepHandoff | null>(null);
   const [meetingPrepActionFeedback, setMeetingPrepActionFeedback] = useState<
@@ -3472,6 +3538,41 @@ function MeetingSidePanel() {
     await refresh();
   };
 
+  const enableRingCentralClosedCaptions = async () => {
+    if (ringCentralCcFeedback === 'enabling') return;
+    setRingCentralCcFeedback('enabling');
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'MEETING_PILOT_ENABLE_RINGCENTRAL_CC',
+        tabId: session.tabId,
+        meetingId: session.meetingId,
+      })) as
+        | {
+            success?: boolean;
+            status?: string;
+            error?: string;
+          }
+        | undefined;
+      if (response?.success) {
+        setRingCentralCcFeedback(
+          response.status === 'already_active' ? 'already-active' : 'enabled',
+        );
+        await refresh();
+        return;
+      }
+      if (
+        response?.status === 'more_not_found' ||
+        response?.status === 'caption_item_not_found'
+      ) {
+        setRingCentralCcFeedback('not-found');
+        return;
+      }
+      setRingCentralCcFeedback(response?.status === 'clicked' ? 'clicked' : 'failed');
+    } catch {
+      setRingCentralCcFeedback('failed');
+    }
+  };
+
   const saveSettings = async () => {
     const currentConfig = await getEnvConfig();
     await chrome.runtime.sendMessage({
@@ -3621,6 +3722,27 @@ function MeetingSidePanel() {
         (chunk) => chunk.source === 'ringcentral_transcript',
       ),
   );
+  const hasRingCentralTranscriptChunk = session.transcript.some(
+    (chunk) => chunk.source === 'ringcentral_transcript',
+  );
+  const shouldShowRingCentralCcPrompt =
+    activeTab === 'speech' &&
+    session.tier?.activeTier === 'ringcentral_transcript' &&
+    (!session.webTranscript?.active || !hasRingCentralTranscriptChunk);
+  const ringCentralCcFeedbackText =
+    ringCentralCcFeedback === 'enabling'
+      ? '正在打开 RingCentral 的 More 菜单。'
+      : ringCentralCcFeedback === 'enabled'
+      ? '已请求开启 RC CC，字幕出现后会作为低置信预览读取。'
+      : ringCentralCcFeedback === 'already-active'
+      ? 'RC CC 已经开启。'
+      : ringCentralCcFeedback === 'clicked'
+      ? '已点击 CC 菜单项，等待 RingCentral 更新状态。'
+      : ringCentralCcFeedback === 'not-found'
+      ? '没找到 CC 菜单项。请手动点 RingCentral More → Enable closed captions。'
+      : ringCentralCcFeedback === 'failed'
+      ? '没能自动开启。请确认会议页仍打开，再手动从 More 菜单开启。'
+      : '';
   const showCaptureStartCard = !isEnhancedCaptureActive && activeTab === 'live';
   const captureStartTitle = !session.readiness.canStartCapture
     ? '先修复配置，再从 popup 开始'
@@ -4158,6 +4280,40 @@ function MeetingSidePanel() {
             >
               <TierBadge tier={session.tier} />
             </div>
+            {shouldShowRingCentralCcPrompt ? (
+              <div className="rc-cc-card">
+                <div className="rc-cc-card-copy">
+                  <div className="rc-cc-card-title">
+                    使用 RingCentral CC 提高实时预览
+                  </div>
+                  <div className="rc-cc-card-body">
+                    会议页的 CC 开启后，发言会先显示低置信预览；最终发言仍优先使用
+                    RingCentral Transcript。
+                  </div>
+                  {ringCentralCcFeedbackText ? (
+                    <div
+                      className={`rc-cc-feedback ${
+                        ringCentralCcFeedback === 'failed' ||
+                        ringCentralCcFeedback === 'not-found'
+                          ? 'warn'
+                          : ''
+                      }`}
+                    >
+                      {ringCentralCcFeedbackText}
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  disabled={ringCentralCcFeedback === 'enabling'}
+                  onClick={() => void enableRingCentralClosedCaptions()}
+                >
+                  {ringCentralCcFeedback === 'enabling'
+                    ? '开启中'
+                    : '启用 RC CC'}
+                </button>
+              </div>
+            ) : null}
             <SpeechTab session={session} refresh={refresh} />
           </>
         ) : null}

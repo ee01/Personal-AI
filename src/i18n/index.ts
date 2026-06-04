@@ -60,7 +60,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'options.sections.standardAgent': '标准Agent系统设置',
     'options.sections.importExport': '配置导入/导出',
     'options.language.description':
-      '界面语言会立即保存到 Chrome 本地存储，不依赖下方保存配置按钮。',
+      '界面语言会立即保存到 Chrome 本地存储，并同步为用户画像里的语言偏好，不依赖下方保存配置按钮。',
     'options.promptConfig.description':
       '集中管理会进入消息分析、项目分析和会前上下文的长期偏好，并查看本轮实际注入回执。',
     'options.promptConfig.open': '打开自定义提示词',
@@ -108,8 +108,8 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'memoryExplorer.nav.dreams': '梦境重放',
     'memoryExplorer.nav.reports': '周报报告',
     'memoryExplorer.nav.reflection': '自我反思',
-    'memoryExplorer.nav.rehearsal': 'Rehearsal',
-    'memoryExplorer.nav.rehearsalSubnote': '未来场景预演',
+    'memoryExplorer.nav.rehearsal': '场景预演',
+    'memoryExplorer.nav.rehearsalSubnote': 'Rehearsal',
     'memoryExplorer.nav.decisions': '决策中心',
     'memoryExplorer.nav.storylines': '故事线',
     'memoryExplorer.nav.storylinesSubnote': '分享 / 汇报草稿',
@@ -218,7 +218,7 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'options.sections.standardAgent': 'Standard Agent Settings',
     'options.sections.importExport': 'Import / Export Config',
     'options.language.description':
-      'The UI language is saved to Chrome local storage immediately and does not depend on the config save button below.',
+      'The UI language is saved to Chrome local storage immediately and synced as the user profile language preference. It does not depend on the config save button below.',
     'options.promptConfig.description':
       'Manage long-term preferences used by message analysis, project analysis, and meeting context, with receipts for what is actually injected.',
     'options.promptConfig.open': 'Open Custom Prompts',

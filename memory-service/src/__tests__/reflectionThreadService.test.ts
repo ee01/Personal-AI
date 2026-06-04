@@ -29,6 +29,7 @@ describe('ReflectionThreadService', () => {
     db.prepare('DELETE FROM reflection_threads').run();
     db.prepare('DELETE FROM entity_properties').run();
     db.prepare('DELETE FROM entities').run();
+    db.prepare('DELETE FROM user_profile_items').run();
   });
 
   afterEach(() => {
@@ -342,6 +343,59 @@ describe('ReflectionThreadService', () => {
     );
     expect(rehearsalLink?.role).toBe('rehearsal_candidate');
     expect(rehearsalLink?.previewTitle).toContain('场景预演');
+  });
+
+  it('passes resolved user language preference into reflection worker', async () => {
+    const currentTime = now();
+    db.prepare(
+      `INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, evidence_refs, source_kind,
+         confidence, user_confirmed, status, salience_score, mention_count,
+         last_seen, valid_from, valid_to, created_at, updated_at, fingerprint)
+       VALUES
+        ('profile-language-1', 'preference', 'language_preference',
+         '回复和生成面向用户的内容时使用中文', '[]', 'explicit',
+         0.95, 1, 'active', 0.9, 1, ?, NULL, NULL, ?, ?, 'language-zh')`,
+    ).run(currentTime, currentTime, currentTime);
+
+    const thread = repo.upsertThread({
+      topicKey: 'entity:colin-liu',
+      title: '实体反思: Colin Liu',
+      status: 'active',
+      priority: 8,
+      salience: 0.88,
+      openQuestions: ['下次和 Colin 聊天要提醒什么？'],
+      nextReflectionAt: currentTime,
+    });
+
+    vi.spyOn(ReflectionResearcher.prototype, 'plan').mockResolvedValue([]);
+    const workerSpy = vi
+      .spyOn(ReflectionWorker.prototype, 'generate')
+      .mockResolvedValue({
+        summary: '已按用户语言偏好生成反思。',
+        discoveries: [],
+        openQuestions: [],
+        actionProposals: [],
+        rehearsalCandidates: [],
+        markdownBody: '',
+      });
+
+    await new ReflectionThreadService(db).runReflection(thread.id, {
+      runType: 'manual_revisit',
+      triggerType: 'manual',
+      force: true,
+    });
+
+    expect(workerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: thread.id }),
+      expect.any(Array),
+      'manual',
+      expect.objectContaining({
+        code: 'zh-CN',
+        label: 'Simplified Chinese',
+        source: 'user_profile_items.language_preference',
+      }),
+    );
   });
 
   it('updates an existing reflection-sourced rehearsal candidate instead of duplicating it', async () => {

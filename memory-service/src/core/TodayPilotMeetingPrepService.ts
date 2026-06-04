@@ -811,6 +811,7 @@ export class TodayPilotMeetingPrepService {
     );
     const storylineOpportunity = normalizeStorylineOpportunity(
       response.storylineOpportunity,
+      { evidenceRefs: evidence },
     );
     const llmUsage: Record<string, unknown> = { ...(response.usage ?? {}) };
     if (storylineOpportunity) {

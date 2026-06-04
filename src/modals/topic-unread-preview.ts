@@ -1,7 +1,12 @@
 const DISCUSSION_ID_KEYS = [
   'messageId',
+  'message_id',
   'conversationId',
+  'conversation_id',
   'sourceMessageId',
+  'source_message_id',
+  'externalMessageId',
+  'external_message_id',
   'id',
 ] as const;
 

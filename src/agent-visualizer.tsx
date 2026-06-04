@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ThoughtStep } from './agentThinking';
 import {
   buildAgentRunDiagnosticPacket,
@@ -52,6 +52,15 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
   });
   const pendingApprovalActions = buildPendingApprovalActions(thoughtProcess);
   const runReviewSeverity = getAgentRunReviewSeverity(runReviewItems);
+  const runDiagnosticPacket = useMemo(
+    () =>
+      thoughtProcess.length === 0
+        ? null
+        : buildAgentRunDiagnosticPacket(thoughtProcess, {
+            isProcessing,
+          }),
+    [thoughtProcess, isProcessing],
+  );
   const runReviewLabel: Record<typeof runReviewSeverity, string> = {
     ok: '正常',
     info: '提示',
@@ -216,12 +225,9 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
     );
 
   const handleCopyRunDiagnosticPacket = async () => {
-    if (thoughtProcess.length === 0) return;
+    if (!runDiagnosticPacket) return;
 
-    const diagnosticPacket = buildAgentRunDiagnosticPacket(thoughtProcess, {
-      isProcessing,
-    });
-    const diagnosticPacketText = JSON.stringify(diagnosticPacket, null, 2);
+    const diagnosticPacketText = JSON.stringify(runDiagnosticPacket, null, 2);
     try {
       const copied = await copyTextToClipboard(diagnosticPacketText);
       if (!copied) {
@@ -297,7 +303,14 @@ const AgentVisualizer: React.FC<AgentVisualizerProps> = ({ thoughtProcess, isPro
             <div className="agent-run-review-header">
               <div>
                 <h4>运行检查</h4>
-                <p>先处理失败、阻断和预算耗尽，再阅读完整时间线。</p>
+                <p>
+                  先处理失败、阻断和预算耗尽，再阅读完整时间线。
+                  {runDiagnosticPacket && (
+                    <span className="agent-run-trace-span-count">
+                      Trace spans {runDiagnosticPacket.traceSpans.length}
+                    </span>
+                  )}
+                </p>
               </div>
               <div className="agent-run-review-actions">
                 <button

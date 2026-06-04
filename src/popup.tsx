@@ -6,6 +6,7 @@ import { getEnvConfig } from './utils';
 import { getGoogleAuthToken } from './utils/googleAuth';
 import {
   getMemoryServiceClient,
+  type AmbientCalibrationEvidenceRef,
   type DayPilotCard,
   type DayPilotContextPackResponse,
 } from './services/MemoryServiceClient';
@@ -643,6 +644,72 @@ function formatTodayPilotContextPackReceipt(
   return `已复制${provider}上下文包（${details.join('，')}）`;
 }
 
+function hashTodayPilotContextPackBody(body: string): string {
+  let hash = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    hash = ((hash << 5) - hash + body.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function todayPilotContextPackEvidenceRefs(
+  pack: DayPilotContextPackResponse,
+): AmbientCalibrationEvidenceRef[] {
+  return pack.evidenceRefs.slice(0, 12).map((ref) => ({
+    id: `${ref.sourceKind}:${ref.sourceId}`,
+    type: ref.sourceKind,
+    title: ref.title,
+    sourceLabel: ref.sourceKind,
+    role: 'used',
+  }));
+}
+
+function submitTodayPilotContextCopyTrace(
+  card: DayPilotCard,
+  pack: DayPilotContextPackResponse,
+): void {
+  void getMemoryServiceClient()
+    .submitAmbientCalibrationTrace({
+      surface: 'today_pilot',
+      sceneKey: `today_pilot:popup:${card.missionId || card.id}`,
+      sourceRequestId: `context-pack:${card.missionId || card.id}:${
+        pack.targetProvider
+      }`,
+      action: 'copied_context',
+      strength: 'strong',
+      polarity: 'positive',
+      evidenceRefs: todayPilotContextPackEvidenceRefs(pack),
+      redactedDiff: {
+        rawTextStored: false,
+        bodyHash: hashTodayPilotContextPackBody(pack.bodyMd),
+        bodyLength: pack.bodyMd.length,
+        evidenceCount: pack.evidenceRefs.length,
+        redactionApplied: pack.redactionApplied,
+        truncated: pack.truncated,
+      },
+      privacyClass:
+        pack.redactionApplied || pack.redactionPreview.length > 0
+          ? 'sensitive_redacted'
+          : 'normal',
+      metadata: {
+        nativeSurface: 'popup_top_three',
+        cardId: card.id,
+        missionId: card.missionId,
+        cardType: card.cardType,
+        targetProvider: pack.targetProvider,
+        providerProfile: pack.providerProfile.id,
+        includeSensitive: false,
+        usageIntent: pack.usageIntent?.kind || 'external_ai_context',
+        contextBoundary:
+          pack.usageIntent?.boundary || 'context_only_not_execution',
+      },
+      createdAt: Date.now(),
+    })
+    .catch((error) => {
+      console.warn('[popup] Today Pilot context copy trace failed:', error);
+    });
+}
+
 function isTodayPilotExternalExecutionCard(card: DayPilotCard): boolean {
   if (card.cardType !== 'decision_check') return false;
 
@@ -1252,15 +1319,13 @@ const Popup = () => {
     }
     setTodayPilotCopyingMissionId(card.missionId);
     try {
-      const response =
-        await getMemoryServiceClient().renderTodayPilotContextPack(
-          card.missionId,
-          {
-            targetProvider: 'generic',
-            includeSensitive: false,
-          },
-        );
+      const client = getMemoryServiceClient();
+      const response = await client.renderTodayPilotContextPack(card.missionId, {
+        targetProvider: 'generic',
+        includeSensitive: false,
+      });
       await navigator.clipboard.writeText(response.bodyMd);
+      submitTodayPilotContextCopyTrace(card, response);
       setTodayPilotError('');
       setTodayPilotNotice(formatTodayPilotContextPackReceipt(response));
     } catch (error: any) {

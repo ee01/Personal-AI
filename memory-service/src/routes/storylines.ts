@@ -49,6 +49,13 @@ export async function storylineRoutes(app: FastifyInstance): Promise<void> {
         if (message.includes('unsupported_storyline_source')) {
           return reply.status(400).send({ error: message });
         }
+        if (message.includes('storyline_source_has_no_usable_evidence')) {
+          return reply.status(422).send({
+            error: 'storyline_source_has_no_usable_evidence',
+            detail:
+              'Storyline draft requires at least one usable evidence ref from the source meeting prep.',
+          });
+        }
         request.log.warn({ err: error }, 'storyline draft generation failed');
         return reply.status(502).send({
           error: 'storyline_draft_generation_failed',

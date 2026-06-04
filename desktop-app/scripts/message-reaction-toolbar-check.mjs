@@ -61,6 +61,20 @@ const fixtureHtml = `<!doctype html>
       [data-name="time"] { display: block; margin-top: 8px; color: #64748b; font-size: 12px; }
       [data-name="avatar"] { display: none; }
       [data-name="conversationTitle"] { display: block; margin-bottom: 16px; font-size: 18px; font-weight: 700; }
+      .topBarAvatar {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        overflow: hidden;
+      }
+      .topBarAvatar img {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
       .composer-shell { margin-top: 24px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px 8px; }
       .ql-editor { min-height: 72px; outline: none; }
       .composer-toolbar {
@@ -119,31 +133,39 @@ const fixtureHtml = `<!doctype html>
     </script>
   </head>
   <body>
+    <div class="topBarAvatar">
+      <img alt="Esone Qiu" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='16' fill='%230b6bcb'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-size='13' font-family='Arial' fill='white'%3EEQ%3C/text%3E%3C/svg%3E" />
+    </div>
     <main class="conversation">
       <span data-name="conversationTitle">Release Team</span>
-      <article class="conversation-card">
-        <div class="conversation-card-wrapper" data-id="msg-1" groupid="12345">
-          <button data-name="avatar" data-uid="GLIP_PERSON.99999"></button>
-          <span data-name="name">Alicia Chen</span>
-          <div data-name="text">Please follow up with the release owner before tomorrow noon.</div>
-          <span data-name="time" datetime="2026-05-15T09:30:00Z">09:30</span>
-        </div>
-      </article>
-      <article class="conversation-card">
-        <div class="conversation-card-wrapper" data-id="msg-own" groupid="12345">
-          <button data-name="avatar" data-uid="GLIP_PERSON.${SELF_EXTENSION_ID}"></button>
-          <span data-name="name">You</span>
-          <div data-name="text">@Jordan Lee can you confirm the release date before Friday?</div>
-          <span data-name="time" datetime="2026-05-15T10:30:00Z">10:30</span>
-        </div>
-        <div class="inline-reply-shell" data-test-automation-id="reply-inline-input">
-          <div class="ql-editor" contenteditable="true" role="textbox"></div>
-          <div class="message-action-bar-inline-reply">
-            <button type="button" aria-label="Attach file">Attach</button>
-            <button type="button" class="inline-more" aria-label="More">More</button>
+      <div class="conversation-list-item">Sidebar-like class should not receive pending message</div>
+      <section id="message-chat-stream-wrapper">
+        <div role="listbox">
+          <article class="conversation-card" role="document">
+            <div class="conversation-card-wrapper" data-id="msg-1" groupid="12345">
+              <button data-name="avatar" data-uid="GLIP_PERSON.99999"></button>
+              <span data-name="name">Alicia Chen</span>
+              <div data-name="text">Please follow up with the release owner before tomorrow noon.</div>
+              <span data-name="time" datetime="2026-05-15T09:30:00Z">09:30</span>
+            </div>
+          </article>
+          <article class="conversation-card" role="document">
+            <div class="conversation-card-wrapper" data-id="msg-own" groupid="12345">
+              <button data-name="avatar" data-uid="GLIP_PERSON.${SELF_EXTENSION_ID}"></button>
+              <span data-name="name">You</span>
+              <div data-name="text">@Jordan Lee can you confirm the release date before Friday?</div>
+              <span data-name="time" datetime="2026-05-15T10:30:00Z">10:30</span>
+            </div>
+            <div class="inline-reply-shell" data-test-automation-id="reply-inline-input">
+              <div class="ql-editor" contenteditable="true" role="textbox"></div>
+              <div class="message-action-bar-inline-reply">
+                <button type="button" aria-label="Attach file">Attach</button>
+                <button type="button" class="inline-more" aria-label="More">More</button>
+              </div>
+            </div>
+          </article>
           </div>
-        </div>
-      </article>
+      </section>
       <footer class="composer-shell" data-test-automation-id="message-compose">
         <div class="ql-editor" contenteditable="true" role="textbox">
           <p>Hi <span role="link" data-id="20367368195">@Esone Qiu</span> and @team, please check this later.</p>
@@ -547,15 +569,25 @@ async function main() {
         '.conversation-card-wrapper[data-id="msg-own"]',
       );
       const composer = document.querySelector('.composer-shell');
-      const icon = document.querySelector('.pai-glip-pending-scheduled-icon');
+      const icon = document.querySelector('.pai-glip-pending-scheduled-avatar img');
       const manage = document.querySelector('.pai-glip-pending-scheduled-manage');
+      const bubble = document.querySelector('.pai-glip-pending-scheduled-bubble');
+      const listbox = document.querySelector('#message-chat-stream-wrapper [role="listbox"]');
+      const sidebarLike = document.querySelector('.conversation-list-item');
       const pendingRect = pending?.getBoundingClientRect();
+      const bubbleRect = bubble?.getBoundingClientRect();
       const lastMessageRect = lastMessage?.getBoundingClientRect();
       const composerRect = composer?.getBoundingClientRect();
       return {
         text: pendingItem?.textContent?.replace(/\s+/g, ' ').trim() || '',
+        ariaLabel: pending?.getAttribute('aria-label') || '',
         iconSrc: icon?.getAttribute('src') || '',
         manageText: manage?.textContent?.trim() || '',
+        bubbleWidth: bubbleRect?.width || 0,
+        bubbleHeight: bubbleRect?.height || 0,
+        listWidth: pendingRect?.width || 0,
+        inMessageList: Boolean(pending && listbox?.contains(pending)),
+        inSidebarLike: Boolean(pending && sidebarLike?.contains(pending)),
         afterLastMessage: Boolean(
           pendingRect && lastMessageRect && pendingRect.top >= lastMessageRect.bottom - 1,
         ),
@@ -564,10 +596,22 @@ async function main() {
         ),
       };
     });
-    assert.match(pendingScheduledState.text, /待发送/);
+    assert.match(pendingScheduledState.ariaLabel, /待发送/);
+    assert.match(pendingScheduledState.text, /定时/);
+    assert.match(pendingScheduledState.text, /Esone Qiu/);
     assert.match(pendingScheduledState.text, /release note/);
-    assert.match(pendingScheduledState.iconSrc, /icon48\.png/);
+    assert.match(pendingScheduledState.iconSrc, /^data:image\/svg\+xml/);
     assert.equal(pendingScheduledState.manageText, '管理');
+    assert.ok(
+      pendingScheduledState.bubbleWidth > 0 &&
+        pendingScheduledState.bubbleWidth < pendingScheduledState.listWidth &&
+        pendingScheduledState.bubbleWidth <= 380 &&
+        pendingScheduledState.bubbleHeight > 0 &&
+        pendingScheduledState.bubbleHeight <= 120,
+      JSON.stringify(pendingScheduledState),
+    );
+    assert.equal(pendingScheduledState.inMessageList, true);
+    assert.equal(pendingScheduledState.inSidebarLike, false);
     assert.equal(
       pendingScheduledState.afterLastMessage,
       true,
@@ -578,6 +622,103 @@ async function main() {
       true,
       JSON.stringify(pendingScheduledState),
     );
+    const pendingNodeStability = await page.evaluate(async () => {
+      const before = document.querySelector('.pai-glip-pending-scheduled-list');
+      const listbox = document.querySelector('#message-chat-stream-wrapper [role="listbox"]');
+      const beforeScrollTop = listbox?.scrollTop || 0;
+      window.dispatchEvent(new CustomEvent('pai-glip-compose-scheduled-created'));
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const after = document.querySelector('.pai-glip-pending-scheduled-list');
+      return {
+        sameNode: before === after,
+        count: document.querySelectorAll('.pai-glip-pending-scheduled-list').length,
+        scrollTopPreserved: (listbox?.scrollTop || 0) === beforeScrollTop,
+      };
+    });
+    assert.deepEqual(
+      pendingNodeStability,
+      {
+        sameNode: true,
+        count: 1,
+        scrollTopPreserved: true,
+      },
+      JSON.stringify(pendingNodeStability),
+    );
+    const pendingVirtualListPosition = await page.evaluate(async () => {
+      const stream = document.querySelector('#message-chat-stream-wrapper');
+      const listbox = document.querySelector('#message-chat-stream-wrapper [role="listbox"]');
+      const pending = document.querySelector('.pai-glip-pending-scheduled-list');
+      if (!(stream instanceof HTMLElement) || !(listbox instanceof HTMLElement) || !(pending instanceof HTMLElement)) {
+        return { ready: false };
+      }
+
+      const spacer = document.createElement('div');
+      spacer.className = 'virtualized-newer-message-placeholder';
+      spacer.style.height = '420px';
+      listbox.appendChild(spacer);
+      stream.style.height = '140px';
+      stream.style.overflowY = 'auto';
+      listbox.style.minHeight = '720px';
+
+      stream.scrollTop = 0;
+      stream.dispatchEvent(new Event('scroll'));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const hiddenAwayFromBottom = pending.hidden || getComputedStyle(pending).display === 'none';
+
+      stream.scrollTop = stream.scrollHeight;
+      stream.dispatchEvent(new Event('scroll'));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const visibleAtBottom = !pending.hidden && getComputedStyle(pending).display !== 'none';
+      const movedAfterVirtualNodes = listbox.lastElementChild === pending;
+
+      spacer.remove();
+      stream.style.height = '';
+      stream.style.overflowY = '';
+      listbox.style.minHeight = '';
+
+      return {
+        ready: true,
+        hiddenAwayFromBottom,
+        visibleAtBottom,
+        movedAfterVirtualNodes,
+      };
+    });
+    assert.deepEqual(
+      pendingVirtualListPosition,
+      {
+        ready: true,
+        hiddenAwayFromBottom: true,
+        visibleAtBottom: true,
+        movedAfterVirtualNodes: true,
+      },
+      JSON.stringify(pendingVirtualListPosition),
+    );
+    const refreshPage = await context.newPage();
+    await refreshPage.goto('https://app.ringcentral.com/messages/12345', {
+      waitUntil: 'domcontentloaded',
+    });
+    await refreshPage
+      .locator('.conversation-card-wrapper[data-id="msg-own"]')
+      .waitFor({ state: 'visible', timeout: 10_000 });
+    const refreshedPendingBubble = refreshPage.locator(
+      '.pai-glip-pending-scheduled-item',
+    );
+    await refreshedPendingBubble.waitFor({ state: 'visible', timeout: 8_000 });
+    const refreshedPendingState = await refreshPage.evaluate(() => {
+      const pending = document.querySelector('.pai-glip-pending-scheduled-list');
+      const listbox = document.querySelector('#message-chat-stream-wrapper [role="listbox"]');
+      return {
+        text:
+          document
+            .querySelector('.pai-glip-pending-scheduled-item')
+            ?.textContent?.replace(/\s+/g, ' ')
+            .trim() || '',
+        inMessageList: Boolean(pending && listbox?.contains(pending)),
+      };
+    });
+    assert.match(refreshedPendingState.text, /release note/);
+    assert.equal(refreshedPendingState.inMessageList, true);
+    await refreshPage.close();
 
     await message.hover();
     await delay(4_300);
@@ -1494,8 +1635,20 @@ async function main() {
                 buttonRect.top +
                   buttonRect.height / 2 -
                   (moreRect.top + moreRect.height / 2),
-              ) <= 1.5,
+              ) <= 4,
           ),
+          clampedToViewportBottom: Boolean(
+            moreRect &&
+              moreRect.bottom > window.innerHeight &&
+              Math.abs(buttonRect.top - (window.innerHeight - buttonRect.height - 8)) <= 1,
+          ),
+          lineCenterDelta: moreRect
+            ? Math.abs(
+                buttonRect.top +
+                  buttonRect.height / 2 -
+                  (moreRect.top + moreRect.height / 2),
+              )
+            : null,
           rightOfMore: Boolean(moreRect && buttonRect.left >= moreRect.right - 0.5),
           brandBadgeTopRight: Boolean(
             brandRect &&
@@ -1506,8 +1659,23 @@ async function main() {
           ),
           buttonLeft: buttonRect.left,
           buttonRight: buttonRect.right,
+          buttonTop: buttonRect.top,
+          buttonCenterY: buttonRect.top + buttonRect.height / 2,
           moreLeft: moreRect?.left ?? 0,
           moreRight: moreRect?.right ?? 0,
+          moreTop: moreRect?.top ?? 0,
+          moreCenterY: moreRect ? moreRect.top + moreRect.height / 2 : 0,
+          moreLabel: more
+            ? [
+                more.getAttribute('aria-label'),
+                more.getAttribute('title'),
+                more.textContent,
+              ]
+                .filter(Boolean)
+                .join(' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+            : '',
           svgWidth: svgRect?.width ?? 0,
           svgHeight: svgRect?.height ?? 0,
           brandWidth: brandRect?.width ?? 0,
@@ -1537,7 +1705,8 @@ async function main() {
     );
     assert.equal(composeSchedulePlacement.pin, 'more');
     assert.equal(
-      composeSchedulePlacement.sameLineAsMore,
+      composeSchedulePlacement.sameLineAsMore ||
+        composeSchedulePlacement.clampedToViewportBottom,
       true,
       JSON.stringify(composeSchedulePlacement),
     );

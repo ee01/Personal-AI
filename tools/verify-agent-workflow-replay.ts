@@ -8,6 +8,7 @@ import {
   buildAgentWorkflowReplayMessage,
   buildAgentWorkflowReplayMessages,
   formatAgentWorkflowDatetimeInputValue,
+  formatAgentWorkflowRegressionFailureDetail,
   formatAgentWorkflowReplayLabel,
   formatAgentWorkflowSavedScenarioLabel,
   getAgentWorkflowTraceStatus,
@@ -274,5 +275,13 @@ const normalizedSavedScenarios = normalizeAgentWorkflowSavedScenarios(
 assert.equal(normalizedSavedScenarios.length, 1);
 assert.equal(normalizedSavedScenarios[0].id, savedScenario.id);
 assert.equal(normalizedSavedScenarios[0].expectedResult?.confidence, 0.88);
+assert.equal(
+  formatAgentWorkflowRegressionFailureDetail('HTTP error! status: 500'),
+  '失败原因：HTTP error! status: 500',
+);
+assert.equal(
+  formatAgentWorkflowRegressionFailureDetail(''),
+  '失败原因：该样例未产出可对比结果，请单独重跑确认。',
+);
 
 console.log('verify-agent-workflow-replay: ok');

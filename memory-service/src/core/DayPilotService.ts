@@ -58,6 +58,17 @@ export interface DayPilotContextPackResponse {
   maxChars: number;
   targetProvider: TargetProvider;
   providerProfile: DayPilotProviderProfile;
+  usageIntent: {
+    kind: 'external_ai_context';
+    boundary: 'context_only_not_execution';
+    defaultSensitiveHandling: 'redacted_by_default' | 'included_sensitive';
+  };
+  sourceSummary: {
+    evidenceCount: number;
+    sourceKinds: Record<string, number>;
+    redactionApplied: boolean;
+    truncated: boolean;
+  };
   bodyMd: string;
   evidenceRefs: DayPilotEvidenceRef[];
   warnings: string[];
@@ -321,6 +332,16 @@ function compactText(
     .trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function countBySourceKind(
+  evidenceRefs: DayPilotEvidenceRef[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const ref of evidenceRefs) {
+    counts[ref.sourceKind] = (counts[ref.sourceKind] || 0) + 1;
+  }
+  return counts;
 }
 
 function uniqByName<T extends { name: string }>(items: T[]): T[] {
@@ -724,6 +745,19 @@ export class DayPilotService {
       maxChars: clamped.maxChars,
       targetProvider,
       providerProfile,
+      usageIntent: {
+        kind: 'external_ai_context',
+        boundary: 'context_only_not_execution',
+        defaultSensitiveHandling: options.includeSensitive
+          ? 'included_sensitive'
+          : 'redacted_by_default',
+      },
+      sourceSummary: {
+        evidenceCount: redaction.evidenceRefs.length,
+        sourceKinds: countBySourceKind(redaction.evidenceRefs),
+        redactionApplied: redaction.redactionApplied,
+        truncated: clamped.truncated,
+      },
       bodyMd: clamped.bodyMd,
       evidenceRefs: redaction.evidenceRefs,
       warnings,
@@ -756,6 +790,10 @@ export class DayPilotService {
       )
       .sort((a, b) => b.card.score - a.card.score)
       .slice(0, 7);
+    const sourceStats = this.sourceStatsWithSelectedCounts(
+      scan.sourceStats,
+      cards.map((item) => item.card),
+    );
 
     const interruptibleCards = cards
       .filter((item) => this.shouldInterrupt(item.card))
@@ -794,10 +832,101 @@ export class DayPilotService {
       status: 'ready',
       summary,
       attentionBudget,
-      sourceStats: scan.sourceStats,
+      sourceStats,
       missions: cards.map((item) => item.mission),
       cards: cards.map((item) => item.card),
     });
+  }
+
+  private sourceStatsWithSelectedCounts(
+    sourceStats: DayPilotSourceStats,
+    cards: DayPilotCard[],
+  ): DayPilotSourceStats {
+    const selected = this.countSelectedSourceRefs(cards);
+    return {
+      messages: {
+        ...sourceStats.messages,
+        selected: selected.messages,
+      },
+      calendar: {
+        ...sourceStats.calendar,
+        selected: selected.calendar,
+      },
+      notifications: {
+        ...sourceStats.notifications,
+        selected: selected.notifications,
+      },
+      actions: {
+        ...sourceStats.actions,
+        selected: selected.actions,
+      },
+      reflections: {
+        ...sourceStats.reflections,
+        selected: selected.reflections,
+      },
+      rehearsals: {
+        ...sourceStats.rehearsals,
+        selected: selected.rehearsals,
+      },
+      skills: {
+        ...sourceStats.skills,
+        selected: selected.skills,
+      },
+      relationships: {
+        ...sourceStats.relationships,
+        selected: selected.relationships,
+      },
+    };
+  }
+
+  private countSelectedSourceRefs(
+    cards: DayPilotCard[],
+  ): Record<keyof DayPilotSourceStats, number> {
+    const counts: Record<keyof DayPilotSourceStats, number> = {
+      messages: 0,
+      calendar: 0,
+      notifications: 0,
+      actions: 0,
+      reflections: 0,
+      rehearsals: 0,
+      skills: 0,
+      relationships: 0,
+    };
+    const seen = new Set<string>();
+    for (const card of cards) {
+      for (const ref of card.evidenceRefs) {
+        const key = `${ref.sourceKind}:${ref.sourceId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const bucket = this.sourceStatsBucketForEvidence(ref);
+        counts[bucket] += 1;
+      }
+    }
+    return counts;
+  }
+
+  private sourceStatsBucketForEvidence(
+    ref: DayPilotEvidenceRef,
+  ): keyof DayPilotSourceStats {
+    switch (ref.sourceKind) {
+      case 'calendar':
+        return 'calendar';
+      case 'notification':
+        return 'notifications';
+      case 'action':
+        return 'actions';
+      case 'reflection':
+        return 'reflections';
+      case 'rehearsal':
+        return 'rehearsals';
+      case 'skill':
+        return 'skills';
+      case 'relationship':
+        return 'relationships';
+      case 'message':
+      default:
+        return 'messages';
+    }
   }
 
   private scanCandidates(
@@ -2222,6 +2351,14 @@ export class DayPilotService {
     const evidenceLines = evidenceRefs.map((ref) =>
       this.evidenceMarkdownLine(ref),
     );
+    const handoffBoundary = [
+      '- This pack gives the target AI context to read; it is not permission to execute external actions.',
+      '- Keep final decisions, external sends, approvals, and destructive changes under user control.',
+    ];
+    const chineseHandoffBoundary = [
+      '- 这份上下文包只是给目标 AI 阅读的背景，不是执行授权。',
+      '- 最终决策、外部发送、审批和破坏性修改仍必须由用户控制。',
+    ];
 
     if (providerProfile.style === 'implementation') {
       return [
@@ -2238,6 +2375,9 @@ export class DayPilotService {
         '',
         '## Current Context',
         whyNow,
+        '',
+        '## Handoff Boundary',
+        ...handoffBoundary,
         '',
         '## Constraints',
         '- Use only the evidence below unless the user provides more context.',
@@ -2268,6 +2408,9 @@ export class DayPilotService {
         '## Background',
         whyNow,
         '',
+        '## Handoff Boundary',
+        ...handoffBoundary,
+        '',
         '## Relevant Facts',
         ...evidenceLines,
         '',
@@ -2288,6 +2431,9 @@ export class DayPilotService {
         '',
         '## Situation',
         whyNow,
+        '',
+        '## Handoff Boundary',
+        ...handoffBoundary,
         '',
         '## Evidence Timeline',
         ...evidenceLines,
@@ -2312,6 +2458,9 @@ export class DayPilotService {
         '## 为什么现在处理',
         whyNow,
         '',
+        '## 交接边界',
+        ...chineseHandoffBoundary,
+        '',
         '## 已知事实',
         ...evidenceLines,
         '',
@@ -2334,6 +2483,9 @@ export class DayPilotService {
       '',
       '## Next Best Action',
       nextBestAction,
+      '',
+      '## Handoff Boundary',
+      ...handoffBoundary,
       '',
       '## Known Facts',
       ...evidenceLines,
@@ -2910,14 +3062,14 @@ export class DayPilotService {
         quietWindows: [],
       },
       sourceStats: {
-        messages: { scanned: 0, totalRecent: 0 },
-        calendar: { scanned: 0, upcoming: 0 },
-        notifications: { scanned: 0, pending: 0 },
-        actions: { scanned: 0, queued: 0 },
-        reflections: { scanned: 0, active: 0 },
-        rehearsals: { scanned: 0, active: 0 },
-        skills: { scanned: 0, suggestions: 0 },
-        relationships: { scanned: 0, highFrequencyPeople: 0 },
+        messages: { scanned: 0, totalRecent: 0, selected: 0 },
+        calendar: { scanned: 0, upcoming: 0, selected: 0 },
+        notifications: { scanned: 0, pending: 0, selected: 0 },
+        actions: { scanned: 0, queued: 0, selected: 0 },
+        reflections: { scanned: 0, active: 0, selected: 0 },
+        rehearsals: { scanned: 0, active: 0, selected: 0 },
+        skills: { scanned: 0, suggestions: 0, selected: 0 },
+        relationships: { scanned: 0, highFrequencyPeople: 0, selected: 0 },
       },
       cards: [],
       missions: [],

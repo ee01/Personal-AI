@@ -174,8 +174,47 @@ function decisionCard() {
   };
 }
 
+function contextPackCard() {
+  return {
+    id: 'card-context-pack',
+    missionId: 'mission-context-pack',
+    sourceHash: 'context-pack',
+    cardType: 'memory_quality',
+    title: '整理 Webpage-MCP 链接检查说明',
+    priority: 'medium',
+    state: 'prepare',
+    score: 76,
+    dueAt: now + 7200,
+    whyNow: '两条近期记忆都指向链接检查优先使用 webpage-mcp。',
+    nextBestAction: '复制上下文包给 Codex，整理团队可复用说明。',
+    people: [{ name: 'Fred Gu' }],
+    projects: [{ name: 'Personal AI' }],
+    evidenceRefs: [
+      {
+        sourceKind: 'message',
+        sourceId: 'msg-context-pack-1',
+        title: 'Webpage-MCP 链接检查',
+        snippet: '链接检查需要优先用 webpage-mcp，并说明验证步骤。',
+        timestamp: now - 900,
+        sourceUrl: 'https://internal.example/context-pack?token=secret',
+      },
+    ],
+    openQuestions: ['是否需要把 Chrome 插件和 webpage-mcp 的边界写清楚？'],
+    trust: {
+      confidence: 0.83,
+      riskLevel: 'medium',
+      staleEvidenceCount: 0,
+      sensitiveEvidenceCount: 1,
+    },
+    contextPack: { preview: 'Mission: document webpage-mcp link checks' },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 const hiddenRehearsal = rehearsalCard();
 const visibleDecision = decisionCard();
+const copyableContextCard = contextPackCard();
 let currentBrief = baseBrief({
   attentionBudget: {
     maxInterruptions: 3,
@@ -199,6 +238,8 @@ let currentBrief = baseBrief({
   cards: [hiddenRehearsal],
 });
 let failTodayPilotRequest = true;
+let failStatsRequest = true;
+const ambientTraceRequests = [];
 
 function collectPageErrors(page) {
   const errors = [];
@@ -231,6 +272,95 @@ try {
         return;
       }
       await route.fulfill(jsonResponse({ brief: currentBrief }));
+      return;
+    }
+    if (pathname.endsWith('/context-pack')) {
+      const payload = request.postDataJSON();
+      const targetProvider = payload?.targetProvider || 'codex';
+      const style =
+        targetProvider === 'codex'
+          ? 'implementation'
+          : targetProvider === 'doubao'
+          ? 'chinese'
+          : 'plain';
+      await route.fulfill(
+        jsonResponse({
+          missionId: copyableContextCard.missionId,
+          generatedAt: now,
+          tokenBudget: payload?.tokenBudget || 1600,
+          maxChars: 6400,
+          targetProvider,
+          providerProfile: {
+            id: targetProvider,
+            label:
+              targetProvider === 'codex'
+                ? 'Codex implementation brief'
+                : 'Generic context pack',
+            defaultTokenBudget: 1600,
+            style,
+          },
+          usageIntent: {
+            kind: 'external_ai_context',
+            boundary: 'context_only_not_execution',
+            defaultSensitiveHandling: 'redacted_by_default',
+          },
+          sourceSummary: {
+            evidenceCount: copyableContextCard.evidenceRefs.length,
+            sourceKinds: { message: 1 },
+            redactionApplied: true,
+            truncated: false,
+          },
+          bodyMd: [
+            '# Codex Brief: 整理 Webpage-MCP 链接检查说明',
+            '',
+            '## Handoff Boundary',
+            '- This pack gives the target AI context to read; it is not permission to execute external actions.',
+            '',
+            '## Evidence',
+            '- Webpage-MCP 链接检查: 链接检查需要优先用 webpage-mcp。',
+          ].join('\n'),
+          evidenceRefs: copyableContextCard.evidenceRefs.map((ref) => ({
+            ...ref,
+            sourceUrl: undefined,
+          })),
+          warnings: [
+            'Sensitive or direct source fields were redacted by default; use includeSensitive only after review.',
+          ],
+          redactionPreview: [
+            'Webpage-MCP 链接检查:msg-context-pack-1 source URL omitted',
+          ],
+          redactionApplied: true,
+          truncated: false,
+        }),
+      );
+      return;
+    }
+    if (pathname.endsWith('/ambient-calibration/traces')) {
+      ambientTraceRequests.push(request.postDataJSON());
+      await route.fulfill(
+        jsonResponse({
+          status: 'ok',
+          traceId: `trace-${ambientTraceRequests.length}`,
+          stored: true,
+        }),
+      );
+      return;
+    }
+    if (pathname.endsWith('/stats')) {
+      if (failStatsRequest) {
+        await route.fulfill(
+          jsonResponse(
+            {
+              error: 'fixture unavailable',
+              code: 'SQLITE_CORRUPT',
+              message: 'database disk image is malformed',
+            },
+            500,
+          ),
+        );
+        return;
+      }
+      await route.fulfill(jsonResponse(apiFallback(url)));
       return;
     }
     await route.fulfill(jsonResponse(apiFallback(url)));
@@ -268,9 +398,13 @@ try {
   await page
     .getByText('尚不能判断今天是否没有高优先级事项')
     .waitFor({ timeout: 15000 });
+  await page.getByText('记忆统计暂不可用').waitFor({ timeout: 15000 });
   await page.getByRole('button', { name: '重试生成' }).waitFor({
     timeout: 15000,
   });
+  await assert.rejects(
+    page.getByText('记忆统计加载中').waitFor({ timeout: 600 }),
+  );
   await assert.rejects(
     page
       .getByText('当前没有需要放到首页的高优先级事项')
@@ -285,6 +419,7 @@ try {
   ]);
 
   failTodayPilotRequest = false;
+  failStatsRequest = false;
   await page.getByRole('button', { name: '重试生成' }).click();
 
   await page.getByText('今天有 0 件事值得关注').waitFor({ timeout: 15000 });
@@ -395,6 +530,98 @@ try {
       timeout: 600,
     }),
   );
+
+  currentBrief = baseBrief({
+    id: 'brief-copyable-context-pack',
+    attentionBudget: {
+      maxInterruptions: 3,
+      usedInterruptions: 0,
+      plannedInterruptions: [],
+      boardOnlyCardIds: [copyableContextCard.id],
+      quietWindows: [],
+    },
+    sourceStats: {
+      messages: { scanned: 1, totalRecent: 1 },
+      calendar: { scanned: 0, upcoming: 0 },
+      notifications: { scanned: 0, pending: 0 },
+      actions: { scanned: 0, queued: 0 },
+      reflections: { scanned: 0, active: 0 },
+      rehearsals: { scanned: 0, active: 0 },
+      skills: { scanned: 0, suggestions: 0 },
+      relationships: { scanned: 0, highFrequencyPeople: 0 },
+    },
+    cards: [copyableContextCard],
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value) => {
+          window.__todayPilotCopiedText = value;
+        },
+      },
+    });
+  });
+  const copyableMission = page.locator('.mission-card', {
+    hasText: '整理 Webpage-MCP 链接检查说明',
+  });
+  await copyableMission.waitFor({ timeout: 15000 });
+  await copyableMission.locator('.mission-head').click();
+  await copyableMission
+    .getByRole('button', { name: '复制上下文包', exact: true })
+    .click();
+  await page
+    .getByText('已复制 Codex 上下文包（1 条证据，已脱敏）。')
+    .waitFor({ timeout: 15000 });
+  await page.waitForFunction(
+    () =>
+      window.__todayPilotCopiedText?.includes('Handoff Boundary') &&
+      window.__todayPilotCopiedText?.includes(
+        'not permission to execute external actions',
+      ),
+    null,
+    { timeout: 15000 },
+  );
+  assert.equal(ambientTraceRequests.length, 1);
+  assert.equal(ambientTraceRequests[0].surface, 'today_pilot');
+  assert.equal(ambientTraceRequests[0].action, 'copied_context');
+  assert.equal(ambientTraceRequests[0].privacyClass, 'sensitive_redacted');
+  assert.equal(ambientTraceRequests[0].redactedDiff.rawTextStored, false);
+  assert.equal(
+    ambientTraceRequests[0].metadata.contextBoundary,
+    'context_only_not_execution',
+  );
+  assert.ok(
+    !JSON.stringify(ambientTraceRequests[0]).includes(
+      'This pack gives the target AI context',
+    ),
+    'ambient trace should not store raw context pack body',
+  );
+
+  currentBrief = baseBrief({
+    id: 'brief-popup-external-execution',
+    attentionBudget: {
+      maxInterruptions: 3,
+      usedInterruptions: 1,
+      plannedInterruptions: [
+        { cardId: visibleDecision.id, reason: 'high priority decision' },
+      ],
+      boardOnlyCardIds: [],
+      quietWindows: [],
+    },
+    sourceStats: {
+      messages: { scanned: 1, totalRecent: 1 },
+      calendar: { scanned: 0, upcoming: 0 },
+      notifications: { scanned: 0, pending: 0 },
+      actions: { scanned: 1, queued: 1 },
+      reflections: { scanned: 0, active: 0 },
+      rehearsals: { scanned: 0, active: 0 },
+      skills: { scanned: 0, suggestions: 0 },
+      relationships: { scanned: 0, highFrequencyPeople: 0 },
+    },
+    cards: [visibleDecision],
+  });
 
   const popupPage = await context.newPage();
   const assertNoPopupPageErrors = collectPageErrors(popupPage);

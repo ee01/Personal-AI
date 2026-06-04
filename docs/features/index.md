@@ -32,6 +32,7 @@
 |---|---|---|---|
 | 记忆摄入、去重、显著性评估 | Memory Service | [memory_system.md](./memory_system.md) | `IngestionPipeline` / `SalienceScorer` |
 | 四通道召回 | Memory Service | [memory_system.md](./memory_system.md) | Vector / FTS / Graph / Time |
+| 场景记忆自动驾驶 | Memory Service / Memory Lens | [memory_system.md](./memory_system.md) / [memory_lens.md](./memory_lens.md) | `/context-recall` 展示前过滤，决定 silent / chip / card / context_pack |
 | Ask 主动问答 | Memory Service | [ask.md](./ask.md) | 主动问答入口，覆盖话题锁定、召回优先级、证据缺口和活答案沉淀 |
 | Ask 短问句话题锁定 | Memory Service | [ask.md](./ask.md) | Ask 前置匹配当前话题、角色词、source anchors 和高频互动记忆 |
 | Ask 活答案记忆 | Memory Service | [ask.md](./ask.md) | 重复 locked topic 问题首问 observation、二问 promote、后续 priorHit / updated |
@@ -126,6 +127,7 @@
 | 回复助手直接插入 | Compose Assist | [compose_assist.md](./compose_assist.md) | hover 只预览正文，点击 icon 直接插入 |
 | 回复助手阈值与反馈 | Compose Assist | [compose_assist.md](./compose_assist.md) | 自适应展示 |
 | 回复助手无感校准 | Memory System / Compose Assist | [memory_system.md](./memory_system.md) / [compose_assist.md](./compose_assist.md) | 插入、改写、发送、hover 未用和 thumb-down 生成 redacted trace |
+| 场景记忆自动驾驶 eval | Memory Lens / Compose Assist | [memory_lens.md](./memory_lens.md) | compose 群聊、网页/文档、空会议、跨域噪音和重复来源合并 |
 | 记忆提示右下角关联记忆 | Memory Lens | [memory_lens.md](./memory_lens.md) | 当前网页/消息/Jira/会议上下文被动召回 |
 | 记忆提示 Hover Peek | Memory Lens | [memory_lens.md](./memory_lens.md) | hover/focus 轻预览 |
 | 记忆提示 Expanded Card | Memory Lens | [memory_lens.md](./memory_lens.md) | 完整卡片、反馈、来源 |

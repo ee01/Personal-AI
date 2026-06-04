@@ -123,7 +123,10 @@ describe('Today Pilot meeting prep API', () => {
     }).format(new Date(timestampSeconds * 1000));
   }
 
-  function seedCalendarEvent(overrides: Record<string, unknown> = {}) {
+  function seedCalendarEvent(
+    overrides: Record<string, unknown> = {},
+    options: { withMemoryChunk?: boolean } = {},
+  ) {
     const current = Math.floor(Date.now() / 1000);
     const event = {
       id: 'cal-ai-notes',
@@ -163,7 +166,9 @@ describe('Today Pilot meeting prep API', () => {
       current,
       current,
     );
-    insertMemoryChunk(current);
+    if (options.withMemoryChunk !== false) {
+      insertMemoryChunk(current);
+    }
     return event;
   }
 
@@ -333,6 +338,96 @@ describe('Today Pilot meeting prep API', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.prep.storylineOpportunity.available).toBe(false);
+    expect(body.assist.storylineOpportunity.available).toBe(false);
+  });
+
+  it('downgrades storyline opportunities without enough story material', async () => {
+    const event = seedCalendarEvent();
+    mockGenerateJSON.mockResolvedValueOnce(
+      buildLlmPrepResponse({
+        storylineOpportunity: {
+          available: true,
+          confidence: 0.9,
+          oneLineReason:
+            '这场会可能可以整理成项目更新，但素材还不够完整。',
+          evidenceClusters: [
+            {
+              label: 'AI Notes owner',
+              sourceKinds: ['calendar', 'meeting'],
+              evidenceCount: 2,
+            },
+          ],
+          suggestedArtifact: 'speaker_notes',
+        },
+      }),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/today-pilot/meeting-prep/resolve',
+      payload: {
+        event: {
+          externalId: event.externalId,
+          title: event.title,
+          startTime: event.startAt,
+        },
+        timezone: 'Asia/Shanghai',
+        autoGenerate: true,
+        forceGenerate: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.prep.storylineOpportunity.available).toBe(false);
+    expect(body.prep.storylineOpportunity.blockedReasons).toContain(
+      '素材不足：至少需要 3 条可讲述证据。',
+    );
+    expect(body.assist.storylineOpportunity.available).toBe(false);
+  });
+
+  it('downgrades calendar-only storyline opportunities', async () => {
+    const event = seedCalendarEvent({}, { withMemoryChunk: false });
+    mockGenerateJSON.mockResolvedValueOnce(
+      buildLlmPrepResponse({
+        storylineOpportunity: {
+          available: true,
+          confidence: 0.88,
+          oneLineReason:
+            '这场会看起来适合做分享，但目前只有日历描述作为素材。',
+          evidenceClusters: [
+            {
+              label: '日历会议描述',
+              sourceKinds: ['calendar'],
+              evidenceCount: 3,
+            },
+          ],
+          suggestedArtifact: 'slides_outline',
+        },
+      }),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/today-pilot/meeting-prep/resolve',
+      payload: {
+        event: {
+          externalId: event.externalId,
+          title: event.title,
+          startTime: event.startAt,
+        },
+        timezone: 'Asia/Shanghai',
+        autoGenerate: true,
+        forceGenerate: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.prep.storylineOpportunity.available).toBe(false);
+    expect(body.prep.storylineOpportunity.blockedReasons).toContain(
+      '素材不足：不能只基于日历标题或会议描述生成故事线。',
+    );
     expect(body.assist.storylineOpportunity.available).toBe(false);
   });
 

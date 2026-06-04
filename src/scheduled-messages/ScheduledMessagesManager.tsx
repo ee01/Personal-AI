@@ -142,6 +142,12 @@ import {
 import { ConfigSyncService } from './ConfigSyncService';
 import { getManualBindConfigDiff } from './manualBindConfigDecision';
 import { getJiraScheduleRestoreTiming } from './jiraScheduleRestore';
+import {
+  SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY,
+  buildScheduledMessagesSetupReceipt,
+  buildScheduledMessagesSetupReceiptNotice,
+  type ScheduledMessagesSetupReceipt,
+} from './setupReceipt';
 
 // react-select 选项类型
 interface SelectOption {
@@ -971,6 +977,7 @@ const ScheduledMessagesManager: React.FC = () => {
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
           const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
+          await consumePendingSetupReceipt(savedConfig);
 
           // 基础数据到位后先展示页面，其余校验延后到后台
           setIsLoading(false);
@@ -984,6 +991,27 @@ const ScheduledMessagesManager: React.FC = () => {
       console.error('初始化应用失败:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const consumePendingSetupReceipt = async (currentConfig: SheetConfig) => {
+    try {
+      if (!chrome?.storage?.local) {
+        return;
+      }
+
+      const storage = await chrome.storage.local.get([SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY]);
+      const receipt = storage[SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY] as ScheduledMessagesSetupReceipt | undefined;
+
+      if (!receipt?.sheetId) {
+        return;
+      }
+
+      await chrome.storage.local.remove(SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY);
+      const receiptNotice = buildScheduledMessagesSetupReceiptNotice(receipt, currentConfig);
+      setConfigSyncNotice(receiptNotice);
+    } catch (error) {
+      console.warn('读取定时消息初始化收据失败:', error);
     }
   };
 
@@ -1297,10 +1325,22 @@ const ScheduledMessagesManager: React.FC = () => {
   
   const handleInitializationComplete = (result: InitializationResult) => {
     if (result.success) {
-      // 刷新页面重新加载
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
+      void (async () => {
+        try {
+          if (chrome?.storage?.local) {
+            await chrome.storage.local.set({
+              [SCHEDULED_MESSAGES_SETUP_RECEIPT_KEY]: buildScheduledMessagesSetupReceipt(result),
+            });
+          }
+        } catch (error) {
+          console.warn('保存定时消息初始化收据失败:', error);
+        } finally {
+          // 刷新页面重新加载
+          setTimeout(() => {
+            window.location.reload();
+          }, 2000);
+        }
+      })();
     }
   };
 
@@ -3008,6 +3048,9 @@ const ScheduledMessagesManager: React.FC = () => {
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
           const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
+          if (config) {
+            await consumePendingSetupReceipt(config);
+          }
           if (config) {
             void checkBotConfigValidity(config, initialMessages);
           }
