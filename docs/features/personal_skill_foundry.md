@@ -1,6 +1,6 @@
 # Personal Skill Foundry — 个人技能炼金台
 
-_最后更新: 2026-05-31_
+_最后更新: 2026-06-13_
 
 ## 是什么
 
@@ -35,7 +35,7 @@ Personal Skill Foundry 先收集“这可能是一个可复用技能”的建议
 | Platform Binding | 某个技能在某个平台的安装/同步状态                                                             |
 | Share Link       | 带 token 的只读 skill URL，用于外部 agent 拉取 `SKILL.md` 和资源                              |
 
-当前状态机只保留：
+当前 `personal_skills.status` 状态机只保留：
 
 ```
 suggestion -> active
@@ -43,6 +43,22 @@ suggestion -> dismissed
 ```
 
 不引入 draft / candidate / eval run 等额外状态。
+
+### 经验质量门控 (Skill Quality Gate, P2-11)
+
+坏经验和好经验一样会复利（Experience-Following 效应），所以自动蒸馏的技能要**先验证再推荐、连败自动退役**。质量门控是 `status` 之外的**独立一层**（`core/SkillQualityGateService.ts`，migration `047`），不改既有 enum：
+
+- **执行账本** `skill_executions`：每次执行结果（success/failure/partial/unknown）按 signalSource（binding_sync / user_feedback / action_result / outcome_event）记一行。接口 `POST /skills/:id/executions`、`GET /skills/:id/health`、`POST /skills/:id/pin`。
+- **健康分**：`health = wilson_lower_bound(success, success+failure)`（小样本保守，unknown 不计入分母，宁可慢晋升不可误退役）。
+- **生命周期门控** `skill_health.gate_state`：
+  - `candidate` → 蒸馏新技能起点；
+  - `active` → 证据 ≥3 且 health ≥0.55（对齐 writing-style 双阈值精神）；
+  - `degraded` → 连续 3 次 failure 或（有失败且 ≥3 样本且 health<0.4）→ **从 suggestions/注入面停用，仍可手动调用**；
+  - `retired` → degraded 满 30 天无翻盘 → 归档（可一键复活）；
+  - `user_pinned` → 用户钉住，豁免自动降级（用户意志最高）。
+- **推荐门控**：`listSuggestions` 过滤掉 degraded/retired 的技能（无 health 行的技能不受影响，向后兼容）。
+- **验证**：`skillQualityGate.test.ts`（4：≥3 成功晋升 active、3 连败降级且从 suggestions 消失、user_pinned 豁免、unknown 不计分母）。
+- **仍在推进**：降级时的通知（lane=notice）+ Foundry UI 黄标、修订回路（degraded → 反思线程产出 v2 → 重新攒证据）。
 
 ## 用户主流程
 
@@ -97,6 +113,42 @@ OpenClaw 或其他 agent 平台同步回来的新 skill 不会直接进入 activ
 
 - 打开“稍后建议”详情时，页面只提供 `现在审` 和 `丢弃`；用户恢复到 Inbox 后才会看到 `使用` / `确认覆盖`，避免把暂缓状态误操作成最终决策。
 - 后端在 suggestion 被 `use`、`dismiss` 或外部变更应用时会清空 `snoozed_until`，终态记录不再保留过期的稍后审标记。
+
+2026-06-06 状态：
+
+- Inbox Bar 顶部会显示一条“优先处理”摘要，从当前可审 suggestion 中优先挑出外部覆盖、高风险、带脚本/外部依赖、证据不足或本机目录导入的建议。
+- 建议卡片会按同一优先级排序，先处理最可能改变 active 真源或外部 agent 行为的条目；点击优先处理按钮会直接进入对应的 `查看风险` / `查看变更` 审核路径。
+- 这个优先级只改变审阅顺序和提示，不绕过审核 gate；需要 `reviewConfirmed` 的建议仍然必须先查看证据或风险后才能 promote / 覆盖。
+
+2026-06-09 状态：
+
+- Memory Outcome Loop 可以把重复成功的 cue 作为 suggestion 来源。例如 Jira estimate `draft_hint` 多次被插入并发送后，会生成 `Estimate wording helper` suggestion。
+- 这类 suggestion 的 `suggestedFrom` 为 `memory_outcome_loop`，`suggestionClusterKey` 绑定 cue key，避免同一句成功提示反复生成 Inbox 卡片。
+- Outcome Loop 只生成待审建议，不会把它自动提升成 active skill，也不会自动同步到外部 agent 平台。
+
+2026-06-12 状态：
+
+- 用户点击 `使用` / `确认使用` / `确认覆盖` 后，页面会保留一条 `入库回执`，说明 suggestion 是否已提升为 active、外部变更是否覆盖了原 active skill、当前版本和 sha256、是否生成带 token 的只读 share URL、以及本次是否触发 OpenClaw 即时同步。
+- 确认前的同步说明会区分三类路径：OpenClaw 可以由确认动作立即尝试同步；Codex CLI / Claude Code / Cursor 等本机目录等待 Desktop App 下一次同步，不由这次点击直接写本机文件；manual-only 平台仍只提供复制安装指引。
+- 这条回执只描述已经完成的入库/覆盖和同步尝试，不代表 skill 已被执行，也不会触发历史消息分析、通知、外部自动写入或绕过后续版本审计。
+
+2026-06-13 状态：
+
+- 如果当前 Inbox 只有 Codex CLI / Claude Code / Cursor 本机目录导入建议，顶部摘要会显示 `本地 agent 导入建议`，并说明建议由 Desktop App 扫描本机 agent skill 目录得来。
+- 这条来源回执会在用户进入卡片前先讲清楚：使用后才会进入 Personal AI active 真源，确认前需要先看目录来源、资源文件和脚本风险；它不会改变原有 review gate、丢弃、稍后审或平台同步逻辑。
+
+2026-06-16 状态：
+
+- 本机 agent skill 导入建议会识别包内 `test` / `spec` / `eval` / `fixture` / `verify` 等验证线索，并在 Inbox 卡片、审核 gate 和确认前回执中展示。
+- 如果本机导入包包含可执行脚本或安装 / 下载 / MCP 连接指令，但没有发现验证线索，审核原因会明确提示 `未发现测试、eval、fixture 或 verify 验证线索`。
+- 这只是确认前的风险事实，不代表 Personal AI 已经运行或验证该 skill；用户确认后仍只是进入 active 真源和已声明同步路径，不会自动执行 skill。
+
+2026-06-17 状态：
+
+- `使用` / `确认使用` / `确认覆盖` 之外，`稍后审`、`现在审` 和 `丢弃` 也会留下持久决策回执，而不是只显示一行临时提示。
+- `稍后审回执` 说明建议仍是 `suggestion`、何时回到 Inbox、审核原因是否保留，以及本次没有提升 active 真源、覆盖技能、触发 OpenClaw / Desktop App 同步、执行 skill 或写入 manual-only 平台。
+- `恢复审阅回执` 说明只是清除 `snoozed_until` 并把建议恢复到 Inbox；真正入库或覆盖仍要走原来的审核 gate。
+- `丢弃回执` 说明状态已变为 `dismissed`、同来源重复建议会按冷却去重处理、可从“已丢弃”过滤器复查；它不会删除 active 技能、改写外部平台或本机目录，也不会触发同步或执行 skill。
 
 ### 2. 管理在用技能
 
@@ -164,6 +216,7 @@ eval / run receipt 以后作为次级能力再加，不进入 MVP 主链路。
 - 每次获取详情会生成新的 live token；旧 token 继续有效，直到被 revoke。
 - public URL 返回 `ETag`，支持 `If-None-Match`。
 - 生成 share link 前会做 secret pattern scan；命中疑似 secret 时不生成 share，并在详情里返回 `shareError`。
+- 绑定页会显示“分享回执”：说明复制给 agent 的安装 URL 会包含 bearer token、只能只读拉取 HTML 预览 / `SKILL.md` / `package.json` / `files/*`，不会写入、覆盖、执行或触发平台同步；同时露出当前 active version、sha256、资源文件数量、secret-scan 阻断和旧 token 需后台 revoke 的边界。
 
 ## 平台同步
 
@@ -234,6 +287,26 @@ Codex CLI / Claude Code / Cursor 的 skill 目录在本机文件系统里，Chro
 
 - Memory Service 只接收本机 skill 包内的安全相对资源路径；绝对路径、越界路径和重复路径会被忽略，并在 binding metadata、审核原因和 Foundry 审核摘要中显示已忽略数量。只要发生过滤，导入后的 sha256 以清洗后的包重新计算，不再沿用 Desktop App 上报的原始包哈希。
 
+2026-06-05 状态：
+
+- 本机 agent skill 导入建议会把可执行脚本文件、`SKILL.md` 里的安装/下载/MCP 连接指令、被忽略的越界或重复资源路径都前置成审核原因；Inbox 卡片和详情审核 gate 会直接显示这些风险，用户确认后才会 promote 或覆盖 active 真源技能。
+
+2026-06-07 状态：
+
+- 本机 agent skill 导入建议还会扫描包内资源文件正文；如果 README、references 或其他资源里藏着安装、下载或 MCP 连接指令，同样会进入审核原因。
+- Inbox 卡片的待审核摘要现在保留前三条原因，让来源、可执行脚本和资源文件依赖边界能在进入详情前同时露出。
+
+2026-06-09 状态：
+
+- suggestion 详情会显示 `确认后会发生什么` 回执，说明确认使用/覆盖会如何影响 active 真源、是否已经完成证据审核、是否来自本机目录、会按哪些已开启平台同步，以及丢弃/稍后审的恢复路径。
+- 这条回执不改变状态机，也不绕过审核 gate；它只是把最终确认按钮背后的入库、覆盖、同步和恢复边界提前展示出来，避免用户把 `确认使用` 误解成普通预览动作。
+
+2026-06-11 状态：
+
+- 平台级同步弹窗在 OpenClaw 或 Desktop App 本机同步后会保留 `同步回执`，不再只显示一行临时结果。
+- 回执会说明本次同步的平台、扫描/处理范围、Personal AI 里新增 suggestion / 更新绑定 / 待审核变更数量、目标平台回拉/推送数量、失败或跳过原因，以及 manual-only 平台没有被自动写入。
+- 外部变更仍只进入顶部 Inbox 待审核；同步回执不会让 skill 自动执行，也不会绕过 suggestion 的审核 gate 或 active 真源版本记录。
+
 ### Manual-only 平台
 
 ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句安装指引。
@@ -269,9 +342,11 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - `skill_share_links` 只保存 token hash，不保存明文 token。
 - 短展示 URL 不能直接打开，避免误把无 token URL 当公开 URL。
 - share 生成前扫描疑似 secret，例如 api key、bearer token、private key、password 等。
+- 带 token 的 URL 等同于只读拉取凭证；复制安装指引前必须让用户看见访问范围、版本指纹、资源文件覆盖和撤销边界。
 - 外部平台导入的 skill 默认先进入 suggestion，不直接进入 active。
 - 外部平台或本机 agent 目录对 active skill 的改动也默认先进入 suggestion，不直接覆盖真源。
 - 自动同步按平台开启，避免用户误以为单条 skill 有独立同步开关。
+- `入库回执` 中的同步状态只覆盖本次确认动作实际触发的即时路径；本机 Desktop App 和 manual-only 平台必须继续按各自边界显示。
 
 ## 已知边界
 
@@ -308,21 +383,45 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - 2026-05-28 再核对 Claude Skills / Claude Code Skills、SkillFoundry、SkillGen 和 Agentic Skills 生命周期综述后，`稍后审` 应被视为一个仍待治理的中间状态，而不是一次性隐藏动作。官方和论文都强调 skill 的来源、资源文件、工具权限、验证与更新需要持续可审计；因此 UI 保留“稍后建议”队列和 `现在审` 恢复路径，避免用户丢失外部导入或高风险 skill 的审核上下文。
 - 2026-05-29 再核对 OpenAI GPTs、Claude Skills、Microsoft Copilot Studio agent 发布/目录流程、SkillOps、Agentic Skills SoK 和 mixed-initiative feedback 研究后，建议状态机应把“恢复审核”和“最终使用/覆盖”拆开。用户控制有价值，但频繁反馈也可能降低信任；所以暂缓项详情可以被查看，但必须先恢复到 Inbox 才能做最终确认。
 - 2026-05-29 针对平台同步再核对 OpenAI GPTs Actions、Claude/Claude Code Skills、Cursor Rules、Custom GPT 漏洞分析和 agent skill 生命周期研究后，同步 UI 需要把“能否自动写入、最近为什么失败、是否只是复制安装”放到持久行内诊断里；跨平台 skill 分发不应只留下短暂同步结果。
+- 2026-06-06 再核对 OpenAI GPTs、Claude Skills、AutoSkill、Voyager 和 ToolLLM 后，短期最有价值的不是新增一个 skill marketplace，而是让已有 Inbox 更像一个安全审阅队列：先暴露“为什么先审这一条”，再进入证据页确认。AutoSkill / Voyager 都强调 skill 应从交互经验沉淀为可复用能力，ToolLLM 则说明工具选择需要检索和评估；Foundry 当前应把这些思想落在 suggestion 优先级、证据状态和外部动作边界上。
+- 2026-06-09 再核对 OpenAI Skills / GPT Actions、Claude Skills、AutoSkill 与 MUSE-Autoskill 后，短期产品重点仍不是扩大同步矩阵，而是让用户在确认前看到“这次点击会把什么变成 active 真源、会不会覆盖现有技能、会触发哪些同步、怎么撤回或稍后处理”。这些资料共同强调 skill 是可复用工作流/资源包，且长期演进需要生命周期、评估、反馈和边界可审计。
+- 2026-06-11 再核对 Claude Agent Skills、OpenAI GPTs、MCP 规范、MCP 安全综述和 Microsoft MCP governance 后，平台同步后也需要可读回执：skill/package 同步既可能移动本地文件或远端资源，也可能生成待审外部变更；用户应在一个稳定位置看到写入、回拉、跳过、失败、manual-only 排除和“不会自动执行 skill”的边界。
+- 2026-06-12 再核对 Claude / Agent Skills 文档、AutoSkill / Voyager 类 skill-library 研究和 skill registry 攻击面讨论后，确认动作本身也需要回执：用户不应只看到页面跳转，而应看到 active 真源、tokenized share、即时同步、Desktop App 等待同步和 manual-only 排除这些边界。
+- 2026-06-16 再核对 Anthropic Agent Skills、Agent Skills open standard、OpenAI Agents SDK guardrails / tracing、Agent Skills survey 和 MUSE-Autoskill 后，本机导入建议需要把验证线索作为审核事实：skill 是带脚本/资源的程序性记忆，生命周期研究也强调 evaluation / runtime feedback；因此短期不做重 eval 面板，但带脚本或外部依赖且缺少 test/eval/fixture/verify 文件时必须在确认前暴露。
+- 2026-06-17 再核对 Claude Skills / OpenAI GPTs、Agent Skills lifecycle 综述、Dynamic Agent Skills 和 human-in-the-loop 反馈研究后，短期重点不是增加新的 review 状态，而是让每个用户决策动作都留下轻量、可恢复的效果回执。技能库建议需要 admission gate 和 lineage，但频繁打扰会降低信任；因此 `稍后审 / 现在审 / 丢弃` 应清楚说明“不入库、不覆盖、不同步、不执行”的边界，让用户能少做决策但看得见后果。
 
 ## Reminders 反馈
 
-2026-05-29 自动化核对：本机 Reminders 可访问，但未发现名为 `Personal AI` 的列表。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
+2026-06-06 自动化核对：本机 Reminders 可访问，但未发现名为 `Personal AI` 的列表。本轮没有可纳入的 Reminder 条目，也没有可标记 done 的条目。
+
+2026-06-09 自动化核对：本机 Reminders 仍可访问，但列表中仍没有 `Personal AI`。本轮没有 Reminder 来源的 Skill Foundry 条目，也没有可标记 done 的条目。
+
+2026-06-10 自动化核对：本机 Reminders 的自动化读取在等待中卡住，本轮没有安全读到 `Personal AI` 列表或相关条目，因此没有纳入或标记完成的 Reminder 项。
+
+2026-06-11 自动化核对：使用 macOS-safe AppleScript 探测后返回 `__NO_PERSONAL_AI_LIST__`。本轮没有 Reminder 来源的 Skill Foundry 平台同步条目，也没有可标记 done 的条目。
+
+2026-06-12 自动化核对：本机 Reminders 可访问，但列表中没有 `Personal AI`。本轮没有 Reminder 来源的 Skill Foundry 条目，也没有可标记 done 的条目。
+
+2026-06-16 自动化核对：本机 Reminders 可访问，但仍没有 `Personal AI` 列表。本轮没有 Reminder 来源的 Skill Foundry 条目，也没有可标记 done 的条目。
+
+2026-06-17 自动化核对：本机 Reminders 可访问，但列表中没有 `Personal AI`。本轮没有 Reminder 来源的 Skill Foundry 条目，也没有可标记 done 的条目。
 
 外部参考：
 
 - [Claude Skills Help](https://support.claude.com/en/articles/12512180-use-skills-in-claude)
 - [OpenAI GPTs](https://help.openai.com/en/articles/8554407-gpts)
+- [Claude Skills Overview](https://claude.com/docs/skills/overview)
 - [Microsoft Copilot Studio agents](https://learn.microsoft.com/en-gb/microsoft-copilot-studio/microsoft-copilot-extend-copilot-extensions)
 - [Claude Code Skills](https://code.claude.com/docs/en/skills)
 - [LangChain Deep Agents long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory)
 - [Agent Skills open standard](https://agentskills.io/)
 - [OpenAI Agents SDK Guardrails](https://openai.github.io/openai-agents-js/guides/guardrails/)
 - [OpenAI Agents SDK Tracing](https://openai.github.io/openai-agents-python/tracing/)
+- [Anthropic Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
+- [OpenAI Creating and editing GPTs](https://help.openai.com/en/articles/8554397-creating-and-editing-gpts)
+- [Model Context Protocol Specification](https://modelcontextprotocol.io/specification/2025-06-18)
+- [Model Context Protocol: Landscape, Security Threats, and Future Research Directions](https://arxiv.org/html/2503.23278v2)
+- [Microsoft MCP security and governance](https://www.microsoft.com/insidetrack/blog/protecting-ai-conversations-at-microsoft-with-model-context-protocol-security-and-governance/)
 - [SkillSmith](https://arxiv.org/abs/2605.15215)
 - [Skill-Inject](https://arxiv.org/abs/2602.20156)
 - [Skill-Pro: Learning Reusable Skills from Experience](https://arxiv.org/abs/2602.01869)
@@ -335,6 +434,9 @@ ChatGPT / GPTs 和 Claude.ai Skills 暂不支持自动写入，只提供一句�
 - [Soliciting Human-in-the-Loop User Feedback for Interactive Machine Learning Reduces User Trust and Impressions of Model Accuracy](https://arxiv.org/abs/2008.12735)
 - [Group of Skills: Group-Structured Skill Retrieval for Agent Skill Libraries](https://arxiv.org/abs/2605.06978)
 - [From Skill Text to Skill Structure: SSL Representation for Agent Skills](https://arxiv.org/abs/2604.24026)
+- [AutoSkill: Experience-Driven Lifelong Learning via Skill Self-Evolution](https://arxiv.org/abs/2603.01145)
+- [Voyager: An Open-Ended Embodied Agent with Large Language Models](https://arxiv.org/abs/2305.16291)
+- [ToolLLM: Facilitating Large Language Models to Master 16000+ Real-world APIs](https://arxiv.org/abs/2307.16789)
 
 ## 验证建议
 

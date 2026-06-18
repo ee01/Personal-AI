@@ -920,7 +920,26 @@ export class SkillLibraryService {
         versions.find((version) => version.isActive) || versions[0];
       return toSkillListItem(row, this.listBindings(row.id), activeVersion);
     });
-    return { items, total: items.length };
+    // P2-11 quality gate: hide degraded/retired skills from suggestions (they
+    // remain manually invokable, just not recommended). user_manual/pinned and
+    // skills without a health row are unaffected.
+    const suppressed = this.loadSuppressedSkillIds();
+    const gated = suppressed.size > 0 ? items.filter((it) => !suppressed.has(it.id)) : items;
+    return { items: gated, total: gated.length };
+  }
+
+  /** Skill ids in a degraded/retired gate state (P2-11). Empty when no gate data. */
+  private loadSuppressedSkillIds(): Set<string> {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT skill_id FROM skill_health WHERE gate_state IN ('degraded', 'retired')`,
+        )
+        .all() as Array<{ skill_id: string }>;
+      return new Set(rows.map((r) => r.skill_id));
+    } catch {
+      return new Set();
+    }
   }
 
   getSkill(idOrSlug: string): SkillDetail | null {

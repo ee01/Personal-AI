@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import type { UserContextManager } from '../core/UserContextManager.js';
+import { SkillQualityGateService } from '../core/SkillQualityGateService.js';
 import {
   hashSkillFilesystemPackage,
   normalizeSkillSlug,
@@ -871,6 +872,49 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const service = serviceForRequest(request);
       return reply.status(200).send(service.listSuggestions(request.query));
+    },
+  );
+
+  // P2-11 quality gate: record an execution outcome and return updated health.
+  app.post<{
+    Params: { id: string };
+    Body: {
+      outcome: 'success' | 'failure' | 'partial' | 'unknown';
+      signalSource?: 'binding_sync' | 'user_feedback' | 'action_result' | 'outcome_event';
+      version?: string;
+      platform?: string;
+      detail?: Record<string, unknown>;
+    };
+  }>('/skills/:id/executions', async (request, reply) => {
+    const { db } = request.userContext;
+    const health = new SkillQualityGateService(db).recordExecution({
+      skillId: request.params.id,
+      outcome: request.body.outcome,
+      signalSource: request.body.signalSource ?? 'user_feedback',
+      version: request.body.version,
+      platform: request.body.platform,
+      detail: request.body.detail,
+    });
+    return reply.status(200).send({ health });
+  });
+
+  // P2-11: read a skill's health/lifecycle state.
+  app.get<{ Params: { id: string } }>('/skills/:id/health', async (request, reply) => {
+    const { db } = request.userContext;
+    const health = new SkillQualityGateService(db).getHealth(request.params.id);
+    return reply.status(200).send({ health });
+  });
+
+  // P2-11: pin/unpin a skill (user intent exempts it from auto-degrade).
+  app.post<{ Params: { id: string }; Body: { pinned: boolean } }>(
+    '/skills/:id/pin',
+    async (request, reply) => {
+      const { db } = request.userContext;
+      const health = new SkillQualityGateService(db).setPinned(
+        request.params.id,
+        request.body.pinned === true,
+      );
+      return reply.status(200).send({ health });
     },
   );
 
