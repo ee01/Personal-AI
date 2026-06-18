@@ -454,6 +454,16 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 - **边界**：试用期与遗忘端点都不物理删除；级联物理删除只由用户显式删除触发（见 cascade-deletion plan）。
 - **验证**：`memoryProbationLifecycle.test.ts`（4）、`mergeDecision.test.ts`（4：UPDATE/MERGE/NOOP apply 语义 + ADD 回退）、`memoryEvolution.test.ts`（2：近邻关联边 + 幂等）。
 
+### 删除的彻底性：级联删除 (Cascade Deletion, P2-10)
+
+「删了就是删了——包括它留下的影子。」用户**显式删除**一个来源时，派生物必须一起清理，否则反思/梦境摘要会把已删信息反复复述出来（Agentic Unlearning 再污染）。`core/MemoryLineageService.ts` 在删除事务内做级联（migration `046` 给 `reflection_artifacts` 加 `evidence_redacted`/`retracted`）：
+
+- **入口**：`DELETE /memories`（按 source+scope 批删）与新增的 `DELETE /memories/message/:id`（单条删除，此前只能按来源批删）都调 `applyCascade(messageIds)`，响应带 `cascade` 回执。
+- **级联内容**：① 删除 `source_message_id` 指向已删消息的孤儿 `entity_properties`；② 从 `relationships.evidence_message_ids_json` 数组剔除失效 id，证据清空的关系整条删除；③ 证据/关系全空、零提及的实体 → `status='archived'`（实体名可能仍有其它来源，不武断删）；④ `user_profile_items` 的 `evidence_refs` 剔除，未确认的 inferred 项掉到晋升阈值（3）以下 → 回退 `candidate`/`archived`；⑤ 引用已删消息的 `reflection_artifacts` → `evidence_redacted=1`，**全部**证据被删 → `retracted=1`（不再被 reindex/召回，杜绝再污染）。
+- **红线**：级联只由用户显式删除触发；ForgettingEngine 的自动衰减永远只降级、不物理删（自动遗忘 ≠ 用户意志）。
+- **对账**：`memory-service/tools/memory-integrity-check.ts <db>` 扫孤儿 `entity_properties` / 脏 relationship 证据 / `chunks_vec` 孤儿，有残留 exit 1（可上线前清存量、上线后保增量）。
+- **验证**：`memoryLineage.test.ts`（4：孤儿属性+关系证据+实体归档、反思全证据删→retracted 的再污染红队、inferred 画像降级、integrityScan 发现孤儿）。
+
 ### 记忆六能力体检 (Memory Abilities Benchmark)
 
 `tools/eval-memory-abilities.ts` 是一套**端到端记忆能力体检**，对运行中的 `/ask` 打真实问题并按六个能力打分：extraction / multi_session / temporal / knowledge_update / abstention / prospective（LongMemEval 五能力 + 前瞻）。

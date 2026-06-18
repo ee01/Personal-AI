@@ -4,6 +4,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import type { MemoryScope, RecallItem, RecallScope } from '../types/index.js';
 import { buildExploreLink } from '../utils/exploreLink.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
+import { MemoryLineageService } from '../core/MemoryLineageService.js';
 import { getRecallFeedbackAction } from '../utils/recallFeedback.js';
 
 interface DeleteMemoriesQuerystring {
@@ -333,7 +334,10 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
         .all(source, ...scopeParams) as Array<{ chunk_id: number }>;
       const chunkIds = matchingChunks.map((row) => row.chunk_id);
 
+      let cascade: ReturnType<MemoryLineageService['applyCascade']> | undefined;
       db.transaction(() => {
+        // P2-10: cascade derived provenance before clearing the source rows.
+        cascade = new MemoryLineageService(db).applyCascade(messageIds);
         if (chunkIds.length > 0) {
           const chunkPlaceholders = chunkIds
             .map(() => 'CAST(? AS INTEGER)')
@@ -382,6 +386,62 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
         scope,
         deletedMessages: messageIds.length,
         deletedChunks: chunkIds.length,
+        cascade,
+      });
+    },
+  );
+
+  // P2-10: single-message deletion with the same lineage cascade. The
+  // source-scoped DELETE above only supports bulk-by-source; this serves the
+  // "delete just this one" need with full provenance cleanup.
+  app.delete<{ Params: { id: string } }>(
+    '/memories/message/:id',
+    async (request, reply) => {
+      const { db } = request.userContext;
+      const messageId = request.params.id;
+      const exists = db
+        .prepare(`SELECT 1 FROM messages_raw WHERE id = ?`)
+        .get(messageId);
+      if (!exists) {
+        return reply.status(404).send({ error: 'message_not_found', id: messageId });
+      }
+      const chunkRows = db
+        .prepare(`SELECT chunk_id FROM chunks WHERE related_entity_id = ?`)
+        .all(messageId) as Array<{ chunk_id: number }>;
+      const chunkIds = chunkRows.map((r) => r.chunk_id);
+
+      let cascade: ReturnType<MemoryLineageService['applyCascade']> | undefined;
+      db.transaction(() => {
+        cascade = new MemoryLineageService(db).applyCascade([messageId]);
+        if (chunkIds.length > 0) {
+          const ph = chunkIds.map(() => 'CAST(? AS INTEGER)').join(', ');
+          try {
+            db.prepare(`DELETE FROM chunks_vec WHERE chunk_id IN (${ph})`).run(...chunkIds);
+          } catch {
+            /* vec absent */
+          }
+          db.prepare(`DELETE FROM chunks WHERE chunk_id IN (${ph})`).run(...chunkIds);
+          const strs = chunkIds.map(String);
+          const sph = strs.map(() => '?').join(', ');
+          db.prepare(
+            `DELETE FROM memory_metadata WHERE target_type = 'chunk' AND target_id IN (${sph})`,
+          ).run(...strs);
+        }
+        try {
+          db.prepare(`DELETE FROM messages_vec WHERE message_id = ?`).run(messageId);
+        } catch {
+          /* vec absent */
+        }
+        db.prepare(`DELETE FROM messages_raw WHERE id = ?`).run(messageId);
+        db.prepare(
+          `DELETE FROM memory_metadata WHERE target_type = 'message' AND target_id = ?`,
+        ).run(messageId);
+      })();
+
+      return reply.status(200).send({
+        id: messageId,
+        deletedChunks: chunkIds.length,
+        cascade,
       });
     },
   );
