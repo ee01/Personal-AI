@@ -28,6 +28,7 @@ import {
   type AnswerMemoryDiagnostic,
   type AnswerMemoryPrior,
 } from '../core/AnswerMemoryService.js';
+import { AnticipationService } from '../core/AnticipationService.js';
 import type { MemoryContextMatchResult } from '../core/MemoryContextMatchService.js';
 import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
@@ -1205,13 +1206,32 @@ async function recallForAsk(
   ).slice(0, askTopK);
   const answerMemoryContext =
     answerMemoryService.formatPriorForPrompt(answerMemoryPrior);
+
+  // Sleep-time prior (P1-7): if last night's Anticipation phase precomputed a
+  // brief for this question's subject, inject it so /ask can short-circuit the
+  // full retrieval+synthesis chain. The brief is a derived cache (consumed once).
+  let anticipationContext = '';
+  try {
+    const subjectKeys = [
+      ...(parsedIntent.filters.entityNames ?? []),
+      ...(parsedIntent.filters.projectNames ?? []),
+      parsedIntent.cleanedQuery,
+    ].filter((k): k is string => !!k && k.length >= 2);
+    const prior = new AnticipationService(db).findPrior(subjectKeys);
+    if (prior) {
+      anticipationContext = `Anticipated brief (precomputed for "${prior.subjectKey}"):\n${prior.briefMd}`;
+    }
+  } catch {
+    /* anticipation table absent or lookup failed — no prior */
+  }
+
   return {
     parsedIntent,
     recalledItems,
     recallBlocks: recallResult.blocks,
     recallChannelDiagnostics: recallResult.channelDiagnostics,
     recallScopeReceipt: recallResult.scopeReceipt,
-    memoryContext: [answerMemoryContext, formatRecalledContext(recalledItems)]
+    memoryContext: [anticipationContext, answerMemoryContext, formatRecalledContext(recalledItems)]
       .filter(Boolean)
       .join('\n\n'),
     intentContext: formatIntentContext(parsedIntent, expansion),

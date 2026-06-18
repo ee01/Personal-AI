@@ -22,6 +22,7 @@ import { BehaviorAffinityService } from './BehaviorAffinityService.js';
 import { SynonymEdgeService } from './SynonymEdgeService.js';
 import { ProbationService } from './ProbationService.js';
 import { MemoryEvolutionService } from './MemoryEvolutionService.js';
+import { AnticipationService } from './AnticipationService.js';
 import { getConfig } from '../config.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
@@ -253,6 +254,17 @@ export class ConsolidationEngine {
       console.log(`[ConsolidationEngine] Phase 6 (Reflect): generated ${result.reflected} reflection`);
     } catch (err) {
       console.error('[ConsolidationEngine] Phase 6 (Reflect) failed:', err);
+    }
+
+    // Phase 6.5: Anticipation (P1-7) — precompute answers to tomorrow's likely
+    // questions (upcoming meetings + open reflection topics) for /ask priors.
+    try {
+      const svc = new AnticipationService(this.db);
+      svc.pruneExpired();
+      const written = await svc.generate();
+      console.log(`[ConsolidationEngine] Phase 6.5 (Anticipation): wrote ${written} briefs`);
+    } catch (err) {
+      console.error('[ConsolidationEngine] Phase 6.5 (Anticipation) failed:', err);
     }
 
     const elapsedSec = ((Date.now() - startMs) / 1000).toFixed(1);

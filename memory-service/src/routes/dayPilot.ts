@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { DayPilotService } from '../core/DayPilotService.js';
 import { TodayPilotMeetingPrepService } from '../core/TodayPilotMeetingPrepService.js';
+import { CatchUpService } from '../core/CatchUpService.js';
 import type { DayPilotFeedbackAction } from '../repositories/DayPilotRepository.js';
 import type {
   ContextAssistMeetingEvent,
@@ -39,6 +40,25 @@ export async function dayPilotRoutes(app: FastifyInstance): Promise<void> {
       });
 
       return reply.status(200).send(result);
+    });
+
+    // P1-7 catch-up: read-only brief of what was captured while the user was
+    // away. sinceTs defaults to 90 minutes ago. Never mutates read state.
+    app.get<{
+      Querystring: { sinceTs?: string; awayMinutes?: string };
+    }>(`${prefix}/catch-up`, async (request, reply) => {
+      const { db } = request.userContext;
+      const nowSec = Math.floor(Date.now() / 1000);
+      let sinceTs = nowSec - 90 * 60;
+      if (request.query.sinceTs) {
+        const parsed = parseInt(request.query.sinceTs, 10);
+        if (Number.isFinite(parsed)) sinceTs = parsed;
+      } else if (request.query.awayMinutes) {
+        const mins = parseInt(request.query.awayMinutes, 10);
+        if (Number.isFinite(mins)) sinceTs = nowSec - mins * 60;
+      }
+      const brief = new CatchUpService(db, request.userId).buildCatchUp(sinceTs, nowSec);
+      return reply.status(200).send(brief);
     });
 
     app.post<{
