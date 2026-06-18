@@ -19,6 +19,7 @@ const TABLES_TO_CLEAR = [
   'proposed_actions',
   'reflection_threads',
   'user_profile_items',
+  'memory_import_batches',
   'chunks',
   'messages_raw',
 ];
@@ -251,6 +252,32 @@ function seedCoverageData(db: BetterSqlite3.Database): void {
     'Coverage pending',
     ts,
   );
+
+  db.prepare(
+    `INSERT INTO memory_import_batches (
+       id, input_kind, detected_kind, source_name, source_hash, source_count,
+       status, summary_json, warnings_json, created_at, committed_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    'external-ai-import-coverage-1',
+    'file',
+    'external_ai_history',
+    'chatgpt-export.zip',
+    'external-ai-import-hash',
+    2,
+    'committed',
+    JSON.stringify({
+      externalAiConversations: 2,
+      externalAiImportedMessages: 12,
+      externalAiTotalMessages: 14,
+      externalAiSkippedParts: 3,
+      externalAiSourcePath: 'exports/conversations.json',
+      externalAiIgnoredFiles: 4,
+    }),
+    '[]',
+    ts,
+    ts,
+  );
 }
 
 describe('Coverage API', () => {
@@ -305,6 +332,18 @@ describe('Coverage API', () => {
     expect(doubao.qualityScoreBreakdown.failingPenalty).toBe(10);
     expect(doubao.qualityScoreBreakdown.reasons.join('\n')).toContain('存在失败贡献项');
     expect(doubao.repairActions[0].description).toContain('fixture failure');
+    expect(body.priorityFocus).toMatchObject({
+      platformId: 'doubao',
+      platformName: '豆包 Doubao',
+      state: 'failing',
+      contributionId: 'doubao:provider-sync',
+      contributionLabel: '长期记忆推送',
+      contributionState: 'failing',
+      actionId: 'doubao:provider-sync',
+      actionSeverity: 'critical',
+      source: "provider_sync_jobs.provider='doubao'",
+    });
+    expect(body.priorityFocus.reason).toContain('先检查最近一次同步或读取错误');
 
     const codex = body.platforms.find((item: any) => item.id === 'codex');
     expect(codex.state).toBe('blocked');
@@ -321,6 +360,31 @@ describe('Coverage API', () => {
       severity: 'warning',
     });
     expect(claudeCode.repairActions[0].description).toContain('probe failed');
+
+    const externalAiHistory = body.platforms.find(
+      (item: any) => item.id === 'external_ai_history',
+    );
+    expect(externalAiHistory).toMatchObject({
+      group: 'active',
+      state: 'healthy',
+      totalCount: 12,
+      recentCount: 12,
+    });
+    expect(externalAiHistory.contributions[0]).toMatchObject({
+      id: 'external-ai:import-batches',
+      count: 12,
+      recentCount: 12,
+    });
+    expect(externalAiHistory.contributions[0].detail).toContain('1 个导入批次');
+    expect(externalAiHistory.contributions[0].detail).toContain('2 个会话');
+    expect(externalAiHistory.contributions[0].detail).toContain('12/14 条文本消息');
+    expect(externalAiHistory.contributions[0].detail).toContain('跳过 3 个非文本');
+    expect(externalAiHistory.contributions[0].detail).toContain('忽略 4 个归档文件');
+    expect(externalAiHistory.contributions[0].detail).toContain('来源 exports/conversations.json');
+    expect(externalAiHistory.repairActions[0]).toMatchObject({
+      id: 'external-ai-history:manual-refresh',
+      severity: 'info',
+    });
 
     const nonInfoRepairActions = body.repairActions.filter(
       (item: any) => item.severity !== 'info',
@@ -356,5 +420,52 @@ describe('Coverage API', () => {
       enabled: true,
       capability: 'api',
     });
+  });
+
+  it('marks imported external AI history stale when the last commit is old', async () => {
+    const old = now() - 12 * 86400;
+    db.prepare(
+      `UPDATE memory_import_batches
+       SET created_at = ?, committed_at = ?
+       WHERE id = ?`,
+    ).run(old, old, 'external-ai-import-coverage-1');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/coverage/map',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const externalAiHistory = body.platforms.find(
+      (item: any) => item.id === 'external_ai_history',
+    );
+
+    expect(externalAiHistory).toMatchObject({
+      group: 'active',
+      state: 'stale',
+      totalCount: 12,
+      recentCount: 0,
+    });
+    expect(externalAiHistory.contributions[0]).toMatchObject({
+      id: 'external-ai:import-batches',
+      state: 'stale',
+      recentCount: 0,
+    });
+    expect(externalAiHistory.qualityScore).toBeLessThan(80);
+    expect(externalAiHistory.repairActions[0]).toMatchObject({
+      id: 'external-ai-history:manual-refresh',
+      severity: 'warning',
+    });
+    expect(externalAiHistory.repairActions[0].description).toContain(
+      '不会自动同步',
+    );
+    expect(
+      body.repairActions.some(
+        (item: any) =>
+          item.id === 'external-ai-history:manual-refresh' &&
+          item.severity === 'warning',
+      ),
+    ).toBe(true);
   });
 });

@@ -57,6 +57,28 @@ export interface Config {
   todayPilotMeetingPrepEnabled: boolean;
   composeAssistEnabled: boolean;
 
+  // Recent Focus injection (QW-1): standard "近期重点" block injected into
+  // /ask and quick-ask system prompts, sharing logic with the Doubao digest.
+  recentFocusEnabled: boolean;
+  recentFocusWindowDays: number;
+  recentFocusTokenBudget: number;
+
+  // Progressive (L0/L1/L2) evidence assembly under a token budget (QW-3).
+  evidenceProgressiveEnabled: boolean;
+  evidenceFullCount: number;
+  evidenceTokenBudget: number;
+
+  // Graph recall algorithm (P0-3): 'ppr' (Personalized PageRank, associative)
+  // or 'hops' (legacy 1-2 hop walk).
+  recallGraphAlgorithm: 'ppr' | 'hops';
+  recallGraphPprMaxNodes: number;
+  recallGraphPprMaxHops: number;
+
+  // Behavioral intimacy factor in recall ranking (P0-4).
+  recallAffinityEnabled: boolean;
+  recallAffinityWeight: number;
+  affinityWindowDays: number;
+
   // Weekly Report
   weeklyReportEnabled: boolean;
   weeklyReportCron: string;
@@ -239,6 +261,53 @@ export function getConfig(): Readonly<Config> {
     composeAssistEnabled:
       process.env.COMPOSE_ASSIST_ENABLED !== 'false' &&
       process.env.CONTEXT_ASSIST_ENABLED !== 'false',
+
+    // Recent Focus injection (QW-1): default on; cheap rolling block.
+    recentFocusEnabled: process.env.RECENT_FOCUS_ENABLED !== 'false',
+    recentFocusWindowDays: (() => {
+      const parsed = parseInt(process.env.RECENT_FOCUS_WINDOW_DAYS || '14', 10);
+      return Number.isFinite(parsed) ? Math.max(1, parsed) : 14;
+    })(),
+    recentFocusTokenBudget: (() => {
+      const parsed = parseInt(process.env.RECENT_FOCUS_TOKEN_BUDGET || '320', 10);
+      return Number.isFinite(parsed) ? Math.max(80, parsed) : 320;
+    })(),
+
+    // Progressive evidence assembly (QW-3): default on.
+    evidenceProgressiveEnabled: process.env.EVIDENCE_PROGRESSIVE_ENABLED !== 'false',
+    evidenceFullCount: (() => {
+      const parsed = parseInt(process.env.EVIDENCE_FULL_COUNT || '4', 10);
+      return Number.isFinite(parsed) ? Math.max(1, parsed) : 4;
+    })(),
+    evidenceTokenBudget: (() => {
+      const parsed = parseInt(process.env.EVIDENCE_TOKEN_BUDGET || '1200', 10);
+      return Number.isFinite(parsed) ? Math.max(200, parsed) : 1200;
+    })(),
+
+    // Graph recall algorithm (P0-3): PPR on by default; revert with
+    // RECALL_GRAPH_ALGORITHM=hops.
+    recallGraphAlgorithm:
+      process.env.RECALL_GRAPH_ALGORITHM === 'hops' ? 'hops' : 'ppr',
+    recallGraphPprMaxNodes: (() => {
+      const parsed = parseInt(process.env.RECALL_GRAPH_PPR_MAX_NODES || '2000', 10);
+      return Number.isFinite(parsed) ? Math.max(50, parsed) : 2000;
+    })(),
+    recallGraphPprMaxHops: (() => {
+      const parsed = parseInt(process.env.RECALL_GRAPH_PPR_MAX_HOPS || '3', 10);
+      return Number.isFinite(parsed) ? Math.max(1, Math.min(5, parsed)) : 3;
+    })(),
+
+    // Behavioral intimacy (P0-4): default on; affinity is 0 until rolled up, so
+    // enabling it is a no-op until there is behavior data.
+    recallAffinityEnabled: process.env.RECALL_AFFINITY_ENABLED !== 'false',
+    recallAffinityWeight: (() => {
+      const parsed = parseFloat(process.env.RECALL_AFFINITY_WEIGHT || '0.08');
+      return Number.isFinite(parsed) ? Math.max(0, Math.min(0.5, parsed)) : 0.08;
+    })(),
+    affinityWindowDays: (() => {
+      const parsed = parseInt(process.env.AFFINITY_WINDOW_DAYS || '90', 10);
+      return Number.isFinite(parsed) ? Math.max(7, parsed) : 90;
+    })(),
 
     // Weekly Report
     weeklyReportEnabled: process.env.WEEKLY_REPORT_ENABLED !== 'false',

@@ -130,17 +130,24 @@ function scoreRehearsal(
   score -= Math.min(0.18, rehearsal.dismissedCount * 0.04);
   score = Math.max(0, Math.min(0.99, score));
 
-  const displayPriority =
+  let displayPriority: ContextRecallDisplayPriority =
     score >= STRONG_DISPLAY_THRESHOLD
       ? 'p1'
       : score >= WEAK_DISPLAY_THRESHOLD
         ? 'p2'
         : 'hidden';
+  const whyRelevant = buildWhyRelevant(matched);
+  if (rehearsal.status === 'stale' && displayPriority === 'p1') {
+    displayPriority = 'p2';
+  }
+  if (rehearsal.status === 'stale' && displayPriority !== 'hidden') {
+    whyRelevant.unshift(staleReasonLabel(rehearsal.staleReason));
+  }
 
   return {
     score,
     matchedCues: matched,
-    whyRelevant: buildWhyRelevant(matched),
+    whyRelevant: Array.from(new Set(whyRelevant)).slice(0, 4),
     displayPriority,
   };
 }
@@ -191,6 +198,8 @@ function toContextRecallMatch(
         activationId,
         scenarioType: rehearsal.scenarioType,
         status: rehearsal.status,
+        summary: rehearsal.summary,
+        content: rehearsal.content,
         sourceKind: rehearsal.sourceKind,
         sourceRefId: rehearsal.sourceRefId,
         validUntil: rehearsal.validUntil,
@@ -334,6 +343,13 @@ function buildWhyRelevant(cues: RehearsalActivationCues): string[] {
   if (cues.conversationIds?.length) reasons.push('同会话');
   if (cues.meetingIds?.length || cues.calendarEventIds?.length) reasons.push('同会议');
   return Array.from(new Set(reasons)).slice(0, 4);
+}
+
+function staleReasonLabel(reason: string | undefined): string {
+  if (reason === 'validity_expired') return '已过期，仅弱提示';
+  if (reason === 'no_activation_90d') return '长期未命中，仅弱提示';
+  if (reason === 'aging_no_activation_30d') return '近期未命中，降权提示';
+  return '已降权，仅弱提示';
 }
 
 function hasAnyCue(cues: RehearsalActivationCues): boolean {

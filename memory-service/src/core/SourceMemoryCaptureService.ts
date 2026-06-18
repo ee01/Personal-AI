@@ -5,6 +5,7 @@ import type { MemoryScope } from '../types/index.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { chunkText } from '../utils/chunking.js';
 import { contentHash } from '../utils/hashing.js';
+import { classifyTrust, screenForInjection } from './injectionScreen.js';
 import { now, formatDate } from '../utils/time.js';
 
 export type SourceMemorySourceKind =
@@ -55,6 +56,15 @@ export interface SourceMemoryCandidateResult {
   reasons: string[];
   blockedReason?: string;
   captureMode: SourceMemoryCaptureMode;
+  policyReceipt: SourceMemoryCapturePolicyReceipt;
+}
+
+export interface SourceMemoryCapturePolicyReceipt {
+  state: 'blocked' | 'ignored_low_signal' | 'suggested_review' | 'auto_save_candidate';
+  label: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
 }
 
 export interface SourceMemoryCreateInput extends SourceMemoryCandidateInput {
@@ -214,16 +224,23 @@ export class SourceMemoryCaptureService {
         reasons: [],
         blockedReason,
         captureMode: 'suggested',
+        policyReceipt: buildPolicyReceipt('blocked', {
+          blockedReason,
+        }),
       };
     }
 
     if (!hasEnoughSignal(text)) {
+      const reasons = ['文本信息量不足'];
       return {
         eligible: false,
         score: 0,
         suggestedAction: 'ignore',
-        reasons: ['文本信息量不足'],
+        reasons,
         captureMode: 'suggested',
+        policyReceipt: buildPolicyReceipt('ignore', {
+          reasons,
+        }),
       };
     }
 
@@ -305,6 +322,10 @@ export class SourceMemoryCaptureService {
       suggestedAction,
       reasons,
       captureMode: suggestedAction === 'auto_save' ? 'auto' : 'suggested',
+      policyReceipt: buildPolicyReceipt(suggestedAction, {
+        reasons,
+        score,
+      }),
     };
   }
 
@@ -431,7 +452,75 @@ export class SourceMemoryCaptureService {
         transaction();
       } else {
         const existingMetadata = parseObject(existing.metadata_json ?? '{}');
-        if (hasVisualMetadataUpgrade(existingMetadata, metadata)) {
+        const shouldRefreshDuplicateNote = note.length > 0;
+        const shouldUpgradeVisualMetadata = hasVisualMetadataUpgrade(existingMetadata, metadata);
+        if (shouldRefreshDuplicateNote) {
+          const messageId = existing.message_id || uuidv4();
+          const refreshedMetadata = {
+            ...existingMetadata,
+            ...metadata,
+            userNote: note,
+            noteUpdatedAt: ts,
+            duplicateSavedAt: ts,
+          };
+          const transaction = this.db.transaction(() => {
+            this.db
+              .prepare(
+                `UPDATE source_memory_capsules
+                 SET source_kind = ?,
+                     source_url = ?,
+                     source_title = ?,
+                     source_host = ?,
+                     capture_mode = ?,
+                     capture_reason = ?,
+                     scope = ?,
+                     privacy_level = ?,
+                     summary = ?,
+                     content_preview = ?,
+                     message_id = ?,
+                     metadata_json = ?,
+                     updated_at = ?
+                 WHERE id = ?`,
+              )
+              .run(
+                sourceKind,
+                sourceUrl,
+                sourceTitle,
+                sourceHost,
+                captureMode,
+                captureReason,
+                scope,
+                privacyLevel,
+                summary,
+                contentPreview,
+                messageId,
+                JSON.stringify(refreshedMetadata),
+                ts,
+                existing.id,
+              );
+            this.removeLinkedMemorySignal(existing.message_id);
+            this.insertMessageAndChunks({
+              messageId,
+              capsuleId: existing.id,
+              content: fullContent,
+              summary,
+              scope,
+              sourceUrl,
+              sourceTitle,
+              sourceHost,
+              captureMode,
+              metadata: refreshedMetadata,
+              ts,
+            });
+            this.insertEvent(existing.id, 'duplicate_save', 'medium', sourceUrl, {
+              captureMode,
+              captureReason,
+              updatedNote: true,
+            });
+          });
+          transaction();
+          this.writeMarkdownSnapshot(existing.id, fullContent, ts);
+        } else if (shouldUpgradeVisualMetadata) {
           this.db
             .prepare(
               `UPDATE source_memory_capsules
@@ -440,11 +529,16 @@ export class SourceMemoryCaptureService {
                WHERE id = ?`,
             )
             .run(JSON.stringify(metadata), ts, existing.id);
+          this.insertEvent(existing.id, 'duplicate_save', 'medium', sourceUrl, {
+            captureMode,
+            captureReason,
+          });
+        } else {
+          this.insertEvent(existing.id, 'duplicate_save', 'medium', sourceUrl, {
+            captureMode,
+            captureReason,
+          });
         }
-        this.insertEvent(existing.id, 'duplicate_save', 'medium', sourceUrl, {
-          captureMode,
-          captureReason,
-        });
       }
       return { ...this.getCapsule(existing.id), duplicate: true };
     }
@@ -701,6 +795,11 @@ export class SourceMemoryCaptureService {
       )
       .all(id) as SourceMemoryTriggerRow[];
 
+    const linkedMessageId =
+      row.status === 'saved' && this.hasLinkedMemorySignal(row.message_id)
+        ? row.message_id ?? undefined
+        : undefined;
+
     return {
       id: row.id,
       sourceKind: row.source_kind,
@@ -714,7 +813,7 @@ export class SourceMemoryCaptureService {
       privacyLevel: row.privacy_level,
       summary: row.summary ?? '',
       contentPreview: row.content_preview ?? '',
-      messageId: row.message_id ?? undefined,
+      messageId: linkedMessageId,
       metadata: parseObject(row.metadata_json ?? '{}'),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -761,13 +860,22 @@ export class SourceMemoryCaptureService {
   }): void {
     const messageImportance = getCaptureModeMessageImportance(input.captureMode);
     const chunkImportance = Math.max(0.45, messageImportance - 0.04);
+    // Injection defense (P0-2): web-page capsules are untrusted content — the
+    // primary "page hides instructions" attack vector. Tag trust + screen for
+    // injection patterns here too, since this path bypasses IngestionPipeline.
+    const trustClass = classifyTrust('web');
+    const screen = screenForInjection(input.content);
+    const injectionFlagsJson = screen.flagged
+      ? JSON.stringify(screen.flags)
+      : null;
     this.db
       .prepare(
         `INSERT INTO messages_raw (
            id, content, summary, scope, source, source_type, source_url,
            source_title, sender, group_id, group_name, timestamp,
-           importance, sentiment, metadata_json, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, ?, ?, ?, 'neutral', ?, ?, ?)`,
+           importance, sentiment, metadata_json, trust_class, injection_flags_json,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, ?, ?, ?, 'neutral', ?, ?, ?, ?, ?)`,
       )
       .run(
         input.messageId,
@@ -787,6 +895,8 @@ export class SourceMemoryCaptureService {
           sourceMemoryCapsuleId: input.capsuleId,
           captureLayer: 'memory_capture',
         }),
+        trustClass,
+        injectionFlagsJson,
         input.ts,
         input.ts,
       );
@@ -795,8 +905,9 @@ export class SourceMemoryCaptureService {
     const chunkStmt = this.db.prepare(
       `INSERT INTO chunks (
          file_path, line_start, line_end, content, content_hash, scope, source,
-         source_type, related_entity_id, token_count, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'web', ?, ?, ?, ?)`,
+         source_type, related_entity_id, token_count, trust_class, injection_flags_json,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'web', ?, ?, ?, ?, ?, ?)`,
     );
     const metadataStmt = this.db.prepare(
       `INSERT INTO memory_metadata (
@@ -823,6 +934,8 @@ export class SourceMemoryCaptureService {
         `source-memory:${input.capsuleId}`,
         input.messageId,
         chunk.tokenCount,
+        trustClass,
+        injectionFlagsJson,
         input.ts,
         input.ts,
       );
@@ -852,6 +965,16 @@ export class SourceMemoryCaptureService {
 
     this.db.prepare(`DELETE FROM chunks WHERE related_entity_id = ?`).run(normalizedMessageId);
     this.db.prepare(`DELETE FROM messages_raw WHERE id = ?`).run(normalizedMessageId);
+  }
+
+  private hasLinkedMemorySignal(messageId?: string | null): boolean {
+    const normalizedMessageId = normalizeText(messageId);
+    if (!normalizedMessageId) return false;
+
+    const row = this.db
+      .prepare(`SELECT 1 AS present FROM messages_raw WHERE id = ? LIMIT 1`)
+      .get(normalizedMessageId) as { present: number } | undefined;
+    return Boolean(row?.present);
   }
 
   private insertEvent(
@@ -1033,6 +1156,62 @@ function buildTriggers(
     });
   }
   return triggers;
+}
+
+function buildPolicyReceipt(
+  action: SourceMemoryCandidateResult['suggestedAction'],
+  input: { reasons?: string[]; blockedReason?: string; score?: number },
+): SourceMemoryCapturePolicyReceipt {
+  const rawEvidence = (input.reasons ?? []).filter(Boolean);
+  const evidence = [
+    ...rawEvidence.filter(isIntentPolicyEvidence),
+    ...rawEvidence.filter((item) => !isIntentPolicyEvidence(item)),
+  ].slice(0, 4);
+
+  if (action === 'blocked') {
+    return {
+      state: 'blocked',
+      label: '已阻断入库',
+      detail: input.blockedReason || '当前资料命中 Memory Capture 阻断规则。',
+      evidence,
+      nextStep: '不会保存；去掉敏感内容或换普通资料页后再试。',
+    };
+  }
+
+  if (action === 'ignore') {
+    return {
+      state: 'ignored_low_signal',
+      label: '未提示入库',
+      detail: evidence[0] || '当前资料缺少足够可复用信息。',
+      evidence,
+      nextStep: '继续阅读、复制，或选择更完整的资料段落后再评分。',
+    };
+  }
+
+  if (action === 'auto_save') {
+    return {
+      state: 'auto_save_candidate',
+      label: '自动入库候选',
+      detail: '候选资料具备强意图和低风险信号；前端仍需满足页面级自动阈值。',
+      evidence,
+      nextStep: '达到自动入库门槛时静默保存，并用轻提示提供撤销。',
+    };
+  }
+
+  return {
+    state: 'suggested_review',
+    label: '建议复核入库',
+    detail:
+      typeof input.score === 'number'
+        ? `候选分 ${input.score.toFixed(2)}，需要用户确认后写入。`
+        : '资料可能有保存价值，需要用户确认后写入。',
+    evidence,
+    nextStep: '显示右侧 + 入库；用户可复核、补备注，再确认保存。',
+  };
+}
+
+function isIntentPolicyEvidence(reason: string): boolean {
+  return /用户|选中|复制|停留|阅读|重复访问|实体线索/.test(reason);
 }
 
 function inferTakeawayKind(text: string): string {

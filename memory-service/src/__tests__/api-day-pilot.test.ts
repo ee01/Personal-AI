@@ -24,6 +24,8 @@ describe('Day Pilot API', () => {
 
   beforeEach(() => {
     for (const table of [
+      'rehearsal_activations',
+      'rehearsals',
       'today_meeting_preps',
       'day_brief_feedback',
       'day_brief_cards',
@@ -422,6 +424,57 @@ describe('Day Pilot API', () => {
     expect(titles).toContain('Could you confirm the owner and risk');
     expect(titles).not.toContain('Casual weekend check-in');
     expect(titles).not.toContain('lunch photos');
+  });
+
+  it('filters passive AI tool news without a concrete user workflow', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+
+    for (const [id, content, summary] of [
+      [
+        'msg-openai-fyi',
+        'FYI: OpenAI published a new model blog post and release notes. No action needed.',
+        'OpenAI release notes shared for awareness only.',
+      ],
+      [
+        'msg-codex-workflow',
+        'OpenAI API quota is blocking Codex usage; please confirm owner, risk, and workaround before tomorrow.',
+        'OpenAI API quota blocks Codex usage and needs owner/risk confirmation.',
+      ],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO messages_raw
+          (id, content, summary, source_type, sender, group_id, group_name,
+           timestamp, entities_json, matched_projects_json, importance, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        content,
+        summary,
+        'glip',
+        'Riley',
+        'group-ai-news',
+        'AI News',
+        current - 600,
+        JSON.stringify([{ type: 'Person', name: 'Riley' }]),
+        JSON.stringify([{ name: 'Codex' }, { name: 'OpenAI' }]),
+        0.98,
+        current - 600,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.brief.sourceStats.messages.scanned).toBe(1);
+    const titles = body.brief.cards.map((card: any) => card.title).join('\n');
+    expect(titles).toContain('OpenAI API quota / Codex 可用性排查');
+    expect(titles).not.toContain('OpenAI release notes');
+    expect(titles).not.toContain('new model blog post');
   });
 
   it('filters low-action calendar noise and cleans dirty calendar titles', async () => {
@@ -1164,6 +1217,67 @@ describe('Day Pilot API', () => {
     ).toBe(false);
   });
 
+  it('adds a cue receipt to Today Pilot rehearsal prompt cards', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const localDate = new Date(current * 1000).toISOString().slice(0, 10);
+
+    db.prepare(
+      `INSERT INTO rehearsals
+        (id, title, scenario_type, status, summary, content,
+         activation_cues_json, evidence_refs_json, source_kind, source_ref_id,
+         confidence, priority, valid_until, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'reh-today-sophia',
+      '会前先复习 Sophia 的边界回应脚本',
+      'meeting',
+      'active',
+      '今天和 Sophia 讨论 AI Tools 时，先复述问题再给边界。',
+      '遇到 Sophia 质疑 AI Tools rollout 时，先复述她的问题，再说明安全边界和下一步 owner。',
+      JSON.stringify({
+        people: ['Sophia'],
+        projects: ['AI Tools'],
+        meetings: ['CoP AI 工具分享'],
+      }),
+      JSON.stringify(['calendar:event-ai-sharing']),
+      'manual',
+      'seed-rehearsal',
+      0.92,
+      9,
+      current + 7200,
+      current - 300,
+      current - 300,
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/today-pilot/today?date=${localDate}&timezone=Asia/Shanghai&autoGenerate=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const rehearsalCard = res
+      .json()
+      .brief.cards.find((card: any) => card.cardType === 'rehearsal_prompt');
+
+    expect(rehearsalCard).toBeTruthy();
+    expect(rehearsalCard.whyNow).toContain('预演线索');
+    expect(rehearsalCard.contextPack.rehearsalCueReceipt).toMatchObject({
+      label: '今日预演提示',
+      cueLabel: expect.stringContaining('人物 Sophia'),
+      statusLabel: expect.stringContaining('Active 预演'),
+      tone: 'info',
+    });
+    expect(rehearsalCard.contextPack.rehearsalCueReceipt.script).toContain(
+      '先复述她的问题',
+    );
+    expect(rehearsalCard.contextPack.rehearsalCueReceipt.boundary).toContain(
+      '不会自动发言',
+    );
+    expect(rehearsalCard.evidenceRefs[0].exploreLink).toContain(
+      '/rehearsals?rehearsalId=reh-today-sophia',
+    );
+  });
+
   it('defaults later feedback to a six-hour snooze when omitted by the client', async () => {
     const { localDate } = seedDayPilotData();
     const first = await app.inject({
@@ -1234,6 +1348,7 @@ describe('Day Pilot API', () => {
     expect(body.bodyMd).toContain('Codex Brief');
     expect(body.bodyMd).toContain('Webpage-MCP');
     expect(body.bodyMd).toContain('Next Best Action');
+    expect(body.bodyMd).toContain('Source Scope');
     expect(body.bodyMd).toContain('Handoff Boundary');
     expect(body.bodyMd).toContain('not permission to execute external actions');
     expect(body.evidenceRefs.length).toBeGreaterThan(0);
@@ -1247,6 +1362,10 @@ describe('Day Pilot API', () => {
       defaultSensitiveHandling: 'redacted_by_default',
     });
     expect(body.sourceSummary.evidenceCount).toBe(body.evidenceRefs.length);
+    expect(body.sourceSummary.renderedEvidenceCount).toBe(
+      body.evidenceRefs.length,
+    );
+    expect(body.sourceSummary.omittedEvidenceCount).toBe(0);
     expect(
       Object.values(body.sourceSummary.sourceKinds).reduce(
         (sum: number, count: any) => sum + Number(count || 0),
@@ -1314,6 +1433,10 @@ describe('Day Pilot API', () => {
     expect(body.truncated).toBe(true);
     expect(body.maxChars).toBe(1600);
     expect(body.bodyMd).toContain('Truncated to fit token budget');
+    expect(body.sourceSummary.renderedEvidenceCount).toBeLessThan(
+      body.sourceSummary.evidenceCount,
+    );
+    expect(body.sourceSummary.omittedEvidenceCount).toBeGreaterThan(0);
     expect(
       body.warnings.some((warning: string) =>
         warning.includes('Context pack was truncated'),

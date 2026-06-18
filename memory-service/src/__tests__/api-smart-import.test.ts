@@ -158,6 +158,41 @@ describe('Smart Memory Import API', () => {
     expect(chunkCount.count).toBeGreaterThan(0);
   });
 
+  it('requires explicit confirmation before committing high-risk shadow memory', async () => {
+    const payload = {
+      text: 'Rotate api_key=abc and token=secret before sharing this note.',
+      scope: 'work',
+    };
+
+    const blocked = await app.inject({
+      method: 'POST',
+      url: '/api/v1/import/commit',
+      payload,
+    });
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json()).toMatchObject({
+      error: 'High-risk import requires explicit confirmation before commit.',
+    });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM messages_raw').get()).toMatchObject({
+      count: 0,
+    });
+
+    const confirmed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/import/commit',
+      payload: {
+        ...payload,
+        confirmHighRisk: true,
+      },
+    });
+
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json()).toMatchObject({
+      status: 'committed',
+      importedMessages: 1,
+    });
+  });
+
   it('detects ordinary document zip and blocks unsupported entries explicitly', () => {
     const service = new SmartMemoryImportService(createUserContext(db));
     const result = service.inspect({
@@ -173,9 +208,36 @@ describe('Smart Memory Import API', () => {
     expect(result.status).toBe('ready');
     expect(result.summary.readyFiles).toBe(1);
     expect(result.summary.unsupported).toBe(1);
+    expect(result.summary.zipTotalFiles).toBe(2);
+    expect(result.summary.zipInspectedFiles).toBe(2);
+    expect(result.summary.zipSkippedFiles).toBe(0);
     expect(result.entries.find((entry) => entry.path.endsWith('.png'))).toMatchObject({
       status: 'blocked',
     });
+  });
+
+  it('reports ordinary zip inspection limits before commit', () => {
+    const service = new SmartMemoryImportService(createUserContext(db));
+    const entries: Record<string, string | Buffer> = {};
+    for (let index = 0; index < 82; index += 1) {
+      entries[`notes/note-${String(index).padStart(3, '0')}.md`] =
+        `# Note ${index}\nNeed provenance before memory import.`;
+    }
+
+    const result = service.inspect({
+      inputKind: 'file',
+      fileName: 'large-notes.zip',
+      buffer: createZipBuffer(entries),
+    });
+
+    expect(result.detectedKind).toBe('document_zip');
+    expect(result.status).toBe('ready');
+    expect(result.summary.files).toBe(80);
+    expect(result.summary.readyFiles).toBe(80);
+    expect(result.summary.zipTotalFiles).toBe(82);
+    expect(result.summary.zipInspectedFiles).toBe(80);
+    expect(result.summary.zipSkippedFiles).toBe(2);
+    expect(result.warnings).toContain('Only inspected the first 80 entries.');
   });
 
   it('blocks an empty standalone text file before commit', () => {
@@ -256,8 +318,67 @@ describe('Smart Memory Import API', () => {
     expect(result.summary.externalAiImportedMessages).toBe(2);
     expect(result.summary.externalAiTotalMessages).toBe(2);
     expect(result.summary.externalAiTruncatedConversations).toBe(0);
+    expect(result.summary.externalAiSourcePath).toBe('conversations.json');
+    expect(result.summary.externalAiIgnoredFiles).toBe(0);
     expect(result.entries[0].title).toBe('Memory import discussion');
     expect(result.entries[0].preview).toContain('Source: chatgpt');
+  });
+
+  it('preserves ChatGPT mapping order and reports skipped non-text parts', () => {
+    const service = new SmartMemoryImportService(createUserContext(db));
+    const result = service.inspect({
+      inputKind: 'file',
+      fileName: 'chatgpt-visual-export.zip',
+      buffer: createZipBuffer({
+        'conversations.json': JSON.stringify([
+          {
+            title: 'ChatGPT visual thread',
+            mapping: {
+              assistant: {
+                parent: 'user',
+                children: [],
+                message: {
+                  author: { role: 'assistant' },
+                  content: { parts: ['Second answer'] },
+                },
+              },
+              root: {
+                parent: null,
+                children: ['user'],
+              },
+              user: {
+                parent: 'root',
+                children: ['assistant'],
+                message: {
+                  author: { role: 'user' },
+                  content: {
+                    parts: [
+                      'First question',
+                      {
+                        content_type: 'image_asset_pointer',
+                        asset_pointer: 'file-service://image.png',
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        ]),
+      }),
+    });
+
+    expect(result.detectedKind).toBe('external_ai_history');
+    expect(result.summary.externalAiSkippedParts).toBe(1);
+    expect(result.summary.externalAiSourcePath).toBe('conversations.json');
+    expect(result.summary.externalAiIgnoredFiles).toBe(0);
+    expect(result.warnings).toContain(
+      'Conversation "ChatGPT visual thread" skipped 1 non-text message parts or attachments.',
+    );
+    expect(result.entries[0].preview.indexOf('First question')).toBeLessThan(
+      result.entries[0].preview.indexOf('Second answer'),
+    );
+    expect(result.entries[0].preview).not.toContain('image_asset_pointer');
   });
 
   it('reports external AI message truncation before import commit', () => {
@@ -294,6 +415,7 @@ describe('Smart Memory Import API', () => {
     expect(result.summary.externalAiTotalMessages).toBe(85);
     expect(result.summary.externalAiTruncatedConversations).toBe(1);
     expect(result.summary.externalAiTruncatedMessages).toBe(5);
+    expect(result.summary.externalAiSourcePath).toBe('conversations.json');
     expect(result.warnings).toContain(
       'Conversation "Long memory thread" includes 85 messages; only the first 80 were included in this import preview.',
     );
@@ -367,13 +489,58 @@ describe('Smart Memory Import API', () => {
     expect(result.status).toBe('ready');
     expect(result.summary.externalAiConversations).toBe(1);
     expect(result.summary.unsupported).toBe(0);
+    expect(result.summary.externalAiSourcePath).toBe('exports/conversations.json');
+    expect(result.summary.externalAiIgnoredFiles).toBe(90);
     expect(result.entries[0]).toMatchObject({
       title: 'Late archive conversation',
       path: 'chatgpt/1-late-archive-conversation.md',
     });
     expect(result.warnings).toContain(
-      'Detected external AI history from exports/conversations.json; other archive files were ignored.',
+      'Detected external AI history from exports/conversations.json; ignored 90 other archive files.',
     );
+  });
+
+  it('persists external AI import scope metadata on commit', () => {
+    const service = new SmartMemoryImportService(createUserContext(db));
+    const input = {
+      inputKind: 'file' as const,
+      fileName: 'chatgpt-export-with-metadata.zip',
+      buffer: createZipBuffer({
+        'account/user.json': JSON.stringify({ email: 'user@example.com' }),
+        'conversations.json': JSON.stringify([
+          {
+            title: 'Scope receipt thread',
+            mapping: {
+              user: {
+                message: {
+                  author: { role: 'user' },
+                  create_time: 1,
+                  content: { parts: ['Only conversations should become memory.'] },
+                },
+              },
+            },
+          },
+        ]),
+      }),
+    };
+
+    const committed = service.commit(input);
+    expect(committed.status).toBe('committed');
+
+    const row = db
+      .prepare(
+        `SELECT summary_json
+         FROM memory_import_batches
+         WHERE detected_kind = 'external_ai_history'
+         LIMIT 1`,
+      )
+      .get() as { summary_json: string };
+    expect(JSON.parse(row.summary_json)).toMatchObject({
+      externalAiSourcePath: 'conversations.json',
+      externalAiIgnoredFiles: 1,
+      externalAiConversations: 1,
+      externalAiImportedMessages: 1,
+    });
   });
 
   it('detects Personal AI backup zip so the UI can switch to restore mode', () => {
@@ -422,6 +589,9 @@ describe('Smart Memory Import API', () => {
 
     expect(result.detectedKind).toBe('backup_zip');
     expect(result.status).toBe('backup');
-    expect(result.warnings).toContain('Only inspected the first 80 entries.');
+    expect(result.summary.zipTotalFiles).toBe(93);
+    expect(result.summary.zipInspectedFiles).toBe(93);
+    expect(result.summary.zipSkippedFiles).toBe(0);
+    expect(result.warnings).not.toContain('Only inspected the first 80 entries.');
   });
 });

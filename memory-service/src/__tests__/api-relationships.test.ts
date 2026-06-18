@@ -11,6 +11,7 @@ describe('Relationships API', () => {
 
   const nowEpoch = Math.floor(Date.now() / 1000);
   const personId = 'relationship-test-person-alice';
+  const storedPersonId = 'relationship-test-person-stored-freshness';
   const projectId = 'relationship-test-project-radar';
   const eventId = 'relationship-test-event-demo';
 
@@ -21,6 +22,11 @@ describe('Relationships API', () => {
     db.prepare('DELETE FROM relationship_review_items WHERE entity_id = ?').run(personId);
     db.prepare('DELETE FROM relationship_radar_people WHERE entity_id = ?').run(personId);
     db.prepare('DELETE FROM entity_properties WHERE entity_id = ?').run(personId);
+    db.prepare('DELETE FROM relationship_event_index WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM relationship_context_cards WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM relationship_review_items WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM relationship_radar_people WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM entity_properties WHERE entity_id = ?').run(storedPersonId);
     db.prepare('DELETE FROM calendar_events WHERE id = ? OR external_id = ?').run(
       eventId,
       eventId,
@@ -30,7 +36,8 @@ describe('Relationships API', () => {
       personId,
     );
     db.prepare('DELETE FROM messages_raw WHERE id LIKE ?').run('relationship-test-message-%');
-    db.prepare('DELETE FROM entities WHERE id IN (?, ?)').run(personId, projectId);
+    db.prepare('DELETE FROM messages_raw WHERE id LIKE ?').run('relationship-test-stored-message-%');
+    db.prepare('DELETE FROM entities WHERE id IN (?, ?, ?)').run(personId, storedPersonId, projectId);
 
     db.prepare(
       `INSERT INTO entities (
@@ -43,6 +50,19 @@ describe('Relationships API', () => {
       nowEpoch - 20 * 86400,
       nowEpoch - 3600,
       nowEpoch - 20 * 86400,
+    );
+
+    db.prepare(
+      `INSERT INTO entities (
+         id, type, name, aliases_json, description, importance, first_seen,
+         last_seen, mention_count, tags_json, status, created_at
+       ) VALUES (?, 'Person', 'Stored Radar', '["Stored"]', ?, 0.78, ?, ?, 7, '["ops"]', 'active', ?)`,
+    ).run(
+      storedPersonId,
+      'Stored context card freshness fixture',
+      nowEpoch - 12 * 86400,
+      nowEpoch - 3 * 86400,
+      nowEpoch - 12 * 86400,
     );
 
     db.prepare(
@@ -83,6 +103,21 @@ describe('Relationships API', () => {
         i % 2 === 0 ? 'Alice Radar' : 'Esone',
         ts,
         JSON.stringify([{ type: 'Person', id: personId, name: 'Alice Radar' }]),
+        ts,
+      );
+    }
+
+    for (let i = 0; i < 5; i += 1) {
+      const ts = nowEpoch - (i + 2) * 86400;
+      insertMessage.run(
+        `relationship-test-stored-message-${i}`,
+        i === 0
+          ? 'Stored Radar needs follow up on context card freshness before the next review.'
+          : `Stored Radar discussed relationship context card fixture ${i}.`,
+        `Stored Radar update ${i}`,
+        i % 2 === 0 ? 'Stored Radar' : 'Esone',
+        ts,
+        JSON.stringify([{ type: 'Person', id: storedPersonId, name: 'Stored Radar' }]),
         ts,
       );
     }
@@ -156,6 +191,11 @@ describe('Relationships API', () => {
     db.prepare('DELETE FROM relationship_review_items WHERE entity_id = ?').run(personId);
     db.prepare('DELETE FROM relationship_radar_people WHERE entity_id = ?').run(personId);
     db.prepare('DELETE FROM entity_properties WHERE entity_id = ?').run(personId);
+    db.prepare('DELETE FROM relationship_event_index WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM relationship_context_cards WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM relationship_review_items WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM relationship_radar_people WHERE entity_id = ?').run(storedPersonId);
+    db.prepare('DELETE FROM entity_properties WHERE entity_id = ?').run(storedPersonId);
     db.prepare('DELETE FROM calendar_events WHERE id = ? OR external_id = ?').run(
       eventId,
       eventId,
@@ -165,7 +205,8 @@ describe('Relationships API', () => {
       personId,
     );
     db.prepare('DELETE FROM messages_raw WHERE id LIKE ?').run('relationship-test-message-%');
-    db.prepare('DELETE FROM entities WHERE id IN (?, ?)').run(personId, projectId);
+    db.prepare('DELETE FROM messages_raw WHERE id LIKE ?').run('relationship-test-stored-message-%');
+    db.prepare('DELETE FROM entities WHERE id IN (?, ?, ?)').run(personId, storedPersonId, projectId);
     await app.close();
   });
 
@@ -220,6 +261,22 @@ describe('Relationships API', () => {
     expect(body.privacySummary.redactedEvidenceRefs).toBeGreaterThan(0);
     expect(body.privacySummary.redactedOpenLoops).toBeGreaterThan(0);
     expect(body.privacySummary.redactionNote).toContain('默认未纳入');
+    expect(body.contextReceipt.title).toBe('上下文卡回执');
+    expect(body.contextReceipt.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: '生成来源',
+          value: expect.stringContaining('索引即时计算'),
+          tone: 'warn',
+        }),
+        expect.objectContaining({
+          label: '隐私范围',
+          value: expect.stringContaining('默认隐藏'),
+          tone: 'ok',
+        }),
+      ]),
+    );
+    expect(body.contextReceipt.boundary).toContain('不会写入画像、发送消息或自动刷新其他场景');
     expect(body.retrievalHints.entityIds).toContain(personId);
     expect(body.evidenceRefs.length).toBeGreaterThan(0);
     expect(body.actionSuggestions.length).toBeGreaterThan(0);
@@ -228,6 +285,9 @@ describe('Relationships API', () => {
         item.title.includes('先闭环'),
       ),
     ).toBe(true);
+    expect(body.contextMd).toContain('## 上下文卡回执');
+    expect(body.contextMd).toContain('生成来源:');
+    expect(body.contextMd).toContain('隐私范围: 默认隐藏');
     expect(body.contextMd).toContain('## 现在建议');
     expect(
       body.evidenceRefs.some((ref: { exploreLink?: string }) =>
@@ -250,6 +310,17 @@ describe('Relationships API', () => {
     expect(sensitiveRes.statusCode).toBe(200);
     const sensitiveBody = sensitiveRes.json();
     expect(sensitiveBody.privacySummary.sensitiveIncluded).toBe(true);
+    expect(sensitiveBody.contextReceipt.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: '隐私范围',
+          value: '已临时包含敏感上下文',
+          tone: 'warn',
+        }),
+      ]),
+    );
+    expect(sensitiveBody.contextReceipt.boundary).toContain('已显式包含敏感上下文');
+    expect(sensitiveBody.contextMd).toContain('隐私范围: 已临时包含敏感上下文');
     expect(sensitiveBody.person.aliases).toContain('alice@example.com');
     expect(JSON.stringify(sensitiveBody)).toContain('alice.private@example.com');
   });
@@ -279,6 +350,128 @@ describe('Relationships API', () => {
     expect(storedCard?.context_md).toContain('## 现在建议');
   });
 
+  it('rebuilds a stored context card after a relationship fact is confirmed', async () => {
+    const storedCard = db
+      .prepare(
+        `SELECT generated_at
+         FROM relationship_context_cards
+         WHERE entity_id = ?
+         LIMIT 1`,
+      )
+      .get(personId) as { generated_at: number } | undefined;
+    expect(storedCard?.generated_at).toBeTruthy();
+
+    db.prepare(
+      `INSERT INTO entity_properties (
+         entity_id, property_key, property_value, value_type, source_author,
+         source_authority, source_context, tx_start, confidence, is_final,
+         status, action_type
+       ) VALUES (?, 'relationship_context', ?, 'string', 'user', 'self', ?, ?, 0.97, 1, 'active', 'confirm')`,
+    ).run(
+      personId,
+      'Alice Radar owns the Relationship Radar review queue.',
+      'Confirmed after stored context card generation',
+      storedCard!.generated_at + 60,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/context-card',
+      payload: {
+        personId,
+        surface: 'memory_exploring_person_tab',
+        tokenBudget: 900,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.dataQuality).toBe('confirmed');
+    expect(body.person.dataQuality).toBe('confirmed');
+    expect(body.projectionSource).toBe('user_confirmed');
+    expect(body.contextReceipt.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: '生成来源',
+          value: '人工确认画像 · 已确认',
+          tone: 'ok',
+        }),
+      ]),
+    );
+    expect(body.knownFacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'relationship_context',
+          value: 'Alice Radar owns the Relationship Radar review queue.',
+          confirmed: true,
+        }),
+      ]),
+    );
+    expect(body.contextMd).toContain('relationship_context: Alice Radar owns the Relationship Radar review queue.');
+  });
+
+  it('marks a reused stored context card as stale after newer interaction', async () => {
+    const consolidationRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/consolidate',
+      payload: { personIds: [storedPersonId], force: true },
+    });
+    expect(consolidationRes.statusCode).toBe(200);
+
+    const storedProjection = db
+      .prepare(
+        `SELECT last_consolidated_at
+         FROM relationship_radar_people
+         WHERE entity_id = ?
+         LIMIT 1`,
+      )
+      .get(storedPersonId) as { last_consolidated_at: number } | undefined;
+    expect(storedProjection?.last_consolidated_at).toBeTruthy();
+
+    const newerInteractionAt = storedProjection!.last_consolidated_at + 60;
+    db.prepare(
+      `INSERT INTO messages_raw (
+         id, content, summary, source_type, sender, group_id, group_name,
+         timestamp, entities_json, importance, created_at, scope
+       ) VALUES (?, ?, ?, 'glip', ?, 'team-radar', 'Radar Team', ?, ?, 0.8, ?, 'work')`,
+    ).run(
+      'relationship-test-stored-message-newer',
+      'Stored Radar needs follow up on the newer interaction before sharing the context card.',
+      'Stored Radar newer interaction',
+      'Stored Radar',
+      newerInteractionAt,
+      JSON.stringify([{ type: 'Person', id: storedPersonId, name: 'Stored Radar' }]),
+      newerInteractionAt,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/context-card',
+      payload: {
+        personId: storedPersonId,
+        surface: 'memory_exploring_person_tab',
+        tokenBudget: 900,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.dataQuality).toBe('stale');
+    expect(body.person.dataQuality).toBe('stale');
+    expect(body.contextReceipt.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: '生成来源',
+          value: '后台整理 · 有新互动待刷新',
+          tone: 'warn',
+        }),
+      ]),
+    );
+    expect(body.contextReceipt.boundary).toContain('新互动待整理');
+    expect(body.contextMd).toContain('后台整理 · 有新互动待刷新');
+    expect(body.contextMd).toContain('外发前建议刷新并核对最新证据');
+  });
+
   it('builds meeting people brief, assistant draft, and relationship graph', async () => {
     const briefRes = await app.inject({
       method: 'POST',
@@ -290,6 +483,9 @@ describe('Relationships API', () => {
     expect(brief.title).toContain('Relationship Radar demo');
     expect(brief.attendees[0].personId).toBe(personId);
     expect(brief.matrix[0].suggestedAsk).toBeTruthy();
+    expect(brief.sourceReceipt.title).toBe('简报来源回执');
+    expect(brief.sourceReceipt.rows.some((row: { value: string }) => row.value === '日历事件')).toBe(true);
+    expect(brief.sourceReceipt.boundary).toContain('不含敏感上下文');
 
     const draftRes = await app.inject({
       method: 'POST',
@@ -301,7 +497,51 @@ describe('Relationships API', () => {
       },
     });
     expect(draftRes.statusCode).toBe(200);
-    expect(draftRes.json().draftText).toContain('确认关系雷达 demo');
+    const draft = draftRes.json();
+    expect(draft.draftText).toContain('确认关系雷达 demo');
+    expect(draft.draftText).toContain('owner');
+    expect(draft.draftReceipt.title).toBe('草稿生成回执');
+    expect(draft.draftReceipt.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: '生成来源',
+          value: '人工确认画像 · 已确认',
+          tone: 'ok',
+        }),
+        expect.objectContaining({
+          label: '草稿范围',
+          value: expect.stringContaining('默认隐藏'),
+          tone: 'ok',
+        }),
+        expect.objectContaining({
+          label: '外部动作',
+          value: '未发送、未写回、未建任务',
+          tone: 'ok',
+        }),
+      ]),
+    );
+    expect(draft.draftReceipt.boundary).toContain('不会发送消息、写入人物画像');
+    expect(draft.draftReceipt.boundary).toContain('没有进入草稿');
+    expect(draft.contextPackage.cards[0].privacySummary.sensitiveIncluded).toBe(false);
+    expect(draft.contextPackage.cards[0].surface).toBe('relationship_assistant_draft');
+    expect(draft.safetyReview.status).toBe('review_first');
+    expect(draft.safetyReview.evidenceCount).toBeGreaterThan(0);
+    expect(draft.safetyReview.openLoopCount).toBeGreaterThan(0);
+    expect(draft.safetyReview.pendingReviewCount).toBeGreaterThan(0);
+    expect(draft.safetyReview.hiddenSensitiveCount).toBeGreaterThan(0);
+    expect(draft.contextBasis.primarySuggestion.title).toBeTruthy();
+    expect(draft.suggestedChecks.join(' ')).toContain('open loop');
+    expect(draft.warnings.join(' ')).toContain('敏感');
+
+    const invalidDraftRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/assistant/draft',
+      payload: {
+        personId,
+        includeSensitive: true,
+      },
+    });
+    expect(invalidDraftRes.statusCode).toBe(400);
 
     const graphRes = await app.inject({
       method: 'GET',
@@ -311,6 +551,59 @@ describe('Relationships API', () => {
     const graph = graphRes.json();
     expect(graph.nodes.some((node: { id: string }) => node.id === personId)).toBe(true);
     expect(graph.edges.length).toBeGreaterThan(0);
+  });
+
+  it('marks missing calendar event ids as manual fallback in meeting brief receipts', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/meeting-brief',
+      payload: {
+        eventId: 'relationship-test-event-missing',
+        title: 'Fallback relationship prep',
+        attendees: [{ email: 'alice@example.com' }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const brief = res.json();
+    const inputSource = brief.sourceReceipt.rows.find(
+      (row: { label: string }) => row.label === '输入来源',
+    );
+    expect(inputSource).toEqual(
+      expect.objectContaining({
+        value: '日历事件未找到，已改用手动输入',
+        tone: 'warn',
+      }),
+    );
+    expect(brief.title).toBe('Fallback relationship prep');
+    expect(brief.attendees[0].personId).toBe(personId);
+  });
+
+  it('marks manual overrides on calendar meeting brief receipts', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/relationships/meeting-brief',
+      payload: {
+        eventId,
+        title: 'Override relationship prep',
+        attendees: [{ name: 'External Reviewer', email: 'external@example.com' }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const brief = res.json();
+    const inputSource = brief.sourceReceipt.rows.find(
+      (row: { label: string }) => row.label === '输入来源',
+    );
+    expect(inputSource).toEqual(
+      expect.objectContaining({
+        value: '日历事件 + 手动覆盖',
+        tone: 'warn',
+      }),
+    );
+    expect(brief.title).toBe('Override relationship prep');
+    expect(brief.coverage.totalAttendees).toBe(1);
+    expect(brief.attendees[0].displayName).toBe('External Reviewer');
   });
 
   it('explains meeting brief attendee match coverage and email-only gaps', async () => {
@@ -360,16 +653,31 @@ describe('Relationships API', () => {
     expect(brief.coverage.totalAttendees).toBe(1);
     expect(brief.coverage.matchedAttendees).toBe(1);
     expect(brief.coverage.identityCheckAttendees).toBe(1);
+    expect(brief.coverage.evidenceRefs).toBe(0);
+    expect(brief.coverage.attendeesWithEvidence).toBe(0);
+    expect(brief.coverage.attendeesWithOpenLoops).toBe(0);
     expect(brief.coverage.coverageNote).toContain('弱匹配');
+    expect(brief.coverage.coverageNote).toContain('已暂缓展开历史上下文');
     expect(brief.readiness.status).toBe('partial');
     expect(brief.readiness.summary).toContain('弱匹配');
+    expect(brief.readiness.summary).toContain('历史上下文已暂缓展开');
     expect(brief.readiness.nextActions.join(' ')).toContain('先确认');
+    expect(brief.readiness.nextActions.join(' ')).toContain('重新生成');
     expect(brief.readiness.successCriteria.join(' ')).toContain('人工确认');
+    expect(brief.sourceReceipt.rows.map((row: { value: string }) => row.value).join(' ')).toContain('弱匹配已隐藏历史上下文');
+    expect(brief.sourceReceipt.rows.map((row: { value: string }) => row.value).join(' ')).toContain('本次没有可引用证据');
     expect(brief.attendees[0].personId).toBe(personId);
     expect(brief.attendees[0].matchedBy).toBe('email_local_part');
     expect(brief.attendees[0].identityCheckRequired).toBe(true);
     expect(brief.attendees[0].identityCheckReason).toContain('先确认');
+    expect(brief.attendees[0].contextSuppressedReason).toContain('暂缓展开历史证据');
     expect(brief.attendees[0].coverageState).toBe('thin');
+    expect(brief.attendees[0].evidenceRefs).toHaveLength(0);
+    expect(brief.attendees[0].openLoops).toHaveLength(0);
+    expect(brief.attendees[0].summary).toContain('历史上下文暂不展开');
+    expect(brief.attendees[0].suggestedQuestions[0]).toContain('先确认');
+    expect(brief.matrix[0].openLoop).toContain('暂不展开');
+    expect(brief.matrix[0].evidenceCount).toBe(0);
   });
 
   it('makes large meeting attendee truncation explicit', async () => {
@@ -451,11 +759,19 @@ describe('Relationships API', () => {
       method: 'POST',
       url: `/api/v1/relationships/review-items/${encodeURIComponent(item.id)}/snooze`,
       payload: {
+        editedValue: 'Alice Radar should be reviewed again after the next sync.',
         userNote: 'Review after the next relationship sync',
       },
     });
     expect(snoozeRes.statusCode).toBe(200);
-    expect(snoozeRes.json().status).toBe('snoozed');
+    const snoozedItem = snoozeRes.json();
+    expect(snoozedItem.status).toBe('snoozed');
+    expect(snoozedItem.actionReceipt.title).toContain('稍后复核');
+    expect(snoozedItem.actionReceipt.outcome).toBe('queued_for_later');
+    expect(snoozedItem.actionReceipt.availableAt).toBeGreaterThan(nowEpoch);
+    expect(snoozedItem.actionReceipt.noteCaptured).toBe(true);
+    expect(snoozedItem.actionReceipt.nextActions.join(' ')).toContain('不会写入人物画像');
+    expect(snoozedItem.proposedValue).toContain('reviewed again');
 
     const peopleWhileSnoozedRes = await app.inject({
       method: 'GET',
@@ -483,6 +799,7 @@ describe('Relationships API', () => {
       .items.find((candidate: { id: string }) => candidate.id === item.id);
     expect(dueItem?.status).toBe('pending');
     expect(dueItem?.snoozeUntil).toBeUndefined();
+    expect(dueItem?.proposedValue).toContain('reviewed again');
 
     const confirmRes = await app.inject({
       method: 'POST',
@@ -493,7 +810,13 @@ describe('Relationships API', () => {
       },
     });
     expect(confirmRes.statusCode).toBe(200);
-    expect(confirmRes.json().status).toBe('confirmed');
+    const confirmedItem = confirmRes.json();
+    expect(confirmedItem.status).toBe('confirmed');
+    expect(confirmedItem.actionReceipt.title).toContain('写入人物画像');
+    expect(confirmedItem.actionReceipt.outcome).toBe('profile_updated');
+    expect(confirmedItem.actionReceipt.nextActions.join(' ')).toContain('Context Card');
+    expect(confirmedItem.actionReceipt.nextActions.join(' ')).toContain('编辑后的写入内容');
+    expect(confirmedItem.actionReceipt.evidenceCount).toBeGreaterThan(0);
 
     const property = db
       .prepare(

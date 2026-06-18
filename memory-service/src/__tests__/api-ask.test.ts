@@ -44,6 +44,10 @@ import type BetterSqlite3 from 'better-sqlite3';
 
 import { UserContextManager } from '../core/UserContextManager.js';
 import { RecallEngine } from '../core/RecallEngine.js';
+import {
+  extractAskContextTitle,
+  resolveAskCandidateSelection,
+} from '../routes/ask.js';
 import { buildApp } from '../server.js';
 import { getTestDb } from './setup.js';
 
@@ -146,6 +150,219 @@ describe('Ask API', () => {
       'neutral',
       currentTime - 7200,
     );
+  });
+
+  it('extracts common RingCentral conversation labels as Ask surface titles', () => {
+    expect(
+      extractAskContextTitle(
+        'Surface: RingCentral chat. Current conversation: MTR-141852: AI Custom VBG. Visible message: 那个 BE ready 了吗？',
+      ),
+    ).toBe('MTR-141852: AI Custom VBG');
+    expect(
+      extractAskContextTitle(
+        'Group name: RingCentral Webinar BE CN Team; Last message: BE owner is checking status.',
+      ),
+    ).toBe('RingCentral Webinar BE CN Team');
+    expect(
+      extractAskContextTitle(
+        'Thread: AI VBG Phase 2.1 rollout. Question: 那个 BE ready 了吗？',
+      ),
+    ).toBe('AI VBG Phase 2.1 rollout');
+    expect(
+      extractAskContextTitle(
+        'Surface: RingCentral chat. Current chat title: MTR-141852: AI Custom VBG. Current URL: https://app.ringcentral.com/messages/153798238214 Selected text: BE status still pending.',
+      ),
+    ).toBe('MTR-141852: AI Custom VBG');
+    expect(
+      extractAskContextTitle(
+        'Surface: Browser page. Current page title: AI Tooling Roadmap. Current URL: https://docs.example.com/roadmap Visible page text: MTR-141852 next steps.',
+      ),
+    ).toBe('AI Tooling Roadmap');
+  });
+
+  it('resolves a candidate-number follow-up from the previous ambiguous Ask turn', () => {
+    const context = [
+      'User: 那个 BE ready 了吗？',
+      'Assistant: 这个问题可能指向多个近期话题。',
+      '候选话题：',
+      '1. AI Generated VBG (匹配角色词、近期高频)',
+      '2. AI Notes (匹配角色词、近期高频)',
+      '',
+      '你可以直接回复候选序号，或补上项目 / 群组 / issue key；确认后我再继续查证状态和证据。',
+    ].join('\n');
+
+    const resolved = resolveAskCandidateSelection('2', context);
+
+    expect(resolved?.query).toBe('那个 BE ready 了吗？ AI Notes');
+    expect(resolved?.selectedCandidateIndex).toBe(2);
+    expect(resolved?.selectedTopicLabel).toBe('AI Notes');
+    expect(resolved?.context).toContain(
+      'Clarification: user selected candidate 2: AI Notes.',
+    );
+    expect(resolveAskCandidateSelection('2')).toBeUndefined();
+  });
+
+  it('resolves English candidate follow-up wording from the previous Ask turn', () => {
+    const context = [
+      'User: Is that BE ready?',
+      'Assistant: This question may refer to multiple recent topics.',
+      'Candidate topics:',
+      '1. AI Generated VBG (role term match, recent activity)',
+      '2. AI Notes (role term match, recent activity)',
+      '',
+      'You can reply with the candidate number, or add a project / group / issue key.',
+    ].join('\n');
+
+    const resolved = resolveAskCandidateSelection('candidate 2', context);
+    const ordinalResolved = resolveAskCandidateSelection('second one', context);
+
+    expect(resolved?.query).toBe('Is that BE ready? AI Notes');
+    expect(resolved?.selectedCandidateIndex).toBe(2);
+    expect(resolved?.selectedTopicLabel).toBe('AI Notes');
+    expect(resolved?.context).toContain(
+      'Clarification: user selected candidate 2: AI Notes.',
+    );
+    expect(ordinalResolved?.query).toBe('Is that BE ready? AI Notes');
+  });
+
+  it('asks for a candidate number when a short Ask topic is ambiguous', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insertFrame = db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, title, summary, dominant_projects_json,
+         topics_json, role_terms_json, source_anchors_json, confidence,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    for (const project of ['AI Generated VBG', 'AI Notes']) {
+      insertFrame.run(
+        `ask-ambiguous:${project}`,
+        'glip',
+        'glip',
+        project,
+        `${project} backend BE status is being discussed.`,
+        JSON.stringify([project]),
+        JSON.stringify([project]),
+        JSON.stringify(['backend']),
+        JSON.stringify([]),
+        0.75,
+        currentTime - 120,
+        currentTime - 120,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.contextMatch?.state).toBe('ambiguous');
+    expect(body.answerMemory).toMatchObject({
+      state: 'skipped',
+      skipReason: 'context_ambiguous',
+      receipt: {
+        label: '等待话题确认',
+        tone: 'warning',
+      },
+    });
+    expect(body.answer).toContain('候选话题：');
+    expect(body.answer).toContain('你可以直接回复候选序号');
+    expect(body.evidence).toBeUndefined();
+  });
+
+  it('continues an ambiguous short Ask after the user replies with a candidate number', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insertFrame = db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, title, summary, dominant_projects_json,
+         topics_json, role_terms_json, source_anchors_json, confidence,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertMessage = db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    for (const project of ['AI Generated VBG', 'AI Notes']) {
+      insertFrame.run(
+        `ask-ambiguous-followup:${project}`,
+        'glip',
+        'glip',
+        project,
+        `${project} backend BE status is being discussed.`,
+        JSON.stringify([project]),
+        JSON.stringify([project]),
+        JSON.stringify(['backend']),
+        JSON.stringify([]),
+        0.75,
+        currentTime - 120,
+        currentTime - 120,
+      );
+      insertMessage.run(
+        `ask-ambiguous-followup-message:${project}`,
+        `${project} backend BE is still pending API checks and is not ready yet.`,
+        'glip',
+        `https://app.ringcentral.com/messages/${encodeURIComponent(project)}`,
+        project,
+        'Backend Owner',
+        project,
+        project,
+        currentTime - 90,
+        0.76,
+        'neutral',
+        JSON.stringify({ groupName: project }),
+        currentTime - 90,
+      );
+    }
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json();
+    expect(firstBody.contextMatch?.state).toBe('ambiguous');
+
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer:
+          'AI Notes 的 BE 还没有 ready，后端仍在等待 API checks。',
+      }),
+    });
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '2',
+        context: `User: 那个 BE ready 了吗？\nAssistant: ${firstBody.answer}`,
+        includeEvidence: true,
+      },
+    });
+
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json();
+    expect(secondBody.contextMatch?.state).toBe('locked');
+    expect(secondBody.contextMatch?.selectedTopic?.label).toBe('AI Notes');
+    expect(secondBody.evidence?.[0]?.id).toBe(
+      'ask-ambiguous-followup-message:AI Notes',
+    );
+    expect(secondBody.answer).toContain('AI Notes');
   });
 
   it('returns structuredAnswer and evidence for filtered ask queries', async () => {
@@ -327,11 +544,20 @@ describe('Ask API', () => {
             score: 0.92,
             source: 'glip',
             timestamp: Math.floor(Date.now() / 1000) - 86400,
+            scope: 'work',
           },
         ],
         totalFound: 1,
         channels: ['time'],
         queryTimeMs: 1,
+        scopeReceipt: {
+          requestedScope: 'both',
+          effectiveScope: 'both',
+          returned: { work: 1, personal: 0, unknown: 0, total: 1 },
+          candidates: { work: 1, personal: 0, unknown: 0, total: 1 },
+          note: '本次主动召回检索工作和个人记忆，当前返回结果未包含个人记忆。',
+          includesPersonal: false,
+        },
       } as any);
     generateMock.mockResolvedValue({
       content: JSON.stringify({
@@ -352,6 +578,11 @@ describe('Ask API', () => {
     expect(res.statusCode).toBe(200);
     expect(recallSpy).toHaveBeenCalled();
     expect(recallSpy.mock.calls[0][0].scope).toBe('both');
+    expect(res.json().scopeReceipt).toMatchObject({
+      requestedScope: 'both',
+      effectiveScope: 'both',
+      includesPersonal: false,
+    });
     recallSpy.mockRestore();
   });
 
@@ -368,11 +599,20 @@ describe('Ask API', () => {
             score: 0.88,
             source: 'manual',
             timestamp: Math.floor(Date.now() / 1000) - 120,
+            scope: 'personal',
           },
         ],
         totalFound: 1,
         channels: ['time'],
         queryTimeMs: 1,
+        scopeReceipt: {
+          requestedScope: 'all',
+          effectiveScope: 'both',
+          returned: { work: 0, personal: 1, unknown: 0, total: 1 },
+          candidates: { work: 0, personal: 1, unknown: 0, total: 1 },
+          note: '本次主动召回检索全部记忆，返回结果包含 1 条个人记忆；引用到工作场景前请确认。',
+          includesPersonal: true,
+        },
       } as any);
     generateMock.mockResolvedValue({
       content: JSON.stringify({
@@ -393,7 +633,14 @@ describe('Ask API', () => {
     expect(res.statusCode).toBe(200);
     expect(recallSpy).toHaveBeenCalled();
     expect(recallSpy.mock.calls[0][0].scope).toBe('all');
-    expect(res.json().evidence?.[0]?.id).toBe('ask-all-scope-memory');
+    const body = res.json();
+    expect(body.evidence?.[0]?.id).toBe('ask-all-scope-memory');
+    expect(body.scopeReceipt).toMatchObject({
+      requestedScope: 'all',
+      effectiveScope: 'both',
+      includesPersonal: true,
+    });
+    expect(body.scopeReceipt.note).toContain('个人记忆');
     recallSpy.mockRestore();
   });
 
@@ -651,6 +898,28 @@ describe('Ask API', () => {
       currentTime - 120,
     );
     db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ask-vbg-sync-service-noise',
+      'AI Service risk digest mentions MTR-141852, BE readiness, and RCV mobile release notes, but it is a generic esone.qiu+sync.service summary.',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-vbg-sync-service-noise',
+      'esone.qiu+sync.service',
+      'AI Service',
+      'sync-service',
+      'esone.qiu+sync.service',
+      currentTime - 60,
+      0.99,
+      'neutral',
+      JSON.stringify({
+        groupName: 'esone.qiu+sync.service',
+      }),
+      currentTime - 60,
+    );
+    db.prepare(
       `INSERT INTO chunks
         (chunk_id, file_path, line_start, line_end, content, content_hash,
          scope, source, source_type, related_project, created_at)
@@ -698,8 +967,90 @@ describe('Ask API', () => {
     expect(recallQuery).toContain('backend');
     const body = res.json();
     expect(body.evidence?.[0]?.id).toBe('ask-vbg-deictic-backend');
+    expect(
+      body.evidence?.some(
+        (item: any) => item.id === 'ask-vbg-sync-service-noise',
+      ),
+    ).toBe(false);
     expect(body.answer).toContain('还没有 ready');
     recallSpy.mockRestore();
+  });
+
+  it('uses current conversation labels as Ask surface context for deictic questions', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insert = db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id,
+         group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insert.run(
+      'ask-webinar-be-current-conversation',
+      'RingCentral Webinar BE CN Team backend is not ready yet because the BE owner is still checking API status.',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-webinar-be-current-conversation',
+      'RingCentral Webinar BE CN Team',
+      'Ivan Velencoso',
+      'webinar-be-cn',
+      'RingCentral Webinar BE CN Team',
+      currentTime - 600,
+      0.74,
+      'neutral',
+      JSON.stringify({
+        groupName: 'RingCentral Webinar BE CN Team',
+      }),
+      currentTime - 600,
+    );
+    insert.run(
+      'ask-generic-backend-current-conversation-distractor',
+      'Generic backend maintenance is ready and fully deployed.',
+      'glip',
+      'https://app.ringcentral.com/messages/ask-generic-backend-current-conversation-distractor',
+      'RCW Backend team',
+      'Backend Bot',
+      'backend-team',
+      'RCW Backend team',
+      currentTime - 30,
+      0.95,
+      'neutral',
+      JSON.stringify({
+        groupName: 'RCW Backend team',
+      }),
+      currentTime - 30,
+    );
+
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({
+        answer:
+          'RingCentral Webinar BE CN Team 的 BE 还没有 ready，owner 仍在检查 API 状态。',
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        context:
+          'Surface: RingCentral chat. Current conversation: RingCentral Webinar BE CN Team. Visible message: 那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.contextMatch?.state).toBe('locked');
+    expect(body.contextMatch?.selectedTopic?.label).toBe(
+      'RingCentral Webinar BE CN Team',
+    );
+    expect(body.evidence?.[0]?.id).toBe(
+      'ask-webinar-be-current-conversation',
+    );
+    expect(body.evidence?.[0]?.metadata?.contextAnchorReason).toBe(
+      'locked_memory_context_match',
+    );
+    expect(body.answer).toContain('还没有 ready');
   });
 
   it('tracks repeated locked ask outcomes without changing the Ask UI payload shape', async () => {
@@ -778,7 +1129,15 @@ describe('Ask API', () => {
       },
     });
     expect(first.statusCode).toBe(200);
-    expect(first.json().answerMemory?.state).toBe('observed');
+    const firstAnswerMemory = first.json().answerMemory;
+    expect(firstAnswerMemory?.state).toBe('observed');
+    expect(firstAnswerMemory?.receipt).toMatchObject({
+      label: '已记录活答案候选',
+      currentEvidenceCount: 2,
+    });
+    expect(firstAnswerMemory?.authority).toMatchObject({
+      decision: 'authorized_change',
+    });
     expect(
       db
         .prepare('SELECT COUNT(*) AS count FROM answer_memory_threads')
@@ -799,6 +1158,13 @@ describe('Ask API', () => {
     const secondBody = second.json();
     expect(secondBody.answerMemory?.state).toBe('promoted');
     expect(secondBody.answerMemory?.threadId).toBeTruthy();
+    expect(secondBody.answerMemory?.receipt).toMatchObject({
+      label: '已建立活答案',
+      currentEvidenceCount: 2,
+    });
+    expect(secondBody.answerMemory?.authority).toMatchObject({
+      decision: 'authorized_change',
+    });
 
     const third = await app.inject({
       method: 'POST',
@@ -811,8 +1177,18 @@ describe('Ask API', () => {
       },
     });
     expect(third.statusCode).toBe(200);
-    expect(third.json().answerMemory?.state).toBe('priorHit');
-    expect(third.json().answer).toContain('还没有 ready');
+    const thirdBody = third.json();
+    expect(thirdBody.answerMemory?.state).toBe('priorHit');
+    expect(thirdBody.answerMemory?.receipt).toMatchObject({
+      label: '活答案已复核',
+      currentEvidenceCount: 2,
+      priorEvidenceCount: 2,
+    });
+    expect(thirdBody.answerMemory?.authority).toMatchObject({
+      decision: 'same_meaning_no_change',
+      suppressedUpdate: false,
+    });
+    expect(thirdBody.answer).toContain('还没有 ready');
   });
 
   it('does not promote noisy web captures as context anchors for deictic BE queries without surface context', async () => {
@@ -868,6 +1244,41 @@ describe('Ask API', () => {
         answer: 'BE 还没有 ready，仍在等 RCV BE 新的 design。',
       }),
     });
+    const recallSpy = vi.spyOn(RecallEngine.prototype, 'recall').mockResolvedValue({
+      items: [
+        {
+          id: 'ask-sync-service-noise',
+          type: 'message',
+          content:
+            'Nova Brandy Daily and RCV mobile release notes mention AI Notes, BE risk, and MTR-141852, but this is a generic summary.',
+          score: 0.99,
+          source: 'glip',
+          sourceTitle: 'esone.qiu+sync.service',
+          timestamp: currentTime - 30,
+          metadata: {
+            groupName: 'esone.qiu+sync.service',
+            sourceTitle: 'esone.qiu+sync.service',
+          },
+        },
+        {
+          id: 'ask-ai-notes-noise',
+          type: 'message',
+          content:
+            'AI Notes participant recognition needs speaker diarization and follow-up planning.',
+          score: 0.98,
+          source: 'glip',
+          sourceTitle: '❤️ Interests',
+          timestamp: currentTime - 45,
+          metadata: {
+            groupName: '❤️ Interests',
+            sourceTitle: '❤️ Interests',
+          },
+        },
+      ],
+      totalFound: 2,
+      queryTimeMs: 1,
+      channels: ['fts'],
+    } as any);
 
     const res = await app.inject({
       method: 'POST',
@@ -890,9 +1301,15 @@ describe('Ask API', () => {
     );
     expect(
       body.evidence
-        ?.slice(0, 3)
-        .some((item: any) => item.id === 'ask-noisy-docs-capture'),
+        ?.some((item: any) =>
+          [
+            'ask-noisy-docs-capture',
+            'ask-sync-service-noise',
+            'ask-ai-notes-noise',
+          ].includes(item.id),
+        ),
     ).toBe(false);
+    recallSpy.mockRestore();
   });
 
   it('keeps direct older BE status evidence ahead of newer generic backend mentions', async () => {
@@ -1154,6 +1571,67 @@ describe('Ask API', () => {
       res.body.indexOf('event: answer_done'),
     );
     expect(res.body).toContain('Release risk increased.');
+  });
+
+  it('streams ambiguous Ask as a clarification state without generating an answer', async () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insertFrame = db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, title, summary, dominant_projects_json,
+         topics_json, role_terms_json, source_anchors_json, confidence,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    for (const project of ['AI Generated VBG', 'AI Notes']) {
+      insertFrame.run(
+        `ask-stream-ambiguous:${project}`,
+        'glip',
+        'glip',
+        project,
+        `${project} backend BE status is being discussed.`,
+        JSON.stringify([project]),
+        JSON.stringify([project]),
+        JSON.stringify(['backend']),
+        JSON.stringify([]),
+        0.75,
+        currentTime - 120,
+        currentTime - 120,
+      );
+    }
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ask/stream',
+      payload: {
+        query: '那个 BE ready 了吗？',
+        includeEvidence: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    const statusMessages = events
+      .filter((event) => event.type === 'status')
+      .map((event) => String(event.message ?? ''));
+    const answerDone = events.find((event) => event.type === 'answer_done');
+    const result = events.find((event) => event.type === 'result');
+
+    expect(events.some((event) => event.type === 'delta')).toBe(false);
+    expect(statusMessages).toContain('需要先确认你指的是哪个话题...');
+    expect(statusMessages).not.toContain('正在生成回答...');
+    expect(answerDone?.answer).toContain('候选话题：');
+    expect(result?.contextMatch).toMatchObject({ state: 'ambiguous' });
+    expect(result?.answerMemory).toMatchObject({
+      state: 'skipped',
+      skipReason: 'context_ambiguous',
+      receipt: {
+        label: '等待话题确认',
+        tone: 'warning',
+      },
+    });
+    expect(generateStreamMock).not.toHaveBeenCalled();
+    expect(generateMock).not.toHaveBeenCalled();
   });
 
   it('streams decision evidence chain blocks during recall_done and final result', async () => {

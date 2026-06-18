@@ -60,6 +60,13 @@ interface UpdatableConfig {
   ringCentralJwt?: string;
   clearRingCentralClientSecret?: boolean;
   clearRingCentralJwt?: boolean;
+  botApiBaseUrl?: string;
+  botToken?: string;
+  botId?: string;
+  botType?: 'user' | 'team';
+  botTeamId?: string;
+  botTargetEmail?: string;
+  clearBotToken?: boolean;
 }
 
 /** Keys that must never be returned to the client. */
@@ -137,6 +144,8 @@ function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
     raw.ringCentralClientSecret.trim().length > 0;
   clean.ringCentralJwtConfigured =
     typeof raw.ringCentralJwt === 'string' && raw.ringCentralJwt.trim().length > 0;
+  clean.botTokenConfigured =
+    typeof raw.botToken === 'string' && raw.botToken.trim().length > 0;
   return clean;
 }
 
@@ -202,6 +211,13 @@ const updateConfigBodySchema = {
     ringCentralJwt: { type: 'string' as const },
     clearRingCentralClientSecret: { type: 'boolean' as const },
     clearRingCentralJwt: { type: 'boolean' as const },
+    botApiBaseUrl: { type: 'string' as const },
+    botToken: { type: 'string' as const },
+    botId: { type: 'string' as const },
+    botType: { type: 'string' as const, enum: ['user', 'team'] },
+    botTeamId: { type: 'string' as const },
+    botTargetEmail: { type: 'string' as const },
+    clearBotToken: { type: 'boolean' as const },
   },
   additionalProperties: false,
 };
@@ -367,6 +383,30 @@ export async function configRoutes(
       }
       if (updates.clearRingCentralJwt === true) {
         delete persisted.ringCentralJwt;
+      }
+      if (updates.botApiBaseUrl !== undefined) {
+        persisted.botApiBaseUrl = updates.botApiBaseUrl.trim();
+      }
+      if (updates.botToken !== undefined) {
+        const trimmed = updates.botToken.trim();
+        if (trimmed.length > 0) {
+          persisted.botToken = trimmed;
+        }
+      }
+      if (updates.botId !== undefined) {
+        persisted.botId = updates.botId.trim();
+      }
+      if (updates.botType !== undefined) {
+        persisted.botType = updates.botType === 'team' ? 'team' : 'user';
+      }
+      if (updates.botTeamId !== undefined) {
+        persisted.botTeamId = updates.botTeamId.trim();
+      }
+      if (updates.botTargetEmail !== undefined) {
+        persisted.botTargetEmail = updates.botTargetEmail.trim();
+      }
+      if (updates.clearBotToken === true) {
+        delete persisted.botToken;
       }
 
       writePersistedConfig(persisted, request);

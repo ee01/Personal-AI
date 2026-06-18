@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proactivity Cost-Asymmetry Demo · 通知代价不对称</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #fffdf8; --ink: #1c1d1f; --muted: #62666f; --line: #d8d3c8;
+    --green: #176f54; --green-soft: #e3f2eb; --blue: #2459a6; --blue-soft: #e4ecf8;
+    --red: #aa3a32; --red-soft: #f8e7e4; --amber: #8a6200; --amber-soft: #fff0c2;
+    --shadow: 0 18px 54px rgba(38, 31, 18, 0.12);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(246,245,242,.92)), var(--bg); }
+  .shell { width: min(1180px, 100%); margin: 0 auto; padding: 0 22px 80px; }
+  .topbar { height: 58px; display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+    background: rgba(255,253,248,.92); backdrop-filter: blur(12px); margin: 0 -22px; padding: 0 22px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .mark { width: 30px; height: 30px; border-radius: 7px;
+    background: conic-gradient(from 220deg, #aa3a32, #2459a6, #c7832a, #aa3a32);
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,.7); }
+  .brand h1 { margin: 0; font-size: 16px; }
+  .brand p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px;
+    border: 1px solid var(--line); background: #fff; color: var(--muted); font-size: 12px; }
+
+  .scene { margin: 32px 0 0; padding: 14px 18px; background: var(--amber-soft);
+    border: 1px solid rgba(138,98,0,.25); border-radius: 12px; font-size: 13px; line-height: 1.6; max-width: 86ch; }
+  .scene strong { color: var(--amber); }
+
+  h2.sec { font-size: 14px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; margin: 40px 0 6px; }
+  p.lede { margin: 0 0 18px; font-size: 13px; color: var(--muted); max-width: 76ch; }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .tag-before, .tag-after { font-size: 11px; letter-spacing: .1em; font-weight: 600; margin-bottom: 8px; }
+  .tag-before { color: var(--muted); } .tag-after { color: var(--green); }
+
+  .feed { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); overflow: hidden; }
+  .feed header { padding: 11px 16px; border-bottom: 1px solid var(--line); background: #fbfaf7;
+    font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+  .item { padding: 13px 16px; border-bottom: 1px solid #efece5; display: flex; gap: 12px; }
+  .item:last-child { border-bottom: 0; }
+  .item .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex: 0 0 auto; }
+  .d-red { background: var(--red); } .d-blue { background: var(--blue); } .d-gray { background: #c9c4b8; }
+  .item h4 { margin: 0 0 3px; font-size: 13.5px; }
+  .item p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.55; }
+  .item .ts { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .silenced { opacity: .55; }
+  .silenced h4 { text-decoration: line-through; text-decoration-thickness: 1px; text-decoration-color: rgba(28,29,31,.4); }
+  .badge { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
+    padding: 2px 8px; border-radius: 999px; margin-bottom: 5px; }
+  .b-silent { color: var(--muted); background: #f0eee8; border: 1px dashed var(--line); }
+  .b-notify { color: var(--green); background: var(--green-soft); }
+  .b-sched { color: var(--blue); background: var(--blue-soft); }
+  .b-top { color: var(--red); background: var(--red-soft); }
+  .basis { margin-top: 7px; display: inline-flex; gap: 6px; font-size: 11.5px; color: var(--blue);
+    background: var(--blue-soft); border-radius: 999px; padding: 2px 9px; }
+  .regret { margin-top: 7px; font-size: 11.5px; color: var(--red); }
+
+  .calc { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+    overflow: hidden; }
+  .calc table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .calc th { text-align: left; font-size: 11px; letter-spacing: .06em; color: var(--muted);
+    padding: 11px 16px; background: #fbfaf7; border-bottom: 1px solid var(--line); font-weight: 600; }
+  .calc td { padding: 10px 16px; border-bottom: 1px solid #efece5; vertical-align: top; }
+  .calc tr:last-child td { border-bottom: 0; }
+  .calc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    background: #f3f2ee; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+  .good { color: var(--green); font-weight: 600; } .bad { color: var(--red); font-weight: 600; }
+
+  .audit { margin-top: 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    background: #1c1d1f; color: #e8e4da; border-radius: 12px; padding: 14px 18px; line-height: 1.8; overflow-x: auto; }
+  .audit .k { color: #9ad0b5; }
+  .note { margin-top: 16px; font-size: 12px; color: var(--muted); border-left: 3px solid var(--line);
+    padding: 4px 0 4px 12px; line-height: 1.6; max-width: 82ch; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="mark"></div>
+      <div>
+        <h1>Proactivity Cost-Asymmetry · Utility v2</h1>
+        <p>漏报/误报代价不对称 · 静态演示 · 配套 memory-proactivity-cost-asymmetry-plan.md</p>
+      </div>
+    </div>
+    <span class="pill">省下的是深夜打扰，不是信息本身</span>
+  </div>
+
+  <div class="scene"><strong>场景</strong> · 周二 23:40，反思线程发现高危组合：明早 10:00 评审会依赖 MTR-148115 的回归结论，而交付群 22:51 的消息说回归还没跑完（truth conflict + deadline 双信号）。同一晚，每周梦境报表也在排队投递。</div>
+
+  <h2 class="sec">① 通知流 · 前后对比（同样的两条候选）</h2>
+  <div class="duo">
+    <div>
+      <div class="tag-before">BEFORE · v1 单公式（utility = benefit − cost）</div>
+      <div class="feed">
+        <header><span>通知中心 · 周二晚 → 周三</span><span>quiet hours 23:00–08:00</span></header>
+        <div class="item silenced">
+          <span class="dot d-gray"></span>
+          <div>
+            <span class="badge b-silent">SILENT · 仅日志</span>
+            <h4>10:00 评审的前置回归未完成</h4>
+            <p>utility 0.18 &lt; 0.25 —— 安静时段统一 cost 0.5 把它压没了</p>
+            <span class="regret">→ 你周三 09:50 才被同事口头提醒，会上被动</span>
+          </div>
+          <span class="ts">23:40</span>
+        </div>
+        <div class="item">
+          <span class="dot d-blue"></span>
+          <div>
+            <span class="badge b-notify">NOTIFY</span>
+            <h4>本周梦境报表已生成</h4>
+            <p>utility 0.42 ≥ 0.40 —— 资讯类照常投递，挤占了额度</p>
+          </div>
+          <span class="ts">周三 09:00</span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="tag-after">AFTER · v2（need × missCost − (1−need) × interruptCost）</div>
+      <div class="feed">
+        <header><span>通知中心 · 周二晚 → 周三</span><span>总量持平，配额重新分给该给的</span></header>
+        <div class="item">
+          <span class="dot d-red"></span>
+          <div>
+            <span class="badge b-top">置顶</span> <span class="badge b-sched">SCHEDULED 次晨 08:00</span>
+            <h4>⚠ 10:00 评审的前置回归未完成</h4>
+            <p>missCost 0.95 触发保底通道：深夜不打扰你，但信息不丢——次晨置顶补投（计入当日配额）</p>
+            <span class="basis">依据：2 条记忆 → 22:51 交付群消息 · 评审会日历项</span>
+          </div>
+          <span class="ts">08:00</span>
+        </div>
+        <div class="item silenced">
+          <span class="dot d-gray"></span>
+          <div>
+            <span class="badge b-silent">SILENT · 并入日摘要</span>
+            <h4>本周梦境报表已生成</h4>
+            <p>missCost 0.15，资讯类从严：utility_v2 = −0.31，随明日 digest 合并展示</p>
+          </div>
+          <span class="ts">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">② 决策算账 · 两条候选的明细</h2>
+  <div class="calc">
+    <table>
+      <tr><th style="width:30%">候选</th><th>v1 计算</th><th>v2 计算</th></tr>
+      <tr>
+        <td><strong>回归未完成 × 明早评审</strong><br><span style="color:var(--muted);font-size:11.5px">type=deadline</span></td>
+        <td><code>benefit 0.83 − cost 0.65 = 0.18</code><br><span class="bad">→ silent（错过）</span></td>
+        <td><code>0.83×0.95 − 0.17×0.2×1.30 = 0.75</code><br><span class="good">→ notify，安静时段转 scheduled 08:00 置顶</span></td>
+      </tr>
+      <tr>
+        <td><strong>每周梦境报表</strong><br><span style="color:var(--muted);font-size:11.5px">type=dream_digest</span></td>
+        <td><code>benefit 0.62 − cost 0.20 = 0.42</code><br><span class="bad">→ notify（挤占额度）</span></td>
+        <td><code>0.62×0.15 − 0.38×0.8×1.15 = −0.26</code><br><span class="good">→ silent，并入日摘要</span></td>
+      </tr>
+      <tr>
+        <td colspan="3" style="font-size:11.5px;color:var(--muted)">COST_MATRIX：deadline { miss 0.95 · interrupt 0.2 · quietSens 0.3 } ｜ dream_digest { miss 0.15 · interrupt 0.8 · quietSens 1.0 } —— 起步常量，月度校准回流微调，audit 可回滚。</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2 class="sec">③ 月度校准回流 · audit 行（你从没配置过任何东西）</h2>
+  <div class="audit">
+<span class="k">notification_policy_audit</span> | type=project_update | interrupt 0.60 → 0.70<br>
+&nbsp;&nbsp;reason: 30d dismissRate 0.68 &gt; 0.6 | window 2026-05-12..06-11 | rollback: available<br>
+<span class="k">notification_policy_audit</span> | type=truth_conflict | miss 0.90 → 0.95<br>
+&nbsp;&nbsp;reason: 被 silent 压制的同类候选事后 clickRate 0.57 | rollback: available
+  </div>
+
+  <p class="note">验收口径：影子模式先行（v2 与 v1 并行打分一周，只记日志）；上线后看 30 天 dismissRate 下降且 clickRate 不降；被次晨补投的通知 clickRate ≥ 平均值，证明保底通道捞回的确实是重要信息。保底通道仅 missCost≥0.9 类型可用，且计入次日配额。</p>
+</div>
+</body>
+</html>

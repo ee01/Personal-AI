@@ -14,6 +14,7 @@ import {
   type DayPilotFeedbackSignal,
   type DayPilotMission,
   type DayPilotPriority,
+  type DayPilotRehearsalCueReceipt,
   type DayPilotSourceStats,
   type DayPilotState,
 } from '../repositories/DayPilotRepository.js';
@@ -65,6 +66,8 @@ export interface DayPilotContextPackResponse {
   };
   sourceSummary: {
     evidenceCount: number;
+    renderedEvidenceCount: number;
+    omittedEvidenceCount: number;
     sourceKinds: Record<string, number>;
     redactionApplied: boolean;
     truncated: boolean;
@@ -232,6 +235,7 @@ interface Candidate {
   openQuestions: string[];
   sourceUrl?: string;
   meetingExternalId?: string;
+  rehearsalCueReceipt?: DayPilotRehearsalCueReceipt;
 }
 
 interface Cluster {
@@ -295,6 +299,10 @@ const ACTIONABLE_FOLLOWUP_PATTERN =
   /follow[-\s]?up|todo|action item|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|pending|unanswered|reply|\brespond\b|needs? to\s+(?:confirm|decide|review|reply|respond|investigate|fix|retry|approve|prepare|schedule|update|ship|release|resolve|upload|check|follow)|should\s+(?:confirm|decide|review|reply|respond|investigate|fix|retry|approve|prepare|schedule|update|ship|release|resolve|upload|check|follow)|confirm|investigate|fix|retry|failing?|跟进|待回复|未回复|回复|承诺|待确认|确认|需要|阻塞|风险|负责人|下一步|审批|排查|修复|上传|准备/i;
 const ACTIONABLE_QUESTION_PATTERN =
   /(?:(?:\?|？).{0,80}(?:owner|eta|deadline|risk|approval|decision|confirm|reply|respond|fix|retry|blocked|investigate|prepare|follow[-\s]?up|跟进|待确认|确认|阻塞|风险|负责人|下一步|审批|排查|修复|准备)|(?:owner|eta|deadline|risk|approval|decision|confirm|reply|respond|fix|retry|blocked|investigate|prepare|follow[-\s]?up|跟进|待确认|确认|阻塞|风险|负责人|下一步|审批|排查|修复|准备).{0,80}(?:\?|？)|(?:怎么|如何|how (?:do|to|should|can|could)).{0,48}(?:配|配置|处理|确认|排查|修复|推进|落地|复用|接入|迁移|更新|安排|准备|回复|审批|configure|debug|fix|resolve|deploy|ship|review|confirm|respond|reply|prepare|schedule|update))/i;
+const PASSIVE_AI_TOOL_NEWS_PATTERN =
+  /fyi|for awareness|no action (?:needed|required)|nothing to do|announcement only|release notes?|blog post|newsletter|仅供参考|了解即可|无需(?:处理|行动)|不用(?:处理|行动)|不需要(?:处理|行动)/i;
+const AI_TOOL_WORKFLOW_ACTION_PATTERN =
+  /config(?:ure|uration)?|setup|compare|evaluate|benchmark|trial|adopt|rollout|migration|quota|owner|eta|deadline|block(?:ed|er)?|risk|decision|approval|reply|\brespond\b|follow[-\s]?up|prepare|wiki|skill|impact|run|test|fix|retry|failing?|配置|设置|接入|对比|评估|试跑|测试|采用|落地|迁移|影响|可用性|确认|回复|跟进|准备|整理|沉淀|复用|分享|材料|说明|阻塞|风险|负责人|下一步|审批|修复|重试/i;
 const STRUCTURED_ACTIONABLE_SOURCE_KINDS = new Set([
   'action',
   'calendar',
@@ -737,6 +745,14 @@ export class DayPilotService {
         tokenBudget,
       );
     }
+    const renderedEvidenceCount = this.countEvidenceRenderedInMarkdown(
+      clamped.bodyMd,
+      redaction.evidenceRefs,
+    );
+    const omittedEvidenceCount = Math.max(
+      0,
+      redaction.evidenceRefs.length - renderedEvidenceCount,
+    );
 
     return {
       missionId,
@@ -754,6 +770,8 @@ export class DayPilotService {
       },
       sourceSummary: {
         evidenceCount: redaction.evidenceRefs.length,
+        renderedEvidenceCount,
+        omittedEvidenceCount,
         sourceKinds: countBySourceKind(redaction.evidenceRefs),
         redactionApplied: redaction.redactionApplied,
         truncated: clamped.truncated,
@@ -1086,6 +1104,12 @@ export class DayPilotService {
       ),
     ]);
     const cardType = this.inferCardType(row.source_type, text);
+    if (
+      cardType === 'ai_tool_shift' &&
+      !this.hasAiToolShiftActionSignal(text)
+    ) {
+      return null;
+    }
     const urgency = hasOpenLoopSignal(text) ? 0.8 : 0.45;
     const score = this.computeScore({
       urgency,
@@ -1894,6 +1918,10 @@ export class DayPilotService {
         row.status === 'stale'
           ? [`这条预演已降权：${row.stale_reason || '长期未触发'}`]
           : [],
+      rehearsalCueReceipt: this.rehearsalCueReceipt(row, cues, {
+        isExpired,
+        aging: Boolean(aging),
+      }),
     };
   }
 
@@ -2137,6 +2165,8 @@ export class DayPilotService {
     const state = this.pickState(cluster.candidates);
     const title = compactText(this.clusterTitle(cluster), 90);
     const nextAction = this.nextBestAction(cardType, title, cluster.candidates);
+    const whyNow = this.whyNow(cluster);
+    const rehearsalCueReceipt = this.rehearsalCueReceiptForCluster(cluster);
     const score = this.applyFeedbackSignal(
       this.clusterScore(cluster) -
         this.clusterStalenessPenalty(cluster, generatedAt),
@@ -2167,7 +2197,7 @@ export class DayPilotService {
         people,
         projects,
       },
-      currentState: this.whyNow(cluster),
+      currentState: whyNow,
       desiredOutcome: nextAction,
       nextActions: [
         {
@@ -2208,7 +2238,7 @@ export class DayPilotService {
       title,
       priority,
       state,
-      whyNow: this.whyNow(cluster),
+      whyNow,
       nextBestAction: nextAction,
       dueAt: this.pickDueAt(cluster.candidates),
       people,
@@ -2219,7 +2249,8 @@ export class DayPilotService {
       ).slice(0, 5),
       trust,
       contextPack: {
-        preview: compactText(`${title}: ${this.whyNow(cluster)}`, 260),
+        preview: compactText(`${title}: ${whyNow}`, 260),
+        rehearsalCueReceipt,
         prepId:
           cardType === 'meeting_prepare'
             ? this.findDefaultMeetingPrepId(cluster.candidates, localDate)
@@ -2351,6 +2382,9 @@ export class DayPilotService {
     const evidenceLines = evidenceRefs.map((ref) =>
       this.evidenceMarkdownLine(ref),
     );
+    const sourceScopeLines = this.sourceScopeMarkdownLines(evidenceRefs);
+    const chineseSourceScopeLines =
+      this.sourceScopeMarkdownLines(evidenceRefs, 'zh');
     const handoffBoundary = [
       '- This pack gives the target AI context to read; it is not permission to execute external actions.',
       '- Keep final decisions, external sends, approvals, and destructive changes under user control.',
@@ -2375,6 +2409,9 @@ export class DayPilotService {
         '',
         '## Current Context',
         whyNow,
+        '',
+        '## Source Scope',
+        ...sourceScopeLines,
         '',
         '## Handoff Boundary',
         ...handoffBoundary,
@@ -2408,6 +2445,9 @@ export class DayPilotService {
         '## Background',
         whyNow,
         '',
+        '## Source Scope',
+        ...sourceScopeLines,
+        '',
         '## Handoff Boundary',
         ...handoffBoundary,
         '',
@@ -2431,6 +2471,9 @@ export class DayPilotService {
         '',
         '## Situation',
         whyNow,
+        '',
+        '## Source Scope',
+        ...sourceScopeLines,
         '',
         '## Handoff Boundary',
         ...handoffBoundary,
@@ -2458,6 +2501,9 @@ export class DayPilotService {
         '## 为什么现在处理',
         whyNow,
         '',
+        '## 来源范围',
+        ...chineseSourceScopeLines,
+        '',
         '## 交接边界',
         ...chineseHandoffBoundary,
         '',
@@ -2484,6 +2530,9 @@ export class DayPilotService {
       '## Next Best Action',
       nextBestAction,
       '',
+      '## Source Scope',
+      ...sourceScopeLines,
+      '',
       '## Handoff Boundary',
       ...handoffBoundary,
       '',
@@ -2502,6 +2551,44 @@ export class DayPilotService {
     return `- ${ref.title || ref.sourceKind}:${ref.sourceId}${
       ref.timestamp ? ` @ ${formatDateTime(ref.timestamp)}` : ''
     }: ${compactText(ref.snippet, 240)}`;
+  }
+
+  private sourceScopeMarkdownLines(
+    evidenceRefs: DayPilotEvidenceRef[],
+    locale: 'en' | 'zh' = 'en',
+  ): string[] {
+    const sourceKinds = countBySourceKind(evidenceRefs);
+    const sourceKindSummary =
+      Object.entries(sourceKinds)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([kind, count]) => `${kind}: ${count}`)
+        .join(', ') || (locale === 'zh' ? '无' : 'none');
+    if (locale === 'zh') {
+      return [
+        `- 已选择证据：${evidenceRefs.length} 条`,
+        `- 来源类型：${sourceKindSummary}`,
+        '- 如果正文被预算截断，后面的证据不会出现在复制内容里。',
+      ];
+    }
+    return [
+      `- Selected evidence items: ${evidenceRefs.length}`,
+      `- Source kinds: ${sourceKindSummary}`,
+      '- If token-budget truncation occurs, later evidence items are not present in the copied body.',
+    ];
+  }
+
+  private countEvidenceRenderedInMarkdown(
+    bodyMd: string,
+    evidenceRefs: DayPilotEvidenceRef[],
+  ): number {
+    let count = 0;
+    for (const ref of evidenceRefs) {
+      const marker = `${ref.title || ref.sourceKind}:${ref.sourceId}`;
+      if (bodyMd.includes(marker)) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   private redactionPreviewForEvidence(
@@ -2805,6 +2892,10 @@ export class DayPilotService {
       return `关系雷达发现 ${evidenceCount} 条带 follow-up、承诺或变冷风险的证据，今天适合确认是否需要主动同步。`;
     }
     if (top.cardType === 'rehearsal_prompt') {
+      const receipt = this.rehearsalCueReceiptForCluster(cluster);
+      if (receipt) {
+        return `预演线索：${receipt.cueLabel}。${receipt.statusLabel}，${receipt.boundary}`;
+      }
       return `有一条未来场景预演记忆与今天的上下文相关，适合提前带入真实对话、会议或写作场景。`;
     }
     return `${evidenceCount} 条来自 ${sourceKinds.join(
@@ -2902,6 +2993,20 @@ export class DayPilotService {
     )
       ? true
       : ACTIONABLE_FOLLOWUP_PATTERN.test(text) || hasOpenLoopSignal(text);
+  }
+
+  private hasAiToolShiftActionSignal(text: string): boolean {
+    if (
+      PASSIVE_AI_TOOL_NEWS_PATTERN.test(text) &&
+      !AI_TOOL_WORKFLOW_ACTION_PATTERN.test(text)
+    ) {
+      return false;
+    }
+    return (
+      AI_TOOL_WORKFLOW_ACTION_PATTERN.test(text) ||
+      ACTIONABLE_QUESTION_PATTERN.test(text) ||
+      (hasOpenLoopSignal(text) && !PASSIVE_AI_TOOL_NEWS_PATTERN.test(text))
+    );
   }
 
   private nextActionDesc(cardType: DayPilotCardType): string {
@@ -3028,6 +3133,79 @@ export class DayPilotService {
       if (result.length >= 5) break;
     }
     return result;
+  }
+
+  private rehearsalCueReceiptForCluster(
+    cluster: Cluster,
+  ): DayPilotRehearsalCueReceipt | undefined {
+    return cluster.candidates.find((item) => item.rehearsalCueReceipt)
+      ?.rehearsalCueReceipt;
+  }
+
+  private rehearsalCueReceipt(
+    row: RehearsalCandidateRow,
+    cues: Record<string, string[]>,
+    options: { isExpired: boolean; aging: boolean },
+  ): DayPilotRehearsalCueReceipt {
+    const groups = this.rehearsalCueGroups(cues);
+    const cueLabel = groups.length
+      ? groups
+          .slice(0, 3)
+          .map((group) => `${group.label} ${group.values.slice(0, 2).join(' / ')}`)
+          .join(' · ')
+      : `场景 ${row.scenario_type}`;
+    const cueDetail = groups.length
+      ? `命中 ${groups
+          .map((group) => `${group.label}${group.values.length}`)
+          .join('、')} 组线索`
+      : '没有稳定人物、会议、项目或 issue 线索，只能作为低把握预演查看';
+    const stale = row.status === 'stale' || options.isExpired || options.aging;
+    const staleReason =
+      row.stale_reason ||
+      (options.isExpired ? '已过有效期' : options.aging ? '长期未触发' : '');
+    return {
+      label: stale ? '预演弱提示' : '今日预演提示',
+      cueLabel,
+      cueDetail,
+      statusLabel: stale
+        ? `已降权${staleReason ? `：${staleReason}` : ''}`
+        : row.status === 'candidate'
+        ? '高置信候选，今天先按预演查看'
+        : 'Active 预演，今天适合提前复习',
+      script: compactText(row.content || row.summary || row.title, 160),
+      boundary: stale
+        ? '弱提示；先确认仍适用，不会自动发言、发消息或执行外部动作。'
+        : '只作为今日准备提醒，不会自动发言、发消息或执行外部动作。',
+      tone: stale ? 'warning' : 'info',
+    };
+  }
+
+  private rehearsalCueGroups(cues: Record<string, string[]>): Array<{
+    label: string;
+    values: string[];
+  }> {
+    const specs: Array<[string, string[]]> = [
+      ['人物', cues.people],
+      ['会议', cues.meetings],
+      ['项目', cues.projects],
+      ['Issue', cues.issueKeys],
+      ['群组', cues.groups],
+      ['会话', cues.conversations],
+      ['网页', cues.urls],
+      ['主题', cues.topics],
+      ['关键词', cues.keywords],
+      ['场景', cues.surfaces],
+    ];
+    return specs
+      .map(([label, values]) => ({
+        label,
+        values: Array.isArray(values)
+          ? values
+              .map((value) => compactText(String(value).trim(), 60))
+              .filter(Boolean)
+          : [],
+      }))
+      .filter((group) => group.values.length > 0);
   }
 
   private privacyRisk(text: string): number {

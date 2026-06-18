@@ -41,7 +41,7 @@ function normalizeImportMode(value: unknown): ImportMode {
   throw new MemoryBackupValidationError('Import mode must be merge or replace');
 }
 
-function normalizeDryRun(value: unknown): boolean {
+function normalizeBooleanField(value: unknown, fieldName: string): boolean {
   if (value === undefined || value === null || value === '') {
     return false;
   }
@@ -54,7 +54,15 @@ function normalizeDryRun(value: unknown): boolean {
     return false;
   }
 
-  throw new MemoryBackupValidationError('dryRun must be true or false');
+  throw new MemoryBackupValidationError(`${fieldName} must be true or false`);
+}
+
+function normalizeDryRun(value: unknown): boolean {
+  return normalizeBooleanField(value, 'dryRun');
+}
+
+function normalizeConfirmUserMismatch(value: unknown): boolean {
+  return normalizeBooleanField(value, 'confirmUserMismatch');
 }
 
 function normalizeImportScope(value: unknown): ImportScope {
@@ -70,6 +78,22 @@ function normalizeImportScope(value: unknown): ImportScope {
   throw new SmartMemoryImportValidationError('Import scope must be work or personal');
 }
 
+function normalizeSmartImportBooleanField(value: unknown, fieldName: string): boolean {
+  if (value === undefined || value === null || value === '') {
+    return false;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'n'].includes(normalized)) {
+    return false;
+  }
+
+  throw new SmartMemoryImportValidationError(`${fieldName} must be true or false`);
+}
+
 function isMultipartRequest(request: { headers: Record<string, any> }): boolean {
   const contentType = String(request.headers['content-type'] || '').toLowerCase();
   return contentType.includes('multipart/form-data');
@@ -83,6 +107,7 @@ async function readSmartImportMultipart(
   let fileName = '';
   let mimeType = '';
   let buffer: Buffer | undefined;
+  let confirmHighRisk = false;
 
   for await (const part of request.parts()) {
     if (part.type === 'file') {
@@ -104,6 +129,14 @@ async function readSmartImportMultipart(
 
     if (part.fieldname === 'scope') {
       scope = normalizeImportScope(part.value);
+      continue;
+    }
+
+    if (part.fieldname === 'confirmHighRisk') {
+      confirmHighRisk = normalizeSmartImportBooleanField(
+        part.value,
+        'confirmHighRisk',
+      );
     }
   }
 
@@ -114,6 +147,7 @@ async function readSmartImportMultipart(
       mimeType,
       buffer,
       scope,
+      confirmHighRisk,
     };
   }
 
@@ -121,6 +155,7 @@ async function readSmartImportMultipart(
     inputKind: 'paste',
     text,
     scope,
+    confirmHighRisk,
   };
 }
 
@@ -150,12 +185,17 @@ async function readSmartImportInput(request: any): Promise<SmartMemoryImportInpu
   const body = (request.body ?? {}) as {
     text?: unknown;
     scope?: unknown;
+    confirmHighRisk?: unknown;
   };
 
   return {
     inputKind: 'paste',
     text: String(body.text ?? ''),
     scope: normalizeImportScope(body.scope),
+    confirmHighRisk: normalizeSmartImportBooleanField(
+      body.confirmHighRisk,
+      'confirmHighRisk',
+    ),
   };
 }
 
@@ -199,6 +239,7 @@ export async function importRoutes(app: FastifyInstance): Promise<void> {
     try {
       let mode: ImportMode = 'merge';
       let dryRun = false;
+      let confirmUserMismatch = false;
       let uploadedFileName = '';
       let fileSaved = false;
 
@@ -229,6 +270,11 @@ export async function importRoutes(app: FastifyInstance): Promise<void> {
 
         if (part.fieldname === 'dryRun') {
           dryRun = normalizeDryRun(part.value);
+          continue;
+        }
+
+        if (part.fieldname === 'confirmUserMismatch') {
+          confirmUserMismatch = normalizeConfirmUserMismatch(part.value);
         }
       }
 
@@ -251,6 +297,9 @@ export async function importRoutes(app: FastifyInstance): Promise<void> {
         request.userContext,
         uploadPath,
         mode,
+        {
+          confirmUserMismatch,
+        },
       );
 
       return reply.status(200).send(result);

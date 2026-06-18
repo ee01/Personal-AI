@@ -72,6 +72,10 @@ describe('AnswerMemoryService', () => {
 
     expect(ambiguous.state).toBe('skipped');
     expect(ambiguous.skipReason).toBe('context_ambiguous');
+    expect(ambiguous.receipt).toMatchObject({
+      label: '等待话题确认',
+      tone: 'warning',
+    });
     expect(
       db
         .prepare('SELECT COUNT(*) AS count FROM answer_memory_observations')
@@ -93,6 +97,20 @@ describe('AnswerMemoryService', () => {
 
     expect(diagnostic.state).toBe('observed');
     expect(diagnostic.canonicalKey).toContain('topic:project ai custom vbg');
+    expect(diagnostic.receipt).toMatchObject({
+      label: '已记录活答案候选',
+      currentEvidenceCount: 1,
+      tone: 'info',
+    });
+    expect(diagnostic.authority).toMatchObject({
+      decision: 'authorized_change',
+      evidenceRoles: [
+        expect.objectContaining({
+          role: 'authority',
+          count: 1,
+        }),
+      ],
+    });
     expect(
       db
         .prepare('SELECT COUNT(*) AS count FROM answer_memory_observations')
@@ -125,6 +143,11 @@ describe('AnswerMemoryService', () => {
 
     expect(promoted.state).toBe('promoted');
     expect(promoted.threadId).toBeTruthy();
+    expect(promoted.receipt).toMatchObject({
+      label: '已建立活答案',
+      currentEvidenceCount: 1,
+      tone: 'success',
+    });
 
     const prior = service.findPrior({
       query: '那个 BE ready 了吗？',
@@ -132,6 +155,107 @@ describe('AnswerMemoryService', () => {
     });
     expect(prior.diagnostic.state).toBe('priorHit');
     expect(prior.prior?.threadId).toBe(promoted.threadId);
+    expect(prior.prior?.currentAnswer).toContain('还没有 ready');
+    expect(prior.diagnostic.receipt).toMatchObject({
+      label: '活答案已复核',
+      priorEvidenceCount: 1,
+      tone: 'info',
+    });
+  });
+
+  it('does not create a new version for same-evidence paraphrases', () => {
+    const service = new AnswerMemoryService(db);
+    const repo = new AnswerMemoryRepository(db);
+
+    service.observeAskOutcome({
+      requestId: 'request-1',
+      query: '那个 BE ready 了吗？',
+      answer: 'AI Custom VBG 的 BE 还没有 ready，RCV BE new design 仍 pending。',
+      contextMatch: lockedVbgContext,
+      recalledItems: [recalledItem],
+      confidence: 0.76,
+    });
+    const promoted = service.observeAskOutcome({
+      requestId: 'request-2',
+      query: 'AI VBG 的 BE 部分完成情况如何？',
+      answer: 'AI Custom VBG 的 BE 还没有 ready，RCV BE new design 仍 pending。',
+      contextMatch: lockedVbgContext,
+      recalledItems: [recalledItem],
+      confidence: 0.77,
+    });
+    expect(promoted.threadId).toBeTruthy();
+    expect(repo.countVersions(promoted.threadId!)).toBe(1);
+
+    const paraphrase = service.observeAskOutcome({
+      requestId: 'request-3',
+      query: '那个 BE ready 了吗？',
+      answer: 'AI Custom VBG 的 BE 还没有 ready，仍在等待 RCV BE new design。',
+      contextMatch: lockedVbgContext,
+      recalledItems: [recalledItem],
+      confidence: 0.78,
+    });
+
+    expect(paraphrase.state).toBe('priorHit');
+    expect(paraphrase.threadId).toBe(promoted.threadId);
+    expect(paraphrase.authority).toMatchObject({
+      decision: 'same_meaning_no_change',
+      currentStance: 'negative_or_pending',
+      priorStance: 'negative_or_pending',
+      sameEvidence: true,
+      suppressedUpdate: true,
+    });
+    expect(repo.countVersions(promoted.threadId!)).toBe(1);
+    const prior = service.findPrior({
+      query: '那个 BE ready 了吗？',
+      contextMatch: lockedVbgContext,
+    });
+    expect(prior.prior?.currentAnswer).toContain('RCV BE new design 仍 pending');
+  });
+
+  it('requires new authority evidence before flipping an existing answer stance', () => {
+    const service = new AnswerMemoryService(db);
+    const repo = new AnswerMemoryRepository(db);
+
+    service.observeAskOutcome({
+      requestId: 'request-1',
+      query: '那个 BE ready 了吗？',
+      answer: 'AI Custom VBG 的 BE 还没有 ready，RCV BE new design 仍 pending。',
+      contextMatch: lockedVbgContext,
+      recalledItems: [recalledItem],
+      confidence: 0.76,
+    });
+    const promoted = service.observeAskOutcome({
+      requestId: 'request-2',
+      query: 'AI VBG 的 BE 部分完成情况如何？',
+      answer: 'AI Custom VBG 的 BE 还没有 ready，RCV BE new design 仍 pending。',
+      contextMatch: lockedVbgContext,
+      recalledItems: [recalledItem],
+      confidence: 0.77,
+    });
+    expect(promoted.threadId).toBeTruthy();
+
+    const unsupportedFlip = service.observeAskOutcome({
+      requestId: 'request-3',
+      query: '那个 BE ready 了吗？',
+      answer: 'AI Custom VBG 的 BE 已经 ready，相关 backend blocker 已解除。',
+      contextMatch: lockedVbgContext,
+      recalledItems: [recalledItem],
+      confidence: 0.82,
+    });
+
+    expect(unsupportedFlip.state).toBe('priorHit');
+    expect(unsupportedFlip.authority).toMatchObject({
+      decision: 'wait_for_authority_source',
+      currentStance: 'positive',
+      priorStance: 'negative_or_pending',
+      sameEvidence: true,
+      suppressedUpdate: true,
+    });
+    expect(repo.countVersions(promoted.threadId!)).toBe(1);
+    const prior = service.findPrior({
+      query: 'AI VBG backend ready status',
+      contextMatch: lockedVbgContext,
+    });
     expect(prior.prior?.currentAnswer).toContain('还没有 ready');
   });
 
@@ -175,6 +299,18 @@ describe('AnswerMemoryService', () => {
     });
 
     expect(updated.state).toBe('updated');
+    expect(updated.receipt).toMatchObject({
+      label: '活答案已更新',
+      currentEvidenceCount: 1,
+      priorEvidenceCount: 1,
+      tone: 'success',
+    });
+    expect(updated.authority).toMatchObject({
+      decision: 'authorized_change',
+      currentStance: 'positive',
+      priorStance: 'negative_or_pending',
+      suppressedUpdate: false,
+    });
     expect(repo.countVersions(updated.threadId!)).toBe(2);
     const prior = service.findPrior({
       query: 'AI VBG backend ready status',

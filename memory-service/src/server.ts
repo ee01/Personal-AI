@@ -57,6 +57,7 @@ import { followThreadHitRoutes } from './routes/followThreadHits.js';
 import { messageRuleRoutes } from './routes/messageRules.js';
 import { outreachRoutes } from './routes/outreach.js';
 import { notificationCenterRoutes } from './routes/notificationCenter.js';
+import { outcomeRoutes } from './routes/outcomes.js';
 import { providerRoutes } from './routes/providers.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { extractorRoutes } from './routes/extractor.js';
@@ -203,6 +204,7 @@ export async function buildApp(
       await instance.register(concernedItemsRoutes);
       await instance.register(followThreadHitRoutes);
       await instance.register(notificationCenterRoutes);
+      await instance.register(outcomeRoutes);
       await instance.register(providerRoutes);
       await instance.register(meetingRoutes);
       await instance.register(extractorRoutes);

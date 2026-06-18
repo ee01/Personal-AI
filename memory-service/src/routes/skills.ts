@@ -209,6 +209,21 @@ function analyzeLocalPackageFiles(
   };
 }
 
+function isValidationEvidenceFilePath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/').toLowerCase();
+  if (
+    /(^|\/)(__tests__|tests?|specs?|fixtures?|evals?)(\/|$)/.test(normalized)
+  ) {
+    return true;
+  }
+  if (/\.(?:test|spec)\.(?:cjs|mjs|js|jsx|ts|tsx)$/.test(normalized)) {
+    return true;
+  }
+  return /(^|\/)(?:verify|test|spec|eval|fixture)[^/]*\.(?:cjs|mjs|js|jsx|ts|tsx|json|jsonl|ya?ml|md|sh|py|rb)$/.test(
+    normalized,
+  );
+}
+
 function localSkillMetadata(
   skill: LocalPlatformSkillPackage,
   analysis = analyzeLocalPackageFiles(skill.files || []),
@@ -217,6 +232,9 @@ function localSkillMetadata(
     (sum, file) => sum + (file.byteSize || 0),
     0,
   );
+  const validationFilePaths = analysis.files
+    .map((file) => file.relativePath)
+    .filter(isValidationEvidenceFilePath);
   return {
     source: 'desktop_app_fs',
     sourceRoot: typeof skill.root === 'string' ? skill.root : undefined,
@@ -226,6 +244,11 @@ function localSkillMetadata(
       typeof skill.skillMdPath === 'string' ? skill.skillMdPath : undefined,
     fileCount: analysis.files.length,
     totalByteSize,
+    validationFileCount: validationFilePaths.length || undefined,
+    validationFilePaths:
+      validationFilePaths.length > 0
+        ? validationFilePaths.slice(0, 5)
+        : undefined,
     rejectedFileCount: analysis.rejectedFilePaths.length || undefined,
     rejectedFilePaths:
       analysis.rejectedFilePaths.length > 0

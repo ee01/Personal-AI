@@ -186,6 +186,14 @@ const GENERIC_QUERY_TOKENS = new Set([
   '设计',
   '定了',
 ]);
+const GENERIC_CONTEXT_HINT_TOKENS = new Set([
+  ...GENERIC_QUERY_TOKENS,
+  'mtr',
+  'rcv',
+  'vbg',
+  'jira',
+  'ringcentral',
+]);
 
 function safeJsonParse<T>(json: string | null | undefined): T | undefined {
   if (!json) return undefined;
@@ -390,7 +398,7 @@ function contextHintCompatibilityBonus(values: string[], externalContextText: st
     const cleaned = normalizeText(value);
     const comparable = normalizeComparable(cleaned);
     if (!comparable || comparable.length < 3) continue;
-    if (GENERIC_QUERY_TOKENS.has(comparable)) continue;
+    if (GENERIC_CONTEXT_HINT_TOKENS.has(comparable)) continue;
     if (!contextComparable.includes(comparable)) continue;
 
     if (hasIssueKey(cleaned)) {
@@ -457,9 +465,29 @@ function hasCurrentContextAnchor(candidate: MemoryContextTopicCandidate | undefi
   );
 }
 
+function hasDirectCurrentContextAnchor(candidate: MemoryContextTopicCandidate | undefined): boolean {
+  return Boolean(
+    candidate?.reasons.some((reason) => reason.includes('当前页面/会话锚点匹配')),
+  );
+}
+
+function hasExternalContextHint(candidate: MemoryContextTopicCandidate | undefined): boolean {
+  return Boolean(
+    candidate?.reasons.some((reason) => reason.includes('外部上下文文本锚点匹配')),
+  );
+}
+
+function hasRoleMatch(candidate: MemoryContextTopicCandidate | undefined): boolean {
+  return Boolean(
+    candidate?.reasons.some((reason) => reason.includes('匹配角色词')),
+  );
+}
+
 function candidateDecisionScore(candidate: MemoryContextTopicCandidate): number {
-  const currentAnchorBoost = hasCurrentContextAnchor(candidate) ? 0.055 : 0;
-  return candidate.score + currentAnchorBoost;
+  const directCurrentAnchorBoost = hasDirectCurrentContextAnchor(candidate) ? 0.16 : 0;
+  const externalContextBoost = hasExternalContextHint(candidate) ? 0.035 : 0;
+  const roleMatchBoost = hasRoleMatch(candidate) ? 0.035 : 0;
+  return candidate.score + directCurrentAnchorBoost + externalContextBoost + roleMatchBoost;
 }
 
 export class MemoryContextMatchService {
@@ -721,6 +749,19 @@ export class MemoryContextMatchService {
       );
     }
 
+    if (statusIntent) {
+      addRows(
+        this.db
+          .prepare(
+            `SELECT * FROM conversation_context_frames
+             WHERE source_anchors_json GLOB '*[A-Z][A-Z0-9]*-[0-9]*'
+             ORDER BY confidence DESC, updated_at DESC
+             LIMIT 40`,
+          )
+          .all() as ContextFrameRow[],
+      );
+    }
+
     if ((statusIntent || roleTerms.length) && rows.length < 20) {
       addRows(
         this.db
@@ -748,7 +789,22 @@ export class MemoryContextMatchService {
         sourceIds.meetingId && row.meeting_id === sourceIds.meetingId,
         sourceIds.issueKey && (row.issue_key === sourceIds.issueKey || anchors.includes(sourceIds.issueKey)),
       ].some(Boolean);
-      const text = [row.title, row.summary, ...projects, ...aliases, ...anchors].join(' ');
+      const anchorEntityContext = this.loadEntityContextForAnchors(anchors);
+      const anchorEntityBridgeBonus =
+        statusIntent &&
+        anchorEntityContext &&
+        (overlapCount(anchorEntityContext, queryTokens) > 0 ||
+          STATUS_EVIDENCE_PATTERN.test(anchorEntityContext))
+          ? 1.35
+          : 0;
+      const text = [
+        row.title,
+        row.summary,
+        ...projects,
+        ...aliases,
+        ...anchors,
+        anchorEntityContext,
+      ].join(' ');
       const roleOverlap = rowRoles.filter((role) => roleTerms.includes(role)).length;
       const statusHit = statusIntent && STATUS_EVIDENCE_PATTERN.test(text);
       const label = projects[0] || row.title || row.id;
@@ -767,6 +823,7 @@ export class MemoryContextMatchService {
         roleOverlap * 1.2 +
         (sourceMatch ? 1.6 : 0) +
         (statusHit ? 0.55 : 0) +
+        anchorEntityBridgeBonus +
         (row.confidence ?? 0.55) * 0.9 +
         recencyScore(row.updated_at) * 3.5 +
         anchorBonus -
@@ -778,6 +835,7 @@ export class MemoryContextMatchService {
       if (contextHintBonus) addReason(reasons, '外部上下文文本锚点匹配');
       if (roleOverlap) addReason(reasons, `匹配角色词: ${rowRoles.filter((role) => roleTerms.includes(role)).join(', ')}`);
       if (statusHit) addReason(reasons, '包含状态/进展信号');
+      if (anchorEntityBridgeBonus) addReason(reasons, '关联实体补充 source anchor 上下文');
       if (explicitBonus) addReason(reasons, `匹配显式 query 锚点: ${explicitQueryTokens.join(', ')}`);
       if (anchorBonus >= 0.9) addReason(reasons, `包含强 source anchor: ${anchors.slice(0, 2).join(', ')}`);
       else if (anchors.length) addReason(reasons, `包含 source anchor: ${anchors.slice(0, 2).join(', ')}`);
@@ -1053,6 +1111,33 @@ export class MemoryContextMatchService {
         evidenceIds: [],
       };
     });
+  }
+
+  private loadEntityContextForAnchors(anchors: string[]): string {
+    const issueAnchors = anchors.filter((anchor) => hasIssueKey(anchor)).slice(0, 4);
+    if (!issueAnchors.length) return '';
+    try {
+      const clauses = issueAnchors.map(() => 'description LIKE ?').join(' OR ');
+      const rows = this.db
+        .prepare(
+          `SELECT name, description
+           FROM entities
+           WHERE status = 'active'
+             AND type IN ('Project', 'Topic', 'Technology')
+             AND (${clauses})
+           ORDER BY importance DESC, mention_count DESC
+           LIMIT 6`,
+        )
+        .all(...issueAnchors.map((anchor) => `%${anchor}%`)) as Array<{
+        name: string;
+        description: string | null;
+      }>;
+      return rows
+        .map((row) => [row.name, row.description].filter(Boolean).join(': '))
+        .join(' ');
+    } catch {
+      return '';
+    }
   }
 
   private collectEntityCandidates(

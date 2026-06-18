@@ -44,6 +44,18 @@ const reviewActionBodySchema = {
   additionalProperties: false,
 };
 
+const assistantDraftBodySchema = {
+  type: 'object' as const,
+  properties: {
+    personId: { type: 'string' as const, minLength: 1 },
+    personName: { type: 'string' as const, minLength: 1 },
+    scenario: { type: 'string' as const, minLength: 1, maxLength: 80 },
+    userGoal: { type: 'string' as const, maxLength: 800 },
+  },
+  additionalProperties: false,
+  anyOf: [{ required: ['personId'] }, { required: ['personName'] }],
+};
+
 interface ConsolidateBody {
   limit?: number;
   personIds?: string[];
@@ -106,6 +118,19 @@ export async function relationshipRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Body: AssistantDraftBody }>(
     '/relationships/assistant/draft',
+    {
+      schema: { body: assistantDraftBodySchema },
+      preValidation: (request, reply, done) => {
+        const body = request.body as Record<string, unknown> | undefined;
+        const allowed = new Set(['personId', 'personName', 'scenario', 'userGoal']);
+        const unknown = Object.keys(body ?? {}).filter((key) => !allowed.has(key));
+        if (unknown.length > 0) {
+          void reply.status(400).send({ error: 'Invalid assistant draft body' });
+          return;
+        }
+        done();
+      },
+    },
     async (request, reply) => {
       const service = new RelationshipRadarService(request.userContext.db);
       const draft = service.buildAssistantDraft(request.body ?? {});

@@ -1,0 +1,3 @@
+ALTER TABLE reflection_research_attempts ADD COLUMN requested_source_types_json TEXT;
+ALTER TABLE reflection_research_attempts ADD COLUMN rejected_source_types_json TEXT;
+ALTER TABLE reflection_research_attempts ADD COLUMN scope_notice TEXT;

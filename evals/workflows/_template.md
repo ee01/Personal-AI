@@ -29,11 +29,12 @@ Describe what user experience this suite evaluates. Write this as a product-faci
 
 ## Report Requirements
 
-- Show what data or target this case evaluated.
-- Show expected behavior next to actual system output.
-- Show the generated/returned AI content, or the explicit error/hide decision.
-- Show score, user-facing verdict, and why the judge made that call.
-- Show concrete improvement suggestions.
+- Render through the shared Reader Contract, not a suite-specific full HTML renderer.
+- State what the run proved and what it did not prove.
+- For each case, provide `caseGoal`, `inputSummary`, `expectedSummary`, `actualSummary`, `proofChecks`, `conclusion`, and `nextSteps`.
+- Show the generated/returned AI content, or the explicit error/hide decision, as a concise actual summary.
+- Keep raw request/response/judge/debug payloads in artifacts and link to them from the report.
+- Surface concrete limitations or `notProved` boundaries when the eval is synthetic, local-only, partial, or blocked by external state.
 
 ## Run Examples
 

@@ -1,0 +1,12 @@
+{
+  "overall": 1,
+  "byAbility": {
+    "extraction": 1,
+    "multi_session": 1,
+    "temporal": 1,
+    "knowledge_update": 1,
+    "abstention": 1,
+    "prospective": 1
+  },
+  "updatedAt": "2026-06-12T05:15:38.375Z"
+}

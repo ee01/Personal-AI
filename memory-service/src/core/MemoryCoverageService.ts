@@ -82,6 +82,21 @@ export interface MemoryCoverageSummary {
   totalEntities: number;
 }
 
+export interface MemoryCoveragePriorityFocus {
+  platformId: string;
+  platformName: string;
+  state: MemoryCoverageState;
+  qualityScore: number;
+  contributionId: string;
+  contributionLabel: string;
+  contributionState: MemoryCoverageState;
+  actionId?: string;
+  actionTitle?: string;
+  actionSeverity?: MemoryCoverageRepairAction['severity'];
+  reason: string;
+  source: string;
+}
+
 export interface MemoryCoverageTimelineEvent {
   id: string;
   platformId: string;
@@ -97,6 +112,7 @@ export interface MemoryCoverageMapResponse {
   summary: MemoryCoverageSummary;
   platforms: MemoryCoveragePlatform[];
   repairActions: MemoryCoverageRepairAction[];
+  priorityFocus: MemoryCoveragePriorityFocus | null;
   timeline: MemoryCoverageTimelineEvent[];
 }
 
@@ -187,6 +203,24 @@ interface ProviderJobLatestRow {
   created_at: number | null;
 }
 
+interface ExternalAiImportBatchRow {
+  source_name: string | null;
+  source_count: number | null;
+  summary_json: string | null;
+  committed_at: number | null;
+}
+
+interface ExternalAiImportCoverageStats {
+  batches: number;
+  conversations: number;
+  importedMessages: number;
+  totalMessages: number;
+  skippedParts: number;
+  ignoredFiles: number;
+  latestSourcePath: string | null;
+  latestCommittedAt: number | null;
+}
+
 const STALE_AFTER_DAYS = 7;
 
 const INACTIVE_SKILL_PLATFORMS = [
@@ -241,6 +275,34 @@ function maxTimestamp(values: Array<number | null | undefined>): number | null {
 
 function formatCount(count: number): string {
   return new Intl.NumberFormat('en-US').format(count);
+}
+
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function readSummaryNumber(
+  summary: Record<string, unknown>,
+  key: string,
+): number | null {
+  const value = summary[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readSummaryString(
+  summary: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = summary[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function recentAfter(): number {
@@ -364,6 +426,16 @@ const SCORE_REPAIR_STATE_PRIORITY: Record<MemoryCoverageState, number> = {
   healthy: 99,
 };
 
+const PRIORITY_REPAIR_SEVERITY_RANK: Record<
+  MemoryCoverageRepairAction['severity'] | 'none',
+  number
+> = {
+  critical: 0,
+  warning: 1,
+  none: 2,
+  info: 3,
+};
+
 function pickScoreRepairContribution(
   contributions: MemoryCoverageContribution[],
 ): MemoryCoverageContribution | null {
@@ -439,6 +511,96 @@ function scoreRepairActionForPlatform(input: {
     ),
     severity: severityForScoreRepair(contribution.state),
     source: contribution.evidence,
+  };
+}
+
+function primaryNonInfoRepairAction(
+  actions: MemoryCoverageRepairAction[],
+): MemoryCoverageRepairAction | undefined {
+  return [...actions]
+    .filter((action) => action.severity !== 'info')
+    .sort(
+      (left, right) =>
+        PRIORITY_REPAIR_SEVERITY_RANK[left.severity] -
+        PRIORITY_REPAIR_SEVERITY_RANK[right.severity],
+    )[0];
+}
+
+function priorityReasonForContribution(
+  contribution: MemoryCoverageContribution,
+  staleAfterDays: number,
+): string {
+  switch (contribution.state) {
+    case 'failing':
+      return '先检查最近一次同步或读取错误，再重跑该来源的采集链路。';
+    case 'pressure':
+      return '先处理积压队列，否则覆盖很多也会难以转成可执行下一步。';
+    case 'blocked':
+    case 'not_configured':
+      return '先确认是否要启用这个通道；未启用时分数只能保持低位。';
+    case 'stale':
+      return `先确认这个来源近 ${staleAfterDays} 天是否应该继续产生新信号。`;
+    case 'sparse':
+      return '先补齐样本或确认这是低频来源，避免把少量历史信号误判成健康覆盖。';
+    case 'unknown':
+      return '先确认数据表、source_type 或同步回执是否存在。';
+    case 'partial':
+    default:
+      return '先打开贡献项明细，确认缺口来自新鲜度、配置还是回执。';
+  }
+}
+
+function priorityFocusForPlatforms(
+  platforms: MemoryCoveragePlatform[],
+): MemoryCoveragePriorityFocus | null {
+  const candidates = platforms
+    .filter(
+      (platform) =>
+        platform.group === 'active' || platform.group === 'derived',
+    )
+    .map((platform) => {
+      const repairAction = primaryNonInfoRepairAction(platform.repairActions);
+      const contribution = pickScoreRepairContribution(platform.contributions);
+      return { platform, repairAction, contribution };
+    })
+    .filter(
+      (item) =>
+        item.repairAction ||
+        item.platform.qualityScore < 80 ||
+        item.platform.state !== 'healthy',
+    )
+    .sort((left, right) => {
+      const leftSeverity = left.repairAction?.severity ?? 'none';
+      const rightSeverity = right.repairAction?.severity ?? 'none';
+      return (
+        PRIORITY_REPAIR_SEVERITY_RANK[leftSeverity] -
+          PRIORITY_REPAIR_SEVERITY_RANK[rightSeverity] ||
+        left.platform.qualityScore - right.platform.qualityScore ||
+        SCORE_REPAIR_STATE_PRIORITY[left.platform.state] -
+          SCORE_REPAIR_STATE_PRIORITY[right.platform.state] ||
+        left.platform.name.localeCompare(right.platform.name, 'zh-CN')
+      );
+    });
+
+  const selected = candidates[0];
+  if (!selected) return null;
+  const contribution =
+    selected.contribution ?? selected.platform.contributions[0] ?? null;
+  if (!contribution) return null;
+
+  return {
+    platformId: selected.platform.id,
+    platformName: selected.platform.name,
+    state: selected.platform.state,
+    qualityScore: selected.platform.qualityScore,
+    contributionId: contribution.id,
+    contributionLabel: contribution.label,
+    contributionState: contribution.state,
+    actionId: selected.repairAction?.id,
+    actionTitle: selected.repairAction?.title,
+    actionSeverity: selected.repairAction?.severity,
+    reason: priorityReasonForContribution(contribution, STALE_AFTER_DAYS),
+    source: selected.repairAction?.source ?? contribution.evidence,
   };
 }
 
@@ -552,6 +714,7 @@ export class MemoryCoverageService {
       summary,
       platforms,
       repairActions,
+      priorityFocus: priorityFocusForPlatforms(platforms),
       timeline,
     };
   }
@@ -1224,6 +1387,82 @@ export class MemoryCoverageService {
   }
 
   private buildExternalAiPlatform(): MemoryCoveragePlatform {
+    const stats = this.getExternalAiImportStats();
+    if (stats.batches > 0) {
+      const importedSignalCount =
+        stats.importedMessages || stats.conversations || stats.batches;
+      const importState: MemoryCoverageState = stats.latestCommittedAt
+        ? stateForCount(importedSignalCount, stats.latestCommittedAt, {
+            sparseBelow: 1,
+          })
+        : 'unknown';
+      const recentMessages =
+        stats.latestCommittedAt && stats.latestCommittedAt >= recentAfter()
+          ? stats.importedMessages
+          : 0;
+      const skippedDetail =
+        stats.skippedParts > 0
+          ? `，跳过 ${formatCount(stats.skippedParts)} 个非文本附件/部件`
+          : '';
+      const ignoredArchiveDetail =
+        stats.ignoredFiles > 0
+          ? `，忽略 ${formatCount(stats.ignoredFiles)} 个归档文件`
+          : '';
+      const sourcePathDetail = stats.latestSourcePath
+        ? `，来源 ${stats.latestSourcePath}`
+        : '';
+
+      return this.platform({
+        id: 'external_ai_history',
+        name: '外部 AI 历史',
+        nameEn: 'ChatGPT · Claude · Gemini',
+        icon: 'AI',
+        group: 'active',
+        directions: ['ingest'],
+        stateOverride: importState,
+        contributions: [
+          {
+            id: 'external-ai:import-batches',
+            label: '主动导入历史',
+            direction: 'ingest',
+            state: importState,
+            count: importedSignalCount,
+            recentCount: recentMessages,
+            latestAt: stats.latestCommittedAt,
+            detail:
+              `${formatCount(stats.batches)} 个导入批次，${formatCount(
+                stats.conversations,
+              )} 个会话，纳入 ${formatCount(
+                stats.importedMessages,
+              )}/${formatCount(
+                stats.totalMessages,
+              )} 条文本消息${skippedDetail}${ignoredArchiveDetail}${sourcePathDetail}`,
+            evidence:
+              "memory_import_batches.detected_kind='external_ai_history'",
+          },
+        ],
+        description:
+          '已通过智能导入处理用户主动提供的外部 AI 历史；这仍不是自动抓取通道。',
+        repairActions: [
+          {
+            id: 'external-ai-history:manual-refresh',
+            platformId: 'external_ai_history',
+            title:
+              importState === 'healthy'
+                ? '按需补录新的外部 AI 导出'
+                : '更新外部 AI 历史导入',
+            description:
+              importState === 'healthy'
+                ? '外部 AI 历史只在用户主动上传时更新；如果最近换了模型或平台，可以再次导入新的 zip。'
+                : `最近一次外部 AI 历史导入已超过 ${STALE_AFTER_DAYS} 天；它不会自动同步，需要重新从外部 AI 平台导出 zip 后在录入抽屉导入。`,
+            severity: importState === 'healthy' ? 'info' : 'warning',
+            source:
+              "memory_import_batches.detected_kind='external_ai_history'",
+          },
+        ],
+      });
+    }
+
     return this.inactivePlatform({
       id: 'external_ai_history',
       name: '外部 AI 历史',
@@ -1511,6 +1750,60 @@ export class MemoryCoverageService {
         "status = 'active' AND user_confirmed = 1",
       ),
     };
+  }
+
+  private getExternalAiImportStats(): ExternalAiImportCoverageStats {
+    const empty: ExternalAiImportCoverageStats = {
+      batches: 0,
+      conversations: 0,
+      importedMessages: 0,
+      totalMessages: 0,
+      skippedParts: 0,
+      ignoredFiles: 0,
+      latestSourcePath: null,
+      latestCommittedAt: null,
+    };
+    if (!this.tableExists('memory_import_batches')) return empty;
+
+    const rows = this.db
+      .prepare(
+        `SELECT source_name, source_count, summary_json, committed_at
+         FROM memory_import_batches
+         WHERE detected_kind = 'external_ai_history'
+           AND status = 'committed'
+         ORDER BY committed_at DESC`,
+      )
+      .all() as ExternalAiImportBatchRow[];
+
+    if (rows.length === 0) return empty;
+
+    const stats: ExternalAiImportCoverageStats = {
+      ...empty,
+      batches: rows.length,
+      latestCommittedAt: maxTimestamp(rows.map((row) => row.committed_at)),
+    };
+
+    for (const row of rows) {
+      const summary = parseJsonObject(row.summary_json);
+      const conversations = readSummaryNumber(summary, 'externalAiConversations');
+      const importedMessages = readSummaryNumber(summary, 'externalAiImportedMessages');
+      const totalMessages = readSummaryNumber(summary, 'externalAiTotalMessages');
+      const skippedParts = readSummaryNumber(summary, 'externalAiSkippedParts');
+      const ignoredFiles = readSummaryNumber(summary, 'externalAiIgnoredFiles');
+      const sourcePath =
+        readSummaryString(summary, 'externalAiSourcePath') ?? row.source_name ?? null;
+
+      stats.conversations += conversations ?? asCount(row.source_count);
+      stats.importedMessages += importedMessages ?? 0;
+      stats.totalMessages += totalMessages ?? importedMessages ?? 0;
+      stats.skippedParts += skippedParts ?? 0;
+      stats.ignoredFiles += ignoredFiles ?? 0;
+      if (!stats.latestSourcePath && sourcePath) {
+        stats.latestSourcePath = sourcePath;
+      }
+    }
+
+    return stats;
   }
 
   private countTable(table: string): number {

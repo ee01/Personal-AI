@@ -31,11 +31,16 @@ import type {
   RecallMediaItem,
   RecallQuery,
   RecallResult,
+  RecallScopeReceipt,
   RecallTimelineEvent,
 } from '../types/index.js';
 import { RecallEngine } from './RecallEngine.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
+import {
+  buildRecallScopeReceiptFromCounts,
+  countRecallScopes,
+} from '../utils/recallScopeReceipt.js';
 
 const ACTIVE_OVER_FETCH_FACTOR = 1.5;
 
@@ -101,6 +106,11 @@ export class ActiveRecallService {
 
     const baseResult = await this.engine.recall(baseQuery);
     const items = baseResult.items.slice(0, baseTopK);
+    const scopeReceipt = adjustScopeReceiptForReturnedItems(
+      baseResult.scopeReceipt,
+      query,
+      items,
+    );
 
     // Evidence-only mode: no blocks requested → cheap, fast, no LLM.
     if (!wantsBlocks) {
@@ -110,6 +120,7 @@ export class ActiveRecallService {
         queryTimeMs: Date.now() - startedAt,
         channels: baseResult.channels,
         channelDiagnostics: baseResult.channelDiagnostics,
+        scopeReceipt,
       };
     }
 
@@ -175,6 +186,7 @@ export class ActiveRecallService {
       queryTimeMs: Date.now() - startedAt,
       channels: baseResult.channels,
       channelDiagnostics: baseResult.channelDiagnostics,
+      scopeReceipt,
       blocks,
       analysis,
     };
@@ -220,6 +232,19 @@ export class ActiveRecallService {
 // ---------------------------------------------------------------------------
 // Block builders
 // ---------------------------------------------------------------------------
+
+function adjustScopeReceiptForReturnedItems(
+  receipt: RecallScopeReceipt | undefined,
+  query: RecallQuery,
+  returnedItems: RecallItem[],
+): RecallScopeReceipt | undefined {
+  if (!receipt) return undefined;
+  return buildRecallScopeReceiptFromCounts({
+    scope: query.scope,
+    returned: countRecallScopes(returnedItems),
+    candidates: receipt.candidates,
+  });
+}
 
 function buildEvidenceCards(items: RecallItem[]): RecallEvidenceCard[] {
   return items.slice(0, 12).map((item) => ({

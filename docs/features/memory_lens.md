@@ -1,6 +1,6 @@
 # Memory Lens
 
-*最后更新: 2026-06-03（含 Scene Memory Autopilot、Expanded Card 反馈失败可见化、站点控制冲突消解、资料记忆反馈闭环、来源链接兜底、Rehearsal 预演提醒反馈、浮窗信息层级重设计、划词记忆检索、弱相关缓存重显、真实召回质量观察）*
+*最后更新: 2026-06-18（含 Scene Memory Autopilot、InteractionScene 查询契约、Hover Peek 来源/新鲜度回执、Expanded Card 反馈失败可见化、正向反馈确认回执、站点控制冲突消解、站点控制回执、Options 站点控制状态回执、被动入库站点控制、资料记忆反馈闭环、来源链接状态回执、来源可复核状态回执、Rehearsal 预演提醒反馈、浮窗信息层级重设计、右下角入口临时拖拽、划词记忆检索、选区动作条、划词入口边界 tooltip、划词检索范围回执、弱相关缓存重显、真实召回质量观察、cue-level Outcome Loop）*
 
 ## 概述
 
@@ -30,6 +30,7 @@ Memory Lens 的逻辑是“当前页面像什么，就去记忆库里找你以�
 3. 记忆本身质量：有明确摘要、实体、来源和时间的记忆更容易展示；低信息标题或泛泛会议记录会被压低。
 4. 敏感页面和输入状态：密码、支付、账号、隐私输入等场景不会显示。
 5. 与 Compose Assist 的互斥：用户正在输入框附近写回复时，Compose Assist 优先，Memory Lens 右下角入口会隐藏。
+6. 精准 cue：少数结构足够明确的场景会把相关记忆编译成一句可行动只读提示，例如用户在 RingCentral 群聊或 Jira comment 中讨论 MTR-148115 估算时提示“上次 original estimate 口径是人天”。这仍然只是展示旧记忆，不插入、不提交；如果同一句 cue 在同类场景被重复标成不相关，Outcome Loop 会让后续同类场景静默。
 
 ## 产品边界
 
@@ -38,13 +39,13 @@ Memory Lens 负责：
 - 根据当前页面、RingCentral 消息会话、Jira issue、会议上下文或划选文本调用 `/context-recall`。
 - 展示少量高相关记忆或 Rehearsal 预演提醒，按"为什么相关 → 它说了什么 / 预演内容是什么 → 我能做什么"三层组织卡片内容。
 - 提供正/负反馈 icon 和站点/页面级静默控制；控制类操作默认折叠，不占据卡片主体。
-- 在用户选中文本后提供 **划词记忆检索（Selection Memory Search）**：先静默召回，命中强相关才显示轻量 `icon48.png` 入口。
+- 在用户选中文本后提供 **划词记忆检索（Selection Memory Search）**：先静默召回，命中强相关才在选区动作条里显示 `icon48.png` 查记忆入口。
 
 Memory Lens 不负责：
 
 - 不自动保存完整 DOM、网页正文、截图、密码/支付/登录表单或私密输入。
 - 不因为用户打开网页就强化长期记忆的 `access_count`。
-- 不做“插入回复”“生成可发送文本”“改写草稿”；这些属于 [`compose_assist.md`](./compose_assist.md)。即使命中 Rehearsal，Memory Lens 也只展示“预演提醒”，不生成回复。
+- 不做“插入回复”“生成可发送文本”“改写草稿”；这些属于 [`compose_assist.md`](./compose_assist.md)。即使命中 Rehearsal 或 Cue Compiler，Memory Lens 也只展示只读提醒，不生成回复。
 - 不在 `v.ringcentral.com/conf/on/*` 上显示通用右下角 bubble；会议页由 Meeting Pilot 接管。
 - 不和 RingCentral Glip 输入框旁的 Compose Assist icon 同时占位；当 Compose Assist 已显示时，Memory Lens 右下角 Rest / Hover Peek / Expanded Card 自动隐藏。
 
@@ -53,6 +54,8 @@ Memory Lens 不负责：
 ### Rest
 
 页面右下角只显示 44px 圆形 `icon48.png`。只有后端返回 `displayPriority=p1` 或带有可解释 `whyRelevant` 锚点的 `p2` 时才显示；`hidden` 或缺少解释锚点的弱匹配不显示。Rest 态不显示百分比分数，避免让用户误以为这是模型置信度。
+
+Rest icon 可以被拖拽到当前视口内的其他位置，用于避开网页自身的右下角按钮、客服入口或提交按钮。拖拽只影响当前页面上的这一枚 icon；位置不会写入 storage，也不会跨刷新、跨页面或跨会话记忆。拖动后 Hover Peek 和 Expanded Card 会跟随新的临时锚点展开，刷新页面后恢复默认右下角位置。
 
 RingCentral Glip 下有一个额外互斥规则：如果页面已经生成 `.pai-composer-guard-icon-button`，说明用户当前更可能需要 Compose Assist 的输入框辅助，Memory Lens 不再显示右下角悬浮 icon；Compose Assist 移除后，Lens 可以重新按正常召回规则出现。
 
@@ -64,13 +67,13 @@ RingCentral Glip 下有一个额外互斥规则：如果页面已经生成 `.pai
 - 第二行：`因为` + 少量 why chips，优先解释来源、匹配类型、证据角色或明确的 `whyMatched`。
 - 第三行：记忆标题，单行截断。
 - 第四行：优先展示 `uiSummary`，最多两行；没有 `uiSummary` 才用 `snippet`。
-- Footer：来源、记录时间和可读来源标题，例如 `RingCentral 消息 · 5/21 · 2026 Hackathon Project`。
+- Footer：来源、记录时间和可读来源标题，例如 `RingCentral 消息 · 5/21 · 2026 Hackathon Project`；缺少标题时保留来源和时间，资料记忆可追加保存方式/资料类型。前端统一通过 `buildContextRecallPeekFooterItems()` 生成这行，避免 Hover Peek、why chips 和 Expanded Card 元信息各自漂移。
 
 Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开后消失。`p1` 强相关可以使用 fresh 动效提示新结果；`p2` 只静默显示 Rest icon，用户主动 hover/focus 时才看到 `可能相关` Peek。即使同页 hash 刷新或焦点恢复复用了本地缓存的 `p2` 结果，也不能升级成 fresh 动效。完整操作必须点击 icon 打开 Expanded Card。
 
 ### Expanded Card
 
-点击 icon 或按 Enter/Space 打开完整卡片。卡片按 **5 层结构**组织，每层占 1-2 行，整张卡高度 ≤ 240px，任何层在数据缺失时自动折叠：
+点击 icon 或按 Enter/Space 打开完整卡片。卡片按 **5 层结构**组织，每层占 1-2 行；正文区域在视口内滚动，反馈和分页 footer 固定在卡片底部，窄屏下不越界。任何层在数据缺失时自动折叠：
 
 | 层 | 内容 | 实现要点 |
 |---|---|---|
@@ -81,9 +84,9 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 | 5 Meta + Foot | 群名可点链接 / 时间 / 反馈 / 翻页 | Thumb up/down icon + `1/N` 翻页器，始终仅占 1 行 |
 
 控制类操作分级：
-- **正/负反馈**（有用 / 不相关）：底部仍只保留低饱和 thumb icon。正反馈一键写入；负反馈入口显示为 compact thumb-down，点击后在卡片内打开轻量原因面板，而不是把“不是这个意思”做成大按钮。
+- **正/负反馈**（有用 / 不相关）：底部仍只保留低饱和 thumb icon。正反馈点击后先显示“正在记录”，等 memory-service 确认成功才显示“已记录为有用”；负反馈入口显示为 compact thumb-down，点击后在卡片内打开轻量原因面板，而不是把“不是这个意思”做成大按钮。
 - **负反馈原因面板**：面板只在用户点 thumb-down 后出现，包含“只是主题相似 / 群组或项目不对 / 空页面误触发”三类原因，选择后立即写入；备注 textarea 仅在用户主动展开“补充原因”后出现，不要求提交按钮。点击面板外侧、关闭按钮或 Escape 会收起面板，不改变当前提示。
-- **反馈失败可见化**：如果有用/不相关反馈没有成功写入 memory-service，卡片不能继续显示成“已学习成功”。正向反馈会解除本次按钮锁定并提示失败；负向反馈仍本地隐藏 30 分钟，但 toast 明确说明只是本页隐藏，并提供“重新显示”恢复刚才的卡片。
+- **反馈失败可见化**：如果有用/不相关反馈没有成功写入 memory-service，卡片不能继续显示成“已学习成功”。正向反馈只有在服务端确认后才显示成功；失败时会解除本次按钮锁定并提示失败。负向反馈仍本地隐藏 30 分钟，但 toast 明确说明只是本页隐藏，并提供“重新显示”恢复刚才的卡片。
 - **站点/页面级静默和屏蔽**（今天不提示 / 此页面永久不提示 / 永久不提示此站点 / 允许此站点）：收进 `⋯` popover，避免误触永久屏蔽。
 - **跳转记忆原文**（在记忆中查看）：右上角 `↗` link-out icon，对应 `exploreLink`。
 
@@ -91,19 +94,29 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 
 ### 划词记忆检索（Selection Memory Search）
 
-用户在任意非敏感网页选中文本时，Selection Memory Search 会先静默调用 `/context-recall` 做 `selected_text` 匹配。请求中 `primaryText` 只放用户选中的文本；页面标题、附近段落、所在容器文本等只作为 `secondaryTexts` 的 background context。只有候选同时满足 `displayPriority=p1`、存在 `whyRelevant` / concrete matched anchors，并且命中点能回到“选中文本”本身时，才在选区旁显示一个小的 `icon48.png` 入口。
+用户在任意非敏感网页选中文本时，Selection Memory Search 会先静默调用 `/context-recall` 做 `selected_text` 匹配。请求中 `primaryText` 只放用户选中的文本；页面标题、附近段落、所在容器文本等只作为 `secondaryTexts` 的 background context。只有候选同时满足 `displayPriority=p1`、存在 `whyRelevant` / concrete matched anchors，并且命中点能回到“选中文本”本身时，才在选区旁的动作条里显示 `icon48.png` 查记忆按钮。
 
 这个模块不新增独立搜索页，也不展示右下角 Rest / Hover Peek 流程。它复用 Lens 的浮窗壳、分页、反馈、跳转记忆原文和 `icon48.png`，但文案、标题、why row、空态和阈值语义都围绕“选中的文本”，不写成“当前页面相关”。
 
+划词查记忆和选区入库可以在同一段选区上同时出现，但刻意分成两个入口：
+
+- 命中强相关记忆时，选区旁只显示 `Personal AI icon`，代表“查已有关联记忆”；hover/focus 该 icon 会显示 `查已有记忆` tooltip，并明确它不保存、不插入、不发送、不调用外部 AI。
+- 选区也适合保存时，`+ 入库` 以页面最右侧半露出的独立 dock 出现，点击后先打开确认面板，不自动保存。
+- 没有强相关记忆但选区值得保存时，不显示查记忆 icon，只保留右侧半露出的 `+ 入库` dock。
+- 这两个入口不会合并成一个按钮组，避免用户把“查已有记忆”和“保存新资料”误解成同一个动作。
+
 - 被动 Lens：页面稳定后自动召回，命中强相关时显示右下角 Rest icon，hover 出 Peek，点击后展开 Card。
-- Selection Memory Search：用户选中文本后先静默召回，命中强相关才显示选区旁小 icon，点击后直接打开 `selectionSearch` variant 浮窗。
+- Selection Memory Search：用户选中文本后先静默召回，命中强相关才显示选区动作条里的查记忆 icon，点击后直接打开 `selectionSearch` variant 浮窗。
 - `selectionSearch` variant 的 Header 使用 `划词记忆检索` / `Selection Memory Search`，内容层级为 `选中的内容 → 找到的相关记忆 → 为什么匹配 → 证据 → 操作`。
+- 划词结果卡片在“选中的内容”下方显示 `检索范围` 回执：`查询` 说明主检索文本只取选中文字，`背景` 说明页面标题/附近段落只是辅助上下文，`边界` 说明主动划词不受被动站点静默或屏蔽影响，`安全` 说明敏感页/密钥类选区仍拦截且不会自动入库、插入或发给外部 AI。
 - Why row 文案使用 `为什么匹配` / `匹配到`，chips 优先展示 `选中文本命中：xxx`、`主题：xxx`、`项目：xxx`；不使用全页面 Lens 的“同页面 / 网页上下文”语义。
 - 划词 Card 打开期间，普通页面 passive recall 不应立刻覆盖或清掉当前 `selected_text` 结果，避免用户看到卡片一闪而过。
 
 如果没有匹配到高相关记忆，不显示划词入口，也不弹出“没有找到高相关记忆”这类空结果提示。`p2`、`hidden`、纯语义相似、只有页面背景命中但没有选中文本命中的结果都不展示入口。只有 `Codex`、`AI`、`RingCentral` 这类宽泛主题词命中时，也不能展示入口；需要命中 `续约`、`300万`、票号、项目名、人名、行动项等更具体的选中文本锚点。
 
 每次选区变化都会立即清除上一条划词入口、取消上一条 pending recall，并重新发起 `selected_text` 匹配。Selection Memory Search 不读取上一轮划词缓存，避免用户快速多次选择文本时把旧结果误展示在新选区旁。
+
+同一页面如果多处出现相同选中文字，附近段落也会进入本次划词上下文签名；用户从第一处相同短语切到第二处时会重新发起 `selected_text` 召回，而不是只把第一处结果挪到新位置。
 
 划词是用户主动发起的查询入口，不受被动右下角 Lens 的站点白名单、临时静默或站点屏蔽限制；敏感页面、敏感表单和低信息/密钥类选区仍然被拦截。划词结果卡片也不展示“此网站今天不提示 / 永久不提示此站点 / 白名单”这类被动站点控制，避免用户误以为这些控制会禁用主动划词检索。
 
@@ -127,11 +140,19 @@ Hover Peek 不包含按钮，不进入 tab 顺序，不抢焦点，鼠标离开�
 - 请求 `limit` 默认按 surface 控制，网页轻量态请求 3 条候选，前端按 `displayPriority + score` 选主提示。
 - `RecallEngine.recall(..., { reinforceAccess: false })`，被动提示不强化访问计数。
 - 请求包含 `sourceContext` 和 `exclude`，用于排除当前 URL、当前 conversation/group/meeting、当前消息 self echo。
+- 请求可以包含 `interactionScene`，用于说明用户此刻是在读 Jira、写 Jira comment、在 RingCentral 群聊讨论 estimate、回复 thread、划词查询，还是只是在普通网页阅读。前端只做确定性的页面/输入框/选区快照和轻量 admission gate，不在浏览器端调用 LLM；Memory Service 负责把这个 scene 和候选记忆结合，判断是否应该提示。
+- `interactionScene.visibleFacts` 会携带当前页面已经能直接看到的结构化字段，例如 Jira 上的 `DEV Estimate New=0.4`。Cue Compiler 看到这类字段后，不会在 Jira issue 阅读场景里再弹一条复述同一字段值的 Lens；同一条记忆仍可以在 RingCentral 群聊、thread 或 Jira comment composer 里作为“讨论估算时的口径提醒”出现。
+- `interactionScene.admission` 只表达“前端已经观察到足够场景信号，值得查询”，例如 issue key、选中文本、输入框 focus、附近消息、可见字段。最终是否展示、展示成只读 Lens 还是给 Compose Assist 的 draft hint，仍由后端 SceneFrame、Cue Compiler 和 Outcome Loop 决定。
 - 后端会 over-fetch、过滤、合并同源 cluster、rerank，再返回 `uiSummary`、`reasonType`、`evidenceRole`、`displayPriority`、`exploreLink`。
 - 对短句或指代性上下文会先做 `MemoryContextMatchService` 话题锁定：用当前页面/会话 hint、`conversation_context_frames`、近期高频消息、source anchors、角色词和互动信号判断用户可能在问哪个项目或 thread。例如用户只说“那个 BE ready 了吗”或“那个新 design 定了吗”时，服务会先尝试锁定到最近最强的话题；如果候选接近，Context Recall 应降级或保持静默，不强弹确定结论。
+- Cue Compiler 位于召回和 UI 之间。`SceneFrameService` 只从当前原始页面/输入框 request 提取 sceneType、fieldHints、issueKey、risk，不使用 RecallContextExpansion 加入的历史记忆词，避免把“找到的 estimate 记忆”反向污染当前 status 页面。当前先支持 Jira estimate：`MemoryCueFactService` 从候选记忆抽 `estimate.unit`、`jira.field`、`close_policy`、`due_date_policy`，`CueCompilerService` 生成 `ContextCue(actionType='remember')`，并要求 `sourceRefs`、`whyNow`、`confidence` 可追溯。
+- Cue Compiler 会读取 `MemoryOutcomeLoopService` 的 cue policy。重复负反馈生成的 `suppress` patch 会把同一句 cue 降为 `compileStatus='suppressed'`、`suppressReason='outcome_policy'`，前端不需要新增按钮；重复正向采纳则会以 `boost` policy 提高同类 cue 的排序置信度。
+- Jira issue 页面会额外做“当前页字段 echo”过滤：如果页面已经显示 `DEV Estimate New: 0.4` 这类 estimate 字段值，Lens 不应再弹一条只复述该字段值的提示。这样的记忆更适合在 RingCentral 群聊、thread、Jira comment 草稿等“讨论这张 ticket 估算”的场景里出现；只有页面上看不到的口径、决策背景或风险说明才适合在 Jira 页面提示。
+- 带明确 Jira key 的 RingCentral / Jira 场景会对 `source_memory` 做精确锚点过滤：资料记忆的标题、摘要、片段、来源 URL 或 link 必须包含同一个 issue key，才允许作为强提示展示。`sdk`、`bug`、`release`、`link` 这类泛词重合只能说明可能相关，不能替代票号证据。
 - 当 `sourceTypes` 包含 `rehearsal` 时，`/context-recall` 可以返回 `type='rehearsal'`、`evidenceRole='rehearsal_cue'`、`reasonType='prospective_cue'` 的预演提醒。Lens 需要把它显示成“预演提醒”，解释命中的人物、会议、issue、URL 或 topic，而不是当普通事实记忆渲染。
 - Rehearsal 卡片使用“为什么此刻相关 / 预演内容 / 我能做什么”的文案，`↗` 跳到 `memory-exploring.html#/rehearsals?rehearsalId=...`，有用/不相关反馈写回对应 Rehearsal activation。
 - 普通记忆和 `source_memory` 资料记忆反馈会以 `recall_quality` 进入 memory-service；资料记忆负反馈按 capsule id 记录，后续 source memory 召回会排除该 capsule。Rehearsal 负反馈走 `/rehearsals/:id/feedback` 并记录为 `irrelevant`，后续同目标或低质量同源结果会被排除或降权。
+- cue-backed 卡片不新增用户操作。用户展开卡片时会通过既有 `AMBIENT_CALIBRATION_TRACE` 写入 `expanded` outcome；thumb up/down 仍走现有反馈通道，但 detail 会带 `cue_id`、`cue_key`、`cue_action_type`、`cue_compile_status`、`cue_confidence` 和 `cue_why_now`，供 Outcome Loop 学习这句 cue 是否有用或不相关。
 
 质量门控重点：
 
@@ -154,16 +175,21 @@ Memory Lens 默认把“用户可以看见记忆”和“可以把记忆外发�
 
 Options 页提供“网页记忆提示控制”管理入口，用于恢复临时静默、永久屏蔽站点、永久屏蔽页面路径和允许站点白名单。
 
-这些控制只约束 **被动网页处理**：右下角 Lens、页面级 `/context-recall` 和旧的网页智能分析都会在临时静默、永久屏蔽、路径屏蔽或白名单未命中时停止；用户主动划词检索仍可使用，但继续受敏感页面、敏感表单和低信息/密钥选区拦截。Options 中的修改会通过 `chrome.storage.onChanged` 实时同步到已打开页面，不需要刷新当前页才生效。
+这些控制只约束 **被动网页处理**：右下角 Lens、页面级 `/context-recall`、整页/视觉资料 `+ 入库` 的被动候选评估和旧的网页智能分析，都会在临时静默、永久屏蔽、路径屏蔽或白名单未命中时停止；用户主动划词检索仍可使用，但继续受敏感页面、敏感表单和低信息/密钥选区拦截。Options 中的修改会通过 `chrome.storage.onChanged` 实时同步到已打开页面，不需要刷新当前页才生效；如果当前页已经显示了被动 Lens 或整页/视觉 `+ 入库` 入口，被控制后也会立即清掉，恢复允许后再重新评估。
+
+Options 管理页会常驻显示 `站点控制状态` 回执：当前是默认模式还是白名单模式、会被控制的被动处理范围、当前有哪些静默/屏蔽/白名单阻断、主动划词仍可用，以及这些设置不会删除、同步、外发记忆或反写当前网站。白名单模式开启但没有允许站点时，回执会明确说普通网页被动提示会全部保持静默，避免用户以为是召回质量或扩展故障。
 
 白名单是全局模式，不是单站点的“解除屏蔽”。因此卡片菜单在白名单关闭时显示为“开启白名单并允许此站点”，避免用户误以为只是恢复当前站点。
 
 当用户显式“允许”某个站点时，Options 页和卡片快捷入口会移除覆盖该站点的父域/子域临时静默或永久屏蔽规则，避免出现“已允许 docs.example.com，但 example.com 的父域屏蔽仍让 Lens 不出现”的假成功。反过来，用户显式“永久屏蔽”站点时会清掉覆盖范围内的允许/静默冲突记录，让设置页只保留当前真正生效的控制语义。
 
+Expanded Card 的更多菜单会先显示 `站点控制回执`：当前 host、当前默认/白名单模式、会被影响的被动处理范围，以及不会发生的事情。用户点“今天不提示 / 页面永久不提示 / 永久不提示此站点 / 允许此站点”后，toast 也会说明这只影响右下角 Lens、页面召回和整页/视觉入库候选；主动划词仍可用，且不会删除、同步或外发已有记忆。
+
 ## 业内参考与启发
 
-- Chrome extension `activeTab` 的官方设计强调“用户手势后临时访问当前 tab”，比长期全站访问更符合最小权限预期；Memory Lens 的站点控制应尽量让用户能形成“这里会不会被动读取页面”的清晰模型。
+- Chrome extension `activeTab` 的官方设计强调“用户手势后临时访问当前 tab”，比长期全站访问更符合最小权限预期；划词检索同样应把用户选中的查询和页面背景上下文分开说明。
 - Microsoft Edge 的 Copilot page context policy 把“Copilot 能否访问页面内容”做成可动态刷新的 profile-level 控制；站点控制变更实时作用于已打开页，沿用同样的可预期性。
+- Microsoft Edge Copilot 的 Context clues 文档把 prompt、当前页面、打开的 tab、历史和偏好区分为不同来源；Selection Memory Search 也要告诉用户哪些内容是主查询、哪些只是辅助背景。
 - ChatGPT Memory 和 Notion Enterprise Search 都把记忆/连接源控制、权限过滤和删除/断开后的不可用语义作为用户信任基础；Memory Lens 的静默/屏蔽不应只隐藏 UI，而应阻止对应被动处理。
 - ChatGPT Memory Sources、Notion Enterprise Search citations 和 RAG trust/transparency 研究都指向同一个 UI 原则：用户看到关联记忆时，应能直接追到来源，而不是只看到模型摘要或分数。因此 Expanded Card 即使只拿到 `sourceUrl`，也要展示可点击来源链接。
 - Slack AI Search / Notion Enterprise Search 都强调搜索答案来自用户已有权限范围，并可追溯来源；对 Hover Peek 来说，弱相关 `p2` 不能像强提醒一样打断用户，只能在有明确解释锚点时作为低打扰入口出现。
@@ -193,16 +219,22 @@ Options 页提供“网页记忆提示控制”管理入口，用于恢复临时
 - Expanded Card 优先把 `sourceUrl` 渲染成可点击来源，即使后端没有重复填充 `links[]`。
 - 链接文案优先用 `sourceTitle`，没有时使用来源类型；同 URL 去重，最多展示 3 个来源入口。
 - 只接受安全 `http(s)` URL；`javascript:`、`data:` 和其他非网页协议不进入卡片。
+- 如果 `exploreLink` 或原始来源 URL 被安全策略隐藏，或没有任何可打开来源，卡片要显示 compact 来源回执（例如 `记忆入口已隐藏` / `原始来源缺失`），避免用户把按钮消失误解成“已经完整可追溯”。
+- 当有可打开来源或记忆详情入口时，卡片还会显示 compact `来源状态` 回执：当前页、同站、外部来源、已保存资料来源和记忆详情是否可复核；如果这条记忆已经很久没有更新，会提示“行动前复核”，避免用户把旧记忆当成当前事实直接执行。
+- `当前页面来源可复核` 的判断使用规范化后的 URL：会忽略 hash、常见追踪参数和 query 顺序差异，避免当前页面带 `utm` / `fbclid` 时被误降级成“同站来源可复核”。
 
 ## Scene Memory Autopilot
 
 后端 `/context-recall` 现在负责第一道场景过滤，不再把主要相关性判断留给浏览器端临时 `overlapAudit`。流程是：
 
-1. `RecallEngine` 先 over-fetch 候选。
-2. `ContextRecallService` 合并同一会议、群组、会话或来源 URL 的重复 chunk。
-3. Scene Memory Autopilot 提取当前场景锚点，并根据人物、项目、主题、来源重叠调整分数和 `displayPriority`。
-4. 低信息标题、空会议壳、广播/公告无锚点、跨域工具主题、弱语义-only 结果会降成 `hidden`。
-5. 响应返回 `autopilot` 摘要，记录 `mode`、展示数、静默数、hidden 数、低信息数、来源排除数、重复合并数、场景锚点和 quiet reasons。
+1. 前端 `SiteContextAdapter` 先生成 `SiteContextSnapshot`，再补一个 `InteractionScene`：当前 surface、scene type、user mode、active element、可见字段、附近消息和 admission reasons。
+2. `RecallEngine` over-fetch 候选；`ContextRecallService` 合并同一会议、群组、会话或来源 URL 的重复 chunk。
+3. `SceneFrameService` 把原始 request 和 `InteractionScene` 合成后端可追溯的 scene frame，明确这是 `jira_issue_reading`、`jira_comment_composing`、`ringcentral_estimate_discussion` 等具体场景。
+4. Scene Memory Autopilot 根据人物、项目、主题、来源重叠和用户当前动作调整分数和 `displayPriority`。
+5. 低信息标题、空会议壳、广播/公告无锚点、跨域工具主题、弱语义-only 结果会降成 `hidden`。
+6. 响应返回 `autopilot` 摘要和 debug scene frame，记录 `mode`、展示数、静默数、hidden 数、低信息数、来源排除数、重复合并数、场景锚点、interactionSceneType 和 quiet reasons。
+
+这个分层的关键取舍是：前端做“是否有足够交互信号值得问”的确定性 admission gate，后端做“这条记忆在这个场景该不该出现”的语义判断。这样不会一打开任意网页就请求 Lens，也不会让浏览器端用临时规则决定所有记忆相关性。
 
 `mode` 的 UI 语义：
 
@@ -241,18 +273,28 @@ Options 页提供“网页记忆提示控制”管理入口，用于恢复临时
 - 同页 hash 刷新、焦点恢复或缓存重显时，缓存里的 `p2` 结果仍保持 `可能相关` 低打扰状态，不重新触发召回或显示 fresh 动效。
 - 右下角 icon hover 出 Hover Peek，mouseleave 后消失，click 后打开 Expanded Card。
 - Hover Peek 和 Expanded Card 都不展示 `100%/87%` 这类百分比分数。
+- Hover Peek footer 应优先显示来源、记录时间、可读来源标题；这行只做 provenance / freshness 回执，不把时间误渲染成 why chip。
 - Expanded Card 标题使用 `metadata.summary` 语义描述，不使用 `"@xxx wrote:"` / `"3. 行动指南"` 这类 raw snippet。
 - 当返回结果含 `metadata.actions[]` 或 `replyAdvice` 时，卡片证据区优先展示可执行行动/建议，不退回低信息 raw snippet。
 - 当召回结果只有 `sourceUrl`、没有 `links[]` 时，Expanded Card 仍展示安全来源链接，并按 URL 去重。
+- 当 `exploreLink` 或原始来源 URL 不安全/缺失时，Expanded Card 应显示来源回执；不允许把核验入口静默省略。
+- Expanded Card 应显示来源状态回执：区分当前页 / 同站 / 外部来源 / 已保存资料来源，保留记忆详情可复核状态，并对 90 天以上的旧记忆提示行动前先复核。
+- 当前页面来源状态应在页面 URL 带 hash、追踪参数或 query 顺序变化时仍显示 `当前页面来源可复核`。
 - `source_memory` Expanded Card 的有用/不相关反馈应真实写入 `/feedback`，target id 规范为 source memory capsule id，而不是只在前端显示 toast。
 - 如果 Expanded Card 的反馈写入失败，应给出失败 toast；不相关反馈失败时只能说明“本页隐藏”，并允许用户重新显示刚才的卡片。
-- 划词后先静默发起 `selected_text` 召回；只有命中高相关候选才显示轻量 icon。
+- 划词后先静默发起 `selected_text` 召回；只有命中高相关候选才显示选区动作条里的查记忆 icon。
+- 强相关划词命中且选区也适合保存时，选区旁的查记忆 icon 和页面右侧半露出的 `+ 入库` dock 应同时存在，但彼此分离。
+- 选区旁的查记忆 icon 应有 hover/focus tooltip：命名为 `查已有记忆`，并说明不保存、不插入、不发送、不调用外部 AI。
 - `selected_text` 没有高相关候选时不显示划词 icon，也不弹空结果 toast。
+- `selected_text` 没有高相关候选但选区值得保存时，只显示 `+ 入库`，点击后必须先打开确认面板，取消不写入资料记忆。
 - 点击划词 icon 后直接打开 Expanded Card，并保持当前 `selected_text` 结果，不被随后完成的页面 passive recall 立刻替换或清除。
+- 划词结果卡片应显示 `检索范围` 回执，说明主查询只取选中文字，页面标题/附近段落只作背景，主动划词不受被动站点静默影响，敏感页/密钥类选区仍拦截且不会自动入库、插入或发给外部 AI。
 - 划词结果卡片的更多菜单只处理本次主动查询结果，不展示被动 Lens 的站点静默、站点屏蔽、页面屏蔽或白名单控制。
 - 选中 Lens 自身卡片文本、明显密钥/卡号文本、或响应前切到敏感表单时不展示划词结果。
 - 允许 `docs.example.com` 会移除覆盖它的 `example.com` 静默/屏蔽记录；随后白名单模式下打开该子域应能触发被动召回。
 - 永久屏蔽一个站点会清掉覆盖范围内的允许/静默冲突记录，Options 页不应同时显示互相抵消的有效规则。
+- 被动 Lens 卡片更多菜单应显示 `站点控制回执`，说明当前 host、当前模式、控制范围、主动划词边界和不删除/不同步/不外发边界；点击站点控制动作后的 toast 也要保留这条边界。
+- Options 页应显示 `站点控制状态` 回执；白名单开启但允许列表为空时必须明确说明普通网页被动提示全部保持静默，并继续说明主动划词不受该被动控制影响。
 - Hackathon/Codex/MCP/setup 上下文不召回 Gary travel itinerary。
 - 空 RingCentral meeting shell 不召回 Colin/AVA 或其他 glip 记忆。
 - 有具体工单、动作、决策、风险的 RingCentral Video/meeting 记忆仍可召回。
@@ -262,4 +304,4 @@ Options 页提供“网页记忆提示控制”管理入口，用于恢复临时
 - 跨群无重叠的候选即使 score=1.00 也不展示 Rest icon 红点；仅在用户主动点击 icon 后以 `可能相关` 出现。
 - 当所有候选 `overlapAudit` 均为 `hidden` 时，Rest icon 不显示红点，Hover Peek 不弹，Expanded Card 主动打开才展示"暂无强相关"空态。
 - 反馈 thumb up/down 后，`detail` JSON 携带 `scene_anchor_signature`、host、target/source 类型、来源标题/URL，以及可用的 `match.metadata.groupId + sender`，用于后续同场景降权。thumb-down 原因面板还会写入 `interaction=memory_relevance_trainer`、`feedback_reason`、可选 `feedback_note` 和 `auto_applied=true`，让后端后续能区分“只是宽泛主题相似”“群组/项目错配”“空页面壳误触发”等训练信号。
-- Options 里新增/移除站点静默、永久屏蔽、路径屏蔽或白名单规则后，已打开页面应立即停止或恢复被动 Lens；被控制站点也不应继续触发旧的网页智能分析。
+- Options 里新增/移除站点静默、永久屏蔽、路径屏蔽或白名单规则后，已打开页面应立即停止或恢复被动 Lens；被控制站点也不应继续触发旧的网页智能分析或整页/视觉 `+ 入库` 候选评分。

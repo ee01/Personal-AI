@@ -2,11 +2,17 @@ import type Database from 'better-sqlite3';
 
 import {
   ChannelDeliveryRepository,
+  type ChannelDeliveryRecord,
   type DeliveryChannel,
   type DeliveryLane,
   type DeliveryStatus,
 } from '../repositories/ChannelDeliveryRepository.js';
-import { getBotSender, type BotSendResult } from '../utils/botSender.js';
+import {
+  BotSender,
+  getBotSender,
+  type BotConfig,
+  type BotSendResult,
+} from '../utils/botSender.js';
 import { formatDateTime, now } from '../utils/time.js';
 
 export type NotificationPriority = 'high' | 'normal';
@@ -16,6 +22,7 @@ export type NotificationFeedDeliveryMode =
   | 'daily_digest';
 
 export const TODO_DELIVERY_RETRY_COOLDOWN_SECONDS = 6 * 60 * 60;
+const DELIVERY_CHANNELS: DeliveryChannel[] = ['chrome', 'doubao', 'glip'];
 
 export interface NotificationEnvelope {
   sourceRef: string;
@@ -31,6 +38,23 @@ export interface NotificationEnvelope {
   type?: string;
   payload?: Record<string, unknown>;
   deliveryContext?: NotificationDeliveryContext;
+  channelReceipts?: NotificationChannelReceipt[];
+}
+
+export interface NotificationChannelReceipt {
+  channel: DeliveryChannel;
+  state: 'not_attempted' | 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  label: string;
+  detail: string;
+  status?: DeliveryStatus;
+  effectiveStatus?: DeliveryStatus;
+  hasSuccessfulDelivery: boolean;
+  firstDeliveredAt?: number;
+  lastDeliveredAt?: number;
+  seenAt?: number;
+  dismissedAt?: number;
+  lastAttemptAt?: number;
+  lastError?: string;
 }
 
 export interface NotificationDeliveryContext {
@@ -46,6 +70,18 @@ export interface NotificationDeliveryContext {
   lastAttemptAt?: number;
   lastDeliveredAt?: number;
   cooldownSeconds?: number;
+}
+
+export interface NotificationFeedResult {
+  items: NotificationEnvelope[];
+  meta: {
+    channel: DeliveryChannel;
+    lanes: DeliveryLane[];
+    deliveryMode: NotificationFeedDeliveryMode;
+    limit: number;
+    returned: number;
+    hasMore: boolean;
+  };
 }
 
 interface ProposedActionRow {
@@ -108,12 +144,18 @@ function firstPayloadString(
 
 function noticePayloadDetail(item: NotificationEnvelope): string | undefined {
   if (item.type === 'dream_digest') {
-    return firstPayloadString(item.payload, [
+    const scopeReceipt = firstPayloadString(
+      item.payload,
+      ['dreamDigestScopeReceipt'],
+      700,
+    );
+    const detail = firstPayloadString(item.payload, [
       'digestBody',
       'summary',
       'details',
       'body',
     ]);
+    return [scopeReceipt, detail].filter(Boolean).join('\n\n') || undefined;
   }
 
   if (item.type === 'weekly_report') {
@@ -169,6 +211,271 @@ function formatDeliveryContextHint(
   return '';
 }
 
+function formatChannelLabel(channel: DeliveryChannel): string {
+  switch (channel) {
+    case 'chrome':
+      return 'Chrome';
+    case 'doubao':
+      return '豆包';
+    case 'glip':
+      return 'Glip';
+    default:
+      return channel;
+  }
+}
+
+function buildChannelReceiptBaseLabel(record: ChannelDeliveryRecord): string {
+  switch (record.effectiveStatus) {
+    case 'clicked':
+      return '已查看';
+    case 'dismissed':
+      return '已忽略';
+    case 'delivered':
+      return '已送达';
+    case 'failed':
+      return '发送失败';
+    default:
+      return record.effectiveStatus;
+  }
+}
+
+function buildChannelReceiptLabel(record: ChannelDeliveryRecord): string {
+  const baseLabel = buildChannelReceiptBaseLabel(record);
+  if (record.status === 'failed' && record.hasSuccessfulDelivery) {
+    return `${baseLabel}，最近失败`;
+  }
+  return baseLabel;
+}
+
+function buildChannelReceiptEffectiveDetail(
+  record: ChannelDeliveryRecord,
+): string {
+  switch (record.effectiveStatus) {
+    case 'clicked':
+      return '用户已从该渠道进入处理入口';
+    case 'dismissed':
+      return '用户已在该渠道忽略或关闭提醒';
+    case 'delivered':
+      return '渠道已报告送达；这不等于用户已处理';
+    case 'failed':
+      return record.lastError
+        ? `最近一次渠道发送失败：${record.lastError}`
+        : '最近一次渠道发送失败';
+    default:
+      return '该渠道已有回执记录';
+  }
+}
+
+function buildChannelReceiptDetail(record: ChannelDeliveryRecord): string {
+  if (record.status === 'failed' && record.hasSuccessfulDelivery) {
+    const failureDetail = record.lastError
+      ? `最近一次回执失败：${record.lastError}`
+      : '最近一次回执失败';
+    return `${buildChannelReceiptEffectiveDetail(record)}；${failureDetail}`;
+  }
+  return buildChannelReceiptEffectiveDetail(record);
+}
+
+function compactReceiptError(raw: string | undefined): string {
+  const compacted = (raw || '').replace(/\s+/g, ' ').trim();
+  if (!compacted) return '';
+  if (compacted.length <= 90) return compacted;
+  return `${compacted.slice(0, 89).trim()}…`;
+}
+
+function formatEffectiveReceiptStateLabel(
+  status: DeliveryStatus | undefined,
+): string {
+  switch (status) {
+    case 'clicked':
+      return '已查看';
+    case 'dismissed':
+      return '已忽略';
+    case 'delivered':
+      return '已送达';
+    case 'failed':
+      return '发送失败';
+    default:
+      return '已有回执';
+  }
+}
+
+function buildChannelReceipt(
+  channel: DeliveryChannel,
+  record: ChannelDeliveryRecord | undefined,
+): NotificationChannelReceipt {
+  if (!record) {
+    return {
+      channel,
+      state: 'not_attempted',
+      label: '未尝试',
+      detail: '该渠道尚未写入投递回执',
+      hasSuccessfulDelivery: false,
+    };
+  }
+
+  const state =
+    record.status === 'failed' && !record.hasSuccessfulDelivery
+      ? 'failed'
+      : record.effectiveStatus;
+  return {
+    channel,
+    state,
+    label: buildChannelReceiptLabel(record),
+    detail: buildChannelReceiptDetail(record),
+    status: record.status,
+    effectiveStatus: record.effectiveStatus,
+    hasSuccessfulDelivery: record.hasSuccessfulDelivery,
+    firstDeliveredAt: record.firstDeliveredAt,
+    lastDeliveredAt: record.lastDeliveredAt,
+    seenAt: record.seenAt,
+    dismissedAt: record.dismissedAt,
+    lastAttemptAt: record.updatedAt,
+    lastError: record.lastError,
+  };
+}
+
+function formatChannelReceiptFailureDetail(
+  receipt: NotificationChannelReceipt,
+): string {
+  if (receipt.status !== 'failed') return '';
+  const channelLabel = formatChannelLabel(receipt.channel);
+  const error = compactReceiptError(receipt.lastError);
+  const errorDetail = error ? `${channelLabel}：${error}` : channelLabel;
+  if (
+    receipt.hasSuccessfulDelivery &&
+    receipt.effectiveStatus &&
+    receipt.effectiveStatus !== 'failed'
+  ) {
+    const stateNote =
+      receipt.effectiveStatus === 'delivered'
+        ? '有效状态仍按已送达，不等于已处理'
+        : `有效状态仍按${formatEffectiveReceiptStateLabel(
+            receipt.effectiveStatus,
+          )}`;
+    return `${errorDetail}（${stateNote}）`;
+  }
+  return errorDetail;
+}
+
+function formatChannelReceiptsHint(
+  receipts: NotificationChannelReceipt[] | undefined,
+  currentChannel: DeliveryChannel | undefined,
+): string {
+  const meaningfulReceipts = (receipts || []).filter(
+    (receipt) =>
+      receipt.channel !== currentChannel && receipt.state !== 'not_attempted',
+  );
+  if (meaningfulReceipts.length === 0) return '';
+  const summary = meaningfulReceipts
+    .map(
+      (receipt) =>
+        `${formatChannelLabel(receipt.channel)}${receipt.label}`,
+    )
+    .join('，');
+  const failureDetails = meaningfulReceipts
+    .map(formatChannelReceiptFailureDetail)
+    .filter(Boolean);
+  if (failureDetails.length === 0) {
+    return ` [其他渠道：${summary}]`;
+  }
+  return ` [其他渠道：${summary}；失败原因：${failureDetails.join('；')}]`;
+}
+
+function maxDigestMarkdownLength(tokenBudget: number): number {
+  return Math.max(400, tokenBudget * 4);
+}
+
+function buildDigestTruncationReceipt(omittedCount: number): string {
+  return `> 已截断：还有 ${omittedCount} 条未放入本次摘要；未显示条目不会写入本次渠道送达回执。`;
+}
+
+function renderBoundedDigestMarkdown(input: {
+  headerLines: string[];
+  itemBlocks: Array<{ sourceRef: string; bodyMd: string }>;
+  emptyLine: string;
+  tokenBudget: number;
+}): {
+  bodyMd: string;
+  sourceRefs: string[];
+  itemCount: number;
+  omittedItemCount: number;
+} {
+  if (input.itemBlocks.length === 0) {
+    return {
+      bodyMd: [...input.headerLines, input.emptyLine].join('\n'),
+      sourceRefs: [],
+      itemCount: 0,
+      omittedItemCount: 0,
+    };
+  }
+
+  const maxLength = maxDigestMarkdownLength(input.tokenBudget);
+
+  const compose = (visibleCount: number): string => {
+    const omittedCount = input.itemBlocks.length - visibleCount;
+    const bodyLines = [
+      ...input.headerLines,
+      visibleCount > 0
+        ? input.itemBlocks
+            .slice(0, visibleCount)
+            .map((item) => item.bodyMd)
+            .join('\n')
+        : '- 本次摘要预算不足，未放入完整条目。',
+    ];
+    if (omittedCount > 0) {
+      bodyLines.push('', buildDigestTruncationReceipt(omittedCount));
+    }
+    return bodyLines.join('\n');
+  };
+
+  for (
+    let visibleCount = input.itemBlocks.length;
+    visibleCount >= 0;
+    visibleCount -= 1
+  ) {
+    const bodyMd = compose(visibleCount);
+    if (bodyMd.length <= maxLength) {
+      const visibleItems = input.itemBlocks.slice(0, visibleCount);
+      return {
+        bodyMd,
+        sourceRefs: visibleItems.map((item) => item.sourceRef),
+        itemCount: visibleItems.length,
+        omittedItemCount: input.itemBlocks.length - visibleItems.length,
+      };
+    }
+  }
+
+  return {
+    bodyMd: [
+      ...input.headerLines,
+      '- 本次摘要预算不足，未放入完整条目。',
+      '',
+      buildDigestTruncationReceipt(input.itemBlocks.length),
+    ].join('\n'),
+    sourceRefs: [],
+    itemCount: 0,
+    omittedItemCount: input.itemBlocks.length,
+  };
+}
+
+function deliveryContextSortWeight(
+  deliveryContext: NotificationDeliveryContext | undefined,
+): number {
+  switch (deliveryContext?.reason) {
+    case 'previous_delivery_failed':
+      return 0;
+    case 'new':
+      return 1;
+    case 'retry_after_cooldown':
+      return 2;
+    case 'already_delivered_unfinished':
+      return 3;
+    default:
+      return 1;
+  }
+}
+
 export function classifyNotificationRouting(params: {
   sourceType: 'notification' | 'proposed_action';
   type?: string | null;
@@ -203,7 +510,10 @@ export function shouldRouteToGlip(
 export class NotificationCenterService {
   private readonly channelDeliveryRepository: ChannelDeliveryRepository;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(
+    private readonly db: Database.Database,
+    private readonly botConfigProvider?: () => BotConfig,
+  ) {
     this.channelDeliveryRepository = new ChannelDeliveryRepository(db);
   }
 
@@ -213,16 +523,44 @@ export class NotificationCenterService {
     limit?: number;
     deliveryMode?: NotificationFeedDeliveryMode;
   }): NotificationEnvelope[] {
+    return this.listFeedResult(input).items;
+  }
+
+  listFeedResult(input: {
+    channel: DeliveryChannel;
+    lanes: DeliveryLane[];
+    limit?: number;
+    deliveryMode?: NotificationFeedDeliveryMode;
+  }): NotificationFeedResult {
     const lanes = Array.from(new Set(input.lanes)).filter(
       (lane): lane is DeliveryLane => lane === 'todo' || lane === 'notice',
     );
-    if (lanes.length === 0) return [];
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
-    const currentTime = now();
     const deliveryMode = input.deliveryMode ?? 'retry_after_cooldown';
+    if (lanes.length === 0) {
+      return {
+        items: [],
+        meta: {
+          channel: input.channel,
+          lanes,
+          deliveryMode,
+          limit,
+          returned: 0,
+          hasMore: false,
+        },
+      };
+    }
+
+    const queryLimit = limit + 1;
+    const currentTime = now();
     const includeDeliveredTodos = deliveryMode === 'daily_digest';
     const deliveredAfter = currentTime - TODO_DELIVERY_RETRY_COOLDOWN_SECONDS;
+    const terminalDeliverySql = `(
+      c.status IN ('clicked', 'dismissed')
+      OR c.seen_at IS NOT NULL
+      OR c.dismissed_at IS NOT NULL
+    )`;
     const todoSuccessfulDeliverySql =
       deliveryMode === 'incremental'
         ? `(
@@ -234,9 +572,7 @@ export class NotificationCenterService {
     const successfulDeliveryParams =
       deliveryMode === 'incremental' ? [] : [deliveredAfter];
     const successfulDeliverySql = `(
-      c.status IN ('clicked', 'dismissed')
-      OR c.seen_at IS NOT NULL
-      OR c.dismissed_at IS NOT NULL
+      ${terminalDeliverySql}
       OR (
         c.lane = 'notice'
         AND (
@@ -270,28 +606,40 @@ export class NotificationCenterService {
 
     const notificationDeliveryFilterSql = includeDeliveredTodos
       ? `AND (
-              ${notificationLaneSql} = 'todo'
-              OR NOT EXISTS (
+              (
+                ${notificationLaneSql} = 'todo'
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM channel_delivery_records c
+                   WHERE c.source_ref = ('notification:' || n.id)
+                     AND c.channel = ?
+                     AND c.lane = ${notificationLaneSql}
+                     AND ${terminalDeliverySql}
+                )
+              )
+              OR (
+                ${notificationLaneSql} <> 'todo'
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM channel_delivery_records c
+                   WHERE c.source_ref = ('notification:' || n.id)
+                     AND c.channel = ?
+                     AND c.lane = ${notificationLaneSql}
+                     AND ${successfulDeliverySql}
+                )
+              )
+            )`
+      : `AND NOT EXISTS (
                 SELECT 1
                   FROM channel_delivery_records c
                  WHERE c.source_ref = ('notification:' || n.id)
                    AND c.channel = ?
                    AND c.lane = ${notificationLaneSql}
                    AND ${successfulDeliverySql}
-              )
-            )`
-      : `AND NOT EXISTS (
-              SELECT 1
-                FROM channel_delivery_records c
-               WHERE c.source_ref = ('notification:' || n.id)
-                 AND c.channel = ?
-                 AND c.lane = ${notificationLaneSql}
-                 AND ${successfulDeliverySql}
             )`;
-    const notificationDeliveryFilterParams = [
-      input.channel,
-      ...successfulDeliveryParams,
-    ];
+    const notificationDeliveryFilterParams = includeDeliveredTodos
+      ? [input.channel, input.channel, ...successfulDeliveryParams]
+      : [input.channel, ...successfulDeliveryParams];
 
     const notificationRows = this.db
       .prepare(
@@ -309,7 +657,7 @@ export class NotificationCenterService {
         currentTime,
         ...lanes,
         ...notificationDeliveryFilterParams,
-        limit,
+        queryLimit,
       ) as NotificationFeedRow[];
 
     const notifications = notificationRows.map<NotificationEnvelope>((row) => {
@@ -337,11 +685,19 @@ export class NotificationCenterService {
           deliveredAfter,
           includeDeliveredTodos,
         }),
+        channelReceipts: this.buildChannelReceipts(sourceRef, routing.lane),
       };
     });
 
     const actionDeliveryFilterSql = includeDeliveredTodos
-      ? ''
+      ? `AND NOT EXISTS (
+                  SELECT 1
+                    FROM channel_delivery_records c
+                   WHERE c.source_ref = ('proposed_action:' || a.id)
+                     AND c.channel = ?
+                     AND c.lane = 'todo'
+                     AND ${terminalDeliverySql}
+                )`
       : `AND NOT EXISTS (
                   SELECT 1
                     FROM channel_delivery_records c
@@ -351,7 +707,7 @@ export class NotificationCenterService {
                      AND ${successfulDeliverySql}
                 )`;
     const actionDeliveryFilterParams = includeDeliveredTodos
-      ? []
+      ? [input.channel]
       : [input.channel, ...successfulDeliveryParams];
 
     const actionEnvelopes = lanes.includes('todo')
@@ -370,7 +726,7 @@ export class NotificationCenterService {
             .all(
               currentTime,
               ...actionDeliveryFilterParams,
-              limit,
+              queryLimit,
             ) as ProposedActionRow[]
         ).map<NotificationEnvelope>((action) => {
           const payload = safeJsonParse<Record<string, unknown>>(
@@ -396,20 +752,54 @@ export class NotificationCenterService {
               deliveredAfter,
               includeDeliveredTodos,
             }),
+            channelReceipts: this.buildChannelReceipts(sourceRef, 'todo'),
           };
         })
       : [];
 
-    return [...notifications, ...actionEnvelopes]
-      .sort((left, right) => {
+    const combined = [...notifications, ...actionEnvelopes].sort(
+      (left, right) => {
         if (left.priority !== right.priority) {
           return left.priority === 'high' ? -1 : 1;
+        }
+        const leftContextWeight = deliveryContextSortWeight(
+          left.deliveryContext,
+        );
+        const rightContextWeight = deliveryContextSortWeight(
+          right.deliveryContext,
+        );
+        if (leftContextWeight !== rightContextWeight) {
+          return leftContextWeight - rightContextWeight;
         }
         const leftTs = left.sentAt ?? left.createdAt;
         const rightTs = right.sentAt ?? right.createdAt;
         return rightTs - leftTs;
-      })
-      .slice(0, limit);
+      },
+    );
+    const items = combined.slice(0, limit);
+    return {
+      items,
+      meta: {
+        channel: input.channel,
+        lanes,
+        deliveryMode,
+        limit,
+        returned: items.length,
+        hasMore: combined.length > limit,
+      },
+    };
+  }
+
+  private buildChannelReceipts(
+    sourceRef: string,
+    lane: DeliveryLane,
+  ): NotificationChannelReceipt[] {
+    return DELIVERY_CHANNELS.map((channel) =>
+      buildChannelReceipt(
+        channel,
+        this.channelDeliveryRepository.getRecord(sourceRef, channel, lane),
+      ),
+    );
   }
 
   private buildDeliveryContext(input: {
@@ -438,7 +828,7 @@ export class NotificationCenterService {
 
     const lastDeliveredAt = record.lastDeliveredAt ?? record.firstDeliveredAt;
     let reason: NotificationDeliveryContext['reason'] = 'new';
-    if (record.status === 'failed' && !record.hasSuccessfulDelivery) {
+    if (record.status === 'failed') {
       reason = 'previous_delivery_failed';
     } else if (
       input.includeDeliveredTodos &&
@@ -452,8 +842,6 @@ export class NotificationCenterService {
       lastDeliveredAt <= input.deliveredAfter
     ) {
       reason = 'retry_after_cooldown';
-    } else if (record.status === 'failed') {
-      reason = 'previous_delivery_failed';
     }
 
     return {
@@ -499,7 +887,9 @@ export class NotificationCenterService {
     targetUserId?: string;
     targetGroupId?: string;
   }): Promise<BotSendResult> {
-    const botSender = getBotSender();
+    const botSender = this.botConfigProvider
+      ? new BotSender(this.botConfigProvider())
+      : getBotSender();
     if (!botSender.isConfigured()) {
       const result: BotSendResult = {
         sent: false,
@@ -549,6 +939,7 @@ export class NotificationCenterService {
     sourceRefs: string[];
     dedupeSuffix: string;
     itemCount: number;
+    omittedItemCount: number;
   } {
     const deliveryMode = options.deliveryMode ?? 'retry_after_cooldown';
     const items = this.listFeed({
@@ -558,43 +949,49 @@ export class NotificationCenterService {
       deliveryMode,
     });
 
-    const lines = items.map((item) => {
+    const itemBlocks = items.map((item) => {
       const due =
         item.dueAt || item.sentAt
           ? ` @ ${formatDateTime(item.dueAt ?? item.sentAt ?? item.createdAt)}`
           : '';
       const body = item.body ? ` - ${item.body}` : '';
-      return `${item.title}${due}${body}${formatDeliveryContextHint(
-        item.deliveryContext,
-      )}`;
+      return {
+        sourceRef: item.sourceRef,
+        bodyMd: `- ${item.title}${due}${body}${formatDeliveryContextHint(
+          item.deliveryContext,
+        )}${formatChannelReceiptsHint(
+          item.channelReceipts,
+          item.deliveryContext?.channel,
+        )}`,
+      };
     });
 
-    const bodyMd = [
-      deliveryMode === 'daily_digest' ? '# 每日待办摘要' : '# 待办摘要',
-      deliveryMode === 'daily_digest'
-        ? '> 每日低打扰汇总：列出仍未完成的待办。'
-        : deliveryMode === 'incremental'
-          ? '> 新待办同步：只列出还没有成功提醒过的事项。'
-          : '> 滚动待办同步：列出当前需要处理或重新提醒的事项。',
-      '',
-      deliveryMode === 'daily_digest'
-        ? '## 未完成待办'
-        : deliveryMode === 'incremental'
-          ? '## 新待办'
-          : '## 待处理事项',
-      lines.length > 0
-        ? lines.map((line) => `- ${line}`).join('\n')
-        : '- 暂无待处理事项。',
-    ].join('\n');
+    const rendered = renderBoundedDigestMarkdown({
+      headerLines: [
+        deliveryMode === 'daily_digest' ? '# 每日待办摘要' : '# 待办摘要',
+        deliveryMode === 'daily_digest'
+          ? '> 每日低打扰汇总：列出仍未完成的待办。'
+          : deliveryMode === 'incremental'
+            ? '> 新待办同步：只列出还没有成功提醒过的事项。'
+            : '> 滚动待办同步：列出当前需要处理或重新提醒的事项。',
+        '',
+        deliveryMode === 'daily_digest'
+          ? '## 未完成待办'
+          : deliveryMode === 'incremental'
+            ? '## 新待办'
+            : '## 待处理事项',
+      ],
+      itemBlocks,
+      emptyLine: '- 暂无待处理事项。',
+      tokenBudget,
+    });
 
     return {
-      bodyMd:
-        bodyMd.length <= Math.max(400, tokenBudget * 4)
-          ? bodyMd
-          : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
-      sourceRefs: items.map((item) => item.sourceRef),
-      dedupeSuffix: items.map((item) => item.sourceRef).join('|'),
-      itemCount: items.length,
+      bodyMd: rendered.bodyMd,
+      sourceRefs: rendered.sourceRefs,
+      dedupeSuffix: rendered.sourceRefs.join('|'),
+      itemCount: rendered.itemCount,
+      omittedItemCount: rendered.omittedItemCount,
     };
   }
 
@@ -606,6 +1003,7 @@ export class NotificationCenterService {
     sourceRefs: string[];
     dedupeSuffix: string;
     itemCount: number;
+    omittedItemCount: number;
   } {
     const items = this.listFeed({
       channel: provider === 'doubao' ? 'doubao' : 'chrome',
@@ -613,26 +1011,32 @@ export class NotificationCenterService {
       limit: 8,
     });
 
-    const lines = items.map(formatNoticeDigestItem);
+    const itemBlocks = items.map((item) => ({
+      sourceRef: item.sourceRef,
+      bodyMd: `${formatNoticeDigestItem(item)}${formatChannelReceiptsHint(
+        item.channelReceipts,
+        item.deliveryContext?.channel,
+      )}`,
+    }));
 
-    const bodyMd = [
-      '# 通知摘要',
-      '> 信息类更新：用于同步近况，不要把它们转成待办。',
-      '',
-      '## 更新',
-      lines.length > 0
-        ? lines.join('\n')
-        : '- 暂无新通知。',
-    ].join('\n');
+    const rendered = renderBoundedDigestMarkdown({
+      headerLines: [
+        '# 通知摘要',
+        '> 信息类更新：用于同步近况，不要把它们转成待办。',
+        '',
+        '## 更新',
+      ],
+      itemBlocks,
+      emptyLine: '- 暂无新通知。',
+      tokenBudget,
+    });
 
     return {
-      bodyMd:
-        bodyMd.length <= Math.max(400, tokenBudget * 4)
-          ? bodyMd
-          : bodyMd.slice(0, Math.max(0, tokenBudget * 4 - 32)).trim(),
-      sourceRefs: items.map((item) => item.sourceRef),
-      dedupeSuffix: items.map((item) => item.sourceRef).join('|'),
-      itemCount: items.length,
+      bodyMd: rendered.bodyMd,
+      sourceRefs: rendered.sourceRefs,
+      dedupeSuffix: rendered.sourceRefs.join('|'),
+      itemCount: rendered.itemCount,
+      omittedItemCount: rendered.omittedItemCount,
     };
   }
 }

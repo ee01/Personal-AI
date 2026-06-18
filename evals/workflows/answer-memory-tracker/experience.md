@@ -13,11 +13,18 @@ Evaluate whether `/api/v1/ask` can silently learn durable answer needs from repe
    - first locked, evidenced Ask: `observed`
    - second canonical Ask in the 90-day window: `promoted`
    - later Ask against the same canonical key: `priorHit` or `updated`
-5. Reuse the Ask context-gap heuristic on the last response to verify topic lock and evidence grounding still work.
+   - if the live remote DB already has the canonical answer thread before this eval starts, `priorHit` or `updated` is acceptable for earlier steps too, as long as all steps keep the same locked topic and the final answer still has current evidence.
+5. When a case defines `expectedAuthorityDecision` or `expectedAuthorityDecisions`, check `answerMemory.authority.decision` as the reason the bottom layer allowed or suppressed an update:
+   - `authorized_change`: current authority evidence can create, promote, or update the live answer.
+   - `same_meaning_no_change`: same authority evidence and same stance; a wording change should not create a new version.
+   - `wait_for_authority_source`: the generated answer tries to flip state without a new authority source.
+   - `supporting_only`: the evidence is derived/supporting and cannot rewrite the answer.
+6. Reuse the Ask context-gap heuristic on the last response to verify topic lock and evidence grounding still work.
 
 ## Pass Criteria
 
-- Each step returns the expected `answerMemory.state`.
+- Each step returns the expected `answerMemory.state`, or an already-learned equivalent (`priorHit` / `updated`) when the canonical thread preexists in live data.
+- If configured, each step returns the expected authority decision so the report explains not just what happened, but why the memory layer wrote or refused to write.
 - The final response has `contextMatch.state = locked` for the intended topic.
 - The final response includes evidence that matches the expected project/role/source anchors.
 - The answer does not rely on the prior alone; it still cites or returns current evidence.
@@ -25,7 +32,7 @@ Evaluate whether `/api/v1/ask` can silently learn durable answer needs from repe
 
 ## Report Requirements
 
-- Show each step's query, supplied context, raw `answerMemory` diagnostic, context match state, answer excerpt, evidence count, and request duration.
+- Show each step's query, supplied context, raw `answerMemory` diagnostic, authority decision, context match state, answer excerpt, evidence count, and request duration.
 - Show the expected diagnostic progression and the actual progression.
 - Show whether the final answer still has current evidence and expected topic anchors.
 - Make service errors and timeouts explicit; do not present a partial sequence as a successful promotion.

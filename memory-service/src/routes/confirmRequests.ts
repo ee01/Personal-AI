@@ -303,7 +303,8 @@ export async function confirmRequestRoutes(
     const routing = current.routing ?? 'decision';
     const isWatchItem = routing === 'watch';
     const validTransition = isWatchItem
-      ? (current.state === 'pending' && targetState === 'snoozed') ||
+      ? (current.state === 'pending' &&
+          (targetState === 'pending' || targetState === 'snoozed')) ||
         (current.state === 'snoozed' &&
           (targetState === 'pending' ||
             targetState === 'expired' ||
@@ -368,6 +369,7 @@ export async function confirmRequestRoutes(
         requiresApproval: false,
         queueStatus: 'queued',
         priority: current.priority === 'high' ? 9 : 7,
+        idempotencyKey: `confirm_request_watch:${current.id}:verify`,
         sourceKind: 'confirm_request_watch',
         sourceRefId: current.id,
         evidenceRefs: current.evidenceRefs,

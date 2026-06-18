@@ -70,6 +70,9 @@ describe('ReflectionThreadService', () => {
     const detail = service.getThreadDetail(thread.id);
 
     expect(detail).not.toBeNull();
+    expect(detail?.thread.continueReason).toBe('new action result available');
+    expect(detail?.thread.reflectionCount).toBe(0);
+    expect(detail?.thread.lastReflectedAt).toBeUndefined();
     expect(detail?.actionResults).toHaveLength(1);
     expect(detail?.actionResults[0].summary).toContain('外部进展摘要');
     expect(
@@ -80,6 +83,30 @@ describe('ReflectionThreadService', () => {
     );
     expect(actionResultLink?.previewTitle).toBe('外部委派结果');
     expect(actionResultLink?.preview).toContain('外部进展摘要');
+  });
+
+  it('resumes confirm request threads without counting a reflection run', () => {
+    const thread = repo.upsertThread({
+      topicKey: 'confirm_request:cr-orbit',
+      title: '决策跟进: Orbit',
+      status: 'active',
+      priority: 8,
+      salience: 0.9,
+      sourceType: 'confirm_request',
+      sourceRefId: 'cr-orbit',
+      continueReason: 'waiting_for_confirm_request',
+      nextReflectionAt: now() + 3600,
+    });
+
+    const service = new ReflectionThreadService(db);
+    const resumed = service.resumeThreadsForConfirmRequest('cr-orbit');
+
+    expect(resumed).toEqual([thread.id]);
+    const updated = repo.getThreadById(thread.id);
+    expect(updated?.continueReason).toBe('confirm request answered');
+    expect(updated?.reflectionCount).toBe(0);
+    expect(updated?.lastReflectedAt).toBeUndefined();
+    expect(updated?.nextReflectionAt).toBeLessThanOrEqual(now());
   });
 
   it('persists and hydrates entity hits from local research', async () => {
@@ -119,6 +146,10 @@ describe('ReflectionThreadService', () => {
         topK: 2,
         purpose: '确认 Orbit 的本地事实',
         sourceTypes: ['manual'],
+        requestedSourceTypes: ['manual', 'unsupported_slack'],
+        rejectedSourceTypes: ['unsupported_slack'],
+        scopeNotice:
+          '研究范围已裁剪：仅查询 Personal AI 支持的本地来源 manual；已忽略不支持的来源 unsupported_slack。',
       },
     ]);
     vi.spyOn(RecallEngine.prototype, 'recall').mockResolvedValue({
@@ -172,6 +203,16 @@ describe('ReflectionThreadService', () => {
     expect(detail?.researchAttempts[0].evidenceRefs).toEqual([
       'entity:entity-orbit',
     ]);
+    expect(detail?.researchAttempts[0].requestedSourceTypes).toEqual([
+      'manual',
+      'unsupported_slack',
+    ]);
+    expect(detail?.researchAttempts[0].rejectedSourceTypes).toEqual([
+      'unsupported_slack',
+    ]);
+    expect(detail?.researchAttempts[0].scopeNotice).toContain(
+      '研究范围已裁剪',
+    );
   });
 
   it('records failed and empty local research attempts without aborting the reflection run', async () => {

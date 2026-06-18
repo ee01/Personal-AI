@@ -192,6 +192,7 @@ describe('GenerativeReplay', () => {
           type: 'message',
           content: 'Numeric RingCentral message id should stay a message.',
           score: 0.92,
+          metadata: { channels: ['fts', 'graph'] },
         },
       ],
       totalFound: 1,
@@ -235,5 +236,17 @@ describe('GenerativeReplay', () => {
       access_count: 1,
     });
     expect(chunkMeta).toBeUndefined();
+
+    const dreamFiles = userDataManager.listFiles('dreams');
+    expect(dreamFiles).toHaveLength(1);
+    const dreamFile = userDataManager.readFile(`dreams/${dreamFiles[0]}`);
+    expect(dreamFile).toContain('## Grounding Receipt');
+    expect(dreamFile).toContain('- Recalled memories: 1');
+    expect(dreamFile).toContain('- Recall result types: message 1');
+    expect(dreamFile).toContain('- Recall hit channels: fts, graph');
+    expect(dreamFile).toContain('- Recall checked channels: fts');
+    expect(dreamFile).toContain(
+      '- message:1234567890 — Numeric RingCentral message id should stay a message.',
+    );
   });
 });

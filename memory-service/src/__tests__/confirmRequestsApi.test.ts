@@ -558,6 +558,27 @@ describe('Confirm Requests API', () => {
       source_ref_id: 'cr-watch-transition',
     });
 
+    const repeatedCheckResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/confirm-requests/cr-watch-transition/state',
+      headers: { 'x-user-id': 'confirm-retry-user' },
+      payload: { state: 'pending' },
+    });
+    expect(repeatedCheckResponse.statusCode).toBe(200);
+    expect(repeatedCheckResponse.json().confirmRequest.state).toBe('pending');
+    expect(repeatedCheckResponse.json().queuedActionId).toBe(
+      stateResponse.json().queuedActionId,
+    );
+    const duplicateWatchActionCount = context.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM proposed_actions
+         WHERE source_kind = 'confirm_request_watch'
+           AND source_ref_id = ?`,
+      )
+      .get('cr-watch-transition') as { count: number };
+    expect(duplicateWatchActionCount.count).toBe(1);
+
     const resnoozeResponse = await app.inject({
       method: 'POST',
       url: '/api/v1/confirm-requests/cr-watch-transition/state',

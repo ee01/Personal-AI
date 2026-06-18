@@ -1,6 +1,6 @@
 # 用户画像系统
 
-更新日期: 2026-06-03
+更新日期: 2026-06-17
 
 ## 功能概述
 
@@ -30,6 +30,7 @@
   - `POST /api/v1/profile/items/:id/restore`
   - `POST /api/v1/profile/items/:id/confirm`
   - `GET /api/v1/profile/core`
+  - `POST /api/v1/profile/insight`（画像洞察查询，见下文「画像洞察查询」）
 - 扩展客户端: `src/services/MemoryServiceClient.ts`
 - 扩展消息入口: `src/services/UserProfileMessageHandler.ts`
 - 前端页面: `src/modals/components/UserProfilePage.vue`
@@ -71,12 +72,24 @@
 - 影响范围：Reflection 自动生成的 Rehearsal、后续需要后台自主生成用户可读内容的能力，都应优先读取这个画像项；它不是普通 UI 翻译开关，也不改变人名、项目名、URL、Jira key 等原文。
 - 更新规则：用户修改 Options 语言选项时同步更新同一个 `language_preference` 条目，不创建多条并列偏好。
 
+### 画像洞察查询（POST /profile/insight，QW-2）
+
+普通画像接口返回的是“条目列表”。`/profile/insight` 提供另一种读法：输入一个自然语言问题（如“怎么给他汇报方案他更买账？”），返回**合成出来的洞察**——“这个用户会怎么想 / 更偏好什么”，而不是把原始画像行贴回去。设计参考 Plastic Labs 的 Honcho dialectic API，由 `core/ProfileInsightService.ts` 实现。
+
+- **取数**：已确认 active 画像（`renderUserCore`）+ 近期重点滚动信号（`RecentFocusService`，作为近况背景）。
+- **不泄露原文**：系统提示要求 LLM 合成、不得粘贴原始证据行；返回体只含 `insight / confidence / basisCount / aspectsUsed`，不回吐 evidence 原文。
+- **置信度受 basis 约束**：`basisCount` = 已确认画像条目数 + 近期“消息/反思”信号数（近期画像信号与已确认条目重叠，不重复计数）。basis < 3 时 confidence 上限 0.5，basis = 0 时直接返回 `available:false, reason:'no_profile_signal'`，不做无依据的猜测。
+- **失败语义**：空问题被 schema 拦截（400）；LLM 不可用 / 无洞察时返回 `available:false` 带 `reason`，不抛错。
+- **消费方**：当前内部使用（Compose Assist 的受众判断、Relationship Radar 草稿），后续接入 MCP 的 `memory_profile_hint`（见 memory-mcp-server-plan）。
+- **验证**：`api-profile-insight.test.ts` 覆盖 availability 门控、不泄露原文、置信度封顶、schema 校验；洞察质量本身属低风险内部提示，不另做 golden-answer LLM eval。
+
 ## 用户可控路径
 
 - 画像总览: 展示当前项目、人员、主题关注点。
 - 首屏校准概览: 展示待确认推断、确认率、证据覆盖和最近信号，引导用户先处理最影响推荐质量的条目。
-- 重要性校准: 用户可以通过星级评分调整条目的 `confidence` 和 `salienceScore`，并自动确认该条目。
-- 影响力快速校准: 条目列表和待确认队列提供“设为重点 / 降低影响”路径，用低摩擦反馈调节 profile item 对个性化上下文的影响。
+- 重要性校准: 用户可以通过星级评分调整条目的 `confidence` 和 `salienceScore`，并自动确认该条目；首屏星级入口会先说明是否会同时确认、证据是否保留，以及仍然只有 `active + confirmed` 才进入个性化。星级回执会按前后权重写成“提高 / 降低 / 调整影响”，避免把 4 星这类中间值误读成降权。
+- 影响力快速校准: 条目列表和待确认队列提供“设为重点 / 降低影响”路径，用低摩擦反馈调节 profile item 对个性化上下文的影响；按钮旁会先显示校准影响回执，说明会更新 `confidence/salience`、是否同时确认条目、证据是否保留，以及只有 `active + confirmed` 才进入个性化。“设为重点”和星级校准会确认条目；“降低影响”只降权，不会把未确认推断自动推进个性化上下文。如果权重写入成功但确认步骤失败，页面会保留“确认未完成”回执，并提示用户可点确认重试，避免把部分成功误读成已经进入个性化。
+- 校准操作回执: 用户确认、设为重点、降低影响、排除、恢复或手动新增画像后，页面会保留一条“画像校准回执”，说明该条现在是否进入个性化上下文、证据数量/缺证状态，以及后续可恢复或继续复核的路径。
 - 条目确认: 对推断条目执行确认，减少系统反复猜测；页面会显示处理中状态，避免重复提交。
 - 条目排除: 将不准确或不希望继续影响推荐的条目标记为 retracted；页面会保留最近一次排除的撤销入口，确认条目恢复为 `active`，未确认条目恢复为 `pending_confirm`。
 - 已排除条目审计: 画像条目列表可以按需加载 `status = retracted` 的已排除画像，显示来源、证据和更新时间，并允许恢复；已排除条目不会进入个性化上下文，刷新页面后仍可找回。
@@ -86,7 +99,7 @@
 - 校准优先级: 前端会标记“优先复核 / 高影响 / 需校准 / 低风险”，并说明待确认、缺证据或多次命中等原因，帮助用户先处理最可能影响个性化质量的条目。
 - 个性化边界提示: 条目列表会标出“可用于个性化”或“确认前不使用”，避免用户误以为未确认推断已经进入上下文。
 - 可解释检查: 条目列表展示来源、证据数量和更新时间，推断内容带有类别和置信度；有证据的条目可以展开查看来源、URL 或片段摘要，不安全来源链接不会变成可点击跳转。
-- 数据导出与大列表: 展示页默认限制拉取量以保持响应速度，列表会明确显示已加载条目数/总条目数，并允许用户主动加载全部后再搜索或筛选；导出路径会以 `status=all` 继续分页，确保 active、pending、retracted、archived、superseded 等画像状态都写入 JSON，并在 `exportInfo.pagination` 中记录导出条目数、总条目数、状态范围和是否截断，便于迁移、备份和审计。导出 JSON 还会写入 `profileAudit`，总结已确认、待确认、可用于个性化、确认前保留、已排除/归档审计项、缺证据以及状态/类型/来源分布；`/health` 或 `/stats` 这类诊断接口临时失败时不阻断导出，而是在 `exportInfo.warnings` 和 optional section 可用性里说明缺失。
+- 数据导出与大列表: 展示页默认限制拉取量以保持响应速度，列表会明确显示已加载条目数/总条目数，并允许用户主动加载全部后再搜索或筛选；导出按钮前会说明当前搜索、筛选或页面加载切片不会限制导出。导出路径会以 `status=all` 继续分页，确保 active、pending、retracted、archived、superseded 等画像状态都写入 JSON，并在 `exportInfo.pagination` 中记录导出条目数、总条目数、状态范围和是否截断，便于迁移、备份和审计。导出 JSON 还会写入 `profileAudit`，总结已确认、待确认、可用于个性化、确认前保留、已排除/归档审计项、缺证据以及状态/类型/来源分布；`/health` 或 `/stats` 这类诊断接口临时失败时不阻断导出，而是在 `exportInfo.warnings` 和 optional section 可用性里说明缺失。下载文件自带 `exportInfo.manifest`，记录导出 scope、分页、诊断 warning、迁移/恢复边界，以及 profile items、USER_CORE 和审计摘要的 SHA-256 指纹；页面回执显示短指纹，方便用户把下载文件和当次导出对上。下载完成后页面保留“画像导出回执”，说明文件名、完整性、可个性化/确认前保留/非活跃审计数量、诊断 warning，以及本地 JSON 不会自动恢复、删除、同步或发送画像。下一次导出开始或失败时会清空上一轮导出回执，避免失败状态和旧成功文件混在一起。
 - 高级设置: 目前保存权重衰变配置；后端实际衰变策略仍由 memory-service 统一管理。
 
 ## 设计原则
@@ -111,6 +124,7 @@
 - ChatGPT Memory Sources 和 Claude 的 “View and edit your memory” 都把来源检查、修正/删除和恢复/导出放在用户可见路径里；Personal AI 现在把 retracted 画像也纳入页面内审计与恢复，而不是只依赖操作后的瞬时 toast。
 - Claude 已支持记忆导入/导出和项目级记忆边界；Personal AI 的导出必须避免被后端单页上限截断，也不能把已排除或归档画像从审计包里静默丢掉，后续可补充导入和按项目/场景分区。
 - [Claude Managed Agents memory](https://claude.com/blog/claude-managed-agents-memory) 的文件式记忆、权限和审计日志说明，生产级记忆系统需要可导出、可回滚、可追溯；Personal AI 的画像导出因此应包含分页完整性元数据，而不是只生成当前页面看到的列表。
+- OpenAI 数据导出和 Claude memory 导入/导出都把本地文件、复制迁移和账户/服务边界分开处理；Personal AI 的导出 manifest 因此只证明“这次导出了什么”，不默认授权导入、恢复或外部同步。
 - 数据可迁移和审计型记忆产品不应让辅助诊断阻塞用户拿回自己的画像数据；Personal AI 当前把画像条目导出作为核心路径，把系统健康和实体统计降级为可缺失的诊断段，并在导出文件和页面提示中保留 warning。
 - 近期用户画像与记忆选择研究显示，画像进入上下文不能只靠相似度；应结合证据强度、用户确认、响应收益和场景边界选择要注入的 profile items。
 - 2026 年的 [Response-Aware User Memory Selection](https://www.microsoft.com/en-us/research/publication/response-aware-user-memory-selection-for-llm-personalization/) 研究进一步说明，记忆候选应按对响应质量的实际效用筛选，而不是把所有相似画像都塞进 prompt；Personal AI 当前先以“确认前不使用”作为安全边界，后续可继续加入响应收益评分。

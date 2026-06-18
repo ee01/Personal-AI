@@ -154,6 +154,10 @@ export function normalizeStorylineOpportunity(
   );
   const minStoryEvidenceCount = options.minStoryEvidenceCount ?? 3;
   const minNonCalendarEvidenceCount = options.minNonCalendarEvidenceCount ?? 1;
+  const actualEvidenceRefs = Array.isArray(options.evidenceRefs)
+    ? options.evidenceRefs
+    : undefined;
+  const actualEvidenceCount = actualEvidenceRefs?.length;
   if (
     record.available === true &&
     clusterEvidenceCount > 0 &&
@@ -164,9 +168,19 @@ export function normalizeStorylineOpportunity(
       `素材不足：至少需要 ${minStoryEvidenceCount} 条可讲述证据。`,
     );
   }
-  if (record.available === true && options.evidenceRefs?.length) {
+  if (
+    record.available === true &&
+    actualEvidenceCount !== undefined &&
+    actualEvidenceCount < minStoryEvidenceCount
+  ) {
+    blockedReasons = appendReason(
+      blockedReasons,
+      `素材不足：至少需要 ${minStoryEvidenceCount} 条可讲述证据。`,
+    );
+  }
+  if (record.available === true && actualEvidenceRefs?.length) {
     const nonCalendarEvidenceCount =
-      options.evidenceRefs.filter((item) => !isCalendarEvidence(item)).length;
+      actualEvidenceRefs.filter((item) => !isCalendarEvidence(item)).length;
     if (nonCalendarEvidenceCount < minNonCalendarEvidenceCount) {
       blockedReasons = appendReason(
         blockedReasons,
@@ -181,6 +195,8 @@ export function normalizeStorylineOpportunity(
     Boolean(oneLineReason) &&
     evidenceClusters.length > 0 &&
     clusterEvidenceCount >= minStoryEvidenceCount &&
+    (actualEvidenceCount === undefined ||
+      actualEvidenceCount >= minStoryEvidenceCount) &&
     blockedReasons.length === 0;
   const buttonLabel = isAvailable
     ? compactText(record.buttonLabel, 40) ||

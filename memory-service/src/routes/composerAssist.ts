@@ -134,6 +134,20 @@ const composerAssistBodySchema = {
       items: visibleMessageSchema,
       maxItems: 12,
     },
+    visibleFields: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        required: ['name', 'value'],
+        properties: {
+          name: { type: 'string' as const, maxLength: 120 },
+          value: { type: 'string' as const, maxLength: 120 },
+          rawText: { type: 'string' as const, maxLength: 240 },
+        },
+        additionalProperties: false,
+      },
+      maxItems: 16,
+    },
     threadRoot: visibleMessageSchema,
     audience: audienceSchema,
     contextItems: {
@@ -149,6 +163,10 @@ const composerAssistBodySchema = {
     automationLevel: {
       type: 'string' as const,
       enum: ['L1', 'L2'],
+    },
+    interactionScene: {
+      type: 'object' as const,
+      additionalProperties: true,
     },
     debug: { type: 'boolean' as const },
   },

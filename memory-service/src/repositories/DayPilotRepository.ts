@@ -34,6 +34,16 @@ export interface DayPilotEvidenceRef {
   exploreLink?: string;
 }
 
+export interface DayPilotRehearsalCueReceipt {
+  label: string;
+  cueLabel: string;
+  cueDetail: string;
+  statusLabel: string;
+  script: string;
+  boundary: string;
+  tone: 'info' | 'warning';
+}
+
 export interface DayPilotTrust {
   confidence: number;
   riskLevel: 'low' | 'medium' | 'high';

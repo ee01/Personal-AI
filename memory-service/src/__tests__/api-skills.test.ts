@@ -897,7 +897,11 @@ describe('Personal Skill Library API', () => {
       originalSlug: 'meeting-prep',
     });
     expect(externalChange.reviewReasons).toEqual(
-      expect.arrayContaining([expect.stringMatching(/已忽略/)]),
+      expect.arrayContaining([
+        expect.stringMatching(/可执行脚本/),
+        expect.stringMatching(/已忽略/),
+        expect.stringMatching(/未发现测试、eval、fixture 或 verify 验证线索/),
+      ]),
     );
 
     const externalChangeDetail = await app.inject({
@@ -921,6 +925,78 @@ describe('Personal Skill Library API', () => {
     expect(applyRes.json().skill.activeVersion.files).toEqual([
       expect.objectContaining({ relativePath: 'scripts/brief.js' }),
     ]);
+  });
+
+  it('records local Desktop App validation evidence for imported skill packages', async () => {
+    const codexRoot = '/Users/skill-user/.codex/skills';
+    const validatedDir = path.join(codexRoot, 'validated-local-skill');
+    await app.inject({
+      method: 'PUT',
+      url: '/api/v1/skills/sync-settings/codex',
+      headers: { 'x-user-id': USER_ID },
+      payload: { enabled: true },
+    });
+    const syncRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/sync/local-platform',
+      headers: { 'x-user-id': USER_ID },
+      payload: {
+        platform: 'codex',
+        skills: [
+          {
+            slug: 'validated-local-skill',
+            title: 'Validated Local Skill',
+            description: 'A local skill package with a test artifact.',
+            version: 'v0.1',
+            mtime: 9_999_999_999,
+            root: codexRoot,
+            directory: validatedDir,
+            skillMdPath: path.join(validatedDir, 'SKILL.md'),
+            skillMd:
+              '# Validated Local Skill\n\nRun npm install helper-kit before using scripts/helper.js.',
+            files: [
+              {
+                path: 'scripts/helper.js',
+                content: 'console.log("helper");\n',
+              },
+              {
+                path: 'tests/helper.test.js',
+                content: 'assert.equal(true, true);\n',
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(syncRes.statusCode).toBe(200);
+    expect(syncRes.json()).toMatchObject({ imported: 1, pushed: 0 });
+
+    const inbox = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/suggestions',
+      headers: { 'x-user-id': USER_ID },
+    });
+    const suggestion = inbox
+      .json()
+      .items.find((item: any) => item.slug === 'validated-local-skill');
+    expect(suggestion).toMatchObject({
+      status: 'suggestion',
+      reviewRequired: true,
+    });
+    expect(suggestion.bindings[0].metadata).toMatchObject({
+      source: 'desktop_app_fs',
+      sourceDirectory: validatedDir,
+      fileCount: 2,
+      validationFileCount: 1,
+      validationFilePaths: ['tests/helper.test.js'],
+    });
+    expect(suggestion.reviewReasons).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/可执行脚本/),
+        expect.stringMatching(/技能说明包含安装、下载或 MCP/),
+      ]),
+    );
+    expect(suggestion.reviewReasons.join('\n')).not.toMatch(/未发现.*验证线索/);
   });
 
   it('reports malformed OpenClaw JSON as a sync failure', async () => {
@@ -966,6 +1042,8 @@ describe('Personal Skill Library API', () => {
       risk: 'high',
       sources: ['openclaw'],
       suggestedFrom: 'openclaw',
+      skillMd:
+        '# External Script Skill\n\nRun npm install helper-kit before using scripts/helper.sh.',
       workflow: [
         {
           title: 'Run helper',
@@ -1000,6 +1078,8 @@ describe('Personal Skill Library API', () => {
       expect.arrayContaining([
         expect.stringMatching(/高风险/),
         expect.stringMatching(/外部 agent/),
+        expect.stringMatching(/可执行脚本/),
+        expect.stringMatching(/外部依赖/),
         expect.stringMatching(/脚本或资源文件/),
         expect.stringMatching(/证据链/),
         expect.stringMatching(/工具调用/),
@@ -1015,6 +1095,8 @@ describe('Personal Skill Library API', () => {
     expect(inboxRes.json().items[0].reviewRequired).toBe(true);
     expect(inboxRes.json().items[0].reviewReasons).toEqual(
       expect.arrayContaining([
+        expect.stringMatching(/可执行脚本/),
+        expect.stringMatching(/外部依赖/),
         expect.stringMatching(/脚本或资源文件/),
         expect.stringMatching(/证据链/),
         expect.stringMatching(/工具调用/),
@@ -1039,6 +1121,58 @@ describe('Personal Skill Library API', () => {
     expect(confirmedUse.statusCode).toBe(200);
     expect(confirmedUse.json().skill.status).toBe('active');
     expect(confirmedUse.json().skill.reviewRequired).toBe(false);
+  });
+
+  it('flags external runtime setup instructions hidden in imported skill resource files', async () => {
+    const suggestion = await createSuggestion({
+      slug: 'local-resource-setup-skill',
+      title: 'Local Resource Setup Skill',
+      risk: 'medium',
+      sources: ['codex'],
+      suggestedFrom: 'codex',
+      skillMd:
+        '# Local Resource Setup Skill\n\nUse the included checklist for recurring release reviews.',
+      evidence: [
+        {
+          title: 'Codex local skill scan',
+          desc: 'Imported from a local agent skill directory.',
+          kind: 'codex',
+          evidenceState: 'partial',
+        },
+      ],
+      files: [
+        {
+          relativePath: 'references/setup.md',
+          content:
+            'Before first use, run npm install release-helper and configure an MCP server connection.',
+        },
+      ],
+    });
+
+    const detailRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/skills/${suggestion.id}`,
+      headers: { 'x-user-id': USER_ID },
+    });
+    expect(detailRes.statusCode).toBe(200);
+    expect(detailRes.json().skill.reviewRequired).toBe(true);
+    expect(detailRes.json().skill.reviewReasons).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/外部 agent/),
+        expect.stringMatching(/资源文件包含安装、下载或 MCP/),
+        expect.stringMatching(/脚本或资源文件/),
+        expect.stringMatching(/证据链/),
+      ]),
+    );
+
+    const blockedUse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/skills/suggestions/${suggestion.id}/use`,
+      headers: { 'x-user-id': USER_ID },
+      payload: {},
+    });
+    expect(blockedUse.statusCode).toBe(400);
+    expect(blockedUse.json().error).toMatch(/Review required/);
   });
 
   it('snoozes and dismisses only pending suggestions', async () => {

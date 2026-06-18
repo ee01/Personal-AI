@@ -12,6 +12,11 @@ type ProjectionSource = 'lazy' | 'background' | 'user_confirmed';
 type AttendeeMatchKind = 'name' | 'alias' | 'email' | 'email_local_part' | 'none';
 type AttendeeCoverageState = 'ready' | 'thin' | 'missing';
 type MeetingReadinessStatus = 'ready' | 'partial' | 'attention' | 'empty';
+type MeetingBriefSourceState =
+  | 'calendar_event'
+  | 'manual_input'
+  | 'calendar_event_with_overrides'
+  | 'calendar_event_missing';
 
 interface EntityRow {
   id: string;
@@ -205,6 +210,23 @@ export interface RelationshipReviewItem {
   rejectedAt?: number;
   createdAt: number;
   updatedAt: number;
+  actionReceipt?: RelationshipReviewActionReceipt;
+}
+
+export interface RelationshipReviewActionReceipt {
+  action: ReviewAction;
+  outcome: 'profile_updated' | 'queued_for_later' | 'dismissed';
+  title: string;
+  summary: string;
+  personId: string;
+  personName: string;
+  proposedKey: string;
+  evidenceCount: number;
+  noteCaptured: boolean;
+  statusAfter: ReviewStatus;
+  availableAt?: number;
+  nextActions: string[];
+  generatedAt: number;
 }
 
 export interface RelationshipContextCard {
@@ -261,6 +283,16 @@ export interface RelationshipContextCard {
     redactedRetrievalHints: number;
     redactionNote?: string;
   };
+  contextReceipt: {
+    title: string;
+    rows: Array<{
+      label: string;
+      value: string;
+      tone: 'ok' | 'warn' | 'muted';
+    }>;
+    boundary: string;
+    generatedAt: number;
+  };
   generatedAt: number;
 }
 
@@ -294,6 +326,16 @@ export interface RelationshipMeetingBrief {
     nextActions: string[];
     successCriteria: string[];
   };
+  sourceReceipt: {
+    title: string;
+    rows: Array<{
+      label: string;
+      value: string;
+      tone: 'ok' | 'warn' | 'muted';
+    }>;
+    boundary: string;
+    generatedAt: number;
+  };
   attendees: Array<{
     displayName: string;
     email?: string;
@@ -306,6 +348,7 @@ export interface RelationshipMeetingBrief {
     matchReason: string;
     identityCheckRequired: boolean;
     identityCheckReason?: string;
+    contextSuppressedReason?: string;
     coverageState: AttendeeCoverageState;
     summary: string;
     openLoops: RelationshipContextCard['openLoops'];
@@ -334,7 +377,37 @@ export interface RelationshipAssistantDraft {
   personName: string;
   scenario: string;
   draftText: string;
+  draftReceipt: {
+    title: string;
+    rows: Array<{
+      label: string;
+      value: string;
+      tone: 'ok' | 'warn' | 'muted';
+    }>;
+    boundary: string;
+    generatedAt: number;
+  };
   contextPackage: RelationshipContextPackage;
+  safetyReview: {
+    status: 'ready' | 'review_first' | 'thin_context';
+    summary: string;
+    reasons: string[];
+    evidenceCount: number;
+    openLoopCount: number;
+    actionSuggestionCount: number;
+    pendingReviewCount: number;
+    hiddenSensitiveCount: number;
+    dataQuality: DataQuality;
+    sensitiveIncluded: boolean;
+  };
+  contextBasis: {
+    primarySuggestion?: RelationshipContextCard['actionSuggestions'][number];
+    openLoops: RelationshipContextCard['openLoops'];
+    knownFacts: RelationshipContextCard['knownFacts'];
+    evidenceRefs: RelationshipEvidenceRef[];
+    privacySummary: RelationshipContextCard['privacySummary'];
+  };
+  suggestedChecks: string[];
   warnings: string[];
 }
 
@@ -551,12 +624,14 @@ export class RelationshipRadarService {
     tokenBudget?: number;
     includeSensitive?: boolean;
   }): RelationshipContextCard {
+    const generatedAt = now();
     const tokenBudget = Math.min(Math.max(input.tokenBudget ?? 900, 300), 2400);
     const rawPerson = this.applyStoredProjection(
-      this.buildPersonSummary(inputEntity, now()),
+      this.buildPersonSummary(inputEntity, generatedAt),
     );
     const includeSensitive = input.includeSensitive === true;
     const person = includeSensitive ? rawPerson : redactSensitivePersonAliases(rawPerson);
+    const surface = input.surface ?? 'memory_exploring';
     const properties = this.loadProperties(inputEntity.id);
     const relationships = this.loadRelationships(inputEntity.id);
     const messages = this.loadMessagesForPerson(inputEntity, 12);
@@ -632,10 +707,21 @@ export class RelationshipRadarService {
       retrievalHints,
       visibleRetrievalHints: safeRetrievalHints,
     });
+    const contextReceipt = buildContextReceipt({
+      person,
+      surface,
+      tokenBudget,
+      knownFacts,
+      openLoops: visibleOpenLoops,
+      evidenceRefs,
+      actionSuggestions,
+      privacySummary,
+      generatedAt,
+    });
 
     return {
       person,
-      surface: input.surface ?? 'memory_exploring',
+      surface,
       tokenBudget,
       dataQuality: person.dataQuality,
       projectionSource: person.projectionSource,
@@ -648,6 +734,7 @@ export class RelationshipRadarService {
         tokenBudget,
         privacySummary,
         doNotAssume,
+        contextReceipt,
       ),
       bullets,
       knownFacts,
@@ -658,7 +745,8 @@ export class RelationshipRadarService {
       evidenceRefs,
       retrievalHints: safeRetrievalHints,
       privacySummary,
-      generatedAt: now(),
+      contextReceipt,
+      generatedAt,
     };
   }
 
@@ -709,6 +797,16 @@ export class RelationshipRadarService {
     attendees?: Array<{ name?: string; email?: string } | string>;
   }): RelationshipMeetingBrief {
     const event = input.eventId ? this.loadCalendarEvent(input.eventId) : null;
+    const hasManualAttendees = Array.isArray(input.attendees);
+    const hasManualTitle = Boolean(cleanText(input.title || ''));
+    const hasManualStartAt = typeof input.startAt === 'number';
+    const sourceState: MeetingBriefSourceState = event
+      ? (hasManualAttendees || hasManualTitle || hasManualStartAt
+          ? 'calendar_event_with_overrides'
+          : 'calendar_event')
+      : input.eventId
+        ? 'calendar_event_missing'
+        : 'manual_input';
     const attendees = normalizeAttendees(
       input.attendees ?? safeJsonParse<unknown[]>(event?.attendees_json ?? null, []),
     );
@@ -729,11 +827,6 @@ export class RelationshipRadarService {
             tokenBudget: 700,
           })
         : null;
-      const openLoops = card?.openLoops.slice(0, 3) ?? [];
-      const suggestedQuestions = buildSuggestedQuestions(
-        attendee.name || attendee.email,
-        card,
-      );
       const identityCheckRequired = Boolean(
         card &&
           (match.matchedBy === 'email_local_part' ||
@@ -742,6 +835,21 @@ export class RelationshipRadarService {
       const identityCheckReason = identityCheckRequired
         ? `${match.reason}；先确认 ${attendee.name || attendee.email || '该参会人'} 确实对应 ${card?.person.name}，再使用历史上下文。`
         : undefined;
+      const contextSuppressedReason = identityCheckRequired && card
+        ? '身份待核对，已暂缓展开历史证据、open loop 和上下文摘要；先确认参会人与人物记录一致。'
+        : undefined;
+      const openLoops = contextSuppressedReason
+        ? []
+        : card?.openLoops.slice(0, 3) ?? [];
+      const evidenceRefs = contextSuppressedReason
+        ? []
+        : card?.evidenceRefs.slice(0, 4) ?? [];
+      const suggestedQuestions = contextSuppressedReason
+        ? buildIdentityCheckQuestions(attendee.name || attendee.email, card?.person.name)
+        : buildSuggestedQuestions(
+          attendee.name || attendee.email,
+          card,
+        );
       const coverageState: AttendeeCoverageState = card
         ? (identityCheckRequired
             ? 'thin'
@@ -759,13 +867,16 @@ export class RelationshipRadarService {
         matchReason: match.reason,
         identityCheckRequired,
         identityCheckReason,
+        contextSuppressedReason,
         coverageState,
-        summary: card
-          ? card.bullets.slice(0, 2).join('；')
-          : '暂无已沉淀的人物上下文，会议中可先确认角色和关注点。',
+        summary: contextSuppressedReason
+          ? `已弱匹配到 ${card?.person.name}，但历史上下文暂不展开；先核对姓名、邮箱或别名后再使用。`
+          : card
+            ? card.bullets.slice(0, 2).join('；')
+            : '暂无已沉淀的人物上下文，会议中可先确认角色和关注点。',
         openLoops,
         suggestedQuestions,
-        evidenceRefs: card?.evidenceRefs.slice(0, 4) ?? [],
+        evidenceRefs,
       };
     });
 
@@ -774,6 +885,10 @@ export class RelationshipRadarService {
       omittedAttendees: omittedAttendees.length,
     });
     const readiness = buildMeetingBriefReadiness(attendeeCards, coverage);
+    const sourceReceipt = buildMeetingBriefSourceReceipt({
+      sourceState,
+      coverage,
+    });
 
     return {
       generatedAt: now(),
@@ -781,11 +896,14 @@ export class RelationshipRadarService {
       startAt,
       coverage,
       readiness,
+      sourceReceipt,
       attendees: attendeeCards,
       matrix: attendeeCards.map((item) => ({
         person: item.personName || item.displayName,
         recentContext: item.summary,
-        openLoop: item.openLoops[0]?.snippet || '无明确 open loop',
+        openLoop: item.contextSuppressedReason
+          ? '身份待核对，暂不展开 open loop'
+          : item.openLoops[0]?.snippet || '无明确 open loop',
         suggestedAsk: item.suggestedQuestions[0] || '先确认本次会议中 TA 关注什么。',
         evidenceCount: item.evidenceRefs.length,
         matchStatus:
@@ -804,35 +922,39 @@ export class RelationshipRadarService {
     scenario?: string;
     userGoal?: string;
   }): RelationshipAssistantDraft | null {
+    const generatedAt = now();
     const card = this.buildContextCard({
       personId: input.personId,
       personName: input.personName,
-      surface: 'relationship_assistant',
+      surface: 'relationship_assistant_draft',
       tokenBudget: 900,
+      preferStored: false,
     });
     if (!card) return null;
 
-    const scenario = input.scenario || 'follow_up_message';
-    const openLoop = card.openLoops[0]?.snippet;
-    const goal = input.userGoal?.trim();
-    const draftLines = [
-      goal ? `我想跟进一下：${goal}` : '我这边想跟进一下我们之前提到的事项。',
-      openLoop ? `我看到上次还留下一个点：${openLoop}` : '',
-      '你方便确认一下当前状态和下一步 owner 吗？',
-    ].filter(Boolean);
+    const scenario = normalizeAssistantScenario(input.scenario);
+    const goal = cleanText(input.userGoal ?? '').slice(0, 500);
+    const safetyReview = buildAssistantDraftSafetyReview(card);
+    const suggestedChecks = buildAssistantDraftSuggestedChecks(card, safetyReview);
 
     return {
-      generatedAt: now(),
+      generatedAt,
       personId: card.person.id,
       personName: card.person.name,
       scenario,
-      draftText: draftLines.join('\n'),
-      contextPackage: this.buildContextPackage({
-        personIds: [card.person.id],
-        surface: 'relationship_assistant',
-        tokenBudget: 900,
-      }),
-      warnings: card.doNotAssume,
+      draftText: buildAssistantDraftText(card, scenario, goal, safetyReview),
+      draftReceipt: buildAssistantDraftReceipt(card, safetyReview, generatedAt),
+      contextPackage: buildRelationshipContextPackageFromCards([card], generatedAt),
+      safetyReview,
+      contextBasis: {
+        primarySuggestion: card.actionSuggestions[0],
+        openLoops: card.openLoops.slice(0, 3),
+        knownFacts: card.knownFacts.slice(0, 4),
+        evidenceRefs: card.evidenceRefs.slice(0, 4),
+        privacySummary: card.privacySummary,
+      },
+      suggestedChecks,
+      warnings: buildAssistantDraftWarnings(card, safetyReview),
     };
   }
 
@@ -1089,20 +1211,27 @@ export class RelationshipRadarService {
       const snoozeUntil = input.snoozeUntil && input.snoozeUntil > timestamp
         ? input.snoozeUntil
         : timestamp + 7 * 86400;
+      const value = cleanText(input.editedValue || row.proposed_value);
       this.db
         .prepare(
           `UPDATE relationship_review_items
            SET status = 'snoozed',
+               proposed_value = ?,
                user_note = ?,
                snooze_until = ?,
                updated_at = ?
            WHERE id = ?`,
         )
-        .run(input.userNote ?? row.user_note, snoozeUntil, timestamp, id);
+        .run(value, input.userNote ?? row.user_note, snoozeUntil, timestamp, id);
     }
 
     const updated = this.getReviewItemRow(id);
-    return updated ? formatReviewItem(updated) : null;
+    if (!updated) return null;
+    const item = formatReviewItem(updated);
+    return {
+      ...item,
+      actionReceipt: buildReviewActionReceipt(row, item, action, input, timestamp),
+    };
   }
 
   private applyStoredProjection(
@@ -1123,11 +1252,15 @@ export class RelationshipRadarService {
       row.last_consolidated_at != null &&
       latestInteractionAt != null &&
       latestInteractionAt > row.last_consolidated_at;
+    const hasConfirmedRelationshipContext = this.hasRelationshipContextProperty(person.id);
     const dataQuality: DataQuality = isStale
       ? 'stale'
-      : this.hasRelationshipContextProperty(person.id)
+      : hasConfirmedRelationshipContext
         ? 'confirmed'
         : row.data_quality;
+    const projectionSource: ProjectionSource = dataQuality === 'confirmed'
+      ? 'user_confirmed'
+      : row.projection_source || person.projectionSource;
 
     return {
       ...person,
@@ -1137,7 +1270,7 @@ export class RelationshipRadarService {
       activeDays: Math.max(person.activeDays, row.active_days ?? 0),
       lastInteractionAt: latestInteractionAt,
       dataQuality,
-      projectionSource: row.projection_source || person.projectionSource,
+      projectionSource,
       generatedAt: row.generated_at || person.generatedAt,
       dirtySince: row.dirty_since ?? (isStale ? latestInteractionAt : undefined),
       lastConsolidatedAt: row.last_consolidated_at ?? undefined,
@@ -1164,15 +1297,26 @@ export class RelationshipRadarService {
 
     try {
       const card = JSON.parse(row.context_json) as RelationshipContextCard;
+      const currentPerson = this.hydrateStoredContextPerson(
+        personId,
+        card.person,
+        row.generated_at,
+      );
+      const confirmedAt = this.getLatestRelationshipContextConfirmedAt(personId);
+      if (
+        confirmedAt != null &&
+        confirmedAt > row.generated_at &&
+        row.data_quality !== 'confirmed'
+      ) {
+        return null;
+      }
       const hydrated: RelationshipContextCard = {
         ...card,
+        person: currentPerson,
         surface: surface ?? card.surface,
         tokenBudget: tokenBudget ?? card.tokenBudget,
-        dataQuality: row.data_quality,
-        projectionSource:
-          row.data_quality === 'confirmed'
-            ? ('user_confirmed' as const)
-            : ('background' as const),
+        dataQuality: currentPerson.dataQuality,
+        projectionSource: currentPerson.projectionSource,
         contextMd: row.context_md,
         evidenceRefs: safeJsonParse<RelationshipEvidenceRef[]>(
           row.evidence_refs_json,
@@ -1191,6 +1335,16 @@ export class RelationshipRadarService {
     } catch {
       return null;
     }
+  }
+
+  private hydrateStoredContextPerson(
+    personId: string,
+    fallback: RelationshipPersonSummary,
+    generatedAt: number,
+  ): RelationshipPersonSummary {
+    const entity = this.getPersonRow(personId);
+    if (!entity) return fallback;
+    return this.applyStoredProjection(this.buildPersonSummary(entity, generatedAt));
   }
 
   private shouldConsolidate(personId: string, timestamp: number): boolean {
@@ -1667,6 +1821,20 @@ export class RelationshipRadarService {
     return Boolean(row);
   }
 
+  private getLatestRelationshipContextConfirmedAt(personId: string): number | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(tx_start) AS latest
+         FROM entity_properties
+         WHERE entity_id = ?
+           AND property_key = 'relationship_context'
+           AND status = 'active'
+           AND tx_end IS NULL`,
+      )
+      .get(personId) as { latest: number | null } | undefined;
+    return row?.latest ?? undefined;
+  }
+
   private releaseDueSnoozedReviewItems(timestamp = now()): void {
     this.db
       .prepare(
@@ -1728,6 +1896,223 @@ export class RelationshipRadarService {
         row.confidence,
       );
   }
+}
+
+function buildRelationshipContextPackageFromCards(
+  cards: RelationshipContextCard[],
+  generatedAt: number,
+): RelationshipContextPackage {
+  return {
+    generatedAt,
+    packageType: 'relationship_context',
+    cards,
+    retrievalBoosts: cards.map((card) => ({
+      entityId: card.person.id,
+      name: card.person.name,
+      score: card.person.score,
+      terms: card.retrievalHints.boostTerms,
+    })),
+  };
+}
+
+function normalizeAssistantScenario(value: string | undefined): string {
+  const normalized = cleanText(value || 'follow_up_message')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .slice(0, 80);
+  return normalized || 'follow_up_message';
+}
+
+function buildAssistantDraftSafetyReview(
+  card: RelationshipContextCard,
+): RelationshipAssistantDraft['safetyReview'] {
+  const hiddenSensitiveCount = countRedactedContextItems(card.privacySummary);
+  const evidenceCount = card.evidenceRefs.length;
+  const openLoopCount = card.openLoops.length;
+  const actionSuggestionCount = card.actionSuggestions.length;
+  const pendingReviewCount = card.person.reviewPendingCount;
+  const reasons: string[] = [];
+
+  if (evidenceCount === 0 && openLoopCount === 0) {
+    reasons.push('缺少可引用证据和明确未闭环事项，草稿只能用于轻量确认。');
+  }
+  if (hiddenSensitiveCount > 0) {
+    reasons.push(`已默认排除 ${hiddenSensitiveCount} 条可能敏感的人物上下文。`);
+  }
+  if (pendingReviewCount > 0) {
+    reasons.push(`${card.person.name} 有 ${pendingReviewCount} 条关系事实待人工确认。`);
+  }
+  if (card.dataQuality === 'stale') {
+    reasons.push('人物上下文在后台整理后又出现新互动，发送前应先看最新证据。');
+  } else if (card.dataQuality === 'indexed') {
+    reasons.push('人物上下文来自即时索引，还不是后台整理或用户确认后的稳定事实。');
+  }
+  for (const note of card.doNotAssume) {
+    reasons.push(note);
+  }
+
+  const status: RelationshipAssistantDraft['safetyReview']['status'] =
+    evidenceCount === 0 && openLoopCount === 0
+      ? 'thin_context'
+      : reasons.length > 0
+        ? 'review_first'
+        : 'ready';
+  const summary =
+    status === 'ready'
+      ? '证据和关系边界足够清晰，可以复制后按需编辑。'
+      : status === 'thin_context'
+        ? '上下文偏薄，先用这版草稿确认当前重点。'
+        : '复制前先扫一遍证据、敏感隐藏和待确认事实。';
+
+  return {
+    status,
+    summary,
+    reasons: uniqueStrings(reasons).slice(0, 6),
+    evidenceCount,
+    openLoopCount,
+    actionSuggestionCount,
+    pendingReviewCount,
+    hiddenSensitiveCount,
+    dataQuality: card.dataQuality,
+    sensitiveIncluded: card.privacySummary.sensitiveIncluded,
+  };
+}
+
+function buildAssistantDraftSuggestedChecks(
+  card: RelationshipContextCard,
+  review: RelationshipAssistantDraft['safetyReview'],
+): string[] {
+  const checks: string[] = [];
+  if (card.openLoops[0]) {
+    checks.push('确认第一条 open loop 是否仍然有效，避免跟进已经关闭的事项。');
+  }
+  if (review.pendingReviewCount > 0) {
+    checks.push('需要强个性化前，先处理或核对待确认关系事实。');
+  }
+  if (review.hiddenSensitiveCount > 0) {
+    checks.push('确认草稿不需要那些默认隐藏的敏感上下文。');
+  }
+  if (review.evidenceCount === 0) {
+    checks.push('先让对方确认当前重点，不要假设历史上下文仍成立。');
+  }
+  if (card.actionSuggestions[0]) {
+    checks.push(`按「${card.actionSuggestions[0].title}」检查这次沟通的下一步。`);
+  }
+  return uniqueStrings(checks).slice(0, 5);
+}
+
+function buildAssistantDraftWarnings(
+  card: RelationshipContextCard,
+  review: RelationshipAssistantDraft['safetyReview'],
+): string[] {
+  return uniqueStrings([
+    ...review.reasons,
+    ...(card.privacySummary.redactionNote ? [card.privacySummary.redactionNote] : []),
+  ]).slice(0, 8);
+}
+
+function buildAssistantDraftReceipt(
+  card: RelationshipContextCard,
+  review: RelationshipAssistantDraft['safetyReview'],
+  generatedAt: number,
+): RelationshipAssistantDraft['draftReceipt'] {
+  const sourceTone: 'ok' | 'warn' | 'muted' =
+    card.dataQuality === 'confirmed'
+      ? 'ok'
+      : card.dataQuality === 'indexed' ||
+          card.dataQuality === 'stale' ||
+          card.person.projectionSource === 'lazy'
+        ? 'warn'
+        : 'muted';
+  const confirmedFactCount = card.knownFacts.filter((fact) => fact.confirmed).length;
+  const materialCount =
+    review.evidenceCount + review.openLoopCount + review.actionSuggestionCount + confirmedFactCount;
+  const scopeValue =
+    review.hiddenSensitiveCount > 0
+      ? `默认隐藏 ${review.hiddenSensitiveCount} 条敏感上下文`
+      : '未请求敏感上下文放行';
+  const boundaryParts = [
+    '这版只生成可编辑草稿；不会发送消息、写入人物画像、创建跟进任务或临时放开敏感上下文。',
+  ];
+  if (card.dataQuality === 'stale') {
+    boundaryParts.push('人物上下文已有新互动待整理，发送前先核对最新证据。');
+  } else if (card.dataQuality === 'indexed') {
+    boundaryParts.push('人物上下文来自即时索引，还不是后台整理或用户确认事实。');
+  }
+  if (review.hiddenSensitiveCount > 0) {
+    boundaryParts.push(`默认隐藏的 ${review.hiddenSensitiveCount} 条敏感上下文没有进入草稿。`);
+  }
+  if (review.pendingReviewCount > 0) {
+    boundaryParts.push(`${review.pendingReviewCount} 条待确认关系事实没有被升级为确认事实。`);
+  }
+
+  return {
+    title: '草稿生成回执',
+    rows: [
+      {
+        label: '生成来源',
+        value: `${relationshipProjectionLabel(card.person.projectionSource)} · ${relationshipDataQualityLabel(card.dataQuality)}`,
+        tone: sourceTone,
+      },
+      {
+        label: '草稿范围',
+        value: scopeValue,
+        tone: review.hiddenSensitiveCount > 0 ? 'ok' : 'muted',
+      },
+      {
+        label: '可引用材料',
+        value: `证据 ${review.evidenceCount} · Open loop ${review.openLoopCount} · 建议 ${review.actionSuggestionCount} · 确认事实 ${confirmedFactCount}`,
+        tone: materialCount > 0 ? 'ok' : 'warn',
+      },
+      {
+        label: '外部动作',
+        value: '未发送、未写回、未建任务',
+        tone: 'ok',
+      },
+    ],
+    boundary: boundaryParts.join(' '),
+    generatedAt,
+  };
+}
+
+function buildAssistantDraftText(
+  card: RelationshipContextCard,
+  scenario: string,
+  goal: string,
+  review: RelationshipAssistantDraft['safetyReview'],
+): string {
+  const salutation = `${card.person.name}，`;
+  const openLoop = card.openLoops[0];
+  const primarySuggestion = card.actionSuggestions[0];
+  const confirmedFact = card.knownFacts.find((fact) => fact.confirmed);
+  const lines = [salutation];
+
+  if (goal) {
+    lines.push(`我想跟进一下：${goal}`);
+  } else if (scenario.includes('question')) {
+    lines.push('我想先确认一个问题，避免我沿用旧上下文。');
+  } else {
+    lines.push('我这边想跟进一下我们之前提到的事项。');
+  }
+
+  if (openLoop) {
+    lines.push(`我看到上次还留下一个点：${compactSuggestionBody(openLoop.snippet)}`);
+  } else if (primarySuggestion) {
+    lines.push(`我想先对齐一下：${compactSuggestionBody(primarySuggestion.title)}`);
+  } else if (confirmedFact) {
+    lines.push(`我会按之前确认过的协作上下文来同步：${compactSuggestionBody(confirmedFact.value)}`);
+  } else if (review.status === 'thin_context') {
+    lines.push('我这边上下文可能不完整，想先确认你现在最关注的点。');
+  }
+
+  if (review.status === 'thin_context') {
+    lines.push('如果我理解有偏差，也麻烦你直接纠正一下。');
+  }
+
+  lines.push('你方便确认一下当前状态、下一步 owner 和预计时间吗？');
+  lines.push('谢谢。');
+
+  return lines.join('\n');
 }
 
 const OPEN_LOOP_PATTERN =
@@ -1929,22 +2314,33 @@ function applyContextPrivacy(
       sensitiveIncluded: true,
       redactionNote: undefined,
     };
+    const contextReceipt = buildContextReceipt({
+      person: card.person,
+      surface: card.surface,
+      tokenBudget: card.tokenBudget,
+      knownFacts: card.knownFacts,
+      openLoops: card.openLoops,
+      evidenceRefs: card.evidenceRefs,
+      actionSuggestions,
+      privacySummary,
+      generatedAt: card.generatedAt,
+    });
     return {
       ...card,
       actionSuggestions,
       privacySummary,
-      contextMd: card.actionSuggestions
-        ? card.contextMd
-        : renderContextMarkdown(
-          card.person,
-          card.bullets,
-          card.knownFacts,
-          card.openLoops,
-          actionSuggestions,
-          card.tokenBudget,
-          privacySummary,
-          card.doNotAssume,
-        ),
+      contextReceipt,
+      contextMd: renderContextMarkdown(
+        card.person,
+        card.bullets,
+        card.knownFacts,
+        card.openLoops,
+        actionSuggestions,
+        card.tokenBudget,
+        privacySummary,
+        card.doNotAssume,
+        contextReceipt,
+      ),
     };
   }
 
@@ -1989,6 +2385,17 @@ function applyContextPrivacy(
         0,
       ),
   });
+  const contextReceipt = buildContextReceipt({
+    person,
+    surface: card.surface,
+    tokenBudget: card.tokenBudget,
+    knownFacts,
+    openLoops,
+    evidenceRefs,
+    actionSuggestions,
+    privacySummary,
+    generatedAt: card.generatedAt,
+  });
 
   return {
     ...card,
@@ -2000,6 +2407,7 @@ function applyContextPrivacy(
     actionSuggestions,
     retrievalHints,
     privacySummary,
+    contextReceipt,
     contextMd: renderContextMarkdown(
       person,
       card.bullets,
@@ -2009,6 +2417,7 @@ function applyContextPrivacy(
       card.tokenBudget,
       privacySummary,
       card.doNotAssume,
+      contextReceipt,
     ),
   };
 }
@@ -2350,6 +2759,7 @@ function renderContextMarkdown(
   tokenBudget: number,
   privacySummary?: RelationshipContextCard['privacySummary'],
   doNotAssume: string[] = [],
+  contextReceipt?: RelationshipContextCard['contextReceipt'],
 ): string {
   const lines = [
     `# ${person.name} 关系上下文`,
@@ -2359,6 +2769,15 @@ function renderContextMarkdown(
     '## 使用提示',
     ...bullets.map((bullet) => `- ${bullet}`),
   ];
+
+  if (contextReceipt) {
+    lines.push(
+      '',
+      `## ${contextReceipt.title}`,
+      ...contextReceipt.rows.map((row) => `- ${row.label}: ${row.value}`),
+      `- 边界: ${contextReceipt.boundary}`,
+    );
+  }
 
   if (actionSuggestions.length > 0) {
     lines.push('', '## 现在建议');
@@ -2392,6 +2811,110 @@ function renderContextMarkdown(
   }
 
   return lines.join('\n').slice(0, tokenBudget * 4);
+}
+
+function buildContextReceipt(input: {
+  person: RelationshipPersonSummary;
+  surface: string;
+  tokenBudget: number;
+  knownFacts: RelationshipContextCard['knownFacts'];
+  openLoops: RelationshipContextCard['openLoops'];
+  evidenceRefs: RelationshipEvidenceRef[];
+  actionSuggestions: RelationshipContextCard['actionSuggestions'];
+  privacySummary: RelationshipContextCard['privacySummary'];
+  generatedAt: number;
+}): RelationshipContextCard['contextReceipt'] {
+  const hiddenSensitiveCount = countRedactedContextItems(input.privacySummary);
+  const sourceTone: 'ok' | 'warn' | 'muted' =
+    input.person.dataQuality === 'stale' ||
+    input.person.dataQuality === 'indexed' ||
+    input.person.projectionSource === 'lazy'
+      ? 'warn'
+      : input.person.dataQuality === 'confirmed'
+        ? 'ok'
+        : 'muted';
+  const evidenceCount =
+    input.evidenceRefs.length + input.knownFacts.length + input.openLoops.length;
+  const evidenceTone: 'ok' | 'warn' | 'muted' =
+    evidenceCount > 0 ? 'ok' : 'warn';
+  const privacyTone: 'ok' | 'warn' | 'muted' =
+    input.privacySummary.sensitiveIncluded
+      ? 'warn'
+      : hiddenSensitiveCount > 0
+        ? 'ok'
+        : 'muted';
+  const baseBoundary =
+    `复制只包含当前 ${input.person.name} 的关系上下文，不会写入画像、发送消息或自动刷新其他场景。`;
+  const boundary = input.privacySummary.sensitiveIncluded
+    ? `${baseBoundary} 已显式包含敏感上下文，外发前先复核人物身份、事实和敏感范围。`
+    : input.person.dataQuality === 'stale'
+      ? `${baseBoundary} 这张卡已有新互动待整理，外发前建议刷新并核对最新证据。`
+      : hiddenSensitiveCount > 0
+        ? `${baseBoundary} 默认隐藏敏感项；如需完整上下文，临时包含后再复核。`
+        : `${baseBoundary} 外发前仍需复核人物身份和事实。`;
+
+  return {
+    title: '上下文卡回执',
+    rows: [
+      {
+        label: '生成来源',
+        value: `${relationshipProjectionLabel(input.person.projectionSource)} · ${relationshipDataQualityLabel(input.person.dataQuality)}`,
+        tone: sourceTone,
+      },
+      {
+        label: '适用场景',
+        value: `${relationshipSurfaceLabel(input.surface)} · ${input.tokenBudget} token 预算`,
+        tone: 'muted',
+      },
+      {
+        label: '可引用内容',
+        value: `证据 ${input.evidenceRefs.length} · 事实 ${input.knownFacts.length} · 跟进 ${input.openLoops.length} · 建议 ${input.actionSuggestions.length}`,
+        tone: evidenceTone,
+      },
+      {
+        label: '隐私范围',
+        value: input.privacySummary.sensitiveIncluded
+          ? '已临时包含敏感上下文'
+          : hiddenSensitiveCount > 0
+            ? `默认隐藏 ${hiddenSensitiveCount} 条敏感上下文`
+            : '未检测到默认隐藏项',
+        tone: privacyTone,
+      },
+    ],
+    boundary,
+    generatedAt: input.generatedAt,
+  };
+}
+
+function relationshipProjectionLabel(source: ProjectionSource): string {
+  const labels: Record<ProjectionSource, string> = {
+    lazy: '索引即时计算',
+    background: '后台整理',
+    user_confirmed: '人工确认画像',
+  };
+  return labels[source] ?? source;
+}
+
+function relationshipDataQualityLabel(quality: DataQuality): string {
+  const labels: Record<DataQuality, string> = {
+    indexed: '索引级',
+    generated: '后台生成',
+    confirmed: '已确认',
+    stale: '有新互动待刷新',
+  };
+  return labels[quality] ?? quality;
+}
+
+function relationshipSurfaceLabel(surface: string): string {
+  const labels: Record<string, string> = {
+    memory_exploring: '人物详情页',
+    memory_exploring_person_tab: '人物详情页',
+    meeting_people_brief: '会议人物简报',
+    relationship_background_consolidation: '后台整理',
+    relationship_assistant_draft: '回复助手',
+  };
+  const normalized = cleanText(surface || 'memory_exploring');
+  return labels[normalized] ?? normalized.replace(/[_-]+/g, ' ').slice(0, 60);
 }
 
 function formatDay(timestamp: number): string {
@@ -2438,6 +2961,91 @@ function formatReviewItem(row: ReviewItemRow): RelationshipReviewItem {
     rejectedAt: row.rejected_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function buildReviewActionReceipt(
+  originalRow: ReviewItemRow,
+  updatedItem: RelationshipReviewItem,
+  action: ReviewAction,
+  input: { editedValue?: string; userNote?: string; snoozeUntil?: number },
+  generatedAt: number,
+): RelationshipReviewActionReceipt {
+  const evidenceCount = safeJsonParse<RelationshipEvidenceRef[]>(
+    originalRow.evidence_refs_json,
+    [],
+  ).length;
+  const noteCaptured = Boolean(cleanText(input.userNote ?? updatedItem.userNote ?? ''));
+  const editedValue = cleanText(input.editedValue || originalRow.proposed_value);
+  const editedValueChanged =
+    action === 'confirm' && editedValue !== cleanText(originalRow.proposed_value);
+
+  if (action === 'confirm') {
+    const nextActions = [
+      `已写入 ${updatedItem.proposedKey}，后续 Context Card、Meeting Brief 和 Assistant Draft 会把它当作用户确认事实读取。`,
+      editedValueChanged
+        ? '本次采用你编辑后的写入内容，原建议只保留在审核记录里。'
+        : '本次使用原建议写入内容。',
+      noteCaptured
+        ? '复核备注已保留，之后排查这条关系事实来源时可回看。'
+        : '没有填写复核备注；证据 refs 仍会保留在审核记录里。',
+    ];
+    return {
+      action,
+      outcome: 'profile_updated',
+      title: '已确认并写入人物画像',
+      summary: `${updatedItem.personName} 的 ${updatedItem.proposedKey} 已升级为确认事实。`,
+      personId: updatedItem.personId,
+      personName: updatedItem.personName,
+      proposedKey: updatedItem.proposedKey,
+      evidenceCount,
+      noteCaptured,
+      statusAfter: updatedItem.status,
+      nextActions,
+      generatedAt,
+    };
+  }
+
+  if (action === 'snooze') {
+    const availableAt = updatedItem.snoozeUntil;
+    return {
+      action,
+      outcome: 'queued_for_later',
+      title: '已排到稍后复核',
+      summary: availableAt
+        ? `${updatedItem.personName} 的候选事实会在 ${formatDay(availableAt)} 后回到待确认。`
+        : `${updatedItem.personName} 的候选事实已从当前待确认列表移出。`,
+      personId: updatedItem.personId,
+      personName: updatedItem.personName,
+      proposedKey: updatedItem.proposedKey,
+      evidenceCount,
+      noteCaptured,
+      statusAfter: updatedItem.status,
+      availableAt,
+      nextActions: [
+        '当前不会写入人物画像，也不会计入待确认数量。',
+        '证据、编辑草稿和复核备注会保留，到期后可以继续确认或驳回。',
+      ],
+      generatedAt,
+    };
+  }
+
+  return {
+    action,
+    outcome: 'dismissed',
+    title: '已驳回候选关系事实',
+    summary: `${updatedItem.personName} 的 ${updatedItem.proposedKey} 没有写入人物画像。`,
+    personId: updatedItem.personId,
+    personName: updatedItem.personName,
+    proposedKey: updatedItem.proposedKey,
+    evidenceCount,
+    noteCaptured,
+    statusAfter: updatedItem.status,
+    nextActions: [
+      '这条建议不会继续出现在默认待确认队列。',
+      '如判断有误，可以在“全部”或“已驳回”筛选里回看证据和备注。',
+    ],
+    generatedAt,
   };
 }
 
@@ -2633,7 +3241,7 @@ function buildMeetingBriefCoverage(
   const unmatchedAttendees = processedAttendees - matchedAttendees;
   const identityCheckNote =
     identityCheckAttendees > 0
-      ? `；${identityCheckAttendees} 位为弱匹配，使用上下文前需核对身份`
+      ? `；${identityCheckAttendees} 位为弱匹配，已暂缓展开历史上下文，使用前需核对身份`
       : '';
   const coverageNote =
     totalAttendees === 0
@@ -2698,9 +3306,9 @@ function buildMeetingBriefReadiness(
     }
   } else if (identityCheckAttendees.length > 0) {
     status = 'partial';
-    summary = `${identityCheckAttendees.length} 位参会人为弱匹配，历史上下文可参考，但需要先核对身份。`;
+    summary = `${identityCheckAttendees.length} 位参会人为弱匹配，历史上下文已暂缓展开，需要先核对身份。`;
     nextActions.push(
-      `先确认 ${formatAttendeeNames(identityCheckAttendees)} 是否就是匹配到的人物，再使用历史上下文。`,
+      `先确认 ${formatAttendeeNames(identityCheckAttendees)} 是否就是匹配到的人物，再重新生成或使用已确认上下文。`,
     );
   } else if (thinAttendees.length > 0 || readyAttendees.length === 0) {
     status = 'partial';
@@ -2740,6 +3348,69 @@ function buildMeetingBriefReadiness(
     summary,
     nextActions: uniqueStrings(nextActions).slice(0, 4),
     successCriteria: uniqueStrings(successCriteria).slice(0, 4),
+  };
+}
+
+function buildMeetingBriefSourceReceipt(input: {
+  sourceState: MeetingBriefSourceState;
+  coverage: RelationshipMeetingBrief['coverage'];
+}): RelationshipMeetingBrief['sourceReceipt'] {
+  const { coverage } = input;
+  const sourceLabels: Record<MeetingBriefSourceState, string> = {
+    calendar_event: '日历事件',
+    manual_input: '手动输入',
+    calendar_event_with_overrides: '日历事件 + 手动覆盖',
+    calendar_event_missing: '日历事件未找到，已改用手动输入',
+  };
+  const inputSource = sourceLabels[input.sourceState];
+  const inputSourceTone =
+    input.sourceState === 'calendar_event_missing' ||
+    input.sourceState === 'calendar_event_with_overrides'
+      ? 'warn'
+      : input.sourceState === 'manual_input'
+        ? 'muted'
+        : 'ok';
+  const attendeeScope =
+    coverage.totalAttendees === 0
+      ? '未提供参会人，只能生成通用准备问题'
+      : coverage.omittedAttendees > 0
+        ? `已分析前 ${coverage.processedAttendees}/${coverage.totalAttendees} 位参会人；${coverage.omittedAttendees} 位未展开`
+        : `已分析 ${coverage.processedAttendees}/${coverage.totalAttendees} 位参会人`;
+  const matchPolicy =
+    coverage.identityCheckAttendees > 0
+      ? `姓名、别名、邮箱优先；${coverage.identityCheckAttendees} 位弱匹配已隐藏历史上下文`
+      : '姓名、别名、邮箱优先；低置信匹配会先要求核对身份';
+  const evidenceBoundary =
+    coverage.evidenceRefs > 0
+      ? `本次返回 ${coverage.evidenceRefs} 条安全证据入口，可点开复核`
+      : '本次没有可引用证据，不能外发为已确认事实';
+
+  return {
+    title: '简报来源回执',
+    rows: [
+      {
+        label: '输入来源',
+        value: inputSource,
+        tone: inputSourceTone,
+      },
+      {
+        label: '参会范围',
+        value: attendeeScope,
+        tone: coverage.omittedAttendees > 0 || coverage.totalAttendees === 0 ? 'warn' : 'ok',
+      },
+      {
+        label: '匹配策略',
+        value: matchPolicy,
+        tone: coverage.identityCheckAttendees > 0 ? 'warn' : 'ok',
+      },
+      {
+        label: '证据边界',
+        value: evidenceBoundary,
+        tone: coverage.evidenceRefs > 0 ? 'ok' : 'warn',
+      },
+    ],
+    boundary: '默认使用不含敏感上下文的人物卡；复制、外发或行动前仍需人工复核身份、证据和 open loop。',
+    generatedAt: now(),
   };
 }
 
@@ -2791,4 +3462,17 @@ function buildSuggestedQuestions(
 
   questions.push('这次同步结束后，下一步 owner 和时间点分别是什么？');
   return uniqueStrings(questions).slice(0, 3);
+}
+
+function buildIdentityCheckQuestions(
+  displayName: string | undefined,
+  personName: string | undefined,
+): string[] {
+  const attendeeName = displayName || '这位参会人';
+  const matchedName = personName || '匹配到的人物记录';
+  return [
+    `先确认 ${attendeeName} 是否就是 ${matchedName}，再使用历史关系上下文。`,
+    `请 ${attendeeName} 补充本次会议的角色、关注点和当前阻塞。`,
+    '确认身份后再决定是否补充人物别名或写回关系记忆。',
+  ];
 }

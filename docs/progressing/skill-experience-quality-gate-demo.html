@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skill Experience Quality Gate Demo · 经验质量门控</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #fffdf8; --ink: #1c1d1f; --muted: #62666f; --line: #d8d3c8;
+    --green: #176f54; --green-soft: #e3f2eb; --blue: #2459a6; --blue-soft: #e4ecf8;
+    --red: #aa3a32; --red-soft: #f8e7e4; --amber: #8a6200; --amber-soft: #fff0c2;
+    --shadow: 0 18px 54px rgba(38, 31, 18, 0.12);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(246,245,242,.92)), var(--bg); }
+  .shell { width: min(1180px, 100%); margin: 0 auto; padding: 0 22px 80px; }
+  .topbar { height: 58px; display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+    background: rgba(255,253,248,.92); backdrop-filter: blur(12px); margin: 0 -22px; padding: 0 22px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .mark { width: 30px; height: 30px; border-radius: 7px;
+    background: conic-gradient(from 220deg, #c7832a, #176f54, #2459a6, #c7832a);
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,.7); }
+  .brand h1 { margin: 0; font-size: 16px; }
+  .brand p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px;
+    border: 1px solid var(--line); background: #fff; color: var(--muted); font-size: 12px; }
+
+  h2.sec { font-size: 14px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; margin: 40px 0 6px; }
+  p.lede { margin: 0 0 18px; font-size: 13px; color: var(--muted); max-width: 76ch; }
+
+  .list { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); overflow: hidden; }
+  .list header { display: grid; grid-template-columns: 1fr 150px 130px 170px; gap: 14px;
+    padding: 11px 18px; background: #fbfaf7; border-bottom: 1px solid var(--line);
+    font-size: 11px; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  .sk { display: grid; grid-template-columns: 1fr 150px 130px 170px; gap: 14px; padding: 14px 18px;
+    border-bottom: 1px solid #efece5; align-items: center; }
+  .sk:last-child { border-bottom: 0; }
+  .sk h4 { margin: 0 0 3px; font-size: 13.5px; }
+  .sk .desc { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .status { justify-self: start; font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
+    padding: 3px 10px; border-radius: 999px; }
+  .s-active { color: var(--green); background: var(--green-soft); }
+  .s-degraded { color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(138,98,0,.3); }
+  .s-pinned { color: var(--blue); background: var(--blue-soft); }
+  .health { display: grid; gap: 4px; }
+  .bar { height: 7px; border-radius: 999px; background: #efece5; overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 999px; }
+  .h-good i { width: 90%; background: var(--green); }
+  .h-bad i { width: 31%; background: var(--amber); }
+  .h-mid i { width: 62%; background: var(--blue); }
+  .health span { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .stats { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+  .stats b { color: var(--ink); }
+  .fail { color: var(--red); font-weight: 600; }
+
+  .lifecycle { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 26px 22px 18px; overflow-x: auto; }
+  .lane { display: flex; align-items: flex-start; gap: 0; min-width: 880px; }
+  .stage { flex: 1; position: relative; padding-top: 18px; }
+  .stage::before { content: ""; position: absolute; top: 5px; left: 0; right: 0; height: 2px; background: var(--line); }
+  .stage:first-child::before { left: 50%; } .stage:last-child::before { right: 50%; }
+  .stage .node { position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 12px; height: 12px; border-radius: 50%; border: 2.5px solid #fff; box-shadow: 0 0 0 1.5px var(--line); }
+  .n-gray .node { background: #c9c4b8; } .n-green .node { background: var(--green); box-shadow: 0 0 0 1.5px var(--green); }
+  .n-amber .node { background: var(--amber); box-shadow: 0 0 0 1.5px var(--amber); }
+  .n-blue .node { background: var(--blue); box-shadow: 0 0 0 1.5px var(--blue); }
+  .stage .lbl { text-align: center; font-size: 12px; font-weight: 600; margin-top: 8px; }
+  .stage .sub { text-align: center; font-size: 10.5px; color: var(--muted); line-height: 1.5; margin-top: 3px; padding: 0 8px; }
+
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .notif { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 14px 18px; display: flex; gap: 12px; }
+  .notif .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--amber); margin-top: 6px; flex: 0 0 auto; }
+  .notif h4 { margin: 0 0 4px; font-size: 13.5px; }
+  .notif p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .vcard { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 16px 18px; }
+  .vcard h4 { margin: 0 0 8px; font-size: 13.5px; display: flex; gap: 8px; align-items: center; }
+  .vtag { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+    color: var(--blue); background: var(--blue-soft); }
+  .vcard ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .meta-inject { margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; background: #f3f2ee; border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 12px; color: var(--muted); line-height: 1.7; }
+  .note { margin-top: 16px; font-size: 12px; color: var(--muted); border-left: 3px solid var(--line);
+    padding: 4px 0 4px 12px; line-height: 1.6; max-width: 82ch; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="mark"></div>
+      <div>
+        <h1>Skill Experience Quality Gate</h1>
+        <p>经验质量门控与退役 · 静态演示 · 配套 skill-experience-quality-gate-plan.md</p>
+      </div>
+    </div>
+    <span class="pill">坏经验和好经验一样会复利——所以要门控</span>
+  </div>
+
+  <h2 class="sec">① Skill Foundry 列表 · 健康度与状态</h2>
+  <p class="lede">2026-06 中旬的快照：「周报生成流程」因 Jira 字段改版 3 连败被自动降级；手写技能（user_pinned）只展示失败率、永不自动降级。</p>
+  <div class="list">
+    <header><span>技能</span><span>状态</span><span>健康分</span><span>近 30 天执行</span></header>
+    <div class="sk">
+      <div><h4>周报生成流程</h4><p class="desc">自动蒸馏 · 来自 5 月 4 次 compose 成功轨迹 · v1</p></div>
+      <span class="status s-degraded">DEGRADED · 3 连败</span>
+      <div class="health h-bad"><div class="bar"><i></i></div><span>health 0.31（wilson 下界）</span></div>
+      <div class="stats">成功 <b>4</b> · 失败 <b class="fail">3</b>（字段缺失 ×3）<br>已从 suggestions 移除，可手动调用</div>
+    </div>
+    <div class="sk">
+      <div><h4>发布前 checklist</h4><p class="desc">用户手写 · user_manual 来源</p></div>
+      <span class="status s-pinned">USER PINNED</span>
+      <div class="health h-mid"><div class="bar"><i></i></div><span>失败率仅展示，不降级</span></div>
+      <div class="stats">成功 <b>5</b> · 失败 <b>2</b><br>用户意志最高：豁免自动降级</div>
+    </div>
+    <div class="sk">
+      <div><h4>会议纪要分发</h4><p class="desc">自动蒸馏 · v3 · 证据 11 条</p></div>
+      <span class="status s-active">ACTIVE</span>
+      <div class="health h-good"><div class="bar"><i></i></div><span>health 0.90</span></div>
+      <div class="stats">成功 <b>14</b> · 失败 <b>1</b><br>正常进入 suggestions 与注入面</div>
+    </div>
+  </div>
+
+  <h2 class="sec">② 「周报生成流程」的一生 · 生命周期时间线</h2>
+  <div class="lifecycle">
+    <div class="lane">
+      <div class="stage n-gray"><span class="node"></span><div class="lbl">candidate</div>
+        <div class="sub">5 月初 · outcome loop 建议沉淀<br>开始攒证据</div></div>
+      <div class="stage n-green"><span class="node"></span><div class="lbl">active</div>
+        <div class="sub">5/30 · 证据 5 条 + health 0.83<br>≥3 证据 &amp; ≥0.6 双门槛晋升</div></div>
+      <div class="stage n-amber"><span class="node"></span><div class="lbl">degraded</div>
+        <div class="sub">6/13 · Jira 字段改版后 3 连败<br>退出推荐 + 黄标 + 通知</div></div>
+      <div class="stage n-blue"><span class="node"></span><div class="lbl">candidate (v2)</div>
+        <div class="sub">6/14 · 反思线程产出修订版<br>changelog：新字段映射</div></div>
+      <div class="stage n-green"><span class="node"></span><div class="lbl">active (v2)</div>
+        <div class="sub">6/27 · 2 次成功 + 1 次采纳<br>重新晋升，历史全程可查</div></div>
+    </div>
+  </div>
+
+  <h2 class="sec">③ 降级时刻 · 通知与修订版本卡</h2>
+  <div class="duo">
+    <div class="notif">
+      <span class="dot"></span>
+      <div>
+        <h4>「周报生成流程」已暂停推荐</h4>
+        <p>连续 3 次执行失败（DEV Estimate 字段缺失）。已自动发起修订线程；你随时可手动调用旧版，或在 Foundry 钉住它以豁免降级。</p>
+      </div>
+    </div>
+    <div class="vcard">
+      <h4>周报生成流程 <span class="vtag">v2 · 修订版</span></h4>
+      <ul>
+        <li>changelog：DEV Estimate 拆分后的新字段映射（estimate_new / estimate_carryover）</li>
+        <li>来源：降级触发的反思线程 #rt-218，输入 3 次失败 detail</li>
+        <li>状态：candidate —— 重新走 ≥3 证据 &amp; health ≥0.6 晋升门槛</li>
+      </ul>
+      <div class="meta-inject">// P2 · 注入侧元信息（experience-following 缓解）<br>
+此流程来自 2026-05，成功 4 / 失败 0，最近一次 5/30；<br>当时 Jira 字段为旧版 —— 由消费端 LLM 决定是否跟随。</div>
+    </div>
+  </div>
+
+  <p class="note">规则备忘：health 用 wilson 下界（1/1 成功不晋升）；unknown 结果不进分母（外部平台回流不全时宁可慢晋升）；retired 不删除，版本历史永久可查可一键复活；降级永远附带可解释原因——不是默默消失。</p>
+</div>
+</body>
+</html>

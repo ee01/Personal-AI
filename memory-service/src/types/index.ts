@@ -1,3 +1,5 @@
+import type { WeaveStats } from '../core/weaveStats.js';
+
 // ============ Core Domain Types ============
 
 export type EntityType =
@@ -576,6 +578,8 @@ export type IngestDecisionReason =
 
 export type IngestDedupeReason = 'post_id' | 'content_source_sender';
 export type IngestExtractionStatus = 'extracted' | 'skipped' | 'unavailable';
+export type IngestTrustClass = 'trusted' | 'internal' | 'untrusted';
+export type IngestSanitization = 'clean' | 'flagged';
 
 export interface IngestSalienceComponents {
   importance: number;
@@ -596,6 +600,10 @@ export interface IngestDecision {
   indexed?: boolean;
   duplicateOf?: string;
   dedupeReason?: IngestDedupeReason;
+  /** Injection-defense (P0-2): trust class of the source and any flagged patterns. */
+  trustClass?: IngestTrustClass;
+  sanitization?: IngestSanitization;
+  injectionFlags?: string[];
 }
 
 export interface IngestResult {
@@ -604,6 +612,23 @@ export interface IngestResult {
   entitiesExtracted?: number;
   matchedProjects?: string[];
   decision?: IngestDecision;
+}
+
+export interface BatchIngestDecisionSummary {
+  totalItems: number;
+  storage: Record<IngestStorageDecision | 'unknown', number>;
+  reasons: Record<IngestDecisionReason | 'unknown', number>;
+  extractionStatus: Record<IngestExtractionStatus | 'unknown', number>;
+  trustClass: Record<IngestTrustClass | 'unknown', number>;
+  sanitization: Record<IngestSanitization | 'unknown', number>;
+  indexing: {
+    requested: number;
+    completed: number;
+    notRequested: number;
+    failedAfterRequest: number;
+    unknown: number;
+  };
+  missingDecision: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -688,12 +713,29 @@ export interface RecallOptions {
   reinforceAccess?: boolean;
 }
 
+export interface RecallScopeCounts {
+  work: number;
+  personal: number;
+  unknown: number;
+  total: number;
+}
+
+export interface RecallScopeReceipt {
+  requestedScope: RecallScope;
+  effectiveScope: MemoryScope | 'both';
+  returned: RecallScopeCounts;
+  candidates: RecallScopeCounts;
+  note: string;
+  includesPersonal: boolean;
+}
+
 export interface RecallResult {
   items: RecallItem[];
   totalFound: number;
   queryTimeMs: number;
   channels: string[];
   channelDiagnostics?: RecallChannelDiagnostic[];
+  scopeReceipt?: RecallScopeReceipt;
   /** Block-style render schema (only present when `blockTypes` was provided). */
   blocks?: RecallBlock[];
   /** Higher-level analysis (only present when `blockTypes` includes `summary`). */
@@ -879,6 +921,106 @@ export interface ContextRecallVisibleMessage {
   timestampLabel?: string;
 }
 
+export interface ContextRecallVisibleField {
+  name: string;
+  value: string;
+  rawText?: string;
+}
+
+export type ContextRecallInteractionUserMode =
+  | 'read'
+  | 'inspect_field'
+  | 'focus_composer'
+  | 'compose'
+  | 'reply'
+  | 'comment'
+  | 'select_text'
+  | 'submit_candidate'
+  | 'unknown';
+
+export type ContextRecallInteractionSceneType =
+  | 'jira_issue_reading'
+  | 'jira_field_inspection'
+  | 'jira_comment_composing'
+  | 'ringcentral_thread_reading'
+  | 'ringcentral_estimate_discussion'
+  | 'ringcentral_reply_composing'
+  | 'web_reading'
+  | 'web_ai_prompt_composing'
+  | 'selection_memory_search'
+  | 'meeting_live'
+  | 'unknown';
+
+export type ContextRecallInteractionSurface =
+  | 'memory_lens'
+  | 'compose_assist'
+  | 'meeting_pilot'
+  | 'today_pilot'
+  | 'ask';
+
+export interface ContextRecallActiveElementSnapshot {
+  kind:
+    | 'none'
+    | 'button'
+    | 'input'
+    | 'textarea'
+    | 'contenteditable'
+    | 'editor'
+    | 'link'
+    | 'other';
+  role?: string;
+  mode?: ContextRecallInteractionUserMode;
+  label?: string;
+  placeholder?: string;
+  nearbyText?: string;
+  containerRole?: string;
+  containerLabel?: string;
+  selectorFingerprint?: string;
+  hasFocus: boolean;
+}
+
+export interface ContextRecallVisibleFact {
+  kind:
+    | 'jira_field'
+    | 'message'
+    | 'page_heading'
+    | 'status_badge'
+    | 'table_cell'
+    | 'other';
+  name?: string;
+  value: string;
+  rawText?: string;
+  source: 'current_page';
+  issueKey?: string;
+  confidence: number;
+}
+
+export interface ContextRecallInteractionSceneAdmission {
+  state: 'blocked' | 'passive_ready' | 'composer_ready' | 'unknown';
+  reasons?: string[];
+  confidence?: number;
+}
+
+export interface ContextRecallInteractionScene {
+  sceneType: ContextRecallInteractionSceneType;
+  surface: ContextRecallInteractionSurface;
+  userMode: ContextRecallInteractionUserMode;
+  url?: string;
+  title?: string;
+  issueKey?: string;
+  conversationId?: string;
+  groupId?: string;
+  meetingId?: string;
+  participants?: string[];
+  activeElement?: ContextRecallActiveElementSnapshot;
+  visibleFacts?: ContextRecallVisibleFact[];
+  draftText?: string;
+  selectedText?: string;
+  nearbyMessages?: ContextRecallVisibleMessage[];
+  sourceAnchorHints?: string[];
+  admission?: ContextRecallInteractionSceneAdmission;
+}
+
 export interface ContextRecallCurrentContext {
   title?: string;
   url?: string;
@@ -888,6 +1030,7 @@ export interface ContextRecallCurrentContext {
   issueKey?: string;
   participants?: string[];
   visibleMessages?: ContextRecallVisibleMessage[];
+  visibleFields?: ContextRecallVisibleField[];
   sourceAnchorHints?: string[];
 }
 
@@ -979,6 +1122,12 @@ export interface ContextRecallRequest {
    * are anchors for recall expansion and must not suppress same-group memory.
    */
   currentContext?: ContextRecallCurrentContext;
+  /**
+   * Frontend-collected interaction facts: active element, visible page facts,
+   * selected/draft text, and a light admission decision. Memory Service owns
+   * the semantic scene/policy decision; this object should stay deterministic.
+   */
+  interactionScene?: ContextRecallInteractionScene;
   exclude?: ContextRecallExclude;
   /**
    * The single most representative chunk of context. The server rejects
@@ -996,10 +1145,129 @@ export interface ContextRecallRequest {
   debug?: boolean;
 }
 
+export type SceneFrameSurface =
+  | 'memory_lens'
+  | 'compose_assist'
+  | 'ask'
+  | 'meeting_pilot';
+
+export type SceneFrameType =
+  | 'jira_estimate'
+  | 'jira_issue_update'
+  | 'ringcentral_reply'
+  | 'meeting_live'
+  | 'external_ai_prompt'
+  | 'web_reading'
+  | 'unknown';
+
+export type SceneFrameIntent =
+  | 'read'
+  | 'reply'
+  | 'fill_field'
+  | 'summarize'
+  | 'decide'
+  | 'delegate'
+  | 'unknown';
+
+export interface SceneFrameFieldHint {
+  field:
+    | 'estimate'
+    | 'original_estimate'
+    | 'due_date'
+    | 'status'
+    | 'assignee'
+    | 'close_policy'
+    | string;
+  rawText: string;
+  confidence: number;
+}
+
+export interface SceneFrame {
+  sceneType: SceneFrameType;
+  surface: SceneFrameSurface;
+  anchors: {
+    people?: string[];
+    projects?: string[];
+    topics?: string[];
+    source?: string[];
+    issueKey?: string;
+    conversationId?: string;
+    groupId?: string;
+  };
+  fieldHints?: SceneFrameFieldHint[];
+  userIntent?: SceneFrameIntent;
+  interactionSceneType?: ContextRecallInteractionSceneType;
+  userMode?: ContextRecallInteractionUserMode;
+  visibleFacts?: ContextRecallVisibleFact[];
+  admission?: ContextRecallInteractionSceneAdmission;
+  riskLevel: 'low' | 'medium' | 'high';
+}
+
+export interface ContextCueSourceRef {
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'jira'
+    | 'meeting'
+    | 'reflection_thread';
+  id: string;
+  title?: string;
+  url?: string;
+  timestamp?: number;
+}
+
+export interface MemoryCueFact {
+  id: string;
+  subject: string;
+  predicate: string;
+  object: string;
+  qualifiers?: Record<string, string>;
+  sceneTags: string[];
+  sourceRefs: ContextCueSourceRef[];
+  confidence: number;
+  validFrom?: number;
+  validUntil?: number;
+}
+
+export interface ContextCue {
+  id: string;
+  cueKey?: string;
+  cueText: string;
+  actionType: 'remember' | 'ask' | 'draft_hint' | 'warning' | 'open_source';
+  surfaceEligibility: SceneFrameSurface[];
+  sourceRefs: ContextCueSourceRef[];
+  evidenceMatchIds: string[];
+  whyNow: string;
+  confidence: number;
+  riskLevel: 'low' | 'medium' | 'high';
+  compileStatus: 'compiled' | 'suppressed' | 'needs_more_evidence';
+  suppressReason?:
+    | 'weak_scene_anchor'
+    | 'weak_fact'
+    | 'stale_source'
+    | 'sensitive'
+    | 'too_noisy'
+    | 'outcome_policy';
+  outcomePolicy?: {
+    action: 'boost' | 'suppress' | 'send_to_skill_foundry';
+    patchId: string;
+    strength: number;
+    reasonCodes: string[];
+    positiveCount: number;
+    negativeCount: number;
+    signalCount: number;
+    expiresAt?: number;
+  };
+}
+
 export interface ContextRecallMatch {
   id: string;
   type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   score: number;
+  scope?: MemoryScope;
   title?: string;
   snippet: string;
   /** Source label, e.g. `meeting`, `glip`, `manual`, `jira`. */
@@ -1033,6 +1301,23 @@ export interface ContextRecallMatch {
   mergedIds?: string[];
   sourceClusterKey?: string;
   timestamp?: number;
+  cue?: ContextCue;
+}
+
+export interface ContextRecallScopeCounts {
+  work: number;
+  personal: number;
+  unknown: number;
+  total: number;
+}
+
+export interface ContextRecallScopeReceipt {
+  requestedScope: ContextRecallScope;
+  effectiveScope: MemoryScope | 'both';
+  shown: ContextRecallScopeCounts;
+  candidates: ContextRecallScopeCounts;
+  note: string;
+  includesPersonal: boolean;
 }
 
 export interface ContextRecallDebug {
@@ -1040,6 +1325,17 @@ export interface ContextRecallDebug {
   channelsHit: string[];
   rejectedReason?: string;
   suppressionReasons?: string[];
+  sceneFrame?: SceneFrame;
+  interactionScene?: ContextRecallInteractionScene;
+  cueCompiler?: {
+    sceneType: SceneFrameType;
+    compiledCount: number;
+    suppressedCount: number;
+    policySuppressedCount?: number;
+    boostedCount?: number;
+    needsMoreEvidenceCount: number;
+    factCount: number;
+  };
   autopilot?: ContextRecallAutopilotDecision;
   contextExpansion?: {
     expandedQuery?: string;
@@ -1065,7 +1361,10 @@ export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch: ContextRecallMatch | null;
   queryTimeMs: number;
+  scopeReceipt?: ContextRecallScopeReceipt;
   autopilot?: ContextRecallAutopilotDecision;
+  /** Weave provenance (P0-5): present only when matches stitch ≥2 sources or ≥7 days. */
+  weave?: WeaveStats;
   debug?: ContextRecallDebug;
 }
 
@@ -1113,6 +1412,12 @@ export interface ComposerVisibleMessage {
   timestampLabel?: string;
 }
 
+export interface ComposerVisibleField {
+  name: string;
+  value: string;
+  rawText?: string;
+}
+
 export interface ComposerAudience {
   conversationTitle?: string;
   conversationId?: string;
@@ -1153,10 +1458,12 @@ export interface ComposerAssistRequest {
     provider?: string;
   };
   visibleMessages?: ComposerVisibleMessage[];
+  visibleFields?: ComposerVisibleField[];
   threadRoot?: ComposerVisibleMessage;
   audience?: ComposerAudience;
   contextItems?: ComposerContextItem[];
   sourceTypes?: RecallSourceType[];
+  interactionScene?: ContextRecallInteractionScene;
   automationLevel?: 'L1' | 'L2';
   debug?: boolean;
 }
@@ -1180,6 +1487,7 @@ export interface ComposerAssistEvidence {
   metadata?: Record<string, any>;
   timestamp?: number;
   score?: number;
+  cue?: ContextCue;
 }
 
 export interface ComposerAssistResponse {

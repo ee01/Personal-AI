@@ -1,8 +1,21 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const llmMocks = vi.hoisted(() => ({
+  generateJSON: vi.fn(),
+}));
 
 vi.mock('../llm/LLMClient.js', () => ({
   getLLMClient: () => ({
-    generateJSON: async () => ({
+    generateJSON: llmMocks.generateJSON,
+  }),
+}));
+
+import { ReflectionResearcher } from '../core/ReflectionResearcher.js';
+
+describe('ReflectionResearcher', () => {
+  beforeEach(() => {
+    llmMocks.generateJSON.mockReset();
+    llmMocks.generateJSON.mockResolvedValue({
       local_queries: [
         {
           query: '最近有哪些协作阻塞？',
@@ -10,13 +23,9 @@ vi.mock('../llm/LLMClient.js', () => ({
           purpose: '收集最近的协作证据',
         },
       ],
-    }),
-  }),
-}));
+    });
+  });
 
-import { ReflectionResearcher } from '../core/ReflectionResearcher.js';
-
-describe('ReflectionResearcher', () => {
   it('defaults local research sourceTypes to non-meeting sources', async () => {
     const researcher = new ReflectionResearcher(undefined);
     const queries = await researcher.plan(
@@ -51,5 +60,162 @@ describe('ReflectionResearcher', () => {
       'manual',
       'system',
     ]);
+  });
+
+  it('sanitizes sourceTypes returned by the research planner', async () => {
+    llmMocks.generateJSON.mockResolvedValueOnce({
+      local_queries: [
+        {
+          query: 'Orbit release risk',
+          topK: 99,
+          purpose: '确认 Orbit 风险证据',
+          sourceTypes: [
+            'glip',
+            'unsupported_slack',
+            'source_memory',
+            'jira',
+            'glip',
+          ],
+        },
+      ],
+    });
+
+    const researcher = new ReflectionResearcher(undefined);
+    const queries = await researcher.plan(
+      {
+        id: 'thread-1',
+        topicKey: 'project:orbit',
+        title: '项目反思: Orbit',
+        status: 'active',
+        priority: 5,
+        salience: 0.8,
+        sourceType: 'message',
+        sourceRefId: null,
+        currentHypothesis: null,
+        openQuestions: [],
+        latestSummary: '',
+        latestMarkdownPath: null,
+        nextReflectionAt: 0,
+        createdAt: 0,
+        updatedAt: 0,
+        lastReflectedAt: null,
+        continueReason: null,
+      },
+      [],
+      [],
+    );
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0].topK).toBe(8);
+    expect(queries[0].sourceTypes).toEqual([
+      'glip',
+      'source_memory',
+      'jira',
+    ]);
+    expect(queries[0].requestedSourceTypes).toEqual([
+      'glip',
+      'unsupported_slack',
+      'source_memory',
+      'jira',
+    ]);
+    expect(queries[0].rejectedSourceTypes).toEqual(['unsupported_slack']);
+    expect(queries[0].scopeNotice).toContain('研究范围已裁剪');
+    expect(queries[0].scopeNotice).toContain('unsupported_slack');
+  });
+
+  it('falls back to default local sources when every requested sourceType is unsupported', async () => {
+    llmMocks.generateJSON.mockResolvedValueOnce({
+      local_queries: [
+        {
+          query: 'Orbit source of truth',
+          topK: 3,
+          purpose: '确认 Orbit 真实来源',
+          sourceTypes: ['salesforce', 'notion_private'],
+        },
+      ],
+    });
+
+    const researcher = new ReflectionResearcher(undefined);
+    const queries = await researcher.plan(
+      {
+        id: 'thread-1',
+        topicKey: 'project:orbit',
+        title: '项目反思: Orbit',
+        status: 'active',
+        priority: 5,
+        salience: 0.8,
+        sourceType: 'message',
+        sourceRefId: null,
+        currentHypothesis: null,
+        openQuestions: [],
+        latestSummary: '',
+        latestMarkdownPath: null,
+        nextReflectionAt: 0,
+        createdAt: 0,
+        updatedAt: 0,
+        lastReflectedAt: null,
+        continueReason: null,
+      },
+      [],
+      [],
+    );
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0].sourceTypes).toEqual([
+      'glip',
+      'jira',
+      'web',
+      'manual',
+      'system',
+    ]);
+    expect(queries[0].requestedSourceTypes).toEqual([
+      'salesforce',
+      'notion_private',
+    ]);
+    expect(queries[0].rejectedSourceTypes).toEqual([
+      'salesforce',
+      'notion_private',
+    ]);
+    expect(queries[0].scopeNotice).toContain('已改用默认本地来源');
+  });
+
+  it('falls back to a deterministic local query when the planner fails', async () => {
+    llmMocks.generateJSON.mockRejectedValueOnce(new Error('planner timeout'));
+
+    const researcher = new ReflectionResearcher(undefined);
+    const queries = await researcher.plan(
+      {
+        id: 'thread-1',
+        topicKey: 'project:orbit',
+        title: '项目反思: Orbit',
+        status: 'active',
+        priority: 7,
+        salience: 0.86,
+        sourceType: 'message',
+        sourceRefId: null,
+        currentHypothesis: 'Orbit owner 可能是 Platform Team',
+        openQuestions: ['Orbit owner 是否已经稳定？'],
+        latestSummary: '',
+        latestMarkdownPath: null,
+        nextReflectionAt: 0,
+        createdAt: 0,
+        updatedAt: 0,
+        lastReflectedAt: null,
+        continueReason: null,
+      },
+      [],
+      [],
+    );
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatchObject({
+      topK: 5,
+      sourceTypes: ['glip', 'jira', 'web', 'manual', 'system'],
+    });
+    expect(queries[0].query).toContain('项目反思: Orbit');
+    expect(queries[0].query).toContain('Orbit owner 是否已经稳定？');
+    expect(queries[0].purpose).toContain(
+      'Orbit owner 是否已经稳定？',
+    );
   });
 });

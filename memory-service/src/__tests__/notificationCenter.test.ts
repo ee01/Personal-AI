@@ -1,4 +1,13 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
@@ -29,6 +38,52 @@ describe('NotificationCenterService', () => {
     db.prepare('DELETE FROM notification_records').run();
     db.prepare('DELETE FROM proposed_actions').run();
     db.prepare('DELETE FROM channel_delivery_records').run();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses injected runtime bot config for Glip notices', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => JSON.stringify({ id: 'runtime-bot-post-1' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const service = new NotificationCenterService(db, () => ({
+      botApiBaseUrl: 'https://bot.example/v2',
+      botToken: 'runtime-token',
+      botId: 'runtime-bot-id',
+      botType: 'user',
+      botTeamId: '',
+      botTargetEmail: '',
+    }));
+
+    const result = await service.deliverNoticeToGlip({
+      sourceRef: 'outreach:test:result',
+      title: '主动询问结果',
+      body: '结果：ok',
+      mention: false,
+      targetUserId: 'esone.qiu',
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.messageId).toBe('runtime-bot-post-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://bot.example/v2/user/message');
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer runtime-token',
+      bot: 'runtime-bot-id',
+    });
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      email: 'esone.qiu@ringcentral.com',
+      mention: false,
+      message: expect.stringContaining('结果：ok'),
+    });
   });
 
   it('classifies and filters channel feed by delivery receipts', () => {
@@ -107,7 +162,7 @@ describe('NotificationCenterService', () => {
       'action-old',
       'Already delivered unfinished todo',
       'Keep it visible in the daily digest',
-      now - 86_400,
+      now - 1_800,
     );
 
     db.prepare(
@@ -118,7 +173,30 @@ describe('NotificationCenterService', () => {
       'action-new',
       'Fresh todo',
       'Only this belongs in the 15 minute stream',
-      now,
+      now - 3_600,
+    );
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 10)`,
+    ).run(
+      'action-clicked',
+      'Channel-clicked todo',
+      'A channel-terminal action should stay out of the daily digest',
+      now - 43_200,
+    );
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'deadline', ?, ?, ?, ?)`,
+    ).run(
+      'notif-clicked-todo',
+      'Channel-clicked notification todo',
+      'A channel-terminal notification should stay out of the daily digest',
+      now - 43_200,
+      now - 43_200,
     );
 
     db.prepare(
@@ -149,6 +227,20 @@ describe('NotificationCenterService', () => {
         status: 'delivered',
         recordedAt: now - 3_600,
       },
+      {
+        sourceRef: 'proposed_action:action-clicked',
+        channel: 'doubao',
+        lane: 'todo',
+        status: 'clicked',
+        recordedAt: now - 3_600,
+      },
+      {
+        sourceRef: 'notification:notif-clicked-todo',
+        channel: 'doubao',
+        lane: 'todo',
+        status: 'dismissed',
+        recordedAt: now - 3_600,
+      },
     ]);
 
     const mixedDailyFeed = service.listFeed({
@@ -158,6 +250,9 @@ describe('NotificationCenterService', () => {
     });
     expect(mixedDailyFeed.map((item) => item.sourceRef)).not.toContain(
       'notification:notif-delivered-notice',
+    );
+    expect(mixedDailyFeed.map((item) => item.sourceRef)).not.toContain(
+      'notification:notif-clicked-todo',
     );
 
     const incrementalFeed = service.listFeed({
@@ -178,6 +273,9 @@ describe('NotificationCenterService', () => {
       'proposed_action:action-new',
       'proposed_action:action-old',
     ]);
+    expect(dailyFeed.map((item) => item.sourceRef)).not.toContain(
+      'proposed_action:action-clicked',
+    );
     expect(dailyFeed[0].deliveryContext).toMatchObject({
       channel: 'doubao',
       reason: 'new',
@@ -550,6 +648,308 @@ describe('NotificationCenterService', () => {
     });
   });
 
+  it('keeps latest failed todo attempts visible after an older delivery cooled down', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const staleDeliveredAt = now - TODO_DELIVERY_RETRY_COOLDOWN_SECONDS - 90;
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 8)`,
+    ).run(
+      'action-failed-after-delivery',
+      'Retry the failed channel delivery',
+      'The latest send attempt failed after an earlier delivery cooled down',
+      now - 1_800,
+    );
+
+    db.prepare(
+      `INSERT INTO proposed_actions
+        (id, type, title, description, state, created_at, action_type, queue_status, priority)
+       VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 8)`,
+    ).run(
+      'action-fresh-after-failure',
+      'Fresh todo after failure',
+      'This should sort behind the failed retry',
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    service.recordDelivery([
+      {
+        sourceRef: 'proposed_action:action-failed-after-delivery',
+        channel: 'chrome',
+        lane: 'todo',
+        status: 'delivered',
+        recordedAt: staleDeliveredAt,
+      },
+      {
+        sourceRef: 'proposed_action:action-failed-after-delivery',
+        channel: 'chrome',
+        lane: 'todo',
+        status: 'failed',
+        error: 'chrome_api_unavailable',
+        recordedAt: now - 60,
+      },
+    ]);
+
+    const feed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['todo'],
+      limit: 10,
+    });
+
+    expect(feed.map((item) => item.sourceRef)).toEqual([
+      'proposed_action:action-failed-after-delivery',
+      'proposed_action:action-fresh-after-failure',
+    ]);
+    expect(feed[0].deliveryContext).toMatchObject({
+      channel: 'chrome',
+      reason: 'previous_delivery_failed',
+      lastStatus: 'failed',
+      effectiveStatus: 'delivered',
+      hasSuccessfulDelivery: true,
+      lastAttemptAt: now - 60,
+      lastDeliveredAt: staleDeliveredAt,
+    });
+
+    const renderedDailyDigest = service.formatTodoDigest('chrome', 500, {
+      deliveryMode: 'daily_digest',
+    });
+    expect(renderedDailyDigest.bodyMd).toContain('上次发送失败');
+  });
+
+  it('includes cross-channel delivery receipts on feed and digest items', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+    ).run(
+      'notif-cross-channel',
+      'Weekly Report Ready',
+      'Chrome has not shown this one yet',
+      now,
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-cross-channel',
+        channel: 'doubao',
+        lane: 'notice',
+        status: 'delivered',
+        recordedAt: now - 300,
+      },
+      {
+        sourceRef: 'notification:notif-cross-channel',
+        channel: 'glip',
+        lane: 'notice',
+        status: 'failed',
+        error: 'bot_not_configured',
+        recordedAt: now - 120,
+      },
+    ]);
+
+    const feed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['notice'],
+      limit: 10,
+    });
+
+    const item = feed.find(
+      (candidate) =>
+        candidate.sourceRef === 'notification:notif-cross-channel',
+    );
+    expect(item?.deliveryContext).toMatchObject({
+      channel: 'chrome',
+      reason: 'new',
+      hasSuccessfulDelivery: false,
+    });
+    expect(item?.channelReceipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: 'chrome',
+          state: 'not_attempted',
+          hasSuccessfulDelivery: false,
+        }),
+        expect.objectContaining({
+          channel: 'doubao',
+          state: 'delivered',
+          label: '已送达',
+          hasSuccessfulDelivery: true,
+        }),
+        expect.objectContaining({
+          channel: 'glip',
+          state: 'failed',
+          label: '发送失败',
+          lastError: 'bot_not_configured',
+        }),
+      ]),
+    );
+
+    const rendered = service.formatNoticeDigest('chrome', 500);
+    expect(rendered.bodyMd).toContain(
+      '其他渠道：豆包已送达，Glip发送失败；失败原因：Glip：bot_not_configured',
+    );
+  });
+
+  it('keeps terminal channel states visible after a later failure receipt', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO notification_records
+        (id, channel, type, title, body, sent_at, created_at)
+       VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+    ).run(
+      'notif-terminal-failure',
+      'Weekly Report Ready',
+      'A later provider failure should not hide the handled state',
+      now,
+      now,
+    );
+
+    const service = new NotificationCenterService(db);
+    service.recordDelivery([
+      {
+        sourceRef: 'notification:notif-terminal-failure',
+        channel: 'doubao',
+        lane: 'notice',
+        status: 'clicked',
+        recordedAt: now - 300,
+      },
+      {
+        sourceRef: 'notification:notif-terminal-failure',
+        channel: 'doubao',
+        lane: 'notice',
+        status: 'failed',
+        error: 'provider_retry_failed',
+        recordedAt: now - 120,
+      },
+    ]);
+
+    const feed = service.listFeed({
+      channel: 'chrome',
+      lanes: ['notice'],
+      limit: 10,
+    });
+    const item = feed.find(
+      (candidate) =>
+        candidate.sourceRef === 'notification:notif-terminal-failure',
+    );
+
+    expect(item?.channelReceipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: 'doubao',
+          state: 'clicked',
+          label: '已查看，最近失败',
+          detail:
+            '用户已从该渠道进入处理入口；最近一次回执失败：provider_retry_failed',
+          status: 'failed',
+          effectiveStatus: 'clicked',
+          hasSuccessfulDelivery: true,
+          lastError: 'provider_retry_failed',
+        }),
+      ]),
+    );
+
+    const rendered = service.formatNoticeDigest('chrome', 500);
+    expect(rendered.bodyMd).toContain(
+      '其他渠道：豆包已查看，最近失败；失败原因：豆包：provider_retry_failed（有效状态仍按已查看）',
+    );
+  });
+
+  it('bounds todo digest markdown without marking hidden items delivered', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const longDescription =
+      'This todo has enough explanatory text to force the provider digest to choose complete visible items instead of cutting a receipt mid-sentence.';
+
+    for (let i = 0; i < 5; i += 1) {
+      db.prepare(
+        `INSERT INTO proposed_actions
+          (id, type, title, description, state, created_at, action_type, queue_status, priority)
+         VALUES (?, 'notify_user', ?, ?, 'pending', ?, 'notify_user', 'queued', 9)`,
+      ).run(
+        `action-truncated-todo-${i}`,
+        `Digest truncation todo ${i}`,
+        `${longDescription} index=${i}`,
+        now - i,
+      );
+    }
+
+    const service = new NotificationCenterService(db);
+    const rendered = service.formatTodoDigest('doubao', 100, {
+      deliveryMode: 'incremental',
+      limit: 5,
+    });
+
+    expect(rendered.bodyMd.length).toBeLessThanOrEqual(400);
+    expect(rendered.bodyMd).toContain('已截断');
+    expect(rendered.bodyMd).toContain('未显示条目不会写入本次渠道送达回执');
+    expect(rendered.itemCount).toBe(rendered.sourceRefs.length);
+    expect(rendered.omittedItemCount).toBeGreaterThan(0);
+    expect(rendered.sourceRefs).not.toContain(
+      'proposed_action:action-truncated-todo-4',
+    );
+    expect(rendered.bodyMd).not.toContain('Digest truncation todo 4');
+  });
+
+  it('leaves notice digest items in feed when they were omitted by budget', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const longBody =
+      'This notice body is intentionally long enough that only a subset of complete notification rows can fit inside the constrained provider digest budget.';
+
+    for (let i = 0; i < 5; i += 1) {
+      db.prepare(
+        `INSERT INTO notification_records
+          (id, channel, type, title, body, sent_at, created_at)
+         VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+      ).run(
+        `notif-truncated-notice-${i}`,
+        `Digest truncation notice ${i}`,
+        `${longBody} index=${i}`,
+        now - i,
+        now - i,
+      );
+    }
+
+    const service = new NotificationCenterService(db);
+    const allRefs = service
+      .listFeed({ channel: 'doubao', lanes: ['notice'], limit: 10 })
+      .map((item) => item.sourceRef);
+    const rendered = service.formatNoticeDigest('doubao', 100);
+    const hiddenRefs = allRefs.filter(
+      (sourceRef) => !rendered.sourceRefs.includes(sourceRef),
+    );
+
+    expect(rendered.bodyMd.length).toBeLessThanOrEqual(400);
+    expect(rendered.bodyMd).toContain('已截断');
+    expect(rendered.itemCount).toBe(rendered.sourceRefs.length);
+    expect(hiddenRefs.length).toBeGreaterThan(0);
+
+    service.recordDelivery(
+      rendered.sourceRefs.map((sourceRef) => ({
+        sourceRef,
+        channel: 'doubao' as const,
+        lane: 'notice' as const,
+        status: 'delivered' as const,
+      })),
+    );
+
+    const remainingRefs = service
+      .listFeed({ channel: 'doubao', lanes: ['notice'], limit: 10 })
+      .map((item) => item.sourceRef);
+    for (const hiddenRef of hiddenRefs) {
+      expect(remainingRefs).toContain(hiddenRef);
+    }
+    for (const visibleRef of rendered.sourceRefs) {
+      expect(remainingRefs).not.toContain(visibleRef);
+    }
+  });
+
   it('does not surface expired proposed actions as todos', () => {
     const now = Math.floor(Date.now() / 1000);
 
@@ -605,6 +1005,8 @@ describe('NotificationCenterService', () => {
       '2 dream(s) generated this period',
       JSON.stringify({
         dreamCount: 2,
+        dreamDigestScopeReceipt:
+          '覆盖周期：2026-05-18 至 2026-05-25\n本次纳入：2 个梦境文件\n未纳入：旧周期 1 个，日期缺失 1 个\n边界：这次推送只汇总当前 Dream Digest 周期；旧梦境和日期缺失文件仍可在梦境重放页查看。',
         digestBody:
           '**Rooms rollout alignment**\nFollow up on the RingCentral rollout decision.\n\n**Doubao bridge fix**\nSync the useful memory highlights, not just the shell notification.',
       }),
@@ -635,6 +1037,8 @@ describe('NotificationCenterService', () => {
     expect(rendered.bodyMd).toContain('# 通知摘要');
     expect(rendered.bodyMd).toContain('## 更新');
     expect(rendered.bodyMd).toContain('2 dream(s) generated this period');
+    expect(rendered.bodyMd).toContain('覆盖周期：2026-05-18 至 2026-05-25');
+    expect(rendered.bodyMd).toContain('旧梦境和日期缺失文件仍可在梦境重放页查看');
     expect(rendered.bodyMd).toContain('Rooms rollout alignment');
     expect(rendered.bodyMd).toContain('Doubao bridge fix');
     expect(rendered.bodyMd).toContain('Launch weekly summary');
@@ -710,6 +1114,45 @@ describe('NotificationCenterService', () => {
 
     expect(feedAfterDelivery.statusCode).toBe(200);
     expect(feedAfterDelivery.json().total).toBe(0);
+  });
+
+  it('exposes feed meta when the limited response has more items', async () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    for (let i = 0; i < 3; i += 1) {
+      db.prepare(
+        `INSERT INTO notification_records
+          (id, channel, type, title, body, sent_at, created_at)
+         VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?)`,
+      ).run(
+        `notif-feed-meta-${i}`,
+        `Weekly Report ${i}`,
+        `Report body ${i}`,
+        now - i,
+        now - i,
+      );
+    }
+
+    const feedRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/notification-center/feed?channel=chrome&lanes=notice&limit=2',
+    });
+
+    expect(feedRes.statusCode).toBe(200);
+    const feedBody = feedRes.json();
+    expect(feedBody.total).toBe(2);
+    expect(feedBody.items.map((item: { sourceRef: string }) => item.sourceRef)).toEqual([
+      'notification:notif-feed-meta-0',
+      'notification:notif-feed-meta-1',
+    ]);
+    expect(feedBody.meta).toEqual({
+      channel: 'chrome',
+      lanes: ['notice'],
+      deliveryMode: 'retry_after_cooldown',
+      limit: 2,
+      returned: 2,
+      hasMore: true,
+    });
   });
 
   it('exposes deliveryMode on the feed route', async () => {

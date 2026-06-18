@@ -186,26 +186,6 @@ export class ContextAssistService {
     }
 
     const ownerReplyState = getOwnerReplyState(request);
-    if (ownerReplyState.state === 'complete') {
-      return {
-        available: false,
-        suggestionType: 'none',
-        title: '已回复',
-        summary: '最近上下文显示用户已经完成回复，不展示重复提词。',
-        evidence: [],
-        riskLevel: 'low',
-        previewRequired: false,
-        confidence: 0,
-        queryTimeMs: 0,
-        debug: request.debug
-          ? {
-              rejectedReason: 'owner_already_replied',
-              ownerReplyText: ownerReplyState.text,
-            }
-          : undefined,
-      };
-    }
-
     const recallRequest = buildComposerRecallRequest(request);
     const recall = await this.recallService.recall(recallRequest);
     const rawEvidence = recall.matches.map(toEvidence);
@@ -260,6 +240,28 @@ export class ContextAssistService {
 
     const suggestionType = getComposerSuggestionType(request);
     const riskLevel = getComposerRiskLevel(request, evidence);
+    if (ownerReplyState.state === 'complete') {
+      return {
+        available: false,
+        suggestionType: 'none',
+        title: '相关上下文',
+        summary: '找到相关记忆，但最近上下文显示用户已经回复过；这里只展示上下文，不生成可插入草稿。',
+        evidence,
+        riskLevel,
+        previewRequired: false,
+        confidence,
+        queryTimeMs: recall.queryTimeMs,
+        debug: request.debug
+          ? {
+              recall: recall.debug,
+              recallRequest,
+              taskFrame,
+              rejectedReason: 'owner_already_replied_context_only',
+              ownerReplyText: ownerReplyState.text,
+            }
+          : undefined,
+      };
+    }
     const agentContext = buildAgentComposeContext(
       request,
       evidence,
@@ -363,6 +365,7 @@ function buildComposerRecallRequest(
     secondaryTexts,
     sourceContext: buildComposerRecallSourceContext(request),
     currentContext: buildComposerRecallCurrentContext(request),
+    interactionScene: request.interactionScene,
     entityHints: buildComposerEntityHints(request),
     scope: 'work',
     sourceTypes: normalizeComposerSourceTypes(request),
@@ -453,7 +456,27 @@ function buildComposerDraftSecondaryTexts(
 function buildComposerRecallSourceContext(
   request: ComposerAssistRequest,
 ): ContextRecallSourceContext | undefined {
-  if (request.contextType !== 'web_agent_prompt') return undefined;
+  const ids = request.identifiers;
+  if (request.contextType !== 'web_agent_prompt') {
+    const context: ContextRecallSourceContext = {
+      contextType: request.contextType,
+      sourceType:
+        request.contextType === 'jira_issue'
+          ? 'jira'
+          : request.surface.startsWith('ringcentral')
+            ? 'glip'
+            : 'web',
+      host: getComposerUrlHost(request.url),
+      url: request.url,
+      title: request.title,
+      topic: request.audience?.issueSummary || request.primaryText,
+      groupId: ids?.groupId || request.audience?.groupId,
+      conversationId:
+        ids?.conversationId || request.audience?.conversationId,
+      issueKey: ids?.issueKey || request.audience?.issueKey,
+    };
+    return Object.values(context).some(Boolean) ? context : undefined;
+  }
   return {
     contextType: 'web_agent_prompt',
     sourceType: 'web',
@@ -467,7 +490,6 @@ function buildComposerRecallSourceContext(
 function buildComposerRecallCurrentContext(
   request: ComposerAssistRequest,
 ): ContextRecallCurrentContext | undefined {
-  if (request.contextType !== 'web_agent_prompt') return undefined;
   const visibleMessages = takeComposerContextItems(
     normalizeComposerContextItems(request),
     8,
@@ -483,13 +505,20 @@ function buildComposerRecallCurrentContext(
     request.draftText,
     request.url,
     request.primaryText,
+    request.audience?.issueKey,
+    request.audience?.issueSummary,
     ...(request.secondaryTexts ?? []),
   ]);
 
   return {
     title: request.title,
     url: request.url,
+    conversationId:
+      request.identifiers?.conversationId || request.audience?.conversationId,
+    groupId: request.identifiers?.groupId || request.audience?.groupId,
+    issueKey: request.identifiers?.issueKey || request.audience?.issueKey,
     participants: request.audience?.people,
+    visibleFields: request.visibleFields,
     sourceAnchorHints: sourceAnchorHints.length ? sourceAnchorHints : undefined,
     visibleMessages: visibleMessages.length ? visibleMessages : undefined,
   };
@@ -682,6 +711,7 @@ function toEvidence(match: ContextRecallMatch): ComposerAssistEvidence {
     metadata: match.metadata,
     timestamp: match.timestamp,
     score: match.score,
+    cue: match.cue,
   };
 }
 
@@ -1056,6 +1086,11 @@ async function buildComposerInsertText(
     return clipInsertText(
       renderWebAgentContextPack(request, evidence, agentContext),
     );
+  }
+
+  const cueDraft = selectComposerDraftHintCue(evidence);
+  if (cueDraft) {
+    return clipInsertText(cueDraft.cueText);
   }
 
   const generated = await generateSendableComposerText(
@@ -1755,12 +1790,32 @@ function isSceneCueRehearsalEvidence(item: ComposerAssistEvidence): boolean {
 function formatComposerEvidenceForPrompt(
   item: ComposerAssistEvidence,
 ): string {
+  if (item.cue?.compileStatus === 'compiled' && item.cue.cueText) {
+    return `${item.cue.cueText} 证据：${formatChatSnippet(item.snippet)}`;
+  }
   const snippet = formatChatSnippet(item.snippet);
   if (!isRehearsalEvidence(item)) return snippet;
   const reasons = item.whyRelevant?.length
     ? `（${item.whyRelevant.slice(0, 2).join('、')}）`
     : '';
   return `预演提醒${reasons}: ${snippet}`;
+}
+
+function selectComposerDraftHintCue(
+  evidence: ComposerAssistEvidence[],
+): ComposerAssistEvidence['cue'] | undefined {
+  return evidence
+    .map((item) => item.cue)
+    .filter(
+      (cue): cue is NonNullable<ComposerAssistEvidence['cue']> =>
+        Boolean(
+          cue?.compileStatus === 'compiled' &&
+            cue.actionType === 'draft_hint' &&
+            cue.surfaceEligibility.includes('compose_assist') &&
+            cue.cueText.trim(),
+        ),
+    )
+    .sort((left, right) => right.confidence - left.confidence)[0];
 }
 
 function buildComposerSceneText(request: ComposerAssistRequest): string {

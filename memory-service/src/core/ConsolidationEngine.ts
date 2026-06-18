@@ -18,6 +18,8 @@ import type Database from 'better-sqlite3';
 
 import { ForgettingEngine } from './ForgettingEngine.js';
 import { MarkdownManager } from './MarkdownManager.js';
+import { BehaviorAffinityService } from './BehaviorAffinityService.js';
+import { getConfig } from '../config.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
@@ -168,6 +170,18 @@ export class ConsolidationEngine {
       console.log(`[ConsolidationEngine] Phase 3.5 (Profile): consolidated ${result.profileConsolidated} profile items`);
     } catch (err) {
       console.error('[ConsolidationEngine] Phase 3.5 (Profile) failed:', err);
+    }
+
+    // Phase 3.6: Behavior Affinity rollup (P0-4)
+    try {
+      const rollup = new BehaviorAffinityService(this.db).recompute({
+        windowDays: getConfig().affinityWindowDays,
+      });
+      console.log(
+        `[ConsolidationEngine] Phase 3.6 (Affinity): ${rollup.subjects} subjects from ${rollup.events} outcome events`,
+      );
+    } catch (err) {
+      console.error('[ConsolidationEngine] Phase 3.6 (Affinity) failed:', err);
     }
 
     // Phase 4: Clean — run forgetting cycle

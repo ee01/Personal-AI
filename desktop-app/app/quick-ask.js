@@ -31,6 +31,7 @@ const elements = {
   voiceSheet: document.getElementById('voice-sheet'),
   voiceTranscript: document.getElementById('voice-transcript'),
   voiceRecovery: document.getElementById('voice-recovery'),
+  voiceReceipt: document.getElementById('voice-receipt'),
   voiceOrb: document.getElementById('voice-orb'),
   voiceCancel: document.getElementById('voice-cancel'),
   voiceSend: document.getElementById('voice-send'),
@@ -56,11 +57,21 @@ const STATUS_SOURCE_LABELS = {
   queued_action: 'Action Queue',
 };
 
+const STATUS_PRIORITY_RECEIPTS = {
+  setup_blocker: '优先处理：缺配置会阻断同步、查询或写回。',
+  runtime_issue: '先确认状态：读取失败时不能把旧状态当最新。',
+  sync_issue: '需要恢复：最近同步失败，先看失败链路和重试条件。',
+  confirm_request: '需要你确认：不会自动写入或发送。',
+  running_action: '正在执行：用来判断动作是否卡住或仍在推进。',
+  waiting_reply: '外部询问：先区分待你批准发送，还是等待对方回复。',
+  queued_action: '尚未执行：先确认排队动作是否仍值得处理。',
+};
+
 const HEIGHTS = {
   /** Keep equal to `ASK_WINDOW_COMPACT_HEIGHT` in `app/main.mjs`. */
   compact: 140,
   compactWithBanner: 188,
-  voice: 214,
+  voice: 254,
   /** Expanded heights (~+50%) so answer area is less cramped. */
   streaming: 714,
   enriched: 816,
@@ -217,17 +228,25 @@ function clipText(value, limit) {
   return `${text.slice(0, Math.max(0, limit - 1)).trim()}…`;
 }
 
-function formatSnapshotRelative(fetchedAt) {
-  const time = Date.parse(fetchedAt || '');
+function formatRelativeAge(value, justNowLabel = '刚刚刷新') {
+  const time = Date.parse(value || '');
   if (!Number.isFinite(time)) return '时间未知';
   const diffMs = Math.max(0, Date.now() - time);
   const minuteMs = 60 * 1000;
   const hourMs = 60 * minuteMs;
   const dayMs = 24 * hourMs;
-  if (diffMs < minuteMs) return '刚刚刷新';
+  if (diffMs < minuteMs) return justNowLabel;
   if (diffMs < hourMs) return `${Math.floor(diffMs / minuteMs)} 分钟前`;
   if (diffMs < dayMs) return `${Math.floor(diffMs / hourMs)} 小时前`;
   return `${Math.floor(diffMs / dayMs)} 天前`;
+}
+
+function formatSnapshotRelative(fetchedAt) {
+  return formatRelativeAge(fetchedAt, '刚刚刷新');
+}
+
+function formatRefreshFailureRelative(failedAt) {
+  return formatRelativeAge(failedAt, '刚刚失败');
 }
 
 function formatRuntimeSnapshotMeta(runtime) {
@@ -236,8 +255,79 @@ function formatRuntimeSnapshotMeta(runtime) {
   return `快照：${formatSnapshotRelative(runtime?.fetchedAt)} · ${countLabel}`;
 }
 
+function getRuntimeSnapshotAgeMs(runtime) {
+  const time = Date.parse(runtime?.fetchedAt || '');
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Date.now() - time);
+}
+
+function formatStatusItemFreshness(runtime, refreshFailure = null) {
+  if (refreshFailure?.error) {
+    const failedLabel = formatRefreshFailureRelative(refreshFailure.failedAt);
+    const snapshotLabel = formatSnapshotRelative(runtime?.fetchedAt);
+    return {
+      label: '刷新失败 · 上次快照',
+      tone: 'refresh-failed',
+      prompt: `${failedLabel}：重新读取失败，当前状态未确认；下面仍是 ${snapshotLabel} 的上次成功快照。错误：${clipText(
+        refreshFailure.error,
+        90,
+      )}`,
+    };
+  }
+
+  const ageMs = getRuntimeSnapshotAgeMs(runtime);
+  if (ageMs === null) {
+    return {
+      label: '来源时间未知',
+      tone: 'unknown',
+      prompt: '这条状态的读取时间未知，先重新读取后再行动。',
+    };
+  }
+
+  const minuteMs = 60 * 1000;
+  if (ageMs < minuteMs) {
+    return {
+      label: '刚刚读取',
+      tone: 'fresh',
+      prompt: '这条状态来自刚刚读取的快照。',
+    };
+  }
+
+  const minutes = Math.floor(ageMs / minuteMs);
+  if (minutes <= 15) {
+    return {
+      label: `${minutes} 分钟前读取`,
+      tone: 'recent',
+      prompt: `这条状态来自 ${minutes} 分钟前的快照。`,
+    };
+  }
+
+  return {
+    label: '旧快照 · 先重新读取',
+    tone: 'stale',
+    prompt: `这条状态来自 ${minutes} 分钟前的旧快照，先点重新读取确认它是否仍然存在。`,
+  };
+}
+
 function getStatusSourceLabel(kind) {
   return STATUS_SOURCE_LABELS[kind] || '运行态汇总';
+}
+
+function getStatusPriorityReceipt(item) {
+  return (
+    item?.priorityReceipt ||
+    STATUS_PRIORITY_RECEIPTS[item?.kind] ||
+    '运行态提示：这条状态需要你决定下一步。'
+  );
+}
+
+function getStatusRefreshFailure(message) {
+  const error = normalizeInlineText(message?.statusRefreshError || '');
+  if (!error) return null;
+  return {
+    error,
+    failedAt: message?.statusRefreshFailedAt || new Date().toISOString(),
+  };
 }
 
 function getUrlHost(value) {
@@ -381,6 +471,12 @@ function normalizeAskScope(value) {
     return value;
   }
   return 'work';
+}
+
+function getAskScopeLabel(scope = state.askScope) {
+  if (scope === 'personal') return t('common.personal');
+  if (scope === 'both') return t('common.both');
+  return t('common.work');
 }
 
 function isExpandedState() {
@@ -1239,6 +1335,56 @@ function renderLowMemoryTail(memoryGrowth) {
   `;
 }
 
+function getAmbiguousContextCandidates(message) {
+  if (message?.contextMatch?.state !== 'ambiguous') return [];
+  if (!Array.isArray(message.contextMatch.candidates)) return [];
+  return message.contextMatch.candidates
+    .slice(0, 5)
+    .map((candidate, index) => ({
+      index: index + 1,
+      label: normalizeInlineText(candidate?.label || `候选 ${index + 1}`),
+      reasons: Array.isArray(candidate?.reasons)
+        ? candidate.reasons.slice(0, 2).map(normalizeInlineText).filter(Boolean)
+        : [],
+    }))
+    .filter((candidate) => candidate.label);
+}
+
+function renderAmbiguousContextChoices(message) {
+  const candidates = getAmbiguousContextCandidates(message);
+  if (!candidates.length) return '';
+  return `
+    <section class="message-section ask-candidate-section">
+      <h4>选择话题继续</h4>
+      <div class="ask-candidate-list">
+        ${candidates
+          .map(
+            (candidate) => `
+              <button
+                class="ask-candidate-choice"
+                type="button"
+                data-ask-candidate-index="${candidate.index}"
+                data-ask-candidate-label="${escapeHtml(candidate.label)}"
+                aria-label="选择话题 ${escapeHtml(candidate.label)}"
+              >
+                <span class="ask-candidate-number">${candidate.index}</span>
+                <span class="ask-candidate-body">
+                  <strong>${escapeHtml(candidate.label)}</strong>
+                  ${
+                    candidate.reasons.length
+                      ? `<em>${escapeHtml(candidate.reasons.join(' / '))}</em>`
+                      : ''
+                  }
+                </span>
+              </button>
+            `,
+          )
+          .join('')}
+      </div>
+    </section>
+  `;
+}
+
 function renderAssistantMessage(message) {
   if (message.pending && !message.text && !message.statusText) {
     return `
@@ -1271,6 +1417,7 @@ function renderAssistantMessage(message) {
     <div class="message-card assistant-card ${message.htmlReady ? '' : 'streaming-card'}">
       ${renderMemoryBadge(message.memorySaveResult)}
       ${bodyHtml}
+      ${message.htmlReady ? renderAmbiguousContextChoices(message) : ''}
       ${message.htmlReady ? renderStructuredAnswer(message.structuredAnswer) : ''}
       ${message.htmlReady ? renderEvidence(message.evidence, message.queryText) : ''}
       ${message.htmlReady ? renderMobileContextAction(message) : ''}
@@ -1283,10 +1430,12 @@ function renderUserMessage(message) {
   return `<div class="message-card user-card"><p>${escapeHtml(message.text)}</p></div>`;
 }
 
-function renderStatusItem(item) {
+function renderStatusItem(item, runtime, refreshFailure = null) {
   const detailLines = Array.isArray(item.detailLines)
     ? item.detailLines.filter(Boolean).slice(0, 4)
     : [];
+  const freshness = formatStatusItemFreshness(runtime, refreshFailure);
+  const priorityReceipt = getStatusPriorityReceipt(item);
   return `
     <button
       class="status-item"
@@ -1296,10 +1445,13 @@ function renderStatusItem(item) {
       data-status-summary="${escapeHtml(item.summary)}"
       data-status-details="${escapeHtml(detailLines.join('；'))}"
       data-status-action="${escapeHtml(item.actionHint || '')}"
+      data-status-freshness="${escapeHtml(freshness.prompt)}"
+      data-status-priority="${escapeHtml(priorityReceipt)}"
     >
       <span class="status-item-main">
         <span class="status-item-title">${escapeHtml(item.title)}</span>
         <span class="status-item-summary">${escapeHtml(item.summary)}</span>
+        <span class="status-item-priority">${escapeHtml(priorityReceipt)}</span>
         ${
           detailLines.length
             ? `<span class="status-item-details">${detailLines
@@ -1310,6 +1462,7 @@ function renderStatusItem(item) {
       </span>
       <span class="status-item-meta">
         <span class="status-item-source">${escapeHtml(getStatusSourceLabel(item.kind))}</span>
+        <span class="status-item-freshness ${escapeHtml(freshness.tone)}">${escapeHtml(freshness.label)}</span>
         ${
           item.badgeLabel
             ? `<span class="status-item-badge">${escapeHtml(item.badgeLabel)}</span>`
@@ -1325,6 +1478,10 @@ function renderStatusMessage(message) {
   const runtime = message.runtime || { items: [] };
   const items = Array.isArray(runtime.items) ? runtime.items : [];
   const refreshLabel = message.statusRefreshing ? '读取中...' : '重新读取';
+  const refreshFailure = getStatusRefreshFailure(message);
+  const noticeClass = refreshFailure
+    ? 'status-refresh-note status-refresh-warning'
+    : 'status-refresh-note';
   return `
     <div class="message-card status-card-wrap">
       <div class="status-card">
@@ -1346,13 +1503,13 @@ function renderStatusMessage(message) {
         <div class="status-card-meta">${escapeHtml(formatRuntimeSnapshotMeta(runtime))}</div>
         ${
           message.statusRefreshNotice
-            ? `<div class="status-refresh-note">${escapeHtml(message.statusRefreshNotice)}</div>`
+            ? `<div class="${noticeClass}">${escapeHtml(message.statusRefreshNotice)}</div>`
             : ''
         }
         <div class="status-item-list">
           ${
             items.length
-              ? items.map((item) => renderStatusItem(item)).join('')
+              ? items.map((item) => renderStatusItem(item, runtime, refreshFailure)).join('')
               : '<div class="status-empty">刚刚重新读取过，目前没有需要关注的运行态。</div>'
           }
         </div>
@@ -1434,19 +1591,33 @@ function setRuntime(runtime) {
       : runtime.topStatus.label;
 }
 
-function buildStatusFollowUpPrompt(kind, title, summary, details, actionHint) {
+function buildStatusFollowUpPrompt(
+  kind,
+  title,
+  summary,
+  details,
+  actionHint,
+  freshness,
+  priorityReceipt,
+) {
   const fallback = STATUS_HINTS[kind] || '帮我解释这条状态，并给出下一步。';
   const cleanTitle = String(title || '').trim();
   const cleanSummary = String(summary || '').trim();
   const cleanDetails = String(details || '').trim();
   const cleanActionHint = String(actionHint || '').trim();
+  const cleanFreshness = String(freshness || '').trim();
+  const cleanPriorityReceipt = String(priorityReceipt || '').trim();
   if (!cleanTitle && !cleanSummary) return fallback;
 
   const subject = cleanTitle || '这条状态';
   const detail = cleanSummary ? `：${cleanSummary}` : '';
   const detailContext = cleanDetails ? ` 细节：${cleanDetails}。` : '';
   const actionContext = cleanActionHint ? ` 建议动作：${cleanActionHint}。` : '';
-  return `关于「${subject}」${detail}。${detailContext}${actionContext}${fallback}`;
+  const freshnessContext = cleanFreshness ? ` 快照状态：${cleanFreshness}。` : '';
+  const priorityContext = cleanPriorityReceipt
+    ? ` 显示原因：${cleanPriorityReceipt}。`
+    : '';
+  return `关于「${subject}」${detail}。${detailContext}${actionContext}${freshnessContext}${priorityContext}${fallback}`;
 }
 
 function buildMobileContextEvidence(evidence) {
@@ -1564,18 +1735,24 @@ async function refreshStatusCard(messageId) {
     updateMessage(messageId, {
       runtime: runtime || { items: [], fetchedAt: new Date().toISOString() },
       statusRefreshing: false,
+      statusRefreshError: '',
+      statusRefreshFailedAt: '',
       statusRefreshNotice:
         itemCount > 0
           ? '已重新读取状态快照。'
           : '已重新读取：暂无需要关注的状态。',
     });
   } catch (error) {
+    const errorText = clipText(
+      error instanceof Error ? error.message : String(error),
+      120,
+    );
+    const snapshotLabel = formatSnapshotRelative(message.runtime?.fetchedAt);
     updateMessage(messageId, {
       statusRefreshing: false,
-      statusRefreshNotice: `重新读取失败：${clipText(
-        error instanceof Error ? error.message : String(error),
-        120,
-      )}`,
+      statusRefreshError: errorText,
+      statusRefreshFailedAt: new Date().toISOString(),
+      statusRefreshNotice: `重新读取失败，当前状态未确认。下面仍显示 ${snapshotLabel} 的上次成功快照：${errorText}`,
     });
   }
 }
@@ -1955,12 +2132,36 @@ class VoiceController {
 
 const voiceController = new VoiceController();
 
+function getVoiceReceiptText() {
+  if (voiceController.lastErrorMessage) {
+    return t('desktop.quickAsk.voiceReceipt.error');
+  }
+
+  const locale = resolveVoiceLocale();
+  if (state.voicePhase === 'listening') {
+    return state.voiceDraft.trim()
+      ? t('desktop.quickAsk.voiceReceipt.listeningWithDraft', { locale })
+      : t('desktop.quickAsk.voiceReceipt.listening', { locale });
+  }
+
+  if (state.voicePhase === 'ready') {
+    return state.voiceDraft.trim()
+      ? t('desktop.quickAsk.voiceReceipt.ready', {
+          scope: getAskScopeLabel(),
+        })
+      : t('desktop.quickAsk.voiceReceipt.readyEmpty');
+  }
+
+  return t('desktop.quickAsk.voiceReceipt.idle');
+}
+
 function renderVoiceSheet() {
   const transcriptText =
     state.voiceDraft ||
     voiceController.lastErrorMessage ||
     t('desktop.quickAsk.voicePrompt');
   elements.voiceTranscript.textContent = transcriptText;
+  elements.voiceReceipt.textContent = getVoiceReceiptText();
   if (voiceController.lastErrorAction) {
     elements.voiceRecovery.hidden = false;
     elements.voiceRecovery.textContent = voiceController.lastErrorAction.label;
@@ -2053,29 +2254,26 @@ function loadOlderSession() {
 async function submitQuery(rawInput, options = {}) {
   const input = rawInput.trim();
   if (!input || state.requestActive) return;
+  const displayText =
+    normalizeInlineText(options.displayText || '') || input;
 
   expireCurrentSessionIfNeeded();
-  const askContext = await buildEnrichedAskContext(input);
-
   const rememberRequested = hasExplicitRememberIntent(input);
   const standaloneRemember =
     rememberRequested && isStandaloneRememberRequest(input);
   let memorySaveResult = null;
 
-  try {
-    if (rememberRequested) {
+  if (standaloneRemember) {
+    try {
       memorySaveResult = await rememberAck(
         normalizeRememberText(input) || input,
       );
+    } catch (error) {
+      memorySaveResult = {
+        duplicate: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-  } catch (error) {
-    memorySaveResult = {
-      duplicate: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-
-  if (standaloneRemember) {
     setDraft('');
     state.autoScrollPinned = true;
     setUiState('enriched');
@@ -2106,7 +2304,7 @@ async function submitQuery(rawInput, options = {}) {
   pushMessage({
     id: createId('user'),
     role: 'user',
-    text: input,
+    text: displayText,
   });
 
   const assistantId = createId('assistant');
@@ -2115,15 +2313,32 @@ async function submitQuery(rawInput, options = {}) {
     id: assistantId,
     role: 'assistant',
     text: '',
+    statusText: t('desktop.quickAsk.pending'),
     pending: true,
     htmlReady: false,
-    memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
   });
 
   let finalResult = null;
   let streamErrored = false;
 
   try {
+    const askContext = await buildEnrichedAskContext(input);
+    if (rememberRequested) {
+      try {
+        memorySaveResult = await rememberAck(
+          normalizeRememberText(input) || input,
+        );
+      } catch (error) {
+        memorySaveResult = {
+          duplicate: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+      updateMessage(assistantId, {
+        memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
+      });
+    }
+
     await quickAsk.askStream(
       {
         query: input,
@@ -2157,7 +2372,7 @@ async function submitQuery(rawInput, options = {}) {
             text: event.answer || '',
             pending: false,
             htmlReady: true,
-            queryText: input,
+            queryText: displayText,
             statusText: '',
           });
           if (state.uiState === 'pending') {
@@ -2178,13 +2393,14 @@ async function submitQuery(rawInput, options = {}) {
             htmlReady: true,
             structuredAnswer: event.structuredAnswer,
             evidence: event.evidence,
+            contextMatch: event.contextMatch,
             runtime: event.runtime,
-            queryText: input,
+            queryText: displayText,
             memorySaveResult: memorySaveResult?.error ? null : memorySaveResult,
             statusText: '',
           });
           state.currentTurns.push({
-            userText: input,
+            userText: displayText,
             assistantText: event.answer || '',
           });
           touchCurrentSession();
@@ -2357,6 +2573,21 @@ elements.voiceRecovery.addEventListener('click', async () => {
 });
 
 elements.conversationPanel.addEventListener('click', async (event) => {
+  const askCandidateButton = event.target.closest('[data-ask-candidate-index]');
+  if (askCandidateButton) {
+    event.preventDefault();
+    if (state.requestActive) return;
+    const candidateLabel = normalizeInlineText(
+      askCandidateButton.dataset.askCandidateLabel ||
+        askCandidateButton.querySelector('strong')?.textContent ||
+        '',
+    );
+    await submitQuery(askCandidateButton.dataset.askCandidateIndex || '', {
+      displayText: candidateLabel ? `选择话题：${candidateLabel}` : '',
+    });
+    return;
+  }
+
   const statusRefreshButton = event.target.closest('[data-status-refresh]');
   if (statusRefreshButton) {
     event.preventDefault();
@@ -2387,6 +2618,8 @@ elements.conversationPanel.addEventListener('click', async (event) => {
         statusItem.dataset.statusSummary,
         statusItem.dataset.statusDetails,
         statusItem.dataset.statusAction,
+        statusItem.dataset.statusFreshness,
+        statusItem.dataset.statusPriority,
       ),
     );
     focusComposer();

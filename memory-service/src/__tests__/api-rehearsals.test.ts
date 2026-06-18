@@ -44,6 +44,74 @@ describe('Rehearsal API and context activation', () => {
     db.prepare('DELETE FROM rehearsals').run();
   });
 
+  it('rejects rehearsals without a future scene cue', async () => {
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/api/v1/rehearsals',
+      payload: {
+        title: 'Generic reminder without a trigger',
+        content: 'Remember to ask about the review later.',
+        confidence: 0.9,
+      },
+    });
+
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({
+      code: 'REHEARSAL_FUTURE_CUE_REQUIRED',
+    });
+    expect(rejected.json().requiredCueFields).toContain('people');
+    expect(rejected.json().requiredCueFields).toContain('surfaces');
+
+    const keywordOnly = await app.inject({
+      method: 'POST',
+      url: '/api/v1/rehearsals',
+      payload: {
+        title: 'Estimate answer script',
+        scenarioType: 'writing',
+        content: 'When the Original Estimate topic appears, answer with story points and person-day context.',
+        activationCues: {
+          topics: ['Original Estimate'],
+          surfaces: ['jira_issue'],
+        },
+        confidence: 0.9,
+      },
+    });
+
+    expect(keywordOnly.statusCode).toBe(201);
+    expect(keywordOnly.json().rehearsal.status).toBe('candidate');
+    expect(keywordOnly.json().rehearsal.activationCues.topics).toEqual([
+      'Original Estimate',
+    ]);
+  });
+
+  it('blocks clearing future scene cues from prompt-eligible rehearsals', async () => {
+    const created = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/rehearsals',
+        payload: {
+          title: 'Colin handoff cue',
+          content: 'Ask Colin whether the handoff blocker is back.',
+          activationCues: { people: ['Colin Liu'] },
+          confidence: 0.9,
+        },
+      })
+    ).json().rehearsal;
+
+    const cleared = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/rehearsals/${created.id}`,
+      payload: {
+        activationCues: {},
+      },
+    });
+
+    expect(cleared.statusCode).toBe(400);
+    expect(cleared.json()).toMatchObject({
+      code: 'REHEARSAL_FUTURE_CUE_REQUIRED',
+    });
+  });
+
   it('creates high-confidence rehearsals as active and supports lifecycle feedback', async () => {
     const create = await app.inject({
       method: 'POST',
@@ -137,6 +205,9 @@ describe('Rehearsal API and context activation', () => {
     expect(body.topMatch.displayPriority).toBe('p1');
     expect(body.topMatch.reasonType).toBe('prospective_cue');
     expect(body.topMatch.evidenceRole).toBe('rehearsal_cue');
+    expect(body.topMatch.metadata.rehearsal.content).toBe(
+      'Ask Colin Liu whether the RingClaw review needs a concrete owner.',
+    );
     expect(body.topMatch.exploreLink).toBe(
       `#/rehearsals?rehearsalId=${encodeURIComponent(created.id)}`,
     );
@@ -217,6 +288,72 @@ describe('Rehearsal API and context activation', () => {
     });
     expect(detail.json().rehearsal.status).toBe('stale');
     expect(detail.json().rehearsal.staleReason).toBe('validity_expired');
+  });
+
+  it('caps stale rehearsals to weak prompts even when exact cues score strongly', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/rehearsals',
+      payload: {
+        title: 'Old launch review script',
+        scenarioType: 'meeting_prep',
+        status: 'stale',
+        content: 'Ask Colin whether RingClaw launch ownership is still blocked.',
+        activationCues: {
+          people: ['Colin Liu'],
+          projects: ['RingClaw'],
+          groupIds: ['colin-group'],
+          conversationIds: ['colin-conversation'],
+          meetingIds: ['ringclaw-launch'],
+          issueKeys: ['RC-42'],
+          urls: ['https://jira.example.com/browse/RC-42'],
+        },
+        confidence: 0.99,
+        priority: 10,
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const id = create.json().rehearsal.id;
+
+    const recall = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'meeting_prep',
+        contextType: 'meeting',
+        title: 'RingClaw launch with Colin Liu',
+        primaryText: 'Colin Liu is reviewing RC-42 for RingClaw launch.',
+        url: 'https://jira.example.com/browse/RC-42?focusedCommentId=1',
+        sourceContext: {
+          groupId: 'colin-group',
+          conversationId: 'colin-conversation',
+          meetingId: 'ringclaw-launch',
+          issueKey: 'RC-42',
+          participants: ['Colin Liu'],
+        },
+        entityHints: [
+          { kind: 'person', value: 'Colin Liu' },
+          { kind: 'project', value: 'RingClaw' },
+        ],
+        sourceTypes: ['rehearsal'],
+        limit: 3,
+      },
+    });
+
+    expect(recall.statusCode).toBe(200);
+    const match = recall.json().topMatch;
+    expect(match.id).toBe(id);
+    expect(match.score).toBeGreaterThan(0.72);
+    expect(match.displayPriority).toBe('p2');
+    expect(match.whyRelevant).toContain('已降权，仅弱提示');
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/rehearsals/${id}`,
+    });
+    expect(detail.json().activations[0]).toMatchObject({
+      displayPriority: 'p2',
+    });
   });
 
   it('lets a manually reviewed stale rehearsal reactivate without immediate aging rollback', async () => {

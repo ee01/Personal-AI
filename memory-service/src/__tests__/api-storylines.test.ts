@@ -341,6 +341,63 @@ describe('Storyline draft API', () => {
     );
   });
 
+  it('falls back when model segments underuse available evidence refs', async () => {
+    const prepId = await createMeetingPrep();
+    mockGenerateJSON.mockResolvedValueOnce({
+      title: 'Narrow model storyline',
+      audience: 'AI Notes 项目组',
+      targetArtifact: 'speaker_notes',
+      segments: [
+        {
+          title: 'Background repeated',
+          intent: 'Only cite one source.',
+          narrative: 'This draft leans on the calendar title for the whole story.',
+          evidenceIds: ['E1'],
+        },
+        {
+          title: 'Risk repeated',
+          intent: 'Still cite one source.',
+          narrative: 'This draft keeps using the same source for risk.',
+          evidenceIds: ['E1'],
+        },
+        {
+          title: 'Action repeated',
+          intent: 'Still cite one source.',
+          narrative: 'This draft keeps using the same source for action.',
+          evidenceIds: ['E1'],
+        },
+      ],
+      gaps: [],
+      riskNotes: [],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/storylines/draft',
+      payload: {
+        sourceKind: 'today_meeting_prep',
+        prepId,
+        targetArtifact: 'speaker_notes',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const citedRefs = new Set(
+      body.segments.flatMap((segment: { evidenceIds: string[] }) =>
+        segment.evidenceIds,
+      ),
+    );
+    expect(citedRefs.size).toBeGreaterThanOrEqual(2);
+    expect(body.title).not.toBe('Narrow model storyline');
+    expect(body.artifactText).not.toContain(
+      'This draft leans on the calendar title',
+    );
+    expect(body.riskNotes).toContain(
+      '原始模型输出缺少足够证据引用，已用会前准备证据重新生成可复制草稿。',
+    );
+  });
+
   it('blocks draft generation when the source prep has no usable evidence refs', async () => {
     const prepId = await createMeetingPrep();
     db.prepare(
@@ -361,6 +418,23 @@ describe('Storyline draft API', () => {
 
     expect(res.statusCode).toBe(422);
     expect(res.json().error).toBe('storyline_source_has_no_usable_evidence');
+    expect(mockGenerateJSON).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unsupported source kinds before draft generation', async () => {
+    const prepId = await createMeetingPrep();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/storylines/draft',
+      payload: {
+        sourceKind: 'compose_assist',
+        prepId,
+        targetArtifact: 'speaker_notes',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
     expect(mockGenerateJSON).toHaveBeenCalledTimes(1);
   });
 

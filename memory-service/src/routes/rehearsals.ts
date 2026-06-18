@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   type CreateRehearsalInput,
   type RehearsalFeedbackInput,
+  RehearsalValidationError,
   RehearsalService,
   type UpdateRehearsalInput,
 } from '../core/RehearsalService.js';
@@ -118,8 +119,19 @@ export async function rehearsalRoutes(app: FastifyInstance): Promise<void> {
         request.userContext.db,
         request.userContext.userDataManager,
       );
-      const rehearsal = service.create(request.body);
-      return reply.status(201).send({ rehearsal });
+      try {
+        const rehearsal = service.create(request.body);
+        return reply.status(201).send({ rehearsal });
+      } catch (error) {
+        if (error instanceof RehearsalValidationError) {
+          return reply.status(400).send({
+            error: error.message,
+            code: error.code,
+            requiredCueFields: error.requiredCueFields,
+          });
+        }
+        throw error;
+      }
     },
   );
 
@@ -144,7 +156,19 @@ export async function rehearsalRoutes(app: FastifyInstance): Promise<void> {
         request.userContext.db,
         request.userContext.userDataManager,
       );
-      const rehearsal = service.update(request.params.id, request.body);
+      let rehearsal: ReturnType<RehearsalService['update']>;
+      try {
+        rehearsal = service.update(request.params.id, request.body);
+      } catch (error) {
+        if (error instanceof RehearsalValidationError) {
+          return reply.status(400).send({
+            error: error.message,
+            code: error.code,
+            requiredCueFields: error.requiredCueFields,
+          });
+        }
+        throw error;
+      }
       if (!rehearsal) return reply.status(404).send({ error: 'Rehearsal not found' });
       return reply.status(200).send({ rehearsal });
     },

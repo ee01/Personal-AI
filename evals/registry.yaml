@@ -92,6 +92,46 @@ suites:
         - npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts
         - npm run eval:run -- --suite scene-memory-autopilot --no-repair
 
+  - id: estimate-cue-compiler
+    title: Estimate Cue Compiler Eval
+    description: 验证 Jira estimate 场景能把“人天口径”相关记忆编译成可行动 cue，并让展开、插入、发送和不相关 outcome 触发 cue-level suppress / boost / Skill suggestion。
+    enabled: true
+    workflow: evals/workflows/estimate-cue-compiler/experience.md
+    cases: evals/cases/estimate-cue-compiler/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/context-recall-relevance.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - memory-service/src/core/SceneFrameService.ts
+        - memory-service/src/core/MemoryCueFactService.ts
+        - memory-service/src/core/CueCompilerService.ts
+        - memory-service/src/core/MemoryOutcomeLoopService.ts
+        - memory-service/src/core/ContextRecallService.ts
+        - memory-service/src/core/ContextAssistService.ts
+        - memory-service/src/routes/ambientCalibration.ts
+        - memory-service/src/routes/feedback.ts
+        - memory-service/src/routes/outcomes.ts
+        - memory-service/src/storage/migrations/**
+        - memory-service/src/types/index.ts
+        - memory-service/src/__tests__/api-ambient-calibration.test.ts
+        - memory-service/src/__tests__/api-context-recall.test.ts
+        - memory-service/src/__tests__/api-composer-assist.test.ts
+        - src/composer-guard/ComposerGuardController.ts
+        - src/contentScriptWebIntelligence.ts
+        - src/services/MemoryServiceClient.ts
+        - tools/eval-estimate-cue-compiler.ts
+        - tools/eval-run.mjs
+        - evals/**
+        - docs/features/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts src/__tests__/api-composer-assist.test.ts
+        - npm run eval:run -- --suite estimate-cue-compiler --no-repair
+
   - id: ask-context-gap
     title: Ask Context Gap Eval
     description: 评估 Ask 在用户只给短问句、缺 ticket/sheet/slide 细节时，是否能自动补齐最近高频记忆上下文并用证据回答。

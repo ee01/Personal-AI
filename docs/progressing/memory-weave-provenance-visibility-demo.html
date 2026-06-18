@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weave Provenance Visibility Demo · 缝合可感知</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #fffdf8; --ink: #1c1d1f; --muted: #62666f; --line: #d8d3c8;
+    --green: #176f54; --green-soft: #e3f2eb; --blue: #2459a6; --blue-soft: #e4ecf8;
+    --red: #aa3a32; --red-soft: #f8e7e4; --amber: #8a6200; --amber-soft: #fff0c2;
+    --shadow: 0 18px 54px rgba(38, 31, 18, 0.12);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(246,245,242,.92)), var(--bg); }
+  .shell { width: min(1180px, 100%); margin: 0 auto; padding: 0 22px 80px; }
+  .topbar { height: 58px; display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+    background: rgba(255,253,248,.92); backdrop-filter: blur(12px); margin: 0 -22px; padding: 0 22px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .mark { width: 30px; height: 30px; border-radius: 7px;
+    background: conic-gradient(from 220deg, #2459a6, #176f54, #c7832a, #2459a6);
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,.7); }
+  .brand h1 { margin: 0; font-size: 16px; line-height: 1.1; }
+  .brand p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+    border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--muted); font-size: 12px; }
+  h2.sec { font-size: 14px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase;
+    margin: 44px 0 6px; }
+  p.lede { margin: 0 0 18px; font-size: 13px; color: var(--muted); max-width: 70ch; }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .tag-before, .tag-after { font-size: 11px; letter-spacing: .1em; font-weight: 600; margin-bottom: 8px; }
+  .tag-before { color: var(--muted); } .tag-after { color: var(--green); }
+
+  .lens-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 16px 18px; position: relative; }
+  .lens-card .kicker { font-size: 11px; color: var(--muted); letter-spacing: .06em; }
+  .lens-card h3 { margin: 6px 0 6px; font-size: 15px; line-height: 1.45; font-weight: 600; }
+  .lens-card .why { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; }
+  .weave-badge { position: absolute; top: 12px; right: 12px; display: inline-flex; align-items: center;
+    gap: 6px; height: 26px; padding: 0 11px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    color: var(--blue); background: var(--blue-soft); border: 1px solid rgba(36,89,166,.25); }
+  .weave-badge .glyph { width: 13px; height: 13px; border-radius: 50%;
+    border: 2px solid var(--blue); position: relative; }
+  .weave-badge .glyph::before, .weave-badge .glyph::after { content: ""; position: absolute;
+    background: var(--blue); }
+  .weave-badge .glyph::before { width: 2px; height: 13px; left: 3.5px; top: -2px; }
+  .weave-badge .glyph::after { height: 2px; width: 13px; top: 3.5px; left: -2px; }
+
+  .evidence { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); overflow: hidden; }
+  .evidence header { padding: 13px 18px; border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center; background: #fbfaf7; }
+  .evidence header strong { font-size: 13px; }
+  .evidence header span { font-size: 12px; color: var(--muted); }
+  .ev-row { display: grid; grid-template-columns: 92px 86px 1fr; gap: 14px; padding: 12px 18px;
+    border-bottom: 1px solid #efece5; font-size: 13px; align-items: baseline; }
+  .ev-row:last-child { border-bottom: 0; }
+  .ev-date { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ev-src { font-size: 11px; font-weight: 600; letter-spacing: .04em; padding: 2px 8px;
+    border-radius: 999px; justify-self: start; }
+  .src-im { color: var(--green); background: var(--green-soft); }
+  .src-meeting { color: var(--blue); background: var(--blue-soft); }
+  .src-web { color: var(--amber); background: var(--amber-soft); }
+  .ev-text { line-height: 1.55; }
+  .flagged { display: inline-flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 11.5px;
+    color: var(--red); background: var(--red-soft); border: 1px dashed rgba(170,58,50,.4);
+    border-radius: 7px; padding: 3px 8px; }
+
+  .notif { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 14px 18px; display: flex; gap: 14px; align-items: flex-start; }
+  .notif .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); margin-top: 6px; flex: 0 0 auto; }
+  .notif h4 { margin: 0 0 4px; font-size: 14px; }
+  .notif p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .basis { margin-top: 8px; display: inline-flex; gap: 6px; align-items: center; font-size: 12px;
+    color: var(--blue); background: var(--blue-soft); border-radius: 999px; padding: 3px 10px; }
+
+  .ask { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 18px; }
+  .ask .q { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+  .ask .a { font-size: 14px; line-height: 1.7; margin: 0 0 14px; }
+  .weave-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 11px 14px;
+    background: var(--blue-soft); border: 1px solid rgba(36,89,166,.22); border-radius: 10px; font-size: 12.5px; }
+  .weave-bar strong { color: var(--blue); }
+  .chip { font-size: 11px; padding: 2px 9px; border-radius: 999px; background: #fff;
+    border: 1px solid var(--line); color: var(--muted); }
+  .note { margin-top: 14px; font-size: 12px; color: var(--muted); border-left: 3px solid var(--line);
+    padding: 4px 0 4px 12px; line-height: 1.6; max-width: 78ch; }
+  .quiet { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="mark"></div>
+      <div>
+        <h1>Weave Provenance Visibility</h1>
+        <p>缝合可感知 · 静态演示 · 配套 memory-weave-provenance-visibility-plan.md</p>
+      </div>
+    </div>
+    <span class="pill">设计基调：把"台面下的网状缝合"搬到台面上</span>
+  </div>
+
+  <h2 class="sec">① Memory Lens 卡片 · 徽章前后对比</h2>
+  <p class="lede">同一条提示。左边是今天的样子——用户的对照物是"我自己翻一下也能找到"；右边加上缝合徽章后，17 天的跨度变成一眼可见的事实。单来源提示不出徽章（阈值：≥2 来源或 ≥7 天）。</p>
+  <div class="duo">
+    <div>
+      <div class="tag-before">BEFORE · 现状</div>
+      <div class="lens-card">
+        <div class="kicker">MEMORY LENS · Jira MTR-148115</div>
+        <h3>客户在 5/21 提出导出格式从 CSV 改为 XLSX，FE 需要重估</h3>
+        <p class="why">与当前 issue 相关的历史讨论。</p>
+      </div>
+    </div>
+    <div>
+      <div class="tag-after">AFTER · 加缝合徽章</div>
+      <div class="lens-card">
+        <span class="weave-badge"><span class="glyph"></span>缝合 3 来源 × 17 天</span>
+        <div class="kicker">MEMORY LENS · Jira MTR-148115</div>
+        <h3>延期的因果链：5/21 客户改需求 → 5/28 确认依赖 → 6/2 宣布延后</h3>
+        <p class="why">这条结论由 3 个场域、17 天内的证据拼成——点击徽章展开。</p>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">② 徽章展开 · 证据视图（含 ⚠ flagged 来源）</h2>
+  <p class="lede">复用既有 evidence list，不新建路由。注入防护（memory-injection-defense-plan）打标的来源在同一视图可见可排查。</p>
+  <div class="evidence">
+    <header><strong>缝合证据 · 4 条</strong><span>3 来源 · 跨 17 天 · 6 实体</span></header>
+    <div class="ev-row"><span class="ev-date">2026-05-21</span><span class="ev-src src-im">客户群</span>
+      <span class="ev-text">「导出希望从 CSV 改成 XLSX，FE 这边需要重估一下」</span></div>
+    <div class="ev-row"><span class="ev-date">2026-05-28</span><span class="ev-src src-meeting">会议纪要</span>
+      <span class="ev-text">估时讨论：MTR-148115 依赖导出格式变更，BE 估时待更新</span></div>
+    <div class="ev-row"><span class="ev-date">2026-06-02</span><span class="ev-src src-im">交付群</span>
+      <span class="ev-text">「MTR-148115 联调延后到下周」</span></div>
+    <div class="ev-row"><span class="ev-date">2026-06-05</span><span class="ev-src src-web">网页摘录</span>
+      <div>
+        <span class="ev-text">XLSX 导出兼容性清单（外部博客，自动入库）</span><br>
+        <span class="flagged">⚠ 该来源含疑似指令文本，已按数据处理（不影响召回，仅改变注入框架）</span>
+      </div></div>
+  </div>
+
+  <h2 class="sec">③ 通知 · "依据"行</h2>
+  <p class="lede">notification_records 补 evidence 列后，每次打扰都能回答书里的质问——"系统凭什么现在推给我"。</p>
+  <div class="notif">
+    <span class="dot"></span>
+    <div>
+      <h4>MTR-148115 估时与 5/28 会议结论冲突</h4>
+      <p>交付群刚刚出现"6 人天"的实际值，与会议记录的"5 人天"不一致，已进入确认队列。</p>
+      <span class="basis">依据：2 条记忆 · 1 个冲突 →</span>
+    </div>
+  </div>
+
+  <h2 class="sec">④ /ask 答案 · 缝合统计条</h2>
+  <div class="ask">
+    <p class="q">你问：MTR-148115 现在的状态和来龙去脉？</p>
+    <p class="a">已于 6/9 完成（实际 6 人天）。延期源于 5/21 客户提出的导出格式变更（CSV→XLSX）：5/28 会议确认依赖并重估为 5 人天，6/2 交付群宣布联调延后一周。</p>
+    <div class="weave-bar">
+      <strong>本回答缝合 4 来源 × 21 天 × 6 实体</strong>
+      <span class="chip">客户群 ×1</span><span class="chip">会议 ×1</span>
+      <span class="chip">交付群 ×2</span><span class="chip">Jira ×1</span>
+      <span class="quiet">hover 任一来源查看证据</span>
+    </div>
+  </div>
+
+  <p class="note">规则备忘：crossSource = 来源≥2 或跨度≥7 天，否则不出任何徽章字段——抽样验收徽章出现率应 &lt;40%，宁缺勿滥；脱敏场景只显示计数不可展开。P2 在徽章展开里追加一句来自 PPR diagnostics 的自然语言解释（"想到这条是因为：MTR-148115 → 依赖 → 导出格式变更"）。</p>
+</div>
+</body>
+</html>

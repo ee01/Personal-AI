@@ -61,6 +61,11 @@ describe('Composer Assist API (POST /composer/assist)', () => {
 
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();
+    db.prepare('DELETE FROM memory_outcome_events').run();
+    db.prepare('DELETE FROM memory_outcome_policy_patches').run();
+    db.prepare('DELETE FROM skill_platform_bindings').run();
+    db.prepare('DELETE FROM skill_versions').run();
+    db.prepare('DELETE FROM personal_skills').run();
     db.prepare('DELETE FROM source_memory_events').run();
     db.prepare('DELETE FROM source_memory_links').run();
     db.prepare('DELETE FROM source_memory_triggers').run();
@@ -398,6 +403,162 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).not.toContain('我这边先补充几个相关点');
     expect(body.insertText).toContain('Factory AI');
     expect(llmGenerateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses compiled Jira estimate cue as direct draft hint without LLM fallback', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    insertChunk({
+      id: 9251,
+      content:
+        'MTR-148115 Original Estimate 口径是人天，必要时可以拆成 3h；close 没有硬性要求，due date 需要单独确认。',
+      sourceType: 'glip',
+      source: 'glip',
+      scope: 'work',
+      createdAt: now - 10,
+    });
+
+    const payload = {
+      surface: 'jira_issue',
+      contextType: 'jira_issue',
+      scenario: 'jira_comment',
+      title: 'MTR-148115 Original Estimate',
+      url: 'https://jira.ringcentral.com/browse/MTR-148115',
+      primaryText: 'MTR-148115 的 Original Estimate 应该按什么口径填写？',
+      identifiers: {
+        issueKey: 'MTR-148115',
+      },
+      audience: {
+        issueKey: 'MTR-148115',
+        issueSummary: 'Original Estimate',
+      },
+      visibleFields: [
+        {
+          name: 'DEV Estimate New',
+          value: '0.4',
+          rawText: 'DEV Estimate New: 0.4',
+        },
+      ],
+      interactionScene: {
+        sceneType: 'jira_comment_composing',
+        surface: 'compose_assist',
+        userMode: 'comment',
+        issueKey: 'MTR-148115',
+        activeElement: {
+          kind: 'contenteditable',
+          role: 'textbox',
+          mode: 'comment',
+          label: 'Add comment',
+          hasFocus: true,
+        },
+        visibleFacts: [
+          {
+            kind: 'jira_field',
+            name: 'DEV Estimate New',
+            value: '0.4',
+            rawText: 'DEV Estimate New: 0.4',
+            source: 'current_page',
+            issueKey: 'MTR-148115',
+            confidence: 0.94,
+          },
+        ],
+        admission: {
+          state: 'composer_ready',
+          reasons: ['issue_key', 'visible_facts'],
+          confidence: 0.9,
+        },
+      },
+      sourceTypes: ['glip', 'jira', 'manual'],
+      debug: true,
+    };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('issue_context');
+    expect(body.insertText).toContain('人天口径');
+    expect(body.insertText).toContain('MTR-148115');
+    expect(body.insertText).toContain('original estimate');
+    expect(body.evidence[0].cue?.compileStatus).toBe('compiled');
+    expect(body.evidence[0].cue?.actionType).toBe('draft_hint');
+    expect(body.evidence[0].cue?.cueKey).toContain('MTR-148115');
+    expect(body.evidence[0].cue?.sourceRefs?.length).toBeGreaterThan(0);
+    expect(body.debug.recall.sceneFrame.sceneType).toBe('jira_estimate');
+    expect(body.debug.recall.sceneFrame.interactionSceneType).toBe(
+      'jira_comment_composing',
+    );
+    expect(body.debug.recall.cueCompiler.compiledCount).toBeGreaterThan(0);
+    expect(llmGenerateMock).not.toHaveBeenCalled();
+
+    for (const id of ['estimate-compose-sent-1', 'estimate-compose-sent-2']) {
+      const outcomeRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/ambient-calibration/traces',
+        payload: {
+          id,
+          surface: 'compose_assist',
+          sceneKey: 'jira:MTR-148115:jira_comment_composing:comment',
+          action: 'sent_after_insert',
+          strength: 'strong',
+          polarity: 'positive',
+          evidenceRefs: body.evidence.map((item: any) => ({
+            id: item.id,
+            type: item.type,
+            cueId: item.cue?.id,
+            cueKey: item.cue?.cueKey,
+            cue: item.cue
+              ? {
+                  id: item.cue.id,
+                  cueKey: item.cue.cueKey,
+                  actionType: item.cue.actionType,
+                  compileStatus: item.cue.compileStatus,
+                  confidence: item.cue.confidence,
+                }
+              : undefined,
+          })),
+          metadata: {
+            cueIds: [body.evidence[0].cue.id],
+            cueKeys: [body.evidence[0].cue.cueKey],
+          },
+          privacyClass: 'sensitive_redacted',
+        },
+      });
+      expect(outcomeRes.statusCode).toBe(200);
+    }
+
+    const boostedRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload,
+    });
+    expect(boostedRes.statusCode).toBe(200);
+    const boosted = boostedRes.json();
+    expect(boosted.evidence[0].cue?.outcomePolicy?.action).toBe('boost');
+    expect(boosted.debug.recall.cueCompiler.boostedCount).toBeGreaterThan(0);
+
+    const skill = db
+      .prepare(
+        `SELECT title, status, suggested_from
+           FROM personal_skills
+          WHERE suggested_from = 'memory_outcome_loop'
+          LIMIT 1`,
+      )
+      .get() as
+      | {
+          title: string;
+          status: string;
+          suggested_from: string;
+        }
+      | undefined;
+    expect(skill).toMatchObject({
+      title: 'Estimate wording helper',
+      status: 'suggestion',
+      suggested_from: 'memory_outcome_loop',
+    });
   });
 
   it('keeps scene-cue rehearsal reminders for RingCentral composer assist', async () => {

@@ -91,11 +91,30 @@ export interface IngestResult {
   decision?: IngestDecision;
 }
 
+export interface BatchIngestDecisionSummary {
+  totalItems: number;
+  storage: Record<IngestDecision['storage'] | 'unknown', number>;
+  reasons: Record<IngestDecision['reason'] | 'unknown', number>;
+  extractionStatus: Record<
+    NonNullable<IngestDecision['extractionStatus']> | 'unknown',
+    number
+  >;
+  indexing: {
+    requested: number;
+    completed: number;
+    notRequested: number;
+    failedAfterRequest: number;
+    unknown: number;
+  };
+  missingDecision: number;
+}
+
 export interface BatchIngestResult {
   results: IngestResult[];
   totalCreated: number;
   totalDuplicate: number;
   totalError: number;
+  decisionSummary?: BatchIngestDecisionSummary;
 }
 
 // ============================================================================
@@ -134,6 +153,22 @@ export interface RecallChannelDiagnostic {
   reason?: string;
 }
 
+export interface RecallScopeCounts {
+  work: number;
+  personal: number;
+  unknown: number;
+  total: number;
+}
+
+export interface RecallScopeReceipt {
+  requestedScope: RecallScope;
+  effectiveScope: 'work' | 'personal' | 'both';
+  returned: RecallScopeCounts;
+  candidates: RecallScopeCounts;
+  note: string;
+  includesPersonal: boolean;
+}
+
 export interface RecallOptions {
   topK?: number;
   channels?: RecallChannelName[];
@@ -166,6 +201,7 @@ export interface RecallResult {
   queryTimeMs: number;
   channels: string[];
   channelDiagnostics?: RecallChannelDiagnostic[];
+  scopeReceipt?: RecallScopeReceipt;
   blocks?: RecallBlock[];
   analysis?: RecallAnalysis;
 }
@@ -451,6 +487,127 @@ export interface ContextRecallSourceContext {
   calendarEventId?: string;
 }
 
+export interface ContextRecallVisibleMessage {
+  id?: string;
+  sender?: string;
+  text: string;
+  timestamp?: number;
+  timestampLabel?: string;
+}
+
+export interface ContextRecallVisibleField {
+  name: string;
+  value: string;
+  rawText?: string;
+}
+
+export type ContextRecallInteractionUserMode =
+  | 'read'
+  | 'inspect_field'
+  | 'focus_composer'
+  | 'compose'
+  | 'reply'
+  | 'comment'
+  | 'select_text'
+  | 'submit_candidate'
+  | 'unknown';
+
+export type ContextRecallInteractionSceneType =
+  | 'jira_issue_reading'
+  | 'jira_field_inspection'
+  | 'jira_comment_composing'
+  | 'ringcentral_thread_reading'
+  | 'ringcentral_estimate_discussion'
+  | 'ringcentral_reply_composing'
+  | 'web_reading'
+  | 'web_ai_prompt_composing'
+  | 'selection_memory_search'
+  | 'meeting_live'
+  | 'unknown';
+
+export type ContextRecallInteractionSurface =
+  | 'memory_lens'
+  | 'compose_assist'
+  | 'meeting_pilot'
+  | 'today_pilot'
+  | 'ask';
+
+export interface ContextRecallActiveElementSnapshot {
+  kind:
+    | 'none'
+    | 'button'
+    | 'input'
+    | 'textarea'
+    | 'contenteditable'
+    | 'editor'
+    | 'link'
+    | 'other';
+  role?: string;
+  mode?: ContextRecallInteractionUserMode;
+  label?: string;
+  placeholder?: string;
+  nearbyText?: string;
+  containerRole?: string;
+  containerLabel?: string;
+  selectorFingerprint?: string;
+  hasFocus: boolean;
+}
+
+export interface ContextRecallVisibleFact {
+  kind:
+    | 'jira_field'
+    | 'message'
+    | 'page_heading'
+    | 'status_badge'
+    | 'table_cell'
+    | 'other';
+  name?: string;
+  value: string;
+  rawText?: string;
+  source: 'current_page';
+  issueKey?: string;
+  confidence: number;
+}
+
+export interface ContextRecallInteractionSceneAdmission {
+  state: 'blocked' | 'passive_ready' | 'composer_ready' | 'unknown';
+  reasons?: string[];
+  confidence?: number;
+}
+
+export interface ContextRecallInteractionScene {
+  sceneType: ContextRecallInteractionSceneType;
+  surface: ContextRecallInteractionSurface;
+  userMode: ContextRecallInteractionUserMode;
+  url?: string;
+  title?: string;
+  issueKey?: string;
+  conversationId?: string;
+  groupId?: string;
+  meetingId?: string;
+  participants?: string[];
+  activeElement?: ContextRecallActiveElementSnapshot;
+  visibleFacts?: ContextRecallVisibleFact[];
+  draftText?: string;
+  selectedText?: string;
+  nearbyMessages?: ContextRecallVisibleMessage[];
+  sourceAnchorHints?: string[];
+  admission?: ContextRecallInteractionSceneAdmission;
+}
+
+export interface ContextRecallCurrentContext {
+  title?: string;
+  url?: string;
+  conversationId?: string;
+  groupId?: string;
+  meetingId?: string;
+  issueKey?: string;
+  participants?: string[];
+  visibleMessages?: ContextRecallVisibleMessage[];
+  visibleFields?: ContextRecallVisibleField[];
+  sourceAnchorHints?: string[];
+}
+
 export interface ContextRecallExclude {
   ids?: string[];
   urls?: string[];
@@ -465,6 +622,8 @@ export interface ContextRecallRequest {
   title?: string;
   url?: string;
   sourceContext?: ContextRecallSourceContext;
+  currentContext?: ContextRecallCurrentContext;
+  interactionScene?: ContextRecallInteractionScene;
   exclude?: ContextRecallExclude;
   primaryText?: string;
   secondaryTexts?: string[];
@@ -475,10 +634,60 @@ export interface ContextRecallRequest {
   debug?: boolean;
 }
 
+export interface ContextCueSourceRef {
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'jira'
+    | 'meeting'
+    | 'reflection_thread';
+  id: string;
+  title?: string;
+  url?: string;
+  timestamp?: number;
+}
+
+export interface ContextCue {
+  id: string;
+  cueKey?: string;
+  cueText: string;
+  actionType: 'remember' | 'ask' | 'draft_hint' | 'warning' | 'open_source';
+  surfaceEligibility: Array<
+    'memory_lens' | 'compose_assist' | 'ask' | 'meeting_pilot'
+  >;
+  sourceRefs: ContextCueSourceRef[];
+  evidenceMatchIds: string[];
+  whyNow: string;
+  confidence: number;
+  riskLevel: 'low' | 'medium' | 'high';
+  compileStatus: 'compiled' | 'suppressed' | 'needs_more_evidence';
+  suppressReason?:
+    | 'weak_scene_anchor'
+    | 'weak_fact'
+    | 'stale_source'
+    | 'sensitive'
+    | 'too_noisy'
+    | 'outcome_policy';
+  outcomePolicy?: {
+    action: 'boost' | 'suppress' | 'send_to_skill_foundry';
+    patchId: string;
+    strength: number;
+    reasonCodes: string[];
+    positiveCount: number;
+    negativeCount: number;
+    signalCount: number;
+    expiresAt?: number;
+  };
+}
+
 export interface ContextRecallMatch {
   id: string;
-  type: 'message' | 'chunk' | 'entity' | 'rehearsal';
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
   score: number;
+  scope?: 'work' | 'personal';
   title?: string;
   uiSummary?: string;
   snippet: string;
@@ -505,6 +714,7 @@ export interface ContextRecallMatch {
   sourceClusterKey?: string;
   sourceContext?: string;
   timestamp?: number;
+  cue?: ContextCue;
 }
 
 export interface ContextRecallSceneSummary {
@@ -537,16 +747,45 @@ export interface ContextRecallAutopilotDecision {
   gates: string[];
 }
 
+export interface ContextRecallScopeCounts {
+  work: number;
+  personal: number;
+  unknown: number;
+  total: number;
+}
+
+export interface ContextRecallScopeReceipt {
+  requestedScope: RecallScope;
+  effectiveScope: 'work' | 'personal' | 'both';
+  shown: ContextRecallScopeCounts;
+  candidates: ContextRecallScopeCounts;
+  note: string;
+  includesPersonal: boolean;
+}
+
+export interface WeaveStats {
+  sourceCount: number;
+  sourceKinds: string[];
+  daySpanDays: number;
+  entityCount: number;
+  crossSource: boolean;
+}
+
 export interface ContextRecallResponse {
   matches: ContextRecallMatch[];
   topMatch: ContextRecallMatch | null;
   queryTimeMs: number;
+  scopeReceipt?: ContextRecallScopeReceipt;
   autopilot?: ContextRecallAutopilotDecision;
+  /** Weave provenance (P0-5): present only when matches stitch ≥2 sources or ≥7 days. */
+  weave?: WeaveStats;
   debug?: {
     normalizedQuery: string;
     channelsHit: string[];
     rejectedReason?: string;
     suppressionReasons?: string[];
+    sceneFrame?: Record<string, unknown>;
+    interactionScene?: ContextRecallInteractionScene;
     autopilot?: ContextRecallAutopilotDecision;
   };
 }
@@ -697,6 +936,12 @@ export interface ComposerVisibleMessage {
   timestampLabel?: string;
 }
 
+export interface ComposerVisibleField {
+  name: string;
+  value: string;
+  rawText?: string;
+}
+
 export interface ComposerAudience {
   conversationTitle?: string;
   conversationId?: string;
@@ -737,10 +982,12 @@ export interface ComposerAssistRequest {
     provider?: string;
   };
   visibleMessages?: ComposerVisibleMessage[];
+  visibleFields?: ComposerVisibleField[];
   threadRoot?: ComposerVisibleMessage;
   audience?: ComposerAudience;
   contextItems?: ComposerContextItem[];
   sourceTypes?: string[];
+  interactionScene?: ContextRecallInteractionScene;
   automationLevel?: 'L1' | 'L2';
   debug?: boolean;
 }
@@ -758,6 +1005,7 @@ export interface ComposerAssistEvidence {
   whyMatched?: string;
   timestamp?: number;
   score?: number;
+  cue?: ContextCue;
 }
 
 export interface ComposerAssistResponse {
@@ -824,6 +1072,16 @@ export interface AmbientCalibrationEvidenceRef {
   sourceLabel?: string;
   role?: string;
   score?: number;
+  cueId?: string;
+  cueKey?: string;
+  cue?: {
+    id?: string;
+    cueKey?: string;
+    actionType?: string;
+    compileStatus?: string;
+    confidence?: number;
+    whyNow?: string;
+  };
 }
 
 export interface AmbientCalibrationTrace {
@@ -845,6 +1103,19 @@ export interface AmbientCalibrationTraceResponse {
   status: 'ok';
   traceId: string;
   stored: boolean;
+  calibrationReceipt?: {
+    stored: boolean;
+    duplicate: boolean;
+    privacyClass: AmbientCalibrationPrivacyClass;
+    rawTextStored: false;
+    evidenceRefCount: number;
+    cueRefCount: number;
+    styleSignalCount: number;
+    redactedDiffKeys: string[];
+    writingStyleProcessed: boolean;
+    outcomeCueEventCount: number;
+    boundary: 'hashes_lengths_tags_and_evidence_refs_only';
+  };
 }
 
 export type StorylineType =
@@ -1109,11 +1380,42 @@ export interface AskResponse {
   evidence?: RecallItem[];
   queryTimeMs: number;
   channelDiagnostics?: RecallChannelDiagnostic[];
+  /** Weave provenance (P0-5): present only when the answer stitches ≥2 sources or ≥7 days. */
+  weave?: WeaveStats;
+  scopeReceipt?: RecallScopeReceipt;
   answerMemory?: {
     state: 'priorHit' | 'observed' | 'promoted' | 'updated' | 'skipped';
     threadId?: string;
     canonicalKey?: string;
     skipReason?: string;
+    receipt?: {
+      label: string;
+      detail: string;
+      tone: 'info' | 'success' | 'warning' | 'muted';
+      currentEvidenceCount?: number;
+      priorEvidenceCount?: number;
+      followUpActionCount?: number;
+      missingInfoCount?: number;
+      stale?: boolean;
+    };
+    authority?: {
+      decision:
+        | 'authorized_change'
+        | 'same_meaning_no_change'
+        | 'supporting_only'
+        | 'wait_for_authority_source';
+      summary: string;
+      evidenceRoles?: Array<{
+        role: 'authority' | 'supporting' | 'derived' | 'query' | 'prior';
+        count: number;
+        reason: string;
+      }>;
+      subjectKey?: string;
+      currentStance?: string;
+      priorStance?: string;
+      sameEvidence?: boolean;
+      suppressedUpdate?: boolean;
+    };
   };
   resolutionState?: 'complete' | 'partial' | 'insufficient' | 'deferred';
   missingInfo?: string[];
@@ -1324,6 +1626,23 @@ export interface RelationshipReviewItem {
   rejectedAt?: number;
   createdAt: number;
   updatedAt: number;
+  actionReceipt?: RelationshipReviewActionReceipt;
+}
+
+export interface RelationshipReviewActionReceipt {
+  action: RelationshipReviewAction;
+  outcome: 'profile_updated' | 'queued_for_later' | 'dismissed';
+  title: string;
+  summary: string;
+  personId: string;
+  personName: string;
+  proposedKey: string;
+  evidenceCount: number;
+  noteCaptured: boolean;
+  statusAfter: RelationshipReviewStatus;
+  availableAt?: number;
+  nextActions: string[];
+  generatedAt: number;
 }
 
 export interface RelationshipReviewItemListResponse {
@@ -1385,6 +1704,16 @@ export interface RelationshipContextCard {
     redactedOpenLoops: number;
     redactedRetrievalHints: number;
     redactionNote?: string;
+  };
+  contextReceipt?: {
+    title: string;
+    rows: Array<{
+      label: string;
+      value: string;
+      tone: 'ok' | 'warn' | 'muted';
+    }>;
+    boundary: string;
+    generatedAt: number;
   };
   generatedAt: number;
 }
@@ -1449,6 +1778,16 @@ export interface RelationshipMeetingBrief {
     nextActions: string[];
     successCriteria: string[];
   };
+  sourceReceipt: {
+    title: string;
+    rows: Array<{
+      label: string;
+      value: string;
+      tone: 'ok' | 'warn' | 'muted';
+    }>;
+    boundary: string;
+    generatedAt: number;
+  };
   attendees: Array<{
     displayName: string;
     email?: string;
@@ -1461,6 +1800,7 @@ export interface RelationshipMeetingBrief {
     matchReason: string;
     identityCheckRequired: boolean;
     identityCheckReason?: string;
+    contextSuppressedReason?: string;
     coverageState: 'ready' | 'thin' | 'missing';
     summary: string;
     openLoops: RelationshipContextCard['openLoops'];
@@ -1489,7 +1829,37 @@ export interface RelationshipAssistantDraft {
   personName: string;
   scenario: string;
   draftText: string;
+  draftReceipt?: {
+    title: string;
+    rows: Array<{
+      label: string;
+      value: string;
+      tone: 'ok' | 'warn' | 'muted';
+    }>;
+    boundary: string;
+    generatedAt: number;
+  };
   contextPackage: RelationshipContextPackage;
+  safetyReview: {
+    status: 'ready' | 'review_first' | 'thin_context';
+    summary: string;
+    reasons: string[];
+    evidenceCount: number;
+    openLoopCount: number;
+    actionSuggestionCount: number;
+    pendingReviewCount: number;
+    hiddenSensitiveCount: number;
+    dataQuality: RelationshipDataQuality;
+    sensitiveIncluded: boolean;
+  };
+  contextBasis: {
+    primarySuggestion?: NonNullable<RelationshipContextCard['actionSuggestions']>[number];
+    openLoops: RelationshipContextCard['openLoops'];
+    knownFacts: RelationshipContextCard['knownFacts'];
+    evidenceRefs: RelationshipEvidenceRef[];
+    privacySummary: RelationshipContextCard['privacySummary'];
+  };
+  suggestedChecks: string[];
   warnings: string[];
 }
 
@@ -1580,6 +1950,23 @@ export interface NotificationCenterEnvelope {
   type?: string;
   payload?: Record<string, unknown>;
   deliveryContext?: NotificationCenterDeliveryContext;
+  channelReceipts?: NotificationCenterChannelReceipt[];
+}
+
+export interface NotificationCenterChannelReceipt {
+  channel: 'chrome' | 'doubao' | 'glip';
+  state: 'not_attempted' | 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  label: string;
+  detail: string;
+  status?: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  effectiveStatus?: 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  hasSuccessfulDelivery: boolean;
+  firstDeliveredAt?: number;
+  lastDeliveredAt?: number;
+  seenAt?: number;
+  dismissedAt?: number;
+  lastAttemptAt?: number;
+  lastError?: string;
 }
 
 export interface NotificationCenterDeliveryContext {
@@ -1600,6 +1987,14 @@ export interface NotificationCenterDeliveryContext {
 export interface NotificationCenterFeedResponse {
   items: NotificationCenterEnvelope[];
   total: number;
+  meta?: {
+    channel: 'chrome' | 'doubao' | 'glip';
+    lanes: Array<'todo' | 'notice'>;
+    deliveryMode: NotificationCenterFeedDeliveryMode;
+    limit: number;
+    returned: number;
+    hasMore: boolean;
+  };
 }
 
 export type NotificationCenterFeedDeliveryMode =
@@ -1672,6 +2067,20 @@ export interface ConfirmRequestListResponse {
   queue?: 'decision' | 'watch' | 'all';
 }
 
+export interface ConfirmRequestStateTransitionResponse {
+  status: string;
+  confirmRequest: ConfirmRequest;
+  queuedActionId?: string;
+}
+
+export interface ConfirmRequestAnswerResponse {
+  status: string;
+  confirmRequest: ConfirmRequest;
+  retriedActionId?: string;
+  skippedActionId?: string;
+  stoppedActionId?: string;
+}
+
 // ============================================================================
 // Reflection Thread & Action Runtime types
 // ============================================================================
@@ -1737,9 +2146,12 @@ export interface ReflectionResearchAttempt {
   status: 'hit' | 'empty' | 'failed';
   resultCount: number;
   sourceTypes: string[];
+  requestedSourceTypes: string[];
+  rejectedSourceTypes: string[];
   projectFilter?: string;
   senderFilter: string[];
   groupFilter: string[];
+  scopeNotice?: string;
   errorMessage?: string;
   evidenceRefs: string[];
   createdAt: number;
@@ -2277,6 +2689,11 @@ export interface SkillSyncRunResponse {
   platforms: SkillSyncPlatformRunResult[];
 }
 
+export interface PersonalSkillSuggestionUseResponse
+  extends PersonalSkillDetailResponse {
+  sync?: SkillSyncPlatformRunResult;
+}
+
 export interface ReflectionThreadDetailResponse {
   thread: ReflectionThread;
   runs: ReflectionRun[];
@@ -2329,6 +2746,12 @@ export interface RuntimeConfigResponse {
   ringCentralClientId?: string;
   ringCentralClientSecretConfigured?: boolean;
   ringCentralJwtConfigured?: boolean;
+  botApiBaseUrl?: string;
+  botId?: string;
+  botType?: 'user' | 'team';
+  botTeamId?: string;
+  botTargetEmail?: string;
+  botTokenConfigured?: boolean;
 }
 
 export interface UpdateRuntimeConfigPayload {
@@ -2363,6 +2786,13 @@ export interface UpdateRuntimeConfigPayload {
   ringCentralJwt?: string;
   clearRingCentralClientSecret?: boolean;
   clearRingCentralJwt?: boolean;
+  botApiBaseUrl?: string;
+  botToken?: string;
+  botId?: string;
+  botType?: 'user' | 'team';
+  botTeamId?: string;
+  botTargetEmail?: string;
+  clearBotToken?: boolean;
 }
 
 // ============================================================================
@@ -2494,6 +2924,21 @@ export interface MemoryCoverageSummary {
   totalEntities: number;
 }
 
+export interface MemoryCoveragePriorityFocus {
+  platformId: string;
+  platformName: string;
+  state: MemoryCoverageState;
+  qualityScore: number;
+  contributionId: string;
+  contributionLabel: string;
+  contributionState: MemoryCoverageState;
+  actionId?: string;
+  actionTitle?: string;
+  actionSeverity?: MemoryCoverageRepairAction['severity'];
+  reason: string;
+  source: string;
+}
+
 export interface MemoryCoverageTimelineEvent {
   id: string;
   platformId: string;
@@ -2509,6 +2954,7 @@ export interface MemoryCoverageMapResponse {
   summary: MemoryCoverageSummary;
   platforms: MemoryCoveragePlatform[];
   repairActions: MemoryCoverageRepairAction[];
+  priorityFocus?: MemoryCoveragePriorityFocus | null;
   timeline: MemoryCoverageTimelineEvent[];
 }
 
@@ -2559,6 +3005,15 @@ export interface SourceMemoryCandidateResponse {
   reasons: string[];
   blockedReason?: string;
   captureMode: SourceMemoryCaptureMode;
+  policyReceipt?: SourceMemoryCapturePolicyReceipt;
+}
+
+export interface SourceMemoryCapturePolicyReceipt {
+  state: 'blocked' | 'ignored_low_signal' | 'suggested_review' | 'auto_save_candidate';
+  label: string;
+  detail: string;
+  evidence: string[];
+  nextStep: string;
 }
 
 export interface SourceMemoryCreateRequest
@@ -2654,6 +3109,16 @@ export interface DayPilotEvidenceRef {
   exploreLink?: string;
 }
 
+export interface DayPilotRehearsalCueReceipt {
+  label: string;
+  cueLabel: string;
+  cueDetail: string;
+  statusLabel: string;
+  script: string;
+  boundary: string;
+  tone: 'info' | 'warning';
+}
+
 export interface DayPilotCard {
   id: string;
   briefId: string;
@@ -2675,7 +3140,9 @@ export interface DayPilotCard {
     staleEvidenceCount: number;
     sensitiveEvidenceCount: number;
   };
-  contextPack: Record<string, any>;
+  contextPack: Record<string, any> & {
+    rehearsalCueReceipt?: DayPilotRehearsalCueReceipt;
+  };
   sourceHash: string;
   score: number;
   createdAt: number;
@@ -2760,6 +3227,8 @@ export interface DayPilotContextPackResponse {
   };
   sourceSummary: {
     evidenceCount: number;
+    renderedEvidenceCount: number;
+    omittedEvidenceCount: number;
     sourceKinds: Record<string, number>;
     redactionApplied: boolean;
     truncated: boolean;
@@ -2880,6 +3349,7 @@ export interface MemoryBackupImportPreviewResponse {
   restoredLayers: Array<'A' | 'B'>;
   backup: {
     userId: string;
+    targetUserId: string;
     exportedAt: string;
     formatVersion: number;
     includeCount: number;
@@ -2947,12 +3417,18 @@ export interface SmartMemoryImportInspectResponse {
     skillSignals: number;
     highRisk: number;
     unsupported: number;
+    zipTotalFiles?: number;
+    zipInspectedFiles?: number;
+    zipSkippedFiles?: number;
     backup: boolean;
     externalAiConversations?: number;
     externalAiImportedMessages?: number;
     externalAiTotalMessages?: number;
     externalAiTruncatedConversations?: number;
     externalAiTruncatedMessages?: number;
+    externalAiSkippedParts?: number;
+    externalAiSourcePath?: string;
+    externalAiIgnoredFiles?: number;
     promotionCandidates?: number;
   };
   entries: SmartMemoryImportEntry[];
@@ -3217,6 +3693,7 @@ export class MemoryServiceClient {
   private apiKey: string | undefined;
   private timeout: number;
   private userId: string;
+  private userIdentityExplicit = false;
   private configLoaded = false;
   private _configLoadPromise: Promise<void> | null = null;
   private _userIdResolvePromise: Promise<void> | null = null;
@@ -3225,7 +3702,11 @@ export class MemoryServiceClient {
     this.baseUrl = config?.baseUrl ?? DEFAULT_BASE_URL;
     this.apiKey = config?.apiKey;
     this.timeout = config?.timeout ?? DEFAULT_TIMEOUT_MS;
-    this.userId = config?.userId ?? 'default';
+    this.userId = 'default';
+
+    if (config?.userId != null) {
+      this.setUserId(config.userId);
+    }
 
     // If no explicit config provided, try to load from chrome.storage.local
     if (!config?.baseUrl) {
@@ -3271,6 +3752,7 @@ export class MemoryServiceClient {
               const username = result.userinfo?.username?.trim();
               if (username && USER_ID_PATTERN.test(username)) {
                 this.userId = username;
+                this.userIdentityExplicit = true;
               }
               this.configLoaded = true;
               resolve();
@@ -3315,6 +3797,7 @@ export class MemoryServiceClient {
         const username = result.userinfo?.username?.trim();
         if (username && USER_ID_PATTERN.test(username)) {
           this.userId = username;
+          this.userIdentityExplicit = true;
         }
       } finally {
         this._userIdResolvePromise = null;
@@ -3338,6 +3821,16 @@ export class MemoryServiceClient {
     }
   }
 
+  private shouldSendUserIdentity(): boolean {
+    return this.userIdentityExplicit && USER_ID_PATTERN.test(this.userId);
+  }
+
+  private applyUserIdentityHeader(headers: Record<string, string>): void {
+    if (this.shouldSendUserIdentity()) {
+      headers['X-User-Id'] = this.userId;
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Core HTTP wrapper
   // --------------------------------------------------------------------------
@@ -3354,8 +3847,8 @@ export class MemoryServiceClient {
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      'X-User-Id': this.userId,
     };
+    this.applyUserIdentityHeader(headers);
     await this.applyUiLanguageHeaders(headers);
 
     if (body !== undefined) {
@@ -3440,8 +3933,8 @@ export class MemoryServiceClient {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       Accept: 'application/zip',
-      'X-User-Id': this.userId,
     };
+    this.applyUserIdentityHeader(headers);
     await this.applyUiLanguageHeaders(headers);
 
     if (body !== undefined) {
@@ -3518,8 +4011,8 @@ export class MemoryServiceClient {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       Accept: accept,
-      'X-User-Id': this.userId,
     };
+    this.applyUserIdentityHeader(headers);
     await this.applyUiLanguageHeaders(headers);
 
     if (this.apiKey) {
@@ -4334,7 +4827,7 @@ export class MemoryServiceClient {
     id: string,
     answer: string,
     detail?: string,
-  ): Promise<{ status: string; confirmRequest: ConfirmRequest }> {
+  ): Promise<ConfirmRequestAnswerResponse> {
     return this.request(
       'POST',
       `/confirm-requests/${encodeURIComponent(id)}/answer`,
@@ -4345,7 +4838,7 @@ export class MemoryServiceClient {
   async transitionConfirmRequestState(
     id: string,
     state: 'pending' | 'snoozed' | 'expired',
-  ): Promise<{ status: string; confirmRequest: ConfirmRequest }> {
+  ): Promise<ConfirmRequestStateTransitionResponse> {
     return this.request(
       'POST',
       `/confirm-requests/${encodeURIComponent(id)}/state`,
@@ -4680,6 +5173,15 @@ export class MemoryServiceClient {
     return this.request(
       'POST',
       `/outreach/templates/${encodeURIComponent(id)}/cancel`,
+    );
+  }
+
+  async pauseOutreachTemplate(
+    id: string,
+  ): Promise<{ template: Record<string, any> }> {
+    return this.request(
+      'POST',
+      `/outreach/templates/${encodeURIComponent(id)}/pause`,
     );
   }
 
@@ -5080,6 +5582,7 @@ export class MemoryServiceClient {
   async importMemory(
     file: Blob | File,
     mode: 'merge' | 'replace' = 'merge',
+    options: { confirmUserMismatch?: boolean } = {},
   ): Promise<MemoryBackupImportResponse> {
     const formData = new FormData();
     const fileName =
@@ -5089,6 +5592,9 @@ export class MemoryServiceClient {
 
     formData.append('file', file, fileName);
     formData.append('mode', mode);
+    if (options.confirmUserMismatch) {
+      formData.append('confirmUserMismatch', 'true');
+    }
 
     return this.requestForm<MemoryBackupImportResponse>(
       'POST',
@@ -5155,7 +5661,7 @@ export class MemoryServiceClient {
 
   async commitSmartMemoryImportText(
     text: string,
-    options?: { scope?: 'work' | 'personal' },
+    options?: { scope?: 'work' | 'personal'; confirmHighRisk?: boolean },
   ): Promise<SmartMemoryImportCommitResponse> {
     return this.request<SmartMemoryImportCommitResponse>(
       'POST',
@@ -5163,13 +5669,14 @@ export class MemoryServiceClient {
       {
         text,
         scope: options?.scope,
+        confirmHighRisk: options?.confirmHighRisk,
       },
     );
   }
 
   async commitSmartMemoryImportFile(
     file: Blob | File,
-    options?: { scope?: 'work' | 'personal' },
+    options?: { scope?: 'work' | 'personal'; confirmHighRisk?: boolean },
   ): Promise<SmartMemoryImportCommitResponse> {
     const formData = new FormData();
     formData.append(
@@ -5179,6 +5686,9 @@ export class MemoryServiceClient {
     );
     if (options?.scope) {
       formData.append('scope', options.scope);
+    }
+    if (options?.confirmHighRisk !== undefined) {
+      formData.append('confirmHighRisk', String(options.confirmHighRisk));
     }
 
     return this.requestForm<SmartMemoryImportCommitResponse>(
@@ -5447,8 +5957,8 @@ export class MemoryServiceClient {
   async useSkillSuggestion(
     id: string,
     options?: { reviewConfirmed?: boolean },
-  ): Promise<PersonalSkillDetailResponse> {
-    return this.request<PersonalSkillDetailResponse>(
+  ): Promise<PersonalSkillSuggestionUseResponse> {
+    return this.request<PersonalSkillSuggestionUseResponse>(
       'POST',
       `/skills/suggestions/${encodeURIComponent(id)}/use`,
       options || {},
@@ -5632,9 +6142,9 @@ export class MemoryServiceClient {
         return;
       }
 
-      const url = `${this.baseUrl}/events?userId=${encodeURIComponent(
-        this.userId,
-      )}`;
+      const url = this.shouldSendUserIdentity()
+        ? `${this.baseUrl}/events?userId=${encodeURIComponent(this.userId)}`
+        : `${this.baseUrl}/events`;
       const source = new EventSource(url);
 
       if (closed) {
@@ -5743,7 +6253,15 @@ export class MemoryServiceClient {
    * Also persists the new value to chrome.storage.local if available.
    */
   setUserId(userId: string): void {
-    this.userId = userId;
+    const normalized = userId.trim();
+    if (normalized && USER_ID_PATTERN.test(normalized)) {
+      this.userId = normalized;
+      this.userIdentityExplicit = true;
+      return;
+    }
+
+    this.userId = 'default';
+    this.userIdentityExplicit = false;
   }
 
   /**

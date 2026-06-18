@@ -8,6 +8,7 @@
  * POST   /profile/items/:id/restore  - Restore a retracted profile item
  * POST   /profile/items/:id/confirm  - User confirms an inferred item
  * GET    /profile/core               - Get USER_CORE.md content
+ * POST   /profile/insight            - Dialectic query: synthesize how the user would think/prefer
  * GET    /profile/social             - List social edges
  * POST   /profile/social             - Add a social edge
  * GET    /profile/opinions           - List opinion items
@@ -18,6 +19,9 @@ import type { FastifyInstance } from 'fastify';
 import { v4 } from 'uuid';
 
 import type { UserContext } from '../core/UserContextManager.js';
+import { getConfig } from '../config.js';
+import { LLMClient } from '../llm/LLMClient.js';
+import { ProfileInsightService } from '../core/ProfileInsightService.js';
 import { contentHash } from '../utils/hashing.js';
 import { now } from '../utils/time.js';
 
@@ -830,6 +834,47 @@ export async function profileRoutes(
 
     return reply.status(200).send({ content });
   });
+
+  // -----------------------------------------------------------------------
+  // POST /profile/insight -- Dialectic query over the user model (QW-2)
+  // -----------------------------------------------------------------------
+  app.post<{ Body: { question?: string; aspect?: string } }>(
+    '/profile/insight',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['question'],
+          properties: {
+            question: { type: 'string', minLength: 1 },
+            aspect: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { db, profileManager } = request.userContext;
+      const llm = new LLMClient(getConfig());
+      const service = new ProfileInsightService(db, profileManager, llm);
+      try {
+        const result = await service.answer(request.body.question ?? '', {
+          aspect: request.body.aspect,
+        });
+        return reply.status(200).send(result);
+      } catch (err) {
+        request.log.warn({ err }, 'profile-insight failed');
+        return reply.status(200).send({
+          available: false,
+          insight: '',
+          confidence: 0,
+          basisCount: 0,
+          aspectsUsed: [],
+          reason: 'internal_error',
+        });
+      }
+    },
+  );
 
   // -----------------------------------------------------------------------
   // GET /profile/social -- List social edges

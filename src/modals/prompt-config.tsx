@@ -15,16 +15,22 @@ import {
     buildIndependentUserConfigFootprint,
     buildIndependentUserConfigSummary,
     buildIndependentUserConfigPreview,
+    buildPreferenceChangeImpact,
+    buildPreferenceDraftPreviewReceipt,
     buildPreferenceInjectionReceipt,
+    buildUserContextSectionReceipts,
     createConfigHistoryEntry,
     describeIndependentUserConfigChange,
     detectPromptImprovementHints,
     detectPromptRiskHints,
+    detectUserContextSensitiveHints,
     isCustomPromptScopeInjectionEnabled,
     mergeConfigHistory,
     normalizeConfigHistoryEntries,
     USER_CONFIG_HISTORY_KEY,
     type ConfigHistoryEntry,
+    type UserContextSensitiveHint,
+    type UserContextSectionReceiptId,
     type UserContextPreferenceScope
 } from '../services/userConfigPreview';
 
@@ -124,6 +130,28 @@ interface ConfigData {
 type TabType = 'prompts' | 'personal' | 'team' | 'work' | 'communication' | 'analysis';
 type PromptScope = keyof CustomPrompts;
 type CurrentUserInfo = { name: string; email: string };
+type ConfigBaselineStatus = 'default' | 'local' | 'memory' | 'backed-up';
+type PreviewCopyReceiptStatus = 'copied' | 'error';
+
+interface ConfigBaselineReceipt {
+    sourceLabel: string;
+    savedAt: number;
+    loadedAt: number;
+    status: ConfigBaselineStatus;
+}
+
+interface PreviewCopyReceipt {
+    status: PreviewCopyReceiptStatus;
+    title: string;
+    detail: string;
+}
+
+interface HistoryRestoreDraftReceipt {
+    restoredAt: number;
+    sourceSavedAt: number;
+    sourceSummary: string;
+    sourceChangeSummary: string;
+}
 
 const PROMPT_EXAMPLES: Record<PromptScope, Array<{ label: string; content: string }>> = {
     message: [
@@ -161,6 +189,18 @@ const PREVIEW_SCOPE_OPTIONS: Array<{ value: UserContextPreferenceScope; label: s
     { value: 'message', label: '消息' },
     { value: 'project', label: '项目' }
 ];
+
+const USER_CONTEXT_SECTION_TAB: Record<UserContextSectionReceiptId, TabType> = {
+    personal: 'personal',
+    team: 'team',
+    work: 'work',
+    communication: 'communication',
+    analysis: 'analysis'
+};
+
+const getPreviewScopeLabel = (scope: UserContextPreferenceScope): string => (
+    PREVIEW_SCOPE_OPTIONS.find((option) => option.value === scope)?.label || '全部'
+);
 
 const createDefaultConfig = (): ConfigData => ({
     preferenceInjection: {
@@ -285,6 +325,58 @@ const formatHistoryTimestamp = (timestamp: number): string => (
     }).format(new Date(timestamp))
 );
 
+const formatBaselineTimestamp = (timestamp: number): string => (
+    timestamp > 0 ? formatHistoryTimestamp(timestamp) : '暂无保存时间'
+);
+
+const createBaselineReceipt = (
+    sourceLabel: string,
+    status: ConfigBaselineStatus,
+    savedAt = 0
+): ConfigBaselineReceipt => ({
+    sourceLabel,
+    savedAt,
+    loadedAt: Date.now(),
+    status
+});
+
+const getBaselineBoundary = (receipt: ConfigBaselineReceipt): string => {
+    if (receipt.status === 'backed-up') {
+        return '本机已保存，记忆服务已有恢复备份；真实分析读取这份已保存配置。';
+    }
+    if (receipt.status === 'memory') {
+        return '已从记忆服务备份恢复到本机；真实分析读取这份已保存配置。';
+    }
+    if (receipt.status === 'local') {
+        return '真实分析读取本机配置；记忆服务备份不可用、未恢复或不是最新。';
+    }
+    return '当前是默认配置；保存前不会写入本机或记忆服务。';
+};
+
+const copyTextToClipboard = async (text: string): Promise<boolean> => {
+    if (!text) return false;
+
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (error) {
+            console.warn('navigator.clipboard 写入失败，尝试降级复制:', error);
+        }
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.setAttribute('readonly', 'true');
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return copied;
+};
+
 const mergeIdentityFallback = (
     config: ConfigData,
     userInfo: CurrentUserInfo
@@ -325,11 +417,18 @@ const PromptConfig: React.FC = () => {
     const [isSaving, setIsSaving] = useState(false);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [syncSource, setSyncSource] = useState('');
+    const [baselineReceipt, setBaselineReceipt] = useState<ConfigBaselineReceipt>(
+        () => createBaselineReceipt('默认配置', 'default')
+    );
     const [configData, setConfigData] = useState<ConfigData>(createDefaultConfig);
     const [lastPersistedConfig, setLastPersistedConfig] = useState<ConfigData | null>(null);
     const [configHistory, setConfigHistory] = useState<ConfigHistoryEntry[]>([]);
     const [promptRiskAcknowledgedKey, setPromptRiskAcknowledgedKey] = useState('');
+    const [userContextSensitiveAcknowledgedKey, setUserContextSensitiveAcknowledgedKey] = useState('');
     const [previewScope, setPreviewScope] = useState<UserContextPreferenceScope>('all');
+    const [previewCopyReceipt, setPreviewCopyReceipt] = useState<PreviewCopyReceipt | null>(null);
+    const [historyRestoreReceipt, setHistoryRestoreReceipt] =
+        useState<HistoryRestoreDraftReceipt | null>(null);
     const injectedPreview = useMemo(
         () => buildIndependentUserConfigPreview(configData, {
             userContextScope: previewScope
@@ -347,6 +446,27 @@ const PromptConfig: React.FC = () => {
             userContextScope: previewScope
         }),
         [configData, previewScope]
+    );
+    const userContextSectionReceipts = useMemo(
+        () => buildUserContextSectionReceipts(configData, {
+            previewScope
+        }),
+        [configData, previewScope]
+    );
+    const preferenceChangeImpact = useMemo(
+        () => hasUnsavedChanges
+            ? buildPreferenceChangeImpact(lastPersistedConfig, configData, {
+                userContextScope: previewScope
+            })
+            : null,
+        [configData, hasUnsavedChanges, lastPersistedConfig, previewScope]
+    );
+    const draftPreviewReceipt = useMemo(
+        () => buildPreferenceDraftPreviewReceipt(lastPersistedConfig, configData, {
+            hasUnsavedChanges,
+            userContextScope: previewScope
+        }),
+        [configData, hasUnsavedChanges, lastPersistedConfig, previewScope]
     );
     const configSummary = useMemo(
         () => buildIndependentUserConfigSummary(configData),
@@ -366,6 +486,16 @@ const PromptConfig: React.FC = () => {
         () => detectPromptImprovementHints(configData),
         [configData]
     );
+    const userContextSensitiveHints = useMemo(
+        () => detectUserContextSensitiveHints(configData),
+        [configData]
+    );
+    const userContextSensitiveHintsBySection = useMemo(() => (
+        userContextSensitiveHints.reduce((result, hint) => {
+            result[hint.section] = [...(result[hint.section] || []), hint];
+            return result;
+        }, {} as Partial<Record<UserContextSectionReceiptId, UserContextSensitiveHint[]>>)
+    ), [userContextSensitiveHints]);
     const promptRiskAcknowledgementKey = useMemo(() => {
         if (activePromptRiskHints.length === 0) return '';
         const riskyPromptContents = activePromptRiskHints.map((hint) => ({
@@ -377,9 +507,20 @@ const PromptConfig: React.FC = () => {
             promptContents: riskyPromptContents
         });
     }, [activePromptRiskHints, configData.customPrompts]);
+    const userContextSensitiveAcknowledgementKey = useMemo(() => {
+        if (userContextSensitiveHints.length === 0) return '';
+        return JSON.stringify(userContextSensitiveHints.map((hint) => hint.fingerprint));
+    }, [userContextSensitiveHints]);
     const hasUnacknowledgedPromptRisk = (
         activePromptRiskHints.length > 0 &&
         promptRiskAcknowledgedKey !== promptRiskAcknowledgementKey
+    );
+    const hasUnacknowledgedUserContextSensitiveHint = (
+        userContextSensitiveHints.length > 0 &&
+        userContextSensitiveAcknowledgedKey !== userContextSensitiveAcknowledgementKey
+    );
+    const hasUnacknowledgedSafetyHint = (
+        hasUnacknowledgedPromptRisk || hasUnacknowledgedUserContextSensitiveHint
     );
     const pendingChangeDescription = useMemo(() => {
         if (!hasUnsavedChanges) return null;
@@ -395,6 +536,10 @@ const PromptConfig: React.FC = () => {
     useEffect(() => {
         initializeConfigPage();
     }, []);
+
+    useEffect(() => {
+        setPreviewCopyReceipt(null);
+    }, [hasUnsavedChanges, injectedPreview, previewScope]);
 
     const initializeConfigPage = async () => {
         const userInfo = await loadCurrentUserInfo();
@@ -447,6 +592,10 @@ const PromptConfig: React.FC = () => {
             ]);
             let nextConfig = normalizeConfig(localResult);
             let sourceLabel = hasStoredConfig(localResult) ? '本机配置' : '默认配置';
+            let sourceStatus: ConfigBaselineStatus = hasStoredConfig(localResult)
+                ? 'local'
+                : 'default';
+            let sourceSavedAt = getConfigTimestamp(localResult);
 
             try {
                 const cloudResponse = await chrome.runtime.sendMessage({
@@ -462,6 +611,8 @@ const PromptConfig: React.FC = () => {
                     if (shouldUseCloud) {
                         nextConfig = cloudConfig;
                         sourceLabel = '记忆服务备份';
+                        sourceStatus = 'memory';
+                        sourceSavedAt = getConfigTimestamp(cloudResponse.data);
                         await chrome.storage.local.set({
                             preferenceInjection: cloudConfig.preferenceInjection,
                             customPrompts: cloudConfig.customPrompts,
@@ -479,6 +630,12 @@ const PromptConfig: React.FC = () => {
             setLastPersistedConfig(displayConfig);
             setHasUnsavedChanges(false);
             setSyncSource(sourceLabel);
+            setBaselineReceipt(createBaselineReceipt(
+                sourceLabel,
+                sourceStatus,
+                sourceSavedAt
+            ));
+            setHistoryRestoreReceipt(null);
             showStatusMessage(`已加载${sourceLabel}`, 'success');
         } catch (error) {
             console.error('加载配置失败:', error);
@@ -593,6 +750,14 @@ const PromptConfig: React.FC = () => {
             return false;
         }
 
+        if (hasUnacknowledgedUserContextSensitiveHint) {
+            showStatusMessage('检测到用户上下文敏感提示，请先确认不会把可用凭据写入长期配置', 'error');
+            setActiveTab(
+                USER_CONTEXT_SECTION_TAB[userContextSensitiveHints[0]?.section] || 'analysis'
+            );
+            return false;
+        }
+
 	    return true;
 	};
 
@@ -630,6 +795,7 @@ const PromptConfig: React.FC = () => {
         setLastPersistedConfig(updatedConfig);
         setConfigHistory(nextHistory);
 	    setHasUnsavedChanges(false);
+        setHistoryRestoreReceipt(null);
 
 	    try {
 	        const response = await chrome.runtime.sendMessage({
@@ -642,10 +808,16 @@ const PromptConfig: React.FC = () => {
 	        }
 
 	        setSyncSource('本机配置 + 记忆服务备份');
+            setBaselineReceipt(createBaselineReceipt(
+                '本机配置 + 记忆服务备份',
+                'backed-up',
+                savedAt
+            ));
 	        showStatusMessage('配置已保存，并已备份到记忆服务', 'success');
 	    } catch (cloudError) {
 	        console.warn('记忆服务备份失败，本机配置已保存:', cloudError);
 	        setSyncSource('本机配置');
+            setBaselineReceipt(createBaselineReceipt('本机配置', 'local', savedAt));
 	        showStatusMessage('配置已保存到本机，记忆服务备份暂不可用', 'success');
 	    }
 
@@ -731,6 +903,7 @@ const PromptConfig: React.FC = () => {
 
             setConfigData(nextConfig);
             setHasUnsavedChanges(true);
+            setHistoryRestoreReceipt(null);
             showStatusMessage('配置已重置，保存后生效', 'success');
         }
     };
@@ -745,6 +918,12 @@ const PromptConfig: React.FC = () => {
 
         setConfigData(normalizeConfig(entry.config));
         setHasUnsavedChanges(true);
+        setHistoryRestoreReceipt({
+            restoredAt: Date.now(),
+            sourceSavedAt: entry.savedAt,
+            sourceSummary: entry.summary,
+            sourceChangeSummary: entry.changeSummary || ''
+        });
         setSyncSource(`已恢复 ${formatHistoryTimestamp(entry.savedAt)} 的历史版本`);
         showStatusMessage('已恢复历史版本，保存后生效', 'success');
     };
@@ -758,13 +937,41 @@ const PromptConfig: React.FC = () => {
         }, 3000);
     };
 
+    const copyEffectPreview = async () => {
+        const scopeLabel = getPreviewScopeLabel(previewScope);
+        const previewStateLabel = draftPreviewReceipt.status === 'active'
+            ? '已保存基线'
+            : '未保存草稿';
+
+        try {
+            const copied = await copyTextToClipboard(injectedPreview);
+            if (!copied) {
+                throw new Error('浏览器未允许写入剪贴板');
+            }
+
+            setPreviewCopyReceipt({
+                status: 'copied',
+                title: `已复制${scopeLabel}预览`,
+                detail: `${previewStateLabel}的清洗后注入文本已复制；这只是审计文本，不会保存配置、不会触发真实分析、不会写入或备份到记忆服务。`
+            });
+        } catch (error) {
+            console.warn('复制生效预览失败:', error);
+            setPreviewCopyReceipt({
+                status: 'error',
+                title: `未能复制${scopeLabel}预览`,
+                detail: '浏览器剪贴板不可用；请手动选择生效预览文本复制，当前页面不会自动保存或触发分析。'
+            });
+        }
+    };
+
 	const updateConfigAtPath = (
 	    path: string,
 	    updater: any | ((currentValue: any) => any)
-	) => {
-	    const keys = path.split('.');
-	    setHasUnsavedChanges(true);
-	    setConfigData(prev => {
+		) => {
+		    const keys = path.split('.');
+		    setHasUnsavedChanges(true);
+            setHistoryRestoreReceipt(null);
+		    setConfigData(prev => {
 	        const newConfig: any = { ...prev };
 	        let currentNew = newConfig;
 	        let currentOld: any = prev;
@@ -930,6 +1137,47 @@ const PromptConfig: React.FC = () => {
             </div>
         </div>
     );
+
+    const renderBaselineReceipt = () => (
+        <div className={`baseline-receipt ${baselineReceipt.status}`}>
+            <span>已生效基线</span>
+            <strong>{baselineReceipt.sourceLabel}</strong>
+            <small>
+                保存时间：{formatBaselineTimestamp(baselineReceipt.savedAt)}；本轮加载：{formatBaselineTimestamp(baselineReceipt.loadedAt)}。
+                {getBaselineBoundary(baselineReceipt)}
+            </small>
+            {hasUnsavedChanges && (
+                <small className="baseline-draft-note">
+                    页面有未保存草稿，真实消息、项目、会议和文档分析仍读取这份已保存基线。
+                </small>
+            )}
+        </div>
+    );
+
+    const renderHistoryRestoreReceipt = () => {
+        if (!historyRestoreReceipt || !hasUnsavedChanges) return null;
+        const scopeLabel = getPreviewScopeLabel(previewScope);
+
+        return (
+            <div
+                className="history-restore-receipt"
+                role="status"
+                aria-live="polite"
+            >
+                <span>恢复草稿</span>
+                <strong>
+                    已载入 {formatHistoryTimestamp(historyRestoreReceipt.sourceSavedAt)} 的历史版本
+                </strong>
+                <small>
+                    来源摘要：{historyRestoreReceipt.sourceSummary}。
+                    {historyRestoreReceipt.sourceChangeSummary
+                        ? `历史变更：${historyRestoreReceipt.sourceChangeSummary}。`
+                        : ''}
+                    本轮恢复：{formatHistoryTimestamp(historyRestoreReceipt.restoredAt)}；当前{scopeLabel}预览显示这份恢复草稿；真实分析仍读取上方已生效基线。点击保存后才会写入本机并尝试备份到记忆服务。
+                </small>
+            </div>
+        );
+    };
 
 	const updateStakeholder = (index: number, key: keyof Stakeholder, value: string) => {
 	    updateConfigAtPath(
@@ -1097,12 +1345,46 @@ const PromptConfig: React.FC = () => {
                         ))}
                     </div>
                 </div>
-                <span>
-                    {preferenceFootprint.previewCharCount > 0
-                        ? `清洗后 · ${preferenceFootprint.previewCharCount} 字符 · 约 ${preferenceFootprint.estimatedTokenCount} token`
-                        : '未注入'}
-                </span>
+                <div className="preview-meta-actions">
+                    <span>
+                        {preferenceFootprint.previewCharCount > 0
+                            ? `清洗后 · ${preferenceFootprint.previewCharCount} 字符 · 约 ${preferenceFootprint.estimatedTokenCount} token`
+                            : '未注入'}
+                    </span>
+                    <button
+                        type="button"
+                        className="copy-preview-btn"
+                        onClick={copyEffectPreview}
+                    >
+                        复制预览
+                    </button>
+                </div>
             </div>
+            {preferenceChangeImpact && (
+                <div
+                    className={`preference-change-impact ${
+                        preferenceChangeImpact.hasChanges ? '' : 'no-change'
+                    }`}
+                    aria-live="polite"
+                >
+                    <div className="change-impact-header">
+                        <strong>保存影响</strong>
+                        <span>{preferenceChangeImpact.summary}</span>
+                    </div>
+                    <div className="change-impact-grid">
+                        {preferenceChangeImpact.items.map((item) => (
+                            <div
+                                key={item.id}
+                                className={`change-impact-item ${item.status}`}
+                            >
+                                <span>{item.label}</span>
+                                <strong>{item.before} → {item.after}</strong>
+                                <small>{item.detail}</small>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
             {activePromptRiskHints.length > 0 && (
                 <div className="preference-warnings" role="status">
                     {activePromptRiskHints.map((hint, index) => (
@@ -1123,6 +1405,60 @@ const PromptConfig: React.FC = () => {
                     </label>
                 </div>
             )}
+            {userContextSensitiveHints.length > 0 && (
+                <div className="context-sensitive-warning" role="status">
+                    <div className="context-sensitive-warning-head">
+                        <strong>用户上下文敏感提示</strong>
+                        <span>
+                            {userContextSensitiveHints.length} 项字段疑似包含凭据；建议删除实际 secret，改成凭据所在系统、owner 或用途说明。
+                        </span>
+                    </div>
+                    <div className="context-sensitive-warning-list">
+                        {userContextSensitiveHints.slice(0, 4).map((hint) => (
+                            <div key={hint.fingerprint}>
+                                <strong>{hint.sectionTitle} · {hint.fieldLabel}</strong>
+                                <span>{hint.message}</span>
+                            </div>
+                        ))}
+                        {userContextSensitiveHints.length > 4 && (
+                            <div>
+                                <strong>其余字段</strong>
+                                <span>还有 {userContextSensitiveHints.length - 4} 项敏感提示，请切换对应上下文页签检查。</span>
+                            </div>
+                        )}
+                    </div>
+                    <label className="context-sensitive-acknowledgement">
+                        <input
+                            type="checkbox"
+                            checked={!hasUnacknowledgedUserContextSensitiveHint}
+                            onChange={(event) => setUserContextSensitiveAcknowledgedKey(
+                                event.target.checked ? userContextSensitiveAcknowledgementKey : ''
+                            )}
+                        />
+                        <span>我确认这些内容不是可用凭据，或已改成不可执行的引用；保存只写入本机配置并尝试做记忆服务恢复备份，不会执行、验证或使用这些值调用外部系统。</span>
+                    </label>
+                </div>
+            )}
+            <div
+                className={`draft-preview-receipt ${draftPreviewReceipt.status}`}
+                role="status"
+                aria-live="polite"
+            >
+                <span>{draftPreviewReceipt.statusLabel}</span>
+                <strong>{draftPreviewReceipt.title}</strong>
+                <small>{draftPreviewReceipt.detail}</small>
+            </div>
+            {previewCopyReceipt && (
+                <div
+                    className={`preview-copy-receipt ${previewCopyReceipt.status}`}
+                    role="status"
+                    aria-live="polite"
+                >
+                    <span>{previewCopyReceipt.status === 'copied' ? '已复制' : '失败'}</span>
+                    <strong>{previewCopyReceipt.title}</strong>
+                    <small>{previewCopyReceipt.detail}</small>
+                </div>
+            )}
             <div className="injection-receipt-grid" aria-label={`${preferenceReceipt.scopeLabel}注入回执`}>
                 {preferenceReceipt.items.map((item) => (
                     <div
@@ -1138,6 +1474,37 @@ const PromptConfig: React.FC = () => {
             <pre className="prompt-preview">{injectedPreview}</pre>
         </div>
     );
+
+    const renderUserContextSectionReceipt = (section: UserContextSectionReceiptId) => {
+        const receipt = userContextSectionReceipts[section];
+        const sectionSensitiveHints = userContextSensitiveHintsBySection[section] || [];
+        return (
+            <>
+                <div
+                    className={`context-section-receipt ${receipt.status}`}
+                    role="status"
+                    aria-live="polite"
+                >
+                    <span>{receipt.statusLabel}</span>
+                    <strong>{receipt.title}</strong>
+                    <small>{receipt.detail}</small>
+                </div>
+                {sectionSensitiveHints.length > 0 && (
+                    <div
+                        className="context-section-sensitive-warning"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <span>敏感提示</span>
+                        <strong>{sectionSensitiveHints.length} 项字段疑似包含凭据</strong>
+                        <small>
+                            {sectionSensitiveHints.map((hint) => `${hint.fieldLabel}：${hint.message}`).join('；')}。保存前需要确认这些值不是可用凭据，或已经改成不可执行的引用。
+                        </small>
+                    </div>
+                )}
+            </>
+        );
+    };
 
     const renderConfigHistory = () => (
         <div className="config-history-section">
@@ -1198,6 +1565,7 @@ const PromptConfig: React.FC = () => {
                 return (
                     <div className="tab-content">
                         <h3>个人信息</h3>
+                        {renderUserContextSectionReceipt('personal')}
                         <div className="user-info">
                             <p><strong>当前用户:</strong> {currentUserInfo.name}</p>
                             <p><strong>邮箱:</strong> {currentUserInfo.email}</p>
@@ -1335,6 +1703,7 @@ const PromptConfig: React.FC = () => {
 	                return (
 	                    <div className="tab-content">
 	                        <h3>团队信息</h3>
+                            {renderUserContextSectionReceipt('team')}
 
 	                        <div className="field-group">
 	                            <label>团队名称</label>
@@ -1452,6 +1821,7 @@ const PromptConfig: React.FC = () => {
 	                return (
 	                    <div className="tab-content">
 	                        <h3>工作关注点</h3>
+                            {renderUserContextSectionReceipt('work')}
                         
                         {renderArrayField('主要关注点', 'userContextConfig.workFocus.primaryConcerns', configData.userContextConfig.workFocus.primaryConcerns)}
                         {renderArrayField('业务领域', 'userContextConfig.workFocus.businessDomains', configData.userContextConfig.workFocus.businessDomains)}
@@ -1475,6 +1845,7 @@ const PromptConfig: React.FC = () => {
 	                return (
 	                    <div className="tab-content">
 	                        <h3>沟通偏好</h3>
+                            {renderUserContextSectionReceipt('communication')}
 
 	                        {renderArrayField('受众类型', 'userContextConfig.communicationContext.audienceType', configData.userContextConfig.communicationContext.audienceType)}
 
@@ -1532,6 +1903,7 @@ const PromptConfig: React.FC = () => {
 	                return (
 	                    <div className="tab-content">
                         <h3>分析偏好</h3>
+                        {renderUserContextSectionReceipt('analysis')}
                         
                         <h4>消息分析</h4>
                         {renderArrayField('关注领域', 'userContextConfig.analysisPreferences.messageAnalysis.focusAreas', configData.userContextConfig.analysisPreferences.messageAnalysis.focusAreas)}
@@ -1582,15 +1954,15 @@ const PromptConfig: React.FC = () => {
                     </button>
                     <button
                         onClick={triggerDataFusion}
-	                        className={`fusion-btn ${hasUnacknowledgedPromptRisk ? 'needs-review' : ''}`}
+	                        className={`fusion-btn ${hasUnacknowledgedSafetyHint ? 'needs-review' : ''}`}
                         title={
-                            hasUnacknowledgedPromptRisk
-                                ? '先确认安全提示只作为低优先级偏好，再融合到用户画像'
+                            hasUnacknowledgedSafetyHint
+                                ? '先确认安全提示只作为低优先级偏好或非凭据引用，再融合到用户画像'
                                 : '将当前用户上下文融合到用户画像'
                         }
 	                        disabled={isLoading || isSaving}
 	                    >
-	                        {hasUnacknowledgedPromptRisk ? '确认安全提示后融合' : '融合到用户画像'}
+	                        {hasUnacknowledgedSafetyHint ? '确认安全提示后融合' : '融合到用户画像'}
 	                    </button>
                     <button
                         onClick={resetToDefaults}
@@ -1598,9 +1970,11 @@ const PromptConfig: React.FC = () => {
                         disabled={isLoading || isSaving}
                     >
                         重置默认
-                    </button>
+	                    </button>
                 </div>
             </div>
+
+            {renderBaselineReceipt()}
 
             {(syncSource || hasUnsavedChanges) && (
                 <div className="sync-summary">
@@ -1611,6 +1985,8 @@ const PromptConfig: React.FC = () => {
                     )}
                 </div>
             )}
+
+            {renderHistoryRestoreReceipt()}
 
             {statusMessage && (
                 <div className={`status-message ${statusType}`}>
@@ -1782,7 +2158,117 @@ const PromptConfig: React.FC = () => {
                     border: 1px solid #f5c6cb;
                 }
 
-	                .config-tabs {
+                .baseline-receipt {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin: -4px 0 12px;
+                    padding: 10px 12px;
+                    border: 1px solid #d8dee4;
+                    border-left: 4px solid #64748b;
+                    border-radius: 6px;
+                    background: #f8fafc;
+                    color: #475569;
+                    line-height: 1.45;
+                }
+
+                .baseline-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: #f1f5f9;
+                    color: #475569;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .baseline-receipt strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .baseline-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: #64748b;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .baseline-receipt.backed-up,
+                .baseline-receipt.memory {
+                    border-left-color: #16a34a;
+                }
+
+                .baseline-receipt.backed-up span,
+                .baseline-receipt.memory span {
+                    background: #dcfce7;
+                    color: #166534;
+                }
+
+                .baseline-receipt.local {
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                }
+
+                .baseline-receipt.local span {
+                    background: #fef3c7;
+                    color: #92400e;
+                }
+
+	                .baseline-draft-note {
+	                    color: #92400e;
+	                    font-weight: 600;
+	                }
+
+                    .history-restore-receipt {
+                        display: grid;
+                        grid-template-columns: auto 1fr;
+                        gap: 4px 8px;
+                        align-items: start;
+                        margin: -4px 0 16px;
+                        padding: 10px 12px;
+                        border: 1px solid #fed7aa;
+                        border-left: 4px solid #ca8a04;
+                        border-radius: 6px;
+                        background: #fff7ed;
+                        color: #92400e;
+                        line-height: 1.45;
+                    }
+
+                    .history-restore-receipt span {
+                        width: fit-content;
+                        max-width: 100%;
+                        padding: 2px 7px;
+                        border-radius: 999px;
+                        background: #fef3c7;
+                        color: #92400e;
+                        font-size: 11px;
+                        font-weight: 700;
+                        white-space: nowrap;
+                    }
+
+                    .history-restore-receipt strong {
+                        min-width: 0;
+                        color: #7c2d12;
+                        font-size: 13px;
+                        overflow-wrap: anywhere;
+                    }
+
+                    .history-restore-receipt small {
+                        grid-column: 1 / -1;
+                        min-width: 0;
+                        color: inherit;
+                        font-size: 12px;
+                        overflow-wrap: anywhere;
+                    }
+
+		                .config-tabs {
 	                    display: flex;
 	                    flex-wrap: wrap;
 	                    margin-bottom: 24px;
@@ -2026,6 +2512,134 @@ const PromptConfig: React.FC = () => {
                     font-size: 12px;
                 }
 
+                .preview-meta-actions {
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: flex-end;
+                    align-items: center;
+                    gap: 8px;
+                    min-width: 0;
+                }
+
+                .copy-preview-btn {
+                    flex: 0 0 auto;
+                    min-height: 30px;
+                    padding: 5px 10px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #334155;
+                    cursor: pointer;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+
+                .copy-preview-btn:hover {
+                    border-color: #94a3b8;
+                    background: #f8fafc;
+                }
+
+                .copy-preview-btn:focus-visible {
+                    outline: 2px solid #93c5fd;
+                    outline-offset: 2px;
+                }
+
+                .preference-change-impact {
+                    display: grid;
+                    gap: 10px;
+                    margin-bottom: 12px;
+                    padding: 10px;
+                    border: 1px solid #bfdbfe;
+                    border-radius: 6px;
+                    background: #eff6ff;
+                    color: #1e3a8a;
+                }
+
+                .preference-change-impact.no-change {
+                    border-color: #cbd5e1;
+                    background: #f8fafc;
+                    color: #475569;
+                }
+
+                .change-impact-header {
+                    display: flex;
+                    flex-wrap: wrap;
+                    align-items: center;
+                    gap: 8px;
+                    min-width: 0;
+                    font-size: 13px;
+                }
+
+                .change-impact-header strong {
+                    flex: 0 0 auto;
+                    color: inherit;
+                    font-weight: 700;
+                }
+
+                .change-impact-header span {
+                    min-width: 0;
+                    color: inherit;
+                    overflow-wrap: anywhere;
+                }
+
+                .change-impact-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+                    gap: 8px;
+                }
+
+                .change-impact-item {
+                    display: grid;
+                    gap: 3px;
+                    min-width: 0;
+                    padding: 8px 9px;
+                    border: 1px solid rgba(37, 99, 235, 0.2);
+                    border-left: 4px solid #60a5fa;
+                    border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.72);
+                    line-height: 1.45;
+                }
+
+                .change-impact-item.increase {
+                    border-left-color: #2563eb;
+                }
+
+                .change-impact-item.decrease {
+                    border-left-color: #16a34a;
+                }
+
+                .change-impact-item.warning {
+                    border-color: #fed7aa;
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                    color: #92400e;
+                }
+
+                .change-impact-item span {
+                    color: inherit;
+                    font-size: 11px;
+                    font-weight: 700;
+                }
+
+                .change-impact-item strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .change-impact-item small {
+                    min-width: 0;
+                    color: #64748b;
+                    font-size: 11px;
+                    overflow-wrap: anywhere;
+                }
+
+                .change-impact-item.warning strong,
+                .change-impact-item.warning small {
+                    color: inherit;
+                }
+
                 .preference-warnings {
                     display: grid;
                     gap: 8px;
@@ -2064,6 +2678,187 @@ const PromptConfig: React.FC = () => {
                 .risk-acknowledgement input {
                     flex: 0 0 auto;
                     margin-top: 2px;
+                }
+
+                .context-sensitive-warning {
+                    display: grid;
+                    gap: 9px;
+                    margin-bottom: 12px;
+                    padding: 10px 12px;
+                    border: 1px solid #fecaca;
+                    border-left: 4px solid #dc2626;
+                    border-radius: 6px;
+                    background: #fef2f2;
+                    color: #991b1b;
+                    line-height: 1.45;
+                }
+
+                .context-sensitive-warning-head {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    align-items: baseline;
+                }
+
+                .context-sensitive-warning-head strong {
+                    color: #7f1d1d;
+                }
+
+                .context-sensitive-warning-head span {
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .context-sensitive-warning-list {
+                    display: grid;
+                    gap: 6px;
+                }
+
+                .context-sensitive-warning-list div {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    min-width: 0;
+                    padding: 7px 9px;
+                    border: 1px solid rgba(220, 38, 38, 0.16);
+                    border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.7);
+                    font-size: 12px;
+                }
+
+                .context-sensitive-warning-list strong {
+                    color: #7f1d1d;
+                }
+
+                .context-sensitive-warning-list span {
+                    min-width: 0;
+                    overflow-wrap: anywhere;
+                }
+
+                .context-sensitive-acknowledgement {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 8px;
+                    padding: 10px 12px;
+                    border: 1px solid #fca5a5;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #7f1d1d;
+                    font-size: 13px;
+                    line-height: 1.45;
+                }
+
+                .context-sensitive-acknowledgement input {
+                    flex: 0 0 auto;
+                    margin-top: 2px;
+                }
+
+                .draft-preview-receipt {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin-bottom: 12px;
+                    padding: 9px 10px;
+                    border: 1px solid #d8dee4;
+                    border-left: 4px solid #16a34a;
+                    border-radius: 6px;
+                    background: #f8fafc;
+                    color: #475569;
+                    line-height: 1.45;
+                }
+
+                .draft-preview-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: #dcfce7;
+                    color: #166534;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .draft-preview-receipt strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .draft-preview-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: #64748b;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .draft-preview-receipt.draft {
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                }
+
+                .draft-preview-receipt.draft span,
+                .draft-preview-receipt.draft-same-scope span {
+                    background: #fef3c7;
+                    color: #92400e;
+                }
+
+                .draft-preview-receipt.draft-same-scope {
+                    border-left-color: #64748b;
+                }
+
+                .preview-copy-receipt {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin: -2px 0 12px;
+                    padding: 9px 10px;
+                    border: 1px solid #bbf7d0;
+                    border-left: 4px solid #16a34a;
+                    border-radius: 6px;
+                    background: #f0fdf4;
+                    color: #166534;
+                    line-height: 1.45;
+                }
+
+                .preview-copy-receipt.error {
+                    border-color: #fecaca;
+                    border-left-color: #dc2626;
+                    background: #fef2f2;
+                    color: #991b1b;
+                }
+
+                .preview-copy-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: rgba(22, 101, 52, 0.1);
+                    color: inherit;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .preview-copy-receipt strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .preview-copy-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
                 }
 
                 .injection-receipt-grid {
@@ -2137,6 +2932,114 @@ const PromptConfig: React.FC = () => {
                 .injection-receipt-item.paused span {
                     background: #fef3c7;
                     color: #92400e;
+                }
+
+                .context-section-receipt {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin: -4px 0 14px;
+                    padding: 9px 10px;
+                    border: 1px solid #d8dee4;
+                    border-left: 4px solid #8c959f;
+                    border-radius: 6px;
+                    background: #fff;
+                    color: #475569;
+                    line-height: 1.45;
+                }
+
+                .context-section-receipt span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: #f1f5f9;
+                    color: #475569;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .context-section-receipt strong {
+                    min-width: 0;
+                    color: #1f2937;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .context-section-receipt small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: #64748b;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
+                }
+
+                .context-section-receipt.included {
+                    border-left-color: #16a34a;
+                }
+
+                .context-section-receipt.included span {
+                    background: #dcfce7;
+                    color: #166534;
+                }
+
+                .context-section-receipt.paused {
+                    border-left-color: #ca8a04;
+                    background: #fffbeb;
+                }
+
+                .context-section-receipt.paused span {
+                    background: #fef3c7;
+                    color: #92400e;
+                }
+
+                .context-section-receipt.empty {
+                    border-left-color: #94a3b8;
+                    background: #f8fafc;
+                }
+
+                .context-section-sensitive-warning {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    gap: 4px 8px;
+                    align-items: start;
+                    margin: -6px 0 14px;
+                    padding: 9px 10px;
+                    border: 1px solid #fecaca;
+                    border-left: 4px solid #dc2626;
+                    border-radius: 6px;
+                    background: #fef2f2;
+                    color: #991b1b;
+                    line-height: 1.45;
+                }
+
+                .context-section-sensitive-warning span {
+                    width: fit-content;
+                    max-width: 100%;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    background: #fee2e2;
+                    color: #991b1b;
+                    font-size: 11px;
+                    font-weight: 700;
+                    white-space: nowrap;
+                }
+
+                .context-section-sensitive-warning strong {
+                    min-width: 0;
+                    color: #7f1d1d;
+                    font-size: 13px;
+                    overflow-wrap: anywhere;
+                }
+
+                .context-section-sensitive-warning small {
+                    grid-column: 1 / -1;
+                    min-width: 0;
+                    color: inherit;
+                    font-size: 12px;
+                    overflow-wrap: anywhere;
                 }
 
                 .prompt-preview {

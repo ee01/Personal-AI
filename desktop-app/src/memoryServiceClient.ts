@@ -109,6 +109,12 @@ export interface RecallAnalysis {
 
 export interface AskResponse {
   answer: string;
+  contextMatch?: {
+    state?: string;
+    userFacingSummary?: string;
+    selectedTopic?: Record<string, unknown>;
+    candidates?: Array<Record<string, unknown>>;
+  };
   evidence?: Array<{
     id?: string;
     type?: 'message' | 'chunk' | 'entity';
@@ -174,6 +180,7 @@ export type AskStreamEvent =
       answer: string;
       evidence?: AskResponse['evidence'];
       queryTimeMs: number;
+      contextMatch?: AskResponse['contextMatch'];
       blocks?: RecallBlock[];
       analysis?: RecallAnalysis;
       structuredAnswer?: AskResponse['structuredAnswer'];
@@ -206,6 +213,55 @@ export interface ContextRecallEntityHint {
   entityId?: string;
 }
 
+export interface ContextCueSourceRef {
+  type:
+    | 'message'
+    | 'chunk'
+    | 'entity'
+    | 'rehearsal'
+    | 'source_memory'
+    | 'jira'
+    | 'meeting'
+    | 'reflection_thread';
+  id: string;
+  title?: string;
+  url?: string;
+  timestamp?: number;
+}
+
+export interface ContextCue {
+  id: string;
+  cueKey?: string;
+  cueText: string;
+  actionType: 'remember' | 'ask' | 'draft_hint' | 'warning' | 'open_source';
+  surfaceEligibility: Array<
+    'memory_lens' | 'compose_assist' | 'ask' | 'meeting_pilot'
+  >;
+  sourceRefs: ContextCueSourceRef[];
+  evidenceMatchIds: string[];
+  whyNow: string;
+  confidence: number;
+  riskLevel: 'low' | 'medium' | 'high';
+  compileStatus: 'compiled' | 'suppressed' | 'needs_more_evidence';
+  suppressReason?:
+    | 'weak_scene_anchor'
+    | 'weak_fact'
+    | 'stale_source'
+    | 'sensitive'
+    | 'too_noisy'
+    | 'outcome_policy';
+  outcomePolicy?: {
+    action: 'boost' | 'suppress' | 'send_to_skill_foundry';
+    patchId: string;
+    strength: number;
+    reasonCodes: string[];
+    positiveCount: number;
+    negativeCount: number;
+    signalCount: number;
+    expiresAt?: number;
+  };
+}
+
 export interface ContextRecallRequest {
   surface: ContextRecallSurface;
   contextType: ContextRecallContextType;
@@ -221,11 +277,12 @@ export interface ContextRecallRequest {
 
 export interface ContextRecallMatch {
   id: string;
-  type: 'message' | 'chunk' | 'entity';
-  title: string;
+  type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
+  title?: string;
+  uiSummary?: string;
   snippet: string;
   score: number;
-  sourceLabel: string;
+  sourceLabel?: string;
   sourceUrl?: string;
   sourceTitle?: string;
   exploreLink?: string;
@@ -238,7 +295,17 @@ export interface ContextRecallMatch {
     source?: string[];
   };
   suppressionReason?: string;
+  reasonType?: string;
+  evidenceRole?: string;
+  displayPriority?: 'p1' | 'p2' | 'hidden';
+  metadata?: Record<string, unknown>;
+  mergedCount?: number;
+  mergedIds?: string[];
+  sourceClusterKey?: string;
+  sourceContext?: string;
+  timestamp?: number;
   links?: Array<{ url: string; label?: string }>;
+  cue?: ContextCue;
 }
 
 export interface ContextRecallSceneSummary {
@@ -281,6 +348,8 @@ export interface ContextRecallResponse {
     channelsHit: string[];
     rejectedReason?: string;
     suppressionReasons?: string[];
+    sceneFrame?: Record<string, unknown>;
+    cueCompiler?: Record<string, unknown>;
     autopilot?: ContextRecallAutopilotDecision;
   };
 }

@@ -21,6 +21,136 @@
       <div v-show="isAiAnswerExpanded" class="ai-answer-content">
         <!-- 主要回答（支持 Markdown 渲染） -->
         <div class="answer-main" v-html="renderedAnswer"></div>
+
+        <!-- 缝合证据徽章 (P0-5)：仅当本答案跨 ≥2 来源或 ≥7 天时出现 -->
+        <div
+          v-if="weaveBadge"
+          class="weave-badge"
+          :title="weaveBadge.title"
+          aria-label="缝合证据"
+        >
+          <span class="weave-badge-glyph">⊕</span>
+          <span class="weave-badge-text">{{ weaveBadge.label }}</span>
+        </div>
+
+        <div
+          v-if="askScopeReceiptNote"
+          :class="[
+            'answer-memory-receipt',
+            askScopeReceiptIncludesPersonal
+              ? 'answer-memory-receipt-warning'
+              : 'answer-memory-receipt-info',
+          ]"
+          role="note"
+          aria-label="Ask 检索范围回执"
+        >
+          <div class="answer-memory-receipt-main">
+            <span class="answer-memory-receipt-label">
+              检索范围回执
+            </span>
+            <span class="answer-memory-receipt-detail">
+              {{ askScopeReceiptNote }}
+            </span>
+          </div>
+          <div
+            v-if="askScopeReceiptMetrics.length"
+            class="answer-memory-receipt-metrics"
+          >
+            <span
+              v-for="metric in askScopeReceiptMetrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
+
+        <div
+          v-if="answerMemoryReceipt"
+          :class="[
+            'answer-memory-receipt',
+            `answer-memory-receipt-${answerMemoryReceipt.tone || 'info'}`,
+          ]"
+          role="note"
+        >
+          <div class="answer-memory-receipt-main">
+            <span class="answer-memory-receipt-label">
+              {{ answerMemoryReceipt.label }}
+            </span>
+            <span class="answer-memory-receipt-detail">
+              {{ answerMemoryReceipt.detail }}
+            </span>
+            <div
+              v-if="answerMemoryAuthority"
+              :class="[
+                'answer-memory-authority',
+                `answer-memory-authority-${answerMemoryAuthority.tone}`,
+              ]"
+              aria-label="活答案权威证据门控"
+            >
+              <div class="answer-memory-authority-line">
+                <span class="answer-memory-authority-label">
+                  {{ answerMemoryAuthority.label }}
+                </span>
+                <span class="answer-memory-authority-summary">
+                  {{ answerMemoryAuthority.summary }}
+                </span>
+              </div>
+              <div
+                v-if="answerMemoryAuthority.metrics.length"
+                class="answer-memory-authority-metrics"
+              >
+                <span
+                  v-for="metric in answerMemoryAuthority.metrics"
+                  :key="metric"
+                >
+                  {{ metric }}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="answer-memory-receipt-metrics">
+            <span v-if="answerMemoryReceipt.currentEvidenceCount != null">
+              本轮证据 {{ answerMemoryReceipt.currentEvidenceCount }}
+            </span>
+            <span v-if="answerMemoryReceipt.priorEvidenceCount != null">
+              旧证据 {{ answerMemoryReceipt.priorEvidenceCount }}
+            </span>
+            <span v-if="answerMemoryReceipt.followUpActionCount">
+              查证 {{ answerMemoryReceipt.followUpActionCount }}
+            </span>
+          </div>
+        </div>
+
+        <div
+          v-if="askFollowUpReceipt"
+          :class="[
+            'answer-memory-receipt',
+            `answer-memory-receipt-${askFollowUpReceipt.tone}`,
+          ]"
+          role="note"
+          aria-label="Ask 查证与缺口回执"
+        >
+          <div class="answer-memory-receipt-main">
+            <span class="answer-memory-receipt-label">
+              {{ askFollowUpReceipt.label }}
+            </span>
+            <span class="answer-memory-receipt-detail">
+              {{ askFollowUpReceipt.detail }}
+            </span>
+          </div>
+          <div
+            v-if="askFollowUpReceipt.metrics.length"
+            class="answer-memory-receipt-metrics"
+          >
+            <span
+              v-for="metric in askFollowUpReceipt.metrics"
+              :key="metric"
+            >
+              {{ metric }}
+            </span>
+          </div>
+        </div>
         
         <!-- 结构化信息（如果有） -->
         <div v-if="searchContext.askResult.structuredAnswer" class="answer-structured">
@@ -179,6 +309,21 @@
           >
             {{ scopeExposureNotice }}
           </span>
+          <span
+            v-if="scopeBoundaryNotice"
+            class="scope-boundary-notice"
+            role="note"
+          >
+            {{ scopeBoundaryNotice }}
+          </span>
+          <button
+            v-if="showResultsBroadenScopeAction"
+            class="scope-broaden-inline"
+            type="button"
+            @click="broadenSearchScope"
+          >
+            搜索全部记忆
+          </button>
           <div
             v-if="recallChannelDiagnostics.length"
             class="channel-diagnostics"
@@ -282,14 +427,74 @@
           >
             <span
               v-if="getFeedbackLabel(entity)"
-              class="feedback-status"
+              :class="[
+                'feedback-status',
+                getFeedbackStatusTone(entity)
+                  ? `feedback-status-${getFeedbackStatusTone(entity)}`
+                  : '',
+              ]"
             >
               {{ getFeedbackLabel(entity) }}
             </span>
+            <div
+              v-if="getFeedbackFailureReceipt(entity)"
+              :class="[
+                'feedback-receipt',
+                `feedback-receipt-${getFeedbackFailureReceipt(entity)?.tone}`,
+              ]"
+              role="alert"
+            >
+              <strong>{{ getFeedbackFailureReceipt(entity)?.label }}</strong>
+              <span>{{ getFeedbackFailureReceipt(entity)?.detail }}</span>
+              <span
+                v-if="getFeedbackFailureReceipt(entity)?.context"
+                class="feedback-receipt-context"
+              >
+                {{ getFeedbackFailureReceipt(entity)?.context }}
+              </span>
+              <span
+                v-for="effect in getFeedbackFailureReceipt(entity)?.effects || []"
+                :key="effect"
+                class="feedback-receipt-effect"
+              >
+                {{ effect }}
+              </span>
+              <span v-if="getFeedbackFailureReceipt(entity)?.nextStep">
+                {{ getFeedbackFailureReceipt(entity)?.nextStep }}
+              </span>
+            </div>
+            <div
+              v-else-if="getFeedbackReceipt(entity)"
+              :class="[
+                'feedback-receipt',
+                `feedback-receipt-${getFeedbackReceipt(entity)?.tone}`,
+              ]"
+              role="note"
+            >
+              <strong>{{ getFeedbackReceipt(entity)?.label }}</strong>
+              <span>{{ getFeedbackReceipt(entity)?.detail }}</span>
+              <span
+                v-if="getFeedbackReceipt(entity)?.context"
+                class="feedback-receipt-context"
+              >
+                {{ getFeedbackReceipt(entity)?.context }}
+              </span>
+              <span
+                v-for="effect in getFeedbackReceipt(entity)?.effects || []"
+                :key="effect"
+                class="feedback-receipt-effect"
+              >
+                {{ effect }}
+              </span>
+              <span v-if="getFeedbackReceipt(entity)?.nextStep">
+                {{ getFeedbackReceipt(entity)?.nextStep }}
+              </span>
+            </div>
             <button
               type="button"
               :class="[
                 'feedback-btn',
+                'feedback-btn-positive',
                 { active: isFeedbackActive(entity, 'positive') },
               ]"
               :aria-pressed="isFeedbackActive(entity, 'positive')"
@@ -302,6 +507,7 @@
               type="button"
               :class="[
                 'feedback-btn',
+                'feedback-btn-negative',
                 { active: isFeedbackActive(entity, 'negative') },
               ]"
               :aria-pressed="isFeedbackActive(entity, 'negative')"
@@ -356,6 +562,41 @@
       </div>
     </div>
 
+    <div
+      v-else-if="searchFailureReceipt"
+      class="search-failure-state"
+      role="alert"
+    >
+      <span class="search-failure-icon">!</span>
+      <p class="search-failure-title">真实搜索没有完成</p>
+      <p class="search-failure-detail">{{ searchFailureDetail }}</p>
+      <div class="search-failure-meta">
+        <span>查询: "{{ searchFailureReceipt.query }}"</span>
+        <span>范围: {{ getScopeLabel(searchFailureReceipt.scope) }}</span>
+        <span>{{ searchFailureModeLabel }}</span>
+      </div>
+      <p class="search-failure-boundary">
+        没有展示模拟记忆；请重试真实后端搜索，或在需要时切换搜索范围。
+      </p>
+      <div class="search-failure-actions">
+        <button
+          class="empty-action-btn"
+          type="button"
+          @click="retryFailedSearch"
+        >
+          重试真实搜索
+        </button>
+        <button
+          v-if="canBroadenSearchScope"
+          class="empty-action-btn"
+          type="button"
+          @click="broadenSearchScope"
+        >
+          搜索全部记忆
+        </button>
+      </div>
+    </div>
+
     <div v-else class="empty-search-state">
       <span>🔍</span>
       <p>没有找到相关结果</p>
@@ -385,10 +626,12 @@ import {
 import type {
   MemoryFeedbackAction,
   MemoryFeedbackTargetType,
+  RecallScope,
 } from '../../services/MemoryServiceClient';
 import {
   MEMORY_RESULT_TYPE_CONFIG,
   formatScopeBreakdownLabel,
+  formatScopeBoundaryNotice,
   formatScopeExposureNotice,
   formatRecallChannelDiagnostics,
   getRecallChannelLabel,
@@ -420,13 +663,110 @@ type SearchFeedbackChoice = Extract<
   'positive' | 'negative'
 >;
 type SearchFeedbackState = SearchFeedbackChoice | 'pending' | 'cleared';
+type SearchFeedbackReceiptTone = Exclude<SearchFeedbackState, 'pending'> | 'error';
+
+interface SearchFeedbackReceipt {
+  tone: SearchFeedbackReceiptTone;
+  label: string;
+  detail: string;
+  context?: string;
+  nextStep?: string;
+  effects?: string[];
+}
+
+interface SearchFeedbackResponseEffect {
+  action: MemoryFeedbackAction;
+  previousAction?: MemoryFeedbackAction;
+  appliedDelta?: number;
+  relevancePatchStatus?: 'patched' | 'cleared' | 'ignored';
+  relevancePatchAction?: string;
+  clearedPatchCount?: number;
+}
+
+interface SearchFeedbackFailure {
+  action: MemoryFeedbackAction;
+  message: string;
+  previousState?: SearchFeedbackState;
+}
+
+type AnswerMemoryAuthorityDecision =
+  | 'authorized_change'
+  | 'same_meaning_no_change'
+  | 'supporting_only'
+  | 'wait_for_authority_source';
+type AnswerMemoryAuthorityTone = 'info' | 'success' | 'warning' | 'muted';
+
+interface AnswerMemoryAuthorityView {
+  label: string;
+  summary: string;
+  tone: AnswerMemoryAuthorityTone;
+  metrics: string[];
+}
+
+type AskFollowUpReceiptTone = 'info' | 'success' | 'warning' | 'muted';
+
+interface AskFollowUpReceiptView {
+  label: string;
+  detail: string;
+  tone: AskFollowUpReceiptTone;
+  metrics: string[];
+}
 
 const feedbackByResultKey = ref<Record<string, SearchFeedbackState>>({});
+const feedbackEffectByResultKey = ref<
+  Record<string, SearchFeedbackResponseEffect>
+>({});
+const feedbackFailureByResultKey = ref<Record<string, SearchFeedbackFailure>>(
+  {},
+);
+const searchFailureReceipt = computed(() => store.searchFailureReceipt);
 
 const renderedAnswer = computed(() => {
   const ans = searchContext.value.askResult?.answer;
   return ans ? markdownToHtml(ans) : '';
 });
+
+const answerMemoryReceipt = computed(() =>
+  searchContext.value.askResult?.answerMemory?.receipt,
+);
+
+const askScopeReceipt = computed(() => searchContext.value.askResult?.scopeReceipt);
+
+const askScopeReceiptNote = computed(() => {
+  const note = askScopeReceipt.value?.note;
+  return typeof note === 'string' ? note.trim() : '';
+});
+
+const askScopeReceiptIncludesPersonal = computed(
+  () => askScopeReceipt.value?.includesPersonal === true,
+);
+
+const askScopeReceiptMetrics = computed(() => {
+  const receipt = askScopeReceipt.value;
+  if (!receipt) return [];
+  const returned = receipt.returned || {};
+  const candidates = receipt.candidates || {};
+  return [
+    typeof returned.total === 'number' ? `返回 ${returned.total}` : '',
+    typeof returned.work === 'number' ? `工作 ${returned.work}` : '',
+    typeof returned.personal === 'number' && returned.personal > 0
+      ? `个人 ${returned.personal}`
+      : '',
+    typeof candidates.total === 'number' && candidates.total !== returned.total
+      ? `候选 ${candidates.total}`
+      : '',
+  ].filter(Boolean);
+});
+
+const answerMemoryAuthority = computed(() =>
+  formatAnswerMemoryAuthority(
+    searchContext.value.askResult?.answerMemory?.authority,
+  ),
+);
+
+const askFollowUpReceipt = computed(() =>
+  formatAskFollowUpReceipt(searchContext.value.askResult),
+);
 
 const decisionEvidenceChainBlock = computed(() =>
   searchContext.value.askResult?.blocks?.find(
@@ -453,6 +793,212 @@ const decisionEvidenceRefs = computed(() => {
   });
 });
 
+function isAnswerMemoryAuthorityDecision(
+  value: unknown,
+): value is AnswerMemoryAuthorityDecision {
+  return (
+    value === 'authorized_change' ||
+    value === 'same_meaning_no_change' ||
+    value === 'supporting_only' ||
+    value === 'wait_for_authority_source'
+  );
+}
+
+function formatAnswerMemoryAuthority(
+  authority: unknown,
+): AnswerMemoryAuthorityView | null {
+  if (!authority || typeof authority !== 'object') return null;
+  const record = authority as Record<string, any>;
+  if (!isAnswerMemoryAuthorityDecision(record.decision)) return null;
+
+  const labels: Record<
+    AnswerMemoryAuthorityDecision,
+    { label: string; tone: AnswerMemoryAuthorityTone }
+  > = {
+    authorized_change: {
+      label: '权威证据允许更新',
+      tone: 'success',
+    },
+    same_meaning_no_change: {
+      label: '同证据同义复核',
+      tone: 'info',
+    },
+    supporting_only: {
+      label: '仅辅助证据',
+      tone: 'warning',
+    },
+    wait_for_authority_source: {
+      label: '等待新的权威证据',
+      tone: 'warning',
+    },
+  };
+  const evidenceRoleLabels: Record<string, string> = {
+    authority: '当前权威',
+    supporting: '辅助',
+    derived: '派生',
+    query: '本轮问题',
+    prior: '旧 prior',
+  };
+  const stanceLabels: Record<string, string> = {
+    positive: 'ready/已完成',
+    negative_or_pending: '未完成/等待',
+    partial: '部分完成',
+    unknown: '未知',
+    informational: '信息型',
+  };
+  const roleMetrics = Array.isArray(record.evidenceRoles)
+    ? record.evidenceRoles
+        .filter(
+          (role: any) =>
+            role &&
+            typeof role.role === 'string' &&
+            typeof role.count === 'number' &&
+            Number.isFinite(role.count) &&
+            role.count > 0,
+        )
+        .map(
+          (role: any) =>
+            `${evidenceRoleLabels[role.role] || role.role} ${role.count}`,
+        )
+    : [];
+  const currentStance =
+    typeof record.currentStance === 'string' ? record.currentStance : '';
+  const priorStance =
+    typeof record.priorStance === 'string' ? record.priorStance : '';
+  const metrics = [
+    ...roleMetrics,
+    currentStance
+      ? `本轮状态 ${stanceLabels[currentStance] || currentStance}`
+      : '',
+    priorStance ? `旧状态 ${stanceLabels[priorStance] || priorStance}` : '',
+    record.suppressedUpdate ? '未写新版本' : '',
+  ].filter(Boolean);
+  const summary =
+    typeof record.summary === 'string' && record.summary.trim()
+      ? record.summary
+      : labels[record.decision].label;
+
+  return {
+    ...labels[record.decision],
+    summary,
+    metrics,
+  };
+}
+
+function formatAskResolutionState(value: unknown): string {
+  if (value === 'complete') return '已回答';
+  if (value === 'partial') return '部分回答';
+  if (value === 'insufficient') return '证据不足';
+  if (value === 'deferred') return '已转待查';
+  return '';
+}
+
+function compactAskReceiptText(value: unknown, maxLength = 88): string {
+  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function normalizeAskActionStatus(action: any): string {
+  return typeof action?.queueStatus === 'string'
+    ? action.queueStatus.toLowerCase()
+    : '';
+}
+
+function formatAskFollowUpReceipt(result: any): AskFollowUpReceiptView | null {
+  if (!result || typeof result !== 'object') return null;
+  const actions = Array.isArray(result.followUpActions)
+    ? result.followUpActions.filter(
+        (action: any) => action && typeof action === 'object',
+      )
+    : [];
+  const missingInfo = Array.isArray(result.missingInfo)
+    ? result.missingInfo
+        .map((item: unknown) => compactAskReceiptText(item, 96))
+        .filter(Boolean)
+    : [];
+  const externalEvidenceCount = Array.isArray(result.externalEvidence)
+    ? result.externalEvidence.length
+    : 0;
+  const resolutionState = result.resolutionState;
+  const resolutionLabel = formatAskResolutionState(resolutionState);
+  const hasIncompleteState =
+    resolutionState === 'partial' ||
+    resolutionState === 'insufficient' ||
+    resolutionState === 'deferred';
+
+  if (
+    actions.length === 0 &&
+    missingInfo.length === 0 &&
+    externalEvidenceCount === 0 &&
+    !hasIncompleteState
+  ) {
+    return null;
+  }
+
+  const completedCount = actions.filter((action: any) =>
+    /^(completed|done|success|succeeded|executed)$/iu.test(
+      normalizeAskActionStatus(action),
+    ),
+  ).length;
+  const queuedCount = actions.filter((action: any) =>
+    /^(queued|pending|ready|scheduled)$/iu.test(normalizeAskActionStatus(action)),
+  ).length;
+  const failedCount = actions.filter(
+    (action: any) =>
+      /fail|error|blocked|rejected/iu.test(normalizeAskActionStatus(action)) ||
+      (typeof action?.lastError === 'string' && action.lastError.trim()),
+  ).length;
+  const manualCount = actions.filter(
+    (action: any) => action?.executionMode === 'manual',
+  ).length;
+
+  const metrics = [
+    resolutionLabel ? `状态 ${resolutionLabel}` : '',
+    actions.length > 0 ? `查证动作 ${actions.length}` : '',
+    completedCount > 0 ? `已完成 ${completedCount}` : '',
+    queuedCount > 0 ? `队列中 ${queuedCount}` : '',
+    failedCount > 0 ? `失败 ${failedCount}` : '',
+    manualCount > 0 ? `需人工 ${manualCount}` : '',
+    externalEvidenceCount > 0 ? `外部证据 ${externalEvidenceCount}` : '',
+    missingInfo.length > 0 ? `缺口 ${missingInfo.length}` : '',
+  ].filter(Boolean);
+
+  if (actions.length > 0) {
+    const label = failedCount > 0 ? 'Ask 查证需处理' : 'Ask 查证回执';
+    const tone: AskFollowUpReceiptTone =
+      failedCount > 0
+        ? 'warning'
+        : completedCount > 0 || externalEvidenceCount > 0
+          ? 'success'
+          : 'info';
+    const detail =
+      failedCount > 0
+        ? `有 ${failedCount} 个 Ask 查证动作失败或未完成；回答仍只按当前证据展示，不会自动确认结论、代表你发消息，或把缺口写成长期事实。`
+        : externalEvidenceCount > 0
+          ? `已返回 ${externalEvidenceCount} 条外部证据，并留下 ${actions.length} 个查证动作回执；它们只表示查证/待确认状态，不会自动确认结论、代表你发消息，或把缺口写成长期事实。`
+          : `已留下 ${actions.length} 个后续查证动作回执；它们只表示查证/待确认状态，不会自动确认结论、代表你发消息，或把缺口写成长期事实。`;
+    return {
+      label,
+      detail,
+      tone,
+      metrics,
+    };
+  }
+
+  const missingSnippet = missingInfo[0] ? `：${missingInfo[0]}` : '';
+  return {
+    label:
+      externalEvidenceCount > 0 ? 'Ask 外部证据回执' : 'Ask 缺口回执',
+    detail:
+      missingInfo.length > 0
+        ? `本轮仍缺少 ${missingInfo.length} 项信息${missingSnippet}。没有创建后续查证动作；回答只基于当前证据，也不会把缺口写成长期事实。`
+        : `本轮状态是${resolutionLabel || '未完整回答'}；没有创建后续查证动作，回答只基于当前证据。`,
+    tone: hasIncompleteState ? 'warning' : 'muted',
+    metrics,
+  };
+}
+
 const normalizeScope = (scope: unknown) => {
   const value = Array.isArray(scope) ? scope[0] : scope;
   if (value === 'both' || value === 'all') return 'all';
@@ -470,6 +1016,23 @@ const currentScopeLabel = computed(() =>
   getScopeLabel(currentScopeValue.value),
 );
 
+const searchFailureModeLabel = computed(() => {
+  const receipt = searchFailureReceipt.value;
+  if (!receipt) return '';
+  if (receipt.mode === 'overview') return 'Ask 智能搜索';
+  if (receipt.entityType) {
+    return `实体搜索: ${getEntityTypeName(receipt.entityType)}`;
+  }
+  return '记忆搜索';
+});
+
+const searchFailureDetail = computed(() => {
+  const receipt = searchFailureReceipt.value;
+  if (!receipt) return '';
+  const sourceLabel = receipt.source === 'ask' ? 'Ask' : '召回';
+  return `Memory Service ${sourceLabel} 没有返回真实结果：${receipt.message}`;
+});
+
 const scopeBreakdownLabel = computed(() =>
   formatScopeBreakdownLabel(entities.value),
 );
@@ -478,17 +1041,40 @@ const scopeExposureNotice = computed(() =>
   formatScopeExposureNotice(entities.value, currentScopeValue.value),
 );
 
+const scopeBoundaryNotice = computed(() =>
+  formatScopeBoundaryNotice(entities.value, currentScopeValue.value),
+);
+
 const recallChannelDiagnostics = computed(() =>
   formatRecallChannelDiagnostics(
     searchContext.value.askResult?.channelDiagnostics,
   ),
 );
 
+// 缝合证据徽章 (P0-5)：后端只在跨 ≥2 来源或 ≥7 天时返回 weave；前端只负责渲染。
+const weaveBadge = computed(() => {
+  const weave = searchContext.value.askResult?.weave;
+  if (!weave || !weave.crossSource) return null;
+  const parts: string[] = [];
+  if (weave.sourceCount >= 2) parts.push(`${weave.sourceCount} 来源`);
+  if (weave.daySpanDays >= 7) parts.push(`${weave.daySpanDays} 天`);
+  if (parts.length === 0) return null;
+  const kinds = (weave.sourceKinds || []).slice(0, 6).join(' · ');
+  return {
+    label: `缝合 ${parts.join(' × ')}`,
+    title: kinds ? `跨来源缝合：${kinds}` : '跨来源缝合证据',
+  };
+});
+
 const canBroadenSearchScope = computed(
   () =>
     searchQuery.value.trim().length >= 2 &&
     currentScopeValue.value !== 'all' &&
     currentScopeValue.value !== 'both',
+);
+
+const showResultsBroadenScopeAction = computed(
+  () => Boolean(scopeBoundaryNotice.value) && canBroadenSearchScope.value,
 );
 
 // 自动设置筛选器：如果是从实体列表页搜索过来的，自动选中该实体类型
@@ -619,6 +1205,45 @@ function compactFeedbackDetailValue(
     : normalized;
 }
 
+function getFeedbackResultPosition(entity: any): {
+  position?: number;
+  visibleCount: number;
+  totalCount: number;
+} {
+  const key = getFeedbackKey(entity);
+  const visibleResults = filteredResults.value;
+  const index = visibleResults.findIndex(
+    (result) => getFeedbackKey(result) === key,
+  );
+  return {
+    position: index >= 0 ? index + 1 : undefined,
+    visibleCount: visibleResults.length,
+    totalCount: entities.value.length,
+  };
+}
+
+function getFeedbackQueryContextLine(entity: any): string {
+  const query = compactFeedbackDetailValue(
+    searchQuery.value || searchContext.value.query,
+    80,
+  );
+  const resultPosition = getFeedbackResultPosition(entity);
+  const filterLabel =
+    selectedTypeFilter.value !== 'all'
+      ? `，筛选 ${getEntityTypeName(selectedTypeFilter.value)}`
+      : '';
+  const positionLabel =
+    resultPosition.position && resultPosition.visibleCount
+      ? `，第 ${resultPosition.position}/${resultPosition.visibleCount} 条`
+      : '';
+
+  if (query) return `本次查询：“${query}”${filterLabel}${positionLabel}`;
+  if (filterLabel || positionLabel) {
+    return `当前结果${filterLabel}${positionLabel}`;
+  }
+  return '';
+}
+
 function buildSearchResultFeedbackDetail(
   entity: any,
   targetType: MemoryFeedbackTargetType,
@@ -641,8 +1266,16 @@ function buildSearchResultFeedbackDetail(
     scope,
     query,
   ]
-    .filter(Boolean)
-    .join(':');
+      .filter(Boolean)
+      .join(':');
+  const resultPosition = getFeedbackResultPosition(entity);
+  const linkState = getLinkSafetyState(entity);
+  const rawSourceUrl =
+    typeof entity?.sourceUrl === 'string' && entity.sourceUrl.trim()
+      ? entity.sourceUrl.trim()
+      : '';
+  const safeSourceUrl = compactFeedbackDetailValue(linkState.sourceUrl, 220);
+  const sourceUrlBlocked = Boolean(rawSourceUrl && !safeSourceUrl);
   const detail = {
     version: '1',
     interaction:
@@ -662,6 +1295,17 @@ function buildSearchResultFeedbackDetail(
     query,
     scope,
     mode,
+    selected_type_filter:
+      selectedTypeFilter.value !== 'all' ? selectedTypeFilter.value : undefined,
+    result_position: resultPosition.position
+      ? String(resultPosition.position)
+      : undefined,
+    visible_result_count: resultPosition.visibleCount
+      ? String(resultPosition.visibleCount)
+      : undefined,
+    total_result_count: resultPosition.totalCount
+      ? String(resultPosition.totalCount)
+      : undefined,
     target_type: targetType,
     result_key: compactFeedbackDetailValue(getSearchResultKey(entity), 180),
     source_label: compactFeedbackDetailValue(
@@ -669,7 +1313,17 @@ function buildSearchResultFeedbackDetail(
       100,
     ),
     source_title: compactFeedbackDetailValue(entity?.sourceTitle, 140),
-    source_url: compactFeedbackDetailValue(entity?.sourceUrl, 220),
+    source_url: safeSourceUrl,
+    source_url_host: compactFeedbackDetailValue(linkState.sourceHost, 80),
+    source_url_included:
+      safeSourceUrl || rawSourceUrl
+        ? safeSourceUrl
+          ? 'true'
+          : 'false'
+        : undefined,
+    source_url_boundary: sourceUrlBlocked
+      ? 'hidden_non_http_source'
+      : undefined,
     current_title: compactFeedbackDetailValue(document.title, 120),
   };
 
@@ -704,6 +1358,34 @@ function setFeedbackState(
   feedbackByResultKey.value = next;
 }
 
+function setFeedbackEffect(
+  entity: any,
+  effect: SearchFeedbackResponseEffect | undefined,
+) {
+  const key = getFeedbackKey(entity);
+  const next = { ...feedbackEffectByResultKey.value };
+  if (effect) {
+    next[key] = effect;
+  } else {
+    delete next[key];
+  }
+  feedbackEffectByResultKey.value = next;
+}
+
+function setFeedbackFailure(
+  entity: any,
+  failure: SearchFeedbackFailure | undefined,
+) {
+  const key = getFeedbackKey(entity);
+  const next = { ...feedbackFailureByResultKey.value };
+  if (failure) {
+    next[key] = failure;
+  } else {
+    delete next[key];
+  }
+  feedbackFailureByResultKey.value = next;
+}
+
 function hydrateFeedbackStateFromResults(results: any[]) {
   const next = { ...feedbackByResultKey.value };
   const visibleKeys = new Set(results.map(getFeedbackKey));
@@ -713,18 +1395,34 @@ function hydrateFeedbackStateFromResults(results: any[]) {
       delete next[key];
     }
   }
+  const nextEffects = { ...feedbackEffectByResultKey.value };
+  for (const key of Object.keys(nextEffects)) {
+    if (!visibleKeys.has(key)) {
+      delete nextEffects[key];
+    }
+  }
+  const nextFailures = { ...feedbackFailureByResultKey.value };
+  for (const key of Object.keys(nextFailures)) {
+    if (!visibleKeys.has(key)) {
+      delete nextFailures[key];
+    }
+  }
 
   for (const entity of results) {
     const key = getFeedbackKey(entity);
+    delete nextFailures[key];
     const feedbackAction = getInitialFeedbackAction(entity);
     if (feedbackAction) {
       next[key] = feedbackAction;
     } else if (next[key] !== 'pending') {
       delete next[key];
+      delete nextEffects[key];
     }
   }
 
   feedbackByResultKey.value = next;
+  feedbackEffectByResultKey.value = nextEffects;
+  feedbackFailureByResultKey.value = nextFailures;
 }
 
 function getFeedbackLabel(entity: any): string {
@@ -734,6 +1432,209 @@ function getFeedbackLabel(entity: any): string {
   if (state === 'negative') return '已记录为不相关';
   if (state === 'cleared') return '已撤销反馈';
   return '';
+}
+
+function getFeedbackStatusTone(entity: any): SearchFeedbackState | undefined {
+  return feedbackByResultKey.value[getFeedbackKey(entity)];
+}
+
+function getFeedbackTargetTypeLabel(
+  targetType: MemoryFeedbackTargetType | undefined,
+): string {
+  switch (targetType) {
+    case 'message':
+      return '消息记忆';
+    case 'chunk':
+      return '资料片段';
+    case 'entity':
+      return '实体记忆';
+    case 'source_memory':
+      return '资料记忆';
+    default:
+      return '当前结果';
+  }
+}
+
+function formatFeedbackDelta(delta: number): string {
+  const percentage = Math.round(Math.abs(delta) * 100);
+  if (percentage <= 0) return '';
+  return `${delta > 0 ? '提高' : '降低'}显著性 ${percentage}%`;
+}
+
+function normalizeFeedbackResponseEffect(
+  response: any,
+  action: MemoryFeedbackAction,
+): SearchFeedbackResponseEffect | undefined {
+  const result = response?.data || response?.result || response;
+  if (!result || typeof result !== 'object') return undefined;
+  const relevancePatch = result.relevancePatch;
+  const patchStatus =
+    relevancePatch?.status === 'patched' ||
+    relevancePatch?.status === 'cleared' ||
+    relevancePatch?.status === 'ignored'
+      ? relevancePatch.status
+      : undefined;
+  const patchAction =
+    typeof relevancePatch?.patch?.action === 'string'
+      ? relevancePatch.patch.action
+      : undefined;
+  const clearedPatchCount = Array.isArray(relevancePatch?.clearedPatchIds)
+    ? relevancePatch.clearedPatchIds.length
+    : undefined;
+  const previousAction =
+    result.previousAction === 'positive' ||
+    result.previousAction === 'negative' ||
+    result.previousAction === 'clear'
+      ? result.previousAction
+      : undefined;
+  const appliedDelta =
+    typeof result.appliedDelta === 'number' &&
+    Number.isFinite(result.appliedDelta)
+      ? result.appliedDelta
+      : undefined;
+
+  if (
+    patchStatus ||
+    previousAction ||
+    appliedDelta !== undefined ||
+    clearedPatchCount !== undefined
+  ) {
+    return {
+      action,
+      previousAction,
+      appliedDelta,
+      relevancePatchStatus: patchStatus,
+      relevancePatchAction: patchAction,
+      clearedPatchCount,
+    };
+  }
+  return undefined;
+}
+
+function getFeedbackEffectLines(entity: any): string[] {
+  const effect = feedbackEffectByResultKey.value[getFeedbackKey(entity)];
+  if (!effect) return [];
+
+  const lines: string[] = [];
+  if (effect.relevancePatchStatus === 'patched') {
+    const actionLabel =
+      effect.relevancePatchAction === 'demote_for_scene'
+        ? '降权'
+        : '隐藏或降权';
+    lines.push(`服务端已创建相近场景修正：同类场景会${actionLabel}这条结果。`);
+  } else if (effect.relevancePatchStatus === 'cleared') {
+    const count = effect.clearedPatchCount;
+    lines.push(
+      count && count > 0
+        ? `服务端已清除 ${count} 条相近场景修正。`
+        : '服务端已检查并清除这条结果的相近场景修正。',
+    );
+  }
+
+  if (effect.appliedDelta != null && effect.appliedDelta !== 0) {
+    lines.push(
+      `排序信号已${formatFeedbackDelta(effect.appliedDelta)}，只影响后续召回排序。`,
+    );
+  } else if (
+    effect.action === 'negative' &&
+    effect.relevancePatchStatus === 'patched'
+  ) {
+    lines.push('没有做全局显著性降权，避免一次负反馈变成全局排除。');
+  }
+
+  if (
+    effect.action === 'clear' &&
+    effect.appliedDelta === 0 &&
+    effect.relevancePatchStatus !== 'cleared'
+  ) {
+    lines.push('没有额外排序回滚；当前结果已回到普通召回信号。');
+  }
+
+  return lines;
+}
+
+function getFeedbackSurfaceLabel(): string {
+  return searchContext.value.mode === 'overview' ? 'Ask 证据' : '记忆搜索';
+}
+
+function getFeedbackReceipt(entity: any): SearchFeedbackReceipt | undefined {
+  const state = feedbackByResultKey.value[getFeedbackKey(entity)];
+  if (!state || state === 'pending') return undefined;
+
+  const targetType = getFeedbackTargetType(entity);
+  const scopePart = currentScopeLabel.value;
+  const targetPart = getFeedbackTargetTypeLabel(targetType);
+  const surfacePart = getFeedbackSurfaceLabel();
+  const detailPrefix = `${surfacePart} / ${scopePart} / ${targetPart}`;
+
+  if (state === 'negative') {
+    return {
+      tone: 'negative',
+      label: '不相关修正范围',
+      detail: `${detailPrefix}；只降低相近场景排序，不删除这条记忆。`,
+      context: getFeedbackQueryContextLine(entity),
+      nextStep:
+        '点“撤销”会移除这次修正；原记忆仍可从搜索、时间轴或来源打开。',
+      effects: getFeedbackEffectLines(entity),
+    };
+  }
+
+  if (state === 'positive') {
+    return {
+      tone: 'positive',
+      label: '有用信号范围',
+      detail: `${detailPrefix}；会提高这条证据在相近召回里的优先级。`,
+      context: getFeedbackQueryContextLine(entity),
+      nextStep:
+        '这不会把它固定成唯一答案，后续仍会和当前证据一起复核。',
+      effects: getFeedbackEffectLines(entity),
+    };
+  }
+
+  return {
+    tone: 'cleared',
+    label: '反馈已撤销',
+    detail: `${detailPrefix}；已移除这条结果的正负标记和相近场景修正。`,
+    context: getFeedbackQueryContextLine(entity),
+    nextStep:
+      '后续排序回到向量、全文、图谱和时间等召回信号。',
+    effects: getFeedbackEffectLines(entity),
+  };
+}
+
+function getFeedbackActionLabel(action: MemoryFeedbackAction): string {
+  if (action === 'positive') return '有用反馈';
+  if (action === 'negative') return '不相关反馈';
+  return '撤销反馈';
+}
+
+function getFeedbackRestoredStateLabel(
+  state: SearchFeedbackState | undefined,
+): string {
+  if (state === 'positive') return '已恢复为“有用”状态';
+  if (state === 'negative') return '已恢复为“不相关”状态';
+  if (state === 'cleared') return '仍保持“已撤销反馈”状态';
+  return '没有写入新的反馈标记';
+}
+
+function getFeedbackFailureReceipt(
+  entity: any,
+): SearchFeedbackReceipt | undefined {
+  const failure = feedbackFailureByResultKey.value[getFeedbackKey(entity)];
+  if (!failure) return undefined;
+
+  return {
+    tone: 'error',
+    label: '反馈未提交',
+    detail: `${getFeedbackActionLabel(failure.action)}没有写入服务端；${getFeedbackRestoredStateLabel(failure.previousState)}。`,
+    context: getFeedbackQueryContextLine(entity),
+    effects: [
+      '没有创建相近场景修正、没有改变显著性，也没有删除这条记忆。',
+      `错误：${compactFeedbackDetailValue(failure.message, 120) || 'feedback_request_failed'}`,
+    ],
+    nextStep:
+      '请稍后重试；需要继续查证时，可先打开来源或调整搜索条件。',
+  };
 }
 
 function isFeedbackPending(entity: any): boolean {
@@ -772,7 +1673,10 @@ async function submitResultFeedback(
   }
   if (previousState === 'pending' || previousState === action) return;
 
+  const previousEffect =
+    feedbackEffectByResultKey.value[getFeedbackKey(entity)];
   setFeedbackState(entity, 'pending');
+  setFeedbackFailure(entity, undefined);
   try {
     const response = (await chromeAPI.sendMessage({
       type: 'SUBMIT_MEMORY_FEEDBACK',
@@ -788,6 +1692,11 @@ async function submitResultFeedback(
     }
 
     feedbackError.value = '';
+    setFeedbackEffect(
+      entity,
+      normalizeFeedbackResponseEffect(response, action),
+    );
+    setFeedbackFailure(entity, undefined);
     setFeedbackState(entity, action === 'clear' ? 'cleared' : action);
   } catch (error: any) {
     setFeedbackState(
@@ -798,6 +1707,13 @@ async function submitResultFeedback(
         ? previousState
         : undefined,
     );
+    setFeedbackEffect(entity, previousEffect);
+    setFeedbackFailure(entity, {
+      action,
+      message: error?.message || 'feedback_request_failed',
+      previousState:
+        previousState === 'pending' ? undefined : previousState,
+    });
     feedbackError.value =
       error?.message || '反馈暂时无法提交，请稍后再试。';
   }
@@ -879,6 +1795,24 @@ const broadenSearchScope = () => {
   router.replace({
     path: '/search',
     query: { ...route.query, q: query, scope: nextScope },
+  });
+};
+
+const retryFailedSearch = () => {
+  const receipt = searchFailureReceipt.value;
+  const query = (receipt?.query || searchQuery.value).trim();
+  if (!query) return;
+
+  const scope = (receipt?.scope || currentScopeValue.value) as RecallScope;
+  if (receipt?.mode === 'entity') {
+    store.performEntityVectorSearch(query, receipt.entityType, scope);
+  } else {
+    store.performAskSearch(query, scope);
+  }
+
+  router.replace({
+    path: '/search',
+    query: { ...route.query, q: query, scope },
   });
 };
 
@@ -1008,6 +1942,140 @@ const handleResultClick = (entity: any) => {
 
 .answer-main a:hover {
   text-decoration: underline;
+}
+
+.answer-memory-receipt {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1.25rem;
+  padding: 0.875rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.answer-memory-receipt-info {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.answer-memory-receipt-success {
+  border-color: rgba(34, 197, 94, 0.28);
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.answer-memory-receipt-warning {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(217, 119, 6, 0.08);
+}
+
+.answer-memory-receipt-muted {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: rgba(51, 65, 85, 0.22);
+}
+
+.answer-memory-receipt-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.answer-memory-receipt-label {
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.answer-memory-receipt-detail {
+  color: #cbd5e1;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.answer-memory-authority {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.answer-memory-authority-success {
+  border-color: rgba(34, 197, 94, 0.26);
+}
+
+.answer-memory-authority-info {
+  border-color: rgba(96, 165, 250, 0.24);
+}
+
+.answer-memory-authority-warning {
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.answer-memory-authority-muted {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.answer-memory-authority-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.answer-memory-authority-label {
+  flex: 0 0 auto;
+  color: #e0f2fe;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.answer-memory-authority-summary {
+  min-width: 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.answer-memory-authority-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.answer-memory-authority-metrics span {
+  color: #dbeafe;
+  font-size: 0.73rem;
+  line-height: 1.2;
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.35rem;
+  background: rgba(30, 41, 59, 0.64);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.answer-memory-receipt-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  gap: 0.35rem;
+  max-width: 260px;
+}
+
+.answer-memory-receipt-metrics span {
+  white-space: nowrap;
+  color: #bfdbfe;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  padding: 0.24rem 0.45rem;
+  border-radius: 0.375rem;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.16);
 }
 
 .answer-structured {
@@ -1301,6 +2369,34 @@ const handleResultClick = (entity: any) => {
   background: rgba(120, 53, 15, 0.32);
 }
 
+.scope-boundary-notice {
+  color: #cbd5e1;
+  font-size: 0.875rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.44);
+}
+
+.scope-broaden-inline {
+  min-height: 1.9rem;
+  padding: 0.32rem 0.6rem;
+  border: 1px solid rgba(96, 165, 250, 0.38);
+  border-radius: 0.45rem;
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.scope-broaden-inline:hover,
+.scope-broaden-inline:focus-visible {
+  border-color: rgba(147, 197, 253, 0.58);
+  background: rgba(37, 99, 235, 0.28);
+  outline: none;
+}
+
 .channel-diagnostics {
   display: flex;
   gap: 0.4rem;
@@ -1320,6 +2416,27 @@ const handleResultClick = (entity: any) => {
   font-size: 0.78rem;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.weave-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.25rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid rgba(56, 132, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(36, 89, 166, 0.16);
+  color: #bfdbfe;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.weave-badge-glyph {
+  font-size: 0.9rem;
+  opacity: 0.9;
 }
 
 .channel-diagnostic-ok {
@@ -1560,8 +2677,73 @@ const handleResultClick = (entity: any) => {
 .feedback-status {
   color: #cbd5e1;
   font-size: 0.78rem;
+  font-weight: 600;
   line-height: 1.3;
   margin-right: 0.15rem;
+}
+
+.feedback-status-pending {
+  color: #fde68a;
+}
+
+.feedback-status-positive {
+  color: #bbf7d0;
+}
+
+.feedback-status-negative {
+  color: #fecaca;
+}
+
+.feedback-status-cleared {
+  color: #cbd5e1;
+}
+
+.feedback-receipt {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.44);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.feedback-receipt strong {
+  color: #f8fafc;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.feedback-receipt-effect {
+  color: #e2e8f0;
+}
+
+.feedback-receipt-context {
+  color: #bfdbfe;
+}
+
+.feedback-receipt-positive {
+  border-color: rgba(34, 197, 94, 0.26);
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.feedback-receipt-negative {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.feedback-receipt-cleared {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(51, 65, 85, 0.16);
+}
+
+.feedback-receipt-error {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(127, 29, 29, 0.18);
 }
 
 .feedback-btn {
@@ -1583,10 +2765,16 @@ const handleResultClick = (entity: any) => {
   color: #dbeafe;
 }
 
-.feedback-btn.active {
+.feedback-btn-positive.active {
   border-color: rgba(34, 197, 94, 0.46);
   background: rgba(22, 163, 74, 0.18);
   color: #bbf7d0;
+}
+
+.feedback-btn-negative.active {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(127, 29, 29, 0.2);
+  color: #fecaca;
 }
 
 .feedback-btn:disabled {
@@ -1646,6 +2834,81 @@ const handleResultClick = (entity: any) => {
   text-align: center;
 }
 
+.search-failure-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3.5rem 2rem;
+  text-align: center;
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  border-radius: 0.75rem;
+  background: rgba(127, 29, 29, 0.12);
+  color: #fecaca;
+}
+
+.search-failure-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(248, 113, 113, 0.32);
+  border-radius: 999px;
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.search-failure-title {
+  margin: 0 0 0.5rem;
+  color: #fee2e2;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.search-failure-detail {
+  max-width: 44rem;
+  margin: 0 0 0.75rem;
+  color: #fecaca;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.search-failure-meta {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.search-failure-meta span {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(248, 113, 113, 0.2);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.28);
+  color: #fde2e2;
+  font-size: 0.82rem;
+}
+
+.search-failure-boundary {
+  max-width: 40rem;
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.search-failure-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .empty-search-state span {
   font-size: 4rem;
   margin-bottom: 1rem;
@@ -1690,6 +2953,20 @@ const handleResultClick = (entity: any) => {
 }
 
 @media (max-width: 768px) {
+  .answer-memory-receipt {
+    flex-direction: column;
+  }
+
+  .answer-memory-receipt-metrics {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .answer-memory-authority-line {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
   .search-results-grid {
     grid-template-columns: 1fr;
   }

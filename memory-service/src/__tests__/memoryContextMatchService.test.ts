@@ -217,6 +217,83 @@ describe('MemoryContextMatchService', () => {
     expect(match.selectedTopic?.label).not.toContain('Google Docs');
   });
 
+  it('keeps an issue-anchored frame visible when linked entity context carries the design clue', () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insertFrame = db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, group_id, title, summary, dominant_projects_json,
+         topics_json, role_terms_json, source_anchors_json, confidence,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertFrame.run(
+      'glip:ai-vbg-drifted-summary',
+      'glip',
+      'glip',
+      'vbg-group',
+      'MTR-141852: AI Custom VBG',
+      'Landcy Lan observed UI color differences in the join button and time background.',
+      JSON.stringify(['AI VBG']),
+      JSON.stringify(['QR code', 'UI color difference', 'join button']),
+      JSON.stringify(['backend']),
+      JSON.stringify(['MTR-141852']),
+      0.69,
+      currentTime - 9 * 24 * 60 * 60,
+      currentTime - 9 * 24 * 60 * 60,
+    );
+
+    db.prepare(
+      `INSERT INTO entities
+        (id, type, name, aliases_json, description, importance, mention_count,
+         status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'project-rcv-entity-context',
+      'Project',
+      'RCV',
+      JSON.stringify(['RCV BE']),
+      'Recent discussion: MTR-141852: AI Custom VBG needs to wait for RCV BE new design before readiness can be decided.',
+      0.8,
+      50,
+      'active',
+      currentTime - 60,
+      currentTime - 60,
+    );
+
+    for (let index = 0; index < 25; index += 1) {
+      insertFrame.run(
+        `glip:recent-design-${index}`,
+        'glip',
+        'glip',
+        `design-group-${index}`,
+        `Recent Design Candidate ${index}`,
+        `Design handoff status candidate ${index} is ready for review.`,
+        JSON.stringify([`Recent Design Candidate ${index}`]),
+        JSON.stringify(['design handoff', 'review']),
+        JSON.stringify([]),
+        JSON.stringify([`MTR-20000${index}`]),
+        0.95,
+        currentTime - index * 60,
+        currentTime - index * 60,
+      );
+    }
+
+    const match = service.match({
+      query: '那个新 design 定了吗？',
+      scope: 'work',
+    });
+
+    expect(match.candidates.map((candidate) => candidate.label)).toContain(
+      'AI VBG',
+    );
+    expect(
+      match.candidates
+        .find((candidate) => candidate.label === 'AI VBG')
+        ?.reasons.join(' '),
+    ).toContain('关联实体补充 source anchor 上下文');
+  });
+
   it('lets explicit current context override a more recent global topic', () => {
     insertMessage({
       id: 'global-status',
@@ -248,6 +325,76 @@ describe('MemoryContextMatchService', () => {
     expect(match.state).toBe('locked');
     expect(match.selectedTopic?.label).toBe('AI Notes');
     expect(match.selectedTopic?.reasons.join(' ')).toContain('当前页面');
+  });
+
+  it('keeps the current RingCentral chat topic ahead of another strong VBG Jira candidate', () => {
+    const currentTime = Math.floor(Date.now() / 1000);
+    const insertFrame = db.prepare(
+      `INSERT INTO conversation_context_frames
+        (id, surface, source_type, group_id, conversation_id, issue_key, title,
+         summary, dominant_projects_json, topics_json, role_terms_json,
+         source_anchors_json, confidence, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertFrame.run(
+      'glip:153798238214',
+      'glip',
+      'glip',
+      '153798238214',
+      '153798238214',
+      null,
+      'MTR-141852: AI Custom VBG',
+      'AI VBG backend BE is waiting for RCV BE new design.',
+      JSON.stringify(['AI VBG']),
+      JSON.stringify(['QR code', 'UI color difference', 'join button']),
+      JSON.stringify(['backend']),
+      JSON.stringify(['MTR-141852']),
+      0.95,
+      currentTime - 3600,
+      currentTime - 3600,
+    );
+    insertFrame.run(
+      'jira:MTR-145975',
+      'jira',
+      'jira',
+      'MTR-145975',
+      'MTR-145975',
+      'MTR-145975',
+      'MTR-145975: Optimize VBG selection page & refresh RCV default library - Phase 2',
+      'Story points for the VBG project were updated from 17 to 68.',
+      JSON.stringify([
+        'MTR-145975: Optimize VBG selection page & refresh RCV default library - Phase 2',
+      ]),
+      JSON.stringify(['Story Points', 'MTR', 'VBG', 'RCV']),
+      JSON.stringify([]),
+      JSON.stringify([
+        'https://jira.ringcentral.com/browse/MTR-145975#comment-76140068',
+        'MTR-145975',
+      ]),
+      0.99,
+      currentTime - 300,
+      currentTime - 300,
+    );
+
+    const match = service.match({
+      query: 'AI VBG 的 BE 部分完成情况如何？',
+      currentContext: {
+        title: 'MTR-141852: AI Custom VBG',
+        issueKey: 'MTR-141852',
+        sourceAnchorHints: ['MTR-141852'],
+      },
+      secondaryTexts: [
+        'Surface: RingCentral chat. Current chat title: MTR-141852: AI Custom VBG.',
+      ],
+      scope: 'work',
+    });
+
+    expect(match.state).toBe('locked');
+    expect(match.selectedTopic?.label).toBe('AI VBG');
+    expect(match.selectedTopic?.anchors).toContain('MTR-141852');
+    expect(match.selectedTopic?.reasons.join(' ')).toContain('当前页面');
+    expect(match.candidates[0]?.label).not.toContain('MTR-145975');
   });
 
   it('uses free-form external context title as a generic topic anchor', () => {

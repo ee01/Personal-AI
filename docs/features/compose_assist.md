@@ -1,6 +1,6 @@
 # Compose Assist
 
-_最后更新: 2026-06-03_
+_最后更新: 2026-06-17_
 
 ## 定位
 
@@ -8,7 +8,7 @@ Compose Assist 是 Personal AI 的输入框辅助层。它只负责“用户正�
 
 产品心智：用户不需要打开 Personal AI 的独立 compose 页面；Personal AI 应该在用户已经准备输入的原生输入框旁边出现，提供可预览、可插入、可忽略的上下文辅助。
 
-与 Memory Lens 的边界：Compose Assist 负责输入框旁的写作/插入辅助；Memory Lens 负责当前页面的关联记忆提示。在 RingCentral Glip 中，如果 Compose Assist icon 已经显示，Memory Lens 的右下角悬浮 icon 会自动隐藏，避免两个 Personal AI 入口在输入框附近重复出现。
+与 Memory Lens 的边界：Compose Assist 负责输入框旁的写作/插入辅助；Memory Lens 负责当前页面的关联记忆提示。在 RingCentral Glip 中，只有 Compose Assist 已经生成可一键写入输入框的文本并显示 icon 时，Memory Lens 的右下角悬浮 icon 才会自动隐藏，避免两个 Personal AI 入口在输入框附近重复出现；如果只是命中关联记忆但没有可插入文本，Compose Assist 不展示 icon，由 Memory Lens 展示关联记忆。
 
 典型场景：
 
@@ -27,6 +27,8 @@ Compose Assist 做：
 - 调用 `/composer/assist`。
 - 复用 `ContextRecallService` 召回相关消息、会议、Jira、网页、AI 对话、用户偏好和 Rehearsal 预演提醒。
 - 生成用户可预览、可插入的建议内容。RingCentral / Jira 输出必须是可直接发送的正文；Web AI 输出可以是 context pack。
+- 当 `/context-recall` 返回已编译 `ContextCue(actionType='draft_hint')` 时，优先把这句 cue 作为 Jira/RingCentral 的插入草稿来源。例如 Jira estimate 场景可以从历史 Glip 记忆生成“我先按人天口径处理 MTR-148115 的 original estimate...”。这条路径仍然走现有 `riskLevel`、`previewRequired` 和前端复核/插入规则，不绕过安全边界；重复插入并发送成功后，Outcome Loop 会给同类 cue 加 `boost` policy，而不是要求用户额外确认。
+- 向 `/composer/assist` 传入 `interactionScene` 和 `visibleFields`。前端只描述用户此刻的确定性上下文，例如 `jira_comment_composing`、`ringcentral_reply_composing`、`web_ai_prompt_composing`、当前 focus 的输入框、可见 Jira 字段和附近消息；Memory Service 再决定这些信号是否足以生成 draft hint。
 - 从用户真实插入、改写、发送和拒绝行为里学习写作风格，逐步减少“AI 味”的回复。
 - 不自动发送消息，不自动提交 comment。
 
@@ -46,13 +48,15 @@ Compose Assist 不做：
 - 用户 focus 到支持的输入框。
 - 页面上下文切换，例如 RingCentral 切换 group/thread，或 Jira issue 变化。
 - RingCentral/Jira 不把用户每次输入的 draft 当作主召回信号；Web AI `compose_to_ai` 会把 draft 当作短 prompt 补上下文的 enrichment signal，并进入 context key，避免同一页面里不同 prompt 被同一次 dismiss 吞掉。
+- Compose Assist 不等同于“页面打开就提示”。它需要输入框 focus、comment/reply/prompt 容器、issue key / conversation id / visible messages 等交互信号组成 `InteractionScene`；如果只有普通阅读、没有输入意图，应该让 Memory Lens 或静默 recall 处理。
 
 展示条件：
 
 - 后端返回 `available=true`。
-- 有非空 `insertText`。
+- 有非空 `insertText`，并且清理包装话术后仍然是可一键写入的文本。
 - `insertText` 通过可发送文本校验，不能包含 `Personal AI context`、`Please review`、`我理解当前...`、`我这边先补充...` 等包装话术。
 - `confidence >= envConfig.COMPOSER_GUARD_CONFIDENCE_THRESHOLD`，默认 `0.78`。
+- 如果只命中高相关 evidence / 关联记忆，但没有生成可一键写入的 `insertText`，前端不挂 Compose Assist icon，也不显示 `草稿回执`；这类只读关联记忆应走 Memory Lens 的相关记忆卡片。
 
 UI 行为：
 
@@ -62,17 +66,21 @@ UI 行为：
 - 非 Web AI 场景可以用轻量 glow 标识当前输入框；ChatGPT/Gemini/Claude/豆包等 Web AI 输入框只在右上角显示 Personal AI icon/popover，不把输入框变成红色发光状态。
 - 切换输入框或焦点离开可支持输入框时，旧输入框的 glow/icon 会被清理，避免误导用户还有可插入建议。
 - 点击 icon 只执行一个动作：把建议内容直接插入当前输入框；不发送、不提交。textarea/input 会按当前光标或选区插入；contenteditable 输入框也会优先尊重当前光标/选区，选中文本时替换选区，没有可用选区时才追加到末尾。
-- 插入成功后会短暂显示 `撤销`，用于误点或发现建议不合适时恢复插入前草稿；撤销后同一建议不会立刻再次弹出，避免把用户拉进重复插入循环。
+- 插入成功后会短暂显示 `已插入草稿 / 未发送，可继续编辑 / 撤销`，用于误点或发现建议不合适时恢复插入前草稿；撤销后同一建议不会立刻再次弹出，避免把用户拉进重复插入循环。
+- 如果当前输入框临时变成只读、禁用或拒绝写入，前端会显示 `未写入草稿` 回执，说明 Personal AI 没有发送或提交，并提示重新聚焦输入框后重试；这类失败不会记录 accepted 反馈或正向校准 trace。
 - 悬浮预览只展示待插入正文，不展示“记忆关联”、来源卡片、复制/取消/插入按钮，也不把用户带到记忆详情页。
-- 如果建议使用了 Rehearsal 预演提醒，悬浮预览会额外显示一行“预演提醒”和命中的主要线索，例如人物、同会话或主题；这只是来源提示，不是可点击证据卡。第一次点击会先锁定预览并提示核对未来场景是否仍适合，确认后才插入草稿。
+- 悬浮/锁定预览会显示紧凑 `草稿回执`：插入对象、动作边界、复核边界和建议依据数量。它只说明“点击后写入哪个草稿、是否需要二次确认、不会发送/提交”，不展开来源链接，也不新增管理入口。
+- 悬浮/锁定预览会先显示紧凑 `来源路由`：当前输入框被识别成 RingCentral 主会话/thread、Jira comment 还是 Web AI prompt；当前上下文来自可见消息、issue 字段/comment 或当前 prompt；这次请求允许召回哪些来源；以及草稿不会发送、Web AI 只插 context pack、当前目标 AI 自己的历史已从本次前端 allowlist 排除等路由边界。它是来源适配回执，不是完整证据浏览器。
+- 如果后端返回高置信 evidence 但没有安全可插入正文，例如 Jira 历史 comments 已显示用户回复过，前端不显示 Compose Assist icon；匹配到的关联记忆由 Memory Lens 使用 lens icon / 相关记忆卡片展示。
+- 如果建议使用了 Rehearsal 预演提醒，悬浮预览会额外显示一行“预演提醒 / 命中线索”，优先压缩人物、项目、issue、群组、会话、会议、URL、surface、主题和关键词等结构化 cue；这只是来源提示，不是可点击证据卡。第一次点击会先锁定预览并提示核对未来场景是否仍适合，确认后才插入草稿；复核态会显示 `预演复核` 回执，把命中线索、预演脚本、只写入草稿不发送/提交的边界，以及 thumb-down 后相同场景降权的反馈路径拆开呈现。下面的“建议依据”仍会同时显示来源、分数、命中原因和压缩后的预演内容，避免用户只看到来源标题却看不到真正要带入的脚本。前端会把 Rehearsal evidence 本身当成必须复核的硬边界，即使后端漏设 `previewRequired` 也不会一键直插。
 - Web AI 输入框的悬浮标题会按主要来源显示为 `Agent 历史上下文`、`Jira / 项目上下文`、`会议上下文` 或 `跨 AI 上下文`，让用户知道点击后要插入的上下文类型。
-- 后端返回 `previewRequired=true` 或 `riskLevel=high` 时，第一次点击 icon 只锁定并展开建议预览，显示核对提示和 `插入` / `取消`；用户再次确认后才写入当前输入框。低风险建议仍保持一键插入。
-- 锁定复核态会显示最多 3 条紧凑“建议依据”，只列来源类型、标题/来源、置信度和命中原因，帮助用户判断是否插入；普通 hover 预览仍不展示来源卡片或额外按钮。高风险建议只暴露来源类别和置信度，避免复核层额外扩散敏感内容。
+- 后端返回 `previewRequired=true` 或 `riskLevel=high` 时，第一次点击 icon 只锁定并展开建议预览，显示核对提示和 `插入` / `取消`；`取消` 或 Escape 只退出锁定复核、回到轻量预览，不会写入草稿、不会发送、也不会把这条建议当作拒绝学习；用户再次确认后才写入当前输入框。低风险建议仍保持一键插入。
+- 锁定复核态会显示最多 3 条紧凑“建议依据”，只列来源类型、标题/来源、置信度和命中原因，帮助用户判断是否插入；普通 hover 预览仍不展示来源卡片或额外按钮。高风险建议只暴露来源类别、置信度和“来源细节已隐藏”提示，前端会隐藏具体来源名、标题和命中原因，避免复核层额外扩散敏感内容。
 - 靠近视口底部时会自动向上展开并限制高度，避免预览框被屏幕边缘挡住。
 - 用户在建议生成中或建议出现后继续编辑草稿时，前端会立刻收起旧建议并重新 debounce 请求；旧草稿版本返回的响应会被丢弃，避免插入过期回复。
-- 建议框右上角有小 thumb-down。点击后隐藏当前建议，并降低后续同类低质建议的出现概率。
-- 如果建议包含 Rehearsal 预演提醒，thumb-down 会同时把对应 activation 标记为 `irrelevant`，插入且未撤销会标记为 `accepted`，避免同一条错误预演在相同场景里反复出现。
-- `Escape` 或 thumb-down 会 dismiss 当前 context，一段时间内不再重复展示同一条。
+- 建议框右上角有小 thumb-down。点击后隐藏当前建议，显示短回执说明“当前场景会更谨慎”，并降低后续同类低质建议的出现概率；换一个 prompt / 草稿仍会重新判断，不把一次拒绝扩散成全局静默。
+- 如果建议包含 Rehearsal 预演提醒，thumb-down 会同时把对应 activation 标记为 `irrelevant`，并把短回执改成“已隐藏预演建议 / 命中线索 / 相同场景降权”，让用户知道这不是只调高当前 surface 阈值，而是按本次人物、会话、issue、主题等预演线索给同类触发降权；插入且撤销窗口结束后会标记为 `accepted`，避免同一条错误预演在相同场景里反复出现。
+- 普通预览态按 `Escape` 或点击 thumb-down 会 dismiss 当前 context，一段时间内不再重复展示同一条；锁定复核态的 `取消` / Escape 只退出复核，不写入、不学习为拒绝。
 - Web AI 输入框里的 dismiss 会把当前草稿也纳入 context key；拒绝“第一个 prompt”的建议后，在同一个 ChatGPT / 豆包 / Claude / Gemini 页面改写成另一个 prompt，仍可重新触发来源适配和 context pack。
 
 ### Web AI / Agent Compose 关键逻辑
@@ -94,23 +102,28 @@ Compose Assist 的展示阈值是输入框 surface 自己的 UI gating，不影�
 配置：
 
 - 功能开关：`chrome.storage.local.envConfig.COMPOSE_ASSIST_ENABLED`，同时受父级 `CONTEXT_ASSIST_ENABLED` 控制。
-- 存储位置：`chrome.storage.local.envConfig.COMPOSER_GUARD_CONFIDENCE_THRESHOLD`
+- 全局兜底存储：`chrome.storage.local.envConfig.COMPOSER_GUARD_CONFIDENCE_THRESHOLD`
+- 分 surface 自适应存储：`chrome.storage.local.envConfig.COMPOSER_GUARD_SURFACE_CONFIDENCE_THRESHOLDS`
 - 默认值：`0.78`
 - 下界：`0.62`
 - 上界：`0.92`
 
 反馈：
 
-- 用户点击 icon 插入建议，记录 `accepted`，阈值按“距离下界的剩余空间”非线性下降。前几次下降更明显，越接近下界下降越少。
-- 用户点击 thumb-down，记录 `rejected`，阈值按“距离上界的剩余空间”非线性上升。前几次上升更明显，越接近上界上升越少。
-- 反馈事件存储在 `chrome.storage.local.composerGuardFeedbackEvents`，最多保留最近 100 条。
+- 用户点击 icon 插入建议，记录 `accepted`，当前 surface 的阈值按“距离下界的剩余空间”非线性下降。前几次下降更明显，越接近下界下降越少。
+- 用户点击 thumb-down，记录 `rejected`，当前 surface 的阈值按“距离上界的剩余空间”非线性上升。前几次上升更明显，越接近上界上升越少。
+- thumb-down 之后前端会保留一个几秒钟的低打扰回执，而不是让 icon 静默消失；回执只说明当前建议已隐藏、当前 surface 后续更谨慎，不展开反馈表单，也不阻断用户继续输入。
+- surface 指 `ringcentral_message`、`ringcentral_thread`、`jira_issue`、`chatgpt`、`doubao`、`claude`、`gemini` 等输入框场景。某个 Web AI prompt 被拒绝，只会让同类 Web AI surface 更谨慎，不会让 RingCentral / Jira 回复助手全局变安静。
+- 反馈事件存储在 `chrome.storage.local.composerGuardFeedbackEvents`，最多保留最近 100 条，并记录 `thresholdScope` / `thresholdSurface` 方便排查是哪类输入框在调阈值。
 - 当 evidence 类型是 Rehearsal 时，Compose Assist 会复用 background 的 `CONTEXT_RECALL_FEEDBACK` 通道，把正向反馈写成 `/rehearsals/:id/feedback outcome=accepted`，负向反馈写成 `outcome=irrelevant`，并携带 `activationId`。
 - 插入后如果用户继续改写并发送，Compose Assist 会在原网页 Send / Submit / Reply 动作上生成无感校准 trace。trace 只包含 redacted diff summary、evidence id、场景 key 和行为类型，不保存完整发送文本。
 - hover 预览但没有插入、随后用户自己发送回复时，也会记录 `sent_without_insert` trace，用于校准“记忆可能相关但建议措辞/时机不对”与“召回不该出现”的差异。
 - thumb-down 除了调整前端阈值，也会写入 `wrong` trace，作为强负向校准信号。
+- 如果建议来自 Cue Compiler，`accepted/rejected` 本地反馈事件、结构化 evidence feedback 和 ambient calibration trace 都会携带 `cueIds`、`cueKeys`、`cue_id` 或 `cue_key`。Outcome Loop 因此能区分“某条记忆被用过”和“某一句 draft_hint cue 被插入、发送、改写或标记不相关”。
+- 同一句 `draft_hint` cue 重复出现 `sent_after_insert` 时，后端会生成可撤销的 `boost` policy patch；达到稳定成功阈值后，还会向 Personal Skill Foundry 写入 `Estimate wording helper` suggestion，供用户决定是否提升为正式 skill。
 - 发送前改写会额外抽取 `styleFeatureTags`，例如“用户加了哈哈”“句尾用了 ~”“删掉了夸张热情话术”“把同意图压短”。这些 tag 只描述改写方向，不保存原文。
 - 如果后续其他入口能捕捉到对方反馈“AI 味”，可以写入 `downstream_reaction` + `ai_tone_called_out`，作为强风格修正证据。
-- 如果用户已经点 thumb-down、取消复核或按 Escape 显式关闭当前建议，前端会清掉这次预览候选；后续发送自己的回复不会再追加 `sent_without_insert`，避免同一次拒绝被重复算成显式负向和隐式负向。
+- 如果用户已经点 thumb-down，或在普通预览态按 Escape 显式关闭当前建议，前端会清掉这次预览候选；后续发送自己的回复不会再追加 `sent_without_insert`，避免同一次拒绝被重复算成显式负向和隐式负向。锁定复核态的 `取消` / Escape 只是回到轻量预览，不清掉候选。
 
 设计原则：
 
@@ -118,6 +131,8 @@ Compose Assist 的展示阈值是输入框 surface 自己的 UI gating，不影�
 - 当前只收集低负担二元信号：插入代表“这条有用”，thumb-down 代表“这条不该出现”。
 - 更细的校准优先藏在用户自然动作里：插入、改写、发送、hover 后不用、撤销和 thumb-down。
 - 如后续需要诊断质量问题，可以在事件 schema 上扩展可选 reason，例如 `irrelevant_memory`、`wrong_tone`、`too_sensitive`、`already_answered`，但 UI 上应按需二级展开，而不是每次打断用户。
+
+2026-06-04 复查行业产品和研究后的建设性取舍：[Gmail Smart Compose](https://support.google.com/mail/answer/9116836) 把建议做成输入中的轻量补全，支持开关、个性化和反馈；[Outlook suggested replies](https://support.microsoft.com/en-us/office/use-suggested-replies-in-outlook-19316194-0434-43ba-a742-6b5890157379) 保留关闭入口、反馈入口，并让用户发送前可编辑；[Grammarly tone suggestions](https://support.grammarly.com/hc/en-us/articles/10674801783309-How-do-Grammarly-s-tone-suggestions-work) 是句子级接受，不直接替用户发送；[Google Smart Compose 论文](https://research.google/pubs/gmail-smart-compose-real-time-assisted-writing/) 强调 real-time、低打扰和高质量 serving；[GhostWriter](https://arxiv.org/abs/2402.08855) 与 [Interaction-Required Suggestions](https://arxiv.org/abs/2504.08726) 都强调 personalization、agency 和 fine-grained control。因此 Compose Assist 当前不增加常驻反馈表单，而是把反馈学习压进插入/拒绝/改写/发送路径，并把阈值按 surface 分开学习，避免一个场景的拒绝污染另一个场景。2026-06-08 复查 [Outlook suggested replies](https://support.microsoft.com/en-us/office/use-suggested-replies-in-outlook-19316194-0434-43ba-a742-6b5890157379)、[Google Smart Compose 介绍](https://research.google/blog/smart-compose-using-neural-networks-to-help-write-emails/) 和 [Smart Compose 论文](https://research.google/pubs/gmail-smart-compose-real-time-assisted-writing/) 后，保留“反馈低摩擦但可见”的取舍：thumb-down 不弹表单，但要给用户一个阈值学习回执，避免用户不知道系统是否真的变谨慎。2026-06-06 复查 prospective memory / implementation intention 研究后，对 Rehearsal-backed 建议额外要求复核态展示 cue 对应的行动脚本：用户确认的是“这个未来场景动作是否仍适合当前回复”，不是只确认一条来源是否相关。2026-06-10 复查 Gmail / Outlook 的写作建议控制、GhostWriter 的隐式风格学习和 AI 写作 agency 研究后，本轮继续不新增校准表单；更重要的是把隐私门做硬：即使客户端把完整句子误塞进 `redactedDiff.previewText` 这类泛用字段，后端也会拒收，并在成功响应里返回 `calibrationReceipt` 说明只存 hash、长度、tag 和证据引用。
 
 ### 无感校准 trace
 
@@ -145,6 +160,7 @@ Compose Assist 是 Ambient Calibration 的首个采样点。它不新增可见 U
 - `same_intent`、`partially_rewritten`、`different_intent` 等语义关系摘要
 - `styleFeatureTags`，例如 `casual_opening_haha`、`tilde_suffix`、`same_intent_shorter_form`、`removed_over_enthusiastic_claim`
 - evidence id、type、title、role、score
+- cue id、actionType、compileStatus、confidence、whyNow（只记录 cue 摘要，不记录 cue 正文到 trace evidenceRefs 之外的原始发送文本）
 - scene key、surface、scenario、context type、confidence
 
 正式入口：
@@ -153,7 +169,7 @@ Compose Assist 是 Ambient Calibration 的首个采样点。它不新增可见 U
 POST /api/v1/ambient-calibration/traces
 ```
 
-后端会递归拒绝 `redactedDiff` 和 `metadata` 中出现的 `rawText`、`finalText`、`suggestionText`、`composerText` 等原文字段；`rawTextStored:false` 这类布尔证明字段允许保留。重复 `id` 的 trace 不会新增写入，回执里的 `stored=false` 用于排查重试/重复上报，而不是把忽略写入误报为成功新增。
+后端会递归拒绝 `redactedDiff` 和 `metadata` 中出现的 `rawText`、`finalText`、`suggestionText`、`composerText` 等原文字段；`rawTextStored:false` 这类布尔证明字段允许保留。`redactedDiff` 还会拒绝疑似原文的长句、URL 和邮箱，即使字段名不是 raw/final/suggestion。重复 `id` 的 trace 不会新增写入，回执里的 `stored=false` 用于排查重试/重复上报，而不是把忽略写入误报为成功新增。成功响应会带 `calibrationReceipt`，列出隐私等级、证据数量、cue 数量、style signal 数量、redacted diff key 和 `hashes_lengths_tags_and_evidence_refs_only` 边界。
 
 这条 trace 当前用于后续召回调权、诊断、eval 数据沉淀和写作风格学习；不会把最终发送文本直接入库。
 
@@ -224,6 +240,8 @@ Thread 回复框：
 - 读取 issue key、summary、status、description。
 - 读取可见 comments、assignee/reporter/commenters。
 - 读取可见附件/图片 metadata：文件名、alt/title/url。
+- Jira comment composer 通过当前 focus 元素及其附近的 Atlassian comment / add-comment 容器识别；如果 focus 落在嵌套 ProseMirror、role textbox 或 comment 容器内，也应能挂载 Compose Assist icon。icon 只有在后端返回可插入建议且 confidence 达到当前 surface 阈值时显示。
+- Jira 场景会同时传 `visibleFields` 和 `interactionScene.visibleFacts`，让后端区分“用户只是在 issue 页面看已经显示的 DEV Estimate New=0.4”和“用户正在 comment 输入框里讨论这张票的估算口径”。前者不应复述字段，后者可以生成可插入的估算口径草稿。
 - Phase 1 不做截图、OCR 或上传图片 binary。
 - 输出语气应更正式，包含判断、依据或 next step，不能像即时通讯闲聊。
 
@@ -232,7 +250,7 @@ Thread 回复框：
 - 覆盖 ChatGPT、豆包、Claude、Gemini 的网页输入框。
 - 读取当前页面可见的最近 conversation turns，默认不 live 抓取完整外部平台历史。
 - 召回来源可以包含已沉淀的 `ai_chat`、`chatgpt`、`doubao`、`doubao_chat`、`codex_cli`、`claude_code_cli`、`cursor_agent_cli`、`glip`、`jira`、`meeting`、`calendar`、`web`、`manual`、`source_memory`、`system`、`user_core`、`markdown`、`reflection`、`reflection_thread`、`rehearsal`。
-- 当前目标 provider 自己的 source 会在后端移除，例如 ChatGPT 页面默认不把 `chatgpt` 历史作为“跨 AI”证据。
+- 当前目标 provider 自己的 source 会先在前端 allowlist 移除，后端再做兜底过滤。例如 ChatGPT 页面默认不把 `chatgpt` 历史作为“跨 AI”证据，豆包页面默认不把 `doubao` / `doubao_chat` 作为跨 AI 证据。
 - 输出是可插入到 prompt 输入框的 context pack，不自动提交。
 
 ### CLI agent 会话作为上下文来源
@@ -290,9 +308,9 @@ agent 会话不能按普通聊天全文入库。`agent_session` 抽取模式会�
 
 | 场景 | 前端传入的 `sourceTypes` | 说明 |
 | --- | --- | --- |
-| RingCentral 主会话/thread | `glip`, `manual`, `source_memory`, `markdown`, `web`, `jira`, `system`, `rehearsal` | 以当前聊天上下文为主，允许补充手动沉淀、资料胶囊、文档、网页、Jira、系统类记忆和预演提醒；当前前端没有把 `meeting/calendar/user_core/reflection` 放进 RingCentral allowlist。 |
-| Jira comment | `jira`, `glip`, `meeting`, `web`, `manual`, `source_memory`, `system`, `rehearsal` | 以 issue 本身为主，允许关联 Jira 历史、聊天、会议、网页、手动沉淀、资料胶囊和预演提醒。 |
-| Web AI prompt | `ai_chat`, `chatgpt`, `doubao`, `doubao_chat`, `codex_cli`, `claude_code_cli`, `cursor_agent_cli`, `glip`, `jira`, `meeting`, `calendar`, `web`, `manual`, `source_memory`, `system`, `user_core`, `markdown`, `reflection`, `reflection_thread`, `rehearsal` | 允许更广的 Personal AI 记忆进入 context pack，但仍只插入到输入框，不自动提交；当前目标 AI 自己的来源会被后端剔除。 |
+| RingCentral 主会话/thread | `glip`, `manual`, `source_memory`, `markdown`, `web`, `jira`, `system`, `user_core`, `reflection`, `reflection_thread`, `rehearsal` | 以当前聊天上下文为主，允许补充手动沉淀、资料胶囊、文档、网页、Jira、系统/画像、反思线程和预演提醒；仍不把 `meeting/calendar` 放进 RingCentral allowlist，避免会话回复被日程/会议泛背景稀释。 |
+| Jira comment | `jira`, `glip`, `meeting`, `web`, `manual`, `source_memory`, `system`, `user_core`, `reflection`, `reflection_thread`, `rehearsal` | 以 issue 本身为主，允许关联 Jira 历史、聊天、会议、网页、手动沉淀、资料胶囊、系统/画像、反思线程和预演提醒。 |
+| Web AI prompt | 基于 `ai_chat`, `chatgpt`, `doubao`, `doubao_chat`, `codex_cli`, `claude_code_cli`, `cursor_agent_cli`, `glip`, `jira`, `meeting`, `calendar`, `web`, `manual`, `source_memory`, `system`, `user_core`, `markdown`, `reflection`, `reflection_thread`, `rehearsal` 动态裁剪 | 允许更广的 Personal AI 记忆进入 context pack，但仍只插入到输入框，不自动提交；前端会先剔除当前目标 AI 自己的来源，例如 ChatGPT 页面不传 `chatgpt`，豆包页面不传 `doubao` / `doubao_chat`，后端仍保留二次过滤。 |
 | 旧调用或未传 `sourceTypes` | 非 Web AI 默认 `WORK_SOURCES`；Web AI 默认 `WEB_AGENT_SOURCES`。 | 这是后端 fallback。若前端已传 allowlist，后端会在对应默认集合中再过滤。 |
 
 ### Recall 与 rerank 权重
@@ -443,7 +461,7 @@ POST /api/v1/extractor/from-chat
 - context pack 会说明任务类型、当前目标工具是否合适，以及是否有更合适的核对入口；这只是插入前提示，不会替用户切换工具或自动打开外部系统。
 - context pack 必须保留证据边界：列出引用的本地记忆、source anchor、仍缺的信息，以及不应让外部 AI 当事实的推断。
 - 复用 `ContextRecallService` 内部的 `RecallContextExpansionService` 做短 prompt 扩写；`debug=true` 时可在 `debug.recall.contextExpansion` 看到 `expandedQuery`、`ambiguity`、`sourceAnchors`。
-- Web AI 的 `sourceTypes` 会排除当前目标 AI 自己的来源，例如在 ChatGPT 页面不会把 `chatgpt` 历史当成“跨 AI”证据；除非是显式 agent compose 场景，否则优先补其他工具、Jira、会议、网页、Source Memory 资料胶囊、手动资料和画像上下文。
+- Web AI 的 `sourceTypes` 会在前端先排除当前目标 AI 自己的来源，例如在 ChatGPT 页面不会把 `chatgpt` 历史当成“跨 AI”证据；除非是显式 agent compose 场景，否则优先补其他工具、Jira、会议、日历、网页、Source Memory 资料胶囊、手动资料和画像上下文。2026-06-06 复查时已补齐前端 adapter 的 `calendar` allowlist，避免会前/日程线索只存在于后端默认值、但浏览器实际请求漏召回。2026-06-13 复查后，前端 Web AI adapter 也会按当前 provider 裁剪 allowlist，并让 `来源路由` 回执显示“当前 AI 自身历史已排除”；后端过滤仍作为兼容旧调用的兜底。
 - 如果 prompt 存在歧义，例如“那个 BE ready 了吗”但当前页面没有足够上下文，Context Recall 会返回 ambiguous，不替用户静默选择项目。
 
 ## 与 Today Pilot 的关系
@@ -469,11 +487,14 @@ Today Pilot 负责“今天要注意什么”和“会议前已经准备了什�
 
 - Gmail Smart Compose 适合短补全：低打扰、用户显式接受、可关闭个性化。
 - RingCentral AI Writer、Atlassian Intelligence draft reply 和 Outlook Copilot 都把写作辅助放在原生 composer 里，用户仍要最终 review/insert/send；Personal AI 保持相同边界。
+- 2026-06-06 复查 RingCentral AI Assistant、Atlassian Intelligence draft reply、Gmail Smart Compose 与 Microsoft Research 写作助手心智模型研究后，建设性方向不是增加一个新的全屏 review 控制台，而是让每个输入框 surface 的来源适配更准：RingCentral/Jira 继续偏当前会话/issue，Web AI context pack 要能带入 Jira、会议、日历和 agent/session 证据，同时保留用户最终编辑和发送权。
 - AnchoredAI 和 ContextCite 相关研究都指向同一个 UX 要求：生成内容要能让用户理解上下文来源，尤其是跨工具 context pack，不能只给一段看似完整的答案。
 - Grammarly rewrite / Outlook Copilot 的整段候选预览更适合独立写作面板，不适合当前“输入框旁一键插入”的 Compose Assist。
 - Compose Assist 的当前原则是低摩擦：低风险 icon 点击直接插入，来源解释交给 Memory Lens / Memory Explore，而不是在输入框旁展开记忆关联；但当后端已经标记需预览或高风险时，交互应增加一次明确确认，避免用户误点后直接污染草稿。
 - 本轮补查后保留“插入后继续编辑”的边界：像 Smart Compose / Grammarly / Outlook Copilot 一样，Personal AI 只把建议放进草稿，不越过用户的发送动作；但插入位置必须服从用户当前编辑意图，避免把已有草稿粗暴挪到末尾或覆盖掉未选中的内容。
 - 直接插入也要有恢复路径：如果建议进入草稿后用户马上发现不合适，应能在原输入框旁撤销到插入前状态，而不是只能依赖各网站不一定可靠的浏览器 undo 栈。
+- 2026-06-06 复查后保留的安全取舍：Gmail / Outlook / Grammarly / Atlassian 这类写作辅助都把建议留在用户可审阅、可编辑、可插入的草稿层；AnchoredAI、ContextCite 和 Interaction-Required Suggestions 的研究也强调 agency、来源可理解和细粒度控制。因此 Compose Assist 对 Rehearsal、high risk 这类跨场景/敏感建议采用前端硬复核；其中 high risk 只在输入框旁给来源类别和置信度，不把具体私密来源名展开成新的泄露面。
+- 2026-06-09 补查 Gmail Smart Compose、Outlook/Copilot email drafting、Sales Copilot email draft 和写作辅助 overreliance/agency 研究后，本轮不新增全屏审阅或表单，而是在输入框旁增加 `草稿回执`：用户先知道这是 context pack / 回复草稿、点击只会插入不会发送、高风险或预演为什么要二次确认，以及背后有几条证据。这比把完整来源卡塞进 hover 里更低打扰，也更能防止误把 AI 建议当成已发送或已核验的事实。2026-06-11 复查 [RingCentral AI Writer](https://support.ringcentral.com/article-v2/Using-AI-to-write-and-improve-messages-in-the-RingCentral-app.html?brand=RingCentral&language=en_US&product=RingEX)、[Atlassian Intelligence draft replies](https://support.atlassian.com/jira-service-management-cloud/docs/draft-replies-for-your-customers-using-atlassian-intelligence/)、[Gmail Smart Compose 论文](https://research.google/pubs/gmail-smart-compose-real-time-assisted-writing/)、[GhostWriter](https://arxiv.org/abs/2402.08855) 和 [Interaction-Required Suggestions](https://aclanthology.org/2025.in2writing-1.6/) 后，本轮补上 `来源路由` 回执：来源适配要像产品内 AI 写作功能一样留在原输入框里，但用户需要知道这次为什么按聊天、Jira 或 Web AI context pack 路径工作，以及哪些记忆来源被允许进入召回。2026-06-13 复查同类产品和写作 agency 研究后，进一步把 Web AI context pack 的当前 provider 排除提前到前端：用户在 ChatGPT 里看到的是其他 AI/agent/Jira/会议/资料记忆带来的上下文，而不是 ChatGPT 自己的历史回流。2026-06-15 复查 ContextCite / AnchoredAI 一类来源归因研究后，高风险复核态继续不展开私密来源细节，但要显式说明“来源细节已隐藏”，让用户知道这是有意的隐私边界，不是证据缺失。
 
 ## 验证
 
@@ -525,16 +546,17 @@ report 必须能看见：
 - Web AI 短 prompt（例如 “AI VBG 的 BE 部分完成情况如何”）能通过 draft 召回并扩写到本地项目上下文。
 - ChatGPT/Gemini/Claude/豆包输入框 focus 后只显示 Personal AI icon，不给输入框加红色 glow。
 - Web AI Jira/status prompt 应显示 Jira/项目来源标签，并在 context pack 里提示实时状态要回到 Jira 或 Personal AI 项目面板核对。
-- 保存过的 Source Memory 资料胶囊能进入 Web AI context pack；当前目标 AI 自己的历史来源仍应被剔除。
+- 保存过的 Source Memory 资料胶囊能进入 Web AI context pack；当前目标 AI 自己的历史来源应在前端请求里先被剔除，并由后端继续兜底。
 - Codex CLI / Claude Code / Cursor Agent fixture JSONL 能被 Desktop App adapter 解析，且 `agent_session` 抽取结果不包含大段代码/diff/tool output。
 - `agent_session` 入库 metadata 应保留 `toolKey`、`sessionId`、`projectPath`、`taskKind`、`producedArtifacts`、`verificationSignals`。
 - 用户在旧建议请求未返回前继续输入时，不渲染也不能插入旧草稿版本的建议；输入停下后只展示基于最新 draft 的建议。
-- `previewRequired=true` 或 `riskLevel=high` 时，第一次点击 icon 只展开锁定预览；未点击 `插入` 前不能改写草稿，点击 `取消` 只关闭当前建议。
-- 含 Rehearsal 预演提醒的建议即使风险为 low，也必须走一次锁定预览，避免未来场景脚本被误点直接插入。
+- `previewRequired=true` 或 `riskLevel=high` 时，第一次点击 icon 只展开锁定预览；未点击 `插入` 前不能改写草稿，点击 `取消` 只关闭当前建议；高风险建议依据必须显示“来源细节已隐藏”，且不能泄露具体来源名、标题或命中原因。
+- 含 Rehearsal 预演提醒的建议即使风险为 low，也必须走一次锁定预览；预览和拒绝回执应能看到命中线索，避免未来场景脚本被误点直接插入或被不透明降权。
 - hover popover 不展示“记忆关联”、来源卡片或 evidence links。
 - 默认阈值 `0.78` 下，低置信建议不展示；插入会降低阈值，thumb-down 会提高阈值。
 - contenteditable 中用户选中一段草稿后点击 icon，建议应替换该选区并保留选区前后的原文；插入成功后才记录 accepted 反馈。
 - 插入后点击 `撤销` 应恢复原草稿，并且不记录 accepted 反馈、不立即重弹同一建议。
+- 输入框拒绝写入时应显示 `未写入草稿`，保留原草稿，并且不记录 accepted 反馈。
 - Web AI 场景 thumb-down 只 dismiss 当前草稿对应的建议；用户在同一页面输入不同 prompt 时，应该重新请求 `/composer/assist`。
 - 插入建议、改写后发送时，应产生 `edited_before_send` trace，且 trace 中不能包含完整最终发送文本。
 - hover 建议但不插入，随后自行发送时，应产生 `sent_without_insert` trace。

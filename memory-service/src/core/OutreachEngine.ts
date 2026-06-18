@@ -1252,7 +1252,9 @@ export class OutreachEngine {
     this.ringClient = new RingCentralClient(userDataManager, db, userId);
     this.evidencePlanner = new EvidenceResolutionPlanner();
     this.recallEngine = new RecallEngine(db);
-    this.notificationCenterService = new NotificationCenterService(db);
+    this.notificationCenterService = new NotificationCenterService(db, () =>
+      getUserRuntimeConfig(userDataManager),
+    );
   }
 
   private getRuntimeConfig() {

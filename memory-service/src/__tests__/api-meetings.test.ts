@@ -202,6 +202,18 @@ describe('Meetings API', () => {
       },
     );
     insertMeeting(
+      'meeting-filter-unsafe-pdf',
+      'Security review with blocked PDF link',
+      'Security Review',
+      'meeting-filter-unsafe-pdf',
+      2850,
+      {
+        participants: ['Jordan'],
+        pdfUrl: 'javascript:alert(1)',
+        summary: 'PDF URL was written back with an unsafe protocol.',
+      },
+    );
+    insertMeeting(
       'meeting-filter-archived',
       'Transcript mentioned migration blockers',
       'Migration Notes',
@@ -239,7 +251,7 @@ describe('Meetings API', () => {
     expect(attentionRes.statusCode).toBe(200);
     expect(
       attentionRes.json().items.map((item: any) => item.meetingId),
-    ).toEqual(['meeting-filter-attention']);
+    ).toEqual(['meeting-filter-attention', 'meeting-filter-unsafe-pdf']);
 
     const transcriptSearchRes = await app.inject({
       method: 'GET',

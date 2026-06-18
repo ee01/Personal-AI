@@ -40,6 +40,50 @@ When adding or changing automation rules:
 - Put reusable executable checks in `package.json` scripts or `tools/` scripts, then reference them from this file
 - Keep feature-specific investigation notes in `docs/` or `.cursor/plans/`; do not bury required harness behavior only in a plan file
 
+### New Capability Ideation Harness
+
+When the user asks for a new Personal AI capability idea, future feature concept, or `docs/progressing` plan and has not asked for implementation, run a docs-first planning loop. Do not modify runtime code in that turn unless the user explicitly approves implementation.
+
+Start from the product vision above: Personal AI is the user's private memory system across AI conversations, messages, browsing, operations, preferences, personal skills, and memories from other platforms. The proposal should improve how those memories are retained, governed, distilled, recalled, or brought back into real scenes such as chat, meetings, Jira work, desktop workflows, and conversations with other AI tools.
+
+Before choosing the idea:
+
+- Set or suggest the Codex conversation title in the form `新能力：<capability name>` when the current tool surface supports thread titles
+- Read `AGENT.md`, then check `docs/progressing/to-verify.md` for carry-over work
+- Inspect `docs/progressing/` for active, shelved, or adjacent plans; do not propose a duplicate or a near-renamed variant
+- If the request comes from automation, read the automation memory path that was provided; for the recurring new-capability automation, check `${CODEX_HOME:-$HOME/.codex}/automations/automation-2/memory.md` when it exists
+- Check the local Reminders list named `Personal AI` for all-new feature ideas, not feedback on existing features or small improvements. If multiple suitable Reminder ideas exist, choose one at random. If the list is absent, blocked, or has no suitable new idea, say so and continue from repo, memory, product, and research signals
+- Query current real `esone.qiu` memory-service data from `10.32.56.212` with read-only checks where possible, and look for repeated user pain patterns rather than isolated anecdotes
+- Use current AI product, research paper, and expert/product references when the idea depends on the state of the art; include links so the user can inspect comparable products or sources
+- Prefer mechanisms, governance layers, retrieval/write boundaries, consolidation loops, or scene contracts over another passive overview page or user-maintained review queue
+
+The plan artifact must be written under `docs/progressing/<slug>-plan.md` and should include:
+
+- One or two concrete user scenarios before detailed design, describing the actual user journey step by step
+- Why this feature should exist, what user need it satisfies, and what makes it surprising or practically useful
+- A comparison with existing Personal AI features and nearby shelved `docs/progressing` ideas, clearly stating what already exists and what this adds
+- A small competitor or industry scan for similar AI-product patterns when relevant, with links
+- UX interaction details from the user's point of view, including source, scope, freshness, privacy, authority, review, recovery, and writeback boundaries where they matter
+- A proposed implementation shape, key data contracts, integration points, risks, and rollout phases
+- An eval decision. If success depends on recall quality, ranking, LLM judgment, generated content usefulness, or behavioral drift, the plan must say that implementation should add an `evals/` suite, run it once, produce a report, and keep iterating until the suite passes. Use real scenarios and, when needed, real `esone.qiu` memory-service data
+- A documentation handoff note saying that after implementation, the key behavior and logic must be summarized in the relevant canonical feature docs under `docs/features/` or `desktop-app/docs/features/`; create a new feature doc only when it does not fit an existing one
+
+If the capability has a UI or user interaction, also create `docs/progressing/<slug>-demo.html`:
+
+- Default the demo copy to Chinese; keep original memory snippets in their source language when useful
+- If the UI is a new page, make the demo preview that page
+- If the UI is integrated into another surface, the demo should simulate that host page and show the integrated interaction in context
+- Use realistic sample data grounded in the scenario and memory evidence, without exposing secrets or unnecessary personal data
+
+For docs/demo-only new-capability planning, validate the artifacts without drifting into implementation:
+
+- Run path-scoped whitespace checks such as `git diff --check -- AGENT.md docs/progressing/<slug>-plan.md docs/progressing/<slug>-demo.html`
+- Use `rg` to confirm required sections are present
+- If the demo has inline JavaScript, parse or check the extracted script with Node where practical
+- Browser or Playwright proof is useful for visual demos, but only report it when it actually ran
+
+If the selected idea came from a Reminder item, finish by marking that Reminder done and writing a short note on the item with the plan path, demo path if any, and a one-paragraph summary. If Reminder access is blocked or the `Personal AI` list is missing, report that exact state instead of inventing completion.
+
 ### Post-Change Verification Harness
 
 After implementing code, choose the smallest validation tier that gives real confidence. Do not run the full matrix for every tiny edit, but do escalate when the touched surface or risk justifies it.
@@ -80,6 +124,20 @@ For a new eval suite:
 - Run `npm run eval:validate`
 - Run the new/updated suite once with `npm run eval:run -- --suite <suite-id> --no-repair`
 - Return the generated report path and a short pass/fail summary to the user
+
+#### Memory Abilities Regression Gate
+
+When you change a memory **recall or write path** — `RecallEngine`, `IngestionPipeline`, `ConsolidationEngine`, `SalienceScorer`, `TruthMaintainer`, `ForgettingEngine`, `injectionScreen`, `graphPpr`, `BehaviorAffinityService`, or the `/ask` prompt assembly — run the six-ability benchmark and include the report before the Commit / Push gate:
+
+```bash
+npm run eval:memory-abilities
+# regression gate: exits non-zero if any ability drops > 0.05 below
+# evals/.baseline/memory-abilities.json
+```
+
+- The benchmark hits the `--endpoint` server (default `http://10.32.56.212:3210/api/v1/ask`), which runs the **deployed** code, not your local branch. To validate your branch's recall/write change, either run it after `npm run deploy:memory` (Tier 3), or point `--endpoint` at a local memory-service started from your branch.
+- This is a deterministic heuristic judge (no judge model), so it is reproducible. Paste the per-ability scores and the regression line into your validation evidence; any regression must be explained or fixed before delivery.
+- Rubric and baseline policy: `evals/judges/memory-abilities.md`. It is the standalone counterpart to the registry suites — intentionally not wired into `eval:run` because it judges end-to-end answers from a live server.
 
 Manual-interaction pauses:
 

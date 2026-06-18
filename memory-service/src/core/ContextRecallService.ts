@@ -24,17 +24,25 @@ import type {
   ContextRecallRequest,
   ContextRecallResponse,
   ContextRecallScope,
+  ContextRecallScopeCounts,
+  ContextRecallScopeReceipt,
+  MemoryScope,
   RecallItem,
   RecallQuery,
   RecallSourceType,
+  SceneFrame,
 } from '../types/index.js';
 import { RecallEngine } from './RecallEngine.js';
 import {
   RecallContextExpansionService,
   type RecallContextExpansion,
 } from './RecallContextExpansionService.js';
+import { CueCompilerService } from './CueCompilerService.js';
+import { MemoryCueFactService } from './MemoryCueFactService.js';
+import { MemoryOutcomeLoopService } from './MemoryOutcomeLoopService.js';
 import { RecallRelevancePatchService } from './RecallRelevancePatchService.js';
 import { RehearsalActivationService } from './RehearsalActivationService.js';
+import { SceneFrameService } from './SceneFrameService.js';
 import { buildExploreLink } from '../utils/exploreLink.js';
 import { buildRecallPresentation } from '../utils/recallPresentation.js';
 import { getRecallFeedbackAction } from '../utils/recallFeedback.js';
@@ -235,6 +243,22 @@ interface AnchorBuckets {
   source: Set<string>;
 }
 
+const SOURCE_MEMORY_KIND_LABELS: Record<string, string> = {
+  jira_comment: 'Jira 评论',
+  manual: '手动资料',
+  message_reply: '外发回复',
+  selection: '选区资料',
+  visual_memory: '视觉证据',
+  web_ai_prompt: 'AI 提问',
+  webpage: '整页资料',
+};
+
+const SOURCE_MEMORY_CAPTURE_MODE_LABELS: Record<string, string> = {
+  auto: '自动保存',
+  manual: '主动保存',
+  suggested: '建议保存',
+};
+
 interface SourceMemoryContextRow {
   id: string;
   source_kind: string;
@@ -259,21 +283,25 @@ interface AnchorOverlap {
 
 type SuppressionReason =
   | 'broadcast_without_scene_anchor'
+  | 'current_page_field_echo'
   | 'generic_title_without_anchor'
   | 'low_anchor_overlap'
   | 'off_domain_tool_context'
+  | 'source_memory_missing_issue_anchor'
   | 'user_relevance_patch'
   | 'weak_semantic_only';
 
 const AUTOPILOT_QUIET_REASON_LABELS: Record<string, string> = {
   ambiguous_context: '当前指代存在多个候选话题',
   broadcast_without_scene_anchor: '广播/公告缺少当前场景锚点',
+  current_page_field_echo: '当前页面已经显示该字段值',
   duplicate_source_cluster: '同一来源的重复记忆已合并',
   generic_title_without_anchor: '标题信息量低且无场景锚点',
   low_anchor_overlap: '缺少当前场景锚点',
   low_information_match: '候选内容信息量不足',
   low_information_meeting_context: '当前会议只是空壳信息',
   off_domain_tool_context: '工具或项目场景不一致',
+  source_memory_missing_issue_anchor: '资料记忆缺少当前 Jira 票号锚点',
   query_too_short: '当前输入过短',
   source_context_excluded: '当前来源或已排除来源',
   user_relevance_patch: '这类证据已被你标记为不符合当前场景',
@@ -285,6 +313,10 @@ export class ContextRecallService {
   private contextExpansion: RecallContextExpansionService;
   private rehearsalActivation: RehearsalActivationService;
   private relevancePatches: RecallRelevancePatchService;
+  private sceneFrames: SceneFrameService;
+  private cueFacts: MemoryCueFactService;
+  private cueCompiler: CueCompilerService;
+  private outcomeLoop: MemoryOutcomeLoopService;
 
   constructor(
     private db: Database.Database,
@@ -294,6 +326,10 @@ export class ContextRecallService {
     this.contextExpansion = new RecallContextExpansionService(db);
     this.rehearsalActivation = new RehearsalActivationService(db);
     this.relevancePatches = new RecallRelevancePatchService(db, userId);
+    this.sceneFrames = new SceneFrameService();
+    this.cueFacts = new MemoryCueFactService();
+    this.cueCompiler = new CueCompilerService();
+    this.outcomeLoop = new MemoryOutcomeLoopService(db, userId);
   }
 
   async recall(request: ContextRecallRequest): Promise<ContextRecallResponse> {
@@ -331,6 +367,7 @@ export class ContextRecallService {
         matches: [],
         topMatch: null,
         queryTimeMs: Date.now() - startedAt,
+        scopeReceipt: buildContextRecallScopeReceipt(request, [], []),
         autopilot,
         debug: request.debug
           ? {
@@ -357,10 +394,16 @@ export class ContextRecallService {
     });
     const expandedRequest = applyContextExpansion(request, expansion);
     const normalized = normalizeContextQuery(expandedRequest);
+    const sceneFrame = this.sceneFrames.fromContextRecallRequest(
+      request,
+      preliminaryNormalized.query,
+    );
     const debug: ContextRecallDebug | undefined = request.debug
       ? {
           normalizedQuery: normalized.query,
           channelsHit: [] as string[],
+          sceneFrame,
+          interactionScene: request.interactionScene,
           contextExpansion: {
             expandedQuery: expansion.expandedQuery,
             addedTerms: expansion.addedTerms,
@@ -389,6 +432,7 @@ export class ContextRecallService {
         matches: [],
         topMatch: null,
         queryTimeMs: Date.now() - startedAt,
+        scopeReceipt: buildContextRecallScopeReceipt(expandedRequest, [], []),
         autopilot,
         debug: debug
           ? { ...debug, rejectedReason: 'ambiguous_context', autopilot }
@@ -418,6 +462,11 @@ export class ContextRecallService {
         matches: rehearsalMatches,
         topMatch: rehearsalMatches[0] ?? null,
         queryTimeMs: Date.now() - startedAt,
+        scopeReceipt: buildContextRecallScopeReceipt(
+          expandedRequest,
+          rehearsalMatches,
+          rehearsalMatches,
+        ),
         autopilot,
         debug: debug
           ? { ...debug, rejectedReason: normalized.rejectedReason, autopilot }
@@ -525,18 +574,44 @@ export class ContextRecallService {
       expandedRequest,
       candidateMatches,
     );
-    const hiddenCount = patchedCandidateMatches.filter(
+    const surfaceAwareCandidateMatches =
+      applySourceMemoryIssueAnchorSuppression(
+        applyCurrentSurfaceEchoSuppression(
+          patchedCandidateMatches,
+          expandedRequest,
+        ),
+        request,
+      );
+    const cueFacts = this.cueFacts.extractFactsForScene(
+      sceneFrame,
+      surfaceAwareCandidateMatches.filter(
+        (match) => match.displayPriority !== 'hidden',
+      ),
+    );
+    const cueCompilation = this.cueCompiler.attachCuesToMatches({
+      sceneFrame,
+      matches: surfaceAwareCandidateMatches,
+      facts: cueFacts,
+      policyResolver: (cue) =>
+        this.outcomeLoop.getCuePolicy({
+          cueKey: cue.cueKey,
+          surface: sceneFrame.surface,
+          sceneKey: buildOutcomeSceneKey(sceneFrame, request.url),
+        }),
+    });
+    const cueCandidateMatches = cueCompilation.matches;
+    const hiddenCount = cueCandidateMatches.filter(
       (match) => match.displayPriority === 'hidden',
     ).length;
     const suppressionReasons = Array.from(
       new Set(
-        patchedCandidateMatches
+        cueCandidateMatches
           .map((match) => match.suppressionReason)
           .filter((reason): reason is string => Boolean(reason)),
       ),
     );
     let displayFilteredMatches = 0;
-    const matches = patchedCandidateMatches
+    const matches = cueCandidateMatches
       .filter((match) => {
         if (!isDisplayableContextMatch(match)) {
           displayFilteredMatches += 1;
@@ -560,9 +635,20 @@ export class ContextRecallService {
     if (debug && suppressionReasons.length) {
       debug.suppressionReasons = suppressionReasons;
     }
-    const autopilot = buildAutopilotDecision({
-      request: expandedRequest,
-      sceneAnchors,
+    if (debug) {
+      debug.cueCompiler = {
+        sceneType: sceneFrame.sceneType,
+        compiledCount: cueCompilation.compiledCount,
+        suppressedCount: cueCompilation.suppressedCount,
+        policySuppressedCount: cueCompilation.policySuppressedCount,
+        boostedCount: cueCompilation.boostedCount,
+        needsMoreEvidenceCount: cueCompilation.needsMoreEvidenceCount,
+        factCount: cueFacts.length,
+      };
+    }
+      const autopilot = buildAutopilotDecision({
+        request: expandedRequest,
+        sceneAnchors,
       matches,
       candidateCount:
         result.items.length + rehearsalMatches.length + sourceMemoryMatches.length,
@@ -571,7 +657,7 @@ export class ContextRecallService {
       sourceExcludedCount,
       duplicateMergedCount,
       quietReasons: buildAutopilotQuietReasons({
-        rankedMatches: patchedCandidateMatches,
+        rankedMatches: cueCandidateMatches,
         lowInformationCount: lowInformationMatches,
         sourceExcludedCount,
         duplicateMergedCount,
@@ -581,15 +667,112 @@ export class ContextRecallService {
     if (debug) {
       debug.autopilot = autopilot;
     }
+    const scopeReceipt = buildContextRecallScopeReceipt(
+      expandedRequest,
+      matches,
+      candidateMatches,
+    );
 
     return {
       matches,
       topMatch: matches[0] ?? null,
       queryTimeMs: Date.now() - startedAt,
+      scopeReceipt,
       autopilot,
       debug,
     };
   }
+}
+
+function normalizeContextRecallScope(
+  scope: ContextRecallScope | undefined,
+): ContextRecallScope {
+  return scope ?? 'all';
+}
+
+function getEffectiveContextRecallScope(
+  scope: ContextRecallScope,
+): MemoryScope | 'both' {
+  return scope === 'all' || scope === 'both' ? 'both' : scope;
+}
+
+function normalizeContextMatchScope(scope: unknown): MemoryScope | undefined {
+  return scope === 'personal' || scope === 'work' ? scope : undefined;
+}
+
+function getContextMatchScope(
+  match: ContextRecallMatch,
+): MemoryScope | undefined {
+  return normalizeContextMatchScope(match.scope ?? match.metadata?.scope);
+}
+
+function countContextMatchScopes(
+  matches: ContextRecallMatch[],
+): ContextRecallScopeCounts {
+  return matches.reduce<ContextRecallScopeCounts>(
+    (counts, match) => {
+      const scope = getContextMatchScope(match);
+      if (scope === 'work' || scope === 'personal') {
+        counts[scope] += 1;
+      } else {
+        counts.unknown += 1;
+      }
+      counts.total += 1;
+      return counts;
+    },
+    { work: 0, personal: 0, unknown: 0, total: 0 },
+  );
+}
+
+function formatContextRecallScopeNote(params: {
+  requestedScope: ContextRecallScope;
+  effectiveScope: MemoryScope | 'both';
+  shown: ContextRecallScopeCounts;
+  candidates: ContextRecallScopeCounts;
+}): string {
+  const { requestedScope, effectiveScope, shown, candidates } = params;
+  if (effectiveScope === 'work') {
+    return '本次被动召回仅检索工作记忆，未纳入个人记忆。';
+  }
+  if (effectiveScope === 'personal') {
+    return '本次被动召回仅检索个人记忆，未纳入工作记忆。';
+  }
+
+  const scopeName = requestedScope === 'both' ? '工作和个人记忆' : '全部记忆';
+  if (shown.personal > 0) {
+    return `本次被动召回检索${scopeName}，已展示 ${shown.personal} 条个人记忆；展示前已按场景过滤，引用到工作场景前请确认。`;
+  }
+  if (candidates.personal > 0) {
+    return `本次被动召回检索${scopeName}；个人记忆只进入候选，展示前已被过滤。`;
+  }
+  if (shown.total === 0) {
+    return `本次被动召回检索${scopeName}，没有展示可用记忆。`;
+  }
+  return `本次被动召回检索${scopeName}，当前展示未包含个人记忆。`;
+}
+
+function buildContextRecallScopeReceipt(
+  request: Pick<ContextRecallRequest, 'scope'>,
+  shownMatches: ContextRecallMatch[],
+  candidateMatches: ContextRecallMatch[],
+): ContextRecallScopeReceipt {
+  const requestedScope = normalizeContextRecallScope(request.scope);
+  const effectiveScope = getEffectiveContextRecallScope(requestedScope);
+  const shown = countContextMatchScopes(shownMatches);
+  const candidates = countContextMatchScopes(candidateMatches);
+  return {
+    requestedScope,
+    effectiveScope,
+    shown,
+    candidates,
+    note: formatContextRecallScopeNote({
+      requestedScope,
+      effectiveScope,
+      shown,
+      candidates,
+    }),
+    includesPersonal: shown.personal > 0,
+  };
 }
 
 function applyContextExpansion(
@@ -815,7 +998,15 @@ function getSourceMemoryContextMatches(
       );
       if (!snippet) return null;
 
+      const sourceKindLabel = formatSourceMemoryKindLabel(row.source_kind);
+      const captureModeLabel = formatSourceMemoryCaptureModeLabel(
+        row.capture_mode,
+      );
+      const provenance = [sourceKindLabel, captureModeLabel]
+        .filter(Boolean)
+        .join(' / ');
       const whyRelevant = [
+        provenance ? `已保存资料：${provenance}` : '',
         matchedTerms.length
           ? `命中资料关键词：${matchedTerms.slice(0, 3).join(' / ')}`
           : '',
@@ -826,6 +1017,7 @@ function getSourceMemoryContextMatches(
         id: `source-memory:${row.id}`,
         type: 'source_memory',
         score,
+        scope: undefined,
         title: row.source_title,
         snippet,
         sourceLabel: 'source_memory',
@@ -842,6 +1034,8 @@ function getSourceMemoryContextMatches(
           sourceMemoryCapsuleId: row.id,
           sourceKind: row.source_kind,
           captureMode: row.capture_mode,
+          sourceKindLabel,
+          captureModeLabel,
           matchedTerms,
           ...(recallFeedback ? { recallFeedback } : {}),
         },
@@ -852,6 +1046,22 @@ function getSourceMemoryContextMatches(
     .filter((match): match is ContextRecallMatch => match != null)
     .sort(compareContextMatches)
     .slice(0, limit);
+}
+
+function formatSourceMemoryKindLabel(value?: string | null): string {
+  const normalized = normalizeInformationText(value || '').toLowerCase();
+  return (
+    SOURCE_MEMORY_KIND_LABELS[normalized] ||
+    normalizeInformationText(value || '')
+  );
+}
+
+function formatSourceMemoryCaptureModeLabel(value?: string | null): string {
+  const normalized = normalizeInformationText(value || '').toLowerCase();
+  return (
+    SOURCE_MEMORY_CAPTURE_MODE_LABELS[normalized] ||
+    normalizeInformationText(value || '')
+  );
 }
 
 function extractSourceMemorySearchTerms(query: string): string[] {
@@ -960,6 +1170,7 @@ function toContextMatch(
       : item.id,
     type: isSourceMemory ? 'source_memory' : item.type,
     score: item.score,
+    scope: normalizeContextMatchScope(item.scope ?? item.metadata?.scope),
     title,
     snippet,
     sourceLabel: isSourceMemory ? 'source_memory' : item.source,
@@ -1700,6 +1911,208 @@ function rankContextMatches(
   });
 }
 
+function applyCurrentSurfaceEchoSuppression(
+  matches: ContextRecallMatch[],
+  request: ContextRecallRequest,
+): ContextRecallMatch[] {
+  const visibleFields = getCurrentJiraEstimateFields(request);
+  if (!visibleFields.length) return matches;
+
+  return matches.map((match) => {
+    if (match.displayPriority === 'hidden') return match;
+    const echoedField = visibleFields.find((field) =>
+      matchEchoesVisibleField(match, field),
+    );
+    if (!echoedField) return match;
+    return {
+      ...match,
+      displayPriority: 'hidden' as const,
+      suppressionReason: 'current_page_field_echo',
+      metadata: {
+        ...(match.metadata ?? {}),
+        currentPageFieldEcho: {
+          field: echoedField.name,
+          value: echoedField.value,
+        },
+      },
+    };
+  });
+}
+
+function applySourceMemoryIssueAnchorSuppression(
+  matches: ContextRecallMatch[],
+  request: ContextRecallRequest,
+): ContextRecallMatch[] {
+  const issueKeys = extractExplicitIssueKeys(request);
+  if (!issueKeys.length) return matches;
+
+  return matches.map((match) => {
+    if (match.displayPriority === 'hidden') return match;
+    if (match.type !== 'source_memory') return match;
+    if (matchContainsIssueKey(match, issueKeys)) return match;
+
+    return {
+      ...match,
+      displayPriority: 'hidden' as const,
+      suppressionReason: 'source_memory_missing_issue_anchor',
+      metadata: {
+        ...(match.metadata ?? {}),
+        sourceMemoryIssueAnchorGate: {
+          requiredIssueKeys: issueKeys,
+        },
+      },
+    };
+  });
+}
+
+function extractExplicitIssueKeys(request: ContextRecallRequest): string[] {
+  const directValues = [
+    request.sourceContext?.issueKey,
+    request.currentContext?.issueKey,
+    request.interactionScene?.issueKey,
+    ...(request.entityHints ?? [])
+      .filter((hint) => /jira|issue|ticket|key/i.test(hint.kind))
+      .map((hint) => hint.value),
+  ];
+  const textValues = [
+    request.title,
+    request.url,
+    request.primaryText,
+    ...(request.secondaryTexts ?? []),
+    request.sourceContext?.title,
+    request.sourceContext?.url,
+    request.sourceContext?.topic,
+    request.currentContext?.title,
+    request.currentContext?.url,
+    ...(request.currentContext?.sourceAnchorHints ?? []),
+    ...(request.currentContext?.visibleMessages ?? []).map((message) =>
+      [message.sender, message.text].filter(Boolean).join(': '),
+    ),
+    request.interactionScene?.title,
+    request.interactionScene?.url,
+    request.interactionScene?.draftText,
+    request.interactionScene?.selectedText,
+    ...(request.interactionScene?.sourceAnchorHints ?? []),
+    ...(request.interactionScene?.nearbyMessages ?? []).map((message) =>
+      [message.sender, message.text].filter(Boolean).join(': '),
+    ),
+    ...(request.interactionScene?.visibleFacts ?? []).flatMap((fact) => [
+      fact.issueKey,
+      fact.rawText,
+      fact.name,
+      fact.value,
+    ]),
+  ];
+  const issueKeys = new Set<string>();
+  for (const value of [...directValues, ...textValues]) {
+    for (const issueKey of extractIssueKeysFromText(value)) {
+      issueKeys.add(issueKey);
+    }
+  }
+  return Array.from(issueKeys).slice(0, 8);
+}
+
+function matchContainsIssueKey(
+  match: ContextRecallMatch,
+  issueKeys: string[],
+): boolean {
+  const text = [
+    buildMatchRerankText(match),
+    match.sourceUrl,
+    ...(match.links ?? []).map((link) => link.url),
+    ...(match.whyRelevant ?? []),
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return issueKeys.some((issueKey) =>
+    issueKeyRegex(issueKey).test(text),
+  );
+}
+
+function extractIssueKeysFromText(value?: string | null): string[] {
+  if (!value) return [];
+  const matches = value.match(/\b[A-Z][A-Z0-9]+-\d+\b/gi) ?? [];
+  return matches.map((match) => match.toUpperCase());
+}
+
+function issueKeyRegex(issueKey: string): RegExp {
+  return new RegExp(`\\b${escapeRegExp(issueKey)}\\b`, 'i');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getCurrentJiraEstimateFields(
+  request: ContextRecallRequest,
+): Array<{ name: string; value: string }> {
+  if (request.surface !== 'web_passive' || request.contextType !== 'jira_issue') {
+    return [];
+  }
+  return (request.currentContext?.visibleFields ?? [])
+    .map((field) => ({ name: field.name, value: field.value }))
+    .concat(
+      (request.interactionScene?.visibleFacts ?? [])
+        .filter((fact) => fact.kind === 'jira_field' && fact.name)
+        .map((fact) => ({
+          name: fact.name || '',
+          value: fact.value,
+        })),
+    )
+    .filter(
+      (field) =>
+        isEstimateFieldName(field.name) &&
+        normalizeVisibleFieldValue(field.value).length > 0,
+    )
+    .slice(0, 12);
+}
+
+function isEstimateFieldName(name: string): boolean {
+  return /\b(?:dev\s+estimate\s+new|dev\s+estimate|original\s+estimate|remaining\s+estimate|time\s+estimate|story\s*points?|estimate)\b|估算|预估|工时|人天|人日/i.test(
+    name,
+  );
+}
+
+function matchEchoesVisibleField(
+  match: ContextRecallMatch,
+  field: { name: string; value: string },
+): boolean {
+  const text = normalizeEchoComparableText(buildMatchRerankText(match));
+  const fieldName = normalizeEchoComparableText(field.name);
+  const fieldValue = normalizeVisibleFieldValue(field.value);
+  if (!fieldName || !fieldValue) return false;
+  const fieldTokens = getFieldNameTokens(fieldName);
+  const hasFieldName = fieldTokens.some((token) => text.includes(token));
+  if (!hasFieldName) return false;
+  if (!text.includes(fieldValue)) return false;
+
+  return true;
+}
+
+function getFieldNameTokens(fieldName: string): string[] {
+  const tokens = new Set<string>([fieldName]);
+  if (fieldName.includes('dev estimate new')) tokens.add('development estimate');
+  if (fieldName.includes('dev estimate')) tokens.add('development estimate');
+  if (fieldName.includes('original estimate')) tokens.add('original estimate');
+  if (fieldName.includes('story points')) tokens.add('story points');
+  if (fieldName.includes('estimate')) tokens.add('estimate');
+  if (/估算|预估|工时|人天|人日/.test(fieldName)) {
+    tokens.add('估算');
+    tokens.add('工时');
+  }
+  return Array.from(tokens).filter((token) => token.length >= 2);
+}
+
+function normalizeEchoComparableText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function normalizeVisibleFieldValue(value: string): string {
+  return normalizeEchoComparableText(value)
+    .replace(/\b(hours?|days?|sp)\b/g, '')
+    .trim();
+}
+
 function createAnchorBuckets(): AnchorBuckets {
   return {
     people: new Set<string>(),
@@ -2265,6 +2678,26 @@ function isDisplayableContextMatch(match: ContextRecallMatch): boolean {
   }
 
   return hasSpecificSignal || meaningfulTokenCount >= 3 || cjkSignalChars >= 8;
+}
+
+function buildOutcomeSceneKey(
+  sceneFrame: SceneFrame,
+  fallbackUrl?: string,
+): string {
+  const modeSuffix = sceneFrame.userMode ? `:${sceneFrame.userMode}` : '';
+  const interactionSuffix = sceneFrame.interactionSceneType
+    ? `:${sceneFrame.interactionSceneType}`
+    : '';
+  if (sceneFrame.anchors.issueKey) {
+    return `jira:${sceneFrame.anchors.issueKey}${interactionSuffix}${modeSuffix}`;
+  }
+  if (sceneFrame.anchors.groupId) {
+    return `group:${sceneFrame.anchors.groupId}${interactionSuffix}${modeSuffix}`;
+  }
+  if (sceneFrame.anchors.conversationId) {
+    return `conversation:${sceneFrame.anchors.conversationId}${interactionSuffix}${modeSuffix}`;
+  }
+  return `${fallbackUrl || sceneFrame.sceneType}${interactionSuffix}${modeSuffix}`;
 }
 
 function normalizeInformationText(value?: string | null): string {

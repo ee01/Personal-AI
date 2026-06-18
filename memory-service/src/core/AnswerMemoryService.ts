@@ -31,6 +31,49 @@ export interface AnswerMemoryDiagnostic {
   threadId?: string;
   canonicalKey?: string;
   skipReason?: string;
+  receipt?: AnswerMemoryReceipt;
+  authority?: AnswerMemoryAuthorityReceipt;
+}
+
+export interface AnswerMemoryReceipt {
+  label: string;
+  detail: string;
+  tone: 'info' | 'success' | 'warning' | 'muted';
+  currentEvidenceCount?: number;
+  priorEvidenceCount?: number;
+  followUpActionCount?: number;
+  missingInfoCount?: number;
+  stale?: boolean;
+}
+
+export type AnswerMemoryEvidenceRole =
+  | 'authority'
+  | 'supporting'
+  | 'derived'
+  | 'query'
+  | 'prior';
+
+export type AnswerMemoryAuthorityDecision =
+  | 'authorized_change'
+  | 'same_meaning_no_change'
+  | 'supporting_only'
+  | 'wait_for_authority_source';
+
+export interface AnswerMemoryEvidenceRoleSummary {
+  role: AnswerMemoryEvidenceRole;
+  count: number;
+  reason: string;
+}
+
+export interface AnswerMemoryAuthorityReceipt {
+  decision: AnswerMemoryAuthorityDecision;
+  summary: string;
+  evidenceRoles: AnswerMemoryEvidenceRoleSummary[];
+  subjectKey?: string;
+  currentStance?: string;
+  priorStance?: string;
+  sameEvidence?: boolean;
+  suppressedUpdate?: boolean;
 }
 
 export interface AnswerMemoryPrior {
@@ -100,6 +143,9 @@ const FACT_FOLLOWUP_PATTERN =
 const HOW_TO_PATTERN = /\b(how to|how do|use|setup|configure)\b|怎么|如何|使用|配置|接入|设置/i;
 const BROAD_PROFILE_PATTERN =
   /\b(my|me)\b.*\b(preference|habit|style|pattern)\b|我的?(偏好|习惯|风格|模式|喜好|工作偏好|关注点)/i;
+const DERIVED_EVIDENCE_PATTERN =
+  /answer[_\s-]?memory|prior|derived|summary|reflection|llm|assistant|generated/i;
+const QUERY_EVIDENCE_PATTERN = /query|prompt|user_request|user-query/i;
 
 function normalizeText(value?: string | null): string {
   return (value || '').replace(/\s+/g, ' ').trim();
@@ -184,6 +230,107 @@ function defaultChangeConditions(intent: AnswerMemoryIntent): string[] {
   return ['新的使用说明、配置步骤或相关产品行为变化时需要更新'];
 }
 
+function countPresent(values?: unknown[]): number {
+  return Array.isArray(values) ? values.length : 0;
+}
+
+function buildAnswerMemoryReceipt(params: {
+  state: AnswerMemoryDiagnosticState;
+  skipReason?: string;
+  currentEvidenceCount?: number;
+  priorEvidenceCount?: number;
+  followUpActionCount?: number;
+  missingInfoCount?: number;
+  stale?: boolean;
+}): AnswerMemoryReceipt {
+  const currentEvidenceCount = params.currentEvidenceCount ?? 0;
+  const priorEvidenceCount = params.priorEvidenceCount ?? 0;
+  const followUpActionCount = params.followUpActionCount ?? 0;
+  const missingInfoCount = params.missingInfoCount ?? 0;
+
+  if (params.state === 'observed') {
+    return {
+      label: '已记录活答案候选',
+      detail: `本轮使用 ${currentEvidenceCount} 条当前证据，只先记为 observation；还不会把它当长期答案复用。`,
+      tone: 'info',
+      currentEvidenceCount,
+      followUpActionCount,
+      missingInfoCount,
+    };
+  }
+
+  if (params.state === 'promoted') {
+    return {
+      label: '已建立活答案',
+      detail: `重复问题已合并为活答案 thread；本轮答案仍以 ${currentEvidenceCount} 条当前证据为准。`,
+      tone: 'success',
+      currentEvidenceCount,
+      followUpActionCount,
+      missingInfoCount,
+    };
+  }
+
+  if (params.state === 'updated') {
+    return {
+      label: '活答案已更新',
+      detail: `当前证据或答案状态发生变化，已写入新版本；旧证据 ${priorEvidenceCount} 条只作为对比线索。`,
+      tone: 'success',
+      currentEvidenceCount,
+      priorEvidenceCount,
+      followUpActionCount,
+      missingInfoCount,
+      stale: params.stale,
+    };
+  }
+
+  if (params.state === 'priorHit') {
+    return {
+      label: params.stale ? '活答案需复核' : '活答案已复核',
+      detail: params.stale
+        ? `命中过往活答案，但它已到复核时间；本轮仍用 ${currentEvidenceCount} 条当前证据重新判断。`
+        : `命中过往活答案，但旧答案只用于聚焦召回；本轮用 ${currentEvidenceCount} 条当前证据复核。`,
+      tone: params.stale ? 'warning' : 'info',
+      currentEvidenceCount,
+      priorEvidenceCount,
+      followUpActionCount,
+      missingInfoCount,
+      stale: params.stale,
+    };
+  }
+
+  if (params.skipReason === 'context_ambiguous') {
+    return {
+      label: '等待话题确认',
+      detail: '这轮没有写入活答案；确认候选话题后才继续查证状态和证据。',
+      tone: 'warning',
+      currentEvidenceCount,
+      priorEvidenceCount,
+    };
+  }
+
+  if (params.skipReason === 'no_evidence') {
+    return {
+      label: '活答案未复核',
+      detail: priorEvidenceCount > 0
+        ? '命中过往活答案，但本轮没有当前证据；不会把旧答案当作事实复述。'
+        : '本轮没有可用证据，因此不会写入或更新活答案。',
+      tone: 'warning',
+      currentEvidenceCount,
+      priorEvidenceCount,
+    };
+  }
+
+  return {
+    label: '未启用活答案',
+    detail: params.skipReason
+      ? `这轮 Ask 不满足活答案条件：${params.skipReason}。`
+      : '这轮 Ask 不满足活答案条件。',
+    tone: 'muted',
+    currentEvidenceCount,
+    priorEvidenceCount,
+  };
+}
+
 function extractUnknowns(answer: string, missingInfo?: string[]): string[] {
   const unknowns = [...(missingInfo ?? [])];
   const text = normalizeText(answer);
@@ -223,6 +370,147 @@ function hashEvidenceRefs(evidenceRefs: AnswerMemoryEvidenceRef[]): string {
     .sort()
     .join('|');
   return hashText(key);
+}
+
+function classifyEvidenceRole(ref: AnswerMemoryEvidenceRef): AnswerMemoryEvidenceRole {
+  const type = normalizeKeyPart(ref.type);
+  const source = normalizeKeyPart(ref.source);
+  if (type.includes('prior') || source.includes('prior')) return 'prior';
+  if (QUERY_EVIDENCE_PATTERN.test(type) || QUERY_EVIDENCE_PATTERN.test(source)) {
+    return 'query';
+  }
+  if (DERIVED_EVIDENCE_PATTERN.test(type) || DERIVED_EVIDENCE_PATTERN.test(source)) {
+    return 'derived';
+  }
+  if (
+    type.includes('message') ||
+    type.includes('chunk') ||
+    type.includes('document') ||
+    type.includes('calendar') ||
+    type.includes('source')
+  ) {
+    return 'authority';
+  }
+  return source ? 'authority' : 'supporting';
+}
+
+function summarizeEvidenceRoles(params: {
+  evidenceRefs: AnswerMemoryEvidenceRef[];
+  priorEvidenceCount?: number;
+}): AnswerMemoryEvidenceRoleSummary[] {
+  const counts = new Map<AnswerMemoryEvidenceRole, number>();
+  for (const ref of params.evidenceRefs) {
+    const role = classifyEvidenceRole(ref);
+    counts.set(role, (counts.get(role) ?? 0) + 1);
+  }
+  if (params.priorEvidenceCount) {
+    counts.set('prior', (counts.get('prior') ?? 0) + params.priorEvidenceCount);
+  }
+  const reasons: Record<AnswerMemoryEvidenceRole, string> = {
+    authority: '原始消息、chunk、文档或日历等当前召回证据，可以驱动长期答案更新。',
+    supporting: '仅作辅助排序或解释，不能单独改写长期答案。',
+    derived: '摘要、LLM 输出或派生记忆只能辅助理解，不能作为事实更新源。',
+    query: '用户本轮问题只表达需求，不能作为事实本身。',
+    prior: '旧活答案只用于对比和聚焦召回，不是本轮事实来源。',
+  };
+  const roleOrder: AnswerMemoryEvidenceRole[] = [
+    'authority',
+    'supporting',
+    'derived',
+    'query',
+    'prior',
+  ];
+  return roleOrder
+    .map((role) => ({
+      role,
+      count: counts.get(role) ?? 0,
+      reason: reasons[role],
+    }))
+    .filter((item) => item.count > 0);
+}
+
+function buildAuthorityReceipt(params: {
+  subjectKey?: string;
+  evidenceRefs: AnswerMemoryEvidenceRef[];
+  priorEvidenceCount?: number;
+  currentStance?: string;
+  priorStance?: string;
+  sameEvidence?: boolean;
+  stale?: boolean;
+  wouldWriteVersion?: boolean;
+}): AnswerMemoryAuthorityReceipt {
+  const evidenceRoles = summarizeEvidenceRoles({
+    evidenceRefs: params.evidenceRefs,
+    priorEvidenceCount: params.priorEvidenceCount,
+  });
+  const authorityCount =
+    evidenceRoles.find((item) => item.role === 'authority')?.count ?? 0;
+  const hasCurrentEvidence = params.evidenceRefs.length > 0;
+  const sameStance = Boolean(
+    params.currentStance &&
+      params.priorStance &&
+      params.currentStance === params.priorStance,
+  );
+  const wouldWriteVersion = params.wouldWriteVersion ?? false;
+
+  if (!hasCurrentEvidence || authorityCount === 0) {
+    const decision: AnswerMemoryAuthorityDecision = hasCurrentEvidence
+      ? 'supporting_only'
+      : 'wait_for_authority_source';
+    return {
+      decision,
+      subjectKey: params.subjectKey,
+      currentStance: params.currentStance,
+      priorStance: params.priorStance,
+      sameEvidence: params.sameEvidence,
+      suppressedUpdate: wouldWriteVersion,
+      evidenceRoles,
+      summary: hasCurrentEvidence
+        ? '本轮只有辅助/派生证据，不能改写长期答案。'
+        : '本轮没有当前权威证据，不能写入或改写长期答案。',
+    };
+  }
+
+  if (
+    params.priorStance &&
+    params.currentStance &&
+    params.sameEvidence &&
+    !params.stale
+  ) {
+    if (sameStance) {
+      return {
+        decision: 'same_meaning_no_change',
+        subjectKey: params.subjectKey,
+        currentStance: params.currentStance,
+        priorStance: params.priorStance,
+        sameEvidence: params.sameEvidence,
+        suppressedUpdate: wouldWriteVersion,
+        evidenceRoles,
+        summary: '同一组权威证据下答案语义没有变化，只记录本轮复核，不写新版本。',
+      };
+    }
+    return {
+      decision: 'wait_for_authority_source',
+      subjectKey: params.subjectKey,
+      currentStance: params.currentStance,
+      priorStance: params.priorStance,
+      sameEvidence: params.sameEvidence,
+      suppressedUpdate: wouldWriteVersion,
+      evidenceRoles,
+      summary: '同一组权威证据下出现答案状态翻转，先等待新的权威来源，不用一次生成结果改写长期答案。',
+    };
+  }
+
+  return {
+    decision: 'authorized_change',
+    subjectKey: params.subjectKey,
+    currentStance: params.currentStance,
+    priorStance: params.priorStance,
+    sameEvidence: params.sameEvidence,
+    suppressedUpdate: false,
+    evidenceRoles,
+    summary: '本轮包含当前权威证据，可用于创建、提升或更新长期答案。',
+  };
 }
 
 function staleAfterForIntent(intent: AnswerMemoryIntent, currentTime: number): number {
@@ -308,6 +596,10 @@ export class AnswerMemoryService {
         diagnostic: {
           state: 'skipped',
           skipReason: canonical.skipReason ?? 'canonical_unavailable',
+          receipt: buildAnswerMemoryReceipt({
+            state: 'skipped',
+            skipReason: canonical.skipReason ?? 'canonical_unavailable',
+          }),
         },
       };
     }
@@ -320,6 +612,10 @@ export class AnswerMemoryService {
           state: 'skipped',
           canonicalKey: canonical.value.canonicalKey,
           skipReason: 'no_thread',
+          receipt: buildAnswerMemoryReceipt({
+            state: 'skipped',
+            skipReason: 'no_thread',
+          }),
         },
       };
     }
@@ -331,9 +627,15 @@ export class AnswerMemoryService {
           canonicalKey: canonical.value.canonicalKey,
           threadId: thread.id,
           skipReason: 'missing_current_version',
+          receipt: buildAnswerMemoryReceipt({
+            state: 'skipped',
+            skipReason: 'missing_current_version',
+          }),
         },
       };
     }
+    const stale =
+      typeof thread.staleAfter === 'number' && thread.staleAfter <= now();
     return {
       prior: {
         threadId: thread.id,
@@ -356,6 +658,11 @@ export class AnswerMemoryService {
         state: 'priorHit',
         canonicalKey: thread.canonicalKey,
         threadId: thread.id,
+        receipt: buildAnswerMemoryReceipt({
+          state: 'priorHit',
+          priorEvidenceCount: version.evidenceRefs.length,
+          stale,
+        }),
       },
     };
   }
@@ -370,6 +677,10 @@ export class AnswerMemoryService {
       return {
         state: 'skipped',
         skipReason: canonical.skipReason ?? 'canonical_unavailable',
+        receipt: buildAnswerMemoryReceipt({
+          state: 'skipped',
+          skipReason: canonical.skipReason ?? 'canonical_unavailable',
+        }),
       };
     }
     const evidenceRefs = buildEvidenceRefs(input.recalledItems);
@@ -378,6 +689,10 @@ export class AnswerMemoryService {
         state: 'skipped',
         canonicalKey: canonical.value.canonicalKey,
         skipReason: 'no_evidence',
+        receipt: buildAnswerMemoryReceipt({
+          state: 'skipped',
+          skipReason: 'no_evidence',
+        }),
       };
     }
 
@@ -429,6 +744,17 @@ export class AnswerMemoryService {
       return {
         state: 'observed',
         canonicalKey: canonical.value.canonicalKey,
+        authority: buildAuthorityReceipt({
+          subjectKey: canonical.value.canonicalKey,
+          evidenceRefs,
+          currentStance: stanceFromAnswer(input.answer),
+        }),
+        receipt: buildAnswerMemoryReceipt({
+          state: 'observed',
+          currentEvidenceCount: evidenceRefs.length,
+          followUpActionCount: countPresent(input.followUpActions),
+          missingInfoCount: countPresent(input.missingInfo),
+        }),
       };
     }
 
@@ -482,6 +808,17 @@ export class AnswerMemoryService {
       state: 'promoted',
       threadId: thread.id,
       canonicalKey: canonical.value.canonicalKey,
+      authority: buildAuthorityReceipt({
+        subjectKey: canonical.value.canonicalKey,
+        evidenceRefs,
+        currentStance: version.stance,
+      }),
+      receipt: buildAnswerMemoryReceipt({
+        state: 'promoted',
+        currentEvidenceCount: evidenceRefs.length,
+        followUpActionCount: countPresent(input.followUpActions),
+        missingInfoCount: countPresent(input.missingInfo),
+      }),
     };
   }
 
@@ -548,17 +885,42 @@ export class AnswerMemoryService {
     const stale =
       typeof input.thread.staleAfter === 'number' &&
       input.thread.staleAfter <= input.askedAt;
-    const shouldCreateVersion =
+    const priorEvidenceCount = currentVersion?.evidenceRefs.length ?? 0;
+    const currentStance = stanceFromAnswer(input.answer);
+    const sameEvidence =
+      Boolean(currentVersion?.evidenceHash) &&
+      currentVersion?.evidenceHash === input.evidenceHash;
+    const wouldWriteVersion =
       !currentVersion ||
       currentVersion.answerHash !== input.answerHash ||
       currentVersion.evidenceHash !== input.evidenceHash ||
       stale;
+    const authority = buildAuthorityReceipt({
+      subjectKey: input.thread.canonicalKey,
+      evidenceRefs: input.evidenceRefs,
+      priorEvidenceCount,
+      currentStance,
+      priorStance: currentVersion?.stance,
+      sameEvidence,
+      stale,
+      wouldWriteVersion,
+    });
+    const shouldCreateVersion =
+      wouldWriteVersion && authority.suppressedUpdate !== true;
 
     if (!shouldCreateVersion) {
       return {
         state: 'priorHit',
         threadId: input.thread.id,
         canonicalKey: input.thread.canonicalKey,
+        authority,
+        receipt: buildAnswerMemoryReceipt({
+          state: 'priorHit',
+          currentEvidenceCount: input.evidenceRefs.length,
+          priorEvidenceCount,
+          missingInfoCount: countPresent(input.missingInfo),
+          stale,
+        }),
       };
     }
 
@@ -566,7 +928,7 @@ export class AnswerMemoryService {
     const version = this.repo.createVersion({
       threadId: input.thread.id,
       answerMd: input.answer,
-      stance: stanceFromAnswer(input.answer),
+      stance: currentStance,
       confidence: input.confidence ?? input.thread.confidence,
       evidenceRefs: input.evidenceRefs,
       missingEvidence: unknowns,
@@ -592,6 +954,14 @@ export class AnswerMemoryService {
       state: 'updated',
       threadId: input.thread.id,
       canonicalKey: input.thread.canonicalKey,
+      authority,
+      receipt: buildAnswerMemoryReceipt({
+        state: 'updated',
+        currentEvidenceCount: input.evidenceRefs.length,
+        priorEvidenceCount,
+        missingInfoCount: countPresent(input.missingInfo),
+        stale,
+      }),
     };
   }
 

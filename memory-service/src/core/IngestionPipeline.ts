@@ -35,6 +35,7 @@ import type { UserDataManager } from '../storage/UserDataManager.js';
 import { chunkText } from '../utils/chunking.js';
 import { contentHash } from '../utils/hashing.js';
 import { normalizeContentForDedup } from '../utils/contentNormalize.js';
+import { classifyTrust, screenForInjection } from './injectionScreen.js';
 import { toSlug } from '../utils/slug.js';
 import { now, formatDate } from '../utils/time.js';
 
@@ -203,6 +204,12 @@ export class IngestionPipeline {
       ? payload.content
       : normalizeContentForDedup(payload.content);
 
+    // ---- Injection defense (P0-2): trust class + screen content ----
+    // Untrusted sources (web pages, external AI, OpenClaw) get a neutral data
+    // frame at recall time; flagged patterns are persisted for provenance.
+    const trustClass = classifyTrust(payload.sourceType);
+    const injectionScreen = screenForInjection(payload.content);
+
     // ---- 2. LLM entity extraction (non-blocking on failure) ----
     let extraction: LLMExtraction | null = null;
     const skip = payload.skipExtraction === true;
@@ -269,8 +276,8 @@ export class IngestionPipeline {
             (id, content, summary, scope, source, source_type, source_url, source_title,
              sender, group_id, group_name, timestamp,
              entities_json, matched_projects_json,
-              importance, sentiment, metadata_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              importance, sentiment, metadata_json, trust_class, injection_flags_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -290,6 +297,8 @@ export class IngestionPipeline {
           importance,
           sentiment,
           payload.metadata ? JSON.stringify(payload.metadata) : null,
+          trustClass,
+          injectionScreen.flagged ? JSON.stringify(injectionScreen.flags) : null,
           now(),
         );
     } catch (err) {
@@ -471,15 +480,20 @@ export class IngestionPipeline {
     }
 
     // ---- 9. Return result ----
-    const decision = this.buildDecision({
-      skip,
-      extraction,
-      salienceScore,
-      salienceComponents,
-      extractionStatus,
-      shouldIndex,
-      indexed,
-    });
+    const decision: IngestDecision = {
+      ...this.buildDecision({
+        skip,
+        extraction,
+        salienceScore,
+        salienceComponents,
+        extractionStatus,
+        shouldIndex,
+        indexed,
+      }),
+      trustClass,
+      sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
+      injectionFlags: injectionScreen.flagged ? injectionScreen.flags : undefined,
+    };
 
     return {
       id,

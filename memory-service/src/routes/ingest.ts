@@ -57,6 +57,18 @@ const ingestDecisionSchema = {
       type: 'string' as const,
       enum: ['post_id', 'content_source_sender'],
     },
+    trustClass: {
+      type: 'string' as const,
+      enum: ['trusted', 'internal', 'untrusted'],
+    },
+    sanitization: {
+      type: 'string' as const,
+      enum: ['clean', 'flagged'],
+    },
+    injectionFlags: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+    },
   },
 };
 

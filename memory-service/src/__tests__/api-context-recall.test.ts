@@ -43,6 +43,8 @@ describe('Context Recall API (POST /context-recall)', () => {
     db.prepare('DELETE FROM recall_training_cases').run();
     db.prepare('DELETE FROM recall_patch_runs').run();
     db.prepare('DELETE FROM recall_relevance_patches').run();
+    db.prepare('DELETE FROM memory_outcome_events').run();
+    db.prepare('DELETE FROM memory_outcome_policy_patches').run();
     db.prepare('DELETE FROM conversation_context_frames').run();
     db.prepare('DELETE FROM memory_feedback_events').run();
     db.prepare('DELETE FROM memory_metadata').run();
@@ -156,6 +158,7 @@ describe('Context Recall API (POST /context-recall)', () => {
     const top = body.matches[0];
     expect(top.id).toBeDefined();
     expect(typeof top.score).toBe('number');
+    expect(['work', 'personal']).toContain(top.scope);
     expect(typeof top.snippet).toBe('string');
     expect(top.displayPriority).toBe('p1');
     expect(top.whyRelevant?.length).toBeGreaterThan(0);
@@ -163,6 +166,12 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(body.autopilot?.mode).toBe('card');
     expect(body.autopilot?.strongCount).toBeGreaterThan(0);
     expect(body.autopilot?.sceneAnchors?.projects || body.autopilot?.sceneAnchors?.topics).toBeTruthy();
+    expect(body.scopeReceipt?.requestedScope).toBe('all');
+    expect(body.scopeReceipt?.effectiveScope).toBe('both');
+    expect(body.scopeReceipt?.shown.total).toBe(body.matches.length);
+    expect(body.scopeReceipt?.candidates.work).toBeGreaterThan(0);
+    expect(body.scopeReceipt?.candidates.personal).toBeGreaterThan(0);
+    expect(body.scopeReceipt?.note).toContain('全部记忆');
     expect(
       typeof top.exploreLink === 'string' || top.exploreLink === undefined,
     ).toBe(true);
@@ -174,6 +183,166 @@ describe('Context Recall API (POST /context-recall)', () => {
       ),
     ).toBe(true);
     expect(body.topMatch?.id).toBe(top.id);
+  });
+
+  it('returns a passive recall scope receipt for explicit work scope', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'webpage',
+        title: 'Falcon launch readiness',
+        primaryText: 'Project Falcon launch readiness',
+        scope: 'work',
+        limit: 3,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.scopeReceipt).toMatchObject({
+      requestedScope: 'work',
+      effectiveScope: 'work',
+      includesPersonal: false,
+    });
+    expect(body.scopeReceipt?.note).toContain('仅检索工作记忆');
+    expect(body.scopeReceipt?.candidates.personal).toBe(0);
+    expect(body.matches.every((match: any) => match.scope !== 'personal')).toBe(
+      true,
+    );
+  });
+
+  it('compiles a Jira estimate cue with 人天口径 for Memory Lens', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, source_url, source_title, sender, group_id, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'estimate-mtr-148115',
+      'MTR-148115 Original Estimate 口径是人天，必要时可以拆成 3h；close 没有硬性要求，due date 需要单独确认。',
+      'glip',
+      'https://app.ringcentral.com/messages/estimate-mtr-148115',
+      'MTR-148115 estimate follow-up',
+      'Esone',
+      'estimate-group',
+      'MTR Estimate',
+      now - 15,
+      0.9,
+      'neutral',
+      JSON.stringify({
+        summary:
+          'MTR-148115 original estimate 口径是人天，也提到 3h 拆分；close 无硬性要求。',
+        contextMessages: [
+          {
+            content:
+              'MTR-148115 Original Estimate 口径是人天，必要时可以拆成 3h。',
+            isMainMessage: true,
+          },
+        ],
+      }),
+      now - 15,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      9101,
+      'messages/estimate-mtr-148115',
+      1,
+      1,
+      'MTR-148115 Original Estimate 口径是人天，必要时可以拆成 3h；close 没有硬性要求，due date 需要单独确认。',
+      'hash-estimate-mtr-148115',
+      'work',
+      'glip',
+      'glip',
+      'MTR',
+      now - 15,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9101,
+      'MTR-148115 Original Estimate estimate 人天 3h close due date',
+    );
+
+    const payload = {
+      surface: 'web_passive',
+      contextType: 'jira_issue',
+      title: 'MTR-148115 Original Estimate',
+      url: 'https://jira.ringcentral.com/browse/MTR-148115',
+      primaryText: 'MTR-148115 的 Original Estimate 应该填什么口径？',
+      entityHints: [{ kind: 'jira_key', value: 'MTR-148115' }],
+      sourceTypes: ['glip', 'jira', 'manual'],
+      limit: 3,
+      debug: true,
+    };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const cue = body.topMatch?.cue;
+    expect(cue?.compileStatus).toBe('compiled');
+    expect(cue?.actionType).toBe('remember');
+    expect(cue?.cueText).toContain('上次 MTR-148115');
+    expect(cue?.cueText).toContain('original estimate');
+    expect(cue?.cueText).toContain('人天');
+    expect(cue?.sourceRefs?.length).toBeGreaterThan(0);
+    expect(cue?.cueKey).toContain('MTR-148115');
+    expect(body.debug?.sceneFrame?.sceneType).toBe('jira_estimate');
+    expect(body.debug?.cueCompiler?.compiledCount).toBeGreaterThan(0);
+
+    for (const id of ['estimate-lens-wrong-1', 'estimate-lens-wrong-2']) {
+      const feedbackRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/ambient-calibration/traces',
+        payload: {
+          id,
+          surface: 'memory_lens',
+          sceneKey: 'jira:MTR-148115',
+          action: 'wrong',
+          strength: 'strong',
+          polarity: 'negative',
+          evidenceRefs: [
+            {
+              id: body.topMatch.id,
+              type: body.topMatch.type,
+              cueId: cue.id,
+              cueKey: cue.cueKey,
+              cue: {
+                id: cue.id,
+                cueKey: cue.cueKey,
+                actionType: cue.actionType,
+                compileStatus: cue.compileStatus,
+                confidence: cue.confidence,
+              },
+            },
+          ],
+          metadata: {
+            cueIds: [cue.id],
+            cueKeys: [cue.cueKey],
+          },
+        },
+      });
+      expect(feedbackRes.statusCode).toBe(200);
+    }
+
+    const suppressedRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload,
+    });
+    expect(suppressedRes.statusCode).toBe(200);
+    const suppressed = suppressedRes.json();
+    expect(suppressed.debug?.cueCompiler?.policySuppressedCount).toBeGreaterThan(0);
+    expect(
+      suppressed.matches.some(
+        (match: any) => match.cue?.compileStatus === 'compiled',
+      ),
+    ).toBe(false);
   });
 
   it('does not reinforce access_count for passive context recall', async () => {
@@ -1126,6 +1295,260 @@ describe('Context Recall API (POST /context-recall)', () => {
       'AI-Generated VBGs',
     );
     expect(body.debug?.contextExpansion?.resolvedRole).toBe('backend');
+  });
+
+  it('suppresses Jira Lens matches that only repeat an estimate value already visible on the issue page', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const content =
+      '如在与团队成员或相关方讨论 MTR-148115 的开发估算时，请明确说明：当前 DEV Estimate New 为 0.4，但尚未最终锁定，后续仍有变动可能。';
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, 1, 1, ?, ?, 'work', 'glip', 'glip', 'MTR', ?)`,
+    ).run(
+      9071,
+      'messages/mtr-148115-dev-estimate-new',
+      content,
+      'hash-mtr-148115-dev-estimate-new',
+      now - 120,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9071,
+      content,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'web_passive',
+        contextType: 'jira_issue',
+        title: 'MTR-148115: Estimate review',
+        url: 'https://jira.ringcentral.com/browse/MTR-148115',
+        primaryText: 'MTR-148115 Estimate review',
+        currentContext: {
+          issueKey: 'MTR-148115',
+        },
+        interactionScene: {
+          sceneType: 'jira_issue_reading',
+          surface: 'memory_lens',
+          userMode: 'read',
+          url: 'https://jira.ringcentral.com/browse/MTR-148115',
+          title: 'MTR-148115: Estimate review',
+          issueKey: 'MTR-148115',
+          activeElement: {
+            kind: 'none',
+            hasFocus: false,
+          },
+          visibleFacts: [
+            {
+              kind: 'jira_field',
+              name: 'DEV Estimate New',
+              value: '0.4',
+              rawText: 'DEV Estimate New: 0.4',
+              source: 'current_page',
+              issueKey: 'MTR-148115',
+              confidence: 0.94,
+            },
+          ],
+          admission: {
+            state: 'passive_ready',
+            reasons: ['issue_key', 'visible_facts'],
+            confidence: 0.82,
+          },
+        },
+        entityHints: [{ kind: 'jira_issue_key', value: 'MTR-148115' }],
+        sourceTypes: ['glip'],
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.matches).toEqual([]);
+    expect(body.topMatch).toBeNull();
+    expect(body.autopilot?.mode).toBe('silent');
+    expect(body.autopilot?.quietReasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: 'current_page_field_echo' }),
+      ]),
+    );
+    expect(body.debug?.interactionScene?.sceneType).toBe('jira_issue_reading');
+    expect(body.debug?.sceneFrame?.interactionSceneType).toBe(
+      'jira_issue_reading',
+    );
+    expect(body.debug?.sceneFrame?.visibleFacts?.[0]?.name).toBe(
+      'DEV Estimate New',
+    );
+  });
+
+  it('keeps the same Jira estimate memory available when the user discusses the ticket in a group chat', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const content =
+      '如在与团队成员或相关方讨论 MTR-148115 的开发估算时，请明确说明：当前 DEV Estimate New 为 0.4，但尚未最终锁定，后续仍有变动可能。';
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, 1, 1, ?, ?, 'work', 'glip', 'glip', 'MTR', ?)`,
+    ).run(
+      9072,
+      'messages/mtr-148115-dev-estimate-new-chat',
+      content,
+      'hash-mtr-148115-dev-estimate-new-chat',
+      now - 120,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9072,
+      content,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'follow_thread',
+        contextType: 'message_thread',
+        title: 'MTR estimate discussion',
+        primaryText: 'MTR-148115 的 estimate 是不是要跟大家说明一下？',
+        currentContext: {
+          groupId: 'mtr-estimate-group',
+          visibleMessages: [
+            {
+              sender: 'Alice',
+              text: 'MTR-148115 的开发估算现在怎么跟团队同步？',
+            },
+          ],
+        },
+        interactionScene: {
+          sceneType: 'ringcentral_estimate_discussion',
+          surface: 'memory_lens',
+          userMode: 'read',
+          groupId: 'mtr-estimate-group',
+          nearbyMessages: [
+            {
+              sender: 'Alice',
+              text: 'MTR-148115 的开发估算现在怎么跟团队同步？',
+            },
+          ],
+          sourceAnchorHints: ['MTR-148115', 'estimate'],
+          admission: {
+            state: 'passive_ready',
+            reasons: ['nearby_messages', 'source_anchors'],
+            confidence: 0.82,
+          },
+        },
+        entityHints: [{ kind: 'jira_issue_key', value: 'MTR-148115' }],
+        sourceTypes: ['glip'],
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.matches.map((match: any) => match.id)).toContain('9072');
+    expect(body.topMatch?.snippet).toContain('DEV Estimate New 为 0.4');
+    expect(body.debug?.sceneFrame?.interactionSceneType).toBe(
+      'ringcentral_estimate_discussion',
+    );
+  });
+
+  it('suppresses generic source memory hits that lack the current RingCentral Jira issue key', async () => {
+    for (const table of [
+      'source_memory_events',
+      'source_memory_links',
+      'source_memory_triggers',
+      'source_memory_takeaways',
+      'source_memory_anchors',
+      'source_memory_capsules',
+    ]) {
+      db.prepare(`DELETE FROM ${table}`).run();
+    }
+
+    const saveRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/source-memory/capsules',
+      payload: {
+        sourceKind: 'webpage',
+        sourceUrl: 'https://example.com/sdk-bug-release-note',
+        sourceTitle: 'SDK bug release notes',
+        text:
+          'SDK bug release link and backend dependency triage notes for a general release workflow. This saved source does not mention any Jira ticket key.',
+        captureMode: 'manual',
+        interactions: {
+          copiedText: true,
+          manualClick: true,
+        },
+      },
+    });
+    expect(saveRes.statusCode).toBe(200);
+
+    const recallRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'follow_thread',
+        contextType: 'message_thread',
+        title: 'RingCentral - Joker, Warren',
+        primaryText:
+          'https://jira.ringcentral.com/browse/MTR-148115 @Esone Qiu 这个有BE 依赖，这个release 不上，帮忙挪走吧 SDK bug link',
+        currentContext: {
+          groupId: '1619118759938',
+          conversationId: '1619118759938',
+          visibleMessages: [
+            {
+              sender: 'Joker',
+              text:
+                'https://jira.ringcentral.com/browse/MTR-148115 @Esone Qiu 这个有BE 依赖，这个release 不上，帮忙挪走吧',
+            },
+            {
+              sender: 'Warren',
+              text: 'BE 是哪张？这个 BE 有 bug，release 可以不进。',
+            },
+          ],
+        },
+        interactionScene: {
+          sceneType: 'ringcentral_thread_reading',
+          surface: 'memory_lens',
+          userMode: 'read',
+          groupId: '1619118759938',
+          nearbyMessages: [
+            {
+              sender: 'Joker',
+              text:
+                'https://jira.ringcentral.com/browse/MTR-148115 @Esone Qiu 这个有BE 依赖，这个release 不上，帮忙挪走吧',
+            },
+          ],
+          sourceAnchorHints: ['MTR-148115', 'BE', 'release', 'bug', 'sdk', 'link'],
+          admission: {
+            state: 'passive_ready',
+            reasons: ['nearby_messages', 'source_anchors'],
+            confidence: 0.82,
+          },
+        },
+        entityHints: [{ kind: 'jira_issue_key', value: 'MTR-148115' }],
+        sourceTypes: ['source_memory'],
+        limit: 3,
+        debug: true,
+      },
+    });
+
+    expect(recallRes.statusCode).toBe(200);
+    const body = recallRes.json();
+    expect(body.matches).toEqual([]);
+    expect(body.topMatch).toBeNull();
+    expect(body.autopilot?.mode).toBe('silent');
+    expect(body.debug?.suppressionReasons).toContain(
+      'source_memory_missing_issue_anchor',
+    );
+    expect(body.autopilot?.quietReasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: 'source_memory_missing_issue_anchor',
+        }),
+      ]),
+    );
   });
 
   it('does not show a passive bubble when a deictic backend reference is ambiguous', async () => {

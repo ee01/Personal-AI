@@ -20,6 +20,7 @@ import { MarkdownManager } from './MarkdownManager.js';
 import { ReflectionThreadService } from './ReflectionThreadService.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
+import type { RecallItem } from '../types/index.js';
 import { toSlug } from '../utils/slug.js';
 import { now, formatDate } from '../utils/time.js';
 
@@ -92,6 +93,8 @@ const DREAM_RELATIONSHIP_SOURCE = 'generative_replay';
 const TOP_SALIENT_LIMIT = 5;
 const RECALL_TOP_K = 8;
 const LOOKBACK_DAYS = 30;
+const GROUNDING_SNIPPET_LIMIT = 5;
+const GROUNDING_SNIPPET_LENGTH = 180;
 
 // ---------------------------------------------------------------------------
 // GenerativeReplay
@@ -259,6 +262,10 @@ Return JSON: {
     const dreamPath = `dreams/${slug}-${dateStr}.md`;
     const udm = this.userDataManager;
     if (!udm) throw new Error('UserDataManager not available');
+    const groundingReceipt = this.buildGroundingReceipt(
+      memories,
+      recallResult.channels,
+    );
 
     const dreamMd = `# Dream: ${topicName}
 
@@ -275,6 +282,8 @@ ${(dreamData.risks ?? []).map((r) => `- ${r}`).join('\n') || '- None'}
 
 ## Discovered Relationships
 ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--> **${r.to}**: ${r.context}`).join('\n') || '- None'}
+
+${groundingReceipt}
 `;
 
     udm.writeFile(dreamPath, dreamMd);
@@ -335,6 +344,80 @@ ${(dreamData.newRelationships ?? []).map((r) => `- **${r.from}** --[${r.type}]--
   // =========================================================================
   // Helpers
   // =========================================================================
+
+  private buildGroundingReceipt(
+    memories: RecallItem[],
+    checkedChannels: string[],
+  ): string {
+    const typeCounts = this.countBy(memories.map((memory) => memory.type));
+    const hitChannels = new Set<string>();
+    for (const memory of memories) {
+      const channels = memory.metadata?.channels;
+      if (!Array.isArray(channels)) continue;
+      for (const channel of channels) {
+        if (typeof channel === 'string' && channel.trim()) {
+          hitChannels.add(channel.trim());
+        }
+      }
+    }
+
+    return `## Grounding Receipt
+- Recalled memories: ${memories.length}
+- Recall result types: ${this.formatCounts(typeCounts)}
+- Recall hit channels: ${this.formatList(Array.from(hitChannels))}
+- Recall checked channels: ${this.formatList(checkedChannels)}
+
+## Grounding Snippets
+${this.formatGroundingSnippets(memories)}`;
+  }
+
+  private formatGroundingSnippets(memories: RecallItem[]): string {
+    if (memories.length === 0) {
+      return '- No recalled memory snippets; treat this replay as an ungrounded hypothesis until reflection finds evidence.';
+    }
+
+    return memories
+      .slice(0, GROUNDING_SNIPPET_LIMIT)
+      .map((memory) => {
+        const identity = `${memory.type}:${memory.id}`;
+        return `- ${identity} — ${this.cleanMarkdownListText(memory.content, GROUNDING_SNIPPET_LENGTH)}`;
+      })
+      .join('\n');
+  }
+
+  private countBy(values: string[]): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const value of values) {
+      counts[value] = (counts[value] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  private formatCounts(counts: Record<string, number>): string {
+    const entries = Object.entries(counts);
+    if (entries.length === 0) return 'none';
+    return entries.map(([type, count]) => `${type} ${count}`).join(', ');
+  }
+
+  private formatList(values: string[]): string {
+    const cleaned = values
+      .map((value) => value.trim())
+      .filter((value, index, list) => value && list.indexOf(value) === index);
+    return cleaned.length > 0 ? cleaned.join(', ') : 'none';
+  }
+
+  private cleanMarkdownListText(text: string, maxLength: number): string {
+    const cleaned = text
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\|/g, '/')
+      .trim();
+    const truncated =
+      cleaned.length > maxLength
+        ? `${cleaned.slice(0, Math.max(0, maxLength - 3))}...`
+        : cleaned;
+    return truncated || '(empty memory content)';
+  }
 
   /**
    * Get entities related to a given entity ID via the relationships table.

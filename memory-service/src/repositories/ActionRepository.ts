@@ -443,6 +443,7 @@ export class ActionRepository {
     attemptId: string,
     errorMessage: string,
     deadLetter = false,
+    result?: Record<string, unknown>,
   ): QueuedActionRecord | null {
     const currentTime = now();
     this.db
@@ -452,20 +453,35 @@ export class ActionRepository {
              state = ?,
              retry_count = retry_count + 1,
              finished_at = ?,
-             last_error = ?
+             last_error = ?,
+             result_json = ?
          WHERE id = ?`,
       )
-      .run(deadLetter ? 'dead_letter' : 'failed', deadLetter ? 'expired' : 'pending', currentTime, errorMessage, id);
+      .run(
+        deadLetter ? 'dead_letter' : 'failed',
+        deadLetter ? 'expired' : 'pending',
+        currentTime,
+        errorMessage,
+        result ? JSON.stringify(result) : null,
+        id,
+      );
 
     this.db
       .prepare(
         `UPDATE proposed_action_attempts
          SET status = ?,
              error_message = ?,
+             result_json = ?,
              finished_at = ?
          WHERE id = ?`,
       )
-      .run(deadLetter ? 'dead_letter' : 'failed', errorMessage, currentTime, attemptId);
+      .run(
+        deadLetter ? 'dead_letter' : 'failed',
+        errorMessage,
+        result ? JSON.stringify(result) : null,
+        currentTime,
+        attemptId,
+      );
 
     return this.getById(id);
   }
@@ -479,7 +495,8 @@ export class ActionRepository {
              scheduled_at = ?,
              started_at = NULL,
              finished_at = NULL,
-             last_error = NULL
+             last_error = NULL,
+             result_json = NULL
          WHERE id = ?`,
       )
       .run(scheduledAt, id);

@@ -55,9 +55,12 @@ export interface ReflectionResearchAttemptRecord {
   status: ReflectionResearchAttemptStatus;
   resultCount: number;
   sourceTypes: string[];
+  requestedSourceTypes: string[];
+  rejectedSourceTypes: string[];
   projectFilter?: string;
   senderFilter: string[];
   groupFilter: string[];
+  scopeNotice?: string;
   errorMessage?: string;
   evidenceRefs: string[];
   createdAt: number;
@@ -134,9 +137,12 @@ interface ReflectionResearchAttemptRow {
   status: ReflectionResearchAttemptStatus;
   result_count: number;
   source_types_json: string | null;
+  requested_source_types_json: string | null;
+  rejected_source_types_json: string | null;
   project_filter: string | null;
   sender_filter_json: string | null;
   group_filter_json: string | null;
+  scope_notice: string | null;
   error_message: string | null;
   evidence_refs_json: string | null;
   created_at: number;
@@ -249,9 +255,12 @@ export interface CreateReflectionResearchAttemptInput {
   status: ReflectionResearchAttemptStatus;
   resultCount?: number;
   sourceTypes?: string[];
+  requestedSourceTypes?: string[];
+  rejectedSourceTypes?: string[];
   projectFilter?: string;
   senderFilter?: string[];
   groupFilter?: string[];
+  scopeNotice?: string;
   errorMessage?: string;
   evidenceRefs?: string[];
   createdAt?: number;
@@ -279,6 +288,11 @@ export interface UpdateThreadAfterRunInput {
   lastReflectedAt?: number;
   continueReason?: string;
   status?: ReflectionThreadStatus;
+}
+
+export interface UpdateThreadProgressMarkerInput {
+  nextReflectionAt?: number | null;
+  continueReason?: string;
 }
 
 export class ReflectionThreadRepository {
@@ -339,9 +353,18 @@ export class ReflectionThreadRepository {
       status: row.status,
       resultCount: row.result_count,
       sourceTypes: safeJsonParse<string[]>(row.source_types_json, []),
+      requestedSourceTypes: safeJsonParse<string[]>(
+        row.requested_source_types_json,
+        [],
+      ),
+      rejectedSourceTypes: safeJsonParse<string[]>(
+        row.rejected_source_types_json,
+        [],
+      ),
       projectFilter: row.project_filter ?? undefined,
       senderFilter: safeJsonParse<string[]>(row.sender_filter_json, []),
       groupFilter: safeJsonParse<string[]>(row.group_filter_json, []),
+      scopeNotice: row.scope_notice ?? undefined,
       errorMessage: row.error_message ?? undefined,
       evidenceRefs: safeJsonParse<string[]>(row.evidence_refs_json, []),
       createdAt: row.created_at,
@@ -580,6 +603,34 @@ export class ReflectionThreadRepository {
     return this.getThreadById(threadId);
   }
 
+  updateThreadProgressMarker(
+    threadId: string,
+    input: UpdateThreadProgressMarkerInput,
+  ): ReflectionThreadRecord | null {
+    const thread = this.getThreadById(threadId);
+    if (!thread) return null;
+
+    const currentTime = now();
+    this.db
+      .prepare(
+        `UPDATE reflection_threads
+         SET next_reflection_at = ?,
+             continue_reason = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        input.nextReflectionAt === undefined
+          ? thread.nextReflectionAt ?? null
+          : input.nextReflectionAt,
+        input.continueReason ?? thread.continueReason ?? null,
+        currentTime,
+        threadId,
+      );
+
+    return this.getThreadById(threadId);
+  }
+
   setThreadStatus(
     threadId: string,
     status: ReflectionThreadStatus,
@@ -689,9 +740,10 @@ export class ReflectionThreadRepository {
       .prepare(
         `INSERT INTO reflection_research_attempts
           (id, thread_id, run_id, query, purpose, status, result_count,
-           source_types_json, project_filter, sender_filter_json,
-           group_filter_json, error_message, evidence_refs_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           source_types_json, requested_source_types_json, rejected_source_types_json,
+           project_filter, sender_filter_json, group_filter_json, scope_notice,
+           error_message, evidence_refs_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -702,9 +754,12 @@ export class ReflectionThreadRepository {
         input.status,
         Math.max(0, Math.floor(input.resultCount ?? 0)),
         JSON.stringify(uniqStrings(input.sourceTypes ?? [])),
+        JSON.stringify(uniqStrings(input.requestedSourceTypes ?? [])),
+        JSON.stringify(uniqStrings(input.rejectedSourceTypes ?? [])),
         input.projectFilter ?? null,
         JSON.stringify(uniqStrings(input.senderFilter ?? [])),
         JSON.stringify(uniqStrings(input.groupFilter ?? [])),
+        input.scopeNotice ?? null,
         input.errorMessage ?? null,
         JSON.stringify(uniqStrings(input.evidenceRefs ?? [])),
         createdAt,

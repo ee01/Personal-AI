@@ -33,6 +33,12 @@ describe('getUserRuntimeConfig', () => {
           openClawBaseUrl: 'https://openclaw.example.com',
           openClawApiKey: 'test-openclaw-key',
           openClawTimeoutMs: 45000,
+          botApiBaseUrl: 'https://bot.example/v2',
+          botToken: 'test-bot-token',
+          botId: 'test-bot-id',
+          botType: 'team',
+          botTeamId: 'team-42',
+          botTargetEmail: 'owner@example.com',
         });
       },
     } as any;
@@ -50,5 +56,11 @@ describe('getUserRuntimeConfig', () => {
     expect(config.openClawBaseUrl).toBe('https://openclaw.example.com');
     expect(config.openClawApiKey).toBe('test-openclaw-key');
     expect(config.openClawTimeoutMs).toBe(300000);
+    expect(config.botApiBaseUrl).toBe('https://bot.example/v2');
+    expect(config.botToken).toBe('test-bot-token');
+    expect(config.botId).toBe('test-bot-id');
+    expect(config.botType).toBe('team');
+    expect(config.botTeamId).toBe('team-42');
+    expect(config.botTargetEmail).toBe('owner@example.com');
   });
 });

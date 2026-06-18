@@ -4,8 +4,34 @@ import type {
   ReflectionThreadRecord,
   ReflectionRunRecord,
 } from '../repositories/ReflectionThreadRepository.js';
-import type { RecallQuery } from '../types/index.js';
+import {
+  SOURCE_TYPES,
+  type RecallQuery,
+  type RecallSourceType,
+} from '../types/index.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
+
+const DEFAULT_LOCAL_RESEARCH_SOURCE_TYPES: RecallSourceType[] = [
+  'glip',
+  'jira',
+  'web',
+  'manual',
+  'system',
+];
+
+const SUPPORTED_LOCAL_RESEARCH_SOURCE_TYPES = new Set<RecallSourceType>([
+  ...SOURCE_TYPES,
+  'daily_log',
+  'project_summary',
+  'reflection',
+  'dream',
+  'rehearsal',
+  'reflection_thread',
+  'source_memory',
+  'entity_profile',
+  'markdown',
+  'user_core',
+]);
 
 export interface LocalResearchQuery {
   query: string;
@@ -16,6 +42,9 @@ export interface LocalResearchQuery {
   senderFilter?: string[];
   groupFilter?: string[];
   sourceTypes?: RecallQuery['sourceTypes'];
+  requestedSourceTypes?: string[];
+  rejectedSourceTypes?: string[];
+  scopeNotice?: string;
 }
 
 interface ResearchPlanResponse {
@@ -56,6 +85,61 @@ function uniqStrings(values: unknown): string[] | undefined {
   return items.length > 0 ? Array.from(new Set(items)) : undefined;
 }
 
+function resolveSourceTypes(values: unknown): Pick<
+  LocalResearchQuery,
+  'sourceTypes' | 'requestedSourceTypes' | 'rejectedSourceTypes' | 'scopeNotice'
+> {
+  const requested = uniqStrings(values);
+  if (!requested) {
+    return {
+      sourceTypes: [...DEFAULT_LOCAL_RESEARCH_SOURCE_TYPES],
+    };
+  }
+
+  const accepted = requested.filter((item): item is RecallSourceType =>
+    SUPPORTED_LOCAL_RESEARCH_SOURCE_TYPES.has(item as RecallSourceType),
+  );
+  const rejected = requested.filter(
+    (item) => !SUPPORTED_LOCAL_RESEARCH_SOURCE_TYPES.has(item as RecallSourceType),
+  );
+  const sourceTypes =
+    accepted.length > 0
+      ? accepted
+      : [...DEFAULT_LOCAL_RESEARCH_SOURCE_TYPES];
+  const scopeNotice =
+    rejected.length > 0
+      ? accepted.length > 0
+        ? `研究范围已裁剪：仅查询 Personal AI 支持的本地来源 ${sourceTypes.join(
+            ' / ',
+          )}；已忽略不支持的来源 ${rejected.join(' / ')}。`
+        : `研究范围已裁剪：模型建议的来源 ${rejected.join(
+            ' / ',
+          )} 当前不支持，已改用默认本地来源 ${sourceTypes.join(' / ')}。`
+      : undefined;
+
+  return {
+    sourceTypes,
+    requestedSourceTypes: requested,
+    rejectedSourceTypes: rejected.length > 0 ? rejected : undefined,
+    scopeNotice,
+  };
+}
+
+function compactText(value: string | undefined | null): string | undefined {
+  const compacted = value?.replace(/\s+/g, ' ').trim();
+  return compacted || undefined;
+}
+
+function fallbackTopicText(topicKey: string): string | undefined {
+  const [, ...parts] = topicKey.split(':');
+  return compactText(parts.join(' ')) ?? compactText(topicKey);
+}
+
+function truncate(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
 export class ReflectionResearcher {
   constructor(private readonly userDataManager?: UserDataManager) {}
 
@@ -68,11 +152,37 @@ export class ReflectionResearcher {
       return await this.planWithLlm(thread, evidence, recentRuns);
     } catch (error) {
       console.warn(
-        '[ReflectionResearcher] Falling back to no-op research plan:',
+        '[ReflectionResearcher] Falling back to deterministic research plan:',
         error instanceof Error ? error.message : String(error),
       );
-      return [];
+      return this.planFallback(thread);
     }
+  }
+
+  private planFallback(thread: ReflectionThreadRecord): LocalResearchQuery[] {
+    const primaryQuestion = compactText(thread.openQuestions[0]);
+    const queryParts = [
+      compactText(thread.title),
+      primaryQuestion,
+      compactText(thread.currentHypothesis),
+      fallbackTopicText(thread.topicKey),
+    ].filter((value): value is string => Boolean(value));
+    const dedupedParts = Array.from(new Set(queryParts));
+    if (dedupedParts.length === 0) return [];
+
+    return [
+      {
+        query: truncate(dedupedParts.slice(0, 4).join(' '), 220),
+        topK: 5,
+        purpose: primaryQuestion
+          ? truncate(
+              `Fallback local research for unresolved reflection question: ${primaryQuestion}`,
+              180,
+            )
+          : 'Fallback local research to keep reflection grounded in existing evidence.',
+        sourceTypes: [...DEFAULT_LOCAL_RESEARCH_SOURCE_TYPES],
+      },
+    ];
   }
 
   private async planWithLlm(
@@ -143,35 +253,35 @@ Rules:
           typeof item.query === 'string' && item.query.trim().length > 0,
       )
       .slice(0, 3)
-      .map((item) => ({
-        query: item.query!.trim(),
-        topK: clampTopK(item.topK),
-        purpose:
-          typeof item.purpose === 'string' && item.purpose.trim().length > 0
-            ? item.purpose.trim()
-            : 'Support the next reflection step with local evidence.',
-        timeRange:
-          item.timeRange && typeof item.timeRange === 'object'
-            ? {
-                start: Number.isFinite(item.timeRange.start)
-                  ? item.timeRange.start
-                  : undefined,
-                end: Number.isFinite(item.timeRange.end)
-                  ? item.timeRange.end
-                  : undefined,
-              }
-            : undefined,
-        projectFilter:
-          typeof item.projectFilter === 'string' &&
-          item.projectFilter.trim().length > 0
-            ? item.projectFilter.trim()
-            : undefined,
-        senderFilter: uniqStrings(item.senderFilter),
-        groupFilter: uniqStrings(item.groupFilter),
-        sourceTypes:
-          Array.isArray(item.sourceTypes) && item.sourceTypes.length > 0
-            ? item.sourceTypes
-            : ['glip', 'jira', 'web', 'manual', 'system'],
-      }));
+      .map((item) => {
+        const sourceTypeScope = resolveSourceTypes(item.sourceTypes);
+        return {
+          query: item.query!.trim(),
+          topK: clampTopK(item.topK),
+          purpose:
+            typeof item.purpose === 'string' && item.purpose.trim().length > 0
+              ? item.purpose.trim()
+              : 'Support the next reflection step with local evidence.',
+          timeRange:
+            item.timeRange && typeof item.timeRange === 'object'
+              ? {
+                  start: Number.isFinite(item.timeRange.start)
+                    ? item.timeRange.start
+                    : undefined,
+                  end: Number.isFinite(item.timeRange.end)
+                    ? item.timeRange.end
+                    : undefined,
+                }
+              : undefined,
+          projectFilter:
+            typeof item.projectFilter === 'string' &&
+            item.projectFilter.trim().length > 0
+              ? item.projectFilter.trim()
+              : undefined,
+          senderFilter: uniqStrings(item.senderFilter),
+          groupFilter: uniqStrings(item.groupFilter),
+          ...sourceTypeScope,
+        };
+      });
   }
 }

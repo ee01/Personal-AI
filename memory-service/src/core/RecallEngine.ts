@@ -39,7 +39,11 @@ import {
   getRecallFeedbackAction,
   isSceneScopedRecallFeedbackDetail,
 } from '../utils/recallFeedback.js';
+import { buildRecallScopeReceipt } from '../utils/recallScopeReceipt.js';
 import { decideMemoryLifecycle } from './MemoryLifecyclePolicy.js';
+import { runPersonalizedPageRank, type PprEdge } from './graphPpr.js';
+import { BehaviorAffinityService } from './BehaviorAffinityService.js';
+import { getConfig } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -389,9 +393,7 @@ function buildMessageMetadata(
   if (msg.source_title && !metadata.sourceTitle) {
     metadata.sourceTitle = msg.source_title;
   }
-  if (msg.scope && !metadata.scope) {
-    metadata.scope = msg.scope;
-  }
+  metadata.scope = normalizeStoredScope(msg.scope);
   if (msg.source && !metadata.source) {
     metadata.source = msg.source;
   }
@@ -631,6 +633,11 @@ export class RecallEngine {
         queryTimeMs: Date.now() - startMs,
         channels: usedChannels,
         channelDiagnostics,
+        scopeReceipt: buildRecallScopeReceipt({
+          scope: query.scope,
+          returnedItems: [],
+          candidateItems: [],
+        }),
       };
     }
 
@@ -654,8 +661,9 @@ export class RecallEngine {
           )
         : lifecycleFiltered;
 
-    // MMR reranking
-    const ranked = this.mmrRerank(filtered, topK);
+    // MMR reranking (P0-4: nudged by behavioral-intimacy affinity)
+    const affinityMap = this.loadAffinityMap();
+    const ranked = this.mmrRerank(filtered, topK, affinityMap);
 
     // Build final RecallItems
     const items: RecallItem[] = ranked.map((c) => {
@@ -730,6 +738,11 @@ export class RecallEngine {
       queryTimeMs: Date.now() - startMs,
       channels: usedChannels,
       channelDiagnostics,
+      scopeReceipt: buildRecallScopeReceipt({
+        scope: query.scope,
+        returnedItems: ranked,
+        candidateItems: filtered,
+      }),
     };
   }
 
@@ -1053,6 +1066,191 @@ export class RecallEngine {
   // =========================================================================
 
   private async graphSearch(
+    queryText: string,
+    limit: number,
+    query: RecallQuery,
+  ): Promise<RecallCandidate[]> {
+    // P0-3: Personalized PageRank associative recall (HippoRAG-style). Gated by
+    // config so it can be reverted to the legacy hop-walk; PPR failures fall
+    // back to hops automatically.
+    const algorithm = getConfig().recallGraphAlgorithm;
+    if (algorithm === 'ppr') {
+      try {
+        const ppr = await this.graphSearchPpr(queryText, limit, query);
+        if (ppr) return ppr;
+      } catch (err) {
+        console.warn('[RecallEngine] PPR graph search failed, falling back to hops:', err);
+      }
+    }
+    return this.graphSearchHops(queryText, limit, query);
+  }
+
+  /**
+   * PPR-based graph recall: seed on query-matched entities, run Personalized
+   * PageRank over a bounded subgraph, surface the highest-activation entities
+   * (and the messages that mention seeds + top entities). Returns null to defer
+   * to the hop-walk when there is no usable graph (no seeds / no edges).
+   */
+  private async graphSearchPpr(
+    queryText: string,
+    limit: number,
+    query: RecallQuery,
+  ): Promise<RecallCandidate[] | null> {
+    const config = getConfig();
+    const maxNodes = config.recallGraphPprMaxNodes;
+    const maxHops = config.recallGraphPprMaxHops;
+
+    const seeds = this.findMatchingEntities(queryText, query.entityTypes)
+      .map((entity) => ({ entity, evidence: this.getEntityEvidenceMatch(entity.id, query) }))
+      .filter(({ evidence }) => evidence.matches);
+    if (seeds.length === 0) return null;
+
+    const seedIds = seeds.map(({ entity }) => entity.id);
+    const candidates: RecallCandidate[] = [];
+
+    // Seeds are always candidates (same as the hop-walk).
+    for (const { entity: ent, evidence } of seeds) {
+      candidates.push({
+        id: ent.id,
+        type: 'entity',
+        content: ent.description || `${ent.type}: ${ent.name}`,
+        score: ent.importance,
+        timestamp: ent.lastSeen,
+        channels: ['graph'],
+        entity: ent,
+        metadata: { ...(evidence.metadata ?? {}), graphAlgorithm: 'ppr', isSeed: true },
+      });
+    }
+
+    // BFS-expand a bounded subgraph around the seeds, collecting weighted edges.
+    const edges: PprEdge[] = [];
+    const visited = new Set<string>(seedIds);
+    let frontier = [...seedIds];
+    for (let hop = 0; hop < maxHops && frontier.length > 0 && visited.size < maxNodes; hop++) {
+      const ph = frontier.map(() => '?').join(', ');
+      const rels = this.db
+        .prepare(
+          `SELECT id, from_entity_id, to_entity_id, relation_type, strength,
+                  co_occurrence_count, context
+           FROM relationships
+           WHERE from_entity_id IN (${ph}) OR to_entity_id IN (${ph})`,
+        )
+        .all(...frontier, ...frontier) as RelationshipRow[];
+
+      const next = new Set<string>();
+      for (const rel of rels) {
+        const w = Math.max(0.05, rel.strength) * Math.log(1 + (rel.co_occurrence_count || 1));
+        // Undirected approximation.
+        edges.push({ from: rel.from_entity_id, to: rel.to_entity_id, weight: w });
+        edges.push({ from: rel.to_entity_id, to: rel.from_entity_id, weight: w });
+        for (const id of [rel.from_entity_id, rel.to_entity_id]) {
+          if (!visited.has(id) && visited.size < maxNodes) {
+            visited.add(id);
+            next.add(id);
+          }
+        }
+      }
+      frontier = [...next];
+    }
+
+    if (edges.length === 0) return null; // no graph structure — defer to hops
+
+    // Restart on seeds, down-weighting generic (high-mention) seed entities.
+    const seedWeights = new Map<string, number>();
+    const specificity = new Map<string, number>();
+    for (const { entity } of seeds) {
+      seedWeights.set(entity.id, 1);
+      specificity.set(entity.id, 1 / Math.log(2 + (entity.mentionCount || 0)));
+    }
+
+    const pageRank = runPersonalizedPageRank(edges, seedWeights, {
+      nodeSpecificity: specificity,
+    });
+
+    // Rank non-seed entities by activation.
+    const seedIdSet = new Set(seedIds);
+    const ranked = [...pageRank.entries()]
+      .filter(([id]) => !seedIdSet.has(id))
+      .sort((a, b) => b[1] - a[1]);
+    const maxPpr = ranked.length > 0 ? ranked[0][1] : 0;
+
+    const topEntityIds: string[] = [];
+    for (const [entityId, score] of ranked) {
+      if (topEntityIds.length >= limit) break;
+      if (score <= 0) break;
+      const relEnt = this.loadEntity(entityId);
+      if (!relEnt) continue;
+      const evidence = this.getEntityEvidenceMatch(relEnt.id, query);
+      if (!evidence.matches) continue;
+      topEntityIds.push(entityId);
+      candidates.push({
+        id: relEnt.id,
+        type: 'entity',
+        content: relEnt.description || `${relEnt.type}: ${relEnt.name}`,
+        score: maxPpr > 0 ? score / maxPpr : 0,
+        timestamp: relEnt.lastSeen,
+        channels: ['graph'],
+        entity: relEnt,
+        metadata: {
+          ...(evidence.metadata ?? {}),
+          graphAlgorithm: 'ppr',
+          pprScore: Number(score.toFixed(6)),
+        },
+      });
+    }
+
+    // Surface messages mentioning seeds + top PPR entities (the real evidence).
+    const mentionEntityIds = [...seedIds, ...topEntityIds];
+    this.appendEntityMentionMessages(mentionEntityIds, limit, query, candidates);
+
+    return candidates.slice(0, limit);
+  }
+
+  /** Append messages mentioning the given entities to the candidate list. */
+  private appendEntityMentionMessages(
+    entityIds: string[],
+    limit: number,
+    query: RecallQuery,
+    candidates: RecallCandidate[],
+  ): void {
+    if (entityIds.length === 0) return;
+    const perEntity = Math.max(1, Math.ceil(limit / entityIds.length));
+    for (const entId of entityIds) {
+      try {
+        const mentionMsgs = this.db
+          .prepare(
+            `SELECT id, content, scope, source, source_type, timestamp, sender, group_id, group_name,
+                    source_url, source_title,
+                    matched_projects_json,
+                    metadata_json, importance, entities_json
+             FROM messages_raw
+             WHERE entities_json LIKE ? ESCAPE '\\'
+             ORDER BY timestamp DESC
+             LIMIT ?`,
+          )
+          .all(`%"${escapeLikePattern(entId)}"%`, perEntity) as MessageRow[];
+        for (const msg of mentionMsgs) {
+          if (!this.passesFilters(msg, query)) continue;
+          candidates.push({
+            id: msg.id,
+            type: 'message',
+            content: msg.content,
+            score: msg.importance * 0.8,
+            timestamp: msg.timestamp,
+            source: msg.source_type,
+            sourceUrl: msg.source_url ?? undefined,
+            sourceTitle: msg.source_title ?? undefined,
+            channels: ['graph'],
+            metadata: buildMessageMetadata(msg),
+          });
+        }
+      } catch {
+        // Skip individual entity search failures.
+      }
+    }
+  }
+
+  private async graphSearchHops(
     queryText: string,
     limit: number,
     query: RecallQuery,
@@ -1500,11 +1698,39 @@ export class RecallEngine {
    *
    * MMR_score = lambda * relevance - (1 - lambda) * max_similarity_to_selected
    */
+  /**
+   * Load the behavioral-intimacy affinity map for the current user (P0-4).
+   * Returns an empty map when disabled or unavailable — recall then behaves
+   * exactly as before.
+   */
+  private loadAffinityMap(): Map<string, number> {
+    if (!getConfig().recallAffinityEnabled) return new Map();
+    try {
+      return new BehaviorAffinityService(this.db).getAffinityMap();
+    } catch {
+      return new Map();
+    }
+  }
+
+  /** Affinity for a candidate: entity items by id, others by source type. */
+  private affinityForCandidate(
+    c: RecallCandidate,
+    affinityMap: Map<string, number>,
+  ): number {
+    if (affinityMap.size === 0) return 0;
+    if (c.type === 'entity') return affinityMap.get(`entity:${c.id}`) ?? 0;
+    if (c.source) return affinityMap.get(`source:${c.source}`) ?? 0;
+    return 0;
+  }
+
   private mmrRerank(
     candidates: RecallCandidate[],
     topK: number,
+    affinityMap: Map<string, number> = new Map(),
   ): RecallCandidate[] {
     if (candidates.length <= 1) return candidates;
+
+    const affinityWeight = getConfig().recallAffinityWeight;
 
     // Compute composite relevance for each candidate
     const relevanceMap = new Map<string, number>();
@@ -1513,8 +1739,12 @@ export class RecallEngine {
       const recency = c.recencyScore ?? 0;
       const salience = c.effectiveSalience ?? c.salienceScore ?? 0;
       const lifecycleWeight = c.lifecycleWeight ?? 1;
+      const affinity = this.affinityForCandidate(c, affinityMap);
       const relevance =
-        (c.score + RECENCY_WEIGHT * recency + SALIENCE_WEIGHT * salience) *
+        (c.score +
+          RECENCY_WEIGHT * recency +
+          SALIENCE_WEIGHT * salience +
+          affinityWeight * affinity) *
         lifecycleWeight;
       relevanceMap.set(candidateKey, relevance);
     }

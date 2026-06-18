@@ -125,7 +125,7 @@ describe('Today Pilot meeting prep API', () => {
 
   function seedCalendarEvent(
     overrides: Record<string, unknown> = {},
-    options: { withMemoryChunk?: boolean } = {},
+    options: { withMemoryChunk?: boolean; memoryChunkCount?: number } = {},
   ) {
     const current = Math.floor(Date.now() / 1000);
     const event = {
@@ -166,32 +166,42 @@ describe('Today Pilot meeting prep API', () => {
       current,
       current,
     );
-    if (options.withMemoryChunk !== false) {
-      insertMemoryChunk(current);
+    const memoryChunkCount =
+      options.withMemoryChunk === false ? 0 : (options.memoryChunkCount ?? 2);
+    for (let index = 0; index < memoryChunkCount; index += 1) {
+      insertMemoryChunk(current, index);
     }
     return event;
   }
 
-  function insertMemoryChunk(current: number): void {
+  function insertMemoryChunk(current: number, index: number): void {
+    const suffix = index + 1;
+    const messageId = `msg-ai-notes-prep-${suffix}`;
+    const chunkId = 9701 + index;
+    const hash = `hash-ai-notes-prep-${suffix}`;
+    const content =
+      index === 0
+        ? 'AI Notes GeneratedNotes message was consumed hundreds of times; retry/ack owner needs confirmation.'
+        : 'AI Notes GeneratedNotes project review should explain the retry impact, owner decision, and rollout risk to stakeholders.';
     db.prepare(
       `INSERT INTO messages_raw
         (id, content, source_type, source, source_url, source_title, sender,
          group_name, timestamp, importance, sentiment, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      'msg-ai-notes-prep',
-      'AI Notes GeneratedNotes message was consumed hundreds of times; retry/ack owner needs confirmation.',
+      messageId,
+      content,
       'meeting',
       'meeting',
-      'https://internal.example.com/ai-notes/generatednotes',
-      'AI Notes investigation',
+      `https://internal.example.com/ai-notes/generatednotes/${suffix}`,
+      index === 0 ? 'AI Notes investigation' : 'AI Notes stakeholder review',
       'Elina',
       'AI Notes',
-      current - 120,
+      current - 120 - index,
       0.88,
       'neutral',
       '{}',
-      current - 120,
+      current - 120 - index,
     );
     db.prepare(
       `INSERT INTO chunks
@@ -199,16 +209,16 @@ describe('Today Pilot meeting prep API', () => {
          scope, source, source_type, related_project, related_entity_id, created_at)
        VALUES (?, ?, 1, 1, ?, ?, 'work', 'meeting', 'meeting', 'AI Notes', ?, ?)`,
     ).run(
-      9701,
-      'messages/msg-ai-notes-prep',
-      'AI Notes GeneratedNotes retry/ack owner remains open after repeated consumption.',
-      'hash-ai-notes-prep',
-      'msg-ai-notes-prep',
-      current - 120,
+      chunkId,
+      `messages/${messageId}`,
+      content,
+      hash,
+      messageId,
+      current - 120 - index,
     );
     db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
-      9701,
-      'AI Notes GeneratedNotes retry ack owner repeated consumption',
+      chunkId,
+      content,
     );
   }
 
@@ -379,6 +389,52 @@ describe('Today Pilot meeting prep API', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
+    expect(body.prep.storylineOpportunity.available).toBe(false);
+    expect(body.prep.storylineOpportunity.blockedReasons).toContain(
+      '素材不足：至少需要 3 条可讲述证据。',
+    );
+    expect(body.assist.storylineOpportunity.available).toBe(false);
+  });
+
+  it('downgrades storyline opportunities when actual evidence refs are under the story threshold', async () => {
+    const event = seedCalendarEvent({}, { memoryChunkCount: 1 });
+    mockGenerateJSON.mockResolvedValueOnce(
+      buildLlmPrepResponse({
+        storylineOpportunity: {
+          available: true,
+          confidence: 0.9,
+          oneLineReason:
+            '这场会声称有三类素材，但实际可追溯证据还不够。',
+          evidenceClusters: [
+            {
+              label: 'AI Notes owner',
+              sourceKinds: ['calendar', 'meeting'],
+              evidenceCount: 3,
+            },
+          ],
+          suggestedArtifact: 'speaker_notes',
+        },
+      }),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/today-pilot/meeting-prep/resolve',
+      payload: {
+        event: {
+          externalId: event.externalId,
+          title: event.title,
+          startTime: event.startAt,
+        },
+        timezone: 'Asia/Shanghai',
+        autoGenerate: true,
+        forceGenerate: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.prep.evidenceRefs.length).toBeLessThan(3);
     expect(body.prep.storylineOpportunity.available).toBe(false);
     expect(body.prep.storylineOpportunity.blockedReasons).toContain(
       '素材不足：至少需要 3 条可讲述证据。',

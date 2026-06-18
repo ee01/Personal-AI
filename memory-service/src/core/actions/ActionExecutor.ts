@@ -253,6 +253,7 @@ export class ActionExecutor {
             attemptId,
             outcome.errorMessage ?? 'Action execution failed',
             outcome.queueStatus === 'dead_letter',
+            outcome.result,
           ) ?? action;
         if (outcome.delegationOutcome) {
           const engine = new OutreachEngine(

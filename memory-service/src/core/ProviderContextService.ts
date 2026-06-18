@@ -1,9 +1,10 @@
 import type Database from 'better-sqlite3';
 
 import { contentHash } from '../utils/hashing.js';
-import { daysAgo, formatDateTime, now } from '../utils/time.js';
+import { formatDateTime, now } from '../utils/time.js';
 import { ProfileManager } from './ProfileManager.js';
 import { RecallEngine } from './RecallEngine.js';
+import { buildRecentFocusBlock } from './RecentFocusService.js';
 import { NotificationCenterService } from './NotificationCenterService.js';
 import {
   ProviderRepository,
@@ -87,26 +88,6 @@ interface ProfileItemRow {
   created_at: number;
 }
 
-interface MessageRow {
-  id: string;
-  summary: string | null;
-  content: string;
-  timestamp: number;
-  sender: string | null;
-  group_name: string | null;
-  importance: number;
-  salience_score: number | null;
-  consolidation_level: string | null;
-  matched_projects_json: string | null;
-}
-
-interface ReflectionArtifactRow {
-  id: string;
-  scope: string;
-  scope_ref: string | null;
-  summary: string;
-  created_at: number;
-}
 
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -154,50 +135,11 @@ function pickFirstString(record: Record<string, any>, keys: string[]): string | 
   return null;
 }
 
-function formatMatchedProjects(raw: string | null): string | null {
-  const parsed = safeJsonParse<unknown[]>(raw, []);
-  const names = parsed
-    .map((item) => {
-      if (typeof item === 'string') return toCleanString(item);
-      const record = asRecord(item);
-      return record ? pickFirstString(record, ['name', 'title', 'project', 'projectName']) : null;
-    })
-    .filter((item): item is string => Boolean(item));
-
-  if (names.length === 0) return null;
-  return compactText(names.slice(0, 3).join(', '), 80);
-}
-
-function formatRecentMemoryHighlight(row: MessageRow): string {
-  const text = row.summary ?? compactText(row.content, 160);
-  const prefix = `${formatDateTime(row.timestamp)}${row.sender ? ` ${row.sender}` : ''}${row.group_name ? ` @ ${row.group_name}` : ''}`;
-  const projects = formatMatchedProjects(row.matched_projects_json);
-  const score = Math.max(row.salience_score ?? 0, row.importance ?? 0);
-  const meta = [
-    projects ? `projects ${projects}` : null,
-    row.consolidation_level ? `level ${row.consolidation_level}` : null,
-    Number.isFinite(score) ? `score ${score.toFixed(2)}` : null,
-  ].filter((item): item is string => Boolean(item));
-  return `${prefix}: ${compactText(text, 180)}${meta.length ? ` [${compactText(meta.join('; '), 120)}]` : ''}`;
-}
-
-function formatProfileSignal(row: ProfileItemRow): string {
-  const confidence = row.user_confirmed ? 'confirmed' : 'inferred';
-  return `**${row.item_key}**: ${compactText(row.item_value, 160)} [${confidence}; salience ${row.salience_score.toFixed(2)}]`;
-}
-
 function markdownList(items: string[], emptyFallback = 'No data available.'): string {
   if (items.length === 0) {
     return `- ${emptyFallback}`;
   }
   return items.map((item) => `- ${item}`).join('\n');
-}
-
-function markdownListOrNote(items: string[], emptyFallback = 'No data available.'): string {
-  if (items.length === 0) {
-    return `> ${emptyFallback}`;
-  }
-  return markdownList(items, emptyFallback);
 }
 
 function formatSourceRef(kind: string, id: string): string {
@@ -622,93 +564,13 @@ export class ProviderContextService {
     freshnessWindowDays: number,
     tokenBudget: number,
   ): ProviderMemoryProduct {
-    const cutoff = daysAgo(freshnessWindowDays);
-
-    const recentMessages = this.db
-      .prepare(
-        `SELECT
-           m.id,
-           m.summary,
-           m.content,
-           m.timestamp,
-           m.sender,
-           m.group_name,
-           m.importance,
-           m.matched_projects_json,
-           mm.salience_score,
-           mm.consolidation_level
-         FROM messages_raw m
-         LEFT JOIN memory_metadata mm
-           ON mm.target_type = 'message'
-          AND mm.target_id = m.id
-         WHERE m.timestamp >= ?
-           AND MAX(COALESCE(mm.salience_score, 0), COALESCE(m.importance, 0)) >= 0.35
-         ORDER BY MAX(COALESCE(mm.salience_score, 0), COALESCE(m.importance, 0)) DESC,
-                  m.importance DESC,
-                  m.timestamp DESC
-         LIMIT 10`,
-      )
-      .all(cutoff) as MessageRow[];
-
-    const recentProfileSignals = this.db
-      .prepare(
-        `SELECT item_key, item_value, salience_score, user_confirmed, last_seen, created_at
-         FROM user_profile_items
-         WHERE status = 'active'
-           AND user_confirmed = 1
-           AND last_seen >= ?
-           AND salience_score >= 0.35
-         ORDER BY user_confirmed DESC, salience_score DESC, last_seen DESC
-         LIMIT 6`,
-      )
-      .all(cutoff) as ProfileItemRow[];
-
-    const recentReflections = this.db
-      .prepare(
-        `SELECT id, scope, scope_ref, summary, created_at
-         FROM reflection_artifacts
-         WHERE created_at >= ?
-         ORDER BY created_at DESC
-         LIMIT 4`,
-      )
-      .all(cutoff) as ReflectionArtifactRow[];
-
-    const itemCount =
-      recentMessages.length + recentProfileSignals.length + recentReflections.length;
-
-    const bodySections = [
-      '# Active Focus Digest',
-      `> Freshness window: ${freshnessWindowDays} day(s). Built from recent high-signal memories, profile updates, and reflections. Watch rules / concerned items are not treated as memory highlights.`,
-      '',
-      '## Recent Memory Highlights',
-      markdownListOrNote(
-        recentMessages.map(formatRecentMemoryHighlight),
-        'No recent high-signal memories found in the freshness window.',
-      ),
-      '',
-      '## Recent Profile Signals',
-      markdownListOrNote(
-        recentProfileSignals.map(formatProfileSignal),
-        'No recent profile signals found in the freshness window.',
-      ),
-      '',
-      '## Recent Reflections',
-      markdownListOrNote(
-        recentReflections.map((row) => {
-          const scope = row.scope_ref ? `${row.scope}/${row.scope_ref}` : row.scope;
-          return `${scope}: ${compactText(row.summary, 160)}`;
-        }),
-        'No recent reflections found.',
-      ),
-    ];
-
-    const sourceRefs = [
-      ...recentMessages.map((row) => formatSourceRef('message', row.id)),
-      ...recentProfileSignals.map((row) => formatSourceRef('profile_item', row.item_key)),
-      ...recentReflections.map((row) => formatSourceRef('reflection', row.id)),
-    ].filter((item): item is string => !!item);
-
-    const bodyMd = clampMarkdownByBudget(bodySections.join('\n'), tokenBudget);
+    // Single source of truth: the recent-focus block is shared with /ask and
+    // quick-ask via RecentFocusService. This keeps "近期重点" identical across
+    // the Doubao bridge and the in-product entry points.
+    const { bodyMd, itemCount, sourceRefs } = buildRecentFocusBlock(this.db, {
+      windowDays: freshnessWindowDays,
+      tokenBudget,
+    });
     return {
       id: contentHash(`${provider}:active_focus_digest:${bodyMd}`),
       kind: 'active_focus_digest',

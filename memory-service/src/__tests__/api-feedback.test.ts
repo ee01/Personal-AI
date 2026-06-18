@@ -299,6 +299,8 @@ describe('Feedback API', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
+    expect(body.appliedDelta).toBe(0);
+    expect(body.previousAction).toBeUndefined();
     expect(body.relevancePatch).toMatchObject({
       status: 'patched',
       patch: {

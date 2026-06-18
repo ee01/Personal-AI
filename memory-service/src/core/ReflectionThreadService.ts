@@ -1040,7 +1040,7 @@ export class ReflectionThreadService {
   ): ReflectionThreadRecord | null {
     const thread = this.repo.getThreadById(threadId);
     if (!thread) return null;
-    const updated = this.repo.updateThreadAfterRun(threadId, {
+    const updated = this.repo.updateThreadProgressMarker(threadId, {
       nextReflectionAt: now() + this.getReflectionHeartbeatSeconds(),
       continueReason: reason,
     });
@@ -1095,7 +1095,7 @@ export class ReflectionThreadService {
     for (const threadId of threadIds) {
       const thread = this.repo.getThreadById(threadId);
       if (!thread || thread.status !== 'active') continue;
-      const updated = this.repo.updateThreadAfterRun(threadId, {
+      const updated = this.repo.updateThreadProgressMarker(threadId, {
         nextReflectionAt: now(),
         continueReason: 'confirm request answered',
       });
@@ -1116,7 +1116,7 @@ export class ReflectionThreadService {
       1,
       'evidence',
     );
-    this.repo.updateThreadAfterRun(result.threadId, {
+    this.repo.updateThreadProgressMarker(result.threadId, {
       nextReflectionAt: now(),
       continueReason: 'new action result available',
     });
@@ -1277,9 +1277,12 @@ export class ReflectionThreadService {
           status: hasHits ? 'hit' : failedChannelSummary ? 'failed' : 'empty',
           resultCount: result.items.length,
           sourceTypes: query.sourceTypes,
+          requestedSourceTypes: query.requestedSourceTypes,
+          rejectedSourceTypes: query.rejectedSourceTypes,
           projectFilter: query.projectFilter,
           senderFilter: query.senderFilter,
           groupFilter: query.groupFilter,
+          scopeNotice: query.scopeNotice,
           errorMessage: failedChannelSummary
             ? hasHits
               ? `部分召回通道失败，命中可能不完整：${failedChannelSummary}`
@@ -1301,9 +1304,12 @@ export class ReflectionThreadService {
           status: 'failed',
           resultCount: 0,
           sourceTypes: query.sourceTypes,
+          requestedSourceTypes: query.requestedSourceTypes,
+          rejectedSourceTypes: query.rejectedSourceTypes,
           projectFilter: query.projectFilter,
           senderFilter: query.senderFilter,
           groupFilter: query.groupFilter,
+          scopeNotice: query.scopeNotice,
           errorMessage: message.slice(0, 500),
           evidenceRefs: [],
         });
@@ -1689,6 +1695,9 @@ export class ReflectionThreadService {
         );
         if (attempt.errorMessage) {
           lines.push(`  - Error: ${attempt.errorMessage}`);
+        }
+        if (attempt.scopeNotice) {
+          lines.push(`  - Scope: ${attempt.scopeNotice}`);
         }
       }
     } else {

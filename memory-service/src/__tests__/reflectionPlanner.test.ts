@@ -80,6 +80,8 @@ describe('ReflectionPlanner', () => {
     const updatedThread = threadRepo.getThreadById(thread.id);
     expect(updatedThread?.continueReason).toBe('waiting_for_delegation');
     expect((updatedThread?.nextReflectionAt ?? 0)).toBeGreaterThan(currentTime);
+    expect(updatedThread?.reflectionCount).toBe(0);
+    expect(updatedThread?.lastReflectedAt).toBeUndefined();
   });
 
   it('continues heartbeat reflection when delegation actions are already finished', async () => {
@@ -182,6 +184,8 @@ describe('ReflectionPlanner', () => {
     const updatedThread = threadRepo.getThreadById(thread.id);
     expect(updatedThread?.continueReason).toBe('waiting_for_confirm_request');
     expect((updatedThread?.nextReflectionAt ?? 0)).toBeGreaterThan(currentTime);
+    expect(updatedThread?.reflectionCount).toBe(0);
+    expect(updatedThread?.lastReflectedAt).toBeUndefined();
   });
 
   it('skips heartbeat reflection when outreach is waiting for approval or reply', async () => {
@@ -216,6 +220,8 @@ describe('ReflectionPlanner', () => {
 
     const updatedThread = threadRepo.getThreadById(thread.id);
     expect(updatedThread?.continueReason).toBe('waiting_for_outreach');
+    expect(updatedThread?.reflectionCount).toBe(0);
+    expect(updatedThread?.lastReflectedAt).toBeUndefined();
   });
 
   it('skips heartbeat reflection when a manual action is still queued', async () => {
@@ -248,5 +254,7 @@ describe('ReflectionPlanner', () => {
 
     const updatedThread = threadRepo.getThreadById(thread.id);
     expect(updatedThread?.continueReason).toBe('waiting_for_manual_action');
+    expect(updatedThread?.reflectionCount).toBe(0);
+    expect(updatedThread?.lastReflectedAt).toBeUndefined();
   });
 });

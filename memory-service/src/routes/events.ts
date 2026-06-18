@@ -93,11 +93,30 @@ const KEEPALIVE_INTERVAL_MS = 30_000;
 
 export interface EventStreamUserResolution {
   userId?: string;
+  identitySource?: 'query' | 'header' | 'default_fallback';
+  fallbackToDefault?: boolean;
+  storageKey?: string;
+  eventFilter?: 'matching_user_or_global';
   error?: string;
+}
+
+function buildEventStreamUserResolution(
+  userId: string,
+  identitySource: NonNullable<EventStreamUserResolution['identitySource']>,
+  fallbackToDefault: boolean,
+): EventStreamUserResolution {
+  return {
+    userId,
+    identitySource,
+    fallbackToDefault,
+    storageKey: `data/users/${userId}/memory.db`,
+    eventFilter: 'matching_user_or_global',
+  };
 }
 
 export function resolveEventStreamUserId(options: {
   requestUserId?: string;
+  requestFallbackToDefault?: boolean;
   queryUserId?: string | string[];
 }): EventStreamUserResolution {
   const queryUserId = options.queryUserId;
@@ -118,10 +137,57 @@ export function resolveEventStreamUserId(options: {
       };
     }
 
-    return { userId: normalized };
+    return buildEventStreamUserResolution(normalized, 'query', false);
   }
 
-  return { userId: options.requestUserId };
+  const normalizedRequestUserId = normalizeUserId(
+    options.requestUserId ?? 'default',
+  );
+  if (!normalizedRequestUserId) {
+    return {
+      error:
+        `Invalid request userId format. ${USER_ID_FORMAT_DESCRIPTION}`,
+    };
+  }
+
+  const fallbackToDefault = Boolean(options.requestFallbackToDefault);
+  return buildEventStreamUserResolution(
+    normalizedRequestUserId,
+    fallbackToDefault ? 'default_fallback' : 'header',
+    fallbackToDefault,
+  );
+}
+
+export function buildEventStreamConnectionReceipt(
+  resolution: EventStreamUserResolution,
+  timestamp = Date.now(),
+): {
+  message: string;
+  timestamp: number;
+  userId: string;
+  user: {
+    id: string;
+    isolation: 'per_user_event_stream';
+    identitySource: 'query' | 'header' | 'default_fallback';
+    fallbackToDefault: boolean;
+    storageKey: string;
+    eventFilter: 'matching_user_or_global';
+  };
+} {
+  const userId = resolution.userId ?? 'default';
+  return {
+    message: 'SSE stream connected',
+    timestamp,
+    userId,
+    user: {
+      id: userId,
+      isolation: 'per_user_event_stream',
+      identitySource: resolution.identitySource ?? 'default_fallback',
+      fallbackToDefault: Boolean(resolution.fallbackToDefault),
+      storageKey: resolution.storageKey ?? `data/users/${userId}/memory.db`,
+      eventFilter: resolution.eventFilter ?? 'matching_user_or_global',
+    },
+  };
 }
 
 export async function eventsRoutes(
@@ -143,8 +209,15 @@ export async function eventsRoutes(
     async (request: FastifyRequest<{ Querystring: { userId?: string } }>, reply: FastifyReply) => {
       // For SSE/EventSource compatibility: browsers cannot send custom headers,
       // so userId can alternatively be passed as a query parameter.
+      const rawHeaderUserId = request.headers['x-user-id'];
+      const headerMissingOrBlank =
+        rawHeaderUserId == null ||
+        (typeof rawHeaderUserId === 'string' &&
+          rawHeaderUserId.trim() === '');
       const resolvedUserId = resolveEventStreamUserId({
         requestUserId: request.userId,
+        requestFallbackToDefault:
+          request.userId === 'default' && headerMissingOrBlank,
         queryUserId: request.query.userId,
       });
 
@@ -152,7 +225,7 @@ export async function eventsRoutes(
         return reply.code(400).send({ error: resolvedUserId.error });
       }
 
-      const sseUserId = resolvedUserId.userId;
+      const sseUserId = resolvedUserId.userId ?? 'default';
 
       // --- SSE headers ---
       reply.raw.writeHead(200, {
@@ -188,7 +261,7 @@ export async function eventsRoutes(
 
       // --- Send an initial "connected" event ---
       reply.raw.write(
-        `event: connected\ndata: ${JSON.stringify({ message: 'SSE stream connected', timestamp: Date.now(), userId: sseUserId })}\n\n`,
+        `event: connected\ndata: ${JSON.stringify(buildEventStreamConnectionReceipt(resolvedUserId))}\n\n`,
       );
 
       // --- Clean up on disconnect ---

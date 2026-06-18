@@ -8,7 +8,7 @@
  */
 import { getConfig, type Config } from '../config.js';
 
-type BotConfig = Pick<Config, 'botApiBaseUrl' | 'botToken' | 'botId' | 'botType' | 'botTeamId' | 'botTargetEmail'>;
+export type BotConfig = Pick<Config, 'botApiBaseUrl' | 'botToken' | 'botId' | 'botType' | 'botTeamId' | 'botTargetEmail'>;
 
 export interface BotSendResult {
   sent: boolean;

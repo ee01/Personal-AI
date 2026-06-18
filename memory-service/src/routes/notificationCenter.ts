@@ -114,15 +114,16 @@ export async function notificationCenterRoutes(app: FastifyInstance): Promise<vo
           message: parsedLanes.error,
         });
       }
-      const feed = service.listFeed({
+      const feed = service.listFeedResult({
         channel: request.query.channel,
         lanes: parsedLanes.lanes,
         limit: request.query.limit ? Number(request.query.limit) : undefined,
         deliveryMode: request.query.deliveryMode,
       });
       return reply.status(200).send({
-        items: feed,
-        total: feed.length,
+        items: feed.items,
+        total: feed.items.length,
+        meta: feed.meta,
       });
     },
   );

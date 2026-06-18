@@ -12,6 +12,8 @@ import {
     buildContextRecallCompactMetaItems,
     buildContextRecallPeekFooterItems,
     formatContextRecallDisplayPriorityLabel,
+    formatContextRecallEvidenceRole,
+    formatContextRecallReasonType,
     formatContextRecallSourceLabel,
     isContextSiteMuteActive,
     isContextHostCoveredBySiteRecord,
@@ -37,10 +39,11 @@ import {
 import { startComposerGuardController } from './composer-guard/ComposerGuardController';
 import {
     buildJiraOwnerCommentLearningPayloads,
+    buildInteractionSceneSnapshot,
     buildPassiveContextSnapshot,
     type OwnerAuthoredLearningPayload,
 } from './composer-guard/siteContextAdapters';
-import type { SiteContextSnapshot } from './composer-guard/types';
+import type { InteractionSceneSnapshot, SiteContextSnapshot } from './composer-guard/types';
 
 interface SimplePageContent {
     title: string;
@@ -87,6 +90,17 @@ interface ContextMatchPayload {
         messageId?: string;
         issueKey?: string;
     };
+    currentContext?: {
+        title?: string;
+        url?: string;
+        conversationId?: string;
+        groupId?: string;
+        issueKey?: string;
+        participants?: string[];
+        visibleFields?: Array<{ name: string; value: string; rawText?: string }>;
+        sourceAnchorHints?: string[];
+    };
+    interactionScene?: InteractionSceneSnapshot;
     exclude?: {
         ids?: string[];
         urls?: string[];
@@ -98,7 +112,11 @@ interface ContextMatchPayload {
 }
 
 interface SelectedTextContextPayload extends ContextMatchPayload {
+    // First visible line rect of the selection; used to place the recall icon beside the selection.
     rect: DOMRect;
+    // Last visible line rect of the selection; the memory-capture dock anchors to this so multi-line
+    // selections attach the right-edge "记住" + at the end of the selection rather than the first line.
+    captureRect: DOMRect;
     selectionRecallEligible: boolean;
 }
 
@@ -106,6 +124,7 @@ interface ContextRecallMatch {
     id: string;
     type: 'message' | 'chunk' | 'entity' | 'rehearsal' | 'source_memory';
     score: number;
+    scope?: 'work' | 'personal';
     title?: string;
     uiSummary?: string;
     snippet: string;
@@ -132,6 +151,36 @@ interface ContextRecallMatch {
     sourceClusterKey?: string;
     sourceContext?: string;
     timestamp?: number;
+    cue?: {
+        id: string;
+        cueKey?: string;
+        cueText: string;
+        actionType: 'remember' | 'ask' | 'draft_hint' | 'warning' | 'open_source';
+        surfaceEligibility: string[];
+        sourceRefs?: Array<{
+            type: string;
+            id: string;
+            title?: string;
+            url?: string;
+            timestamp?: number;
+        }>;
+        evidenceMatchIds?: string[];
+        whyNow?: string;
+        confidence?: number;
+        riskLevel?: 'low' | 'medium' | 'high';
+        compileStatus: 'compiled' | 'suppressed' | 'needs_more_evidence';
+        suppressReason?: string;
+        outcomePolicy?: {
+            action: 'boost' | 'suppress' | 'send_to_skill_foundry';
+            patchId: string;
+            strength: number;
+            reasonCodes: string[];
+            positiveCount: number;
+            negativeCount: number;
+            signalCount: number;
+            expiresAt?: number;
+        };
+    };
 }
 
 interface ContextToastAction {
@@ -238,6 +287,15 @@ interface MemoryCaptureCandidateResult {
     reasons?: string[];
     blockedReason?: string;
     captureMode?: 'auto' | 'suggested' | 'manual';
+    policyReceipt?: MemoryCapturePolicyReceipt;
+}
+
+interface MemoryCapturePolicyReceipt {
+    state: 'blocked' | 'ignored_low_signal' | 'suggested_review' | 'auto_save_candidate';
+    label: string;
+    detail: string;
+    evidence?: string[];
+    nextStep?: string;
 }
 
 interface VisualMemoryCandidate {
@@ -295,6 +353,32 @@ function escapeHtml(text: string): string {
     return div.innerHTML;
 }
 
+/**
+ * Weave provenance chip (P0-5) for the Memory Lens bubble. Computed client-side
+ * from the matches actually shown (mirrors backend weaveStats: ≥2 distinct
+ * sources or a ≥7-day span). Returns a short label or null when there is no
+ * cross-source stitching to surface (anti-inflation).
+ */
+function computeLensWeaveLabel(matches: ContextRecallMatch[]): string | null {
+    const sources = new Set<string>();
+    const timestamps: number[] = [];
+    for (const m of matches) {
+        const s = (m.sourceLabel ?? '').trim().toLowerCase();
+        if (s) sources.add(s);
+        if (typeof m.timestamp === 'number' && Number.isFinite(m.timestamp)) {
+            timestamps.push(m.timestamp);
+        }
+    }
+    const daySpanDays =
+        timestamps.length >= 2
+            ? Math.floor((Math.max(...timestamps) - Math.min(...timestamps)) / 86400)
+            : 0;
+    const parts: string[] = [];
+    if (sources.size >= 2) parts.push(`${sources.size} 来源`);
+    if (daySpanDays >= 7) parts.push(`${daySpanDays} 天`);
+    return parts.length > 0 ? `⊕ 缝合 ${parts.join(' × ')}` : null;
+}
+
 function escapeHtmlAttribute(text: string): string {
     return text.replace(/[&<>"']/g, (char) => {
         switch (char) {
@@ -316,6 +400,85 @@ function escapeHtmlAttribute(text: string): string {
 
 function normalizeText(text?: string | null): string {
     return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function formatMemoryCaptureCandidateReceipt(
+    candidate: MemoryCaptureCandidateResult,
+    evidenceLimit = 2,
+): string {
+    const receipt = candidate.policyReceipt;
+    if (receipt) {
+        const label = normalizeText(receipt.label);
+        const evidence = Array.isArray(receipt.evidence)
+            ? receipt.evidence.map((item) => normalizeText(item)).filter(Boolean).slice(0, evidenceLimit)
+            : [];
+        if (label && evidence.length) {
+            return `${label}：${evidence.join('，')}`;
+        }
+        const detail = normalizeText(receipt.detail);
+        if (label && detail) return `${label}：${detail}`;
+        if (label) return label;
+        if (detail) return detail;
+    }
+    return (candidate.reasons || [])
+        .map((item) => normalizeText(item))
+        .filter(Boolean)
+        .slice(0, evidenceLimit)
+        .join('，');
+}
+
+function formatMemoryCaptureSourceBoundaryReceipt(request: Record<string, unknown>): string {
+    const sourceKind = normalizeText(
+        typeof request.sourceKind === 'string' ? request.sourceKind : 'webpage',
+    );
+    const sourceUrl = normalizeText(typeof request.sourceUrl === 'string' ? request.sourceUrl : '');
+    let sourceHost = '';
+    if (sourceUrl) {
+        try {
+            sourceHost = new URL(sourceUrl).host;
+        } catch {
+            sourceHost = '';
+        }
+    }
+
+    const scope = normalizeText(typeof request.scope === 'string' ? request.scope : 'work');
+    const scopeLabel =
+        scope === 'personal'
+            ? '个人记忆'
+            : scope === 'all'
+                ? '全部范围'
+                : '工作记忆';
+    const sourceKindLabel =
+        sourceKind === 'visual_memory'
+            ? '视觉证据'
+            : sourceKind === 'selection'
+                ? '选区资料'
+                : '当前页面资料';
+    const writeSignal =
+        sourceKind === 'visual_memory'
+            ? '会写入资料记忆和视觉证据检索信号'
+            : '会写入资料记忆和网页检索信号';
+    const parts = [`保存范围：${sourceKindLabel}`, scopeLabel];
+    if (sourceHost) {
+        parts.push(`来源 ${sourceHost}`);
+    }
+    return `${parts.join(' · ')}；${writeSignal}。`;
+}
+
+function getMemoryCaptureWriteSignalLabel(request?: Record<string, unknown>): string {
+    const sourceKind = normalizeText(
+        typeof request?.sourceKind === 'string' ? request.sourceKind : 'webpage',
+    );
+    return sourceKind === 'visual_memory' ? '视觉证据检索信号' : '网页检索信号';
+}
+
+function formatMemoryCaptureSaveFailureReceipt(
+    targetLabel: string,
+    message: string,
+    request?: Record<string, unknown>,
+): string {
+    const reason = normalizeText(message) || '保存请求未完成';
+    return `${targetLabel}未写入：${reason}。没有创建资料记忆或${getMemoryCaptureWriteSignalLabel(request)}；入口仍保留，可重试或稍后再保存。`;
 }
 
 function asPlainObject(value: unknown): Record<string, unknown> | null {
@@ -341,6 +504,16 @@ function getContextRehearsalActivationId(match: ContextRecallMatch): string | un
     return typeof activationId === 'string' && activationId.trim()
         ? activationId.trim()
         : undefined;
+}
+
+function getContextRehearsalMetadataText(
+    match: ContextRecallMatch,
+    key: 'summary' | 'content',
+): string {
+    const metadata = asPlainObject(match.metadata);
+    const rehearsal = asPlainObject(metadata?.rehearsal);
+    const value = rehearsal?.[key];
+    return typeof value === 'string' ? normalizeText(value) : '';
 }
 
 function clipContextFeedbackDetailValue(value?: string | null, maxLength = 160): string | undefined {
@@ -445,6 +618,20 @@ function buildContextRecallFeedbackDetail(
             getContextMatchMetadataText(match, 'sourceMemoryCapsuleId'),
             120,
         ),
+        cue_id: clipContextFeedbackDetailValue(match.cue?.id, 120),
+        cue_key: clipContextFeedbackDetailValue(match.cue?.cueKey, 220),
+        cue_action_type: clipContextFeedbackDetailValue(match.cue?.actionType, 60),
+        cue_compile_status: clipContextFeedbackDetailValue(
+            match.cue?.compileStatus,
+            60,
+        ),
+        cue_confidence: clipContextFeedbackDetailValue(
+            typeof match.cue?.confidence === 'number'
+                ? String(match.cue.confidence)
+                : undefined,
+            40,
+        ),
+        cue_why_now: clipContextFeedbackDetailValue(match.cue?.whyNow, 180),
         group_id: clipContextFeedbackDetailValue(
             getContextMatchMetadataText(match, 'groupId') ||
             getContextMatchMetadataText(match, 'group_id'),
@@ -459,6 +646,74 @@ function buildContextRecallFeedbackDetail(
     };
 
     return stringifyContextRecallFeedbackDetail(detail);
+}
+
+function summarizeContextCueForTrace(match: ContextRecallMatch): Record<string, unknown> | undefined {
+    const cue = match.cue;
+    if (!cue?.id) return undefined;
+    return {
+        id: cue.id,
+        cueKey: cue.cueKey,
+        actionType: cue.actionType,
+        compileStatus: cue.compileStatus,
+        confidence: cue.confidence,
+        whyNow: cue.whyNow,
+    };
+}
+
+function submitContextRecallAmbientTrace(
+    match: ContextRecallMatch,
+    contextKey: string | undefined,
+    action: 'expanded' | 'opened_source',
+    surface: string,
+): void {
+    if (typeof chrome === 'undefined' || !chrome?.runtime?.sendMessage) {
+        return;
+    }
+    const cueIds = match.cue?.id ? [match.cue.id] : [];
+    const cueKeys = match.cue?.cueKey ? [match.cue.cueKey] : [];
+    try {
+        chrome.runtime.sendMessage(
+            {
+                type: 'AMBIENT_CALIBRATION_TRACE',
+                trace: {
+                    surface: 'memory_lens',
+                    sceneKey: contextKey || window.location.href,
+                    action,
+                    strength: action === 'expanded' ? 'medium' : 'weak',
+                    polarity: action === 'expanded' ? 'positive' : 'neutral',
+                    evidenceRefs: [
+                        {
+                            id: getContextRecallFeedbackTargetId(match),
+                            type: match.type,
+                            title: match.title || match.sourceTitle,
+                            sourceLabel: match.sourceLabel,
+                            role: 'used',
+                            score: typeof match.score === 'number' ? match.score : undefined,
+                            cueId: match.cue?.id,
+                            cueKey: match.cue?.cueKey,
+                            cue: summarizeContextCueForTrace(match),
+                        },
+                    ],
+                    privacyClass: 'sensitive_redacted',
+                    metadata: {
+                        contextSurface: surface,
+                        displayPriority: match.displayPriority,
+                        reasonType: match.reasonType,
+                        evidenceRole: match.evidenceRole,
+                        cueIds,
+                        cueKeys,
+                    },
+                    createdAt: Date.now(),
+                },
+            },
+            () => {
+                void chrome.runtime.lastError;
+            },
+        );
+    } catch (error) {
+        console.warn('Context recall ambient trace failed:', error);
+    }
 }
 
 function getContextMatchMetadataLayers(match: ContextRecallMatch): Record<string, unknown>[] {
@@ -556,6 +811,26 @@ function selectContextLensTitle(match: ContextRecallMatch, sourceLabel: string):
 }
 
 function selectContextLensSummary(match: ContextRecallMatch, titleText: string): string {
+    const cueText = cleanContextLensDisplayText(
+        match.cue?.compileStatus === 'compiled' &&
+            match.cue.surfaceEligibility?.includes('memory_lens')
+            ? match.cue.cueText
+            : '',
+    );
+    if (cueText) return cueText;
+
+    if (isContextRehearsalMatch(match)) {
+        const rehearsalContent = cleanContextLensDisplayText(
+            getContextRehearsalMetadataText(match, 'content'),
+        );
+        if (rehearsalContent) return rehearsalContent;
+
+        const rehearsalSummary = cleanContextLensDisplayText(
+            getContextRehearsalMetadataText(match, 'summary'),
+        );
+        if (rehearsalSummary) return rehearsalSummary;
+    }
+
     const candidates = [
         getContextMatchMetadataText(match, 'summary'),
         match.uiSummary,
@@ -572,6 +847,16 @@ function selectContextLensSummary(match: ContextRecallMatch, titleText: string):
 }
 
 function selectContextLensEvidence(match: ContextRecallMatch, summaryText: string): string {
+    if (isContextRehearsalMatch(match)) {
+        const rehearsalSummary = cleanContextLensDisplayText(
+            getContextRehearsalMetadataText(match, 'summary'),
+        );
+        return rehearsalSummary &&
+            rehearsalSummary !== cleanContextLensDisplayText(summaryText)
+            ? rehearsalSummary
+            : '';
+    }
+
     const actions = getContextMatchMetadataArray(match, 'actions');
     for (const action of actions) {
         const record = asPlainObject(action);
@@ -689,9 +974,9 @@ function buildContextWhyChips(match: ContextRecallMatch): string[] {
         add(item);
     }
     add(match.whyMatched);
-    for (const item of buildContextRecallPeekFooterItems(match)) {
-        add(item);
-    }
+    add(formatContextRecallReasonType(match.reasonType));
+    add(formatContextRecallEvidenceRole(match.evidenceRole));
+    add(formatContextRecallSourceLabel(match.sourceLabel));
     add(match.sourceTitle);
     return chips.slice(0, 3);
 }
@@ -878,16 +1163,6 @@ function buildSelectionSearchWhyChips(
     return chips.slice(0, 3);
 }
 
-function formatContextMatchDate(timestamp?: number): string {
-    if (!timestamp || !Number.isFinite(timestamp)) return '';
-    const date = new Date(timestamp > 10_000_000_000 ? timestamp : timestamp * 1000);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleDateString('zh-CN', {
-        month: 'numeric',
-        day: 'numeric',
-    });
-}
-
 function buildContextRecallSourceLinks(
     match: ContextRecallMatch,
     baseUrl: string,
@@ -913,6 +1188,122 @@ function buildContextRecallSourceLinks(
     }
 
     return links.slice(0, 3);
+}
+
+function buildContextRecallSourceReceipts(
+    match: ContextRecallMatch,
+    exploreUrl: string,
+    sourceLinks: Array<{ label: string; url: string }>,
+): string[] {
+    const receipts: string[] = [];
+    const rawExploreRoute = normalizeText(match.exploreLink);
+    const rawSourceUrls = [
+        normalizeText(match.sourceUrl),
+        ...(Array.isArray(match.links) ? match.links : [])
+            .map((link) => normalizeText(link?.url))
+            .filter(Boolean),
+    ].filter(Boolean);
+
+    if (!exploreUrl && rawExploreRoute) {
+        receipts.push('记忆入口已隐藏');
+    } else if (!exploreUrl && !sourceLinks.length) {
+        receipts.push('记忆入口缺失');
+    }
+
+    if (!sourceLinks.length && rawSourceUrls.length) {
+        receipts.push('原始来源已隐藏');
+    } else if (!sourceLinks.length && !exploreUrl) {
+        receipts.push('原始来源缺失');
+    }
+
+    return receipts.slice(0, 2);
+}
+
+function normalizeContextSourceUrlKey(rawUrl: string): string {
+    const normalizedUrl =
+        normalizeContextPageUrl(rawUrl) ||
+        sanitizeContextExternalUrl(rawUrl);
+    if (!normalizedUrl) return '';
+
+    try {
+        const parsed = new URL(normalizedUrl);
+        return parsed.toString();
+    } catch (_error) {
+        return '';
+    }
+}
+
+function getContextMatchTimestampMs(match: ContextRecallMatch): number | null {
+    if (!match.timestamp || !Number.isFinite(match.timestamp)) return null;
+    return match.timestamp > 10_000_000_000
+        ? match.timestamp
+        : match.timestamp * 1000;
+}
+
+function formatContextSourceAgeReceipt(match: ContextRecallMatch): string {
+    const timestampMs = getContextMatchTimestampMs(match);
+    if (!timestampMs) return '';
+
+    const ageMs = Date.now() - timestampMs;
+    if (!Number.isFinite(ageMs) || ageMs < 0) return '';
+
+    const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+    if (ageDays >= 365) {
+        const ageYears = Math.max(1, Math.floor(ageDays / 365));
+        return `${ageYears}年前记录，行动前复核`;
+    }
+
+    if (ageDays >= 90) {
+        return `${ageDays}天前记录，行动前复核`;
+    }
+
+    return '';
+}
+
+function buildContextRecallSourceStatusReceipts(
+    match: ContextRecallMatch,
+    sourceLinks: Array<{ label: string; url: string }>,
+    exploreUrl: string,
+    currentUrl: string,
+): string[] {
+    const receipts: string[] = [];
+    const primarySourceUrl = sourceLinks[0]?.url || '';
+
+    if (match.scope === 'personal') {
+        receipts.push('个人记忆已进入本次提示');
+    }
+
+    if (primarySourceUrl) {
+        try {
+            const sourceUrl = new URL(primarySourceUrl);
+            const pageUrl = new URL(currentUrl);
+            const samePage =
+                normalizeContextSourceUrlKey(sourceUrl.toString()) ===
+                normalizeContextSourceUrlKey(pageUrl.toString());
+            if (samePage) {
+                receipts.push('当前页面来源可复核');
+            } else if (sourceUrl.hostname === pageUrl.hostname) {
+                receipts.push('同站来源可复核');
+            } else if (match.type === 'source_memory') {
+                receipts.push('已保存资料来源可复核');
+            } else {
+                receipts.push('外部来源可复核');
+            }
+        } catch (_error) {
+            // Sanitized source URLs should parse, but keep the card resilient.
+        }
+    }
+
+    if (exploreUrl) {
+        receipts.push(match.type === 'source_memory' ? '资料详情可复核' : '记忆详情可复核');
+    }
+
+    const ageReceipt = formatContextSourceAgeReceipt(match);
+    if (ageReceipt) {
+        receipts.push(ageReceipt);
+    }
+
+    return Array.from(new Set(receipts)).slice(0, 4);
 }
 
 function isMeetingPilotPage(): boolean {
@@ -1015,6 +1406,7 @@ class WebIntelligenceContentScript {
     private selectedTextPendingContextKey: string | null = null;
     private selectedTextRequestId = 0;
     private pageCaptureChipElement: HTMLElement | null = null;
+    private pageCaptureReviewElement: HTMLElement | null = null;
     private visualMemoryPreviewElement: HTMLElement | null = null;
     private pageCaptureTimer: number | null = null;
     private pageCaptureRequestId = 0;
@@ -2271,6 +2663,8 @@ class WebIntelligenceContentScript {
                 title: payload.title,
                 url: payload.url,
                 sourceContext: payload.sourceContext,
+                currentContext: payload.currentContext,
+                interactionScene: payload.interactionScene,
                 exclude: payload.exclude,
                 primaryText: payload.snippet,
                 secondaryTexts: payload.keywords,
@@ -2360,6 +2754,11 @@ class WebIntelligenceContentScript {
                 snippet: snapshot.primaryText,
                 entityHints: this.toPassiveRecallEntityHints(snapshot),
                 sourceContext: this.toPassiveRecallSourceContext(snapshot),
+                currentContext: this.toPassiveRecallCurrentContext(snapshot),
+                interactionScene: buildInteractionSceneSnapshot(snapshot, {
+                    surface: 'memory_lens',
+                    activeElement: document.activeElement,
+                }),
                 exclude: this.toPassiveRecallExclude(snapshot),
                 sourceTypes: snapshot.sourceTypes,
                 ownerAuthoredLearningPayloads: buildJiraOwnerCommentLearningPayloads(snapshot),
@@ -2494,6 +2893,23 @@ class WebIntelligenceContentScript {
         });
     }
 
+    private toPassiveRecallCurrentContext(
+        snapshot: SiteContextSnapshot,
+    ): ContextMatchPayload['currentContext'] {
+        const identifiers = snapshot.identifiers || {};
+        const participants = snapshot.audience?.people?.slice(0, 8);
+        return this.compactContextRecallObject({
+            title: snapshot.title,
+            url: snapshot.url,
+            participants,
+            groupId: identifiers.groupId,
+            conversationId: identifiers.conversationId,
+            issueKey: identifiers.issueKey,
+            visibleFields: snapshot.visibleFields,
+            sourceAnchorHints: snapshot.keywords,
+        });
+    }
+
     private toPassiveRecallExclude(
         snapshot: SiteContextSnapshot,
     ): ContextMatchPayload['exclude'] {
@@ -2586,9 +3002,6 @@ class WebIntelligenceContentScript {
             if (this.selectionTriggerElement) {
                 this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
             }
-            if (this.selectionCaptureDockElement) {
-                this.placeSelectionMemoryCaptureDock(this.selectionCaptureDockElement, payload.rect);
-            }
             return;
         }
 
@@ -2628,6 +3041,7 @@ class WebIntelligenceContentScript {
         if (!rect) {
             return null;
         }
+        const captureRect = this.getSelectionLastLineRect(range) || rect;
 
         const snapshot = buildPassiveContextSnapshot(document, window.location);
         const contextUrl = normalizeContextPageUrl(snapshot?.url || window.location.href);
@@ -2642,7 +3056,7 @@ class WebIntelligenceContentScript {
         const contextKey = [
             'selection',
             contextUrl,
-            this.createContextSignature(`${title}:${selectedText}`),
+            this.createContextSignature(`${title}:${selectedText}:${nearbyText}`),
         ].join(':');
 
         return {
@@ -2672,7 +3086,28 @@ class WebIntelligenceContentScript {
             exclude: this.compactContextRecallObject({
                 urls: [contextUrl],
             }),
+            interactionScene: buildInteractionSceneSnapshot(
+                snapshot || {
+                    adapterId: 'selection',
+                    surface: 'generic_agent',
+                    contextType: 'web_agent_prompt',
+                    contextKey,
+                    title,
+                    url: contextUrl,
+                    primaryText: selectedText.slice(0, 500),
+                    identifiers,
+                    audience: { people: participants },
+                    sourceTypes: snapshot?.sourceTypes,
+                },
+                {
+                    surface: 'memory_lens',
+                    selectedText,
+                    nearbyText,
+                    activeElement: document.activeElement,
+                },
+            ),
             rect,
+            captureRect,
         };
     }
 
@@ -2697,6 +3132,17 @@ class WebIntelligenceContentScript {
             (rect) => rect.width > 0 && rect.height > 0,
         );
         const rect = rects[0] || range.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) {
+            return null;
+        }
+        return rect;
+    }
+
+    private getSelectionLastLineRect(range: Range): DOMRect | null {
+        const rects = Array.from(range.getClientRects()).filter(
+            (rect) => rect.width > 0 && rect.height > 0,
+        );
+        const rect = rects[rects.length - 1] || range.getBoundingClientRect();
         if (!rect || rect.width <= 0 || rect.height <= 0) {
             return null;
         }
@@ -2750,6 +3196,10 @@ class WebIntelligenceContentScript {
             return;
         }
 
+        // The recall icon and the memory-capture entry are deliberately separate surfaces. The Personal
+        // AI recall icon follows the selection and only opens Memory Lens; the "记住" capture dock is a
+        // half-revealed + pinned to the page's right edge (same treatment as the page/visual capture
+        // chips). They must never share one toolbar.
         const existingRecallKey = this.selectionTriggerElement?.dataset.contextKey;
         const existingCaptureKey = this.selectionCaptureDockElement?.dataset.contextKey;
         if (
@@ -2760,7 +3210,7 @@ class WebIntelligenceContentScript {
                 this.placeSelectedTextTrigger(this.selectionTriggerElement, payload.rect);
             }
             if (this.selectionCaptureDockElement) {
-                this.placeSelectionMemoryCaptureDock(this.selectionCaptureDockElement, payload.rect);
+                this.placeSelectionMemoryCaptureDock(this.selectionCaptureDockElement, payload.captureRect);
             }
             return;
         }
@@ -2771,6 +3221,8 @@ class WebIntelligenceContentScript {
             const trigger = document.createElement('div');
             trigger.className = 'pai-context-selection-trigger';
             trigger.dataset.contextKey = payload.contextKey;
+            trigger.setAttribute('role', 'toolbar');
+            trigger.setAttribute('aria-label', '选区操作：查找关联记忆');
             trigger.addEventListener('mousedown', (event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -2779,8 +3231,11 @@ class WebIntelligenceContentScript {
             const recallButton = document.createElement('button');
             recallButton.type = 'button';
             recallButton.className = 'pai-context-selection-action pai-context-selection-recall';
-            recallButton.setAttribute('aria-label', '用 Personal AI 查找关联记忆');
-            recallButton.title = '用 Personal AI 查找关联记忆';
+            recallButton.setAttribute('aria-label', '用 Personal AI 查找已有记忆，不保存、不插入、不发送、不调用外部 AI');
+            recallButton.title = '查已有记忆；不保存、不插入、不发送、不调用外部 AI';
+
+            const tooltipId = `pai-context-selection-tooltip-${Math.random().toString(36).slice(2)}`;
+            recallButton.setAttribute('aria-describedby', tooltipId);
 
             const iconImg = document.createElement('img');
             iconImg.src = chrome.runtime.getURL('icons/icon48.png');
@@ -2806,6 +3261,13 @@ class WebIntelligenceContentScript {
             });
             trigger.appendChild(recallButton);
 
+            const tooltip = document.createElement('span');
+            tooltip.id = tooltipId;
+            tooltip.className = 'pai-context-selection-tooltip';
+            tooltip.setAttribute('role', 'tooltip');
+            tooltip.textContent = '查已有记忆 · 不保存、不插入、不发送、不调用外部 AI';
+            trigger.appendChild(tooltip);
+
             document.body.appendChild(trigger);
             this.selectionTriggerElement = trigger;
             this.placeSelectedTextTrigger(trigger, payload.rect);
@@ -2829,6 +3291,14 @@ class WebIntelligenceContentScript {
         );
         trigger.style.left = `${Math.round(left)}px`;
         trigger.style.top = `${Math.round(top)}px`;
+        const triggerCenter = left + size / 2;
+        const tooltipHalfWidth = 116;
+        trigger.dataset.tooltipSide =
+            triggerCenter < tooltipHalfWidth + 12
+                ? 'left'
+                : triggerCenter > window.innerWidth - tooltipHalfWidth - 12
+                    ? 'right'
+                    : 'center';
     }
 
     private showSelectionMemoryCaptureDock(
@@ -2846,17 +3316,19 @@ class WebIntelligenceContentScript {
         dock.type = 'button';
         dock.className = 'pai-memory-capture-selection-dock';
         dock.dataset.contextKey = payload.contextKey;
-        dock.setAttribute('aria-label', '入库这段资料');
-        dock.title = `入库这段资料${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
+        dock.setAttribute('aria-label', '记住这段选中资料');
+        const candidateReceipt = formatMemoryCaptureCandidateReceipt(candidate, 2);
+        dock.title = `记住这段选中资料${candidateReceipt ? `：${candidateReceipt}` : ''}`;
 
         const plus = document.createElement('span');
         plus.className = 'pai-memory-capture-selection-dock-plus';
+        plus.setAttribute('aria-hidden', 'true');
         plus.textContent = '+';
         dock.appendChild(plus);
 
         const label = document.createElement('span');
         label.className = 'pai-memory-capture-selection-dock-label';
-        label.textContent = '入库';
+        label.textContent = '记住';
         dock.appendChild(label);
 
         const logo = document.createElement('img');
@@ -2878,10 +3350,12 @@ class WebIntelligenceContentScript {
 
         document.body.appendChild(dock);
         this.selectionCaptureDockElement = dock;
-        this.placeSelectionMemoryCaptureDock(dock, payload.rect);
+        this.placeSelectionMemoryCaptureDock(dock, payload.captureRect);
     }
 
     private placeSelectionMemoryCaptureDock(dock: HTMLElement, rect: DOMRect): void {
+        // CSS pins the dock to the viewport's right edge (right: 0; translate(50%, -50%)); we only set
+        // the vertical anchor so the half-revealed "记住" + sits at the selection's (last) line height.
         const top = Math.max(
             24,
             Math.min(window.innerHeight - 24, rect.top + rect.height / 2),
@@ -2929,15 +3403,23 @@ class WebIntelligenceContentScript {
         title.textContent = '保存这段资料';
         panel.appendChild(title);
 
+        const boundaryReceipt = document.createElement('div');
+        boundaryReceipt.className = 'pai-memory-capture-source-boundary';
+        boundaryReceipt.textContent = formatMemoryCaptureSourceBoundaryReceipt(
+            this.buildMemoryCaptureSelectionRequest(payload),
+        );
+        panel.appendChild(boundaryReceipt);
+
         const preview = document.createElement('div');
         preview.className = 'pai-memory-capture-note-preview';
         preview.textContent = normalizeText(payload.snippet).slice(0, 180);
         panel.appendChild(preview);
 
-        if (candidate.reasons?.length) {
+        const candidateReceipt = formatMemoryCaptureCandidateReceipt(candidate, 2);
+        if (candidateReceipt) {
             const reasons = document.createElement('div');
             reasons.className = 'pai-memory-capture-note-reasons';
-            reasons.textContent = candidate.reasons.slice(0, 2).join('，');
+            reasons.textContent = candidateReceipt;
             panel.appendChild(reasons);
         }
 
@@ -3008,6 +3490,7 @@ class WebIntelligenceContentScript {
                 title: payload.title,
                 url: payload.url,
                 sourceContext: payload.sourceContext,
+                interactionScene: payload.interactionScene,
                 exclude: payload.exclude,
                 primaryText: payload.snippet,
                 secondaryTexts: payload.keywords,
@@ -3171,9 +3654,16 @@ class WebIntelligenceContentScript {
             this.isSensitiveContextPage() ||
             this.isContextDismissed(payload.contextKey)
         ) {
+            const failureReceipt = formatMemoryCaptureSaveFailureReceipt(
+                '选区资料',
+                '页面上下文已变化，请重新选择要保存的资料',
+                this.buildMemoryCaptureSelectionRequest(payload),
+            );
             if (error) {
-                error.textContent = '当前页面上下文已变化，未保存。';
+                error.textContent = failureReceipt;
                 error.hidden = false;
+            } else {
+                this.showContextToast(failureReceipt);
             }
             return;
         }
@@ -3192,29 +3682,39 @@ class WebIntelligenceContentScript {
             request: {
                 ...this.buildMemoryCaptureSelectionRequest(payload),
                 captureMode: 'manual',
-                captureReason: '用户点击右侧半露出 + 入库按钮',
+                captureReason: '用户点击选区右侧半露出 + 记住资料',
                 note,
             },
         }, (response) => {
             if (chrome.runtime.lastError || !response?.success) {
                 const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
+                const failureReceipt = formatMemoryCaptureSaveFailureReceipt(
+                    '选区资料',
+                    message,
+                    this.buildMemoryCaptureSelectionRequest(payload),
+                );
                 if (saveButton) {
                     saveButton.disabled = false;
                     saveButton.textContent = '保存';
                 }
                 if (error) {
-                    error.textContent = `资料记忆保存失败：${message}`;
+                    error.textContent = failureReceipt;
                     error.hidden = false;
                 } else {
-                    this.showContextToast(`资料记忆保存失败：${message}`);
+                    this.showContextToast(failureReceipt);
                 }
                 return;
             }
 
             this.clearSelectedTextTrigger();
             const duplicate = Boolean(response.result?.capsule?.duplicate);
+            const updatedDuplicateNote = duplicate && note.length > 0;
             this.showContextToast(
-                duplicate ? '这段资料已在记忆中' : '已保存为资料记忆',
+                updatedDuplicateNote
+                    ? '这段资料已在记忆中，备注已更新'
+                    : duplicate
+                        ? '这段资料已在记忆中'
+                        : '已保存为资料记忆',
                 buildSourceMemoryDetailToastAction(response.result?.capsule?.id),
                 { durationMs: 5000 },
             );
@@ -3227,6 +3727,7 @@ class WebIntelligenceContentScript {
         this.pageCaptureCopiedText = false;
         this.pageCaptureShownContextKey = null;
         this.pageCaptureStoredContextKey = null;
+        this.clearPageMemoryCaptureReview();
         this.clearVisualMemoryPreview();
         this.invalidatePageMemoryCaptureRequest();
     }
@@ -3269,6 +3770,9 @@ class WebIntelligenceContentScript {
             return;
         }
         if (this.pageCaptureStoredContextKey === payload.contextKey) {
+            return;
+        }
+        if (this.pageCaptureReviewElement?.dataset.contextKey === payload.contextKey) {
             return;
         }
         if (this.pageCapturePendingContextKey === payload.contextKey) {
@@ -3511,11 +4015,18 @@ class WebIntelligenceContentScript {
         const isVisualCapture = payload.request.sourceKind === 'visual_memory';
         const chip = document.createElement('button');
         chip.type = 'button';
-        chip.className = 'pai-memory-capture-page-chip';
+        chip.className = isVisualCapture
+            ? 'pai-memory-capture-page-chip pai-memory-capture-page-chip--visual'
+            : 'pai-memory-capture-page-chip';
         chip.dataset.contextKey = payload.contextKey;
         chip.dataset.captureKind = isVisualCapture ? 'visual' : 'webpage';
-        chip.setAttribute('aria-label', '入库当前页面资料');
-        chip.title = `入库当前页面资料${candidate.reasons?.length ? `：${candidate.reasons.slice(0, 2).join('，')}` : ''}`;
+        chip.setAttribute(
+            'aria-label',
+            isVisualCapture ? '记住当前页面视觉证据' : '记住当前页面资料',
+        );
+        const chipTitle = isVisualCapture ? '记住当前页面视觉证据' : '记住当前页面资料';
+        const candidateReceipt = formatMemoryCaptureCandidateReceipt(candidate, 2);
+        chip.title = `${chipTitle}${candidateReceipt ? `：${candidateReceipt}` : ''}`;
 
         const plus = document.createElement('span');
         plus.className = 'pai-memory-capture-selection-dock-plus';
@@ -3524,7 +4035,7 @@ class WebIntelligenceContentScript {
 
         const label = document.createElement('span');
         label.className = 'pai-memory-capture-selection-dock-label';
-        label.textContent = '入库';
+        label.textContent = '记住';
         chip.appendChild(label);
 
         const logo = document.createElement('img');
@@ -3541,7 +4052,11 @@ class WebIntelligenceContentScript {
         chip.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            this.savePageMemoryCapture(payload);
+            if (isVisualCapture) {
+                this.savePageMemoryCapture(payload);
+                return;
+            }
+            this.showPageMemoryCaptureReview(payload, candidate);
         });
 
         document.body.appendChild(chip);
@@ -3553,6 +4068,12 @@ class WebIntelligenceContentScript {
     private clearPageMemoryCaptureChip(): void {
         this.pageCaptureChipElement?.remove();
         this.pageCaptureChipElement = null;
+        this.clearPageMemoryCaptureReview();
+    }
+
+    private clearPageMemoryCaptureReview(): void {
+        this.pageCaptureReviewElement?.remove();
+        this.pageCaptureReviewElement = null;
     }
 
     private clearVisualMemoryPreview(): void {
@@ -3566,6 +4087,126 @@ class WebIntelligenceContentScript {
             Math.min(window.innerHeight - 24, 112),
         );
         dock.style.top = `${Math.round(top)}px`;
+    }
+
+    private showPageMemoryCaptureReview(
+        payload: { contextKey: string; request: Record<string, unknown> },
+        candidate: MemoryCaptureCandidateResult,
+    ): void {
+        this.ensureContextBubbleStyles();
+        if (!document.body) {
+            return;
+        }
+
+        if (this.pageCaptureReviewElement?.dataset.contextKey === payload.contextKey) {
+            const textarea = this.pageCaptureReviewElement.querySelector('textarea');
+            textarea?.focus();
+            return;
+        }
+
+        this.clearPageMemoryCaptureReview();
+
+        const sourceTitle = normalizeText(
+            typeof payload.request.sourceTitle === 'string'
+                ? payload.request.sourceTitle
+                : document.title,
+        ) || '当前页面';
+        const previewText = normalizeText(
+            typeof payload.request.text === 'string'
+                ? payload.request.text
+                : '',
+        ).slice(0, 220);
+
+        const panel = document.createElement('form');
+        panel.className = 'pai-memory-capture-note-panel pai-page-memory-capture-review-panel';
+        panel.dataset.contextKey = payload.contextKey;
+        panel.setAttribute('aria-label', '保存当前页面资料');
+        panel.addEventListener('mousedown', (event) => {
+            event.stopPropagation();
+        });
+        panel.addEventListener('submit', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.submitPageMemoryCapture(payload, noteInput.value.trim(), panel);
+        });
+
+        const title = document.createElement('div');
+        title.className = 'pai-memory-capture-note-title';
+        title.textContent = '保存当前页面资料';
+        panel.appendChild(title);
+
+        const source = document.createElement('div');
+        source.className = 'pai-visual-memory-preview-source';
+        source.textContent = sourceTitle;
+        panel.appendChild(source);
+
+        const boundaryReceipt = document.createElement('div');
+        boundaryReceipt.className = 'pai-memory-capture-source-boundary';
+        boundaryReceipt.textContent = formatMemoryCaptureSourceBoundaryReceipt(payload.request);
+        panel.appendChild(boundaryReceipt);
+
+        const preview = document.createElement('div');
+        preview.className = 'pai-memory-capture-note-preview';
+        preview.textContent = previewText || sourceTitle;
+        panel.appendChild(preview);
+
+        const candidateReceipt = formatMemoryCaptureCandidateReceipt(candidate, 3);
+        if (candidateReceipt) {
+            const reasons = document.createElement('div');
+            reasons.className = 'pai-memory-capture-note-reasons';
+            reasons.textContent = candidateReceipt;
+            panel.appendChild(reasons);
+        }
+
+        const noteInput = document.createElement('textarea');
+        noteInput.className = 'pai-memory-capture-note-input';
+        noteInput.name = 'note';
+        noteInput.rows = 3;
+        noteInput.maxLength = 800;
+        noteInput.placeholder = '备注（可选）';
+        panel.appendChild(noteInput);
+
+        const error = document.createElement('div');
+        error.className = 'pai-memory-capture-note-error';
+        error.setAttribute('role', 'alert');
+        error.hidden = true;
+        panel.appendChild(error);
+
+        const actions = document.createElement('div');
+        actions.className = 'pai-memory-capture-note-actions';
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'pai-memory-capture-note-button pai-memory-capture-note-cancel';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.clearPageMemoryCaptureReview();
+            this.pageCaptureChipElement?.focus();
+        });
+        actions.appendChild(cancel);
+
+        const save = document.createElement('button');
+        save.type = 'submit';
+        save.className = 'pai-memory-capture-note-button pai-memory-capture-note-save';
+        save.textContent = '保存';
+        actions.appendChild(save);
+        panel.appendChild(actions);
+
+        document.body.appendChild(panel);
+        this.pageCaptureReviewElement = panel;
+        this.placePageMemoryCaptureReview(panel);
+        window.requestAnimationFrame(() => noteInput.focus());
+    }
+
+    private placePageMemoryCaptureReview(panel: HTMLElement): void {
+        const panelHeight = Math.max(210, panel.offsetHeight || 210);
+        const top = Math.max(
+            72,
+            Math.min(window.innerHeight - panelHeight - 16, 92),
+        );
+        panel.style.top = `${Math.round(top)}px`;
     }
 
     private autoSavePageMemoryCapture(
@@ -3614,7 +4255,7 @@ class WebIntelligenceContentScript {
                 {
                     durationMs: 5000,
                     variant: 'memory-capture-auto',
-                    detailMessage: `因为${reason}，本网页信息已自动存入记忆库`,
+                    detailMessage: `因为${reason}，本网页信息已自动存入记忆库。${formatMemoryCaptureSourceBoundaryReceipt(payload.request)}`,
                 },
             );
         });
@@ -3659,18 +4300,23 @@ class WebIntelligenceContentScript {
             request: {
                 ...payload.request,
                 captureMode: 'manual',
-                captureReason: '用户点击网页 + 入库保存视觉证据',
+                captureReason: '用户点击网页 + 记住保存视觉证据',
                 note: '',
             },
         }, (response) => {
             if (chrome.runtime.lastError || !response?.success) {
                 const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
+                const failureReceipt = formatMemoryCaptureSaveFailureReceipt(
+                    '视觉证据',
+                    message,
+                    payload.request,
+                );
                 if (chip) {
                     chip.disabled = false;
                     chip.removeAttribute('aria-busy');
-                    chip.title = '入库当前页面资料';
+                    chip.title = '记住当前页面视觉证据';
                 }
-                this.showContextToast(`视觉证据保存失败：${message}`);
+                this.showContextToast(failureReceipt);
                 return;
             }
 
@@ -3930,10 +4576,44 @@ class WebIntelligenceContentScript {
             return;
         }
 
-        const note = window.prompt('给当前页面资料加个备注（可选）', '');
-        if (note === null) {
-            this.showContextToast('已取消保存当前页面资料');
+        this.showContextToast('请先在页面复核面板确认保存');
+    }
+
+    private submitPageMemoryCapture(
+        payload: { contextKey: string; request: Record<string, unknown> },
+        note: string,
+        panel: HTMLElement,
+    ): void {
+        const error = panel.querySelector<HTMLElement>('.pai-memory-capture-note-error');
+        const saveButton = panel.querySelector<HTMLButtonElement>('.pai-memory-capture-note-save');
+        const currentPayload = this.buildPageMemoryCaptureRequest();
+        if (
+            !currentPayload ||
+            currentPayload.contextKey !== payload.contextKey ||
+            this.isSensitiveContextPage() ||
+            this.isContextDismissed(payload.contextKey)
+        ) {
+            const failureReceipt = formatMemoryCaptureSaveFailureReceipt(
+                '页面资料',
+                '页面上下文已变化，请重新选择要保存的资料',
+                payload.request,
+            );
+            if (error) {
+                error.textContent = failureReceipt;
+                error.hidden = false;
+            } else {
+                this.showContextToast(failureReceipt);
+            }
             return;
+        }
+
+        if (error) {
+            error.textContent = '';
+            error.hidden = true;
+        }
+        if (saveButton) {
+            saveButton.disabled = true;
+            saveButton.textContent = '保存中...';
         }
 
         chrome.runtime.sendMessage({
@@ -3941,21 +4621,41 @@ class WebIntelligenceContentScript {
             request: {
                 ...payload.request,
                 captureMode: 'manual',
-                captureReason: '用户点击右侧半露出 + 入库当前页面',
-                note: note.trim(),
+                captureReason: '用户点击右侧半露出 + 记住当前页面',
+                note,
             },
         }, (response) => {
             if (chrome.runtime.lastError || !response?.success) {
                 const message = chrome.runtime.lastError?.message || response?.error || '保存失败';
-                this.showContextToast(`页面资料保存失败：${message}`);
+                const failureReceipt = formatMemoryCaptureSaveFailureReceipt(
+                    '页面资料',
+                    message,
+                    payload.request,
+                );
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.textContent = '保存';
+                }
+                if (error) {
+                    error.textContent = failureReceipt;
+                    error.hidden = false;
+                } else {
+                    this.showContextToast(failureReceipt);
+                }
                 return;
             }
 
+            this.clearPageMemoryCaptureReview();
             this.clearPageMemoryCaptureChip();
             this.pageCaptureStoredContextKey = payload.contextKey;
             const duplicate = Boolean(response.result?.capsule?.duplicate);
+            const updatedDuplicateNote = duplicate && note.length > 0;
             this.showContextToast(
-                duplicate ? '当前页面已在记忆中' : '已保存当前页面资料',
+                updatedDuplicateNote
+                    ? '当前页面已在记忆中，备注已更新'
+                    : duplicate
+                        ? '当前页面已在记忆中'
+                        : '已保存当前页面资料',
                 buildSourceMemoryDetailToastAction(response.result?.capsule?.id),
                 { durationMs: 5000 },
             );
@@ -4261,14 +4961,18 @@ class WebIntelligenceContentScript {
 
     private handleSiteControlsChanged(): void {
         this.invalidatePendingContextRequest();
+        this.invalidatePageMemoryCaptureRequest();
         this.resetContextStability();
 
         if (this.isPassiveContextSuppressedBySiteControls()) {
             this.clearPassiveContextBubble();
+            this.clearPageMemoryCaptureChip();
+            this.clearVisualMemoryPreview();
             return;
         }
 
         this.scheduleContextMatch(0);
+        this.schedulePageMemoryCaptureEvaluation(PAGE_MEMORY_CAPTURE_INTERACTION_DELAY_MS);
     }
 
     private loadSiteControls(): Promise<void> {
@@ -4620,9 +5324,15 @@ class WebIntelligenceContentScript {
                     this.mutedSiteHosts.delete(host);
                 }
                 this.saveSiteMutes();
-                this.showContextToast('已恢复此网站记忆提示');
+                this.showContextToast('已恢复此网站记忆提示', undefined, {
+                    detailMessage: '仅恢复被动网页提示与候选评估；不会写入、删除或外发记忆。',
+                    durationMs: 5200,
+                });
                 this.scheduleContextMatch(0);
             },
+        }, {
+            detailMessage: '只暂停右下角 Lens、页面召回和被动入库候选；主动划词仍可用。',
+            durationMs: 6400,
         });
     }
 
@@ -4672,9 +5382,15 @@ class WebIntelligenceContentScript {
                 this.saveSiteBlocks();
                 this.saveSiteMutes();
                 this.saveSiteAllowlist();
-                this.showContextToast('已恢复此网站记忆提示');
+                this.showContextToast('已恢复此网站记忆提示', undefined, {
+                    detailMessage: '仅恢复被动网页提示与候选评估；不会写入、删除或外发记忆。',
+                    durationMs: 5200,
+                });
                 this.scheduleContextMatch(0);
             },
+        }, {
+            detailMessage: '只关闭被动网页处理，不删除已有记忆；主动划词仍受敏感页保护。',
+            durationMs: 6400,
         });
     }
 
@@ -4701,9 +5417,15 @@ class WebIntelligenceContentScript {
                     this.blockedPagePrefixes.delete(prefix);
                 }
                 this.savePageBlocks();
-                this.showContextToast('已恢复此页面路径记忆提示');
+                this.showContextToast('已恢复此页面路径记忆提示', undefined, {
+                    detailMessage: '仅恢复这个路径的被动提示与候选评估；不会写入、删除或外发记忆。',
+                    durationMs: 5200,
+                });
                 this.scheduleContextMatch(0);
             },
+        }, {
+            detailMessage: '只关闭此路径下的被动 Lens 和入库候选，不影响同域名其他路径。',
+            durationMs: 6400,
         });
     }
 
@@ -4748,23 +5470,30 @@ class WebIntelligenceContentScript {
                 ? `已开启白名单并允许此网站，已移除 ${removedConflictCount} 条覆盖规则`
                 : '已开启白名单并允许此网站',
             {
-            label: '撤销',
-            ariaLabel: '撤销此站点白名单快捷设置',
-            onClick: () => {
-                this.siteAllowlistMode = previousAllowlistMode;
-                if (hadPreviousAllow && previousAllowedAt !== undefined) {
-                    this.allowedSiteHosts.set(host, previousAllowedAt);
-                } else {
-                    this.allowedSiteHosts.delete(host);
-                }
-                this.restoreSiteEntries(this.blockedSiteHosts, previousBlockedEntries);
-                this.restoreSiteEntries(this.mutedSiteHosts, previousMutedEntries);
-                this.saveSiteAllowlist();
-                this.saveSiteBlocks();
-                this.saveSiteMutes();
-                this.showContextToast('已恢复白名单设置');
-                this.scheduleContextMatch(0);
+                label: '撤销',
+                ariaLabel: '撤销此站点白名单快捷设置',
+                onClick: () => {
+                    this.siteAllowlistMode = previousAllowlistMode;
+                    if (hadPreviousAllow && previousAllowedAt !== undefined) {
+                        this.allowedSiteHosts.set(host, previousAllowedAt);
+                    } else {
+                        this.allowedSiteHosts.delete(host);
+                    }
+                    this.restoreSiteEntries(this.blockedSiteHosts, previousBlockedEntries);
+                    this.restoreSiteEntries(this.mutedSiteHosts, previousMutedEntries);
+                    this.saveSiteAllowlist();
+                    this.saveSiteBlocks();
+                    this.saveSiteMutes();
+                    this.showContextToast('已恢复白名单设置', undefined, {
+                        detailMessage: '仅恢复被动网页提示规则；不会写入、删除或外发记忆。',
+                        durationMs: 5200,
+                    });
+                    this.scheduleContextMatch(0);
+                },
             },
+            {
+                detailMessage: '白名单只控制被动网页处理；主动划词仍可用，已有记忆不被外发。',
+                durationMs: 6400,
             },
         );
     }
@@ -4875,13 +5604,18 @@ class WebIntelligenceContentScript {
         onResult?: ContextRecallFeedbackResultHandler,
         detailOptions: ContextRecallFeedbackDetailOptions = {},
     ): void {
+        const successMessage = isContextRehearsalMatch(match)
+            ? '已记录为预演提醒有用，后续会优先保留类似提示'
+            : '已记录为有用，后续会优先保留类似提示';
         this.showContextToast(
             isContextRehearsalMatch(match)
-                ? '已记录为预演提醒有用，后续会优先保留类似提示'
-                : '已记录为有用，后续会优先保留类似提示',
+                ? '正在记录预演提醒有用反馈...'
+                : '正在记录有用反馈...',
         );
         this.submitContextRecallFeedback(match, 'positive', contextKey, detailOptions, (success, error) => {
-            if (!success) {
+            if (success) {
+                this.showContextToast(successMessage);
+            } else {
                 this.showContextToast(
                     `反馈记录失败：${error || '请稍后再试'}`,
                     undefined,
@@ -4968,13 +5702,14 @@ class WebIntelligenceContentScript {
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                cursor: pointer;
+                cursor: grab;
                 z-index: 2147483646;
                 box-shadow:
                     0 10px 28px rgba(48, 24, 13, 0.18),
                     0 0 0 4px rgba(248, 113, 113, 0.08);
                 transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
                 user-select: none;
+                touch-action: none;
                 backdrop-filter: blur(10px);
                 animation: pai-context-bubble-enter 0.28s ease-out;
             }
@@ -4992,6 +5727,13 @@ class WebIntelligenceContentScript {
                 box-shadow:
                     0 14px 34px rgba(48, 24, 13, 0.24),
                     0 0 0 5px rgba(248, 113, 113, 0.12);
+            }
+
+            .pai-context-bubble--dragging,
+            .pai-context-bubble--dragging:hover {
+                cursor: grabbing;
+                transform: none;
+                transition: none;
             }
 
             .pai-context-bubble::after {
@@ -5062,14 +5804,23 @@ class WebIntelligenceContentScript {
             .pai-context-peek::after {
                 content: '';
                 position: absolute;
-                right: 16px;
-                bottom: -7px;
+                left: var(--pai-context-arrow-left, auto);
+                right: var(--pai-context-arrow-right, 16px);
+                top: var(--pai-context-arrow-top, auto);
+                bottom: var(--pai-context-arrow-bottom, -7px);
                 width: 14px;
                 height: 14px;
                 background: rgba(255, 252, 246, 0.98);
                 border-right: 1px solid rgba(222, 204, 178, 0.92);
                 border-bottom: 1px solid rgba(222, 204, 178, 0.92);
                 transform: rotate(45deg);
+            }
+
+            .pai-context-peek[data-pai-placement='below']::after {
+                border-right: 0;
+                border-bottom: 0;
+                border-left: 1px solid rgba(222, 204, 178, 0.92);
+                border-top: 1px solid rgba(222, 204, 178, 0.92);
             }
 
             .pai-context-peek--visible {
@@ -5196,14 +5947,23 @@ class WebIntelligenceContentScript {
             .pai-context-card::after {
                 content: '';
                 position: absolute;
-                right: 17px;
-                bottom: -8px;
+                left: var(--pai-context-arrow-left, auto);
+                right: var(--pai-context-arrow-right, 17px);
+                top: var(--pai-context-arrow-top, auto);
+                bottom: var(--pai-context-arrow-bottom, -8px);
                 width: 16px;
                 height: 16px;
                 background: rgba(255, 252, 246, 0.99);
                 border-right: 1px solid rgba(222, 204, 178, 0.95);
                 border-bottom: 1px solid rgba(222, 204, 178, 0.95);
                 transform: rotate(45deg);
+            }
+
+            .pai-context-card[data-pai-placement='below']::after {
+                border-right: 0;
+                border-bottom: 0;
+                border-left: 1px solid rgba(222, 204, 178, 0.95);
+                border-top: 1px solid rgba(222, 204, 178, 0.95);
             }
 
             .pai-context-card-scroll {
@@ -5215,25 +5975,99 @@ class WebIntelligenceContentScript {
 
             .pai-context-selection-trigger {
                 position: fixed;
-                min-width: 28px;
-                height: 28px;
+                min-width: 34px;
+                height: 34px;
                 border-radius: 999px;
                 border: 1px solid rgba(203, 213, 225, 0.9);
                 background: rgba(255, 255, 255, 0.98);
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                gap: 2px;
-                padding: 0;
+                gap: 3px;
+                padding: 3px;
                 z-index: 2147483646;
                 box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
                 backdrop-filter: blur(10px);
-                overflow: hidden;
+                overflow: visible;
+                box-sizing: border-box;
+                transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+            }
+
+            .pai-context-selection-tooltip {
+                position: absolute;
+                left: 50%;
+                bottom: calc(100% + 8px);
+                width: max-content;
+                max-width: min(232px, calc(100vw - 24px));
+                transform: translate(-50%, 4px);
+                border-radius: 8px;
+                border: 1px solid rgba(15, 23, 42, 0.18);
+                background: #0f172a;
+                color: #ffffff;
+                padding: 6px 8px;
+                box-shadow: 0 12px 28px rgba(15, 23, 42, 0.28);
+                font: 700 11px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                letter-spacing: 0;
+                text-align: left;
+                white-space: normal;
+                overflow-wrap: anywhere;
+                opacity: 0;
+                visibility: hidden;
+                pointer-events: none;
+                transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+            }
+
+            .pai-context-selection-tooltip::after {
+                content: "";
+                position: absolute;
+                left: 50%;
+                bottom: -5px;
+                width: 10px;
+                height: 10px;
+                transform: translateX(-50%) rotate(45deg);
+                background: #0f172a;
+                border-right: 1px solid rgba(15, 23, 42, 0.18);
+                border-bottom: 1px solid rgba(15, 23, 42, 0.18);
+            }
+
+            .pai-context-selection-trigger[data-tooltip-side='left'] .pai-context-selection-tooltip {
+                left: 0;
+                transform: translate(0, 4px);
+            }
+
+            .pai-context-selection-trigger[data-tooltip-side='left'] .pai-context-selection-tooltip::after {
+                left: 17px;
+            }
+
+            .pai-context-selection-trigger[data-tooltip-side='right'] .pai-context-selection-tooltip {
+                left: auto;
+                right: 0;
+                transform: translate(0, 4px);
+            }
+
+            .pai-context-selection-trigger[data-tooltip-side='right'] .pai-context-selection-tooltip::after {
+                left: auto;
+                right: 12px;
+            }
+
+            .pai-context-selection-trigger:hover .pai-context-selection-tooltip,
+            .pai-context-selection-trigger:focus-within .pai-context-selection-tooltip {
+                opacity: 1;
+                visibility: visible;
+                transform: translate(-50%, 0);
+            }
+
+            .pai-context-selection-trigger[data-tooltip-side='left']:hover .pai-context-selection-tooltip,
+            .pai-context-selection-trigger[data-tooltip-side='left']:focus-within .pai-context-selection-tooltip,
+            .pai-context-selection-trigger[data-tooltip-side='right']:hover .pai-context-selection-tooltip,
+            .pai-context-selection-trigger[data-tooltip-side='right']:focus-within .pai-context-selection-tooltip {
+                transform: translate(0, 0);
             }
 
             .pai-context-selection-action {
                 width: 28px;
                 height: 28px;
+                border-radius: 999px;
                 border: 0;
                 background: transparent;
                 color: #0f172a;
@@ -5245,19 +6079,11 @@ class WebIntelligenceContentScript {
                 font: 700 18px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             }
 
-            .pai-context-selection-action + .pai-context-selection-action {
-                border-left: 1px solid rgba(226, 232, 240, 0.95);
-            }
-
             .pai-context-selection-action img {
                 width: 20px;
                 height: 20px;
                 object-fit: contain;
                 pointer-events: none;
-            }
-
-            .pai-context-selection-capture {
-                color: #2563eb;
             }
 
             .pai-memory-capture-selection-dock,
@@ -5425,6 +6251,16 @@ class WebIntelligenceContentScript {
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
+            }
+
+            .pai-memory-capture-source-boundary {
+                padding: 7px 8px;
+                border-radius: 9px;
+                border: 1px solid rgba(37, 99, 235, 0.16);
+                background: #eff6ff;
+                color: #1e3a8a;
+                font-size: 12px;
+                line-height: 1.4;
             }
 
             .pai-visual-memory-preview-card {
@@ -5683,6 +6519,38 @@ class WebIntelligenceContentScript {
                 overflow: hidden;
             }
 
+            .pai-context-selection-receipt {
+                margin-top: 6px;
+                border: 1px solid rgba(37, 99, 235, 0.16);
+                background: rgba(239, 246, 255, 0.74);
+                border-radius: 8px;
+                padding: 7px 9px;
+                color: #334155;
+                font-size: 11px;
+                line-height: 1.42;
+                display: flex;
+                flex-direction: column;
+                gap: 3px;
+            }
+
+            .pai-context-selection-receipt-row {
+                display: flex;
+                align-items: flex-start;
+                gap: 6px;
+                min-width: 0;
+            }
+
+            .pai-context-selection-receipt-label {
+                flex: 0 0 auto;
+                color: #1d4ed8;
+                font-weight: 760;
+            }
+
+            .pai-context-selection-receipt-value {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+
             .pai-context-evidence-block {
                 margin-top: 8px;
                 border: 1px solid rgba(45, 112, 100, 0.16);
@@ -5730,6 +6598,25 @@ class WebIntelligenceContentScript {
                 color: #69503d;
                 padding: 2px 7px;
                 line-height: 1.45;
+            }
+
+            .pai-context-source-receipt {
+                border: 1px solid rgba(217, 119, 6, 0.26);
+                background: rgba(254, 243, 199, 0.82);
+                color: #92400e;
+            }
+
+            .pai-context-weave-chip {
+                border: 1px solid rgba(36, 89, 166, 0.3);
+                background: rgba(219, 234, 254, 0.85);
+                color: #1d4ed8;
+                font-weight: 600;
+            }
+
+            .pai-context-source-status {
+                border: 1px solid rgba(14, 116, 144, 0.22);
+                background: rgba(236, 254, 255, 0.82);
+                color: #155e75;
             }
 
             .pai-context-source-link {
@@ -6021,6 +6908,42 @@ class WebIntelligenceContentScript {
                 color: #b45309;
             }
 
+            .pai-context-site-control-receipt {
+                margin: 4px 4px 6px;
+                border: 1px solid rgba(14, 116, 144, 0.22);
+                border-radius: 8px;
+                background: rgba(236, 254, 255, 0.86);
+                color: #155e75;
+                padding: 8px 9px;
+                font-size: 11px;
+                line-height: 1.42;
+                display: grid;
+                gap: 4px;
+            }
+
+            .pai-context-site-control-title {
+                color: #0f4c5c;
+                font-weight: 760;
+            }
+
+            .pai-context-site-control-row {
+                display: flex;
+                align-items: flex-start;
+                gap: 6px;
+                min-width: 0;
+            }
+
+            .pai-context-site-control-label {
+                flex: 0 0 auto;
+                color: #0e7490;
+                font-weight: 700;
+            }
+
+            .pai-context-site-control-value {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+
             .pai-context-toast {
                 position: fixed;
                 top: max(16px, env(safe-area-inset-top));
@@ -6041,6 +6964,14 @@ class WebIntelligenceContentScript {
                 box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
                 z-index: 2147483646;
                 animation: pai-context-toast-enter 0.18s ease-out;
+            }
+
+            .pai-context-toast--with-detail {
+                max-width: min(360px, calc(100vw - 32px));
+                align-items: flex-start;
+                justify-content: flex-start;
+                flex-direction: column;
+                gap: 4px;
             }
 
             .pai-context-toast--memory-capture-auto {
@@ -6077,6 +7008,13 @@ class WebIntelligenceContentScript {
 
             .pai-context-toast-detail {
                 display: none;
+            }
+
+            .pai-context-toast--with-detail .pai-context-toast-detail {
+                display: block;
+                color: rgba(255, 255, 255, 0.78);
+                font-size: 11px;
+                line-height: 1.38;
             }
 
             .pai-context-toast--memory-capture-auto .pai-context-toast-detail {
@@ -6248,9 +7186,12 @@ class WebIntelligenceContentScript {
 
         const toast = document.createElement('div');
         const isAutoMemoryCapture = options.variant === 'memory-capture-auto';
+        const hasDetail = Boolean(options.detailMessage);
         toast.className = isAutoMemoryCapture
             ? 'pai-context-toast pai-context-toast--memory-capture-auto'
-            : 'pai-context-toast';
+            : hasDetail
+                ? 'pai-context-toast pai-context-toast--with-detail'
+                : 'pai-context-toast';
         toast.setAttribute('role', 'status');
 
         if (isAutoMemoryCapture) {
@@ -6267,7 +7208,7 @@ class WebIntelligenceContentScript {
         text.textContent = message;
         toast.appendChild(text);
 
-        if (isAutoMemoryCapture && options.detailMessage) {
+        if (options.detailMessage) {
             const detail = document.createElement('span');
             detail.className = 'pai-context-toast-detail';
             detail.textContent = options.detailMessage;
@@ -6401,6 +7342,7 @@ class WebIntelligenceContentScript {
         const cardAriaLabel = isSelectionSearch
             ? 'Selection Memory Search 划词记忆检索结果'
             : 'Memory Lens 相关记忆详情';
+        const currentSiteHost = this.getCurrentSiteMuteHost();
         const currentSiteAlreadyAllowed = this.siteAllowlistMode && this.isCurrentSiteAllowed();
         const siteAllowActionLabel = currentSiteAlreadyAllowed
             ? '此站点已在白名单'
@@ -6408,6 +7350,28 @@ class WebIntelligenceContentScript {
                 ? '允许此站点'
                 : '开启白名单并允许此站点';
         const siteAllowActionDisabled = currentSiteAlreadyAllowed;
+        const siteControlReceiptItems = isSelectionSearch
+            ? []
+            : [
+                ['当前站点', currentSiteHost || '当前网页'],
+                ['当前模式', this.siteAllowlistMode ? '白名单模式：只允许列表内站点被动提示' : '默认模式：未屏蔽站点可被动提示'],
+                ['控制范围', '只影响右下角 Lens、页面召回、整页/视觉入库候选'],
+                ['仍可使用', '主动划词检索仍可用；敏感页和密钥选区继续拦截'],
+                ['不会执行', '不删除、不同步、不外发已有记忆'],
+            ];
+        const siteControlReceiptHtml = siteControlReceiptItems.length
+            ? `
+                <div class="pai-context-site-control-receipt" aria-label="站点控制回执">
+                    <div class="pai-context-site-control-title">站点控制回执</div>
+                    ${siteControlReceiptItems.map(([label, value]) => `
+                        <div class="pai-context-site-control-row">
+                            <span class="pai-context-site-control-label">${escapeHtml(label)}</span>
+                            <span class="pai-context-site-control-value">${escapeHtml(value)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `
+            : '';
 
         const bubble = document.createElement('div');
         bubble.className = 'pai-context-bubble';
@@ -6442,6 +7406,106 @@ class WebIntelligenceContentScript {
         let negativeFeedbackNoteExpanded = false;
         let negativeFeedbackNote = '';
         const feedbackSurface = isSelectionSearch ? 'selection_memory_search_card' : 'web_passive_bubble';
+        const dragViewportMargin = 8;
+        const dragPanelGap = 10;
+        const dragThresholdPx = 4;
+        let hasDraggedBubble = false;
+        let suppressNextBubbleClick = false;
+        let bubbleDragState: {
+            pointerId: number;
+            startClientX: number;
+            startClientY: number;
+            startLeft: number;
+            startTop: number;
+            moved: boolean;
+            previousBodyUserSelect: string;
+        } | null = null;
+
+        const clampDragValue = (value: number, min: number, max: number): number => {
+            if (max < min) {
+                return min;
+            }
+            return Math.min(Math.max(value, min), max);
+        };
+
+        const positionAnchoredPanel = (panel: HTMLDivElement): void => {
+            if (!hasDraggedBubble || !panel.isConnected) {
+                return;
+            }
+            if (window.getComputedStyle(panel).display === 'none') {
+                return;
+            }
+
+            const bubbleRect = bubble.getBoundingClientRect();
+            const panelRect = panel.getBoundingClientRect();
+            const panelWidth = panelRect.width || panel.offsetWidth;
+            const panelHeight = panelRect.height || panel.offsetHeight;
+            if (!panelWidth || !panelHeight) {
+                return;
+            }
+
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const bubbleCenterX = bubbleRect.left + bubbleRect.width / 2;
+            const roomAbove = bubbleRect.top - dragViewportMargin;
+            const roomBelow = viewportHeight - bubbleRect.bottom - dragViewportMargin;
+            const placeBelow = roomAbove < panelHeight + dragPanelGap && roomBelow > roomAbove;
+            const maxLeft = viewportWidth - panelWidth - dragViewportMargin;
+            const maxTop = viewportHeight - panelHeight - dragViewportMargin;
+            const left = clampDragValue(
+                bubbleCenterX - panelWidth / 2,
+                dragViewportMargin,
+                maxLeft,
+            );
+            const top = clampDragValue(
+                placeBelow
+                    ? bubbleRect.bottom + dragPanelGap
+                    : bubbleRect.top - panelHeight - dragPanelGap,
+                dragViewportMargin,
+                maxTop,
+            );
+            const arrowSize = panel === card ? 16 : 14;
+            const arrowInset = panel === card ? 17 : 16;
+            const arrowOutsideOffset = panel === card ? 8 : 7;
+            const arrowOffset = clampDragValue(
+                bubbleCenterX - left - arrowSize / 2,
+                arrowInset,
+                panelWidth - arrowSize - arrowInset,
+            );
+
+            panel.style.left = `${Math.round(left)}px`;
+            panel.style.top = `${Math.round(top)}px`;
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            panel.style.setProperty('--pai-context-arrow-left', `${Math.round(arrowOffset)}px`);
+            panel.style.setProperty('--pai-context-arrow-right', 'auto');
+            panel.style.setProperty('--pai-context-arrow-top', placeBelow ? `-${arrowOutsideOffset}px` : 'auto');
+            panel.style.setProperty('--pai-context-arrow-bottom', placeBelow ? 'auto' : `-${arrowOutsideOffset}px`);
+            panel.dataset.paiPlacement = placeBelow ? 'below' : 'above';
+        };
+
+        const updateAnchoredPanels = (): void => {
+            if (!hasDraggedBubble) {
+                return;
+            }
+            positionAnchoredPanel(peek);
+            positionAnchoredPanel(card);
+        };
+
+        const setDraggedBubblePosition = (left: number, top: number): void => {
+            const bubbleWidth = bubble.offsetWidth || 44;
+            const bubbleHeight = bubble.offsetHeight || 44;
+            const maxLeft = window.innerWidth - bubbleWidth - dragViewportMargin;
+            const maxTop = window.innerHeight - bubbleHeight - dragViewportMargin;
+            const nextLeft = clampDragValue(left, dragViewportMargin, maxLeft);
+            const nextTop = clampDragValue(top, dragViewportMargin, maxTop);
+            hasDraggedBubble = true;
+            bubble.style.left = `${Math.round(nextLeft)}px`;
+            bubble.style.top = `${Math.round(nextTop)}px`;
+            bubble.style.right = 'auto';
+            bubble.style.bottom = 'auto';
+            updateAnchoredPanels();
+        };
 
         const getViewCopy = (match: ContextRecallMatch): ContextMatchViewCopy => {
             if (isSelectionSearch) {
@@ -6464,7 +7528,7 @@ class WebIntelligenceContentScript {
                     footerSectionLabel: '我能做什么',
                     positiveAriaLabel: '标记这条预演提醒有用',
                     negativeAriaLabel: '标记这条预演提醒不相关',
-                    evidenceLabel: '线索',
+                    evidenceLabel: '摘要',
                 };
             }
 
@@ -6496,11 +7560,7 @@ class WebIntelligenceContentScript {
             const whyChips = isSelectionSearch
                 ? buildSelectionSearchWhyChips(match, selectedText)
                 : buildContextWhyChips(match);
-            const peekFooter = [
-                sourceLabel,
-                formatContextMatchDate(match.timestamp),
-                normalizeText(match.sourceTitle),
-            ].filter(Boolean).join(' · ');
+            const peekFooter = buildContextRecallPeekFooterItems(match).join(' · ');
             const safeExploreRoute = sanitizeExploreRoute(match.exploreLink);
             const exploreUrl = safeExploreRoute
                 ? chrome.runtime.getURL(`memory-exploring.html${safeExploreRoute}`)
@@ -6511,6 +7571,17 @@ class WebIntelligenceContentScript {
                 match,
                 window.location.href,
                 sourceLabel,
+            );
+            const sourceReceipts = buildContextRecallSourceReceipts(
+                match,
+                exploreUrl,
+                sourceLinks,
+            );
+            const sourceStatusReceipts = buildContextRecallSourceStatusReceipts(
+                match,
+                sourceLinks,
+                exploreUrl,
+                window.location.href,
             );
 
             return {
@@ -6527,6 +7598,8 @@ class WebIntelligenceContentScript {
                 exploreUrl,
                 compactMetaItems,
                 sourceLinks,
+                sourceReceipts,
+                sourceStatusReceipts,
             };
         };
 
@@ -6711,6 +7784,7 @@ class WebIntelligenceContentScript {
                 <div class="pai-context-peek-summary">${escapeHtml(view.summaryText)}</div>
                 ${view.peekFooter ? `<div class="pai-context-peek-footer">${escapeHtml(view.peekFooter)}</div>` : ''}
             `;
+            updateAnchoredPanels();
         };
 
         const renderCard = (): void => {
@@ -6723,6 +7797,16 @@ class WebIntelligenceContentScript {
             const sourceLinksHtml = view.sourceLinks
                 .map((link) => `<a class="pai-context-source-link" href="${escapeHtmlAttribute(link.url)}" target="_blank" rel="noopener">${escapeHtml(link.label)}</a>`)
                 .join('');
+            const sourceStatusHtml = view.sourceStatusReceipts
+                .map((item) => `<span class="pai-context-meta-item pai-context-source-status">${escapeHtml(item)}</span>`)
+                .join('');
+            const sourceReceiptHtml = view.sourceReceipts
+                .map((item) => `<span class="pai-context-meta-item pai-context-source-receipt">${escapeHtml(item)}</span>`)
+                .join('');
+            const weaveLabel = computeLensWeaveLabel(matches);
+            const weaveChipHtml = weaveLabel
+                ? `<span class="pai-context-meta-item pai-context-weave-chip" title="跨来源缝合证据">${escapeHtml(weaveLabel)}</span>`
+                : '';
             const pagerHtml = matches.length > 1
                 ? `
                     <div class="pai-context-pager" aria-label="相关记忆候选分页">
@@ -6732,10 +7816,38 @@ class WebIntelligenceContentScript {
                     </div>
                 `
                 : '';
+            const selectionReceiptItems = isSelectionSearch
+                ? [
+                    ['查询', '只用选中文字作为主检索文本'],
+                    [
+                        '背景',
+                        [
+                            '页面标题/附近段落只作辅助上下文',
+                            clipContextFeedbackDetailValue(document.title, 70),
+                            clipContextFeedbackDetailValue(window.location.hostname, 60),
+                        ].filter(Boolean).join(' · '),
+                    ],
+                    ['边界', '主动划词，不受被动站点静默或屏蔽控制影响'],
+                    ['安全', '敏感页/密钥类选区仍拦截；不自动入库、插入或发给外部 AI'],
+                ]
+                : [];
+            const selectionReceiptHtml = selectionReceiptItems.length
+                ? `
+                    <div class="pai-context-selection-receipt" aria-label="划词检索范围">
+                        ${selectionReceiptItems.map(([label, value]) => `
+                            <div class="pai-context-selection-receipt-row">
+                                <span class="pai-context-selection-receipt-label">${escapeHtml(label)}</span>
+                                <span class="pai-context-selection-receipt-value">${escapeHtml(value)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                `
+                : '';
             const selectedTextHtml = isSelectionSearch && selectedText
                 ? `
                     <div class="pai-context-section-label">选中的内容</div>
                     <div class="pai-context-selected-text">${escapeHtml(selectedText)}</div>
+                    ${selectionReceiptHtml}
                 `
                 : '';
             const moreMenuHtml = isSelectionSearch
@@ -6743,6 +7855,7 @@ class WebIntelligenceContentScript {
                     <button type="button" class="pai-context-menu-item pai-context-selection-close" role="menuitem">关闭本次划词结果</button>
                 `
                 : `
+                    ${siteControlReceiptHtml}
                     <button type="button" class="pai-context-menu-item pai-context-dismiss" role="menuitem">隐藏此条记忆 30 分钟</button>
                     <button type="button" class="pai-context-menu-item pai-context-site-allow" role="menuitem" ${siteAllowActionDisabled ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(siteAllowActionLabel)}</button>
                     <button type="button" class="pai-context-menu-item pai-context-site-mute" role="menuitem">此网站今天不提示</button>
@@ -6784,8 +7897,11 @@ class WebIntelligenceContentScript {
                     ` : ''}
 
                     <div class="pai-context-meta-row" aria-label="记忆来源摘要">
+                        ${weaveChipHtml}
                         ${metaHtml}
                         ${sourceLinksHtml}
+                        ${sourceStatusHtml}
+                        ${sourceReceiptHtml}
                     </div>
                 </div>
                 <div class="pai-context-footer-wrap">
@@ -6799,18 +7915,21 @@ class WebIntelligenceContentScript {
                     </div>
                 </div>
             `;
+            updateAnchoredPanels();
         };
 
         renderPeek();
         renderCard();
 
         let expanded = false;
+        let expandedTraceRecordedForMatchId: string | null = null;
         const setPeekVisible = (visible: boolean): void => {
             if (expanded) {
                 visible = false;
             }
             peek.classList.toggle('pai-context-peek--visible', visible);
             peek.setAttribute('aria-hidden', String(!visible));
+            updateAnchoredPanels();
         };
         const schedulePeekVisible = (visible: boolean, delayMs: number): void => {
             if (this.peekShowTimer !== null) {
@@ -6840,6 +7959,7 @@ class WebIntelligenceContentScript {
                 this.clearContextBubble();
                 return;
             }
+            const wasExpanded = expanded;
             expanded = nextExpanded;
             moreMenuOpen = false;
             if (!expanded) {
@@ -6853,10 +7973,106 @@ class WebIntelligenceContentScript {
             card.style.display = expanded ? 'flex' : 'none';
             card.setAttribute('aria-hidden', String(!expanded));
             bubble.setAttribute('aria-expanded', String(expanded));
+            updateAnchoredPanels();
+            if (!wasExpanded && expanded) {
+                const currentMatch = matches[currentIndex];
+                if (currentMatch && expandedTraceRecordedForMatchId !== currentMatch.id) {
+                    expandedTraceRecordedForMatchId = currentMatch.id;
+                    submitContextRecallAmbientTrace(
+                        currentMatch,
+                        contextKey,
+                        'expanded',
+                        feedbackSurface,
+                    );
+                }
+            }
         };
+
+        const finishBubbleDrag = (): void => {
+            if (!bubbleDragState) {
+                return;
+            }
+            const { pointerId, moved, previousBodyUserSelect } = bubbleDragState;
+            if (bubble.hasPointerCapture(pointerId)) {
+                bubble.releasePointerCapture(pointerId);
+            }
+            document.body.style.userSelect = previousBodyUserSelect;
+            bubble.classList.remove('pai-context-bubble--dragging');
+            bubbleDragState = null;
+            if (moved) {
+                suppressNextBubbleClick = true;
+                schedulePeekVisible(false, 0);
+                window.setTimeout(() => {
+                    suppressNextBubbleClick = false;
+                }, 250);
+            }
+        };
+
+        if (!isSelectionSearch) {
+            bubble.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0) {
+                    return;
+                }
+                const rect = bubble.getBoundingClientRect();
+                bubbleDragState = {
+                    pointerId: event.pointerId,
+                    startClientX: event.clientX,
+                    startClientY: event.clientY,
+                    startLeft: rect.left,
+                    startTop: rect.top,
+                    moved: false,
+                    previousBodyUserSelect: document.body.style.userSelect,
+                };
+                bubble.setPointerCapture(event.pointerId);
+            });
+
+            bubble.addEventListener('pointermove', (event) => {
+                if (!bubbleDragState || bubbleDragState.pointerId !== event.pointerId) {
+                    return;
+                }
+                const deltaX = event.clientX - bubbleDragState.startClientX;
+                const deltaY = event.clientY - bubbleDragState.startClientY;
+                if (
+                    !bubbleDragState.moved &&
+                    Math.hypot(deltaX, deltaY) < dragThresholdPx
+                ) {
+                    return;
+                }
+                if (!bubbleDragState.moved) {
+                    bubbleDragState.moved = true;
+                    document.body.style.userSelect = 'none';
+                    bubble.classList.add('pai-context-bubble--dragging');
+                    schedulePeekVisible(false, 0);
+                }
+                event.preventDefault();
+                setDraggedBubblePosition(
+                    bubbleDragState.startLeft + deltaX,
+                    bubbleDragState.startTop + deltaY,
+                );
+            });
+
+            bubble.addEventListener('pointerup', (event) => {
+                if (!bubbleDragState || bubbleDragState.pointerId !== event.pointerId) {
+                    return;
+                }
+                finishBubbleDrag();
+            });
+
+            bubble.addEventListener('pointercancel', (event) => {
+                if (!bubbleDragState || bubbleDragState.pointerId !== event.pointerId) {
+                    return;
+                }
+                finishBubbleDrag();
+            });
+        }
 
         bubble.addEventListener('click', (event) => {
             event.stopPropagation();
+            if (suppressNextBubbleClick) {
+                event.preventDefault();
+                suppressNextBubbleClick = false;
+                return;
+            }
             setExpanded(!expanded);
         });
 

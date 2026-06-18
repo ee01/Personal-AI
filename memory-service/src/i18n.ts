@@ -14,6 +14,8 @@ const MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'ask.status.analyzing': '正在分析已知信息...',
     'ask.status.integratingExternal':
       '已获取外部证据，正在整合上下文...',
+    'ask.status.needsClarification':
+      '需要先确认你指的是哪个话题...',
     'ask.status.generating': '正在生成回答...',
     'ask.status.structuring': '正在整理结构化要点...',
     'ask.error.answer':
@@ -32,6 +34,8 @@ const MESSAGES: Record<UiLanguage, Record<string, string>> = {
     'ask.status.analyzing': 'Analyzing known information...',
     'ask.status.integratingExternal':
       'External evidence received. Integrating context...',
+    'ask.status.needsClarification':
+      'Need to confirm which topic you mean...',
     'ask.status.generating': 'Generating answer...',
     'ask.status.structuring': 'Organizing structured takeaways...',
     'ask.error.answer':
@@ -51,6 +55,7 @@ const LEGACY_TEXT_KEYS = new Map<string, string>([
   ['正在检索相关记忆...', 'ask.status.recalling'],
   ['正在分析已知信息...', 'ask.status.analyzing'],
   ['已获取外部证据，正在整合上下文...', 'ask.status.integratingExternal'],
+  ['需要先确认你指的是哪个话题...', 'ask.status.needsClarification'],
   ['正在生成回答...', 'ask.status.generating'],
   ['正在整理结构化要点...', 'ask.status.structuring'],
 ]);

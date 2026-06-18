@@ -39,6 +39,12 @@ export interface UserRuntimeConfig {
   ringCentralClientId: string;
   ringCentralClientSecret: string;
   ringCentralJwt: string;
+  botApiBaseUrl: string;
+  botToken: string;
+  botId: string;
+  botType: string;
+  botTeamId: string;
+  botTargetEmail: string;
 }
 
 const MIN_OPENCLAW_TIMEOUT_MS = 5 * 60 * 1000;
@@ -219,5 +225,30 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
       typeof persisted.ringCentralJwt === 'string' && persisted.ringCentralJwt.length > 0
         ? persisted.ringCentralJwt
         : appConfig.ringCentralJwt,
+    botApiBaseUrl:
+      typeof persisted.botApiBaseUrl === 'string' &&
+      persisted.botApiBaseUrl.trim().length > 0
+        ? persisted.botApiBaseUrl.trim()
+        : appConfig.botApiBaseUrl,
+    botToken:
+      typeof persisted.botToken === 'string' && persisted.botToken.length > 0
+        ? persisted.botToken
+        : appConfig.botToken,
+    botId:
+      typeof persisted.botId === 'string' && persisted.botId.trim().length > 0
+        ? persisted.botId.trim()
+        : appConfig.botId,
+    botType:
+      persisted.botType === 'team' || persisted.botType === 'user'
+        ? persisted.botType
+        : appConfig.botType === 'team'
+          ? 'team'
+          : 'user',
+    botTeamId:
+      typeof persisted.botTeamId === 'string' ? persisted.botTeamId.trim() : appConfig.botTeamId,
+    botTargetEmail:
+      typeof persisted.botTargetEmail === 'string'
+        ? persisted.botTargetEmail.trim()
+        : appConfig.botTargetEmail,
   };
 }

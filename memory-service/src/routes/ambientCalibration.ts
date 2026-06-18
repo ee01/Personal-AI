@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance } from 'fastify';
 
+import { MemoryOutcomeLoopService } from '../core/MemoryOutcomeLoopService.js';
 import { UserWritingStyleMemoryService } from '../core/UserWritingStyleMemoryService.js';
 import type { UserContext } from '../core/UserContextManager.js';
 import { now } from '../utils/time.js';
@@ -49,6 +50,20 @@ type AmbientCalibrationPrivacyClass =
   | 'sensitive_redacted'
   | 'local_only';
 
+interface AmbientCalibrationReceipt {
+  stored: boolean;
+  duplicate: boolean;
+  privacyClass: AmbientCalibrationPrivacyClass;
+  rawTextStored: false;
+  evidenceRefCount: number;
+  cueRefCount: number;
+  styleSignalCount: number;
+  redactedDiffKeys: string[];
+  writingStyleProcessed: boolean;
+  outcomeCueEventCount: number;
+  boundary: 'hashes_lengths_tags_and_evidence_refs_only';
+}
+
 interface AmbientCalibrationEvidenceRef {
   id: string;
   type?: string;
@@ -56,6 +71,16 @@ interface AmbientCalibrationEvidenceRef {
   sourceLabel?: string;
   role?: string;
   score?: number;
+  cueId?: string;
+  cueKey?: string;
+  cue?: {
+    id?: string;
+    cueKey?: string;
+    actionType?: string;
+    compileStatus?: string;
+    confidence?: number;
+    whyNow?: string;
+  };
 }
 
 interface AmbientCalibrationTraceBody {
@@ -83,6 +108,20 @@ const evidenceRefSchema = {
     sourceLabel: { type: 'string' as const, maxLength: 120 },
     role: { type: 'string' as const, maxLength: 64 },
     score: { type: 'number' as const, minimum: 0, maximum: 1 },
+    cueId: { type: 'string' as const, maxLength: 160 },
+    cueKey: { type: 'string' as const, maxLength: 240 },
+    cue: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string' as const, maxLength: 160 },
+        cueKey: { type: 'string' as const, maxLength: 240 },
+        actionType: { type: 'string' as const, maxLength: 64 },
+        compileStatus: { type: 'string' as const, maxLength: 64 },
+        confidence: { type: 'number' as const, minimum: 0, maximum: 1 },
+        whyNow: { type: 'string' as const, maxLength: 320 },
+      },
+      additionalProperties: false,
+    },
   },
   additionalProperties: false,
 };
@@ -180,6 +219,13 @@ const forbiddenRawTextKeys = new Set([
   'messagetext',
 ]);
 
+const redactedDiffStyleSignalKeys = new Set([
+  'styleFeatureTags',
+  'toneShiftTags',
+  'formatShiftTags',
+  'recipientReactionTags',
+]);
+
 function nowMs(): number {
   return Date.now();
 }
@@ -223,6 +269,146 @@ function findForbiddenRawTextField(
   return null;
 }
 
+function looksLikeHashOrEnumValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (/^[a-f0-9]{32,}$/i.test(trimmed)) return true;
+  if (/^[a-z0-9_.:-]{1,96}$/i.test(trimmed)) return true;
+  return false;
+}
+
+function looksLikeUnredactedTextValue(value: string): boolean {
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  if (!trimmed || looksLikeHashOrEnumValue(trimmed)) return false;
+  if (/https?:\/\//i.test(trimmed)) return true;
+  if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(trimmed)) return true;
+  if (trimmed.length > 180) return true;
+
+  const englishWordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  if (englishWordCount >= 9 && trimmed.length >= 50) return true;
+
+  const cjkCount = (trimmed.match(/[\u3400-\u9fff]/g) || []).length;
+  if (cjkCount >= 48) return true;
+  if (cjkCount >= 16 && trimmed.length >= 24 && /[，。！？；：、,.!?;:]/.test(trimmed)) {
+    return true;
+  }
+  if (cjkCount >= 28 && /[，。！？；：、,.!?;:]/.test(trimmed)) return true;
+
+  return false;
+}
+
+function findLikelyUnredactedDiffValue(
+  value: unknown,
+  path = 'redactedDiff',
+): string | null {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    return looksLikeUnredactedTextValue(value) ? path : null;
+  }
+
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const nested = findLikelyUnredactedDiffValue(
+        value[index],
+        `${path}[${index}]`,
+      );
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  if (typeof value !== 'object') return null;
+
+  for (const [key, nestedValue] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    const nested = findLikelyUnredactedDiffValue(
+      nestedValue,
+      `${path}.${key}`,
+    );
+    if (nested) return nested;
+  }
+
+  return null;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
+function countCueRefs(trace: AmbientCalibrationTraceBody): number {
+  const cues = new Set<string>();
+  for (const ref of trace.evidenceRefs || []) {
+    for (const value of [
+      ref.cueId,
+      ref.cueKey,
+      ref.cue?.id,
+      ref.cue?.cueKey,
+    ]) {
+      if (value) cues.add(value);
+    }
+  }
+
+  const metadata = trace.metadata || {};
+  for (const key of ['cueIds', 'cueKeys']) {
+    for (const value of readStringArray(metadata[key])) {
+      cues.add(value);
+    }
+  }
+
+  return cues.size;
+}
+
+function countStyleSignals(trace: AmbientCalibrationTraceBody): number {
+  const signals = new Set<string>();
+  for (const container of [trace.redactedDiff || {}, trace.metadata || {}]) {
+    for (const [key, value] of Object.entries(container)) {
+      if (!redactedDiffStyleSignalKeys.has(key)) continue;
+      for (const signal of readStringArray(value)) {
+        signals.add(signal);
+      }
+    }
+  }
+  return signals.size;
+}
+
+function buildCalibrationReceipt(
+  trace: AmbientCalibrationTraceBody,
+  stored: boolean,
+  writingStyleMemory:
+    | {
+        processed: boolean;
+        memoryIds: string[];
+        promotedProfileItemIds: string[];
+      }
+    | undefined,
+  outcomeLoop:
+    | {
+        cueEventCount: number;
+        patches: unknown[];
+        skillSuggestionIds: string[];
+      }
+    | undefined,
+): AmbientCalibrationReceipt {
+  return {
+    stored,
+    duplicate: !stored,
+    privacyClass: trace.privacyClass || 'normal',
+    rawTextStored: false,
+    evidenceRefCount: trace.evidenceRefs?.length || 0,
+    cueRefCount: countCueRefs(trace),
+    styleSignalCount: countStyleSignals(trace),
+    redactedDiffKeys: Object.keys(trace.redactedDiff || {})
+      .sort()
+      .slice(0, 24),
+    writingStyleProcessed: writingStyleMemory?.processed || false,
+    outcomeCueEventCount: outcomeLoop?.cueEventCount || 0,
+    boundary: 'hashes_lengths_tags_and_evidence_refs_only',
+  };
+}
+
 export async function ambientCalibrationRoutes(
   app: FastifyInstance,
 ): Promise<void> {
@@ -257,6 +443,14 @@ export async function ambientCalibrationRoutes(
       if (forbiddenNestedField) {
         return reply.code(400).send({
           error: `${forbiddenNestedField} is not allowed in ambient calibration traces`,
+        });
+      }
+      const unredactedDiffValue = findLikelyUnredactedDiffValue(
+        trace.redactedDiff,
+      );
+      if (unredactedDiffValue) {
+        return reply.code(400).send({
+          error: `${unredactedDiffValue} appears to contain unredacted text; use hashes, lengths, bands, or compact tags instead`,
         });
       }
       const id = trace.id || randomUUID();
@@ -306,6 +500,31 @@ export async function ambientCalibrationRoutes(
             promotedProfileItemIds: string[];
           }
         | undefined;
+      let outcomeLoop:
+        | {
+            cueEventCount: number;
+            patches: unknown[];
+            skillSuggestionIds: string[];
+          }
+        | undefined;
+      if (result.changes > 0) {
+        const service = new MemoryOutcomeLoopService(
+          request.userContext.db,
+          request.userId,
+        );
+        outcomeLoop = service.processAmbientTrace({
+          id,
+          surface: trace.surface,
+          sceneKey: trace.sceneKey,
+          sourceRequestId: trace.sourceRequestId,
+          action: trace.action,
+          strength: trace.strength,
+          polarity: trace.polarity,
+          evidenceRefs: trace.evidenceRefs,
+          metadata: trace.metadata,
+          createdAt,
+        });
+      }
       if (result.changes > 0 && trace.surface === 'compose_assist') {
         const service = new UserWritingStyleMemoryService(
           request.userContext.db,
@@ -341,6 +560,13 @@ export async function ambientCalibrationRoutes(
         traceId: id,
         stored: result.changes > 0,
         writingStyleMemory,
+        outcomeLoop,
+        calibrationReceipt: buildCalibrationReceipt(
+          trace,
+          result.changes > 0,
+          writingStyleMemory,
+          outcomeLoop,
+        ),
       });
     },
   );

@@ -1,0 +1,1124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Memory Outcome Loop Demo</title>
+  <style>
+    :root {
+      --bg: #f6f5f2;
+      --panel: #fffdf8;
+      --ink: #1c1d1f;
+      --muted: #62666f;
+      --line: #d8d3c8;
+      --green: #176f54;
+      --green-soft: #e3f2eb;
+      --blue: #2459a6;
+      --blue-soft: #e4ecf8;
+      --red: #aa3a32;
+      --red-soft: #f8e7e4;
+      --amber: #8a6200;
+      --amber-soft: #fff0c2;
+      --purple: #6a4aa0;
+      --purple-soft: #eee7fa;
+      --shadow: 0 18px 54px rgba(38, 31, 18, 0.14);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(246, 245, 242, 0.92)),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .shell {
+      width: min(1440px, 100%);
+      min-height: 100vh;
+      margin: 0 auto;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.9);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: conic-gradient(from 220deg, #2459a6, #176f54, #c7832a, #2459a6);
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.7);
+      flex: 0 0 auto;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 2px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.2;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr) 370px;
+      gap: 0;
+      min-height: 0;
+    }
+
+    .sidebar,
+    .right-rail {
+      background: rgba(255, 253, 248, 0.78);
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 18px 14px;
+    }
+
+    .side-label {
+      margin: 0 0 9px;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .scene-button {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+      border: 1px solid transparent;
+      display: grid;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .scene-button:hover {
+      background: rgba(36, 89, 166, 0.07);
+    }
+
+    .scene-button.active {
+      border-color: rgba(36, 89, 166, 0.35);
+      background: var(--blue-soft);
+    }
+
+    .scene-button strong {
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .scene-button span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .side-card {
+      margin-top: 18px;
+      padding: 13px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .side-card strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .metric-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 7px 0;
+      border-top: 1px solid #eee8db;
+    }
+
+    .metric-line:first-of-type {
+      border-top: 0;
+    }
+
+    .metric-line b {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .main {
+      padding: 22px;
+      overflow: auto;
+    }
+
+    .work-surface {
+      max-width: 850px;
+      margin: 0 auto;
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: var(--shadow);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .surface-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      background: #fbfaf7;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .surface-title {
+      min-width: 0;
+    }
+
+    .surface-title h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .surface-title p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .surface-badge {
+      flex: 0 0 auto;
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .surface-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 260px;
+      gap: 0;
+      min-height: 558px;
+    }
+
+    .conversation {
+      padding: 18px;
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .message {
+      max-width: 82%;
+      padding: 11px 12px;
+      border-radius: 8px;
+      background: #f3f2ee;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .message.me {
+      margin-left: auto;
+      background: #dff0e8;
+    }
+
+    .message.ai {
+      background: #e8eef8;
+      border: 1px solid rgba(36, 89, 166, 0.14);
+    }
+
+    .message small {
+      display: block;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .composer {
+      margin-top: auto;
+      display: grid;
+      gap: 10px;
+      padding-top: 8px;
+    }
+
+    .composer textarea {
+      width: 100%;
+      min-height: 92px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px;
+      line-height: 1.45;
+      color: var(--ink);
+      background: #fffdf8;
+    }
+
+    .composer-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .ghost-btn,
+    .primary-btn,
+    .tone-btn {
+      height: 34px;
+      border-radius: 7px;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+
+    .ghost-btn {
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+
+    .primary-btn {
+      color: #fff;
+      background: var(--green);
+    }
+
+    .tone-btn {
+      color: var(--ink);
+      background: #f3f2ee;
+      border: 1px solid var(--line);
+    }
+
+    .context-pane {
+      padding: 15px;
+      background: #fbfaf7;
+    }
+
+    .context-pane h3 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .context-item {
+      padding: 10px 0;
+      border-top: 1px solid #e8e1d3;
+    }
+
+    .context-item:first-of-type {
+      border-top: 0;
+    }
+
+    .context-item strong {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .context-item p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .right-rail {
+      border-left: 1px solid var(--line);
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .rail-section {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+
+    .rail-section h2,
+    .rail-section h3 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    .rail-section h2 {
+      font-size: 17px;
+      line-height: 1.25;
+    }
+
+    .rail-section h3 {
+      font-size: 13px;
+      line-height: 1.3;
+      margin-bottom: 9px;
+    }
+
+    .rail-section p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 6px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .status-chip.helped {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .status-chip.noise {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .status-chip.late {
+      color: var(--amber);
+      background: var(--amber-soft);
+    }
+
+    .intervention-card {
+      display: grid;
+      gap: 10px;
+    }
+
+    .intervention-card strong {
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 7px;
+      margin-top: 10px;
+    }
+
+    .source-pill {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px;
+      border-radius: 7px;
+      background: #f6f5f2;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .source-pill b {
+      color: var(--ink);
+    }
+
+    .feedback-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .feedback-grid button {
+      height: 36px;
+      border-radius: 7px;
+      color: var(--ink);
+      background: #f6f5f2;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .feedback-grid button:hover {
+      border-color: rgba(36, 89, 166, 0.42);
+      background: var(--blue-soft);
+    }
+
+    .feedback-grid button.selected {
+      color: #fff;
+      background: var(--blue);
+      border-color: var(--blue);
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 9px;
+      align-items: start;
+    }
+
+    .event-dot {
+      width: 10px;
+      height: 10px;
+      margin: 5px auto 0;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 0 0 4px var(--blue-soft);
+    }
+
+    .event.helped .event-dot {
+      background: var(--green);
+      box-shadow: 0 0 0 4px var(--green-soft);
+    }
+
+    .event.noise .event-dot {
+      background: var(--red);
+      box-shadow: 0 0 0 4px var(--red-soft);
+    }
+
+    .event strong {
+      display: block;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .event span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      margin-top: 2px;
+    }
+
+    .score-wrap {
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .score-row {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr) 42px;
+      gap: 9px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #ece6da;
+    }
+
+    .bar > i {
+      display: block;
+      height: 100%;
+      width: 50%;
+      background: var(--blue);
+      border-radius: inherit;
+    }
+
+    .policy-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .policy-item {
+      border-radius: 7px;
+      background: #f6f5f2;
+      border: 1px solid #e7e0d2;
+      padding: 9px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
+    .policy-item b {
+      color: var(--ink);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%) translateY(22px);
+      background: #1c1d1f;
+      color: #fff;
+      border-radius: 8px;
+      padding: 11px 14px;
+      font-size: 13px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transition: 180ms ease;
+      z-index: 40;
+      max-width: calc(100vw - 24px);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1100px) {
+      .workspace {
+        grid-template-columns: 210px minmax(0, 1fr);
+      }
+
+      .right-rail {
+        grid-column: 1 / -1;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .rail-section {
+        margin-bottom: 0;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .topbar {
+        height: auto;
+        padding: 12px;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      .top-actions {
+        display: none;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 12px;
+      }
+
+      .scene-button {
+        margin-bottom: 6px;
+      }
+
+      .side-card {
+        display: none;
+      }
+
+      .main {
+        padding: 12px;
+      }
+
+      .surface-head,
+      .composer-row {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .surface-body {
+        grid-template-columns: 1fr;
+      }
+
+      .conversation {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        min-height: 500px;
+      }
+
+      .context-pane {
+        display: none;
+      }
+
+      .right-rail {
+        display: block;
+        padding: 12px;
+      }
+
+      .rail-section {
+        margin-bottom: 12px;
+      }
+
+      .message {
+        max-width: 100%;
+      }
+
+      .feedback-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true"></div>
+        <div>
+          <h1>Memory Outcome Loop</h1>
+          <p>Personal AI 记忆介入成效回路 Demo</p>
+        </div>
+      </div>
+      <div class="top-actions" aria-label="demo status">
+        <span class="pill"><span class="dot"></span> 本地预览</span>
+        <span class="pill">49 pending confirmations</span>
+        <span class="pill">58 queued OpenClaw actions</span>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <p class="side-label">工作场景</p>
+        <button class="scene-button active" data-scene="glip">
+          <strong>RingCentral 估算口径</strong>
+          <span>在聊天里辅助回复 estimate 单位和 due date。</span>
+        </button>
+        <button class="scene-button" data-scene="jira">
+          <strong>Jira / BE ready 事实跟进</strong>
+          <span>识别重复外部核实和确认债。</span>
+        </button>
+        <button class="scene-button" data-scene="clinic">
+          <strong>AI Workflow Clinic</strong>
+          <span>把真实记忆转成团队模拟流程。</span>
+        </button>
+
+        <div class="side-card">
+          <strong>本周成效摘要</strong>
+          <div class="metric-line"><span>介入记录</span><b id="metricInterventions">128</b></div>
+          <div class="metric-line"><span>可能帮上忙</span><b id="metricHelped">42</b></div>
+          <div class="metric-line"><span>失败循环</span><b id="metricLoops">9</b></div>
+          <div class="metric-line"><span>已静默噪声</span><b id="metricMuted">18</b></div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="work-surface" aria-label="simulated work surface">
+          <div class="surface-head">
+            <div class="surface-title">
+              <h2 id="sceneTitle">RingCentral · esone.qiu + rondo.yang</h2>
+              <p id="sceneSubtitle">当前输入框旁嵌入 Outcome Strip，不需要打开新页面。</p>
+            </div>
+            <span class="surface-badge" id="sceneBadge">Compose Assist</span>
+          </div>
+
+          <div class="surface-body">
+            <div class="conversation" id="conversation"></div>
+            <aside class="context-pane">
+              <h3>当前上下文</h3>
+              <div id="contextList"></div>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <aside class="right-rail" aria-label="personal ai rail">
+        <section class="rail-section">
+          <span class="status-chip" id="statusChip">成效待观察</span>
+          <div class="intervention-card">
+            <h2 id="interventionTitle">建议补一句 estimate 单位口径</h2>
+            <p id="interventionBody">这条提示来自最近 Glip 线程和 Q3 planning 日历，系统会观察是否被插入、发送和解决后续追问。</p>
+            <div class="source-list" id="sourceList"></div>
+          </div>
+          <div class="feedback-grid" id="feedbackGrid">
+            <button data-feedback="helped">有用</button>
+            <button data-feedback="irrelevant">不相关</button>
+            <button data-feedback="late">太晚了</button>
+            <button data-feedback="weak">证据弱</button>
+          </div>
+        </section>
+
+        <section class="rail-section">
+          <h3>成效时间线</h3>
+          <div class="timeline" id="timeline"></div>
+        </section>
+
+        <section class="rail-section">
+          <h3>Impact Score</h3>
+          <div class="score-wrap">
+            <div class="score-row">
+              <span>有用度</span>
+              <span class="bar"><i id="usefulnessBar"></i></span>
+              <b id="usefulnessText">62%</b>
+            </div>
+            <div class="score-row">
+              <span>注意力成本</span>
+              <span class="bar"><i id="costBar"></i></span>
+              <b id="costText">18%</b>
+            </div>
+            <div class="score-row">
+              <span>证据强度</span>
+              <span class="bar"><i id="evidenceBar"></i></span>
+              <b id="evidenceText">74%</b>
+            </div>
+          </div>
+        </section>
+
+        <section class="rail-section">
+          <h3>下次策略</h3>
+          <div class="policy-list" id="policyList"></div>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const scenes = {
+      glip: {
+        title: "RingCentral · esone.qiu + rondo.yang",
+        subtitle: "当前输入框旁嵌入 Outcome Strip，不需要打开新页面。",
+        badge: "Compose Assist",
+        status: ["成效待观察", ""],
+        interventionTitle: "建议补一句 estimate 单位口径",
+        interventionBody: "这条提示来自最近 Glip 线程和 Q3 planning 日历。系统会观察是否被插入、发送和解决后续追问。",
+        composer: "也可以填 3h 这样的小时单位。close 的时候应该没有硬要求，日常维护 original estimate 和 due date 即可。",
+        messages: [
+          ["other", "Rondo", "original estimate 如果不是人天，可以填小时吗？"],
+          ["me", "Esone", "人天"],
+          ["me", "Esone", "也可以填 3h 这样的小时单位"],
+          ["other", "Rondo", "close 的时候有硬要求吗？"],
+          ["ai", "Personal AI", "上次你提到日常维护 original estimate 和 due date。这条 cue 如果被采用，会记录为 estimate wording outcome。"]
+        ],
+        context: [
+          ["Glip thread", "Rondo 刚问过人天和小时单位。"],
+          ["Calendar", "Q3 planning for video mobile 需要核对 Dev/QA estimate。"],
+          ["Outcome hint", "同类 estimate wording 过去被复制后发送 4 次。"]
+        ],
+        sources: [
+          ["glip:esone+rondo", "人天 / 3h 单位讨论"],
+          ["calendar:q3-planning", "review all user stories and estimates"],
+          ["memory:estimate-style", "短句口径比长解释更常被采纳"]
+        ],
+        timeline: [
+          ["shown", "提示已显示", "sceneKey: ringcentral.estimate.reply"],
+          ["expanded", "用户展开来源", "查看了 Glip thread 和日历依据"],
+          ["pending", "等待结果", "如果草稿发送且对方不再追问，记为 probably_helped"]
+        ],
+        scores: [62, 18, 74],
+        policies: [
+          ["boost", "如果用户发送此草稿，下次 estimate 场景提升“单位/口径”类记忆。"],
+          ["keep short", "同类提示默认保持 1-2 句，不展开长历史。"]
+        ]
+      },
+      jira: {
+        title: "Jira · MTR-141852 / BE readiness",
+        subtitle: "Outcome Loop 识别同义确认债和 OpenClaw 失败循环。",
+        badge: "Ask + Reflection",
+        status: ["失败循环", "noise"],
+        interventionTitle: "暂停重复外部核实，等待权威证据",
+        interventionBody: "过去多次 BE ready 查询生成了近似 property_change 和 failed delegate_openclaw。系统建议合并同义问题，并要求新权威来源后再更新当前事实。",
+        composer: "当前仍只能说：BE 尚未 ready，等待 RCV BE 新 design。过去 8 次自动外部核实没有拿到新权威证据。",
+        messages: [
+          ["me", "Esone", "那个 BE ready 了吗？"],
+          ["ai", "Personal AI", "已有结论：not ready; waiting for new RCV BE design。"],
+          ["ai", "OpenClaw action", "外部核实失败：缺少可用外部系统入口或更明确源。"],
+          ["ai", "Outcome Loop", "同义确认请求过多，已建议 require_better_evidence + ask_less。"]
+        ],
+        context: [
+          ["Confirm debt", "49 pending requests，BE status 占多条近似 property_change。"],
+          ["Action loop", "58 queued delegate_openclaw，46 failed delegate_openclaw。"],
+          ["Authority", "没有 April/BE/Jira 新权威证据前，不写新状态。"]
+        ],
+        sources: [
+          ["confirm_requests", "BE ready/status same-meaning property changes"],
+          ["proposed_actions", "failed delegate_openclaw: capability missing"],
+          ["reflection_thread", "事实跟进: BE readiness"]
+        ],
+        timeline: [
+          ["shown", "Ask 回答已显示", "引用已有 BE not ready 证据"],
+          ["noise", "失败 action 记录", "delegate_openclaw 多次 failed"],
+          ["noise", "确认债增加", "同义 property_change 反复出现"],
+          ["policy", "策略补丁生成", "require_better_evidence, ask_less, merge"]
+        ],
+        scores: [24, 67, 58],
+        policies: [
+          ["require_better_evidence", "没有新 Jira/BE/thread 权威来源时，不再生成 property_change。"],
+          ["ask_less", "同一 BE ready scene 只给一条合并提示，减少确认债。"],
+          ["suppress delegate", "OpenClaw connector 缺能力前，暂停同类自动委派。"]
+        ]
+      },
+      clinic: {
+        title: "Calendar · AI workflow clinic 模拟",
+        subtitle: "把真实消息里的想法转成可执行流程，并观察会后是否继续推进。",
+        badge: "Meeting Prep",
+        status: ["可能帮上忙", "helped"],
+        interventionTitle: "生成 3 人问诊空间模拟流程",
+        interventionBody: "用户昨天在 CoP - AI Enablers 说希望模拟“求医者进入问诊空间”的整体流程。Personal AI 建议 3 人角色分工和观察指标。",
+        composer: "建议 30 分钟：5 分钟设定求医者任务，15 分钟 workflow doctor 问诊，5 分钟观察员记录卡点，5 分钟沉淀下一版流程。",
+        messages: [
+          ["me", "Esone", "这一场我希望来个模拟，比如我作为求医者，参加一个问诊空间的时候整体流程应该是怎么样的"],
+          ["me", "Esone", "3 个人就够了，我们先模拟摸索一下"],
+          ["ai", "Personal AI", "已将这两条记忆转成 clinic 流程建议，等待会后 follow-up 判断是否有用。"]
+        ],
+        context: [
+          ["Calendar", "AI workflow clinic 模拟 - Esone's team"],
+          ["Glip", "CoP - AI Enablers 讨论求医者/问诊空间。"],
+          ["Outcome", "如果会后产生 follow-up 或模板，会送 Skill Foundry。"]
+        ],
+        sources: [
+          ["glip:CoP-AI-Enablers", "求医者进入问诊空间的模拟设想"],
+          ["calendar:workflow-clinic", "Workflow doctors: Fred, Zong"],
+          ["skill-signal", "可能形成 AI Workflow Clinic playbook"]
+        ],
+        timeline: [
+          ["shown", "会前 cue 已显示", "sceneKey: meeting.ai-workflow-clinic"],
+          ["expanded", "用户复制流程", "3 人模拟流程进入会前材料"],
+          ["helped", "可能帮上忙", "若会后产生 follow-up，进入 Skill Foundry candidate"]
+        ],
+        scores: [78, 22, 81],
+        policies: [
+          ["send_to_skill_foundry", "同类 clinic 流程重复成功后，生成个人 skill candidate。"],
+          ["boost", "未来 AI workflow clinic 优先显示角色分工和观察指标。"]
+        ]
+      }
+    };
+
+    let currentScene = "glip";
+    let selectedFeedback = "";
+
+    const conversation = document.getElementById("conversation");
+    const contextList = document.getElementById("contextList");
+    const sourceList = document.getElementById("sourceList");
+    const timeline = document.getElementById("timeline");
+    const policyList = document.getElementById("policyList");
+    const toast = document.getElementById("toast");
+    const feedbackGrid = document.getElementById("feedbackGrid");
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1900);
+    }
+
+    function renderScene(key) {
+      currentScene = key;
+      selectedFeedback = "";
+      const scene = scenes[key];
+
+      document.getElementById("sceneTitle").textContent = scene.title;
+      document.getElementById("sceneSubtitle").textContent = scene.subtitle;
+      document.getElementById("sceneBadge").textContent = scene.badge;
+      document.getElementById("interventionTitle").textContent = scene.interventionTitle;
+      document.getElementById("interventionBody").textContent = scene.interventionBody;
+
+      const statusChip = document.getElementById("statusChip");
+      statusChip.textContent = scene.status[0];
+      statusChip.className = `status-chip ${scene.status[1] || ""}`.trim();
+
+      conversation.innerHTML = scene.messages.map(([kind, who, text]) => `
+        <div class="message ${kind === "me" ? "me" : kind === "ai" ? "ai" : ""}">
+          <small>${escapeHtml(who)}</small>
+          ${escapeHtml(text)}
+        </div>
+      `).join("") + `
+        <div class="composer">
+          <textarea aria-label="draft">${escapeHtml(scene.composer)}</textarea>
+          <div class="composer-row">
+            <div>
+              <button class="ghost-btn" data-action="insert">插入建议</button>
+              <button class="ghost-btn" data-action="detail">查看成效详情</button>
+            </div>
+            <button class="primary-btn" data-action="send">发送并观察结果</button>
+          </div>
+        </div>
+      `;
+
+      contextList.innerHTML = scene.context.map(([title, body]) => `
+        <div class="context-item">
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(body)}</p>
+        </div>
+      `).join("");
+
+      sourceList.innerHTML = scene.sources.map(([title, body]) => `
+        <div class="source-pill"><span>↳</span><span><b>${escapeHtml(title)}</b><br>${escapeHtml(body)}</span></div>
+      `).join("");
+
+      timeline.innerHTML = scene.timeline.map(([kind, title, body]) => `
+        <div class="event ${kind === "helped" ? "helped" : kind === "noise" ? "noise" : ""}">
+          <span class="event-dot"></span>
+          <span><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></span>
+        </div>
+      `).join("");
+
+      policyList.innerHTML = scene.policies.map(([title, body]) => `
+        <div class="policy-item"><b>${escapeHtml(title)}</b>${escapeHtml(body)}</div>
+      `).join("");
+
+      setScore("usefulness", scene.scores[0], key === "jira" ? "var(--red)" : "var(--green)");
+      setScore("cost", scene.scores[1], key === "jira" ? "var(--amber)" : "var(--blue)");
+      setScore("evidence", scene.scores[2], "var(--purple)");
+
+      document.querySelectorAll(".scene-button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.scene === key);
+      });
+      document.querySelectorAll("#feedbackGrid button").forEach((button) => {
+        button.classList.remove("selected");
+      });
+    }
+
+    function setScore(id, value, color) {
+      const bar = document.getElementById(`${id}Bar`);
+      const text = document.getElementById(`${id}Text`);
+      bar.style.width = `${value}%`;
+      bar.style.background = color;
+      text.textContent = `${value}%`;
+    }
+
+    document.querySelectorAll(".scene-button").forEach((button) => {
+      button.addEventListener("click", () => renderScene(button.dataset.scene));
+    });
+
+    feedbackGrid.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-feedback]");
+      if (!button) return;
+      selectedFeedback = button.dataset.feedback;
+      document.querySelectorAll("#feedbackGrid button").forEach((item) => item.classList.remove("selected"));
+      button.classList.add("selected");
+
+      const labels = {
+        helped: "已记录：有用。下次同类场景会轻微提升这类来源。",
+        irrelevant: "已记录：不相关。系统会降低同类 cue 的展示频率。",
+        late: "已记录：太晚了。系统会优先调整触发时机，而不是惩罚来源。",
+        weak: "已记录：证据弱。下次更新事实前会要求更强 authority source。"
+      };
+      showToast(labels[selectedFeedback]);
+    });
+
+    conversation.addEventListener("click", (event) => {
+      const action = event.target.closest("button[data-action]")?.dataset.action;
+      if (!action) return;
+      if (action === "insert") {
+        showToast("已记录 inserted signal：等待用户是否发送和后续结果。");
+        addTimeline("expanded", "插入建议", "Outcome signal: inserted + edited draft");
+      }
+      if (action === "send") {
+        showToast("已记录 sent signal：24 小时内观察是否解决后续追问。");
+        addTimeline("helped", "草稿已发送", "Delayed outcome window: 24h");
+        setScore("usefulness", Math.min(92, scenes[currentScene].scores[0] + 14), "var(--green)");
+      }
+      if (action === "detail") {
+        showToast("右侧详情已展示来源、行为、成效和下次策略。");
+      }
+    });
+
+    function addTimeline(kind, title, body) {
+      const item = document.createElement("div");
+      item.className = `event ${kind === "helped" ? "helped" : kind === "noise" ? "noise" : ""}`;
+      item.innerHTML = `
+        <span class="event-dot"></span>
+        <span><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></span>
+      `;
+      timeline.appendChild(item);
+    }
+
+    renderScene(currentScene);
+  </script>
+</body>
+</html>

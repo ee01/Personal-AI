@@ -660,6 +660,10 @@ describe('ActionExecutor', () => {
 
     expect(result.queueStatus).toBe('failed');
     expect(result.error).toContain('未配置 Jira');
+    const failedAction = actionRepo.getById(action.id);
+    expect(failedAction?.result?.status).toBe('capability_missing');
+    expect(failedAction?.result?.summary).toContain('未配置 Jira');
+    expect(failedAction?.result?.transcriptPath).toMatch(/^delegations\//);
 
     const confirmRequests = db
       .prepare(
@@ -704,6 +708,11 @@ describe('ActionExecutor', () => {
         (item) => item.action_type === 'create_confirm_request',
       ),
     ).toBe(true);
+    expect(Array.isArray(failedAction?.result?.followUpActionIds)).toBe(true);
+    expect(
+      (failedAction?.result?.followUpActionIds as unknown[] | undefined)
+        ?.length,
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it('creates a message rule improvement confirm request when linked action delegation fails', async () => {

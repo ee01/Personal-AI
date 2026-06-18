@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { now } from '../utils/time.js';
+import { formatDate, now } from '../utils/time.js';
 import { contentHash } from '../utils/hashing.js';
 import {
   ProactivityPolicy,
@@ -116,6 +116,19 @@ interface DreamDigestRuntimeConfig {
   intervalDays: number;
   pushTarget: RuntimePushTarget;
   pushGroupId: string;
+}
+
+interface DreamDigestScopeReceipt {
+  periodStart: number;
+  periodEnd: number;
+  periodLabel: string;
+  includedCount: number;
+  includedDreamPaths: string[];
+  excludedOlderCount: number;
+  excludedUndatedCount: number;
+  excludedFutureCount: number;
+  skippedUnreadableCount: number;
+  boundary: 'current_digest_period_only';
 }
 
 export interface DreamDigestPushResult {
@@ -941,19 +954,41 @@ export class HeartbeatLoop {
       nowDate,
       runtimeConfig,
     );
+    const contentPeriodEnd = Math.floor(nowDate.getTime() / 1000);
     const dreamFiles = this.userDataManager.listFiles('dreams/');
     if (!dreamFiles || dreamFiles.length === 0) return null;
 
-    const recentDreams: Array<{ content: string; generatedAt: number }> = [];
+    const recentDreams: Array<{
+      file: string;
+      content: string;
+      generatedAt: number;
+    }> = [];
+    let excludedOlderCount = 0;
+    let excludedUndatedCount = 0;
+    let excludedFutureCount = 0;
+    let skippedUnreadableCount = 0;
+
     for (const file of dreamFiles) {
       if (!file.endsWith('.md')) continue;
       const content = this.userDataManager.readFile(`dreams/${file}`);
-      if (!content) continue;
-      const generatedAt = this.parseDreamGeneratedAt(file, content);
-      if (generatedAt === null || generatedAt < contentPeriodStart) {
+      if (!content) {
+        skippedUnreadableCount++;
         continue;
       }
-      recentDreams.push({ content, generatedAt });
+      const generatedAt = this.parseDreamGeneratedAt(file, content);
+      if (generatedAt === null) {
+        excludedUndatedCount++;
+        continue;
+      }
+      if (generatedAt < contentPeriodStart) {
+        excludedOlderCount++;
+        continue;
+      }
+      if (generatedAt > contentPeriodEnd) {
+        excludedFutureCount++;
+        continue;
+      }
+      recentDreams.push({ file, content, generatedAt });
     }
 
     if (recentDreams.length === 0) return null;
@@ -981,6 +1016,20 @@ export class HeartbeatLoop {
     const topicId = options?.manual
       ? `dream_digest_manual_${dateTag}_${now()}`
       : `dream_digest_${dateTag}`;
+    const dreamDigestScope: DreamDigestScopeReceipt = {
+      periodStart: contentPeriodStart,
+      periodEnd: contentPeriodEnd,
+      periodLabel: `${formatDate(contentPeriodStart)} 至 ${formatDate(
+        contentPeriodEnd,
+      )}`,
+      includedCount: recentDreams.length,
+      includedDreamPaths: recentDreams.map(({ file }) => `dreams/${file}`),
+      excludedOlderCount,
+      excludedUndatedCount,
+      excludedFutureCount,
+      skippedUnreadableCount,
+      boundary: 'current_digest_period_only',
+    };
 
     return {
       type: 'dream_digest',
@@ -991,8 +1040,43 @@ export class HeartbeatLoop {
       confidence: 0.95,
       actionability: 0.4,
       topicId,
-      payload: { dreamCount: recentDreams.length, digestBody },
+      payload: {
+        dreamCount: recentDreams.length,
+        dreamDigestScope,
+        dreamDigestScopeReceipt:
+          this.formatDreamDigestScopeReceipt(dreamDigestScope),
+        digestBody,
+        latestDreamPath: `dreams/${recentDreams[0].file}`,
+        dreamPaths: dreamDigestScope.includedDreamPaths,
+      },
     };
+  }
+
+  private formatDreamDigestScopeReceipt(
+    scope: DreamDigestScopeReceipt,
+  ): string {
+    const exclusions: string[] = [];
+    if (scope.excludedOlderCount > 0) {
+      exclusions.push(`旧周期 ${scope.excludedOlderCount} 个`);
+    }
+    if (scope.excludedUndatedCount > 0) {
+      exclusions.push(`日期缺失 ${scope.excludedUndatedCount} 个`);
+    }
+    if (scope.excludedFutureCount > 0) {
+      exclusions.push(`未来日期 ${scope.excludedFutureCount} 个`);
+    }
+    if (scope.skippedUnreadableCount > 0) {
+      exclusions.push(`读取失败 ${scope.skippedUnreadableCount} 个`);
+    }
+
+    return [
+      `覆盖周期：${scope.periodLabel}`,
+      `本次纳入：${scope.includedCount} 个梦境文件`,
+      exclusions.length > 0
+        ? `未纳入：${exclusions.join('，')}`
+        : '未纳入：无',
+      '边界：这次推送只汇总当前 Dream Digest 周期；旧梦境和日期缺失文件仍可在梦境重放页查看。',
+    ].join('\n');
   }
 
   private getDreamDigestRuntimeConfig(): DreamDigestRuntimeConfig {

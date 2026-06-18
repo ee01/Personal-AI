@@ -14,6 +14,25 @@ const ACTIVE_STATUSES: RehearsalStatus[] = ['candidate', 'active', 'stale'];
 const AUTO_ACTIVE_CONFIDENCE = 0.82;
 const AGING_SECONDS = 30 * 86400;
 const STALE_SECONDS = 90 * 86400;
+const FUTURE_CUE_FIELDS = [
+  'people',
+  'projects',
+  'topics',
+  'keywords',
+  'groupIds',
+  'conversationIds',
+  'meetingIds',
+  'calendarEventIds',
+  'issueKeys',
+  'urls',
+  'surfaces',
+] as const;
+const PROMPT_ELIGIBLE_STATUSES = new Set<RehearsalStatus>([
+  'candidate',
+  'active',
+  'paused',
+  'stale',
+]);
 
 interface RehearsalRow {
   id: string;
@@ -93,6 +112,18 @@ export interface RehearsalFeedbackInput {
   outcome: RehearsalActivationOutcome;
   activationId?: string;
   note?: string;
+}
+
+export class RehearsalValidationError extends Error {
+  readonly code = 'REHEARSAL_FUTURE_CUE_REQUIRED';
+  readonly requiredCueFields = [...FUTURE_CUE_FIELDS];
+
+  constructor() {
+    super(
+      'Rehearsal requires at least one future scene cue before it can be saved.',
+    );
+    this.name = 'RehearsalValidationError';
+  }
 }
 
 export class RehearsalService {
@@ -212,6 +243,7 @@ export class RehearsalService {
     const now = unixNow();
     const id = randomUUID();
     const cues = normalizeCues(input.activationCues);
+    assertHasFutureCue(cues);
     const confidence = clamp01(input.confidence ?? 0.5);
     const status =
       input.status ?? (confidence >= AUTO_ACTIVE_CONFIDENCE && hasStableCue(cues) ? 'active' : 'candidate');
@@ -324,6 +356,12 @@ export class RehearsalService {
       lastActivatedAt: refreshActivationClock ? now : current.lastActivatedAt,
       updatedAt: now,
     };
+    if (
+      input.activationCues !== undefined ||
+      PROMPT_ELIGIBLE_STATUSES.has(next.status)
+    ) {
+      assertHasFutureCue(next.activationCues);
+    }
     if (next.status === 'candidate' && next.confidence >= AUTO_ACTIVE_CONFIDENCE && hasStableCue(next.activationCues)) {
       next.status = 'active';
       next.staleReason = undefined;
@@ -622,6 +660,10 @@ export function normalizeCues(
   return normalized;
 }
 
+export function hasFutureCue(cues: RehearsalActivationCues): boolean {
+  return FUTURE_CUE_FIELDS.some((key) => Boolean(cues[key]?.length));
+}
+
 export function hasStableCue(cues: RehearsalActivationCues): boolean {
   return Boolean(
     cues.people?.length ||
@@ -633,6 +675,12 @@ export function hasStableCue(cues: RehearsalActivationCues): boolean {
       cues.issueKeys?.length ||
       cues.urls?.length,
   );
+}
+
+function assertHasFutureCue(cues: RehearsalActivationCues): void {
+  if (!hasFutureCue(cues)) {
+    throw new RehearsalValidationError();
+  }
 }
 
 function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {

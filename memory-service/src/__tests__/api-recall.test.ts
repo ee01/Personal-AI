@@ -366,6 +366,74 @@ describe('Recall API', () => {
     expect(body.items.map((item: any) => item.id)).not.toContain(
       'personal-memory-1',
     );
+    expect(body.scopeReceipt).toMatchObject({
+      requestedScope: 'work',
+      effectiveScope: 'work',
+      includesPersonal: false,
+    });
+    expect(body.scopeReceipt.returned.work).toBeGreaterThan(0);
+    expect(body.scopeReceipt.returned.personal).toBe(0);
+    expect(body.scopeReceipt.note).toContain('仅检索工作记忆');
+  });
+
+  it('uses the stored message scope as authoritative for returned scope receipts', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, source_type, sender, group_name, timestamp, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'legacy-scope-metadata-mismatch',
+      'Legacy memory row about scope receipt planning.',
+      'manual',
+      'self',
+      'Legacy Scope',
+      now - 20,
+      0.7,
+      'neutral',
+      JSON.stringify({ scope: 'personal', legacyScopeSource: 'metadata_json' }),
+      now - 20,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/recall',
+      payload: {
+        query: 'scope receipt planning',
+        topK: 5,
+        channels: ['time'],
+        timeRange: {
+          start: now - 3600,
+          end: now + 60,
+        },
+        sourceTypes: ['manual'],
+        includeMetadata: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({
+      id: 'legacy-scope-metadata-mismatch',
+      scope: 'work',
+      metadata: {
+        scope: 'work',
+        legacyScopeSource: 'metadata_json',
+      },
+    });
+    expect(body.scopeReceipt).toMatchObject({
+      requestedScope: 'work',
+      effectiveScope: 'work',
+      returned: {
+        work: 1,
+        personal: 0,
+        unknown: 0,
+        total: 1,
+      },
+      includesPersonal: false,
+    });
+    expect(body.scopeReceipt.note).toContain('仅检索工作记忆');
   });
 
   it('treats all scope as both work and personal memories', async () => {
@@ -410,6 +478,14 @@ describe('Recall API', () => {
     expect(body.items.map((item: any) => item.id)).toContain(
       'personal-memory-1',
     );
+    expect(body.scopeReceipt).toMatchObject({
+      requestedScope: 'all',
+      effectiveScope: 'both',
+      includesPersonal: true,
+    });
+    expect(body.scopeReceipt.returned.work).toBeGreaterThan(0);
+    expect(body.scopeReceipt.returned.personal).toBeGreaterThan(0);
+    expect(body.scopeReceipt.note).toContain('返回结果包含');
   });
 
   it('keeps graph entity recall inside the requested memory scope', async () => {
@@ -673,6 +749,11 @@ describe('Recall API', () => {
     const bothBody = bothRes.json();
     expect(bothBody.items.map((item: any) => item.id)).toContain('101');
     expect(bothBody.items.map((item: any) => item.id)).toContain('102');
+    expect(bothBody.scopeReceipt).toMatchObject({
+      requestedScope: 'both',
+      effectiveScope: 'both',
+      includesPersonal: true,
+    });
 
     const allRes = await app.inject({
       method: 'POST',
@@ -689,6 +770,11 @@ describe('Recall API', () => {
     const allBody = allRes.json();
     expect(allBody.items.map((item: any) => item.id)).toContain('101');
     expect(allBody.items.map((item: any) => item.id)).toContain('102');
+    expect(allBody.scopeReceipt).toMatchObject({
+      requestedScope: 'all',
+      effectiveScope: 'both',
+      includesPersonal: true,
+    });
   });
 
   it('keeps message and chunk recall results separate when their ids collide', async () => {

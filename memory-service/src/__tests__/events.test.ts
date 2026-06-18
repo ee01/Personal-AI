@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
-import { resolveEventStreamUserId } from '../routes/events.js';
+import {
+  buildEventStreamConnectionReceipt,
+  resolveEventStreamUserId,
+} from '../routes/events.js';
 import { buildApp } from '../server.js';
 import { cleanupTestDb, getTestDb } from './setup.js';
 
@@ -24,18 +27,54 @@ describe('events stream user isolation', () => {
   it('prefers a validated EventSource query userId over auth fallback', () => {
     const resolved = resolveEventStreamUserId({
       requestUserId: 'default',
+      requestFallbackToDefault: true,
       queryUserId: 'alice.user',
     });
 
-    expect(resolved).toEqual({ userId: 'alice.user' });
+    expect(resolved).toEqual({
+      userId: 'alice.user',
+      identitySource: 'query',
+      fallbackToDefault: false,
+      storageKey: 'data/users/alice.user/memory.db',
+      eventFilter: 'matching_user_or_global',
+    });
   });
 
-  it('falls back to the middleware userId when no query userId is present', () => {
+  it('uses the middleware userId when no query userId is present', () => {
     const resolved = resolveEventStreamUserId({
       requestUserId: 'bob-user',
     });
 
-    expect(resolved).toEqual({ userId: 'bob-user' });
+    expect(resolved).toEqual({
+      userId: 'bob-user',
+      identitySource: 'header',
+      fallbackToDefault: false,
+      storageKey: 'data/users/bob-user/memory.db',
+      eventFilter: 'matching_user_or_global',
+    });
+  });
+
+  it('marks the connected receipt when request identity fell back to default', () => {
+    const resolved = resolveEventStreamUserId({
+      requestUserId: 'default',
+      requestFallbackToDefault: true,
+    });
+
+    const receipt = buildEventStreamConnectionReceipt(resolved, 12345);
+
+    expect(receipt).toEqual({
+      message: 'SSE stream connected',
+      timestamp: 12345,
+      userId: 'default',
+      user: {
+        id: 'default',
+        isolation: 'per_user_event_stream',
+        identitySource: 'default_fallback',
+        fallbackToDefault: true,
+        storageKey: 'data/users/default/memory.db',
+        eventFilter: 'matching_user_or_global',
+      },
+    });
   });
 
   it('rejects unsafe EventSource query userIds', () => {

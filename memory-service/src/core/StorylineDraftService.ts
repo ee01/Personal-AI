@@ -57,6 +57,12 @@ function appendOnce(items: string[], value: string): string[] {
   return items.includes(value) ? items : [...items, value];
 }
 
+function countDistinctSegmentEvidenceIds(
+  segments: StorylineDraftSegment[],
+): number {
+  return new Set(segments.flatMap((segment) => segment.evidenceIds)).size;
+}
+
 const FALLBACK_GROUNDING_RISK =
   '原始模型输出缺少足够证据引用，已用会前准备证据重新生成可复制草稿。';
 
@@ -213,7 +219,10 @@ export class StorylineDraftService {
           )
           .slice(0, 6)
       : [];
-    const usedFallbackSegments = segments.length < 3;
+    const minimumDistinctEvidence = Math.min(3, allowedEvidenceIds.size);
+    const usedFallbackSegments =
+      segments.length < 3 ||
+      countDistinctSegmentEvidenceIds(segments) < minimumDistinctEvidence;
     const normalizedSegments = usedFallbackSegments
       ? this.fallbackSegments(prep)
       : segments;
@@ -292,17 +301,30 @@ export class StorylineDraftService {
     prep: TodayPilotMeetingPrepRecord,
   ): StorylineDraftSegment[] {
     const fallbackEvidence = prep.evidenceRefs.slice(0, 3);
-    const baseSegments = prep.cueCards.slice(0, 3).map((card, index) => ({
-      title: compactText(card.title, 90) || `第 ${index + 1} 段`,
-      intent: compactText(card.body, 160) || '把会前准备转成可讲述材料。',
-      narrative: compactText(card.body, 700) || prep.summaryMd,
-      evidenceIds: this.resolveFallbackEvidenceIds(
-        card.evidenceIds,
-        prep.evidenceRefs,
-      ),
-    }));
+    const usedEvidenceIds = new Set<string>();
+    const baseSegments = prep.cueCards
+      .slice(0, 3)
+      .map((card, index) => ({
+        title: compactText(card.title, 90) || `第 ${index + 1} 段`,
+        intent: compactText(card.body, 160) || '把会前准备转成可讲述材料。',
+        narrative: compactText(card.body, 700) || prep.summaryMd,
+        evidenceIds: this.resolveFallbackEvidenceIds(
+          card.evidenceIds,
+          prep.evidenceRefs,
+          index,
+          usedEvidenceIds,
+        ),
+      }))
+      .map((segment) => {
+        for (const id of segment.evidenceIds) usedEvidenceIds.add(id);
+        return segment;
+      });
     while (baseSegments.length < 3) {
-      const evidence = fallbackEvidence[baseSegments.length] || fallbackEvidence[0];
+      const evidence =
+        fallbackEvidence.find((item) => !usedEvidenceIds.has(item.id)) ||
+        fallbackEvidence[baseSegments.length] ||
+        fallbackEvidence[0];
+      if (evidence) usedEvidenceIds.add(evidence.id);
       baseSegments.push({
         title: ['背景', '关键证据', '下一步'][baseSegments.length],
         intent: '补齐故事线的基本结构。',
@@ -311,14 +333,18 @@ export class StorylineDraftService {
       });
     }
     return baseSegments
-      .map((segment, index) => ({
-        ...segment,
-        evidenceIds: segment.evidenceIds.length
-          ? segment.evidenceIds
-          : fallbackEvidence[index]
-          ? [fallbackEvidence[index].id]
-          : [],
-      }))
+      .map((segment, index) => {
+        if (segment.evidenceIds.length) return segment;
+        const unusedEvidence = fallbackEvidence.find(
+          (item) => !usedEvidenceIds.has(item.id),
+        );
+        const evidence = unusedEvidence || fallbackEvidence[index];
+        if (evidence) usedEvidenceIds.add(evidence.id);
+        return {
+          ...segment,
+          evidenceIds: evidence ? [evidence.id] : [],
+        };
+      })
       .filter((segment) => segment.evidenceIds.length > 0)
       .slice(0, 6);
   }
@@ -326,6 +352,8 @@ export class StorylineDraftService {
   private resolveFallbackEvidenceIds(
     evidenceIds: string[] | undefined,
     evidence: ComposerAssistEvidence[],
+    preferredIndex = 0,
+    usedEvidenceIds: Set<string> = new Set(),
   ): string[] {
     const allowed = new Set(evidence.map((item) => item.id));
     const aliases = new Map<string, string>(
@@ -334,8 +362,33 @@ export class StorylineDraftService {
     const normalized = (evidenceIds ?? [])
       .map((id) => aliases.get(id) || id)
       .filter((id) => allowed.has(id));
-    if (normalized.length > 0) return normalized.slice(0, 4);
-    return evidence.slice(0, 1).map((item) => item.id);
+    if (normalized.length > 0) {
+      const uniqueNormalized = normalized.filter(
+        (id, index, all) => all.indexOf(id) === index,
+      );
+      const unusedNormalized = uniqueNormalized.filter(
+        (id) => !usedEvidenceIds.has(id),
+      );
+      if (unusedNormalized.length > 0) {
+        return [
+          ...unusedNormalized,
+          ...uniqueNormalized.filter((id) => usedEvidenceIds.has(id)),
+        ].slice(0, 4);
+      }
+      const unusedFallback = evidence.find(
+        (item) => !usedEvidenceIds.has(item.id),
+      );
+      if (unusedFallback) return [unusedFallback.id];
+      return uniqueNormalized.slice(0, 4);
+    }
+    const fallback =
+      evidence.find(
+        (item, index) => index >= preferredIndex && !usedEvidenceIds.has(item.id),
+      ) ||
+      evidence.find((item) => !usedEvidenceIds.has(item.id)) ||
+      evidence[preferredIndex] ||
+      evidence[0];
+    return fallback ? [fallback.id] : [];
   }
 
   private defaultTitle(

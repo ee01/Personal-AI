@@ -125,6 +125,10 @@ export interface MemoryImportResult {
   warnings: string[];
 }
 
+export interface MemoryBackupImportOptions {
+  confirmUserMismatch?: boolean;
+}
+
 export interface MemoryImportPreviewResult {
   mode: 'merge' | 'replace';
   dryRun: true;
@@ -132,6 +136,7 @@ export interface MemoryImportPreviewResult {
   restoredLayers: Array<'A' | 'B'>;
   backup: {
     userId: string;
+    targetUserId: string;
     exportedAt: string;
     formatVersion: number;
     includeCount: number;
@@ -233,6 +238,10 @@ const VECTOR_TABLES = [
     columns: ['message_id', 'embedding'],
   },
 ] as const;
+
+const REPLACE_STYLE_MERGE_TABLES = new Set<string>([
+  'agent_profile_versions',
+]);
 
 export async function exportMemoryBackupZip(
   userContext: UserContext,
@@ -361,6 +370,7 @@ export async function importMemoryBackupZip(
   userContext: UserContext,
   zipFilePath: string,
   mode: 'merge' | 'replace',
+  options: MemoryBackupImportOptions = {},
 ): Promise<MemoryImportResult> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'personal-ai-memory-import-'));
   const warnings: string[] = [];
@@ -377,6 +387,13 @@ export async function importMemoryBackupZip(
       currentUserDir,
       importedUserDir,
     } = inspection;
+
+    const backupUserId = inspection.extracted.manifest.userId;
+    if (backupUserId !== userContext.userId && !options.confirmUserMismatch) {
+      throw new MemoryBackupValidationError(
+        `Backup was exported for user ${backupUserId}; import target is ${userContext.userId}. Run dryRun=true first and resubmit with confirmUserMismatch=true if this cross-user restore is intentional.`,
+      );
+    }
 
     const stageUserDir = path.join(tempRoot, mode === 'merge' ? 'stage-merge-user' : 'stage-replace-user');
 
@@ -478,6 +495,7 @@ export async function previewMemoryBackupImportZip(
       restoredLayers: ['A', 'B'],
       backup: {
         userId: manifest.userId,
+        targetUserId: userContext.userId,
         exportedAt: manifest.exportedAt,
         formatVersion: manifest.formatVersion,
         includeCount: manifest.includes.length,
@@ -1043,7 +1061,9 @@ function mergeDatabaseBackup(
         }
 
         const primaryKeys = getPrimaryKeyColumns(targetDb, tableName);
-        const sql = buildMergeSql(tableName, columns, primaryKeys);
+        const sql = buildMergeSql(tableName, columns, primaryKeys, {
+          replaceStyle: REPLACE_STYLE_MERGE_TABLES.has(tableName),
+        });
         const result = targetDb.prepare(sql).run();
 
         tableChanges[tableName] = result.changes;
@@ -1501,10 +1521,19 @@ function buildMergeSql(
   tableName: string,
   columns: string[],
   primaryKeys: string[],
+  options: { replaceStyle?: boolean } = {},
 ): string {
   const quotedColumns = columns.map(quoteIdentifier).join(', ');
   const conflictColumns = primaryKeys.map(quoteIdentifier).join(', ');
   const updatableColumns = columns.filter((column) => !primaryKeys.includes(column));
+
+  if (options.replaceStyle) {
+    return `
+      INSERT OR REPLACE INTO ${quoteIdentifier(tableName)} (${quotedColumns})
+      SELECT ${quotedColumns}
+      FROM importdb.${quoteIdentifier(tableName)}
+    `;
+  }
 
   if (primaryKeys.length === 0 || updatableColumns.length === 0) {
     return `

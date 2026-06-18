@@ -99,10 +99,16 @@ function hasSafeOpenableUrl(value?: string): boolean {
   }
 }
 
+function hasBlockedOpenableUrlCandidate(value?: string): boolean {
+  if (!value?.trim()) return false;
+  return !hasSafeOpenableUrl(value);
+}
+
 function getArchiveStatus(
   meeting: MeetingListItem,
 ): Exclude<MeetingArchiveStatusFilter, 'all'> {
   const hasPdf = hasSafeOpenableUrl(meeting.pdfUrl);
+  if (hasBlockedOpenableUrlCandidate(meeting.pdfUrl)) return 'attention';
   if (meeting.digestStatus === 'failed') return 'attention';
   if (meeting.digestStatus === 'completed' && !hasPdf) return 'attention';
   if (hasPdf || meeting.digestStatus === 'completed') return 'ready';

@@ -8,6 +8,7 @@
 import type { FastifyInstance } from 'fastify';
 import type BetterSqlite3 from 'better-sqlite3';
 
+import { MemoryOutcomeLoopService } from '../core/MemoryOutcomeLoopService.js';
 import { RecallRelevancePatchService } from '../core/RecallRelevancePatchService.js';
 import { TruthMaintainer } from '../core/TruthMaintainer.js';
 import { isSceneScopedRecallFeedbackDetail } from '../utils/recallFeedback.js';
@@ -351,6 +352,17 @@ export async function feedbackRoutes(
             action,
             detail,
           });
+          const outcomeLoop =
+            action === 'clear'
+              ? { cueEventCount: 0, patches: [] }
+              : new MemoryOutcomeLoopService(db, request.userId).processRecallFeedback({
+                  surface: 'memory_lens',
+                  targetId: resolvedTargetId,
+                  targetType: resolvedTargetType,
+                  action: action === 'negative' ? 'negative' : 'positive',
+                  detail,
+                  createdAt: currentTime,
+                });
 
           return reply.status(200).send({
             status: 'ok',
@@ -359,6 +371,8 @@ export async function feedbackRoutes(
             appliedDelta: result.appliedDelta,
             relevancePatch:
               relevancePatch.status === 'ignored' ? undefined : relevancePatch,
+            outcomeLoop:
+              outcomeLoop.cueEventCount > 0 ? outcomeLoop : undefined,
           });
         }
 

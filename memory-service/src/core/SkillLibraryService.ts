@@ -543,6 +543,44 @@ function uniqueText(values: Array<string | undefined>): string[] {
   );
 }
 
+const EXECUTABLE_SKILL_FILE_PATTERN =
+  /\.(?:applescript|bash|bat|cmd|cjs|go|java|js|jsx|kt|mjs|php|pl|ps1|py|rb|rs|sh|swift|ts|tsx|zsh)$/i;
+
+const EXTERNAL_RUNTIME_INSTRUCTION_PATTERNS = [
+  /\b(?:npm|pnpm|yarn|pip3?|uv|poetry|brew|apt-get|apt)\s+(?:install|add)\b/i,
+  /\b(?:curl|wget)\s+(?:-[^\s]+\s+)*https?:\/\//i,
+  /\bmcp\b.{0,80}\b(?:connection|connect|config|server|sse|stdio|streamable)\b/i,
+];
+
+function skillPackageHasExecutableFiles(version: SkillVersionRecord): boolean {
+  return (version.files || []).some((file) =>
+    EXECUTABLE_SKILL_FILE_PATTERN.test(file.relativePath || ''),
+  );
+}
+
+function skillMdHasExternalRuntimeInstructions(skillMd: string): boolean {
+  return EXTERNAL_RUNTIME_INSTRUCTION_PATTERNS.some((pattern) =>
+    pattern.test(skillMd),
+  );
+}
+
+function skillPackageFilesHaveExternalRuntimeInstructions(
+  files: SkillPackageFile[] = [],
+): boolean {
+  return files.some((file) =>
+    EXTERNAL_RUNTIME_INSTRUCTION_PATTERNS.some((pattern) =>
+      pattern.test(file.content || ''),
+    ),
+  );
+}
+
+function isLocalDesktopSkillBinding(binding: SkillBindingRecord): boolean {
+  return (
+    ['codex', 'claude_code', 'cursor'].includes(binding.platform) &&
+    binding.metadata?.source === 'desktop_app_fs'
+  );
+}
+
 function skillReviewReasons(input: {
   status: SkillStatus;
   risk: SkillRisk;
@@ -567,14 +605,51 @@ function skillReviewReasons(input: {
   if (isExternalAgentSource) {
     reasons.push('外部 agent 平台导入的技能需要先确认来源内容');
   }
-  const rejectedLocalFileCount = (input.bindings || []).reduce(
+
+  const version = input.activeVersion;
+  let packageHasExecutableFiles = false;
+  let skillMdHasRuntimeInstructions = false;
+  let packageFilesHaveRuntimeInstructions = false;
+  if (version) {
+    packageHasExecutableFiles = skillPackageHasExecutableFiles(version);
+    skillMdHasRuntimeInstructions = skillMdHasExternalRuntimeInstructions(
+      version.skillMd,
+    );
+    packageFilesHaveRuntimeInstructions =
+      skillPackageFilesHaveExternalRuntimeInstructions(version.files);
+    if (packageHasExecutableFiles) {
+      reasons.push('技能包包含可执行脚本文件，需要确认命令和权限');
+    }
+    if (skillMdHasRuntimeInstructions) {
+      reasons.push('技能说明包含安装、下载或 MCP 连接指令，需要确认外部依赖');
+    }
+    if (packageFilesHaveRuntimeInstructions) {
+      reasons.push('技能资源文件包含安装、下载或 MCP 连接指令，需要确认外部依赖');
+    }
+  }
+
+  const localDesktopBindings = (input.bindings || []).filter(
+    isLocalDesktopSkillBinding,
+  );
+  const validationFileCount = localDesktopBindings.reduce((sum, binding) => {
+    const count = binding.metadata?.validationFileCount;
+    return sum + (typeof count === 'number' && count > 0 ? count : 0);
+  }, 0);
+  if (
+    version &&
+    localDesktopBindings.length > 0 &&
+    validationFileCount === 0 &&
+    (packageHasExecutableFiles ||
+      skillMdHasRuntimeInstructions ||
+      packageFilesHaveRuntimeInstructions)
+  ) {
+    reasons.push(
+      '本机 skill 包含脚本或外部依赖，但未发现测试、eval、fixture 或 verify 验证线索',
+    );
+  }
+
+  const rejectedLocalFileCount = localDesktopBindings.reduce(
     (sum, binding) => {
-      if (
-        !externalPlatformIds.includes(binding.platform) ||
-        binding.metadata?.source !== 'desktop_app_fs'
-      ) {
-        return sum;
-      }
       const count = binding.metadata?.rejectedFileCount;
       return sum + (typeof count === 'number' && count > 0 ? count : 0);
     },
@@ -586,7 +661,6 @@ function skillReviewReasons(input: {
     );
   }
 
-  const version = input.activeVersion;
   if (version) {
     if ((version.files || []).length > 0) {
       reasons.push('技能包包含额外脚本或资源文件');

@@ -54,6 +54,7 @@ ${title} narrative.
 
   it('limits weekly digest content to current digest period dreams', () => {
     writeDream('old-strategy-2026-05-10.md', 'Old Strategy', '2026-05-10');
+    writeDream('future-signal-2026-05-26.md', 'Future Signal', '2026-05-26');
     writeDream(
       'sunday-risk-2026-05-24.md',
       'Sunday Risk',
@@ -78,10 +79,36 @@ ${title} narrative.
     expect(candidate.body).toBe('2 dream(s) generated this period');
 
     const digestBody = String(candidate.payload.digestBody);
+    const scopeReceipt = String(candidate.payload.dreamDigestScopeReceipt);
+    const scope = candidate.payload
+      .dreamDigestScope as Record<string, unknown>;
     expect(digestBody).toContain('Current Launch');
     expect(digestBody).toContain('Sunday Risk');
     expect(digestBody).not.toContain('Old Strategy');
+    expect(digestBody).not.toContain('Future Signal');
     expect(digestBody).not.toContain('Undated Note');
+    expect(scope).toMatchObject({
+      periodLabel: '2026-05-18 至 2026-05-25',
+      includedCount: 2,
+      excludedOlderCount: 1,
+      excludedUndatedCount: 1,
+      excludedFutureCount: 1,
+      skippedUnreadableCount: 0,
+      boundary: 'current_digest_period_only',
+    });
+    expect(scopeReceipt).toContain('覆盖周期：2026-05-18 至 2026-05-25');
+    expect(scopeReceipt).toContain('本次纳入：2 个梦境文件');
+    expect(scopeReceipt).toContain('旧周期 1 个');
+    expect(scopeReceipt).toContain('日期缺失 1 个');
+    expect(scopeReceipt).toContain('未来日期 1 个');
+    expect(scopeReceipt).toContain('旧梦境和日期缺失文件仍可在梦境重放页查看');
+    expect(candidate.payload.latestDreamPath).toBe(
+      'dreams/current-launch-2026-05-25.md',
+    );
+    expect(candidate.payload.dreamPaths).toEqual([
+      'dreams/current-launch-2026-05-25.md',
+      'dreams/sunday-risk-2026-05-24.md',
+    ]);
     expect(digestBody.indexOf('Current Launch')).toBeLessThan(
       digestBody.indexOf('Sunday Risk'),
     );

@@ -382,6 +382,34 @@ describe('Ingest API', () => {
     expect(body).toHaveProperty('totalCreated');
     expect(body).toHaveProperty('totalDuplicate');
     expect(body).toHaveProperty('totalError');
+    expect(body.decisionSummary).toMatchObject({
+      totalItems: 3,
+      storage: {
+        indexed: 3,
+        stored_unindexed: 0,
+        duplicate: 0,
+        error: 0,
+        unknown: 0,
+      },
+      reasons: {
+        salience_indexed: 3,
+        unknown: 0,
+      },
+      extractionStatus: {
+        extracted: 0,
+        skipped: 0,
+        unavailable: 3,
+        unknown: 0,
+      },
+      indexing: {
+        requested: 3,
+        completed: 3,
+        notRequested: 0,
+        failedAfterRequest: 0,
+        unknown: 0,
+      },
+      missingDecision: 0,
+    });
 
     // Each result should have an id and status
     for (const result of body.results) {
@@ -429,6 +457,75 @@ describe('Ingest API', () => {
       'created',
       'created',
     ]);
+  });
+
+  it('POST /api/v1/ingest/batch returns a decision summary for mixed outcomes', async () => {
+    const ts = Date.now();
+    const duplicatePayload = {
+      content: `Batch receipt duplicate seed ${ts}`,
+      sourceType: 'manual' as const,
+      sender: 'batch-receipt-user',
+      timestamp: Math.floor(ts / 1000),
+    };
+    const seed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest',
+      payload: duplicatePayload,
+    });
+    expect(seed.statusCode).toBe(200);
+    expect(seed.json().status).toBe('created');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ingest/batch',
+      payload: {
+        items: [
+          duplicatePayload,
+          {
+            content: `Batch receipt extraction skipped ${ts}`,
+            sourceType: 'manual',
+            sender: 'batch-receipt-user',
+            timestamp: Math.floor(ts / 1000),
+            skipExtraction: true,
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.totalCreated).toBe(1);
+    expect(body.totalDuplicate).toBe(1);
+    expect(body.totalError).toBe(0);
+    expect(body.decisionSummary).toMatchObject({
+      totalItems: 2,
+      storage: {
+        indexed: 0,
+        stored_unindexed: 1,
+        duplicate: 1,
+        error: 0,
+        unknown: 0,
+      },
+      reasons: {
+        extraction_skipped: 1,
+        duplicate_content_source_sender: 1,
+        unknown: 0,
+      },
+      extractionStatus: {
+        extracted: 0,
+        skipped: 1,
+        unavailable: 0,
+        unknown: 1,
+      },
+      indexing: {
+        requested: 0,
+        completed: 0,
+        notRequested: 1,
+        failedAfterRequest: 0,
+        unknown: 1,
+      },
+      missingDecision: 0,
+    });
   });
 
   // -------------------------------------------------------------------
