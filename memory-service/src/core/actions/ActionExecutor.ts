@@ -206,6 +206,52 @@ export class ActionExecutor {
     return results;
   }
 
+  /**
+   * Injection defense (P0-2 P1): returns true when any evidence ref points at a
+   * memory that was flagged with injection patterns at ingest (messages_raw /
+   * chunks `injection_flags_json`). Evidence refs are strings such as
+   * `message:<id>` or `chunk:<id>`; unknown shapes are ignored.
+   */
+  private evidenceHasFlaggedMemory(evidenceRefs: string[] | undefined): boolean {
+    if (!evidenceRefs || evidenceRefs.length === 0) return false;
+    const messageIds: string[] = [];
+    const chunkIds: string[] = [];
+    for (const ref of evidenceRefs) {
+      if (typeof ref !== 'string') continue;
+      const idx = ref.indexOf(':');
+      const kind = idx > 0 ? ref.slice(0, idx) : '';
+      const id = idx > 0 ? ref.slice(idx + 1) : ref;
+      if (!id) continue;
+      if (kind === 'message' || kind === 'messages' || kind === '') messageIds.push(id);
+      else if (kind === 'chunk' || kind === 'chunks') chunkIds.push(id);
+    }
+    try {
+      if (messageIds.length > 0) {
+        const ph = messageIds.map(() => '?').join(', ');
+        const row = this.db
+          .prepare(
+            `SELECT 1 FROM messages_raw
+              WHERE id IN (${ph}) AND injection_flags_json IS NOT NULL LIMIT 1`,
+          )
+          .get(...messageIds);
+        if (row) return true;
+      }
+      if (chunkIds.length > 0) {
+        const ph = chunkIds.map(() => '?').join(', ');
+        const row = this.db
+          .prepare(
+            `SELECT 1 FROM chunks
+              WHERE id IN (${ph}) AND injection_flags_json IS NOT NULL LIMIT 1`,
+          )
+          .get(...chunkIds);
+        if (row) return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
   async executeAction(
     actionId: string,
     options: ActionExecutionOptions = {},
@@ -213,6 +259,23 @@ export class ActionExecutor {
     let action = this.actionRepo.getById(actionId);
     if (!action) {
       throw new Error(`Action "${actionId}" not found`);
+    }
+
+    // Injection defense (P0-2 P1): if the action's evidence chain references any
+    // flagged (possible-injection) memory, sever the "injection → reflection →
+    // auto-action" path by forcing manual confirmation, regardless of the
+    // action's executionMode. A human-initiated approve (options.approve===true)
+    // still proceeds; only the unattended auto-runner is blocked.
+    if (
+      action.queueStatus !== 'cancelled' &&
+      action.queueStatus !== 'succeeded' &&
+      !action.approvedAt &&
+      options.approve !== true &&
+      this.evidenceHasFlaggedMemory(action.evidenceRefs)
+    ) {
+      throw new Error(
+        `Action "${action.id}" references flagged (possible-injection) memory; manual confirmation required`,
+      );
     }
 
     if (

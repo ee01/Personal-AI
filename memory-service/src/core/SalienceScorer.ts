@@ -17,6 +17,7 @@ import type Database from 'better-sqlite3';
 import { now } from '../utils/time.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { classifyMemoryLifecycle } from './MemoryLifecyclePolicy.js';
+import { getConfig } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,6 +39,7 @@ export interface SalienceInput {
   surprise: number;      // |sentiment_score| * 0.5 + novelty * 0.5
   redundancy: number;    // max cosine similarity with existing memories, 0-1
   userInterestBoost?: number; // 0-1 boost when content matches user interests
+  entityAffinityBoost?: number; // 0-1 behavioral-intimacy affinity of mentioned entities (P0-4 P1)
 }
 
 export interface SalienceResult {
@@ -127,8 +129,18 @@ export class SalienceScorer {
       eta * input.surprise -
       delta * Math.max(0, input.redundancy - 0.7);
 
-    // Add user interest boost when available
-    raw += zeta * (input.userInterestBoost ?? 0);
+    // Add user interest boost when available. When behavioral-intimacy affinity
+    // is enabled (P0-4 P1), the user-relevance budget is split: interest weight
+    // drops to 0.10 and entity affinity contributes up to its own weight. Only
+    // the positive side feeds intake — negative affinity never blocks storage.
+    const cfg = getConfig();
+    if (cfg.salienceAffinityEnabled) {
+      const interestWeight = Math.min(zeta, 0.1);
+      raw += interestWeight * (input.userInterestBoost ?? 0);
+      raw += cfg.salienceAffinityWeight * Math.max(0, input.entityAffinityBoost ?? 0);
+    } else {
+      raw += zeta * (input.userInterestBoost ?? 0);
+    }
 
     // Clamp to [0, 1]
     const score = Math.max(0, Math.min(1, raw));
@@ -271,6 +283,37 @@ export class SalienceScorer {
     }
   }
 
+  /**
+   * Compute an entity-affinity boost (0-1) for ingest scoring (P0-4 P1).
+   *
+   * At ingest time entities are not yet resolved to ids, so we match the rough
+   * name candidates against the active `entities` table (name or alias) and read
+   * the rolled-up behavioral-intimacy affinity from `behavior_affinity`. Returns
+   * the max positive affinity found (negative affinity is ignored — it must never
+   * block storage). Returns 0 on any error / missing table.
+   */
+  computeEntityAffinityBoost(entityNames: string[]): number {
+    if (entityNames.length === 0) return 0;
+    try {
+      const placeholders = entityNames.map(() => '?').join(', ');
+      const lowered = entityNames.map((n) => n.toLowerCase());
+      const row = this.db
+        .prepare(
+          `SELECT MAX(ba.affinity) AS aff
+             FROM entities e
+             JOIN behavior_affinity ba
+               ON ba.subject_type = 'entity' AND ba.subject_key = e.id
+            WHERE e.status = 'active'
+              AND LOWER(e.name) IN (${placeholders})`,
+        )
+        .get(...lowered) as { aff: number | null } | undefined;
+      const aff = row?.aff;
+      return typeof aff === 'number' && aff > 0 ? aff : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   // ---- High-level scoring ------------------------------------------------
 
   /**
@@ -325,6 +368,11 @@ export class SalienceScorer {
     // --- User interest boost ---
     const userInterestBoost = this.computeUserInterestBoost(content);
 
+    // --- Behavioral-intimacy affinity boost (P0-4 P1) ---
+    const entityAffinityBoost = getConfig().salienceAffinityEnabled
+      ? this.computeEntityAffinityBoost(entityNames)
+      : 0;
+
     // --- Final score ---
     const input: SalienceInput = {
       importance,
@@ -333,6 +381,7 @@ export class SalienceScorer {
       surprise,
       redundancy,
       userInterestBoost,
+      entityAffinityBoost,
     };
 
     return this.score(input);

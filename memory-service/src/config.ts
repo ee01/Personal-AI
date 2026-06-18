@@ -78,6 +78,11 @@ export interface Config {
   recallAffinityEnabled: boolean;
   recallAffinityWeight: number;
   affinityWindowDays: number;
+  // Behavioral intimacy in ingest salience scoring (P0-4 P1). Only the positive
+  // side feeds intake (negative affinity never blocks storage — forgetting is the
+  // ForgettingEngine's job).
+  salienceAffinityEnabled: boolean;
+  salienceAffinityWeight: number;
 
   // Weekly Report
   weeklyReportEnabled: boolean;
@@ -307,6 +312,13 @@ export function getConfig(): Readonly<Config> {
     affinityWindowDays: (() => {
       const parsed = parseInt(process.env.AFFINITY_WINDOW_DAYS || '90', 10);
       return Number.isFinite(parsed) ? Math.max(7, parsed) : 90;
+    })(),
+    // P0-4 P1: ingest-side salience affinity. Default on; entity affinity is 0
+    // until rolled up, so enabling it is a no-op until there is behavior data.
+    salienceAffinityEnabled: process.env.SALIENCE_AFFINITY_ENABLED !== 'false',
+    salienceAffinityWeight: (() => {
+      const parsed = parseFloat(process.env.SALIENCE_AFFINITY_WEIGHT || '0.10');
+      return Number.isFinite(parsed) ? Math.max(0, Math.min(0.5, parsed)) : 0.10;
     })(),
 
     // Weekly Report

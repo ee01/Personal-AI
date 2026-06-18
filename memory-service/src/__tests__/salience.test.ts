@@ -41,6 +41,25 @@ describe('SalienceScorer.score()', () => {
     expect(result.score).toBeGreaterThan(0.4);
   });
 
+  it('positive entity affinity boosts the score; negative affinity does not (P0-4 P1)', () => {
+    const base: SalienceInput = {
+      importance: 0.4,
+      frequency: 0,
+      recency: 0.3,
+      surprise: 0.2,
+      redundancy: 0,
+    };
+    const baseScore = scorer.score(base).score;
+
+    const boosted = scorer.score({ ...base, entityAffinityBoost: 0.8 }).score;
+    expect(boosted).toBeGreaterThan(baseScore);
+
+    // Negative affinity must never change the intake score relative to base
+    // (the negative side never blocks storage).
+    const negative = scorer.score({ ...base, entityAffinityBoost: -0.5 }).score;
+    expect(negative).toBeCloseTo(baseScore, 6);
+  });
+
   it('high redundancy (>0.7) penalises the score', () => {
     const baseInput: SalienceInput = {
       importance: 0.5,

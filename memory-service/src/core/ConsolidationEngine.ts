@@ -19,6 +19,7 @@ import type Database from 'better-sqlite3';
 import { ForgettingEngine } from './ForgettingEngine.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import { BehaviorAffinityService } from './BehaviorAffinityService.js';
+import { SynonymEdgeService } from './SynonymEdgeService.js';
 import { getConfig } from '../config.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
@@ -182,6 +183,17 @@ export class ConsolidationEngine {
       );
     } catch (err) {
       console.error('[ConsolidationEngine] Phase 3.6 (Affinity) failed:', err);
+    }
+
+    // Phase 3.7: Synonym edges (P0-3 P1) — link name-drifted entities so PPR
+    // associative recall can hop across "MTR 项目" / "MTR-148115" / "地铁项目".
+    try {
+      const syn = await new SynonymEdgeService(this.db).generate();
+      console.log(
+        `[ConsolidationEngine] Phase 3.7 (Synonym): +${syn.edgesAdded} synonym_of edges from ${syn.entities} entities (embeddings=${syn.usedEmbeddings})`,
+      );
+    } catch (err) {
+      console.error('[ConsolidationEngine] Phase 3.7 (Synonym) failed:', err);
     }
 
     // Phase 4: Clean — run forgetting cycle
