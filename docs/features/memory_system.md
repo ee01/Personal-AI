@@ -454,6 +454,17 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 - **边界**：试用期与遗忘端点都不物理删除；级联物理删除只由用户显式删除触发（见 cascade-deletion plan）。
 - **验证**：`memoryProbationLifecycle.test.ts`（4）、`mergeDecision.test.ts`（4：UPDATE/MERGE/NOOP apply 语义 + ADD 回退）、`memoryEvolution.test.ts`（2：近邻关联边 + 幂等）。
 
+### MCP Server：跨 AI 平台记忆接口 (P2-9)
+
+把记忆服务以 **MCP（Model Context Protocol）** 标准协议暴露，让 Claude Code / Claude Desktop / Cursor / Codex 等任何 MCP 客户端直接读写本系统记忆——把「跨 AI 平台的记忆层」从豆包桥接脚本升级成标准协议。
+
+- **形态**：`memory-service/mcp-server.mjs`（stdio）+ 纯逻辑 `src/mcp/tools.ts`（与 SDK 解耦、可单测）。server 是薄壳：SDK 动态 import（运行时从仓库根 `node_modules` 解析，TS 构建不依赖它），工具逻辑/脱敏/审计都在 tools.ts。配置：`claude mcp add personal-memory -- node memory-service/mcp-server.mjs --user-id esone.qiu --base-url http://localhost:3210 --scopes work`。
+- **5 个 tool**（宁少勿多，读为主）：`memory_search`（→ /recall）、`memory_ask`（→ /ask）、`memory_save`（→ /ingest，`source_type='mcp_client'`，trust=internal，走全套 salience/合并/probation）、`memory_context_brief`（token 预算装配）、`memory_profile_hint`（→ /profile/insight 的洞察，不吐原文）。
+- **安全门控（三层）**：① scope 白名单——请求超出 `allowedScopes`（默认 `['work']`）即 `{error:'scope_not_allowed'}`；② 敏感类目硬排除——vault/credential/secret 等来源永不出口；③ 最小化打包——只给脱敏摘要 + evidence 计数，单条截断 500 字符（与 formatRecalledContext 同口径）。
+- **审计**：每次 tool 调用写 `mcp_access_log`（migration `048`：tool/client/scope/itemCount/status），对外开口可检视。
+- **验证**：`mcpTools.test.ts`（3：scope 越界拒绝+审计、脱敏截断+敏感源排除、memory_save 走 mcp_client 内部源）；启动冒烟通过（stdio 连接 + SDK/工具 import 解析）。
+- **仍在推进**：SSE 远程档、OpenClaw 双向。
+
 ### 删除的彻底性：级联删除 (Cascade Deletion, P2-10)
 
 「删了就是删了——包括它留下的影子。」用户**显式删除**一个来源时，派生物必须一起清理，否则反思/梦境摘要会把已删信息反复复述出来（Agentic Unlearning 再污染）。`core/MemoryLineageService.ts` 在删除事务内做级联（migration `046` 给 `reflection_artifacts` 加 `evidence_redacted`/`retracted`）：

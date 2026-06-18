@@ -25,6 +25,7 @@ export const SOURCE_TYPES = [
   'codex_cli',
   'claude_code_cli',
   'cursor_agent_cli',
+  'mcp_client',
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 export type MemoryScope = 'work' | 'personal';
