@@ -21,6 +21,7 @@ import { MarkdownManager } from './MarkdownManager.js';
 import { BehaviorAffinityService } from './BehaviorAffinityService.js';
 import { SynonymEdgeService } from './SynonymEdgeService.js';
 import { ProbationService } from './ProbationService.js';
+import { MemoryEvolutionService } from './MemoryEvolutionService.js';
 import { getConfig } from '../config.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
@@ -156,6 +157,18 @@ export class ConsolidationEngine {
       console.log(`[ConsolidationEngine] Phase 2 (Denoise): merged ${result.merged} duplicates`);
     } catch (err) {
       console.error('[ConsolidationEngine] Phase 2 (Denoise) failed:', err);
+    }
+
+    // Phase 2.5: Evolution (P1-6 slice B) — link the day's new chunks to older
+    // near-neighbors (feeds PPR/weave) and evolve related message summaries with
+    // an audited follow-up note. Original chunk content is never rewritten.
+    try {
+      const evo = await new MemoryEvolutionService(this.db).run();
+      console.log(
+        `[ConsolidationEngine] Phase 2.5 (Evolution): ${evo.newChunks} new chunks, +${evo.linksAdded} links, ${evo.revisions} summary revisions`,
+      );
+    } catch (err) {
+      console.error('[ConsolidationEngine] Phase 2.5 (Evolution) failed:', err);
     }
 
     // Phase 3: Structure — update project summaries

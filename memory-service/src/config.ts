@@ -83,6 +83,8 @@ export interface Config {
   // ForgettingEngine's job).
   salienceAffinityEnabled: boolean;
   salienceAffinityWeight: number;
+  // Chunk-level merge decision ADD/UPDATE/MERGE/NOOP (P1-6 slice A). Default off.
+  chunkMergeDecisionEnabled: boolean;
 
   // Weekly Report
   weeklyReportEnabled: boolean;
@@ -320,6 +322,9 @@ export function getConfig(): Readonly<Config> {
       const parsed = parseFloat(process.env.SALIENCE_AFFINITY_WEIGHT || '0.10');
       return Number.isFinite(parsed) ? Math.max(0, Math.min(0.5, parsed)) : 0.10;
     })(),
+    // P1-6 slice A: chunk merge decision. Default OFF — adds embedding + LLM call
+    // to the write path; enable after the memory-abilities benchmark validates it.
+    chunkMergeDecisionEnabled: process.env.CHUNK_MERGE_DECISION_ENABLED === 'true',
 
     // Weekly Report
     weeklyReportEnabled: process.env.WEEKLY_REPORT_ENABLED !== 'false',

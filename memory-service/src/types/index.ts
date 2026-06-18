@@ -604,6 +604,12 @@ export interface IngestDecision {
   trustClass?: IngestTrustClass;
   sanitization?: IngestSanitization;
   injectionFlags?: string[];
+  /** Merge decision (P1-6 slice A): present only when op != ADD. */
+  mergeOp?: {
+    op: 'UPDATE' | 'MERGE' | 'NOOP';
+    neighborIds: number[];
+    reason: string;
+  };
 }
 
 export interface IngestResult {

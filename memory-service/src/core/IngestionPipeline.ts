@@ -37,6 +37,8 @@ import { contentHash } from '../utils/hashing.js';
 import { normalizeContentForDedup } from '../utils/contentNormalize.js';
 import { classifyTrust, screenForInjection } from './injectionScreen.js';
 import { ProbationService } from './ProbationService.js';
+import { MergeDecisionService, type MergeDecision } from './MergeDecisionService.js';
+import { getConfig } from '../config.js';
 import { toSlug } from '../utils/slug.js';
 import { now, formatDate } from '../utils/time.js';
 
@@ -338,6 +340,7 @@ export class IngestionPipeline {
 
     // ---- 6. High-salience processing: entities, relationships, chunks ----
     let indexed = false;
+    let mergeOp: MergeDecision | undefined;
     if (shouldIndex) {
       if (extraction) {
         try {
@@ -351,8 +354,9 @@ export class IngestionPipeline {
       }
 
       let chunksCreated = 0;
+      let createdChunks: Array<{ chunkId: number; content: string }> = [];
       try {
-        chunksCreated = this.processChunks(
+        createdChunks = this.processChunks(
           contentNormalized,
           id,
           scope,
@@ -360,6 +364,7 @@ export class IngestionPipeline {
           payload.sourceType,
           ts,
         );
+        chunksCreated = createdChunks.length;
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Chunk processing failed:',
@@ -383,7 +388,25 @@ export class IngestionPipeline {
         );
       }
 
-      // ---- 7.5 TTL probation (P1-6 slice C) ----
+      // ---- 7.5 Chunk-level merge decision (P1-6 slice A) ----
+      // When enabled, the newest chunk is checked against high-similarity
+      // neighbors and an LLM decides ADD/UPDATE/MERGE/NOOP rather than always
+      // piling up a new version. Default off (adds embedding + LLM call). On any
+      // failure or no neighbor it stays ADD (identical to legacy behavior).
+      if (getConfig().chunkMergeDecisionEnabled && createdChunks.length > 0) {
+        try {
+          const svc = new MergeDecisionService(this.db);
+          const primary = createdChunks[0];
+          mergeOp = await svc.decideAndApply(primary.chunkId, primary.content);
+        } catch (err) {
+          console.warn(
+            '[IngestionPipeline] Merge decision failed:',
+            (err as Error).message,
+          );
+        }
+      }
+
+      // ---- 7.6 TTL probation (P1-6 slice C) ----
       // Low-confidence / untrusted auto-captures get a 72h probation: capped to
       // 'weak' tier (searchable, but out of passive Lens/notifications) until they
       // prove value or expire. user_manual (trusted) is never probationary.
@@ -507,6 +530,10 @@ export class IngestionPipeline {
       trustClass,
       sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
       injectionFlags: injectionScreen.flagged ? injectionScreen.flags : undefined,
+      mergeOp:
+        mergeOp && mergeOp.op !== 'ADD'
+          ? { op: mergeOp.op, neighborIds: mergeOp.neighborIds, reason: mergeOp.reason }
+          : undefined,
     };
 
     return {
@@ -1183,9 +1210,10 @@ Rules:
     source: string | null,
     sourceType: string,
     ts: number,
-  ): number {
+  ): Array<{ chunkId: number; content: string }> {
     const chunks = chunkText(content);
-    if (chunks.length === 0) return 0;
+    if (chunks.length === 0) return [];
+    const created: Array<{ chunkId: number; content: string }> = [];
 
     const insertChunk = this.db.prepare(
       `INSERT INTO chunks
@@ -1215,8 +1243,9 @@ Rules:
       // Store embedding for the chunk in chunks_vec
       const chunkId = result.lastInsertRowid;
       this.embedChunkAsync(Number(chunkId), chunk.content);
+      created.push({ chunkId: Number(chunkId), content: chunk.content });
     }
-    return chunks.length;
+    return created;
   }
 
   /**

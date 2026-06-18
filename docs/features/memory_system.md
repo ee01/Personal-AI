@@ -437,7 +437,13 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 
 ### 写入决策：TTL 试用期 + 生命周期端点 (Merge/Evolution/TTL, P1-6)
 
-把写路径从「仅 INSERT」往「有决策的写入」升级。**切片 C（TTL 试用期 + 端点补全 + 向量清理）已落地**：
+把写路径从「仅 INSERT」往「有决策的写入」升级。**三个切片 A/B/C 均已落地**。
+
+**切片 A（chunk 级合并决策）** `core/MergeDecisionService.ts`（migration `042_chunk_merge.sql` 给 chunks 加 `superseded_by`/`merged_into`/`merge_reason`）：开关 `chunkMergeDecisionEnabled`（env `CHUNK_MERGE_DECISION_ENABLED`，**默认 OFF**——它给写路径加一次嵌入+LLM 调用，建议部署后用记忆六能力体检验证 knowledge-update 提分再开）。新 chunk 入库后查 cos≥0.86 的近邻（低于 0.92 denoise 阈值，留决策空间），有近邻才让 LLM 决策 ADD/UPDATE/MERGE/NOOP：UPDATE→旧 chunk 标 `superseded_by` 并降到 weak；MERGE→近邻标 `merged_into` 折进新 chunk；NOOP→新 chunk 降权、旧 chunk 强化。无近邻或任何失败都回退 ADD（与旧行为逐字节一致）。decision 回执加 `mergeOp`（op≠ADD 时）。永不物理删除。
+
+**切片 B（记忆演化）** `core/MemoryEvolutionService.ts`（migration `043_memory_evolution.sql` 建 `memory_links`/`chunk_revisions`，夜间巩固 Phase 2.5）：对当日新 chunk（≤50）找 cos≥0.8 旧近邻，写 `memory_links`（关联边，幂等，同时供 PPR chunk 关联与 weave 缝合证据）；当近邻属于另一条 message 时，给那条 message 的 summary 追加一句「后续关联」注记并写 `chunk_revisions` 审计行——**原文（chunk content）永不改写**，只动派生 summary/links，可审计可回溯。
+
+**切片 C（TTL 试用期 + 端点补全 + 向量清理）**：
 
 - **TTL 试用期** `core/ProbationService.ts`（migration `041_memory_probation.sql` 给 `memory_metadata` 加 `probation_until`）：低置信（salience ∈ [0.30, 0.45)）或 untrusted 的**自动捕获**入库时进 72h 试用期——retrieval_tier 被 cap 到 `weak`（主动搜索 `/recall`、`/ask` 仍能召回；但 `passive_surface` 只放行 core/active，所以**不进被动 Lens / 通知**）。`user_manual`（trusted）来源永不进试用期（用户显式动作 = 最高信任）。message 与其 chunks 一起 cap。
 - **毕业 / 过期**（夜间巩固 Phase 4.6 `processProbation`）：试用期内被召回（access_count>0）→ 毕业（清 `probation_until`，按 salience 恢复 active/weak）；到期无互动 → 直接 `archive_only`+`archived`（跳过漫长衰减）。原文（messages_raw）永不改动，只移动派生检索层级。
@@ -446,8 +452,7 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
   - `POST /lifecycle/forget {scope?, source?, sourceType?, olderThanDays?, dryRun}`：范围遗忘——把匹配 chunk 与其 message 降到 `archive_only`，原文保留。
   - `POST /lifecycle/compress {entityId?|topic?, dryRun}`：把某主题的 weak/archived chunk 压缩成一条 summary chunk（LLM 摘要，不可用时退化为拼接摘要），原件标 `archive_ref` 归档不删。
 - **边界**：试用期与遗忘端点都不物理删除；级联物理删除只由用户显式删除触发（见 cascade-deletion plan）。
-- **验证**：`memoryProbationLifecycle.test.ts`（4：试用期判定、cap+毕业、过期归档、forget dryRun/真实降级保留原文）。
-- **仍在推进**：切片 A（chunk 级 ADD/UPDATE/MERGE/NOOP 合并决策 + decision 回执 + 撤销）、切片 B（`memory_links`/`chunk_revisions` 演化）。
+- **验证**：`memoryProbationLifecycle.test.ts`（4）、`mergeDecision.test.ts`（4：UPDATE/MERGE/NOOP apply 语义 + ADD 回退）、`memoryEvolution.test.ts`（2：近邻关联边 + 幂等）。
 
 ### 记忆六能力体检 (Memory Abilities Benchmark)
 
