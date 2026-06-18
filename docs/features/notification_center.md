@@ -90,6 +90,21 @@ Notification Center 是 `memory-service` 里的统一通知路由层。它解决
 - `todo` 是“需要用户处理的事情”
 - `notice` 是“只需要同步和告知的信息”
 
+### 1.4.1 代价不对称 Utility v2 (P1-8)
+
+`ProactivityPolicy` 的单一 `utility = benefit − cost` 升级为**代价不对称**的两因子模型（开关 `utilityV2`，env `PROACTIVITY_UTILITY_V2`，**默认 OFF**——通知是最敏感的面，先影子模式再切）：
+
+```
+utility_v2 = needScore * missCost − (1 − needScore) * interruptCost * (1 + timingCost)
+```
+
+- `COST_MATRIX[type]` 给每类通知三个常量：`miss`（漏报代价）、`interrupt`（误打扰代价基数）、`quietSens`（安静时段敏感度）。deadline/truth_conflict 高 miss 低 interrupt（漏了会写错事实，深夜也值得早晨置顶）；dream_digest/weekly_report 低 miss 高 interrupt（纯资讯从严）。
+- **保底通道**（书中「成本-静默」矛盾的工程答案）：`miss ≥ 0.9 && needScore ≥ 0.5` 的候选在安静时段既不深夜打扰、也不静默丢弃——降级为 `scheduled`（次晨置顶补投）。**省下的是深夜打扰，不是信息本身。**
+- **校准回流**（`calibrate(windowDays, dryRun)`，月度）：按 type 聚合近 30 天 `notification_records` 的 dismissRate/clickRate，dismissRate>0.6 → interrupt +0.1，clickRate>0.5 → miss +0.05，每次调整写 `notification_policy_audit`（可解释可回滚）。
+- **通知证据**：migration `045` 给 `notification_records` 加 `evidence_refs_json` / `weave_json`，feed 可渲染「依据：N 条记忆」一行（ProAct：附依据的通知更可信、更可关闭）。
+- 验证：`proactivityV2.test.ts`（5：深夜 deadline→scheduled、白天→notify、同分 dream 比 deadline 难 notify、v1 不返回 scheduled、校准 dryRun 提 interrupt）。
+- **仍在推进**：feed「依据」行前端渲染 + 通知创建时写 evidence_refs、scheduled 状态的次晨实际投递管线。
+
 ### 1.5 渠道投递回执
 
 Notification Center 不会把“已经发给某个渠道”直接视为“用户已经处理”。
@@ -130,6 +145,7 @@ Notification Center 不会把“已经发给某个渠道”直接视为“用户
 - `effectiveStatus`: 对用户和调试更有意义的当前有效状态；如果此前已经送达、点击或忽略，后续一次失败不会把有效状态倒退成“从未送达”
 - `hasSuccessfulDelivery`: 是否曾经有过送达、点击或忽略类成功回执
 - `firstDeliveredAt` / `lastDeliveredAt` / `updatedAt`: 按回执事件时间记录，而不是按服务端收到请求的时间猜测；`POST /notification-center/delivery` 可以带 `recordedAt`
+- `channelReceipts`: feed item 上的跨渠道回执摘要，按 Chrome / Doubao / Glip 分别说明未尝试、已送达、已查看、已忽略或发送失败；Chrome 通知和 Provider digest 会把“其他渠道已送达/失败”的关键信息露出来，便于用户和排障时区分“这个渠道第一次提醒”和“别的渠道已经试过”。Provider / Doubao markdown 摘要在其他渠道最近失败时还会带失败原因；如果该渠道此前已经送达、查看或忽略，摘要会说明有效状态没有被最近失败回滚。
 
 这避免了一个常见误读：例如 Doubao 或 Chrome 曾经成功展示过通知，但后面一次网络重试写入了 `failed`。此时 `status=failed` 说明最后一次尝试失败，`effectiveStatus=delivered` 才说明这条 source 对该渠道已经有过可用送达。
 
@@ -156,7 +172,11 @@ Notification Center 对外主要暴露两个接口：
 - `clicked` / `dismissed` 是终止性的用户处理回执，不会因为冷却时间过去而重新进入 feed
 - feed 会先排除该 channel 已成功投递的 source，再做 `limit` 截断，避免旧的未投递通知被新的已投递记录挡住
 - 每个 feed item 会带 `deliveryContext`，说明它是全新通知、上次投递失败后重试、待办冷却结束后的再次提醒，还是每日摘要里“已提醒但仍未完成”的待办；Chrome 通知和 Provider digest 会把这个原因展示出来，避免用户误以为重复出现的待办是全新事件
+- 如果某个待办曾经成功送达、后来又发生投递失败，等它重新进入 feed 时会优先显示“上次发送失败”，而不是只显示普通“再次提醒”；这样用户能区分“冷却后重复提醒”和“渠道最近确实失败过”
 - `feed` 可以通过 `deliveryMode` 选择打扰策略：`retry_after_cooldown` 是默认实时提醒，`incremental` 只返回从未成功送达的新待办，`daily_digest` 返回仍未完成的待办用于低打扰汇总。`daily_digest` 只放宽 `todo` 的已投递过滤，`notice` 仍然保持送达后不重复进入 feed
+- `daily_digest` 放宽的是“已送达但仍未完成”的待办，不会把该 channel 已经 `clicked` / `dismissed` 的待办重新拉回摘要；摘要排序也会把新待办和失败重试放在“已提醒过，仍待处理”的旧待办前面
+- Provider / Doubao 摘要会按 token budget 只保留完整条目；如果放不下全部，会追加“已截断，还有 N 条未放入本次摘要”的回执，并且只把真正展示出来的 sourceRef 写入渠道送达回执。未展示的通知或待办会继续留在后续 feed，不会因为一次截断摘要被误判成已经送达
+- `feed` 响应会带 `meta`，记录本次实际 channel、lanes、deliveryMode、limit、returned 和 `hasMore`。`total` 仍表示本次返回条数；如果 `hasMore=true`，说明这次 response 被 limit 截断，并不代表当前 feed 已经全部展示完。
 
 `delivery` 的语义是：
 
@@ -236,7 +256,7 @@ Chrome extension 优先从 `notification-center/feed` 拉取消息。
 - 通知弹窗会用 `contextMessage` 标出“待处理/通知”、优先级和待办截止时间，降低用户判断成本
 - `dream_digest` 这类通知的系统弹窗预览会优先用 payload 摘要片段，而不是只展示计数型 body
 - `weekly_report` 通知的系统弹窗预览会优先使用周报摘要摘录，而不是只展示“周报已生成”或报告文件路径
-- `proposed_action:*` 的“查看待办”会打开动作队列并定位对应 action；`project_update` / `property_change` 这类 notice 会打开时间轴；`weekly_report` 会打开 `memory-exploring.html#/reports?file=...` 并定位报告正文；`dream_digest` 仍进入梦境重放
+- `proposed_action:*` 的“查看待办”会打开动作队列并定位对应 action；`project_update` / `property_change` 这类 notice 会打开时间轴；`weekly_report` 会打开 `memory-exploring.html#/reports?file=...` 并定位报告正文；`dream_digest` 如果 payload 带 `latestDreamPath` / `dreamPaths`，会打开 `memory-exploring.html#/dreams?file=...` 并展开对应 dream 文件，否则兜底进入梦境重放总页
 - 带 `payload.confirmRequestId` 的 `truth_conflict` / `notify_user` 等通知会打开决策中心的具体确认项，页面会置顶并高亮该卡片；如果确认项已处理或不在当前队列，会显示明确落空说明
 - Chrome 通知的来源元数据会同时保存在 `chrome.storage.local`，避免 MV3 service worker 被回收后点击 / 忽略操作无法回写通知中心
 - 对 `notification:*` 的待办类系统通知，第二按钮是“稍后提醒”；没有截止时间时默认延后 24 小时，有截止时间时会尽量在截止前再次提醒，避免把待办直接延到过期后。notice 使用“不再提示”，`proposed_action:*` 使用“暂不提醒”且只记录渠道事件
@@ -317,7 +337,7 @@ DigestQueueService 的处理流程是：
 
 如果任一内置 digest 推送失败，队列条目会保留，`digest_queue_process` 后台任务会被标成失败，并在 popup 的后台任务面板同时显示失败原因和“队列已保留 N 条”这类恢复摘要。这样用户不会看到“后台任务成功”但摘要实际没有发出去的假状态，也不会只看到网络错误却不知道摘要是否还在队列里。
 
-popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送队列处理` 行显示本地摘要队列的实时状态：总共等待多少条、其中多少条已经到释放时间、最早下一次释放时间是什么。这样“上次成功 / 无到期摘要”不会掩盖其实还有摘要正在等待用户设定的时间。
+popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送队列处理` 行显示本地摘要队列的实时状态：总共等待多少条、其中多少条已经到释放时间、最早下一次释放时间、对应的摘要任务/关注项和释放节奏是什么。这样“上次成功 / 无到期摘要”不会掩盖其实还有摘要正在等待用户设定的时间，也不会让英文界面显示固定中文队列文案。
 
 本地 digest 不是某一条 RingCentral 原消息，所以 Bot 文案不会再生成空群组 mention 或 `app.ringcentral.com/messages/` 这类无效原消息链接；摘要正文会作为可读内容直接展示。
 
@@ -382,7 +402,11 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - Firebase Cloud Messaging 的 BigQuery delivery export 支持按 message / instance 追踪 accepted、delivered 和 latency，说明回执数据要能用于事后诊断。
 - Teams read receipts 明确把“在通知/banner 看到”排除在 read receipt 之外，和 Personal AI 里“渠道送达不等于用户已处理”的原则一致。
 - 通知系统研究强调错误时机和过多打断会损害体验，因此回执必须为冷却、重试和处理状态提供可靠信号。当前 feed 已把这些信号整理成 `deliveryContext.reason`，用于给用户显示“再次提醒”或“上次发送失败”。
+- 本轮把 `deliveryContext.reason` 的优先级再收紧一层：如果最新渠道回执是失败，即使之前有过成功送达且待办冷却也已过期，也优先标成“上次发送失败”。这不会改变 notice 的一次性去重或 todo 的冷却机制，只是让失败恢复在 Chrome context label、Provider digest 和排序里不被普通冷却文案覆盖。
 - 本轮继续补齐回执事件时间：状态回调和设备确认类系统经常异步、延迟或乱序到达，所以 `recordedAt` 必须代表渠道事件发生时间；旧事件可以补足首次/末次送达证据，但不能把较新的失败或处理状态倒回去。
+- 本轮把这些回执从“当前 channel 的过滤依据”扩展成 feed item 的 `channelReceipts`：用户在 Chrome 里看到一条通知时，如果 Doubao 已经送达或 Glip 失败，context label 会显示“其他渠道”；Provider digest 里也会带同样的短回执。这样不改变去重、冷却或全局处理状态，只让跨渠道分发结果更可解释。
+- 本轮继续收紧 `channelReceipts` 的展示文案：如果某渠道已经 `clicked` / `dismissed`，之后又收到一次失败回执，短标签会保留“已查看，最近失败”或“已忽略，最近失败”，而不是退成“已送达，最近失败”。这样用户能同时看见“这个渠道曾经被处理过”和“最近一次 provider 回调仍需要排障”。
+- 本轮进一步让 Provider / Doubao 摘要里的“其他渠道”失败回执带上失败原因，并在已有有效送达/查看/忽略时写明“有效状态仍按原状态”。这样跨渠道摘要不只告诉用户“失败了”，也能解释失败是否覆盖了先前的有效回执。
 
 本轮对通知点击落点补了确认项深链：
 
@@ -395,14 +419,19 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - 通知 batching 研究支持减少打断，但也提醒 batching 只在符合工作期待时有效。对本地摘要来说，失败不能被吞掉，digest 文案也必须自包含，不能带空群组和无效原消息链接，否则用户无法判断这条摘要到底从哪里来、是否需要补救。
 - 本轮进一步把“当前队列里还等着什么”直接显示到 popup 后台任务行。Apple Scheduled Summary 的核心是用户选择哪些通知进入摘要以及接收时间；Slack Activity 则强调 feed 可以筛选、扫读和清理；bounded deferral / notification batching 研究也说明延迟要在“可预期”范围内才不破坏 awareness。因此 Personal AI 不能只说“上次无到期摘要”，还要告诉用户是否有本地摘要正在等待下一次释放。
 - 本轮还补齐了失败恢复文案：当本地摘要发送失败时，后台任务状态和最近运行记录都会保留“队列已保留 N 条”的摘要。对低打扰通知来说，失败后的可恢复性和延迟本身同样重要，用户需要明确知道这些摘要没有丢失。
+- 本轮给 Concerned Items 的 Bot 摘要正文加了 `摘要回执`：用户收到摘要时能直接看到本次释放了多少条、对应每日/每周节奏、未到期条目仍在本地队列，以及 Bot 推送失败不会清除本次条目。这样低打扰摘要不只是“晚点发”，也能解释为什么现在发、失败后是否会丢。
+- 本轮继续把 popup 的本地队列状态从一段后端中文文案改成结构化状态：后台任务行现在能按当前界面语言展示总数、到期数、最早释放时间、摘要任务、关注项和每日/每周节奏；旧 `currentQueueSummary` 仍保留为兜底，避免旧调用方断掉。
 - 本轮对 Notification Center feed 的 `daily_digest` 语义做了边界收紧：每日摘要可以重新列出已提醒但仍未完成的 `todo`，并用 `already_delivered_unfinished` 标明它不是新待办；但已送达的 `notice` 不会因为调用 daily digest 又重复出现。这样符合“摘要用于处理未完成事项、notice 用于一次性同步”的用户心智。
+- 本轮继续补齐 `daily_digest` 的“未完成”边界：channel 已经 `clicked` / `dismissed` 的 todo 不再回到每日摘要；新待办、上次发送失败的待办会排在“已提醒过，仍待处理”的旧待办前面，避免摘要第一屏被重复提醒占住。
+- 本轮补齐 Provider/Doubao 摘要的截断回执：正文不会再按字符硬切到半条通知或半句渠道回执，而是按完整条目收口，并说明还有多少条未展示。更关键的是 delivery sourceRefs 只包含可见条目，避免预算截断后把用户没看到的 notice 标成已送达、从后续 feed 中永久消失。
+- 本轮给 feed API 本身补了 `meta.hasMore` 回执：当调用方请求 `limit=20` 只拿到 20 条时，`total=20` 不再被误解成“全部只有 20 条”。这和 Slack / Teams Activity feed 的筛选心智一致：用户或渠道消费者需要知道当前看到的是哪种视图、是否还有后续项，而不是只能从返回数组长度猜。
 
 本轮对周报 / Dream Digest 的投递目标做了语义对齐：
 
 - Microsoft Viva Digest 把个人 digest 明确做成可 opt out 的个人洞察入口；Apple Scheduled Summary 也强调由用户选择哪些通知进入摘要和何时展示；Slack Activity 则把通知、提醒和 saved views 放在可过滤队列里。对应到 Personal AI，`不推送`、`推送给 Me`、`自定义群组` 必须是后端真实行为，而不能只改变 Options 页文案。
 - 研究上，email batching / interruption 相关工作支持“低打扰摘要”但也提醒 batching 只有在符合工作响应预期时才有效。因此周报和 Dream Digest 不能在用户选择 `none` 时仍暗中投递，也不能在选择群组时退回个人私聊；目标错投会破坏用户对摘要节奏和可见范围的信任。
 - 本轮进一步把周报正文摘录写入 Notification Center payload，使 Provider digest、Doubao 同步和 Chrome 系统通知都能给出“这份周报讲了什么”。这个改动和 Apple Scheduled Summary / Viva Digest 的产品取向一致：摘要通知应该帮助用户判断是否现在进入详情，而不是只告诉用户“有一份报告”。
-- 本轮还把周报点击落点从梦境重放拆到 `/reports`：Slack AI / Teams Recap 的共同模式是“摘要先帮用户判断价值，点击后进入对应内容或行动项”，而不是进入相邻但语义不同的汇总页。Dream Digest 仍然进入 `/dreams`，因为它的正文是低置信梦境回放线索；周报则优先进入 `reports/` 里的具体 Markdown。
+- 本轮还把周报点击落点从梦境重放拆到 `/reports`：Slack AI / Teams Recap 的共同模式是“摘要先帮用户判断价值，点击后进入对应内容或行动项”，而不是进入相邻但语义不同的汇总页。Dream Digest 则保留 `/dreams` 的低置信回放语义，但 payload 有文件线索时会带 `file` query 并展开对应 dream，避免用户从总页重新猜哪条 dream 对应刚收到的通知。
 
 参考：
 
@@ -455,3 +484,4 @@ popup 的后台任务面板还会读取当前 `digestQueues`，在 `汇总推送
 - `src/message-reaction/FollowThreadHandler.ts`
 - `src/services/TaskScheduler.ts`
 - `src/services/taskSchedulerDefinitions.ts`
+- `src/popup.tsx`

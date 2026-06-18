@@ -39,10 +39,27 @@ export interface NotificationCandidate {
 }
 
 export interface NotifyDecision {
-  action: 'notify' | 'confirm_only' | 'silent' | 'throttled';
+  action: 'notify' | 'confirm_only' | 'silent' | 'throttled' | 'scheduled';
   utility: number;
   reason?: string;
 }
+
+/**
+ * Cost-asymmetry matrix (P1-8). miss = cost of NOT surfacing important info;
+ * interrupt = base cost of an unwanted interruption; quietSens = how much quiet
+ * hours should suppress this type (deadline/conflict are less suppressible).
+ * Starter constants — refined by the monthly calibration reflow + audit.
+ */
+const COST_MATRIX: Record<string, { miss: number; interrupt: number; quietSens: number }> = {
+  truth_conflict: { miss: 0.9, interrupt: 0.3, quietSens: 0.4 },
+  deadline: { miss: 0.95, interrupt: 0.2, quietSens: 0.3 },
+  notify_user: { miss: 0.7, interrupt: 0.4, quietSens: 1.0 },
+  project_update: { miss: 0.4, interrupt: 0.6, quietSens: 1.0 },
+  property_change: { miss: 0.35, interrupt: 0.6, quietSens: 1.0 },
+  dream_digest: { miss: 0.15, interrupt: 0.8, quietSens: 1.0 },
+  weekly_report: { miss: 0.15, interrupt: 0.7, quietSens: 1.0 },
+};
+const COST_MATRIX_DEFAULT = { miss: 0.5, interrupt: 0.5, quietSens: 1.0 };
 
 export interface PolicyConfig {
   weights: {
@@ -66,6 +83,8 @@ export interface PolicyConfig {
     sameTopicMinIntervalMs: number;
     maxDailyNotifications: number;
   };
+  /** P1-8: enable the cost-asymmetry utility v2 model. */
+  utilityV2: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +113,9 @@ const DEFAULT_POLICY: PolicyConfig = {
     sameTopicMinIntervalMs: 86_400_000,   // 24 hours
     maxDailyNotifications: 10,
   },
+  // Default OFF — utility v2 is rolled out via shadow mode first (the book's
+  // most user-sensitive surface). Enable with PROACTIVITY_UTILITY_V2=true.
+  utilityV2: process.env.PROACTIVITY_UTILITY_V2 === 'true',
 };
 
 // ---------------------------------------------------------------------------
@@ -155,11 +177,44 @@ export class ProactivityPolicy {
 
     const totalCost = busyCost + quietCost + spamCost + prefCost;
 
-    // 3. Utility = benefit - cost
+    // 4. Throttle checks (shared by v1 and v2).
+    const throttleResult = this.checkThrottle(candidate.topicId, throttle);
+
+    // ---- Utility v2 (P1-8: cost-asymmetry) ----
+    if (this.config.utilityV2) {
+      const m = COST_MATRIX[candidate.type] ?? COST_MATRIX_DEFAULT;
+      const needScore = benefit; // same need model as v1 benefit
+      const timingCost = quietCost * m.quietSens + spamCost + prefCost;
+      const utility =
+        needScore * m.miss - (1 - needScore) * m.interrupt * (1 + timingCost);
+
+      if (throttleResult !== null) {
+        return { action: 'throttled', utility, reason: throttleResult };
+      }
+      // Safety-net (the book's core answer): high miss-cost candidates in quiet
+      // hours are never pushed at night and never silently dropped — they are
+      // deferred to a next-morning scheduled delivery. What we save is the
+      // late-night interruption, not the information itself.
+      const highMiss = m.miss >= 0.9 && needScore >= 0.5;
+      if (highMiss && this.isQuietHours()) {
+        return {
+          action: 'scheduled',
+          utility,
+          reason: 'high_miss_cost_deferred_to_morning',
+        };
+      }
+      if (utility >= thresholds.notify) {
+        return { action: 'notify', utility };
+      }
+      if (utility >= thresholds.confirm) {
+        return { action: 'confirm_only', utility, reason: 'Below notify threshold (v2)' };
+      }
+      return { action: 'silent', utility, reason: 'Below confirm threshold (v2)' };
+    }
+
+    // ---- Utility v1 (legacy) ----
     const utility = benefit - totalCost;
 
-    // 4. Throttle checks
-    const throttleResult = this.checkThrottle(candidate.topicId, throttle);
     if (throttleResult !== null) {
       return { action: 'throttled', utility, reason: throttleResult };
     }
@@ -176,6 +231,94 @@ export class ProactivityPolicy {
     }
 
     return { action: 'silent', utility, reason: 'Utility too low' };
+  }
+
+  /**
+   * Monthly calibration reflow (P1-8 P2): aggregate the last `windowDays` of
+   * delivered notifications per type and nudge the COST_MATRIX — raise interrupt
+   * for types the user keeps dismissing, raise miss for types they keep clicking.
+   * Every change is written to notification_policy_audit (explainable, reversible).
+   * Returns the adjustments made. dryRun previews without writing.
+   */
+  calibrate(options: { windowDays?: number; dryRun?: boolean } = {}): Array<{
+    type: string;
+    field: 'interrupt' | 'miss';
+    oldValue: number;
+    newValue: number;
+    reason: string;
+  }> {
+    const windowDays = options.windowDays ?? 30;
+    const cutoff = now() - windowDays * 86400;
+    const adjustments: Array<{
+      type: string;
+      field: 'interrupt' | 'miss';
+      oldValue: number;
+      newValue: number;
+      reason: string;
+    }> = [];
+
+    let rows: Array<{ type: string; delivered: number; dismissed: number; clicked: number }> = [];
+    try {
+      rows = this.db
+        .prepare(
+          `SELECT type AS type,
+                  COUNT(*) AS delivered,
+                  SUM(CASE WHEN dismissed_at IS NOT NULL THEN 1 ELSE 0 END) AS dismissed,
+                  SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) AS clicked
+             FROM notification_records
+            WHERE created_at >= ?
+            GROUP BY type`,
+        )
+        .all(cutoff) as typeof rows;
+    } catch {
+      return adjustments;
+    }
+
+    for (const r of rows) {
+      if (!r.delivered || r.delivered < 5) continue; // too few to learn from
+      const base = COST_MATRIX[r.type];
+      if (!base) continue;
+      const dismissRate = r.dismissed / r.delivered;
+      const clickRate = r.clicked / r.delivered;
+      if (dismissRate > 0.6 && base.interrupt < 0.9) {
+        const newValue = Math.min(0.9, base.interrupt + 0.1);
+        adjustments.push({
+          type: r.type,
+          field: 'interrupt',
+          oldValue: base.interrupt,
+          newValue,
+          reason: `dismissRate ${dismissRate.toFixed(2)} > 0.6`,
+        });
+      } else if (clickRate > 0.5 && base.miss < 0.95) {
+        const newValue = Math.min(0.95, base.miss + 0.05);
+        adjustments.push({
+          type: r.type,
+          field: 'miss',
+          oldValue: base.miss,
+          newValue,
+          reason: `clickRate ${clickRate.toFixed(2)} > 0.5`,
+        });
+      }
+    }
+
+    if (!options.dryRun && adjustments.length > 0) {
+      const nowTs = now();
+      const insert = this.db.prepare(
+        `INSERT INTO notification_policy_audit
+           (notification_type, field, old_value, new_value, reason, window_days, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const tx = this.db.transaction(() => {
+        for (const a of adjustments) {
+          insert.run(a.type, a.field, a.oldValue, a.newValue, a.reason, windowDays, nowTs);
+          // Apply in-memory so the running process reflects it immediately.
+          COST_MATRIX[a.type][a.field] = a.newValue;
+        }
+      });
+      tx();
+    }
+
+    return adjustments;
   }
 
   /**
@@ -395,6 +538,7 @@ export class ProactivityPolicy {
       costs: { ...DEFAULT_POLICY.costs, ...partial.costs },
       thresholds: { ...DEFAULT_POLICY.thresholds, ...partial.thresholds },
       throttle: { ...DEFAULT_POLICY.throttle, ...partial.throttle },
+      utilityV2: partial.utilityV2 ?? DEFAULT_POLICY.utilityV2,
     };
   }
 }
