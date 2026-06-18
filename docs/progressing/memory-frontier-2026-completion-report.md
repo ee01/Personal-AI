@@ -77,6 +77,25 @@ QW + P0（#1–#5）此前已基本落地，本轮**验证并补齐其 P1 缺口
 
 **结论：本批改动对六能力体检逐项零偏移 → 零回归。** 体检脚本对仓库内 `.baseline`（overall=1.0）报「regression」纯属环境差异（基线 2026-06-12 在**线上**真实数据+不同 LLM runtime 上采集；本地 fresh fixture 在新旧代码上都得 0.722，证明差异来自环境而非本批代码）。
 
+### 逐 case 明细（本分支本地跑，endpoint=localhost:3299/api/v1/ask，user=eval-mem-abilities）
+
+| 能力 | case | 结论 | 分数 | proof 检查 |
+| --- | --- | --- | --- | --- |
+| extraction | mThor 项目是做什么/我负责什么 | FAIL | 0.50 | ✓ 命中 `mthor`；✗ 缺 `fixversion\|sign-off\|e2e`（部分尝试已召回「Sprint fixVersion set to mThor 26.2.30」，best-of-2 措辞抖动） |
+| multi_session | 关于 Cursor 在多处提过哪些评价 | FAIL | 0.50 | ✓ 命中 `cursor`；✗ 缺 `30%\|贵\|expensive\|cost`（部分尝试已召回 Cursor 成本讨论） |
+| temporal | Cursor 成本/性价比结论 + 何时得出 | PASS | 0.67 | ✓ `cursor` ✓ `性价比`；✗ 缺日期 `2026\|4月` |
+| knowledge_update | Cursor 当前许可政策 / 不活跃用户处理 | PASS | 0.67 | ✓ `cursor` ✓ `不活跃`；✗ 缺 `claude code\|codex\|按用量` |
+| abstention | 下周飞巴黎航班几点/登机口（库中无） | PASS | 1.00 | ✓ 未编造任何缺失事实（4 模式干净） |
+| prospective | Everyone AI Campaign 还需跟进什么 | PASS | 1.00 | ✓ `everyone ai campaign` ✓ `跟进` |
+
+`report: .eval-runs/memory-abilities/mem-abilities-local/{reader-report.json,case-results.json,responses.jsonl}`
+
+### 诚实标注（本地体检的可信边界）
+
+- **A/B 的有效结论是「行为中性」**：新旧代码在同一 fixture/同一 cases 上得到**逐项完全相同**的分数 → 本批未改变召回/作答行为。这是本次能给出的最强无回归证据。
+- **绝对分数不代表线上召回质量**：本地是 fresh fixture + 本地 Dify(gpt-4o-mini) + best-of-2，`responses.jsonl` 显示同一 case 不同尝试时而召回到真实证据（mThor fixVersion、Cursor 成本）、时而退化为「证据不足」，分数受 LLM 措辞抖动影响较大；`case-results` 记的 `evidence=0` 也说明评分以关键词命中为主、未稳定锚定证据条数。因此 0.722 是「新旧一致的本地参考值」，不是「线上真实数据上的召回质量」。
+- **线上权威体检待补**：仓库基线（overall=1.0、2026-06-12）是在 `10.32.56.212` 真实数据上采集的口径；本次因远端无法 `npm ci` 未能复跑。**待远端恢复网络后 `npm run deploy:memory` 再 `npm run eval:memory-abilities` 即可在权威口径上确认。**
+
 **其它验证**：memory-service 全量 698 单测/集成测试通过（新增 6 plan 各带确定性套件：`synonymEdges`/`salience`/`actionExecutor`/`memoryProbationLifecycle`/`mergeDecision`/`memoryEvolution`/`anticipation`/`catchUp`/`proactivityV2`/`memoryLineage`/`skillQualityGate`/`mcpTools`）。所有默认关闭的开关（chunkMergeDecisionEnabled、utilityV2）保证 off 时与旧行为逐字节一致。
 
 ## 遗留与边界（透明记录）
