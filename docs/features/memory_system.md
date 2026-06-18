@@ -435,6 +435,20 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 - **纵深防御定位**：正则层必然漏报——它是「打标 + 中性框架 + 动作隔离」三层叠加的第一层；per-item ⚠ UI 标记与其它读路径（composer/provider/reflection/dream）的中性框架包裹仍在推进。出口侧脱敏是 `memory-egress-firewall-plan` 的互补范围。
 - **验证**：`injectionScreen.test.ts`（22 恶意全标记 + 22 良性零误报 + trust 分级）、`injectionDefense.test.ts`（中性框架分区）、`api-ingest-injection.test.ts`（恶意网页红队：入库回执 flagged + 持久化）、`actionExecutor.test.ts`（flagged 证据驱动的动作被强制人工确认）；记忆六能力体检确认中性框架不破坏正常召回（6/6 无回归）。
 
+### 写入决策：TTL 试用期 + 生命周期端点 (Merge/Evolution/TTL, P1-6)
+
+把写路径从「仅 INSERT」往「有决策的写入」升级。**切片 C（TTL 试用期 + 端点补全 + 向量清理）已落地**：
+
+- **TTL 试用期** `core/ProbationService.ts`（migration `041_memory_probation.sql` 给 `memory_metadata` 加 `probation_until`）：低置信（salience ∈ [0.30, 0.45)）或 untrusted 的**自动捕获**入库时进 72h 试用期——retrieval_tier 被 cap 到 `weak`（主动搜索 `/recall`、`/ask` 仍能召回；但 `passive_surface` 只放行 core/active，所以**不进被动 Lens / 通知**）。`user_manual`（trusted）来源永不进试用期（用户显式动作 = 最高信任）。message 与其 chunks 一起 cap。
+- **毕业 / 过期**（夜间巩固 Phase 4.6 `processProbation`）：试用期内被召回（access_count>0）→ 毕业（清 `probation_until`，按 salience 恢复 active/weak）；到期无互动 → 直接 `archive_only`+`archived`（跳过漫长衰减）。原文（messages_raw）永不改动，只移动派生检索层级。
+- **向量索引清理**（Phase 4.5 `phaseVectorCleanup`）：把 forgotten / archive_only 的 chunk 从 `chunks_vec` 物理移除，修掉「已遗忘 chunk 仍被向量通道扫描」的残留（盘点 B 缺口）。
+- **生命周期端点** `core/LifecycleService.ts` + `routes/lifecycle.ts`（补全六操作分类学缺的 forgetting / compression 两面，均**降级不删除**、支持 `dryRun` 预览）：
+  - `POST /lifecycle/forget {scope?, source?, sourceType?, olderThanDays?, dryRun}`：范围遗忘——把匹配 chunk 与其 message 降到 `archive_only`，原文保留。
+  - `POST /lifecycle/compress {entityId?|topic?, dryRun}`：把某主题的 weak/archived chunk 压缩成一条 summary chunk（LLM 摘要，不可用时退化为拼接摘要），原件标 `archive_ref` 归档不删。
+- **边界**：试用期与遗忘端点都不物理删除；级联物理删除只由用户显式删除触发（见 cascade-deletion plan）。
+- **验证**：`memoryProbationLifecycle.test.ts`（4：试用期判定、cap+毕业、过期归档、forget dryRun/真实降级保留原文）。
+- **仍在推进**：切片 A（chunk 级 ADD/UPDATE/MERGE/NOOP 合并决策 + decision 回执 + 撤销）、切片 B（`memory_links`/`chunk_revisions` 演化）。
+
 ### 记忆六能力体检 (Memory Abilities Benchmark)
 
 `tools/eval-memory-abilities.ts` 是一套**端到端记忆能力体检**，对运行中的 `/ask` 打真实问题并按六个能力打分：extraction / multi_session / temporal / knowledge_update / abstention / prospective（LongMemEval 五能力 + 前瞻）。

@@ -20,6 +20,7 @@ import { ForgettingEngine } from './ForgettingEngine.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import { BehaviorAffinityService } from './BehaviorAffinityService.js';
 import { SynonymEdgeService } from './SynonymEdgeService.js';
+import { ProbationService } from './ProbationService.js';
 import { getConfig } from '../config.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
@@ -202,6 +203,27 @@ export class ConsolidationEngine {
       console.log(`[ConsolidationEngine] Phase 4 (Clean): processed ${result.cleaned} memories`);
     } catch (err) {
       console.error('[ConsolidationEngine] Phase 4 (Clean) failed:', err);
+    }
+
+    // Phase 4.5: Vector index cleanup (P1-6 slice C) — drop chunks_vec rows for
+    // chunks whose memory is forgotten/archive_only so they stop being scanned by
+    // the vector channel (fixes the residual-index gap).
+    try {
+      const removed = this.phaseVectorCleanup();
+      console.log(`[ConsolidationEngine] Phase 4.5 (VecCleanup): pruned ${removed} stale vec rows`);
+    } catch (err) {
+      console.error('[ConsolidationEngine] Phase 4.5 (VecCleanup) failed:', err);
+    }
+
+    // Phase 4.6: Probation graduation/expiry (P1-6 slice C) — graduate captures
+    // that proved value, archive those that expired untouched.
+    try {
+      const prob = new ProbationService(this.db).processProbation();
+      console.log(
+        `[ConsolidationEngine] Phase 4.6 (Probation): graduated ${prob.graduated}, expired ${prob.expired}`,
+      );
+    } catch (err) {
+      console.error('[ConsolidationEngine] Phase 4.6 (Probation) failed:', err);
     }
 
     // Phase 5: Reindex — rebuild chunk index for changed files
@@ -787,6 +809,44 @@ Brief current status
     const engine = new ForgettingEngine(this.db);
     const result = await engine.runForgettingCycle();
     return result.totalProcessed;
+  }
+
+  // =========================================================================
+  // Phase 4.5: Vector index cleanup (P1-6 slice C)
+  // =========================================================================
+
+  /**
+   * Remove chunks_vec rows whose owning chunk is forgotten / archive_only so the
+   * vector channel stops scanning dead memories. Returns the number of vec rows
+   * pruned. Best-effort: missing chunks_vec (vec extension absent) is a no-op.
+   */
+  private phaseVectorCleanup(): number {
+    try {
+      const stale = this.db
+        .prepare(
+          `SELECT mm.target_id AS id
+             FROM memory_metadata mm
+            WHERE mm.target_type = 'chunk'
+              AND mm.retrieval_tier IN ('forgotten', 'archive_only')`,
+        )
+        .all() as Array<{ id: string }>;
+      if (stale.length === 0) return 0;
+      const del = this.db.prepare(
+        `DELETE FROM chunks_vec WHERE chunk_id = CAST(? AS INTEGER)`,
+      );
+      let removed = 0;
+      const tx = this.db.transaction(() => {
+        for (const row of stale) {
+          const info = del.run(row.id);
+          removed += info.changes;
+        }
+      });
+      tx();
+      return removed;
+    } catch {
+      // chunks_vec missing (vec extension not loaded) — nothing to prune.
+      return 0;
+    }
   }
 
   // =========================================================================

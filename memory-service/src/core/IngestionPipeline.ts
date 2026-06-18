@@ -36,6 +36,7 @@ import { chunkText } from '../utils/chunking.js';
 import { contentHash } from '../utils/hashing.js';
 import { normalizeContentForDedup } from '../utils/contentNormalize.js';
 import { classifyTrust, screenForInjection } from './injectionScreen.js';
+import { ProbationService } from './ProbationService.js';
 import { toSlug } from '../utils/slug.js';
 import { now, formatDate } from '../utils/time.js';
 
@@ -378,6 +379,19 @@ export class IngestionPipeline {
       } catch (err) {
         console.warn(
           '[IngestionPipeline] Metadata update failed:',
+          (err as Error).message,
+        );
+      }
+
+      // ---- 7.5 TTL probation (P1-6 slice C) ----
+      // Low-confidence / untrusted auto-captures get a 72h probation: capped to
+      // 'weak' tier (searchable, but out of passive Lens/notifications) until they
+      // prove value or expire. user_manual (trusted) is never probationary.
+      try {
+        new ProbationService(this.db).applyOnIngest(id, salienceScore ?? 0, trustClass, ts);
+      } catch (err) {
+        console.warn(
+          '[IngestionPipeline] Probation tagging failed:',
           (err as Error).message,
         );
       }

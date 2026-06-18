@@ -26,6 +26,7 @@ import { ProfileManager } from './core/ProfileManager.js';
 import { healthRoutes } from './routes/health.js';
 import { ingestRoutes } from './routes/ingest.js';
 import { recallRoutes } from './routes/recall.js';
+import { lifecycleRoutes } from './routes/lifecycle.js';
 import { projectRoutes } from './routes/projects.js';
 import { askRoutes } from './routes/ask.js';
 import { notificationRoutes } from './routes/notifications.js';
@@ -173,6 +174,7 @@ export async function buildApp(
       await instance.register(healthRoutes);
       await instance.register(ingestRoutes);
       await instance.register(recallRoutes);
+      await instance.register(lifecycleRoutes);
       await instance.register(projectRoutes);
       await instance.register(askRoutes);
       await instance.register(notificationRoutes);
